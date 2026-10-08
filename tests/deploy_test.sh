@@ -9,7 +9,8 @@
 # `url` against a fake ssh that plays the Jetson's docker (URL alone on stdout, logs read since the
 # container's last start, waiting, stopped or missing cloudflared), the backup and restore
 # options refused before any network call, *.dump and backups/ kept out of git and rsync, and the
-# typed confirmation of restore --into-live against a fake Jetson.
+# typed confirmation of restore --into-live against a fake Jetson, and `admin create` (argument
+# checks before any network call; the CLI run in the api container with the tunnel URL, quoted).
 # Needs Docker (for the pinned shellcheck image) and rsync.
 set -euo pipefail
 
@@ -122,6 +123,25 @@ out_has "usage: ./deploy.sh url"
 run 1 ./deploy.sh smoke --bogus
 out_has "unknown option for smoke: --bogus"
 ok "url takes no argument, smoke refuses an unknown option, both before any network call"
+for args in "admin" "admin create" "admin list x@y.z" "admin create a@b.c extra" "admin delete a@b.c"; do
+  # shellcheck disable=SC2086 # word splitting wanted
+  run 1 nohost ./deploy.sh $args
+  out_has "usage: ./deploy.sh admin create <email>"
+done
+for email in "no-at-sign" "-x@example.org" "--base-url=https://evil@x" "" "$(printf 'a%.0s' {1..320})@x.org"; do
+  run 1 nohost ./deploy.sh admin create "$email"
+  out_has "admin create needs one email address"
+done
+for email in "a b@example.org" $'a\tb@example.org' $'a@example.org\nrm' $'a\x01@example.org'; do
+  run 1 nohost ./deploy.sh admin create "$email"
+  out_has "contains whitespace or control characters"
+done
+run 1 nohost ./deploy.sh admin create zoe@example.org
+out_has "cannot reach nonexistent-host.invalid"
+ok "admin create: wrong or missing action, extra arguments, no @, leading dash, over 320 characters, whitespace or control characters refused before any network call; a good email reaches the ssh check"
+run 0 ./deploy.sh --help
+out_has "admin create <email>"
+ok "--help documents admin create"
 run 1 ./deploy.sh deploy --bogus-flag
 out_has "unknown option for deploy: --bogus-flag"
 ok "unknown deploy option refused before any network call"
@@ -195,6 +215,12 @@ case "$cmd" in
     echo "$cmd" >>"$FAKE_CALLS"
     cat "$FAKE_CF_LOG"
     ;;
+  *"exec -T api python -m app.identity.cli"*)
+    echo "$cmd" >>"$FAKE_CALLS"
+    echo "Setup link for zoe@example.org, valid 7 days, single use:"
+    echo "  https://gathering-saves-below-twelve.trycloudflare.com/invite/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    exit "${FAKE_CLI_EXIT:-0}"
+    ;;
 esac
 exit 0
 FAKE
@@ -255,6 +281,27 @@ grep -q "cloudflared is exited on fakejetson, not running" "$WORK/stderr" || fai
 run_split 1 fake FAKE_CF_ID= FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh url
 grep -q "cloudflared is not running on fakejetson: no container" "$WORK/stderr" || fail "missing: $(cat "$WORK/stderr")"
 ok "cloudflared stopped or missing: exit 1 with a clear message, stdout empty"
+
+step "admin create against the fake Jetson"
+: >"$WORK/calls"
+run_split 0 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh admin create Zoe@Example.org
+grep -q "https://gathering-saves-below-twelve.trycloudflare.com/invite/A\{43\}$" "$WORK/stdout" ||
+  fail "full link not on stdout: $(cat "$WORK/stdout")"
+grep -qF -- "docker compose -f compose.yml --profile tunnel exec -T api python -m app.identity.cli create-admin Zoe@Example.org --base-url https://gathering-saves-below-twelve.trycloudflare.com" "$WORK/calls" ||
+  fail "remote command: $(cat "$WORK/calls")"
+ok "admin create runs the CLI in the api container with --base-url set to the tunnel URL, the full link on stdout"
+: >"$WORK/calls"
+run_split 0 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh admin create "o'brien+\$(id)@example.org"
+grep -qF -- "create-admin o\'brien+\\\$\(id\)@example.org --base-url" "$WORK/calls" ||
+  fail "email not quoted for the remote shell: $(cat "$WORK/calls")"
+ok "quotes, \$ and parentheses in the email reach the CLI quoted, never run by the remote shell"
+: >"$WORK/calls"
+run_split 1 fake FAKE_CF_ID= FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh admin create zoe@example.org
+grep -q "cloudflared is not running on fakejetson" "$WORK/stderr" || fail "no tunnel: $(cat "$WORK/stderr")"
+grep -q "exec -T api" "$WORK/calls" && fail "the CLI ran without a public URL"
+ok "no tunnel URL: exit 1 before the CLI runs"
+run_split 2 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" FAKE_CLI_EXIT=2 ./deploy.sh admin create zoe@example.org
+ok "the CLI's exit code (2, invalid email) is passed through"
 
 step "restore --into-live confirmation, against a fake Jetson"
 # This fake swallows the ops/db.sh streamed to `bash -s` and records the command; it answers the

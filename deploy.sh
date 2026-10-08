@@ -21,6 +21,10 @@
 #   ./deploy.sh restore --drop-scratch   drop the scratch database left by --keep
 #   ./deploy.sh backup-schedule install|remove|status
 #                                  nightly backup in the Jetson user's crontab (no sudo)
+#   ./deploy.sh admin create <email>
+#                                  print a one-time admin setup link on the public URL (a 1 hour
+#                                  password reset link when that admin exists); runs
+#                                  python -m app.identity.cli create-admin in the api container
 #
 # <file> is a local file (uploaded first), a path on the Jetson, a name in the backup directory,
 # or `latest`. The work on the Jetson is done by ops/db.sh, streamed over ssh.
@@ -475,6 +479,25 @@ cmd_ssh() {
   ssh -t "${SSH_OPTS[@]}" "$HOST" "cd $RDIR_Q 2>/dev/null; exec \$SHELL -l"
 }
 
+cmd_admin() {
+  [[ $# -eq 2 && "$1" == "create" ]] || die "usage: ./deploy.sh admin create <email>"
+  local email="$2"
+  # Checked here so a typo never reaches the Jetson; the CLI then validates the address itself.
+  # A leading dash would be read as an option by the CLI, and whitespace or control characters
+  # are never part of an address.
+  [[ "$email" == *@* && "$email" != -* && ${#email} -le 320 ]] ||
+    die "admin create needs one email address, got '$email'"
+  [[ ! "$email" =~ [[:space:][:cntrl:]] ]] || die "admin create: the email contains whitespace or control characters"
+  ssh_master
+  require_remote
+  require_deployed
+  local url
+  url="$(tunnel_url)" # dies with the reason when cloudflared has no URL
+  note "public URL: $url"
+  # The link (and its token) goes to stdout only, never to a log.
+  rcompose exec -T api python -m app.identity.cli create-admin "$email" --base-url "$url"
+}
+
 cmd_url() {
   [[ $# -eq 0 ]] || die "usage: ./deploy.sh url"
   ssh_master
@@ -848,6 +871,7 @@ main() {
     backups) cmd_backups "$@" ;;
     restore) cmd_restore "$@" ;;
     backup-schedule) cmd_backup_schedule "$@" ;;
+    admin) cmd_admin "$@" ;;
     -h | --help | help) usage ;;
     *)
       usage >&2
