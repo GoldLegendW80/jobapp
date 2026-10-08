@@ -35,6 +35,8 @@ repos:
         additional_dependencies: [prettier@3.9.9]
         entry: prettier --write --ignore-unknown
         files: ^web/
+        # The lockfile is written by pnpm and must stay byte for byte as pnpm writes it.
+        exclude: ^web/pnpm-lock\.yaml$
         types: [text]
 
       # Uses the eslint config and plugins installed in web/node_modules.
