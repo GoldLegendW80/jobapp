@@ -7,11 +7,11 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 **Description:** Models and migration 0002 for users, sessions, invites, login_attempts (citext extension, enums); password hashing (argon2id), password rules with the bundled common-password list, token generation and hashing; CLI `python -m app.identity.cli create-admin <email>` that creates a setup invite and prints a one-time link; `./deploy.sh admin create <email>` wrapper.
 
 **Acceptance criteria:**
-- [ ] Migration 0002 upgrades and downgrades cleanly; `alembic check` clean
-- [ ] Unit tests for hashing, verification, rules, token hashing
-- [ ] CLI prints a link path `/invite/<token>`; running it twice for the same email revokes the first link
+- [x] Migration 0002 upgrades and downgrades cleanly; `alembic check` clean
+- [x] Unit tests for hashing, verification, rules, token hashing
+- [x] CLI prints a link path `/invite/<token>`; running it twice for the same email revokes the first link
 
-**Verification:** pytest; `./deploy.sh admin create` on the Jetson prints a link
+**Verification:** pytest (226 passed). `./deploy.sh admin create`, still to do (added with I2) on the Jetson prints a link
 
 **Dependencies:** platform
 

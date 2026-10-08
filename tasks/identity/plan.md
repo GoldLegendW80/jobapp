@@ -17,7 +17,7 @@ Invite-only accounts with server-side sessions, an admin area, and the `current_
 
 ## Task list
 
-- [ ] I1: Identity schema, security primitives and first admin from the CLI
+- [x] I1: Identity schema, security primitives and first admin from the CLI
 - [ ] I2: Sign in, sign out, session cookie and default-deny API
 - [ ] I3: Frontend shell: router, login page, protected routes, sign out
 
