@@ -15,7 +15,7 @@ Spec: [SPEC-profile.md](../../SPEC-profile.md). Depends on identity (I1 to I3 at
 **Verify:** pytest; curl through Caddy.
 **Files:** `api/app/profile/{models,schemas,service,router}.py`, `api/alembic/versions/0003_profile.py`, tests. **Scope:** M
 
-## P2: Export, import and Harald's importer
+## P2: Export, import and Harald's importer (done 2026-10-08, 910 api tests; deploy.sh wrapper still to add)
 
 **Acceptance:** export and import endpoints with identical round trip; `importer.py` converts facts.md, skills.json, boards.json and assemble.py constants; golden test; CLI and `./deploy.sh profile import <email>`.
 **Verify:** pytest golden; dry run against the real files.
