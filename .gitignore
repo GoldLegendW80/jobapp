@@ -26,3 +26,6 @@ test-results/
 .DS_Store
 .idea/
 .vscode/
+
+# agent worktrees
+.claude/

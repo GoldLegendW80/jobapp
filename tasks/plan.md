@@ -34,10 +34,10 @@ repo bootstrap (1)
 ### Phase 1: Backend foundation
 - [x] Task 1: Repository bootstrap
 - [x] Task 2: API skeleton with health
-- [ ] Task 3: Compose core and migrations
+- [x] Task 3: Compose core and migrations
 
 ### Checkpoint A: local backend
-- [ ] `docker compose up` locally, `/api/health` returns ok with a DB round trip, pytest green
+- [x] `docker compose up` locally, `/api/health` returns ok with a DB round trip, pytest green
 
 ### Phase 2: Fail fast on the Jetson
 - [ ] Task 4: First Jetson deploy
@@ -46,7 +46,7 @@ repo bootstrap (1)
 - [ ] api and db build and run on the Jetson; memory measured; review with Harald
 
 ### Phase 3: Frontend and edge
-- [ ] Task 5: Web skeleton
+- [x] Task 5: Web skeleton
 - [ ] Task 6: Caddy in front
 - [ ] Task 7: CI workflow
 

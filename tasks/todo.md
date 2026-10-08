@@ -46,13 +46,13 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Description:** `compose.yml` with `api`, `db`, `redis`, healthchecks and memory limits; `compose.dev.yml` with bind mounts and reload; Alembic initialised with an empty baseline revision.
 
 **Acceptance criteria:**
-- [ ] `docker compose up` brings api, db, redis to healthy; only dev publishes ports
-- [ ] Every service has `mem_limit` and `restart: unless-stopped`; named volume `pgdata`
-- [ ] `alembic upgrade head` succeeds against the compose database
+- [x] `docker compose up` brings api, db, redis to healthy; only dev publishes ports
+- [x] Every service has `mem_limit` and `restart: unless-stopped`; named volume `pgdata`
+- [x] `alembic upgrade head` succeeds against the compose database
 
 **Verification:**
-- [ ] `docker compose -f compose.yml -f compose.dev.yml up -d --build` then `curl localhost:8000/api/health` returns ok
-- [ ] `docker compose exec api pytest` passes
+- [x] `docker compose -f compose.yml -f compose.dev.yml up -d --build` then `curl localhost:8000/api/health` returns ok
+- [x] `docker compose exec api pytest` passes
 
 **Dependencies:** Task 2
 
@@ -61,7 +61,7 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Scope:** M
 
 ## Checkpoint A: local backend
-- [ ] Stack healthy locally, pytest green, pre-commit clean
+- [x] Stack healthy locally, pytest green, pre-commit clean
 
 ## Task 4: First Jetson deploy
 
@@ -92,13 +92,13 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Description:** Vite, React 18, TypeScript, Tailwind CSS 4, shadcn initialised; the home page renders a shadcn Card that shows the API health through TanStack Query; multi-stage Dockerfile producing static files.
 
 **Acceptance criteria:**
-- [ ] `pnpm --dir web build` produces `dist/`; one shadcn component (Card, Button) renders styled
-- [ ] The page shows "API ok" from `/api/health` (Vite proxy in dev)
-- [ ] ESLint, Prettier and `tsc --noEmit` clean
+- [x] `pnpm --dir web build` produces `dist/`; one shadcn component (Card, Button) renders styled
+- [x] The page shows "API ok" from `/api/health` (Vite proxy in dev)
+- [x] ESLint, Prettier and `tsc --noEmit` clean
 
 **Verification:**
-- [ ] `pnpm --dir web test` (Vitest: health card renders the status from a mocked fetch)
-- [ ] `pnpm --dir web dev` and open the page: card shows "API ok"
+- [x] `pnpm --dir web test` (Vitest: health card renders the status from a mocked fetch)
+- [x] `pnpm --dir web dev` and open the page: card shows "API ok"
 
 **Dependencies:** Task 3
 
