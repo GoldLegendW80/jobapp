@@ -32,7 +32,7 @@ repo bootstrap (1)
 ## Task list
 
 ### Phase 1: Backend foundation
-- [ ] Task 1: Repository bootstrap
+- [x] Task 1: Repository bootstrap
 - [ ] Task 2: API skeleton with health
 - [ ] Task 3: Compose core and migrations
 

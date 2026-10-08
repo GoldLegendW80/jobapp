@@ -7,14 +7,14 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Description:** Turn `app/` into a git repo with ignore rules, an env template and pre-commit hooks, and push it to a new private GitHub repo.
 
 **Acceptance criteria:**
-- [ ] `git init`, `.gitignore` (env, node_modules, .venv, dist, caches), `.env.example` listing every variable of the spec
-- [ ] `.pre-commit-config.yaml` with ruff, ruff-format, prettier, eslint, gitleaks, end-of-file-fixer, trailing-whitespace, check-yaml; `pre-commit install` done
-- [ ] Private repo `GoldLegendW80/jobapp` created with `gh repo create --private` and first commit pushed
+- [x] `git init`, `.gitignore` (env, node_modules, .venv, dist, caches), `.env.example` listing every variable of the spec
+- [x] `.pre-commit-config.yaml` with ruff, ruff-format, prettier, eslint, gitleaks, end-of-file-fixer, trailing-whitespace, check-yaml; `pre-commit install` done
+- [x] Private repo `GoldLegendW80/jobapp` created with `gh repo create --private` and first commit pushed
 
 **Verification:**
-- [ ] `pre-commit run --all-files` passes
-- [ ] `gh repo view GoldLegendW80/jobapp --json visibility` shows PRIVATE
-- [ ] A dummy file containing a fake AWS key is refused by gitleaks
+- [x] `pre-commit run --all-files` passes
+- [x] `gh repo view GoldLegendW80/jobapp --json visibility` shows PRIVATE
+- [x] A dummy file containing a fake AWS key is refused by gitleaks
 
 **Dependencies:** None
 
