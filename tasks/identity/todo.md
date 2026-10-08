@@ -24,9 +24,9 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 **Description:** `/api/auth/login`, `/logout`, `/me`, invite check and accept (needed to finish the first admin), `current_user` and `require_admin` dependencies, CSRF header middleware, default-deny for `/api/*` with a public allowlist, sliding session refresh.
 
 **Acceptance criteria:**
-- [ ] Cookie flags correct over http locally and https through the tunnel
-- [ ] Route enumeration test: every non-allowlisted route returns 401 without a session
-- [ ] Non-GET without `X-Requested-With: jobapp` returns 403
+- [x] Cookie flags correct over http locally and https through the tunnel
+- [x] Route enumeration test: every non-allowlisted route returns 401 without a session
+- [x] Non-GET without `X-Requested-With: jobapp` returns 403
 
 **Verification:** pytest (integration, real Postgres); curl sequence through Caddy
 
