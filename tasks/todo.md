@@ -111,11 +111,11 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Description:** Caddy image built from the web dist output, serving `/` with SPA fallback and proxying `/api` to `api:8000`. Only Caddy publishes a port; remove the temporary api port.
 
 **Acceptance criteria:**
-- [ ] `http://localhost/` serves the shell, `http://localhost/api/health` returns ok
-- [ ] Unknown frontend routes fall back to `index.html`; `api`, `db`, `redis` publish no port in `compose.yml`
+- [x] `http://localhost/` serves the shell, `http://localhost/api/health` returns ok
+- [x] Unknown frontend routes fall back to `index.html`; `api`, `db`, `redis` publish no port in `compose.yml`
 
 **Verification:**
-- [ ] `curl -s localhost/api/health` and `curl -s localhost/some/route | grep '<div id="root">'`
+- [x] `curl -s localhost/api/health` and `curl -s localhost/some/route | grep '<div id="root">'`
 - [ ] Deployed to the Jetson with `./deploy.sh`, same two curls over ssh
 
 **Dependencies:** Tasks 4, 5
