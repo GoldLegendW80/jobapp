@@ -109,6 +109,15 @@ Idle RAM per service (`docker stats --no-stream`, stack idle, no user):
 Host after deploy: 1.4G used of 7.4G, 5.9G available, swap unused. Well under the 1G idle target
 of success criterion 5.
 
+Task 8, 2026-10-08, quick tunnel (`cloudflare/cloudflared:2026.9.3`, arm64, 72MB image):
+cloudflared idles at about 21MiB of its 128MiB limit, so the idle stack is about 150MiB. It logs its
+`*.trycloudflare.com` URL about 5s after a (re)start and turns healthy (`cloudflared tunnel ready`)
+within one healthcheck interval. A fresh hostname answered from the Mac on the first request in
+every run; the smoke still backs off up to 90s because the zone's negative DNS TTL is 60s. One
+QUIC connection (`ha-connections:1`, location cdg12). cloudflared warns that it cannot raise the
+UDP receive buffer (`net.core.rmem_max`, needs sudo on the Jetson); harmless at this traffic.
+Through Cloudflare, an origin 502 reaches the browser with Cloudflare's own error page and text.
+
 ## Open questions
 
 None blocking. Human prerequisites are tracked in tasks 4 and 7.

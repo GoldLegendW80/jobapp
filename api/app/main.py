@@ -63,6 +63,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "request",
                 extra={
                     "request_id": request_id,
+                    # The visitor's address: uvicorn --proxy-headers takes it from the single
+                    # X-Forwarded-For that caddy sets (Cf-Connecting-Ip through the tunnel).
+                    "client": request.client.host if request.client else None,
                     "method": request.method,
                     "path": request.url.path,
                     "status": status,

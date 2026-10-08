@@ -24,6 +24,10 @@ const evidence = path.join(
  *   E2E_CADDY_URL=http://127.0.0.1:18080 E2E_COMPOSE_SSH=jetson E2E_EVIDENCE=task4 \
  *     pnpm --dir web exec playwright test caddy.spec.ts
  * E2E_COMPOSE_DIR names the deploy directory on that host (default jobapp, under its home).
+ *
+ * Through the public quick tunnel (from any network, Cloudflare in front):
+ *   E2E_CADDY_URL=$(./deploy.sh url) E2E_COMPOSE_SSH=jetson E2E_EVIDENCE=task8 \
+ *     pnpm --dir web exec playwright test caddy.spec.ts
  */
 const caddyUrl = process.env.E2E_CADDY_URL;
 test.describe.configure({ mode: "serial" });

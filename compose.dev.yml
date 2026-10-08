@@ -4,6 +4,8 @@
 # caddy runs as in production on http://localhost (HTTP_PORT), serving the last web build.
 # For frontend hot reload run Vite outside Docker, it proxies /api to the api on 127.0.0.1:8000:
 #   pnpm --dir web dev            # http://localhost:5173
+# No public tunnel on the Mac: cloudflared is in the `tunnel` profile of compose.yml, which only
+# deploy.sh enables on the Jetson. Never pass --profile tunnel here unless you mean to publish.
 
 services:
   api:

@@ -1,7 +1,12 @@
 # Single entry point of the stack: static React build at /, FastAPI at /api.
-# Plain HTTP on :80. TLS ends at Cloudflare, and cloudflared reaches http://caddy:80 over the
-# Compose network (task 8). Built into the caddy image by the `caddy` target of web/Dockerfile,
-# which runs caddy validate and caddy fmt on it.
+# Plain HTTP, two listeners serving the same site (snippet `app`):
+#   :80    published on the host loopback (HTTP_BIND:HTTP_PORT). Trusts no proxy: the client is
+#          the TCP peer, and any X-Forwarded-For or Cf-Connecting-Ip it sends is ignored.
+#   :8080  never published, reached only over the Compose network by cloudflared (quick tunnel,
+#          TLS ends at Cloudflare). Trusts private peers, so the real visitor address comes from
+#          Cf-Connecting-Ip, which the Cloudflare edge always overwrites.
+# Built into the caddy image by the `caddy` target of web/Dockerfile, which runs caddy validate
+# and caddy fmt on it.
 {
 	# No admin API: the config is baked into the image, so there is nothing to reload live.
 	admin off
@@ -14,6 +19,12 @@
 	log default {
 		output stdout
 		format json
+	}
+	# Tunnel listener only. Every container of the Compose network is a private peer; cloudflared is
+	# the only one that connects here.
+	servers :8080 {
+		trusted_proxies static private_ranges
+		client_ip_headers Cf-Connecting-Ip X-Forwarded-For
 	}
 }
 
@@ -31,7 +42,7 @@
 	}
 }
 
-:80 {
+(app) {
 	# Access log, one JSON line per request on stdout. Cookie and Authorization are redacted by default.
 	log {
 		output stdout
@@ -65,11 +76,14 @@
 		respond "ok" 200
 	}
 
-	# The api keeps its /api prefix. X-Forwarded-For, -Proto and -Host are set by reverse_proxy.
+	# The api keeps its /api prefix. X-Forwarded-Proto and -Host are set by reverse_proxy, and
+	# X-Forwarded-For is exactly one address, the client ip resolved above (the TCP peer on :80,
+	# Cf-Connecting-Ip on :8080), so a value sent by the visitor never reaches the api.
 	# A stopped api fails the dial at once and becomes 502.
 	@api path /api /api/*
 	handle @api {
 		reverse_proxy api:8000 {
+			header_up X-Forwarded-For {client_ip}
 			transport http {
 				dial_timeout 3s
 			}
@@ -106,4 +120,12 @@
 		header Cache-Control no-store
 		respond "{err.status_code} {err.status_text}"
 	}
+}
+
+:80 {
+	import app
+}
+
+:8080 {
+	import app
 }

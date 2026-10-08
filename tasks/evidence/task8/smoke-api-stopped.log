@@ -1,0 +1,23 @@
+
+== on jetson: tests/jetson_smoke.sh
+
+== services healthy, only caddy published, on loopback
+   FAIL: api is not running
+
+== public, through the quick tunnel
+   https://macro-nutritional-grey-quick.trycloudflare.com
+   ok: caddy answers through the tunnel
+   FAIL: /api/health answered 502: <!DOCTYPE html>
+<!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->
+<!--[if IE 7]>    <html class="no-js ie7 oldie" lang="en-US"> <![endif]-->
+<!--[if IE 8]>    <html class="no-
+   ok: / serves the React shell
+   ok: /some/deep/route?x=1 serves the React shell
+   ok: security headers and no-cache on index.html
+   FAIL: the api logged client 'nothing' for smoke-1791462758-1015, Cloudflare sees this machine as 82.126.154.38
+   ok: a forged Cf-Connecting-Ip is refused by the Cloudflare edge (403)
+   FAIL: 5 MB upload answered 502: <!DOCTYPE html>
+<!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->
+<!--[if IE 7]>    <html class
+
+SMOKE FAILED: 4 check(s), see FAIL above

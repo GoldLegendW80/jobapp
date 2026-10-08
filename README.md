@@ -47,10 +47,11 @@ in `api/app/models.py` so `alembic revision --autogenerate` sees them.
 ./deploy.sh ps                 # docker compose ps on the Jetson
 ./deploy.sh stats              # memory and CPU per service
 ./deploy.sh ssh                # shell in the deploy directory
-./deploy.sh url                # print the current trycloudflare URL (task 8)
-./deploy.sh smoke              # health through Caddy, then through the public URL (task 8)
+./deploy.sh url                # the current https://*.trycloudflare.com URL, alone on stdout
+./deploy.sh smoke              # checks on the Jetson, then through the public URL; exit 1 if any fails
+./deploy.sh smoke --full       # same, plus a database outage and recovery (stops and starts db once)
 ./deploy.sh backup             # pg_dump to jetson:~/jobapp-backups/YYYY-MM-DD.sql.gz (task 9)
-tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore
+tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore, url
 tests/jetson_smoke.sh          # smoke of the deployed stack over ssh (stops and starts db once)
 ```
 
@@ -64,3 +65,27 @@ generated on the first deploy into the git-ignored `.env.jetson` (random `POSTGR
 Jetson's loopback only; from the Mac, open it with `ssh -N -L 18080:127.0.0.1:80 jetson` and browse
 http://127.0.0.1:18080. `DEPLOY_HOST` and `DEPLOY_DIR` override the target. Deploys are manual;
 GitHub Actions only runs lint and tests.
+
+## Public URL
+
+`cloudflared` runs a Cloudflare quick tunnel (free, no account, no domain) from the Jetson to
+Caddy. It only makes outbound connections, so no port is opened on the router. The URL is
+random and changes every time the container starts (deploy that recreates it, `restart`, reboot):
+
+```bash
+curl "$(./deploy.sh url)/api/health"     # {"status":"ok"} from anywhere
+```
+
+`./deploy.sh url` reads the logs of the container's current start only, so it never prints the
+dead URL of a previous start, and waits up to 30s for a fresh one. `./deploy.sh` prints the URL at
+the end. A new hostname can take up to a minute to resolve (the zone's negative DNS cache is 60s);
+the smoke backs off and retries rather than hammering it, because quick tunnels are rate limited
+and have no uptime guarantee.
+
+cloudflared reaches Caddy on its own listener, `caddy:8080`, never published. That listener trusts
+the Compose network as a proxy and takes the visitor's address from `Cf-Connecting-Ip`, which the
+Cloudflare edge sets (and refuses with 403 when a visitor sends it). The published `:80` trusts
+nobody. Either way the api receives exactly one `X-Forwarded-For` and logs it as `client`.
+
+The service sits in the Compose profile `tunnel`, which `deploy.sh` enables on the Jetson. Neither
+the dev stack nor a plain `docker compose -f compose.yml up` on the Mac opens a public tunnel.

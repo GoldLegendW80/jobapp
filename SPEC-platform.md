@@ -28,7 +28,7 @@ RAM budget for the whole stack, all modules included: 5G, leaving the rest to th
 | `api` | build `api/` (`python:3.12-slim`) | FastAPI, SQLAlchemy 2, Alembic, Pydantic 2, uvicorn |
 | `db` | `postgres:16-alpine` | Database, volume `pgdata` |
 | `redis` | `redis:7-alpine` | Queue between `api` and `worker` (used from the `agents` module on) |
-| `cloudflared` | `cloudflare/cloudflared` | Quick tunnel to Caddy (`tunnel --no-autoupdate --url http://caddy:80`): free, no account, no domain; the `*.trycloudflare.com` URL changes on every restart of the container |
+| `cloudflared` | `cloudflare/cloudflared` | Quick tunnel to Caddy (`tunnel --no-autoupdate --url http://caddy:8080`, Caddy's unpublished tunnel listener that trusts `Cf-Connecting-Ip`): free, no account, no domain; the `*.trycloudflare.com` URL changes on every restart of the container |
 
 `worker` and `browser` are added by their own modules; the Compose file reserves their names.
 

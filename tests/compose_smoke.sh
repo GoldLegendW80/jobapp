@@ -71,11 +71,11 @@ ok "compose.yml"
 ok "compose.yml + compose.dev.yml"
 
 step "production config: only caddy publishes a port, mem_limit and restart everywhere, pgdata"
-"${PROD[@]}" config --format json | python3 -c '
+"${PROD[@]}" --profile tunnel config --format json | python3 -c '
 import json, sys
 cfg = json.load(sys.stdin)
 services = cfg["services"]
-assert set(services) == {"api", "caddy", "db", "redis"}, sorted(services)
+assert set(services) == {"api", "caddy", "db", "redis", "cloudflared"}, sorted(services)
 for name, svc in services.items():
     ports, restart = svc.get("ports"), svc.get("restart")
     if name == "caddy":
@@ -92,9 +92,21 @@ deps = services["api"]["depends_on"]
 assert deps["db"]["condition"] == deps["redis"]["condition"] == "service_healthy", deps
 assert int(services["caddy"]["mem_limit"]) == 128 * 1024**2, services["caddy"]["mem_limit"]
 assert services["caddy"]["build"]["target"] == "caddy", services["caddy"]["build"]
+cf = services["cloudflared"]
+import re
+assert re.fullmatch(r"cloudflare/cloudflared:\d{4}\.\d+\.\d+", cf["image"]), cf["image"]
+assert cf["profiles"] == ["tunnel"], cf.get("profiles")
+assert cf["depends_on"]["caddy"]["condition"] == "service_healthy", cf["depends_on"]
+assert int(cf["mem_limit"]) == 128 * 1024**2, cf["mem_limit"]
+assert "http://caddy:8080" in cf["command"] and "--no-autoupdate" in cf["command"], cf["command"]
 print(f"   total mem_limit today: {total // 1024**2} MiB")
 ' || fail "production config"
-ok "caddy alone publishes, on 127.0.0.1; limits, restart policy, healthchecks, depends_on healthy"
+ok "caddy alone publishes, on 127.0.0.1; limits, restart policy, healthchecks, depends_on healthy; cloudflared pinned, in the tunnel profile"
+for files in "compose.yml" "compose.yml -f compose.dev.yml"; do
+  # shellcheck disable=SC2086 # two words on purpose
+  ! docker compose -f $files config --services | grep -qx cloudflared || fail "$files starts cloudflared without --profile tunnel"
+done
+ok "no tunnel without --profile tunnel: neither the dev stack nor a plain compose.yml opens one on the Mac"
 "${DEV[@]}" config --format json | python3 -c '
 import json, sys
 services = json.load(sys.stdin)["services"]

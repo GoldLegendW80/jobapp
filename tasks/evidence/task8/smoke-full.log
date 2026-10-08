@@ -1,0 +1,54 @@
+
+== on jetson: tests/jetson_smoke.sh (full: stops and starts db)
+
+== services healthy, only caddy published, on loopback
+   ok: api, caddy, db, redis, cloudflared healthy; caddy alone on 127.0.0.1:80 (its tunnel listener :8080 unpublished)
+   ok: nothing answers on the LAN at 192.168.1.47:80
+
+== production settings
+   ok: .env mode 600, APP_ENV production in the api, strong SECRET_KEY and POSTGRES_PASSWORD
+   ok: runtime image: no dev dependencies, runs as uid 10001
+   ok: jobapp-api and jobapp-caddy images are arm64
+
+== health and the React shell through caddy
+   ok: /api/health: {"status":"ok"}
+   ok: /, deep routes, query string, trailing slash, unicode: index.html
+   ok: index no-cache, DENY, no Server header; /assets/index-B1uZrTNO.js immutable
+   ok: zstd, missing asset is a 404, /api/nope is the api's JSON 404
+   ok: path traversal never leaves /srv
+
+== loopback trusts no proxy: spoofed client headers never reach the api
+   ok: the api logs the TCP peer 172.18.0.1, not the spoofed Cf-Connecting-Ip or X-Forwarded-For
+
+== migrations rerun safely
+   ok: upgrade head twice, current is 0001 (head)
+
+== redis
+   ok: PONG, appendonly yes
+
+== database stopped: 503 through caddy, then 200 without restarting api; data kept
+   ok: db stopped: 503 database unavailable
+   ok: db started: 200 again, api never restarted, row kept
+
+== memory under the limits
+   jobapp-api-1 62.6MiB / 512MiB
+   jobapp-caddy-1 29.7MiB / 128MiB
+   jobapp-cloudflared-1 21.61MiB / 128MiB
+   jobapp-db-1 19.84MiB / 768MiB
+   jobapp-redis-1 8.93MiB / 256MiB
+   ok: api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, cloudflared 128MiB
+
+All 16 checks passed on jetson.
+
+== public, through the quick tunnel
+   https://gathering-saves-below-twelve.trycloudflare.com
+   ok: caddy answers through the tunnel
+   ok: /api/health: {"status":"ok"}
+   ok: / serves the React shell
+   ok: /some/deep/route?x=1 serves the React shell
+   ok: security headers and no-cache on index.html
+   ok: the api logs the visitor's address 82.126.154.38 (Cf-Connecting-Ip), spoofed headers ignored
+   ok: a forged Cf-Connecting-Ip is refused by the Cloudflare edge (403)
+   ok: 5 MB upload reaches the api through the tunnel (405 from FastAPI)
+
+Smoke passed on jetson and through https://gathering-saves-below-twelve.trycloudflare.com

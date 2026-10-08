@@ -6,7 +6,10 @@
 #   ./deploy.sh ps                 docker compose ps on the Jetson
 #   ./deploy.sh stats              docker stats --no-stream of the stack
 #   ./deploy.sh ssh                interactive shell in the deploy directory
-#   ./deploy.sh url | smoke | backup | restore   reserved for tasks 8 and 9
+#   ./deploy.sh url                print the current https://*.trycloudflare.com URL, alone on stdout
+#   ./deploy.sh smoke [--full]     checks on the Jetson, then through the public URL; --full also
+#                                  stops and starts db once (tests/jetson_smoke.sh)
+#   ./deploy.sh backup | restore   reserved for task 9
 #
 # Settings, first found wins: the shell environment, then .env at the repository root, then
 # the defaults below. DEPLOY_HOST (ssh alias, default jetson), DEPLOY_DIR (default ~/jobapp).
@@ -25,10 +28,18 @@ LOCAL_ENV="$ROOT/.env.jetson"
 MIN_DISK_GB=5
 HEALTH_TIMEOUT_S=90
 SSH_TIMEOUT_S=5
+# How long `url` waits for cloudflared to log its URL after a (re)start.
+URL_TIMEOUT_S="${DEPLOY_URL_TIMEOUT:-30}"
+# How long the public checks wait for a fresh trycloudflare hostname to resolve and route. macOS
+# caches a negative DNS answer for the zone's 60s, so this must outlast one negative TTL.
+PUBLIC_TIMEOUT_S="${DEPLOY_PUBLIC_TIMEOUT:-90}"
+# Compose profile of the cloudflared service (compose.yml): enabled on the Jetson only.
+PROFILE=tunnel
 
 # --- output -------------------------------------------------------------------------------
 step() { printf '\n== %s\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
+note() { printf '   %s\n' "$*" >&2; } # progress that must stay off stdout (url)
 warn() { printf '   WARNING: %s\n' "$*" >&2; }
 die() {
   printf 'deploy.sh: %s\n' "$*" >&2
@@ -80,10 +91,11 @@ trap cleanup EXIT
 
 remote() { ssh "${SSH_OPTS[@]}" "$HOST" "$@"; }
 
-rcompose() { # rcompose <args...>: docker compose -f compose.yml in the deploy directory
+RCOMPOSE="docker compose -f compose.yml --profile $PROFILE"
+rcompose() { # rcompose <args...>: docker compose -f compose.yml --profile tunnel in the deploy directory
   local args
   args="$(printf ' %q' "$@")"
-  remote "cd $RDIR_Q && docker compose -f compose.yml$args"
+  remote "cd $RDIR_Q && $RCOMPOSE$args"
 }
 
 require_remote() {
@@ -256,7 +268,7 @@ check_port() {
   HTTP_BIND="${bind:-127.0.0.1}"
   used="$(remote "ss -ltnH 'sport = :$HTTP_PORT'" || true)"
   # Taken by our own caddy is fine: compose recreates it on the same port.
-  ours="$(remote "id=\$(cd $RDIR_Q && docker compose -f compose.yml ps -q caddy 2>/dev/null) &&
+  ours="$(remote "id=\$(cd $RDIR_Q && $RCOMPOSE ps -q caddy 2>/dev/null) &&
     [ -n \"\$id\" ] && docker port \"\$id\" 80/tcp" 2>/dev/null || true)"
   if [[ -n "$used" && "$ours" != *":$HTTP_PORT" ]]; then
     die "port $HTTP_PORT is already taken on $HOST; set HTTP_PORT to a free port in .env.jetson and deploy with --env"
@@ -307,6 +319,77 @@ health() {
   info "/some/route: React shell"
 }
 
+# --- tunnel -------------------------------------------------------------------------------
+# extract_url: the last https://<name>.trycloudflare.com on stdin. cloudflared prints it in a box
+# ("Your quick Tunnel has been created! Visit it at ..."); api.trycloudflare.com is the service it
+# asks for the hostname, never the answer.
+extract_url() {
+  grep -oE 'https://[a-z0-9]+(-[a-z0-9]+)*\.trycloudflare\.com([^A-Za-z0-9.-]|$)' |
+    sed -E 's/(\.com).*$/\1/' | grep -v '^https://api\.' | tail -n 1 || true
+}
+
+# tunnel_url: print the URL of the running cloudflared's current start on stdout, waiting up to
+# URL_TIMEOUT_S for it to appear. Only logs since the container's last StartedAt are read, so a
+# restart never yields the previous, dead hostname. Diagnostics on stderr; exit 1 if none.
+tunnel_url() {
+  local deadline=$((SECONDS + URL_TIMEOUT_S)) id state started url="" waited=0
+  while :; do
+    id="$(rcompose ps -a -q cloudflared 2>/dev/null | head -n 1 || true)"
+    [[ -n "$id" ]] || die "cloudflared is not running on $HOST: no container (deploy with ./deploy.sh, then ./deploy.sh ps)"
+    read -r state started <<<"$(remote "docker inspect -f '{{.State.Status}} {{.State.StartedAt}}' $(printf '%q' "$id")" || true)"
+    if [[ "$state" == "running" ]]; then
+      url="$(remote "docker logs --since $(printf '%q' "$started") $(printf '%q' "$id") 2>&1" | extract_url)"
+      [[ -n "$url" ]] && break
+    elif [[ "$state" != "restarting" && "$state" != "created" ]]; then
+      die "cloudflared is ${state:-gone} on $HOST, not running (./deploy.sh logs cloudflared; start it with ./deploy.sh)"
+    fi
+    if ((SECONDS >= deadline)); then
+      die "cloudflared ($state since ${started:-?}) logged no trycloudflare URL within ${URL_TIMEOUT_S}s; see ./deploy.sh logs cloudflared"
+    fi
+    if ((waited == 0)); then
+      note "waiting up to ${URL_TIMEOUT_S}s for cloudflared to log its URL"
+      waited=1
+    fi
+    sleep 2
+  done
+  printf '%s\n' "$url"
+}
+
+# --- public checks, from this machine through the tunnel ------------------------------------
+PIN=() # --resolve host:443:ip, set when the system resolver still caches a negative answer
+pcurl() { # pcurl <url> [curl args]: status code on stdout, headers in $PDIR/h, body in $PDIR/b
+  local url="$1"
+  shift
+  curl -s --max-time 30 ${PIN[@]+"${PIN[@]}"} -D "$PDIR/h" -o "$PDIR/b" -w '%{http_code}' "$@" "$url" || true
+}
+pbrief() { # one line about the last body: an HTML page's <title> (Cloudflare's error pages), else its start
+  local title
+  title="$(tr -d '\r\n' <"$PDIR/b" | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p' | head -c 120)"
+  if [[ -n "$title" ]]; then printf 'page "%s"' "$title"; else tr -d '\r\n' <"$PDIR/b" | head -c 120; fi
+}
+phdr() { tr -d '\r' <"$PDIR/h" | grep -i "^$1:" | tail -n 1 | cut -d' ' -f2-; }
+
+# wait_public <url>: until caddy's /healthz answers through the tunnel. A fresh hostname takes a
+# few seconds to exist in DNS and to route to this connector; back off 2, 4, 8, 15, 15... seconds,
+# so a slow start costs a handful of requests, not a stream (quick tunnels are rate limited).
+wait_public() {
+  local url="$1" host deadline=$((SECONDS + PUBLIC_TIMEOUT_S)) delay=2 code ip
+  host="${url#https://}"
+  while :; do
+    code="$(pcurl "$url/healthz")"
+    [[ "$code" == "200" && "$(cat "$PDIR/b")" == "ok" ]] && return 0
+    if [[ "$code" == "000" && ${#PIN[@]} -eq 0 ]] && command -v dig >/dev/null; then
+      # Not resolvable here yet: ask 1.1.1.1 directly, past the local negative cache.
+      ip="$(dig +short +time=3 +tries=1 @1.1.1.1 A "$host" 2>/dev/null | grep -E '^[0-9.]+$' | head -n 1 || true)"
+      [[ -z "$ip" ]] || PIN=(--resolve "$host:443:$ip")
+    fi
+    ((SECONDS + delay <= deadline)) || return 1
+    note "$host not answering yet (HTTP $code), retrying in ${delay}s"
+    sleep "$delay"
+    delay=$((delay * 2 > 15 ? 15 : delay * 2))
+  done
+}
+
 cmd_deploy() {
   local force_env=0 arg
   for arg in "$@"; do
@@ -332,8 +415,19 @@ cmd_deploy() {
   start_stack
   migrate
   health
+  step "public URL"
+  local url
+  url="$(tunnel_url)"
+  PDIR="$(mktemp -d)"
+  if wait_public "$url"; then
+    info "answers through the tunnel"
+  else
+    warn "$url does not answer from here yet; try ./deploy.sh smoke in a minute"
+  fi
+  rm -rf "$PDIR"
   step "done in $((SECONDS - t0))s"
   printf '   %s\n' "${TIMES[@]}"
+  printf '\n%s\n' "$url"
 }
 
 # --- other subcommands --------------------------------------------------------------------
@@ -356,12 +450,139 @@ cmd_ps() {
 cmd_stats() {
   require_remote
   require_deployed
-  remote "cd $RDIR_Q && docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.CPUPerc}}' \$(docker compose -f compose.yml ps -q)"
+  remote "cd $RDIR_Q && docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.CPUPerc}}' \$($RCOMPOSE ps -q)"
 }
 
 cmd_ssh() {
   require_remote
   ssh -t "${SSH_OPTS[@]}" "$HOST" "cd $RDIR_Q 2>/dev/null; exec \$SHELL -l"
+}
+
+cmd_url() {
+  [[ $# -eq 0 ]] || die "usage: ./deploy.sh url"
+  ssh_master
+  require_remote
+  require_deployed
+  tunnel_url
+}
+
+# smoke: tests/jetson_smoke.sh over ssh (quick unless --full), then the public checks. Every
+# check runs and is reported; the exit code is 1 if any failed.
+cmd_smoke() {
+  local full=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --full) full=1 ;;
+      *) die "unknown option for smoke: $arg (usage: ./deploy.sh smoke [--full])" ;;
+    esac
+  done
+  ssh_master
+  require_remote
+  require_deployed
+  local failed=0
+  step "on $HOST: tests/jetson_smoke.sh$( ((full)) && echo ' (full: stops and starts db)')"
+  if ! DEPLOY_HOST="$HOST" DEPLOY_DIR="$RDIR" JETSON_SMOKE_FULL="$full" "$ROOT/tests/jetson_smoke.sh"; then
+    failed=$((failed + 1))
+  fi
+
+  step "public, through the quick tunnel"
+  local url
+  if ! url="$(tunnel_url)"; then
+    printf '\nSMOKE FAILED: no tunnel URL\n' >&2
+    exit 1
+  fi
+  info "$url"
+  PDIR="$(mktemp -d)"
+  # shellcheck disable=SC2064 # expand PDIR now
+  trap "rm -rf '$PDIR'; cleanup" EXIT
+  pass() { info "ok: $*"; }
+  flunk() {
+    printf '   FAIL: %s\n' "$*" >&2
+    failed=$((failed + 1))
+  }
+  if ! wait_public "$url"; then
+    flunk "$url/healthz never answered within ${PUBLIC_TIMEOUT_S}s (DNS, or cloudflared not connected)"
+    printf '\nSMOKE FAILED: %d check(s)\n' "$failed" >&2
+    exit 1
+  fi
+  pass "caddy answers through the tunnel"
+
+  local code body
+  code="$(pcurl "$url/api/health")"
+  body="$(cat "$PDIR/b")"
+  if [[ "$code" == "200" && "$body" == '{"status":"ok"}' ]]; then
+    pass "/api/health: $body"
+  else
+    flunk "/api/health answered $code: $(pbrief)"
+  fi
+
+  local route
+  for route in / "/some/deep/route?x=1"; do
+    code="$(pcurl "$url$route")"
+    if [[ "$code" == "200" ]] && grep -q '<div id="root">' "$PDIR/b"; then
+      pass "$route serves the React shell"
+    else
+      flunk "$route answered $code without the React shell"
+    fi
+  done
+  local want got hname
+  for want in "X-Frame-Options: DENY" "X-Content-Type-Options: nosniff" \
+    "Referrer-Policy: strict-origin-when-cross-origin" \
+    "Content-Security-Policy: frame-ancestors 'none'; base-uri 'self'; object-src 'none'" \
+    "Cache-Control: no-cache"; do
+    hname="${want%%:*}"
+    got="$(phdr "$hname")"
+    [[ "$got" == "${want#*: }" ]] || flunk "$hname is '${got}', expected '${want#*: }'"
+  done
+  pass "security headers and no-cache on index.html"
+
+  # The visitor's address must reach the api: Cloudflare's view of this machine (cdn-cgi/trace)
+  # against the client the api logs for one tagged request carrying a spoofed X-Forwarded-For.
+  # IPv4 for both, so the two requests cannot leave by different address families.
+  local rid trace_ip logged
+  rid="smoke-$(date +%s)-$RANDOM"
+  pcurl "$url/cdn-cgi/trace" -4 >/dev/null
+  trace_ip="$(sed -n 's/^ip=//p' "$PDIR/b")"
+  code="$(pcurl "$url/api/health" -4 -H "X-Request-ID: $rid" -H 'X-Forwarded-For: 203.0.113.9')"
+  logged=""
+  local i
+  for i in 1 2 3 4 5; do
+    logged="$(rcompose logs --no-log-prefix --since 5m api 2>/dev/null | grep -F "\"request_id\": \"$rid\"" |
+      sed -n 's/.*"client": "\([^"]*\)".*/\1/p' | tail -n 1 || true)"
+    [[ -n "$logged" ]] && break
+    sleep "$i"
+  done
+  if [[ -z "$trace_ip" ]]; then
+    flunk "cdn-cgi/trace gave no ip (HTTP $code for the tagged request)"
+  elif [[ "$logged" == "$trace_ip" ]]; then
+    pass "the api logs the visitor's address $logged (Cf-Connecting-Ip), spoofed headers ignored"
+  else
+    flunk "the api logged client '${logged:-nothing}' for $rid, Cloudflare sees this machine as $trace_ip"
+  fi
+
+  # The Cloudflare edge refuses a visitor who sends Cf-Connecting-Ip (403), so the header caddy
+  # trusts on the tunnel listener cannot be forged from outside.
+  code="$(pcurl "$url/api/health" -H 'Cf-Connecting-Ip: 203.0.113.10')"
+  if [[ "$code" == "403" ]]; then
+    pass "a forged Cf-Connecting-Ip is refused by the Cloudflare edge (403)"
+  else
+    flunk "a forged Cf-Connecting-Ip answered $code, expected the edge's 403"
+  fi
+
+  # A 5 MB body, half the caddy limit, crosses the tunnel and reaches the api, which answers 405
+  # (POST on a GET route) rather than caddy's 413 or a tunnel error.
+  code="$(head -c 5000000 /dev/zero | pcurl "$url/api/health" -X POST --data-binary @- -H 'Content-Type: application/octet-stream')"
+  if [[ "$code" == "405" ]] && grep -q 'Method Not Allowed' "$PDIR/b"; then
+    pass "5 MB upload reaches the api through the tunnel (405 from FastAPI)"
+  else
+    flunk "5 MB upload answered $code: $(pbrief)"
+  fi
+
+  if ((failed > 0)); then
+    printf '\nSMOKE FAILED: %d check(s), see FAIL above\n' "$failed" >&2
+    exit 1
+  fi
+  printf '\nSmoke passed on %s and through %s\n' "$HOST" "$url"
 }
 
 not_yet() {
@@ -379,7 +600,8 @@ main() {
     ps) cmd_ps ;;
     stats) cmd_stats ;;
     ssh) cmd_ssh ;;
-    url | smoke) not_yet "$cmd" "task 8" ;;
+    url) cmd_url "$@" ;;
+    smoke) cmd_smoke "$@" ;;
     backup | restore) not_yet "$cmd" "task 9" ;;
     -h | --help | help) usage ;;
     *)

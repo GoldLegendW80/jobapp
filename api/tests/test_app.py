@@ -95,6 +95,7 @@ def test_logs_are_one_json_object_per_line(capsys: pytest.CaptureFixture[str]) -
     assert request_logs, lines
     entry = request_logs[0]
     assert entry["request_id"] == "trace-1"
+    assert entry["client"] == "testclient"
     assert entry["path"] == "/nope"
     assert entry["status"] == 404
     assert entry["level"] == "info"
@@ -116,3 +117,17 @@ def test_json_formatter_handles_unicode_and_exceptions() -> None:
     assert payload["custom"] == {"a": 1}
     assert "ValueError: bad" in payload["exc"]
     assert payload["level"] == "error"
+
+
+def test_client_comes_from_the_forwarded_header(capsys: pytest.CaptureFixture[str]) -> None:
+    # As in production: uvicorn --proxy-headers --forwarded-allow-ips "*" behind caddy, which
+    # sends exactly one X-Forwarded-For (the visitor, from Cf-Connecting-Ip through the tunnel).
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    app = ProxyHeadersMiddleware(create_app(make_settings(UNREACHABLE)), trusted_hosts="*")
+    with TestClient(app) as client:
+        client.get("/nope", headers={"X-Forwarded-For": "203.0.113.7"})
+        client.get("/nope", headers={"X-Forwarded-For": "2001:db8::1"})
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
+    clients = [line["client"] for line in lines if line["msg"] == "request"]
+    assert clients == ["203.0.113.7", "2001:db8::1"]

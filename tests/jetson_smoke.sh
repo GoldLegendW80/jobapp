@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Reduced smoke test of the deployed stack on the Jetson, run from the Mac over ssh (platform
-# tasks 4 and 6). Rerunnable. It stops and starts db once (data kept) and leaves every service up.
+# tasks 4, 6 and 8). Rerunnable. By default it stops and starts db once (data kept) and leaves
+# every service up; JETSON_SMOKE_FULL=0 skips that outage and changes nothing on the Jetson, which
+# is what ./deploy.sh smoke runs (./deploy.sh smoke --full runs the outage too).
 #
 #   tests/jetson_smoke.sh                  against DEPLOY_HOST (default jetson), DEPLOY_DIR ~/jobapp
 #   DEPLOY_HOST=other tests/jetson_smoke.sh
+#   JETSON_SMOKE_FULL=0 tests/jetson_smoke.sh
 #
 # The full local checks live in tests/compose_smoke.sh; this keeps the ones that matter on the
 # target: health and SPA through caddy on loopback, nothing on the LAN, production settings,
@@ -13,13 +16,18 @@ set -euo pipefail
 HOST="${DEPLOY_HOST:-jetson}"
 RDIR="${DEPLOY_DIR:-jobapp}"
 RDIR="${RDIR#\~/}"
+FULL="${JETSON_SMOKE_FULL:-1}"
 
 CTL="$(mktemp -d /tmp/jobapp-smoke.XXXXXX)"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=5 -o ControlMaster=auto -o "ControlPath=$CTL/%C"
   -o ControlPersist=60 "$HOST")
+STOPPED_DB=0
 cleanup() {
-  # Never leave a service stopped, whatever failed.
-  "${SSH[@]}" "cd $RDIR && docker compose -f compose.yml start db api >/dev/null 2>&1" || true
+  # Never leave db stopped by this script, whatever failed. A service that was already down when
+  # the script started is left as it was: the smoke reports it, it does not repair it.
+  if ((STOPPED_DB == 1)); then
+    "${SSH[@]}" "cd $RDIR && docker compose -f compose.yml start db >/dev/null 2>&1" || true
+  fi
   ssh -o "ControlPath=$CTL/%C" -O exit "$HOST" >/dev/null 2>&1 || true
   rm -rf "$CTL"
 }
@@ -37,7 +45,7 @@ fail() {
 }
 
 r() { "${SSH[@]}" "$@"; }
-rc() { r "cd $RDIR && docker compose -f compose.yml $*"; }
+rc() { r "cd $RDIR && docker compose -f compose.yml --profile tunnel $*"; }
 # Remote env values, never printed.
 renv() { r "sed -n 's/^$1=//p' $RDIR/.env | tail -n 1"; }
 
@@ -58,10 +66,15 @@ body_of() { sed -n '/^---8<---$/,$p' <<<"$1" | tail -n +2; }
 hdr() { headers_of "$1" | grep -i "^$2:" | head -n 1 | cut -d' ' -f2-; }
 
 step "services healthy, only caddy published, on loopback"
-for svc in api caddy db redis; do
+for svc in api caddy db redis cloudflared; do
   id="$(rc ps -q "$svc")"
   [[ -n "$id" ]] || fail "$svc is not running"
-  health="$(r "docker inspect -f '{{.State.Health.Status}}' $id")"
+  # A service that has just (re)started is `starting` until its first healthcheck: give it a minute.
+  deadline=$((SECONDS + 60))
+  while health="$(r "docker inspect -f '{{.State.Health.Status}}' $id")" && [[ "$health" == "starting" ]] &&
+    ((SECONDS < deadline)); do
+    sleep 3
+  done
   [[ "$health" == "healthy" ]] || fail "$svc is $health"
   ports="$(r "docker port $id")"
   if [[ "$svc" == "caddy" ]]; then
@@ -70,7 +83,7 @@ for svc in api caddy db redis; do
     [[ -z "$ports" ]] || fail "$svc publishes $ports"
   fi
 done
-ok "api, caddy, db, redis healthy; caddy alone on 127.0.0.1:$PORT"
+ok "api, caddy, db, redis, cloudflared healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
 ip="$(ssh -G "$HOST" 2>/dev/null | awk '/^hostname / {print $2}')"
 if curl -s --max-time 3 -o /dev/null "http://$ip:$PORT/" 2>/dev/null; then
   fail "the stack answers on the LAN at $ip:$PORT"
@@ -128,6 +141,20 @@ for attack in /../etc/passwd /%2e%2e/%2e%2e/etc/passwd /assets/..%2f..%2f..%2fet
 done
 ok "path traversal never leaves /srv"
 
+step "loopback trusts no proxy: spoofed client headers never reach the api"
+rid="jetson-smoke-$RANDOM$RANDOM"
+rcurl /api/health -H "'X-Request-ID: $rid'" -H "'Cf-Connecting-Ip: 203.0.113.10'" -H "'X-Forwarded-For: 203.0.113.9'" >/dev/null
+client=""
+for i in 1 2 3; do
+  client="$(rc logs --no-log-prefix --since 2m api | grep -F "\"request_id\": \"$rid\"" |
+    sed -n 's/.*"client": "\([^"]*\)".*/\1/p' | tail -n 1 || true)"
+  [[ -n "$client" ]] && break
+  sleep "$i"
+done
+python3 -c 'import ipaddress, sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]).is_private else 1)' "${client:-x}" 2>/dev/null ||
+  fail "the api logged client '${client:-nothing}' for a spoofed request on loopback"
+ok "the api logs the TCP peer $client, not the spoofed Cf-Connecting-Ip or X-Forwarded-For"
+
 step "migrations rerun safely"
 for _ in 1 2; do rc exec -T api alembic upgrade head >/dev/null 2>&1 || fail "upgrade head"; done
 current="$(rc exec -T api alembic current 2>/dev/null | tr -d '\r')"
@@ -139,41 +166,47 @@ step "redis"
 [[ "$(rc exec -T redis redis-cli config get appendonly | tail -n 1 | tr -d '\r')" == "yes" ]] || fail "AOF off"
 ok "PONG, appendonly yes"
 
-step "database stopped: 503 through caddy, then 200 without restarting api; data kept"
-PGU="$(renv POSTGRES_USER)"
-PGD="$(renv POSTGRES_DB)"
-psql() { rc exec -T db psql -v ON_ERROR_STOP=1 -U "$PGU" -d "$PGD" -tAc "\"$1\""; }
-psql "create table if not exists smoke_jetson (note text)" >/dev/null
-psql "delete from smoke_jetson; insert into smoke_jetson values ('kept ✓')" >/dev/null
-api_started="$(r "docker inspect -f '{{.State.StartedAt}}' $(rc ps -q api)")"
-wait_health() { # wait_health <code> <seconds>
-  local deadline=$((SECONDS + $2)) got=""
-  while ((SECONDS < deadline)); do
-    got="$(status_of "$(rcurl /api/health)")"
-    [[ "$got" == "$1" ]] && return 0
-    sleep 1
-  done
-  fail "health never answered $1 within $2s (last $got)"
-}
-rc stop db >/dev/null 2>&1
-wait_health 503 30
-grep -q '"database unavailable"' <<<"$(body_of "$(rcurl /api/health)")" || fail "503 body"
-ok "db stopped: 503 database unavailable"
-rc start db >/dev/null 2>&1
-wait_health 200 90
-[[ "$(r "docker inspect -f '{{.State.StartedAt}}' $(rc ps -q api)")" == "$api_started" ]] || fail "api restarted"
-[[ "$(psql "select note from smoke_jetson" | tr -d '\r')" == "kept ✓" ]] || fail "row lost"
-psql "drop table smoke_jetson" >/dev/null
-ok "db started: 200 again, api never restarted, row kept"
+if ((FULL == 1)); then
+  step "database stopped: 503 through caddy, then 200 without restarting api; data kept"
+  PGU="$(renv POSTGRES_USER)"
+  PGD="$(renv POSTGRES_DB)"
+  psql() { rc exec -T db psql -v ON_ERROR_STOP=1 -U "$PGU" -d "$PGD" -tAc "\"$1\""; }
+  psql "create table if not exists smoke_jetson (note text)" >/dev/null
+  psql "delete from smoke_jetson; insert into smoke_jetson values ('kept ✓')" >/dev/null
+  api_started="$(r "docker inspect -f '{{.State.StartedAt}}' $(rc ps -q api)")"
+  wait_health() { # wait_health <code> <seconds>
+    local deadline=$((SECONDS + $2)) got=""
+    while ((SECONDS < deadline)); do
+      got="$(status_of "$(rcurl /api/health)")"
+      [[ "$got" == "$1" ]] && return 0
+      sleep 1
+    done
+    fail "health never answered $1 within $2s (last $got)"
+  }
+  STOPPED_DB=1
+  rc stop db >/dev/null 2>&1
+  wait_health 503 30
+  grep -q '"database unavailable"' <<<"$(body_of "$(rcurl /api/health)")" || fail "503 body"
+  ok "db stopped: 503 database unavailable"
+  rc start db >/dev/null 2>&1
+  wait_health 200 90
+  [[ "$(r "docker inspect -f '{{.State.StartedAt}}' $(rc ps -q api)")" == "$api_started" ]] || fail "api restarted"
+  [[ "$(psql "select note from smoke_jetson" | tr -d '\r')" == "kept ✓" ]] || fail "row lost"
+  psql "drop table smoke_jetson" >/dev/null
+  STOPPED_DB=0
+  ok "db started: 200 again, api never restarted, row kept"
+else
+  printf '\n== database outage skipped (JETSON_SMOKE_FULL=0)\n'
+fi
 
 step "memory under the limits"
-stats="$(r "docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \$(cd $RDIR && docker compose -f compose.yml ps -q)")"
+stats="$(r "docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \$(cd $RDIR && docker compose -f compose.yml --profile tunnel ps -q)")"
 printf '%s\n' "$stats" | sed 's/^/   /'
-for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB"; do
+for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB" "cloudflared 128MiB"; do
   name="${pair% *}"
   limit="${pair#* }"
   grep -Eq "^jobapp-$name-[0-9]+ .* / $limit\$" <<<"$stats" || fail "$name limit is not $limit"
 done
-ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB"
+ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, cloudflared 128MiB"
 
 printf '\nAll %d checks passed on %s.\n' "$passed" "$HOST"
