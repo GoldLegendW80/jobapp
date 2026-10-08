@@ -35,7 +35,11 @@ test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
 const sshHost = process.env.E2E_COMPOSE_SSH;
 const remoteDir = process.env.E2E_COMPOSE_DIR ?? "jobapp";
-const COMPOSE = ["compose", "-f", "compose.yml", "-f", "compose.dev.yml"];
+// E2E_COMPOSE_PROJECT targets a scratch project started with compose.yml alone (identity.spec.ts).
+const project = process.env.E2E_COMPOSE_PROJECT;
+const COMPOSE = project
+  ? ["compose", "-p", project, "-f", "compose.yml"]
+  : ["compose", "-f", "compose.yml", "-f", "compose.dev.yml"];
 function compose(...args: string[]) {
   if (sshHost) {
     // Service names only, no shell metacharacters: safe to join for the remote shell.
@@ -70,6 +74,25 @@ async function shot(page: Page, name: string) {
   });
 }
 
+// The health card lives on the protected home page: the session is faked here, everything else
+// (Caddy, the api, the database) is real. identity.spec.ts covers real sign in.
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/auth/me", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "00000000-0000-4000-8000-000000000001",
+        email: "caddy-check@example.org",
+        name: "Caddy Check",
+        role: "admin",
+        created_at: "2026-10-08T10:00:00Z",
+        last_login_at: null,
+      }),
+    }),
+  );
+});
+
 test.afterAll(() => {
   // Never leave a service stopped, whatever failed.
   compose("start", "db", "api");
@@ -83,9 +106,7 @@ test('the app loads through Caddy and shows "API ok"', async ({ page }) => {
   expect(response?.headers()["x-frame-options"]).toBe("DENY");
   expect((await health).status()).toBe(200);
   expect((await health).headers()["via"]).toContain("Caddy");
-  await expect(
-    page.getByRole("heading", { level: 1, name: "jobapp" }),
-  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "jobapp" })).toBeVisible();
   await expect(status(page)).toContainText("API ok");
   await shot(page, "1-api-ok");
   expect(errors).toEqual([]);
@@ -149,13 +170,16 @@ test("a deep link loads and survives a reload", async ({ page }) => {
   const response = await page.goto("/some/deep/route?x=1");
   expect(response?.status()).toBe(200);
   expect(response?.headers()["cache-control"]).toBe("no-cache");
-  await expect(status(page)).toContainText("API ok");
+  // An unknown client route: the SPA answers with its own not found page inside the shell.
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Page not found" }),
+  ).toBeVisible();
   const reloaded = await page.reload();
   expect(reloaded?.status()).toBe(200);
+  await expect(page.getByRole("link", { name: "jobapp" })).toBeVisible();
   await expect(
-    page.getByRole("heading", { level: 1, name: "jobapp" }),
+    page.getByRole("heading", { level: 1, name: "Page not found" }),
   ).toBeVisible();
-  await expect(status(page)).toContainText("API ok");
   expect(page.url()).toMatch(/\/some\/deep\/route\?x=1$/);
   await shot(page, "4-deep-link-reload");
   expect(errors).toEqual([]);

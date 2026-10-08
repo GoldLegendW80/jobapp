@@ -8,10 +8,29 @@
  * - `timeout`: no complete response within `timeoutMs`
  * - `aborted`: the caller's own signal was aborted (for example TanStack Query cancelling)
  * - `parse`: a 2xx response whose body is not JSON or fails the caller's validator
+ *
+ * Every request sends the session cookie (`credentials: "include"`, the api is same origin
+ * anyway), and every non-GET request carries `X-Requested-With: jobapp`, the CSRF header the api
+ * demands (SPEC-identity.md). A 401 answer is reported to the `onUnauthorized` listeners (the
+ * auth provider signs the browser out locally and the protected routes send it to /login),
+ * unless the caller opts out with `authRedirect: false`: sign in itself, and the "who am I" call.
  */
 
 export const API_BASE = "/api";
 export const DEFAULT_TIMEOUT_MS = 5000;
+export const CSRF_HEADER = "X-Requested-With";
+export const CSRF_VALUE = "jobapp";
+
+type UnauthorizedListener = (error: ApiError) => void;
+const unauthorizedListeners = new Set<UnauthorizedListener>();
+
+/** Be told about every 401 answer (except the opted out calls). Returns the unsubscribe. */
+export function onUnauthorized(listener: UnauthorizedListener): () => void {
+  unauthorizedListeners.add(listener);
+  return () => {
+    unauthorizedListeners.delete(listener);
+  };
+}
 
 export type ApiErrorKind = "http" | "network" | "timeout" | "aborted" | "parse";
 
@@ -49,6 +68,8 @@ export interface RequestOptions<T> {
   timeoutMs?: number;
   /** Runtime check of the decoded body; throw to reject it as a `parse` error. */
   validate?: Validator<T>;
+  /** false: a 401 is this call's own answer, not a lost session (default true). */
+  authRedirect?: boolean;
 }
 
 function decode(text: string): { ok: true; value: unknown } | { ok: false } {
@@ -95,7 +116,14 @@ export async function request<T>(
   if (!path.startsWith("/")) {
     throw new TypeError(`api path must start with "/": ${path}`);
   }
-  const { method = "GET", body, headers = {}, signal, validate } = options;
+  const {
+    method = "GET",
+    body,
+    headers = {},
+    signal,
+    validate,
+    authRedirect = true,
+  } = options;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (signal?.aborted) {
@@ -124,9 +152,11 @@ export async function request<T>(
         headers: {
           Accept: "application/json",
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          ...(method === "GET" ? {} : { [CSRF_HEADER]: CSRF_VALUE }),
           ...headers,
         },
         body: body === undefined ? undefined : JSON.stringify(body),
+        credentials: "include",
         signal: controller.signal,
       });
       // The timeout also covers a body that starts and then stalls.
@@ -149,7 +179,7 @@ export async function request<T>(
 
     const decoded = decode(text);
     if (!response.ok) {
-      throw new ApiError(
+      const error = new ApiError(
         "http",
         `${method} ${url} answered ${response.status}`,
         {
@@ -157,6 +187,10 @@ export async function request<T>(
           body: decoded.ok ? decoded.value : text,
         },
       );
+      if (response.status === 401 && authRedirect) {
+        for (const listener of [...unauthorizedListeners]) listener(error);
+      }
+      throw error;
     }
     if (!decoded.ok) {
       throw new ApiError(
@@ -209,17 +243,23 @@ export function getHealth(
   return request("/health", { ...options, validate: validateHealth });
 }
 
+/** The api's `{"detail": "..."}` message of an http error, when it is a non empty string. */
+export function errorDetail(error: unknown): string | undefined {
+  if (!isApiError(error) || error.kind !== "http") return undefined;
+  const body = error.body;
+  if (typeof body !== "object" || body === null) return undefined;
+  const detail = (body as { detail?: unknown }).detail;
+  return typeof detail === "string" && detail.trim() !== ""
+    ? detail
+    : undefined;
+}
+
 /** A short sentence for the user explaining an api failure, without dashes. */
 export function describeError(error: unknown): string {
   if (!isApiError(error)) return "Something unexpected went wrong.";
   switch (error.kind) {
     case "http": {
-      const detail =
-        typeof error.body === "object" &&
-        error.body !== null &&
-        typeof (error.body as { detail?: unknown }).detail === "string"
-          ? (error.body as { detail: string }).detail
-          : undefined;
+      const detail = errorDetail(error);
       return detail
         ? `The API answered ${error.status}: ${detail}.`
         : `The API answered ${error.status}.`;

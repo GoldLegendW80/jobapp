@@ -10,6 +10,20 @@ const evidence = path.resolve(
 
 const HEALTH = "**/api/health";
 
+/** A signed in user for every test: the home page is protected since identity I3. */
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/auth/me", (route) =>
+    json(route, 200, {
+      id: "00000000-0000-4000-8000-000000000001",
+      email: "harald@example.org",
+      name: "Harald Hautin",
+      role: "admin",
+      created_at: "2026-10-08T10:00:00Z",
+      last_login_at: null,
+    }),
+  );
+});
+
 function json(route: Route, status: number, body: unknown) {
   return route.fulfill({
     status,
@@ -40,9 +54,7 @@ test.describe("API status card", () => {
       json(route, 200, { status: "ok" }),
     );
     await page.goto("/");
-    await expect(
-      page.getByRole("heading", { level: 1, name: "jobapp" }),
-    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "jobapp" })).toBeVisible();
     await expect(
       page.getByRole("region", { name: "API status" }),
     ).toBeVisible();
@@ -122,7 +134,7 @@ test.describe("API status card", () => {
     );
     await page.goto("/");
     await expect(status(page)).toContainText("API unavailable");
-    await page.keyboard.press("Tab");
+    await retry(page).focus();
     await expect(retry(page)).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(status(page)).toContainText("API ok");

@@ -15,6 +15,24 @@ const evidence = path.resolve(
  */
 const mode = process.env.E2E_REAL_API;
 
+// The health card is on the protected home page: fake the session only, the health check is real.
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/auth/me", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "00000000-0000-4000-8000-000000000001",
+        email: "real-api@example.org",
+        name: "Real Api",
+        role: "member",
+        created_at: "2026-10-08T10:00:00Z",
+        last_login_at: null,
+      }),
+    }),
+  );
+});
+
 test.describe("real api, database up", () => {
   test.skip(
     mode !== "up",

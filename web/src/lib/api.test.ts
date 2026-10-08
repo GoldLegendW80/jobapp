@@ -7,8 +7,10 @@ import {
   ApiError,
   DEFAULT_TIMEOUT_MS,
   describeError,
+  errorDetail,
   getHealth,
   isApiError,
+  onUnauthorized,
   request,
   validateHealth,
 } from "./api";
@@ -324,5 +326,118 @@ describe("helpers", () => {
     ];
     for (const error of errors)
       expect(describeError(error)).not.toMatch(/[–—]| - /);
+  });
+});
+
+describe("session and CSRF", () => {
+  it("sends the cookie and no CSRF header on GET", async () => {
+    let seen: Request | undefined;
+    health(({ request: req }) => {
+      seen = req;
+      return HttpResponse.json({ status: "ok" });
+    });
+    const spy = vi.spyOn(globalThis, "fetch");
+    await getHealth();
+    expect(spy.mock.calls[0]![1]).toMatchObject({ credentials: "include" });
+    expect(seen!.headers.get("x-requested-with")).toBeNull();
+  });
+
+  it.each(["POST", "PUT", "PATCH", "DELETE"] as const)(
+    "adds X-Requested-With: jobapp on %s",
+    async (method) => {
+      let header: string | null = null;
+      server.use(
+        http.all("*/api/thing", ({ request: req }) => {
+          header = req.headers.get("x-requested-with");
+          return new HttpResponse(null, { status: 204 });
+        }),
+      );
+      const spy = vi.spyOn(globalThis, "fetch");
+      await request("/thing", { method });
+      expect(header).toBe("jobapp");
+      expect(spy.mock.calls[0]![1]).toMatchObject({ credentials: "include" });
+    },
+  );
+
+  it("tells the 401 listeners, then still rejects with the error", async () => {
+    server.use(
+      http.get("*/api/private", () =>
+        HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),
+      ),
+    );
+    const listener = vi.fn();
+    const stop = onUnauthorized(listener);
+    try {
+      const error = await failure(request("/private"));
+      expect(error.status).toBe(401);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith(error);
+    } finally {
+      stop();
+    }
+  });
+
+  it("does not tell the listeners when the call opts out", async () => {
+    server.use(
+      http.post("*/api/auth/login", () =>
+        HttpResponse.json(
+          { detail: "Incorrect email or password." },
+          { status: 401 },
+        ),
+      ),
+    );
+    const listener = vi.fn();
+    const stop = onUnauthorized(listener);
+    try {
+      await failure(
+        request("/auth/login", {
+          method: "POST",
+          body: {},
+          authRedirect: false,
+        }),
+      );
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      stop();
+    }
+  });
+
+  it("does not tell the listeners about 403, 404 or a network failure", async () => {
+    const listener = vi.fn();
+    const stop = onUnauthorized(listener);
+    try {
+      for (const respond of [
+        () => HttpResponse.json({ detail: "no" }, { status: 403 }),
+        () => HttpResponse.json({ detail: "no" }, { status: 404 }),
+        () => HttpResponse.error(),
+      ]) {
+        health(respond);
+        await failure(getHealth());
+      }
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      stop();
+    }
+  });
+
+  it("stops calling a listener once unsubscribed", async () => {
+    health(() => HttpResponse.json({ detail: "x" }, { status: 401 }));
+    const listener = vi.fn();
+    onUnauthorized(listener)();
+    await failure(getHealth());
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("errorDetail reads only a non empty string detail of an http error", () => {
+    const http422 = (body: unknown) =>
+      new ApiError("http", "", { status: 422, body });
+    expect(errorDetail(http422({ detail: "password: too short" }))).toBe(
+      "password: too short",
+    );
+    expect(errorDetail(http422({ detail: "  " }))).toBeUndefined();
+    expect(errorDetail(http422({ detail: 3 }))).toBeUndefined();
+    expect(errorDetail(http422("text"))).toBeUndefined();
+    expect(errorDetail(new ApiError("network", ""))).toBeUndefined();
+    expect(errorDetail(new Error("x"))).toBeUndefined();
   });
 });

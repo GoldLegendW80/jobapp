@@ -55,7 +55,8 @@ in `api/app/models.py` so `alembic revision --autogenerate` sees them.
 ./deploy.sh restore latest     # restore into the scratch database jobapp_restore_check, print row counts
 ./deploy.sh restore <file> --into-live   # replace the live database (type RESTORE jobapp to confirm)
 ./deploy.sh backup-schedule install|remove|status   # nightly backup in the Jetson user's crontab
-tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore, url, restore prompt
+./deploy.sh admin create <email>   # one-time admin setup link on the public URL (a reset link if that admin exists)
+tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore, url, restore prompt, admin create
 tests/jetson_smoke.sh          # smoke of the deployed stack over ssh (stops and starts db once)
 tests/backup_test.sh           # backup and restore round trip and refusals on the Jetson (BACKUP_TEST_LIVE=1: live restore too)
 tests/crash_check.sh           # kill each service's main process, check the daemon restarts it, then smoke
@@ -96,6 +97,41 @@ nobody. Either way the api receives exactly one `X-Forwarded-For` and logs it as
 
 The service sits in the Compose profile `tunnel`, which `deploy.sh` enables on the Jetson. Neither
 the dev stack nor a plain `docker compose -f compose.yml up` on the Mac opens a public tunnel.
+
+## Accounts
+
+Nobody signs up alone. The first admin comes from the Jetson's command line:
+
+```bash
+./deploy.sh admin create you@example.org    # prints https://<tunnel>/invite/<token>, valid 7 days, single use
+```
+
+Open the link, choose a name and a password (10 to 128 characters, not the email, not a common
+password) and you land signed in. Run it again for an active admin to get a 1 hour password reset
+link instead. The link holds a secret: it is printed once, never logged, and Caddy masks tokens in
+its access log. Every page except `/login`, `/invite/<token>` and `/reset/<token>` needs a session;
+any api answer 401 sends the browser to `/login?next=<page>`.
+
+The identity journey runs in a real browser against the real stack, locally on a scratch project:
+
+```bash
+HTTP_PORT=8093 docker compose -p jobapp-i3 -f compose.yml up -d --build --wait
+docker compose -p jobapp-i3 -f compose.yml exec -T api alembic upgrade head
+E2E_CADDY_URL=http://127.0.0.1:8093 E2E_COMPOSE_PROJECT=jobapp-i3 pnpm --dir web exec playwright test identity.spec.ts
+docker compose -p jobapp-i3 -f compose.yml down -v       # that scratch project only
+```
+
+and on the Jetson through the public URL (the spec runs `./deploy.sh admin create` itself), then
+the test account is removed:
+
+```bash
+E2E_CADDY_URL=$(./deploy.sh url) E2E_ADMIN_VIA_DEPLOY=1 E2E_ADMIN_EMAIL=e2e-admin@example.org \
+  E2E_SHOT_PREFIX=jetson- pnpm --dir web exec playwright test identity.spec.ts
+ssh jetson "cd jobapp && docker compose -f compose.yml exec -T db sh -c 'psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'" \
+  <<< "delete from invites where email = 'e2e-admin@example.org'; delete from users where email = 'e2e-admin@example.org';"
+```
+
+Do not run `identity.spec.ts` in parallel with `caddy.spec.ts`: the latter stops the database.
 
 ## Backups and restores
 

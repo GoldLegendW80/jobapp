@@ -90,3 +90,21 @@
     @apply bg-background text-foreground antialiased;
   }
 }
+
+/* Loading indicators appear only when the wait is long enough to notice (no flash). */
+@keyframes delayed-appear {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.delayed-appear {
+  animation: delayed-appear 200ms ease-out 400ms both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .delayed-appear {
+    animation-duration: 1ms;
+  }
+}

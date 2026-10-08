@@ -18,6 +18,31 @@ export default defineConfig({
       "@": path.resolve(root, "src"),
     },
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        // Libraries in their own long-cached chunks, so a deploy of app code alone leaves them
+        // in the browser cache, and no chunk passes the 500 kB warning.
+        codeSplitting: {
+          groups: [
+            {
+              name: "react",
+              test: /node_modules[\\/](react|react-dom|scheduler|react-router)[\\/]/,
+            },
+            {
+              name: "ui",
+              test: /node_modules[\\/](radix-ui|@radix-ui|@floating-ui|lucide-react|sonner)[\\/]/,
+            },
+            {
+              name: "forms",
+              test: /node_modules[\\/](zod|react-hook-form|@hookform)[\\/]/,
+            },
+            { name: "vendor", test: /node_modules[\\/]/ },
+          ],
+        },
+      },
+    },
+  },
   server: { proxy: apiProxy },
   preview: { proxy: apiProxy },
   test: {
