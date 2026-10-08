@@ -1,0 +1,28 @@
+# Secrets: .env and every variant, the template stays tracked
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage/
+htmlcov/
+
+# JavaScript
+node_modules/
+dist/
+build/
+.vite/
+playwright-report/
+test-results/
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
