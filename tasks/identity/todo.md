@@ -61,9 +61,9 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 **Description:** Admin invite endpoints (create, list, revoke), invite expiry and single use, concurrent accept safety; admin invites section in the UI with a copy-link dialog.
 
 **Acceptance criteria:**
-- [ ] Expired, used, revoked, malformed tokens all give the same 404 page
-- [ ] Two concurrent accepts: exactly one succeeds
-- [ ] Link shown once, built from the current origin
+- [x] Expired, used, revoked, malformed tokens all give the same 404 page
+- [x] Two concurrent accepts: exactly one succeeds
+- [x] Link shown once, built from the current origin
 
 **Verification:** pytest; Playwright with two browser contexts
 
