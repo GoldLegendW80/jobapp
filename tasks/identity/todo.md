@@ -11,7 +11,7 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 - [x] Unit tests for hashing, verification, rules, token hashing
 - [x] CLI prints a link path `/invite/<token>`; running it twice for the same email revokes the first link
 
-**Verification:** pytest (226 passed). `./deploy.sh admin create`, still to do (added with I2) on the Jetson prints a link
+**Verification:** pytest (226 passed); `./deploy.sh admin create` added with I3 and used on the Jetson on the Jetson prints a link
 
 **Dependencies:** platform
 
@@ -41,9 +41,9 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 **Description:** React Router, auth provider from `/api/auth/me`, `/login`, `/invite/:token` (first admin setup uses it), protected app shell with header and user menu, global 401 handling, `next` redirect.
 
 **Acceptance criteria:**
-- [ ] Unauthenticated visit to `/` goes to `/login?next=/`, then back after sign in
-- [ ] Invite page sets a password and lands signed in
-- [ ] Sign out returns to `/login`; back button does not show protected content
+- [x] Unauthenticated visit to `/` goes to `/login?next=/`, then back after sign in
+- [x] Invite page sets a password and lands signed in
+- [x] Sign out returns to `/login`; back button does not show protected content
 
 **Verification:** Vitest; Playwright e2e locally through Caddy; screenshots
 
@@ -54,7 +54,7 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 **Scope:** M
 
 ## Checkpoint I-A
-- [ ] On the Jetson: `./deploy.sh admin create`, open the link through the public URL, set password, sign out, sign in
+- [x] On the Jetson: `./deploy.sh admin create`, open the link through the public URL, set password, sign out, sign in
 
 ## I4: Invites: admin creates a link, friend accepts and is signed in
 

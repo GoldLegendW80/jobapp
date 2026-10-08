@@ -22,10 +22,10 @@ Invite-only accounts with server-side sessions, an admin area, and the `current_
 
 - [x] I1: Identity schema, security primitives and first admin from the CLI
 - [x] I2: Sign in, sign out, session cookie and default-deny API
-- [ ] I3: Frontend shell: router, login page, protected routes, sign out
+- [x] I3: Frontend shell: router, login page, protected routes, sign out
 
 ### Checkpoint I-A
-- [ ] Harald's admin created by CLI on the Jetson can sign in and out through the public URL
+- [x] Harald's admin created by CLI on the Jetson can sign in and out through the public URL
 
 - [ ] I4: Invites: admin creates a link, friend accepts and is signed in
 - [ ] I5: Admin users page: list, disable, role, last-admin protection
