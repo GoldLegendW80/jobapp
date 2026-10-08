@@ -54,7 +54,7 @@ repo bootstrap (1)
 - [ ] `http://localhost` serves the shell and proxies `/api`; CI green on GitHub
 
 ### Phase 4: Public and durable
-- [ ] Task 8: Quick tunnel, url and smoke
+- [x] Task 8: Quick tunnel, url and smoke
 - [ ] Task 9: Backup, restore, reboot and RAM
 
 ### Checkpoint D: spec complete

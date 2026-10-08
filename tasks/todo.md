@@ -152,12 +152,12 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Description:** `cloudflared` service running a quick tunnel to `caddy:80`; `deploy.sh url` extracts the current `*.trycloudflare.com` URL from its logs; `deploy.sh smoke` checks health through Caddy on the Jetson, then through the tunnel.
 
 **Acceptance criteria:**
-- [ ] After deploy, `./deploy.sh url` prints an https URL
-- [ ] `curl $(./deploy.sh url)/api/health` returns ok from the Mac on mobile data or any outside network
-- [ ] `./deploy.sh smoke` exits 0 and non-zero when api is stopped
+- [x] After deploy, `./deploy.sh url` prints an https URL
+- [x] `curl $(./deploy.sh url)/api/health` returns ok from the Mac on mobile data or any outside network
+- [x] `./deploy.sh smoke` exits 0 and non-zero when api is stopped
 
 **Verification:**
-- [ ] Run smoke twice: once normal, once after `docker compose stop api` on the Jetson
+- [x] Run smoke twice: once normal, once after `docker compose stop api` on the Jetson
 
 **Dependencies:** Task 6
 
