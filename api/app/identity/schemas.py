@@ -12,6 +12,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.identity.models import InviteKind, Role
+from app.identity.service import InviteStatus
 
 # Wider than any valid value (emails are at most 320 characters, passwords 128 after
 # normalisation, which NFKC can shrink or grow), so the handler gives the precise message.
@@ -58,3 +59,49 @@ class InviteOut(BaseModel):
 
 class ErrorOut(BaseModel):
     detail: str
+
+
+# --- admin -------------------------------------------------------------------------------------
+
+INVITES_PAGE_MAX = 100
+INVITES_PAGE_DEFAULT = 50
+
+
+class AdminInviteIn(_Strict):
+    """A new link. `role` is the role an invite gives (member when omitted); a reset link
+    changes a password only, so a role there is refused rather than silently dropped."""
+
+    email: str = Field(min_length=1, max_length=EMAIL_MAX)
+    kind: InviteKind = InviteKind.invite
+    role: Role | None = None
+
+
+class AdminInviteOut(BaseModel):
+    """A link as the admin area lists it. Never the token: it exists only in the create
+    answer. `role` is null for reset links."""
+
+    id: UUID
+    email: str
+    kind: InviteKind
+    role: Role | None
+    status: InviteStatus
+    created_by_name: str | None
+    created_at: datetime
+    expires_at: datetime
+    used_at: datetime | None
+    revoked_at: datetime | None
+
+
+class AdminInvitePage(BaseModel):
+    items: list[AdminInviteOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class AdminInviteCreated(BaseModel):
+    """The only answer that carries the link: `/invite/<token>` or `/reset/<token>`, relative,
+    so the admin's browser prefixes it with the origin it is on."""
+
+    invite: AdminInviteOut
+    path: str

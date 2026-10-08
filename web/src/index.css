@@ -27,6 +27,8 @@
   --ring: oklch(0.705 0.015 286.067);
   --success: oklch(0.527 0.154 150.069);
   --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.555 0.163 48.998);
+  --warning-muted: oklch(0.987 0.022 95.277);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -52,6 +54,8 @@
     --ring: oklch(0.552 0.016 285.938);
     --success: oklch(0.723 0.219 149.579);
     --success-foreground: oklch(0.141 0.005 285.823);
+    --warning: oklch(0.828 0.189 84.429);
+    --warning-muted: oklch(0.279 0.077 45.635 / 45%);
   }
 }
 
@@ -80,6 +84,8 @@
   --color-ring: var(--ring);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-muted: var(--warning-muted);
 }
 
 @layer base {

@@ -2,6 +2,7 @@
 transaction (a request handler, or the CLI).
 """
 
+import enum
 import ipaddress
 import unicodedata
 from dataclasses import dataclass
@@ -375,3 +376,66 @@ def accept_invite(
     user.last_login_at = now
     session.flush()
     return user
+
+
+# --- admin: listing and revoking links ---------------------------------------------------------
+
+
+class InviteStatus(enum.StrEnum):
+    active = "active"
+    used = "used"
+    revoked = "revoked"
+    expired = "expired"
+
+
+def invite_status(invite: Invite, now: datetime) -> InviteStatus:
+    """What a link is now. Used wins over revoked (a used link was never revoked: revocation
+    only touches unused ones), and both win over expired, which only time decides."""
+    if invite.used_at is not None:
+        return InviteStatus.used
+    if invite.revoked_at is not None:
+        return InviteStatus.revoked
+    if invite.expires_at <= now:
+        return InviteStatus.expired
+    return InviteStatus.active
+
+
+@dataclass(frozen=True)
+class InviteListing:
+    """One page of links, newest first, each with the name of the admin who made it (None for
+    links from the command line or whose creator is gone)."""
+
+    rows: list[tuple[Invite, str | None]]
+    total: int
+
+
+def list_invites(session: Session, limit: int, offset: int) -> InviteListing:
+    total = int(session.scalar(sa.select(sa.func.count()).select_from(Invite)) or 0)
+    found = session.execute(
+        sa.select(Invite, User.name)
+        .outerjoin(User, User.id == Invite.created_by)
+        # id breaks ties between links made in the same instant, so pages never overlap.
+        .order_by(Invite.created_at.desc(), Invite.id.desc())
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return InviteListing(rows=[(invite, name) for invite, name in found], total=total)
+
+
+def revoke_invite(session: Session, invite_id: UUID, now: datetime | None = None) -> Invite | None:
+    """Revoke a link that is still active (unused, unrevoked, unexpired) in one statement, so a
+    concurrent accept or revoke cannot slip between a check and the write. Returns the revoked
+    row, or None when there was nothing active to revoke."""
+    now = now or utcnow()
+    return session.scalars(
+        sa.update(Invite)
+        .where(
+            Invite.id == invite_id,
+            Invite.used_at.is_(None),
+            Invite.revoked_at.is_(None),
+            Invite.expires_at > now,
+        )
+        .values(revoked_at=now)
+        .returning(Invite)
+        .execution_options(populate_existing=True)
+    ).one_or_none()

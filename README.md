@@ -133,6 +133,45 @@ ssh jetson "cd jobapp && docker compose -f compose.yml exec -T db sh -c 'psql -U
 
 Do not run `identity.spec.ts` in parallel with `caddy.spec.ts`: the latter stops the database.
 
+### Inviting people
+
+Signed in as an admin, open **Admin** (`/admin/users`), then **Invite someone**: an email, the kind
+of link (an invite creates an account, valid 7 days; a password reset is for an existing active
+account, valid 1 hour) and, for an invite, the role. The dialog shows the full link once, built
+from the address you are on, with a Copy button: send it yourself. It is never shown again; a new
+link for the same email and kind revokes the previous unused one. The Invites table lists every
+link with its status (active, used, revoked, expired) and lets you revoke an active one. An invite
+for an email that already has an account is refused: send a reset link instead.
+
+The API behind it, admin only (a member gets 404, nobody signed in 401):
+`GET /api/admin/invites?limit=&offset=` (newest first, never a token), `POST /api/admin/invites`
+`{email, kind, role}` (201 with `path` once), `DELETE /api/admin/invites/{id}` (204, or 404 for
+anything not active).
+
+The invites journey (`web/e2e/invites.spec.ts`) runs like the identity one, on its own scratch
+project:
+
+```bash
+HTTP_PORT=8094 docker compose -p jobapp-i4 -f compose.yml up -d --build --wait
+docker compose -p jobapp-i4 -f compose.yml exec -T api alembic upgrade head
+E2E_CADDY_URL=http://127.0.0.1:8094 E2E_COMPOSE_PROJECT=jobapp-i4 E2E_FRIEND_EMAIL=friend@example.org \
+  pnpm --dir web exec playwright test invites.spec.ts
+docker compose -p jobapp-i4 -f compose.yml down -v
+```
+
+On the Jetson it uses two throwaway accounts, removed afterwards with everything they own
+(sessions and profile rows cascade with the user):
+
+```bash
+E2E_CADDY_URL=$(./deploy.sh url) E2E_ADMIN_VIA_DEPLOY=1 E2E_ADMIN_EMAIL=e2e-admin@example.org \
+  E2E_FRIEND_EMAIL=e2e-friend@example.org E2E_SHOT_PREFIX=jetson- \
+  pnpm --dir web exec playwright test invites.spec.ts
+ssh jetson "cd jobapp && docker compose -f compose.yml exec -T db sh -c 'psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'" <<< "
+  delete from invites where email in ('e2e-admin@example.org', 'e2e-friend@example.org');
+  delete from login_attempts where email in ('e2e-admin@example.org', 'e2e-friend@example.org');
+  delete from users where email in ('e2e-admin@example.org', 'e2e-friend@example.org');"
+```
+
 ## Profile export and import
 
 `GET /api/profile/export` downloads the whole profile as `profile-YYYY-MM-DD.json`;
