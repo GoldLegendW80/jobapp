@@ -33,7 +33,7 @@ repo bootstrap (1)
 
 ### Phase 1: Backend foundation
 - [x] Task 1: Repository bootstrap
-- [ ] Task 2: API skeleton with health
+- [x] Task 2: API skeleton with health
 - [ ] Task 3: Compose core and migrations
 
 ### Checkpoint A: local backend

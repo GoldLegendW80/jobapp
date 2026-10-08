@@ -27,13 +27,13 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Description:** FastAPI app managed by uv, with settings from env, a SQLAlchemy session dependency and `GET /api/health` doing a `select 1`, plus its Dockerfile.
 
 **Acceptance criteria:**
-- [ ] `api/pyproject.toml` with pinned FastAPI, uvicorn, SQLAlchemy 2, psycopg 3, pydantic-settings, alembic; dev: pytest, httpx, ruff
-- [ ] `/api/health` returns `{"status":"ok"}` and fails (500) when the database is down
-- [ ] `api/Dockerfile` on `python:3.12-slim`, non-root user, uv sync from lockfile
+- [x] `api/pyproject.toml` with pinned FastAPI, uvicorn, SQLAlchemy 2, psycopg 3, pydantic-settings, alembic; dev: pytest, httpx, ruff
+- [x] `/api/health` returns `{"status":"ok"}` and fails (503) when the database is down
+- [x] `api/Dockerfile` on `python:3.12-slim`, non-root user, uv sync from lockfile
 
 **Verification:**
-- [ ] `uv run --directory api pytest` passes (health test against a test database)
-- [ ] `uv run --directory api ruff check .` clean
+- [x] `uv run --directory api pytest` passes (health test against a test database)
+- [x] `uv run --directory api ruff check .` clean
 
 **Dependencies:** Task 1
 
