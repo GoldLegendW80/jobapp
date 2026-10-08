@@ -8,6 +8,7 @@ dependencies = [
     "argon2-cffi==25.1.0",
     "email-validator==2.3.0",
     "fastapi==0.142.4",
+    "pillow==12.3.0",
     "psycopg[binary]==3.3.6",
     "pydantic-settings==2.15.0",
     "sqlalchemy==2.1.4",

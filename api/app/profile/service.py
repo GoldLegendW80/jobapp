@@ -10,8 +10,9 @@ stored revision, so two concurrent saves based on the same revision are serialis
 increments the revision and appends its profile_revisions row, the second then sees the new
 revision and is refused as stale. The unique (user_id, revision) constraint is a second guard.
 An import takes the same lock and writes all six sections at once, one revision each.
-The photo given to an import is stored as received (type sniffed by the caller); task P3 adds
-the re-encoding that strips metadata.
+The photo is not a section: storing or removing it adds no revision, but updates `updated_at`.
+It is only ever stored as a `photo.Photo`, the output of `photo.normalize` (re-encoded, metadata
+stripped), by an upload and by an import alike.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
@@ -25,6 +26,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.profile.models import Profile, ProfileRevision
+from app.profile.photo import Photo
 from app.profile.schemas import SECTION_MODELS, SECTIONS
 
 REVISIONS_PAGE_MAX = 100
@@ -111,14 +113,14 @@ def import_profile(
     db: Session,
     user_id: uuid.UUID,
     sections: dict[str, dict[str, Any]],
-    photo: tuple[bytes, str] | None,
+    photo: Photo | None,
     base_revision: int | None,
     now: datetime,
 ) -> Profile:
     """Replace all six sections at once with already validated data, one revision each (in
     SECTIONS order), under the same row lock as a save, in the caller's transaction.
 
-    `photo` is (image bytes, mime), already sniffed; None leaves the stored photo as it is.
+    `photo` is the normalized photo of the file; None leaves the stored photo as it is.
     With a `base_revision` that is not the stored one, raises StaleRevisionError; without one
     the import is applied after any save in progress (serialised by the lock).
     """
@@ -143,9 +145,60 @@ def import_profile(
     profile.revision = revision
     profile.updated_at = now
     if photo is not None:
-        profile.photo, profile.photo_mime = photo
+        profile.photo, profile.photo_mime = photo.data, photo.mime
     db.flush()
     return profile
+
+
+# --- photo --------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PhotoState:
+    mime: str
+    etag: str
+
+
+def photo_state(db: Session, user_id: uuid.UUID) -> PhotoState | None:
+    """The type and ETag of the user's photo, hashed by Postgres (the image is not transferred),
+    or None without one."""
+    row = db.execute(
+        sa.select(Profile.photo_mime, sa.func.encode(sa.func.sha256(Profile.photo), "hex")).where(
+            Profile.user_id == user_id, Profile.photo.is_not(None)
+        )
+    ).one_or_none()
+    return None if row is None else PhotoState(mime=row[0], etag=f'"{row[1]}"')
+
+
+def get_photo(db: Session, user_id: uuid.UUID) -> tuple[bytes, str] | None:
+    """The user's photo (bytes, mime), or None without one."""
+    row = db.execute(
+        sa.select(Profile.photo, Profile.photo_mime).where(
+            Profile.user_id == user_id, Profile.photo.is_not(None)
+        )
+    ).one_or_none()
+    return None if row is None else (row[0], row[1])
+
+
+def set_photo(db: Session, user_id: uuid.UUID, photo: Photo, now: datetime) -> Profile:
+    """Store a normalized photo, replacing any previous one, under the profile row lock."""
+    profile = _locked(db, user_id, now)
+    profile.photo, profile.photo_mime = photo.data, photo.mime
+    profile.updated_at = now
+    db.flush()
+    return profile
+
+
+def delete_photo(db: Session, user_id: uuid.UUID, now: datetime) -> bool:
+    """Remove the user's photo; False when there was none (nothing changes, not even
+    updated_at, so a repeated delete is a no-op)."""
+    result = db.execute(
+        sa.update(Profile)
+        .where(Profile.user_id == user_id, Profile.photo_mime.is_not(None))
+        .values(photo=None, photo_mime=None, updated_at=now)
+        .execution_options(synchronize_session=False)
+    )
+    return bool(result.rowcount)
 
 
 def export_sections(profile: Profile) -> dict[str, dict[str, Any]]:

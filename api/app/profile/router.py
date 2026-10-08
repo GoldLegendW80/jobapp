@@ -1,5 +1,18 @@
-"""/api/profile: read the caller's profile, save one section, browse past revisions, and export
-or import the whole profile as one JSON file (format in schemas.py, "export and import").
+"""/api/profile: read the caller's profile, save one section, browse past revisions, export or
+import the whole profile as one JSON file (format in schemas.py, "export and import"), and upload,
+read or remove the photo.
+
+The photo (PUT, GET, DELETE /api/profile/photo):
+- PUT takes the image as the raw request body (not multipart), at most PHOTO_MAX_BYTES (2 MB,
+  413 above, checked on Content-Length and again while the body streams). The Content-Type and
+  any file name are ignored: the type comes from the bytes. It goes through `photo.normalize`
+  (PNG or JPEG only, fully decoded, bomb guard, EXIF orientation applied, at most 1024 px,
+  re-encoded without any metadata): 415 for anything that is not a complete PNG or JPEG, 422 for
+  too many pixels. The answer describes the stored image and carries its ETag.
+- GET serves the stored bytes with `Cache-Control: private, no-cache` and a strong ETag (the
+  SHA-256 of the bytes), 304 when If-None-Match matches, 404 without a photo.
+- DELETE is idempotent: 204 whether or not there was a photo.
+The photo is not a section: no revision is recorded, `updated_at` moves.
 
 Every route needs a session (the app-wide default deny; none of them is public) and acts on the
 caller's own profile only: the user id comes from `current_user`, never from the request. Another
@@ -25,10 +38,12 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
+from app.profile import photo as photos
 from app.profile import service
 from app.profile.models import Profile
 from app.profile.schemas import (
     IMPORT_MAX_BYTES,
+    PHOTO_MAX_BYTES,
     REVISION_MAX,
     SECTIONS,
     ConflictOut,
@@ -37,6 +52,7 @@ from app.profile.schemas import (
     ExportSections,
     ImportIn,
     PhotoData,
+    PhotoOut,
     ProfileOut,
     RevisionOut,
     RevisionPage,
@@ -61,6 +77,8 @@ UNKNOWN_SECTION = "Unknown profile section."
 REVISION_NOT_FOUND = "Revision not found."
 STALE = "The profile changed since you loaded it. Review the current version and save again."
 TOO_LARGE = "The import file is larger than 2 MB."
+NO_PHOTO = "No photo."
+PHOTO_CACHE = "private, no-cache"
 
 Db = Annotated[Session, Depends(get_session)]
 CurrentUser = Annotated[User, Depends(deps.current_user)]
@@ -71,13 +89,16 @@ _409 = {409: {"model": ConflictOut, "description": "base_revision is stale"}}
 _422 = {422: {"model": ErrorOut, "description": "The data breaks a rule of the section"}}
 
 
-def _out(profile: Profile) -> ProfileOut:
+def _out(profile: Profile, db: Session) -> ProfileOut:
     sections = service.sections_view(profile)
+    state = service.photo_state(db, profile.user_id)
     return ProfileOut(
         revision=profile.revision,
         updated_at=profile.updated_at,
         sections=sections,
         completeness=completeness({k: v for k, v in sections.items() if v is not None}),
+        has_photo=state is not None,
+        photo_etag=state.etag if state else None,
     )
 
 
@@ -96,7 +117,7 @@ def read_profile(user: CurrentUser, request: Request, db: Db) -> ProfileOut:
     """All sections (null when never saved), the revision, and completeness per section."""
     profile = service.get_profile(db, user.id, deps.clock(request))
     db.commit()
-    return _out(profile)
+    return _out(profile, db)
 
 
 @router.get("/revisions", response_model=RevisionPage, responses=_401)
@@ -167,20 +188,28 @@ def export_profile(user: CurrentUser, request: Request, db: Db) -> Response:
     )
 
 
-async def _import_body(request: Request) -> bytes:
-    """The request body, refused with 413 as soon as it is known to exceed IMPORT_MAX_BYTES:
-    from Content-Length when declared, else while it streams in (nothing larger is buffered)."""
+async def _limited_body(request: Request, limit: int, message: str) -> bytes:
+    """The request body, refused with 413 as soon as it is known to exceed `limit` bytes: from
+    Content-Length when declared, else while it streams in (nothing larger is buffered)."""
     declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit() and int(declared) > IMPORT_MAX_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=TOO_LARGE)
+    if declared is not None and declared.isdigit() and int(declared) > limit:
+        raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=message)
     chunks: list[bytes] = []
     size = 0
     async for chunk in request.stream():
         size += len(chunk)
-        if size > IMPORT_MAX_BYTES:
-            raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=TOO_LARGE)
+        if size > limit:
+            raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail=message)
         chunks.append(chunk)
     return b"".join(chunks)
+
+
+async def _import_body(request: Request) -> bytes:
+    return await _limited_body(request, IMPORT_MAX_BYTES, TOO_LARGE)
+
+
+async def _photo_body(request: Request) -> bytes:
+    return await _limited_body(request, PHOTO_MAX_BYTES, photos.TOO_LARGE)
 
 
 @router.post(
@@ -213,7 +242,12 @@ def import_profile(
         raise _invalid(exc, ()) from None
     photo = None
     if document.photo is not None:
-        photo = (document.photo.image(), document.photo.mime)
+        try:
+            photo = photos.normalize(document.photo.image())
+        except photos.PhotoError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"photo: {exc.message}"
+            ) from None
     try:
         profile = service.import_profile(
             db,
@@ -226,7 +260,113 @@ def import_profile(
     except service.StaleRevisionError as exc:
         return _conflict(exc, db)
     db.commit()
-    return _out(profile)
+    return _out(profile, db)
+
+
+# --- photo --------------------------------------------------------------------------------------
+# Declared before PUT /{section}, which would otherwise take /photo for an unknown section.
+
+_PHOTO_ERRORS = {
+    413: {"model": ErrorOut, "description": "The body is larger than 2 MB"},
+    415: {"model": ErrorOut, "description": "Not a complete PNG or JPEG image"},
+    422: {"model": ErrorOut, "description": "The image has too many pixels"},
+}
+
+
+@router.put(
+    "/photo",
+    response_model=PhotoOut,
+    responses={**_401, **_PHOTO_ERRORS},
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "description": "The image file itself as the raw body; its type is read from its "
+            "bytes, the Content-Type header is ignored.",
+            "content": {
+                media: {"schema": {"type": "string", "format": "binary"}}
+                for media in ("image/png", "image/jpeg", "application/octet-stream")
+            },
+        }
+    },
+)
+def upload_photo(
+    raw: Annotated[bytes, Depends(_photo_body)],
+    user: CurrentUser,
+    request: Request,
+    response: Response,
+    db: Db,
+) -> PhotoOut:
+    """Replace the photo with the uploaded PNG or JPEG, re-encoded without metadata."""
+    try:
+        photo = photos.normalize(raw)  # outside the row lock: decoding takes a while
+    except photos.PhotoError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from None
+    profile = service.set_photo(db, user.id, photo, deps.clock(request))
+    db.commit()
+    response.headers["ETag"] = photo.etag
+    return PhotoOut(
+        mime=photo.mime,
+        width=photo.width,
+        height=photo.height,
+        size=len(photo.data),
+        etag=photo.etag,
+        updated_at=profile.updated_at,
+    )
+
+
+def _matches(if_none_match: str | None, etag: str) -> bool:
+    """RFC 9110 weak comparison of If-None-Match with the current ETag (`*` matches any)."""
+    if if_none_match is None:
+        return False
+    for candidate in if_none_match.split(","):
+        tag = candidate.strip()
+        if tag == "*" or tag.removeprefix("W/") == etag:
+            return True
+    return False
+
+
+@router.get(
+    "/photo",
+    responses={
+        **_401,
+        200: {"content": {"image/png": {}, "image/jpeg": {}}, "description": "The image"},
+        304: {"description": "If-None-Match matches the current photo"},
+        404: {"model": ErrorOut, "description": "No photo"},
+    },
+)
+def read_photo(user: CurrentUser, request: Request, db: Db) -> Response:
+    """The stored photo, revalidated on every use (private, no-cache) through its ETag."""
+    state = service.photo_state(db, user.id)
+    if state is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_PHOTO)
+    headers = {"Cache-Control": PHOTO_CACHE, "ETag": state.etag}
+    if _matches(request.headers.get("if-none-match"), state.etag):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+    found = service.get_photo(db, user.id)
+    if found is None:  # removed between the two reads
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_PHOTO)
+    data, mime = found
+    extension = "png" if mime == "image/png" else "jpg"
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={
+            "Cache-Control": PHOTO_CACHE,
+            "ETag": photos.etag(data),
+            "Content-Disposition": f'inline; filename="photo.{extension}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.delete(
+    "/photo", status_code=status.HTTP_204_NO_CONTENT, responses=_401, response_class=Response
+)
+def delete_photo(user: CurrentUser, request: Request, db: Db) -> Response:
+    """Remove the photo. Idempotent: 204 whether or not there was one."""
+    service.delete_photo(db, user.id, deps.clock(request))
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers=NO_STORE)
 
 
 @router.put(
@@ -251,4 +391,4 @@ def save_section(
     except service.StaleRevisionError as exc:
         return _conflict(exc, db)
     db.commit()
-    return _out(profile)
+    return _out(profile, db)

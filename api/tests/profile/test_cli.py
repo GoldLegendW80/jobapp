@@ -1,6 +1,7 @@
 """`python -m app.profile.cli` as the operator runs it: convert on the Mac (no database), import
 inside the container (as a subprocess, file and stdin), and the refusals."""
 
+import base64
 import json
 import os
 import subprocess
@@ -13,9 +14,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.profile.cli import main
 from app.profile.models import Profile, ProfileRevision
+from app.profile.photo import UNREADABLE, normalize
 from app.profile.schemas import IMPORT_MAX_BYTES, SECTIONS
 from tests.identity.api_helpers import make_user
-from tests.profile.conftest import ALICE, BOB
+from tests.profile import images
+from tests.profile.conftest import ALICE, BOB, full
 from tests.profile.test_importer import write_sources
 
 API_DIR = Path(__file__).resolve().parents[2]
@@ -235,3 +238,46 @@ def test_import_database_down(
     monkeypatch.setenv("DB_CONNECT_TIMEOUT_S", "2")
     assert main(["import", "--email", ALICE, "--file", str(converted)]) == 1
     assert "Database error, nothing was imported" in capsys.readouterr().err
+
+
+def test_import_stores_the_photo_re_encoded(
+    migrated_url: str, factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A file written by hand (not by convert) with a photo full of metadata: the CLI stores it
+    through the same pipeline as an upload."""
+    make_user(factory, email=ALICE)
+    source = images.jpeg_with_gps(orientation=6)
+    body = {
+        "format": "jobapp-profile",
+        "version": 1,
+        "exported_at": "2026-10-08T12:00:00Z",
+        "sections": {name: full(name) for name in SECTIONS},
+        "photo": {"mime": "image/jpeg", "base64": base64.b64encode(source).decode()},
+    }
+    file = tmp_path / "profile.json"
+    file.write_text(json.dumps(body), encoding="utf-8")
+    assert main(["import", "--email", ALICE, "--file", str(file)]) == 0
+    with factory() as db:
+        stored, mime = db.execute(sa.select(Profile.photo, Profile.photo_mime)).one()
+    assert mime == "image/jpeg"
+    assert stored == normalize(source).data
+    assert images.metadata(stored) == {}
+    assert images.opened(stored).size == (30, 40)
+
+
+def test_import_refuses_a_photo_that_does_not_decode(
+    migrated_url: str,
+    factory: sessionmaker[Session],
+    converted: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    make_user(factory, email=ALICE)
+    body = json.loads(converted.read_text(encoding="utf-8"))
+    truncated = images.png(300, 300)[:-60]
+    body["photo"] = {"mime": "image/png", "base64": base64.b64encode(truncated).decode()}
+    converted.write_text(json.dumps(body), encoding="utf-8")
+    assert main(["import", "--email", ALICE, "--file", str(converted)]) == 2
+    assert capsys.readouterr().err == (
+        f"Invalid profile, photo: {UNREADABLE} Nothing was imported.\n"
+    )
+    assert history(factory) == ([], [])

@@ -1,0 +1,96 @@
+# profile P3 real-world check, 2026-10-08, Mac, scratch prod stack
+
+## Stack
+docker compose -p jobapp-p3scratch -f compose.yml -f <scratchpad>/compose.p3.yml up -d --build --wait
+  (compose.p3.yml renames the images to jobapp-p3scratch-{api,caddy}:latest so the shared
+  jobapp-api:latest and jobapp-caddy:latest tags are not touched; .env: APP_ENV=production,
+  HTTP_PORT=8093, fresh random SECRET_KEY and database password)
+  -> redis, db, api, caddy Healthy
+docker compose ... exec -T api alembic upgrade head  -> 0001, 0002, 0003
+docker compose ... exec -T api python -m app.identity.cli create-admin alice.p3check@example.org
+docker compose ... exec -T api python -m app.identity.cli create-admin bob.p3check@example.org
+  (scratch accounts; earlier scratch accounts were used by two runs that failed on the script's
+  own expectations, see "Runs" below)
+
+## Playwright through Caddy (http://127.0.0.1:8093)
+uv run --native-tls --no-project --with playwright==1.55.0 --with pillow==12.3.0 \
+    python tasks/evidence/profile-p3/photo_check.py <alice link file> <bob link file>
+APIRequestContext for every call; Google Chrome (channel chrome, headless) for the screenshot.
+The session cookie is Secure (production), so it is read from Set-Cookie and sent explicitly
+over loopback http, as in P2.
+
+ok   anonymous GET /api/profile/photo is 401
+ok   anonymous PUT /api/profile/photo is 401
+ok   anonymous DELETE /api/profile/photo is 401
+ok   Alice accepts the setup link and is signed in
+ok   Alice's cookie: Secure HttpOnly
+ok   Bob accepts the setup link and is signed in
+ok   Bob's cookie: Secure HttpOnly
+ok   GET without a photo is 404
+ok   has_photo false
+     upload: 158310 bytes, (2000, 3000), EXIF tags [272, 274, 315, 34853], GPS {1: 'N', 2: (44.0, 50.0, 16.0), 3: 'W', 4: (0.0, 34.0, 45.0)}
+ok   the upload carries EXIF orientation 6
+ok   PUT without X-Requested-With is 403
+ok   PUT is 200
+ok   stored upright and downscaled: 1024x683
+ok   the answer carries the ETag
+ok   GET is the JPEG
+ok   Cache-Control private, no-cache
+ok   same ETag
+ok   nosniff
+ok   ETag is the SHA-256 of the bytes
+ok   downloaded (1024, 683)
+ok   no metadata in the file info: []
+ok   no EXIF at all (orientation, artist, camera)
+ok   no GPS
+ok   none of the metadata strings in the bytes: []
+     download: 21770 bytes, (1024, 683), info keys ['jfif', 'jfif_density', 'jfif_unit', 'jfif_version', 'progression', 'progressive']
+ok   second GET is 304 without a body
+ok   profile reports it
+ok   no revision for the photo
+ok   SVG (59 bytes) is 415: {'detail': 'Only PNG and JPEG images are accepted.'}
+ok   GIF (68 bytes) is 415: {'detail': 'Only PNG and JPEG images are accepted.'}
+ok   WebP (68 bytes) is 415: {'detail': 'Only PNG and JPEG images are accepted.'}
+ok   PDF (15 bytes) is 415: {'detail': 'Only PNG and JPEG images are accepted.'}
+ok   empty (0 bytes) is 415: {'detail': 'The file is empty.'}
+ok   truncated JPEG (79155 bytes) is 415: {'detail': 'The image could not be read: the file is damaged, truncated or not a real image.'}
+ok   JPEG magic then HTML (35 bytes) is 415: {'detail': 'The image could not be read: the file is damaged, truncated or not a real image.'}
+ok   2 MB + 1 byte (2097153 bytes) is 413: {'detail': 'The image is larger than 2 MB.'}
+ok   20000x20000 PNG (388871 bytes) is 422: {'detail': 'The image is too large: at most 25 megapixels are accepted.'}
+ok   the refused files left the stored photo alone
+ok   Bob gets 404, not Alice's photo
+ok   Bob with Alice's ETag still gets 404
+ok   Bob's DELETE is 204
+ok   and Alice still has hers
+ok   the browser shows a [1024, 683] image
+ok   DELETE is 204
+ok   DELETE again is 204 (idempotent)
+ok   GET after delete is 404
+0 failure(s)
+
+Files: exchange.json (every request and answer, headers kept: cache-control, content-type,
+content-length, etag, x-content-type-options, content-disposition; secrets redacted),
+downloaded-photo.jpg (the bytes GET returned), photo-in-browser.png (Chrome showing GET
+/api/profile/photo: "TOP" is at the top, so the server applied EXIF orientation 6 before
+stripping it; the stored file has no EXIF left for a browser to apply).
+
+## Runs
+Run 1 stopped at "GET without a photo": the script relied on the request context to send the
+Secure cookie back over http, which it does not; fixed in the script (explicit Cookie header).
+Run 2 reported 3 failures that were the script's own wrong expectation (683x1024 portrait; the
+picture is a 3000x2000 landscape, so upright is 1024x683, which the server returned); fixed.
+Run 3 (above): 0 failures.
+
+## Logs (api and caddy, all three runs)
+api request lines for /api/profile/photo: DELETE 204 x7, DELETE 401 x4, GET 200 x5, GET 304 x9,
+  GET 401 x5, GET 404 x11, PUT 200 x3, PUT 401 x4, PUT 403 x3, PUT 413 x3, PUT 415 x21, PUT 422 x3
+caddy access lines for /api/profile/photo: the same counts
+no warning, error or traceback line
+occurrences of the password, the setup tokens, "SecretCam", "Ada Example", "Bordeaux",
+  "secret note" or JPEG base64 ("/9j/"): 0 (no photo bytes or metadata logged)
+api container memory after the runs (20000x20000 PNG included): 94 MiB of 512 MiB
+
+## Teardown
+docker compose -p jobapp-p3scratch ... down -v --rmi local
+  -> containers, network, volumes pgdata and redisdata, images jobapp-p3scratch-{api,caddy} removed
+scratch .env removed; no jobapp-test-pg-* container left behind
