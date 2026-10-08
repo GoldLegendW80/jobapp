@@ -40,14 +40,14 @@ repo bootstrap (1)
 - [x] `docker compose up` locally, `/api/health` returns ok with a DB round trip, pytest green
 
 ### Phase 2: Fail fast on the Jetson
-- [ ] Task 4: First Jetson deploy
+- [x] Task 4: First Jetson deploy
 
 ### Checkpoint B: arm64 confirmed
-- [ ] api and db build and run on the Jetson; memory measured; review with Harald
+- [x] api and db build and run on the Jetson; memory measured; review with Harald
 
 ### Phase 3: Frontend and edge
 - [x] Task 5: Web skeleton
-- [ ] Task 6: Caddy in front
+- [x] Task 6: Caddy in front
 - [ ] Task 7: CI workflow
 
 ### Checkpoint C: full stack locally and in CI

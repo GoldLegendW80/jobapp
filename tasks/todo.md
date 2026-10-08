@@ -70,13 +70,13 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Prerequisite (Harald):** `ssh -t jetson 'sudo usermod -aG docker yessai'`, then reconnect.
 
 **Acceptance criteria:**
-- [ ] `./deploy.sh` from the Mac builds api on the Jetson and brings api, db, redis to healthy
-- [ ] `ssh jetson curl -s localhost:8000/api/health` returns ok (temporary port, removed in task 6)
-- [ ] Build time and idle RAM per service recorded in `tasks/plan.md`
+- [x] `./deploy.sh` from the Mac builds api on the Jetson and brings api, db, redis to healthy
+- [x] `ssh jetson curl -s localhost/api/health` returns ok through Caddy (port 80 on loopback since task 6)
+- [x] Build time and idle RAM per service recorded in `tasks/plan.md`
 
 **Verification:**
-- [ ] `./deploy.sh` exits 0; a second run is idempotent
-- [ ] `ssh jetson docker stats --no-stream` shows every service under its limit
+- [x] `./deploy.sh` exits 0; a second run is idempotent
+- [x] `ssh jetson docker stats --no-stream` shows every service under its limit
 
 **Dependencies:** Task 3
 
@@ -85,7 +85,7 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Scope:** S
 
 ## Checkpoint B: arm64 confirmed
-- [ ] Results of task 4 reviewed with Harald before building the frontend
+- [x] Results of task 4 reviewed with Harald before building the frontend
 
 ## Task 5: Web skeleton
 
@@ -116,7 +116,7 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 
 **Verification:**
 - [x] `curl -s localhost/api/health` and `curl -s localhost/some/route | grep '<div id="root">'`
-- [ ] Deployed to the Jetson with `./deploy.sh`, same two curls over ssh
+- [x] Deployed to the Jetson with `./deploy.sh`, same two curls over ssh
 
 **Dependencies:** Tasks 4, 5
 
