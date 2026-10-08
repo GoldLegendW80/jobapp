@@ -75,8 +75,16 @@ class Postgres:
         subprocess.run(["docker", "rm", "-f", self.name], capture_output=True, check=False)
 
 
-def _host_port(name: str) -> int:
-    return int(docker("port", name, "5432/tcp").splitlines()[0].rsplit(":", 1)[1])
+def _host_port(name: str, timeout: float = 10) -> int:
+    # Right after `docker run -d` (or `start`) the mapping can still be empty for a moment.
+    deadline = time.monotonic() + timeout
+    while True:
+        lines = docker("port", name, "5432/tcp").splitlines()
+        if lines:
+            return int(lines[0].rsplit(":", 1)[1])
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"container {name} publishes no port for 5432")
+        time.sleep(0.2)
 
 
 def start_postgres(port: int | None = None) -> Postgres:

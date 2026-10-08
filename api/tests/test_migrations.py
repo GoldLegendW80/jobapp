@@ -18,6 +18,7 @@ from app.config import ConfigError, get_settings
 from app.models_base import NAMING_CONVENTION, Base
 
 API_DIR = Path(__file__).resolve().parents[1]
+HEAD = "0002"
 
 
 def alembic_config() -> Config:
@@ -47,21 +48,21 @@ def migrated_env(database_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator
 
 def test_single_head_and_baseline_is_first() -> None:
     script = ScriptDirectory.from_config(alembic_config())
-    assert script.get_heads() == ["0001"]
+    assert script.get_heads() == [HEAD]
     assert script.get_base() == "0001"
     assert script.get_revision("0001").down_revision is None
 
 
-def test_upgrade_head_reaches_baseline(migrated_env: str) -> None:
+def test_upgrade_head_reaches_head(migrated_env: str) -> None:
     assert current_revision(migrated_env) is None
     command.upgrade(alembic_config(), "head")
-    assert current_revision(migrated_env) == "0001"
+    assert current_revision(migrated_env) == HEAD
 
 
 def test_upgrade_twice_is_idempotent(migrated_env: str) -> None:
     command.upgrade(alembic_config(), "head")
     command.upgrade(alembic_config(), "head")
-    assert current_revision(migrated_env) == "0001"
+    assert current_revision(migrated_env) == HEAD
 
 
 def test_downgrade_base_then_upgrade(migrated_env: str) -> None:
@@ -69,7 +70,7 @@ def test_downgrade_base_then_upgrade(migrated_env: str) -> None:
     command.downgrade(alembic_config(), "base")
     assert current_revision(migrated_env) is None
     command.upgrade(alembic_config(), "head")
-    assert current_revision(migrated_env) == "0001"
+    assert current_revision(migrated_env) == HEAD
 
 
 def test_concurrent_upgrades_do_not_race(migrated_env: str) -> None:
@@ -84,14 +85,14 @@ def test_concurrent_upgrades_do_not_race(migrated_env: str) -> None:
     ]
     outputs = [proc.communicate(timeout=60)[0].decode() for proc in procs]
     assert [proc.returncode for proc in procs] == [0, 0, 0, 0], outputs
-    assert current_revision(migrated_env) == "0001"
+    assert current_revision(migrated_env) == HEAD
     engine = sa.create_engine(migrated_env, poolclass=sa.pool.NullPool)
     try:
         with engine.connect() as conn:
             rows = conn.execute(sa.text("select version_num from alembic_version")).all()
     finally:
         engine.dispose()
-    assert rows == [("0001",)]
+    assert rows == [(HEAD,)]
 
 
 def test_models_match_migrations(migrated_env: str) -> None:
@@ -113,6 +114,7 @@ def test_offline_sql_needs_no_database(
     out = capsys.readouterr().out
     assert "CREATE TABLE alembic_version" in out
     assert "INSERT INTO alembic_version (version_num) VALUES ('0001')" in out
+    assert f"UPDATE alembic_version SET version_num='{HEAD}'" in out
     assert "nowhere.invalid" not in out
 
 
