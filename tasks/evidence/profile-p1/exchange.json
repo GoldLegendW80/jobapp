@@ -1,0 +1,2400 @@
+{
+  "task": "profile P1",
+  "when": "2026-10-08T17:22:38+00:00",
+  "base_url": "http://127.0.0.1:8097",
+  "client": "Playwright APIRequestContext (Python, async)",
+  "note": "tokens, passwords and cookie values replaced by [redacted]; sample data is fictional",
+  "log_scan": {
+    "lines": 134,
+    "secrets_found": 0,
+    "profile_content_found": false
+  },
+  "failures": [],
+  "exchanges": [
+    {
+      "step": "profile without a session",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile",
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "53594e26-b01b-4924-b3b6-eee8049c6b27"
+          }
+        ],
+        "body": {
+          "detail": "Sign in to continue."
+        }
+      }
+    },
+    {
+      "step": "revisions without a session",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions",
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "53f8f3ba-1c15-4491-8eee-aadfcd5874d7"
+          }
+        ],
+        "body": {
+          "detail": "Sign in to continue."
+        }
+      }
+    },
+    {
+      "step": "accept invite (Alice)",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/invites/[redacted]/accept",
+        "body": {
+          "name": "Alice",
+          "password": "[redacted]"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Set-Cookie",
+            "value": "jobapp_session=[redacted]; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "601babea-989d-4167-a9ab-d99c18709136"
+          }
+        ],
+        "body": {
+          "id": "d63e9cba-4fbf-4216-a0c4-9155b54eb42a",
+          "email": "alice@example.org",
+          "name": "Alice",
+          "role": "admin",
+          "created_at": "2026-10-08T17:22:38.195286Z",
+          "last_login_at": "2026-10-08T17:22:38.188132Z"
+        }
+      }
+    },
+    {
+      "step": "accept invite (Bob)",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/invites/[redacted]/accept",
+        "body": {
+          "name": "Bob",
+          "password": "[redacted]"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Set-Cookie",
+            "value": "jobapp_session=[redacted]; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "f74d4016-09a6-400d-bacf-9781091544dd"
+          }
+        ],
+        "body": {
+          "id": "c79a8a34-b55e-48db-82d2-682688dfd064",
+          "email": "bob@example.org",
+          "name": "Bob",
+          "role": "admin",
+          "created_at": "2026-10-08T17:22:38.243956Z",
+          "last_login_at": "2026-10-08T17:22:38.243481Z"
+        }
+      }
+    },
+    {
+      "step": "first read creates the profile",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "c2d226a4-14f8-4c77-addb-f0e89dba26a5"
+          }
+        ],
+        "body": {
+          "revision": 0,
+          "updated_at": "2026-10-08T17:22:38.274614Z",
+          "sections": {
+            "identity": null,
+            "experience": null,
+            "facts": null,
+            "skills": null,
+            "search": null,
+            "answers": null
+          },
+          "completeness": {
+            "overall": 0,
+            "sections": {
+              "identity": {
+                "percent": 0,
+                "missing": [
+                  "full_name",
+                  "headline",
+                  "email",
+                  "phone",
+                  "city",
+                  "country",
+                  "languages"
+                ]
+              },
+              "experience": {
+                "percent": 0,
+                "missing": [
+                  "employers",
+                  "education"
+                ]
+              },
+              "facts": {
+                "percent": 0,
+                "missing": [
+                  "blocks"
+                ]
+              },
+              "skills": {
+                "percent": 0,
+                "missing": [
+                  "years_experience",
+                  "have"
+                ]
+              },
+              "search": {
+                "percent": 0,
+                "missing": [
+                  "title_include",
+                  "location",
+                  "contract_types",
+                  "remote_stance",
+                  "boards"
+                ]
+              },
+              "answers": {
+                "percent": 0,
+                "missing": [
+                  "work_authorization",
+                  "notice_period",
+                  "earliest_start",
+                  "salary_policy",
+                  "motivation"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "save without CSRF header",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/facts",
+        "body": {
+          "base_revision": 0,
+          "data": {
+            "blocks": [
+              {
+                "title": "Règles",
+                "body": "1. Every claim traces here.\n2. 🚀 Profile-content-marker-7f3a"
+              },
+              {
+                "title": "عربي",
+                "body": "نص من اليمين إلى اليسار"
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "ac4c4c4f-d6ee-4cd4-8650-205ca9c999cb"
+          }
+        ],
+        "body": {
+          "detail": "Missing or invalid X-Requested-With header."
+        }
+      }
+    },
+    {
+      "step": "save identity",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/identity",
+        "body": {
+          "base_revision": 0,
+          "data": {
+            "full_name": "Zoë Ünal Profile-content-marker-7f3a",
+            "headline": "GenAI Engineer",
+            "email": "zoe@example.org",
+            "phone": "+33 6 12 34 56 78",
+            "city": "Bordeaux",
+            "country": "France",
+            "linkedin_url": "https://www.linkedin.com/in/zoe-example/",
+            "website": "https://zoe.example.org/",
+            "links": [],
+            "languages": [
+              {
+                "name": "Français",
+                "level": "Langue maternelle"
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "b2f42a7e-c3ff-4239-98b2-8ce2fec2d213"
+          }
+        ],
+        "body": {
+          "revision": 1,
+          "updated_at": "2026-10-08T17:22:38.288320Z",
+          "sections": {
+            "identity": {
+              "full_name": "Zoë Ünal Profile-content-marker-7f3a",
+              "headline": "GenAI Engineer",
+              "email": "zoe@example.org",
+              "phone": "+33 6 12 34 56 78",
+              "city": "Bordeaux",
+              "country": "France",
+              "linkedin_url": "https://www.linkedin.com/in/zoe-example/",
+              "website": "https://zoe.example.org/",
+              "links": [],
+              "languages": [
+                {
+                  "name": "Français",
+                  "level": "Langue maternelle"
+                }
+              ]
+            },
+            "experience": null,
+            "facts": null,
+            "skills": null,
+            "search": null,
+            "answers": null
+          },
+          "completeness": {
+            "overall": 17,
+            "sections": {
+              "identity": {
+                "percent": 100,
+                "missing": []
+              },
+              "experience": {
+                "percent": 0,
+                "missing": [
+                  "employers",
+                  "education"
+                ]
+              },
+              "facts": {
+                "percent": 0,
+                "missing": [
+                  "blocks"
+                ]
+              },
+              "skills": {
+                "percent": 0,
+                "missing": [
+                  "years_experience",
+                  "have"
+                ]
+              },
+              "search": {
+                "percent": 0,
+                "missing": [
+                  "title_include",
+                  "location",
+                  "contract_types",
+                  "remote_stance",
+                  "boards"
+                ]
+              },
+              "answers": {
+                "percent": 0,
+                "missing": [
+                  "work_authorization",
+                  "notice_period",
+                  "earliest_start",
+                  "salary_policy",
+                  "motivation"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "save experience",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/experience",
+        "body": {
+          "base_revision": 1,
+          "data": {
+            "employers": [
+              {
+                "key": "acme",
+                "organisation": "Acme",
+                "title": "GenAI Engineer",
+                "start": "2025-09",
+                "end": null,
+                "location": "Bordeaux",
+                "contract": "CDI"
+              }
+            ],
+            "education": [
+              {
+                "school": "École d'ingénieurs",
+                "degree": "MSc",
+                "start": "2022-09",
+                "end": "2025-08",
+                "location": null,
+                "details": null
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "b23e939c-4a9c-4d9d-b37e-41ed9e66e379"
+          }
+        ],
+        "body": {
+          "revision": 2,
+          "updated_at": "2026-10-08T17:22:38.299326Z",
+          "sections": {
+            "identity": {
+              "city": "Bordeaux",
+              "email": "zoe@example.org",
+              "links": [],
+              "phone": "+33 6 12 34 56 78",
+              "country": "France",
+              "website": "https://zoe.example.org/",
+              "headline": "GenAI Engineer",
+              "full_name": "Zoë Ünal Profile-content-marker-7f3a",
+              "languages": [
+                {
+                  "name": "Français",
+                  "level": "Langue maternelle"
+                }
+              ],
+              "linkedin_url": "https://www.linkedin.com/in/zoe-example/"
+            },
+            "experience": {
+              "employers": [
+                {
+                  "start": "2025-09",
+                  "end": null,
+                  "key": "acme",
+                  "organisation": "Acme",
+                  "title": "GenAI Engineer",
+                  "location": "Bordeaux",
+                  "contract": "CDI"
+                }
+              ],
+              "education": [
+                {
+                  "start": "2022-09",
+                  "end": "2025-08",
+                  "school": "École d'ingénieurs",
+                  "degree": "MSc",
+                  "location": null,
+                  "details": null
+                }
+              ]
+            },
+            "facts": null,
+            "skills": null,
+            "search": null,
+            "answers": null
+          },
+          "completeness": {
+            "overall": 33,
+            "sections": {
+              "identity": {
+                "percent": 100,
+                "missing": []
+              },
+              "experience": {
+                "percent": 100,
+                "missing": []
+              },
+              "facts": {
+                "percent": 0,
+                "missing": [
+                  "blocks"
+                ]
+              },
+              "skills": {
+                "percent": 0,
+                "missing": [
+                  "years_experience",
+                  "have"
+                ]
+              },
+              "search": {
+                "percent": 0,
+                "missing": [
+                  "title_include",
+                  "location",
+                  "contract_types",
+                  "remote_stance",
+                  "boards"
+                ]
+              },
+              "answers": {
+                "percent": 0,
+                "missing": [
+                  "work_authorization",
+                  "notice_period",
+                  "earliest_start",
+                  "salary_policy",
+                  "motivation"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "save facts",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/facts",
+        "body": {
+          "base_revision": 2,
+          "data": {
+            "blocks": [
+              {
+                "title": "Règles",
+                "body": "1. Every claim traces here.\n2. 🚀 Profile-content-marker-7f3a"
+              },
+              {
+                "title": "عربي",
+                "body": "نص من اليمين إلى اليسار"
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "3720ed8e-7157-4988-b3ca-ef49333ff146"
+          }
+        ],
+        "body": {
+          "revision": 3,
+          "updated_at": "2026-10-08T17:22:38.307477Z",
+          "sections": {
+            "identity": {
+              "city": "Bordeaux",
+              "email": "zoe@example.org",
+              "links": [],
+              "phone": "+33 6 12 34 56 78",
+              "country": "France",
+              "website": "https://zoe.example.org/",
+              "headline": "GenAI Engineer",
+              "full_name": "Zoë Ünal Profile-content-marker-7f3a",
+              "languages": [
+                {
+                  "name": "Français",
+                  "level": "Langue maternelle"
+                }
+              ],
+              "linkedin_url": "https://www.linkedin.com/in/zoe-example/"
+            },
+            "experience": {
+              "education": [
+                {
+                  "end": "2025-08",
+                  "start": "2022-09",
+                  "degree": "MSc",
+                  "school": "École d'ingénieurs",
+                  "details": null,
+                  "location": null
+                }
+              ],
+              "employers": [
+                {
+                  "end": null,
+                  "key": "acme",
+                  "start": "2025-09",
+                  "title": "GenAI Engineer",
+                  "contract": "CDI",
+                  "location": "Bordeaux",
+                  "organisation": "Acme"
+                }
+              ]
+            },
+            "facts": {
+              "blocks": [
+                {
+                  "title": "Règles",
+                  "body": "1. Every claim traces here.\n2. 🚀 Profile-content-marker-7f3a"
+                },
+                {
+                  "title": "عربي",
+                  "body": "نص من اليمين إلى اليسار"
+                }
+              ]
+            },
+            "skills": null,
+            "search": null,
+            "answers": null
+          },
+          "completeness": {
+            "overall": 50,
+            "sections": {
+              "identity": {
+                "percent": 100,
+                "missing": []
+              },
+              "experience": {
+                "percent": 100,
+                "missing": []
+              },
+              "facts": {
+                "percent": 100,
+                "missing": []
+              },
+              "skills": {
+                "percent": 0,
+                "missing": [
+                  "years_experience",
+                  "have"
+                ]
+              },
+              "search": {
+                "percent": 0,
+                "missing": [
+                  "title_include",
+                  "location",
+                  "contract_types",
+                  "remote_stance",
+                  "boards"
+                ]
+              },
+              "answers": {
+                "percent": 0,
+                "missing": [
+                  "work_authorization",
+                  "notice_period",
+                  "earliest_start",
+                  "salary_policy",
+                  "motivation"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "save skills",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/skills",
+        "body": {
+          "base_revision": 3,
+          "data": {
+            "years_experience": 3.5,
+            "have": [
+              {
+                "name": "agents",
+                "terms": [
+                  "agent",
+                  "agentic"
+                ],
+                "advanced_regex": false
+              }
+            ],
+            "adjacent": [],
+            "none": [],
+            "gates": [
+              {
+                "name": "phd",
+                "terms": [
+                  "phd (is )?required"
+                ],
+                "advanced_regex": true,
+                "penalty": 25
+              }
+            ]
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "efbfee2c-3b52-4135-9e80-38453a914f51"
+          }
+        ],
+        "body": {
+          "revision": 4,
+          "updated_at": "2026-10-08T17:22:38.315177Z",
+          "sections": {
+            "identity": {
+              "city": "Bordeaux",
+              "email": "zoe@example.org",
+              "links": [],
+              "phone": "+33 6 12 34 56 78",
+              "country": "France",
+              "website": "https://zoe.example.org/",
+              "headline": "GenAI Engineer",
+              "full_name": "Zoë Ünal Profile-content-marker-7f3a",
+              "languages": [
+                {
+                  "name": "Français",
+                  "level": "Langue maternelle"
+                }
+              ],
+              "linkedin_url": "https://www.linkedin.com/in/zoe-example/"
+            },
+            "experience": {
+              "education": [
+                {
+                  "end": "2025-08",
+                  "start": "2022-09",
+                  "degree": "MSc",
+                  "school": "École d'ingénieurs",
+                  "details": null,
+                  "location": null
+                }
+              ],
+              "employers": [
+                {
+                  "end": null,
+                  "key": "acme",
+                  "start": "2025-09",
+                  "title": "GenAI Engineer",
+                  "contract": "CDI",
+                  "location": "Bordeaux",
+                  "organisation": "Acme"
+                }
+              ]
+            },
+            "facts": {
+              "blocks": [
+                {
+                  "body": "1. Every claim traces here.\n2. 🚀 Profile-content-marker-7f3a",
+                  "title": "Règles"
+                },
+                {
+                  "body": "نص من اليمين إلى اليسار",
+                  "title": "عربي"
+                }
+              ]
+            },
+            "skills": {
+              "years_experience": 3.5,
+              "have": [
+                {
+                  "advanced_regex": false,
+                  "terms": [
+                    "agent",
+                    "agentic"
+                  ],
+                  "name": "agents"
+                }
+              ],
+              "adjacent": [],
+              "none": [],
+              "gates": [
+                {
+                  "advanced_regex": true,
+                  "terms": [
+                    "phd (is )?required"
+                  ],
+                  "name": "phd",
+                  "penalty": 25
+                }
+              ]
+            },
+            "search": null,
+            "answers": null
+          },
+          "completeness": {
+            "overall": 67,
+            "sections": {
+              "identity": {
+                "percent": 100,
+                "missing": []
+              },
+              "experience": {
+                "percent": 100,
+                "missing": []
+              },
+              "facts": {
+                "percent": 100,
+                "missing": []
+              },
+              "skills": {
+                "percent": 100,
+                "missing": []
+              },
+              "search": {
+                "percent": 0,
+                "missing": [
+                  "title_include",
+                  "location",
+                  "contract_types",
+                  "remote_stance",
+                  "boards"
+                ]
+              },
+              "answers": {
+                "percent": 0,
+                "missing": [
+                  "work_authorization",
+                  "notice_period",
+                  "earliest_start",
+                  "salary_policy",
+                  "motivation"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "save search",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/search",
+        "body": {
+          "base_revision": 4,
+          "data": {
+            "title_include": {
+              "terms": [
+                "ai engineer",
+                "llm"
+              ],
+              "advanced_regex": false
+            },
+            "title_exclude": {
+              "terms": [
+                "\\b(staff|principal)\\b"
+              ],
+              "advanced_regex": true
+            },
+            "location": {
+              "terms": [
+                "paris",
+                "remote"
+              ],
+              "advanced_regex": false
+            },
+            "contract_types": [
+              "CDI",
+              "VIE"
+            ],
+            "remote_stance": "hybrid",
+            "min_fit": 60,
+            "days": 14,
+            "boards": [
+              {
+                "company": "Mistral AI",
+                "ats": "ashby",
+                "org": "mistral.ai",
+                "enabled": true,
+                "extra_exclude": {
+                  "terms": [],
+                  "advanced_regex": false
+                }
+              }
+            ],
+            "never_apply": [
+              "No cybersecurity roles."
+            ]
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "2747e284-0a46-4871-97f8-d4352b9b593a"
+          }
+        ],
+        "body": {
+          "revision": 5,
+          "updated_at": "2026-10-08T17:22:38.322658Z",
+          "sections": {
+            "identity": {
+              "city": "Bordeaux",
+              "email": "zoe@example.org",
+              "links": [],
+              "phone": "+33 6 12 34 56 78",
+              "country": "France",
+              "website": "https://zoe.example.org/",
+              "headline": "GenAI Engineer",
+              "full_name": "Zoë Ünal Profile-content-marker-7f3a",
+              "languages": [
+                {
+                  "name": "Français",
+                  "level": "Langue maternelle"
+                }
+              ],
+              "linkedin_url": "https://www.linkedin.com/in/zoe-example/"
+            },
+            "experience": {
+              "education": [
+                {
+                  "end": "2025-08",
+                  "start": "2022-09",
+                  "degree": "MSc",
+                  "school": "École d'ingénieurs",
+                  "details": null,
+                  "location": null
+                }
+              ],
+              "employers": [
+                {
+                  "end": null,
+                  "key": "acme",
+                  "start": "2025-09",
+                  "title": "GenAI Engineer",
+                  "contract": "CDI",
+                  "location": "Bordeaux",
+                  "organisation": "Acme"
+                }
+              ]
+            },
+            "facts": {
+              "blocks": [
+                {
+                  "body": "1. Every claim traces here.\n2. 🚀 Profile-content-marker-7f3a",
+                  "title": "Règles"
+                },
+                {
+                  "body": "نص من اليمين إلى اليسار",
+                  "title": "عربي"
+                }
+              ]
+            },
+            "skills": {
+              "have": [
+                {
+                  "name": "agents",
+                  "terms": [
+                    "agent",
+                    "agentic"
+                  ],
+                  "advanced_regex": false
+                }
+              ],
+              "none": [],
+              "gates": [
+                {
+                  "name": "phd",
+                  "terms": [
+                    "phd (is )?required"
+                  ],
+                  "penalty": 25,
+                  "advanced_regex": true
+                }
+              ],
+              "adjacent": [],
+              "years_experience": 3.5
+            },
+            "search": {
+              "title_include": {
+                "advanced_regex": false,
+                "terms": [
+                  "ai engineer",
+                  "llm"
+                ]
+              },
+              "title_exclude": {
+                "advanced_regex": true,
+                "terms": [
+                  "\\b(staff|principal)\\b"
+                ]
+              },
+              "location": {
+                "advanced_regex": false,
+                "terms": [
+                  "paris",
+                  "remote"
+                ]
+              },
+              "contract_types": [
+                "CDI",
+                "VIE"
+              ],
+              "remote_stance": "hybrid",
+              "min_fit": 60,
+              "days": 14,
+              "boards": [
+                {
+                  "company": "Mistral AI",
+                  "ats": "ashby",
+                  "org": "mistral.ai",
+                  "enabled": true,
+                  "extra_exclude": {
+                    "advanced_regex": false,
+                    "terms": []
+                  }
+                }
+              ],
+              "never_apply": [
+                "No cybersecurity roles."
+              ]
+            },
+            "answers": null
+          },
+          "completeness": {
+            "overall": 83,
+            "sections": {
+              "identity": {
+                "percent": 100,
+                "missing": []
+              },
+              "experience": {
+                "percent": 100,
+                "missing": []
+              },
+              "facts": {
+                "percent": 100,
+                "missing": []
+              },
+              "skills": {
+                "percent": 100,
+                "missing": []
+              },
+              "search": {
+                "percent": 100,
+                "missing": []
+              },
+              "answers": {
+                "percent": 0,
+                "missing": [
+                  "work_authorization",
+                  "notice_period",
+                  "earliest_start",
+                  "salary_policy",
+                  "motivation"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "save answers",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/answers",
+        "body": {
+          "base_revision": 5,
+          "data": {
+            "work_authorization": [
+              {
+                "country": "France",
+                "answer": "EU citizen.",
+                "needs_sponsorship": false
+              }
+            ],
+            "notice_period": "One to three months.",
+            "earliest_start": "2026-12-01",
+            "salary_policy": "Never invent a number.",
+            "relocation": null,
+            "travel": null,
+            "motivation": "Build agents that run real operations.",
+            "heard_about": null,
+            "leave_blank": [
+              "gender"
+            ]
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "2c699736-c963-4294-99b9-6e10ea7dc23e"
+          }
+        ],
+        "body": {
+          "revision": 6,
+          "updated_at": "2026-10-08T17:22:38.330436Z",
+          "sections": {
+            "identity": {
+              "city": "Bordeaux",
+              "email": "zoe@example.org",
+              "links": [],
+              "phone": "+33 6 12 34 56 78",
+              "country": "France",
+              "website": "https://zoe.example.org/",
+              "headline": "GenAI Engineer",
+              "full_name": "Zoë Ünal Profile-content-marker-7f3a",
+              "languages": [
+                {
+                  "name": "Français",
+                  "level": "Langue maternelle"
+                }
+              ],
+              "linkedin_url": "https://www.linkedin.com/in/zoe-example/"
+            },
+            "experience": {
+              "education": [
+                {
+                  "end": "2025-08",
+                  "start": "2022-09",
+                  "degree": "MSc",
+                  "school": "École d'ingénieurs",
+                  "details": null,
+                  "location": null
+                }
+              ],
+              "employers": [
+                {
+                  "end": null,
+                  "key": "acme",
+                  "start": "2025-09",
+                  "title": "GenAI Engineer",
+                  "contract": "CDI",
+                  "location": "Bordeaux",
+                  "organisation": "Acme"
+                }
+              ]
+            },
+            "facts": {
+              "blocks": [
+                {
+                  "body": "1. Every claim traces here.\n2. 🚀 Profile-content-marker-7f3a",
+                  "title": "Règles"
+                },
+                {
+                  "body": "نص من اليمين إلى اليسار",
+                  "title": "عربي"
+                }
+              ]
+            },
+            "skills": {
+              "have": [
+                {
+                  "name": "agents",
+                  "terms": [
+                    "agent",
+                    "agentic"
+                  ],
+                  "advanced_regex": false
+                }
+              ],
+              "none": [],
+              "gates": [
+                {
+                  "name": "phd",
+                  "terms": [
+                    "phd (is )?required"
+                  ],
+                  "penalty": 25,
+                  "advanced_regex": true
+                }
+              ],
+              "adjacent": [],
+              "years_experience": 3.5
+            },
+            "search": {
+              "days": 14,
+              "boards": [
+                {
+                  "ats": "ashby",
+                  "org": "mistral.ai",
+                  "company": "Mistral AI",
+                  "enabled": true,
+                  "extra_exclude": {
+                    "terms": [],
+                    "advanced_regex": false
+                  }
+                }
+              ],
+              "min_fit": 60,
+              "location": {
+                "terms": [
+                  "paris",
+                  "remote"
+                ],
+                "advanced_regex": false
+              },
+              "never_apply": [
+                "No cybersecurity roles."
+              ],
+              "remote_stance": "hybrid",
+              "title_exclude": {
+                "terms": [
+                  "\\b(staff|principal)\\b"
+                ],
+                "advanced_regex": true
+              },
+              "title_include": {
+                "terms": [
+                  "ai engineer",
+                  "llm"
+                ],
+                "advanced_regex": false
+              },
+              "contract_types": [
+                "CDI",
+                "VIE"
+              ]
+            },
+            "answers": {
+              "work_authorization": [
+                {
+                  "country": "France",
+                  "answer": "EU citizen.",
+                  "needs_sponsorship": false
+                }
+              ],
+              "notice_period": "One to three months.",
+              "earliest_start": "2026-12-01",
+              "salary_policy": "Never invent a number.",
+              "relocation": null,
+              "travel": null,
+              "motivation": "Build agents that run real operations.",
+              "heard_about": null,
+              "leave_blank": [
+                "gender"
+              ]
+            }
+          },
+          "completeness": {
+            "overall": 100,
+            "sections": {
+              "identity": {
+                "percent": 100,
+                "missing": []
+              },
+              "experience": {
+                "percent": 100,
+                "missing": []
+              },
+              "facts": {
+                "percent": 100,
+                "missing": []
+              },
+              "skills": {
+                "percent": 100,
+                "missing": []
+              },
+              "search": {
+                "percent": 100,
+                "missing": []
+              },
+              "answers": {
+                "percent": 100,
+                "missing": []
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "bad regex",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/search",
+        "body": {
+          "base_revision": 6,
+          "data": {
+            "title_include": {
+              "terms": [
+                "(ai engineer"
+              ],
+              "advanced_regex": true
+            }
+          }
+        }
+      },
+      "response": {
+        "status": 422,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "f09ad01c-bd0a-4493-ac2d-740639bcda94"
+          }
+        ],
+        "body": {
+          "detail": "data.title_include.terms: term 1: invalid regular expression at position 0: missing ), unterminated subpattern"
+        }
+      }
+    },
+    {
+      "step": "unknown field",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/identity",
+        "body": {
+          "base_revision": 6,
+          "data": {
+            "nickname": "x"
+          }
+        }
+      },
+      "response": {
+        "status": 422,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "bc46dd30-753e-4730-8be2-de0dcdbc906c"
+          }
+        ],
+        "body": {
+          "detail": "data.nickname: Extra inputs are not permitted"
+        }
+      }
+    },
+    {
+      "step": "unknown section",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/hobbies",
+        "body": {
+          "base_revision": 6,
+          "data": {}
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "38b5074e-7131-4753-8824-ce3c15811135"
+          }
+        ],
+        "body": {
+          "detail": "Unknown profile section."
+        }
+      }
+    },
+    {
+      "step": "stale base revision",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/facts",
+        "body": {
+          "base_revision": 2,
+          "data": {
+            "blocks": []
+          }
+        }
+      },
+      "response": {
+        "status": 409,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "7a12cb79-376e-4f87-810e-680fd277564c"
+          }
+        ],
+        "body": {
+          "detail": "The profile changed since you loaded it. Review the current version and save again.",
+          "revision": 6,
+          "sections": {
+            "identity": {
+              "city": "Bordeaux",
+              "email": "zoe@example.org",
+              "links": [],
+              "phone": "+33 6 12 34 56 78",
+              "country": "France",
+              "website": "https://zoe.example.org/",
+              "headline": "GenAI Engineer",
+              "full_name": "Zoë Ünal Profile-content-marker-7f3a",
+              "languages": [
+                {
+                  "name": "Français",
+                  "level": "Langue maternelle"
+                }
+              ],
+              "linkedin_url": "https://www.linkedin.com/in/zoe-example/"
+            },
+            "experience": {
+              "education": [
+                {
+                  "end": "2025-08",
+                  "start": "2022-09",
+                  "degree": "MSc",
+                  "school": "École d'ingénieurs",
+                  "details": null,
+                  "location": null
+                }
+              ],
+              "employers": [
+                {
+                  "end": null,
+                  "key": "acme",
+                  "start": "2025-09",
+                  "title": "GenAI Engineer",
+                  "contract": "CDI",
+                  "location": "Bordeaux",
+                  "organisation": "Acme"
+                }
+              ]
+            },
+            "facts": {
+              "blocks": [
+                {
+                  "body": "1. Every claim traces here.\n2. 🚀 Profile-content-marker-7f3a",
+                  "title": "Règles"
+                },
+                {
+                  "body": "نص من اليمين إلى اليسار",
+                  "title": "عربي"
+                }
+              ]
+            },
+            "skills": {
+              "have": [
+                {
+                  "name": "agents",
+                  "terms": [
+                    "agent",
+                    "agentic"
+                  ],
+                  "advanced_regex": false
+                }
+              ],
+              "none": [],
+              "gates": [
+                {
+                  "name": "phd",
+                  "terms": [
+                    "phd (is )?required"
+                  ],
+                  "penalty": 25,
+                  "advanced_regex": true
+                }
+              ],
+              "adjacent": [],
+              "years_experience": 3.5
+            },
+            "search": {
+              "days": 14,
+              "boards": [
+                {
+                  "ats": "ashby",
+                  "org": "mistral.ai",
+                  "company": "Mistral AI",
+                  "enabled": true,
+                  "extra_exclude": {
+                    "terms": [],
+                    "advanced_regex": false
+                  }
+                }
+              ],
+              "min_fit": 60,
+              "location": {
+                "terms": [
+                  "paris",
+                  "remote"
+                ],
+                "advanced_regex": false
+              },
+              "never_apply": [
+                "No cybersecurity roles."
+              ],
+              "remote_stance": "hybrid",
+              "title_exclude": {
+                "terms": [
+                  "\\b(staff|principal)\\b"
+                ],
+                "advanced_regex": true
+              },
+              "title_include": {
+                "terms": [
+                  "ai engineer",
+                  "llm"
+                ],
+                "advanced_regex": false
+              },
+              "contract_types": [
+                "CDI",
+                "VIE"
+              ]
+            },
+            "answers": {
+              "travel": null,
+              "motivation": "Build agents that run real operations.",
+              "relocation": null,
+              "heard_about": null,
+              "leave_blank": [
+                "gender"
+              ],
+              "notice_period": "One to three months.",
+              "salary_policy": "Never invent a number.",
+              "earliest_start": "2026-12-01",
+              "work_authorization": [
+                {
+                  "answer": "EU citizen.",
+                  "country": "France",
+                  "needs_sponsorship": false
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "20 concurrent saves with the same base_revision",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/identity",
+        "base_revision": 6
+      },
+      "response": {
+        "statuses": [
+          200,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409,
+          409
+        ]
+      }
+    },
+    {
+      "step": "profile after the race",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "0c844cb9-72f6-48ae-8ed3-af2bfbb76356"
+          }
+        ],
+        "body": {
+          "revision": 7,
+          "updated_at": "2026-10-08T17:22:38.393487Z",
+          "sections": {
+            "identity": {
+              "city": "C0",
+              "email": "zoe@example.org",
+              "links": [],
+              "phone": "+33 6 12 34 56 78",
+              "country": "France",
+              "website": "https://zoe.example.org/",
+              "headline": "GenAI Engineer",
+              "full_name": "Zoë Ünal Profile-content-marker-7f3a",
+              "languages": [
+                {
+                  "name": "Français",
+                  "level": "Langue maternelle"
+                }
+              ],
+              "linkedin_url": "https://www.linkedin.com/in/zoe-example/"
+            },
+            "experience": {
+              "education": [
+                {
+                  "end": "2025-08",
+                  "start": "2022-09",
+                  "degree": "MSc",
+                  "school": "École d'ingénieurs",
+                  "details": null,
+                  "location": null
+                }
+              ],
+              "employers": [
+                {
+                  "end": null,
+                  "key": "acme",
+                  "start": "2025-09",
+                  "title": "GenAI Engineer",
+                  "contract": "CDI",
+                  "location": "Bordeaux",
+                  "organisation": "Acme"
+                }
+              ]
+            },
+            "facts": {
+              "blocks": [
+                {
+                  "body": "1. Every claim traces here.\n2. 🚀 Profile-content-marker-7f3a",
+                  "title": "Règles"
+                },
+                {
+                  "body": "نص من اليمين إلى اليسار",
+                  "title": "عربي"
+                }
+              ]
+            },
+            "skills": {
+              "have": [
+                {
+                  "name": "agents",
+                  "terms": [
+                    "agent",
+                    "agentic"
+                  ],
+                  "advanced_regex": false
+                }
+              ],
+              "none": [],
+              "gates": [
+                {
+                  "name": "phd",
+                  "terms": [
+                    "phd (is )?required"
+                  ],
+                  "penalty": 25,
+                  "advanced_regex": true
+                }
+              ],
+              "adjacent": [],
+              "years_experience": 3.5
+            },
+            "search": {
+              "days": 14,
+              "boards": [
+                {
+                  "ats": "ashby",
+                  "org": "mistral.ai",
+                  "company": "Mistral AI",
+                  "enabled": true,
+                  "extra_exclude": {
+                    "terms": [],
+                    "advanced_regex": false
+                  }
+                }
+              ],
+              "min_fit": 60,
+              "location": {
+                "terms": [
+                  "paris",
+                  "remote"
+                ],
+                "advanced_regex": false
+              },
+              "never_apply": [
+                "No cybersecurity roles."
+              ],
+              "remote_stance": "hybrid",
+              "title_exclude": {
+                "terms": [
+                  "\\b(staff|principal)\\b"
+                ],
+                "advanced_regex": true
+              },
+              "title_include": {
+                "terms": [
+                  "ai engineer",
+                  "llm"
+                ],
+                "advanced_regex": false
+              },
+              "contract_types": [
+                "CDI",
+                "VIE"
+              ]
+            },
+            "answers": {
+              "travel": null,
+              "motivation": "Build agents that run real operations.",
+              "relocation": null,
+              "heard_about": null,
+              "leave_blank": [
+                "gender"
+              ],
+              "notice_period": "One to three months.",
+              "salary_policy": "Never invent a number.",
+              "earliest_start": "2026-12-01",
+              "work_authorization": [
+                {
+                  "answer": "EU citizen.",
+                  "country": "France",
+                  "needs_sponsorship": false
+                }
+              ]
+            }
+          },
+          "completeness": {
+            "overall": 100,
+            "sections": {
+              "identity": {
+                "percent": 100,
+                "missing": []
+              },
+              "experience": {
+                "percent": 100,
+                "missing": []
+              },
+              "facts": {
+                "percent": 100,
+                "missing": []
+              },
+              "skills": {
+                "percent": 100,
+                "missing": []
+              },
+              "search": {
+                "percent": 100,
+                "missing": []
+              },
+              "answers": {
+                "percent": 100,
+                "missing": []
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "revisions page 1",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions?limit=3",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "4896ee79-738e-4826-8df0-43693342cb0a"
+          }
+        ],
+        "body": {
+          "items": [
+            {
+              "revision": 7,
+              "section": "identity",
+              "created_at": "2026-10-08T17:22:38.393487Z"
+            },
+            {
+              "revision": 6,
+              "section": "answers",
+              "created_at": "2026-10-08T17:22:38.330436Z"
+            },
+            {
+              "revision": 5,
+              "section": "search",
+              "created_at": "2026-10-08T17:22:38.322658Z"
+            }
+          ],
+          "next_before": 5
+        }
+      }
+    },
+    {
+      "step": "revisions page 2",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions?limit=3&before=5",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "8f345f4f-8b33-43dd-b2c0-f6549e6d5ed9"
+          }
+        ],
+        "body": {
+          "items": [
+            {
+              "revision": 4,
+              "section": "skills",
+              "created_at": "2026-10-08T17:22:38.315177Z"
+            },
+            {
+              "revision": 3,
+              "section": "facts",
+              "created_at": "2026-10-08T17:22:38.307477Z"
+            },
+            {
+              "revision": 2,
+              "section": "experience",
+              "created_at": "2026-10-08T17:22:38.299326Z"
+            }
+          ],
+          "next_before": 2
+        }
+      }
+    },
+    {
+      "step": "revisions of identity",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions?section=identity",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "60e31651-b91a-4b53-be41-ee8df52d007a"
+          }
+        ],
+        "body": {
+          "items": [
+            {
+              "revision": 7,
+              "section": "identity",
+              "created_at": "2026-10-08T17:22:38.393487Z"
+            },
+            {
+              "revision": 1,
+              "section": "identity",
+              "created_at": "2026-10-08T17:22:38.288320Z"
+            }
+          ],
+          "next_before": null
+        }
+      }
+    },
+    {
+      "step": "one past revision",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions/3",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "06cddd49-7670-433e-a7c5-98aa87acecb8"
+          }
+        ],
+        "body": {
+          "revision": 3,
+          "section": "facts",
+          "created_at": "2026-10-08T17:22:38.307477Z",
+          "data": {
+            "blocks": [
+              {
+                "body": "1. Every claim traces here.\n2. 🚀 Profile-content-marker-7f3a",
+                "title": "Règles"
+              },
+              {
+                "body": "نص من اليمين إلى اليسار",
+                "title": "عربي"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "step": "Bob reads his own profile",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "e9d7832a-76e3-4f9b-a7d3-dc366b74a573"
+          }
+        ],
+        "body": {
+          "revision": 0,
+          "updated_at": "2026-10-08T17:22:38.492234Z",
+          "sections": {
+            "identity": null,
+            "experience": null,
+            "facts": null,
+            "skills": null,
+            "search": null,
+            "answers": null
+          },
+          "completeness": {
+            "overall": 0,
+            "sections": {
+              "identity": {
+                "percent": 0,
+                "missing": [
+                  "full_name",
+                  "headline",
+                  "email",
+                  "phone",
+                  "city",
+                  "country",
+                  "languages"
+                ]
+              },
+              "experience": {
+                "percent": 0,
+                "missing": [
+                  "employers",
+                  "education"
+                ]
+              },
+              "facts": {
+                "percent": 0,
+                "missing": [
+                  "blocks"
+                ]
+              },
+              "skills": {
+                "percent": 0,
+                "missing": [
+                  "years_experience",
+                  "have"
+                ]
+              },
+              "search": {
+                "percent": 0,
+                "missing": [
+                  "title_include",
+                  "location",
+                  "contract_types",
+                  "remote_stance",
+                  "boards"
+                ]
+              },
+              "answers": {
+                "percent": 0,
+                "missing": [
+                  "work_authorization",
+                  "notice_period",
+                  "earliest_start",
+                  "salary_policy",
+                  "motivation"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "step": "Bob asks for Alice's revision 1",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions/1",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "2f36b4ad-6545-4d8d-b9cb-7823caf640c7"
+          }
+        ],
+        "body": {
+          "detail": "Revision not found."
+        }
+      }
+    },
+    {
+      "step": "Bob asks for Alice's revision 2",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions/2",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "067c45e1-3a18-4ceb-b8eb-baa0a8b5f3c4"
+          }
+        ],
+        "body": {
+          "detail": "Revision not found."
+        }
+      }
+    },
+    {
+      "step": "Bob asks for Alice's revision 3",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions/3",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "44a478d4-42f6-4467-999c-6370be55a21c"
+          }
+        ],
+        "body": {
+          "detail": "Revision not found."
+        }
+      }
+    },
+    {
+      "step": "Bob asks for Alice's revision 4",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions/4",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "f75749bd-4402-4123-bc06-b55c02fe9a82"
+          }
+        ],
+        "body": {
+          "detail": "Revision not found."
+        }
+      }
+    },
+    {
+      "step": "Bob asks for Alice's revision 5",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions/5",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "cfb08844-cd48-41f8-9169-c62de42d4fe5"
+          }
+        ],
+        "body": {
+          "detail": "Revision not found."
+        }
+      }
+    },
+    {
+      "step": "Bob asks for Alice's revision 6",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions/6",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "fc4e4db4-16ca-410b-aecc-7f67a9350893"
+          }
+        ],
+        "body": {
+          "detail": "Revision not found."
+        }
+      }
+    },
+    {
+      "step": "Bob asks for Alice's revision 7",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions/7",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "9ad0c8e1-140f-45aa-94cb-7e629573c1e5"
+          }
+        ],
+        "body": {
+          "detail": "Revision not found."
+        }
+      }
+    },
+    {
+      "step": "Bob lists revisions",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/revisions",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "01247fa0-68af-4b39-9ec9-f57d5d0ba67e"
+          }
+        ],
+        "body": {
+          "items": [],
+          "next_before": null
+        }
+      }
+    }
+  ]
+}

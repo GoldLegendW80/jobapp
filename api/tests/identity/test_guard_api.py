@@ -106,6 +106,12 @@ def test_every_non_public_route_is_401_without_a_session(app: FastAPI, api: Api)
             assert response.json() == {"detail": UNAUTHORIZED}
             checked.append((method, context.path))
     assert ("GET", "/api/auth/me") in checked
+    assert {
+        ("GET", "/api/profile"),
+        ("PUT", "/api/profile/{section}"),
+        ("GET", "/api/profile/revisions"),
+        ("GET", "/api/profile/revisions/{revision}"),
+    } <= set(checked)
 
 
 def test_public_routes_answer_without_a_session(api: Api) -> None:
