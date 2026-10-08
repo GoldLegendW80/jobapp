@@ -23,7 +23,9 @@ from app.profile.importer import (
     split_blocks,
     wrap_skill_term,
 )
+from app.profile.photo import normalize
 from app.profile.schemas import completeness
+from tests.profile import images
 
 NOW = datetime(2026, 10, 8, 9, 30, tzinfo=UTC)
 
@@ -109,8 +111,7 @@ def write_sources(root: Path, **files: str | None) -> SourcePaths:
                 ],
             }
         ),
-        "engine/photo.b64": "data:image/png;base64,"
-        + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16).decode(),
+        "engine/photo.b64": "data:image/png;base64," + base64.b64encode(images.png()).decode(),
     }
     names = {
         "facts": "profile/facts.md",
@@ -316,12 +317,35 @@ def test_bad_photo_file(tmp_path: Path, photo: str, message: str) -> None:
 
 
 def test_bare_base64_jpeg_with_line_breaks(tmp_path: Path) -> None:
-    jpeg = b"\xff\xd8\xff\xe0" + bytes(range(256)) * 3
+    jpeg = images.jpeg_with_gps(orientation=1)
     wrapped = base64.encodebytes(jpeg).decode()  # 76-character lines
     document = convert(write_sources(tmp_path, photo=wrapped))
     assert document.photo is not None
     assert document.photo.mime == "image/jpeg"
-    assert document.photo.image() == jpeg
+    # Re-encoded as the app stores it: same picture, no metadata.
+    assert document.photo.image() == normalize(jpeg).data
+    assert images.opened(document.photo.image()).size == (40, 30)
+    assert images.metadata(document.photo.image()) == {}
+
+
+def test_photo_is_re_encoded_and_stripped(tmp_path: Path) -> None:
+    """The engine photo goes through the upload pipeline: EXIF orientation applied, GPS, author,
+    XMP and ICC gone, longest side at most 1024 px, so the file stays far below the limit."""
+    big = images.save(
+        images.halves(2400, 1200), "JPEG", quality=100, exif=images.gps_exif(6).tobytes()
+    )
+    document = convert(write_sources(tmp_path, photo=base64.b64encode(big).decode()))
+    assert document.photo is not None
+    stored = document.photo.image()
+    assert images.opened(stored).size == (512, 1024)  # turned upright, then downscaled
+    assert images.metadata(stored) == {}
+    assert len(stored) < len(big)
+
+
+def test_photo_that_does_not_decode(tmp_path: Path) -> None:
+    truncated = images.png()[:-30]
+    with pytest.raises(ConversionError, match=r"photo\.b64: The image could not be read"):
+        convert(write_sources(tmp_path, photo=base64.b64encode(truncated).decode()))
 
 
 def test_invalid_json_source(tmp_path: Path) -> None:

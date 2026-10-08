@@ -20,7 +20,8 @@ Sources and where they go:
   and travel) or countries, with its first letter capitalised.
 - profile/skills.json (optional): the scoring model -> skills.
 - engine/boards.json (optional): title, exclude and location regexes and the boards -> search.
-- engine/photo.b64 (optional): the photo, a data URL or bare base64 of a PNG or JPEG.
+- engine/photo.b64 (optional): the photo, a data URL or bare base64 of a PNG or JPEG, re-encoded
+  exactly as the app stores an upload (photo.normalize: metadata stripped, at most 1024 px).
 A missing optional file gives the empty section (or no photo).
 
 Matching semantics are kept exactly (app/profile/matching.py defines them):
@@ -48,6 +49,7 @@ from pathlib import Path
 from typing import Any
 
 from app.profile.matching import PLURAL, escape
+from app.profile.photo import PhotoError, normalize
 from app.profile.schemas import ExportDocument, sniff_photo
 
 
@@ -669,10 +671,15 @@ def _photo(text: str | None, origin: str) -> dict[str, str] | None:
         data = base64.b64decode("".join(encoded.split()), validate=True)
     except (binascii.Error, ValueError):
         raise ConversionError(f"{origin}: not valid base64") from None
-    mime = sniff_photo(data)
-    if mime is None:
+    if sniff_photo(data) is None:
         raise ConversionError(f"{origin}: the photo is not a PNG or JPEG image")
-    return {"mime": mime, "base64": base64.b64encode(data).decode("ascii")}
+    # Re-encoded as the app stores it (metadata stripped, at most 1024 px), so the export file
+    # carries no EXIF or XMP and stays well under the import size limit.
+    try:
+        photo = normalize(data)
+    except PhotoError as exc:
+        raise ConversionError(f"{origin}: {exc.message}") from None
+    return {"mime": photo.mime, "base64": base64.b64encode(photo.data).decode("ascii")}
 
 
 # --- the conversion -----------------------------------------------------------------------------

@@ -1226,6 +1226,6 @@
   },
   "photo": {
     "mime": "image/jpeg",
-    "base64": "<47650 bytes, sha256 842ee1e40e4ba073550619ce7f5d03113524a00aef567ef34f85d6338d4b8f26>"
+    "base64": "<JPEG RGB 420x420>"
   }
 }

@@ -15,12 +15,15 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from PIL import ImageChops, ImageStat
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.identity.deps import CSRF_REFUSED
 from app.identity.models import User
+from app.profile import photo as photos
 from app.profile import service
 from app.profile.models import Profile, ProfileRevision
+from app.profile.photo import normalize
 from app.profile.router import STALE, TOO_LARGE
 from app.profile.schemas import (
     IMPORT_MAX_BYTES,
@@ -29,6 +32,7 @@ from app.profile.schemas import (
     SECTIONS,
 )
 from tests.identity.api_helpers import Api, Clock, make_user
+from tests.profile import images
 from tests.profile.conftest import ALICE, BOB, FULL, full
 
 FIXTURE = Path(__file__).parent / "fixtures" / "harald_export.json"
@@ -504,26 +508,88 @@ def photo_row(factory: sessionmaker[Session]) -> tuple[bytes | None, str | None]
         return (None, None) if row is None else (row[0], row[1])
 
 
-@pytest.mark.parametrize(("image", "mime"), [(png(), "image/png"), (JPEG, "image/jpeg")])
-def test_import_with_a_photo_stores_it_and_exports_it(
+@pytest.mark.parametrize(("image", "mime"), [(png(), "image/png"), (images.jpeg(), "image/jpeg")])
+def test_import_with_a_photo_stores_it_re_encoded_and_exports_it(
     api: Api, alice: str, factory: sessionmaker[Session], image: bytes, mime: str
 ) -> None:
     import_ok(api, alice, document(photo={"mime": mime, "base64": b64(image)}))
-    assert photo_row(factory) == (image, mime)
+    # Stored as an upload would be: through photo.normalize, not as received.
+    expected = normalize(image).data
+    assert photo_row(factory) == (expected, mime)
     exported = export(api, alice)
-    assert exported["photo"] == {"mime": mime, "base64": b64(image)}
+    assert exported["photo"] == {"mime": mime, "base64": b64(expected)}
     # The photo is not a section: no revision for it.
     assert len(revisions(factory)) == len(SECTIONS)
+
+
+def test_imported_photo_is_stripped_and_turned_upright(
+    api: Api, alice: str, factory: sessionmaker[Session]
+) -> None:
+    source = images.jpeg_with_gps(orientation=6)
+    assert "exif" in images.metadata(source)
+    import_ok(api, alice, document(photo={"mime": "image/jpeg", "base64": b64(source)}))
+    data, mime = photo_row(factory)
+    assert data is not None
+    assert mime == "image/jpeg"
+    assert images.metadata(data) == {}
+    assert images.opened(data).size == (30, 40)
+    assert b"Ada Example" not in data
+    assert b"secret comment" not in data
+
+
+def test_import_of_a_photo_that_does_not_decode_is_422(
+    api: Api, alice: str, factory: sessionmaker[Session]
+) -> None:
+    truncated = images.jpeg(400, 300)[:-200]
+    response = do_import(
+        api, alice, document(photo={"mime": "image/jpeg", "base64": b64(truncated)})
+    )
+    assert response.status_code == 422
+    assert response.json() == {"detail": f"photo: {photos.UNREADABLE}"}
+    assert_untouched(factory)
+    assert photo_row(factory) == (None, None)
 
 
 def test_import_without_a_photo_keeps_the_stored_one(
     api: Api, alice: str, factory: sessionmaker[Session]
 ) -> None:
+    expected = normalize(png()).data
     import_ok(api, alice, document(photo={"mime": "image/png", "base64": b64(png())}))
     import_ok(api, alice, document())
-    assert photo_row(factory) == (png(), "image/png")
+    assert photo_row(factory) == (expected, "image/png")
     import_ok(api, alice, document(photo=None))
-    assert photo_row(factory) == (png(), "image/png")
+    assert photo_row(factory) == (expected, "image/png")
+
+
+@pytest.mark.parametrize("mime", ["image/png", "image/jpeg"])
+def test_round_trip_with_a_photo(
+    api: Api, alice: str, bob: str, factory: sessionmaker[Session], mime: str
+) -> None:
+    """Export then import is identical for the sections; the photo is re-encoded on import, so
+    a PNG (lossless) comes back byte for byte and a JPEG as the same picture: same type and
+    size, pixels within re-compression noise."""
+    upload = images.png(300, 200) if mime == "image/png" else images.jpeg(300, 200)
+    for base, section in enumerate(SECTIONS):
+        api.request(
+            "PUT",
+            f"/api/profile/{section}",
+            token=alice,
+            json={"base_revision": base, "data": full(section)},
+        )
+    assert api.request("PUT", "/api/profile/photo", token=alice, content=upload).status_code == 200
+    first = export(api, alice)
+    import_ok(api, bob, first)
+    second = export(api, bob)
+    assert canonical(second["sections"]) == canonical(first["sections"])
+    assert second["photo"]["mime"] == first["photo"]["mime"] == mime
+    before = images.opened(base64.b64decode(first["photo"]["base64"]))
+    after = images.opened(base64.b64decode(second["photo"]["base64"]))
+    assert after.size == before.size == (300, 200)
+    if mime == "image/png":
+        assert second["photo"] == first["photo"]
+    else:
+        difference = ImageChops.difference(before.convert("RGB"), after.convert("RGB"))
+        assert sum(ImageStat.Stat(difference).mean) / 3 < 2
 
 
 @pytest.mark.parametrize(

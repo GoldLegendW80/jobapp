@@ -71,7 +71,7 @@ def test_get_creates_an_empty_profile_lazily(
     created = rows(factory, Profile)
     assert len(created) == 1
     assert created[0].sections == {}
-    assert created[0].photo is None
+    assert created[0].photo_mime is None  # photo itself is deferred: not loaded with the row
     # A second read finds the same row, nothing new, no revision.
     assert read(api, alice) == body
     assert len(rows(factory, Profile)) == 1
@@ -286,7 +286,7 @@ def test_not_json_is_422(api: Api, alice: str) -> None:
     assert response.status_code == 422
 
 
-@pytest.mark.parametrize("section", ["photo", "Identity", "unknown", "revisions", "export"])
+@pytest.mark.parametrize("section", ["Identity", "unknown", "revisions", "export", "photos"])
 def test_unknown_section_is_404(api: Api, alice: str, section: str) -> None:
     response = save(api, alice, section, {}, 0)
     assert response.status_code == 404

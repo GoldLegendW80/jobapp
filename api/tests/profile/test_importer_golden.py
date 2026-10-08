@@ -12,7 +12,7 @@ then review the diff of tests/profile/fixtures/harald_export.json by eye.
 import ast
 import base64
 import csv
-import hashlib
+import io
 import json
 import os
 import re
@@ -22,10 +22,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image, ImageChops, ImageStat
 
 from app.profile import matching
 from app.profile.importer import SourcePaths, convert, regex_terms, wrap_skill_term
 from app.profile.schemas import ExportDocument
+from tests.profile import images
 
 FIXTURE = Path(__file__).parent / "fixtures" / "harald_export.json"
 NOW = datetime(2026, 10, 8, tzinfo=UTC)
@@ -67,13 +69,17 @@ def out(document: ExportDocument) -> dict[str, Any]:
 
 
 def golden_view(body: dict[str, Any]) -> dict[str, Any]:
-    """The document as checked in: the photo by its digest, not 60 KB of base64."""
+    """The document as checked in, the photo by what it shows rather than 40 KB of base64.
+
+    The importer re-encodes the photo (photo.normalize), so its bytes depend on the libjpeg and
+    zlib builds bundled with Pillow, not only on the sources: the golden file records the
+    decoded image (format, mode, dimensions) and test_photo_is_the_engine_photo checks the
+    pixels against the engine photo.
+    """
     view = json.loads(json.dumps(body))
     if view.get("photo"):
-        image = base64.b64decode(view["photo"]["base64"])
-        view["photo"]["base64"] = (
-            f"<{len(image)} bytes, sha256 {hashlib.sha256(image).hexdigest()}>"
-        )
+        with Image.open(io.BytesIO(base64.b64decode(view["photo"]["base64"]))) as image:
+            view["photo"]["base64"] = f"<{image.format} {image.mode} {image.width}x{image.height}>"
     return view
 
 
@@ -255,9 +261,23 @@ def test_practicalities_are_mapped_into_answers(out: dict[str, Any], root: Path)
 
 
 def test_photo_is_the_engine_photo(out: dict[str, Any], root: Path) -> None:
+    """The same picture as engine/photo.b64, re-encoded: same type and size, pixels within JPEG
+    re-compression noise, and none of the metadata the source carries (Canva document ids, the
+    author's name, XMP, Photoshop blocks)."""
     source = (root / "engine" / "photo.b64").read_text().strip()
     mime, _, encoded = source.partition(";base64,")
-    assert out["photo"] == {"mime": mime.removeprefix("data:"), "base64": encoded}
+    original = images.opened(base64.b64decode(encoded))
+    stored = base64.b64decode(out["photo"]["base64"])
+    converted = images.opened(stored)
+    assert out["photo"]["mime"] == mime.removeprefix("data:")
+    assert out["photo"]["base64"] != encoded
+    scale = min(1.0, 1024 / max(original.size))
+    assert converted.size == (round(original.width * scale), round(original.height * scale))
+    if scale == 1.0:
+        difference = ImageChops.difference(original.convert("RGB"), converted.convert("RGB"))
+        mean = sum(ImageStat.Stat(difference).mean) / 3
+        assert mean < 3, mean
+    assert images.metadata(stored) == {}
 
 
 # --- the converted regexes decide exactly as the originals --------------------------------------

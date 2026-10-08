@@ -4,7 +4,8 @@
 search, answers), each validated by its Pydantic model in `schemas.py` before it is written.
 `revision` counts saves: every save of a section increments it by one and appends the saved
 section to `profile_revisions` under that number, so any past version can be shown or restored.
-The photo lives in its own columns (task P3), never in the JSON.
+The photo lives in its own columns, never in the JSON, and is not a section: storing or removing
+it adds no revision (see photo.py for what is stored).
 Migration: alembic/versions/0003_profile.py, which must stay in step with this file
 (`alembic check` in the tests compares them).
 """
@@ -42,7 +43,8 @@ class Profile(Base):
     sections: Mapped[dict[str, Any]] = mapped_column(
         pg.JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")
     )
-    photo: Mapped[bytes | None] = mapped_column(pg.BYTEA)
+    # Loaded only when read (up to 1 MB): reading the sections never pulls the image along.
+    photo: Mapped[bytes | None] = mapped_column(pg.BYTEA, deferred=True)
     photo_mime: Mapped[str | None] = mapped_column(sa.Text)
     revision: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
     updated_at: Mapped[datetime] = mapped_column(

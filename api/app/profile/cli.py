@@ -16,7 +16,8 @@ to api/.)
 import loads an export document (from convert, or downloaded from GET /api/profile/export) into
 the profile of the account with that email, exactly as POST /api/profile/import does: every
 section validated, all six replaced in one transaction with one revision each, the photo too when
-the file has one. It runs inside the api container, reading the file from stdin:
+the file has one (re-encoded without metadata, see photo.py). It runs inside the api container,
+reading the file from stdin:
 
     docker compose exec -T api python -m app.profile.cli import --email <email> --file - \\
         < /tmp/profile.json
@@ -37,6 +38,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import ConfigError, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity import service as identity_service
+from app.profile import photo as photos
 from app.profile import service
 from app.profile.importer import ConversionError, SourcePaths, convert
 from app.profile.schemas import (
@@ -126,7 +128,13 @@ def run_import(email: str, file: str) -> int:
     except ValidationError as exc:
         _error(f"Invalid profile, {describe_validation_error(exc)}. Nothing was imported.")
         return 2
-    photo = (document.photo.image(), document.photo.mime) if document.photo else None
+    photo = None
+    if document.photo is not None:
+        try:
+            photo = photos.normalize(document.photo.image())
+        except photos.PhotoError as exc:
+            _error(f"Invalid profile, photo: {exc.message} Nothing was imported.")
+            return 2
 
     settings = get_settings()
     engine = build_engine(settings)

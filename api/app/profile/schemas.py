@@ -599,6 +599,21 @@ class ProfileOut(BaseModel):
     # One entry per section; null for a section never saved.
     sections: dict[str, dict[str, Any] | None]
     completeness: Completeness
+    has_photo: bool
+    # The ETag of GET /api/profile/photo, null without a photo: a client can tell the photo
+    # changed (and bust its cache) without downloading it.
+    photo_etag: str | None
+
+
+class PhotoOut(BaseModel):
+    """The photo as stored after PUT /api/profile/photo (re-encoded, so not the uploaded bytes)."""
+
+    mime: Literal["image/png", "image/jpeg"]
+    width: int
+    height: int
+    size: int  # bytes
+    etag: str
+    updated_at: datetime
 
 
 class ConflictOut(BaseModel):
