@@ -21,7 +21,7 @@ Spec: [SPEC-profile.md](../../SPEC-profile.md). Depends on identity (I1 to I3 at
 **Verify:** pytest golden; dry run against the real files.
 **Files:** `api/app/profile/{importer,cli}.py`, `deploy.sh`, tests. **Scope:** M
 
-## P3: Photo upload
+## P3: Photo upload (done 2026-10-09, 1112 api tests; raw body PUT, 415/413/422, ETag 304)
 
 **Acceptance:** PUT, GET, DELETE photo; PNG and JPEG only by magic bytes; 2 MB limit; re-encoded; isolation.
 **Verify:** pytest with real image fixtures and hostile files.
