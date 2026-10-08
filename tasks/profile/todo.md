@@ -9,7 +9,7 @@ Spec: [SPEC-profile.md](../../SPEC-profile.md). Depends on identity (I1 to I3 at
 - Importer is a pure function `files -> export JSON`, CLI posts it; golden fixture from the real `../profile` and `../engine` files.
 - The board check calls the ATS public posting API from the backend with a 5s timeout (httpx), never from the browser.
 
-## P1: Profile schema, section models, read and save with revisions
+## P1: Profile schema, section models, read and save with revisions (done 2026-10-08, 737 api tests)
 
 **Acceptance:** migration 0003; GET /api/profile with completeness; PUT /api/profile/{section} with 422, 409; revisions list and get; isolation tests.
 **Verify:** pytest; curl through Caddy.
