@@ -133,6 +133,21 @@ ssh jetson "cd jobapp && docker compose -f compose.yml exec -T db sh -c 'psql -U
 
 Do not run `identity.spec.ts` in parallel with `caddy.spec.ts`: the latter stops the database.
 
+## Profile export and import
+
+`GET /api/profile/export` downloads the whole profile as `profile-YYYY-MM-DD.json`;
+`POST /api/profile/import` takes that file back (2 MB at most) and replaces all six sections in
+one transaction, one revision each. Harald's engine files convert into the same format on the
+Mac, then load into one account inside the api container:
+
+```bash
+uv run --native-tls --directory api python -m app.profile.cli convert --source-dir "$PWD/.." --out /tmp/profile.json
+docker compose exec -T api python -m app.profile.cli import --email you@example.org --file - < /tmp/profile.json
+```
+
+The import prints the new revision and the completeness, never the profile itself. Exit codes:
+0 imported, 2 invalid arguments or file, 1 no such account or a database error.
+
 ## Backups and restores
 
 `./deploy.sh backup` runs `pg_dump -Fc` inside the `db` container and streams it to

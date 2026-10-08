@@ -46,6 +46,9 @@ Required fields, chosen as what search and CV generation cannot run without:
 Fields with a default (min_fit, days) always count as filled, so they are not listed.
 """
 
+import base64
+import binascii
+import json
 import re
 import unicodedata
 from collections.abc import Callable
@@ -61,6 +64,7 @@ from pydantic import (
     Field,
     StrictInt,
     StringConstraints,
+    ValidationError,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -619,3 +623,149 @@ class RevisionPage(BaseModel):
 
 class RevisionOut(RevisionSummary):
     data: dict[str, Any]
+
+
+# --- export and import --------------------------------------------------------------------------
+#
+# The whole profile as one JSON file (GET /api/profile/export, POST /api/profile/import, the CLI
+# and the importer of Harald's engine files all speak it):
+#   {"format": "jobapp-profile", "version": 1, "exported_at": "<ISO 8601>",
+#    "sections": {<the six sections, each in its stored form>},
+#    "photo": {"mime": "image/png" | "image/jpeg", "base64": "<standard base64>"}  (optional)}
+# An import may add "base_revision": the revision the client loaded (409 when stale).
+
+EXPORT_FORMAT = "jobapp-profile"
+EXPORT_VERSION = 1
+IMPORT_MAX_BYTES = 2 * 1024 * 1024  # the whole document; larger is a 413
+PHOTO_MAX_BYTES = 2 * 1024 * 1024  # decoded image bytes
+_PHOTO_B64_MAX = (PHOTO_MAX_BYTES + 2) // 3 * 4
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_MAGIC = b"\xff\xd8\xff"
+
+
+def sniff_photo(data: bytes) -> str | None:
+    """The image type by its first bytes (never by a name or a declared type): image/png,
+    image/jpeg, or None for anything else (SVG, GIF, WebP, text, empty)."""
+    if data.startswith(_PNG_MAGIC):
+        return "image/png"
+    if data.startswith(_JPEG_MAGIC):
+        return "image/jpeg"
+    return None
+
+
+def decode_photo(mime: str, encoded: str) -> bytes:
+    """The image bytes of an exported photo. Raises ValueError when the base64 is invalid or
+    truncated, the image is empty or over PHOTO_MAX_BYTES, is not a PNG or JPEG, or is not the
+    type `mime` declares."""
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("base64 is invalid or truncated") from None
+    if not data:
+        raise ValueError("the image is empty")
+    if len(data) > PHOTO_MAX_BYTES:
+        raise ValueError(f"the image is larger than {PHOTO_MAX_BYTES // (1024 * 1024)} MB")
+    sniffed = sniff_photo(data)
+    if sniffed is None:
+        raise ValueError("only PNG and JPEG images are accepted")
+    if sniffed != mime:
+        raise ValueError(f"the image is a {sniffed}, not the declared {mime}")
+    return data
+
+
+class PhotoData(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    mime: Literal["image/png", "image/jpeg"]
+    base64: Annotated[str, StringConstraints(min_length=1, max_length=_PHOTO_B64_MAX)]
+
+    @model_validator(mode="after")
+    def _decodes(self) -> "PhotoData":
+        decode_photo(self.mime, self.base64)
+        return self
+
+    def image(self) -> bytes:
+        return decode_photo(self.mime, self.base64)
+
+
+class ExportSections(BaseModel):
+    """All six sections, each required (an empty profile exports its empty sections)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identity: IdentitySection
+    experience: ExperienceSection
+    facts: FactsSection
+    skills: SkillsSection
+    search: SearchSection
+    answers: AnswersSection
+
+
+class ExportDocument(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    format: Literal["jobapp-profile"] = EXPORT_FORMAT
+    version: Literal[1] = EXPORT_VERSION
+    exported_at: datetime
+    sections: ExportSections
+    photo: PhotoData | None = None
+
+    def stored_sections(self) -> dict[str, dict[str, Any]]:
+        """Each section in its stored form, in SECTIONS order."""
+        return {name: getattr(self.sections, name).model_dump(mode="json") for name in SECTIONS}
+
+    def to_json(self) -> str:
+        """The file as written: indented UTF-8 JSON, the photo key omitted when there is none."""
+        body = self.model_dump(mode="json", exclude={"base_revision"})
+        if body["photo"] is None:
+            del body["photo"]
+        return json.dumps(body, ensure_ascii=False, indent=2) + "\n"
+
+
+class ImportIn(ExportDocument):
+    base_revision: Annotated[StrictInt, Field(ge=0, le=REVISION_MAX)] | None = None
+
+
+class DocumentError(ValueError):
+    """An import document refused before its sections are validated: too large (413), not JSON,
+    not a jobapp profile, or a version this app does not read (422)."""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def parse_document(raw: bytes) -> ImportIn:
+    """An import document from the raw bytes of the file or request body.
+
+    Raises DocumentError for the size, JSON, format and version checks (in that order, so the
+    message names the real problem) and pydantic.ValidationError for the sections and photo.
+    """
+    if len(raw) > IMPORT_MAX_BYTES:
+        raise DocumentError(413, f"The import file is larger than {IMPORT_MAX_BYTES} bytes (2 MB).")
+    try:
+        document = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise DocumentError(422, "The import file is not valid JSON.") from None
+    if not isinstance(document, dict):
+        raise DocumentError(422, "The import file must hold one JSON object.")
+    if document.get("format") != EXPORT_FORMAT:
+        raise DocumentError(
+            422, f'Unknown file format: expected "format": "{EXPORT_FORMAT}", a profile export.'
+        )
+    version = document.get("version")
+    if type(version) is not int or version != EXPORT_VERSION:
+        raise DocumentError(
+            422, f"Unsupported export version: this app reads version {EXPORT_VERSION}."
+        )
+    return ImportIn.model_validate(document)
+
+
+def describe_validation_error(exc: ValidationError) -> str:
+    """The first problem as `path: message`, without echoing the value (for the CLI)."""
+    first = exc.errors(include_input=False, include_url=False)[0]
+    message = str(first.get("msg", "invalid value")).removeprefix("Value error, ")
+    where = ".".join(str(part) for part in first.get("loc", ()))
+    return f"{where}: {message}" if where else message

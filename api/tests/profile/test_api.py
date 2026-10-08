@@ -23,6 +23,8 @@ PROFILE_ROUTES = {
     ("PUT", "/api/profile/{section}"),
     ("GET", "/api/profile/revisions"),
     ("GET", "/api/profile/revisions/{revision}"),
+    ("GET", "/api/profile/export"),
+    ("POST", "/api/profile/import"),
 }
 
 
@@ -498,6 +500,8 @@ def test_profile_routes_are_served_and_none_is_public(app: FastAPI) -> None:
         ("PUT", "/api/profile/nope"),
         ("GET", "/api/profile/revisions"),
         ("GET", "/api/profile/revisions/1"),
+        ("GET", "/api/profile/export"),
+        ("POST", "/api/profile/import"),
     ],
 )
 def test_without_a_session_every_route_is_401(api: Api, method: str, path: str) -> None:
