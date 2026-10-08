@@ -1,0 +1,1003 @@
+{
+  "base": "http://127.0.0.1:8093",
+  "note": "tokens, passwords and cookie values redacted",
+  "exchanges": [
+    {
+      "step": "anonymous GET",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "33"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "10e55423-12f5-4f6a-a371-467f8f06bbc7"
+          }
+        ],
+        "body": {
+          "detail": "Sign in to continue."
+        }
+      }
+    },
+    {
+      "step": "anonymous PUT",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "33"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "dad8f637-54d9-4d4d-8f17-e6e6e99b6693"
+          }
+        ],
+        "body": {
+          "detail": "Sign in to continue."
+        }
+      }
+    },
+    {
+      "step": "anonymous DELETE",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "33"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "61897993-753d-4b90-a3d7-4ff706a7d89e"
+          }
+        ],
+        "body": {
+          "detail": "Sign in to continue."
+        }
+      }
+    },
+    {
+      "step": "accept invite (Alice)",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/invites/[redacted]/accept",
+        "body": "<name and password>"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Length",
+            "value": "200"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "b871d743-2cd7-4d8c-98ee-b64d09220eaa"
+          }
+        ],
+        "body": {
+          "id": "16bfc649-02af-4165-86bf-9b6838275abc",
+          "email": "alice.p3check@example.org",
+          "name": "Alice",
+          "role": "admin",
+          "created_at": "2026-10-08T21:36:11.109299Z",
+          "last_login_at": "2026-10-08T21:36:11.108124Z"
+        }
+      }
+    },
+    {
+      "step": "accept invite (Bob)",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/invites/[redacted]/accept",
+        "body": "<name and password>"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Length",
+            "value": "196"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "351fedf2-c413-479e-9d8b-2fd4f08c5370"
+          }
+        ],
+        "body": {
+          "id": "1299962d-4ea0-4b0d-8dfe-db274628a87d",
+          "email": "bob.p3check@example.org",
+          "name": "Bob",
+          "role": "admin",
+          "created_at": "2026-10-08T21:36:11.148620Z",
+          "last_login_at": "2026-10-08T21:36:11.148092Z"
+        }
+      }
+    },
+    {
+      "step": "GET before any upload",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "22"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "93745170-0b74-4283-a85c-4aeff6a6ff09"
+          }
+        ],
+        "body": {
+          "detail": "No photo."
+        }
+      }
+    },
+    {
+      "step": "profile before upload",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "4ae888b8-d500-4a04-a1a3-63df63f12910"
+          },
+          {
+            "name": "Content-Length",
+            "value": "372"
+          }
+        ],
+        "body": {
+          "revision": 0,
+          "updated_at": "2026-10-08T21:36:11.184516Z",
+          "sections": {
+            "identity": null,
+            "experience": null,
+            "facts": null,
+            "skills": null,
+            "search": null,
+            "answers": null
+          },
+          "completeness": {
+            "overall": 0,
+            "sections": {
+              "identity": {
+                "percent": 0,
+                "missing": [
+                  "full_name",
+                  "headline",
+                  "email",
+                  "phone",
+                  "city",
+                  "country",
+                  "languages"
+                ]
+              },
+              "experience": {
+                "percent": 0,
+                "missing": [
+                  "employers",
+                  "education"
+                ]
+              },
+              "facts": {
+                "percent": 0,
+                "missing": [
+                  "blocks"
+                ]
+              },
+              "skills": {
+                "percent": 0,
+                "missing": [
+                  "years_experience",
+                  "have"
+                ]
+              },
+              "search": {
+                "percent": 0,
+                "missing": [
+                  "title_include",
+                  "location",
+                  "contract_types",
+                  "remote_stance",
+                  "boards"
+                ]
+              },
+              "answers": {
+                "percent": 0,
+                "missing": [
+                  "work_authorization",
+                  "notice_period",
+                  "earliest_start",
+                  "salary_policy",
+                  "motivation"
+                ]
+              }
+            }
+          },
+          "has_photo": false,
+          "photo_etag": null
+        }
+      }
+    },
+    {
+      "step": "PUT without the CSRF header",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<158310 bytes>"
+      },
+      "response": {
+        "status": 403,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "56"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "864149f5-5783-4bb6-b29e-aea5193f9041"
+          }
+        ],
+        "body": {
+          "detail": "Missing or invalid X-Requested-With header."
+        }
+      }
+    },
+    {
+      "step": "PUT the sideways JPEG",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<158310 bytes>"
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Length",
+            "value": "181"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Etag",
+            "value": "\"53da0a2759f878bf99cdca7c5f45e5eec8ec74fd5916e09ccb44682aa854d74f\""
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "1c7cc976-a87a-4470-b05c-b20ce8013208"
+          }
+        ],
+        "body": {
+          "mime": "image/jpeg",
+          "width": 1024,
+          "height": 683,
+          "size": 21770,
+          "etag": "\"53da0a2759f878bf99cdca7c5f45e5eec8ec74fd5916e09ccb44682aa854d74f\"",
+          "updated_at": "2026-10-08T21:36:11.260643Z"
+        }
+      }
+    },
+    {
+      "step": "GET the photo",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "private, no-cache"
+          },
+          {
+            "name": "Content-Disposition",
+            "value": "inline; filename=\"photo.jpg\""
+          },
+          {
+            "name": "Content-Length",
+            "value": "21770"
+          },
+          {
+            "name": "Content-Type",
+            "value": "image/jpeg"
+          },
+          {
+            "name": "Etag",
+            "value": "\"53da0a2759f878bf99cdca7c5f45e5eec8ec74fd5916e09ccb44682aa854d74f\""
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "14eea325-d350-424d-a5a9-bb78e5a8c285"
+          }
+        ],
+        "body": "<21770 bytes of image/jpeg>"
+      }
+    },
+    {
+      "step": "GET again with If-None-Match",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 304,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "private, no-cache"
+          },
+          {
+            "name": "Etag",
+            "value": "\"53da0a2759f878bf99cdca7c5f45e5eec8ec74fd5916e09ccb44682aa854d74f\""
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "ec330112-ecc5-4446-adf5-ad05da12b47d"
+          }
+        ],
+        "body": null
+      }
+    },
+    {
+      "step": "profile after upload",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "8d79f2d4-7c91-4cb2-9262-7ba4f5d3210c"
+          },
+          {
+            "name": "Content-Length",
+            "value": "423"
+          }
+        ],
+        "body": {
+          "revision": 0,
+          "updated_at": "2026-10-08T21:36:11.260643Z",
+          "sections": {
+            "identity": null,
+            "experience": null,
+            "facts": null,
+            "skills": null,
+            "search": null,
+            "answers": null
+          },
+          "completeness": {
+            "overall": 0,
+            "sections": {
+              "identity": {
+                "percent": 0,
+                "missing": [
+                  "full_name",
+                  "headline",
+                  "email",
+                  "phone",
+                  "city",
+                  "country",
+                  "languages"
+                ]
+              },
+              "experience": {
+                "percent": 0,
+                "missing": [
+                  "employers",
+                  "education"
+                ]
+              },
+              "facts": {
+                "percent": 0,
+                "missing": [
+                  "blocks"
+                ]
+              },
+              "skills": {
+                "percent": 0,
+                "missing": [
+                  "years_experience",
+                  "have"
+                ]
+              },
+              "search": {
+                "percent": 0,
+                "missing": [
+                  "title_include",
+                  "location",
+                  "contract_types",
+                  "remote_stance",
+                  "boards"
+                ]
+              },
+              "answers": {
+                "percent": 0,
+                "missing": [
+                  "work_authorization",
+                  "notice_period",
+                  "earliest_start",
+                  "salary_policy",
+                  "motivation"
+                ]
+              }
+            }
+          },
+          "has_photo": true,
+          "photo_etag": "\"53da0a2759f878bf99cdca7c5f45e5eec8ec74fd5916e09ccb44682aa854d74f\""
+        }
+      }
+    },
+    {
+      "step": "PUT SVG",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<59 bytes>"
+      },
+      "response": {
+        "status": 415,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "51"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "bf78bc09-7643-4e06-99b7-9a8749f6db4d"
+          }
+        ],
+        "body": {
+          "detail": "Only PNG and JPEG images are accepted."
+        }
+      }
+    },
+    {
+      "step": "PUT GIF",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<68 bytes>"
+      },
+      "response": {
+        "status": 415,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "51"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "1ed1ddac-5f79-459f-af90-fec80be0ecbd"
+          }
+        ],
+        "body": {
+          "detail": "Only PNG and JPEG images are accepted."
+        }
+      }
+    },
+    {
+      "step": "PUT WebP",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<68 bytes>"
+      },
+      "response": {
+        "status": 415,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "51"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "8eb17bab-c58e-450d-a006-672badde792f"
+          }
+        ],
+        "body": {
+          "detail": "Only PNG and JPEG images are accepted."
+        }
+      }
+    },
+    {
+      "step": "PUT PDF",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<15 bytes>"
+      },
+      "response": {
+        "status": 415,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "51"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "bfc69ecb-5278-45fb-826d-9d62d66ef989"
+          }
+        ],
+        "body": {
+          "detail": "Only PNG and JPEG images are accepted."
+        }
+      }
+    },
+    {
+      "step": "PUT empty",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<0 bytes>"
+      },
+      "response": {
+        "status": 415,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "31"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "0a2062ee-b154-4d16-a94f-f066b68cfe01"
+          }
+        ],
+        "body": {
+          "detail": "The file is empty."
+        }
+      }
+    },
+    {
+      "step": "PUT truncated JPEG",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<79155 bytes>"
+      },
+      "response": {
+        "status": 415,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "93"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "a7529cf3-edc8-45f4-99e6-c9eca2b8c0f8"
+          }
+        ],
+        "body": {
+          "detail": "The image could not be read: the file is damaged, truncated or not a real image."
+        }
+      }
+    },
+    {
+      "step": "PUT JPEG magic then HTML",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<35 bytes>"
+      },
+      "response": {
+        "status": 415,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "93"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "0c904bea-16da-4cf2-975f-861702bb6df9"
+          }
+        ],
+        "body": {
+          "detail": "The image could not be read: the file is damaged, truncated or not a real image."
+        }
+      }
+    },
+    {
+      "step": "PUT 2 MB + 1 byte",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<2097153 bytes>"
+      },
+      "response": {
+        "status": 413,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "43"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "d2a4e550-7a02-43e2-8693-4129fa801d76"
+          }
+        ],
+        "body": {
+          "detail": "The image is larger than 2 MB."
+        }
+      }
+    },
+    {
+      "step": "PUT 20000x20000 PNG",
+      "request": {
+        "method": "PUT",
+        "path": "/api/profile/photo",
+        "body": "<388871 bytes>"
+      },
+      "response": {
+        "status": 422,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "72"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "49a217bf-7fbf-40e6-bfad-4c3abf7c2dc8"
+          }
+        ],
+        "body": {
+          "detail": "The image is too large: at most 25 megapixels are accepted."
+        }
+      }
+    },
+    {
+      "step": "Bob GET",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "22"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "2aa97361-796f-44bc-893c-9fc3310f03e8"
+          }
+        ],
+        "body": {
+          "detail": "No photo."
+        }
+      }
+    },
+    {
+      "step": "Bob DELETE",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "49b9e3d4-eaf2-4371-9798-e5f4e7a7ac0e"
+          }
+        ],
+        "body": null
+      }
+    },
+    {
+      "step": "DELETE",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "98640d76-072f-449f-aeb5-60336c62d650"
+          }
+        ],
+        "body": null
+      }
+    },
+    {
+      "step": "DELETE again",
+      "request": {
+        "method": "DELETE",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "349b0464-b4ef-4927-924d-33319eb3f7af"
+          }
+        ],
+        "body": null
+      }
+    },
+    {
+      "step": "GET after delete",
+      "request": {
+        "method": "GET",
+        "path": "/api/profile/photo",
+        "body": null
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "22"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "95a2d0e0-2eb2-4d9b-943e-44adfd69faee"
+          }
+        ],
+        "body": {
+          "detail": "No photo."
+        }
+      }
+    }
+  ]
+}
