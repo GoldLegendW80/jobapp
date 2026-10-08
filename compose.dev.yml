@@ -1,6 +1,9 @@
 # Development overrides for the Mac: dev image with test tools, code bind-mounted, uvicorn
 # reloading on change, and ports published on 127.0.0.1 only (never on the LAN).
 #   docker compose -f compose.yml -f compose.dev.yml up -d --build
+# caddy runs as in production on http://localhost (HTTP_PORT), serving the last web build.
+# For frontend hot reload run Vite outside Docker, it proxies /api to the api on 127.0.0.1:8000:
+#   pnpm --dir web dev            # http://localhost:5173
 
 services:
   api:

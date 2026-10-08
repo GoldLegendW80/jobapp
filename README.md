@@ -18,13 +18,20 @@ pre-commit install             # ruff, prettier, eslint, gitleaks and file fixer
 ## Development on the Mac
 
 ```bash
-docker compose -f compose.yml -f compose.dev.yml up --build    # hot reload for api and web
+docker compose -f compose.yml -f compose.dev.yml up --build    # api reloads; http://localhost via caddy
+pnpm --dir web dev                                             # Vite with hot reload on :5173, /api proxied to :8000
 docker compose exec api alembic upgrade head                   # apply migrations
 docker compose exec api pytest                                 # backend tests
 pnpm --dir web test                                            # frontend tests
 pnpm --dir web lint && uv run --directory api ruff check .     # lint
 tests/compose_smoke.sh                                         # whole-stack smoke test, then down
+E2E_CADDY_URL=http://127.0.0.1 pnpm --dir web exec playwright test caddy.spec.ts   # browser through caddy
 ```
+
+Caddy (`caddy/Caddyfile`) is the only service with a host port, `${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-80}`.
+It serves the React build baked into its image by the `caddy` target of `web/Dockerfile`, falls back
+to `index.html` for client routes, and proxies `/api/*` to `api:8000` with the prefix kept. Set
+`HTTP_PORT=8080` in `.env` if port 80 is taken on the Mac.
 
 `docker compose exec api pytest` needs a test database: the smoke script creates `jobapp_test` in the
 compose `db` and runs `pytest -m "not docker"` with `TEST_DATABASE_URL` pointing at it.

@@ -1,0 +1,109 @@
+# Single entry point of the stack: static React build at /, FastAPI at /api.
+# Plain HTTP on :80. TLS ends at Cloudflare, and cloudflared reaches http://caddy:80 over the
+# Compose network (task 8). Built into the caddy image by the `caddy` target of web/Dockerfile,
+# which runs caddy validate and caddy fmt on it.
+{
+	# No admin API: the config is baked into the image, so there is nothing to reload live.
+	admin off
+	auto_https off
+	# docker stop waits 10s; finish in-flight requests within that.
+	grace_period 8s
+	# The body size check below must run before the handle blocks pick a route.
+	order error before handle
+	# Caddy's own logs (startup, errors) as JSON on stdout.
+	log default {
+		output stdout
+		format json
+	}
+}
+
+# Response headers of every answer, normal or error.
+(security_headers) {
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		# The app is never framed by another site. When the browser module adds /vnc and the app
+		# embeds it in an iframe of its own, relax both to SAMEORIGIN and frame-ancestors 'self'.
+		X-Frame-Options DENY
+		Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+}
+
+:80 {
+	# Access log, one JSON line per request on stdout. Cookie and Authorization are redacted by default.
+	log {
+		output stdout
+		format json
+	}
+
+	encode zstd gzip
+
+	# Largest request body accepted anywhere, 10 MiB; raise it per route if uploads need more.
+	# A declared Content-Length above it is refused with 413 before anything is proxied; a chunked
+	# body is cut at the limit while it streams, and the read fails with 413.
+	request_body {
+		max_size 10MiB
+	}
+	@body_too_large expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 10485760`
+	error @body_too_large 413
+
+	import security_headers
+
+	# Keep the caller's X-Request-ID (64 characters at most, as the api does), else a fresh UUID.
+	# The api logs it and echoes it back in the response.
+	map {http.request.header.X-Request-ID} {request_id} {
+		~^([A-Za-z0-9._:-]{1,64})$ "${1}"
+		default {http.request.uuid}
+	}
+	request_header X-Request-ID {request_id}
+
+	# Liveness of Caddy itself, for the container healthcheck. Answers without touching the api.
+	handle /healthz {
+		header Cache-Control no-store
+		respond "ok" 200
+	}
+
+	# The api keeps its /api prefix. X-Forwarded-For, -Proto and -Host are set by reverse_proxy.
+	# A stopped api fails the dial at once and becomes 502.
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy api:8000 {
+			transport http {
+				dial_timeout 3s
+			}
+		}
+	}
+
+	# Reserved for the browser module: noVNC of the headed Chromium.
+	# handle /vnc/* {
+	# 	reverse_proxy browser:6080
+	# }
+
+	# Hashed build output: cached for a year, never revalidated. A missing file is a real 404,
+	# never index.html, so a stale chunk fails loudly instead of parsing HTML as JavaScript.
+	handle /assets/* {
+		root * /srv
+		header Cache-Control "public, max-age=31536000, immutable"
+		file_server
+	}
+
+	# Everything else is the single-page app: an existing file, or index.html for client routes.
+	# no-cache makes the browser revalidate index.html on each load, so a deploy is picked up at once.
+	handle {
+		root * /srv
+		header Cache-Control no-cache
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Errors raised by Caddy itself (missing file, api unreachable, body too large): a short plain
+	# text body, the same security headers, and never cached, so a missing /assets file is not
+	# remembered for a year.
+	handle_errors {
+		import security_headers
+		header Cache-Control no-store
+		respond "{err.status_code} {err.status_text}"
+	}
+}

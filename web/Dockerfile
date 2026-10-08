@@ -1,10 +1,14 @@
-# web image: builds the React app with pnpm, then keeps only the static files.
-# The final stage `dist` holds nothing but /dist, for Caddy to copy with
-#   COPY --from=web /dist /srv
-# or to export locally with
-#   docker build --target dist --output type=local,dest=out web/
+# web image: builds the React app with pnpm, then serves it with Caddy.
+# Stages:
+#   build   pnpm install and vite build into /web/dist
+#   caddy   caddy:2.x-alpine with caddy/Caddyfile and the build in /srv; the `caddy` service of
+#           compose.yml builds this target, passing caddy/ as the named context `caddy-config`:
+#             docker build --target caddy --build-context caddy-config=caddy -t jobapp-caddy web/
+#   dist    nothing but /dist, to export the static files locally with
+#             docker build --target dist --output type=local,dest=out web/
 
 ARG NODE_IMAGE=node:22.23.3-alpine3.24
+ARG CADDY_IMAGE=caddy:2.11.7-alpine
 
 FROM ${NODE_IMAGE} AS build
 ENV PNPM_HOME=/pnpm \
@@ -20,6 +24,16 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
     && pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build
+
+FROM ${CADDY_IMAGE} AS caddy
+COPY --from=caddy-config Caddyfile /etc/caddy/Caddyfile
+# Fails the build on an invalid or unformatted Caddyfile.
+RUN caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile \
+    && caddy fmt --diff /etc/caddy/Caddyfile >/dev/null
+COPY --from=build /web/dist /srv
+EXPOSE 80
+HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
 
 FROM scratch AS dist
 COPY --from=build /web/dist /dist

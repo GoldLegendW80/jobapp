@@ -1,18 +1,19 @@
 # Production stack. Local development adds compose.dev.yml:
 #   docker compose -f compose.yml -f compose.dev.yml up --build
-# No service publishes a host port here: the only public entry point will be caddy (task 6),
-# reached through the cloudflared quick tunnel (task 8).
+# caddy is the only service that publishes a host port: ${HTTP_BIND}:${HTTP_PORT}, loopback by
+# default, so the Jetson answers curl localhost over ssh and nothing on the LAN. Set HTTP_BIND=0.0.0.0
+# in .env to open it to the LAN (ask first, SPEC-platform.md). The public entry point will be the
+# cloudflared quick tunnel (task 8), which reaches http://caddy:80 over the Compose network.
 #
 # Service names reserved for later modules, so nothing else takes them:
-#   caddy        reverse proxy and static web build (platform, task 6)
-#   web          frontend build stage served by caddy (platform, task 5)
+#   web          name kept free: the React build ships inside the caddy image
 #   cloudflared  quick tunnel to caddy (platform, task 8)
 #   worker       Claude Agent SDK runtime consuming the redis queue (agents module)
 #   browser      headed Chromium, Xvfb, noVNC (browser module)
 #
 # Memory budget, 5G for the whole stack on the 7.4G Jetson (each service sets mem_limit):
-#   api 512m, db 768m, redis 256m              this file today: 1536m
-#   caddy 128m, cloudflared 128m               reserved for tasks 6 and 8
+#   api 512m, db 768m, redis 256m, caddy 128m  this file today: 1664m
+#   cloudflared 128m                           reserved for task 8
 #   worker 1536m, browser 1536m                reserved for the agents and browser modules
 #   total 4864m, leaving about 250m of headroom inside the 5G budget
 
@@ -22,6 +23,28 @@ x-restart: &restart
   restart: unless-stopped
 
 services:
+  caddy:
+    <<: *restart
+    # Target `caddy` of web/Dockerfile: the React build baked into a caddy:2.x-alpine image.
+    build:
+      context: ./web
+      target: caddy
+      additional_contexts:
+        caddy-config: ./caddy
+    image: jobapp-caddy:latest
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "${HTTP_BIND:-127.0.0.1}:${HTTP_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    mem_limit: 128m
+
   api:
     <<: *restart
     build:

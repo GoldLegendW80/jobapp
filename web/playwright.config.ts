@@ -1,6 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const port = Number(process.env.E2E_PORT ?? 4173);
+// E2E_CADDY_URL=http://127.0.0.1 runs the tests against the running Compose stack through Caddy,
+// with no local web server (caddy.spec.ts needs it; the mocked specs pass there too).
+const caddyUrl = process.env.E2E_CADDY_URL;
 // E2E_SERVER=dev runs the tests against the Vite dev server instead of the production build.
 const server =
   process.env.E2E_SERVER === "dev"
@@ -20,14 +23,16 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: [["list"]],
   use: {
-    baseURL: `http://127.0.0.1:${port}`,
+    baseURL: caddyUrl ?? `http://127.0.0.1:${port}`,
     trace: "retain-on-failure",
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
-  webServer: {
-    command: server,
-    url: `http://127.0.0.1:${port}`,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: caddyUrl
+    ? undefined
+    : {
+        command: server,
+        url: `http://127.0.0.1:${port}`,
+        reuseExistingServer: !process.env.CI,
+        timeout: 120_000,
+      },
 });
