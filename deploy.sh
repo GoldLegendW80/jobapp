@@ -610,12 +610,28 @@ cmd_smoke() {
   fi
 
   # A 5 MB body, half the caddy limit, crosses the tunnel and reaches the api, which answers 405
-  # (POST on a GET route) rather than caddy's 413 or a tunnel error.
-  code="$(head -c 5000000 /dev/zero | pcurl "$url/api/health" -X POST --data-binary @- -H 'Content-Type: application/octet-stream')"
+  # (POST on a GET route) rather than caddy's 413 or a tunnel error. It carries the CSRF header
+  # every non-GET api request needs (identity), else the api would answer 403 first.
+  code="$(head -c 5000000 /dev/zero | pcurl "$url/api/health" -X POST --data-binary @- -H 'Content-Type: application/octet-stream' -H 'X-Requested-With: jobapp')"
   if [[ "$code" == "405" ]] && grep -q 'Method Not Allowed' "$PDIR/b"; then
     pass "5 MB upload reaches the api through the tunnel (405 from FastAPI)"
   else
     flunk "5 MB upload answered $code: $(pbrief)"
+  fi
+
+  # Identity through the tunnel: no session is a 401, a state-changing call without the CSRF
+  # header a 403.
+  code="$(pcurl "$url/api/auth/me")"
+  if [[ "$code" == "401" ]]; then
+    pass "/api/auth/me without a session: 401"
+  else
+    flunk "/api/auth/me without a session answered $code: $(pbrief)"
+  fi
+  code="$(pcurl "$url/api/auth/logout" -X POST)"
+  if [[ "$code" == "403" ]] && grep -q 'X-Requested-With' "$PDIR/b"; then
+    pass "a POST without X-Requested-With is refused (403)"
+  else
+    flunk "a POST without X-Requested-With answered $code: $(pbrief)"
   fi
 
   if ((failed > 0)); then
