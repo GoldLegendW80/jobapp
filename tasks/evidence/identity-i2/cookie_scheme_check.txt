@@ -1,0 +1,14 @@
+identity I2, 2026-10-08, scratch stack `docker compose -p jobapp-i2 -f compose.yml` on the Mac.
+Cookie values replaced by [redacted].
+
+1. Tunnel listener (caddy :8080, trusts private peers, as cloudflared reaches it), request with
+   X-Forwarded-Proto: https, sent from inside the caddy container:
+   wget -S --header "X-Forwarded-Proto: https" ... http://127.0.0.1:8080/api/auth/login
+     HTTP/1.1 200 OK
+     Set-Cookie: jobapp_session=[redacted]; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax; Secure
+
+2. Loopback listener (caddy :80, trusts no proxy), same header spoofed by the client:
+   curl -H "X-Forwarded-Proto: https" ... http://127.0.0.1/api/auth/login
+     HTTP/1.1 200 OK
+     Set-Cookie: jobapp_session=[redacted]; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax
+   (no Secure: caddy overwrites the spoofed value with the real scheme, http)

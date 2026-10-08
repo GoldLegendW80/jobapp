@@ -10,6 +10,9 @@ Invite-only accounts with server-side sessions, an admin area, and the `current_
 
 - **Server-side sessions in Postgres**, opaque cookie token, SHA-256 stored. Revocation is a row delete; no JWT.
 - **Default deny.** A router-level dependency makes every `/api/*` route require a session unless it is on an explicit public allowlist (health, login, invite check and accept). A test enumerates `app.routes` to prove it.
+  As built in I2: `deps.default_deny` is an app-wide dependency (`FastAPI(dependencies=...)`), so it also covers routes added later; `deps.PUBLIC_ROUTES` lists (method, path) pairs; `deps.assert_default_deny` runs in `create_app` and again at startup and refuses an app where an API route skips the guard, anything else is served under `/api`, a public route is reused under another prefix, or an allowlist entry names no route. Logout is on the allowlist too: it only ends the session its cookie names and answers 204 without one, so it stays idempotent.
+- **Cookie writes in one place.** Handlers and dependencies only record the new cookie state; a middleware writes `Set-Cookie` with the flags (Secure from the request scheme after `--proxy-headers`, or `APP_ENV=production`). The sliding refresh therefore reaches the browser whatever the handler returns.
+- **Logs.** The request log records the route template (`/api/auth/invites/{token}`), unmatched link paths are masked, SQL parameters are hidden (`hide_parameters`), 422 bodies never echo input, and Caddy's access log masks link tokens in the URI and the Referer.
 - **CSRF by custom header** `X-Requested-With: jobapp` on non-GET plus SameSite=Lax; enforced in middleware.
 - **No email.** Links are shown once to the admin, who shares them.
 - **Frontend auth state** from `GET /api/auth/me` through TanStack Query; a global 401 handler clears it and routes to `/login?next=`.

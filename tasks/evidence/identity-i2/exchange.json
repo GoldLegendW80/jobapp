@@ -1,0 +1,969 @@
+{
+  "task": "identity I2",
+  "when": "2026-10-08T16:56:15+00:00",
+  "base_url": "http://127.0.0.1",
+  "client": "Playwright APIRequestContext (Python)",
+  "note": "tokens, passwords and cookie values replaced by [redacted]",
+  "log_scan": {
+    "lines": 58,
+    "secrets_found": 0
+  },
+  "failures": [],
+  "exchanges": [
+    {
+      "step": "health",
+      "request": {
+        "method": "GET",
+        "path": "/api/health",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Length",
+            "value": "15"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:14 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "aa6be22b-3af9-49bd-8ef8-22eb80b02131"
+          }
+        ],
+        "body": {
+          "status": "ok"
+        }
+      }
+    },
+    {
+      "step": "me before anything",
+      "request": {
+        "method": "GET",
+        "path": "/api/auth/me",
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "33"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:14 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "f8209356-159e-4164-a565-998969056f44"
+          }
+        ],
+        "body": {
+          "detail": "Sign in to continue."
+        }
+      }
+    },
+    {
+      "step": "check setup link",
+      "request": {
+        "method": "GET",
+        "path": "/api/auth/invites/[redacted]",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "88"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:14 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "2f9d01fd-1acc-47d6-9989-50f2dcf48fb8"
+          }
+        ],
+        "body": {
+          "email": "admin@example.org",
+          "kind": "invite",
+          "expires_at": "2026-10-15T16:56:14.350257Z"
+        }
+      }
+    },
+    {
+      "step": "accept without CSRF header",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/invites/[redacted]/accept",
+        "body": {
+          "name": "  Harald  Admin ",
+          "password": "[redacted]"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "56"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:14 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "88ec6ec4-b537-42be-99d7-a70f45f35b24"
+          }
+        ],
+        "body": {
+          "detail": "Missing or invalid X-Requested-With header."
+        }
+      }
+    },
+    {
+      "step": "accept with a common password",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/invites/[redacted]/accept",
+        "body": {
+          "name": "Harald",
+          "password": "password123"
+        }
+      },
+      "response": {
+        "status": 422,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "77"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:14 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "94989db6-19f7-4c7c-aa12-2ca97d8cbb9e"
+          }
+        ],
+        "body": {
+          "detail": "This password is too common. Choose one that is harder to guess."
+        }
+      }
+    },
+    {
+      "step": "accept setup link",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/invites/[redacted]/accept",
+        "body": {
+          "name": "  Harald  Admin ",
+          "password": "[redacted]"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Length",
+            "value": "199"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:14 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Set-Cookie",
+            "value": "jobapp_session=[redacted]; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "760dad86-e9bd-4edd-a19f-9f4a6b20714d"
+          }
+        ],
+        "body": {
+          "id": "0183128f-7cc7-43bb-9bdc-2c0aca47e918",
+          "email": "admin@example.org",
+          "name": "Harald Admin",
+          "role": "admin",
+          "created_at": "2026-10-08T16:56:15.297781Z",
+          "last_login_at": "2026-10-08T16:56:15.297166Z"
+        }
+      }
+    },
+    {
+      "step": "me after accept",
+      "request": {
+        "method": "GET",
+        "path": "/api/auth/me",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "199"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "7b817912-19ac-4859-b3ad-076ceb4f23f2"
+          }
+        ],
+        "body": {
+          "id": "0183128f-7cc7-43bb-9bdc-2c0aca47e918",
+          "email": "admin@example.org",
+          "name": "Harald Admin",
+          "role": "admin",
+          "created_at": "2026-10-08T16:56:15.297781Z",
+          "last_login_at": "2026-10-08T16:56:15.297166Z"
+        }
+      }
+    },
+    {
+      "step": "accept again",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/invites/[redacted]/accept",
+        "body": {
+          "name": "  Harald  Admin ",
+          "password": "[redacted]"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "78"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "0d87df74-4291-4577-83a2-26f79f3517b8"
+          }
+        ],
+        "body": {
+          "detail": "This link is not valid. It may have expired or been used already."
+        }
+      }
+    },
+    {
+      "step": "logout",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Set-Cookie",
+            "value": "jobapp_session=\"\"; expires=Thu, 08 Oct 2026 16:56:15 GMT; HttpOnly; Max-Age=0; Path=/; SameSite=lax"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "fae39d51-fd86-4bcc-88f7-18aca63ac23e"
+          }
+        ],
+        "body": null
+      }
+    },
+    {
+      "step": "me after logout",
+      "request": {
+        "method": "GET",
+        "path": "/api/auth/me",
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "33"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "35c4042f-6c0b-409a-beb4-0f4f3147caad"
+          }
+        ],
+        "body": {
+          "detail": "Sign in to continue."
+        }
+      }
+    },
+    {
+      "step": "login wrong password",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/login",
+        "body": {
+          "email": "admin@example.org",
+          "password": "[redacted]"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "41"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "2223b29c-2402-4fcf-9592-eeca949acbc8"
+          }
+        ],
+        "body": {
+          "detail": "Incorrect email or password."
+        }
+      }
+    },
+    {
+      "step": "login unknown email",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/login",
+        "body": {
+          "email": "nobody@example.org",
+          "password": "[redacted]"
+        }
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "41"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "df087211-773e-4437-9c11-138824c3590e"
+          }
+        ],
+        "body": {
+          "detail": "Incorrect email or password."
+        }
+      }
+    },
+    {
+      "step": "login",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/login",
+        "body": {
+          "email": "ADMIN@Example.org",
+          "password": "[redacted]"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Length",
+            "value": "199"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Set-Cookie",
+            "value": "jobapp_session=[redacted]; HttpOnly; Max-Age=2592000; Path=/; SameSite=lax"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "192600f7-ecc1-4173-a723-b280148a7401"
+          }
+        ],
+        "body": {
+          "id": "0183128f-7cc7-43bb-9bdc-2c0aca47e918",
+          "email": "admin@example.org",
+          "name": "Harald Admin",
+          "role": "admin",
+          "created_at": "2026-10-08T16:56:15.297781Z",
+          "last_login_at": "2026-10-08T16:56:15.451996Z"
+        }
+      }
+    },
+    {
+      "step": "me after login",
+      "request": {
+        "method": "GET",
+        "path": "/api/auth/me",
+        "body": null
+      },
+      "response": {
+        "status": 200,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "199"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "ad4a2a1a-4886-4689-9ce9-016fd1f2008b"
+          }
+        ],
+        "body": {
+          "id": "0183128f-7cc7-43bb-9bdc-2c0aca47e918",
+          "email": "admin@example.org",
+          "name": "Harald Admin",
+          "role": "admin",
+          "created_at": "2026-10-08T16:56:15.297781Z",
+          "last_login_at": "2026-10-08T16:56:15.451996Z"
+        }
+      }
+    },
+    {
+      "step": "logout again",
+      "request": {
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "body": null
+      },
+      "response": {
+        "status": 204,
+        "headers": [
+          {
+            "name": "Cache-Control",
+            "value": "no-store"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Set-Cookie",
+            "value": "jobapp_session=\"\"; expires=Thu, 08 Oct 2026 16:56:15 GMT; HttpOnly; Max-Age=0; Path=/; SameSite=lax"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "5fb4f43b-a93d-425f-8971-f725a3397dcb"
+          }
+        ],
+        "body": null
+      }
+    },
+    {
+      "step": "me after second logout",
+      "request": {
+        "method": "GET",
+        "path": "/api/auth/me",
+        "body": null
+      },
+      "response": {
+        "status": 401,
+        "headers": [
+          {
+            "name": "Content-Length",
+            "value": "33"
+          },
+          {
+            "name": "Content-Security-Policy",
+            "value": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "name": "Date",
+            "value": "Thu, 08 Oct 2026 16:56:15 GMT"
+          },
+          {
+            "name": "Permissions-Policy",
+            "value": "camera=(), microphone=(), geolocation=()"
+          },
+          {
+            "name": "Referrer-Policy",
+            "value": "strict-origin-when-cross-origin"
+          },
+          {
+            "name": "Via",
+            "value": "1.1 Caddy"
+          },
+          {
+            "name": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "name": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "name": "X-Request-Id",
+            "value": "8d00b307-a9e7-4552-9eb7-b14af5b3ded1"
+          }
+        ],
+        "body": {
+          "detail": "Sign in to continue."
+        }
+      }
+    }
+  ]
+}
