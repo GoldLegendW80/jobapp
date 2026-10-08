@@ -171,7 +171,7 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 
 **Acceptance criteria:**
 - [x] Backup file created; restore into a scratch database succeeds and a seed row survives the round trip
-- [ ] After `sudo reboot` of the Jetson, `./deploy.sh smoke` passes within 2 minutes (new tunnel URL printed)
+- [x] After `sudo reboot` of the Jetson, `./deploy.sh smoke` passes within 2 minutes (new tunnel URL printed)
 - [x] Idle stack under 1G RAM total in `docker stats`
 
 **Verification:**
@@ -184,5 +184,5 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Scope:** S
 
 ## Checkpoint D: spec complete
-- [ ] All 6 success criteria of SPEC-platform.md checked
-- [ ] Review with Harald before writing SPEC-identity.md
+- [x] All 6 success criteria of SPEC-platform.md checked
+- [x] Review with Harald before writing SPEC-identity.md (identity spec approved 2026-10-08)

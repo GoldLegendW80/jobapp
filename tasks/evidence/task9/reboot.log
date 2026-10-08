@@ -1,0 +1,12 @@
+# Run by Harald in Terminal.app on 2026-10-08 (output pasted; tee failed on a line break). Key lines:
+18:56:02  jetson boot id b8ebf950-8721-49d0-b2e0-e536fc54829c, up since 2026-10-08 10:44:19
+18:56:03  rebooting jetson
+18:57:17  ssh back 67s after the reboot command, new boot id 215e5874-a3e4-4482-905f-8037a5ecca7a
+18:57:17  booted at 2026-10-08 18:56:44
+18:57:51  all 5 services healthy at uptime 67s (restart=unless-stopped, restarts=0)
+          All 14 checks passed on jetson; public smoke passed (8 checks)
+          stack healthy at 67s after boot, smoke passed at 86s after boot
+          tunnel URL before https://poster-yukon-ellen-javascript.trycloudflare.com
+          tunnel URL now    https://colleges-politics-reforms-deleted.trycloudflare.com
+          memory 1303M used of 7619M, 6056M available
+18:58:10  PASS: the stack came back by itself, healthy 67s after boot (limit 120s), smoke green

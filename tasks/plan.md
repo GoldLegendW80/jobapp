@@ -55,7 +55,7 @@ repo bootstrap (1)
 
 ### Phase 4: Public and durable
 - [x] Task 8: Quick tunnel, url and smoke
-- [ ] Task 9: Backup, restore, reboot and RAM
+- [x] Task 9: Backup, restore, reboot and RAM
 
 ### Checkpoint D: spec complete
 - [ ] All 6 success criteria of SPEC-platform.md verified; review with Harald before `identity`
