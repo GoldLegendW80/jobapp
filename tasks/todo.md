@@ -170,12 +170,12 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 **Description:** `deploy.sh backup` (pg_dump gzip to `jetson:~/jobapp-backups/`) and `deploy.sh restore <file>` into a fresh database; prove reboot recovery and the idle RAM budget.
 
 **Acceptance criteria:**
-- [ ] Backup file created; restore into a scratch database succeeds and a seed row survives the round trip
+- [x] Backup file created; restore into a scratch database succeeds and a seed row survives the round trip
 - [ ] After `sudo reboot` of the Jetson, `./deploy.sh smoke` passes within 2 minutes (new tunnel URL printed)
-- [ ] Idle stack under 1G RAM total in `docker stats`
+- [x] Idle stack under 1G RAM total in `docker stats`
 
 **Verification:**
-- [ ] Commands above run once and their output pasted in the commit message of this task
+- [x] Commands above run once and their output pasted in the commit message of this task
 
 **Dependencies:** Task 8
 
