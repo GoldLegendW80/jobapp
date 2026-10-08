@@ -28,7 +28,7 @@ Invite-only accounts with server-side sessions, an admin area, and the `current_
 - [x] Harald's admin created by CLI on the Jetson can sign in and out through the public URL
 
 - [x] I4: Invites: admin creates a link, friend accepts and is signed in
-- [ ] I5: Admin users page: list, disable, role, last-admin protection
+- [x] I5: Admin users page: list, disable, role, last-admin protection
 - [ ] I6: Account password change and reset links
 
 ### Checkpoint I-B

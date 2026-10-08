@@ -76,9 +76,9 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 ## I5: Admin users page: list, disable, role, last-admin protection
 
 **Acceptance criteria:**
-- [ ] Disabling a user ends their sessions; their next request is 401 and the UI lands on `/login`
-- [ ] The last active admin cannot be disabled or demoted
-- [ ] Members get 404 on admin API routes and cannot see the admin entry
+- [x] Disabling a user ends their sessions; their next request is 401 and the UI lands on `/login`
+- [x] The last active admin cannot be disabled or demoted
+- [x] Members get 404 on admin API routes and cannot see the admin entry
 
 **Verification:** pytest; Playwright two contexts
 
