@@ -1,27 +1,22 @@
-import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import {
-  expect,
-  test,
-  type Browser,
-  type BrowserContext,
-  type ConsoleMessage,
-  type Locator,
-  type Page,
-} from "@playwright/test";
+  caddyUrl,
+  cliLink,
+  createLink as createLinkWith,
+  makeShots,
+  menuButton,
+  newContext,
+  rowFor,
+  setPassword,
+  signIn,
+  signOut,
+  watchErrors,
+} from "./stack";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, "../..");
-const evidence = path.join(
-  root,
-  "tasks/evidence",
-  process.env.E2E_EVIDENCE ?? "identity-i4",
-);
-const prefix = process.env.E2E_SHOT_PREFIX ?? "";
+const shots = makeShots("identity-i4");
 
 /**
  * Invites from the admin area, against the real stack through Caddy: no mocks.
@@ -38,7 +33,6 @@ const prefix = process.env.E2E_SHOT_PREFIX ?? "";
  *     E2E_FRIEND_EMAIL=e2e-friend@example.org E2E_SHOT_PREFIX=jetson- \
  *     pnpm --dir web exec playwright test invites.spec.ts
  */
-const caddyUrl = process.env.E2E_CADDY_URL;
 test.describe.configure({ mode: "serial" });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
@@ -51,180 +45,15 @@ const FRIEND_NAME = "E2E Friend";
 const ADMIN_PASSWORD = `Pw ${randomBytes(12).toString("base64url")}`;
 const FRIEND_PASSWORD = `Pw ${randomBytes(12).toString("base64url")}`;
 const FRIEND_NEW_PASSWORD = `Pw2 ${randomBytes(12).toString("base64url")}`;
-const LINK = /\/(invite|reset)\/[A-Za-z0-9_-]{43}/;
 
-/** A one-time link from the operator CLI, as a path to open on the base URL. */
-function cliLink(email: string): string {
-  const output = process.env.E2E_ADMIN_VIA_DEPLOY
-    ? execFileSync(path.join(root, "deploy.sh"), ["admin", "create", email], {
-        cwd: root,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "inherit"],
-      })
-    : execFileSync(
-        "docker",
-        [
-          "compose",
-          "-p",
-          process.env.E2E_COMPOSE_PROJECT ?? "jobapp",
-          "-f",
-          "compose.yml",
-          "exec",
-          "-T",
-          "api",
-          "python",
-          "-m",
-          "app.identity.cli",
-          "create-admin",
-          email,
-          "--base-url",
-          caddyUrl ?? "",
-        ],
-        { cwd: root, encoding: "utf8" },
-      );
-  const match = LINK.exec(/https?:\/\/\S+/.exec(output)?.[0] ?? "");
-  if (!match) throw new Error("the CLI printed no link");
-  return match[0];
-}
-
-/** Console errors, except the browser's own lines for answers the journey expects. */
-function watchErrors(page: Page) {
-  const errors: string[] = [];
-  page.on("console", (msg: ConsoleMessage) => {
-    if (msg.type() !== "error") return;
-    const text = `${msg.text()} @ ${msg.location().url}`;
-    if (/status of 401/.test(text) && /\/api\/auth\/(me|login)/.test(text))
-      return;
-    if (/status of 404/.test(text) && /\/api\/auth\/invites\//.test(text))
-      return;
-    if (/status of 409/.test(text) && /\/api\/admin\/invites/.test(text))
-      return;
-    errors.push(text);
-  });
-  page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
-  return errors;
-}
-
-const VIEWPORTS = [
-  { name: "desktop", width: 1280, height: 800 },
-  { name: "mobile", width: 375, height: 812 },
-] as const;
-const SCHEMES = ["light", "dark"] as const;
-
-/** One screenshot per viewport and colour scheme, then back to desktop light. */
-async function shots(page: Page, name: string, fullPage = true) {
-  fs.mkdirSync(evidence, { recursive: true });
-  for (const viewport of VIEWPORTS) {
-    await page.setViewportSize({
-      width: viewport.width,
-      height: viewport.height,
-    });
-    for (const scheme of SCHEMES) {
-      await page.emulateMedia({ colorScheme: scheme });
-      const overflow = await page.evaluate(
-        () =>
-          document.documentElement.scrollWidth -
-          document.documentElement.clientWidth,
-      );
-      expect(overflow, `${name} ${viewport.name} ${scheme}`).toBe(0);
-      await page.screenshot({
-        path: path.join(
-          evidence,
-          `${prefix}${name}-${viewport.name}-${scheme}.png`,
-        ),
-        fullPage,
-        animations: "disabled",
-      });
-    }
-  }
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await page.emulateMedia({ colorScheme: "light" });
-}
-
-async function setPassword(page: Page, password: string, name?: string) {
-  if (name !== undefined) await page.getByLabel("Name").fill(name);
-  await page.getByLabel(/^(New password|Password)$/).fill(password);
-  await page.getByLabel("Confirm password").fill(password);
-  await page
-    .getByRole("button", { name: /Create account|Save password/ })
-    .click();
-  await expect(page).toHaveURL(/\/$/);
-}
-
-async function signIn(page: Page, email: string, password: string) {
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-}
-
-const menuButton = (page: Page, name: string) =>
-  page.getByRole("button", { name: `Account menu, ${name}` });
-
-async function signOut(page: Page, name: string) {
-  await menuButton(page, name).click();
-  await page.getByRole("menuitem", { name: "Sign out" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
-}
-
-async function newContext(browser: Browser) {
-  const context = await browser.newContext({ baseURL: caddyUrl });
-  await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-    origin: caddyUrl,
-  });
-  return context;
-}
-
-/** The newest row for an email (the list is newest first). */
-const rowFor = (page: Page, email: string): Locator =>
-  page
-    .getByRole("table", { name: "Invites, newest first" })
-    .getByRole("row")
-    .filter({ hasText: email })
-    .first();
-
-/** Create a link from the dialog; returns the full link as shown. */
-async function createLink(
+/** Create a link from the dialog, with screenshots of the result when `shot` is set. */
+const createLink = (
   page: Page,
   email: string,
   kind: "invite" | "reset",
   shot?: string,
-): Promise<string> {
-  await page.getByRole("button", { name: "Invite someone" }).click();
-  const dialog = page.getByRole("dialog", { name: "Invite someone" });
-  await dialog.getByLabel("Email").fill(email);
-  await dialog.getByLabel("Link").selectOption(kind);
-  if (kind === "invite") await dialog.getByLabel("Role").selectOption("member");
-  else await expect(dialog.getByLabel("Role")).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Create link" }).click();
-  const result = page.getByRole("dialog", {
-    name: kind === "invite" ? "Invite link ready" : "Reset link ready",
-  });
-  await expect(result).toBeVisible();
-  await expect(result).toContainText("shown only once");
-  await expect(result).toContainText(
-    kind === "invite" ? "expires in 7 days" : "expires in 1 hour",
-  );
-  const field = result.getByLabel(
-    kind === "invite" ? "Invite link" : "Reset link",
-  );
-  const link = await field.inputValue();
-  // Built from the origin the admin is on, whatever host that is.
-  const origin = await page.evaluate(() => window.location.origin);
-  expect(link.startsWith(`${origin}/${kind}/`)).toBe(true);
-  expect(LINK.test(new URL(link).pathname)).toBe(true);
-
-  await result.getByRole("button", { name: "Copy link" }).click();
-  await expect(result.getByRole("button", { name: "Copied" })).toBeVisible();
-  const copied = await page.evaluate(() => navigator.clipboard.readText());
-  expect(copied).toBe(link);
-  if (shot) await shots(page, shot, false);
-  await result.getByRole("button", { name: "Done" }).click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  // Shown once: nowhere on the page any more.
-  await expect(page.locator("body")).not.toContainText(new URL(link).pathname);
-  return link;
-}
+) =>
+  createLinkWith(page, email, kind, shot ? { shots, name: shot } : undefined);
 
 let adminContext: BrowserContext;
 let admin: Page;

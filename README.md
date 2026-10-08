@@ -172,6 +172,34 @@ ssh jetson "cd jobapp && docker compose -f compose.yml exec -T db sh -c 'psql -U
   delete from users where email in ('e2e-admin@example.org', 'e2e-friend@example.org');"
 ```
 
+### Managing accounts
+
+The **Accounts** table above the invites lists everyone who can sign in, by name: email, role,
+status, last sign in and how many browsers are signed in. Your own row says **You**. Each row's
+actions menu offers **Make admin** or **Make member**, and **Disable** or **Enable**, each behind a
+confirmation:
+
+- Disabling signs the account out of every browser at once (its sessions are deleted, its next
+  request answers 401 and lands on `/login`) and refuses its sign in until it is enabled again.
+  Enabling never brings an old session back: the person signs in again. Their data stays.
+- A role change applies from the account's next request; a demoted admin loses the Admin entry
+  on their next page load.
+- The last active admin can be neither disabled nor made a member (the menu greys those out
+  and the API answers 409), even when two admins act at the same moment: every change takes one
+  database lock and rechecks under it. You can make yourself a member while another admin
+  exists (the dialog asks first, then the app reloads who you are and leaves the admin area).
+  Your own row has no Disable: another admin does that.
+
+The API, admin only like the invites: `GET /api/admin/users?limit=&offset=` (sorted by name, each
+with `sessions`, plus `active_admins`), `PATCH /api/admin/users/{id}` `{is_active?, role?}` (200
+with the account, also when nothing changes; 404 for an unknown id, 409 for the last admin, 422
+for an empty or invalid body).
+
+The accounts journey (`web/e2e/users.spec.ts`) runs like the invites one, on its own scratch
+project (`-p jobapp-i5`, `HTTP_PORT=8095`, `E2E_COMPOSE_PROJECT=jobapp-i5`), and on the Jetson with
+the same two throwaway accounts and the same cleanup. It only ever acts on the rows of its two
+emails, and checks the last admin rule in the browser only where its admin is the only active one.
+
 ## Profile export and import
 
 `GET /api/profile/export` downloads the whole profile as `profile-YYYY-MM-DD.json`;

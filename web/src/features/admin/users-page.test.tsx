@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession, member } from "@/test/auth";
 import { renderApp } from "@/test/render";
@@ -126,6 +126,21 @@ async function openDialog(user: ReturnType<typeof userEvent.setup>) {
 const noDashes = (text: string | null) => {
   expect(text ?? "").not.toMatch(/[–—]| - /);
 };
+
+beforeEach(() => {
+  // The accounts section above the invites: the admin alone (users-section.test.tsx covers it).
+  server.use(
+    http.get("*/api/admin/users", () =>
+      HttpResponse.json({
+        items: [{ ...admin, is_active: true, sessions: 1 }],
+        total: 1,
+        limit: 50,
+        offset: 0,
+        active_admins: 1,
+      }),
+    ),
+  );
+});
 
 afterEach(() => {
   setClipboard(null);
@@ -352,9 +367,9 @@ describe("invite dialog", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
     // The list behind refreshed with the new link, and the link itself is nowhere.
-    expect(await screen.findByRole("table")).toHaveTextContent(
-      "friend@example.org",
-    );
+    expect(
+      await screen.findByRole("table", { name: "Invites, newest first" }),
+    ).toHaveTextContent("friend@example.org");
     expect(document.body.textContent).not.toContain(TOKEN);
     dialog = await openDialog(user);
     expect(within(dialog).getByLabelText("Email")).toHaveValue("");

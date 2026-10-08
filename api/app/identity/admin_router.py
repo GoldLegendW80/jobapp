@@ -1,4 +1,5 @@
-"""/api/admin: what only an admin may do. Invites (I4): list, create, revoke.
+"""/api/admin: what only an admin may do. Invites (I4): list, create, revoke. Users (I5): list,
+disable or enable, promote or demote, never leaving the app without an active admin.
 
 Every route runs `require_admin` (router dependency), which answers 404 to a member, so a
 member learns nothing about which admin routes exist; without a session the app-wide
@@ -22,10 +23,15 @@ from app.identity.models import Invite, InviteKind, Role, User
 from app.identity.schemas import (
     INVITES_PAGE_DEFAULT,
     INVITES_PAGE_MAX,
+    USERS_PAGE_DEFAULT,
+    USERS_PAGE_MAX,
     AdminInviteCreated,
     AdminInviteIn,
     AdminInviteOut,
     AdminInvitePage,
+    AdminUserOut,
+    AdminUserPage,
+    AdminUserPatch,
     ErrorOut,
 )
 
@@ -35,6 +41,8 @@ ACCOUNT_EXISTS = "An account with this email already exists. Send a reset link i
 NO_ACTIVE_ACCOUNT = "No active account uses this email."
 ROLE_ON_RESET = "A reset link keeps the account's role: leave the role out."
 INVITE_NOT_REVOCABLE = "No active invite has this id. It may have been used, revoked or expired."
+USER_NOT_FOUND = "No user has this id."
+LAST_ADMIN = service.LAST_ADMIN
 
 Db = Annotated[Session, Depends(get_session)]
 Admin = Annotated[User, Depends(deps.require_admin)]
@@ -138,3 +146,72 @@ def revoke_invite(invite_id: str, request: Request, db: Db) -> Response:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=INVITE_NOT_REVOCABLE)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- users -------------------------------------------------------------------------------------
+
+
+def _user_out(user: User, sessions: int) -> AdminUserOut:
+    return AdminUserOut(
+        id=user.id,
+        email=user.email,
+        name=user.name,
+        role=user.role,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+        sessions=sessions,
+    )
+
+
+@router.get("/users", response_model=AdminUserPage, responses=_404)
+def list_users(
+    request: Request,
+    db: Db,
+    limit: Annotated[int, Query(ge=1, le=USERS_PAGE_MAX)] = USERS_PAGE_DEFAULT,
+    offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
+) -> AdminUserPage:
+    """Every account sorted by name, with its signed in sessions and the count of active admins."""
+    listing = service.list_users(db, limit=limit, offset=offset, now=deps.clock(request))
+    return AdminUserPage(
+        items=[_user_out(user, sessions) for user, sessions in listing.rows],
+        total=listing.total,
+        limit=limit,
+        offset=offset,
+        active_admins=listing.active_admins,
+    )
+
+
+@router.patch(
+    "/users/{user_id}",
+    response_model=AdminUserOut,
+    responses={
+        **_404,
+        409: {"model": ErrorOut, "description": "The last active admin"},
+        422: {"model": ErrorOut, "description": "Nothing to change, or a bad value"},
+    },
+)
+def update_user(
+    user_id: str, body: AdminUserPatch, request: Request, db: Db, admin: Admin
+) -> AdminUserOut:
+    """Disable or enable an account and change its role. Disabling ends its sessions at once.
+    The last active admin can be neither disabled nor demoted (409). Setting a value it already
+    has is a 200 that changes nothing. An unknown id, or one that is not a UUID, is a 404."""
+    try:
+        parsed = UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND) from None
+    try:
+        user = service.update_user(db, admin.id, parsed, is_active=body.is_active, role=body.role)
+    except service.NotAnAdminError:
+        db.rollback()  # demoted or disabled meanwhile: from now on a member, so the member 404
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found") from None
+    except service.UnknownUserError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND) from None
+    except service.LastAdminError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
+    sessions = service.count_live_sessions(db, user.id, deps.clock(request))
+    db.commit()
+    return _user_out(user, sessions)

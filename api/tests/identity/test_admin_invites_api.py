@@ -160,11 +160,15 @@ def test_admin_routes_are_served_and_all_run_the_admin_check(app: FastAPI) -> No
         ("GET", INVITES),
         ("POST", INVITES),
         ("DELETE", f"{INVITES}/{{invite_id}}"),
+        ("GET", "/api/admin/users"),
+        ("PATCH", "/api/admin/users/{user_id}"),
     }
     for handler in (
         admin_router.list_invites,
         admin_router.create_invite,
         admin_router.revoke_invite,
+        admin_router.list_users,
+        admin_router.update_user,
     ):
         # Plain def: the threadpool, never the event loop.
         assert not inspect.iscoroutinefunction(handler)

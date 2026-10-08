@@ -9,7 +9,7 @@ user-facing.
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from app.identity.models import InviteKind, Role
 from app.identity.service import InviteStatus
@@ -105,3 +105,48 @@ class AdminInviteCreated(BaseModel):
 
     invite: AdminInviteOut
     path: str
+
+
+USERS_PAGE_MAX = 100
+USERS_PAGE_DEFAULT = 50
+
+
+class AdminUserOut(BaseModel):
+    """An account as the admin area lists it. `sessions` counts its unexpired sessions (signed
+    in browsers). Never a password hash or a token."""
+
+    id: UUID
+    email: str
+    name: str
+    role: Role
+    is_active: bool
+    created_at: datetime
+    last_login_at: datetime | None
+    sessions: int
+
+
+class AdminUserPage(BaseModel):
+    """One page of accounts sorted by name. `active_admins` counts every active admin, not only
+    those on this page, so the client knows which row is the last one."""
+
+    items: list[AdminUserOut]
+    total: int
+    limit: int
+    offset: int
+    active_admins: int
+
+
+class AdminUserPatch(_Strict):
+    """What an admin may change on an account: at least one of the two, never null."""
+
+    is_active: StrictBool | None = None
+    role: Role | None = None
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> "AdminUserPatch":
+        if not self.model_fields_set:
+            raise ValueError("Send is_active, role or both.")
+        for field in self.model_fields_set:
+            if getattr(self, field) is None:
+                raise ValueError(f"{field} cannot be null.")
+        return self

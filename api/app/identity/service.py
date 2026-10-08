@@ -439,3 +439,146 @@ def revoke_invite(session: Session, invite_id: UUID, now: datetime | None = None
         .returning(Invite)
         .execution_options(populate_existing=True)
     ).one_or_none()
+
+
+# --- admin: listing and changing accounts ------------------------------------------------------
+
+# Namespace of the transaction advisory lock that serialises every admin change to an account.
+_ACCOUNTS_LOCK_NAMESPACE = 20_005
+
+
+@dataclass(frozen=True)
+class UserListing:
+    """One page of accounts sorted by name, each with its count of unexpired sessions, plus the
+    number of active admins across all pages."""
+
+    rows: list[tuple[User, int]]
+    total: int
+    active_admins: int
+
+
+def _live_sessions(now: datetime) -> sa.Subquery:
+    return (
+        sa.select(UserSession.user_id, sa.func.count().label("n"))
+        .where(UserSession.expires_at > now)
+        .group_by(UserSession.user_id)
+        .subquery()
+    )
+
+
+def count_active_admins(session: Session) -> int:
+    return int(
+        session.scalar(
+            sa.select(sa.func.count())
+            .select_from(User)
+            .where(User.role == Role.admin, User.is_active.is_(True))
+        )
+        or 0
+    )
+
+
+def list_users(session: Session, limit: int, offset: int, now: datetime) -> UserListing:
+    total = int(session.scalar(sa.select(sa.func.count()).select_from(User)) or 0)
+    live = _live_sessions(now)
+    found = session.execute(
+        sa.select(User, sa.func.coalesce(live.c.n, 0))
+        .outerjoin(live, live.c.user_id == User.id)
+        # Case-insensitive by name, then email (unique) so equal names never swap between pages.
+        .order_by(sa.func.lower(User.name), User.name, User.email)
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return UserListing(
+        rows=[(user, int(n)) for user, n in found],
+        total=total,
+        active_admins=count_active_admins(session),
+    )
+
+
+def count_live_sessions(session: Session, user_id: UUID, now: datetime) -> int:
+    return int(
+        session.scalar(
+            sa.select(sa.func.count())
+            .select_from(UserSession)
+            .where(UserSession.user_id == user_id, UserSession.expires_at > now)
+        )
+        or 0
+    )
+
+
+class LastAdminError(Exception):
+    """The change would leave no active admin. The message is user-facing."""
+
+
+LAST_ADMIN = "This is the last active admin. Make someone else an admin first, then try again."
+
+
+class UnknownUserError(LookupError):
+    """No account has this id."""
+
+
+class NotAnAdminError(PermissionError):
+    """The acting admin was disabled or demoted after their request was let in."""
+
+
+def update_user(
+    session: Session,
+    actor_id: UUID,
+    user_id: UUID,
+    is_active: bool | None = None,
+    role: Role | None = None,
+) -> User:
+    """Disable, enable, promote or demote an account, as the admin `actor_id`. The caller commits.
+
+    Every such change takes one transaction advisory lock first, so changes run one at a time
+    and each reads the accounts as the previous one left them (read committed takes a new
+    snapshot per statement). Under that lock:
+    - the actor must still be an active admin (another admin may have just disabled or demoted
+      them), else UnknownUserError, the same 404 a member gets;
+    - a change that takes the target out of the active admins is refused with LastAdminError
+      when no other active admin remains. Two admins disabling each other at once therefore
+      leave exactly one of them active.
+
+    Disabling ends every session of the account at once. Enabling also ends any session left
+    over from before (an account disabled outside this function keeps its rows until they are
+    next used), so re-enabling never brings an old browser back. A change to the current value
+    writes nothing (updated_at stays).
+    """
+    session.execute(sa.select(sa.func.pg_advisory_xact_lock(_ACCOUNTS_LOCK_NAMESPACE)))
+    actor = session.scalars(
+        sa.select(User).where(User.id == actor_id).execution_options(populate_existing=True)
+    ).one_or_none()
+    if actor is None or not actor.is_active or actor.role is not Role.admin:
+        raise NotAnAdminError
+    user = session.scalars(
+        sa.select(User)
+        .where(User.id == user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if user is None:
+        raise UnknownUserError
+
+    new_active = user.is_active if is_active is None else is_active
+    new_role = user.role if role is None else role
+    was_admin = user.is_active and user.role is Role.admin
+    stays_admin = new_active and new_role is Role.admin
+    if was_admin and not stays_admin:
+        others = session.scalar(
+            sa.select(sa.func.count())
+            .select_from(User)
+            .where(User.role == Role.admin, User.is_active.is_(True), User.id != user.id)
+        )
+        if not others:
+            raise LastAdminError(LAST_ADMIN)
+
+    if new_active != user.is_active:
+        # Enabling or disabling: no session survives either way.
+        end_user_sessions(session, user.id)
+        user.is_active = new_active
+    elif not new_active:
+        end_user_sessions(session, user.id)  # already disabled: make sure nothing lingers
+    if new_role != user.role:
+        user.role = new_role
+    session.flush()
+    return user

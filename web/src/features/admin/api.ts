@@ -1,6 +1,7 @@
 /**
- * Calls of /api/admin/invites (SPEC-identity.md). Bodies are checked with zod. The link of a
- * new invite exists only in the create answer: callers show it once and never store it.
+ * Calls of /api/admin/invites and /api/admin/users (SPEC-identity.md). Bodies are checked with
+ * zod. The link of a new invite exists only in the create answer: callers show it once and never
+ * store it.
  */
 import { z } from "zod";
 
@@ -79,4 +80,53 @@ export async function revokeInvite(id: string): Promise<void> {
 /** The full link to share: the origin this admin is on, plus the api's path. */
 export function fullLink(path: string, origin = window.location.origin) {
   return `${origin}${path}`;
+}
+
+// --- users ------------------------------------------------------------------------------------
+
+export const roleSchema = z.enum(["admin", "member"]);
+export type Role = z.infer<typeof roleSchema>;
+
+export const adminUserSchema = z.object({
+  id: z.string().min(1),
+  email: z.string().min(1),
+  name: z.string(),
+  role: roleSchema,
+  is_active: z.boolean(),
+  created_at: z.string(),
+  last_login_at: z.string().nullable(),
+  sessions: z.number().int().nonnegative(),
+});
+export type AdminUser = z.infer<typeof adminUserSchema>;
+
+export const userPageSchema = z.object({
+  items: z.array(adminUserSchema),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  active_admins: z.number().int().nonnegative(),
+});
+export type UserPage = z.infer<typeof userPageSchema>;
+
+export type UserChange = { is_active: boolean } | { role: Role };
+
+export const USERS_PAGE_SIZE = 50;
+export const usersKey = ["admin", "users"] as const;
+
+export function listUsers(
+  offset: number,
+  signal?: AbortSignal,
+): Promise<UserPage> {
+  return request(`/admin/users?limit=${USERS_PAGE_SIZE}&offset=${offset}`, {
+    signal,
+    validate: (data) => userPageSchema.parse(data),
+  });
+}
+
+export function updateUser(id: string, change: UserChange): Promise<AdminUser> {
+  return request(`/admin/users/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: change,
+    validate: (data) => adminUserSchema.parse(data),
+  });
 }

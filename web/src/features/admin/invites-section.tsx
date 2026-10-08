@@ -27,8 +27,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SERVER_UNREACHABLE } from "@/features/auth/login-errors";
-import { describeError, errorDetail, isApiError } from "@/lib/api";
+import { isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import {
@@ -39,8 +38,10 @@ import {
   type AdminInvite,
   type InviteStatus,
 } from "./api";
+import { message } from "./errors";
 import { InviteDialog } from "./invite-dialog";
 import { exactTime, relativeTime } from "./relative-time";
+import { cell } from "./table-cell";
 
 const STATUS: Record<InviteStatus, { label: string; className: string }> = {
   active: {
@@ -60,13 +61,6 @@ const STATUS: Record<InviteStatus, { label: string; className: string }> = {
 
 const KIND = { invite: "Invite", reset: "Password reset" } as const;
 const ROLE = { member: "Member", admin: "Admin" } as const;
-
-function message(error: unknown) {
-  return isApiError(error) &&
-    (error.kind === "network" || error.kind === "timeout")
-    ? SERVER_UNREACHABLE
-    : (errorDetail(error) ?? describeError(error));
-}
 
 /** The admin's invite and reset links: who, what, status, expiry, and revoke while active. */
 export function InvitesSection() {
@@ -192,13 +186,6 @@ export function InvitesSection() {
     </section>
   );
 }
-
-/** Mobile first: under 640px each row is a card; from sm up, a regular table. */
-const cell = (label: string) => ({
-  "data-label": label,
-  className:
-    "px-3 py-2 align-middle max-sm:grid max-sm:grid-cols-[6.5rem_1fr] max-sm:items-center max-sm:gap-2 max-sm:px-0 max-sm:py-1 max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-muted-foreground max-sm:before:content-[attr(data-label)]",
-});
 
 function InvitesTable({
   items,
