@@ -43,10 +43,17 @@
 }
 
 (app) {
-	# Access log, one JSON line per request on stdout. Cookie and Authorization are redacted by default.
+	# Access log, one JSON line per request on stdout. Cookie, Set-Cookie and Authorization are
+	# redacted by default. Invite and reset tokens travel in the path (/invite/<token>,
+	# /reset/<token>, /api/auth/invites/<token>) and, once such a page calls the api, in the
+	# Referer: both are masked so no log line holds a usable link.
 	log {
 		output stdout
-		format json
+		format filter {
+			wrap json
+			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+" "${1}[redacted]"
+			request>headers>Referer regexp "(/(?:invites?|reset)/)[^/?#]+" "${1}[redacted]"
+		}
 	}
 
 	encode zstd gzip

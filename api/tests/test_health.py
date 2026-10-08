@@ -65,8 +65,9 @@ def test_health_query_string_ignored(client: TestClient) -> None:
 
 
 def test_other_methods_are_405(client: TestClient) -> None:
+    # With the CSRF header: without it the CSRF middleware answers 403 before routing.
     for method in ("POST", "PUT", "DELETE", "PATCH"):
-        response = client.request(method, "/api/health")
+        response = client.request(method, "/api/health", headers={"X-Requested-With": "jobapp"})
         assert response.status_code == 405, method
         assert response.json() == {"detail": "Method Not Allowed"}
         assert response.headers["allow"] == "GET"

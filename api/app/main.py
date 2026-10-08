@@ -1,24 +1,59 @@
 """FastAPI application factory. Run with: uvicorn app.main:create_app --factory"""
 
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import datetime
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app import health
 from app.config import Settings, get_settings
 from app.db import build_engine, build_sessionmaker
+from app.identity import deps as identity_deps
+from app.identity import service as identity_service
+from app.identity.router import router as auth_router
 from app.logging_config import configure_logging
 
 logger = logging.getLogger("app")
 
+# Path segments that carry a secret (invite and reset tokens), masked in the request log.
+_SECRET_SEGMENT = re.compile(r"(/(?:invites?|reset)/)[^/]+")
 
-def create_app(settings: Settings | None = None) -> FastAPI:
-    """Build the app. Raises ConfigError at once when the environment is incomplete."""
+
+def log_path(request: Request) -> str:
+    """The path as logged: the route template when one matched (no parameter values), else the
+    raw path with any link token masked."""
+    route = request.scope.get("route")
+    template = getattr(route, "path", None)
+    if isinstance(template, str):
+        return template
+    return _SECRET_SEGMENT.sub(r"\1[redacted]", request.url.path)
+
+
+def validation_detail(exc: RequestValidationError) -> str:
+    """One readable sentence for the first problem, with no echo of the submitted values."""
+    errors = exc.errors()
+    if not errors:  # pragma: no cover, pydantic always reports at least one error
+        return "Invalid request."
+    first = errors[0]
+    where = ".".join(str(part) for part in first.get("loc", ()) if part != "body")
+    message = str(first.get("msg", "invalid value"))
+    return f"{where}: {message}" if where else f"Invalid request body: {message}"
+
+
+def create_app(
+    settings: Settings | None = None, clock: Callable[[], datetime] | None = None
+) -> FastAPI:
+    """Build the app. Raises ConfigError at once when the environment is incomplete.
+
+    `clock` returns the current time (timezone-aware); tests pass a frozen one.
+    """
     settings = settings or get_settings()
     configure_logging(settings.log_level)
     engine = build_engine(settings)
@@ -26,7 +61,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     checker = health.HealthChecker(sessions, settings.health_timeout_s)
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Again at startup: routes added after create_app are covered too.
+        identity_deps.assert_default_deny(app)
         logger.info(
             "api starting", extra={"env": settings.app_env, "database": settings.safe_database_url}
         )
@@ -42,11 +79,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         docs_url="/docs" if settings.app_env != "production" else None,
         redoc_url=None,
         openapi_url="/openapi.json" if settings.app_env != "production" else None,
+        # Default deny: every route, including any added later, needs a session unless it is
+        # in identity.deps.PUBLIC_ROUTES.
+        dependencies=[Depends(identity_deps.default_deny)],
     )
     app.state.settings = settings
+    app.state.clock = clock or identity_service.utcnow
     app.state.engine = engine
     app.state.sessionmaker = sessions
     app.state.health = checker
+
+    # Middleware added last runs first: request_log, then CSRF, then the cookie writer.
+    app.middleware("http")(identity_deps.session_cookie_middleware)
+    app.middleware("http")(identity_deps.csrf_middleware)
 
     @app.middleware("http")
     async def request_log(
@@ -67,7 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # X-Forwarded-For that caddy sets (Cf-Connecting-Ip through the tunnel).
                     "client": request.client.host if request.client else None,
                     "method": request.method,
-                    "path": request.url.path,
+                    "path": log_path(request),
                     "status": status,
                     "duration_ms": round((time.perf_counter() - start) * 1000, 1),
                 },
@@ -80,5 +125,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         logger.exception("unhandled error", extra={"path": request.url.path})
         return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default body echoes the submitted input, a password included: never.
+        return JSONResponse(status_code=422, content={"detail": validation_detail(exc)})
+
     app.include_router(health.router)
+    app.include_router(auth_router)
+    identity_deps.assert_default_deny(app)
     return app

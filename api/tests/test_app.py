@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import ConfigError
+from app.identity.deps import default_deny
 from app.logging_config import JsonFormatter
 from app.main import create_app
 from tests.conftest import make_settings
@@ -75,6 +76,8 @@ def test_request_id_generated_and_echoed() -> None:
 
 def test_unhandled_error_is_500_json() -> None:
     app = create_app(make_settings(UNREACHABLE))
+    # Not about sessions (and the database is unreachable): lift the default deny.
+    app.dependency_overrides[default_deny] = lambda: None
 
     @app.get("/boom")
     def boom() -> None:

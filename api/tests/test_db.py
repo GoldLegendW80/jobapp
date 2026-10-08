@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db import build_engine, build_sessionmaker, get_session
+from app.identity.deps import default_deny
 from app.main import create_app
 from tests.conftest import make_settings
 
@@ -51,6 +52,8 @@ def test_sessionmaker_does_not_expire_on_commit(database_url: str) -> None:
 
 def test_get_session_dependency_closes_session(database_url: str) -> None:
     app = create_app(make_settings(database_url))
+    # The probe route is not about sessions: lift the default deny for it.
+    app.dependency_overrides[default_deny] = lambda: None
     seen: list[Session] = []
 
     @app.get("/probe")

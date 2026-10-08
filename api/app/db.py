@@ -14,6 +14,8 @@ def build_engine(settings: Settings) -> Engine:
     return create_engine(
         settings.sqlalchemy_url,
         pool_pre_ping=True,
+        # Errors and logs never carry bound values: token hashes, password hashes, emails.
+        hide_parameters=True,
         pool_size=5,
         max_overflow=5,
         pool_timeout=settings.db_connect_timeout_s,
