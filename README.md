@@ -41,11 +41,26 @@ in `api/app/models.py` so `alembic revision --autogenerate` sees them.
 ## Deploy to the Jetson
 
 ```bash
-./deploy.sh                    # rsync to jetson:~/jobapp, compose up, run migrations
-./deploy.sh logs api           # tail logs of one service
-./deploy.sh url                # print the current trycloudflare URL
-./deploy.sh backup             # pg_dump to jetson:~/jobapp-backups/YYYY-MM-DD.sql.gz
-./deploy.sh smoke              # health through Caddy, then through the public URL
+./deploy.sh                    # preflight, rsync to jetson:~/jobapp, build there, compose up --wait, migrate, health
+./deploy.sh --env              # same, and replace the Jetson's .env with .env.jetson
+./deploy.sh logs api           # follow the logs of one service (last 200 lines first)
+./deploy.sh ps                 # docker compose ps on the Jetson
+./deploy.sh stats              # memory and CPU per service
+./deploy.sh ssh                # shell in the deploy directory
+./deploy.sh url                # print the current trycloudflare URL (task 8)
+./deploy.sh smoke              # health through Caddy, then through the public URL (task 8)
+./deploy.sh backup             # pg_dump to jetson:~/jobapp-backups/YYYY-MM-DD.sql.gz (task 9)
+tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore
+tests/jetson_smoke.sh          # smoke of the deployed stack over ssh (stops and starts db once)
 ```
 
-Images are built on the Jetson itself (arm64). Deploys are manual; GitHub Actions only runs lint and tests.
+Images are built on the Jetson itself (arm64) with only `compose.yml`. `.rsyncignore` keeps
+secrets, `node_modules`, `.venv`, `dist`, `.git` and evidence off the Jetson, and since `.env` is
+excluded, `rsync --delete` never removes the Jetson's `.env`. The Jetson's production `.env` is
+generated on the first deploy into the git-ignored `.env.jetson` (random `POSTGRES_PASSWORD` and
+`SECRET_KEY`, `APP_ENV=production`, mode 600) and copied only when the Jetson has none or with
+`--env`; `--env` refuses to change `POSTGRES_PASSWORD` once the `pgdata` volume exists. If
+`.env.jetson` is lost, the next deploy copies the Jetson's `.env` back. Caddy listens on the
+Jetson's loopback only; from the Mac, open it with `ssh -N -L 18080:127.0.0.1:80 jetson` and browse
+http://127.0.0.1:18080. `DEPLOY_HOST` and `DEPLOY_DIR` override the target. Deploys are manual;
+GitHub Actions only runs lint and tests.

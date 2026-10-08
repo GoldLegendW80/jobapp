@@ -1,0 +1,251 @@
+### case A: remote .env missing, local .env.jetson present
+
+== preflight: jetson:jobapp
+   ssh ok
+   aarch64, docker 29.8.0, compose 5.5.1
+   disk: 46G free
+   memory: 5904M available
+   WARNING: 5 uncommitted change(s): deploying the working tree, not 8831989
+
+== rsync to jetson:jobapp
+   files: 78 on jetson
+   rsync: 0s
+
+== environment
+   copied .env.jetson to jetson:jobapp/.env
+   remote .env mode 600
+   caddy on 127.0.0.1:80
+
+== build on jetson (native arm64, BuildKit cache)
+   build api: 1s
+   build caddy: 1s
+
+== compose up
+ Container jobapp-db-1 Running
+ Container jobapp-redis-1 Running
+ Container jobapp-caddy-1 Running
+ Container jobapp-api-1 Running
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-redis-1 Healthy
+ Container jobapp-db-1 Healthy
+ Container jobapp-caddy-1 Waiting
+ Container jobapp-api-1 Waiting
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-redis-1 Healthy
+ Container jobapp-db-1 Healthy
+ Container jobapp-caddy-1 Healthy
+ Container jobapp-api-1 Healthy
+   up --wait: 1s
+
+== migrations
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+   alembic current: 0001 (head)
+   migrations: 5s
+
+== health through caddy on jetson loopback
+   /api/health: {"status":"ok"}
+   /some/route: React shell
+
+== done in 10s
+   rsync: 0s
+   build api: 1s
+   build caddy: 1s
+   up --wait: 1s
+   migrations: 5s
+exit=0
+remote .env restored identical
+600 yessai
+
+### case B: local .env.jetson missing, remote .env present
+
+== preflight: jetson:jobapp
+   ssh ok
+   aarch64, docker 29.8.0, compose 5.5.1
+   disk: 46G free
+   memory: 5912M available
+   WARNING: 5 uncommitted change(s): deploying the working tree, not 8831989
+
+== rsync to jetson:jobapp
+   files: 78 on jetson
+   rsync: 0s
+
+== environment
+   copied the existing jetson:jobapp/.env to .env.jetson
+   remote .env kept (pass --env to replace it with .env.jetson)
+   remote .env mode 600
+   caddy on 127.0.0.1:80
+
+== build on jetson (native arm64, BuildKit cache)
+   build api: 1s
+   build caddy: 1s
+
+== compose up
+ Container jobapp-api-1 Running
+ Container jobapp-db-1 Running
+ Container jobapp-redis-1 Running
+ Container jobapp-caddy-1 Running
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-db-1 Healthy
+ Container jobapp-redis-1 Healthy
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-caddy-1 Waiting
+ Container jobapp-api-1 Waiting
+ Container jobapp-api-1 Healthy
+ Container jobapp-db-1 Healthy
+ Container jobapp-redis-1 Healthy
+ Container jobapp-caddy-1 Healthy
+   up --wait: 1s
+
+== migrations
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+   alembic current: 0001 (head)
+   migrations: 5s
+
+== health through caddy on jetson loopback
+   /api/health: {"status":"ok"}
+   /some/route: React shell
+
+== done in 9s
+   rsync: 0s
+   build api: 1s
+   build caddy: 1s
+   up --wait: 1s
+   migrations: 5s
+exit=0
+local copy identical to the original
+600
+
+### case C: --env with a different POSTGRES_PASSWORD while pgdata exists
+
+== preflight: jetson:jobapp
+   ssh ok
+   aarch64, docker 29.8.0, compose 5.5.1
+   disk: 46G free
+   memory: 5898M available
+   WARNING: 5 uncommitted change(s): deploying the working tree, not 8831989
+
+== rsync to jetson:jobapp
+   files: 78 on jetson
+   rsync: 0s
+
+== environment
+deploy.sh: --env would change POSTGRES_PASSWORD but the jobapp_pgdata volume keeps the old one; run ALTER USER first or restore the old value in .env.jetson
+exit=1
+
+### case D: --env with the same values
+
+== preflight: jetson:jobapp
+   ssh ok
+   aarch64, docker 29.8.0, compose 5.5.1
+   disk: 46G free
+   memory: 5909M available
+   WARNING: 5 uncommitted change(s): deploying the working tree, not 8831989
+
+== rsync to jetson:jobapp
+   files: 78 on jetson
+   rsync: 1s
+
+== environment
+   copied .env.jetson to jetson:jobapp/.env
+   remote .env mode 600
+   caddy on 127.0.0.1:80
+
+== build on jetson (native arm64, BuildKit cache)
+   build api: 1s
+   build caddy: 2s
+
+== compose up
+ Container jobapp-caddy-1 Running
+ Container jobapp-api-1 Running
+ Container jobapp-db-1 Running
+ Container jobapp-redis-1 Running
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-redis-1 Healthy
+ Container jobapp-db-1 Healthy
+ Container jobapp-api-1 Waiting
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-caddy-1 Waiting
+ Container jobapp-db-1 Healthy
+ Container jobapp-caddy-1 Healthy
+ Container jobapp-redis-1 Healthy
+ Container jobapp-api-1 Healthy
+   up --wait: 1s
+
+== migrations
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+   alembic current: 0001 (head)
+   migrations: 5s
+
+== health through caddy on jetson loopback
+   /api/health: {"status":"ok"}
+   /some/route: React shell
+
+== done in 10s
+   rsync: 1s
+   build api: 1s
+   build caddy: 2s
+   up --wait: 1s
+   migrations: 5s
+exit=0
+
+### case E: HTTP_PORT taken by another process on the Jetson
+
+== preflight: jetson:jobapp
+   ssh ok
+   aarch64, docker 29.8.0, compose 5.5.1
+   disk: 46G free
+   memory: 5895M available
+   WARNING: 5 uncommitted change(s): deploying the working tree, not 8831989
+
+== rsync to jetson:jobapp
+   files: 78 on jetson
+   rsync: 1s
+
+== environment
+   copied .env.jetson to jetson:jobapp/.env
+   remote .env mode 600
+   caddy on 127.0.0.1:18099
+
+== build on jetson (native arm64, BuildKit cache)
+   build api: 1s
+   build caddy: 2s
+
+== compose up
+ Container jobapp-redis-1 Running
+ Container jobapp-db-1 Running
+ Container jobapp-api-1 Recreate
+ Container jobapp-api-1 Recreated
+ Container jobapp-caddy-1 Recreate
+ Container jobapp-caddy-1 Recreated
+ Container jobapp-redis-1 Waiting
+ Container jobapp-db-1 Waiting
+ Container jobapp-db-1 Healthy
+ Container jobapp-redis-1 Healthy
+ Container jobapp-api-1 Starting
+ Container jobapp-api-1 Started
+ Container jobapp-caddy-1 Starting
+Error response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint jobapp-caddy-1 (f57b99ea8fd61bd3b112515f75f915d671ef1df4a76e7ed5fbc2c213a03e63dc): failed to bind host port 127.0.0.1:18099/tcp: address already in use
+NAME             IMAGE                   COMMAND                  SERVICE   CREATED         STATUS                                     PORTS
+jobapp-api-1     jobapp-api:latest       "uvicorn app.main:cr…"   api       3 seconds ago   Up Less than a second (health: starting)   8000/tcp
+jobapp-caddy-1   jobapp-caddy:latest     "caddy run --config …"   caddy     2 seconds ago   Created
+jobapp-db-1      postgres:16.15-alpine   "docker-entrypoint.s…"   db        3 minutes ago   Up About a minute (healthy)                5432/tcp
+jobapp-redis-1   redis:7.4.11-alpine     "docker-entrypoint.s…"   redis     3 minutes ago   Up 2 minutes (healthy)                     6379/tcp
+deploy.sh: the stack did not become healthy; see ./deploy.sh logs <service>
+exit=1
+restored with --env: exit=1
+80
+{"status":"ok"}
+
+### case F: two deploys at once
+deploy.sh: another deploy to jetson is running (pid 84293)
+second exit=1
+first exit=0

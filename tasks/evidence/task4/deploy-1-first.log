@@ -1,0 +1,288 @@
+
+== preflight: jetson:jobapp
+   ssh ok
+   aarch64, docker 29.8.0, compose 5.5.1
+   disk: 47G free
+   memory: 6212M available
+   WARNING: 3 uncommitted change(s): deploying the working tree, not 8831989
+
+== rsync to jetson:jobapp
+   files: 75 on jetson
+   rsync: 0s
+
+== environment
+   generated .env.jetson with a random POSTGRES_PASSWORD and SECRET_KEY
+   copied .env.jetson to jetson:jobapp/.env
+   remote .env mode 600
+   caddy on 127.0.0.1:80
+
+== build on jetson (native arm64, BuildKit cache)
+--progress is a global compose flag, better use `docker compose --progress xx build ...
+   build api: 34s
+--progress is a global compose flag, better use `docker compose --progress xx build ...
+   build caddy: 52s
+
+== compose up
+ Image redis:7.4.11-alpine Pulling
+ Image postgres:16.15-alpine Pulling
+ 248d4d6535e8 Pulling fs layer 0B
+ 80825e26e4d6 Pulling fs layer 0B
+ 6c159c167f77 Pulling fs layer 0B
+ 574676109835 Pulling fs layer 0B
+ 459f390c40ba Pulling fs layer 0B
+ 574676109835 Waiting 0B
+ 4f4fb700ef54 Pulling fs layer 0B
+ c436aca17997 Pulling fs layer 0B
+ 459f390c40ba Waiting 0B
+ 4f4fb700ef54 Waiting 0B
+ c436aca17997 Waiting 0B
+ a9986cd6f37d Already exists 0B
+ 42522e794927 Pulling fs layer 0B
+ 60d97d74e2c3 Pulling fs layer 0B
+ 42522e794927 Waiting 0B
+ 262040291247 Pulling fs layer 0B
+ 60d97d74e2c3 Waiting 0B
+ fc1879ba45ce Pulling fs layer 0B
+ 262040291247 Waiting 0B
+ a9df484dbfba Pulling fs layer 0B
+ fc1879ba45ce Waiting 0B
+ cebfcc8ad205 Pulling fs layer 0B
+ a9df484dbfba Waiting 0B
+ 59d395e5f091 Pulling fs layer 0B
+ cebfcc8ad205 Waiting 0B
+ 92de42ef5e5f Pulling fs layer 0B
+ 59d395e5f091 Waiting 0B
+ 507ae4668108 Pulling fs layer 0B
+ 92de42ef5e5f Waiting 0B
+ a939abc7661d Pulling fs layer 0B
+ 507ae4668108 Waiting 0B
+ a939abc7661d Waiting 0B
+ 248d4d6535e8 Downloading 48.55kB
+ 248d4d6535e8 Downloading 2.408MB
+ 248d4d6535e8 Downloading 3.975MB
+ 248d4d6535e8 Download complete 0B
+ 248d4d6535e8 Extracting 65.54kB
+ 6c159c167f77 Downloading 3.494kB
+ 6c159c167f77 Downloading 201.4kB
+ 6c159c167f77 Verifying Checksum 0B
+ 6c159c167f77 Download complete 0B
+ 80825e26e4d6 Downloading 948B
+ 80825e26e4d6 Verifying Checksum 0B
+ 80825e26e4d6 Download complete 0B
+ 248d4d6535e8 Extracting 1.18MB
+ 459f390c40ba Downloading 101B
+ 459f390c40ba Verifying Checksum 0B
+ 459f390c40ba Download complete 0B
+ 574676109835 Downloading 130.5kB
+ 248d4d6535e8 Extracting 1.769MB
+ 4f4fb700ef54 Downloading 32B
+ 574676109835 Downloading 2.359MB
+ c436aca17997 Downloading 600B
+ c436aca17997 Verifying Checksum 0B
+ c436aca17997 Download complete 0B
+ 248d4d6535e8 Extracting 3.975MB
+ 248d4d6535e8 Extracting 3.975MB
+ 574676109835 Downloading 6.553MB
+ 42522e794927 Downloading 968B
+ 42522e794927 Verifying Checksum 0B
+ 42522e794927 Download complete 0B
+ 42522e794927 Extracting 968B
+ 42522e794927 Extracting 968B
+ 574676109835 Downloading 9.699MB
+ 248d4d6535e8 Pull complete 0B
+ 80825e26e4d6 Extracting 948B
+ 80825e26e4d6 Extracting 948B
+ 574676109835 Downloading 12.58MB
+ 574676109835 Verifying Checksum 0B
+ 60d97d74e2c3 Downloading 15.78kB
+ 574676109835 Download complete 0B
+ 42522e794927 Pull complete 0B
+ 60d97d74e2c3 Download complete 0B
+ 60d97d74e2c3 Extracting 32.77kB
+ 80825e26e4d6 Pull complete 0B
+ 262040291247 Downloading 173B
+ 262040291247 Verifying Checksum 0B
+ 262040291247 Download complete 0B
+ fc1879ba45ce Downloading 116B
+ fc1879ba45ce Verifying Checksum 0B
+ fc1879ba45ce Download complete 0B
+ 6c159c167f77 Extracting 32.77kB
+ 6c159c167f77 Extracting 201.4kB
+ 60d97d74e2c3 Extracting 853.4kB
+ 60d97d74e2c3 Pull complete 0B
+ cebfcc8ad205 Downloading 3.496kB
+ cebfcc8ad205 Downloading 9.672kB
+ cebfcc8ad205 Verifying Checksum 0B
+ cebfcc8ad205 Download complete 0B
+ 262040291247 Extracting 173B
+ 262040291247 Extracting 173B
+ 59d395e5f091 Downloading 128B
+ 59d395e5f091 Verifying Checksum 0B
+ 59d395e5f091 Download complete 0B
+ a9df484dbfba Downloading 526.8kB
+ 262040291247 Pull complete 0B
+ 6c159c167f77 Extracting 201.4kB
+ fc1879ba45ce Extracting 116B
+ fc1879ba45ce Extracting 116B
+ 92de42ef5e5f Downloading 169B
+ 92de42ef5e5f Verifying Checksum 0B
+ 92de42ef5e5f Download complete 0B
+ 507ae4668108 Downloading 3.496kB
+ 507ae4668108 Downloading 6.111kB
+ 507ae4668108 Download complete 0B
+ fc1879ba45ce Pull complete 0B
+ a9df484dbfba Downloading 4.265MB
+ a9df484dbfba Downloading 9.064MB
+ a939abc7661d Downloading 186B
+ a939abc7661d Verifying Checksum 0B
+ a939abc7661d Download complete 0B
+ a9df484dbfba Downloading 12.8MB
+ a9df484dbfba Downloading 18.12MB
+ a9df484dbfba Downloading 20.79MB
+ 6c159c167f77 Pull complete 0B
+ 574676109835 Extracting 131.1kB
+ a9df484dbfba Downloading 25.06MB
+ 574676109835 Extracting 1.966MB
+ a9df484dbfba Downloading 28.27MB
+ 574676109835 Extracting 4.85MB
+ a9df484dbfba Downloading 32.56MB
+ 574676109835 Extracting 9.044MB
+ 574676109835 Extracting 12.58MB
+ a9df484dbfba Downloading 37.37MB
+ 574676109835 Pull complete 0B
+ 459f390c40ba Extracting 101B
+ 459f390c40ba Extracting 101B
+ a9df484dbfba Downloading 42.72MB
+ 459f390c40ba Pull complete 0B
+ 4f4fb700ef54 Extracting 32B
+ 4f4fb700ef54 Extracting 32B
+ a9df484dbfba Downloading 49.12MB
+ 4f4fb700ef54 Pull complete 0B
+ c436aca17997 Extracting 600B
+ c436aca17997 Extracting 600B
+ c436aca17997 Pull complete 0B
+ a9df484dbfba Downloading 53.37MB
+ Image redis:7.4.11-alpine Pulled
+ a9df484dbfba Downloading 57.1MB
+ a9df484dbfba Downloading 61.9MB
+ a9df484dbfba Downloading 66.16MB
+ a9df484dbfba Downloading 70.43MB
+ a9df484dbfba Downloading 74.71MB
+ a9df484dbfba Downloading 78.44MB
+ a9df484dbfba Downloading 83.23MB
+ a9df484dbfba Downloading 87.5MB
+ a9df484dbfba Downloading 92.31MB
+ a9df484dbfba Downloading 97.65MB
+ a9df484dbfba Downloading 103MB
+ a9df484dbfba Downloading 108.4MB
+ a9df484dbfba Verifying Checksum 0B
+ a9df484dbfba Download complete 0B
+ a9df484dbfba Extracting 557.1kB
+ a9df484dbfba Extracting 1.114MB
+ a9df484dbfba Extracting 5.014MB
+ a9df484dbfba Extracting 11.7MB
+ a9df484dbfba Extracting 19.5MB
+ a9df484dbfba Extracting 27.3MB
+ a9df484dbfba Extracting 34.54MB
+ a9df484dbfba Extracting 42.34MB
+ a9df484dbfba Extracting 50.14MB
+ a9df484dbfba Extracting 54.03MB
+ a9df484dbfba Extracting 56.82MB
+ a9df484dbfba Extracting 60.16MB
+ a9df484dbfba Extracting 65.73MB
+ a9df484dbfba Extracting 69.63MB
+ a9df484dbfba Extracting 73.53MB
+ a9df484dbfba Extracting 78.54MB
+ a9df484dbfba Extracting 79.1MB
+ a9df484dbfba Extracting 79.66MB
+ a9df484dbfba Extracting 81.33MB
+ a9df484dbfba Extracting 82.44MB
+ a9df484dbfba Extracting 83.56MB
+ a9df484dbfba Extracting 85.23MB
+ a9df484dbfba Extracting 86.9MB
+ a9df484dbfba Extracting 88.57MB
+ a9df484dbfba Extracting 90.24MB
+ a9df484dbfba Extracting 93.03MB
+ a9df484dbfba Extracting 94.14MB
+ a9df484dbfba Extracting 95.26MB
+ a9df484dbfba Extracting 97.48MB
+ a9df484dbfba Extracting 101.4MB
+ a9df484dbfba Extracting 107MB
+ a9df484dbfba Extracting 108.8MB
+ a9df484dbfba Pull complete 0B
+ cebfcc8ad205 Extracting 9.672kB
+ cebfcc8ad205 Extracting 9.672kB
+ cebfcc8ad205 Pull complete 0B
+ 59d395e5f091 Extracting 128B
+ 59d395e5f091 Extracting 128B
+ 59d395e5f091 Pull complete 0B
+ 92de42ef5e5f Extracting 169B
+ 92de42ef5e5f Extracting 169B
+ 92de42ef5e5f Pull complete 0B
+ 507ae4668108 Extracting 6.111kB
+ 507ae4668108 Extracting 6.111kB
+ 507ae4668108 Pull complete 0B
+ a939abc7661d Extracting 186B
+ a939abc7661d Extracting 186B
+ a939abc7661d Pull complete 0B
+ Image postgres:16.15-alpine Pulled
+ Network jobapp_default Creating
+ Volume jobapp_pgdata Creating
+ Volume jobapp_pgdata Creating
+ Volume jobapp_redisdata Creating
+ Volume jobapp_redisdata Creating
+ Network jobapp_default Creating
+ Volume jobapp_pgdata Created
+ Volume jobapp_pgdata Created
+ Volume jobapp_redisdata Created
+ Volume jobapp_redisdata Created
+ Network jobapp_default Created
+ Network jobapp_default Created
+ Container jobapp-redis-1 Creating
+ Container jobapp-db-1 Creating
+ Container jobapp-db-1 Created
+ Container jobapp-redis-1 Created
+ Container jobapp-api-1 Creating
+ Container jobapp-api-1 Created
+ Container jobapp-caddy-1 Creating
+ Container jobapp-caddy-1 Created
+ Container jobapp-db-1 Starting
+ Container jobapp-redis-1 Starting
+ Container jobapp-db-1 Started
+ Container jobapp-redis-1 Started
+ Container jobapp-redis-1 Waiting
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Healthy
+ Container jobapp-db-1 Healthy
+ Container jobapp-api-1 Starting
+ Container jobapp-api-1 Started
+ Container jobapp-caddy-1 Starting
+ Container jobapp-caddy-1 Started
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-caddy-1 Waiting
+ Container jobapp-api-1 Waiting
+ Container jobapp-redis-1 Healthy
+ Container jobapp-db-1 Healthy
+ Container jobapp-caddy-1 Healthy
+ Container jobapp-api-1 Healthy
+   up --wait: 30s
+
+== migrations
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001, Baseline: empty schema, the starting point every module's migrations build on.
+   alembic current: 0001 (head)
+   migrations: 4s
+
+== health through caddy on jetson loopback
+   /api/health: {"status":"ok"}
+   /some/route: React shell
+
+== done in 122s
+   rsync: 0s
+   build api: 34s
+   build caddy: 52s
+   up --wait: 30s
+   migrations: 4s
+./deploy.sh  0.16s user 0.16s system 0% cpu 2:02.61 total

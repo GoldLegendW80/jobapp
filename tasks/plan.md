@@ -71,6 +71,44 @@ repo bootstrap (1)
 | Two human steps block deploy and CI | Low | Listed as prerequisites in tasks 4 and 7, asked for when reached |
 | `rsync` ships secrets or junk | Med | `.rsyncignore` mirrors `.gitignore` except `.env`, which is copied separately with mode 600 |
 
+## Jetson measurements
+
+Task 4, 2026-10-08, `./deploy.sh` from the Mac over Wi-Fi. Jetson Orin Nano: aarch64, 6 cores,
+7.4G RAM, Docker 29.8.0 (BuildKit v0.33.0, runc default, nvidia runtime unused), Compose v5.5.1.
+Port 80 was free on the Jetson's loopback, so caddy listens on `127.0.0.1:80` (`HTTP_PORT=80`).
+
+Build and deploy times (logs in `tasks/evidence/task4/`):
+
+| Phase | First deploy, empty Jetson (no image, no cache) | Second deploy, nothing changed |
+|---|---|---|
+| rsync (76 files, 648K) | 0s | 0s |
+| build api (`python:3.12.15-slim-trixie`, uv sync from the lockfile) | 34s | 1s |
+| build caddy (node 22 alpine, `pnpm install --frozen-lockfile`, `vite build`, caddy 2.11.7) | 52s | 1s |
+| `compose up --wait` (pulls postgres and redis the first time) | 30s | 2s |
+| migrations (`alembic upgrade head`) | 4s | 4s |
+| whole `./deploy.sh` | 122s | 11s |
+
+The second deploy recreated no container (same ids and start times). Both builds include the base
+image pulls the first time. The web build on linux/arm64 musl installed the native bindings it
+needs: `@rolldown/binding-linux-arm64-musl` (Vite 8 bundles with rolldown, no rollup or esbuild),
+`@tailwindcss/oxide-linux-arm64-musl`, `lightningcss-linux-arm64-musl`.
+
+Images: jobapp-api 244MB, jobapp-caddy 63.9MB, postgres:16.15-alpine 288MB, redis:7.4.11-alpine
+39.5MB. BuildKit cache after the deploys: 893MB.
+
+Idle RAM per service (`docker stats --no-stream`, stack idle, no user):
+
+| Service | Idle | Limit |
+|---|---|---|
+| api | 64.6MiB | 512MiB |
+| caddy | 20 to 36MiB | 128MiB |
+| db | 19.8MiB | 768MiB |
+| redis | 9.1MiB | 256MiB |
+| total | about 130MiB | 1664MiB |
+
+Host after deploy: 1.4G used of 7.4G, 5.9G available, swap unused. Well under the 1G idle target
+of success criterion 5.
+
 ## Open questions
 
 None blocking. Human prerequisites are tracked in tasks 4 and 7.

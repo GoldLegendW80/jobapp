@@ -1,0 +1,57 @@
+
+== preflight: jetson:jobapp
+   ssh ok
+   aarch64, docker 29.8.0, compose 5.5.1
+   disk: 46G free
+   memory: 5909M available
+   WARNING: 5 uncommitted change(s): deploying the working tree, not 8831989
+
+== rsync to jetson:jobapp
+   files: 78 on jetson
+   rsync: 0s
+
+== environment
+   remote .env kept (pass --env to replace it with .env.jetson)
+   remote .env mode 600
+   caddy on 127.0.0.1:80
+
+== build on jetson (native arm64, BuildKit cache)
+   build api: 1s
+   build caddy: 1s
+
+== compose up
+ Container jobapp-caddy-1 Running
+ Container jobapp-api-1 Running
+ Container jobapp-db-1 Running
+ Container jobapp-redis-1 Running
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-db-1 Healthy
+ Container jobapp-redis-1 Healthy
+ Container jobapp-caddy-1 Waiting
+ Container jobapp-api-1 Waiting
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-redis-1 Healthy
+ Container jobapp-api-1 Healthy
+ Container jobapp-db-1 Healthy
+ Container jobapp-caddy-1 Healthy
+   up --wait: 2s
+
+== migrations
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+   alembic current: 0001 (head)
+   migrations: 4s
+
+== health through caddy on jetson loopback
+   /api/health: {"status":"ok"}
+   /some/route: React shell
+
+== done in 11s
+   rsync: 0s
+   build api: 1s
+   build caddy: 1s
+   up --wait: 2s
+   migrations: 4s
+./deploy.sh  0.13s user 0.13s system 2% cpu 10.761 total

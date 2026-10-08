@@ -1,0 +1,38 @@
+# Paths deploy.sh never ships to the Jetson (rsync --exclude-from). Mirrors .gitignore.
+# Excluded paths are also never deleted on the Jetson by --delete, which protects its .env.
+
+# Secrets: the Jetson's .env is copied separately, mode 600 (deploy.sh push_env)
+.env
+.env.*
+
+# Version control and agent worktrees
+.git/
+.claude/
+.deploy.lock/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage/
+htmlcov/
+
+# JavaScript
+node_modules/
+dist/
+build/
+.vite/
+playwright-report/
+test-results/
+
+# OS and editors
+.DS_Store
+.idea/
+.vscode/
+
+# Screenshots and scripts of past checks: documentation, not runtime
+tasks/evidence/

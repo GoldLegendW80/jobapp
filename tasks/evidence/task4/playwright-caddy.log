@@ -1,0 +1,10 @@
+
+Running 5 tests using 1 worker
+
+  ✓  1 [chromium] › e2e/caddy.spec.ts:74:1 › the app loads through Caddy and shows "API ok" (422ms)
+  ✓  2 [chromium] › e2e/caddy.spec.ts:90:1 › database stopped, Retry shows the 503, database started, Retry recovers (5.4s)
+  ✓  3 [chromium] › e2e/caddy.spec.ts:122:1 › api stopped: the shell still loads and the card shows Caddy's 502 (6.8s)
+  ✓  4 [chromium] › e2e/caddy.spec.ts:143:1 › a deep link loads and survives a reload (1.4s)
+  ✓  5 [chromium] › e2e/caddy.spec.ts:160:1 › hashed assets are immutable and a missing one is a real 404 (638ms)
+
+  5 passed (16.3s)

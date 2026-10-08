@@ -6,7 +6,11 @@ import { expect, test, type ConsoleMessage, type Page } from "@playwright/test";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
-const evidence = path.join(root, "tasks/evidence/task6");
+const evidence = path.join(
+  root,
+  "tasks/evidence",
+  process.env.E2E_EVIDENCE ?? "task6",
+);
 
 /**
  * The real stack through Caddy, no mocks: static build, SPA fallback and /api proxy.
@@ -14,13 +18,29 @@ const evidence = path.join(root, "tasks/evidence/task6");
  *   docker compose -f compose.yml -f compose.dev.yml up -d --build --wait
  *   E2E_CADDY_URL=http://127.0.0.1 pnpm --dir web exec playwright test caddy.spec.ts
  * The test stops and starts the db service, so it runs serially.
+ *
+ * Against the Jetson, through an ssh tunnel, with compose driven over ssh (compose.yml only):
+ *   ssh -N -L 18080:127.0.0.1:80 jetson &
+ *   E2E_CADDY_URL=http://127.0.0.1:18080 E2E_COMPOSE_SSH=jetson E2E_EVIDENCE=task4 \
+ *     pnpm --dir web exec playwright test caddy.spec.ts
+ * E2E_COMPOSE_DIR names the deploy directory on that host (default jobapp, under its home).
  */
 const caddyUrl = process.env.E2E_CADDY_URL;
 test.describe.configure({ mode: "serial" });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
+const sshHost = process.env.E2E_COMPOSE_SSH;
+const remoteDir = process.env.E2E_COMPOSE_DIR ?? "jobapp";
 const COMPOSE = ["compose", "-f", "compose.yml", "-f", "compose.dev.yml"];
 function compose(...args: string[]) {
+  if (sshHost) {
+    // Service names only, no shell metacharacters: safe to join for the remote shell.
+    const remote = `cd ${remoteDir} && docker compose -f compose.yml ${args.join(" ")}`;
+    execFileSync("ssh", ["-o", "BatchMode=yes", sshHost, remote], {
+      stdio: "ignore",
+    });
+    return;
+  }
   execFileSync("docker", [...COMPOSE, ...args], { cwd: root, stdio: "ignore" });
 }
 

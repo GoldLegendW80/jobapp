@@ -1,0 +1,26 @@
+
+== shellcheck
+   ok: deploy.sh, tests/deploy_test.sh, tests/jetson_smoke.sh clean
+   ok: executable, env bash, set -euo pipefail
+
+== dispatcher
+   ok: --help prints usage
+   ok: unknown subcommand exits 2 with the usage
+   ok: url, smoke (task 8), backup, restore (task 9): not yet implemented, exit 3
+   ok: unknown deploy option refused before any network call
+   ok: logs needs exactly one service
+   ok: DEPLOY_DIR=/ refused
+
+== unreachable host fails fast with a clear message
+   ok: nonexistent-host.invalid: exit 1 in 0s
+   ok: 192.0.2.1: exit 1 in 5s
+   ok: logs and ps fail the same way
+
+== .rsyncignore: what ships and what --delete keeps
+   ok: remote .env kept byte for byte through --delete
+   ok: stale remote file deleted
+   ok: code and unicode file names shipped
+   ok: never shipped: .env.jetson, node_modules, .venv, __pycache__, .git, evidence, dist, .claude, .DS_Store
+   ok: .env.jetson is git-ignored
+
+All 16 checks passed.

@@ -50,3 +50,11 @@ repos:
           echo "eslint not installed in web/node_modules, skipped"; exit 0; fi;
           files=(); for f in "$@"; do files+=("${f#web/}"); done;
           pnpm --dir web exec eslint --max-warnings=0 "${files[@]}"' --
+
+  # deploy.sh and the scripts that test it. tests/compose_smoke.sh predates the hook and still
+  # has info-level findings (SC2015, SC2046, SC2086), so it is not listed yet.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        files: ^(deploy\.sh|tests/deploy_test\.sh|tests/jetson_smoke\.sh)$

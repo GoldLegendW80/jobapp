@@ -1,0 +1,35 @@
+
+== services healthy, only caddy published, on loopback
+   ok: api, caddy, db, redis healthy; caddy alone on 127.0.0.1:80
+   ok: nothing answers on the LAN at 192.168.1.47:80
+
+== production settings
+   ok: .env mode 600, APP_ENV production in the api, strong SECRET_KEY and POSTGRES_PASSWORD
+   ok: runtime image: no dev dependencies, runs as uid 10001
+   ok: jobapp-api and jobapp-caddy images are arm64
+
+== health and the React shell through caddy
+   ok: /api/health: {"status":"ok"}
+   ok: /, deep routes, query string, trailing slash, unicode: index.html
+   ok: index no-cache, DENY, no Server header; /assets/index-B1uZrTNO.js immutable
+   ok: zstd, missing asset is a 404, /api/nope is the api's JSON 404
+   ok: path traversal never leaves /srv
+
+== migrations rerun safely
+   ok: upgrade head twice, current is 0001 (head)
+
+== redis
+   ok: PONG, appendonly yes
+
+== database stopped: 503 through caddy, then 200 without restarting api; data kept
+   ok: db stopped: 503 database unavailable
+   ok: db started: 200 again, api never restarted, row kept
+
+== memory under the limits
+   jobapp-api-1 64.55MiB / 512MiB
+   jobapp-caddy-1 35.66MiB / 128MiB
+   jobapp-db-1 19.79MiB / 768MiB
+   jobapp-redis-1 9.055MiB / 256MiB
+   ok: api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB
+
+All 15 checks passed on jetson.

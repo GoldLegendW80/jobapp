@@ -1,0 +1,76 @@
+### HTTP_PORT taken by another process on the Jetson (after the check_port fix)
+
+== preflight: jetson:jobapp
+   ssh ok
+   aarch64, docker 29.8.0, compose 5.5.1
+   disk: 46G free
+   memory: 5929M available
+   WARNING: 5 uncommitted change(s): deploying the working tree, not 8831989
+
+== rsync to jetson:jobapp
+   files: 78 on jetson
+   rsync: 0s
+
+== environment
+   copied .env.jetson to jetson:jobapp/.env
+   remote .env mode 600
+deploy.sh: port 18099 is already taken on jetson; set HTTP_PORT to a free port in .env.jetson and deploy with --env
+exit=1 in 2s
+### restore the real .env
+
+== preflight: jetson:jobapp
+   ssh ok
+   aarch64, docker 29.8.0, compose 5.5.1
+   disk: 46G free
+   memory: 5929M available
+   WARNING: 5 uncommitted change(s): deploying the working tree, not 8831989
+
+== rsync to jetson:jobapp
+   files: 78 on jetson
+   rsync: 1s
+
+== environment
+   copied .env.jetson to jetson:jobapp/.env
+   remote .env mode 600
+   caddy on 127.0.0.1:80
+
+== build on jetson (native arm64, BuildKit cache)
+   build api: 6s
+   build caddy: 2s
+
+== compose up
+ Container jobapp-caddy-1 Running
+ Container jobapp-api-1 Running
+ Container jobapp-db-1 Running
+ Container jobapp-redis-1 Running
+ Container jobapp-redis-1 Waiting
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Healthy
+ Container jobapp-db-1 Healthy
+ Container jobapp-api-1 Waiting
+ Container jobapp-db-1 Waiting
+ Container jobapp-redis-1 Waiting
+ Container jobapp-caddy-1 Waiting
+ Container jobapp-db-1 Healthy
+ Container jobapp-redis-1 Healthy
+ Container jobapp-api-1 Healthy
+ Container jobapp-caddy-1 Healthy
+   up --wait: 1s
+
+== migrations
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+   alembic current: 0001 (head)
+   migrations: 5s
+
+== health through caddy on jetson loopback
+   /api/health: {"status":"ok"}
+   /some/route: React shell
+
+== done in 17s
+   rsync: 1s
+   build api: 6s
+   build caddy: 2s
+   up --wait: 1s
+   migrations: 5s
+exit=0 in 16s
