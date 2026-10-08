@@ -23,7 +23,13 @@ docker compose exec api alembic upgrade head                   # apply migration
 docker compose exec api pytest                                 # backend tests
 pnpm --dir web test                                            # frontend tests
 pnpm --dir web lint && uv run --directory api ruff check .     # lint
+tests/compose_smoke.sh                                         # whole-stack smoke test, then down
 ```
+
+`docker compose exec api pytest` needs a test database: the smoke script creates `jobapp_test` in the
+compose `db` and runs `pytest -m "not docker"` with `TEST_DATABASE_URL` pointing at it.
+Migrations live in `api/alembic/versions/`; models register on `app.models_base.Base` and are imported
+in `api/app/models.py` so `alembic revision --autogenerate` sees them.
 
 ## Deploy to the Jetson
 

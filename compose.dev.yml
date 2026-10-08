@@ -1,0 +1,35 @@
+# Development overrides for the Mac: dev image with test tools, code bind-mounted, uvicorn
+# reloading on change, and ports published on 127.0.0.1 only (never on the LAN).
+#   docker compose -f compose.yml -f compose.dev.yml up -d --build
+
+services:
+  api:
+    build:
+      context: ./api
+      target: dev
+    image: jobapp-api:dev
+    command:
+      - uvicorn
+      - app.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - app
+      - --reload-dir
+      - alembic
+    volumes:
+      - ./api/app:/app/app
+      - ./api/alembic:/app/alembic
+      - ./api/alembic.ini:/app/alembic.ini:ro
+      - ./api/tests:/app/tests
+      - ./api/pyproject.toml:/app/pyproject.toml:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"

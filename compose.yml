@@ -1,0 +1,101 @@
+# Production stack. Local development adds compose.dev.yml:
+#   docker compose -f compose.yml -f compose.dev.yml up --build
+# No service publishes a host port here: the only public entry point will be caddy (task 6),
+# reached through the cloudflared quick tunnel (task 8).
+#
+# Service names reserved for later modules, so nothing else takes them:
+#   caddy        reverse proxy and static web build (platform, task 6)
+#   web          frontend build stage served by caddy (platform, task 5)
+#   cloudflared  quick tunnel to caddy (platform, task 8)
+#   worker       Claude Agent SDK runtime consuming the redis queue (agents module)
+#   browser      headed Chromium, Xvfb, noVNC (browser module)
+#
+# Memory budget, 5G for the whole stack on the 7.4G Jetson (each service sets mem_limit):
+#   api 512m, db 768m, redis 256m              this file today: 1536m
+#   caddy 128m, cloudflared 128m               reserved for tasks 6 and 8
+#   worker 1536m, browser 1536m                reserved for the agents and browser modules
+#   total 4864m, leaving about 250m of headroom inside the 5G budget
+
+name: jobapp
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *restart
+    build:
+      context: ./api
+      target: runtime
+    image: jobapp-api:latest
+    env_file:
+      - path: .env
+        required: true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    mem_limit: 512m
+    expose:
+      - "8000"
+
+  db:
+    <<: *restart
+    image: postgres:16.15-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -h 127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 10
+    shm_size: 128m
+    mem_limit: 768m
+    expose:
+      - "5432"
+
+  redis:
+    <<: *restart
+    image: redis:7.4.11-alpine
+    # Queue between api and worker: persist every write (AOF) and never evict a job.
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 192mb
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 10
+    mem_limit: 256m
+    expose:
+      - "6379"
+
+volumes:
+  pgdata:
+  redisdata:

@@ -1,5 +1,7 @@
 # api image: FastAPI on python:3.12-slim, dependencies installed by uv from uv.lock.
 # Multi-stage: uv and the build cache stay in the builder; the runtime holds the venv and code.
+# Targets: `runtime` (default, last stage) for production; `dev` adds the dev dependencies
+# (pytest, ruff) for compose.dev.yml, which bind-mounts the code and runs uvicorn --reload.
 
 ARG PYTHON_IMAGE=python:3.12.15-slim-trixie
 
@@ -17,6 +19,22 @@ COPY pyproject.toml uv.lock .python-version ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 
+FROM builder AS dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --home-dir /app --no-create-home --shell /usr/sbin/nologin app \
+    && chown app:app /app
+ENV PATH=/app/.venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY app ./app
+USER app:app
+EXPOSE 8000
+CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "app"]
+
 FROM ${PYTHON_IMAGE} AS runtime
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app --no-create-home --shell /usr/sbin/nologin app
@@ -25,6 +43,8 @@ ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY --from=builder --chown=root:root /app/.venv /app/.venv
+COPY --chown=root:root alembic.ini ./
+COPY --chown=root:root alembic ./alembic
 COPY --chown=root:root app ./app
 USER app:app
 EXPOSE 8000
