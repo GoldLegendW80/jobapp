@@ -9,6 +9,9 @@ A save locks the profile row (SELECT ... FOR UPDATE) before comparing `base_revi
 stored revision, so two concurrent saves based on the same revision are serialised: the first
 increments the revision and appends its profile_revisions row, the second then sees the new
 revision and is refused as stale. The unique (user_id, revision) constraint is a second guard.
+An import takes the same lock and writes all six sections at once, one revision each.
+The photo given to an import is stored as received (type sniffed by the caller); task P3 adds
+the re-encoding that strips metadata.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
@@ -22,7 +25,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.profile.models import Profile, ProfileRevision
-from app.profile.schemas import SECTIONS
+from app.profile.schemas import SECTION_MODELS, SECTIONS
 
 REVISIONS_PAGE_MAX = 100
 
@@ -102,6 +105,57 @@ def save_section(
     )
     db.flush()
     return profile
+
+
+def import_profile(
+    db: Session,
+    user_id: uuid.UUID,
+    sections: dict[str, dict[str, Any]],
+    photo: tuple[bytes, str] | None,
+    base_revision: int | None,
+    now: datetime,
+) -> Profile:
+    """Replace all six sections at once with already validated data, one revision each (in
+    SECTIONS order), under the same row lock as a save, in the caller's transaction.
+
+    `photo` is (image bytes, mime), already sniffed; None leaves the stored photo as it is.
+    With a `base_revision` that is not the stored one, raises StaleRevisionError; without one
+    the import is applied after any save in progress (serialised by the lock).
+    """
+    if set(sections) != set(SECTIONS):
+        raise ValueError("an import replaces exactly the six sections")
+    profile = _locked(db, user_id, now)
+    if base_revision is not None and profile.revision != base_revision:
+        raise StaleRevisionError(profile)
+    revision = profile.revision
+    for name in SECTIONS:
+        revision += 1
+        db.add(
+            ProfileRevision(
+                user_id=user_id,
+                revision=revision,
+                section=name,
+                data=sections[name],
+                created_at=now,
+            )
+        )
+    profile.sections = {name: sections[name] for name in SECTIONS}
+    profile.revision = revision
+    profile.updated_at = now
+    if photo is not None:
+        profile.photo, profile.photo_mime = photo
+    db.flush()
+    return profile
+
+
+def export_sections(profile: Profile) -> dict[str, dict[str, Any]]:
+    """Every section in its canonical stored form (a section never saved is its empty form),
+    keys in model order: Postgres JSONB does not keep the order they were written in."""
+    stored = profile.sections or {}
+    return {
+        name: SECTION_MODELS[name].model_validate(stored.get(name, {})).model_dump(mode="json")
+        for name in SECTIONS
+    }
 
 
 @dataclass(frozen=True)

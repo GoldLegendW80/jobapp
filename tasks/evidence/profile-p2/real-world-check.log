@@ -1,0 +1,62 @@
+# profile P2 real-world check, 2026-10-08, Mac, scratch prod stack
+# Harald's phone number and email address are redacted throughout.
+
+## Stack
+docker compose -p jobapp-p2scratch -f compose.yml -f compose.p2.yml up -d --build --wait
+  (compose.p2.yml renames the images to jobapp-p2scratch-{api,caddy}:latest so the shared
+  jobapp-api:latest and jobapp-caddy:latest tags are not overwritten; .env: APP_ENV=production,
+  HTTP_PORT=8092)
+  -> redis, db, api, caddy Healthy
+docker compose ... exec -T api alembic upgrade head
+  -> 0001, 0002, 0003
+docker compose ... exec -T api python -m app.identity.cli create-admin harald.p2check@example.org
+  -> setup link printed; accepted with Playwright APIRequestContext: POST
+     /api/auth/invites/<token>/accept -> 200 (the account used below is a scratch account, not
+     Harald's real email)
+
+## Convert on the Mac (no database)
+uv run --native-tls --directory api python -m app.profile.cli convert \
+    --source-dir /Users/harald-thorvaldhautin/Desktop/job --out <scratchpad>/harald.json
+  -> Wrote <scratchpad>/harald.json: 10 fact blocks, 5 employers, 3 schools, 32 boards, photo included.
+
+## Import inside the api container
+docker compose ... cp <scratchpad>/harald.json api:/tmp/harald.json
+docker compose ... exec -T api python -m app.profile.cli import --email harald.p2check@example.org --file /tmp/harald.json
+  -> Imported the profile of harald.p2check@example.org: revision 6, 100% complete, photo replaced.
+docker compose ... exec -T api python -m app.profile.cli import --email harald.p2check@example.org --file - < harald.json
+  -> Imported the profile of harald.p2check@example.org: revision 12, 100% complete, photo replaced.
+  (the stdin form is the one ./deploy.sh profile import can wrap without docker cp)
+
+## Playwright APIRequestContext through Caddy (http://127.0.0.1:8092)
+POST /api/auth/login -> 200
+session cookie received (Secure, HttpOnly); sent explicitly over loopback http
+GET /api/profile -> 200, revision 12
+completeness overall 100%
+  identity: 100% missing []
+  experience: 100% missing []
+  facts: 100% missing []
+  skills: 100% missing []
+  search: 100% missing []
+  answers: 100% missing []
+identity: {"full_name": "Harald-Thorvald Hautin", "headline": "GenAI Engineer", "email": "<email redacted>", "phone": "<phone redacted>", "city": "Bordeaux"}
+employers: ['betclic', 'devtech', 'elsan', 'thales', 'hotel35']
+schools: ['EPITECH – European Institute of Technology', 'Université de Reims Champagne-Ardenne', 'Lycée Pierre Corneille, Rouen']
+fact blocks: 10
+skills: have 20, adjacent 9, none 4, gates 6
+boards: 32
+GET /api/profile/export -> 200, content-disposition 'attachment; filename="profile-2026-10-08.json"', cache-control 'no-store'
+export sections byte-identical to the converted file: True
+export photo identical to the converted photo: True
+export format jobapp-profile version 1
+POST /api/profile/import with base_revision 0 -> 409
+POST /api/profile/import with base_revision 12 -> 200, revision 18
+POST /api/profile/import of 2 MB + 1 byte -> 413 '{"detail":"The import file is larger than 2 MB."}'
+export after the re-import still identical: True
+
+## api log
+request lines for /api/profile: 401 (before login), 200, export 200, import 409, 200, 413, export 200
+grep of the api log for the email, the phone, "Betclic", "VERIFIED": 0 matches (no profile
+contents logged)
+
+## Teardown
+docker compose -p jobapp-p2scratch ... down -v
