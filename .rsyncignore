@@ -5,6 +5,10 @@
 .env
 .env.*
 
+# Database dumps pulled by ./deploy.sh backup --pull: they stay on the Mac
+backups/
+*.dump
+
 # Version control and agent worktrees
 .git/
 .claude/

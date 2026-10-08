@@ -49,7 +49,8 @@ pnpm --dir web lint && uv run --directory api ruff check .     # lint
                                # docker compose up -d --build && docker compose exec api alembic upgrade head
 ./deploy.sh logs api           # tail logs of one service
 ./deploy.sh url                # print the current trycloudflare URL from the cloudflared logs
-./deploy.sh backup             # pg_dump to jetson:~/jobapp-backups/YYYY-MM-DD.sql.gz
+./deploy.sh backup             # pg_dump -Fc to jetson:~/jobapp-backups/jobapp-YYYY-MM-DDTHHMMSS.dump
+./deploy.sh restore <file>     # into a scratch database; --into-live replaces the live one
 ```
 
 Images are built on the Jetson itself (native arm64), so no cross-build is needed.

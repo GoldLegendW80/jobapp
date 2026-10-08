@@ -1,0 +1,21 @@
+
+== boot persistence
+   ok: docker.service and containerd.service enabled at boot
+   ok: restart: unless-stopped on redis db api caddy cloudflared
+
+== crash each service: SIGKILL of its main process from the host PID namespace
+   ok: redis: pid 291844 killed, restarted by the daemon (restart count 1 to 2), healthy again after 6s
+   ok: db: pid 82904 killed, restarted by the daemon (restart count 0 to 1), healthy again after 5s
+   ok: api: pid 267540 killed, restarted by the daemon (restart count 0 to 1), healthy again after 7s
+   ok: caddy: pid 66458 killed, restarted by the daemon (restart count 0 to 1), healthy again after 6s
+   ok: cloudflared: pid 84763 killed, restarted by the daemon (restart count 0 to 1), healthy again after 11s
+
+== control: docker kill is a manual stop, unless-stopped leaves it down
+   ok: after docker kill, redis stays exited for 8s, restart count unchanged (2): that is why the crash above uses SIGKILL from outside
+   ok: redis started again, healthy after 5s
+
+== the app after the crashes
+   ok: /api/health through caddy: {"status":"ok"}
+   ok: ./deploy.sh smoke passes through https://poster-yukon-ellen-javascript.trycloudflare.com (new URL: cloudflared restarted)
+
+All 11 checks passed.

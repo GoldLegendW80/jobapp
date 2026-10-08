@@ -1,0 +1,7 @@
+
+== verify latest on jetson
+   ok: /home/yessai/jobapp-backups/jobapp-2026-10-08T164000.dump, 1.7KB, 3 entries, dumped from database 'jobapp'
+
+   This replaces the live database on jetson with latest.
+   A pre-restore backup is taken first. Type RESTORE jobapp to go on: restore jobapp please
+deploy.sh: confirmation not given, nothing changed

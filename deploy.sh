@@ -9,10 +9,26 @@
 #   ./deploy.sh url                print the current https://*.trycloudflare.com URL, alone on stdout
 #   ./deploy.sh smoke [--full]     checks on the Jetson, then through the public URL; --full also
 #                                  stops and starts db once (tests/jetson_smoke.sh)
-#   ./deploy.sh backup | restore   reserved for task 9
+#   ./deploy.sh backup [--pull]    pg_dump -Fc to jetson:~/jobapp-backups/jobapp-<UTC time>.dump,
+#                                  verified, newest BACKUP_KEEP kept; --pull copies it to backups/
+#   ./deploy.sh backups            list the dumps on the Jetson
+#   ./deploy.sh restore <file> [--keep]
+#                                  restore into the scratch database jobapp_restore_check and print
+#                                  the row counts; the live database is not touched
+#   ./deploy.sh restore <file> --into-live [--yes]
+#                                  replace the live database (asks you to type RESTORE jobapp):
+#                                  pre-restore backup, api stopped, restore, migrations, health
+#   ./deploy.sh restore --drop-scratch   drop the scratch database left by --keep
+#   ./deploy.sh backup-schedule install|remove|status
+#                                  nightly backup in the Jetson user's crontab (no sudo)
+#
+# <file> is a local file (uploaded first), a path on the Jetson, a name in the backup directory,
+# or `latest`. The work on the Jetson is done by ops/db.sh, streamed over ssh.
 #
 # Settings, first found wins: the shell environment, then .env at the repository root, then
-# the defaults below. DEPLOY_HOST (ssh alias, default jetson), DEPLOY_DIR (default ~/jobapp).
+# the defaults below. DEPLOY_HOST (ssh alias, default jetson), DEPLOY_DIR (default ~/jobapp),
+# BACKUP_DIR (on the Jetson, default ~/jobapp-backups), BACKUP_KEEP (default 14),
+# BACKUP_CRON (schedule of backup-schedule, default "17 3 * * *", the Jetson's local time).
 #
 # Secrets: the Jetson's .env is generated once into .env.jetson (git-ignored, mode 600) with
 # random POSTGRES_PASSWORD and SECRET_KEY, and copied to the Jetson only when the remote .env is
@@ -21,6 +37,7 @@
 # shellcheck disable=SC2029
 set -euo pipefail
 
+CALLER_PWD="$PWD" # local paths given on the command line are relative to where it was run
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
@@ -46,8 +63,8 @@ die() {
   exit 1
 }
 
-usage() {
-  sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+usage() { # the header comment, up to the settings paragraph
+  awk 'NR > 1 && /^# Settings/ {exit} NR > 1 {sub(/^# ?/, ""); print}' "${BASH_SOURCE[0]}"
 }
 
 # --- settings -----------------------------------------------------------------------------
@@ -585,9 +602,234 @@ cmd_smoke() {
   printf '\nSmoke passed on %s and through %s\n' "$HOST" "$url"
 }
 
-not_yet() {
-  printf 'deploy.sh %s: not yet implemented (%s of the platform plan, tasks/todo.md)\n' "$1" "$2" >&2
-  exit 3
+# --- backups and restores -----------------------------------------------------------------
+# ops/db.sh does the work on the Jetson; this side parses options, asks the confirmation, moves
+# files between the two machines and runs the health check after a live restore.
+# shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
+BDIR="$(setting BACKUP_DIR '~/jobapp-backups')"
+BDIR="${BDIR#\~/}"
+BACKUP_KEEP="$(setting BACKUP_KEEP 14)"
+BACKUP_CRON="$(setting BACKUP_CRON '17 3 * * *')"
+LOCAL_BACKUPS="$ROOT/backups"
+CRON_MARK="# jobapp-backup (./deploy.sh backup-schedule)"
+CONFIRM_PHRASE="RESTORE jobapp"
+
+check_backup_settings() {
+  [[ "$BACKUP_KEEP" =~ ^[1-9][0-9]*$ ]] || die "BACKUP_KEEP must be a whole number of at least 1, got '$BACKUP_KEEP'"
+  [[ -n "$BDIR" && "$BDIR" != "~" && "$BDIR" != "/" ]] || die "BACKUP_DIR must name a directory"
+  [[ "$BDIR" =~ ^[A-Za-z0-9._/-]+$ ]] || die "BACKUP_DIR may only hold letters, digits, . _ / and -: '$BDIR'"
+  case "$BDIR/" in
+    "$RDIR/"*) die "BACKUP_DIR ($BDIR) must not be inside DEPLOY_DIR ($RDIR): rsync --delete would erase it" ;;
+  esac
+}
+
+rdb() { # rdb <args...>: ops/db.sh of this tree, run by bash on the Jetson
+  local args env
+  args="$(printf ' %q' "$@")"
+  env="JOBAPP_DIR=$RDIR_Q BACKUP_DIR=$(printf '%q' "$BDIR") BACKUP_KEEP=$(printf '%q' "$BACKUP_KEEP")"
+  [[ -z "${BACKUP_MIN_FREE_MB:-}" ]] || env+=" BACKUP_MIN_FREE_MB=$(printf '%q' "$BACKUP_MIN_FREE_MB")"
+  remote "$env bash -s --$args" <"$ROOT/ops/db.sh"
+}
+
+backup_remote() { # the usual checks before any backup subcommand
+  check_backup_settings
+  ssh_master
+  require_remote
+  require_deployed
+}
+
+# pull_backup <remote file>: copy to backups/ (dir 700, file 600), compare sha256 on both sides.
+pull_backup() {
+  local rfile="$1" name lfile rsum lsum
+  name="$(basename "$rfile")"
+  lfile="$LOCAL_BACKUPS/$name"
+  step "pull to $lfile"
+  mkdir -p "$LOCAL_BACKUPS"
+  chmod 700 "$LOCAL_BACKUPS"
+  (
+    umask 077
+    remote "cat $(printf '%q' "$rfile")" >"$lfile.partial"
+  ) || die "copy of $rfile failed"
+  rsum="$(remote "sha256sum $(printf '%q' "$rfile")" | cut -d' ' -f1)"
+  lsum="$(shasum -a 256 "$lfile.partial" | cut -d' ' -f1)"
+  if [[ -z "$rsum" || "$rsum" != "$lsum" ]]; then
+    rm -f "$lfile.partial"
+    die "checksum mismatch pulling $rfile (remote ${rsum:-none}, local $lsum)"
+  fi
+  chmod 600 "$lfile.partial"
+  mv "$lfile.partial" "$lfile"
+  info "sha256 $lsum on both sides"
+  info "$lfile ($(wc -c <"$lfile" | tr -d ' ') bytes, mode 600, git-ignored and never rsynced)"
+}
+
+cmd_backup() {
+  local pull=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --pull) pull=1 ;;
+      *) die "unknown option for backup: $arg (usage: ./deploy.sh backup [--pull])" ;;
+    esac
+  done
+  backup_remote
+  step "backup on $HOST"
+  local out rfile
+  out="$(mktemp)"
+  if ! rdb backup | tee "$out"; then
+    rm -f "$out"
+    die "backup failed, see above"
+  fi
+  rfile="$(sed -n 's/^backup=//p' "$out" | tail -n 1)"
+  rm -f "$out"
+  [[ -n "$rfile" ]] || die "ops/db.sh reported no backup file"
+  ((pull == 0)) || pull_backup "$rfile"
+}
+
+cmd_backups() {
+  [[ $# -eq 0 ]] || die "usage: ./deploy.sh backups"
+  backup_remote
+  rdb list
+}
+
+read_port() { # HTTP_PORT of the Jetson's .env, for health
+  HTTP_PORT="$(remote "sed -n 's/^HTTP_PORT=//p' $RDIR_Q/.env | tail -n 1")"
+  HTTP_PORT="${HTTP_PORT:-80}"
+}
+
+# upload_backup <local file>: to <backup dir>/incoming/ on the Jetson, mode 600; prints its path
+upload_backup() {
+  local lfile="$1" rdir rfile lsum rsum
+  rdir="$BDIR/incoming"
+  rfile="$rdir/$(basename "$lfile")"
+  [[ "$(basename "$lfile")" =~ ^[A-Za-z0-9._-]+$ ]] || die "rename $lfile to letters, digits, . _ and - before restoring it"
+  note "uploading $lfile to $HOST:$rfile"
+  remote "umask 077 && mkdir -p $(printf '%q' "$rdir") && chmod 700 $(printf '%q' "$BDIR") $(printf '%q' "$rdir") &&
+    cat > $(printf '%q' "$rfile.partial") && mv $(printf '%q' "$rfile.partial") $(printf '%q' "$rfile")" <"$lfile" ||
+    die "upload of $lfile failed"
+  lsum="$(shasum -a 256 "$lfile" | cut -d' ' -f1)"
+  rsum="$(remote "sha256sum $(printf '%q' "$rfile")" | cut -d' ' -f1)"
+  [[ "$lsum" == "$rsum" ]] || die "checksum mismatch after uploading $lfile"
+  printf '%s' "$rfile"
+}
+
+cmd_restore() {
+  local file="" live=0 yes=0 keep=0 drop=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      --into-live) live=1 ;;
+      --yes) yes=1 ;;
+      --keep) keep=1 ;;
+      --drop-scratch) drop=1 ;;
+      -*) die "unknown option for restore: $arg" ;;
+      *)
+        [[ -z "$file" ]] || die "restore takes one file, got '$file' and '$arg'"
+        file="$arg"
+        ;;
+    esac
+  done
+  if ((drop)); then
+    [[ -z "$file" && $live -eq 0 && $keep -eq 0 ]] || die "--drop-scratch takes no file and no other option"
+    backup_remote
+    rdb drop-scratch
+    return 0
+  fi
+  [[ -n "$file" ]] || die "usage: ./deploy.sh restore <file> [--keep] | <file> --into-live [--yes] | --drop-scratch"
+  ((live == 0 || keep == 0)) || die "--keep is for the scratch restore, not with --into-live"
+  ((yes == 0 || live == 1)) || die "--yes only confirms --into-live"
+  if ((live == 1 && yes == 0)) && [[ ! -t 0 ]]; then
+    die "--into-live replaces the live database: run it in a terminal to type the confirmation, or pass --yes"
+  fi
+  backup_remote
+
+  # A file on this machine is uploaded first; anything else names a file on the Jetson.
+  local lpath="$file"
+  [[ "$lpath" == /* ]] || lpath="$CALLER_PWD/$lpath"
+  if [[ -f "$lpath" ]]; then
+    file="$(upload_backup "$lpath")"
+  elif [[ "$file" == */* && -e "$lpath" ]]; then
+    die "$file is not a regular file"
+  fi
+
+  if ((live == 0)); then
+    step "restore $file into the scratch database on $HOST"
+    local args=(restore "$file")
+    ((keep == 0)) || args+=(--keep)
+    rdb "${args[@]}" || die "restore check failed, see above"
+    return 0
+  fi
+
+  step "verify $file on $HOST"
+  local out
+  out="$(mktemp)"
+  if ! rdb verify "$file" | tee "$out"; then
+    rm -f "$out"
+    die "refused, nothing changed"
+  fi
+  # From here on the resolved path, so `latest` cannot change under a backup made meanwhile.
+  file="$(sed -n 's/^file=//p' "$out" | tail -n 1)"
+  rm -f "$out"
+  [[ -n "$file" ]] || die "ops/db.sh did not name the verified file, nothing changed"
+  if ((yes == 0)); then
+    printf '\n   This replaces the live database on %s with %s.\n' "$HOST" "$file" >&2
+    printf '   A pre-restore backup is taken first. Type %s to go on: ' "$CONFIRM_PHRASE" >&2
+    local answer=""
+    read -r answer || true
+    [[ "$answer" == "$CONFIRM_PHRASE" ]] || die "confirmation not given, nothing changed"
+  fi
+  step "restore $file into the live database on $HOST"
+  rdb restore-live "$file" || die "live restore failed, see above (the api was started again)"
+  read_port
+  health
+  info "run ./deploy.sh smoke for the full checks"
+}
+
+cron_line() { # the crontab line, every path absolute through $HOME (cron's sh expands it)
+  local logdir
+  case "$BDIR" in
+    /*) logdir="$BDIR" ;;
+    *) logdir="\$HOME/$BDIR" ;;
+  esac
+  # shellcheck disable=SC2016 # $HOME is for cron's shell on the Jetson
+  printf '%s JOBAPP_DIR=%s BACKUP_DIR=%s BACKUP_KEEP=%s "$HOME/%s/ops/db.sh" backup >>"%s/backup.log" 2>&1 %s' \
+    "$BACKUP_CRON" "$RDIR" "$BDIR" "$BACKUP_KEEP" "$RDIR" "$logdir" "$CRON_MARK"
+}
+
+cmd_backup_schedule() {
+  local action="${1:-}"
+  [[ $# -eq 1 && "$action" =~ ^(install|remove|status)$ ]] ||
+    die "usage: ./deploy.sh backup-schedule install|remove|status"
+  [[ "$RDIR" =~ ^[A-Za-z0-9._/-]+$ ]] || die "DEPLOY_DIR may only hold letters, digits, . _ / and - for cron"
+  [[ "$BACKUP_CRON" =~ ^[0-9*/,-]+(\ [0-9*/,-]+){4}$ ]] ||
+    die "BACKUP_CRON must be five cron fields of digits, * / , and -, got '$BACKUP_CRON'"
+  backup_remote
+  local mark_q line_q
+  mark_q="$(printf '%q' "$CRON_MARK")"
+  case "$action" in
+    install)
+      remote "test -x $RDIR_Q/ops/db.sh" ||
+        die "$HOST:$RDIR/ops/db.sh is missing or not executable; deploy first with ./deploy.sh"
+      line_q="$(printf '%q' "$(cron_line)")"
+      remote "umask 077 && mkdir -p $(printf '%q' "$BDIR") && chmod 700 $(printf '%q' "$BDIR") &&
+        { crontab -l 2>/dev/null | grep -vF $mark_q; printf '%s\n' $line_q; } | crontab -" ||
+        die "crontab update failed"
+      info "installed in the crontab of $(remote whoami)@$HOST (replacing any previous jobapp line):"
+      remote "crontab -l | grep -F $mark_q" | sed 's/^/   /'
+      ;;
+    remove)
+      remote "crontab -l 2>/dev/null | grep -vF $mark_q | crontab -" || die "crontab update failed"
+      info "no jobapp backup line left in the crontab of $HOST; other lines kept"
+      ;;
+    status)
+      local line
+      line="$(remote "crontab -l 2>/dev/null | grep -F $mark_q" || true)"
+      if [[ -n "$line" ]]; then
+        info "installed: $line"
+      else
+        info "not installed (./deploy.sh backup-schedule install)"
+      fi
+      local logf="$BDIR/backup.log" # relative paths resolve in the remote home, where ssh starts
+      remote "test -f $(printf '%q' "$logf") && { echo '   last lines of $logf:'; tail -n 5 $(printf '%q' "$logf") | sed 's/^/     /'; } || true"
+      ;;
+  esac
 }
 
 main() {
@@ -602,7 +844,10 @@ main() {
     ssh) cmd_ssh ;;
     url) cmd_url "$@" ;;
     smoke) cmd_smoke "$@" ;;
-    backup | restore) not_yet "$cmd" "task 9" ;;
+    backup) cmd_backup "$@" ;;
+    backups) cmd_backups "$@" ;;
+    restore) cmd_restore "$@" ;;
+    backup-schedule) cmd_backup_schedule "$@" ;;
     -h | --help | help) usage ;;
     *)
       usage >&2

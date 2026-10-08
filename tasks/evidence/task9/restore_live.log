@@ -1,0 +1,45 @@
+
+== verify latest on jetson
+   ok: /home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump, 13KB, 34 entries, dumped from database 'jobapp'
+file=/home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump
+
+== restore /home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump into the live database on jetson
+   verified /home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump (34 entries)
+
+== pre-restore backup of the live database jobapp
+   backup: /home/yessai/jobapp-backups/jobapp-2026-10-08T164635-pre-restore.dump
+   size: 13KB (12870 bytes), database 7.9MB
+   verified: pg_restore --list (34 entries) and a full read
+
+== stop api
+ Container jobapp-api-1 Stopping
+ Container jobapp-api-1 Stopped
+
+== drop, create and restore jobapp
+
+== alembic upgrade head
+ Container jobapp-api-run-27d8c6ec237b Creating
+ Container jobapp-api-run-27d8c6ec237b Created
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+
+== start api
+ Container jobapp-api-1 Starting
+ Container jobapp-api-1 Started
+ Container jobapp-api-1 Waiting
+   row counts of jobapp after the restore:
+ Container jobapp-api-1 Healthy
+         table          | rows
+------------------------+------
+ public.alembic_version |    1
+ public.invites         |    0
+ public.login_attempts  |    0
+ public.sessions        |    0
+ public.users           |    0
+
+   restored /home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump into jobapp; the previous content is in /home/yessai/jobapp-backups/jobapp-2026-10-08T164635-pre-restore.dump
+
+== health through caddy on jetson loopback
+   /api/health: {"status":"ok"}
+   /some/route: React shell
+   run ./deploy.sh smoke for the full checks

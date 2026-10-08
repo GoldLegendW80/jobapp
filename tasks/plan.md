@@ -118,6 +118,39 @@ QUIC connection (`ha-connections:1`, location cdg12). cloudflared warns that it 
 UDP receive buffer (`net.core.rmem_max`, needs sudo on the Jetson); harmless at this traffic.
 Through Cloudflare, an origin 502 reaches the browser with Cloudflare's own error page and text.
 
+Task 9, 2026-10-08, backups, crash recovery and idle RAM (logs in `tasks/evidence/task9/`):
+
+| Measure | Result |
+|---|---|
+| `./deploy.sh backup` of the live database (7.5MB on disk, schema only) | 1.7KB dump, about 3s including the verification |
+| Backup of the test seed (1004 rows, 1MB text, 320KB random bytes) | verified, restored into `jobapp_restore_check`, md5 of every row identical |
+| `./deploy.sh restore <file> --into-live --yes` | 15 to 18s end to end: verify, pre-restore backup, api stopped, restore, `alembic upgrade head`, api healthy |
+| Refused files | missing, empty, directory, random bytes, 30-byte header, plain SQL, truncated at 60%, 256 zero bytes at 70% |
+| Concurrency | a held lock refuses backup and restore; 3 parallel backups: 1 written, 2 refused, no partial file |
+| Retention | 5 backups with `BACKUP_KEEP=3` leave exactly the newest 3 |
+| Crash of each service (SIGKILL of its main process from the host PID namespace) | restarted by the daemon and healthy again after: redis 6s, db 5s, api 7s, caddy 6s, cloudflared 11s (new URL) |
+| `docker kill` (control) | stays exited: a manual stop, which `unless-stopped` leaves down |
+| Boot persistence | `docker.service` and `containerd.service` enabled, `restart: unless-stopped` on all five services |
+| Reboot | not run (needs sudo); `tests/reboot_check.sh` is for Harald |
+
+Truncation at 60% passed `pg_restore --list` (the table of contents sits at the head of the file)
+and was only caught by the full read into `/dev/null`, which is why both run on every backup and
+before every restore.
+
+Idle RAM after the crash tests and a live restore, `docker stats --no-stream`:
+
+| Service | Idle | Limit |
+|---|---|---|
+| api | 62.6MiB | 512MiB |
+| caddy | 34.4MiB | 128MiB |
+| cloudflared | 28.0MiB | 128MiB |
+| db | 20.1MiB | 768MiB |
+| redis | 9.1MiB | 256MiB |
+| total | 152MiB | 1792MiB |
+
+Host `free -m`: 1530M used of 7619M, 5805M available, swap unused. Success criterion 5 (idle
+stack under 1G) holds with a wide margin.
+
 ## Open questions
 
 None blocking. Human prerequisites are tracked in tasks 4 and 7.

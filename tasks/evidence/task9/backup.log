@@ -1,0 +1,7 @@
+
+== backup on jetson
+   backup: /home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump
+   size: 13KB (12870 bytes), database 7.9MB
+   verified: pg_restore --list (34 entries) and a full read
+   retention: 6 backup(s) kept in /home/yessai/jobapp-backups (BACKUP_KEEP=14)
+backup=/home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump

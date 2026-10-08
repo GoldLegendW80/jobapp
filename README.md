@@ -50,9 +50,16 @@ in `api/app/models.py` so `alembic revision --autogenerate` sees them.
 ./deploy.sh url                # the current https://*.trycloudflare.com URL, alone on stdout
 ./deploy.sh smoke              # checks on the Jetson, then through the public URL; exit 1 if any fails
 ./deploy.sh smoke --full       # same, plus a database outage and recovery (stops and starts db once)
-./deploy.sh backup             # pg_dump to jetson:~/jobapp-backups/YYYY-MM-DD.sql.gz (task 9)
-tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore, url
+./deploy.sh backup [--pull]    # verified pg_dump -Fc to jetson:~/jobapp-backups/, --pull copies it to backups/
+./deploy.sh backups            # list the dumps on the Jetson
+./deploy.sh restore latest     # restore into the scratch database jobapp_restore_check, print row counts
+./deploy.sh restore <file> --into-live   # replace the live database (type RESTORE jobapp to confirm)
+./deploy.sh backup-schedule install|remove|status   # nightly backup in the Jetson user's crontab
+tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore, url, restore prompt
 tests/jetson_smoke.sh          # smoke of the deployed stack over ssh (stops and starts db once)
+tests/backup_test.sh           # backup and restore round trip and refusals on the Jetson (BACKUP_TEST_LIVE=1: live restore too)
+tests/crash_check.sh           # kill each service's main process, check the daemon restarts it, then smoke
+tests/reboot_check.sh          # run by a human: reboots the Jetson (sudo), checks the stack is back within 2 minutes
 ```
 
 Images are built on the Jetson itself (arm64) with only `compose.yml`. `.rsyncignore` keeps
@@ -89,3 +96,59 @@ nobody. Either way the api receives exactly one `X-Forwarded-For` and logs it as
 
 The service sits in the Compose profile `tunnel`, which `deploy.sh` enables on the Jetson. Neither
 the dev stack nor a plain `docker compose -f compose.yml up` on the Mac opens a public tunnel.
+
+## Backups and restores
+
+`./deploy.sh backup` runs `pg_dump -Fc` inside the `db` container and streams it to
+`jetson:~/jobapp-backups/jobapp-YYYY-MM-DDTHHMMSS.dump` (UTC time). The dump is written to a hidden
+`.partial` file, checked with `pg_restore --list` and a full read into `/dev/null` (which is what
+catches a truncated or damaged file), then renamed; the directory is mode 700 and every dump mode
+600. The newest `BACKUP_KEEP` dumps (default 14) are kept and older ones deleted. A backup is
+refused when the free disk would drop under the database size plus `BACKUP_MIN_FREE_MB` (100);
+a disk that fills up during `pg_dump` makes it fail, and the partial file is removed. Every backup
+and restore holds `flock` on `~/jobapp-backups/.lock`, so a second one at the same time is refused
+with a clear message. The backup directory lives outside `~/jobapp`, so `rsync --delete` never
+touches it; `backups/` and `*.dump` are git-ignored and never rsynced.
+
+`./deploy.sh backup --pull` also copies the dump to `backups/` on the Mac (dir 700, file 600,
+sha256 compared on both sides). That copy is the only one off the Jetson's SD card.
+
+`./deploy.sh restore <file>` takes a name in `~/jobapp-backups`, a path on the Jetson, `latest`,
+or a file on the Mac (uploaded to `~/jobapp-backups/incoming/` first). By default it restores into
+the scratch database `jobapp_restore_check`, prints the row count of every table and drops it
+(`--keep` leaves it, `./deploy.sh restore --drop-scratch` drops it later). A missing, empty,
+foreign, truncated or damaged file is refused before any database is touched.
+
+`./deploy.sh restore <file> --into-live` replaces the live database. It verifies the file, asks you
+to type `RESTORE jobapp` (`--yes` skips the question, for scripts; without a terminal and without
+`--yes` it refuses), takes a pre-restore backup (`jobapp-...-pre-restore.dump`), stops `api`,
+drops and recreates the database, restores (rolling back to the pre-restore dump if `pg_restore`
+fails), runs `alembic upgrade head`, starts `api` and checks health. About 15 seconds of 502 on
+`/api` for a small database.
+
+Nightly backups: `./deploy.sh backup-schedule install` adds one line to the crontab of the Jetson
+user (no sudo; idempotent; other lines kept), `remove` takes it out, `status` shows it and the end
+of `~/jobapp-backups/backup.log`. It runs the deployed `~/jobapp/ops/db.sh`, so deploy first. The
+line, at `BACKUP_CRON` (default `17 3 * * *`, the Jetson's local time):
+
+```
+17 3 * * * JOBAPP_DIR=jobapp BACKUP_DIR=jobapp-backups BACKUP_KEEP=14 "$HOME/jobapp/ops/db.sh" backup >>"$HOME/jobapp-backups/backup.log" 2>&1 # jobapp-backup (./deploy.sh backup-schedule)
+```
+
+## Reboot and crash recovery
+
+Every service has `restart: unless-stopped` and `docker.service` is enabled at boot, so the daemon
+starts the stack again after a reboot; `cloudflared` comes back with a new URL.
+`tests/crash_check.sh` proves the restart half without sudo: it kills each container's main process
+with SIGKILL from the host PID namespace (what the OOM killer or a segfault looks like) and waits
+for the daemon to restart it healthy. `docker kill` and `docker compose kill` count as a manual
+stop, which `unless-stopped` deliberately leaves down. The reboot itself needs sudo, so it is run by
+hand:
+
+```bash
+tests/reboot_check.sh 2>&1 | tee tasks/evidence/task9/reboot.log   # asks for the sudo password once
+```
+
+It reboots the Jetson, waits for ssh with a new boot id, waits for the five services to be healthy,
+runs `./deploy.sh smoke` and prints the new URL and the seconds since boot; it passes when the
+stack is healthy within 120 seconds of boot.

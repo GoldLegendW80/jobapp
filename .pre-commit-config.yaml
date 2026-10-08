@@ -57,4 +57,4 @@ repos:
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
-        files: ^(deploy\.sh|tests/deploy_test\.sh|tests/jetson_smoke\.sh)$
+        files: ^(deploy\.sh|ops/db\.sh|tests/(deploy_test|jetson_smoke|backup_test|crash_check|reboot_check)\.sh)$

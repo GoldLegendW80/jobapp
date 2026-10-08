@@ -1,0 +1,56 @@
+
+== safety backup of the live database, before any seed, into the real ~/jobapp-backups
+   ok: /home/yessai/jobapp-backups/jobapp-2026-10-08T164459.dump
+
+== seed: schema restore_check in the live database jobapp
+   ok: 1004 rows: unicode, a 1035000 byte text, 320 KB of random bytes, NULLs, empty values, escapes; checksum 1004:9ebaa4b9a1816601dc9c5a9469bc73a7
+
+== backup into ~/jobapp-backups-test, with --pull
+   ok: named jobapp-2026-10-08T164501.dump, verified with pg_restore --list and a full read
+   ok: directory 700, dump 600, no .partial left
+   ok: --pull: backups/jobapp-2026-10-08T164501.dump mode 600 in a 700 directory, git-ignored, excluded from rsync
+
+== restore into the scratch database: checksums match
+   ok: row counts printed; checksum identical in jobapp_restore_check (1004:9ebaa4b9a1816601dc9c5a9469bc73a7)
+   ok: live database untouched
+   ok: --drop-scratch drops it; without --keep the scratch database is dropped after the counts; latest resolves
+
+== a local file is uploaded, then restored
+   ok: uploaded to ~/jobapp-backups-test/incoming (700, file 600), checksum compared, restored
+
+== refusals: missing, empty, garbage, truncated, damaged, plain SQL, directory
+   ok: nope.dump: db.sh: no such backup: /home/yessai/jobapp-backups-test/nope.dump
+   ok: empty.dump: db.sh: empty file, not a backup: /home/yessai/jobapp-backups-test/empty.dump
+   ok: garbage.dump: db.sh: not a valid pg_dump custom-format archive: /home/yessai/jobapp-backups-test/garbage.dump (pg_restore: e
+   ok: header-only.dump: db.sh: not a valid pg_dump custom-format archive: /home/yessai/jobapp-backups-test/header-only.dump (pg_restor
+   ok: plain.sql.dump: db.sh: not a valid pg_dump custom-format archive: /home/yessai/jobapp-backups-test/plain.sql.dump (pg_restore:
+   ok: adir.dump: db.sh: not a regular file: /home/yessai/jobapp-backups-test/adir.dump
+   ok: truncated.dump: db.sh: corrupt or truncated backup, refused: /home/yessai/jobapp-backups-test/truncated.dump (pg_restore: erro
+   ok: damaged.dump: db.sh: corrupt or truncated backup, refused: /home/yessai/jobapp-backups-test/damaged.dump (pg_restore: error:
+   ok: no refused file reached pg_restore into a database
+   ok: a truncated local file is uploaded, then refused
+   ok: a missing local path is looked up on the Jetson and refused there
+   ok: --into-live with a truncated file: refused before anything, api not restarted, live data intact
+
+== lock: one backup or restore at a time
+   ok: backup and restore refused while the lock is held
+   ok: 3 backups at once: 1 succeeded, the others refused by the lock, 1 new dump(s), no partial file
+
+== retention keeps exactly BACKUP_KEEP
+   ok: 5 backups with BACKUP_KEEP=3: exactly the newest 3 left
+
+== backup-schedule: install twice, other crontab lines kept, the line runs like cron, remove
+   ok: installed twice, one line: 17 3 * * * JOBAPP_DIR=jobapp BACKUP_DIR=jobapp-backups-test BACKUP_KEEP=14 "$HOME/jobapp/ops/db.sh" backup >>"$HOME/jobapp-backups-test/backup.log" 2>&1 # jobapp-backup (./deploy.sh backup-schedule)
+   ok: the cron command, under cron's bare environment, made a verified dump and logged to backup.log
+   ok: remove (twice) deletes only the jobapp line; status says not installed
+
+== disk space check
+   ok: refused before pg_dump when free space is short, nothing written
+
+== live restore, end to end
+   ok: restore --into-live --yes in 15s: pre-restore backup, api stopped, restore, migrations, health ok
+   ok: the seed is back byte for byte (1004:9ebaa4b9a1816601dc9c5a9469bc73a7), the mutation is gone, alembic at 0002, api restarted
+   ok: the pre-restore backup holds the state just before the restore (jobapp-2026-10-08T164554-pre-restore.dump)
+   ok: ./deploy.sh smoke passes after the live restore
+
+All 32 checks passed.

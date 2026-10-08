@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local tests of deploy.sh that need no Jetson (platform tasks 4 and 8). Rerunnable, touches
+# Local tests of deploy.sh that need no Jetson (platform tasks 4, 8 and 9). Rerunnable, touches
 # nothing remote.
 #
 #   tests/deploy_test.sh
@@ -7,7 +7,9 @@
 # Covers: shellcheck, the subcommand dispatcher, an unreachable host failing fast, the
 # .rsyncignore rules (secrets and junk never shipped, a remote .env never deleted by --delete), and
 # `url` against a fake ssh that plays the Jetson's docker (URL alone on stdout, logs read since the
-# container's last start, waiting, stopped or missing cloudflared).
+# container's last start, waiting, stopped or missing cloudflared), the backup and restore
+# options refused before any network call, *.dump and backups/ kept out of git and rsync, and the
+# typed confirmation of restore --into-live against a fake Jetson.
 # Needs Docker (for the pinned shellcheck image) and rsync.
 set -euo pipefail
 
@@ -39,9 +41,13 @@ run() {
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
 
 step "shellcheck"
-docker run --rm -v "$ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" deploy.sh tests/deploy_test.sh tests/jetson_smoke.sh ||
-  fail "shellcheck"
-ok "deploy.sh, tests/deploy_test.sh, tests/jetson_smoke.sh clean"
+SCRIPTS=(deploy.sh ops/db.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
+  tests/crash_check.sh tests/reboot_check.sh)
+docker run --rm -v "$ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" "${SCRIPTS[@]}" || fail "shellcheck"
+ok "${SCRIPTS[*]} clean"
+for f in "${SCRIPTS[@]}"; do
+  [[ -x "$f" ]] || fail "$f is not executable"
+done
 [[ -x deploy.sh ]] || fail "deploy.sh is not executable"
 head -n 1 deploy.sh | grep -q '^#!/usr/bin/env bash$' || fail "deploy.sh shebang"
 grep -q '^set -euo pipefail$' deploy.sh || fail "deploy.sh lacks set -euo pipefail"
@@ -54,11 +60,63 @@ ok "--help prints usage"
 run 2 ./deploy.sh frobnicate
 out_has "./deploy.sh"
 ok "unknown subcommand exits 2 with the usage"
-for cmd in backup restore; do
-  run 3 ./deploy.sh "$cmd"
-  out_has "not yet implemented (task 9"
+out_has "backup \[--pull\]"
+out_has "restore <file> --into-live"
+ok "--help documents backup, restore and backup-schedule"
+
+step "backup and restore options, refused before any network call"
+# An unreachable host proves the refusal comes first: past the parsing it would say "cannot reach".
+nohost() { env DEPLOY_HOST=nonexistent-host.invalid "$@"; }
+run 1 nohost ./deploy.sh backup --bogus
+out_has "unknown option for backup: --bogus"
+run 1 nohost ./deploy.sh backup extra
+out_has "unknown option for backup: extra"
+run 1 nohost ./deploy.sh backups extra
+out_has "usage: ./deploy.sh backups"
+run 1 nohost ./deploy.sh restore
+out_has "usage: ./deploy.sh restore <file>"
+run 1 nohost ./deploy.sh restore a.dump b.dump
+out_has "restore takes one file, got 'a.dump' and 'b.dump'"
+run 1 nohost ./deploy.sh restore a.dump --bogus
+out_has "unknown option for restore: --bogus"
+run 1 nohost ./deploy.sh restore a.dump --into-live --keep
+out_has "--keep is for the scratch restore"
+run 1 nohost ./deploy.sh restore a.dump --yes
+out_has "--yes only confirms --into-live"
+run 1 nohost ./deploy.sh restore --drop-scratch a.dump
+out_has "--drop-scratch takes no file"
+ok "unknown options, extra or missing files, --keep with --into-live, --yes alone, --drop-scratch with a file"
+run 1 nohost ./deploy.sh restore a.dump --into-live </dev/null
+out_has "run it in a terminal to type the confirmation, or pass --yes"
+ok "--into-live without a terminal and without --yes is refused before anything"
+for keep in 0 -1 abc 1.5 ""; do
+  [[ -z "$keep" ]] && continue
+  run 1 nohost env BACKUP_KEEP="$keep" ./deploy.sh backup
+  out_has "BACKUP_KEEP must be a whole number of at least 1, got '$keep'"
 done
-ok "backup, restore (task 9): not yet implemented, exit 3"
+run 1 nohost env BACKUP_DIR=jobapp/backups ./deploy.sh backup
+out_has "must not be inside DEPLOY_DIR"
+run 1 nohost env BACKUP_DIR='~/my backups' ./deploy.sh backups
+out_has "BACKUP_DIR may only hold"
+run 1 nohost env BACKUP_DIR=/ ./deploy.sh backup
+out_has "BACKUP_DIR must name a directory"
+ok "BACKUP_KEEP 0, -1, abc, 1.5 refused; BACKUP_DIR inside the deploy directory, with a space, or / refused"
+for args in "" "bogus" "install now"; do
+  # shellcheck disable=SC2086 # word splitting wanted
+  run 1 nohost ./deploy.sh backup-schedule $args
+  out_has "usage: ./deploy.sh backup-schedule install|remove|status"
+done
+run 1 nohost env BACKUP_CRON='17 3 * *' ./deploy.sh backup-schedule status
+out_has "BACKUP_CRON must be five cron fields"
+run 1 nohost env BACKUP_CRON='17 3 * * * ; rm -rf ~' ./deploy.sh backup-schedule install
+out_has "BACKUP_CRON must be five cron fields"
+ok "backup-schedule needs one of install, remove, status; BACKUP_CRON must be five plain fields (no injection)"
+for cmd in "backup" "backups" "restore x.dump" "backup-schedule status"; do
+  # shellcheck disable=SC2086
+  run 1 nohost ./deploy.sh $cmd
+  out_has "cannot reach nonexistent-host.invalid"
+done
+ok "backup, backups, restore and backup-schedule fail fast on an unreachable host"
 run 1 ./deploy.sh url extra
 out_has "usage: ./deploy.sh url"
 run 1 ./deploy.sh smoke --bogus
@@ -104,6 +162,8 @@ printf 'x\n' | tee "$WORK/src/.env" "$WORK/src/.env.jetson" "$WORK/src/web/node_
   "$WORK/src/api/.venv/p" "$WORK/src/api/app/__pycache__/m.pyc" "$WORK/src/.git/HEAD" \
   "$WORK/src/tasks/evidence/task4/a.png" "$WORK/src/web/dist/index.html" "$WORK/src/.claude/s" \
   "$WORK/src/.DS_Store" "$WORK/src/api/app/main.py" "$WORK/src/café ünïcode.txt" >/dev/null
+mkdir -p "$WORK/src/backups"
+printf 'PGDMP\n' | tee "$WORK/src/backups/jobapp-2026-10-08T120000.dump" "$WORK/src/stray.dump" >/dev/null
 rsync -a --delete --exclude-from="$WORK/src/.rsyncignore" "$WORK/src/" "$dst/"
 [[ "$(cat "$dst/.env")" == "POSTGRES_PASSWORD=remote-secret" ]] || fail "remote .env changed or deleted"
 ok "remote .env kept byte for byte through --delete"
@@ -111,12 +171,15 @@ ok "remote .env kept byte for byte through --delete"
 ok "stale remote file deleted"
 [[ -f "$dst/api/app/main.py" && -f "$dst/compose.yml" && -f "$dst/café ünïcode.txt" ]] || fail "source files missing"
 ok "code and unicode file names shipped"
-for junk in .env.jetson web/node_modules api/.venv api/app/__pycache__ .git tasks/evidence web/dist .claude .DS_Store; do
+for junk in .env.jetson web/node_modules api/.venv api/app/__pycache__ .git tasks/evidence web/dist .claude .DS_Store \
+  backups stray.dump; do
   [[ ! -e "$dst/$junk" ]] || fail "$junk was shipped"
 done
-ok "never shipped: .env.jetson, node_modules, .venv, __pycache__, .git, evidence, dist, .claude, .DS_Store"
-git check-ignore -q .env.jetson || fail ".env.jetson is not git-ignored"
-ok ".env.jetson is git-ignored"
+ok "never shipped: .env.jetson, node_modules, .venv, __pycache__, .git, evidence, dist, .claude, .DS_Store, backups/, *.dump"
+for f in .env.jetson backups/jobapp-2026-10-08T120000.dump stray.dump api/x.dump; do
+  git check-ignore -q "$f" || fail "$f is not git-ignored"
+done
+ok ".env.jetson, backups/ and any *.dump are git-ignored"
 
 step "url against a fake Jetson (fake ssh on PATH)"
 # The fake answers the remote commands deploy.sh sends: the cloudflared container id, its state
@@ -192,5 +255,68 @@ grep -q "cloudflared is exited on fakejetson, not running" "$WORK/stderr" || fai
 run_split 1 fake FAKE_CF_ID= FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh url
 grep -q "cloudflared is not running on fakejetson: no container" "$WORK/stderr" || fail "missing: $(cat "$WORK/stderr")"
 ok "cloudflared stopped or missing: exit 1 with a clear message, stdout empty"
+
+step "restore --into-live confirmation, against a fake Jetson"
+# This fake swallows the ops/db.sh streamed to `bash -s` and records the command; it answers the
+# port and health probes that follow a live restore. `script` gives deploy.sh a terminal, and the
+# answer is typed two seconds later, once the prompt is up.
+mkdir -p "$WORK/bin2"
+cat >"$WORK/bin2/ssh" <<'FAKE'
+#!/usr/bin/env bash
+cmd="${*: -1}"
+case "$cmd" in
+  *"bash -s --"*)
+    cat >/dev/null
+    echo "$cmd" >>"$FAKE_CALLS"
+    [[ "$cmd" != *" verify latest" ]] || echo "file=/home/u/jobapp-backups/jobapp-2026-10-08T120000.dump"
+    ;;
+  *"HTTP_PORT="*) echo 80 ;;
+  *"/api/health"*) echo '{"status":"ok"}' ;;
+  *"/some/route"*) echo '<div id="root"></div>' ;;
+esac
+exit 0
+FAKE
+chmod +x "$WORK/bin2/ssh"
+fake2() { env PATH="$WORK/bin2:$PATH" FAKE_CALLS="$WORK/calls2" DEPLOY_HOST=fakejetson "$@"; }
+typed() { # typed <answer> <cmd...>: run cmd against the fake in a pseudo terminal, type the answer
+  local answer="$1"
+  shift
+  (
+    sleep 2
+    printf '%s\n' "$answer"
+    sleep 1
+  ) | script -q /dev/null env PATH="$WORK/bin2:$PATH" FAKE_CALLS="$WORK/calls2" DEPLOY_HOST=fakejetson \
+    "$@" >"$WORK/out" 2>&1 || true
+}
+: >"$WORK/calls2"
+typed "restore jobapp" ./deploy.sh restore latest --into-live
+out_has "Type RESTORE jobapp to go on"
+out_has "confirmation not given, nothing changed"
+grep -q -- "bash -s -- verify latest" "$WORK/calls2" || fail "no verify call: $(cat "$WORK/calls2")"
+grep -q -- "restore-live" "$WORK/calls2" && fail "restore-live ran after a wrong answer"
+ok "a wrong answer (lowercase) refuses after the verification, restore-live never runs"
+: >"$WORK/calls2"
+typed "" ./deploy.sh restore latest --into-live
+out_has "confirmation not given, nothing changed"
+grep -q -- "restore-live" "$WORK/calls2" && fail "restore-live ran after an empty answer"
+ok "an empty answer refuses too"
+: >"$WORK/calls2"
+typed "RESTORE jobapp" ./deploy.sh restore latest --into-live
+grep -q -- "bash -s -- restore-live /home/u/jobapp-backups/jobapp-2026-10-08T120000.dump" "$WORK/calls2" ||
+  fail "restore-live not called with the verified path: $(cat "$WORK/calls2")"
+out_has '/api/health: {"status":"ok"}'
+ok "the exact phrase runs restore-live on the path verify resolved (latest pinned), then the health check"
+: >"$WORK/calls2"
+run 0 fake2 ./deploy.sh restore latest --into-live --yes </dev/null
+grep -q "Type RESTORE" "$WORK/out" && fail "--yes still prompted"
+grep -q -- "BACKUP_DIR=jobapp-backups BACKUP_KEEP=14 bash -s -- restore-live /home/u/" "$WORK/calls2" ||
+  fail "settings not passed: $(cat "$WORK/calls2")"
+ok "--yes skips the prompt without a terminal; BACKUP_DIR and BACKUP_KEEP reach ops/db.sh"
+: >"$WORK/calls2"
+# The fake prints no backup=<path> line, so the run must fail rather than claim a backup.
+run 1 fake2 env BACKUP_KEEP=3 ./deploy.sh backup --pull
+grep -q -- "BACKUP_KEEP=3 bash -s -- backup" "$WORK/calls2" || fail "BACKUP_KEEP not passed: $(cat "$WORK/calls2")"
+out_has "ops/db.sh reported no backup file"
+ok "backup passes BACKUP_KEEP, and fails when ops/db.sh reports no file"
 
 printf '\nAll %d checks passed.\n' "$passed"

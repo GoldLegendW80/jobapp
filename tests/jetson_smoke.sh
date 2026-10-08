@@ -158,7 +158,8 @@ ok "the api logs the TCP peer $client, not the spoofed Cf-Connecting-Ip or X-For
 step "migrations rerun safely"
 for _ in 1 2; do rc exec -T api alembic upgrade head >/dev/null 2>&1 || fail "upgrade head"; done
 current="$(rc exec -T api alembic current 2>/dev/null | tr -d '\r')"
-[[ "$current" == "0001 (head)" ]] || fail "alembic current: $current"
+# Any revision, as long as it is the head: later modules add migrations.
+[[ "$current" =~ ^[0-9a-z_]+\ \(head\)$ ]] || fail "alembic current: $current"
 ok "upgrade head twice, current is $current"
 
 step "redis"

@@ -1,0 +1,12 @@
+jeu. 08 oct. 2026 18:47:25 CEST
+NAME                   MEM USAGE / LIMIT   MEM %     CPU %
+jobapp-api-1           62.59MiB / 512MiB   12.23%    0.15%
+jobapp-caddy-1         34.36MiB / 128MiB   26.85%    0.00%
+jobapp-cloudflared-1   28.01MiB / 128MiB   21.88%    0.28%
+jobapp-db-1            20.14MiB / 768MiB   2.62%     0.10%
+jobapp-redis-1         9.082MiB / 256MiB   3.55%     4.02%
+stack total 152,0MiB
+               total        used        free      shared  buff/cache   available
+Mem:            7619        1530        1132          50        4956        5805
+Swap:           3809           0        3809
+ 18:47:30 up  8:03,  0 users,  load average: 0,98, 1,11, 0,84

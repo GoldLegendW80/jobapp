@@ -1,0 +1,74 @@
+18:33:27  jetson boot id b8ebf950-8721-49d0-b2e0-e536fc54829c, up since 2026-10-08 10:44:19, tunnel https://freedom-astrology-designers-databases.trycloudflare.com
+18:33:28  docker.service at boot: enabled, containerd: enabled
+18:33:28  --no-reboot: checking the current boot, timing is not judged
+18:33:29  booted at 2026-10-08 10:44:19, uptime now 28149s
+18:33:29  waiting for api caddy db redis cloudflared to be running and healthy
+18:33:30  uptime 28151s: api: running healthy, caddy: running healthy, db: running healthy, redis: running healthy, cloudflared: running healthy
+18:33:31  all 5 services healthy at uptime 28151s
+          /jobapp-api-1 restart=unless-stopped started=2026-10-08T16:28:42.47676291Z restarts=0
+          /jobapp-caddy-1 restart=unless-stopped started=2026-10-08T12:29:06.991110299Z restarts=0
+          /jobapp-cloudflared-1 restart=unless-stopped started=2026-10-08T12:39:31.682294903Z restarts=0
+          /jobapp-db-1 restart=unless-stopped started=2026-10-08T12:38:40.167883805Z restarts=0
+          /jobapp-redis-1 restart=unless-stopped started=2026-10-08T11:13:06.75347806Z restarts=0
+18:33:31  ./deploy.sh smoke
+
+== on jetson: tests/jetson_smoke.sh
+
+== services healthy, only caddy published, on loopback
+   ok: api, caddy, db, redis, cloudflared healthy; caddy alone on 127.0.0.1:80 (its tunnel listener :8080 unpublished)
+   ok: nothing answers on the LAN at 192.168.1.47:80
+
+== production settings
+   ok: .env mode 600, APP_ENV production in the api, strong SECRET_KEY and POSTGRES_PASSWORD
+   ok: runtime image: no dev dependencies, runs as uid 10001
+   ok: jobapp-api and jobapp-caddy images are arm64
+
+== health and the React shell through caddy
+   ok: /api/health: {"status":"ok"}
+   ok: /, deep routes, query string, trailing slash, unicode: index.html
+   ok: index no-cache, DENY, no Server header; /assets/index-B1uZrTNO.js immutable
+   ok: zstd, missing asset is a 404, /api/nope is the api's JSON 404
+   ok: path traversal never leaves /srv
+
+== loopback trusts no proxy: spoofed client headers never reach the api
+   ok: the api logs the TCP peer 172.18.0.1, not the spoofed Cf-Connecting-Ip or X-Forwarded-For
+
+== migrations rerun safely
+   ok: upgrade head twice, current is 0001 (head)
+
+== redis
+   ok: PONG, appendonly yes
+
+== database outage skipped (JETSON_SMOKE_FULL=0)
+
+== memory under the limits
+   jobapp-api-1 62.55MiB / 512MiB
+   jobapp-caddy-1 26.4MiB / 128MiB
+   jobapp-cloudflared-1 26.68MiB / 128MiB
+   jobapp-db-1 45.1MiB / 768MiB
+   jobapp-redis-1 8.93MiB / 256MiB
+   ok: api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, cloudflared 128MiB
+
+All 14 checks passed on jetson.
+
+== public, through the quick tunnel
+   https://freedom-astrology-designers-databases.trycloudflare.com
+   ok: caddy answers through the tunnel
+   ok: /api/health: {"status":"ok"}
+   ok: / serves the React shell
+   ok: /some/deep/route?x=1 serves the React shell
+   ok: security headers and no-cache on index.html
+   ok: the api logs the visitor's address 82.126.154.38 (Cf-Connecting-Ip), spoofed headers ignored
+   ok: a forged Cf-Connecting-Ip is refused by the Cloudflare edge (403)
+   ok: 5 MB upload reaches the api through the tunnel (405 from FastAPI)
+
+Smoke passed on jetson and through https://freedom-astrology-designers-databases.trycloudflare.com
+
+== reboot check on jetson
+   booted at          2026-10-08 10:44:19
+   stack healthy at   28151s after boot
+   smoke passed at   28171s after boot
+   tunnel URL before  https://freedom-astrology-designers-databases.trycloudflare.com
+   tunnel URL now     https://freedom-astrology-designers-databases.trycloudflare.com
+   memory             1500M used of 7619M, 5820M available
+18:33:52  no reboot done: services healthy and smoke green on the current boot

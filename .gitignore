@@ -29,3 +29,7 @@ test-results/
 
 # agent worktrees
 .claude/
+
+# Database dumps: pulled by ./deploy.sh backup --pull, never committed
+backups/
+*.dump
