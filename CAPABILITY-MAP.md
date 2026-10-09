@@ -4,16 +4,20 @@ Intent: [docs/intent/jetson-job-app.md](../docs/intent/jetson-job-app.md). Appro
 
 | Module id | Responsibility | Depends on |
 |---|---|---|
-| platform | Docker Compose, Postgres, Redis, Caddy, cloudflared, deploy script to the Jetson | none |
+| platform | Docker Compose, Postgres, Redis, Caddy, cloudflared, deploy script to the Jetson; GitHub delivery: branches, PRs, Actions CI, review subagent, self-hosted runner deploying main | none |
 | identity | Invite-only accounts, sessions, per-user isolation | platform |
 | profile | Facts, skills, approved positioning, contact info, search options (titles, locations, contracts, exclusions), all editable in the UI | identity |
 | jobs | Postings table, API board sweep (Ashby, Greenhouse, Lever), scoring, statuses, list and filters, multi-select, import of the existing CSV | profile |
-| documents | CV and letter per job: generation, manual editing, PDF render, one-page check | profile, jobs |
+| agents | Claude Agent SDK runtime in a worker, task queue, run logs, chat UI primitives; model credentials per user (Harald's Claude subscription, others' Anthropic API keys stored encrypted) | jobs |
+| ingestion | Profile from documents: copyable laptop-analysis prompt, paste or upload any document (text, PDF, images), extraction agent proposing per-section additions the user accepts | agents, profile |
+| mail | Gmail connector per user (Google OAuth, testing mode): mails linked to jobs, history per job, status updates from mail, reply drafts, draft-with-agent chat, send on click only | agents, jobs |
+| documents | CV and letter per job: generation, manual editing, PDF render, one-page check | agents, profile, jobs |
 | browser | Headed Chromium under Xvfb, Playwright MCP endpoint, noVNC live view in the UI, one persistent browser profile per user | platform |
-| agents | Claude Agent SDK runtime, task queue, specialized subagents (search, scoring, cv, letter, apply), chat for editing documents, run logs | jobs, documents, browser |
-| apply | Apply button, agent fills and submits the form, status update, run report | agents |
+| apply | Apply button, agent fills and submits the form, status update, run report | agents, documents, browser |
 
-Build order: platform → identity → profile → jobs → documents → browser → agents → apply
+Build order: platform → identity → profile → jobs → agents → ingestion → mail → documents → browser → apply
+
+Updated 2026-10-09 with [docs/intent/agent-features.md](../docs/intent/agent-features.md): GitHub delivery joins platform; `agents` comes earlier and owns model credentials; new modules `ingestion` and `mail`.
 
 ## Approved assumptions
 
