@@ -6,6 +6,33 @@ Spec: [SPEC-jobs.md](../../SPEC-jobs.md). Depends on profile (matching rules in 
 - Rows, events and files in Postgres; files as bytea (20 MB total for Harald today), so backups cover them.
 - Scoring is a pure function `(posting_text, skills_section) -> (fit, competencies, gaps)`, golden-tested against `engine/jobs.py`.
 - Sweeps run in a new `worker` container fed by Redis (queue library chosen in J5 and recorded here).
+- Queue library (J5, 2026-10-09): **arq 0.28.0** (redis-py 5.3, Redis 7.4). Why: asyncio native, so
+  the sweep's concurrent httpx fetches and, later, the Claude Agent SDK (async) run in the job's own
+  event loop with no thread or fork per job; jobs are named functions and cron jobs (with a time
+  zone) are built in, so the schedule tick needs no extra scheduler; one small pure
+  Python package on top of redis-py (arm64 needs nothing compiled), one process for every queue
+  (about 90 MB idle), where RQ forks a work horse per job and needs rq-scheduler for cron, and
+  Celery or Dramatiq bring brokers and processes this budget does not need. Shape: one arq Worker
+  per queue in one process (`app/worker.py`, `QueueSpec`), each with its own functions, concurrency
+  and timeout; agents add their queue as one more spec. Messages are JSON, never pickle; job ids
+  (`sweep:<id>`, `schedule:<user>:<slot>`) make enqueueing idempotent and the cron job ids make
+  each tick fire once across workers.
+- Live progress (J5): server-sent events through one helper, `app/sse.py` (state read every 0.5 s,
+  an event on change, heartbeat comments, `Cache-Control: no-transform` so Caddy neither compresses
+  nor buffers), with polling of the same JSON as the fallback in the browser. The agents module
+  streams runs through the same helper.
+- Automatic sweeps are per user and OFF by default (Harald, 2026-10-09): `search.sweep_schedule`
+  = `{enabled: false, days: ["monday" ... "sunday"] (lowercase English names, at least one),
+  times: ["06:17"] ("HH:MM", 1 to 4), timezone: "Europe/Paris" (IANA, validated)}`; a section
+  without it reads as off (the draft's `sweep_nightly` key is dropped on read). A worker cron
+  ticks every 5 minutes and starts every (user, slot) whose instant fell in the 15 minutes before
+  the tick (`app/jobs/schedule.py`): a slot fires once (advisory lock on user and slot, the slot
+  key recorded in the sweep's stats, queue job id `schedule:<user>:<slot>`), a user already
+  sweeping is retried by the next ticks of the window, a missed tick is caught by the next one.
+  Daylight saving time: a local time skipped in spring fires when the clock jumps over it, a
+  repeated autumn time fires at its first occurrence. Set from "Schedule" next to Find jobs (PUT
+  /api/profile/search with the base revision, a 409 merged once) and from the profile Search tab
+  (profile P6, same field and shape).
 - List endpoint returns counts and histogram for the filtered set in the same response, so the dashboard needs one request.
 - Filters live in the URL query so views are shareable and survive reloads.
 

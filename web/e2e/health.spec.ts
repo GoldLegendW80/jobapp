@@ -37,6 +37,32 @@ test.beforeEach(async ({ page }) => {
       }),
     }),
   );
+  // ...and no sweep yet (the Find jobs button reads the last sweeps).
+  await page.route(/\/api\/jobs\/sweeps(\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [],
+        schedule: {
+          enabled: false,
+          days: [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+          ],
+          times: ["06:17"],
+          timezone: "Europe/Paris",
+          active: false,
+          next_run: null,
+        },
+      }),
+    }),
+  );
 });
 
 function json(route: Route, status: number, body: unknown) {

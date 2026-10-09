@@ -400,7 +400,7 @@ def test_up_down_up_with_data(at_head: sa.Engine) -> None:
         assert conn.execute(sa.text("SELECT count(*) FROM users")).scalar_one() == 1
         assert conn.execute(sa.text("SELECT count(*) FROM profiles")).scalar_one() == 1
     command.upgrade(alembic_config(), "head")
-    assert current_revision(url(at_head)) == HEAD == "0004"
+    assert current_revision(url(at_head)) == HEAD == "0005"
     with at_head.begin() as conn:
         add_job(conn, user, "a", "https://x.example/1")  # a fresh, empty schema
     command.downgrade(alembic_config(), "0003")
@@ -427,3 +427,24 @@ def test_offline_sql_has_the_jobs_tables(
         assert f"DROP TABLE {table}" in out
     for name in ENUMS:
         assert f"DROP TYPE {name}" in out
+
+
+def test_0005_indexes_the_slot_of_scheduled_sweeps(at_head: sa.Engine) -> None:
+    with at_head.connect() as conn:
+        definition = conn.execute(
+            sa.text("SELECT indexdef FROM pg_indexes WHERE indexname = :n"),
+            {"n": "ix_sweeps_user_id_schedule_slot"},
+        ).scalar_one()
+    assert "(stats ->> 'schedule_slot'::text)" in definition
+    assert "WHERE (trigger = 'schedule'::sweep_trigger)" in definition
+    command.downgrade(alembic_config(), "0004")
+    with at_head.connect() as conn:
+        assert (
+            conn.execute(
+                sa.text("SELECT count(*) FROM pg_indexes WHERE indexname = :n"),
+                {"n": "ix_sweeps_user_id_schedule_slot"},
+            ).scalar_one()
+            == 0
+        )
+    command.upgrade(alembic_config(), "head")
+    command.check(alembic_config())

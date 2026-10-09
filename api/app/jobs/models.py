@@ -258,6 +258,13 @@ class Sweep(Base):
             postgresql_where="status = 'running'",
         ),
         sa.Index("ix_sweeps_user_id_started_at", "user_id", sa.text("started_at DESC")),
+        # The slot of a scheduled sweep (jobs J5, migration 0005): what the schedule tick checks.
+        sa.Index(
+            "ix_sweeps_user_id_schedule_slot",
+            "user_id",
+            sa.text("(stats ->> 'schedule_slot')"),
+            postgresql_where=sa.text("trigger = 'schedule'"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = _uuid_pk()

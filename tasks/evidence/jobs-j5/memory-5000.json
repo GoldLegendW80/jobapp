@@ -1,0 +1,9 @@
+{
+  "seen": 15000,
+  "new": 5000,
+  "duration_s": 4.24,
+  "wall_s": 4.795,
+  "worker_memory_mib_samples": 2,
+  "worker_memory_mib_peak": 135.7,
+  "worker_memory_limit_mib": 1536
+}

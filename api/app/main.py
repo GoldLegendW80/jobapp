@@ -21,8 +21,10 @@ from app.identity import throttle as identity_throttle
 from app.identity.admin_router import router as admin_router
 from app.identity.router import router as auth_router
 from app.jobs.router import router as jobs_router
+from app.jobs.sweep_router import router as sweeps_router
 from app.logging_config import configure_logging
 from app.profile.router import router as profile_router
+from app.queue import Queue
 
 logger = logging.getLogger("app")
 
@@ -72,6 +74,7 @@ def create_app(
             "api starting", extra={"env": settings.app_env, "database": settings.safe_database_url}
         )
         yield
+        await app.state.queue.close()
         await checker.close()
         engine.dispose()
         logger.info("api stopped")
@@ -94,6 +97,8 @@ def create_app(
     app.state.engine = engine
     app.state.sessionmaker = sessions
     app.state.health = checker
+    # The worker's queue (jobs J5); the Redis pool opens on the first enqueue.
+    app.state.queue = Queue(settings.redis_url.get_secret_value())
 
     # Middleware added last runs first: request_log, then CSRF, then the cookie writer.
     app.middleware("http")(identity_deps.session_cookie_middleware)
@@ -140,6 +145,8 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(profile_router)
+    # Before the jobs router: /api/jobs/sweeps must not be read as /api/jobs/{job_id}.
+    app.include_router(sweeps_router)
     app.include_router(jobs_router)
     identity_deps.assert_default_deny(app)
     return app

@@ -548,3 +548,74 @@ class MissingOut(BaseModel):
 class StaleOut(BaseModel):
     detail: str
     updated_at: datetime
+
+
+# --- sweeps (J5) --------------------------------------------------------------------------------
+
+
+class BoardFailureOut(BaseModel):
+    company: str
+    ats: str
+    org: str
+    # not_found, blocked, rate_limited, upstream_error, timeout, network, too_large,
+    # invalid_response, store_failed (app/jobs/ats.py, app/jobs/sweep.py)
+    error: str
+    message: str
+
+
+class SweepOut(BaseModel):
+    """A sweep and its progress: while it runs the counters grow board by board."""
+
+    id: uuid.UUID
+    trigger: str
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    error: str | None
+    boards_total: int = 0
+    boards_done: int = 0
+    boards_ok: int = 0
+    boards_failed: list[BoardFailureOut] = Field(default_factory=list)
+    current_board: str | None = None
+    seen: int = 0
+    matched: int = 0
+    new: int = 0
+    duplicates: int = 0
+    skipped_by_rule: int = 0
+    duration: float | None = None
+
+
+class SweepJobOut(BaseModel):
+    id: uuid.UUID
+    company: str
+    title: str
+    location: str
+    fit: int | None
+    status: str
+
+
+class SweepDetail(SweepOut):
+    # The jobs this sweep added, best fit first (at most 200).
+    new_jobs: list[SweepJobOut] = Field(default_factory=list)
+
+
+class ScheduleOut(BaseModel):
+    """The caller's `search.sweep_schedule` and when it fires next. `active` is false when it
+    is off or no board is enabled (then nothing runs whatever the schedule says)."""
+
+    enabled: bool
+    days: list[str]
+    times: list[str]
+    timezone: str
+    active: bool
+    next_run: datetime | None
+
+
+class SweepList(BaseModel):
+    items: list[SweepOut]
+    schedule: ScheduleOut
+
+
+class SweepConflictOut(BaseModel):
+    detail: str
+    sweep_id: uuid.UUID

@@ -8,7 +8,14 @@ import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
 import { jobListKey, listJobs, listQuery } from "./api";
+import {
+  FindJobsButton,
+  SweepHistoryButton,
+  SweepProgress,
+  SweepSummaryDialog,
+} from "./find-jobs";
 import { AddPostingButton, BulkBar, PageMenu } from "./jobs-actions";
+import { ScheduleButton } from "./schedule-dialog";
 import { FilterBar } from "./filter-bar";
 import {
   EMPTY_FILTERS,
@@ -21,6 +28,7 @@ import { JobsViewTabs } from "./map/view-tabs";
 import { JobsList, JobsListSkeleton } from "./jobs-list";
 import { KpiTiles } from "./kpi-tiles";
 import { useSelection } from "./selection";
+import { useSweepRunner } from "./use-sweep-runner";
 import { useJobFilters } from "./use-job-filters";
 
 const EMPTY_BUCKETS = Array.from({ length: 10 }, (_, i) => ({
@@ -32,8 +40,8 @@ const EMPTY_BUCKETS = Array.from({ length: 10 }, (_, i) => ({
 /**
  * /jobs, the home page: counts per status, the fit histogram, the filters (all in the URL) and
  * the list of postings, loaded page by page as it scrolls. Rows can be selected (Shift for a
- * range, the header box for the whole view) for the bulk bar; the header adds a posting by
- * hand, and its menu rescores.
+ * range, the header box for the whole view) for the bulk bar; the header finds jobs on the
+ * profile's boards (live progress, then a summary), adds a posting by hand, and its menu rescores.
  */
 export function JobsPage() {
   useTitle("Jobs");
@@ -54,6 +62,7 @@ export function JobsPage() {
     void fetchNextPage();
   }, [fetchNextPage]);
   const selection = useSelection(items, apiQuery, first?.total ?? 0);
+  const sweep = useSweepRunner();
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
@@ -71,11 +80,17 @@ export function JobsPage() {
               : ""}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <FindJobsButton runner={sweep} />
+          <ScheduleButton />
+          <SweepHistoryButton runner={sweep} />
           <AddPostingButton />
           <PageMenu selected={selection.ids} />
         </div>
       </div>
+
+      <SweepProgress runner={sweep} />
+      <SweepSummaryDialog runner={sweep} />
 
       <KpiTiles
         counts={first?.counts_by_status}

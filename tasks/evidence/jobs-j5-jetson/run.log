@@ -1,0 +1,56 @@
+tests/e2e_jobs_sweep_jetson.sh, 2026-10-09T14:46:04Z
+
+== before
+   no jobapp-test-pg-* container stuck in Created
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+   jobs=433
+   per_status=found:158,shortlisted:146,cv_ready:3,staged:29,applied:29,interview:2,closed:6,skipped:60
+   fit_sum=34530
+   fits_manual=40
+   max_updated_at=2026-10-09 13:23:59.0329+00
+   events=473
+   files=330
+   sweeps=0
+   rows_md5=096c5d2273c6a2779ded85a5a1fa33a8
+   profile_revision=6
+
+== Playwright: web/e2e/jobs-sweep.spec.ts through https://colleges-politics-reforms-deleted.trycloudflare.com (E2E_REAL_ONLY: two real boards)
+
+Running 4 tests using 1 worker
+
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+  ✓  1 [chromium] › e2e/jobs-sweep.spec.ts:223:1 › an account with skills (5.6s)
+  -  2 [chromium] › e2e/jobs-sweep.spec.ts:230:1 › Find jobs: live progress, summary, history, list refreshed
+  -  3 [chromium] › e2e/jobs-sweep.spec.ts:361:1 › 5,000 postings: the worker stays far under its 1536 MiB
+  ✓  4 [chromium] › e2e/jobs-sweep.spec.ts:406:1 › a real sweep of two real boards (5.3s)
+
+  2 skipped
+  2 passed (11.9s)
+   worker memory samples: 4, highest: 132.6MiB
+   {
+     "at": "2026-10-09T14:46:18.500Z",
+     "stack": "https://colleges-politics-reforms-deleted.trycloudflare.com",
+     "boards": [
+       "Mistral AI (ashby, mistral.ai)",
+       "Anthropic (greenhouse, anthropic)"
+     ],
+     "status": "done",
+     "boards_ok": 2,
+     "boards_failed": [],
+     "seen": 855,
+     "matched": 138,
+     "new": 138,
+     "duplicates": 0,
+     "skipped_by_rule": 11,
+     "duration_s": 2.27,
+     "worker_memory_mib": null
+   }
+
+== after: e2e rows removed, Harald's jobs unchanged
+   e2e rows before the cleanup: users=1|jobs=138|events=436|profiles=1|sweeps=1|invites=1|login_attempts=0
+   e2e rows after the cleanup: users=0|jobs=0|events=0|profiles=0|sweeps=0|invites=0|login_attempts=0
+   Harald's jobs: identical before and after (10 fields)
+   failed sign ins of hthautin@gmail.com in the 15 minute window: 0
+   no jobapp-test-pg-* container stuck in Created
+   screenshots: 4
+   PASS

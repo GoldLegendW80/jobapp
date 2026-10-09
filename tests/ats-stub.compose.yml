@@ -1,9 +1,18 @@
 # CI e2e only: a stub of the ATS posting APIs (tests/ats_stub.py) and the api pointed at it, so
-# the board check of the profile journeys never calls Ashby, Greenhouse or Lever from CI.
+# the board check of the profile journeys and the worker's sweeps never call Ashby, Greenhouse or
+# Lever from CI.
 #   docker compose -p jobapp-ci -f compose.yml -f tests/ats-stub.compose.yml up -d --build --wait
 # The api refuses ATS_BASE_URL when APP_ENV is production (app/config.py).
 services:
   api:
+    environment:
+      ATS_BASE_URL: http://atsstub:8080
+    depends_on:
+      atsstub:
+        condition: service_healthy
+
+  # The worker's sweeps read the same stub (one override for the board check and the sweeps).
+  worker:
     environment:
       ATS_BASE_URL: http://atsstub:8080
     depends_on:

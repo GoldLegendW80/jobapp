@@ -75,7 +75,7 @@ step "production config: only caddy publishes a port, mem_limit and restart ever
 import json, sys
 cfg = json.load(sys.stdin)
 services = cfg["services"]
-assert set(services) == {"api", "caddy", "db", "redis", "cloudflared"}, sorted(services)
+assert set(services) == {"api", "caddy", "db", "redis", "cloudflared", "worker"}, sorted(services)
 for name, svc in services.items():
     ports, restart = svc.get("ports"), svc.get("restart")
     if name == "caddy":
@@ -92,6 +92,11 @@ deps = services["api"]["depends_on"]
 assert deps["db"]["condition"] == deps["redis"]["condition"] == "service_healthy", deps
 assert int(services["caddy"]["mem_limit"]) == 128 * 1024**2, services["caddy"]["mem_limit"]
 assert services["caddy"]["build"]["target"] == "caddy", services["caddy"]["build"]
+worker = services["worker"]
+assert worker["image"] == services["api"]["image"], worker["image"]
+assert worker["command"] == ["python", "-m", "app.worker"], worker["command"]
+assert int(worker["mem_limit"]) == 1536 * 1024**2, worker["mem_limit"]
+assert worker["depends_on"]["db"]["condition"] == worker["depends_on"]["redis"]["condition"] == "service_healthy"
 cf = services["cloudflared"]
 import re
 assert re.fullmatch(r"cloudflare/cloudflared:\d{4}\.\d+\.\d+", cf["image"]), cf["image"]
@@ -119,11 +124,11 @@ ok "dev publishes 8000, 5432 and $HTTP_PORT on 127.0.0.1 only"
 
 step "dev stack up, every service healthy"
 "${DEV[@]}" up -d --build --wait --wait-timeout 180 >/dev/null 2>&1 || fail "stack did not become healthy"
-for svc in api caddy db redis; do
+for svc in api caddy db redis worker; do
   health="$(docker inspect -f '{{.State.Health.Status}}' "$("${DEV[@]}" ps -q "$svc")")"
   [[ "$health" == "healthy" ]] || fail "$svc is $health"
 done
-ok "api, caddy, db, redis healthy"
+ok "api, caddy, db, redis, worker healthy"
 
 step "GET /api/health"
 body="$(curl -s --max-time 5 "$HEALTH_URL")"

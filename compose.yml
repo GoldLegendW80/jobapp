@@ -12,12 +12,11 @@
 #
 # Service names reserved for later modules, so nothing else takes them:
 #   web          name kept free: the React build ships inside the caddy image
-#   worker       Claude Agent SDK runtime consuming the redis queue (agents module)
 #   browser      headed Chromium, Xvfb, noVNC (browser module)
 #
 # Memory budget, 5G for the whole stack on the 7.4G Jetson (each service sets mem_limit):
-#   api 512m, db 768m, redis 256m, caddy 128m, cloudflared 128m  this file today: 1792m
-#   worker 1536m, browser 1536m                reserved for the agents and browser modules
+#   api 512m, db 768m, redis 256m, caddy 128m, cloudflared 128m, worker 1536m  this file: 3328m
+#   browser 1536m                              reserved for the browser module
 #   total 4864m, leaving about 250m of headroom inside the 5G budget
 
 name: jobapp
@@ -104,6 +103,35 @@ services:
     mem_limit: 512m
     expose:
       - "8000"
+
+  # --- worker (jobs J5) ----------------------------------------------------------------------
+  # Queue consumer: board sweeps and the users' sweep schedules today (app/worker.py), Claude agent
+  # runs later (SPEC-agents.md). Same image as the api, another command; no port, no tunnel.
+  worker:
+    <<: *restart
+    # The api's image, built by the api service (two builds to one tag would race); never pulled.
+    image: jobapp-api:latest
+    pull_policy: never
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - path: .env
+        required: true
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Healthy while every queue's arq worker keeps its health record fresh in Redis (10 s).
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.worker", "--check"]
+      interval: 15s
+      timeout: 8s
+      start_period: 20s
+      retries: 3
+    # A running sweep is failed as "interrupted" on SIGTERM; give it time to write that.
+    stop_grace_period: 20s
+    mem_limit: 1536m
+  # --- end of worker --------------------------------------------------------------------------
 
   db:
     <<: *restart

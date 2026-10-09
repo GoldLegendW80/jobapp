@@ -1,0 +1,43 @@
+# Scratch stack of the jobs J5 journey (web/e2e/jobs-sweep.spec.ts), over compose.yml:
+#   HTTP_PORT=8125 docker compose -p jobapp-j5e2e -f compose.yml -f tests/compose.j5-e2e.yml \
+#     up -d --build --wait
+#   docker compose -p jobapp-j5e2e -f compose.yml exec -T api alembic upgrade head
+#   E2E_CADDY_URL=http://127.0.0.1:8125 E2E_COMPOSE_PROJECT=jobapp-j5e2e \
+#     pnpm --dir web exec playwright test jobs-sweep.spec.ts
+#   docker compose -p jobapp-j5e2e -f compose.yml -f tests/compose.j5-e2e.yml down -v
+# Its own image tags, so the dev and production images are never replaced, and the fake ATS
+# server of the sweep tests (api/tests/jobs/fake_ats.py), which the worker reaches as
+# http://fakeats:8099 for boards whose org starts with "fake-" (ATS_BASE_URL with
+# ATS_BASE_URL_ORG_PREFIX, refused when APP_ENV is production). Every other board still goes to
+# its real ATS.
+services:
+  api:
+    image: jobapp-api:j5-e2e
+  worker:
+    image: jobapp-api:j5-e2e
+    environment:
+      ATS_BASE_URL: http://fakeats:8099
+      ATS_BASE_URL_ORG_PREFIX: fake-
+    depends_on:
+      fakeats:
+        condition: service_healthy
+  caddy:
+    image: jobapp-caddy:j5-e2e
+  fakeats:
+    image: jobapp-api:j5-e2e
+    pull_policy: never  # built above for api and worker
+    command: ["python", "/fake/fake_ats.py", "--port", "8099", "--slow", "21"]
+    volumes:
+      - ./api/tests/jobs/fake_ats.py:/fake/fake_ats.py:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/_health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 256m
+    expose:
+      - "8099"

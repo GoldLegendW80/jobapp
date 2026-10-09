@@ -11,7 +11,7 @@ User stories:
 - As a user, I see a dashboard: counts per status, a fit histogram, and a list I can search, filter (status, contract type, company, fit range, location, found date) and sort; one row opens a detail view with the posting text and everything attached.
 - As a user, I select one or many rows and change their status or add a note in one action; the history of every change is kept.
 - As a user, I add a posting by hand (URL, company, title, location, text) when it comes from a site with no API.
-- As a user, I press "Find jobs": the app sweeps the company boards of my profile (Ashby, Greenhouse, Lever public APIs), keeps the postings matching my search terms, scores the new ones, and tells me what is new. It also runs by itself every night.
+- As a user, I press "Find jobs": the app sweeps the company boards of my profile (Ashby, Greenhouse, Lever public APIs), keeps the postings matching my search terms, scores the new ones, and tells me what is new. Once I turn it on, it also runs by itself on my schedule (days, times, time zone); it is off until then.
 - As a user, I see my postings on a map, as the current dashboard does.
 
 ## Data model
@@ -42,7 +42,7 @@ Port of `engine/jobs.py score_row` against the user's `skills` section, using `a
 
 - Backend fetches each enabled board of the user's `search.boards` with httpx (timeouts, retries with backoff, polite concurrency of 4, a User-Agent naming the app), parses Ashby, Greenhouse and Lever exactly as `engine/jobs.py fetch` does, filters with the user's include, exclude, per-board exclude and location terms and the days window, dedupes against existing rows, stores new ones as `found` with the posting text, scores them.
 - Runs in the `worker` container (first use of Redis as a queue, with RQ or arq; the choice is recorded in the plan), one sweep per user at a time, progress visible in the UI, a summary at the end (boards ok and failed, postings seen, matches, new).
-- Nightly schedule per user (default 06:17, can be switched off in the search section).
+- Automatic sweeps per user, off by default: the user turns them on and picks weekdays, one to four local times and a time zone (`search.sweep_schedule`); a worker tick every 5 minutes starts each due slot once, daylight saving time handled.
 - `never_apply` rules from the profile mark matching rows `skipped` with the rule as the note (hard rule 11 generalised).
 - If an ATS blocks plain HTTP from the Jetson, that board is reported as failed; browser-based fetching comes with the `browser` module.
 
@@ -63,7 +63,7 @@ All require a session and act on the caller's rows only (404 otherwise).
 | POST /api/jobs/bulk | `{ids[], set: {status?, notes_append?}}` in one transaction |
 | POST /api/jobs/rescore | `{ids?[], overwrite_manual: bool}` |
 | GET /api/jobs/{id}/files/{file_id} | download with the stored mime |
-| POST /api/jobs/sweeps, GET /api/jobs/sweeps, GET /api/jobs/sweeps/{id} | start, list, progress |
+| POST /api/jobs/sweeps, GET /api/jobs/sweeps, GET /api/jobs/sweeps/{id}, GET /api/jobs/sweeps/{id}/events | start (409 when one runs), list (with the user's schedule and its next run), progress and the jobs added, progress as server-sent events |
 | GET /api/jobs/places | coordinates for the map, from `engine/places.json` ported as a bundled gazetteer |
 | POST /api/jobs/import | the import document used by the deploy command |
 
@@ -89,7 +89,7 @@ web/e2e/jobs.spec.ts
 ## Testing strategy
 
 - Unit: slug and duplicate rules; scoring port golden test against the engine on the real CSV; ATS parsers against recorded fixtures of each API (captured once, checked in, personal data free); filter terms; never_apply rules; importer mapping of every CSV column and every file type.
-- Integration (real Postgres and Redis): every endpoint, isolation (user B sees none of A's rows, files, sweeps), bulk in one transaction, concurrent edits, sweep against a fake ATS server (ok, 404, 429, timeout, malformed JSON, 5000 postings), one sweep per user at a time, idempotent import, applied files immutable, nightly schedule enqueues once.
+- Integration (real Postgres and Redis): every endpoint, isolation (user B sees none of A's rows, files, sweeps), bulk in one transaction, concurrent edits, sweep against a fake ATS server (ok, 404, 429, timeout, malformed JSON, 5000 postings), one sweep per user at a time, idempotent import, applied files immutable, a scheduled slot enqueues once (daylight saving time included).
 - End to end (Playwright, locally and on the Jetson): Harald's import shows 433 rows with the same status counts as the CSV; filters and URL state; bulk status change; detail with PDF preview; add by hand; a sweep against the fake ATS locally and one real sweep on the Jetson for an e2e user with two boards; map pins; screenshots light and dark, desktop and 375px.
 
 ## Boundaries
@@ -102,7 +102,7 @@ web/e2e/jobs.spec.ts
 
 1. Harald's 433 rows, their posting texts and their files are in the app on the Jetson, with status counts identical to the CSV, and the import is idempotent.
 2. The scoring port matches the engine on every scorable row (golden test).
-3. "Find jobs" sweeps the user's boards from the Jetson and adds only new matching postings, scored; the nightly run works.
+3. "Find jobs" sweeps the user's boards from the Jetson and adds only new matching postings, scored; a user's schedule, once turned on, runs by itself.
 4. Filters, bulk actions, detail and map work on desktop and phone.
 5. No user can see another user's jobs, files or sweeps (automated isolation tests).
 

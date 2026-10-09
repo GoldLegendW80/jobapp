@@ -606,4 +606,87 @@ grep -q -- "BACKUP_KEEP=3 bash -s -- backup" "$WORK/calls2" || fail "BACKUP_KEEP
 out_has "ops/db.sh reported no backup file"
 ok "backup passes BACKUP_KEEP, and fails when ops/db.sh reports no file"
 
+step "ops/db.sh restore-live stops the api and the worker, and starts both on every path"
+# ops/db.sh itself, run here with a fake docker (and flock, stat) found first: what it asks of
+# Compose, in order, and what was stopped while the live database was dropped and restored.
+DBT="$WORK/dbsh"
+mkdir -p "$DBT/bin" "$DBT/app" "$DBT/backups"
+printf 'name: fake\n' >"$DBT/app/compose.yml"
+printf 'POSTGRES_USER=jobapp\nPOSTGRES_DB=jobapp\n' >"$DBT/app/.env"
+printf 'PGDMP fake dump\n' >"$DBT/backups/jobapp-2026-10-08T120000.dump"
+cat >"$DBT/bin/flock" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+cat >"$DBT/bin/stat" <<'SH'
+#!/usr/bin/env bash
+wc -c <"${!#}" | tr -d ' '
+SH
+cat >"$DBT/bin/docker" <<'SH'
+#!/usr/bin/env bash
+# Plays the Jetson's docker for ops/db.sh; logs every call and the stopped services.
+log="$FAKE_DIR/calls"
+args="$*"
+case "$args" in
+  *"ps -q db"*) echo dbid ;;
+  inspect*) echo "running healthy" ;;
+  *" stop "*)
+    echo "stop ${args##* stop }" >>"$log"
+    echo "${args##* stop }" >"$FAKE_DIR/stopped"
+    ;;
+  *" start "*)
+    echo "start ${args##* start }" >>"$log"
+    : >"$FAKE_DIR/stopped"
+    ;;
+  *" up "*)
+    echo "up ${args##* up }" >>"$log"
+    : >"$FAKE_DIR/stopped"
+    ;;
+  *"alembic upgrade head"*)
+    echo "alembic" >>"$log"
+    [[ -z "${FAKE_FAIL_ALEMBIC:-}" ]] || exit 1
+    ;;
+  *"pg_restore --list"*) cat >/dev/null; printf ';\n; dbname: jobapp\n1; table a\n2; data a\n' ;;
+  *"pg_restore -f /dev/null"*) cat >/dev/null ;;
+  *"pg_dump"*) printf 'PGDMP fake dump\n' ;;
+  *"pg_database_size"*) echo 1000 ;;
+  *"drop database"*) echo "drop while stopped: $(cat "$FAKE_DIR/stopped" 2>/dev/null)" >>"$log" ;;
+  *"pg_restore -U"*)
+    cat >/dev/null
+    echo "restore while stopped: $(cat "$FAKE_DIR/stopped" 2>/dev/null)" >>"$log"
+    if [[ -n "${FAKE_FAIL_RESTORE:-}" && ! -e "$FAKE_DIR/failed" ]]; then
+      touch "$FAKE_DIR/failed"
+      exit 1
+    fi
+    ;;
+  *) cat >/dev/null 2>&1 || true ;;
+esac
+SH
+chmod +x "$DBT/bin/"*
+dbsh() { # dbsh <expected exit> [env assignments]: restore-live of the fake dump
+  local want="$1"
+  shift
+  rm -f "$DBT/calls" "$DBT/stopped" "$DBT/failed"
+  run "$want" env "$@" FAKE_DIR="$DBT" DB_SH_TEST_BIN="$DBT/bin" JOBAPP_DIR="$DBT/app" \
+    BACKUP_DIR="$DBT/backups" BACKUP_MIN_FREE_MB=0 bash ops/db.sh restore-live jobapp-2026-10-08T120000.dump
+}
+calls_are() { # calls_are <expected, one per line>
+  diff <(printf '%s\n' "$@") "$DBT/calls" >/dev/null || fail "calls: $(cat "$DBT/calls")"
+}
+dbsh 0
+calls_are "stop api worker" "drop while stopped: api worker" "restore while stopped: api worker" \
+  "alembic" "up -d --no-deps --wait --wait-timeout 120 api worker"
+ok "restore-live: api and worker stopped through drop and restore, started healthy after the migrations"
+dbsh 1 FAKE_FAIL_RESTORE=1
+out_has "the live database was rolled back"
+calls_are "stop api worker" "drop while stopped: api worker" "restore while stopped: api worker" \
+  "drop while stopped: api worker" "restore while stopped: api worker" \
+  "up -d --no-deps --wait --wait-timeout 120 api worker"
+ok "a failed restore rolls back with both still stopped, then starts api and worker"
+dbsh 1 FAKE_FAIL_ALEMBIC=1
+out_has "starting api and worker again after a failure"
+calls_are "stop api worker" "drop while stopped: api worker" "restore while stopped: api worker" \
+  "alembic" "start api worker"
+ok "any other failure after the stop starts api and worker again on exit"
+
 printf '\nAll %d checks passed.\n' "$passed"

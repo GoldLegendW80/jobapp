@@ -56,26 +56,40 @@ def test_a_full_schedule_is_kept_as_written() -> None:
         ({"days": []}, "at least 1 item"),
         ({"days": ["Monday"]}, "'monday'"),
         ({"days": ["mon"]}, "'monday'"),
-        ({"days": ["monday", "monday"]}, "duplicate day"),
         ({"days": [*WEEKDAYS, "monday"]}, "at most 7 items"),
         ({"times": []}, "at least 1 item"),
         ({"times": ["6:17"]}, "is not a time as HH:MM"),
         ({"times": ["24:00"]}, "is not a time as HH:MM"),
         ({"times": ["06:60"]}, "is not a time as HH:MM"),
         ({"times": ["06:17:00"]}, "is not a time as HH:MM"),
-        ({"times": ["06:17", "06:17"]}, "duplicate time"),
         ({"times": ["01:00", "02:00", "03:00", "04:00", "05:00"]}, "at most 4 items"),
         ({"times": [617]}, "valid string"),
         ({"timezone": "Paris"}, "IANA time zone"),
         ({"timezone": "Europe/Atlantis"}, "IANA time zone"),
         ({"timezone": ""}, "at least 1 character"),
         ({"timezone": "../../etc/passwd"}, "IANA time zone"),
+        ({"timezone": "GMT"}, "IANA time zone"),
+        ({"timezone": "EST5EDT"}, "IANA time zone"),
         ({"unknown": 1}, "Extra inputs are not permitted"),
     ],
 )
 def test_invalid_schedules_are_refused(change: dict[str, Any], fragment: str) -> None:
     with pytest.raises(ValidationError, match=fragment):
         SweepSchedule.model_validate({**ON, **change})
+
+
+def test_duplicates_are_dropped_and_the_order_normalised() -> None:
+    schedule = SweepSchedule.model_validate(
+        {**ON, "days": ["friday", "monday", "friday"], "times": ["18:30", "06:17", "18:30"]}
+    )
+    assert schedule.days == ["monday", "friday"]
+    assert schedule.times == ["06:17", "18:30"]
+    assert SweepSchedule.model_validate({**ON, "timezone": "UTC"}).timezone == "UTC"
+
+
+def test_the_draft_sweep_nightly_key_is_dropped() -> None:
+    section = SearchSection.model_validate({**full("search"), "sweep_nightly": True})
+    assert section.sweep_schedule.enabled is False
 
 
 def test_the_search_section_reports_where() -> None:

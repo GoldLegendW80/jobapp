@@ -34,9 +34,14 @@ class Settings(BaseSettings):
     # Hard ceiling on the whole health check, in seconds, whatever the database does.
     health_timeout_s: float = Field(default=2.5, gt=0, le=30)
     # Tests only: the base address of a stub serving the Ashby, Greenhouse and Lever posting APIs
-    # under /ashby, /greenhouse and /lever (the CI e2e job's tests/ats_stub.py), so the board check
-    # never depends on the real services there. Refused in production.
+    # under /ashby, /greenhouse and /lever (the CI e2e job's tests/ats_stub.py, the sweep tests'
+    # api/tests/jobs/fake_ats.py), used by the board check and the sweeps alike. With
+    # ATS_BASE_URL_ORG_PREFIX only the orgs starting with it go there (a scratch stack sweeping a
+    # fake board and real boards side by side). Both refused in production.
     ats_base_url: str | None = None
+    ats_base_url_org_prefix: str | None = None
+    # Queue between the api and the worker (jobs J5): arq on Redis.
+    redis_url: SecretStr = SecretStr("redis://redis:6379/0")
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod
@@ -75,6 +80,19 @@ class Settings(BaseSettings):
         if parts.query or parts.fragment or parts.username or parts.password:
             raise ValueError("ATS_BASE_URL must be a plain address without query or credentials")
         return value
+
+    @field_validator("ats_base_url_org_prefix", mode="after")
+    @classmethod
+    def _org_prefix(cls, value: str | None) -> str | None:
+        return value.strip() if value and value.strip() else None
+
+    @field_validator("redis_url", mode="after")
+    @classmethod
+    def _redis(cls, value: SecretStr) -> SecretStr:
+        raw = value.get_secret_value().strip()
+        if not raw.startswith(("redis://", "rediss://")):
+            raise ValueError("REDIS_URL must start with redis:// or rediss://")
+        return SecretStr(raw)
 
     @model_validator(mode="after")
     def _no_stub_in_production(self) -> "Settings":
@@ -125,3 +143,14 @@ def load_settings() -> Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return load_settings()
+
+
+def ats_stub_for(settings: Settings, org: str) -> str | None:
+    """The test stub's base address when this org's ATS calls go to it (ATS_BASE_URL, filtered
+    by ATS_BASE_URL_ORG_PREFIX), else None: the real ATS."""
+    if settings.ats_base_url is None:
+        return None
+    prefix = settings.ats_base_url_org_prefix
+    if prefix is not None and not org.startswith(prefix):
+        return None
+    return settings.ats_base_url
