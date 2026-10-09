@@ -365,8 +365,10 @@ export function WorldMap({
               style={{
                 left: `${pin.fx * 100}%`,
                 top: `${pin.fy * 100}%`,
-                width: `${Math.max(24, pin.r * 2)}px`,
-                height: `${Math.max(24, pin.r * 2)}px`,
+                // The dot plus 3 px: wider targets would hide crowded neighbours (the
+                // places list is the full-size alternative). Smaller pins come later, on top.
+                width: `${pin.r * 2 + 6}px`,
+                height: `${pin.r * 2 + 6}px`,
                 zIndex: isSelected ? 3 : 2,
               }}
               className="group absolute grid -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring"

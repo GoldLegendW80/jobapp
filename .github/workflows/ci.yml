@@ -195,13 +195,13 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/identity
           PLAYWRIGHT_HTML_OPEN: never
         run: pnpm exec playwright test -c e2e/identity-all.config.ts --reporter=list,html
-      - name: Jobs journey on the synthetic import
+      - name: Jobs journeys on the synthetic import, and the map
         working-directory: web
         env:
           E2E_JOBS_DATA: ${{ runner.temp }}/synthetic/data
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/jobs
           PLAYWRIGHT_HTML_OPEN: never
-        run: pnpm exec playwright test jobs.spec.ts --workers=1 --reporter=list,html
+        run: pnpm exec playwright test jobs.spec.ts jobs-map.spec.ts --workers=1 --reporter=list,html
       - name: Stack logs
         if: failure()
         run: |
