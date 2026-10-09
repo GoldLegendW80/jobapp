@@ -54,9 +54,10 @@ RUN groupadd --gid "${RUNNER_GID}" "${RUNNER_USER}" \
 
 COPY --chmod=755 entrypoint.sh /usr/local/bin/runner-entrypoint
 # Every job runs this first and fails unless it is deploy.yml from main (job-guard.sh). Set in the
-# image, not in the repository, so no branch or workflow can switch it off.
-COPY --chmod=755 job-guard.sh /usr/local/bin/runner-job-guard
-ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/runner-job-guard
+# image, not in the repository, so no branch or workflow can switch it off. The runner only takes
+# a hook path ending in .sh (it refused /usr/local/bin/runner-job-guard on 2026-10-09).
+COPY --chmod=755 job-guard.sh /usr/local/bin/runner-job-guard.sh
+ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/runner-job-guard.sh
 
 ENV RUNNER_HOME=/home/${RUNNER_USER}/actions-runner \
     RUNNER_ALLOW_RUNASROOT=0

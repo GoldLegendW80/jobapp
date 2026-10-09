@@ -229,9 +229,9 @@ if command -v gh >/dev/null; then
 fi
 
 step "runner image: the job guard is baked in and refuses every job but deploy.yml from main"
-grep -q '^ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/runner-job-guard$' ops/runner/Dockerfile ||
+grep -q '^ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/runner-job-guard.sh$' ops/runner/Dockerfile ||
   fail "ops/runner/Dockerfile does not set ACTIONS_RUNNER_HOOK_JOB_STARTED"
-grep -q '^COPY --chmod=755 job-guard.sh /usr/local/bin/runner-job-guard$' ops/runner/Dockerfile ||
+grep -q '^COPY --chmod=755 job-guard.sh /usr/local/bin/runner-job-guard.sh$' ops/runner/Dockerfile ||
   fail "ops/runner/Dockerfile does not copy job-guard.sh"
 grep -q 'Dockerfile entrypoint.sh job-guard.sh' deploy.sh || fail "runner_install does not send job-guard.sh"
 guard() { # guard <exit> <repository> <workflow ref> <event>
