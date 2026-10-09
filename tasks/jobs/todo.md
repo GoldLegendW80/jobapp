@@ -21,7 +21,7 @@ Spec: [SPEC-jobs.md](../../SPEC-jobs.md). Depends on profile (matching rules in 
 **Acceptance:** `/jobs` home with KPIs, histogram, filter chips in the URL, virtualised table and mobile cards; `/jobs/:id` with posting, fit, files with PDF preview, events.
 **Files:** `web/src/features/jobs/*`, routes. **Scope:** M
 
-## J4: Editing, bulk actions, add by hand, rescore
+## J4: Editing, bulk actions, add by hand, rescore (done 2026-10-09)
 **Acceptance:** PATCH, bulk, POST add (409 duplicate), rescore with manual override kept; UI for each with optimistic updates and undo for bulk status.
 **Files:** `api/app/jobs/*`, `web/src/features/jobs/*`. **Scope:** M
 
