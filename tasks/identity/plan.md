@@ -48,3 +48,28 @@ Invite-only accounts with server-side sessions, an admin area, and the `current_
 | Tunnel URL changes so invite links break | Med | Links are relative to whatever origin the admin uses; the admin UI builds the link from `window.location.origin`; documented |
 | argon2 hashing is slow on the Jetson | Low | Measure; library defaults target ~50ms; run in a threadpool so the event loop never blocks |
 | Route added later without auth | High | Default-deny dependency plus the enumeration test that fails on any unlisted public route |
+
+## Identity: verification
+
+Checkpoint I-C, 2026-10-09. Jetson run: `./deploy.sh && tests/e2e_jetson.sh` through the public
+quick tunnel URL, 32 passed and 2 skipped (see below), log in
+[evidence/identity/run.log](../evidence/identity/run.log), 145 screenshots indexed in
+[evidence/identity/index.md](../evidence/identity/index.md). Local run: the same config on a
+scratch stack (`-p jobapp-i8`), 34 passed, log in
+[evidence/identity/local-run.log](../evidence/identity/local-run.log). Api: `pytest tests/identity`
+567 passed against real Postgres. `./deploy.sh smoke` passed with the new auth checks.
+
+| Success criterion of SPEC-identity.md | Proved by |
+|---|---|
+| 1. Harald creates himself as admin from the CLI on the Jetson and signs in through the public tunnel URL | His account `hthautin@gmail.com` exists on the Jetson as an active admin, created 2026-10-08 17:39:02 UTC by accepting an invite printed by `./deploy.sh admin create` (both of his invite rows have no creator, which only the CLI produces; the first was revoked when the second was printed). The accept signed him in at that moment (`last_login_at` equals the invite's `used_at`), on the tunnel URL the CLI built the link from. Not repeated here: the journey never signs in as him. The same path is exercised end to end by `identity.spec.ts` ("the CLI link sets up the admin, who lands signed in on /") with a throwaway admin through `./deploy.sh admin create` on the public URL. |
+| 2. A friend invited by link signs in from another browser and sees only their own space; `/admin/users` is refused | `invites.spec.ts` ("the friend opens a copied invite in another browser and lands signed in as a member": no Admin entry, `/admin/users` is the not found page, `GET /api/admin/invites` answers 404) and `users.spec.ts` (accept in a second context, demoted admin gets 404). Isolation: `tests/profile/test_api.py` `test_users_never_see_each_other` and `test_query_parameters_cannot_select_another_user`; `test_member_gets_the_same_404_as_an_unknown_route` in the admin users and invites api tests. Screenshots `invites-member-admin-404-*`, `users-admin-demoted-404-*`. |
+| 3. Every API route except health and the public auth routes returns 401 without a session, enumerated | `tests/identity/test_guard_api.py`: `test_every_non_public_route_is_401_without_a_session` walks `app.routes`, `test_routes_added_later_are_denied_too`, `test_the_real_app_passes_the_check` (startup refuses an unguarded route). On the Jetson: `./deploy.sh smoke` checks 401 on `/api/auth/me`, `/api/admin/users`, `/api/admin/invites`, `/api/profile`, `/api/profile/revisions` on loopback (no cookie and a forged one) and on the first four plus `PATCH /api/auth/me` through the tunnel. |
+| 4. Brute force on login is throttled with 429; disabled users are signed out on their next request | `throttle.spec.ts` on the Jetson: five wrong passwords, the sixth (right password) gets 429 with the countdown (`throttle-login-throttled-*`); locally also the password card. `tests/identity/test_throttle_api.py` (per email, per address, sliding window, parallel guesses). `users.spec.ts` "disabling the friend sends their next navigation to the sign in page" (and a stale cookie stays out after enable); `test_disabling_ends_the_sessions_at_once`, `test_session_of_a_disabled_user_is_refused_and_deleted`. |
+| 5. All identity tests and the Playwright journey pass locally and against the Jetson | pytest 567 passed; `web/e2e/identity-all.config.ts` 34 of 34 locally and 32 passed on the Jetson. The 2 skipped there are by design: the last admin rule in the browser needs the spec's admin to be the only active one (Harald is a second admin there; the rule passes locally and in `test_admin_users_api.py`), and the password card throttle needs a second throwaway account (scratch stack only). |
+
+Live data untouched: `tests/e2e_jetson.sh` snapshots Harald's account (role, is_active, created,
+updated and last sign in times, md5 of the password hash, name, sessions and their md5, profile
+revision, updated time and md5 of its sections, revisions count, invites) before and after the run:
+identical, 15 fields. Afterwards zero e2e users, sessions, profiles, invites and login attempts, and
+zero failed sign ins in the 15 minute window for his email, for the Mac's IPv4 and IPv6 addresses,
+and overall. Each spec unlocked its own failures in between with `./deploy.sh admin unlock`.

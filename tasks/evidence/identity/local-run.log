@@ -1,0 +1,42 @@
+INFO  [alembic.runtime.migration] Running upgrade 0003 -> 0004, Jobs: jobs, job_events, job_files, sweeps; their six enums; list and full-text indexes.
+local scratch stack jobapp-i8 on http://127.0.0.1:8098, 2026-10-09T08:03:41Z
+
+Running 34 tests using 1 worker
+
+  ✓   1 [identity] › e2e/identity.spec.ts:187:1 › signed out, / goes to the sign in page with next=/ (487ms)
+  ✓   2 [identity] › e2e/identity.spec.ts:197:1 › the CLI link sets up the admin, who lands signed in on / (1.6s)
+  ✓   3 [identity] › e2e/identity.spec.ts:277:1 › sign out lands on /login and the back button shows nothing protected (641ms)
+  ✓   4 [identity] › e2e/identity.spec.ts:300:1 › sign in with a mixed case email, reload keeps the session, deep link as admin (474ms)
+  ✓   5 [identity] › e2e/identity.spec.ts:341:1 › wrong password and unknown email get the same generic error (560ms)
+  ✓   6 [identity] › e2e/identity.spec.ts:359:1 › invalid, malformed and used links show the invalid page (359ms)
+  ✓   7 [identity] › e2e/identity.spec.ts:381:1 › a reset link from the CLI sets a new password and ends the old session (2.2s)
+  ✓   8 [invites] › e2e/invites.spec.ts:81:1 › the admin from the CLI signs in and opens the admin area (875ms)
+  ✓   9 [invites] › e2e/invites.spec.ts:107:1 › a revoked invite link shows the invalid page (2.2s)
+  ✓  10 [invites] › e2e/invites.spec.ts:142:1 › the friend opens a copied invite in another browser and lands signed in as a member (1.6s)
+  ✓  11 [invites] › e2e/invites.spec.ts:180:1 › the admin sees the invite as used, and cannot invite an existing account (1.0s)
+  ✓  12 [invites] › e2e/invites.spec.ts:203:1 › a reset link from the admin area sets the friend's new password (1.5s)
+  ✓  13 [users] › e2e/users.spec.ts:119:1 › the admin invites a friend, who accepts in another browser (1.8s)
+  ✓  14 [users] › e2e/users.spec.ts:140:1 › the admin sees every account above the invites (287ms)
+  ✓  15 [users] › e2e/users.spec.ts:161:1 › disabling the friend sends their next navigation to the sign in page (6.7s)
+  ✓  16 [users] › e2e/users.spec.ts:201:1 › re-enabling lets the friend sign in again, and the old browser stays signed out (1.1s)
+  ✓  17 [users] › e2e/users.spec.ts:220:1 › promoting the friend shows them the Admin entry after a reload (1.2s)
+  ✓  18 [users] › e2e/users.spec.ts:233:1 › the friend demotes the original admin, then restores them (1.9s)
+  ✓  19 [users] › e2e/users.spec.ts:254:1 › the admin demotes themselves after a confirmation and the Admin entry goes (2.7s)
+  ✓  20 [users] › e2e/users.spec.ts:281:1 › the friend goes back to member, and the last active admin is protected (1.2s)
+  ✓  21 [account] › e2e/account.spec.ts:74:1 › the admin is signed in on two browsers (1.1s)
+  ✓  22 [account] › e2e/account.spec.ts:95:1 › the user menu opens the account page (551ms)
+  ✓  23 [account] › e2e/account.spec.ts:109:1 › renaming shows the new name in the header menu at once (334ms)
+  ✓  24 [account] › e2e/account.spec.ts:132:1 › a wrong current password and a mismatch are clear errors that sign nobody out (618ms)
+  ✓  25 [account] › e2e/account.spec.ts:166:1 › changing the password signs the other browser out and keeps this one (757ms)
+  ✓  26 [profile] › e2e/profile.spec.ts:279:1 › a new account gets a profile through the CLI and sees every tab (7.1s)
+  ✓  27 [profile] › e2e/profile.spec.ts:347:1 › Identity: edit, crop and upload a photo, save (9.5s)
+  ✓  28 [profile] › e2e/profile.spec.ts:390:1 › Experience: add an employer, reorder, save (286ms)
+  ✓  29 [profile] › e2e/profile.spec.ts:422:1 › Answers: edit and save (171ms)
+  ✓  30 [profile] › e2e/profile.spec.ts:441:1 › a reload shows every saved change (177ms)
+  ✓  31 [profile] › e2e/profile.spec.ts:472:1 › saving the same section from two browsers shows the conflict dialog (1.6s)
+  ✓  32 [profile] › e2e/profile.spec.ts:520:1 › unsaved changes: switching tab and leaving the page ask first (1.8s)
+  ✓  33 [throttle] › e2e/throttle.spec.ts:96:1 › five wrong passwords, then the sixth attempt is throttled with a countdown (2.7s)
+  ✓  34 [throttle] › e2e/throttle.spec.ts:117:1 › the password card waits out a 429 too (1.5s)
+
+  34 passed (1.0m)
+exit 0

@@ -1,0 +1,87 @@
+tests/e2e_jetson.sh, 2026-10-09T07:56:02Z
+
+== before
+   no jobapp-test-pg-* container stuck in Created
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+   email=hthautin@gmail.com
+   name=Harald
+   role=admin
+   is_active=true
+   created_at=2026-10-08 17:39:02.360711+00
+   updated_at=2026-10-08 17:39:02.360711+00
+   last_login_at=2026-10-08 17:39:02.352888+00
+   password_hash_md5=535112b6e8a9b911311871b743949b88
+   sessions=1
+   sessions_md5=61a83ef08d2e29f8d700735230504f29
+   profile_revision=6
+   profile_updated_at=2026-10-08 20:50:49.450156+00
+   profile_sections_md5=afbbef8472697db16b2eb7118f14d603
+   profile_revisions=6
+   invites=2
+
+== Playwright: web/e2e/identity-all.config.ts through https://colleges-politics-reforms-deleted.trycloudflare.com
+
+Running 34 tests using 1 worker
+
+  ✓   1 [identity] › e2e/identity.spec.ts:187:1 › signed out, / goes to the sign in page with next=/ (1.2s)
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+  ✓   2 [identity] › e2e/identity.spec.ts:197:1 › the CLI link sets up the admin, who lands signed in on / (5.4s)
+  ✓   3 [identity] › e2e/identity.spec.ts:277:1 › sign out lands on /login and the back button shows nothing protected (2.2s)
+  ✓   4 [identity] › e2e/identity.spec.ts:300:1 › sign in with a mixed case email, reload keeps the session, deep link as admin (2.5s)
+  ✓   5 [identity] › e2e/identity.spec.ts:341:1 › wrong password and unknown email get the same generic error (2.6s)
+  ✓   6 [identity] › e2e/identity.spec.ts:359:1 › invalid, malformed and used links show the invalid page (1.7s)
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+   unlocked e2e-admin@example.org, e2e-nobody-mv0o8egz@example.org: 3 failed attempt(s)
+  ✓   7 [identity] › e2e/identity.spec.ts:381:1 › a reset link from the CLI sets a new password and ends the old session (8.0s)
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+  ✓   8 [invites] › e2e/invites.spec.ts:81:1 › the admin from the CLI signs in and opens the admin area (6.0s)
+  ✓   9 [invites] › e2e/invites.spec.ts:107:1 › a revoked invite link shows the invalid page (3.1s)
+  ✓  10 [invites] › e2e/invites.spec.ts:142:1 › the friend opens a copied invite in another browser and lands signed in as a member (2.9s)
+  ✓  11 [invites] › e2e/invites.spec.ts:180:1 › the admin sees the invite as used, and cannot invite an existing account (1.5s)
+   unlocked e2e-admin@example.org, e2e-friend-mv0o8y1ybda4@example.org: 1 failed attempt(s)
+  ✓  12 [invites] › e2e/invites.spec.ts:203:1 › a reset link from the admin area sets the friend's new password (4.1s)
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+  ✓  13 [users] › e2e/users.spec.ts:119:1 › the admin invites a friend, who accepts in another browser (6.7s)
+  ✓  14 [users] › e2e/users.spec.ts:140:1 › the admin sees every account above the invites (592ms)
+  ✓  15 [users] › e2e/users.spec.ts:161:1 › disabling the friend sends their next navigation to the sign in page (8.3s)
+  ✓  16 [users] › e2e/users.spec.ts:201:1 › re-enabling lets the friend sign in again, and the old browser stays signed out (2.7s)
+  ✓  17 [users] › e2e/users.spec.ts:220:1 › promoting the friend shows them the Admin entry after a reload (1.6s)
+  ✓  18 [users] › e2e/users.spec.ts:233:1 › the friend demotes the original admin, then restores them (2.8s)
+  ✓  19 [users] › e2e/users.spec.ts:254:1 › the admin demotes themselves after a confirmation and the Admin entry goes (4.7s)
+   unlocked e2e-admin@example.org, e2e-friend-mv0o9d0w4e61@example.org: 1 failed attempt(s)
+  -  20 [users] › e2e/users.spec.ts:281:1 › the friend goes back to member, and the last active admin is protected
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+  ✓  21 [account] › e2e/account.spec.ts:74:1 › the admin is signed in on two browsers (5.8s)
+  ✓  22 [account] › e2e/account.spec.ts:95:1 › the user menu opens the account page (840ms)
+  ✓  23 [account] › e2e/account.spec.ts:109:1 › renaming shows the new name in the header menu at once (671ms)
+  ✓  24 [account] › e2e/account.spec.ts:132:1 › a wrong current password and a mismatch are clear errors that sign nobody out (1.4s)
+   unlocked e2e-admin@example.org: 2 failed attempt(s)
+  ✓  25 [account] › e2e/account.spec.ts:166:1 › changing the password signs the other browser out and keeps this one (3.9s)
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+  ✓  26 [profile] › e2e/profile.spec.ts:276:1 › a new account gets a profile through the CLI and sees every tab (11.3s)
+  ✓  27 [profile] › e2e/profile.spec.ts:344:1 › Identity: edit, crop and upload a photo, save (10.1s)
+  ✓  28 [profile] › e2e/profile.spec.ts:387:1 › Experience: add an employer, reorder, save (448ms)
+  ✓  29 [profile] › e2e/profile.spec.ts:419:1 › Answers: edit and save (336ms)
+  ✓  30 [profile] › e2e/profile.spec.ts:438:1 › a reload shows every saved change (529ms)
+  ✓  31 [profile] › e2e/profile.spec.ts:469:1 › saving the same section from two browsers shows the conflict dialog (3.8s)
+   unlocked e2e-profile-mv0oabg0@example.org: 0 failed attempt(s)
+  ✓  32 [profile] › e2e/profile.spec.ts:517:1 › unsaved changes: switching tab and leaving the page ask first (3.1s)
+   public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
+  ✓  33 [throttle] › e2e/throttle.spec.ts:96:1 › five wrong passwords, then the sixth attempt is throttled with a countdown (8.5s)
+   unlocked e2e-admin@example.org, e2e-card-mv0oazak@example.org: 5 failed attempt(s)
+  -  34 [throttle] › e2e/throttle.spec.ts:117:1 › the password card waits out a 429 too
+
+  2 skipped
+  32 passed (2.2m)
+
+== after: e2e rows removed, Harald's account unchanged, nobody throttled
+   e2e rows before the cleanup: users=4|sessions=5|profiles=1|invites=11|login_attempts=11
+   e2e rows after the cleanup: users=0|sessions=0|profiles=0|invites=0|login_attempts=0
+   Harald's account: identical before and after (15 fields)
+   failed sign ins in the 15 minute window: email=0|mac_ips=0|all=0 (Mac addresses: 2a01:cb19:74d:4000:896b:59ca:7261:b735, 82.126.154.38)
+   no jobapp-test-pg-* container stuck in Created
+
+== index
+   145 screenshots, index in tasks/evidence/identity/index.md
+
+Identity journey passed on jetson through https://colleges-politics-reforms-deleted.trycloudflare.com
