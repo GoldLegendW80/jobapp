@@ -73,7 +73,7 @@ body_of() { sed -n '/^---8<---$/,$p' <<<"$1" | tail -n +2; }
 hdr() { headers_of "$1" | grep -i "^$2:" | head -n 1 | cut -d' ' -f2-; }
 
 step "services healthy, only caddy published, on loopback"
-for svc in api caddy db redis cloudflared; do
+for svc in api caddy db redis worker cloudflared; do
   id="$(rc ps -q "$svc")"
   [[ -n "$id" ]] || fail "$svc is not running"
   # A service that has just (re)started is `starting` until its first healthcheck: give it a minute.
@@ -90,7 +90,7 @@ for svc in api caddy db redis cloudflared; do
     [[ -z "$ports" ]] || fail "$svc publishes $ports"
   fi
 done
-ok "api, caddy, db, redis, cloudflared healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
+ok "api, caddy, db, redis, worker, cloudflared healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
 if [[ "$HOST" == "local" ]]; then
   ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')"
 else
@@ -243,11 +243,11 @@ fi
 step "memory under the limits"
 stats="$(r "docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \$(cd $RDIR && docker compose -f compose.yml --profile tunnel ps -q)")"
 printf '%s\n' "$stats" | sed 's/^/   /'
-for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB" "cloudflared 128MiB"; do
+for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB" "worker 1.5GiB" "cloudflared 128MiB"; do
   name="${pair% *}"
   limit="${pair#* }"
   grep -Eq "^jobapp-$name-[0-9]+ .* / $limit\$" <<<"$stats" || fail "$name limit is not $limit"
 done
-ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, cloudflared 128MiB"
+ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, worker 1.5GiB, cloudflared 128MiB"
 
 printf '\nAll %d checks passed on %s.\n' "$passed" "$HOST"

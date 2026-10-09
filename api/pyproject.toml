@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic==1.20.0",
     "argon2-cffi==25.1.0",
+    "arq==0.28.0",
     "email-validator==2.3.0",
     "fastapi==0.142.4",
     "httpx==0.28.1",
@@ -13,6 +14,7 @@ dependencies = [
     "psycopg[binary]==3.3.6",
     "pydantic-settings==2.15.0",
     "sqlalchemy==2.1.4",
+    "tzdata==2026.2",
     "uvicorn[standard]==0.54.0",
 ]
 
@@ -49,6 +51,8 @@ filterwarnings = [
     "error",
     # Starlette 1.x prefers httpx2 for its TestClient; httpx is the pinned client of the spec.
     "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+    # arq 0.28 closes its pool with redis-py's close(), deprecated for aclose() since redis 5.0.1.
+    "ignore:Call to deprecated close:DeprecationWarning",
 ]
 markers = ["docker: needs a local Docker daemon to start throwaway Postgres containers"]
 

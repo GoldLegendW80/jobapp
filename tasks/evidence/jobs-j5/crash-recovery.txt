@@ -1,0 +1,25 @@
+Worker killed (SIGKILL) in the middle of a sweep, scratch stack jobapp-j5e2e on the Mac, 2026-10-09.
+The sweep reads one board (fake-timeout) that answers after 21 s, three attempts.
+Columns: time (UTC), status, error, picked by a worker, last heartbeat.
+
+14:25:56 before kill: running None True 2026-10-09T14:25:53.662583+00:00
+14:25:57 worker killed (SIGKILL): running None True 2026-10-09T14:25:53.662583+00:00
+14:25:59 worker started again
+14:26:10 running None True 2026-10-09T14:25:53.662583+00:00
+14:26:21 running None True 2026-10-09T14:25:53.662583+00:00
+14:26:32 running None True 2026-10-09T14:25:53.662583+00:00
+14:26:43 running None True 2026-10-09T14:25:53.662583+00:00
+14:26:54 running None True 2026-10-09T14:25:53.662583+00:00
+14:27:06 running None True 2026-10-09T14:25:53.662583+00:00
+14:27:17 running None True 2026-10-09T14:25:53.662583+00:00
+14:27:28 running None True 2026-10-09T14:25:53.662583+00:00
+14:27:39 running None True 2026-10-09T14:25:53.662583+00:00
+14:27:50 running None True 2026-10-09T14:25:53.662583+00:00
+14:28:01 running None True 2026-10-09T14:25:53.662583+00:00
+14:28:13 running None True 2026-10-09T14:25:53.662583+00:00
+14:28:24 running None True 2026-10-09T14:25:53.662583+00:00
+14:28:35 failed The worker stopped during this sweep. Start it again. True 2026-10-09T14:25:53.662583+00:00
+
+The heartbeat stopped at 14:25:53; the reap cron (every minute at :30) failed the sweep at
+14:28:30, the first run after STALE_AFTER (2 minutes). The user could start a new sweep from then
+on (POST /api/jobs/sweeps also reaps the caller's stale sweep before refusing with 409).

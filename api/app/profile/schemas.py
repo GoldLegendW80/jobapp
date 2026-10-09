@@ -54,7 +54,7 @@ import unicodedata
 import zoneinfo
 from collections.abc import Callable, Iterator
 from datetime import datetime
-from functools import lru_cache, partial
+from functools import partial
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -563,31 +563,31 @@ Ats = Literal["ashby", "greenhouse", "lever"]
 
 WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
 Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+SCHEDULE_TIMES_MAX = 4
 _HHMM = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
-
-
-@lru_cache(maxsize=1)
-def _timezones() -> frozenset[str]:
-    return frozenset(zoneinfo.available_timezones())
+_IANA = "must be an IANA time zone name such as Europe/Paris"
 
 
 class SweepSchedule(_Section):
-    """When the boards are swept automatically: on these weekdays, at these local times (24 hour
-    HH:MM, 1 to 4), in this IANA time zone. Off by default."""
+    """When the boards are swept automatically (jobs J5): on these weekdays, at these local
+    times (24 hour HH:MM, 1 to 4), in this IANA time zone. Off by default. Days are stored
+    deduplicated in week order (Monday first), times deduplicated and sorted, so the same choice
+    always stores the same value. Time zones are region names (Europe/Paris) or UTC: legacy
+    abbreviations such as GMT or EST5EDT are refused."""
 
     enabled: bool = False
     days: Annotated[list[Weekday], Field(min_length=1, max_length=7)] = Field(
         default_factory=lambda: list(WEEKDAYS)
     )
-    times: Annotated[list[str], Field(min_length=1, max_length=4)] = Field(
+    times: Annotated[list[str], Field(min_length=1, max_length=SCHEDULE_TIMES_MAX)] = Field(
         default_factory=lambda: ["06:17"]
     )
     timezone: Annotated[str, StringConstraints(min_length=1, max_length=64)] = "Europe/Paris"
 
     @field_validator("days")
     @classmethod
-    def _unique_days(cls, value: list[str]) -> list[str]:
-        return _unique(value, str, "day")
+    def _week_order(cls, value: list[str]) -> list[str]:
+        return [day for day in WEEKDAYS if day in value]
 
     @field_validator("times")
     @classmethod
@@ -595,13 +595,17 @@ class SweepSchedule(_Section):
         for time_ in value:
             if not _HHMM.match(time_):
                 raise ValueError(f"{time_[:10]!r} is not a time as HH:MM, 00:00 to 23:59")
-        return _unique(value, str, "time")
+        return sorted(set(value))
 
     @field_validator("timezone")
     @classmethod
     def _iana(cls, value: str) -> str:
-        if value not in _timezones():
-            raise ValueError("must be an IANA time zone name such as Europe/Paris")
+        if "/" not in value and value != "UTC":
+            raise ValueError(_IANA)
+        try:
+            zoneinfo.ZoneInfo(value)
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+            raise ValueError(_IANA) from None
         return value
 
 
@@ -627,6 +631,15 @@ class SearchSection(_Section):
     # jobs). Off unless the user turns it on; a section saved before this field existed reads as
     # off.
     sweep_schedule: SweepSchedule = Field(default_factory=lambda: SweepSchedule())
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_sweep_nightly(cls, data: Any) -> Any:
+        # The first J5 draft stored `sweep_nightly`; it never reached production, and the
+        # schedule replaces it (off by default), so the old key is dropped, not refused.
+        if isinstance(data, dict) and "sweep_nightly" in data:
+            data = {k: v for k, v in data.items() if k != "sweep_nightly"}
+        return data
 
     @field_validator("contract_types")
     @classmethod

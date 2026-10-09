@@ -12,8 +12,9 @@
 #                                   into the scratch database jobapp_restore_check, then prints the
 #                                   row count of every table; --keep leaves the scratch database
 #   ops/db.sh restore-live <file>   replaces the live database: automatic pre-restore backup, api
-#                                   stopped, drop, create, restore (rolled back to the pre-restore
-#                                   dump if it fails), alembic upgrade head, api started healthy.
+#                                   and worker stopped, drop, create, restore (rolled back to the
+#                                   pre-restore dump if it fails), alembic upgrade head, api and
+#                                   worker started healthy.
 #                                   No confirmation here: ./deploy.sh restore --into-live asks it.
 #
 # <file>: a path, a name inside $BACKUP_DIR, or `latest`.
@@ -24,6 +25,10 @@
 set -euo pipefail
 umask 077
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+# Tests only (tests/deploy_test.sh): a folder of fake docker and flock found first.
+if [[ -n "${DB_SH_TEST_BIN:-}" ]]; then
+  PATH="$DB_SH_TEST_BIN:$PATH"
+fi
 export LC_ALL=C
 
 die() {
@@ -93,15 +98,16 @@ take_lock() {
   LOCKED=1
 }
 
-# Files to remove and the api to start again if the script stops half way, whatever the reason.
+# Files to remove, and the api and the worker to start again if the script stops half way,
+# whatever the reason. Both use the database: neither may run while it is dropped and restored.
 PARTIAL=""
 API_STOPPED=0
 on_exit() {
   local rc=$?
   [[ -z "$PARTIAL" ]] || rm -f "$PARTIAL"
   if ((API_STOPPED == 1)); then
-    printf 'db.sh: starting api again after a failure\n' >&2
-    dc start api >/dev/null 2>&1 || true
+    printf 'db.sh: starting api and worker again after a failure\n' >&2
+    dc start api worker >/dev/null 2>&1 || true
   fi
   exit "$rc"
 }
@@ -303,21 +309,21 @@ cmd_restore_live() {
   printf '\n== pre-restore backup of the live database %s\n' "$PGDB"
   do_backup pre-restore
   pre="$BACKUP_FILE"
-  printf '\n== stop api\n'
+  printf '\n== stop api and worker\n'
   API_STOPPED=1
-  dc stop api
+  dc stop api worker
   printf '\n== drop, create and restore %s\n' "$PGDB"
   if ! restore_into "$PGDB" "$file"; then
     printf 'db.sh: restore of %s failed; rolling back to %s\n' "$file" "$pre" >&2
     restore_into "$PGDB" "$pre" || die "ROLLBACK FAILED too: the live database is incomplete; restore $pre by hand"
-    dc up -d --no-deps --wait --wait-timeout 120 api
+    dc up -d --no-deps --wait --wait-timeout 120 api worker
     API_STOPPED=0
     die "restore failed, the live database was rolled back to $pre"
   fi
   printf '\n== alembic upgrade head\n'
   dc run --rm --no-deps -T api alembic upgrade head
-  printf '\n== start api\n'
-  dc up -d --no-deps --wait --wait-timeout 120 api
+  printf '\n== start api and worker\n'
+  dc up -d --no-deps --wait --wait-timeout 120 api worker
   API_STOPPED=0
   info "row counts of $PGDB after the restore:"
   row_counts "$PGDB"

@@ -1,0 +1,23 @@
+{
+  "at": "2026-10-09T23:15:04.674Z",
+  "scheduled_time_paris": "01:13",
+  "sweep": {
+    "id": "5bcca89d-cc0b-4504-90b1-2d63de7fbcb8",
+    "trigger": "schedule",
+    "status": "done",
+    "started_at": "2026-10-09T23:15:00.533256Z",
+    "finished_at": "2026-10-09T23:15:01.053334Z",
+    "error": null,
+    "boards_total": 1,
+    "boards_done": 1,
+    "boards_ok": 1,
+    "boards_failed": [],
+    "current_board": null,
+    "seen": 2,
+    "matched": 2,
+    "new": 2,
+    "duplicates": 0,
+    "skipped_by_rule": 0,
+    "duration": 0.01
+  }
+}

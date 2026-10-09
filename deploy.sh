@@ -17,7 +17,8 @@
 #                                  the row counts; the live database is not touched
 #   ./deploy.sh restore <file> --into-live [--yes]
 #                                  replace the live database (asks you to type RESTORE jobapp):
-#                                  pre-restore backup, api stopped, restore, migrations, health
+#                                  pre-restore backup, api and worker stopped, restore, migrations,
+#                                  health
 #   ./deploy.sh restore --drop-scratch   drop the scratch database left by --keep
 #   ./deploy.sh backup-schedule install|remove|status
 #                                  nightly backup in the Jetson user's crontab (no sudo)

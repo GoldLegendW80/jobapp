@@ -18,8 +18,30 @@ export const emptyJobsPage = {
   },
 };
 
+/** No sweep yet, the automatic search off: what GET /api/jobs/sweeps answers a new account. */
+export const emptySweeps = {
+  items: [],
+  schedule: {
+    enabled: false,
+    days: [
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday",
+      "sunday",
+    ],
+    times: ["06:17"],
+    timezone: "Europe/Paris",
+    active: false,
+    next_run: null,
+  },
+};
+
 export const handlers = [
   http.get("*/api/jobs", () => HttpResponse.json(emptyJobsPage)),
+  http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
   http.get("*/api/health", () => HttpResponse.json({ status: "ok" })),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),

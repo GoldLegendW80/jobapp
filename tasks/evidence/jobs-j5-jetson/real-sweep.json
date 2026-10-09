@@ -1,0 +1,18 @@
+{
+  "at": "2026-10-09T14:46:18.500Z",
+  "stack": "https://colleges-politics-reforms-deleted.trycloudflare.com",
+  "boards": [
+    "Mistral AI (ashby, mistral.ai)",
+    "Anthropic (greenhouse, anthropic)"
+  ],
+  "status": "done",
+  "boards_ok": 2,
+  "boards_failed": [],
+  "seen": 855,
+  "matched": 138,
+  "new": 138,
+  "duplicates": 0,
+  "skipped_by_rule": 11,
+  "duration_s": 2.27,
+  "worker_memory_mib": null
+}

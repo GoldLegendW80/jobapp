@@ -99,6 +99,19 @@ def test_the_checker_asks_the_base_and_keeps_redirects_on_it() -> None:
     ]
 
 
+def test_an_org_prefix_sends_only_those_orgs_to_the_stub() -> None:
+    """ATS_BASE_URL_ORG_PREFIX (jobs J5 scratch stacks): fake boards on the stub, real ones real."""
+    checker, recorder, _ = make(
+        lambda r: httpx.Response(200, json=ASHBY), base_url=STUB, org_prefix="fake-"
+    )
+    run(checker, "ashby", "fake-acme")
+    run(checker, "ashby", "acme")
+    assert [str(r.url) for r in recorder.requests] == [
+        f"{STUB}/ashby/posting-api/job-board/fake-acme",
+        "https://api.ashbyhq.com/posting-api/job-board/acme",
+    ]
+
+
 @pytest.mark.parametrize(
     "location",
     [

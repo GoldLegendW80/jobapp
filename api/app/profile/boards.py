@@ -150,8 +150,10 @@ class BoardChecker:
     transport: httpx.AsyncBaseTransport | None = None
     clock: Callable[[], float] = time.monotonic
     timeout_s: float = TIMEOUT_S
-    # settings.ats_base_url: a test stub in place of the real hosts (never set in production)
+    # settings.ats_base_url: a test stub in place of the real hosts (never set in production),
+    # for every org or, with settings.ats_base_url_org_prefix, for the orgs starting with it
     base_url: str | None = None
+    org_prefix: str | None = None
     _cache: OrderedDict[tuple[str, str], tuple[float, BoardCheckOut]] = field(
         default_factory=OrderedDict
     )
@@ -211,7 +213,8 @@ class BoardChecker:
         return answer
 
     async def _fetch(self, ats: str, org: str) -> BoardCheckOut:
-        url = board_url(ats, org, self.base_url)
+        stubbed = self.org_prefix is None or org.startswith(self.org_prefix)
+        url = board_url(ats, org, self.base_url if stubbed else None)
         origin = urlsplit(url)
         async with httpx.AsyncClient(
             transport=self.transport,
@@ -293,7 +296,10 @@ def checker(request: Request) -> BoardChecker:
     found = getattr(request.app.state, "board_checker", None)
     if found is None:
         settings = getattr(request.app.state, "settings", None)
-        found = BoardChecker(base_url=getattr(settings, "ats_base_url", None))
+        found = BoardChecker(
+            base_url=getattr(settings, "ats_base_url", None),
+            org_prefix=getattr(settings, "ats_base_url_org_prefix", None),
+        )
         request.app.state.board_checker = found
     return found
 

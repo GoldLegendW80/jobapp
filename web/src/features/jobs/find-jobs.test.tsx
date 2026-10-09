@@ -1,0 +1,425 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { admin, fakeSession } from "@/test/auth";
+import { fakeJobsApi, makeJob } from "@/test/jobs";
+import { renderApp } from "@/test/render";
+import { emptySweeps, server } from "@/test/server";
+
+import type { ScheduleState, Sweep, SweepDetail } from "./sweeps-api";
+import { sweepTiming } from "./sweeps-api";
+
+const ID = "11111111-2222-4333-8444-555555555555";
+
+function makeSweep(overrides: Partial<Sweep> = {}): Sweep {
+  return {
+    id: ID,
+    trigger: "manual",
+    status: "running",
+    started_at: "2026-10-09T08:00:00Z",
+    finished_at: null,
+    error: null,
+    boards_total: 3,
+    boards_done: 0,
+    boards_ok: 0,
+    boards_failed: [],
+    current_board: null,
+    seen: 0,
+    matched: 0,
+    new: 0,
+    duplicates: 0,
+    skipped_by_rule: 0,
+    duration: null,
+    ...overrides,
+  };
+}
+
+function finished(overrides: Partial<SweepDetail> = {}): SweepDetail {
+  return {
+    ...makeSweep({
+      status: "done",
+      finished_at: "2026-10-09T08:01:00Z",
+      boards_done: 3,
+      boards_ok: 2,
+      seen: 120,
+      matched: 4,
+      new: 2,
+      duplicates: 2,
+      duration: 12.5,
+      boards_failed: [
+        {
+          company: "Gone Corp",
+          ats: "lever",
+          org: "gone",
+          error: "not_found",
+          message: "board not found",
+        },
+      ],
+    }),
+    new_jobs: [
+      {
+        id: "aaaaaaaa-0000-4000-9000-000000000001",
+        company: "Mistral AI",
+        title: "Applied AI Engineer",
+        location: "Paris",
+        fit: 82,
+        status: "found",
+      },
+      {
+        id: "aaaaaaaa-0000-4000-9000-000000000002",
+        company: "Anthropic",
+        title: "Forward Deployed Engineer",
+        location: "London",
+        fit: null,
+        status: "found",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+/**
+ * A fake sweeps api: POST answers `start` (a Response or the sweep), GET /{id} walks through
+ * `states` one per call (the last repeats), GET list answers `list`.
+ */
+function fakeSweeps(options: {
+  start?: () => Response;
+  states?: Array<Sweep | SweepDetail | Response>;
+  list?: Sweep[];
+  schedule?: Partial<ScheduleState>;
+}) {
+  const calls = { start: 0, detail: 0, list: 0 };
+  const states = options.states ?? [];
+  server.use(
+    http.post("*/api/jobs/sweeps", () => {
+      calls.start += 1;
+      return options.start
+        ? options.start()
+        : HttpResponse.json(makeSweep(), { status: 202 });
+    }),
+    http.get("*/api/jobs/sweeps", () => {
+      calls.list += 1;
+      return HttpResponse.json({
+        items: options.list ?? [],
+        schedule: { ...emptySweeps.schedule, ...options.schedule },
+      });
+    }),
+    http.get("*/api/jobs/sweeps/:id", () => {
+      const state = states[Math.min(calls.detail, states.length - 1)];
+      calls.detail += 1;
+      if (state instanceof Response) return state;
+      return HttpResponse.json(
+        "new_jobs" in (state ?? {}) ? state : { ...state, new_jobs: [] },
+      );
+    }),
+  );
+  return calls;
+}
+
+beforeEach(() => {
+  fakeSession(admin);
+  sweepTiming.pollMs = 20;
+  vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+});
+afterEach(() => {
+  sweepTiming.pollMs = 1500;
+});
+
+async function openJobs() {
+  const jobs = fakeJobsApi([makeJob(1)]);
+  const app = renderApp("/jobs");
+  await screen.findByRole("table", { name: "Postings" });
+  return { jobs, app };
+}
+
+describe("Find jobs", () => {
+  it("starts a sweep, shows live progress, then the summary, and refreshes the list", async () => {
+    // Slow enough that the progress line is seen before the end, even on a loaded machine.
+    sweepTiming.pollMs = 300;
+    const calls = fakeSweeps({
+      states: [
+        makeSweep({ boards_done: 1, current_board: "Mistral AI", new: 1 }),
+        makeSweep({ boards_done: 2, current_board: "Anthropic", new: 2 }),
+        finished(),
+      ],
+    });
+    const { jobs } = await openJobs();
+    const before = jobs.requests.length;
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    await waitFor(() => {
+      expect(progress).toHaveTextContent(/Reading (Mistral AI|Anthropic)/);
+    });
+    expect(within(progress).getByRole("progressbar")).toHaveAttribute(
+      "aria-valuemax",
+      "3",
+    );
+    expect(screen.getByRole("button", { name: "Finding jobs" })).toBeDisabled();
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    expect(dialog).toHaveTextContent(
+      "2 boards read, 120 postings seen, 4 matched your search, 2 new postings.",
+    );
+    expect(dialog).toHaveTextContent("2 matches already in your list.");
+    const links = within(
+      within(dialog).getByRole("region", { name: "New postings" }),
+    ).getAllByRole("link");
+    expect(links.map((l) => l.getAttribute("href"))).toEqual([
+      "/jobs/aaaaaaaa-0000-4000-9000-000000000001",
+      "/jobs/aaaaaaaa-0000-4000-9000-000000000002",
+    ]);
+    expect(links[0]).toHaveTextContent("Applied AI Engineer");
+    expect(within(links[0]!).getByLabelText("Fit 82 out of 100")).toBeTruthy();
+    expect(within(links[1]!).getByLabelText("Unscored")).toBeTruthy();
+    const failed = within(dialog).getByRole("region", {
+      name: "Failed boards",
+    });
+    expect(failed).toHaveTextContent("1 board could not be read");
+    expect(failed).toHaveTextContent(
+      "Gone Corp (lever, gone): board not found",
+    );
+
+    expect(calls.start).toBe(1);
+    await waitFor(() => {
+      expect(jobs.requests.length).toBeGreaterThan(before);
+    });
+    expect(
+      screen.queryByRole("region", { name: "Sweep in progress" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Done" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
+  });
+
+  it("opens a new posting from the summary", async () => {
+    fakeSweeps({ states: [finished()] });
+    server.use(
+      http.get("*/api/jobs/:id", () =>
+        HttpResponse.json({ detail: "Job not found." }, { status: 404 }),
+      ),
+    );
+    const { app } = await openJobs();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    await user.click(within(dialog).getByRole("link", { name: /Applied AI/ }));
+    expect(app.location()).toBe("/jobs/aaaaaaaa-0000-4000-9000-000000000001");
+  });
+
+  it("follows the sweep already running on a second start (409)", async () => {
+    fakeSweeps({
+      start: () =>
+        HttpResponse.json(
+          { detail: "A sweep is already running.", sweep_id: ID },
+          { status: 409 },
+        ),
+      states: [
+        makeSweep({ boards_done: 1 }),
+        finished({ new: 0, new_jobs: [] }),
+      ],
+    });
+    await openJobs();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Find jobs" }));
+    expect(
+      await screen.findByText("A sweep is already running: following it."),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("dialog", { name: "No new posting" }),
+    ).toBeInTheDocument();
+  });
+
+  it("explains a profile without boards (422) and offers to open it", async () => {
+    fakeSweeps({
+      start: () =>
+        HttpResponse.json(
+          {
+            detail:
+              "No board is enabled in the search section of your profile.",
+          },
+          { status: 422 },
+        ),
+    });
+    server.use(
+      http.get("*/api/profile", () =>
+        HttpResponse.json({ detail: "x" }, { status: 500 }),
+      ),
+    );
+    const { app } = await openJobs();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    expect(
+      await screen.findByText(
+        "No board is enabled in the search section of your profile.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Open the profile" }));
+    expect(app.location()).toBe("/profile");
+  });
+
+  it("reports a sweep that could not start (503) and stays usable", async () => {
+    fakeSweeps({
+      start: () =>
+        HttpResponse.json(
+          { detail: "The sweep could not be queued. Try again in a minute." },
+          { status: 503 },
+        ),
+    });
+    await openJobs();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Find jobs" }));
+    expect(
+      await screen.findByText(/The sweep did not start\. The API answered 503/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
+  });
+
+  it("follows a sweep already running when the page opens", async () => {
+    const running = makeSweep({
+      trigger: "schedule",
+      boards_done: 2,
+      current_board: "Datadog",
+      new: 4,
+    });
+    fakeSweeps({ list: [running], states: [running, finished()] });
+    await openJobs();
+    const progress = await screen.findByRole("region", {
+      name: "Sweep in progress",
+    });
+    expect(progress).toHaveTextContent(/2 of 3 boards read/);
+    expect(
+      await screen.findByRole("dialog", { name: "2 new postings found" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps polling through a failed request, and shows a failed sweep's error", async () => {
+    fakeSweeps({
+      states: [
+        HttpResponse.json({ detail: "boom" }, { status: 500 }),
+        makeSweep({ boards_done: 1 }),
+        finished({
+          status: "failed",
+          error: "The sweep took too long and was stopped.",
+          new: 1,
+          new_jobs: [finished().new_jobs[0]!],
+          skipped_by_rule: 1,
+        }),
+      ],
+    });
+    await openJobs();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Find jobs" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "The sweep stopped",
+    });
+    expect(dialog).toHaveTextContent(
+      "The sweep took too long and was stopped.",
+    );
+    expect(dialog).toHaveTextContent(
+      "1 new posting matched a never apply rule and was set to Skipped.",
+    );
+  });
+
+  it("stops following a sweep that disappeared (404)", async () => {
+    const calls = fakeSweeps({
+      states: [
+        HttpResponse.json({ detail: "Sweep not found." }, { status: 404 }),
+      ],
+    });
+    await openJobs();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Find jobs" }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("region", { name: "Sweep in progress" }),
+      ).not.toBeInTheDocument();
+    });
+    const seen = calls.detail;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(calls.detail).toBe(seen);
+    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
+  });
+});
+
+describe("Sweep history", () => {
+  it("lists the last sweeps with the automatic schedule and opens one", async () => {
+    fakeSweeps({
+      schedule: {
+        enabled: true,
+        active: true,
+        next_run: "2026-10-10T04:17:00Z",
+      },
+      list: [
+        makeSweep({
+          id: "b0000000-0000-4000-9000-000000000001",
+          status: "done",
+          trigger: "schedule",
+          new: 3,
+          started_at: "2026-10-09T04:17:00Z",
+        }),
+        makeSweep({
+          id: "b0000000-0000-4000-9000-000000000002",
+          status: "failed",
+          new: 0,
+          boards_failed: [
+            {
+              company: "X",
+              ats: "ashby",
+              org: "x",
+              error: "timeout",
+              message: "no answer in time",
+            },
+          ],
+        }),
+      ],
+      states: [finished()],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Sweep history" }));
+    const dialog = await screen.findByRole("dialog", { name: "Sweeps" });
+    expect(
+      within(dialog).getByRole("region", { name: "Automatic search" }),
+    ).toHaveTextContent(
+      "Automatic search: on, every day at 06:17 (Europe/Paris). Next: Sat 10 Oct, 06:17 (Europe/Paris).",
+    );
+    const items = within(
+      within(dialog).getByRole("list", { name: "Last sweeps" }),
+    ).getAllByRole("button");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent(/Automatic, Done/);
+    expect(items[0]).toHaveTextContent("3 new");
+    expect(items[1]).toHaveTextContent(/By hand, Failed, 1 board failed/);
+    await user.click(items[0]!);
+    expect(
+      await screen.findByRole("dialog", { name: "2 new postings found" }),
+    ).toBeInTheDocument();
+  });
+
+  it("says when there is no sweep yet and the automatic search is off", async () => {
+    fakeSweeps({ list: [] });
+    await openJobs();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "Sweep history" }));
+    const dialog = await screen.findByRole("dialog", { name: "Sweeps" });
+    expect(dialog).toHaveTextContent("Automatic search: off.");
+    expect(dialog).toHaveTextContent("No sweep yet.");
+  });
+});

@@ -1,0 +1,22 @@
+The Jetson after the J5 real-world check, 2026-10-09 (UTC times).
+
+14:44  Harald's jobs snapshot, before the branch was deployed (scratchpad copy of the query of
+       tests/e2e_jobs_sweep_jetson.sh):
+         jobs=433
+         per_status=found:158,shortlisted:146,cv_ready:3,staged:29,applied:29,interview:2,closed:6,skipped:60
+         fit_sum=34530
+         fits_manual=40
+         max_updated_at=2026-10-09 13:23:59.0329+00
+         events=473
+         files=330
+         sweeps=0
+         rows_md5=096c5d2273c6a2779ded85a5a1fa33a8
+         profile_revision=6
+14:45  ./deploy.sh from the branch jobs/j5-worker-sweep (worker service up and healthy).
+14:46  tests/e2e_jobs_sweep_jetson.sh: one real sweep for e2e-admin@example.org (run.log,
+       real-sweep.json); e2e rows deleted; Harald's snapshot identical before and after.
+14:50  ./deploy.sh from a clean export of origin/main (f54b0ad, git archive): the worker container
+       is gone (--remove-orphans), api, caddy, db, redis, cloudflared healthy, alembic 0004 (head).
+       The one arq result key the e2e sweep left in Redis was deleted (dbsize 0).
+14:51  Harald's snapshot again: identical to the one of 14:44, field for field (sweeps=0).
+No sweep ever ran for Harald's account, and no nightly run can: the worker is not deployed.
