@@ -213,7 +213,8 @@ describe("login page", () => {
 
       await user.click(again);
       await waitFor(() => {
-        expect(location()).toBe("/");
+        // Signed in: "/", which the index route redirects to "/jobs" (either may be seen).
+        expect(location()).toMatch(/^\/(jobs)?$/);
       });
       expect(seen).toHaveLength(2);
     } finally {
