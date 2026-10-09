@@ -58,7 +58,7 @@ ingestion_runs(id uuid, user_id fk cascade, agent_run_id fk agent_runs, document
 
 ## Extraction agent
 
-- Runs on the `agents` runtime with the user's credential, model `claude-opus-5-5`, max 80 turns and 30 minutes per run, with the only built-in tool being file reading scoped to the run's scratch directory (for transcription), and read-only app tools over the run's documents (`list_documents`, `read_document(id, offset, limit)`, `get_profile_section`) and one write tool `propose_profile_changes(section, items[])` with a strict schema. Each item has:
+- Runs on the `agents` runtime with the user's credential, model `claude-opus-5-5`, turn limit sized from the input (20 + 10 per document, at most 400) and 60 minutes per run, with one sub-run per document for transcription and extraction then one merge sub-run, with the only built-in tool being file reading scoped to the run's scratch directory (for transcription), and read-only app tools over the run's documents (`list_documents`, `read_document(id, offset, limit)`, `get_profile_section`) and one write tool `propose_profile_changes(section, items[])` with a strict schema. Each item has:
   - a **stable key**: the employer `key`, the school name and start, the facts block `title`, the skills category `name`, the board `org`, the answers field name; never an array index;
   - the action (`add`, `replace`, `remove`), the proposed value (validated against the section's Pydantic model before it is stored), and one or more citations `{document_id, excerpt}`.
 - **Citation check** (server side, before storing): Unicode NFKC, case folding, whitespace collapsed and hyphenation at line breaks removed on both the excerpt and the document text; the excerpt must be at least 20 characters (or the whole value, if shorter) and found in the text. Values are then checked against their excerpts by type:
@@ -77,6 +77,7 @@ ingestion_runs(id uuid, user_id fk cascade, agent_run_id fk agent_runs, document
 Ingestion uses the `proposals` table of SPEC-agents (amended in this PR: nullable `target_id`, statuses `superseded` and `invalid`, optional `edited_value` on accept) with `target = "profile"`, `target_id = null`, `kind = "profile_item"`, one row per item, and `payload = {section, key, action, value, citations[], base_revision, conflict?}`. Applying items:
 - `POST /api/proposals/{id}/accept` takes an optional `edited_value` (validated by the section schema; SPEC-agents' accept endpoint gains this optional field).
 - `POST /api/ingestion/runs/{id}/accept-section {section, proposal_ids[]}` applies several items of one section in **one profile save, so one revision**; locked items are refused in this call.
+- **Invalid:** an item whose value no longer validates against its section's schema when it is read or accepted (the schema changed, or the stored value was edited elsewhere) is set to `invalid` and shown greyed out with the reason; it cannot be accepted.
 - **Stale** is computed when proposals are read, never stored: if the profile section changed since the run's `base_revision` and the item's key changed meanwhile, the item is shown as stale and needs a fresh look; others apply normally.
 - The review page lists only `kind = "profile_item"` proposals of the run; the job pages list only job proposals (`GET /api/proposals?kind=`).
 
