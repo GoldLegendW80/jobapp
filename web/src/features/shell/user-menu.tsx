@@ -1,4 +1,5 @@
-import { LogOut } from "lucide-react";
+import { LogOut, UserRound } from "lucide-react";
+import { Link } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,12 @@ export function UserMenu({ user }: { user: User }) {
           </span>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link to="/account">
+            <UserRound aria-hidden="true" />
+            Account
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem
           disabled={signingOut}
           onSelect={() => {

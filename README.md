@@ -200,6 +200,33 @@ project (`-p jobapp-i5`, `HTTP_PORT=8095`, `E2E_COMPOSE_PROJECT=jobapp-i5`), and
 the same two throwaway accounts and the same cleanup. It only ever acts on the rows of its two
 emails, and checks the last admin rule in the browser only where its admin is the only active one.
 
+### Your account
+
+Everyone has an **Account** page (`/account`, from the user menu at the top right) with two cards:
+
+- **Profile name**: the name shown in the header menu and to the admin. Same rules as on the
+  invite page: trimmed, inner spaces collapsed, 1 to 100 characters, no control characters.
+- **Change password**: the current password, then the new one twice (10 to 128 characters, not
+  your email, not a common password, not the current one). Each field has a show toggle. On
+  success every other browser signed in to the account is signed out at its next request; the
+  browser you used stays signed in.
+
+Forgot your password? Ask the admin for a reset link (Admin, Invite someone, kind "Password
+reset"): it is valid 1 hour, opens `/reset/<token>`, and setting a new password there signs out
+every browser of the account.
+
+The API, for the signed in user only (401 without a session, 403 without the CSRF header):
+`PATCH /api/auth/me` `{name}` (200 with the user, 422 `name: <rule>`) and `POST /api/auth/password`
+`{current_password, new_password}` (204). A wrong current password is a 400
+`current_password: The current password is incorrect.`, not a 401: the session is fine and stays
+signed in. A broken rule is a 422 `new_password: <the invite page's message>`. Errors name their
+field first so the page can put each message under its input. Under two simultaneous changes from
+two browsers, the first one wins and ends the other's session, which gets a 401.
+
+The account journey (`web/e2e/account.spec.ts`) runs like the others, on its own scratch project
+(`-p jobapp-i6`, `HTTP_PORT=8096`, `E2E_COMPOSE_PROJECT=jobapp-i6`), and on the Jetson with the
+throwaway admin `e2e-admin@example.org` only, removed afterwards with the same cleanup as above.
+
 ## Profile export and import
 
 `GET /api/profile/export` downloads the whole profile as `profile-YYYY-MM-DD.json`;

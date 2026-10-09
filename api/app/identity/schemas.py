@@ -38,6 +38,16 @@ class AcceptInviteIn(_Strict):
     password: str = Field(min_length=1, max_length=PASSWORD_MAX)
 
 
+class PasswordChangeIn(_Strict):
+    current_password: str = Field(min_length=1, max_length=PASSWORD_MAX)
+    new_password: str = Field(min_length=1, max_length=PASSWORD_MAX)
+
+
+class NameIn(_Strict):
+    # Cleaned and checked by service.clean_name, so the message is the invite page's.
+    name: str = Field(max_length=NAME_INPUT_MAX)
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

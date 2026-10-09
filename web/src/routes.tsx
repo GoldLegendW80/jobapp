@@ -1,6 +1,7 @@
 import { Outlet, type RouteObject } from "react-router";
 
 import { Toaster } from "@/components/ui/sonner";
+import { AccountPage } from "@/features/account/account-page";
 import { AdminUsersPage } from "@/features/admin/users-page";
 import { AuthProvider } from "@/features/auth/auth-provider";
 import { PublicOnly, RequireAdmin, RequireAuth } from "@/features/auth/guards";
@@ -41,6 +42,7 @@ export const routes: RouteObject[] = [
         ),
         children: [
           { index: true, element: <HomePage /> },
+          { path: "account", element: <AccountPage /> },
           {
             path: "admin/users",
             element: (

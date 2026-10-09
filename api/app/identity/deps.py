@@ -187,6 +187,14 @@ async def current_user(request: Request) -> User:
     return active.user
 
 
+async def current_session(request: Request) -> service.ActiveSession:
+    """The session this request runs under (its row and user), for routes that act on it."""
+    active = await resolve(request)
+    if active is None:
+        raise unauthorized()
+    return active
+
+
 async def require_admin(user: User = Depends(current_user)) -> User:  # noqa: B008
     # 404, not 403: a member learns nothing about which admin routes exist.
     if user.role is not Role.admin:

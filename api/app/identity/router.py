@@ -1,4 +1,5 @@
-"""/api/auth: sign in, sign out, who am I, and the invite or reset link a person opens.
+"""/api/auth: sign in, sign out, who am I, your own name and password, and the invite or reset
+link a person opens.
 
 The handlers are plain `def`: FastAPI runs them on its threadpool (`run_in_threadpool`), so the
 argon2 work (about 50 ms per hash or verification) and the blocking database calls never stall
@@ -16,7 +17,15 @@ from sqlalchemy.orm import Session
 from app.db import get_session
 from app.identity import deps, security, service
 from app.identity.models import User
-from app.identity.schemas import AcceptInviteIn, ErrorOut, InviteOut, LoginIn, UserOut
+from app.identity.schemas import (
+    AcceptInviteIn,
+    ErrorOut,
+    InviteOut,
+    LoginIn,
+    NameIn,
+    PasswordChangeIn,
+    UserOut,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -25,6 +34,12 @@ LINK_INVALID = "This link is not valid. It may have expired or been used already
 
 Db = Annotated[Session, Depends(get_session)]
 CurrentUser = Annotated[User, Depends(deps.current_user)]
+CurrentSession = Annotated[service.ActiveSession, Depends(deps.current_session)]
+
+# Errors of the account routes name their field first, like the 422 of a malformed body
+# ("new_password: String should have at most 1024 characters"), so the page can put each
+# message under the right input: "<field>: <message>".
+CURRENT_PASSWORD_WRONG = "current_password: The current password is incorrect."  # noqa: S105, a message
 
 _401 = {401: {"model": ErrorOut, "description": "Not signed in, or the credentials are wrong"}}
 _404 = {404: {"model": ErrorOut, "description": "The link is not valid"}}
@@ -73,6 +88,78 @@ def logout(request: Request, db: Db) -> Response:
 @router.get("/me", response_model=UserOut, responses=_401)
 def me(user: CurrentUser) -> User:
     return user
+
+
+def _session_ended(request: Request, db: Session) -> HTTPException:
+    """The session ended (or the account was disabled) while the request ran: drop the cookie
+    and answer like any request without a session."""
+    db.rollback()
+    deps.clear_cookie(request)
+    return deps.unauthorized()
+
+
+@router.patch(
+    "/me",
+    response_model=UserOut,
+    responses={**_401, 422: {"model": ErrorOut, "description": "name: the rule it breaks"}},
+)
+def rename_me(body: NameIn, request: Request, db: Db, active: CurrentSession) -> User:
+    """Change your own display name: trimmed, NFC, whitespace runs collapsed, 1 to 100
+    characters, no control characters (the invite page's rules and messages)."""
+    try:
+        user = service.rename_user(
+            db, active.user.id, active.row.id, body.name, now=deps.clock(request)
+        )
+    except service.AcceptError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"name: {exc}"
+        ) from None
+    except service.SessionEndedError:
+        raise _session_ended(request, db) from None
+    db.commit()
+    return user
+
+
+@router.post(
+    "/password",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+    responses={
+        **_401,
+        400: {"model": ErrorOut, "description": "current_password: incorrect"},
+        422: {"model": ErrorOut, "description": "new_password: the rule it breaks"},
+    },
+)
+def change_password(
+    body: PasswordChangeIn, request: Request, db: Db, active: CurrentSession
+) -> Response:
+    """Change your password. A wrong current password is a 400 (not 401: the session is fine
+    and stays signed in), the new one must pass the invite rules and differ from the current
+    one (422). On success every other session of the account ends; this one stays. 204."""
+    try:
+        service.change_password(
+            db,
+            active.user.id,
+            active.row.id,
+            body.current_password,
+            body.new_password,
+            now=deps.clock(request),
+        )
+    except service.WrongPasswordError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=CURRENT_PASSWORD_WRONG
+        ) from None
+    except security.PasswordRuleError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"new_password: {exc}"
+        ) from None
+    except service.SessionEndedError:
+        raise _session_ended(request, db) from None
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/invites/{token}", response_model=InviteOut, responses=_404)

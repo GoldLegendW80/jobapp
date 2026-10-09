@@ -78,3 +78,24 @@ export function acceptInvite(
     authRedirect: false,
   });
 }
+
+/**
+ * Change the signed in user's password (204). The api ends every other session and keeps this
+ * one. A wrong current password is a 400 naming `current_password`; a rule broken by the new
+ * one is a 422 naming `new_password` ("<field>: <message>", see `fieldError`).
+ */
+export async function changePassword(body: {
+  current_password: string;
+  new_password: string;
+}): Promise<void> {
+  await request("/auth/password", { method: "POST", body });
+}
+
+/** Rename the signed in user; returns the user as stored (trimmed, NFC). */
+export function renameMe(name: string): Promise<User> {
+  return request("/auth/me", {
+    method: "PATCH",
+    body: { name },
+    validate: parseUser,
+  });
+}

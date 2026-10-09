@@ -378,6 +378,110 @@ def accept_invite(
     return user
 
 
+# --- the account page: password and name ------------------------------------------------------
+
+
+class WrongPasswordError(ValueError):
+    """The current password given is not the account's password (or it changed meanwhile)."""
+
+
+class SessionEndedError(LookupError):
+    """The caller's session ended, or its account was disabled, while the request ran."""
+
+
+SAME_PASSWORD = "The new password must be different from the current one."  # noqa: S105, a message
+
+
+def _lock_live_account(session: Session, user_id: UUID, session_id: UUID, now: datetime) -> User:
+    """Lock the account row (SELECT ... FOR UPDATE) and check, under that lock and with a fresh
+    read, that it is still active and that the caller's session still exists and is unexpired.
+    Read committed takes a new snapshot per statement, so a change committed by another request
+    while this one waited for the lock is seen here. Raises SessionEndedError."""
+    user = session.scalars(
+        sa.select(User)
+        .where(User.id == user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if user is None or not user.is_active:
+        raise SessionEndedError
+    alive = session.scalar(
+        sa.select(UserSession.id).where(
+            UserSession.id == session_id,
+            UserSession.user_id == user_id,
+            UserSession.expires_at > now,
+        )
+    )
+    if alive is None:
+        raise SessionEndedError
+    return user
+
+
+def change_password(
+    session: Session,
+    user_id: UUID,
+    session_id: UUID,
+    current: str,
+    new: str,
+    now: datetime | None = None,
+) -> int:
+    """Replace the password of a signed in account and end its other sessions; the session
+    `session_id` (the caller's browser) stays. Returns how many other sessions ended. The caller
+    commits.
+
+    Order: the current password is verified (WrongPasswordError), the new one must differ from
+    it after NFKC normalisation and pass the rules of `security.check_password_rules`
+    (PasswordRuleError, code `same_as_current` or the rule's code). Both slow argon2 steps run
+    before the account row is locked. Under the lock the account must still be active and the
+    session alive (SessionEndedError), and the hash must still be the one just verified: when
+    two sessions change the password at once, the first to take the lock wins and ends the other
+    session, which then gets SessionEndedError. A hash replaced by a reset link meanwhile gives
+    WrongPasswordError. A wrong current password never ends any session.
+    """
+    now = now or utcnow()
+    user = session.scalars(
+        sa.select(User).where(User.id == user_id).execution_options(populate_existing=True)
+    ).one_or_none()
+    if user is None or not user.is_active:
+        security.hash_dummy(current)
+        raise SessionEndedError
+    verified_hash = user.password_hash
+    if not security.verify_password(verified_hash, current):
+        raise WrongPasswordError
+    if security.normalize_password(new) == security.normalize_password(current):
+        raise security.PasswordRuleError("same_as_current", SAME_PASSWORD)
+    new_hash = security.hash_password(security.check_password_rules(new, user.email))
+
+    locked = _lock_live_account(session, user_id, session_id, now)
+    if locked.password_hash != verified_hash:
+        raise WrongPasswordError
+    locked.password_hash = new_hash
+    ended = session.execute(
+        sa.delete(UserSession).where(UserSession.user_id == user_id, UserSession.id != session_id)
+    )
+    session.flush()  # updated_at moves through its onupdate
+    return int(ended.rowcount or 0)
+
+
+def rename_user(
+    session: Session,
+    user_id: UUID,
+    session_id: UUID,
+    raw_name: str | None,
+    now: datetime | None = None,
+) -> User:
+    """Set the display name of a signed in account, cleaned as on an invite (`clean_name`:
+    NFC, whitespace collapsed, 1 to NAME_MAX_LENGTH characters, no control characters). The
+    same name writes nothing, so updated_at stays. Raises AcceptError or SessionEndedError.
+    The caller commits."""
+    name = clean_name(raw_name)
+    user = _lock_live_account(session, user_id, session_id, now or utcnow())
+    if user.name != name:
+        user.name = name
+        session.flush()
+    return user
+
+
 # --- admin: listing and revoking links ---------------------------------------------------------
 
 

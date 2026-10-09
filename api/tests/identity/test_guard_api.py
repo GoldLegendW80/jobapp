@@ -50,7 +50,8 @@ def test_post_without_the_csrf_header_is_403(api: Api, path: str, value: str | N
 @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
 def test_other_unsafe_methods_need_the_header_too(api: Api, method: str) -> None:
     assert api.request(method, "/api/auth/me", csrf=False).status_code == 403
-    assert api.request(method, "/api/auth/me").status_code == 405
+    # PATCH /api/auth/me renames the signed in user (I6): with the header and no session, 401.
+    assert api.request(method, "/api/auth/me").status_code == (401 if method == "PATCH" else 405)
 
 
 def test_csrf_check_runs_before_authentication_and_login(
@@ -279,7 +280,14 @@ def test_startup_rechecks_routes_added_after_create_app() -> None:
 
 def test_handlers_doing_argon2_run_on_the_threadpool() -> None:
     # Plain def handlers: FastAPI calls them through run_in_threadpool, never on the loop.
-    for handler in (router.login, router.accept_invite, router.logout, router.check_invite):
+    for handler in (
+        router.login,
+        router.accept_invite,
+        router.logout,
+        router.check_invite,
+        router.change_password,
+        router.rename_me,
+    ):
         assert not inspect.iscoroutinefunction(handler), handler.__name__
 
 
