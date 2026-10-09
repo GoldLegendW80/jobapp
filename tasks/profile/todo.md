@@ -27,7 +27,7 @@ Spec: [SPEC-profile.md](../../SPEC-profile.md). Depends on identity (I1 to I3 at
 **Verify:** pytest with real image fixtures and hostile files.
 **Files:** `api/app/profile/{router,service}.py`, tests. **Scope:** S
 
-## P4: Profile page shell and form sections (identity, experience, answers)
+## P4: Profile page shell and form sections (identity, experience, answers) (done 2026-10-09)
 
 **Acceptance:** /profile with tabs and completeness bar; three form tabs with validation, save, 409 handling with reload, unsaved-change prompt; photo upload with square crop.
 **Verify:** Vitest; Playwright locally; screenshots.
