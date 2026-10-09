@@ -450,7 +450,9 @@ test("Rescore all keeps every fit set by hand", async () => {
   await expect(summary).toBeVisible({ timeout: 120_000 });
   const text = (await summary.textContent()) ?? "";
   console.log(`   ${text}`);
-  expect(text).toContain(`${manual.length} fits set by hand kept`);
+  expect(text).toContain(
+    `${manual.length} ${manual.length === 1 ? "fit" : "fits"} set by hand kept`,
+  );
 
   const after = new Map(
     (await allRows(page.request)).map((row) => [row.id, row]),
