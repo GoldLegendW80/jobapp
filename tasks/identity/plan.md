@@ -29,7 +29,7 @@ Invite-only accounts with server-side sessions, an admin area, and the `current_
 
 - [x] I4: Invites: admin creates a link, friend accepts and is signed in
 - [x] I5: Admin users page: list, disable, role, last-admin protection
-- [ ] I6: Account password change and reset links
+- [x] I6: Account password change and reset links
 
 ### Checkpoint I-B
 - [ ] Two-user journey works; isolation fixture proves cross-user reads fail

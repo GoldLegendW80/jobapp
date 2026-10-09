@@ -91,9 +91,9 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 ## I6: Account password change and reset links
 
 **Acceptance criteria:**
-- [ ] Changing the password ends the other sessions, keeps the current one
-- [ ] Admin creates a reset link (1 hour); `/reset/:token` sets a new password and ends all old sessions
-- [ ] Wrong current password, weak new password, same as email: clear errors
+- [x] Changing the password ends the other sessions, keeps the current one
+- [x] Admin creates a reset link (1 hour); `/reset/:token` sets a new password and ends all old sessions
+- [x] Wrong current password, weak new password, same as email: clear errors
 
 **Verification:** pytest; Playwright
 
