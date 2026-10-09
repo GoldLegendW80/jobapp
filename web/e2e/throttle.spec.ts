@@ -12,7 +12,7 @@ import {
   watchErrors,
 } from "./stack";
 
-const shots = makeShots("identity-i7");
+const shots = makeShots("identity-i7", "throttle");
 
 /**
  * Sign in throttling against the real stack through Caddy: five wrong passwords, then the sixth

@@ -25,6 +25,9 @@
 #                                  print a one-time admin setup link on the public URL (a 1 hour
 #                                  password reset link when that admin exists); runs
 #                                  python -m app.identity.cli create-admin in the api container
+#   ./deploy.sh admin unlock <email> [--ip <ip>]
+#                                  delete the failed sign in attempts of that email (and of that
+#                                  address) in the 15 minute window, print how many went
 #
 # <file> is a local file (uploaded first), a path on the Jetson, a name in the backup directory,
 # or `latest`. The work on the Jetson is done by ops/db.sh, streamed over ssh.
@@ -480,7 +483,12 @@ cmd_ssh() {
 }
 
 cmd_admin() {
-  [[ $# -eq 2 && "$1" == "create" ]] || die "usage: ./deploy.sh admin create <email>"
+  if [[ "${1:-}" == "unlock" ]]; then
+    shift
+    cmd_admin_unlock "$@"
+    return
+  fi
+  [[ $# -eq 2 && "$1" == "create" ]] || die "usage: ./deploy.sh admin create <email>, or admin unlock <email> [--ip <ip>]"
   local email="$2"
   # Checked here so a typo never reaches the Jetson; the CLI then validates the address itself.
   # A leading dash would be read as an option by the CLI, and whitespace or control characters
@@ -496,6 +504,45 @@ cmd_admin() {
   note "public URL: $url"
   # The link (and its token) goes to stdout only, never to a log.
   rcompose exec -T api python -m app.identity.cli create-admin "$email" --base-url "$url"
+}
+
+# admin unlock: delete the failed sign in attempts of one email (and of one address with --ip)
+# still inside the 15 minute throttle window, and print how many rows went. The values reach
+# psql as variables (:'email', :'ip'), never spliced into the SQL; Postgres parses the address.
+UNLOCK_SQL="with gone as (delete from login_attempts where not success
+  and at > now() - interval '15 minutes'
+  and (email = :'email' or (:'ip' <> '' and ip = nullif(:'ip', '')::inet)) returning 1)
+select count(*) from gone;"
+
+cmd_admin_unlock() {
+  local usage="usage: ./deploy.sh admin unlock <email> [--ip <ip>]" email="" ip=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ip)
+        [[ $# -ge 2 && -n "$2" ]] || die "$usage"
+        ip="$2"
+        shift 2
+        ;;
+      -*) die "unknown option for admin unlock: $1 ($usage)" ;;
+      *)
+        [[ -z "$email" ]] || die "$usage"
+        email="$1"
+        shift
+        ;;
+    esac
+  done
+  [[ "$email" == *@* && ${#email} -le 320 ]] || die "admin unlock needs one email address, got '$email'"
+  [[ ! "$email" =~ [[:space:][:cntrl:]] ]] || die "admin unlock: the email contains whitespace or control characters"
+  [[ -z "$ip" || ("$ip" =~ ^[0-9A-Fa-f:.]+$ && ${#ip} -le 45) ]] || die "admin unlock: '$ip' is not an IP address"
+  ssh_master
+  require_remote
+  require_deployed
+  local removed
+  # shellcheck disable=SC2016 # $POSTGRES_* and $1, $2 expand in the db container
+  removed="$(rcompose exec -T db sh -c 'psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tA -v email="$1" -v ip="$2"' \
+    sh "$email" "$ip" <<<"$UNLOCK_SQL" | tr -d '\r')" || die "admin unlock: psql refused it, nothing deleted"
+  [[ "$removed" =~ ^[0-9]+$ ]] || die "admin unlock: unexpected answer from psql: $removed"
+  info "removed $removed failed sign in attempt(s) of $email${ip:+ and of $ip} in the last 15 minutes"
 }
 
 cmd_url() {
@@ -621,12 +668,21 @@ cmd_smoke() {
 
   # Identity through the tunnel: no session is a 401, a state-changing call without the CSRF
   # header a 403.
-  code="$(pcurl "$url/api/auth/me")"
-  if [[ "$code" == "401" ]]; then
-    pass "/api/auth/me without a session: 401"
-  else
-    flunk "/api/auth/me without a session answered $code: $(pbrief)"
-  fi
+  # Protected routes of every kind (the user, the admin area, a user's own data, and a write
+  # carrying the CSRF header) answer 401 without a session, a forged cookie included.
+  local protected
+  for protected in "GET /api/auth/me" "GET /api/admin/users" "GET /api/admin/invites" "GET /api/profile" \
+    "PATCH /api/auth/me"; do
+    local body=()
+    [[ "$protected" == GET* ]] || body=(-H 'Content-Type: application/json' --data-binary '{"name": "x"}')
+    code="$(pcurl "$url${protected#* }" -X "${protected%% *}" -H 'X-Requested-With: jobapp' \
+      -H 'Cookie: jobapp_session=forged' ${body[@]+"${body[@]}"})"
+    if [[ "$code" == "401" ]] && grep -q '"detail"' "$PDIR/b"; then
+      pass "$protected without a session: 401"
+    else
+      flunk "$protected without a session answered $code: $(pbrief)"
+    fi
+  done
   code="$(pcurl "$url/api/auth/logout" -X POST)"
   if [[ "$code" == "403" ]] && grep -q 'X-Requested-With' "$PDIR/b"; then
     pass "a POST without X-Requested-With is refused (403)"

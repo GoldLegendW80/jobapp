@@ -4,6 +4,7 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import {
   caddyUrl,
+  clearAttempts,
   cliLink,
   createLink,
   makeShots,
@@ -14,7 +15,7 @@ import {
   watchErrors,
 } from "./stack";
 
-const shots = makeShots("identity-i5");
+const shots = makeShots("identity-i5", "users");
 
 /**
  * The accounts table of the admin area, against the real stack through Caddy: no mocks.
@@ -37,9 +38,10 @@ const shots = makeShots("identity-i5");
 test.describe.configure({ mode: "serial" });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
-const run = Date.now().toString(36);
+// Unique per spec file, so two specs of one run never share a friend.
+const run = `${Date.now().toString(36)}${randomBytes(2).toString("hex")}`;
 const ADMIN = process.env.E2E_ADMIN_EMAIL ?? `e2e-admin-${run}@example.org`;
-const FRIEND = process.env.E2E_FRIEND_EMAIL ?? `friend-${run}@example.org`;
+const FRIEND = process.env.E2E_FRIEND_EMAIL ?? `e2e-friend-${run}@example.org`;
 const ADMIN_NAME = "E2E Admin";
 const FRIEND_NAME = "E2E Friend";
 // Fresh per run, never a common password, never logged.
@@ -111,6 +113,7 @@ test.beforeAll(async ({ browser }) => {
 test.afterAll(async () => {
   await adminContext.close();
   await friendContext.close();
+  clearAttempts([ADMIN, FRIEND]);
 });
 
 test("the admin invites a friend, who accepts in another browser", async () => {

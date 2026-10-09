@@ -9,8 +9,9 @@
 # `url` against a fake ssh that plays the Jetson's docker (URL alone on stdout, logs read since the
 # container's last start, waiting, stopped or missing cloudflared), the backup and restore
 # options refused before any network call, *.dump and backups/ kept out of git and rsync, and the
-# typed confirmation of restore --into-live against a fake Jetson, and `admin create` (argument
-# checks before any network call; the CLI run in the api container with the tunnel URL, quoted).
+# typed confirmation of restore --into-live against a fake Jetson, `admin create` (argument
+# checks before any network call; the CLI run in the api container with the tunnel URL, quoted),
+# and `admin unlock` (argument checks first; psql in the db container, values bound, count printed).
 # Needs Docker (for the pinned shellcheck image) and rsync.
 set -euo pipefail
 
@@ -142,6 +143,37 @@ ok "admin create: wrong or missing action, extra arguments, no @, leading dash, 
 run 0 ./deploy.sh --help
 out_has "admin create <email>"
 ok "--help documents admin create"
+for args in "admin unlock" "admin unlock --ip 203.0.113.9" "admin unlock no-at-sign"; do
+  # shellcheck disable=SC2086 # word splitting wanted
+  run 1 nohost ./deploy.sh $args
+  out_has "admin unlock needs one email address"
+done
+for args in "admin unlock a@b.c d@e.f" "admin unlock a@b.c --ip" "admin unlock --ip"; do
+  # shellcheck disable=SC2086 # word splitting wanted
+  run 1 nohost ./deploy.sh $args
+  out_has "usage: ./deploy.sh admin unlock <email> \[--ip <ip>\]"
+done
+run 1 nohost ./deploy.sh admin unlock a@b.c --bogus
+out_has "unknown option for admin unlock: --bogus"
+run 1 nohost ./deploy.sh admin unlock -x@example.org
+out_has "unknown option for admin unlock: -x@example.org"
+for email in "a b@example.org" $'a@example.org\nrm' "$(printf 'a%.0s' {1..320})@x.org"; do
+  run 1 nohost ./deploy.sh admin unlock "$email"
+  out_has "admin unlock"
+  grep -q "cannot reach" "$WORK/out" && fail "'$email' reached the ssh check"
+done
+for ip in "1.2.3.4; drop table users" "'1.2.3.4'" "$(printf '1%.0s' {1..46})" "localhost"; do
+  run 1 nohost ./deploy.sh admin unlock a@b.c --ip "$ip"
+  out_has "is not an IP address"
+done
+run 1 nohost ./deploy.sh admin unlock zoe@example.org --ip 2001:db8::1
+out_has "cannot reach nonexistent-host.invalid"
+run 1 nohost ./deploy.sh admin unlock --ip 203.0.113.9 zoe@example.org
+out_has "cannot reach nonexistent-host.invalid"
+ok "admin unlock: no email, two emails, --ip without a value, unknown option, leading dash, whitespace, over 320 characters and a non address --ip refused before any network call; a good email with an IPv4 or IPv6 --ip, in either order, reaches the ssh check"
+run 0 ./deploy.sh --help
+out_has "admin unlock <email> \[--ip <ip>\]"
+ok "--help documents admin unlock"
 run 1 ./deploy.sh deploy --bogus-flag
 out_has "unknown option for deploy: --bogus-flag"
 ok "unknown deploy option refused before any network call"
@@ -214,6 +246,11 @@ case "$cmd" in
   *"docker logs"*)
     echo "$cmd" >>"$FAKE_CALLS"
     cat "$FAKE_CF_LOG"
+    ;;
+  *"exec -T db sh -c"*"psql"*)
+    echo "$cmd" >>"$FAKE_CALLS"
+    cat >>"$FAKE_CALLS"
+    echo "${FAKE_UNLOCKED:-3}"
     ;;
   *"exec -T api python -m app.identity.cli"*)
     echo "$cmd" >>"$FAKE_CALLS"
@@ -302,6 +339,30 @@ grep -q "exec -T api" "$WORK/calls" && fail "the CLI ran without a public URL"
 ok "no tunnel URL: exit 1 before the CLI runs"
 run_split 2 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" FAKE_CLI_EXIT=2 ./deploy.sh admin create zoe@example.org
 ok "the CLI's exit code (2, invalid email) is passed through"
+
+step "admin unlock against the fake Jetson"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh admin unlock "O'Brien+\$(id)@Example.org" --ip 203.0.113.9
+grep -qF "removed 3 failed sign in attempt(s) of O'Brien+\$(id)@Example.org and of 203.0.113.9 in the last 15 minutes" "$WORK/stdout" ||
+  fail "count not printed: $(cat "$WORK/stdout")"
+grep -qF -- "docker compose -f compose.yml --profile tunnel exec -T db sh -c psql\ -X\ -q\ -v\ ON_ERROR_STOP=1" "$WORK/calls" ||
+  fail "remote command: $(cat "$WORK/calls")"
+grep -qF -- "sh O\'Brien+\\\$\(id\)@Example.org 203.0.113.9" "$WORK/calls" ||
+  fail "email not quoted for the remote shell: $(cat "$WORK/calls")"
+grep -qF -- "email = :'email'" "$WORK/calls" || fail "the SQL does not bind the email: $(cat "$WORK/calls")"
+grep -qF -- "not success" "$WORK/calls" || fail "the SQL is not limited to failures"
+grep -qF -- "interval '15 minutes'" "$WORK/calls" || fail "the SQL is not limited to the window"
+grep -q "Brien" <<<"$(grep -F "email = " "$WORK/calls")" && fail "the email was spliced into the SQL"
+ok "admin unlock runs psql in the db container with the email and address as quoted arguments bound as psql variables, failures in the 15 minute window only, and prints the count"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh admin unlock zoe@example.org
+grep -qF -- "sh zoe@example.org ''" "$WORK/calls" || fail "no empty address argument: $(cat "$WORK/calls")"
+grep -qF "removed 3 failed sign in attempt(s) of zoe@example.org in the last 15 minutes" "$WORK/stdout" ||
+  fail "count without --ip: $(cat "$WORK/stdout")"
+ok "without --ip the address is passed empty and only the email's rows go"
+run_split 1 fake env FAKE_UNLOCKED="ERROR: nope" ./deploy.sh admin unlock zoe@example.org
+grep -q "unexpected answer from psql" "$WORK/stderr" || fail "garbage answer: $(cat "$WORK/stderr")"
+ok "an answer that is not a count fails with exit 1"
 
 step "restore --into-live confirmation, against a fake Jetson"
 # This fake swallows the ops/db.sh streamed to `bash -s` and records the command; it answers the

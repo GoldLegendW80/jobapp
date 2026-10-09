@@ -12,6 +12,8 @@ import {
   type Page,
 } from "@playwright/test";
 
+import { clearAttempts } from "./stack";
+
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
 const evidence = path.join(
@@ -19,7 +21,10 @@ const evidence = path.join(
   "tasks/evidence",
   process.env.E2E_EVIDENCE ?? "identity-i3",
 );
-const prefix = process.env.E2E_SHOT_PREFIX ?? "";
+const prefix = (process.env.E2E_SHOT_PREFIX ?? "").replace(
+  "{spec}",
+  "identity",
+);
 
 /**
  * The identity journey against the real stack through Caddy: no mocks at all.
@@ -48,6 +53,8 @@ const EMAIL =
   process.env.E2E_ADMIN_EMAIL ??
   `e2e-admin-${Date.now().toString(36)}@example.org`;
 const NAME = "E2E Admin";
+// An address with no account, for the generic error: an e2e one so its attempt is cleaned up.
+const UNKNOWN = `e2e-nobody-${Date.now().toString(36)}@example.org`;
 // Fresh per run, never a common password, never logged.
 const PASSWORD = `Pw ${randomBytes(12).toString("base64url")}`;
 const NEW_PASSWORD = `Pw2 ${randomBytes(12).toString("base64url")}`;
@@ -172,6 +179,10 @@ async function freshPage(browser: Browser) {
 }
 
 let used = ""; // the invite path, once accepted
+
+test.afterAll(() => {
+  clearAttempts([EMAIL.toLowerCase(), UNKNOWN]);
+});
 
 test("signed out, / goes to the sign in page with next=/", async ({ page }) => {
   const errors = watchErrors(page);
@@ -336,7 +347,7 @@ test("wrong password and unknown email get the same generic error", async ({
   await expect(alert).toHaveText("Incorrect email or password.");
   await expect(page).toHaveURL(/\/login$/);
   await shots(page, "login-error");
-  await signIn(page, `nobody-${Date.now()}@example.org`, PASSWORD);
+  await signIn(page, UNKNOWN, PASSWORD);
   await expect(alert).toHaveText("Incorrect email or password.");
   // An unsafe next is ignored after a good sign in.
   await page.goto("/login?next=//evil.example");

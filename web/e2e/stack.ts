@@ -56,17 +56,34 @@ export function cliLink(email: string): string {
 }
 
 /**
- * Delete the sign in attempts recorded for these emails on a local scratch stack, so a rerun
- * within 15 minutes is not throttled by the previous one (every local browser reaches the api
- * from the same address, Caddy's peer). A no-op against the Jetson, which is cleaned by hand
- * (README). Returns how many rows went, or undefined when nothing was done.
+ * Delete the sign in attempts recorded for these emails, so the next spec or a rerun within 15
+ * minutes is not throttled by this one: every local browser reaches the api from one address
+ * (Caddy's peer), and every browser of the Mac from one address through the tunnel, which allows
+ * 20 failures per 15 minutes. On a local scratch stack it deletes every row of the emails; on the
+ * Jetson (E2E_ADMIN_VIA_DEPLOY) it runs `./deploy.sh admin unlock <email>`, which deletes their
+ * failures in the window (tests/e2e_jetson.sh removes the rest at the end). Returns how many rows
+ * went, or undefined when there is no stack to clean.
  */
 export function clearAttempts(emails: string[]): number | undefined {
-  if (process.env.E2E_ADMIN_VIA_DEPLOY || !process.env.E2E_COMPOSE_PROJECT)
-    return undefined;
   for (const email of emails)
     if (!/^[a-z0-9.@-]+$/.test(email))
       throw new Error(`refusing to clear attempts of ${email}`);
+  if (process.env.E2E_ADMIN_VIA_DEPLOY) {
+    let removed = 0;
+    for (const email of emails) {
+      const output = execFileSync(
+        path.join(root, "deploy.sh"),
+        ["admin", "unlock", email],
+        { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+      );
+      removed += Number(/removed (\d+)/.exec(output)?.[1] ?? Number.NaN);
+    }
+    console.log(
+      `   unlocked ${emails.join(", ")}: ${removed} failed attempt(s)`,
+    );
+    return removed;
+  }
+  if (!process.env.E2E_COMPOSE_PROJECT) return undefined;
   const list = emails.map((email) => `'${email}'`).join(", ");
   const output = execFileSync(
     "docker",
@@ -130,15 +147,17 @@ export type Shots = (
 
 /**
  * One screenshot per viewport and colour scheme into tasks/evidence/<E2E_EVIDENCE or the
- * default>, each checked for horizontal overflow, then back to desktop light.
+ * default>, each checked for horizontal overflow, then back to desktop light. Files are named
+ * <E2E_SHOT_PREFIX><name>-<viewport>-<scheme>.png, with {spec} in the prefix replaced by `spec`,
+ * so specs sharing one evidence folder never overwrite each other.
  */
-export function makeShots(defaultEvidence: string): Shots {
+export function makeShots(defaultEvidence: string, spec = ""): Shots {
   const evidence = path.join(
     root,
     "tasks/evidence",
     process.env.E2E_EVIDENCE ?? defaultEvidence,
   );
-  const prefix = process.env.E2E_SHOT_PREFIX ?? "";
+  const prefix = (process.env.E2E_SHOT_PREFIX ?? "").replace("{spec}", spec);
   return async (page, name, fullPage = true) => {
     fs.mkdirSync(evidence, { recursive: true });
     for (const viewport of VIEWPORTS) {

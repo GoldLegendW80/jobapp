@@ -133,6 +133,34 @@ ssh jetson "cd jobapp && docker compose -f compose.yml exec -T db sh -c 'psql -U
 
 Do not run `identity.spec.ts` in parallel with `caddy.spec.ts`: the latter stops the database.
 
+The whole identity surface runs as one journey on the Jetson through the public URL, with
+throwaway `e2e-*@example.org` accounts only:
+
+```bash
+./deploy.sh && tests/e2e_jetson.sh
+```
+
+It runs `web/e2e/identity-all.config.ts` (identity, invites, users, account, profile and throttle
+specs in that order, one after the other; each unlocks its own failed attempts with `./deploy.sh
+admin unlock`, so the run never reaches the 20 failures per address), snapshots Harald's account
+before and after and fails if anything changed, deletes every e2e row (users with their sessions
+and profile, invites, attempts), checks that no failed sign in is left in the window for his
+email or this Mac's addresses, and writes every screenshot with an index to
+`tasks/evidence/identity/`. It refuses to start while e2e rows of an earlier run are left
+(`E2E_CLEAN_FIRST=1` removes them first).
+Locally the same config runs on a scratch project (one shared admin, so the last admin rule runs
+too):
+
+```bash
+HTTP_PORT=8098 docker compose -p jobapp-i8 -f compose.yml up -d --build --wait
+docker compose -p jobapp-i8 -f compose.yml exec -T api alembic upgrade head
+E2E_CADDY_URL=http://127.0.0.1:8098 E2E_COMPOSE_PROJECT=jobapp-i8 E2E_ADMIN_EMAIL=e2e-admin@example.org \
+  E2E_PASSWORD_THROTTLE=1 pnpm --dir web exec playwright test -c e2e/identity-all.config.ts
+docker compose -p jobapp-i8 -f compose.yml down -v
+```
+
+The specs' own runs below remain for one area at a time.
+
 ### Inviting people
 
 Signed in as an admin, open **Admin** (`/admin/users`), then **Invite someone**: an email, the kind
@@ -258,12 +286,16 @@ scratch project (`-p jobapp-i7`, `HTTP_PORT=8097`, `E2E_COMPOSE_PROJECT=jobapp-i
 `e2e-admin@example.org` only. Every local browser reaches the api from one address (Caddy's
 peer), so all specs of one run share the 20 failure budget per 15 minutes.
 
-To unlock someone by hand on the Jetson (the rows of one email, or of one address, in the window):
+To unlock someone on the Jetson, delete their failed attempts still in the window (also those of
+one address with `--ip`, whatever the email); it prints how many rows went:
 
 ```bash
-./deploy.sh ssh   # then:
-docker compose -f compose.yml exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "delete from login_attempts where email = '\''someone@example.org'\'' and at > now() - interval '\''15 minutes'\''"'
+./deploy.sh admin unlock someone@example.org                   # that email, case insensitive
+./deploy.sh admin unlock someone@example.org --ip 203.0.113.9  # and every failure from that address
 ```
+
+Successful attempts and failures older than 15 minutes are kept. The email and the address reach
+psql as bound variables, and Postgres refuses anything that is not an address.
 
 ## Profile export and import
 

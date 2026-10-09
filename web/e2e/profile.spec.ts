@@ -5,6 +5,7 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import {
   caddyUrl,
+  clearAttempts,
   cliLink,
   makeShots,
   newContext,
@@ -14,7 +15,7 @@ import {
   watchErrors,
 } from "./stack";
 
-const takeShots = makeShots("profile-p4");
+const takeShots = makeShots("profile-p4", "profile");
 
 /** Screenshots once every toast is gone, so none covers the page. */
 async function shots(page: Page, name: string, fullPage = true) {
@@ -36,6 +37,9 @@ async function shots(page: Page, name: string, fullPage = true) {
  *   E2E_CADDY_URL=http://127.0.0.1:8094 E2E_COMPOSE_PROJECT=jobapp-p4 \
  *     pnpm --dir web exec playwright test profile.spec.ts
  *   docker compose -p jobapp-p4 -f compose.yml down -v
+ *
+ * On the Jetson (E2E_ADMIN_VIA_DEPLOY=1) the profile goes in through the same CLI over ssh, as
+ * part of tests/e2e_jetson.sh, which removes the account afterwards.
  */
 test.describe.configure({ mode: "serial" });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
@@ -166,6 +170,24 @@ function fakeExport() {
 }
 
 function importProfile(email: string) {
+  if (process.env.E2E_ADMIN_VIA_DEPLOY) {
+    // On the Jetson: the same CLI in its api container, over ssh (DEPLOY_HOST, DEPLOY_DIR).
+    if (!/^[a-z0-9.@-]+$/.test(email))
+      throw new Error(`refusing to import a profile for ${email}`);
+    const dir = (process.env.DEPLOY_DIR ?? "jobapp").replace(/^~\//, "");
+    if (!/^[A-Za-z0-9._/-]+$/.test(dir))
+      throw new Error(`refusing DEPLOY_DIR ${dir}`);
+    return execFileSync(
+      "ssh",
+      [
+        "-o",
+        "BatchMode=yes",
+        process.env.DEPLOY_HOST ?? "jetson",
+        `cd ${dir} && docker compose -f compose.yml exec -T api python -m app.profile.cli import --email ${email} --file -`,
+      ],
+      { encoding: "utf8", input: JSON.stringify(fakeExport()) },
+    );
+  }
   return execFileSync(
     "docker",
     [
@@ -251,6 +273,7 @@ test.beforeAll(async ({ browser }) => {
 
 test.afterAll(async () => {
   await context.close();
+  clearAttempts([EMAIL]);
 });
 
 test("a new account gets a profile through the CLI and sees every tab", async () => {

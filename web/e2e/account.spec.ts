@@ -4,6 +4,7 @@ import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import {
   caddyUrl,
+  clearAttempts,
   cliLink,
   makeShots,
   menuButton,
@@ -13,7 +14,7 @@ import {
   watchErrors,
 } from "./stack";
 
-const shots = makeShots("identity-i6");
+const shots = makeShots("identity-i6", "account");
 
 /**
  * The account page against the real stack through Caddy: no mocks. Rename yourself, a wrong
@@ -67,6 +68,7 @@ test.beforeAll(async ({ browser }) => {
 test.afterAll(async () => {
   await one.close();
   await two.close();
+  clearAttempts([ADMIN]);
 });
 
 test("the admin is signed in on two browsers", async () => {
