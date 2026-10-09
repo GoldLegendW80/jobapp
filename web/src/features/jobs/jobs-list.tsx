@@ -45,7 +45,20 @@ function useIsMobile(): boolean {
 }
 
 const COLUMNS =
-  "sm:grid sm:grid-cols-[minmax(0,1.1fr)_minmax(0,2fr)_minmax(0,1.2fr)_4.5rem_5.5rem_7rem_6.5rem] sm:items-center sm:gap-3";
+  "sm:grid sm:grid-cols-[1.25rem_minmax(0,1.1fr)_minmax(0,2fr)_minmax(0,1.2fr)_4.5rem_6.5rem_7rem_6.5rem] sm:items-center sm:gap-3";
+
+const CHECKBOX =
+  "size-4 cursor-pointer rounded border-input accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+
+/** What the list needs to show and change the selection (jobs-page.tsx owns it). */
+export interface ListSelection {
+  selected: ReadonlySet<string>;
+  /** A click on row `index`'s checkbox; `range` when Shift was held. */
+  toggle: (index: number, range: boolean) => void;
+  /** The header checkbox: everything in the current filter, or nothing. */
+  allState: "none" | "some" | "all";
+  toggleAll: () => void;
+}
 
 /**
  * The list: one ARIA table, virtualised against the window scroll (only the rows near the
@@ -60,6 +73,7 @@ export function JobsList({
   isFetchingNextPage,
   fetchNextPage,
   from,
+  selection,
 }: {
   items: JobListItem[];
   total: number;
@@ -68,6 +82,7 @@ export function JobsList({
   fetchNextPage: () => void;
   /** The list's query string, so the detail page can come back to the same view. */
   from: string;
+  selection?: ListSelection;
 }) {
   const mobile = useIsMobile();
   const navigate = useNavigate();
@@ -156,6 +171,15 @@ export function JobsList({
       move(target);
       return;
     }
+    if (
+      selection &&
+      (event.key === " " || event.key === "x") &&
+      event.target === event.currentTarget
+    ) {
+      event.preventDefault();
+      selection.toggle(index, event.shiftKey);
+      return;
+    }
     if (event.key === "Enter" && event.target === event.currentTarget) {
       event.preventDefault();
       const job = items[index];
@@ -164,8 +188,9 @@ export function JobsList({
   };
 
   const onRowClick = (event: MouseEvent<HTMLDivElement>, job: JobListItem) => {
-    // The title link navigates on its own (and keeps middle click and new tab).
-    if ((event.target as HTMLElement).closest("a")) return;
+    // The title link navigates on its own (and keeps middle click and new tab); the checkbox
+    // selects.
+    if ((event.target as HTMLElement).closest("a, input, label")) return;
     open(job);
   };
 
@@ -185,6 +210,13 @@ export function JobsList({
             "border-b bg-muted/50 px-3 py-2 text-left text-xs font-medium text-muted-foreground",
           )}
         >
+          <span role="columnheader" className="flex items-center">
+            {selection ? (
+              <HeaderCheckbox selection={selection} />
+            ) : (
+              <span className="sr-only">Select</span>
+            )}
+          </span>
           <span role="columnheader">Company</span>
           <span role="columnheader">Title</span>
           <span role="columnheader">Location</span>
@@ -203,6 +235,7 @@ export function JobsList({
         {virtualItems.map((virtual) => {
           const job = items[virtual.index];
           if (!job) return null;
+          const checked = selection?.selected.has(job.id) ?? false;
           return (
             <div
               key={virtual.key}
@@ -210,6 +243,7 @@ export function JobsList({
               data-index={virtual.index}
               role="row"
               aria-rowindex={virtual.index + 2}
+              aria-selected={selection ? checked : undefined}
               tabIndex={virtual.index === current ? 0 : -1}
               onKeyDown={(event) => {
                 onKeyDown(event, virtual.index);
@@ -231,11 +265,33 @@ export function JobsList({
                   "flex flex-wrap items-center gap-x-2 gap-y-1 transition-colors group-hover:bg-accent/60 group-focus-visible:ring-[3px] group-focus-visible:ring-ring/50 group-focus-visible:ring-inset",
                   "max-sm:rounded-lg max-sm:border max-sm:bg-card max-sm:p-3",
                   "sm:h-12 sm:border-b sm:px-3",
+                  checked && "bg-accent/40",
                 )}
               >
                 <span
                   role="cell"
-                  className="truncate text-sm text-muted-foreground max-sm:basis-full max-sm:text-xs sm:text-foreground"
+                  className="flex items-center max-sm:order-first"
+                >
+                  {selection ? (
+                    <input
+                      type="checkbox"
+                      className={CHECKBOX}
+                      checked={checked}
+                      aria-label={`Select ${job.title} at ${job.company}`}
+                      tabIndex={-1}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        selection.toggle(virtual.index, event.shiftKey);
+                      }}
+                      onChange={() => {
+                        /* handled on click, which knows about Shift */
+                      }}
+                    />
+                  ) : null}
+                </span>
+                <span
+                  role="cell"
+                  className="truncate text-sm text-muted-foreground max-sm:min-w-0 max-sm:flex-1 max-sm:text-xs sm:text-foreground"
                 >
                   {job.company}
                 </span>
@@ -306,6 +362,27 @@ export function JobsList({
         </p>
       ) : null}
     </div>
+  );
+}
+
+function HeaderCheckbox({ selection }: { selection: ListSelection }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = selection.allState === "some";
+  }, [selection.allState]);
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className={CHECKBOX}
+      checked={selection.allState === "all"}
+      aria-label={
+        selection.allState === "none"
+          ? "Select every posting in this view"
+          : "Clear the selection"
+      }
+      onChange={selection.toggleAll}
+    />
   );
 }
 

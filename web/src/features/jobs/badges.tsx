@@ -49,7 +49,16 @@ export function FitBadge({
         className,
       )}
     >
-      {fit === null ? "Unscored" : `${fit}${overridden ? "*" : ""}`}
+      {fit === null ? (
+        "Unscored"
+      ) : overridden ? (
+        <>
+          {fit}
+          <span className="font-normal opacity-80">manual</span>
+        </>
+      ) : (
+        fit
+      )}
     </Badge>
   );
 }
