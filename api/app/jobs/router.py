@@ -23,6 +23,9 @@ GET /api/jobs, query parameters (all optional, any combination):
 The answer holds the page, next_cursor, total (rows matching every filter), counts_by_status
 (every filter but status, so tabs can show their counts) and fit_histogram (every filter).
 
+GET /api/jobs/places: the same filters (not sort, limit, cursor); the filtered rows grouped by
+the places their location names, for the map, with the locations no place matches (places.py).
+
 GET /api/jobs/{id}/files/{file_id}: the bytes with their stored type, `inline` for a PDF (the
 browser shows it) and `attachment` for anything else, `X-Content-Type-Options: nosniff`,
 `Cache-Control: private, no-cache` and a strong ETag (the SHA-256), 304 on If-None-Match.
@@ -50,7 +53,7 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.jobs import service
+from app.jobs import places, service
 from app.jobs import undo as undo_tokens
 from app.jobs.importer import kind
 from app.jobs.models import ContractType, Job, JobFile, JobStatus
@@ -122,12 +125,7 @@ def _item(job: Job, file_count: int) -> JobListItem:
     return JobListItem(**data, file_count=file_count)
 
 
-@router.get(
-    "", response_model=JobListPage, responses={**_401, **_422}, dependencies=[Depends(_no_store)]
-)
-def list_jobs(
-    user: CurrentUser,
-    db: Db,
+def _filters(
     status_: Annotated[list[JobStatus] | None, Query(alias="status")] = None,
     type_: Annotated[list[ContractType] | None, Query(alias="type")] = None,
     company: Annotated[str | None, Query(max_length=Q_MAX)] = None,
@@ -136,16 +134,13 @@ def list_jobs(
     fit_max: Annotated[int | None, Query(ge=0, le=100)] = None,
     found_from: date | None = None,
     found_to: date | None = None,
-    sort: JobSort = JobSort.found_on,
-    limit: Annotated[int, Query(ge=1, le=LIST_LIMIT_MAX)] = 50,
-    cursor: Annotated[str | None, Query(max_length=1000)] = None,
-) -> JobListPage:
-    """One page of the caller's jobs, with the counts and the histogram of the filtered set."""
+) -> JobFilters:
+    """The list filters of the query, shared by GET /api/jobs and GET /api/jobs/places."""
     if fit_min is not None and fit_max is not None and fit_min > fit_max:
         raise _invalid("fit_min", "fit_min must not be above fit_max")
     if found_from is not None and found_to is not None and found_from > found_to:
         raise _invalid("found_from", "found_from must not be after found_to")
-    filters = JobFilters(
+    return JobFilters(
         statuses=tuple(dict.fromkeys(status_ or ())),
         contract_types=tuple(dict.fromkeys(type_ or ())),
         company=company,
@@ -155,6 +150,23 @@ def list_jobs(
         found_from=found_from,
         found_to=found_to,
     )
+
+
+Filters = Annotated[JobFilters, Depends(_filters)]
+
+
+@router.get(
+    "", response_model=JobListPage, responses={**_401, **_422}, dependencies=[Depends(_no_store)]
+)
+def list_jobs(
+    user: CurrentUser,
+    db: Db,
+    filters: Filters,
+    sort: JobSort = JobSort.found_on,
+    limit: Annotated[int, Query(ge=1, le=LIST_LIMIT_MAX)] = 50,
+    cursor: Annotated[str | None, Query(max_length=1000)] = None,
+) -> JobListPage:
+    """One page of the caller's jobs, with the counts and the histogram of the filtered set."""
     try:
         page = service.list_page(db, user.id, filters, sort, limit, cursor)
     except InvalidCursorError as exc:
@@ -175,6 +187,17 @@ def list_jobs(
             unscored=unscored,
         ),
     )
+
+
+@router.get(
+    "/places",
+    response_model=places.PlacesOut,
+    responses={**_401, **_422},
+    dependencies=[Depends(_no_store)],
+)
+def jobs_places(user: CurrentUser, db: Db, filters: Filters) -> places.PlacesOut:
+    """The caller's jobs under the list filters, grouped by place for the map (see places.py)."""
+    return places.places_map(db, user.id, filters)
 
 
 async def _import_body(request: Request) -> bytes:

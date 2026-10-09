@@ -36,11 +36,12 @@ import {
   safeHttpUrl,
 } from "./text";
 
-/** The list view to go back to: the query the list passed along, else the plain list. */
+/** The view to go back to: the query (and /map) the list or map passed along, else the list. */
 function useBackTo(): string {
   const location = useLocation();
   const from = (location.state as { from?: unknown } | null)?.from;
-  return typeof from === "string" && (from === "" || from.startsWith("?"))
+  return typeof from === "string" &&
+    (from === "" || /^(\/map)?(\?|$)/.test(from))
     ? `/jobs${from}`
     : "/jobs";
 }

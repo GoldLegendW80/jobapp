@@ -17,6 +17,7 @@ import {
   toggleOnlyStatus,
 } from "./filters";
 import { FitHistogram } from "./fit-histogram";
+import { JobsViewTabs } from "./map/view-tabs";
 import { JobsList, JobsListSkeleton } from "./jobs-list";
 import { KpiTiles } from "./kpi-tiles";
 import { useSelection } from "./selection";
@@ -56,6 +57,7 @@ export function JobsPage() {
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
+      <JobsViewTabs current="list" query={query} />
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Jobs</h1>
