@@ -62,6 +62,8 @@ export interface RequestOptions<T> {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /** Serialised as JSON when set. */
   body?: unknown;
+  /** Sent as is (an uploaded file), with its own type; takes the place of `body`. */
+  rawBody?: Blob;
   headers?: Record<string, string>;
   /** Caller's cancellation, combined with the timeout. */
   signal?: AbortSignal;
@@ -119,6 +121,7 @@ export async function request<T>(
   const {
     method = "GET",
     body,
+    rawBody,
     headers = {},
     signal,
     validate,
@@ -151,11 +154,16 @@ export async function request<T>(
         method,
         headers: {
           Accept: "application/json",
-          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+          ...(rawBody !== undefined
+            ? { "Content-Type": rawBody.type || "application/octet-stream" }
+            : body === undefined
+              ? {}
+              : { "Content-Type": "application/json" }),
           ...(method === "GET" ? {} : { [CSRF_HEADER]: CSRF_VALUE }),
           ...headers,
         },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body:
+          rawBody ?? (body === undefined ? undefined : JSON.stringify(body)),
         credentials: "include",
         signal: controller.signal,
       });
