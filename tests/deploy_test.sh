@@ -190,6 +190,14 @@ for module in jobs profile; do
   out_has "$module import <email>"
 done
 ok "jobs import and profile import: wrong action, extra arguments and bad emails refused before any network call; --help documents both"
+for args in "jobs mark-overrides" "jobs mark-overrides a@b.c --force" "jobs mark-overrides a@b.c --apply x" "jobs mark-overrides --apply a@b.c"; do
+  # shellcheck disable=SC2086 # word splitting wanted
+  run 1 nohost ./deploy.sh $args
+  grep -q "mark-overrides" "$WORK/out" || fail "jobs mark-overrides $args: $(cat "$WORK/out")"
+done
+run 0 ./deploy.sh --help
+out_has "jobs mark-overrides <email> \[--apply\]"
+ok "jobs mark-overrides: missing email, unknown option, extra argument refused before any network call; --help documents it"
 run 1 ./deploy.sh deploy --bogus-flag
 out_has "unknown option for deploy: --bogus-flag"
 ok "unknown deploy option refused before any network call"
@@ -273,6 +281,11 @@ case "$cmd" in
     # What reached the Jetson on stdin: kept whole, to compare with the local conversion.
     cat >"$FAKE_STDIN"
     echo "Imported 2 rows: 2 created, 0 updated, 0 unchanged, 0 skipped."
+    exit "${FAKE_CLI_EXIT:-0}"
+    ;;
+  *"exec -T api python -m app.jobs.cli mark-overrides"*)
+    echo "$cmd" >>"$FAKE_CALLS"
+    echo "Dry run: would mark 0 fits as set by hand (they differ from the computed fit)."
     exit "${FAKE_CLI_EXIT:-0}"
     ;;
   *"exec -T api python -m app.identity.cli"*)
@@ -410,6 +423,18 @@ ls /tmp/jobapp-import.* >/dev/null 2>&1 && fail "the temporary document was left
 ok "the temporary document is removed afterwards"
 run_split 2 fake JOBAPP_SOURCE_DIR="$src" FAKE_CLI_EXIT=2 ./deploy.sh jobs import zoe@example.org
 ok "the import CLI's exit code is passed through"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh jobs mark-overrides zoe@example.org
+grep -qF -- "exec -T api python -m app.jobs.cli mark-overrides --email zoe@example.org" "$WORK/calls" ||
+  fail "mark-overrides remote command: $(cat "$WORK/calls")"
+grep -qF -- "--apply" "$WORK/calls" && fail "a dry run sent --apply: $(cat "$WORK/calls")"
+grep -q "(dry run)" "$WORK/stdout" "$WORK/stderr" || fail "the dry run is not announced"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh jobs mark-overrides zoe@example.org --apply
+grep -qF -- "mark-overrides --email zoe@example.org --apply" "$WORK/calls" ||
+  fail "mark-overrides --apply remote command: $(cat "$WORK/calls")"
+run_split 2 fake FAKE_CLI_EXIT=2 ./deploy.sh jobs mark-overrides zoe@example.org
+ok "jobs mark-overrides runs app.jobs.cli mark-overrides in the api container, dry run unless --apply, exit code passed through"
 : >"$WORK/calls"
 run_split 1 fake JOBAPP_SOURCE_DIR="$WORK/empty-folder" ./deploy.sh jobs import zoe@example.org
 grep -q "is not a folder (set JOBAPP_SOURCE_DIR" "$WORK/stderr" || fail "missing source: $(cat "$WORK/stderr")"

@@ -98,7 +98,8 @@ def test_import_from_a_file_then_stdin(
     stdout = result.stdout.decode()
     assert stdout.splitlines()[0] == (
         "Imported 2 rows: 2 created, 0 updated, 0 unchanged, 0 skipped. Files: 1 added, "
-        "0 replaced, 0 unchanged, 0 kept as sent. Warnings: 1."
+        "0 replaced, 0 unchanged, 0 kept as sent. Fits set by hand: not checked, the profile "
+        "has no skills. Warnings: 1."
     )
     # Nothing private is printed: no email, no notes, no posting text.
     for secret in (ALICE, "private note", "Build agents"):

@@ -1,0 +1,296 @@
+/**
+ * Search: what the sweep looks for. Title include and exclude terms and location terms as chips
+ * (each list with its advanced switch), contract types as toggles, the remote stance, the minimum
+ * fit to shortlist, the posting age window, the company boards (boards-table.tsx) and the
+ * never-apply rules.
+ */
+import { Plus } from "lucide-react";
+import { useFieldArray, type UseFormReturn } from "react-hook-form";
+
+import { Button } from "@/components/ui/button";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
+import { NativeSelect } from "@/components/ui/native-select";
+import { cn } from "@/lib/utils";
+
+import { CONTRACT_TYPES, REMOTE_STANCES, type Profile } from "./api";
+import { BoardsTable } from "./boards-table";
+import {
+  fromSearchForm,
+  NEVER_APPLY_MAX,
+  searchSchema,
+  toSearchForm,
+  type SearchForm,
+} from "./editor-forms";
+import {
+  ConflictDialog,
+  FormErrorAlert,
+  Group,
+  ItemControls,
+  SaveBar,
+  TextField,
+} from "./section-ui";
+import { TermChips } from "./term-chips";
+import { useSectionForm } from "./use-section-form";
+
+const CONTRACT_LABELS: Record<(typeof CONTRACT_TYPES)[number], string> = {
+  CDI: "CDI (permanent)",
+  CDD: "CDD (fixed term)",
+  VIE: "VIE",
+  Stage: "Stage (internship)",
+  Alternance: "Alternance (apprenticeship)",
+  Freelance: "Freelance",
+};
+
+const STANCE_LABELS: Record<(typeof REMOTE_STANCES)[number], string> = {
+  remote: "Remote only",
+  hybrid: "Hybrid",
+  office: "Office",
+  any: "Any",
+};
+
+export function SearchTab({
+  profile,
+  onDirtyChange,
+}: {
+  profile: Profile;
+  onDirtyChange: (dirty: boolean) => void;
+}) {
+  const { form, onSubmit, saving, formError, conflict, keepEditing, reload } =
+    useSectionForm({
+      section: "search",
+      profile,
+      schema: searchSchema,
+      toForm: toSearchForm,
+      fromForm: fromSearchForm,
+      rules: { unique: { boards: "org" }, wrapped: ["never_apply"] },
+      onDirtyChange,
+    });
+  const { control } = form;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <Form {...form}>
+        <form
+          noValidate
+          aria-label="Search"
+          className="flex flex-col gap-6"
+          onSubmit={(event) => void onSubmit(event)}
+        >
+          <FormErrorAlert message={formError} />
+          <Group
+            title="Job titles"
+            description="Plain terms match whole words in any case, with an optional plural. Switch a list to advanced to write regular expressions instead."
+          >
+            <TermChips
+              form={form}
+              name="title_include"
+              label="Titles to include"
+              description="A posting is kept when its title matches one of these."
+            />
+            <TermChips
+              form={form}
+              name="title_exclude"
+              label="Titles to exclude"
+              description="A posting whose title matches one of these is dropped."
+            />
+          </Group>
+          <Group title="Where and how">
+            <TermChips
+              form={form}
+              name="location"
+              label="Locations"
+              description="Cities, countries or Remote, matched against the posting location."
+            />
+            <FormField
+              control={control}
+              name="remote_stance"
+              render={({ field }) => (
+                <FormItem className="max-w-64">
+                  <FormLabel>Remote stance</FormLabel>
+                  <FormControl>
+                    <NativeSelect {...field}>
+                      <option value="">Not set</option>
+                      {REMOTE_STANCES.map((stance) => (
+                        <option key={stance} value={stance}>
+                          {STANCE_LABELS[stance]}
+                        </option>
+                      ))}
+                    </NativeSelect>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <ContractTypes form={form} />
+          </Group>
+          <Group title="Shortlist">
+            <FormField
+              control={control}
+              name="min_fit"
+              render={({ field }) => (
+                <FormItem>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <FormLabel>Minimum fit</FormLabel>
+                    <output className="text-sm tabular-nums text-muted-foreground">
+                      {field.value} / 100
+                    </output>
+                  </div>
+                  <FormControl>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={1}
+                      className="w-full accent-primary"
+                      name={field.name}
+                      ref={field.ref}
+                      value={field.value}
+                      onBlur={field.onBlur}
+                      onChange={(event) => {
+                        field.onChange(Number(event.target.value));
+                      }}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    Postings scoring at least this are proposed for the
+                    shortlist.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <TextField
+              control={control}
+              name="days"
+              label="Posting age window (days)"
+              inputMode="numeric"
+              autoComplete="off"
+              className="max-w-48"
+              description="Only postings published within this many days."
+            />
+          </Group>
+          <BoardsTable form={form} />
+          <NeverApply form={form} />
+          <SaveBar
+            label="Search"
+            saving={saving}
+            dirty={form.formState.isDirty}
+          />
+        </form>
+      </Form>
+      <ConflictDialog
+        open={conflict}
+        label="Search"
+        onKeepEditing={keepEditing}
+        onReload={reload}
+      />
+    </div>
+  );
+}
+
+function ContractTypes({ form }: { form: UseFormReturn<SearchForm> }) {
+  return (
+    <FormField
+      control={form.control}
+      name="contract_types"
+      render={({ field }) => {
+        const selected = field.value;
+        return (
+          <FormItem>
+            <p id="contract-types-label" className="text-sm font-medium">
+              Contract types
+            </p>
+            <div
+              role="group"
+              aria-labelledby="contract-types-label"
+              className="flex flex-wrap gap-2"
+            >
+              {CONTRACT_TYPES.map((type) => {
+                const on = selected.includes(type);
+                return (
+                  <Button
+                    key={type}
+                    type="button"
+                    size="sm"
+                    variant={on ? "default" : "outline"}
+                    aria-pressed={on}
+                    className={cn(!on && "text-muted-foreground")}
+                    onClick={() => {
+                      field.onChange(
+                        on
+                          ? selected.filter((t) => t !== type)
+                          : CONTRACT_TYPES.filter(
+                              (t) => t === type || selected.includes(t),
+                            ),
+                      );
+                    }}
+                  >
+                    {CONTRACT_LABELS[type]}
+                  </Button>
+                );
+              })}
+            </div>
+            <FormMessage />
+          </FormItem>
+        );
+      }}
+    />
+  );
+}
+
+function NeverApply({ form }: { form: UseFormReturn<SearchForm> }) {
+  const rules = useFieldArray({ control: form.control, name: "never_apply" });
+  return (
+    <Group
+      title="Never apply"
+      description="Rules agents must respect whatever the fit score, in your own words."
+      action={
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={rules.fields.length >= NEVER_APPLY_MAX}
+          onClick={() => {
+            rules.append({ value: "" }, { shouldFocus: true });
+          }}
+        >
+          <Plus aria-hidden="true" />
+          Add rule
+        </Button>
+      }
+    >
+      {rules.fields.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No rule yet.</p>
+      ) : (
+        <ol className="flex flex-col gap-3">
+          {rules.fields.map((item, index) => (
+            <li key={item.id} className="flex items-end gap-2">
+              <TextField
+                control={form.control}
+                name={`never_apply.${index}.value`}
+                label={`Rule ${index + 1}`}
+                placeholder="No cybersecurity roles."
+                className="min-w-0 flex-1"
+              />
+              <ItemControls
+                index={index}
+                count={rules.fields.length}
+                name={`rule ${index + 1}`}
+                onMove={rules.move}
+                onRemove={rules.remove}
+              />
+            </li>
+          ))}
+        </ol>
+      )}
+    </Group>
+  );
+}

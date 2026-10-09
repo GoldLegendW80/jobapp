@@ -72,6 +72,22 @@ YEARS = re.compile(r"(\d{1,2})\s*\+?\s*(?:years|yrs)")
 SENIOR_TITLE = re.compile(r"\bsenior\b|\bsr\.?\b|\blead\b", re.I)
 
 
+def engine_text(posting_text: str, header: object = None) -> str:
+    """The text the engine scored for a posting: its posting.txt as written, header included.
+
+    The importer stores the header lines of posting.txt (`KEY: value`, up to the first blank
+    line) in legacy["posting_header"] and the rest as posting_text. The engine scored the whole
+    file, so the header's words (the title, the company, the location) counted too. This puts
+    the header back in front, `KEY: value` per line and a blank line, which gives the same
+    score as the original file on every posting of ../data (tests/jobs/test_rescore_real.py).
+    Without a header (a posting added by hand or found by a sweep) the text is scored as is.
+    """
+    if not isinstance(header, dict) or not header:
+        return posting_text
+    lines = "".join(f"{key}: {value}\n" for key, value in header.items() if isinstance(key, str))
+    return f"{lines}\n{posting_text}"
+
+
 @dataclass(frozen=True)
 class ScoreResult:
     fit: int

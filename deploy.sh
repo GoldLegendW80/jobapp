@@ -41,6 +41,10 @@
 #                                  the self-hosted GitHub Actions runner on the Jetson (ops/runner/):
 #                                  a container with the host Docker socket, registered to the repo
 #                                  with labels self-hosted, jetson, arm64; tokens from gh on the Mac
+#   ./deploy.sh jobs mark-overrides <email> [--apply]
+#                                  list the account's fits that differ from the computed ones
+#                                  (set by hand in the CSV); a dry run unless --apply, which
+#                                  marks them so no rescore replaces them (app.jobs.cli)
 #
 # The job folder holding profile/, engine/ and data/ is the parent of this repository, or
 # JOBAPP_SOURCE_DIR. Both imports convert first, so a bad source fails before any network call.
@@ -601,9 +605,29 @@ cmd_profile() {
 }
 
 cmd_jobs() {
-  [[ $# -eq 2 && "$1" == "import" ]] || die "usage: ./deploy.sh jobs import <email>"
+  if [[ "${1:-}" == "mark-overrides" ]]; then
+    jobs_mark_overrides "${@:2}"
+    return
+  fi
+  [[ $# -eq 2 && "$1" == "import" ]] ||
+    die "usage: ./deploy.sh jobs import <email> | ./deploy.sh jobs mark-overrides <email> [--apply]"
   check_email "jobs import" "$2"
   import_into jobs "$2" "$(job_dir)/data"
+}
+
+# jobs_mark_overrides <email> [--apply]: app.jobs.cli mark-overrides in the api container on the
+# Jetson; a dry run unless --apply.
+jobs_mark_overrides() {
+  [[ $# -eq 1 || ($# -eq 2 && "$2" == "--apply") ]] ||
+    die "usage: ./deploy.sh jobs mark-overrides <email> [--apply]"
+  check_email "jobs mark-overrides" "$1"
+  local mode=" (dry run)"
+  [[ $# -eq 2 ]] && mode=""
+  ssh_master
+  require_remote
+  require_deployed
+  step "mark-overrides on $HOST$mode"
+  rcompose exec -T api python -m app.jobs.cli mark-overrides --email "$1" "${@:2}"
 }
 
 cmd_url() {

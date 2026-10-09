@@ -311,17 +311,21 @@ test("a new account gets a profile through the CLI and sees every tab", async ()
   await shots(page, "experience");
 
   await openTab(page, "Facts");
-  await expect(page.getByText("Coming next:")).toBeVisible();
-  await page.getByText("WHAT ROBIN BUILT").click();
-  await expect(page.getByRole("link", { name: "the portfolio" })).toBeVisible();
-  await page.getByText("HOSTILE BLOCK").click();
+  await page.getByRole("button", { name: "WHAT ROBIN BUILT, block 1" }).click();
   await expect(
-    page.getByText("<script>window.__xss = 1</script>"),
+    page
+      .getByRole("region", { name: "Preview of block 1" })
+      .getByRole("link", { name: "the portfolio" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "HOSTILE BLOCK, block 2" }).click();
+  const hostile = page.getByRole("region", { name: "Preview of block 2" });
+  await expect(
+    hostile.getByText("<script>window.__xss = 1</script>"),
   ).toBeVisible();
   expect(
     await page.evaluate(() => (window as { __xss?: number }).__xss),
   ).toBeUndefined();
-  expect(await page.locator("details script, details img").count()).toBe(0);
+  expect(await hostile.locator("script, img").count()).toBe(0);
   await shots(page, "facts");
 
   await openTab(page, "Skills");
@@ -331,9 +335,9 @@ test("a new account gets a profile through the CLI and sees every tab", async ()
   await shots(page, "skills");
 
   await openTab(page, "Search");
-  await expect(page.getByRole("list", { name: "Boards" })).toContainText(
-    "Example AI",
-  );
+  await expect(
+    page.getByLabel("Company of board 1", { exact: true }),
+  ).toHaveValue("Example AI");
   await shots(page, "search");
 
   await openTab(page, "Answers");

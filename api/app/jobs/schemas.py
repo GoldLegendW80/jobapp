@@ -27,6 +27,7 @@ import re
 import uuid
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -244,6 +245,9 @@ class ImportSummaryOut(BaseModel):
     files_replaced: int
     files_unchanged: int
     files_kept: int  # a different file arrived for a sent (applied) row: the stored one was kept
+    # Rows whose fit differs from the computed one: stored as set by hand (fit_overridden).
+    fits_manual: int = 0
+    fits_checked: bool = True  # False: the profile has no skills, no fit could be checked
     warnings: list[str]
 
 
@@ -328,3 +332,219 @@ class JobDetail(JobListItem):
     files: list[FileOut]
     events: list[EventOut]  # newest first, at most EVENTS_IN_DETAIL
     events_total: int
+
+
+# --- editing, bulk, add, rescore (J4) -----------------------------------------------------------
+
+BULK_MAX = 500
+RESCORE_IDS_MAX = 5_000
+URL_SCHEMES = ("http", "https")
+PATCH_NULLABLE = frozenset({"updated_at", "fit", "url"})
+
+
+def _clean_line(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _http_url(value: str | None) -> str | None:
+    """An absolute http(s) URL, trimmed; empty means none. Anything else is refused, so a link
+    the app renders can never be javascript: or data:."""
+    if value is None or not value.strip():
+        return None
+    value = value.strip()
+    if any(c.isspace() or ord(c) < 32 for c in value):
+        raise ValueError("url must not contain spaces or control characters")
+    parts = urlsplit(value)
+    if parts.scheme.lower() not in URL_SCHEMES or not parts.netloc:
+        raise ValueError("url must be an absolute http or https address")
+    return value
+
+
+Line1k = Annotated[str, StringConstraints(max_length=FIELD_MAX)]
+Url1k = Annotated[str, StringConstraints(max_length=FIELD_MAX)]
+Notes = Annotated[str, StringConstraints(max_length=TEXT_MAX)]
+Posting = Annotated[str, StringConstraints(max_length=POSTING_MAX)]
+
+
+class JobPatchIn(BaseModel):
+    """PATCH /api/jobs/{id}: only the fields sent change. `fit`: a number sets it by hand, null
+    goes back to the computed fit. `url`: null or "" removes it. `updated_at`: the version the
+    edit is based on (as last read); a different stored value is a 409."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    updated_at: datetime | None = None
+    status: JobStatus | None = None
+    notes: Notes | None = None
+    fit: Annotated[int, Field(ge=0, le=100, strict=True)] | None = None
+    company: Line1k | None = None
+    title: Line1k | None = None
+    location: Line1k | None = None
+    contract_type: ContractType | None = None
+    url: Url1k | None = None
+
+    @field_validator("company", "title")
+    @classmethod
+    def _required_line(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = _clean_line(value)
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
+    @field_validator("location")
+    @classmethod
+    def _line(cls, value: str | None) -> str | None:
+        return None if value is None else _clean_line(value)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, value: str | None) -> str | None:
+        return _http_url(value)
+
+    @model_validator(mode="after")
+    def _something(self) -> "JobPatchIn":
+        for name in self.model_fields_set - PATCH_NULLABLE:
+            if getattr(self, name) is None:
+                raise ValueError(f"{name} cannot be null")
+        if not self.model_fields_set - {"updated_at"}:
+            raise ValueError("nothing to change")
+        return self
+
+
+class BulkSet(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: JobStatus | None = None
+    notes_append: Annotated[str, StringConstraints(max_length=TEXT_MAX)] | None = None
+
+    @field_validator("notes_append")
+    @classmethod
+    def _note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("the note is empty")
+        return value
+
+    @model_validator(mode="after")
+    def _something(self) -> "BulkSet":
+        if self.status is None and self.notes_append is None:
+            raise ValueError("set a status or a note to append")
+        return self
+
+
+class BulkIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    ids: Annotated[list[uuid.UUID], Field(min_length=1, max_length=BULK_MAX)]
+    set_: Annotated[BulkSet, Field(alias="set")]
+
+
+class BulkItemOut(BaseModel):
+    id: uuid.UUID
+    changed: bool
+    status: JobStatus
+    previous_status: JobStatus
+
+
+class BulkOut(BaseModel):
+    results: list["BulkItemOut"]
+    changed: int
+    unchanged: int
+    # Present when some statuses changed: POST it to /api/jobs/bulk/undo before it expires.
+    undo_token: str | None
+    undo_expires_at: datetime | None
+
+
+class UndoIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: Annotated[str, StringConstraints(min_length=1, max_length=200_000)]
+
+
+class UndoOut(BaseModel):
+    restored: list[uuid.UUID]
+    # Jobs changed again since the bulk change (or deleted): left as they are.
+    skipped: list[uuid.UUID]
+
+
+class JobCreateIn(BaseModel):
+    """POST /api/jobs: a posting added by hand. The contract type, when not given, is read from
+    the title, location and url as the engine did."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    company: Line1k
+    title: Line1k
+    location: Line1k = ""
+    contract_type: ContractType | None = None
+    url: Url1k | None = None
+    posting_text: Posting | None = None
+
+    @field_validator("company", "title")
+    @classmethod
+    def _required_line(cls, value: str) -> str:
+        value = _clean_line(value)
+        if not value:
+            raise ValueError("must not be empty")
+        return value
+
+    @field_validator("location")
+    @classmethod
+    def _line(cls, value: str) -> str:
+        return _clean_line(value)
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, value: str | None) -> str | None:
+        return _http_url(value)
+
+    @field_validator("posting_text")
+    @classmethod
+    def _text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.replace("\r\n", "\n").strip()
+        return value or None
+
+
+class RescoreIn(BaseModel):
+    """POST /api/jobs/rescore. Without ids: every job. `after`: resume after this id (the
+    `next_after` of the previous answer)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: Annotated[list[uuid.UUID], Field(min_length=1, max_length=RESCORE_IDS_MAX)] | None = None
+    overwrite_manual: bool = False
+    after: uuid.UUID | None = None
+
+
+class RescoreOut(BaseModel):
+    scored: int
+    changed: int
+    unchanged: int
+    skipped_manual: int
+    skipped_no_text: int
+    # Jobs not looked at yet (the time budget or the row cap stopped this call): call again
+    # with after = next_after. 0 and null when done.
+    remaining: int
+    next_after: uuid.UUID | None
+
+
+class DuplicateOut(BaseModel):
+    detail: str
+    existing_id: uuid.UUID
+    existing_slug: str
+
+
+class MissingOut(BaseModel):
+    detail: str
+    missing: list[uuid.UUID]
+
+
+class StaleOut(BaseModel):
+    detail: str
+    updated_at: datetime

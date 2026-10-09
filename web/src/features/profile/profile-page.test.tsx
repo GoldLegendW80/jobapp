@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { admin, fakeSession, member } from "@/test/auth";
-import { fakeProfile, haraldLike, XSS_BODY } from "@/test/profile";
+import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -121,65 +121,6 @@ describe("profile page", () => {
     expect(screen.getByLabelText("Notice period")).toHaveValue(
       "1 to 3 months.",
     );
-  });
-});
-
-describe("read only tabs", () => {
-  it("lists fact blocks with bodies rendered safely as Markdown", async () => {
-    fakeSession(admin);
-    fakeProfile();
-    const { user } = await openProfile();
-    await user.click(tab(/Facts/));
-    expect(await screen.findByText("Coming next:")).toBeVisible();
-    const summary = screen.getByText("POSITIONING");
-    await user.click(summary);
-    const block = summary.closest("details")!;
-    expect(block).toHaveAttribute("open");
-    expect(block.querySelector("script")).toBeNull();
-    expect(block.querySelector("img")).toBeNull();
-    expect(block.textContent).toContain("<script>");
-    expect(
-      within(block).getByRole("link", { name: "safe link" }),
-    ).toHaveAttribute("href", "https://example.org");
-    expect(within(block).queryByRole("link", { name: "bad link" })).toBeNull();
-    expect((window as { __xss?: string }).__xss).toBeUndefined();
-    expect(XSS_BODY).toContain("onerror");
-  });
-
-  it("shows skills categories with their terms", async () => {
-    fakeSession(admin);
-    fakeProfile();
-    const { user } = await openProfile();
-    await user.click(tab(/Skills/));
-    expect(await screen.findByText("3.5 years of experience.")).toBeVisible();
-    const agents = screen.getByRole("list", { name: "Terms of agents" });
-    expect(
-      within(agents)
-        .getAllByRole("listitem")
-        .map((li) => li.textContent),
-    ).toEqual(["agent", "langgraph"]);
-    expect(
-      screen.getByRole("list", { name: "Terms of llm" }),
-    ).toHaveTextContent("\\bllm(?:s)?\\b");
-    expect(screen.getByText("(penalty 25)")).toBeVisible();
-    expect(screen.getByText("Coming next:")).toBeVisible();
-  });
-
-  it("shows search terms, preferences and boards", async () => {
-    fakeSession(admin);
-    fakeProfile();
-    const { user } = await openProfile();
-    await user.click(tab(/Search/));
-    const boards = await screen.findByRole("list", { name: "Boards" });
-    expect(within(boards).getAllByRole("listitem")).toHaveLength(2);
-    expect(boards).toHaveTextContent("Mistral AI");
-    expect(boards).toHaveTextContent("ashby, mistral.ai");
-    expect(within(boards).getByText("Off")).toBeVisible();
-    expect(screen.getByRole("list", { name: "Locations" })).toHaveTextContent(
-      "Paris",
-    );
-    expect(screen.getByText("CDI, Freelance")).toBeVisible();
-    expect(screen.getByText("No cybersecurity roles.")).toBeVisible();
   });
 });
 

@@ -27,16 +27,18 @@ import {
 } from "./api";
 import { AnswersTab } from "./answers-tab";
 import { ExperienceTab } from "./experience-tab";
+import { FactsTab } from "./facts-tab";
 import { IdentityTab } from "./identity-tab";
 import { missingLabel, SECTION_LABELS } from "./labels";
-import { FactsTab, SearchTab, SkillsTab } from "./readonly-tabs";
+import { SearchTab } from "./search-tab";
+import { SkillsTab } from "./skills-tab";
 
 const isSection = (value: string | null): value is SectionName =>
   value !== null && (SECTIONS as readonly string[]).includes(value);
 
 /**
- * /profile: the completeness of the whole profile, then one tab per section. Identity,
- * Experience and Answers are editable; Facts, Skills and Search show the data read only for now.
+ * /profile: the completeness of the whole profile, then one tab per section, each an editor that
+ * saves on its own.
  * The open tab lives in `?tab=`. With unsaved changes, switching tab, following a link away or
  * closing the page asks first.
  */
@@ -161,11 +163,11 @@ export function ProfilePage() {
             ) : name === "answers" ? (
               <AnswersTab profile={profile} onDirtyChange={onDirtyChange} />
             ) : name === "facts" ? (
-              <FactsTab facts={profile.sections.facts} />
+              <FactsTab profile={profile} onDirtyChange={onDirtyChange} />
             ) : name === "skills" ? (
-              <SkillsTab skills={profile.sections.skills} />
+              <SkillsTab profile={profile} onDirtyChange={onDirtyChange} />
             ) : (
-              <SearchTab search={profile.sections.search} />
+              <SearchTab profile={profile} onDirtyChange={onDirtyChange} />
             )}
           </TabsContent>
         ))}

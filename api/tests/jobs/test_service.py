@@ -209,13 +209,18 @@ def test_apply_score_keeps_a_manual_fit(db: Session, alice: uuid.UUID) -> None:
     assert service.apply_score(db, job, result, NOW) is False  # unchanged: no event
     job.fit, job.fit_overridden = 90, True
     rescored = ScoreResult(fit=60, competencies=["agents"], gaps=[])
-    assert service.apply_score(db, job, rescored, NOW) is False
+    # The manual fit is kept; the competencies and gaps changed, so the call reports a change.
+    assert service.apply_score(db, job, rescored, NOW) is True
     assert (job.fit, job.fit_overridden, job.competencies, job.gaps) == (90, True, ["agents"], [])
+    assert service.apply_score(db, job, rescored, NOW) is False  # nothing new this time
     assert service.apply_score(db, job, rescored, NOW, overwrite_manual=True) is True
     assert (job.fit, job.fit_overridden) == (60, False)
     db.commit()
     fits = [e.data for e in service.list_events(db, alice, job.id) if e.kind is JobEventKind.fit]
-    assert fits == [{"from": None, "to": 72}, {"from": 90, "to": 60}]
+    assert fits == [
+        {"from": None, "to": 72, "manual": False},
+        {"from": 90, "to": 60, "manual": False, "was_manual": True},
+    ]
 
 
 def test_one_running_sweep_per_user(db: Session, alice: uuid.UUID, bob: uuid.UUID) -> None:
