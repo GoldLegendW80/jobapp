@@ -135,17 +135,19 @@ export function ProfilePage() {
           aria-label="Profile sections"
           className="grid h-auto grid-cols-3 gap-1 sm:grid-cols-6"
         >
-          {SECTIONS.map((name) => (
-            <TabsTrigger key={name} value={name}>
-              <CompletenessDot
-                percent={profile.completeness.sections[name]?.percent ?? 0}
-              />
-              {SECTION_LABELS[name]}
-              <span className="sr-only">
-                , {profile.completeness.sections[name]?.percent ?? 0}% complete
-              </span>
-            </TabsTrigger>
-          ))}
+          {SECTIONS.map((name) => {
+            const percent = profile.completeness.sections[name]?.percent ?? 0;
+            return (
+              <TabsTrigger
+                key={name}
+                value={name}
+                aria-label={`${SECTION_LABELS[name]}, ${percent}% complete`}
+              >
+                <CompletenessDot percent={percent} />
+                {SECTION_LABELS[name]}
+              </TabsTrigger>
+            );
+          })}
         </TabsList>
         {SECTIONS.map((name) => (
           <TabsContent key={name} value={name} className="flex flex-col gap-4">

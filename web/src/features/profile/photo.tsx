@@ -100,10 +100,7 @@ export function PhotoField({ profile }: { profile: Profile }) {
 
   const etag = profile.has_photo ? profile.photo_etag : null;
   return (
-    <section aria-labelledby="photo-heading" className="flex flex-col gap-3">
-      <h3 id="photo-heading" className="text-sm font-medium">
-        Photo
-      </h3>
+    <section aria-label="Photo" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-4">
         <div className="grid size-24 shrink-0 place-items-center overflow-hidden rounded-full border bg-muted">
           {etag ? (
