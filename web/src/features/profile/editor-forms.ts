@@ -20,9 +20,10 @@ import {
   type Search,
   type Skills,
   type TermList,
+  WEEKDAYS,
 } from "./api";
 import { fold, LINE_MAX, text, uniqueBy } from "./forms";
-import { cleanTerms, termProblem } from "./matching";
+import { cleanTerms, listProblems, termProblem } from "./matching";
 
 export const FACTS_MAX_BYTES = 200_000;
 export const FACT_BLOCKS_MAX = 200;
@@ -118,10 +119,14 @@ const termListShape = {
   terms: z.array(z.string()).max(TERMS_MAX, `Keep at most ${TERMS_MAX} terms.`),
 };
 
-/** An issue on each term the api would refuse, at `<list>.terms.<index>`. */
+/**
+ * An issue on each term the api would refuse, at `<list>.terms.<index>`: alone, or with the
+ * terms before it (a group name used twice).
+ */
 function checkTerms(list: TermList, ctx: z.RefinementCtx) {
+  const across = listProblems(list.terms, list.advanced_regex);
   list.terms.forEach((term, index) => {
-    const problem = termProblem(term, list.advanced_regex);
+    const problem = termProblem(term, list.advanced_regex) ?? across.get(index);
     if (problem) {
       ctx.addIssue({
         code: "custom",
@@ -307,6 +312,13 @@ export const searchSchema = z
         }),
       )
       .max(NEVER_APPLY_MAX, `Keep at most ${NEVER_APPLY_MAX} rules.`),
+    // Not edited here (Jobs owns it): carried through unchanged so a save never resets it.
+    sweep_schedule: z.object({
+      enabled: z.boolean(),
+      days: z.array(z.enum(WEEKDAYS)),
+      times: z.array(z.string()),
+      timezone: z.string(),
+    }),
   })
   .superRefine((values, ctx) => {
     uniqueBy(
@@ -339,6 +351,11 @@ export const toSearchForm = (search: Search): SearchForm => ({
     extra_exclude: toTermList(b.extra_exclude),
   })),
   never_apply: search.never_apply.map((value) => ({ value })),
+  sweep_schedule: {
+    ...search.sweep_schedule,
+    days: [...search.sweep_schedule.days],
+    times: [...search.sweep_schedule.times],
+  },
 });
 
 export const fromSearchForm = (values: SearchForm): Search => ({
@@ -359,4 +376,9 @@ export const fromSearchForm = (values: SearchForm): Search => ({
     extra_exclude: fromTermList(b.extra_exclude),
   })),
   never_apply: values.never_apply.map((r) => cleanLine(r.value)),
+  sweep_schedule: {
+    ...values.sweep_schedule,
+    days: [...values.sweep_schedule.days],
+    times: [...values.sweep_schedule.times],
+  },
 });

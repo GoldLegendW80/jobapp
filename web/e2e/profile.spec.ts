@@ -1,15 +1,14 @@
-import { execFileSync } from "node:child_process";
 import { deflateSync, crc32 } from "node:zlib";
 
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import {
   caddyUrl,
+  cliImportProfile,
   clearAttempts,
   cliLink,
   makeShots,
   newContext,
-  root,
   setPassword,
   signIn,
   watchErrors,
@@ -170,46 +169,7 @@ function fakeExport() {
 }
 
 function importProfile(email: string) {
-  if (process.env.E2E_ADMIN_VIA_DEPLOY) {
-    // On the Jetson: the same CLI in its api container, over ssh (DEPLOY_HOST, DEPLOY_DIR).
-    if (!/^[a-z0-9.@-]+$/.test(email))
-      throw new Error(`refusing to import a profile for ${email}`);
-    const dir = (process.env.DEPLOY_DIR ?? "jobapp").replace(/^~\//, "");
-    if (!/^[A-Za-z0-9._/-]+$/.test(dir))
-      throw new Error(`refusing DEPLOY_DIR ${dir}`);
-    return execFileSync(
-      "ssh",
-      [
-        "-o",
-        "BatchMode=yes",
-        process.env.DEPLOY_HOST ?? "jetson",
-        `cd ${dir} && docker compose -f compose.yml exec -T api python -m app.profile.cli import --email ${email} --file -`,
-      ],
-      { encoding: "utf8", input: JSON.stringify(fakeExport()) },
-    );
-  }
-  return execFileSync(
-    "docker",
-    [
-      "compose",
-      "-p",
-      process.env.E2E_COMPOSE_PROJECT ?? "jobapp",
-      "-f",
-      "compose.yml",
-      "exec",
-      "-T",
-      "api",
-      "python",
-      "-m",
-      "app.profile.cli",
-      "import",
-      "--email",
-      email,
-      "--file",
-      "-",
-    ],
-    { cwd: root, encoding: "utf8", input: JSON.stringify(fakeExport()) },
-  );
+  return cliImportProfile(email, fakeExport());
 }
 
 /** A real 600 x 400 PNG (a colour gradient), so the api decodes and re-encodes it. */

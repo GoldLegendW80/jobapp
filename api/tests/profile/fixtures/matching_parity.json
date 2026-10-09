@@ -842,11 +842,11 @@
   },
   {
    "pattern": "(?x) a",
-   "valid": true
+   "valid": false
   },
   {
    "pattern": "(?i)llm",
-   "valid": true
+   "valid": false
   },
   {
    "pattern": "a**",
@@ -874,6 +874,163 @@
   },
   {
    "pattern": "(a)\\1",
+   "valid": false
+  },
+  {
+   "pattern": "(?m)x",
+   "valid": false
+  },
+  {
+   "pattern": "(?s)a.b",
+   "valid": false
+  },
+  {
+   "pattern": "(?a)\\w",
+   "valid": false
+  },
+  {
+   "pattern": "(?u)\\w",
+   "valid": false
+  },
+  {
+   "pattern": "(?im)x",
+   "valid": false
+  },
+  {
+   "pattern": "ab(?i)c",
+   "valid": false
+  },
+  {
+   "pattern": "(?:(?i)x)",
+   "valid": false
+  },
+  {
+   "pattern": "(x)|(?s)y",
+   "valid": false
+  },
+  {
+   "pattern": "(?i:llm)",
+   "valid": true
+  },
+  {
+   "pattern": "(?-i:LLM)",
+   "valid": true
+  },
+  {
+   "pattern": "(?s:a.b)",
+   "valid": true
+  },
+  {
+   "pattern": "(?x: a b)",
+   "valid": true
+  },
+  {
+   "pattern": "[(?i)]",
+   "valid": true
+  },
+  {
+   "pattern": "\\(?i\\)",
+   "valid": true
+  },
+  {
+   "pattern": "(?#x(?i)",
+   "valid": true
+  },
+  {
+   "pattern": "(?#[)(?i)x",
+   "valid": false
+  },
+  {
+   "pattern": "(a)\\2",
+   "valid": false
+  },
+  {
+   "pattern": "x(a)\\1y",
+   "valid": false
+  },
+  {
+   "pattern": "(a)\\18",
+   "valid": false
+  },
+  {
+   "pattern": "\\101",
+   "valid": true
+  },
+  {
+   "pattern": "\\0",
+   "valid": true
+  },
+  {
+   "pattern": "[\\1]",
+   "valid": true
+  },
+  {
+   "pattern": "\\\\1",
+   "valid": true
+  },
+  {
+   "pattern": "(a)?(?(1)b|c)",
+   "valid": false
+  },
+  {
+   "pattern": "(?P<w>a)?(?(w)b|c)",
+   "valid": true
+  },
+  {
+   "pattern": "(?P<w>a)(?P=w)",
+   "valid": true
+  }
+ ],
+ "joined": [
+  {
+   "terms": [
+    "(?P<n>a)",
+    "(?P<n>b)"
+   ],
+   "valid": false
+  },
+  {
+   "terms": [
+    "ok",
+    "(?P<n>a)",
+    "x",
+    "(?P<n>b)"
+   ],
+   "valid": false
+  },
+  {
+   "terms": [
+    "(?P<a>x)",
+    "(?P<b>y)"
+   ],
+   "valid": true
+  },
+  {
+   "terms": [
+    "(?P<a>x)(?P=a)",
+    "(?P<b>y)?(?(b)z|w)"
+   ],
+   "valid": true
+  },
+  {
+   "terms": [
+    "[(?P<n>)]",
+    "(?P<n>a)"
+   ],
+   "valid": true
+  },
+  {
+   "terms": [
+    "agent",
+    "llm"
+   ],
+   "valid": true
+  },
+  {
+   "terms": [
+    "(?#P<n>)a",
+    "(?P<n>a)"
+   ],
    "valid": true
   }
  ]

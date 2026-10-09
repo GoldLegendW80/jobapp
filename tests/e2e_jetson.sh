@@ -201,6 +201,9 @@ row() {
   row "Disabled and old password refused" users-friend-disabled-sign-in account-old-password-refused
   row "Profile tabs" profile-identity profile-experience profile-facts profile-skills profile-search profile-answers
   row "Profile editing" profile-identity-crop profile-identity-photo profile-identity-conflict profile-unsaved-guard
+  row "Profile editors" editors-facts editors-skills editors-skills-regex-error editors-search editors-search-check-found
+  row "Profile history" history-identity-history-diff history-facts-history-diff history-identity-history
+  row "Profile import" history-import-refused history-import-summary history-identity-after-import
   printf '\n## Every file\n\n'
   find "$EVIDENCE" -name '*.png' -exec basename {} \; | sort | sed 's/.*/- [&](&)/'
 } >"$EVIDENCE/index.md"

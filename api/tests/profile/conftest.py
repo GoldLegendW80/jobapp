@@ -127,6 +127,12 @@ FULL: dict[str, dict[str, Any]] = {
             },
         ],
         "never_apply": ["No cybersecurity roles."],
+        "sweep_schedule": {
+            "enabled": False,
+            "days": ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+            "times": ["06:17"],
+            "timezone": "Europe/Paris",
+        },
     },
     "answers": {
         "work_authorization": [

@@ -51,9 +51,10 @@ import binascii
 import json
 import re
 import unicodedata
-from collections.abc import Callable
+import zoneinfo
+from collections.abc import Callable, Iterator
 from datetime import datetime
-from functools import partial
+from functools import lru_cache, partial
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -69,6 +70,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from app.profile.matching import compile_terms
 
 # --- limits -------------------------------------------------------------------------------------
 
@@ -247,13 +250,110 @@ def has_nested_quantifier(pattern: str) -> bool:
     return False
 
 
+_GLOBAL_FLAGS = re.compile(r"\(\?[aiLmsux]+\)")
+_NUMBERED_CONDITION = re.compile(r"\(\?\((\d+)\)")
+_GROUP_NAME = re.compile(r"\(\?P<([^>]*)>")
+_OCTAL = re.compile(r"[0-7]{3}")
+_GROUP_REF = re.compile(r"\\([1-9][0-9]?)")
+
+
+def _tokens(pattern: str) -> Iterator[int]:
+    """Positions of the characters a scan of a pattern looks at: each escape (its backslash)
+    and every character outside character classes and (?#...) comments."""
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "\\":
+            yield i
+            i += 2
+            continue
+        if char == "[":  # skip the class; a `]` right after `[` or `[^` is a literal
+            i += 1
+            if pattern[i : i + 1] == "^":
+                i += 1
+            if pattern[i : i + 1] == "]":
+                i += 1
+            while i < len(pattern) and pattern[i] != "]":
+                i += 2 if pattern[i] == "\\" else 1
+            i += 1
+            continue
+        if pattern.startswith("(?#", i):  # a comment ends at the first ")"
+            end = pattern.find(")", i)
+            i = len(pattern) if end == -1 else end + 1
+            continue
+        yield i
+        i += 1
+
+
+def global_flags(pattern: str) -> re.Match[str] | None:
+    """The first global inline flag group such as (?i), (?m) or (?sx), outside escapes,
+    character classes and comments, or None. Scoped groups such as (?i:...) or (?-i:...) are not
+    global. The matcher wraps every advanced term in (?:...) and joins the list with |, and Python
+    only accepts global flags at the very start of a whole pattern, so a term holding one would
+    pass alone and break the list (and (?x) would change how every other term reads)."""
+    for i in _tokens(pattern):
+        if pattern[i] == "(" and (found := _GLOBAL_FLAGS.match(pattern, i)):
+            return found
+    return None
+
+
+def joining_problem(pattern: str) -> tuple[int, str] | None:
+    """The first construct that cannot survive joining the terms of a list into one expression,
+    as (position, sentence), or None:
+    - a global inline flag, (?i) (see `global_flags`);
+    - a numbered backreference, \\1 (a three digit octal escape such as \\101 is fine);
+    - a condition on a numbered group, (?(1)...).
+    Once joined, a number counts the groups of every earlier term, so it would silently point at
+    another term's group; named groups ((?P<word>...), (?P=word), (?(word)...)) keep their meaning,
+    and their names must be unique across the list (`group_names`)."""
+    for i in _tokens(pattern):
+        char = pattern[i]
+        if char == "(" and (flags := _GLOBAL_FLAGS.match(pattern, i)):
+            return i, (
+                f"inline flags such as {flags.group()} are not allowed. Matching is already "
+                "case-insensitive; to apply a flag to part of the term, scope it as a group "
+                "such as (?s:...)"
+            )
+        ref = _GROUP_REF.match(pattern, i) if char == "\\" else None
+        if ref is not None and not _OCTAL.match(pattern, i + 1):
+            return i, (
+                f"numbered backreferences such as {ref.group()} are not allowed: the terms of a "
+                "list are joined into one expression, where the number would point at another "
+                "term's group. Name the group and refer to it by name, as in (?P<word>...) then "
+                "(?P=word)"
+            )
+        if char == "(" and (cond := _NUMBERED_CONDITION.match(pattern, i)):
+            return i, (
+                f"conditions on a numbered group such as {cond.group()}...) are not allowed: the "
+                "terms of a list are joined into one expression, where the number would point at "
+                "another term's group. Name the group and test it by name, as in "
+                "(?P<word>...) then (?(word)...)"
+            )
+    return None
+
+
+def group_names(pattern: str) -> list[str]:
+    """The names of the named groups a pattern defines, (?P<name>...), in order."""
+    names = []
+    for i in _tokens(pattern):
+        if pattern[i] == "(" and (found := _GROUP_NAME.match(pattern, i)):
+            names.append(found.group(1))
+    return names
+
+
 def check_regex(pattern: str) -> str:
-    """Compile an advanced term as the matcher will (case-insensitive). Raises ValueError with
-    the error position when it does not compile, is too long, or nests quantifiers."""
+    """Compile an advanced term as the matcher will (case-insensitive, wrapped in a group so the
+    terms of a list join). Raises ValueError with the error position when it is too long, holds a
+    construct that breaks or changes meaning once joined (`joining_problem`), does not compile,
+    or nests quantifiers."""
     if len(pattern) > REGEX_MAX:
         raise ValueError(f"regular expression longer than {REGEX_MAX} characters")
+    problem = joining_problem(pattern)
+    if problem is not None:
+        raise ValueError(f"invalid regular expression at position {problem[0]}: {problem[1]}")
     try:
         re.compile(pattern, re.IGNORECASE)
+        re.compile(f"(?:{pattern})", re.IGNORECASE)  # as compile_terms joins it
     except re.error as exc:
         where = f" at position {exc.pos}" if exc.pos is not None else ""
         raise ValueError(f"invalid regular expression{where}: {exc.msg}") from None
@@ -301,7 +401,28 @@ class _Terms(_Section):
                     raise ValueError(f"term {index + 1}: {exc}") from None
             elif len(term) > TERM_MAX:
                 raise ValueError(f"term {index + 1}: a plain term is at most {TERM_MAX} characters")
+        if advanced:
+            check_joined(terms)
         return terms
+
+
+def check_joined(terms: list[str]) -> None:
+    """Raise ValueError when advanced terms, each valid alone, do not make one expression the way
+    matching.compile_terms joins them: a group name used by two terms, or any other compile error
+    of the joined list."""
+    first_use: dict[str, int] = {}
+    for index, term in enumerate(terms):
+        for name in group_names(term):
+            if name in first_use and first_use[name] != index:
+                raise ValueError(
+                    f'term {index + 1}: the group name "{name}" is already used by term '
+                    f"{first_use[name] + 1}; group names must be unique across the list"
+                )
+            first_use.setdefault(name, index)
+    try:
+        compile_terms(terms, advanced_regex=True)
+    except re.error as exc:
+        raise ValueError(f"the terms do not combine into one expression: {exc.msg}") from None
 
 
 class TermList(_Terms):
@@ -440,6 +561,50 @@ RemoteStance = Literal["remote", "hybrid", "office", "any"]
 Ats = Literal["ashby", "greenhouse", "lever"]
 
 
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_HHMM = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+@lru_cache(maxsize=1)
+def _timezones() -> frozenset[str]:
+    return frozenset(zoneinfo.available_timezones())
+
+
+class SweepSchedule(_Section):
+    """When the boards are swept automatically: on these weekdays, at these local times (24 hour
+    HH:MM, 1 to 4), in this IANA time zone. Off by default."""
+
+    enabled: bool = False
+    days: Annotated[list[Weekday], Field(min_length=1, max_length=7)] = Field(
+        default_factory=lambda: list(WEEKDAYS)
+    )
+    times: Annotated[list[str], Field(min_length=1, max_length=4)] = Field(
+        default_factory=lambda: ["06:17"]
+    )
+    timezone: Annotated[str, StringConstraints(min_length=1, max_length=64)] = "Europe/Paris"
+
+    @field_validator("days")
+    @classmethod
+    def _unique_days(cls, value: list[str]) -> list[str]:
+        return _unique(value, str, "day")
+
+    @field_validator("times")
+    @classmethod
+    def _hhmm(cls, value: list[str]) -> list[str]:
+        for time_ in value:
+            if not _HHMM.match(time_):
+                raise ValueError(f"{time_[:10]!r} is not a time as HH:MM, 00:00 to 23:59")
+        return _unique(value, str, "time")
+
+    @field_validator("timezone")
+    @classmethod
+    def _iana(cls, value: str) -> str:
+        if value not in _timezones():
+            raise ValueError("must be an IANA time zone name such as Europe/Paris")
+        return value
+
+
 class Board(_Section):
     company: Line
     ats: Ats
@@ -458,6 +623,10 @@ class SearchSection(_Section):
     days: Annotated[StrictInt, Field(ge=1, le=365)] = 30
     boards: Annotated[list[Board], Field(max_length=300)] = Field(default_factory=list)
     never_apply: Annotated[list[Text(500)], Field(max_length=50)] = Field(default_factory=list)
+    # When the boards are swept automatically (jobs J5 schedules it and edits it next to Find
+    # jobs). Off unless the user turns it on; a section saved before this field existed reads as
+    # off.
+    sweep_schedule: SweepSchedule = Field(default_factory=lambda: SweepSchedule())
 
     @field_validator("contract_types")
     @classmethod

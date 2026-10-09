@@ -1,6 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { LoaderCircle, RotateCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
 import { useBlocker, useSearchParams } from "react-router";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -28,8 +34,10 @@ import {
 import { AnswersTab } from "./answers-tab";
 import { ExperienceTab } from "./experience-tab";
 import { FactsTab } from "./facts-tab";
+import { HistoryDrawer } from "./history-drawer";
 import { IdentityTab } from "./identity-tab";
 import { missingLabel, SECTION_LABELS } from "./labels";
+import { ProfileFileMenu } from "./profile-file";
 import { SearchTab } from "./search-tab";
 import { SkillsTab } from "./skills-tab";
 
@@ -40,7 +48,9 @@ const isSection = (value: string | null): value is SectionName =>
  * /profile: the completeness of the whole profile, then one tab per section, each an editor that
  * saves on its own.
  * The open tab lives in `?tab=`. With unsaved changes, switching tab, following a link away or
- * closing the page asks first.
+ * closing the page asks first. Each tab has a History drawer (view and restore past saves), and
+ * the header an Export or import menu. A restore or an import remounts the open tab, so its form
+ * reloads from the new current version.
  */
 export function ProfilePage() {
   useTitle("Profile");
@@ -53,6 +63,12 @@ export function ProfilePage() {
   const tab: SectionName = isSection(requested) ? requested : "identity";
   const [dirty, setDirty] = useState(false);
   const [pendingTab, setPendingTab] = useState<SectionName>();
+  // Bumped after a restore or an import: the tabs remount and read the new current version.
+  const [generation, setGeneration] = useState(0);
+  const reloadTabs = useCallback(() => {
+    setDirty(false);
+    setGeneration((value) => value + 1);
+  }, []);
   const onDirtyChange = useCallback((value: boolean) => {
     setDirty(value);
   }, []);
@@ -124,7 +140,16 @@ export function ProfilePage() {
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
-      <Header profile={profile} />
+      <Header
+        profile={profile}
+        actions={
+          <ProfileFileMenu
+            profile={profile}
+            dirtySection={dirty ? tab : undefined}
+            onImported={reloadTabs}
+          />
+        }
+      />
       <Tabs
         value={tab}
         onValueChange={(value) => {
@@ -153,22 +178,38 @@ export function ProfilePage() {
         </TabsList>
         {SECTIONS.map((name) => (
           <TabsContent key={name} value={name} className="flex flex-col gap-4">
-            <Missing
-              missing={profile.completeness.sections[name]?.missing ?? []}
-            />
-            {name === "identity" ? (
-              <IdentityTab profile={profile} onDirtyChange={onDirtyChange} />
-            ) : name === "experience" ? (
-              <ExperienceTab profile={profile} onDirtyChange={onDirtyChange} />
-            ) : name === "answers" ? (
-              <AnswersTab profile={profile} onDirtyChange={onDirtyChange} />
-            ) : name === "facts" ? (
-              <FactsTab profile={profile} onDirtyChange={onDirtyChange} />
-            ) : name === "skills" ? (
-              <SkillsTab profile={profile} onDirtyChange={onDirtyChange} />
-            ) : (
-              <SearchTab profile={profile} onDirtyChange={onDirtyChange} />
-            )}
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <Missing
+                missing={profile.completeness.sections[name]?.missing ?? []}
+              />
+              <div className="ml-auto">
+                <HistoryDrawer
+                  section={name}
+                  profile={profile}
+                  dirty={dirty}
+                  onRestored={reloadTabs}
+                />
+              </div>
+            </div>
+            {/* A new key after a restore or an import: the editor reloads its form. */}
+            <Fragment key={generation}>
+              {name === "identity" ? (
+                <IdentityTab profile={profile} onDirtyChange={onDirtyChange} />
+              ) : name === "experience" ? (
+                <ExperienceTab
+                  profile={profile}
+                  onDirtyChange={onDirtyChange}
+                />
+              ) : name === "answers" ? (
+                <AnswersTab profile={profile} onDirtyChange={onDirtyChange} />
+              ) : name === "facts" ? (
+                <FactsTab profile={profile} onDirtyChange={onDirtyChange} />
+              ) : name === "skills" ? (
+                <SkillsTab profile={profile} onDirtyChange={onDirtyChange} />
+              ) : (
+                <SearchTab profile={profile} onDirtyChange={onDirtyChange} />
+              )}
+            </Fragment>
           </TabsContent>
         ))}
       </Tabs>
@@ -220,11 +261,20 @@ export function ProfilePage() {
   );
 }
 
-function Header({ profile }: { profile: Profile }) {
+function Header({
+  profile,
+  actions,
+}: {
+  profile: Profile;
+  actions: ReactNode;
+}) {
   const overall = profile.completeness.overall;
   return (
     <header className="flex flex-col gap-3">
-      <h1 className="text-2xl font-semibold tracking-tight">Profile</h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-semibold tracking-tight">Profile</h1>
+        {actions}
+      </div>
       <p className="text-sm text-muted-foreground">
         Everything search and document generation read about you. Each section
         saves on its own.
@@ -275,7 +325,7 @@ function CompletenessDot({ percent }: { percent: number }) {
 function Missing({ missing }: { missing: string[] }) {
   if (missing.length === 0) return null;
   return (
-    <p className="text-sm text-muted-foreground">
+    <p className="min-w-0 flex-1 basis-60 text-sm text-muted-foreground">
       To complete this section, add: {missing.map(missingLabel).join(", ")}.
     </p>
   );

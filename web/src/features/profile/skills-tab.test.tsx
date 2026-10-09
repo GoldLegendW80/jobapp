@@ -126,6 +126,26 @@ describe("skills tab", () => {
     ]);
   });
 
+  it("refuses numbered backreferences and group names already used in the list", async () => {
+    const { user } = await openSkills();
+    const input = screen.getByLabelText("New term for llm");
+    await user.type(input, "(a)\\1{enter}");
+    expect(
+      screen.getByText(/^Numbered backreferences such as \\1 are not allowed/),
+    ).toBeVisible();
+    await user.clear(input);
+    await user.type(input, "(?P<w>gpt)(?P=w){enter}");
+    expect(chips("llm")).toHaveLength(3);
+    await user.clear(input);
+    await user.type(input, "(?P<w>claude){enter}");
+    expect(
+      screen.getByText(
+        'The group name "w" is already used by term 3: group names must be unique across the list.',
+      ),
+    ).toBeVisible();
+    expect(chips("llm")).toHaveLength(3);
+  });
+
   it("revalidates chips when the advanced switch changes, and blocks the save", async () => {
     const { user, state } = await openSkills();
     await user.type(

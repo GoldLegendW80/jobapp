@@ -9,7 +9,7 @@ import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-import type { Board, Search } from "./api";
+import type { Board, Search, Weekday } from "./api";
 
 afterEach(() => {
   toast.dismiss();
@@ -268,7 +268,81 @@ describe("search tab: terms and preferences", () => {
       days: 30,
       boards: [],
       never_apply: [],
+      sweep_schedule: {
+        enabled: false,
+        days: [
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+          "sunday",
+        ],
+        times: ["06:17"],
+        timezone: "Europe/Paris",
+      },
     });
+  });
+});
+
+describe("search tab: automatic search", () => {
+  const line = () => screen.getByText("Automatic search:").parentElement;
+  const ON = {
+    enabled: true,
+    days: ["monday", "friday"] as Weekday[],
+    times: ["18:30", "06:17"],
+    timezone: "America/New_York",
+  };
+
+  it("shows off for a section saved before the schedule existed, with a link to Jobs", async () => {
+    const legacy = haraldLike();
+    const search: Partial<Search> = { ...legacy.search };
+    delete search.sweep_schedule;
+    await openSearch({ ...legacy, search });
+    expect(line()).toHaveTextContent("Automatic search: off");
+    expect(
+      screen.getByRole("link", { name: "Change in Jobs" }),
+    ).toHaveAttribute("href", "/jobs");
+  });
+
+  it("describes a schedule that is on", async () => {
+    const data = haraldLike();
+    data.search.sweep_schedule = ON;
+    await openSearch(data);
+    expect(line()).toHaveTextContent(
+      "Automatic search: on, Monday and Friday at 06:17 and 18:30 (America/New_York)",
+    );
+  });
+
+  it("keeps the schedule unchanged when the tab is saved", async () => {
+    const data = haraldLike();
+    data.search.sweep_schedule = ON;
+    const { user, state } = await openSearch(data);
+    await user.clear(screen.getByLabelText("Posting age window (days)"));
+    await user.type(screen.getByLabelText("Posting age window (days)"), "14");
+    await user.click(save());
+    await screen.findByText("Search saved.");
+    expect(saved(state).sweep_schedule).toEqual(ON);
+    expect(saved(state).days).toBe(14);
+    // And again after the form was reset from the saved version.
+    await user.click(screen.getByRole("button", { name: "CDD (fixed term)" }));
+    await user.click(save());
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(2);
+    });
+    expect(saved(state, 1).sweep_schedule).toEqual(ON);
+  });
+
+  it("saves the default off schedule for a section that had none", async () => {
+    const legacy = haraldLike();
+    const search: Partial<Search> = { ...legacy.search };
+    delete search.sweep_schedule;
+    const { user, state } = await openSearch({ ...legacy, search });
+    await user.click(screen.getByRole("button", { name: "VIE" }));
+    await user.click(save());
+    await screen.findByText("Search saved.");
+    expect(saved(state).sweep_schedule.enabled).toBe(false);
   });
 });
 

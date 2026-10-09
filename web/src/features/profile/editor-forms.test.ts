@@ -151,6 +151,17 @@ describe("skills schema", () => {
     },
   );
 
+  it("marks a term whose group name an earlier term of the list uses", () => {
+    const form = base();
+    form.have[1]!.terms = ["(?P<n>llm)", "(?P<n>genai)"];
+    expect(issues(skillsSchema.safeParse(form))).toEqual([
+      [
+        "have.1.terms.1",
+        'The group name "n" is already used by term 1: group names must be unique across the list.',
+      ],
+    ]);
+  });
+
   it("refuses a category name used in another list, ignoring case", () => {
     const form = base();
     form.none.push({ name: "AGENTS", advanced_regex: false, terms: [] });

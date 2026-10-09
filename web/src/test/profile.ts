@@ -2,7 +2,9 @@
  * A fake /api/profile for tests: a profile shaped like Harald's real import
  * (api/tests/profile/fixtures/harald_export.json) with made up contact details, and MSW handlers
  * that keep it in memory, bump the revision on every save, answer 409 to a stale base_revision,
- * and compute completeness with the api's rules.
+ * and compute completeness with the api's rules. Every save and import appends to `revisions`,
+ * which the History endpoints page through as the api does (newest first, `before` exclusive),
+ * and export and import speak the api's file format.
  */
 import { http, HttpResponse } from "msw";
 
@@ -143,6 +145,20 @@ export function haraldLike(): SectionData {
         },
       ],
       never_apply: ["No cybersecurity roles."],
+      sweep_schedule: {
+        enabled: false,
+        days: [
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+          "sunday",
+        ],
+        times: ["06:17"],
+        timezone: "Europe/Paris",
+      },
     },
     answers: {
       work_authorization: [
@@ -248,7 +264,31 @@ export interface FakeProfile {
   saves: { section: string; body: { base_revision: number; data: unknown } }[];
   uploads: Blob[];
   deletes: number;
+  revisions: FakeRevision[];
+  /** bodies of POST /api/profile/import */
+  imports: Record<string, unknown>[];
+  exports: number;
 }
+
+export interface FakeRevision {
+  revision: number;
+  section: SectionName;
+  created_at: string;
+  data: unknown;
+}
+
+const SECTION_ORDER: SectionName[] = [
+  "identity",
+  "experience",
+  "facts",
+  "skills",
+  "search",
+  "answers",
+];
+
+/** A fixed time `revision` hours after the first save, so lists sort and read predictably. */
+export const revisionTime = (revision: number) =>
+  new Date(Date.UTC(2026, 9, 1, 8) + revision * 3600_000).toISOString();
 
 export function profileBody(state: FakeProfile) {
   const sections: Record<string, unknown> = {};
@@ -284,7 +324,24 @@ export function fakeProfile(
     saves: [],
     uploads: [],
     deletes: 0,
+    revisions: [],
+    imports: [],
+    exports: 0,
   };
+  // The saves that led there: the last six revisions, one per section saved.
+  if (initial) {
+    const saved = SECTION_ORDER.filter((name) => name in initial);
+    saved.forEach((section, index) => {
+      const number = state.revision - saved.length + 1 + index;
+      if (number < 1) return;
+      state.revisions.push({
+        revision: number,
+        section,
+        created_at: revisionTime(number),
+        data: structuredClone(initial[section]),
+      });
+    });
+  }
   server.use(
     http.get("*/api/profile", () => HttpResponse.json(profileBody(state))),
     http.put("*/api/profile/photo", async ({ request }) => {
@@ -330,8 +387,158 @@ export function fakeProfile(
       }
       state.sections[section as SectionName] = body.data;
       state.revision += 1;
+      state.revisions.push({
+        revision: state.revision,
+        section: section as SectionName,
+        created_at: revisionTime(state.revision),
+        data: structuredClone(body.data),
+      });
+      return HttpResponse.json(profileBody(state));
+    }),
+    http.get("*/api/profile/revisions", ({ request }) => {
+      const url = new URL(request.url);
+      const section = url.searchParams.get("section");
+      const limit = Number(url.searchParams.get("limit") ?? "20");
+      const before = url.searchParams.get("before");
+      const matching = state.revisions
+        .filter((r) => section === null || r.section === section)
+        .filter((r) => before === null || r.revision < Number(before))
+        .sort((a, b) => b.revision - a.revision);
+      const items = matching.slice(0, limit);
+      return HttpResponse.json({
+        items: items.map(({ revision, section: name, created_at }) => ({
+          revision,
+          section: name,
+          created_at,
+        })),
+        next_before:
+          matching.length > limit ? (items.at(-1)?.revision ?? null) : null,
+      });
+    }),
+    http.get("*/api/profile/revisions/:revision", ({ params }) => {
+      const found = state.revisions.find(
+        (r) => r.revision === Number(params.revision),
+      );
+      if (!found)
+        return HttpResponse.json(
+          { detail: "No such revision." },
+          { status: 404 },
+        );
+      return HttpResponse.json(found);
+    }),
+    http.get("*/api/profile/export", () => {
+      state.exports += 1;
+      const sections: Record<string, unknown> = {};
+      for (const name of SECTION_ORDER)
+        sections[name] = state.sections[name] ?? EMPTY_SECTIONS[name];
+      return HttpResponse.json(
+        {
+          format: "jobapp-profile",
+          version: 1,
+          exported_at: "2026-10-09T08:00:00+00:00",
+          sections,
+        },
+        {
+          headers: {
+            "Content-Disposition":
+              'attachment; filename="profile-2026-10-09.json"',
+          },
+        },
+      );
+    }),
+    http.post("*/api/profile/import", async ({ request }) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      state.imports.push(body);
+      if (
+        body.base_revision !== undefined &&
+        body.base_revision !== state.revision
+      ) {
+        return HttpResponse.json(
+          {
+            detail:
+              "The profile changed since you loaded it. Review the current version and save again.",
+            revision: state.revision,
+            sections: profileBody(state).sections,
+          },
+          { status: 409 },
+        );
+      }
+      const sections = body.sections as Record<SectionName, unknown>;
+      for (const name of SECTION_ORDER) {
+        state.revision += 1;
+        state.sections[name] = sections[name];
+        state.revisions.push({
+          revision: state.revision,
+          section: name,
+          created_at: revisionTime(state.revision),
+          data: structuredClone(sections[name]),
+        });
+      }
+      if (body.photo)
+        state.photoEtag = `"etag-import-${String(state.revision)}"`;
       return HttpResponse.json(profileBody(state));
     }),
   );
   return state;
 }
+
+/** The empty form of each section, as the api exports a section never saved. */
+const EMPTY_SECTIONS: Record<SectionName, unknown> = {
+  identity: {
+    full_name: null,
+    headline: null,
+    email: null,
+    phone: null,
+    city: null,
+    country: null,
+    linkedin_url: null,
+    website: null,
+    links: [],
+    languages: [],
+  },
+  experience: { employers: [], education: [] },
+  facts: { blocks: [] },
+  skills: {
+    years_experience: null,
+    have: [],
+    adjacent: [],
+    none: [],
+    gates: [],
+  },
+  search: {
+    title_include: { advanced_regex: false, terms: [] },
+    title_exclude: { advanced_regex: false, terms: [] },
+    location: { advanced_regex: false, terms: [] },
+    contract_types: [],
+    remote_stance: null,
+    min_fit: 70,
+    days: 30,
+    boards: [],
+    never_apply: [],
+    sweep_schedule: {
+      enabled: false,
+      days: [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+      ],
+      times: ["06:17"],
+      timezone: "Europe/Paris",
+    },
+  },
+  answers: {
+    work_authorization: [],
+    notice_period: null,
+    earliest_start: null,
+    salary_policy: null,
+    relocation: null,
+    travel: null,
+    motivation: null,
+    heard_about: null,
+    leave_blank: [],
+  },
+};

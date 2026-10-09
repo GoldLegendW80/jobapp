@@ -10,6 +10,8 @@ import { defineConfig, devices } from "@playwright/test";
  *   users     accounts table: disable signs out at once, enable, promote, demote
  *   account   rename, wrong current password, password change signs the other browser out
  *   profile   a made up profile through the CLI, every tab
+ *   profile-editors  Facts, Skills and Search editors, the board check against a real ATS
+ *   profile-history  empty to 100% in the browser, History diff and restore, export, import
  *   throttle  five wrong passwords, then 429 with a countdown (last: it locks its admin)
  *
  * Each spec deletes its own failed sign in attempts in its afterAll (stack.ts clearAttempts, which
@@ -26,6 +28,8 @@ const SPECS = [
   "users",
   "account",
   "profile",
+  "profile-editors",
+  "profile-history",
   "throttle",
 ] as const;
 
@@ -36,7 +40,8 @@ export default defineConfig({
   testDir: ".",
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // One retry in CI only: a slow runner should not turn main red; locally a failure shows at once.
+  retries: process.env.CI ? 1 : 0,
   forbidOnly: true,
   timeout: 120_000,
   expect: { timeout: 15_000 },

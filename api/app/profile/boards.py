@@ -40,7 +40,7 @@ from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import SplitResult, quote, urljoin, urlsplit
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -71,16 +71,21 @@ TOO_MANY = "Too many board checks. Wait a minute and try again."
 CheckError = Literal["not_found", "timeout", "upstream_error", "blocked"]
 
 
-def board_url(ats: str, org: str) -> str:
-    """The posting API address of a board; `org` becomes one percent-encoded path segment."""
+def board_url(ats: str, org: str, base_url: str | None = None) -> str:
+    """The posting API address of a board; `org` becomes one percent-encoded path segment.
+    With `base_url` (settings.ats_base_url, tests only) the same path goes to
+    `<base_url>/<ats>` instead of the ATS's own host."""
     segment = quote(org, safe="")
-    if ats == "ashby":
-        return f"https://{HOSTS['ashby']}/posting-api/job-board/{segment}"
-    if ats == "greenhouse":
-        return f"https://{HOSTS['greenhouse']}/v1/boards/{segment}/jobs"
-    if ats == "lever":
-        return f"https://{HOSTS['lever']}/v0/postings/{segment}?mode=json"
-    raise ValueError(f"unknown ATS {ats!r}")
+    paths = {
+        "ashby": f"/posting-api/job-board/{segment}",
+        "greenhouse": f"/v1/boards/{segment}/jobs",
+        "lever": f"/v0/postings/{segment}?mode=json",
+    }
+    if ats not in paths:
+        raise ValueError(f"unknown ATS {ats!r}")
+    if base_url is not None:
+        return f"{base_url.rstrip('/')}/{ats}{paths[ats]}"
+    return f"https://{HOSTS[ats]}{paths[ats]}"
 
 
 def _org(value: str) -> str:
@@ -145,6 +150,8 @@ class BoardChecker:
     transport: httpx.AsyncBaseTransport | None = None
     clock: Callable[[], float] = time.monotonic
     timeout_s: float = TIMEOUT_S
+    # settings.ats_base_url: a test stub in place of the real hosts (never set in production)
+    base_url: str | None = None
     _cache: OrderedDict[tuple[str, str], tuple[float, BoardCheckOut]] = field(
         default_factory=OrderedDict
     )
@@ -204,8 +211,8 @@ class BoardChecker:
         return answer
 
     async def _fetch(self, ats: str, org: str) -> BoardCheckOut:
-        host = HOSTS[ats]
-        url = board_url(ats, org)
+        url = board_url(ats, org, self.base_url)
+        origin = urlsplit(url)
         async with httpx.AsyncClient(
             transport=self.transport,
             timeout=httpx.Timeout(self.timeout_s),
@@ -216,7 +223,7 @@ class BoardChecker:
             for _ in range(MAX_REDIRECTS + 1):
                 status_code, location, body = await self._get(client, url)
                 if status_code in (301, 302, 303, 307, 308):
-                    url = _same_host(url, location, host)
+                    url = _same_host(url, location, origin)
                     continue
                 return _answer(ats, status_code, body)
         raise _UpstreamError("upstream_error")  # too many redirects
@@ -248,13 +255,19 @@ class BoardChecker:
         raise _UpstreamError("upstream_error")  # pragma: no cover, unreachable
 
 
-def _same_host(url: str, location: str | None, host: str) -> str:
-    """The redirect target when it stays on the ATS's own host over https, else refused."""
+def _same_host(url: str, location: str | None, origin: SplitResult) -> str:
+    """The redirect target when it stays on the first request's scheme, host and port (the
+    ATS's own host over https), else refused."""
     if not location:
         raise _UpstreamError("upstream_error")
     target = urljoin(url, location)
     parts = urlsplit(target)
-    if parts.scheme != "https" or parts.hostname != host or parts.port not in (None, 443):
+    default = {"https": 443, "http": 80}
+    if (
+        parts.scheme != origin.scheme
+        or parts.hostname != origin.hostname
+        or (parts.port or default.get(parts.scheme)) != (origin.port or default[origin.scheme])
+    ):
         raise _UpstreamError("upstream_error")
     if parts.username or parts.password:
         raise _UpstreamError("upstream_error")
@@ -279,7 +292,8 @@ def checker(request: Request) -> BoardChecker:
     """The app's checker, made on first use (tests install their own on app.state)."""
     found = getattr(request.app.state, "board_checker", None)
     if found is None:
-        found = BoardChecker()
+        settings = getattr(request.app.state, "settings", None)
+        found = BoardChecker(base_url=getattr(settings, "ats_base_url", None))
         request.app.state.board_checker = found
     return found
 

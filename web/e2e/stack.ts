@@ -56,6 +56,54 @@ export function cliLink(email: string): string {
 }
 
 /**
+ * Import a profile export for an account through the api's CLI (`python -m app.profile.cli
+ * import`): in the local Compose project, or on the Jetson over ssh (E2E_ADMIN_VIA_DEPLOY,
+ * DEPLOY_HOST, DEPLOY_DIR). Only made up e2e data goes in this way.
+ */
+export function cliImportProfile(email: string, document: unknown): string {
+  if (!/^[a-z0-9.@-]+$/.test(email))
+    throw new Error(`refusing to import a profile for ${email}`);
+  const input = JSON.stringify(document);
+  if (process.env.E2E_ADMIN_VIA_DEPLOY) {
+    const dir = (process.env.DEPLOY_DIR ?? "jobapp").replace(/^~\//, "");
+    if (!/^[A-Za-z0-9._/-]+$/.test(dir))
+      throw new Error(`refusing DEPLOY_DIR ${dir}`);
+    return execFileSync(
+      "ssh",
+      [
+        "-o",
+        "BatchMode=yes",
+        process.env.DEPLOY_HOST ?? "jetson",
+        `cd ${dir} && docker compose -f compose.yml exec -T api python -m app.profile.cli import --email ${email} --file -`,
+      ],
+      { encoding: "utf8", input },
+    );
+  }
+  return execFileSync(
+    "docker",
+    [
+      "compose",
+      "-p",
+      process.env.E2E_COMPOSE_PROJECT ?? "jobapp",
+      "-f",
+      "compose.yml",
+      "exec",
+      "-T",
+      "api",
+      "python",
+      "-m",
+      "app.profile.cli",
+      "import",
+      "--email",
+      email,
+      "--file",
+      "-",
+    ],
+    { cwd: root, encoding: "utf8", input },
+  );
+}
+
+/**
  * Delete the sign in attempts recorded for these emails, so the next spec or a rerun within 15
  * minutes is not throttled by this one: every local browser reaches the api from one address
  * (Caddy's peer), and every browser of the Mac from one address through the tunnel, which allows

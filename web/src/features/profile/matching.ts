@@ -173,6 +173,7 @@ function commonEscape(
   if (next === "N" || next === "0") return null; // named and octal escapes
   if (/[1-9]/.test(next)) {
     if (inClass) return null; // octal inside a class
+    if (/^[0-7]{3}/.test(pattern.slice(i + 1))) return null; // octal, \101
     const digits = /^\d{1,2}/.exec(pattern.slice(i + 1))?.[0] ?? next;
     return { text: `\\${digits}`, length: 1 + digits.length };
   }
@@ -367,15 +368,162 @@ export function hasNestedQuantifier(pattern: string): boolean {
   return false;
 }
 
+const GLOBAL_FLAGS = /\(\?[aiLmsux]+\)/y;
+const NUMBERED_CONDITION = /\(\?\((\d+)\)/y;
+const GROUP_NAME = /\(\?P<([^>]*)>/y;
+const OCTAL = /[0-7]{3}/y;
+const GROUP_REF = /\\([1-9][0-9]?)/y;
+
+function matchAt(regex: RegExp, text: string, index: number) {
+  regex.lastIndex = index;
+  return regex.exec(text);
+}
+
+/** Position as Python counts it: code points, not UTF-16 units. */
+const pythonIndex = (text: string, index: number) =>
+  text.slice(0, index).replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "_").length;
+
+/**
+ * Positions of what a scan of a pattern looks at: each escape (its backslash) and every character
+ * outside character classes and (?#...) comments. A port of schemas.py `_tokens`.
+ */
+function* tokens(pattern: string): Generator<number> {
+  let i = 0;
+  while (i < pattern.length) {
+    const char = pattern.charAt(i);
+    if (char === "\\") {
+      yield i;
+      i += 2;
+      continue;
+    }
+    if (char === "[") {
+      i += 1;
+      if (pattern.charAt(i) === "^") i += 1;
+      if (pattern.charAt(i) === "]") i += 1;
+      while (i < pattern.length && pattern.charAt(i) !== "]") {
+        i += pattern.charAt(i) === "\\" ? 2 : 1;
+      }
+      i += 1;
+      continue;
+    }
+    if (pattern.startsWith("(?#", i)) {
+      const end = pattern.indexOf(")", i);
+      i = end === -1 ? pattern.length : end + 1;
+      continue;
+    }
+    yield i;
+    i += 1;
+  }
+}
+
+/**
+ * The first global inline flag group such as (?i), (?m) or (?sx), outside escapes, character
+ * classes and comments, with its position, or undefined. Scoped groups such as (?i:...) are not
+ * global. A port of schemas.py `global_flags`: the server wraps each advanced term in (?:...) and
+ * joins the list, and Python accepts a global flag only at the start of the whole pattern.
+ */
+export function globalFlags(
+  pattern: string,
+): { index: number; flags: string } | undefined {
+  for (const i of tokens(pattern)) {
+    if (pattern.charAt(i) !== "(") continue;
+    const found = matchAt(GLOBAL_FLAGS, pattern, i);
+    if (found) return { index: pythonIndex(pattern, i), flags: found[0] };
+  }
+  return undefined;
+}
+
+/**
+ * The first construct that cannot survive joining the terms of a list into one expression, as
+ * the sentence the browser shows, or undefined: a global inline flag, a numbered backreference
+ * (\1; a three digit octal escape is fine) or a condition on a numbered group ((?(1)...)).
+ * A port of schemas.py `joining_problem`.
+ */
+export function joiningProblem(pattern: string): string | undefined {
+  for (const i of tokens(pattern)) {
+    const char = pattern.charAt(i);
+    const at = pythonIndex(pattern, i);
+    if (char === "(") {
+      const flags = matchAt(GLOBAL_FLAGS, pattern, i);
+      if (flags) {
+        return (
+          `Inline flags such as ${flags[0]} are not allowed (position ${at}). ` +
+          "Matching is already case-insensitive; to apply a flag to part of the term, " +
+          "scope it as a group such as (?s:...)."
+        );
+      }
+      const condition = matchAt(NUMBERED_CONDITION, pattern, i);
+      if (condition) {
+        return (
+          `Conditions on a numbered group such as ${condition[0]}...) are not allowed (position ${at}): ` +
+          "the terms of a list are joined into one expression, where the number would point at " +
+          "another term's group. Name the group and test it by name, as in (?P<word>...) then (?(word)...)."
+        );
+      }
+    }
+    if (char === "\\" && !matchAt(OCTAL, pattern, i + 1)) {
+      const ref = matchAt(GROUP_REF, pattern, i);
+      if (ref) {
+        return (
+          `Numbered backreferences such as ${ref[0]} are not allowed (position ${at}): ` +
+          "the terms of a list are joined into one expression, where the number would point at " +
+          "another term's group. Name the group and refer to it by name, as in (?P<word>...) then (?P=word)."
+        );
+      }
+    }
+  }
+  return undefined;
+}
+
+/** The names of the named groups a pattern defines, (?P<name>...), in order. */
+export function groupNames(pattern: string): string[] {
+  const names: string[] = [];
+  for (const i of tokens(pattern)) {
+    if (pattern.charAt(i) !== "(") continue;
+    const found = matchAt(GROUP_NAME, pattern, i);
+    if (found) names.push(found[1] ?? "");
+  }
+  return names;
+}
+
+/**
+ * Problems of a whole list of advanced terms that each term alone does not show, by term index:
+ * a group name already used by an earlier term (Python refuses it once the list is joined).
+ * A port of schemas.py `check_joined`.
+ */
+export function listProblems(
+  terms: readonly string[],
+  advancedRegex: boolean,
+): Map<number, string> {
+  const problems = new Map<number, string>();
+  if (!advancedRegex) return problems;
+  const firstUse = new Map<string, number>();
+  terms.forEach((term, index) => {
+    for (const name of groupNames(term)) {
+      const first = firstUse.get(name);
+      if (first !== undefined && first !== index && !problems.has(index)) {
+        problems.set(
+          index,
+          `The group name "${name}" is already used by term ${first + 1}: group names must be unique across the list.`,
+        );
+      }
+      if (first === undefined) firstUse.set(name, index);
+    }
+  });
+  return problems;
+}
+
 /**
  * Why an advanced term would be refused on save, or undefined when the browser sees no problem
  * (the server stays the judge, and reports the exact position). Same order as `check_regex`:
- * length, compiling, nested quantifiers.
+ * length, constructs that break once joined, compiling, nested quantifiers.
  */
 export function regexProblem(pattern: string): string | undefined {
   if (pattern.length > REGEX_MAX) {
     return `Regular expression longer than ${REGEX_MAX} characters.`;
   }
+  const joining = joiningProblem(pattern);
+  if (joining !== undefined) return joining;
   const translated = pyToJs(pattern);
   if (translated !== null) {
     try {

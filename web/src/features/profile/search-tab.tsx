@@ -6,6 +6,7 @@
  */
 import { Plus } from "lucide-react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
+import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -20,8 +21,14 @@ import {
 import { NativeSelect } from "@/components/ui/native-select";
 import { cn } from "@/lib/utils";
 
-import { CONTRACT_TYPES, REMOTE_STANCES, type Profile } from "./api";
+import {
+  CONTRACT_TYPES,
+  REMOTE_STANCES,
+  type Profile,
+  type SweepSchedule,
+} from "./api";
 import { BoardsTable } from "./boards-table";
+import { describeSchedule } from "./schedule";
 import {
   fromSearchForm,
   NEVER_APPLY_MAX,
@@ -177,6 +184,7 @@ export function SearchTab({
               description="Only postings published within this many days."
             />
           </Group>
+          <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
           <BoardsTable form={form} />
           <NeverApply form={form} />
           <SaveBar
@@ -292,5 +300,26 @@ function NeverApply({ form }: { form: UseFormReturn<SearchForm> }) {
         </ol>
       )}
     </Group>
+  );
+}
+
+/**
+ * The automatic search, read only: Jobs (next to Find jobs) edits it. The Search tab carries the
+ * value through every save unchanged.
+ */
+function AutomaticSearch({ schedule }: { schedule: SweepSchedule }) {
+  return (
+    <p className="flex flex-wrap items-baseline gap-x-2 text-sm">
+      <span>
+        <span className="font-medium">Automatic search:</span>{" "}
+        {describeSchedule(schedule)}
+      </span>
+      <Link
+        to="/jobs"
+        className="text-primary underline-offset-4 hover:underline"
+      >
+        Change in Jobs
+      </Link>
+    </p>
   );
 }
