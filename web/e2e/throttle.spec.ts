@@ -74,7 +74,13 @@ async function account(email: string) {
   );
 }
 
+/**
+ * Drop the session cookie and land on the sign in page. The app is left for about:blank first:
+ * cleared while still on /jobs, its list request would answer 401 and log a console error the
+ * error watch rightly counts (issue #9). No page of the app is open while the cookie goes.
+ */
 async function signOut() {
+  await page.goto("about:blank");
   await context.clearCookies();
   await page.goto("/login");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
