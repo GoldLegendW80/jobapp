@@ -176,8 +176,12 @@ jobs:
           umask 077
           .github/scripts/ci_env.sh 8080 > .env
           ! grep -q change-me .env
+      # tests/ats-stub.compose.yml: the board check asks a stub (tests/ats_stub.py), never the
+      # real Ashby, Greenhouse or Lever, so their availability cannot turn this job red.
       - name: Build and start the stack
-        run: docker compose -p "$PROJECT" -f compose.yml up -d --build --wait --wait-timeout 300
+        run: >-
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml
+          up -d --build --wait --wait-timeout 300
       - name: Migrations
         run: docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
       - name: Install web dependencies and Chromium
@@ -205,8 +209,8 @@ jobs:
       - name: Stack logs
         if: failure()
         run: |
-          docker compose -p "$PROJECT" -f compose.yml ps -a
-          docker compose -p "$PROJECT" -f compose.yml logs --no-color > "$RUNNER_TEMP/compose.log" 2>&1 || true
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml ps -a
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color > "$RUNNER_TEMP/compose.log" 2>&1 || true
       - name: Upload Playwright report, traces, screenshots and logs
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -221,7 +225,7 @@ jobs:
           if-no-files-found: ignore
       - name: Tear down the scratch stack
         if: always()
-        run: docker compose -p "$PROJECT" -f compose.yml down -v --remove-orphans || true
+        run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans || true
 
   precommit:
     name: pre-commit (file fixers, gitleaks, prettier)

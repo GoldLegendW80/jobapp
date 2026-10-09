@@ -6,6 +6,7 @@ Compose injects the environment, and tests set it explicitly.
 
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -32,6 +33,10 @@ class Settings(BaseSettings):
     db_statement_timeout_ms: int = Field(default=15_000, ge=100, le=600_000)
     # Hard ceiling on the whole health check, in seconds, whatever the database does.
     health_timeout_s: float = Field(default=2.5, gt=0, le=30)
+    # Tests only: the base address of a stub serving the Ashby, Greenhouse and Lever posting APIs
+    # under /ashby, /greenhouse and /lever (the CI e2e job's tests/ats_stub.py), so the board check
+    # never depends on the real services there. Refused in production.
+    ats_base_url: str | None = None
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod
@@ -57,6 +62,28 @@ class Settings(BaseSettings):
         if not url.host or not url.database:
             raise ValueError("DATABASE_URL needs a host and a database name")
         return SecretStr(url.render_as_string(hide_password=False))
+
+    @field_validator("ats_base_url", mode="after")
+    @classmethod
+    def _http_base(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip().rstrip("/")
+        parts = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("ATS_BASE_URL must be an http or https address")
+        if parts.query or parts.fragment or parts.username or parts.password:
+            raise ValueError("ATS_BASE_URL must be a plain address without query or credentials")
+        return value
+
+    @model_validator(mode="after")
+    def _no_stub_in_production(self) -> "Settings":
+        if self.app_env == "production" and self.ats_base_url is not None:
+            raise ValueError(
+                "ATS_BASE_URL points the board check at a test stub and must not be set "
+                "in production"
+            )
+        return self
 
     @model_validator(mode="after")
     def _production_secret(self) -> "Settings":

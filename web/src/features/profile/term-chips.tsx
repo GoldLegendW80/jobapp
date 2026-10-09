@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 import { TERMS_MAX } from "./editor-forms";
-import { termProblem } from "./matching";
+import { listProblems, termProblem } from "./matching";
 
 interface TermChipsProps<F extends FieldValues> {
   form: UseFormReturn<F>;
@@ -73,7 +73,9 @@ export function TermChips<F extends FieldValues>({
 
   const add = () => {
     const term = draft.normalize("NFC").trim();
-    const found = termProblem(term, isAdvanced);
+    const found =
+      termProblem(term, isAdvanced) ??
+      listProblems([...values, term], isAdvanced).get(values.length);
     if (found) {
       setProblem(found);
       return;

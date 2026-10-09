@@ -265,7 +265,10 @@ function ImportBody({
           disabled={mutation.isPending}
           className="block w-full min-w-0 text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-background file:px-3 file:py-1.5 file:text-sm file:font-medium"
           onChange={(event) => {
-            void choose(event.target.files?.[0]);
+            const chosen = event.target.files?.[0];
+            // Cleared at once, so choosing the same file again (after fixing it) fires a change.
+            event.target.value = "";
+            void choose(chosen);
           }}
         />
         {file ? (

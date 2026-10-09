@@ -386,6 +386,28 @@ describe("import dialog: a valid file", () => {
     expect(replaceButton(dialog)).toBeEnabled();
   });
 
+  it("reads the same file again when it is chosen a second time", async () => {
+    fakeSession(admin);
+    fakeProfile();
+    const { user, dialog } = await openImport();
+    const input =
+      within(dialog).getByLabelText<HTMLInputElement>("Profile file");
+    const file = changedFile();
+    await user.upload(input, file);
+    await within(dialog).findByRole("region");
+    // The input is emptied after each read, so the browser fires a change for the same file.
+    expect(input.value).toBe("");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await user.click(
+      within(await openMenu(user)).getByRole("menuitem", {
+        name: "Import profile",
+      }),
+    );
+    const again = await screen.findByRole("dialog", { name: "Import profile" });
+    await user.upload(within(again).getByLabelText("Profile file"), file);
+    expect(await within(again).findByRole("region")).toBeVisible();
+  });
+
   it("choosing another file replaces the error with a summary", async () => {
     fakeSession(admin);
     fakeProfile();

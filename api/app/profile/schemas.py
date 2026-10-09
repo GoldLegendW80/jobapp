@@ -51,7 +51,7 @@ import binascii
 import json
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from functools import partial
 from typing import Annotated, Any, Literal
@@ -69,6 +69,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from app.profile.matching import compile_terms
 
 # --- limits -------------------------------------------------------------------------------------
 
@@ -248,18 +250,20 @@ def has_nested_quantifier(pattern: str) -> bool:
 
 
 _GLOBAL_FLAGS = re.compile(r"\(\?[aiLmsux]+\)")
+_NUMBERED_CONDITION = re.compile(r"\(\?\((\d+)\)")
+_GROUP_NAME = re.compile(r"\(\?P<([^>]*)>")
+_OCTAL = re.compile(r"[0-7]{3}")
+_GROUP_REF = re.compile(r"\\([1-9][0-9]?)")
 
 
-def global_flags(pattern: str) -> re.Match[str] | None:
-    """The first global inline flag group such as (?i), (?m) or (?sx), outside escapes
-    and character classes, or None. Scoped groups such as (?i:...) or (?-i:...) are not global.
-    The matcher wraps every advanced term in (?:...) and joins the list with |, and Python only
-    accepts global flags at the very start of a whole pattern, so a term holding one would pass
-    alone and break the list (and (?x) would change how every other term reads)."""
+def _tokens(pattern: str) -> Iterator[int]:
+    """Positions of the characters a scan of a pattern looks at: each escape (its backslash)
+    and every character outside character classes and (?#...) comments."""
     i = 0
     while i < len(pattern):
         char = pattern[i]
         if char == "\\":
+            yield i
             i += 2
             continue
         if char == "[":  # skip the class; a `]` right after `[` or `[^` is a literal
@@ -272,25 +276,80 @@ def global_flags(pattern: str) -> re.Match[str] | None:
                 i += 2 if pattern[i] == "\\" else 1
             i += 1
             continue
-        if char == "(" and (found := _GLOBAL_FLAGS.match(pattern, i)):
-            return found
+        if pattern.startswith("(?#", i):  # a comment ends at the first ")"
+            end = pattern.find(")", i)
+            i = len(pattern) if end == -1 else end + 1
+            continue
+        yield i
         i += 1
+
+
+def global_flags(pattern: str) -> re.Match[str] | None:
+    """The first global inline flag group such as (?i), (?m) or (?sx), outside escapes,
+    character classes and comments, or None. Scoped groups such as (?i:...) or (?-i:...) are not
+    global. The matcher wraps every advanced term in (?:...) and joins the list with |, and Python
+    only accepts global flags at the very start of a whole pattern, so a term holding one would
+    pass alone and break the list (and (?x) would change how every other term reads)."""
+    for i in _tokens(pattern):
+        if pattern[i] == "(" and (found := _GLOBAL_FLAGS.match(pattern, i)):
+            return found
     return None
+
+
+def joining_problem(pattern: str) -> tuple[int, str] | None:
+    """The first construct that cannot survive joining the terms of a list into one expression,
+    as (position, sentence), or None:
+    - a global inline flag, (?i) (see `global_flags`);
+    - a numbered backreference, \\1 (a three digit octal escape such as \\101 is fine);
+    - a condition on a numbered group, (?(1)...).
+    Once joined, a number counts the groups of every earlier term, so it would silently point at
+    another term's group; named groups ((?P<word>...), (?P=word), (?(word)...)) keep their meaning,
+    and their names must be unique across the list (`group_names`)."""
+    for i in _tokens(pattern):
+        char = pattern[i]
+        if char == "(" and (flags := _GLOBAL_FLAGS.match(pattern, i)):
+            return i, (
+                f"inline flags such as {flags.group()} are not allowed. Matching is already "
+                "case-insensitive; to apply a flag to part of the term, scope it as a group "
+                "such as (?s:...)"
+            )
+        ref = _GROUP_REF.match(pattern, i) if char == "\\" else None
+        if ref is not None and not _OCTAL.match(pattern, i + 1):
+            return i, (
+                f"numbered backreferences such as {ref.group()} are not allowed: the terms of a "
+                "list are joined into one expression, where the number would point at another "
+                "term's group. Name the group and refer to it by name, as in (?P<word>...) then "
+                "(?P=word)"
+            )
+        if char == "(" and (cond := _NUMBERED_CONDITION.match(pattern, i)):
+            return i, (
+                f"conditions on a numbered group such as {cond.group()}...) are not allowed: the "
+                "terms of a list are joined into one expression, where the number would point at "
+                "another term's group. Name the group and test it by name, as in "
+                "(?P<word>...) then (?(word)...)"
+            )
+    return None
+
+
+def group_names(pattern: str) -> list[str]:
+    """The names of the named groups a pattern defines, (?P<name>...), in order."""
+    names = []
+    for i in _tokens(pattern):
+        if pattern[i] == "(" and (found := _GROUP_NAME.match(pattern, i)):
+            names.append(found.group(1))
+    return names
 
 
 def check_regex(pattern: str) -> str:
     """Compile an advanced term as the matcher will (case-insensitive, wrapped in a group so the
     terms of a list join). Raises ValueError with the error position when it is too long, holds a
-    global inline flag, does not compile, or nests quantifiers."""
+    construct that breaks or changes meaning once joined (`joining_problem`), does not compile,
+    or nests quantifiers."""
     if len(pattern) > REGEX_MAX:
         raise ValueError(f"regular expression longer than {REGEX_MAX} characters")
-    flags = global_flags(pattern)
-    if flags is not None:
-        raise ValueError(
-            f"invalid regular expression at position {flags.start()}: inline flags such as "
-            f"{flags.group()} are not allowed. Matching is already case-insensitive; to apply a "
-            "flag to part of the term, scope it as a group such as (?s:...)"
-        )
+    problem = joining_problem(pattern)
+    if problem is not None:
+        raise ValueError(f"invalid regular expression at position {problem[0]}: {problem[1]}")
     try:
         re.compile(pattern, re.IGNORECASE)
         re.compile(f"(?:{pattern})", re.IGNORECASE)  # as compile_terms joins it
@@ -341,7 +400,28 @@ class _Terms(_Section):
                     raise ValueError(f"term {index + 1}: {exc}") from None
             elif len(term) > TERM_MAX:
                 raise ValueError(f"term {index + 1}: a plain term is at most {TERM_MAX} characters")
+        if advanced:
+            check_joined(terms)
         return terms
+
+
+def check_joined(terms: list[str]) -> None:
+    """Raise ValueError when advanced terms, each valid alone, do not make one expression the way
+    matching.compile_terms joins them: a group name used by two terms, or any other compile error
+    of the joined list."""
+    first_use: dict[str, int] = {}
+    for index, term in enumerate(terms):
+        for name in group_names(term):
+            if name in first_use and first_use[name] != index:
+                raise ValueError(
+                    f'term {index + 1}: the group name "{name}" is already used by term '
+                    f"{first_use[name] + 1}; group names must be unique across the list"
+                )
+            first_use.setdefault(name, index)
+    try:
+        compile_terms(terms, advanced_regex=True)
+    except re.error as exc:
+        raise ValueError(f"the terms do not combine into one expression: {exc.msg}") from None
 
 
 class TermList(_Terms):

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.profile.matching import matches
-from app.profile.schemas import check_regex, has_nested_quantifier
+from app.profile.schemas import TermList, check_regex, has_nested_quantifier
 
 FIXTURE = Path(__file__).parent / "fixtures" / "matching_parity.json"
 
@@ -32,6 +32,30 @@ EXTRA_CHECK_REGEX = [
     "(?x: a b)",
     "[(?i)]",
     "\\(?i\\)",
+    # Comments are skipped by the scanner; numbered references are refused (review of P6).
+    "(?#x(?i)",
+    "(?#[)(?i)x",
+    "(a)\\2",
+    "x(a)\\1y",
+    "(a)\\18",
+    "\\101",
+    "\\0",
+    "[\\1]",
+    "\\\\1",
+    "(a)?(?(1)b|c)",
+    "(?P<w>a)?(?(w)b|c)",
+    "(?P<w>a)(?P=w)",
+]
+
+# Whole lists of advanced terms: each term valid alone, the list valid or not once joined.
+EXTRA_JOINED = [
+    ["(?P<n>a)", "(?P<n>b)"],
+    ["ok", "(?P<n>a)", "x", "(?P<n>b)"],
+    ["(?P<a>x)", "(?P<b>y)"],
+    ["(?P<a>x)(?P=a)", "(?P<b>y)?(?(b)z|w)"],
+    ["[(?P<n>)]", "(?P<n>a)"],
+    ["(?#P<n>)a", "(?P<n>a)"],
+    ["agent", "llm"],
 ]
 
 
@@ -43,7 +67,22 @@ def _valid(pattern: str) -> bool:
     return True
 
 
+def _joined_valid(terms: list[str]) -> bool:
+    try:
+        TermList.model_validate({"terms": terms, "advanced_regex": True})
+    except ValueError:
+        return False
+    return True
+
+
 def regenerate(document: dict[str, Any]) -> dict[str, Any]:
+    joined = document.setdefault("joined", [])
+    known_lists = [case["terms"] for case in joined]
+    for terms in EXTRA_JOINED:
+        if terms not in known_lists:
+            joined.append({"terms": terms, "valid": False})
+    for case in joined:
+        case["valid"] = _joined_valid(case["terms"])
     known = {case["pattern"] for case in document["check_regex"]}
     for pattern in EXTRA_CHECK_REGEX:
         if pattern not in known:

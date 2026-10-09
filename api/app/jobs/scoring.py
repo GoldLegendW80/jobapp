@@ -40,10 +40,16 @@ so a 1 MB posting would take a second; capped, it scores in well under 200 ms
 (tests/jobs/test_scoring.py measures it). The longest posting of ../data is under 13,000
 characters, five times below the cap, so the golden test covers the engine's whole range; a
 longer text is a pasted page, not a job description, and its tail would only add noise.
+
+A term list that does not compile (stored before the profile refused such lists, for instance
+two terms naming the same group) is skipped with one logged warning per list and process, never
+an error for every posting: the rest of the profile still scores.
 """
 
+import logging
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
 from app.profile import matching
 from app.profile.schemas import Category, SkillsSection
@@ -56,6 +62,23 @@ YEARS_MAX_PENALTY = 35
 SENIOR_YEARS = 5
 YEARS_WINDOW = 80
 SCORED_CHARS_MAX = 64_000
+
+logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=512)
+def _compiled(terms: tuple[str, ...], advanced_regex: bool, where: str) -> re.Pattern[str] | None:
+    """The pattern of a term list, None for an empty list or one that does not compile (logged
+    once, by its place in the section, never its contents)."""
+    try:
+        return matching.compile_terms(terms, advanced_regex)
+    except re.error as exc:
+        logger.warning(
+            "skills term list does not compile, skipped in scoring",
+            extra={"list": where, "position": exc.pos},
+        )
+        return None
+
 
 REQ_START = re.compile(
     r"requirements|qualifications|what you.ll bring|what we.re looking for|what you bring|"
@@ -137,8 +160,10 @@ def score(posting_text: str, skills: SkillsSection, *, title: str = "") -> Score
     gaps: list[str] = []
     for level, mult in CREDIT:
         categories: list[Category] = getattr(skills, level)
-        for category in categories:
-            pattern = matching.compile_terms(category.terms, category.advanced_regex)
+        for index, category in enumerate(categories):
+            pattern = _compiled(
+                tuple(category.terms), category.advanced_regex, f"{level} {index + 1}"
+            )
             if pattern is None:
                 continue
             n = _count(pattern, low) + REQUIREMENTS_WEIGHT * _count(pattern, req)
@@ -154,8 +179,9 @@ def score(posting_text: str, skills: SkillsSection, *, title: str = "") -> Score
         if need > skills.years_experience:
             fit -= min(YEARS_MAX_PENALTY, round((need - skills.years_experience) * YEARS_STEP))
             gaps.append(f"{need}+ years")
-    for gate in skills.gates:
-        if matching.matches(gate.terms, gate.advanced_regex, low):
+    for index, gate in enumerate(skills.gates):
+        pattern = _compiled(tuple(gate.terms), gate.advanced_regex, f"gate {index + 1}")
+        if pattern is not None and pattern.search(low) is not None:
             fit -= gate.penalty
             gaps.append(gate.name)
     return ScoreResult(fit=max(0, min(100, fit)), competencies=named, gaps=gaps)

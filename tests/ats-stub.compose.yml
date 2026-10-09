@@ -1,0 +1,31 @@
+# CI e2e only: a stub of the ATS posting APIs (tests/ats_stub.py) and the api pointed at it, so
+# the board check of the profile journeys never calls Ashby, Greenhouse or Lever from CI.
+#   docker compose -p jobapp-ci -f compose.yml -f tests/ats-stub.compose.yml up -d --build --wait
+# The api refuses ATS_BASE_URL when APP_ENV is production (app/config.py).
+services:
+  api:
+    environment:
+      ATS_BASE_URL: http://atsstub:8080
+    depends_on:
+      atsstub:
+        condition: service_healthy
+
+  atsstub:
+    # The api's own base image (api/Dockerfile PYTHON_IMAGE): pinned and already pulled.
+    image: python:3.12.15-slim-trixie
+    command: ["python", "/stub/ats_stub.py", "8080"]
+    volumes:
+      # Relative to the project directory, the folder of compose.yml.
+      - ./tests/ats_stub.py:/stub/ats_stub.py:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 64m
+    expose:
+      - "8080"

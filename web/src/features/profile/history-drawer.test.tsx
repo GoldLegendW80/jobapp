@@ -65,6 +65,15 @@ describe("history drawer", () => {
     ).toBeNull();
   });
 
+  it("describes itself to screen readers", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    const { drawer } = await openHistory();
+    expect(drawer).toHaveAccessibleDescription(
+      "Every save of identity is kept. Choose one to compare it with the current version and restore it.",
+    );
+  });
+
   it("lists one version as current, with relative and absolute dates, and cannot restore it", async () => {
     fakeSession(member);
     const state = fakeProfile(null);

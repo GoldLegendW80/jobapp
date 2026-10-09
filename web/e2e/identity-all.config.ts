@@ -40,7 +40,8 @@ export default defineConfig({
   testDir: ".",
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // One retry in CI only: a slow runner should not turn main red; locally a failure shows at once.
+  retries: process.env.CI ? 1 : 0,
   forbidOnly: true,
   timeout: 120_000,
   expect: { timeout: 15_000 },

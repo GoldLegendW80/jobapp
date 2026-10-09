@@ -109,11 +109,7 @@ export function HistoryDrawer({
           History
         </Button>
       </SheetTrigger>
-      <SheetContent
-        side="right"
-        className="w-full gap-0 p-0 sm:max-w-3xl"
-        aria-describedby={undefined}
-      >
+      <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-3xl">
         <SheetHeader className="border-b">
           <SheetTitle>{label} history</SheetTitle>
           <SheetDescription>

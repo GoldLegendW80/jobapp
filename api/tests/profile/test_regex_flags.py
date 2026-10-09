@@ -11,8 +11,17 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
+from app.profile import schemas
 from app.profile.matching import compile_terms, matches
-from app.profile.schemas import check_regex, global_flags, validate_section
+from app.profile.schemas import (
+    TermList,
+    check_joined,
+    check_regex,
+    global_flags,
+    group_names,
+    joining_problem,
+    validate_section,
+)
 from tests.identity.api_helpers import Api
 from tests.profile.test_api import read, save
 
@@ -178,3 +187,123 @@ def test_api_save_of_scoped_flags_succeeds(api: Api, alice: str) -> None:
     data = {"title_include": {"terms": ["(?i:agent)", "(?s:a.b)"], "advanced_regex": True}}
     response = save(api, alice, "search", data, 0)
     assert response.status_code == 200, response.text
+
+
+# --- review of P6: comments, numbered references, group names across the list -------------------
+
+
+@pytest.mark.parametrize("pattern", ["(?#x(?i)", "(?#(?m))a", "a(?#[)b", "(?#\\)x"])
+def test_comments_are_skipped_by_the_scanner(pattern: str) -> None:
+    assert global_flags(pattern) is None
+    assert joining_problem(pattern) is None
+
+
+def test_a_flag_after_a_comment_is_still_found() -> None:
+    found = global_flags("(?#[)(?i)x")
+    assert found is not None
+    assert found.start() == 5
+
+
+@pytest.mark.parametrize(
+    ("pattern", "position", "shown"),
+    [
+        (r"(a)\1", 3, r"\1"),
+        (r"(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\10", 30, r"\10"),
+        (r"(ab)\2", 4, r"\2"),
+        (r"x(a)\1y", 4, r"\1"),
+        (r"(a)\18", 3, r"\18"),  # 8 is not octal: a group reference
+    ],
+)
+def test_numbered_backreferences_are_refused(pattern: str, position: int, shown: str) -> None:
+    problem = joining_problem(pattern)
+    assert problem is not None
+    assert problem[0] == position
+    assert f"numbered backreferences such as {shown} are not allowed" in problem[1]
+    with pytest.raises(ValueError, match=rf"^invalid regular expression at position {position}: "):
+        check_regex(pattern)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [r"\101", r"\0", r"\012", r"[\1]", r"\\1", r"(?P<w>a)(?P=w)", r"(?P<w>a)?(?(w)b|c)", r"\d\w"],
+)
+def test_octal_escapes_classes_and_named_references_pass(pattern: str) -> None:
+    assert joining_problem(pattern) is None
+    assert check_regex(pattern) == pattern
+
+
+@pytest.mark.parametrize(("pattern", "position"), [(r"(a)?(?(1)b|c)", 4), (r"(?(12)x)", 0)])
+def test_numbered_conditions_are_refused(pattern: str, position: int) -> None:
+    problem = joining_problem(pattern)
+    assert problem is not None
+    assert problem[0] == position
+    assert "conditions on a numbered group" in problem[1]
+    assert "(?(word)...)" in problem[1]
+
+
+def test_the_old_backreference_bug_is_what_the_check_prevents() -> None:
+    """Joined, term 2's \\1 points at term 1's group and matches the wrong thing, silently."""
+    joined = compile_terms(["(x)", r"(a)\1"], advanced_regex=True)
+    assert joined is not None
+    assert joined.search("aa") is None  # alone, (a)\1 matches "aa"
+    assert re.search(r"(a)\1", "aa") is not None
+
+
+def test_group_names_lists_named_groups_outside_classes_and_comments() -> None:
+    assert group_names(r"(?P<a>x)(?:y)(?P<b2>z)[(?P<c>)](?#(?P<d>))") == ["a", "b2"]
+
+
+def test_duplicate_group_names_across_terms_are_refused() -> None:
+    with pytest.raises(ValidationError) as caught:
+        TermList.model_validate({"terms": ["ok", "(?P<n>a)", "(?P<n>b)"], "advanced_regex": True})
+    message = caught.value.errors()[0]["msg"]
+    assert message == (
+        'Value error, term 3: the group name "n" is already used by term 2; '
+        "group names must be unique across the list"
+    )
+
+
+def test_distinct_group_names_and_references_combine() -> None:
+    terms = ["(?P<a>x)(?P=a)", "(?P<b>y)?(?(b)z|w)", "plain"]
+    validated = TermList.model_validate({"terms": terms, "advanced_regex": True})
+    pattern = compile_terms(validated.terms, advanced_regex=True)
+    assert pattern is not None
+    assert pattern.search("xx") is not None
+    assert pattern.search("yz") is not None
+
+
+def test_check_joined_catches_any_other_combine_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(terms: object, advanced_regex: bool) -> None:
+        raise re.error("too many groups")
+
+    monkeypatch.setattr(schemas, "compile_terms", broken)
+    with pytest.raises(
+        ValueError, match=r"^the terms do not combine into one expression: too many"
+    ):
+        check_joined(["a", "b"])
+
+
+def test_plain_lists_are_never_checked_as_a_whole() -> None:
+    TermList.model_validate({"terms": ["(?P<n>a)", "(?P<n>b)"], "advanced_regex": False})
+
+
+def test_api_refuses_duplicate_group_names_with_one_sentence(api: Api, alice: str) -> None:
+    data = {
+        "have": [{"name": "x", "terms": ["(?P<n>a)", "(?P<n>b)"], "advanced_regex": True}],
+    }
+    response = save(api, alice, "skills", data, 0)
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": 'data.have.0.terms: term 2: the group name "n" is already used by term 1; '
+        "group names must be unique across the list"
+    }
+
+
+def test_api_refuses_a_numbered_backreference(api: Api, alice: str) -> None:
+    data = {"title_exclude": {"terms": [r"(a)\1"], "advanced_regex": True}}
+    response = save(api, alice, "search", data, 0)
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith(
+        "data.title_exclude.terms: term 1: invalid regular expression at position 3: "
+        "numbered backreferences such as \\1 are not allowed"
+    )

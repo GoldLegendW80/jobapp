@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from app.profile.matching import matches
-from app.profile.schemas import check_regex, has_nested_quantifier
+from app.profile.schemas import TermList, check_regex, has_nested_quantifier
 
 FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "matching_parity.json").read_text(encoding="utf-8")
@@ -40,9 +41,22 @@ def test_check_regex(case: dict[str, Any]) -> None:
             check_regex(case["pattern"])
 
 
+@pytest.mark.parametrize("case", FIXTURE["joined"], ids=_id)
+def test_joined(case: dict[str, Any]) -> None:
+    for term in case["terms"]:
+        check_regex(term)  # each term is valid alone
+    data = {"terms": case["terms"], "advanced_regex": True}
+    if case["valid"]:
+        TermList.model_validate(data)
+    else:
+        with pytest.raises(ValidationError, match=r"unique across the list|do not combine"):
+            TermList.model_validate(data)
+
+
 def test_fixture_covers_both_outcomes() -> None:
     for key, field in (("matching", "expected"), ("nested_quantifier", "expected")):
         assert {case[field] for case in FIXTURE[key]} == {True, False}
     assert {case["valid"] for case in FIXTURE["check_regex"]} == {True, False}
+    assert {case["valid"] for case in FIXTURE["joined"]} == {True, False}
     assert any(case["advanced_regex"] for case in FIXTURE["matching"])
     assert any(not case["advanced_regex"] for case in FIXTURE["matching"])

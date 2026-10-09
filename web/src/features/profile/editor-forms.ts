@@ -22,7 +22,7 @@ import {
   type TermList,
 } from "./api";
 import { fold, LINE_MAX, text, uniqueBy } from "./forms";
-import { cleanTerms, termProblem } from "./matching";
+import { cleanTerms, listProblems, termProblem } from "./matching";
 
 export const FACTS_MAX_BYTES = 200_000;
 export const FACT_BLOCKS_MAX = 200;
@@ -118,10 +118,14 @@ const termListShape = {
   terms: z.array(z.string()).max(TERMS_MAX, `Keep at most ${TERMS_MAX} terms.`),
 };
 
-/** An issue on each term the api would refuse, at `<list>.terms.<index>`. */
+/**
+ * An issue on each term the api would refuse, at `<list>.terms.<index>`: alone, or with the
+ * terms before it (a group name used twice).
+ */
 function checkTerms(list: TermList, ctx: z.RefinementCtx) {
+  const across = listProblems(list.terms, list.advanced_regex);
   list.terms.forEach((term, index) => {
-    const problem = termProblem(term, list.advanced_regex);
+    const problem = termProblem(term, list.advanced_regex) ?? across.get(index);
     if (problem) {
       ctx.addIssue({
         code: "custom",

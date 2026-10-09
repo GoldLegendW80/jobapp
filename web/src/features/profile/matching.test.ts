@@ -11,7 +11,10 @@ import {
   escapeTerm,
   findMatches,
   globalFlags,
+  groupNames,
   hasNestedQuantifier,
+  joiningProblem,
+  listProblems,
   matches,
   pyToJs,
   regexProblem,
@@ -27,6 +30,7 @@ interface Fixture {
   }[];
   nested_quantifier: { pattern: string; expected: boolean }[];
   check_regex: { pattern: string; valid: boolean }[];
+  joined: { terms: string[]; valid: boolean }[];
 }
 
 // The same file api/tests/profile/test_matching_parity.py checks against the Python code.
@@ -69,8 +73,8 @@ describe("parity with schemas.py has_nested_quantifier", () => {
 });
 
 // Patterns the browser cannot judge: Python refuses them, the browser leaves them to the server
-// (a forward reference JavaScript accepts, and `(?<name>)`, which only JavaScript knows).
-const SERVER_ONLY = new Set(["\\1(a)", "(?<n>a)"]);
+// (`(?<name>)`, which only JavaScript knows).
+const SERVER_ONLY = new Set(["(?<n>a)"]);
 
 describe("parity with schemas.py check_regex", () => {
   it.each(fixture.check_regex.map((c) => [label(c.pattern), c] as const))(
@@ -247,6 +251,86 @@ describe("global inline flags (refused, as in schemas.py check_regex)", () => {
   it("checks the flag before compiling, so the message is the clear one", () => {
     // JavaScript would reject "a(?i)b" with a cryptic "invalid group".
     expect(regexProblem("a(?i)b")).toMatch(/^Inline flags such as \(\?i\)/);
+  });
+});
+
+describe("parity with schemas.py check_joined", () => {
+  it.each(fixture.joined.map((c) => [label(c.terms), c] as const))(
+    "%s",
+    (_name, c) => {
+      for (const term of c.terms) expect(regexProblem(term)).toBeUndefined();
+      expect(listProblems(c.terms, true).size === 0).toBe(c.valid);
+    },
+  );
+});
+
+describe("constructs that break once the terms are joined", () => {
+  it.each(["(?#x(?i)", "(?#(?m))a", "a(?#[)b", "(?#\\)x"])(
+    "skips the comment in %s",
+    (pattern) => {
+      expect(globalFlags(pattern)).toBeUndefined();
+      expect(joiningProblem(pattern)).toBeUndefined();
+    },
+  );
+
+  it("still finds a flag after a comment", () => {
+    expect(globalFlags("(?#[)(?i)x")).toEqual({ index: 5, flags: "(?i)" });
+  });
+
+  it.each([
+    ["(a)\\1", 3, "\\1"],
+    ["(ab)\\2", 4, "\\2"],
+    ["(a)\\18", 3, "\\18"],
+    ["(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10", 30, "\\10"],
+  ])("refuses the numbered backreference in %s", (pattern, at, shown) => {
+    expect(termProblem(pattern, true)).toBe(
+      `Numbered backreferences such as ${shown} are not allowed (position ${at}): ` +
+        "the terms of a list are joined into one expression, where the number would point at " +
+        "another term's group. Name the group and refer to it by name, as in (?P<word>...) then (?P=word).",
+    );
+  });
+
+  it.each(["(a)?(?(1)b|c)", "(?(12)x)"])(
+    "refuses the numbered condition in %s",
+    (pattern) => {
+      expect(joiningProblem(pattern)).toMatch(
+        /^Conditions on a numbered group such as \(\?\(\d+\)\.\.\.\) are not allowed/,
+      );
+    },
+  );
+
+  it.each(["\\101", "[\\1]", "\\\\1", "(?P<w>a)(?P=w)", "(?P<w>a)?(?(w)b|c)"])(
+    "accepts %s",
+    (pattern) => {
+      expect(joiningProblem(pattern)).toBeUndefined();
+    },
+  );
+
+  it("counts positions in code points, as Python does", () => {
+    expect(globalFlags("😀(?m)x")).toEqual({ index: 1, flags: "(?m)" });
+    expect(joiningProblem("é😀(a)\\1")).toContain("(position 5)");
+  });
+
+  it("lists group names outside classes and comments", () => {
+    expect(groupNames("(?P<a>x)(?:y)(?P<b2>z)[(?P<c>)](?#P<d>)")).toEqual([
+      "a",
+      "b2",
+    ]);
+  });
+
+  it("flags a group name used again by a later term, not within plain lists", () => {
+    const terms = ["ok", "(?P<n>a)", "x", "(?P<n>b)", "(?P<n>c)"];
+    expect([...listProblems(terms, true)]).toEqual([
+      [
+        3,
+        'The group name "n" is already used by term 2: group names must be unique across the list.',
+      ],
+      [
+        4,
+        'The group name "n" is already used by term 2: group names must be unique across the list.',
+      ],
+    ]);
+    expect(listProblems(terms, false).size).toBe(0);
   });
 });
 

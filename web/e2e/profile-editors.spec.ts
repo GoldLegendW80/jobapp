@@ -35,7 +35,8 @@ async function shots(page: Page, name: string, fullPage = true) {
  *   docker compose -p jobapp-p5 -f compose.yml down -v
  *
  * On the Jetson it runs inside web/e2e/identity-all.config.ts (tests/e2e_jetson.sh): the CLI goes
- * over ssh and the board check calls the ATS from the Jetson's api container.
+ * over ssh and the board check calls the ATS from the Jetson's api container. In CI the api asks the
+ * ATS stub instead (tests/ats_stub.py knows mistral.ai on Ashby, 404 for every other org).
  */
 test.describe.configure({ mode: "serial", timeout: 120_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
@@ -306,7 +307,7 @@ test("Skills: add a term, regex errors from the browser and the server, Try it",
     ),
   ).toBeVisible();
   // Accepted by the browser, refused by Python: the server's message lands under the chip.
-  await llm.fill("\\1(a)");
+  await llm.fill("(?<n>a)");
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Save skills" }).click();
   const terms = page.getByRole("list", { name: "Terms of llm" });
@@ -314,7 +315,7 @@ test("Skills: add a term, regex errors from the browser and the server, Try it",
     /Invalid regular expression at position \d+/,
   );
   await shots(page, "skills-regex-error", false);
-  await page.getByRole("button", { name: "Remove \\1(a)" }).click();
+  await page.getByRole("button", { name: "Remove (?<n>a)" }).click();
 
   await page
     .getByLabel("Posting text", { exact: true })
@@ -418,7 +419,7 @@ test("a reload shows every saved change", async () => {
   ).toContainText("crewai");
   await expect(
     page.getByRole("list", { name: "Terms of llm" }),
-  ).not.toContainText("\\1(a)");
+  ).not.toContainText("(?<n>a)");
 
   await openTab(page, "Search");
   await expect(page.getByLabel("Org of board 33", { exact: true })).toHaveValue(
