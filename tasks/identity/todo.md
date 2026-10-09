@@ -124,9 +124,9 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 ## I8: End-to-end identity journey on the Jetson
 
 **Acceptance criteria:**
-- [ ] `./deploy.sh` then the full Playwright identity journey through the public URL passes
-- [ ] Screenshots of every page, light and dark, desktop and 375px, in `tasks/evidence/identity/`
-- [ ] `./deploy.sh smoke` extended with an auth check (401 on a protected route)
+- [x] `./deploy.sh` then the full Playwright identity journey through the public URL passes
+- [x] Screenshots of every page, light and dark, desktop and 375px, in `tasks/evidence/identity/`
+- [x] `./deploy.sh smoke` extended with an auth check (401 on a protected route)
 
 **Verification:** Playwright run log and screenshots
 
@@ -137,4 +137,4 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 **Scope:** S
 
 ## Checkpoint I-C
-- [ ] All 5 success criteria of SPEC-identity.md verified
+- [x] All 5 success criteria of SPEC-identity.md verified

@@ -35,10 +35,10 @@ Invite-only accounts with server-side sessions, an admin area, and the `current_
 - [x] Two-user journey works; isolation fixture proves cross-user reads fail
 
 - [x] I7: Login throttling and auth hardening
-- [ ] I8: End-to-end identity journey on the Jetson, screenshots of every page
+- [x] I8: End-to-end identity journey on the Jetson, screenshots of every page
 
 ### Checkpoint I-C
-- [ ] All 5 success criteria of SPEC-identity.md verified
+- [x] All 5 success criteria of SPEC-identity.md verified
 
 ## Risks and mitigations
 
