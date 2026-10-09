@@ -122,6 +122,7 @@ test("a new account fills its profile from empty to 100% in the browser", async 
     .getByLabel("Job title at employer 1", { exact: true })
     .fill("AI Engineer");
   await page.getByLabel("Start of employer 1", { exact: true }).fill("2024-03");
+  await page.getByLabel("Present at employer 1", { exact: true }).check();
   await page.getByRole("button", { name: "Add school" }).click();
   await page.getByLabel("School 1", { exact: true }).fill("École Exemple");
   await page.getByLabel("Degree at school 1", { exact: true }).fill("MSc");
