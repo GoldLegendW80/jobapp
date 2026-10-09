@@ -7,7 +7,7 @@ import { DEFAULT_TIMEOUT_MS } from "@/lib/api";
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
-import { HealthCard } from "./health-card";
+import { HealthDot } from "./health-dot";
 
 /** Install a sequence of responders for /api/health and count the calls. */
 function healthSequence(
@@ -40,30 +40,34 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("HealthCard", () => {
+describe("HealthDot", () => {
   it("shows a loading state first, with Retry disabled", async () => {
     healthSequence(async () => {
       await delay(50);
       return ok();
     });
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     expect(status()).toHaveTextContent("Checking");
-    expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Check the API again" }),
+    ).toBeDisabled();
     expect(await within(status()).findByText("API ok")).toBeInTheDocument();
   });
 
   it('shows "API ok" on a 200', async () => {
     const calls = healthSequence(ok);
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     expect(await screen.findByText("API ok")).toBeInTheDocument();
     expect(screen.queryByText("API unavailable")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Check the API again" }),
+    ).toBeEnabled();
     expect(calls.count).toBe(1);
   });
 
   it('shows "API unavailable" with the reason on a 503', async () => {
     healthSequence(down);
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     expect(await screen.findByText("API unavailable")).toBeInTheDocument();
     expect(status()).toHaveTextContent(
       "The API answered 503: database unavailable.",
@@ -73,7 +77,7 @@ describe("HealthCard", () => {
 
   it('shows "API unavailable" on a network error', async () => {
     healthSequence(() => HttpResponse.error());
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     expect(await screen.findByText("API unavailable")).toBeInTheDocument();
     expect(status()).toHaveTextContent("The API could not be reached.");
   });
@@ -82,7 +86,7 @@ describe("HealthCard", () => {
     healthSequence(() =>
       HttpResponse.text("<!doctype html><title>proxy</title>"),
     );
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     expect(await screen.findByText("API unavailable")).toBeInTheDocument();
     expect(status()).toHaveTextContent(
       "The API sent a response this page cannot read.",
@@ -98,7 +102,7 @@ describe("HealthCard", () => {
       await delay("infinite");
       return ok();
     });
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     expect(status()).toHaveTextContent("Checking");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS - 100);
@@ -114,10 +118,12 @@ describe("HealthCard", () => {
   it("recovers when Retry is clicked after a failure", async () => {
     const user = userEvent.setup();
     const calls = healthSequence(down, ok);
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     expect(await screen.findByText("API unavailable")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(
+      screen.getByRole("button", { name: "Check the API again" }),
+    );
     expect(await screen.findByText("API ok")).toBeInTheDocument();
     expect(screen.queryByText("API unavailable")).not.toBeInTheDocument();
     expect(calls.count).toBe(2);
@@ -133,18 +139,24 @@ describe("HealthCard", () => {
       await gate;
       return HttpResponse.error();
     });
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     expect(await screen.findByText("API unavailable")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(
+      screen.getByRole("button", { name: "Check the API again" }),
+    );
     expect(await within(status()).findByText("Checking")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Check the API again" }),
+    ).toBeDisabled();
 
     release();
     expect(
       await screen.findByText("The API could not be reached."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Check the API again" }),
+    ).toBeEnabled();
   });
 
   it("sends one request when Retry is clicked twice quickly", async () => {
@@ -153,9 +165,9 @@ describe("HealthCard", () => {
       await delay(100);
       return ok();
     });
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     await screen.findByText("API unavailable");
-    const retry = screen.getByRole("button", { name: "Retry" });
+    const retry = screen.getByRole("button", { name: "Check the API again" });
     await user.click(retry);
     await user.click(retry);
     await screen.findByText("API ok");
@@ -164,7 +176,7 @@ describe("HealthCard", () => {
 
   it("does not refetch in a loop after a failure", async () => {
     const calls = healthSequence(down);
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     await screen.findByText("API unavailable");
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(calls.count).toBe(1);
@@ -172,7 +184,7 @@ describe("HealthCard", () => {
 
   it("does not refetch on window focus or when the network comes back", async () => {
     const calls = healthSequence(down);
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     await screen.findByText("API unavailable");
     act(() => {
       window.dispatchEvent(new Event("visibilitychange"));
@@ -185,7 +197,7 @@ describe("HealthCard", () => {
 
   it("does not refetch in a loop after a success", async () => {
     const calls = healthSequence(ok);
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     await screen.findByText("API ok");
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(calls.count).toBe(1);
@@ -194,29 +206,29 @@ describe("HealthCard", () => {
   it("refreshes a healthy status when Retry is clicked and the api went down", async () => {
     const user = userEvent.setup();
     healthSequence(ok, down);
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     await screen.findByText("API ok");
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(
+      screen.getByRole("button", { name: "Check the API again" }),
+    );
     expect(await screen.findByText("API unavailable")).toBeInTheDocument();
   });
 });
 
-describe("HealthCard accessibility", () => {
-  it("is a region named by its title, with a live status and a labelled button", async () => {
+describe("HealthDot accessibility", () => {
+  it("has a polite live status and a labelled button", async () => {
     healthSequence(ok);
-    renderWithQuery(<HealthCard />);
-    const region = screen.getByRole("region", { name: "API status" });
-    const live = within(region).getByRole("status");
-    expect(live).toHaveAttribute("aria-live", "polite");
+    renderWithQuery(<HealthDot />);
+    expect(status()).toHaveAttribute("aria-live", "polite");
     expect(
-      within(region).getByRole("button", { name: "Retry" }),
+      screen.getByRole("button", { name: "Check the API again" }),
     ).toBeInTheDocument();
-    await within(live).findByText("API ok");
+    await within(status()).findByText("API ok");
   });
 
   it("hides decorative icons from assistive technology", async () => {
     healthSequence(down);
-    const { container } = renderWithQuery(<HealthCard />);
+    const { container } = renderWithQuery(<HealthDot />);
     await screen.findByText("API unavailable");
     const icons = container.querySelectorAll("svg");
     expect(icons.length).toBeGreaterThan(0);
@@ -227,10 +239,12 @@ describe("HealthCard accessibility", () => {
   it("reaches Retry with the keyboard and activates it with Enter", async () => {
     const user = userEvent.setup();
     const calls = healthSequence(down, ok);
-    renderWithQuery(<HealthCard />);
+    renderWithQuery(<HealthDot />);
     await screen.findByText("API unavailable");
     await user.tab();
-    expect(screen.getByRole("button", { name: "Retry" })).toHaveFocus();
+    expect(
+      screen.getByRole("button", { name: "Check the API again" }),
+    ).toHaveFocus();
     await user.keyboard("{Enter}");
     await screen.findByText("API ok");
     await waitFor(() => {

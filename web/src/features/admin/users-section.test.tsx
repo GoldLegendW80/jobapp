@@ -466,13 +466,13 @@ describe("actions", () => {
       await screen.findByText("You are now a member."),
     ).toBeInTheDocument();
     await waitFor(() => {
-      expect(location()).toBe("/");
+      expect(location()).toBe("/jobs");
     });
     await waitFor(() => {
       expect(screen.queryByRole("link", { name: "Admin" })).toBeNull();
     });
     expect(
-      await screen.findByRole("heading", { name: /Welcome/ }),
+      await screen.findByRole("heading", { level: 1, name: "Jobs" }),
     ).toBeInTheDocument();
     expect(state.patches).toEqual([{ id: me.id, body: { role: "member" } }]);
   });

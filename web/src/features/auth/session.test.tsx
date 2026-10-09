@@ -64,7 +64,7 @@ describe("protected routes", () => {
     expect(screen.queryByRole("banner")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading")).not.toBeInTheDocument();
     expect(
-      await screen.findByRole("heading", { name: /^Welcome/ }),
+      await screen.findByRole("heading", { level: 1, name: "Jobs" }),
     ).toBeInTheDocument();
   });
 
@@ -92,7 +92,7 @@ describe("protected routes", () => {
       .setup()
       .click(screen.getByRole("button", { name: "Retry" }));
     expect(
-      await screen.findByRole("heading", { name: `Welcome, ${member.name}` }),
+      await screen.findByRole("heading", { level: 1, name: "Jobs" }),
     ).toBeInTheDocument();
   });
 
@@ -126,7 +126,7 @@ describe("roles", () => {
   it("hides the Admin entry from a member", async () => {
     fakeSession(member);
     renderApp("/");
-    await screen.findByRole("heading", { name: `Welcome, ${member.name}` });
+    await screen.findByRole("heading", { level: 1, name: "Jobs" });
     expect(
       screen.queryByRole("link", { name: "Admin" }),
     ).not.toBeInTheDocument();
@@ -208,7 +208,9 @@ describe("user menu and sign out", () => {
       });
       await screen.findByRole("heading", { name: "Sign in" });
       expect(screen.queryByRole("banner")).not.toBeInTheDocument();
-      expect(screen.queryByText(/Welcome/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("heading", { name: "Jobs" }),
+      ).not.toBeInTheDocument();
       expect(
         screen.queryByRole("heading", { name: "Users" }),
       ).not.toBeInTheDocument();
@@ -228,7 +230,7 @@ describe("user menu and sign out", () => {
         /Sign out failed\. The API could not be reached\./,
       ),
     ).toBeInTheDocument();
-    expect(location()).toBe("/");
+    expect(location()).toBe("/jobs");
     expect(screen.getByRole("banner")).toBeInTheDocument();
   });
 });
@@ -243,11 +245,11 @@ describe("global 401", () => {
     server.use(http.get("*/api/health", () => unauthorized()));
     await userEvent
       .setup()
-      .click(screen.getByRole("button", { name: "Retry" }));
+      .click(screen.getByRole("button", { name: "Check the API again" }));
     expect(
       await screen.findByRole("heading", { name: "Sign in" }),
     ).toBeInTheDocument();
-    expect(location()).toBe("/login?next=/");
+    expect(location()).toBe("/login?next=/jobs");
     expect(client.getQueryData(["me"])).toBeNull();
     expect(client.getQueryData(["health"])).toBeUndefined();
   });
@@ -300,7 +302,9 @@ describe("global 401", () => {
     state.user = null;
     server.use(http.get("*/api/health", () => unauthorized()));
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await user.click(
+      screen.getByRole("button", { name: "Check the API again" }),
+    );
     await screen.findByRole("heading", { name: "Sign in" });
     server.use(
       http.get("*/api/health", () => HttpResponse.json({ status: "ok" })),
@@ -309,6 +313,6 @@ describe("global 401", () => {
     await user.type(screen.getByLabelText("Password"), "correct horse");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     expect(await screen.findByText("API ok")).toBeInTheDocument();
-    expect(location()).toBe("/");
+    expect(location()).toBe("/jobs");
   });
 });

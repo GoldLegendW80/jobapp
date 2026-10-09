@@ -117,9 +117,9 @@ describe("invite page", () => {
     await fill(user, { name: "  Zoë   Ångström " });
     await user.click(screen.getByRole("button", { name: "Create account" }));
     expect(
-      await screen.findByRole("heading", { name: "Welcome, Zoë Ångström" }),
+      await screen.findByRole("heading", { level: 1, name: "Jobs" }),
     ).toBeInTheDocument();
-    expect(location()).toBe("/");
+    expect(location()).toBe("/jobs");
     expect(calls.accept).toEqual([
       { name: "Zoë Ångström", password: PASSWORD },
     ]);
@@ -271,7 +271,7 @@ describe("invite page", () => {
     const busy = screen.getByRole("button", { name: "Creating account" });
     expect(busy).toBeDisabled();
     await user.dblClick(busy);
-    await screen.findByRole("heading", { name: /^Welcome/ });
+    await screen.findByRole("heading", { level: 1, name: "Jobs" });
     expect(calls.accept).toHaveLength(1);
   });
 });
@@ -288,10 +288,10 @@ describe("reset page", () => {
     const user = userEvent.setup();
     await fill(user, {});
     await user.click(screen.getByRole("button", { name: "Save password" }));
-    await screen.findByRole("heading", { name: /^Welcome/ });
+    await screen.findByRole("heading", { level: 1, name: "Jobs" });
     expect(calls.accept).toEqual([{ password: PASSWORD }]);
-    expect(location()).toBe("/");
-    expect(document.title).toBe("Home · jobapp");
+    expect(location()).toBe("/jobs");
+    expect(document.title).toBe("Jobs · jobapp");
   });
 
   it("follows the api: a reset link opened on /invite asks no name", async () => {

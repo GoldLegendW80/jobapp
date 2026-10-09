@@ -81,9 +81,9 @@ describe("login page", () => {
     const { location } = renderApp("/login");
     await fillAndSubmit();
     expect(
-      await screen.findByRole("heading", { name: `Welcome, ${member.name}` }),
+      await screen.findByRole("heading", { level: 1, name: "Jobs" }),
     ).toBeInTheDocument();
-    expect(location()).toBe("/");
+    expect(location()).toBe("/jobs");
   });
 
   it.each([
@@ -98,9 +98,9 @@ describe("login page", () => {
     const { location } = renderApp(`/login?next=${next}`);
     await fillAndSubmit();
     expect(
-      await screen.findByRole("heading", { name: /^Welcome/ }),
+      await screen.findByRole("heading", { level: 1, name: "Jobs" }),
     ).toBeInTheDocument();
-    expect(location()).toBe("/");
+    expect(location()).toBe("/jobs");
   });
 
   it("shows the api's generic message on 401 and stays on the page", async () => {
@@ -180,7 +180,7 @@ describe("login page", () => {
     expect(submit()).toHaveTextContent("Signing in");
     await user.dblClick(submit());
     expect(
-      await screen.findByRole("heading", { name: /^Welcome/ }),
+      await screen.findByRole("heading", { level: 1, name: "Jobs" }),
     ).toBeInTheDocument();
     expect(seen).toHaveLength(1);
   });
@@ -220,9 +220,9 @@ describe("login page", () => {
     fakeSession(admin);
     const { location } = renderApp("/login");
     expect(
-      await screen.findByRole("heading", { name: /^Welcome/ }),
+      await screen.findByRole("heading", { level: 1, name: "Jobs" }),
     ).toBeInTheDocument();
-    expect(location()).toBe("/");
+    expect(location()).toBe("/jobs");
   });
 
   it("redirects a signed in visitor to a safe next", async () => {

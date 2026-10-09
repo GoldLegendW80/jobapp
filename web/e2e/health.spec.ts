@@ -5,7 +5,8 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 
 const evidence = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
-  "../../tasks/evidence/task5",
+  "../../tasks/evidence",
+  process.env.E2E_EVIDENCE ?? "task5",
 );
 
 const HEALTH = "**/api/health";
@@ -20,6 +21,20 @@ test.beforeEach(async ({ page }) => {
       role: "admin",
       created_at: "2026-10-08T10:00:00Z",
       last_login_at: null,
+    }),
+  );
+  // The home page is the jobs dashboard: an empty list, so only the health check is under test.
+  await page.route(/\/api\/jobs(\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [],
+        next_cursor: null,
+        total: 0,
+        counts_by_status: {},
+        fit_histogram: { buckets: [], unscored: 0 },
+      }),
     }),
   );
 });
@@ -45,19 +60,18 @@ async function mockHealth(
   return calls;
 }
 
-const status = (page: Page) => page.getByRole("status");
-const retry = (page: Page) => page.getByRole("button", { name: "Retry" });
+const status = (page: Page) =>
+  page.getByRole("contentinfo").getByRole("status");
+const retry = (page: Page) =>
+  page.getByRole("button", { name: "Check the API again" });
 
-test.describe("API status card", () => {
+test.describe("API status in the footer", () => {
   test('shows "API ok" when the api answers 200', async ({ page }) => {
     const calls = await mockHealth(page, (route) =>
       json(route, 200, { status: "ok" }),
     );
     await page.goto("/");
     await expect(page.getByRole("link", { name: "jobapp" })).toBeVisible();
-    await expect(
-      page.getByRole("region", { name: "API status" }),
-    ).toBeVisible();
     await expect(status(page)).toContainText("API ok");
     await expect(retry(page)).toBeEnabled();
     expect(calls.count).toBe(1);
@@ -166,21 +180,17 @@ test.describe("API status card", () => {
     await mockHealth(page, (route) => json(route, 200, { status: "ok" }));
     await page.goto("/");
     await expect(status(page)).toContainText("API ok");
-    const card = page.locator('[data-slot="card"]');
-    // Tailwind and the shadcn Card styles are applied: rounded corners and a border.
-    await expect(card).toHaveCSS("border-top-style", "solid");
-    expect(
-      await card.evaluate((el) => getComputedStyle(el).borderRadius),
-    ).not.toBe("0px");
-    // Once transitions settle the Retry button is fully opaque and the ok badge is green with
-    // light text (the success tokens resolve).
-    await expect(retry(page)).toHaveCSS("opacity", "1");
-    const badge = page.locator('[data-slot="badge"]');
-    await expect(badge).toHaveCSS(
+    // Tailwind and the theme tokens are applied: the ok dot is the success green, and the
+    // check again button is fully opaque once transitions settle.
+    const dot = status(page).locator("span").first();
+    await expect(dot).toHaveCSS(
       "background-color",
       "oklch(0.527 0.154 150.069)",
     );
-    await expect(badge).toHaveCSS("color", "oklch(0.985 0 0)");
+    expect(
+      await dot.evaluate((el) => getComputedStyle(el).borderRadius),
+    ).not.toBe("0px");
+    await expect(retry(page)).toHaveCSS("opacity", "1");
     expect(errors).toEqual([]);
   });
 });

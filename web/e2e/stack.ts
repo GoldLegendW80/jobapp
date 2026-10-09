@@ -142,7 +142,7 @@ export async function setPassword(page: Page, password: string, name?: string) {
   await page
     .getByRole("button", { name: /Create account|Save password/ })
     .click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/jobs$/);
 }
 
 export async function signIn(page: Page, email: string, password: string) {

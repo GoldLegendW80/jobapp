@@ -453,7 +453,7 @@ test("saving the same section from two browsers shows the conflict dialog", asyn
   const second = await other.newPage();
   const secondErrors = watchErrors(second);
   await signIn(second, EMAIL, PASSWORD);
-  await expect(second).toHaveURL(/\/$/);
+  await expect(second).toHaveURL(/\/jobs$/);
   await second.goto("/profile?tab=identity");
   await page.goto("/profile?tab=identity");
   await expect(second.getByLabel("City", { exact: true })).toHaveValue(
@@ -531,7 +531,7 @@ test("unsaved changes: switching tab and leaving the page ask first", async () =
 
   await page.getByRole("link", { name: "jobapp" }).click();
   await guard.getByRole("button", { name: "Discard changes" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/jobs$/);
   await page.goto("/profile");
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Senior Applied AI Engineer",

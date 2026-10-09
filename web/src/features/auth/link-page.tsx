@@ -216,7 +216,7 @@ function SetPasswordForm({
           ? `Welcome, ${user.name}.`
           : "Your new password is saved.",
       );
-      void navigate("/", { replace: true });
+      void navigate("/jobs", { replace: true });
     },
     onError: (error) => {
       if (is404(error)) {
