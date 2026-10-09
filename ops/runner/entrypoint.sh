@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Entry point of the jobapp-runner image (ops/runner/Dockerfile). ./deploy.sh runner drives it:
 #
-#   configure   register with GitHub: the registration token is read from stdin (never from an
-#               argument or the environment, so it shows in no `docker inspect` and no process
-#               list); RUNNER_URL, RUNNER_NAME and RUNNER_LABELS come from the environment
-#   remove      unregister: the removal token is read from stdin
+#   configure   register with GitHub: the registration token is read from stdin and handed to
+#               config.sh as ACTIONS_RUNNER_INPUT_TOKEN, never as an argument, so it shows in no
+#               process list and no `docker inspect` (/proc/<pid>/environ is readable only by the
+#               same uid or root); RUNNER_URL, RUNNER_NAME and RUNNER_LABELS come from the environment
+#   remove      unregister: the removal token is read from stdin, passed the same way
 #   run         the long-running listener (the container's default command)
 #
 # The runner directory ($RUNNER_HOME, a named volume) is seeded from /opt/actions-runner the first
@@ -38,7 +39,7 @@ case "$cmd" in
     seed
     token="$(read_token)"
     cd "$RUNNER_HOME"
-    ./config.sh --unattended --replace --url "$RUNNER_URL" --token "$token" \
+    ACTIONS_RUNNER_INPUT_TOKEN="$token" ./config.sh --unattended --replace --url "$RUNNER_URL" \
       --name "$RUNNER_NAME" --labels "$RUNNER_LABELS" --work _work
     ;;
   remove)
@@ -46,7 +47,7 @@ case "$cmd" in
     token="$(read_token)"
     cd "$RUNNER_HOME"
     [[ -f .runner ]] || die "not configured, nothing to remove"
-    ./config.sh remove --token "$token"
+    ACTIONS_RUNNER_INPUT_TOKEN="$token" ./config.sh remove --unattended
     ;;
   run)
     seed

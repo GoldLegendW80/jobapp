@@ -125,6 +125,11 @@ ssh_master() {
 }
 
 cleanup() {
+  if [[ -n "${LOCK_PID:-}" ]]; then
+    # Closing the FIFO ends the remote `cat`, which releases the Jetson's deploy lock.
+    exec 8>&- || true
+    wait "$LOCK_PID" 2>/dev/null || true
+  fi
   if [[ -n "$CTL_DIR" ]]; then
     ssh "${SSH_OPTS[@]}" -O exit "$HOST" >/dev/null 2>&1 || true
     rm -rf "$CTL_DIR"
@@ -155,6 +160,33 @@ require_deployed() {
 }
 
 # --- deploy steps -------------------------------------------------------------------------
+# remote_lock: hold flock on <BACKUP_DIR>/.deploy.lock on the Jetson for the rest of this run. It
+# is the lock .github/workflows/deploy.yml takes on the self-hosted runner, so a deploy from this
+# Mac and one from GitHub never rsync or compose at the same time. A background ssh holds it while
+# its stdin, a FIFO kept open on fd 8, stays open; cleanup closes fd 8 and the lock goes.
+remote_lock() {
+  step "deploy lock on $HOST"
+  local bdir lock fifo="$CTL_DIR/lock.in" out="$CTL_DIR/lock.out" deadline
+  # shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
+  bdir="$(setting BACKUP_DIR '~/jobapp-backups')"
+  bdir="${bdir#\~/}"
+  lock="$(printf '%q' "$bdir/.deploy.lock")"
+  mkfifo "$fifo"
+  remote "mkdir -p $(printf '%q' "$bdir") && exec 9>>$lock && { flock -n 9 || { echo busy; flock -w 900 9; }; } &&
+    echo locked && cat >/dev/null" <"$fifo" >"$out" 2>&1 &
+  LOCK_PID=$!
+  exec 8>"$fifo"
+  deadline=$((SECONDS + 960))
+  until grep -q '^locked' "$out" 2>/dev/null; do
+    kill -0 "$LOCK_PID" 2>/dev/null || die "could not take the deploy lock on $HOST: $(cat "$out" 2>/dev/null)"
+    ((SECONDS < deadline)) || die "the deploy lock on $HOST stayed busy for 16 minutes"
+    sleep 1
+  done
+  if grep -q '^busy' "$out"; then
+    info "waited for another deploy (GitHub or another Mac) to finish"
+  fi
+  info "held: $bdir/.deploy.lock"
+}
 TIMES=()
 record() { # record <label> <start SECONDS>: keep and print the duration of one phase
   TIMES+=("$1: $((SECONDS - $2))s")
@@ -451,6 +483,7 @@ cmd_deploy() {
   take_lock
   ssh_master
   preflight
+  remote_lock
   local start=$SECONDS
   sync_tree
   record rsync "$start"
@@ -1081,7 +1114,7 @@ runner_install() {
   # build does not read as a tar and parses as a Dockerfile.
   local tar_opts=(--format ustar)
   tar --version 2>/dev/null | grep -q bsdtar && tar_opts+=(--no-xattrs --no-mac-metadata --no-acls)
-  COPYFILE_DISABLE=1 tar "${tar_opts[@]}" -C "$ROOT/ops/runner" -cf - Dockerfile entrypoint.sh |
+  COPYFILE_DISABLE=1 tar "${tar_opts[@]}" -C "$ROOT/ops/runner" -cf - Dockerfile entrypoint.sh job-guard.sh |
     remote "docker build -q --build-arg RUNNER_USER=$(printf '%q' "$RUNNER_USER") --build-arg RUNNER_UID=$RUNNER_UID --build-arg RUNNER_GID=$RUNNER_GID -t $RUNNER_IMAGE -" >/dev/null ||
     die "docker build of $RUNNER_IMAGE failed on $HOST"
   info "$RUNNER_IMAGE built (arm64, ubuntu 22.04, actions runner $(runner_version))"

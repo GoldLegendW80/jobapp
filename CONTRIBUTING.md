@@ -1,7 +1,8 @@
 # Contributing
 
 How a change reaches the Jetson. The work is done by agents, coordinated by an orchestrator
-session; Harald decides what gets built. Intent: [docs/intent/agent-features.md](../docs/intent/agent-features.md).
+session; Harald decides what gets built. The intent behind this flow is `docs/intent/agent-features.md`
+in the job folder that holds this repository (it is not part of the repository).
 
 ## One task, one branch, one pull request
 
@@ -22,9 +23,12 @@ session; Harald decides what gets built. Intent: [docs/intent/agent-features.md]
    `tests/deploy_test.sh`), e2e (the Playwright journeys against a scratch Compose stack with a
    synthetic jobs import) and pre-commit. It must be green.
 5. A separate Claude review subagent, run by the orchestrator with fresh context, reviews the diff
-   and posts its verdict on the pull request with `gh pr review` (`--approve`, or
-   `--request-changes` with the findings). Findings are fixed on the same branch.
-6. The orchestrator merges when CI is green and the review approves, with a **merge commit**
+   and posts its verdict as a review comment, `gh pr review <n> --comment --body-file <review>`,
+   whose first line is `REVIEW VERDICT: APPROVE` or `REVIEW VERDICT: REQUEST CHANGES`, followed
+   by the findings. (`--approve` and `--request-changes` are not used: every agent acts as the
+   repository owner, and GitHub does not let the author of a pull request approve it.) Findings
+   are fixed on the same branch and the subagent reviews the new head.
+6. The orchestrator merges when CI is green and the latest verdict is APPROVE, with a **merge commit**
    (`gh pr merge --merge --delete-branch`): the branch's commits, one per step of the agent's work,
    stay readable in the history, and the merge commit names the pull request. Squash is not used.
 7. Every push to `main` deploys: once CI is green on `main`, `.github/workflows/deploy.yml` runs

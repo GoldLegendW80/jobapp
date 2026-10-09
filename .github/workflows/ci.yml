@@ -69,17 +69,24 @@ jobs:
         run: uv run --frozen ruff check --output-format=github .
       - name: Ruff format
         run: uv run --frozen ruff format --check .
-      # The docker-marked tests start their own throwaway Postgres containers and stop or pause
-      # them; they run locally (Docker Desktop) and in tests/compose_smoke.sh, not here, where
-      # the database is the service container above.
+      # The docker-marked tests (database stopped, restarted, paused) start their own throwaway
+      # Postgres containers, so they run in the next step, on the runner's Docker daemon, not
+      # against the shared service container.
       - name: Pytest with coverage (at least 95 percent)
         run: >-
           uv run --frozen pytest -m "not docker" -p no:cacheprovider
           --cov --cov-report=term --cov-fail-under=95
           --junitxml=${{ runner.temp }}/junit-api.xml
+      - name: Pytest, docker-marked (own Postgres containers stopped, restarted, paused)
+        timeout-minutes: 10
+        run: >-
+          uv run --frozen pytest -m docker -p no:cacheprovider
+          --junitxml=${{ runner.temp }}/junit-api-docker.xml
       - name: Test summary
         if: always()
-        run: python3 ../.github/scripts/junit_summary.py api "${{ runner.temp }}/junit-api.xml" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          python3 ../.github/scripts/junit_summary.py api "${{ runner.temp }}/junit-api.xml" >> "$GITHUB_STEP_SUMMARY"
+          python3 ../.github/scripts/junit_summary.py "api (docker)" "${{ runner.temp }}/junit-api-docker.xml" >> "$GITHUB_STEP_SUMMARY"
 
   web:
     name: web (eslint, tsc, vitest, build)
@@ -131,7 +138,7 @@ jobs:
       - name: Shellcheck (pinned image, as tests/deploy_test.sh and pre-commit)
         run: >-
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
-          deploy.sh ops/db.sh ops/runner/entrypoint.sh .github/scripts/ci_env.sh
+          deploy.sh ops/db.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
           tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
           tests/reboot_check.sh tests/e2e_jetson.sh
       # deploy.sh against fake ssh and docker: no Jetson, nothing remote.

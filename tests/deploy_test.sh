@@ -45,7 +45,7 @@ run() {
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
 
 step "shellcheck"
-SCRIPTS=(deploy.sh ops/db.sh ops/runner/entrypoint.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
+SCRIPTS=(deploy.sh ops/db.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
   tests/crash_check.sh tests/reboot_check.sh)
 docker run --rm -v "$ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" "${SCRIPTS[@]}" || fail "shellcheck"
 ok "${SCRIPTS[*]} clean"
@@ -227,9 +227,77 @@ if command -v gh >/dev/null; then
   out_has "cannot reach nonexistent-host.invalid"
   ok "runner status: an unreachable host fails with the ssh message"
 fi
-grep -q 'token' <(sed -n '/^runner_install()/,/^}/p' deploy.sh | grep -E 'echo|info|printf') &&
-  fail "runner_install prints something about the token"
-ok "runner_install never prints the token"
+
+step "runner image: the job guard is baked in and refuses every job but deploy.yml from main"
+grep -q '^ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/runner-job-guard$' ops/runner/Dockerfile ||
+  fail "ops/runner/Dockerfile does not set ACTIONS_RUNNER_HOOK_JOB_STARTED"
+grep -q '^COPY --chmod=755 job-guard.sh /usr/local/bin/runner-job-guard$' ops/runner/Dockerfile ||
+  fail "ops/runner/Dockerfile does not copy job-guard.sh"
+grep -q 'Dockerfile entrypoint.sh job-guard.sh' deploy.sh || fail "runner_install does not send job-guard.sh"
+guard() { # guard <exit> <repository> <workflow ref> <event>
+  run "$1" env -i PATH="$PATH" GITHUB_REPOSITORY="$2" GITHUB_WORKFLOW_REF="$3" GITHUB_EVENT_NAME="$4" \
+    ops/runner/job-guard.sh
+}
+main_ref="GoldLegendW80/jobapp/.github/workflows/deploy.yml@refs/heads/main"
+guard 0 GoldLegendW80/jobapp "$main_ref" workflow_run
+guard 0 GoldLegendW80/jobapp "$main_ref" workflow_dispatch
+guard 1 GoldLegendW80/jobapp "$main_ref" push
+out_has "refused: event push"
+guard 1 GoldLegendW80/jobapp "$main_ref" pull_request
+guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/deploy.yml@refs/heads/evil" workflow_dispatch
+out_has "refused: workflow"
+guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/ci.yml@refs/heads/main" workflow_dispatch
+guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/deploy.yml@refs/pull/1/merge" pull_request
+guard 1 someone/fork "someone/fork/.github/workflows/deploy.yml@refs/heads/main" workflow_dispatch
+out_has "refused: repository"
+guard 1 "" "" ""
+ok "hook set in the image; allowed: deploy.yml@main on workflow_run and workflow_dispatch; refused: push, pull_request, another branch, another workflow, a fork, no context"
+
+step "runner install and remove against a fake Jetson and a fake gh: the token never shows"
+# A canary token: install and remove must pass it to the container on stdin only, never on a
+# command line (here: the remote command string) and never in deploy.sh's own output.
+CANARY="CANARYTOKEN0123456789abcdefXYZ"
+mkdir -p "$WORK/bin3"
+cat >"$WORK/bin3/ssh" <<'FAKE'
+#!/usr/bin/env bash
+cmd="${*: -1}"
+echo "$cmd" >>"$FAKE_CALLS"
+case "$cmd" in
+  true) ;;
+  *"id -un"*) printf 'u\n1000\n1000\n/home/u\n995\n' ;;
+  *"docker build"*) cat >/dev/null ;;
+  *"--entrypoint test"*) exit 1 ;;
+  *" configure"* | *" remove") cat >>"$FAKE_STDIN" ;;
+  *"docker image inspect"*) exit 0 ;;
+esac
+exit 0
+FAKE
+cat >"$WORK/bin3/gh" <<'FAKE'
+#!/usr/bin/env bash
+case "$*" in
+  *registration-token* | *remove-token*) echo "$FAKE_TOKEN" ;;
+  *"actions/runners --paginate"*) [[ "$FAKE_LISTED" == 1 ]] && echo "7 online false self-hosted,Linux,ARM64,jetson" ;;
+esac
+exit 0
+FAKE
+chmod +x "$WORK/bin3/ssh" "$WORK/bin3/gh"
+fake3() {
+  env PATH="$WORK/bin3:$PATH" FAKE_CALLS="$WORK/calls3" FAKE_STDIN="$WORK/stdin3" \
+    FAKE_TOKEN="$CANARY" DEPLOY_HOST=fakejetson "$@"
+}
+: >"$WORK/calls3"
+: >"$WORK/stdin3"
+run 0 fake3 FAKE_LISTED=1 ./deploy.sh runner install
+out_has "online on GitHub"
+grep -q "docker run --rm -i .* configure" "$WORK/calls3" || fail "no configure call: $(cat "$WORK/calls3")"
+grep -q "docker run -d --name jobapp-runner --restart unless-stopped" "$WORK/calls3" || fail "no runner container"
+grep -q -- "--group-add 995" "$WORK/calls3" || fail "docker group not added"
+run 0 fake3 FAKE_LISTED=0 ./deploy.sh runner remove
+grep -q "docker run --rm -i .* remove" "$WORK/calls3" || fail "no remove call: $(cat "$WORK/calls3")"
+[[ "$(grep -c "$CANARY" "$WORK/stdin3")" == 2 ]] || fail "the token did not reach configure and remove on stdin"
+grep -q "$CANARY" "$WORK/calls3" && fail "the token was on a remote command line"
+grep -q "$CANARY" "$WORK/out" && fail "deploy.sh printed the token"
+ok "configure and remove get the token on stdin only; it is on no command line and in no output"
 
 step "unreachable host fails fast with a clear message"
 for host in nonexistent-host.invalid 192.0.2.1; do

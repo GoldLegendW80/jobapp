@@ -84,12 +84,20 @@ Postgres and Redis, coverage at least 95 percent), web (eslint, tsc, Vitest, bui
 (shellcheck, `tests/deploy_test.sh`), e2e (the Compose stack built on GitHub's runner, the
 Playwright journeys with throwaway accounts and a synthetic jobs import, never Harald's data) and
 pre-commit. When CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
-Jetson's self-hosted runner: rsync of that commit into `~/jobapp` (same `.rsyncignore`, `.env`
-kept), images built first (a failed build leaves the running stack untouched), a backup into
-`~/jobapp-backups/deploys/` (newest 10 kept, separate from the nightly ones), `compose up --wait`,
-migrations, `tests/jetson_smoke.sh` in quick mode, and the public URL in the run's summary. One
-deploy runs at a time and is never cancelled. `gh workflow run deploy.yml --ref <branch>` deploys
-any branch by hand (to test it before the merge; the next merge redeploys `main`).
+Jetson's self-hosted runner, under the Jetson's deploy lock (`flock` on
+`~/jobapp-backups/.deploy.lock`, which `./deploy.sh` takes too, so the two never overlap): rsync of
+that commit into `~/jobapp` (same `.rsyncignore`, `.env` kept), images built first (a failed build
+leaves the running stack untouched; the running images are tagged `:previous` beforehand), a
+backup into `~/jobapp-backups/deploys/` whenever the database volume exists (db started first if
+it was stopped; newest 10 kept, separate from the nightly ones), `compose up --wait`, migrations,
+`tests/jetson_smoke.sh` in quick mode, `~/jobapp/.deployed-commit` written once the smoke passed,
+and the public URL in the run's summary. If `up` or a migration fails, the `:previous` images are
+put back and started again; a migration runs in one transaction and rolls back, and for data the
+log names the predeploy dump to restore with `ops/db.sh restore-live`. A started deploy is never
+cancelled. `gh workflow run deploy.yml -f ref=<branch or sha>` deploys a branch by hand to test it
+before the merge (the next merge redeploys `main`); the workflow itself always comes from `main`.
+Each ref has its own concurrency group: GitHub keeps one pending run per group and replaces an
+older pending one, so a branch dispatch never displaces a pending `main` deploy.
 
 ```bash
 ./deploy.sh runner install     # build ops/runner on the Jetson, register it (labels self-hosted, jetson, arm64), start it
@@ -108,10 +116,14 @@ ephemeral runner must be registered again for every job, which needs a long-live
 token on the Jetson, a larger secret than the runner's own repository-scoped credential.
 
 **Security.** Access to the Docker socket is equivalent to root on the Jetson, so this runner is
-root on the Jetson for whatever workflow runs on it. It is registered to this private repository
-only: never add it to a public repository, never let it run workflows from forks, and keep
-`deploy.yml` the only workflow that targets `[self-hosted, jetson]`; it runs automatically only for
-pushes to `main`. Anyone with write access to the repository can run code on the Jetson.
+root on the Jetson for whatever job runs on it. It is registered to this private repository only,
+and its job-started hook (`ops/runner/job-guard.sh`, set in the image as
+`ACTIONS_RUNNER_HOOK_JOB_STARTED`, so no commit can turn it off) fails every job before its first
+step unless it is this repository's `deploy.yml` from `refs/heads/main`, run by `workflow_run` or
+`workflow_dispatch`. A pull request, a push to a branch or another workflow that targets
+`[self-hosted, jetson]` is refused. Never add the runner to a public repository or allow fork
+workflows. Dispatching a branch deploys and runs that branch's code on the Jetson (its compose
+file and images), so dispatch only reviewed branches. Anyone with write access to the repository can run code on the Jetson.
 
 ## Public URL
 
