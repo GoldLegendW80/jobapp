@@ -101,7 +101,10 @@ def other_admin(api: Api, factory: sessionmaker[Session]) -> str:
 
 
 @pytest.mark.parametrize(
-    ("method", "path"), [("GET", USERS), ("PATCH", f"{USERS}/{uuid4()}"), ("PATCH", f"{USERS}/x")]
+    ("method", "path"),
+    [("GET", USERS), ("PATCH", f"{USERS}/{uuid4()}"), ("PATCH", f"{USERS}/x")],
+    # Fixed ids: a random uuid in the id would differ between pytest-xdist workers.
+    ids=["list", "patch-unknown-id", "patch-malformed-id"],
 )
 def test_anonymous_is_401(api: Api, method: str, path: str) -> None:
     response = api.request(method, path, json={"is_active": False})

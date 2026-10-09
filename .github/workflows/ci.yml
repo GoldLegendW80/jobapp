@@ -72,19 +72,33 @@ jobs:
       # The docker-marked tests (database stopped, restarted, paused) start their own throwaway
       # Postgres containers, so they run in the next step, on the runner's Docker daemon, not
       # against the shared service container.
-      - name: Pytest with coverage (at least 95 percent)
-        run: >-
-          uv run --frozen pytest -m "not docker" -p no:cacheprovider
-          --cov --cov-report=term --cov-fail-under=95
-          --junitxml=${{ runner.temp }}/junit-api.xml
+      # pytest-xdist: PYTEST_WORKERS processes, each on a database of its own created next to
+      # TEST_DATABASE_URL's (tests/conftest.py), so migrations and TRUNCATE never cross. argon2 runs
+      # at a cheap cost in-process (tests/conftest.py fast_argon2); the production cost is checked
+      # by tests/identity/test_security.py. Issue #9: this step took 10 to 25 minutes before.
+      - name: Pytest with coverage (at least 95 percent), in parallel
+        env:
+          PYTEST_WORKERS: "4"
+        run: |
+          start=$SECONDS
+          uv run --frozen pytest -m "not docker" -p no:cacheprovider -n "$PYTEST_WORKERS" \
+            --cov --cov-report=term --cov-fail-under=95 --durations=15 \
+            --junitxml=${{ runner.temp }}/junit-api.xml
+          echo "pytest (not docker, $PYTEST_WORKERS workers): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
+      # Serial, without -n: these stop, restart and pause Postgres containers of their own.
       - name: Pytest, docker-marked (own Postgres containers stopped, restarted, paused)
         timeout-minutes: 10
-        run: >-
-          uv run --frozen pytest -m docker -p no:cacheprovider
-          --junitxml=${{ runner.temp }}/junit-api-docker.xml
+        run: |
+          start=$SECONDS
+          uv run --frozen pytest -m docker -p no:cacheprovider \
+            --junitxml=${{ runner.temp }}/junit-api-docker.xml
+          echo "pytest (docker-marked, serial): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
       - name: Test summary
         if: always()
         run: |
+          if [[ -f "$RUNNER_TEMP/api-timings.txt" ]]; then
+            { echo "### api timings"; echo; sed 's/^/- /' "$RUNNER_TEMP/api-timings.txt"; echo; } >> "$GITHUB_STEP_SUMMARY"
+          fi
           python3 ../.github/scripts/junit_summary.py api "${{ runner.temp }}/junit-api.xml" >> "$GITHUB_STEP_SUMMARY"
           python3 ../.github/scripts/junit_summary.py "api (docker)" "${{ runner.temp }}/junit-api-docker.xml" >> "$GITHUB_STEP_SUMMARY"
 
@@ -138,7 +152,7 @@ jobs:
       - name: Shellcheck (pinned image, as tests/deploy_test.sh and pre-commit)
         run: >-
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
-          deploy.sh ops/db.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
+          deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
           tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
           tests/reboot_check.sh tests/e2e_jetson.sh
       # deploy.sh against fake ssh and docker: no Jetson, nothing remote.

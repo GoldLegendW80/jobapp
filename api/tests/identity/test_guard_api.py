@@ -354,6 +354,7 @@ def test_logs_never_hold_passwords_tokens_or_cookies(
 # --- timing ------------------------------------------------------------------------------------
 
 
+@pytest.mark.production_argon2
 def test_unknown_email_and_wrong_password_take_comparable_time(
     api: Api, factory: sessionmaker[Session], clock: Clock
 ) -> None:
