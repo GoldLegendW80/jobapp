@@ -253,13 +253,13 @@ def test_long_text_is_bounded_and_fast() -> None:
         ],
     )
     score(text, section)  # warm the regex cache
-    # The best of 3: the bound is on the scorer, not on a neighbour (another pytest-xdist worker)
-    # taking the CPU during a single measurement.
+    # CPU time of this process, the best of 3: the bound is on the scorer's work, not on the
+    # wall clock, which other pytest-xdist workers sharing the runner's cores would stretch.
     timings = []
     for _ in range(3):
-        started = time.perf_counter()
+        started = time.process_time()
         result = score(text, section)
-        timings.append(time.perf_counter() - started)
+        timings.append(time.process_time() - started)
     elapsed = min(timings)
     assert elapsed < 0.2, f"{elapsed * 1000:.0f} ms (runs: {[round(t * 1000) for t in timings]})"
     assert result == score(text[: scoring.SCORED_CHARS_MAX], section)
@@ -267,9 +267,9 @@ def test_long_text_is_bounded_and_fast() -> None:
     for worst in ("x" * 1_000_000, "é日" * 500_000, " " * 1_000_000):
         runs = []
         for _ in range(3):
-            started = time.perf_counter()
+            started = time.process_time()
             score(worst, section)
-            runs.append(time.perf_counter() - started)
+            runs.append(time.process_time() - started)
         assert min(runs) < 0.2, [round(t * 1000) for t in runs]
 
 
