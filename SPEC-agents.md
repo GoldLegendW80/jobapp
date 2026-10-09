@@ -41,8 +41,8 @@ agent_runs(id uuid, user_id, agent text, job_id null, status enum(queued, runnin
 agent_events(id bigserial, run_id fk, seq int, at, kind text, data jsonb)   -- streamed steps, kept for replay
 agent_threads(id uuid, user_id, job_id null, title, sdk_session_id text null, created_at, updated_at)
 agent_messages(id bigserial, thread_id fk, role enum(user, assistant), content jsonb, run_id null, at)
-proposals(id uuid, user_id, run_id, target text, target_id uuid, kind text, payload jsonb,
-          status enum(pending, accepted, rejected), decided_at)
+proposals(id uuid, user_id, run_id, target text, target_id uuid null, kind text, payload jsonb,
+          status enum(pending, accepted, rejected, superseded, invalid), decided_at)
 ```
 
 ## API
@@ -55,7 +55,7 @@ proposals(id uuid, user_id, run_id, target text, target_id uuid, kind text, payl
 | GET /api/agents/runs/{id}/stream | server-sent events of a live run (resumable with Last-Event-ID) |
 | POST /api/agents/runs/{id}/cancel | stop |
 | GET/POST /api/agents/threads, GET /api/agents/threads/{id}, POST /api/agents/threads/{id}/messages | chat |
-| GET /api/proposals?status=pending, POST /api/proposals/{id}/accept, /reject | proposals |
+| GET /api/proposals?status=&kind=, POST /api/proposals/{id}/accept `{edited_value?}` (validated by the target's schema), /reject | proposals |
 
 ## Frontend
 

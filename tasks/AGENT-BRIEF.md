@@ -1,9 +1,9 @@
 # Brief for implementation subagents
 
-You implement exactly one task of `tasks/todo.md`. The orchestrator verifies your work before ticking it.
+You implement exactly one task of `tasks/todo.md` or of your module's `tasks/<module>/todo.md`. The orchestrator verifies your work before ticking it.
 
 ## Read first
-- `CAPABILITY-MAP.md`, the `SPEC-<module>.md` of your module, `tasks/plan.md`, and your task block in `tasks/todo.md`.
+- `CAPABILITY-MAP.md`, the `SPEC-<module>.md` of your module, `tasks/plan.md`, and your task block in `tasks/todo.md` or `tasks/<module>/todo.md`.
 - The existing code you build on. Match its style.
 
 ## Environment
@@ -22,6 +22,6 @@ You implement exactly one task of `tasks/todo.md`. The orchestrator verifies you
 ## Delivery (GitHub flow, see CONTRIBUTING.md)
 - Work on your own branch named `<module>/<task-id>-<slug>` (in a worktree when given one), never on `main`.
 - Commit with clear conventional messages ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, push the branch, open a PR with `gh pr create` using the template, and make CI green on it.
-- Never merge, never push to `main`, never deploy the app to the Jetson: the orchestrator merges after the review subagent's `REVIEW VERDICT: APPROVE`, and every merge to `main` deploys automatically. Real-world checks on the Jetson happen after the merge, run by the orchestrator or a follow-up task.
-- Do not tick boxes in `tasks/*/todo.md`; the orchestrator does.
+- Never merge, never push to `main`, never deploy the app to the Jetson: the orchestrator merges after the review subagent's `REVIEW VERDICT: APPROVE`, and every merge to `main` deploys automatically. Real-world checks that change the Jetson's state happen after the merge, run by the orchestrator or a follow-up task; read-only checks on the Jetson (SQL selects, logs, status) are fine before merge.
+- Do not tick boxes in `tasks/todo.md` or `tasks/<module>/todo.md`; the orchestrator does.
 - Report: files changed, commands run with key output, tests (count, what edge cases), Playwright evidence paths, what failed or was skipped and why, follow-ups for later tasks.
