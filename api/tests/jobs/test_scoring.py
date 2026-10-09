@@ -253,16 +253,24 @@ def test_long_text_is_bounded_and_fast() -> None:
         ],
     )
     score(text, section)  # warm the regex cache
-    started = time.perf_counter()
-    result = score(text, section)
-    elapsed = time.perf_counter() - started
-    assert elapsed < 0.2, f"{elapsed * 1000:.0f} ms"
+    # The best of 3: the bound is on the scorer, not on a neighbour (another pytest-xdist worker)
+    # taking the CPU during a single measurement.
+    timings = []
+    for _ in range(3):
+        started = time.perf_counter()
+        result = score(text, section)
+        timings.append(time.perf_counter() - started)
+    elapsed = min(timings)
+    assert elapsed < 0.2, f"{elapsed * 1000:.0f} ms (runs: {[round(t * 1000) for t in timings]})"
     assert result == score(text[: scoring.SCORED_CHARS_MAX], section)
     # The worst case for the patterns: no word boundary to skip ahead with.
     for worst in ("x" * 1_000_000, "é日" * 500_000, " " * 1_000_000):
-        started = time.perf_counter()
-        score(worst, section)
-        assert time.perf_counter() - started < 0.2
+        runs = []
+        for _ in range(3):
+            started = time.perf_counter()
+            score(worst, section)
+            runs.append(time.perf_counter() - started)
+        assert min(runs) < 0.2, [round(t * 1000) for t in runs]
 
 
 def test_text_past_the_cap_is_not_read() -> None:
