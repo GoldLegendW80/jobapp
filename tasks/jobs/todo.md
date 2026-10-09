@@ -9,7 +9,7 @@ Spec: [SPEC-jobs.md](../../SPEC-jobs.md). Depends on profile (matching rules in 
 - List endpoint returns counts and histogram for the filtered set in the same response, so the dashboard needs one request.
 - Filters live in the URL query so views are shareable and survive reloads.
 
-## J1: Jobs schema and scoring port
+## J1: Jobs schema and scoring port (done 2026-10-09: golden test 395/395 identical to the engine)
 **Acceptance:** migration 0004 (jobs, job_events, job_files, sweeps, enums, indexes for list filters and full text); `scoring.py` port; golden test equal to the engine on every scorable CSV row; isolation-ready service skeleton.
 **Files:** `api/app/jobs/{models,scoring,service}.py`, `api/alembic/versions/0004_jobs.py`, tests. **Scope:** M
 
