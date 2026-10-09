@@ -1,0 +1,880 @@
+{
+ "_comment": "Shared by api/tests/profile/test_matching_parity.py and web/src/features/profile/matching.test.ts. Expected values come from the Python implementation (app/profile/matching.py, schemas.check_regex and has_nested_quantifier), which is the judge; the TypeScript port must agree.",
+ "matching": [
+  {
+   "terms": [
+    "agent"
+   ],
+   "advanced_regex": false,
+   "text": "We build Agents.",
+   "expected": true
+  },
+  {
+   "terms": [
+    "agent"
+   ],
+   "advanced_regex": false,
+   "text": "agentic workflows",
+   "expected": false
+  },
+  {
+   "terms": [
+    "agent"
+   ],
+   "advanced_regex": false,
+   "text": "a reagent",
+   "expected": false
+  },
+  {
+   "terms": [
+    "agent"
+   ],
+   "advanced_regex": false,
+   "text": "agentes",
+   "expected": true
+  },
+  {
+   "terms": [
+    "class"
+   ],
+   "advanced_regex": false,
+   "text": "Classes and objects",
+   "expected": true
+  },
+  {
+   "terms": [
+    "llm"
+   ],
+   "advanced_regex": false,
+   "text": "LLMs and RAG",
+   "expected": true
+  },
+  {
+   "terms": [
+    "llm"
+   ],
+   "advanced_regex": false,
+   "text": "LLM-based",
+   "expected": true
+  },
+  {
+   "terms": [
+    "c++"
+   ],
+   "advanced_regex": false,
+   "text": "C++ developer",
+   "expected": true
+  },
+  {
+   "terms": [
+    "c#"
+   ],
+   "advanced_regex": false,
+   "text": "C# or .NET",
+   "expected": true
+  },
+  {
+   "terms": [
+    "node.js"
+   ],
+   "advanced_regex": false,
+   "text": "Node.js and React",
+   "expected": true
+  },
+  {
+   "terms": [
+    "node.js"
+   ],
+   "advanced_regex": false,
+   "text": "nodexjs",
+   "expected": false
+  },
+  {
+   "terms": [
+    "machine learning"
+   ],
+   "advanced_regex": false,
+   "text": "Machine Learning Engineer",
+   "expected": true
+  },
+  {
+   "terms": [
+    "machine learning"
+   ],
+   "advanced_regex": false,
+   "text": "machine  learning",
+   "expected": false
+  },
+  {
+   "terms": [
+    "machine learning"
+   ],
+   "advanced_regex": false,
+   "text": "machine-learning",
+   "expected": false
+  },
+  {
+   "terms": [
+    "ml"
+   ],
+   "advanced_regex": false,
+   "text": "ML-ops",
+   "expected": true
+  },
+  {
+   "terms": [
+    "ml"
+   ],
+   "advanced_regex": false,
+   "text": "html and xml",
+   "expected": false
+  },
+  {
+   "terms": [
+    "ml"
+   ],
+   "advanced_regex": false,
+   "text": "MLs",
+   "expected": true
+  },
+  {
+   "terms": [
+    "café"
+   ],
+   "advanced_regex": false,
+   "text": "Le Café est ouvert",
+   "expected": true
+  },
+  {
+   "terms": [
+    "cafe"
+   ],
+   "advanced_regex": false,
+   "text": "cafés",
+   "expected": false
+  },
+  {
+   "terms": [
+    "résumé"
+   ],
+   "advanced_regex": false,
+   "text": "RÉSUMÉ REQUIRED",
+   "expected": true
+  },
+  {
+   "terms": [
+    "data"
+   ],
+   "advanced_regex": false,
+   "text": "big_data pipelines",
+   "expected": false
+  },
+  {
+   "terms": [
+    "data"
+   ],
+   "advanced_regex": false,
+   "text": "data2",
+   "expected": false
+  },
+  {
+   "terms": [
+    "data"
+   ],
+   "advanced_regex": false,
+   "text": "data science",
+   "expected": true
+  },
+  {
+   "terms": [
+    "data"
+   ],
+   "advanced_regex": false,
+   "text": "2data",
+   "expected": false
+  },
+  {
+   "terms": [
+    "ai"
+   ],
+   "advanced_regex": false,
+   "text": "AI/ML",
+   "expected": true
+  },
+  {
+   "terms": [
+    "ai"
+   ],
+   "advanced_regex": false,
+   "text": "naïve",
+   "expected": false
+  },
+  {
+   "terms": [
+    "ai"
+   ],
+   "advanced_regex": false,
+   "text": "éai",
+   "expected": false
+  },
+  {
+   "terms": [
+    "go"
+   ],
+   "advanced_regex": false,
+   "text": "Golang",
+   "expected": false
+  },
+  {
+   "terms": [
+    "go"
+   ],
+   "advanced_regex": false,
+   "text": "Go, Rust",
+   "expected": true
+  },
+  {
+   "terms": [
+    "go"
+   ],
+   "advanced_regex": false,
+   "text": "goes",
+   "expected": true
+  },
+  {
+   "terms": [],
+   "advanced_regex": false,
+   "text": "anything at all",
+   "expected": false
+  },
+  {
+   "terms": [],
+   "advanced_regex": true,
+   "text": "anything at all",
+   "expected": false
+  },
+  {
+   "terms": [
+    "agent",
+    "langgraph"
+   ],
+   "advanced_regex": false,
+   "text": "Experience with LangGraph",
+   "expected": true
+  },
+  {
+   "terms": [
+    "agent",
+    "langgraph"
+   ],
+   "advanced_regex": false,
+   "text": "",
+   "expected": false
+  },
+  {
+   "terms": [
+    "(a+)"
+   ],
+   "advanced_regex": false,
+   "text": "(a+) literal",
+   "expected": true
+  },
+  {
+   "terms": [
+    "a.b"
+   ],
+   "advanced_regex": false,
+   "text": "aXb",
+   "expected": false
+  },
+  {
+   "terms": [
+    "$100k"
+   ],
+   "advanced_regex": false,
+   "text": "pay $100k",
+   "expected": true
+  },
+  {
+   "terms": [
+    "日本語"
+   ],
+   "advanced_regex": false,
+   "text": "日本語の仕事",
+   "expected": false
+  },
+  {
+   "terms": [
+    "日本語"
+   ],
+   "advanced_regex": false,
+   "text": "仕事 日本語 です",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\bllm(?:s)?\\b"
+   ],
+   "advanced_regex": true,
+   "text": "Senior LLMs engineer",
+   "expected": true
+  },
+  {
+   "terms": [
+    "fine[- ]?tun\\w*"
+   ],
+   "advanced_regex": true,
+   "text": "fine-tuning models",
+   "expected": true
+  },
+  {
+   "terms": [
+    "phd (is )?required"
+   ],
+   "advanced_regex": true,
+   "text": "A PhD is required.",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\b(staff|principal)\\b"
+   ],
+   "advanced_regex": true,
+   "text": "Principal Engineer",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\b(staff|principal)\\b"
+   ],
+   "advanced_regex": true,
+   "text": "principality",
+   "expected": false
+  },
+  {
+   "terms": [
+    "^senior"
+   ],
+   "advanced_regex": true,
+   "text": "Senior AI",
+   "expected": true
+  },
+  {
+   "terms": [
+    "^senior"
+   ],
+   "advanced_regex": true,
+   "text": "Not senior",
+   "expected": false
+  },
+  {
+   "terms": [
+    "\\bcyber"
+   ],
+   "advanced_regex": true,
+   "text": "Cybersecurity analyst",
+   "expected": true
+  },
+  {
+   "terms": [
+    "remote|paris"
+   ],
+   "advanced_regex": true,
+   "text": "Lyon",
+   "expected": false
+  },
+  {
+   "terms": [
+    "agent"
+   ],
+   "advanced_regex": true,
+   "text": "a reagent",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\d{2,}\\+? years"
+   ],
+   "advanced_regex": true,
+   "text": "10+ years",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\d{2,}\\+? years"
+   ],
+   "advanced_regex": true,
+   "text": "5 years",
+   "expected": false
+  },
+  {
+   "terms": [
+    "\\bcafé\\b"
+   ],
+   "advanced_regex": true,
+   "text": "un café noir",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\bcaf\\b"
+   ],
+   "advanced_regex": true,
+   "text": "un café noir",
+   "expected": false
+  },
+  {
+   "terms": [
+    "\\w+é"
+   ],
+   "advanced_regex": true,
+   "text": "Le résumé",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\W"
+   ],
+   "advanced_regex": true,
+   "text": "é",
+   "expected": false
+  },
+  {
+   "terms": [
+    "engineer$"
+   ],
+   "advanced_regex": true,
+   "text": "AI Engineer\n",
+   "expected": true
+  },
+  {
+   "terms": [
+    "engineer$"
+   ],
+   "advanced_regex": true,
+   "text": "AI Engineer\nNext",
+   "expected": false
+  },
+  {
+   "terms": [
+    "^next"
+   ],
+   "advanced_regex": true,
+   "text": "AI Engineer\nNext",
+   "expected": false
+  },
+  {
+   "terms": [
+    "a.c"
+   ],
+   "advanced_regex": true,
+   "text": "a\nc",
+   "expected": false
+  },
+  {
+   "terms": [
+    "a.c"
+   ],
+   "advanced_regex": true,
+   "text": "a\rc",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\Aai"
+   ],
+   "advanced_regex": true,
+   "text": "AI first",
+   "expected": true
+  },
+  {
+   "terms": [
+    "ai\\Z"
+   ],
+   "advanced_regex": true,
+   "text": "first AI",
+   "expected": true
+  },
+  {
+   "terms": [
+    "ai\\Z"
+   ],
+   "advanced_regex": true,
+   "text": "first AI\n",
+   "expected": false
+  },
+  {
+   "terms": [
+    "\\-ops"
+   ],
+   "advanced_regex": true,
+   "text": "ml-ops",
+   "expected": true
+  },
+  {
+   "terms": [
+    "a{,2}b"
+   ],
+   "advanced_regex": true,
+   "text": "aab",
+   "expected": true
+  },
+  {
+   "terms": [
+    "x{2,3}"
+   ],
+   "advanced_regex": true,
+   "text": "xx",
+   "expected": true
+  },
+  {
+   "terms": [
+    "x{"
+   ],
+   "advanced_regex": true,
+   "text": "x{",
+   "expected": true
+  },
+  {
+   "terms": [
+    "x{a}"
+   ],
+   "advanced_regex": true,
+   "text": "x{a}",
+   "expected": true
+  },
+  {
+   "terms": [
+    "]"
+   ],
+   "advanced_regex": true,
+   "text": "a]b",
+   "expected": true
+  },
+  {
+   "terms": [
+    "[]a]+"
+   ],
+   "advanced_regex": true,
+   "text": "]]",
+   "expected": true
+  },
+  {
+   "terms": [
+    "[\\w-]+@"
+   ],
+   "advanced_regex": true,
+   "text": "jean-luc@",
+   "expected": true
+  },
+  {
+   "terms": [
+    "(?P<w>ab)(?P=w)"
+   ],
+   "advanced_regex": true,
+   "text": "ABab",
+   "expected": true
+  },
+  {
+   "terms": [
+    "(?i:llm)"
+   ],
+   "advanced_regex": true,
+   "text": "LLM",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\d+"
+   ],
+   "advanced_regex": true,
+   "text": "٣",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\x41"
+   ],
+   "advanced_regex": true,
+   "text": "a",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\u00e9"
+   ],
+   "advanced_regex": true,
+   "text": "É",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\U0001F600"
+   ],
+   "advanced_regex": true,
+   "text": "smile 😀",
+   "expected": true
+  },
+  {
+   "terms": [
+    "llm",
+    "\\bagent"
+   ],
+   "advanced_regex": true,
+   "text": "agentic AI",
+   "expected": true
+  },
+  {
+   "terms": [
+    "\\bai\\b"
+   ],
+   "advanced_regex": true,
+   "text": "naïve",
+   "expected": false
+  },
+  {
+   "terms": [
+    "\\Bai"
+   ],
+   "advanced_regex": true,
+   "text": "naïve",
+   "expected": false
+  },
+  {
+   "terms": [
+    "\\s+"
+   ],
+   "advanced_regex": true,
+   "text": "a\tb",
+   "expected": true
+  },
+  {
+   "terms": [
+    "a\\/b"
+   ],
+   "advanced_regex": true,
+   "text": "a/b",
+   "expected": true
+  },
+  {
+   "terms": [
+    "a\\ b"
+   ],
+   "advanced_regex": true,
+   "text": "a b",
+   "expected": true
+  }
+ ],
+ "nested_quantifier": [
+  {
+   "pattern": "(a+)+",
+   "expected": true
+  },
+  {
+   "pattern": "(\\w+\\s?)*",
+   "expected": true
+  },
+  {
+   "pattern": "(?:x{2,})+",
+   "expected": true
+  },
+  {
+   "pattern": "((ab)+)+",
+   "expected": true
+  },
+  {
+   "pattern": "(c\\+\\+)+",
+   "expected": false
+  },
+  {
+   "pattern": "([+*])+",
+   "expected": false
+  },
+  {
+   "pattern": "(ab)+",
+   "expected": false
+  },
+  {
+   "pattern": "a+b*",
+   "expected": false
+  },
+  {
+   "pattern": "(a|b)*",
+   "expected": false
+  },
+  {
+   "pattern": "(a{2})+",
+   "expected": true
+  },
+  {
+   "pattern": "[]a+]+",
+   "expected": false
+  },
+  {
+   "pattern": "([)]+)+",
+   "expected": true
+  },
+  {
+   "pattern": "(a)(b+)",
+   "expected": false
+  },
+  {
+   "pattern": "((a)b+)",
+   "expected": false
+  },
+  {
+   "pattern": "(?:a*)?",
+   "expected": false
+  },
+  {
+   "pattern": "(a*){2,3}",
+   "expected": true
+  },
+  {
+   "pattern": "(a\\))+",
+   "expected": false
+  },
+  {
+   "pattern": "x(?:y|z+)*",
+   "expected": true
+  },
+  {
+   "pattern": "([^a]+b)+",
+   "expected": true
+  },
+  {
+   "pattern": "\\(a+\\)+",
+   "expected": false
+  },
+  {
+   "pattern": "(a{,2})+",
+   "expected": true
+  },
+  {
+   "pattern": "(a{})+",
+   "expected": true
+  },
+  {
+   "pattern": "",
+   "expected": false
+  },
+  {
+   "pattern": "(((a))+)",
+   "expected": false
+  }
+ ],
+ "check_regex": [
+  {
+   "pattern": "(abc",
+   "valid": false
+  },
+  {
+   "pattern": "[a-",
+   "valid": false
+  },
+  {
+   "pattern": "*a",
+   "valid": false
+  },
+  {
+   "pattern": "a{2,1}",
+   "valid": false
+  },
+  {
+   "pattern": "(?P<n>a)(?P=n)",
+   "valid": true
+  },
+  {
+   "pattern": "\\-",
+   "valid": true
+  },
+  {
+   "pattern": "a{,3}",
+   "valid": true
+  },
+  {
+   "pattern": "a++",
+   "valid": true
+  },
+  {
+   "pattern": "(?>a)",
+   "valid": true
+  },
+  {
+   "pattern": "\\bok\\b",
+   "valid": true
+  },
+  {
+   "pattern": "a)",
+   "valid": false
+  },
+  {
+   "pattern": "\\e",
+   "valid": false
+  },
+  {
+   "pattern": "\\q",
+   "valid": false
+  },
+  {
+   "pattern": "(?<n>a)",
+   "valid": false
+  },
+  {
+   "pattern": "(?#note)a",
+   "valid": true
+  },
+  {
+   "pattern": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "valid": false
+  },
+  {
+   "pattern": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "valid": true
+  },
+  {
+   "pattern": "(a+)+",
+   "valid": false
+  },
+  {
+   "pattern": "[\\W]",
+   "valid": true
+  },
+  {
+   "pattern": "(?x) a",
+   "valid": true
+  },
+  {
+   "pattern": "(?i)llm",
+   "valid": true
+  },
+  {
+   "pattern": "a**",
+   "valid": false
+  },
+  {
+   "pattern": "?",
+   "valid": false
+  },
+  {
+   "pattern": "\\N{DIGIT ONE}",
+   "valid": true
+  },
+  {
+   "pattern": "x{2}{3}",
+   "valid": false
+  },
+  {
+   "pattern": "[z-a]",
+   "valid": false
+  },
+  {
+   "pattern": "\\1(a)",
+   "valid": false
+  },
+  {
+   "pattern": "(a)\\1",
+   "valid": true
+  }
+ ]
+}

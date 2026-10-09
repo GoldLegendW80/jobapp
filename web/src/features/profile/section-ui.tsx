@@ -113,7 +113,8 @@ export function AreaField<F extends FieldValues>({
   description,
   className,
   rows = 3,
-}: FieldProps<F> & { rows?: number }) {
+  textareaClassName,
+}: FieldProps<F> & { rows?: number; textareaClassName?: string }) {
   return (
     <FormField
       control={control}
@@ -124,7 +125,12 @@ export function AreaField<F extends FieldValues>({
             <LabelText label={label} srSuffix={srSuffix} />
           </FormLabel>
           <FormControl>
-            <Textarea rows={rows} {...field} value={field.value ?? ""} />
+            <Textarea
+              rows={rows}
+              className={textareaClassName}
+              {...field}
+              value={field.value ?? ""}
+            />
           </FormControl>
           {description ? (
             <FormDescription>{description}</FormDescription>

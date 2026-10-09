@@ -47,7 +47,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_PATTERN = /^\+?[0-9][0-9 ().-]{4,38}$/;
 
 /** A text field: trimmed length at most `max`, no control characters, required or not. */
-function text(
+export function text(
   label: string,
   max: number,
   { required = false, multiline = false } = {},
@@ -101,7 +101,7 @@ const month = (required: boolean) =>
     );
 
 /** Add an issue on `path` of each item whose `key(item)` repeats an earlier one. */
-function uniqueBy<T>(
+export function uniqueBy<T>(
   items: T[],
   key: (item: T) => string,
   field: string,
@@ -120,7 +120,7 @@ function uniqueBy<T>(
   });
 }
 
-const fold = (value: string) =>
+export const fold = (value: string) =>
   value.trim().normalize("NFC").toLocaleLowerCase("en");
 const orNull = (value: string) => (value.trim() === "" ? null : value.trim());
 const textOrNull = (value: string) => {

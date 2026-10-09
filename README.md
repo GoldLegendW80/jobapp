@@ -313,6 +313,16 @@ The import prints the new revision and the completeness, never the profile itsel
 0 imported, 2 invalid arguments or file, 1 no such account or a database error.
 `./deploy.sh profile import <email>` does both, the import on the Jetson.
 
+## Board check
+
+The Search tab checks a company board before adding it: `POST /api/profile/boards/check` with
+`{"ats": "ashby" | "greenhouse" | "lever", "org": "<slug>"}` answers
+`{exists, postings, company_name, error}`, `error` being null, `not_found`, `timeout`, `blocked`
+(the ATS refused this server) or `upstream_error`. The api calls the ATS public posting API itself
+(fixed hosts, org checked against the slug pattern first, no redirect off the host, 5 s for the
+whole exchange, one retry on a connection error), caches found and not found answers for 10
+minutes in the process, and allows 10 checks per user per minute (429 with Retry-After).
+
 ## Jobs import, list and files
 
 Harald's `../data` (`jobs.csv` and `jobs/<id>/`: posting.txt, cv.pdf, letter.pdf, cv.json,
