@@ -41,6 +41,10 @@
 #                                  list the account's fits that differ from the computed ones
 #                                  (set by hand in the CSV); a dry run unless --apply, which
 #                                  marks them so no rescore replaces them (app.jobs.cli)
+#   ./deploy.sh runner install|status|remove
+#                                  the self-hosted GitHub Actions runner on the Jetson (ops/runner/):
+#                                  a container with the host Docker socket, registered to the repo
+#                                  with labels self-hosted, jetson, arm64; tokens from gh on the Mac
 #
 # The job folder holding profile/, engine/ and data/ is the parent of this repository, or
 # JOBAPP_SOURCE_DIR. Both imports convert first, so a bad source fails before any network call.
@@ -121,6 +125,11 @@ ssh_master() {
 }
 
 cleanup() {
+  if [[ -n "${LOCK_PID:-}" ]]; then
+    # Closing the FIFO ends the remote `cat`, which releases the Jetson's deploy lock.
+    exec 8>&- || true
+    wait "$LOCK_PID" 2>/dev/null || true
+  fi
   if [[ -n "$CTL_DIR" ]]; then
     ssh "${SSH_OPTS[@]}" -O exit "$HOST" >/dev/null 2>&1 || true
     rm -rf "$CTL_DIR"
@@ -151,6 +160,33 @@ require_deployed() {
 }
 
 # --- deploy steps -------------------------------------------------------------------------
+# remote_lock: hold flock on <BACKUP_DIR>/.deploy.lock on the Jetson for the rest of this run. It
+# is the lock .github/workflows/deploy.yml takes on the self-hosted runner, so a deploy from this
+# Mac and one from GitHub never rsync or compose at the same time. A background ssh holds it while
+# its stdin, a FIFO kept open on fd 8, stays open; cleanup closes fd 8 and the lock goes.
+remote_lock() {
+  step "deploy lock on $HOST"
+  local bdir lock fifo="$CTL_DIR/lock.in" out="$CTL_DIR/lock.out" deadline
+  # shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
+  bdir="$(setting BACKUP_DIR '~/jobapp-backups')"
+  bdir="${bdir#\~/}"
+  lock="$(printf '%q' "$bdir/.deploy.lock")"
+  mkfifo "$fifo"
+  remote "mkdir -p $(printf '%q' "$bdir") && exec 9>>$lock && { flock -n 9 || { echo busy; flock -w 900 9; }; } &&
+    echo locked && cat >/dev/null" <"$fifo" >"$out" 2>&1 &
+  LOCK_PID=$!
+  exec 8>"$fifo"
+  deadline=$((SECONDS + 960))
+  until grep -q '^locked' "$out" 2>/dev/null; do
+    kill -0 "$LOCK_PID" 2>/dev/null || die "could not take the deploy lock on $HOST: $(cat "$out" 2>/dev/null)"
+    ((SECONDS < deadline)) || die "the deploy lock on $HOST stayed busy for 16 minutes"
+    sleep 1
+  done
+  if grep -q '^busy' "$out"; then
+    info "waited for another deploy (GitHub or another Mac) to finish"
+  fi
+  info "held: $bdir/.deploy.lock"
+}
 TIMES=()
 record() { # record <label> <start SECONDS>: keep and print the duration of one phase
   TIMES+=("$1: $((SECONDS - $2))s")
@@ -447,6 +483,7 @@ cmd_deploy() {
   take_lock
   ssh_master
   preflight
+  remote_lock
   local start=$SECONDS
   sync_tree
   record rsync "$start"
@@ -1008,6 +1045,160 @@ cmd_backup_schedule() {
   esac
 }
 
+# --- self-hosted GitHub Actions runner (ops/runner/) ----------------------------------------
+# The official runner in a container on the Jetson, no sudo: it talks to the host Docker daemon
+# through its socket and sees ~/jobapp and ~/jobapp-backups at the same paths, so the deploy
+# workflow (.github/workflows/deploy.yml) runs docker compose there exactly as this script does.
+# Registration and removal tokens come from `gh api` on this Mac, go to the container on stdin and
+# are never written anywhere. Docker socket access makes the runner root-equivalent on the Jetson
+# (README, Continuous delivery).
+RUNNER_REPO="$(setting JOBAPP_RUNNER_REPO GoldLegendW80/jobapp)"
+RUNNER_NAME="$(setting JOBAPP_RUNNER_NAME jetson)"
+RUNNER_LABELS="jetson,arm64" # GitHub adds self-hosted, Linux and ARM64 itself
+RUNNER_CONTAINER=jobapp-runner
+RUNNER_VOLUME=jobapp-runner
+RUNNER_MEM=768m
+
+runner_version() { # the RUNNER_VERSION pinned in ops/runner/Dockerfile
+  sed -n 's/^ARG RUNNER_VERSION=//p' "$ROOT/ops/runner/Dockerfile" | head -n 1
+}
+
+runner_checks() { # settings and local tools, before any network call
+  [[ "$RUNNER_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "JOBAPP_RUNNER_REPO must be owner/name, got '$RUNNER_REPO'"
+  [[ "$RUNNER_NAME" =~ ^[A-Za-z0-9_.-]+$ ]] || die "JOBAPP_RUNNER_NAME may only hold letters, digits, . _ and -: '$RUNNER_NAME'"
+  [[ "$RDIR" =~ ^[A-Za-z0-9._-]+$ ]] || die "the runner needs DEPLOY_DIR to be a folder directly in the Jetson home, got '$RDIR'"
+  [[ "$BDIR" =~ ^[A-Za-z0-9._-]+$ ]] || die "the runner needs BACKUP_DIR to be a folder directly in the Jetson home, got '$BDIR'"
+  command -v gh >/dev/null || die "gh is needed on this Mac for the runner tokens"
+  [[ -n "$(runner_version)" ]] || die "ops/runner/Dockerfile pins no RUNNER_VERSION"
+}
+
+runner_github() { # runner_github: "<id> <status> <busy> <labels>" of RUNNER_NAME on GitHub, or nothing
+  gh api "repos/$RUNNER_REPO/actions/runners" --paginate \
+    --jq ".runners[] | select(.name == \"$RUNNER_NAME\") | \"\(.id) \(.status) \(.busy) \([.labels[].name] | join(\",\"))\"" |
+    head -n 1
+}
+
+# runner_opts: the docker run options shared by configure, run and remove, built from the Jetson
+# user's facts (name, uid, gid, home, docker group); each value quoted for the remote shell.
+runner_opts() {
+  local facts user uid gid home dgid
+  # shellcheck disable=SC2016 # expanded by the remote shell
+  facts="$(remote 'id -un; id -u; id -g; printf "%s\n" "$HOME"; stat -c %g /var/run/docker.sock')"
+  {
+    read -r user
+    read -r uid
+    read -r gid
+    read -r home
+    read -r dgid
+  } <<<"$facts"
+  [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ && "$dgid" =~ ^[0-9]+$ && "$home" == /* ]] ||
+    die "could not read the Jetson user's ids and home"
+  RUNNER_USER="$user" RUNNER_UID="$uid" RUNNER_GID="$gid"
+  RUNNER_IMAGE="jobapp-runner:$(runner_version)"
+  RUNNER_OPTS="--network host --group-add $dgid"
+  RUNNER_OPTS+=" -v /var/run/docker.sock:/var/run/docker.sock"
+  RUNNER_OPTS+=" -v /usr/bin/docker:/usr/bin/docker:ro"
+  RUNNER_OPTS+=" -v /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro"
+  RUNNER_OPTS+=" -v $RUNNER_VOLUME:$(printf '%q' "$home/actions-runner")"
+  RUNNER_OPTS+=" -v $(printf '%q' "$home/$RDIR:$home/$RDIR")"
+  RUNNER_OPTS+=" -v $(printf '%q' "$home/$BDIR:$home/$BDIR")"
+  RUNNER_OPTS+=" -e JOBAPP_DIR=$(printf '%q' "$home/$RDIR") -e BACKUP_DIR=$(printf '%q' "$home/$BDIR")"
+  RUNNER_OPTS+=" -e RUNNER_URL=$(printf '%q' "https://github.com/$RUNNER_REPO")"
+  RUNNER_OPTS+=" -e RUNNER_NAME=$(printf '%q' "$RUNNER_NAME") -e RUNNER_LABELS=$RUNNER_LABELS"
+}
+
+runner_install() {
+  step "runner image on $HOST"
+  # The two files of ops/runner as a tar context on stdin: nothing copied to the Jetson's disk.
+  # Plain ustar: macOS's bsdtar otherwise adds pax headers for extended attributes, which docker
+  # build does not read as a tar and parses as a Dockerfile.
+  local tar_opts=(--format ustar)
+  tar --version 2>/dev/null | grep -q bsdtar && tar_opts+=(--no-xattrs --no-mac-metadata --no-acls)
+  COPYFILE_DISABLE=1 tar "${tar_opts[@]}" -C "$ROOT/ops/runner" -cf - Dockerfile entrypoint.sh job-guard.sh |
+    remote "docker build -q --build-arg RUNNER_USER=$(printf '%q' "$RUNNER_USER") --build-arg RUNNER_UID=$RUNNER_UID --build-arg RUNNER_GID=$RUNNER_GID -t $RUNNER_IMAGE -" >/dev/null ||
+    die "docker build of $RUNNER_IMAGE failed on $HOST"
+  info "$RUNNER_IMAGE built (arm64, ubuntu 22.04, actions runner $(runner_version))"
+  remote "mkdir -p $RDIR_Q && umask 077 && mkdir -p $(printf '%q' "$BDIR")"
+
+  step "registration as $RUNNER_NAME on $RUNNER_REPO"
+  if remote "docker run --rm --entrypoint test $RUNNER_OPTS $RUNNER_IMAGE -f actions-runner/.runner" 2>/dev/null &&
+    [[ -n "$(runner_github)" ]]; then
+    info "already registered (volume $RUNNER_VOLUME kept); ./deploy.sh runner remove first to register again"
+  else
+    local token
+    token="$(gh api -X POST "repos/$RUNNER_REPO/actions/runners/registration-token" --jq .token)" ||
+      die "gh could not create a registration token (needs admin rights on $RUNNER_REPO)"
+    remote "docker rm -f $RUNNER_CONTAINER >/dev/null 2>&1; docker run --rm -i $RUNNER_OPTS $RUNNER_IMAGE configure" <<<"$token" ||
+      die "registration failed"
+    token=""
+    info "registered"
+  fi
+
+  step "container $RUNNER_CONTAINER (restart unless-stopped, $RUNNER_MEM)"
+  remote "docker rm -f $RUNNER_CONTAINER >/dev/null 2>&1; docker run -d --name $RUNNER_CONTAINER --restart unless-stopped \
+    --memory $RUNNER_MEM --log-opt max-size=10m --log-opt max-file=3 --label jobapp.role=runner \
+    $RUNNER_OPTS $RUNNER_IMAGE run" >/dev/null || die "the runner container did not start"
+  local deadline=$((SECONDS + 90)) state=""
+  while ((SECONDS < deadline)); do
+    state="$(runner_github)"
+    [[ "$state" == *" online "* ]] && break
+    sleep 3
+  done
+  [[ "$state" == *" online "* ]] || die "$RUNNER_NAME is not online on GitHub after 90s: ${state:-not listed}; see docker logs $RUNNER_CONTAINER on $HOST"
+  info "online on GitHub: ${state#* }"
+}
+
+runner_status() {
+  step "runner $RUNNER_NAME"
+  local container github
+  container="$(remote "docker inspect -f '{{.State.Status}} since {{.State.StartedAt}}, restart {{.HostConfig.RestartPolicy.Name}}, image {{.Config.Image}}' $RUNNER_CONTAINER" 2>/dev/null || true)"
+  info "container on $HOST: ${container:-none}"
+  github="$(runner_github || true)"
+  if [[ -n "$github" ]]; then
+    local _id state busy labels
+    read -r _id state busy labels <<<"$github"
+    info "GitHub: $state, busy $busy, labels $labels"
+  else
+    info "GitHub: not registered on $RUNNER_REPO"
+  fi
+  [[ "$container" == running* && "$github" == *" online "* ]]
+}
+
+runner_remove() {
+  step "unregister $RUNNER_NAME from $RUNNER_REPO"
+  remote "docker rm -f $RUNNER_CONTAINER >/dev/null 2>&1 || true"
+  local token removed=0
+  if remote "docker image inspect $RUNNER_IMAGE >/dev/null 2>&1"; then
+    token="$(gh api -X POST "repos/$RUNNER_REPO/actions/runners/remove-token" --jq .token)" ||
+      die "gh could not create a removal token"
+    remote "docker run --rm -i $RUNNER_OPTS $RUNNER_IMAGE remove" <<<"$token" && removed=1
+    token=""
+  fi
+  if ((removed == 0)); then
+    # No image or no local registration left: delete the GitHub side by id.
+    local id
+    id="$(runner_github | cut -d' ' -f1)"
+    [[ -z "$id" ]] || gh api -X DELETE "repos/$RUNNER_REPO/actions/runners/$id" || die "could not delete runner $id on GitHub"
+  fi
+  remote "docker volume rm $RUNNER_VOLUME >/dev/null 2>&1 || true"
+  [[ -z "$(runner_github)" ]] || die "$RUNNER_NAME is still listed on GitHub"
+  info "container and volume $RUNNER_VOLUME removed, $RUNNER_NAME no longer listed; image $RUNNER_IMAGE kept"
+}
+
+cmd_runner() {
+  local action="${1:-}"
+  [[ $# -eq 1 && "$action" =~ ^(install|status|remove)$ ]] || die "usage: ./deploy.sh runner install|status|remove"
+  runner_checks
+  ssh_master
+  require_remote
+  runner_opts
+  case "$action" in
+    install) runner_install ;;
+    status) runner_status ;;
+    remove) runner_remove ;;
+  esac
+}
+
 main() {
   local cmd="${1:-deploy}"
   [[ $# -eq 0 ]] || shift
@@ -1027,6 +1218,7 @@ main() {
     admin) cmd_admin "$@" ;;
     profile) cmd_profile "$@" ;;
     jobs) cmd_jobs "$@" ;;
+    runner) cmd_runner "$@" ;;
     -h | --help | help) usage ;;
     *)
       usage >&2

@@ -1,0 +1,203 @@
+# Continuous delivery to the Jetson (SPEC-platform.md, Repository and automation; CONTRIBUTING.md).
+#
+# Automatic: once CI has finished green for a push to main, on the self-hosted runner installed on
+# the Jetson by ./deploy.sh runner install (labels self-hosted, jetson). The runner only connects
+# out to GitHub; no port is opened. Manual: `gh workflow run deploy.yml -f ref=<branch or sha>`
+# (default main). The workflow definition always comes from main: the runner's job-started hook
+# (ops/runner/job-guard.sh) refuses every job that is not this file on refs/heads/main, run by
+# workflow_run or workflow_dispatch. A dispatched branch is deployed as code, never as workflow.
+#
+# The same steps as ./deploy.sh, run on the Jetson itself, under the Jetson's deploy lock
+# (flock on ~/jobapp-backups/.deploy.lock, shared with ./deploy.sh): rsync of the commit into
+# ~/jobapp with .rsyncignore (the .env there is never touched), build, a database backup,
+# compose up --wait, migrations, tests/jetson_smoke.sh in quick mode, the public URL in the job
+# summary. Images are built before anything restarts, so a failed build leaves the running stack
+# as it was; a failed up or migration puts the previous images back (tagged :previous before the
+# build) and starts them again. A migration runs in one transaction and rolls back on failure;
+# for data, the predeploy dump named in the log restores with ops/db.sh restore-live.
+#
+# Security: the runner has the host Docker socket, which is root on the Jetson. Only this private
+# repository's deploy.yml from main reaches it; it must never be offered to forks or public
+# repositories.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit to deploy (the workflow itself always comes from main)
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+# One deploy per ref at a time and a started deploy always finishes. Groups are per ref, so a
+# branch dispatch never replaces a pending main deploy (GitHub keeps one pending run per group);
+# deploys of different refs are serialized on the Jetson by the deploy lock.
+concurrency:
+  group: deploy-jetson-${{ inputs.ref || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy to the Jetson
+    # workflow_run fires for every completed CI run on main: deploy only a green push.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: [self-hosted, jetson]
+    timeout-minutes: 45
+    env:
+      TARGET: ${{ github.event.workflow_run.head_sha || inputs.ref }}
+      COMPOSE: docker compose -f compose.yml --profile tunnel
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TARGET }}
+          persist-credentials: false
+          clean: true
+
+      - name: Preflight
+        run: |
+          set -euo pipefail
+          # JOBAPP_DIR and BACKUP_DIR are set in the runner container by ./deploy.sh runner install.
+          app="${JOBAPP_DIR:-$HOME/jobapp}"
+          backups="${BACKUP_DIR:-$HOME/jobapp-backups}"
+          commit="$(git rev-parse HEAD)"
+          {
+            echo "APP=$app"
+            echo "BACKUPS=$backups"
+            echo "COMMIT=$commit"
+          } >> "$GITHUB_ENV"
+          [[ "$(uname -m)" == "aarch64" ]] || { echo "::error::not on the Jetson"; exit 1; }
+          [[ -f "$app/.env" ]] || { echo "::error::$app/.env is missing: the first deploy is ./deploy.sh from the Mac"; exit 1; }
+          docker info --format 'docker {{.ServerVersion}}'
+          docker compose version
+          free_gb="$(df -Pk "$HOME" | awk 'NR==2 {print int($4 / 1024 / 1024)}')"
+          echo "disk: ${free_gb}G free"
+          ((free_gb > 5)) || { echo "::error::only ${free_gb}G free on the Jetson"; exit 1; }
+          echo "target: $TARGET, commit $commit ($(git log -1 --format=%s))"
+          echo "previous: $(cat "$app/.deployed-commit" 2>/dev/null || echo unknown)"
+
+      - name: Deploy under the Jetson deploy lock
+        run: |
+          set -euo pipefail
+          mkdir -p "$BACKUPS"
+          exec 9>"$BACKUPS/.deploy.lock"
+          echo "waiting for the deploy lock (shared with ./deploy.sh)"
+          flock -w 900 9 || { echo "::error::another deploy held the lock for 15 minutes"; exit 1; }
+
+          echo "::group::sync ~/jobapp from $COMMIT"
+          # deploy.sh sync_tree rules: .rsyncignore excludes .env* and .deployed-commit, so
+          # --delete never removes them.
+          rsync -a --delete --exclude-from=.rsyncignore ./ "$APP/"
+          echo "files: $(find "$APP" -type f | wc -l)"
+          echo "::endgroup::"
+          cd "$APP"
+
+          echo "::group::build (the running stack is untouched until this succeeds)"
+          for img in jobapp-api jobapp-caddy; do
+            if docker image inspect "$img:latest" >/dev/null 2>&1; then
+              docker tag "$img:latest" "$img:previous"
+            fi
+          done
+          for svc in api caddy; do
+            start=$SECONDS
+            $COMPOSE --progress=plain build "$svc"
+            echo "build $svc: $((SECONDS - start))s"
+          done
+          echo "::endgroup::"
+
+          echo "::group::backup before migrations"
+          dump=""
+          if docker volume inspect jobapp_pgdata >/dev/null 2>&1; then
+            # The database exists: back it up even if db is stopped (start it first).
+            [[ -n "$($COMPOSE ps -q --status running db)" ]] || $COMPOSE up -d --wait db
+            # Its own folder and retention, so deploy dumps never push the nightly ones out.
+            out="$(BACKUP_DIR="$BACKUPS/deploys" BACKUP_KEEP=10 bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}")"
+            echo "$out"
+            dump="$(sed -n 's/^backup=//p' <<<"$out" | tail -n 1)"
+            [[ -n "$dump" ]] || { echo "::error::ops/db.sh reported no backup file"; exit 1; }
+          else
+            echo "no jobapp_pgdata volume: first start, nothing to back up"
+          fi
+          echo "::endgroup::"
+
+          rollback() { # the previous images back under :latest, started again
+            echo "::error::$1: rolling back to the previous images"
+            for img in jobapp-api jobapp-caddy; do
+              if docker image inspect "$img:previous" >/dev/null 2>&1; then
+                docker tag "$img:previous" "$img:latest"
+              fi
+            done
+            $COMPOSE up -d --remove-orphans --wait --wait-timeout 180 || true
+            $COMPOSE ps -a || true
+            if [[ -n "$dump" ]]; then
+              echo "::warning::database dump taken before this deploy: $dump (restore: BACKUP_DIR=$BACKUPS/deploys bash ops/db.sh restore-live $dump)"
+            fi
+            exit 1
+          }
+
+          echo "::group::compose up --wait"
+          $COMPOSE up -d --remove-orphans --wait --wait-timeout 180 || rollback "compose up did not become healthy"
+          echo "::endgroup::"
+
+          echo "::group::migrations"
+          $COMPOSE exec -T api alembic upgrade head || rollback "alembic upgrade head failed"
+          echo "alembic current: $($COMPOSE exec -T api alembic current 2>/dev/null | tr -d '\r')"
+          echo "::endgroup::"
+
+          echo "::group::smoke (tests/jetson_smoke.sh, quick mode, on the Jetson)"
+          cd "$GITHUB_WORKSPACE"
+          DEPLOY_HOST=local JETSON_SMOKE_FULL=0 tests/jetson_smoke.sh
+          echo "::endgroup::"
+
+          # Only now: the commit is running and passed the smoke.
+          echo "$COMMIT" > "$APP/.deployed-commit"
+          echo "deployed $COMMIT"
+
+      - name: Public URL
+        working-directory: ${{ env.APP }}
+        run: |
+          set -euo pipefail
+          id="$($COMPOSE ps -q cloudflared)"
+          url=""
+          for _ in $(seq 1 15); do
+            started="$(docker inspect -f '{{.State.StartedAt}}' "$id")"
+            url="$(docker logs --since "$started" "$id" 2>&1 |
+              grep -oE 'https://[a-z0-9]+(-[a-z0-9]+)*\.trycloudflare\.com' | grep -v '^https://api\.' | tail -n 1 || true)"
+            [[ -n "$url" ]] && break
+            sleep 2
+          done
+          [[ -n "$url" ]] || { echo "::error::cloudflared logged no trycloudflare URL"; exit 1; }
+          public="no answer yet (a fresh hostname can take a minute)"
+          for delay in 2 4 8 15 15 15; do
+            if [[ "$(curl -s --max-time 10 "$url/api/health" || true)" == '{"status":"ok"}' ]]; then
+              public="answers /api/health"
+              break
+            fi
+            sleep "$delay"
+          done
+          {
+            echo "### Deployed ${COMMIT:0:12} to the Jetson"
+            echo
+            echo "- Public URL: $url ($public)"
+            echo "- Target: $TARGET, trigger: $GITHUB_EVENT_NAME"
+            echo "- alembic: $($COMPOSE exec -T api alembic current 2>/dev/null | tr -d '\r')"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$url"
+
+      - name: State on failure
+        if: failure()
+        working-directory: ${{ env.APP }}
+        run: |
+          $COMPOSE ps -a || true
+          $COMPOSE logs --no-color --tail 80 || true
+          ls -1t "$BACKUPS/deploys" 2>/dev/null | head -n 3 | sed 's/^/predeploy dump: /' || true
