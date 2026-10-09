@@ -371,3 +371,99 @@ export function checkBoard(
     validate: (body) => boardCheckSchema.parse(body),
   });
 }
+
+// --- history ---------------------------------------------------------------------------------
+
+export const revisionSummarySchema = z.object({
+  revision: z.number().int().positive(),
+  section: z.enum(SECTIONS),
+  created_at: z.string(),
+});
+export type RevisionSummary = z.infer<typeof revisionSummarySchema>;
+
+export const revisionPageSchema = z.object({
+  items: z.array(revisionSummarySchema),
+  next_before: z.number().int().positive().nullable(),
+});
+export type RevisionPage = z.infer<typeof revisionPageSchema>;
+
+export const revisionSchema = revisionSummarySchema.extend({
+  data: z.record(z.string(), z.unknown()),
+});
+export interface Revision extends RevisionSummary {
+  /** The section as saved then, merged over its empty form like a loaded profile. */
+  data: SectionData[SectionName];
+}
+
+/** Revisions per page of the History drawer. */
+export const REVISIONS_PAGE = 20;
+
+export const revisionsKey = (section: SectionName) =>
+  ["profile", "revisions", section] as const;
+export const revisionKey = (revision: number) =>
+  ["profile", "revision", revision] as const;
+
+/** One page of a section's saves, newest first; `before` (exclusive) pages back. */
+export function listRevisions(
+  section: SectionName,
+  before?: number,
+  signal?: AbortSignal,
+): Promise<RevisionPage> {
+  const query = new URLSearchParams({
+    section,
+    limit: String(REVISIONS_PAGE),
+  });
+  if (before !== undefined) query.set("before", String(before));
+  return request(`/profile/revisions?${query.toString()}`, {
+    signal,
+    validate: (body) => revisionPageSchema.parse(body),
+  });
+}
+
+export function getRevision(
+  revision: number,
+  signal?: AbortSignal,
+): Promise<Revision> {
+  return request(`/profile/revisions/${String(revision)}`, {
+    signal,
+    validate: (body) => {
+      const parsed = revisionSchema.parse(body);
+      return {
+        ...parsed,
+        data: {
+          ...EMPTY[parsed.section],
+          ...parsed.data,
+        },
+      };
+    },
+  });
+}
+
+// --- export and import -----------------------------------------------------------------------
+
+/** What the api reads (schemas.py EXPORT_FORMAT, EXPORT_VERSION, IMPORT_MAX_BYTES). */
+export const EXPORT_FORMAT = "jobapp-profile";
+export const EXPORT_VERSION = 1;
+export const IMPORT_MAX_BYTES = 2 * 1024 * 1024;
+
+/** The export file as the api wrote it (GET /api/profile/export), decoded. */
+export function exportProfile(): Promise<Record<string, unknown>> {
+  return request("/profile/export", {
+    // With a 2 MB photo inside, a phone link needs longer than the default.
+    timeoutMs: 30_000,
+    validate: (body) => z.record(z.string(), z.unknown()).parse(body),
+  });
+}
+
+/** Replace the whole profile with an export file, based on the revision the page loaded. */
+export function importProfile(
+  document: Record<string, unknown>,
+  baseRevision: number,
+): Promise<Profile> {
+  return request("/profile/import", {
+    method: "POST",
+    body: { ...document, base_revision: baseRevision },
+    timeoutMs: 30_000,
+    validate: (body) => toProfile(profileSchema.parse(body)),
+  });
+}
