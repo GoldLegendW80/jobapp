@@ -10,6 +10,7 @@ import {
   compileTerms,
   escapeTerm,
   findMatches,
+  globalFlags,
   hasNestedQuantifier,
   matches,
   pyToJs,
@@ -193,6 +194,59 @@ describe("termProblem", () => {
     expect(termProblem("(a+)+", true)).toMatch(/^Nested quantifiers/);
     expect(termProblem("(abc", true)).toMatch(/^Invalid regular expression: /);
     expect(termProblem("a++", true)).toBeUndefined(); // the server decides
+  });
+});
+
+describe("global inline flags (refused, as in schemas.py check_regex)", () => {
+  it.each([
+    ["(?i)llm", 0, "(?i)"],
+    ["(?m)^ai$", 0, "(?m)"],
+    ["(?s)a.b", 0, "(?s)"],
+    ["(?x) a b", 0, "(?x)"],
+    ["(?a)\\w", 0, "(?a)"],
+    ["(?u)\\w", 0, "(?u)"],
+    ["(?imsx)x", 0, "(?imsx)"],
+    ["(?L)x", 0, "(?L)"],
+    ["ab(?i)c", 2, "(?i)"],
+    ["(?:(?i)x)", 3, "(?i)"],
+    ["(x)|(?s)y", 4, "(?s)"],
+    ["[a](?m)", 3, "(?m)"],
+    ["\\((?i)", 2, "(?i)"],
+  ])("%s is refused at %i", (pattern, index, flags) => {
+    expect(globalFlags(pattern)).toEqual({ index, flags });
+    const problem = termProblem(pattern, true);
+    expect(problem).toBe(
+      `Inline flags such as ${flags} are not allowed (position ${index}). ` +
+        "Matching is already case-insensitive; to apply a flag to part of the term, " +
+        "scope it as a group such as (?s:...).",
+    );
+    expect(problem).not.toMatch(/ - |\u2014|\u2013/);
+  });
+
+  it.each([
+    "(?i:llm)",
+    "(?-i:LLM)",
+    "(?i-m:x)",
+    "(?s:a.b)",
+    "(?x: a b )",
+    "[(?i)]",
+    "[]?(i)]x",
+    "\\(?i\\)",
+    "(?:x)",
+    "(?#comment)a",
+    "(?P<name>a)(?P=name)",
+  ])("%s is not a global flag", (pattern) => {
+    expect(globalFlags(pattern)).toBeUndefined();
+    expect(termProblem(pattern, true)).toBeUndefined();
+  });
+
+  it("leaves plain terms alone", () => {
+    expect(termProblem("(?i)", false)).toBeUndefined();
+  });
+
+  it("checks the flag before compiling, so the message is the clear one", () => {
+    // JavaScript would reject "a(?i)b" with a cryptic "invalid group".
+    expect(regexProblem("a(?i)b")).toMatch(/^Inline flags such as \(\?i\)/);
   });
 });
 

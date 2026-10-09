@@ -247,13 +247,53 @@ def has_nested_quantifier(pattern: str) -> bool:
     return False
 
 
+_GLOBAL_FLAGS = re.compile(r"\(\?[aiLmsux]+\)")
+
+
+def global_flags(pattern: str) -> re.Match[str] | None:
+    """The first global inline flag group such as (?i), (?m) or (?sx), outside escapes
+    and character classes, or None. Scoped groups such as (?i:...) or (?-i:...) are not global.
+    The matcher wraps every advanced term in (?:...) and joins the list with |, and Python only
+    accepts global flags at the very start of a whole pattern, so a term holding one would pass
+    alone and break the list (and (?x) would change how every other term reads)."""
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "\\":
+            i += 2
+            continue
+        if char == "[":  # skip the class; a `]` right after `[` or `[^` is a literal
+            i += 1
+            if pattern[i : i + 1] == "^":
+                i += 1
+            if pattern[i : i + 1] == "]":
+                i += 1
+            while i < len(pattern) and pattern[i] != "]":
+                i += 2 if pattern[i] == "\\" else 1
+            i += 1
+            continue
+        if char == "(" and (found := _GLOBAL_FLAGS.match(pattern, i)):
+            return found
+        i += 1
+    return None
+
+
 def check_regex(pattern: str) -> str:
-    """Compile an advanced term as the matcher will (case-insensitive). Raises ValueError with
-    the error position when it does not compile, is too long, or nests quantifiers."""
+    """Compile an advanced term as the matcher will (case-insensitive, wrapped in a group so the
+    terms of a list join). Raises ValueError with the error position when it is too long, holds a
+    global inline flag, does not compile, or nests quantifiers."""
     if len(pattern) > REGEX_MAX:
         raise ValueError(f"regular expression longer than {REGEX_MAX} characters")
+    flags = global_flags(pattern)
+    if flags is not None:
+        raise ValueError(
+            f"invalid regular expression at position {flags.start()}: inline flags such as "
+            f"{flags.group()} are not allowed. Matching is already case-insensitive; to apply a "
+            "flag to part of the term, scope it as a group such as (?s:...)"
+        )
     try:
         re.compile(pattern, re.IGNORECASE)
+        re.compile(f"(?:{pattern})", re.IGNORECASE)  # as compile_terms joins it
     except re.error as exc:
         where = f" at position {exc.pos}" if exc.pos is not None else ""
         raise ValueError(f"invalid regular expression{where}: {exc.msg}") from None

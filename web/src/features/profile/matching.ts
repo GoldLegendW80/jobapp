@@ -367,14 +367,60 @@ export function hasNestedQuantifier(pattern: string): boolean {
   return false;
 }
 
+const GLOBAL_FLAGS = /\(\?[aiLmsux]+\)/y;
+
+/**
+ * The first global inline flag group such as (?i), (?m) or (?sx), outside escapes and character
+ * classes, with its position, or undefined. Scoped groups such as (?i:...) are not global. A port
+ * of schemas.py `global_flags`: the server wraps each advanced term in (?:...) and joins the list,
+ * and Python accepts a global flag only at the start of the whole pattern.
+ */
+export function globalFlags(
+  pattern: string,
+): { index: number; flags: string } | undefined {
+  let i = 0;
+  while (i < pattern.length) {
+    const char = pattern.charAt(i);
+    if (char === "\\") {
+      i += 2;
+      continue;
+    }
+    if (char === "[") {
+      i += 1;
+      if (pattern.charAt(i) === "^") i += 1;
+      if (pattern.charAt(i) === "]") i += 1;
+      while (i < pattern.length && pattern.charAt(i) !== "]") {
+        i += pattern.charAt(i) === "\\" ? 2 : 1;
+      }
+      i += 1;
+      continue;
+    }
+    if (char === "(") {
+      GLOBAL_FLAGS.lastIndex = i;
+      const found = GLOBAL_FLAGS.exec(pattern);
+      if (found) return { index: i, flags: found[0] };
+    }
+    i += 1;
+  }
+  return undefined;
+}
+
 /**
  * Why an advanced term would be refused on save, or undefined when the browser sees no problem
  * (the server stays the judge, and reports the exact position). Same order as `check_regex`:
- * length, compiling, nested quantifiers.
+ * length, global inline flags, compiling, nested quantifiers.
  */
 export function regexProblem(pattern: string): string | undefined {
   if (pattern.length > REGEX_MAX) {
     return `Regular expression longer than ${REGEX_MAX} characters.`;
+  }
+  const flags = globalFlags(pattern);
+  if (flags !== undefined) {
+    return (
+      `Inline flags such as ${flags.flags} are not allowed (position ${flags.index}). ` +
+      "Matching is already case-insensitive; to apply a flag to part of the term, " +
+      "scope it as a group such as (?s:...)."
+    );
   }
   const translated = pyToJs(pattern);
   if (translated !== null) {
