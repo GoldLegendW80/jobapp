@@ -497,8 +497,15 @@ typed() { # typed <answer> <cmd...>: run cmd against the fake in a pseudo termin
     sleep 2
     printf '%s\n' "$answer"
     sleep 1
-  ) | script -q /dev/null env PATH="$WORK/bin2:$PATH" FAKE_CALLS="$WORK/calls2" DEPLOY_HOST=fakejetson \
+  ) | in_pty env PATH="$WORK/bin2:$PATH" FAKE_CALLS="$WORK/calls2" DEPLOY_HOST=fakejetson \
     "$@" >"$WORK/out" 2>&1 || true
+}
+in_pty() { # in_pty <cmd...>: run cmd in a pseudo terminal, BSD script (macOS) or util-linux (CI)
+  if script --version 2>/dev/null | grep -q util-linux; then
+    script -q -e -c "$(printf '%q ' "$@")" /dev/null
+  else
+    script -q /dev/null "$@"
+  fi
 }
 : >"$WORK/calls2"
 typed "restore jobapp" ./deploy.sh restore latest --into-live
