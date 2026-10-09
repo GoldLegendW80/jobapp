@@ -17,7 +17,7 @@ Spec: [SPEC-jobs.md](../../SPEC-jobs.md). Depends on profile (matching rules in 
 **Acceptance:** importer maps every CSV column and file; POST /api/jobs/import idempotent; `./deploy.sh jobs import <email>`; GET list with filters, counts, histogram, cursor pagination; GET detail; GET file download; isolation.
 **Files:** `api/app/jobs/{importer,router,schemas}.py`, `deploy.sh`, tests. **Scope:** M
 
-## J3: Jobs dashboard and detail pages
+## J3: Jobs dashboard and detail pages (done 2026-10-09; PDF preview uses a same-origin blob, Caddy keeps frame-ancestors none)
 **Acceptance:** `/jobs` home with KPIs, histogram, filter chips in the URL, virtualised table and mobile cards; `/jobs/:id` with posting, fit, files with PDF preview, events.
 **Files:** `web/src/features/jobs/*`, routes. **Scope:** M
 
