@@ -1,14 +1,12 @@
-import { execFileSync } from "node:child_process";
-
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import {
   caddyUrl,
   clearAttempts,
+  cliImportProfile,
   cliLink,
   makeShots,
   newContext,
-  root,
   setPassword,
   watchErrors,
 } from "./stack";
@@ -35,6 +33,9 @@ async function shots(page: Page, name: string, fullPage = true) {
  *   E2E_CADDY_URL=http://127.0.0.1:8095 E2E_COMPOSE_PROJECT=jobapp-p5 \
  *     pnpm --dir web exec playwright test profile-editors.spec.ts
  *   docker compose -p jobapp-p5 -f compose.yml down -v
+ *
+ * On the Jetson it runs inside web/e2e/identity-all.config.ts (tests/e2e_jetson.sh): the CLI goes
+ * over ssh and the board check calls the ATS from the Jetson's api container.
  */
 test.describe.configure({ mode: "serial", timeout: 120_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
@@ -188,28 +189,7 @@ function fakeExport() {
 }
 
 function importProfile(email: string) {
-  return execFileSync(
-    "docker",
-    [
-      "compose",
-      "-p",
-      process.env.E2E_COMPOSE_PROJECT ?? "jobapp",
-      "-f",
-      "compose.yml",
-      "exec",
-      "-T",
-      "api",
-      "python",
-      "-m",
-      "app.profile.cli",
-      "import",
-      "--email",
-      email,
-      "--file",
-      "-",
-    ],
-    { cwd: root, encoding: "utf8", input: JSON.stringify(fakeExport()) },
-  );
+  return cliImportProfile(email, fakeExport());
 }
 
 const tab = (page: Page, name: string) =>
