@@ -20,6 +20,7 @@ import {
   type Search,
   type Skills,
   type TermList,
+  WEEKDAYS,
 } from "./api";
 import { fold, LINE_MAX, text, uniqueBy } from "./forms";
 import { cleanTerms, listProblems, termProblem } from "./matching";
@@ -311,6 +312,13 @@ export const searchSchema = z
         }),
       )
       .max(NEVER_APPLY_MAX, `Keep at most ${NEVER_APPLY_MAX} rules.`),
+    // Not edited here (Jobs owns it): carried through unchanged so a save never resets it.
+    sweep_schedule: z.object({
+      enabled: z.boolean(),
+      days: z.array(z.enum(WEEKDAYS)),
+      times: z.array(z.string()),
+      timezone: z.string(),
+    }),
   })
   .superRefine((values, ctx) => {
     uniqueBy(
@@ -343,6 +351,11 @@ export const toSearchForm = (search: Search): SearchForm => ({
     extra_exclude: toTermList(b.extra_exclude),
   })),
   never_apply: search.never_apply.map((value) => ({ value })),
+  sweep_schedule: {
+    ...search.sweep_schedule,
+    days: [...search.sweep_schedule.days],
+    times: [...search.sweep_schedule.times],
+  },
 });
 
 export const fromSearchForm = (values: SearchForm): Search => ({
@@ -363,4 +376,9 @@ export const fromSearchForm = (values: SearchForm): Search => ({
     extra_exclude: fromTermList(b.extra_exclude),
   })),
   never_apply: values.never_apply.map((r) => cleanLine(r.value)),
+  sweep_schedule: {
+    ...values.sweep_schedule,
+    days: [...values.sweep_schedule.days],
+    times: [...values.sweep_schedule.times],
+  },
 });

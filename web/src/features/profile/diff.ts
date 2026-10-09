@@ -175,6 +175,15 @@ export interface FieldRow {
   value: string;
 }
 
+/** Titles that depend on the path, checked before FIELD_TITLES. */
+const PATH_TITLES: Record<string, string> = {
+  sweep_schedule: "Automatic search",
+  "sweep_schedule.enabled": "On",
+  "sweep_schedule.days": "Days",
+  "sweep_schedule.times": "Times",
+  "sweep_schedule.timezone": "Time zone",
+};
+
 const titleOf = (key: string) =>
   FIELD_TITLES[key] ??
   key.charAt(0).toUpperCase() + key.slice(1).replaceAll("_", " ");
@@ -242,8 +251,10 @@ function walk(value: unknown, path: string, label: string, out: FieldRow[]) {
       });
       return;
     }
-    for (const [k, v] of Object.entries(value))
-      walk(v, path === "" ? k : `${path}.${k}`, join(label, titleOf(k)), out);
+    for (const [k, v] of Object.entries(value)) {
+      const child = path === "" ? k : `${path}.${k}`;
+      walk(v, child, join(label, PATH_TITLES[child] ?? titleOf(k)), out);
+    }
     return;
   }
   out.push({ path, label, value: text(value) });

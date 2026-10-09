@@ -110,6 +110,25 @@ export const CONTRACT_TYPES = [
 ] as const;
 export const REMOTE_STANCES = ["remote", "hybrid", "office", "any"] as const;
 
+export const WEEKDAYS = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+/** schemas.py SweepSchedule: off by default, every day at 06:17 Europe/Paris. */
+export interface SweepSchedule {
+  enabled: boolean;
+  days: Weekday[];
+  times: string[];
+  timezone: string;
+}
+
 export interface Board {
   company: string;
   ats: AtsName;
@@ -127,6 +146,8 @@ export interface Search {
   days: number;
   boards: Board[];
   never_apply: string[];
+  /** when the boards are swept automatically; edited in Jobs (J5), kept as is by this tab */
+  sweep_schedule: SweepSchedule;
 }
 
 export interface WorkAuthorization {
@@ -188,6 +209,12 @@ export const EMPTY: SectionData = {
     days: 30,
     boards: [],
     never_apply: [],
+    sweep_schedule: {
+      enabled: false,
+      days: [...WEEKDAYS],
+      times: ["06:17"],
+      timezone: "Europe/Paris",
+    },
   },
   answers: {
     work_authorization: [],

@@ -145,6 +145,20 @@ export function haraldLike(): SectionData {
         },
       ],
       never_apply: ["No cybersecurity roles."],
+      sweep_schedule: {
+        enabled: false,
+        days: [
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+          "sunday",
+        ],
+        times: ["06:17"],
+        timezone: "Europe/Paris",
+      },
     },
     answers: {
       work_authorization: [
@@ -501,6 +515,20 @@ const EMPTY_SECTIONS: Record<SectionName, unknown> = {
     days: 30,
     boards: [],
     never_apply: [],
+    sweep_schedule: {
+      enabled: false,
+      days: [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+      ],
+      times: ["06:17"],
+      timezone: "Europe/Paris",
+    },
   },
   answers: {
     work_authorization: [],

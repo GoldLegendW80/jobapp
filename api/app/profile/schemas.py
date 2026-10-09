@@ -51,9 +51,10 @@ import binascii
 import json
 import re
 import unicodedata
+import zoneinfo
 from collections.abc import Callable, Iterator
 from datetime import datetime
-from functools import partial
+from functools import lru_cache, partial
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -560,6 +561,50 @@ RemoteStance = Literal["remote", "hybrid", "office", "any"]
 Ats = Literal["ashby", "greenhouse", "lever"]
 
 
+WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+Weekday = Literal["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_HHMM = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+
+
+@lru_cache(maxsize=1)
+def _timezones() -> frozenset[str]:
+    return frozenset(zoneinfo.available_timezones())
+
+
+class SweepSchedule(_Section):
+    """When the boards are swept automatically: on these weekdays, at these local times (24 hour
+    HH:MM, 1 to 4), in this IANA time zone. Off by default."""
+
+    enabled: bool = False
+    days: Annotated[list[Weekday], Field(min_length=1, max_length=7)] = Field(
+        default_factory=lambda: list(WEEKDAYS)
+    )
+    times: Annotated[list[str], Field(min_length=1, max_length=4)] = Field(
+        default_factory=lambda: ["06:17"]
+    )
+    timezone: Annotated[str, StringConstraints(min_length=1, max_length=64)] = "Europe/Paris"
+
+    @field_validator("days")
+    @classmethod
+    def _unique_days(cls, value: list[str]) -> list[str]:
+        return _unique(value, str, "day")
+
+    @field_validator("times")
+    @classmethod
+    def _hhmm(cls, value: list[str]) -> list[str]:
+        for time_ in value:
+            if not _HHMM.match(time_):
+                raise ValueError(f"{time_[:10]!r} is not a time as HH:MM, 00:00 to 23:59")
+        return _unique(value, str, "time")
+
+    @field_validator("timezone")
+    @classmethod
+    def _iana(cls, value: str) -> str:
+        if value not in _timezones():
+            raise ValueError("must be an IANA time zone name such as Europe/Paris")
+        return value
+
+
 class Board(_Section):
     company: Line
     ats: Ats
@@ -578,6 +623,10 @@ class SearchSection(_Section):
     days: Annotated[StrictInt, Field(ge=1, le=365)] = 30
     boards: Annotated[list[Board], Field(max_length=300)] = Field(default_factory=list)
     never_apply: Annotated[list[Text(500)], Field(max_length=50)] = Field(default_factory=list)
+    # When the boards are swept automatically (jobs J5 schedules it and edits it next to Find
+    # jobs). Off unless the user turns it on; a section saved before this field existed reads as
+    # off.
+    sweep_schedule: SweepSchedule = Field(default_factory=lambda: SweepSchedule())
 
     @field_validator("contract_types")
     @classmethod

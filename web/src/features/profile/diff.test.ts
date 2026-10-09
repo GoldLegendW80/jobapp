@@ -177,6 +177,25 @@ describe("flattenSection", () => {
     });
   });
 
+  it("labels the automatic search apart from the posting age", () => {
+    const rows = flattenSection("search", haraldLike().search);
+    expect(rows).toContainEqual({
+      path: "days",
+      label: "Posting age (days)",
+      value: "30",
+    });
+    expect(rows).toContainEqual({
+      path: "sweep_schedule.days",
+      label: "Automatic search › Days",
+      value: "monday, tuesday, wednesday, thursday, friday, saturday, sunday",
+    });
+    expect(rows).toContainEqual({
+      path: "sweep_schedule.enabled",
+      label: "Automatic search › On",
+      value: "No",
+    });
+  });
+
   it("flattens answers with sponsorship yes, no and unknown", () => {
     const answers = haraldLike().answers;
     answers.work_authorization.push({
