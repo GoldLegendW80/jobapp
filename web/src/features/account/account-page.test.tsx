@@ -82,7 +82,7 @@ describe("account page", () => {
     account();
     const { location, user } = await (async () => {
       const utils = renderApp("/");
-      await screen.findByRole("heading", { name: /Welcome/ });
+      await screen.findByRole("heading", { level: 1, name: "Jobs" });
       return { ...utils, user: userEvent.setup() };
     })();
     await user.click(

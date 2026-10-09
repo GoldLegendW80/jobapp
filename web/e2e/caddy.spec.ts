@@ -52,8 +52,10 @@ function compose(...args: string[]) {
   execFileSync("docker", [...COMPOSE, ...args], { cwd: root, stdio: "ignore" });
 }
 
-const status = (page: Page) => page.getByRole("status");
-const retry = (page: Page) => page.getByRole("button", { name: "Retry" });
+const status = (page: Page) =>
+  page.getByRole("contentinfo").getByRole("status");
+const retry = (page: Page) =>
+  page.getByRole("button", { name: "Check the API again" });
 
 /** Console errors and uncaught page errors, for the whole test. */
 function watchErrors(page: Page) {
@@ -74,7 +76,7 @@ async function shot(page: Page, name: string) {
   });
 }
 
-// The health card lives on the protected home page: the session is faked here, everything else
+// The health status lives in the footer of the protected app: the session is faked here, everything else
 // (Caddy, the api, the database) is real. identity.spec.ts covers real sign in.
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/auth/me", (route) =>
@@ -88,6 +90,20 @@ test.beforeEach(async ({ page }) => {
         role: "admin",
         created_at: "2026-10-08T10:00:00Z",
         last_login_at: null,
+      }),
+    }),
+  );
+  // The home page is the jobs dashboard: an empty list, so only the health check is under test.
+  await page.route(/\/api\/jobs(\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [],
+        next_cursor: null,
+        total: 0,
+        counts_by_status: {},
+        fit_histogram: { buckets: [], unscored: 0 },
       }),
     }),
   );
@@ -144,7 +160,7 @@ test("database stopped, Retry shows the 503, database started, Retry recovers", 
   expect(unexpected).toEqual([]);
 });
 
-test("api stopped: the shell still loads and the card shows Caddy's 502", async ({
+test("api stopped: the shell still loads and the footer shows Caddy's 502", async ({
   page,
 }) => {
   compose("stop", "api");

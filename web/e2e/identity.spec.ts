@@ -243,16 +243,16 @@ test("the CLI link sets up the admin, who lands signed in on /", async ({
   await page
     .getByRole("button", { name: /Create account|Save password/ })
     .click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/jobs$/);
   await expect(menuButton(page)).toBeVisible();
   await expect(
     page.getByRole("navigation", { name: "Main" }).getByRole("link", {
       name: "Admin",
     }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("region", { name: "API status" }).getByRole("status"),
-  ).toContainText("API ok");
+  await expect(page.getByRole("contentinfo").getByRole("status")).toContainText(
+    "API ok",
+  );
   used = link.path;
 
   const cookie = (await context.cookies()).find(
@@ -284,13 +284,13 @@ test("sign out lands on /login and the back button shows nothing protected", asy
   await page.getByRole("link", { name: "Admin" }).click();
   await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
   await signOut(page);
-  // History: /login was replaced by / on sign in, then /admin/users by /login on sign out.
-  // Back reaches /, which must not render: it sends to the sign in page again.
+  // History: /login was replaced by /jobs on sign in (/ redirects there), then /admin/users by
+  // /login on sign out. Back reaches /jobs, which must not render: it sends to sign in again.
   await page.goBack();
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  await expect(page).toHaveURL(/\/login\?next=\/$/);
+  await expect(page).toHaveURL(/\/login\?next=\/jobs$/);
   await expect(page.getByRole("banner")).toHaveCount(0);
-  await expect(page.getByText(/Welcome/)).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Jobs" })).toHaveCount(0);
   // The session is gone on the server too: a reload stays signed out.
   await page.goto("/admin/users");
   await expect(page).toHaveURL(/\/login\?next=\/admin\/users$/);
@@ -333,7 +333,7 @@ test("sign in with a mixed case email, reload keeps the session, deep link as ad
 
   // Signed in, /login sends back home.
   await page.goto("/login");
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/jobs$/);
   await expect(menuButton(page)).toBeVisible();
   expect(errors).toEqual([]);
 });
@@ -352,7 +352,7 @@ test("wrong password and unknown email get the same generic error", async ({
   // An unsafe next is ignored after a good sign in.
   await page.goto("/login?next=//evil.example");
   await signIn(page, EMAIL, PASSWORD);
-  await expect(page).toHaveURL(new RegExp(`^${caddyUrl ?? ""}/$`));
+  await expect(page).toHaveURL(new RegExp(`^${caddyUrl ?? ""}/jobs$`));
   await expect(menuButton(page)).toBeVisible();
 });
 
@@ -400,7 +400,7 @@ test("a reset link from the CLI sets a new password and ends the old session", a
   await page.getByLabel("New password", { exact: true }).fill(NEW_PASSWORD);
   await page.getByLabel("Confirm password").fill(NEW_PASSWORD);
   await page.getByRole("button", { name: "Save password" }).click();
-  await expect(page).toHaveURL(/\/$/);
+  await expect(page).toHaveURL(/\/jobs$/);
   await expect(menuButton(page)).toBeVisible();
 
   // The other browser's session ended with the reset: it lands on /login, keeping its page.

@@ -495,7 +495,7 @@ function ConfirmDialog({
       onClose();
       if (done.self && done.action === "demote") {
         // No longer an admin: leave the admin area and let /me drop the Admin entry.
-        await navigate("/", { replace: true });
+        await navigate("/jobs", { replace: true });
         await client.refetchQueries({ queryKey: meQueryKey });
         client.removeQueries({ queryKey: usersKey });
         client.removeQueries({ queryKey: invitesKey });

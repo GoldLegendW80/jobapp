@@ -266,7 +266,7 @@ test("the admin demotes themselves after a confirmation and the Admin entry goes
 
   await choose(admin, ADMIN, "Make member");
   await confirm(admin, "Make me a member", "You are now a member.");
-  await expect(admin).toHaveURL(/\/$/);
+  await expect(admin).toHaveURL(/\/jobs$/);
   await expect(adminLink(admin)).toHaveCount(0);
 
   // The friend, still an admin, restores them.

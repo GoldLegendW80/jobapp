@@ -31,6 +31,20 @@ test.beforeEach(async ({ page }) => {
       }),
     }),
   );
+  // The home page is the jobs dashboard: an empty list, so only the health check is under test.
+  await page.route(/\/api\/jobs(\?|$)/, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [],
+        next_cursor: null,
+        total: 0,
+        counts_by_status: {},
+        fit_histogram: { buckets: [], unscored: 0 },
+      }),
+    }),
+  );
 });
 
 test.describe("real api, database up", () => {
@@ -43,7 +57,9 @@ test.describe("real api, database up", () => {
     const response = page.waitForResponse("**/api/health");
     await page.goto("/");
     expect((await response).status()).toBe(200);
-    await expect(page.getByRole("status")).toContainText("API ok");
+    await expect(
+      page.getByRole("contentinfo").getByRole("status"),
+    ).toContainText("API ok");
     await page.screenshot({
       path: path.join(evidence, "real-api-ok.png"),
       fullPage: true,
@@ -72,10 +88,12 @@ test.describe("real api, database down", () => {
     const response = page.waitForResponse("**/api/health");
     await page.goto("/");
     expect((await response).status()).toBe(503);
-    await expect(page.getByRole("status")).toContainText("API unavailable");
-    await expect(page.getByRole("status")).toContainText(
-      "The API answered 503: database unavailable.",
-    );
+    await expect(
+      page.getByRole("contentinfo").getByRole("status"),
+    ).toContainText("API unavailable");
+    await expect(
+      page.getByRole("contentinfo").getByRole("status"),
+    ).toContainText("The API answered 503: database unavailable.");
     await page.screenshot({
       path: path.join(evidence, "real-api-db-down.png"),
       fullPage: true,

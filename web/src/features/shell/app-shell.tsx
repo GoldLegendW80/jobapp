@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet } from "react-router";
 
 import { useMe } from "@/features/auth/auth-context";
+import { HealthDot } from "@/features/health/health-dot";
 import { APP_NAME } from "@/lib/use-title";
 import { cn } from "@/lib/utils";
 
@@ -26,14 +27,17 @@ export function AppShell() {
         Skip to content
       </a>
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto flex h-14 max-w-5xl items-center gap-2 px-4 sm:gap-4">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-4 sm:gap-4">
           <Link
-            to="/"
+            to="/jobs"
             className="rounded-md px-1 text-lg font-semibold tracking-tight"
           >
             {APP_NAME}
           </Link>
           <nav aria-label="Main" className="flex items-center gap-1">
+            <NavLink to="/jobs" className={navLink}>
+              Jobs
+            </NavLink>
             <NavLink to="/profile" className={navLink}>
               Profile
             </NavLink>
@@ -48,9 +52,14 @@ export function AppShell() {
           </div>
         </div>
       </header>
-      <main id="main" tabIndex={-1} className="flex-1 px-4 py-8 sm:py-12">
+      <main id="main" tabIndex={-1} className="flex-1 px-4 py-6 sm:py-10">
         <Outlet />
       </main>
+      <footer className="border-t">
+        <div className="mx-auto flex h-10 max-w-6xl items-center justify-end px-4">
+          <HealthDot />
+        </div>
+      </footer>
     </div>
   );
 }
