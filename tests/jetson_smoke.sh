@@ -7,6 +7,8 @@
 #   tests/jetson_smoke.sh                  against DEPLOY_HOST (default jetson), DEPLOY_DIR ~/jobapp
 #   DEPLOY_HOST=other tests/jetson_smoke.sh
 #   JETSON_SMOKE_FULL=0 tests/jetson_smoke.sh
+#   DEPLOY_HOST=local tests/jetson_smoke.sh   on the Jetson itself, no ssh (the self-hosted runner
+#                                             of .github/workflows/deploy.yml, host network)
 #
 # The full local checks live in tests/compose_smoke.sh; this keeps the ones that matter on the
 # target: health and SPA through caddy on loopback, nothing on the LAN, production settings,
@@ -22,13 +24,19 @@ CTL="$(mktemp -d /tmp/jobapp-smoke.XXXXXX)"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=5 -o ControlMaster=auto -o "ControlPath=$CTL/%C"
   -o ControlPersist=60 "$HOST")
 STOPPED_DB=0
+# r <command string>: run it on the Jetson, in the home directory, through ssh or (local) bash.
+if [[ "$HOST" == "local" ]]; then
+  r() { (cd "$HOME" && bash -c "$*"); }
+else
+  r() { "${SSH[@]}" "$@"; }
+fi
 cleanup() {
   # Never leave db stopped by this script, whatever failed. A service that was already down when
   # the script started is left as it was: the smoke reports it, it does not repair it.
   if ((STOPPED_DB == 1)); then
-    "${SSH[@]}" "cd $RDIR && docker compose -f compose.yml start db >/dev/null 2>&1" || true
+    r "cd $RDIR && docker compose -f compose.yml start db >/dev/null 2>&1" || true
   fi
-  ssh -o "ControlPath=$CTL/%C" -O exit "$HOST" >/dev/null 2>&1 || true
+  [[ "$HOST" == "local" ]] || ssh -o "ControlPath=$CTL/%C" -O exit "$HOST" >/dev/null 2>&1 || true
   rm -rf "$CTL"
 }
 trap cleanup EXIT
@@ -44,7 +52,6 @@ fail() {
   exit 1
 }
 
-r() { "${SSH[@]}" "$@"; }
 rc() { r "cd $RDIR && docker compose -f compose.yml --profile tunnel $*"; }
 # Remote env values, never printed.
 renv() { r "sed -n 's/^$1=//p' $RDIR/.env | tail -n 1"; }
@@ -84,7 +91,12 @@ for svc in api caddy db redis cloudflared; do
   fi
 done
 ok "api, caddy, db, redis, cloudflared healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
-ip="$(ssh -G "$HOST" 2>/dev/null | awk '/^hostname / {print $2}')"
+if [[ "$HOST" == "local" ]]; then
+  ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')"
+else
+  ip="$(ssh -G "$HOST" 2>/dev/null | awk '/^hostname / {print $2}')"
+fi
+[[ -n "$ip" ]] || fail "could not find the LAN address of $HOST"
 if curl -s --max-time 3 -o /dev/null "http://$ip:$PORT/" 2>/dev/null; then
   fail "the stack answers on the LAN at $ip:$PORT"
 fi
