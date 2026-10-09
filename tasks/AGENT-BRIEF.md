@@ -7,7 +7,7 @@ You implement exactly one task of `tasks/todo.md`. The orchestrator verifies you
 - The existing code you build on. Match its style.
 
 ## Environment
-- Repo: `/Users/harald-thorvaldhautin/Desktop/job/app`, git, branch `main`, remote `GoldLegendW80/jobapp` (private, HTTPS with a repo-local gh credential helper). Never touch files outside `app/` except reading `../engine`, `../profile` and `../data` when the task ports them.
+- Repo: `/Users/harald-thorvaldhautin/Desktop/job/app`, git, default branch `main` (protected by convention: changes arrive only through PRs), remote `GoldLegendW80/jobapp` (private, HTTPS with a repo-local gh credential helper). CI: `.github/workflows/ci.yml`; deploy: `.github/workflows/deploy.yml` on the Jetson's self-hosted runner. Never touch files outside `app/` except reading `../engine`, `../profile` and `../data` when the task ports them.
 - Mac: arm64, Docker Desktop running, uv, pnpm, node 22, pre-commit, gitleaks, Playwright (Python via `uv run --native-tls --with playwright`, CLI via `npx -y @playwright/cli@latest`).
 - `uv` needs `--native-tls` on this network (the old `--system-certs` flag does not exist in uv 0.9).
 - Jetson: `ssh jetson` (Ubuntu 22.04, arm64, 7.4G RAM, Docker 29, Compose v5). Ask the orchestrator before running anything with sudo there.
@@ -19,7 +19,9 @@ You implement exactly one task of `tasks/todo.md`. The orchestrator verifies you
 - Pin versions. arm64-compatible only. No secrets in git.
 - Outward and user-facing text uses no dashes as separators (commas, colons, new sentences instead).
 
-## Finish
-- Commit on `main` with clear messages ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` and push.
-- Do not tick boxes in `tasks/todo.md`; the orchestrator does.
+## Delivery (GitHub flow, see CONTRIBUTING.md)
+- Work on your own branch named `<module>/<task-id>-<slug>` (in a worktree when given one), never on `main`.
+- Commit with clear conventional messages ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`, push the branch, open a PR with `gh pr create` using the template, and make CI green on it.
+- Never merge, never push to `main`, never deploy the app to the Jetson: the orchestrator merges after the review subagent's `REVIEW VERDICT: APPROVE`, and every merge to `main` deploys automatically. Real-world checks on the Jetson happen after the merge, run by the orchestrator or a follow-up task.
+- Do not tick boxes in `tasks/*/todo.md`; the orchestrator does.
 - Report: files changed, commands run with key output, tests (count, what edge cases), Playwright evidence paths, what failed or was skipped and why, follow-ups for later tasks.
