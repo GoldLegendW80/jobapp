@@ -98,9 +98,21 @@ export interface Skills {
   gates: Gate[];
 }
 
+export const ATS = ["ashby", "greenhouse", "lever"] as const;
+export type AtsName = (typeof ATS)[number];
+export const CONTRACT_TYPES = [
+  "CDI",
+  "CDD",
+  "VIE",
+  "Stage",
+  "Alternance",
+  "Freelance",
+] as const;
+export const REMOTE_STANCES = ["remote", "hybrid", "office", "any"] as const;
+
 export interface Board {
   company: string;
-  ats: "ashby" | "greenhouse" | "lever";
+  ats: AtsName;
   org: string;
   enabled: boolean;
   extra_exclude: TermList;
@@ -110,7 +122,7 @@ export interface Search {
   title_exclude: TermList;
   location: TermList;
   contract_types: string[];
-  remote_stance: "remote" | "hybrid" | "office" | "any" | null;
+  remote_stance: (typeof REMOTE_STANCES)[number] | null;
   min_fit: number;
   days: number;
   boards: Board[];
@@ -327,4 +339,35 @@ export async function deletePhoto(): Promise<void> {
 /** The stored photo's address; the ETag in the query busts the browser cache when it changes. */
 export function photoUrl(etag: string): string {
   return `/api/profile/photo?v=${encodeURIComponent(etag.replaceAll('"', ""))}`;
+}
+
+// --- board check -----------------------------------------------------------------------------
+
+export const boardCheckSchema = z.object({
+  exists: z.boolean(),
+  postings: z.number().int().nonnegative().nullable(),
+  company_name: z.string().nullable().optional(),
+  error: z
+    .enum(["not_found", "timeout", "upstream_error", "blocked"])
+    .nullable()
+    .optional(),
+});
+export type BoardCheck = z.infer<typeof boardCheckSchema>;
+
+/**
+ * Ask the api whether a board exists on its ATS (POST /api/profile/boards/check). The api waits
+ * up to 5 seconds for the ATS and retries a failed connection once, so the browser waits longer.
+ */
+export function checkBoard(
+  ats: AtsName,
+  org: string,
+  signal?: AbortSignal,
+): Promise<BoardCheck> {
+  return request("/profile/boards/check", {
+    method: "POST",
+    body: { ats, org },
+    signal,
+    timeoutMs: 15_000,
+    validate: (body) => boardCheckSchema.parse(body),
+  });
 }

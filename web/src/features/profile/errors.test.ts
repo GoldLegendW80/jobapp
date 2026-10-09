@@ -4,11 +4,15 @@ import { ApiError } from "@/lib/api";
 import { haraldLike } from "@/test/profile";
 
 import { serverFieldError, validationDetail } from "./errors";
+import { toFactsForm, toSearchForm, toSkillsForm } from "./editor-forms";
 import { toAnswersForm, toExperienceForm, toIdentityForm } from "./forms";
 
 const identity = toIdentityForm(haraldLike().identity);
 const experience = toExperienceForm(haraldLike().experience);
 const answers = toAnswersForm(haraldLike().answers);
+const facts = toFactsForm(haraldLike().facts);
+const skills = toSkillsForm(haraldLike().skills);
+const search = toSearchForm(haraldLike().search);
 
 describe("serverFieldError", () => {
   it("maps a leaf path to that field, as a sentence", () => {
@@ -122,6 +126,79 @@ describe("serverFieldError", () => {
       serverFieldError("data.phone: must be a phone number.", identity)
         ?.message,
     ).toBe("Must be a phone number.");
+  });
+});
+
+describe("serverFieldError on term lists", () => {
+  it("maps a refused term to that term of the list, without the prefix", () => {
+    expect(
+      serverFieldError(
+        "data.have.1.terms: term 2: invalid regular expression at position 7: missing ), unterminated subpattern",
+        skills,
+      ),
+    ).toEqual({
+      name: "have.1.terms.1",
+      message:
+        "Invalid regular expression at position 7: missing ), unterminated subpattern.",
+    });
+    expect(
+      serverFieldError(
+        "data.title_exclude.terms: term 1: nested quantifiers such as (a+)+ are not allowed: they can make matching hang",
+        search,
+      )?.name,
+    ).toBe("title_exclude.terms.0");
+    expect(
+      serverFieldError(
+        "data.gates.0.terms: term 1: a plain term is at most 200 characters",
+        skills,
+      ),
+    ).toEqual({
+      name: "gates.0.terms.0",
+      message: "A plain term is at most 200 characters.",
+    });
+  });
+
+  it.each([
+    "data.have.1.terms: term 3: invalid regular expression",
+    "data.have.1.terms: term 0: invalid regular expression",
+    "data.have.1.terms: List should have at most 300 items after validation",
+    "data.have.7.terms: term 1: invalid regular expression",
+  ])("leaves %j above the form", (detail) => {
+    expect(serverFieldError(detail, skills)).toBeUndefined();
+  });
+
+  it("maps a refused board org and a rule", () => {
+    expect(
+      serverFieldError(
+        "data.boards.1.org: String should match pattern '^[A-Za-z0-9][A-Za-z0-9._-]*$'",
+        search,
+      )?.name,
+    ).toBe("boards.1.org");
+    expect(
+      serverFieldError(
+        "data.never_apply.0: control characters are not allowed",
+        search,
+        { wrapped: ["never_apply"] },
+      )?.name,
+    ).toBe("never_apply.0.value");
+  });
+
+  it("names an item only for a duplicate, never for a list wide rule", () => {
+    const rules = { unique: { blocks: "title" } };
+    expect(
+      serverFieldError(
+        "data.blocks: duplicate block title: each must be unique",
+        facts,
+        rules,
+      )?.name,
+    ).toBe("blocks.0.title");
+    expect(
+      serverFieldError(
+        "data.blocks: the fact base is 200123 bytes, at most 200000 allowed",
+        facts,
+        rules,
+      ),
+    ).toBeUndefined();
   });
 });
 

@@ -6,7 +6,10 @@
  * - an item path (`data.employers.0`: end before start) is the item's `end`;
  * - a list path (`data.employers`: duplicate key) is the field of the first repeated item, by the
  *   list's identity field (key, name, country);
- * - a list of plain strings (`data.leave_blank.1`) is the item's `value` in the form.
+ * - a list of plain strings (`data.leave_blank.1`) is the item's `value` in the form;
+ * - a refused term (`data.have.0.terms: term 2: invalid regular expression at position 3`) is
+ *   that term of the list (`have.0.terms.1`), so the message shows under its chip. The api numbers
+ *   terms after dropping duplicates, which the form never holds.
  * Anything else (a field the form does not show) gives undefined: the caller shows the sentence
  * above the form instead.
  */
@@ -25,6 +28,7 @@ export interface ListRules {
 }
 
 const DETAIL = /^data\.([^:\s]+): ([\s\S]+)$/;
+const TERM = /^term (\d+): ([\s\S]+)$/;
 
 const fold = (value: unknown) =>
   typeof value === "string" ? value.trim().toLocaleLowerCase("en") : "";
@@ -43,7 +47,8 @@ export function serverFieldError(
   const match = DETAIL.exec(detail);
   if (!match) return undefined;
   const path = (match[1] ?? "").split(".");
-  const message = sentence(match[2] ?? "");
+  const raw = match[2] ?? "";
+  const message = sentence(raw);
   let node: unknown = values;
   for (const part of path) {
     if (node === null || typeof node !== "object") return undefined;
@@ -53,8 +58,15 @@ export function serverFieldError(
   const last = path[path.length - 1] ?? "";
   const name = path.join(".");
   if (Array.isArray(node)) {
+    const term = TERM.exec(raw);
+    if (term) {
+      const index = Number(term[1]) - 1;
+      if (index < 0 || index >= node.length) return undefined;
+      return { name: `${name}.${index}`, message: sentence(term[2] ?? "") };
+    }
     const field = rules.unique?.[last];
-    if (!field) return undefined;
+    // Only a duplicate names an item: a list wide rule (a size cap) stays above the form.
+    if (!field || !/duplicate/i.test(raw)) return undefined;
     const seen = new Set<string>();
     for (const [index, item] of node.entries()) {
       const key = fold((item as Record<string, unknown>)[field]);
