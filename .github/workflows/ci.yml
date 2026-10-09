@@ -108,7 +108,7 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
       - name: Vitest
-        run: pnpm test --reporter=default --reporter=junit --outputFile.junit=${{ runner.temp }}/junit-web.xml
+        run: pnpm exec vitest run --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
       - name: Build
         run: pnpm build
       - name: Test summary

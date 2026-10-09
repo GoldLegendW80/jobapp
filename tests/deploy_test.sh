@@ -215,10 +215,10 @@ for args in "runner" "runner bogus" "runner install extra" "runner status remove
   run 1 env DEPLOY_HOST=nonexistent-host.invalid ./deploy.sh $args
   out_has "usage: ./deploy.sh runner install|status|remove"
 done
-run 1 env DEPLOY_HOST=nonexistent-host.invalid RUNNER_REPO=no-slash ./deploy.sh runner status
-out_has "RUNNER_REPO must be owner/name"
-run 1 env DEPLOY_HOST=nonexistent-host.invalid RUNNER_NAME='a b' ./deploy.sh runner status
-out_has "RUNNER_NAME may only hold"
+run 1 env DEPLOY_HOST=nonexistent-host.invalid JOBAPP_RUNNER_REPO=no-slash ./deploy.sh runner status
+out_has "JOBAPP_RUNNER_REPO must be owner/name"
+run 1 env DEPLOY_HOST=nonexistent-host.invalid JOBAPP_RUNNER_NAME='a b' ./deploy.sh runner status
+out_has "JOBAPP_RUNNER_NAME may only hold"
 run 1 env DEPLOY_HOST=nonexistent-host.invalid DEPLOY_DIR=apps/jobapp ./deploy.sh runner install
 out_has "folder directly in the Jetson home"
 ok "runner: no action, unknown action, extra arguments, bad repo, name and folder refused before ssh"

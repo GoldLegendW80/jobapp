@@ -1019,8 +1019,8 @@ cmd_backup_schedule() {
 # Registration and removal tokens come from `gh api` on this Mac, go to the container on stdin and
 # are never written anywhere. Docker socket access makes the runner root-equivalent on the Jetson
 # (README, Continuous delivery).
-RUNNER_REPO="$(setting RUNNER_REPO GoldLegendW80/jobapp)"
-RUNNER_NAME="$(setting RUNNER_NAME jetson)"
+RUNNER_REPO="$(setting JOBAPP_RUNNER_REPO GoldLegendW80/jobapp)"
+RUNNER_NAME="$(setting JOBAPP_RUNNER_NAME jetson)"
 RUNNER_LABELS="jetson,arm64" # GitHub adds self-hosted, Linux and ARM64 itself
 RUNNER_CONTAINER=jobapp-runner
 RUNNER_VOLUME=jobapp-runner
@@ -1031,8 +1031,8 @@ runner_version() { # the RUNNER_VERSION pinned in ops/runner/Dockerfile
 }
 
 runner_checks() { # settings and local tools, before any network call
-  [[ "$RUNNER_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "RUNNER_REPO must be owner/name, got '$RUNNER_REPO'"
-  [[ "$RUNNER_NAME" =~ ^[A-Za-z0-9_.-]+$ ]] || die "RUNNER_NAME may only hold letters, digits, . _ and -: '$RUNNER_NAME'"
+  [[ "$RUNNER_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "JOBAPP_RUNNER_REPO must be owner/name, got '$RUNNER_REPO'"
+  [[ "$RUNNER_NAME" =~ ^[A-Za-z0-9_.-]+$ ]] || die "JOBAPP_RUNNER_NAME may only hold letters, digits, . _ and -: '$RUNNER_NAME'"
   [[ "$RDIR" =~ ^[A-Za-z0-9._-]+$ ]] || die "the runner needs DEPLOY_DIR to be a folder directly in the Jetson home, got '$RDIR'"
   [[ "$BDIR" =~ ^[A-Za-z0-9._-]+$ ]] || die "the runner needs BACKUP_DIR to be a folder directly in the Jetson home, got '$BDIR'"
   command -v gh >/dev/null || die "gh is needed on this Mac for the runner tokens"
@@ -1077,7 +1077,11 @@ runner_opts() {
 runner_install() {
   step "runner image on $HOST"
   # The two files of ops/runner as a tar context on stdin: nothing copied to the Jetson's disk.
-  COPYFILE_DISABLE=1 tar -C "$ROOT/ops/runner" -cf - Dockerfile entrypoint.sh |
+  # Plain ustar: macOS's bsdtar otherwise adds pax headers for extended attributes, which docker
+  # build does not read as a tar and parses as a Dockerfile.
+  local tar_opts=(--format ustar)
+  tar --version 2>/dev/null | grep -q bsdtar && tar_opts+=(--no-xattrs --no-mac-metadata --no-acls)
+  COPYFILE_DISABLE=1 tar "${tar_opts[@]}" -C "$ROOT/ops/runner" -cf - Dockerfile entrypoint.sh |
     remote "docker build -q --build-arg RUNNER_USER=$(printf '%q' "$RUNNER_USER") --build-arg RUNNER_UID=$RUNNER_UID --build-arg RUNNER_GID=$RUNNER_GID -t $RUNNER_IMAGE -" >/dev/null ||
     die "docker build of $RUNNER_IMAGE failed on $HOST"
   info "$RUNNER_IMAGE built (arm64, ubuntu 22.04, actions runner $(runner_version))"
