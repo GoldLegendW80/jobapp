@@ -28,6 +28,18 @@
 #   ./deploy.sh admin unlock <email> [--ip <ip>]
 #                                  delete the failed sign in attempts of that email (and of that
 #                                  address) in the 15 minute window, print how many went
+#   ./deploy.sh profile import <email>
+#                                  convert ../profile and ../engine on the Mac (app.profile.cli
+#                                  convert) and load the result into that account's profile on
+#                                  the Jetson (app.profile.cli import in the api container)
+#   ./deploy.sh jobs import <email>
+#                                  convert ../data (jobs.csv, jobs/<id>/) on the Mac
+#                                  (app.jobs.cli convert) and load it into that account's jobs on
+#                                  the Jetson (app.jobs.cli import, from stdin: no HTTP upload, so
+#                                  Caddy's 10 MiB body limit does not apply); idempotent
+#
+# The job folder holding profile/, engine/ and data/ is the parent of this repository, or
+# JOBAPP_SOURCE_DIR. Both imports convert first, so a bad source fails before any network call.
 #
 # <file> is a local file (uploaded first), a path on the Jetson, a name in the backup directory,
 # or `latest`. The work on the Jetson is done by ops/db.sh, streamed over ssh.
@@ -110,6 +122,7 @@ cleanup() {
     rm -rf "$CTL_DIR"
   fi
   [[ -z "${LOCK_DIR:-}" ]] || rm -rf "$LOCK_DIR"
+  [[ -z "${IMPORT_DIR:-}" ]] || rm -rf "$IMPORT_DIR"
 }
 trap cleanup EXIT
 
@@ -482,6 +495,16 @@ cmd_ssh() {
   ssh -t "${SSH_OPTS[@]}" "$HOST" "cd $RDIR_Q 2>/dev/null; exec \$SHELL -l"
 }
 
+check_email() { # check_email <command label> <email>
+  # Checked here so a typo never reaches the Jetson; the CLI then validates the address itself.
+  # A leading dash would be read as an option by the CLI, and whitespace or control characters
+  # are never part of an address.
+  local label="$1" email="$2"
+  [[ "$email" == *@* && "$email" != -* && ${#email} -le 320 ]] ||
+    die "$label needs one email address, got '$email'"
+  [[ ! "$email" =~ [[:space:][:cntrl:]] ]] || die "$label: the email contains whitespace or control characters"
+}
+
 cmd_admin() {
   if [[ "${1:-}" == "unlock" ]]; then
     shift
@@ -490,12 +513,7 @@ cmd_admin() {
   fi
   [[ $# -eq 2 && "$1" == "create" ]] || die "usage: ./deploy.sh admin create <email>, or admin unlock <email> [--ip <ip>]"
   local email="$2"
-  # Checked here so a typo never reaches the Jetson; the CLI then validates the address itself.
-  # A leading dash would be read as an option by the CLI, and whitespace or control characters
-  # are never part of an address.
-  [[ "$email" == *@* && "$email" != -* && ${#email} -le 320 ]] ||
-    die "admin create needs one email address, got '$email'"
-  [[ ! "$email" =~ [[:space:][:cntrl:]] ]] || die "admin create: the email contains whitespace or control characters"
+  check_email "admin create" "$email"
   ssh_master
   require_remote
   require_deployed
@@ -543,6 +561,45 @@ cmd_admin_unlock() {
     sh "$email" "$ip" <<<"$UNLOCK_SQL" | tr -d '\r')" || die "admin unlock: psql refused it, nothing deleted"
   [[ "$removed" =~ ^[0-9]+$ ]] || die "admin unlock: unexpected answer from psql: $removed"
   info "removed $removed failed sign in attempt(s) of $email${ip:+ and of $ip} in the last 15 minutes"
+}
+
+# import_into <module> <email> <source dir>: convert on the Mac with python -m app.<module>.cli
+# convert into a private temporary file, then stream it to python -m app.<module>.cli import in
+# the api container on the Jetson. The CLI prints the summary; its exit code is passed through.
+import_into() {
+  local module="$1" email="$2" source="$3" document
+  [[ -d "$source" ]] || die "$module import: $source is not a folder (set JOBAPP_SOURCE_DIR to the job folder)"
+  command -v uv >/dev/null || die "$module import: uv is needed on this Mac to convert the sources"
+  IMPORT_DIR="$(mktemp -d /tmp/jobapp-import.XXXXXX)"
+  chmod 700 "$IMPORT_DIR"
+  document="$IMPORT_DIR/$module.json"
+  step "convert $source"
+  # The document goes to a file, never to stdout: a failed conversion sends nothing.
+  uv run --native-tls --directory "$ROOT/api" python -m "app.$module.cli" convert \
+    --source-dir "$source" --out "$document" || die "$module import: conversion failed, nothing was sent"
+  ssh_master
+  require_remote
+  require_deployed
+  step "import into $HOST"
+  rcompose exec -T api python -m "app.$module.cli" import --email "$email" --file - <"$document"
+}
+
+job_dir() { # the job folder holding profile/, engine/ and data/
+  local dir
+  dir="$(setting JOBAPP_SOURCE_DIR "$ROOT/..")"
+  (cd "$dir" 2>/dev/null && pwd) || printf '%s' "$dir"
+}
+
+cmd_profile() {
+  [[ $# -eq 2 && "$1" == "import" ]] || die "usage: ./deploy.sh profile import <email>"
+  check_email "profile import" "$2"
+  import_into profile "$2" "$(job_dir)"
+}
+
+cmd_jobs() {
+  [[ $# -eq 2 && "$1" == "import" ]] || die "usage: ./deploy.sh jobs import <email>"
+  check_email "jobs import" "$2"
+  import_into jobs "$2" "$(job_dir)/data"
 }
 
 cmd_url() {
@@ -944,6 +1001,8 @@ main() {
     restore) cmd_restore "$@" ;;
     backup-schedule) cmd_backup_schedule "$@" ;;
     admin) cmd_admin "$@" ;;
+    profile) cmd_profile "$@" ;;
+    jobs) cmd_jobs "$@" ;;
     -h | --help | help) usage ;;
     *)
       usage >&2
