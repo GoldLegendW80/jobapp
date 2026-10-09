@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleAlert, LoaderCircle, Timer } from "lucide-react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -30,6 +30,7 @@ import { login } from "./api";
 import { useAuth } from "./auth-context";
 import { AuthLayout } from "./auth-layout";
 import { loginErrorMessage } from "./login-errors";
+import { formatWait, throttledFor, useRetryCountdown } from "./retry-countdown";
 
 const schema = z.object({
   email: z
@@ -58,7 +59,14 @@ export function LoginPage() {
   const mutation = useMutation({
     mutationFn: (values: Values) => login(values.email.trim(), values.password),
     onSuccess: signIn,
+    onError: (error) => {
+      const wait = throttledFor(error);
+      if (wait !== undefined) countdown.start(wait);
+    },
   });
+  // After a 429 the button stays disabled until Retry-After has passed, then the message goes.
+  const countdown = useRetryCountdown(mutation.reset);
+  const locked = countdown.remaining > 0;
   const pending = mutation.isPending || mutation.isSuccess;
 
   return (
@@ -131,11 +139,22 @@ export function LoginPage() {
               />
             </CardContent>
             <CardFooter className="mt-6 flex flex-col items-stretch gap-4">
-              <Button type="submit" disabled={pending} aria-busy={pending}>
+              <Button
+                type="submit"
+                disabled={pending || locked}
+                aria-busy={pending}
+              >
                 {pending ? (
                   <>
                     <LoaderCircle aria-hidden="true" className="animate-spin" />
                     Signing in
+                  </>
+                ) : locked ? (
+                  <>
+                    <Timer aria-hidden="true" />
+                    <span className="tabular-nums">
+                      Try again in {formatWait(countdown.remaining)}
+                    </span>
                   </>
                 ) : (
                   "Sign in"

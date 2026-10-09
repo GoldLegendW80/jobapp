@@ -6,7 +6,9 @@ argon2 work (about 50 ms per hash or verification) and the blocking database cal
 the event loop. Each handler owns one transaction and commits it itself.
 
 Every failure of a link answers the same 404 body, and every failed sign in the same 401 body,
-whatever the reason. Nothing here logs a password, a token or a cookie.
+whatever the reason. Sign in and the current password of a password change are throttled
+(`throttle`): over the limit they answer 429 with Retry-After before any argon2 work. Nothing
+here logs a password, a token or a cookie.
 """
 
 from typing import Annotated
@@ -15,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.db import get_session
-from app.identity import deps, security, service
+from app.identity import deps, security, service, throttle
 from app.identity.models import User
 from app.identity.schemas import (
     AcceptInviteIn,
@@ -44,6 +46,35 @@ CURRENT_PASSWORD_WRONG = "current_password: The current password is incorrect." 
 _401 = {401: {"model": ErrorOut, "description": "Not signed in, or the credentials are wrong"}}
 _404 = {404: {"model": ErrorOut, "description": "The link is not valid"}}
 _422 = {422: {"model": ErrorOut, "description": "The input breaks a rule"}}
+_429 = {429: {"model": ErrorOut, "description": "Too many failed attempts; see Retry-After"}}
+
+LOGIN_THROTTLED = "Too many sign in attempts."
+PASSWORD_THROTTLED = "Too many attempts with a wrong current password."  # noqa: S105, a message
+
+
+def _too_many(exc: throttle.ThrottledError, what: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"{what} {throttle.wait_phrase(exc.retry_after)}",
+        headers={"Retry-After": str(exc.retry_after)},
+    )
+
+
+def _reserve_attempt(request: Request, db: Session, email: str, what: str) -> int:
+    """Record a password attempt before verifying it (committed at once), or raise the 429."""
+    try:
+        attempt = throttle.reserve(
+            db,
+            email,
+            deps.client_ip(request),
+            deps.clock(request),
+            getattr(request.app.state, "login_purger", None),
+        )
+    except throttle.ThrottledError as exc:
+        db.rollback()
+        raise _too_many(exc, what) from None
+    db.commit()
+    return attempt
 
 
 def _start_session(request: Request, db: Session, user: User) -> None:
@@ -63,12 +94,17 @@ def _start_session(request: Request, db: Session, user: User) -> None:
     deps.issue_cookie(request, issued.token)
 
 
-@router.post("/login", response_model=UserOut, responses=_401)
+@router.post("/login", response_model=UserOut, responses={**_401, **_429})
 def login(body: LoginIn, request: Request, db: Db) -> User:
+    """Sign in. Every attempt is recorded (unknown and disabled accounts too) and checked
+    against the limits first: 5 failures per email (reset by a success) and 20 per client
+    address in 15 minutes, else 429 with Retry-After in seconds."""
+    attempt = _reserve_attempt(request, db, throttle.attempt_email(body.email), LOGIN_THROTTLED)
     user = service.authenticate(db, body.email, body.password)
     if user is None:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=LOGIN_FAILED)
+    throttle.mark_success(db, attempt)
     user.last_login_at = deps.clock(request)
     _start_session(request, db, user)
     return user
@@ -129,6 +165,7 @@ def rename_me(body: NameIn, request: Request, db: Db, active: CurrentSession) ->
         **_401,
         400: {"model": ErrorOut, "description": "current_password: incorrect"},
         422: {"model": ErrorOut, "description": "new_password: the rule it breaks"},
+        **_429,
     },
 )
 def change_password(
@@ -136,7 +173,13 @@ def change_password(
 ) -> Response:
     """Change your password. A wrong current password is a 400 (not 401: the session is fine
     and stays signed in), the new one must pass the invite rules and differ from the current
-    one (422). On success every other session of the account ends; this one stays. 204."""
+    one (422). On success every other session of the account ends; this one stays. 204.
+
+    A wrong current password counts as a failed sign in of the account's email (and of the
+    caller's address): after 5 in 15 minutes the route answers 429 before verifying anything,
+    and so does the sign in of that email. A verified current password resets the count, even
+    when the new password is then refused."""
+    attempt = _reserve_attempt(request, db, active.user.email, PASSWORD_THROTTLED)
     try:
         service.change_password(
             db,
@@ -153,11 +196,14 @@ def change_password(
         ) from None
     except security.PasswordRuleError as exc:
         db.rollback()
+        throttle.mark_success(db, attempt)  # the current password was right
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=f"new_password: {exc}"
         ) from None
     except service.SessionEndedError:
         raise _session_ended(request, db) from None
+    throttle.mark_success(db, attempt)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

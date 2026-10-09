@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleAlert, LoaderCircle, Timer } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -20,6 +20,11 @@ import { Form } from "@/components/ui/form";
 import { message } from "@/features/admin/errors";
 import { changePassword, type User } from "@/features/auth/api";
 import { PASSWORD_HINT, passwordProblem } from "@/features/auth/password-rules";
+import {
+  formatWait,
+  throttledFor,
+  useRetryCountdown,
+} from "@/features/auth/retry-countdown";
 
 import { fieldError } from "./field-error";
 import { PasswordField } from "./password-field";
@@ -77,6 +82,11 @@ export function PasswordCard({ user }: { user: User }) {
     defaultValues: EMPTY,
   });
   const [formError, setFormError] = useState<string>();
+  // After a 429 (too many wrong current passwords) the button waits out Retry-After.
+  const countdown = useRetryCountdown(() => {
+    setFormError(undefined);
+  });
+  const locked = countdown.remaining > 0;
   const mutation = useMutation({
     mutationFn: (values: Values) =>
       changePassword({
@@ -91,6 +101,8 @@ export function PasswordCard({ user }: { user: User }) {
       toast.success(PASSWORD_CHANGED);
     },
     onError: (error) => {
+      const wait = throttledFor(error);
+      if (wait !== undefined) countdown.start(wait);
       const found = fieldError(error, ["current_password", "new_password"]);
       if (found) {
         form.setError(
@@ -168,13 +180,20 @@ export function PasswordCard({ user }: { user: User }) {
             <Button
               type="submit"
               className="w-full sm:w-auto"
-              disabled={pending}
+              disabled={pending || locked}
               aria-busy={pending}
             >
               {pending ? (
                 <>
                   <LoaderCircle aria-hidden="true" className="animate-spin" />
                   Changing password
+                </>
+              ) : locked ? (
+                <>
+                  <Timer aria-hidden="true" />
+                  <span className="tabular-nums">
+                    Try again in {formatWait(countdown.remaining)}
+                  </span>
                 </>
               ) : (
                 "Change password"

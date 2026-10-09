@@ -227,6 +227,44 @@ The account journey (`web/e2e/account.spec.ts`) runs like the others, on its own
 (`-p jobapp-i6`, `HTTP_PORT=8096`, `E2E_COMPOSE_PROJECT=jobapp-i6`), and on the Jetson with the
 throwaway admin `e2e-admin@example.org` only, removed afterwards with the same cleanup as above.
 
+### Sign in throttling
+
+Every sign in attempt is recorded in `login_attempts` (the normalised email, or the trimmed
+lowercase text when it is not an address; the client address the api sees, which is
+`Cf-Connecting-Ip` through the tunnel and the TCP peer on loopback; the time; success or not),
+unknown and disabled accounts included. Before any password is checked:
+
+- 5 failures for one email in 15 minutes, or 20 from one address, answer **429**
+  `{"detail": "Too many sign in attempts. Try again in N minutes."}` with `Retry-After` in whole
+  seconds, counted from the oldest failure still in the window. The window slides: a failure
+  stops counting exactly 15 minutes after it happened.
+- A successful sign in resets the email's count (the person proved they hold the password); it
+  does not reset the address's count, so one account someone owns cannot launder guesses on
+  others.
+- A 429 runs no argon2 and is not recorded, so retrying does not extend the wait. Its speed
+  reveals nothing: the same refusal comes for any email once the limit is reached.
+- The count and the record happen under one Postgres advisory lock per email and per address,
+  before argon2 runs, so parallel guesses never overshoot: 20 at once on one email give exactly
+  5 checks and 15 refusals.
+- A wrong current password on the Account page counts as a failed sign in of that account (both
+  guess the same password): after 5 the card answers 429 too, and so does the sign in of that
+  email. Invite and reset links are not throttled: the token is the credential.
+- Rows older than 30 days are deleted on write, at most once an hour per api process.
+
+The sign in page and the password card show the server's message and keep their button disabled
+with a countdown until `Retry-After` has passed. The journey `web/e2e/throttle.spec.ts` runs on a
+scratch project (`-p jobapp-i7`, `HTTP_PORT=8097`, `E2E_COMPOSE_PROJECT=jobapp-i7`,
+`E2E_PASSWORD_THROTTLE=1`) and deletes its own attempts afterwards; on the Jetson with
+`e2e-admin@example.org` only. Every local browser reaches the api from one address (Caddy's
+peer), so all specs of one run share the 20 failure budget per 15 minutes.
+
+To unlock someone by hand on the Jetson (the rows of one email, or of one address, in the window):
+
+```bash
+./deploy.sh ssh   # then:
+docker compose -f compose.yml exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "delete from login_attempts where email = '\''someone@example.org'\'' and at > now() - interval '\''15 minutes'\''"'
+```
+
 ## Profile export and import
 
 `GET /api/profile/export` downloads the whole profile as `profile-YYYY-MM-DD.json`;

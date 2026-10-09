@@ -155,6 +155,26 @@ python3 -c 'import ipaddress, sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1
   fail "the api logged client '${client:-nothing}' for a spoofed request on loopback"
 ok "the api logs the TCP peer $client, not the spoofed Cf-Connecting-Ip or X-Forwarded-For"
 
+step "log hygiene: a failed sign in leaves no password and no email in the logs"
+PGU="$(renv POSTGRES_USER)"
+PGD="$(renv POSTGRES_DB)"
+psql() { rc exec -T db psql -v ON_ERROR_STOP=1 -U "$PGU" -d "$PGD" -tAc "\"$1\""; }
+marker="smoke$RANDOM$RANDOM"
+semail="$marker@example.org"
+spass="pass-$marker-secret"
+res="$(rcurl /api/auth/login -X POST -H "'Content-Type: application/json'" -H "'X-Requested-With: jobapp'" \
+  --data "'{\"email\": \"$semail\", \"password\": \"$spass\"}'")"
+[[ "$(status_of "$res")" == "401" ]] || fail "a wrong sign in answered $(status_of "$res"): $(body_of "$res")"
+recorded="$(psql "select count(*) from login_attempts where email = '$semail' and not success" | tr -d '\r')"
+# The attempt is the smoke's own: remove it before judging, so a failure leaves nothing behind.
+psql "delete from login_attempts where email = '$semail'" >/dev/null
+[[ "$recorded" == "1" ]] || fail "the attempt was recorded $recorded times in login_attempts"
+sleep 1
+if rc logs --no-log-prefix --since 2m api caddy | grep -qF -e "$spass" -e "$marker"; then
+  fail "the api or caddy logs hold the password or the email of a sign in"
+fi
+ok "401 recorded once in login_attempts (then deleted), neither password nor email in the api and caddy logs"
+
 step "migrations rerun safely"
 for _ in 1 2; do rc exec -T api alembic upgrade head >/dev/null 2>&1 || fail "upgrade head"; done
 current="$(rc exec -T api alembic current 2>/dev/null | tr -d '\r')"
@@ -169,9 +189,6 @@ ok "PONG, appendonly yes"
 
 if ((FULL == 1)); then
   step "database stopped: 503 through caddy, then 200 without restarting api; data kept"
-  PGU="$(renv POSTGRES_USER)"
-  PGD="$(renv POSTGRES_DB)"
-  psql() { rc exec -T db psql -v ON_ERROR_STOP=1 -U "$PGU" -d "$PGD" -tAc "\"$1\""; }
   psql "create table if not exists smoke_jetson (note text)" >/dev/null
   psql "delete from smoke_jetson; insert into smoke_jetson values ('kept ✓')" >/dev/null
   api_started="$(r "docker inspect -f '{{.State.StartedAt}}' $(rc ps -q api)")"

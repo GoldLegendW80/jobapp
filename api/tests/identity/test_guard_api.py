@@ -355,7 +355,7 @@ def test_logs_never_hold_passwords_tokens_or_cookies(
 
 
 def test_unknown_email_and_wrong_password_take_comparable_time(
-    api: Api, factory: sessionmaker[Session]
+    api: Api, factory: sessionmaker[Session], clock: Clock
 ) -> None:
     make_user(factory)
     api.login("warmup@example.org", "warm up password")  # builds the dummy hash once
@@ -363,6 +363,7 @@ def test_unknown_email_and_wrong_password_take_comparable_time(
     unknown: list[float] = []
     wrong: list[float] = []
     for i in range(12):
+        clock.advance(minutes=16)  # past the throttle window: every round reaches argon2
         for email, bucket in (("nobody@example.org", unknown), (EMAIL, wrong)):
             start = time.perf_counter()
             response = api.login(email, f"not the password {i}")

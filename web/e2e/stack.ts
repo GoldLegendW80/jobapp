@@ -55,6 +55,40 @@ export function cliLink(email: string): string {
   return match[0];
 }
 
+/**
+ * Delete the sign in attempts recorded for these emails on a local scratch stack, so a rerun
+ * within 15 minutes is not throttled by the previous one (every local browser reaches the api
+ * from the same address, Caddy's peer). A no-op against the Jetson, which is cleaned by hand
+ * (README). Returns how many rows went, or undefined when nothing was done.
+ */
+export function clearAttempts(emails: string[]): number | undefined {
+  if (process.env.E2E_ADMIN_VIA_DEPLOY || !process.env.E2E_COMPOSE_PROJECT)
+    return undefined;
+  for (const email of emails)
+    if (!/^[a-z0-9.@-]+$/.test(email))
+      throw new Error(`refusing to clear attempts of ${email}`);
+  const list = emails.map((email) => `'${email}'`).join(", ");
+  const output = execFileSync(
+    "docker",
+    [
+      "compose",
+      "-p",
+      process.env.E2E_COMPOSE_PROJECT,
+      "-f",
+      "compose.yml",
+      "exec",
+      "-T",
+      "db",
+      "sh",
+      "-c",
+      'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "$0"',
+      `with gone as (delete from login_attempts where email in (${list}) returning 1) select count(*) from gone`,
+    ],
+    { cwd: root, encoding: "utf8" },
+  );
+  return Number(output.trim());
+}
+
 /** Answers the journeys expect, as the browser logs them: [status, url pattern]. */
 const EXPECTED: Array<[number, RegExp]> = [
   [401, /\/api\/auth\/(me|login)/],

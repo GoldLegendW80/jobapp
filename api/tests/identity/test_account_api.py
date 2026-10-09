@@ -445,16 +445,19 @@ def test_two_sessions_changing_at_once_one_wins_cleanly(
 
     monkeypatch.setattr(security, "hash_password", hash_then_meet)
 
-    def attempt(i: int) -> int:
-        with TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*")) as client:
+    # One client for both threads: one lifespan, so the engine is not disposed under the other
+    # request (a client per thread left a connection to be garbage collected, a ResourceWarning).
+    with TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*")) as client:
+
+        def attempt(i: int) -> int:
             return client.post(
                 PASSWORD_URL,
                 json={"current_password": PASSWORD, "new_password": news[i]},
                 headers={**CSRF, "Cookie": f"{COOKIE_NAME}={tokens[i]}"},
             ).status_code
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        codes = list(pool.map(attempt, range(2)))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            codes = list(pool.map(attempt, range(2)))
     assert sorted(codes) == [204, 401], codes
     winner = codes.index(204)
     # Only the winner's browser stays, and only the winner's password works.

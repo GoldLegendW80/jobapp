@@ -1,7 +1,7 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession, member } from "@/test/auth";
 import { renderApp } from "@/test/render";
@@ -146,11 +146,9 @@ describe("login page", () => {
     let call = 0;
     loginAnswers(() => {
       call += 1;
+      // No Retry-After here: nothing to count down, the button stays usable.
       return call === 1
-        ? new HttpResponse(null, {
-            status: 429,
-            headers: { "Retry-After": "900" },
-          })
+        ? new HttpResponse(null, { status: 429 })
         : HttpResponse.json(
             { detail: "Too many attempts. Try again in 15 minutes." },
             { status: 429 },
@@ -167,6 +165,94 @@ describe("login page", () => {
         "Too many attempts. Try again in 15 minutes.",
       );
     });
+  });
+
+  it("after a 429 disables the button with a countdown until Retry-After has passed", async () => {
+    // Fake only the interval and the clock: msw and user-event keep their real timeouts.
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setInterval", "clearInterval", "Date"],
+    });
+    try {
+      const detail = "Too many sign in attempts. Try again in 2 minutes.";
+      let call = 0;
+      const { seen } = loginAnswers(() => {
+        call += 1;
+        return call === 1
+          ? HttpResponse.json(
+              { detail },
+              { status: 429, headers: { "Retry-After": "65" } },
+            )
+          : HttpResponse.json(admin);
+      });
+      const { location } = renderApp("/login");
+      const user = await fillAndSubmit();
+      expect(await screen.findByRole("alert")).toHaveTextContent(detail);
+      const locked = screen.getByRole("button", { name: /try again in/i });
+      expect(locked).toBeDisabled();
+      expect(locked).toHaveTextContent("Try again in 1:05");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(locked).toHaveTextContent("Try again in 0:35");
+      expect(locked).toBeDisabled();
+      await user.click(locked); // disabled: sends nothing
+      expect(seen).toHaveLength(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(34_000);
+      });
+      expect(locked).toHaveTextContent("Try again in 0:01");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      const again = screen.getByRole("button", { name: "Sign in" });
+      expect(again).toBeEnabled();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+      await user.click(again);
+      await waitFor(() => {
+        expect(location()).toBe("/");
+      });
+      expect(seen).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a later 429 restarts the countdown with its own Retry-After", async () => {
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setInterval", "clearInterval", "Date"],
+    });
+    try {
+      let call = 0;
+      loginAnswers(() => {
+        call += 1;
+        return HttpResponse.json(
+          { detail: "Too many sign in attempts. Try again in 1 minute." },
+          {
+            status: 429,
+            headers: { "Retry-After": call === 1 ? "3" : "120" },
+          },
+        );
+      });
+      renderApp("/login");
+      const user = await fillAndSubmit();
+      expect(
+        await screen.findByRole("button", { name: /try again in 0:03/i }),
+      ).toBeDisabled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      await user.click(screen.getByRole("button", { name: "Sign in" }));
+      expect(
+        await screen.findByRole("button", { name: /try again in 2:00/i }),
+      ).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("disables the button while signing in, so a double click sends one request", async () => {

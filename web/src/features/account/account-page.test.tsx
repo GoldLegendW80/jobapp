@@ -1,7 +1,7 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession, member } from "@/test/auth";
 import { renderApp } from "@/test/render";
@@ -165,6 +165,46 @@ describe("change password card", () => {
     );
     await user.click(toggle);
     expect(input).toHaveAttribute("type", "password");
+  });
+
+  it("after a 429 shows the message and waits out Retry-After with a countdown", async () => {
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["setInterval", "clearInterval", "Date"],
+    });
+    try {
+      const detail =
+        "Too many attempts with a wrong current password. Try again in 15 minutes.";
+      const { calls } = account({
+        password: () =>
+          HttpResponse.json(
+            { detail },
+            { status: 429, headers: { "Retry-After": "900" } },
+          ),
+      });
+      const { user } = await openAccount();
+      await fillPassword(user);
+      await submitPassword(user);
+      const form = within(passwordForm());
+      expect(await form.findByRole("alert")).toHaveTextContent(detail);
+      const locked = form.getByRole("button", { name: /try again in/i });
+      expect(locked).toBeDisabled();
+      expect(locked).toHaveTextContent("Try again in 15:00");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(899_000);
+      });
+      expect(locked).toHaveTextContent("Try again in 0:01");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(
+        form.getByRole("button", { name: "Change password" }),
+      ).toBeEnabled();
+      expect(form.queryByRole("alert")).not.toBeInTheDocument();
+      expect(calls.password).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("checks an empty form on the client and focuses the first error", async () => {

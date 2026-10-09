@@ -38,17 +38,25 @@ export class ApiError extends Error {
   readonly kind: ApiErrorKind;
   readonly status: number | undefined;
   readonly body: unknown;
+  /** Seconds to wait before retrying, from the `Retry-After` header of an http error (429). */
+  readonly retryAfter: number | undefined;
 
   constructor(
     kind: ApiErrorKind,
     message: string,
-    options: { status?: number; body?: unknown; cause?: unknown } = {},
+    options: {
+      status?: number;
+      body?: unknown;
+      cause?: unknown;
+      retryAfter?: number;
+    } = {},
   ) {
     super(message, { cause: options.cause });
     this.name = "ApiError";
     this.kind = kind;
     this.status = options.status;
     this.body = options.body;
+    this.retryAfter = options.retryAfter;
   }
 }
 
@@ -72,6 +80,23 @@ export interface RequestOptions<T> {
   validate?: Validator<T>;
   /** false: a 401 is this call's own answer, not a lost session (default true). */
   authRedirect?: boolean;
+}
+
+/**
+ * The `Retry-After` header in whole seconds: a number of seconds, or an HTTP date turned into the
+ * seconds left until then (0 when past). Undefined when absent or unreadable.
+ */
+export function parseRetryAfter(
+  value: string | null,
+  now: number = Date.now(),
+): number | undefined {
+  if (value === null) return undefined;
+  const text = value.trim();
+  if (/^\d+$/.test(text)) return Number(text);
+  // An HTTP date always ends in GMT; anything else (V8 reads "1.5" as a date) is unreadable.
+  const date = text.endsWith("GMT") ? Date.parse(text) : Number.NaN;
+  if (Number.isNaN(date)) return undefined;
+  return Math.max(0, Math.ceil((date - now) / 1000));
 }
 
 function decode(text: string): { ok: true; value: unknown } | { ok: false } {
@@ -193,6 +218,7 @@ export async function request<T>(
         {
           status: response.status,
           body: decoded.ok ? decoded.value : text,
+          retryAfter: parseRetryAfter(response.headers.get("Retry-After")),
         },
       );
       if (response.status === 401 && authRedirect) {

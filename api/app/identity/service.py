@@ -193,7 +193,7 @@ class ActiveSession:
     refreshed: bool
 
 
-def _clean_ip(ip: str | None) -> str | None:
+def clean_ip(ip: str | None) -> str | None:
     """The address as Postgres inet accepts it, or None (test clients, unix sockets)."""
     if not ip:
         return None
@@ -226,7 +226,7 @@ def create_session(
         last_seen_at=now,
         expires_at=now + SESSION_TTL,
         user_agent=_clean_user_agent(user_agent),
-        ip=_clean_ip(ip),
+        ip=clean_ip(ip),
     )
     session.add(row)
     session.flush()
