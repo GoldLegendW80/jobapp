@@ -6,7 +6,7 @@ in the job folder that holds this repository (it is not part of the repository).
 
 ## One task, one branch, one pull request
 
-1. A task of `tasks/todo.md` gets its own branch from `main`, named `<module>/<task-id>-<slug>`,
+1. A task of `tasks/todo.md` or of a module's `tasks/<module>/todo.md` gets its own branch from `main`, named `<module>/<task-id>-<slug>`,
    for example `jobs/j4-rescore`, `platform/7-ci` or `profile/p5-import-preview`.
 2. Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat(jobs): ...`,
    `fix(identity): ...`, `ci: ...`, `docs: ...`) and end with the agent's attribution line:

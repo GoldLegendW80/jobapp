@@ -29,7 +29,7 @@ A versioned prompt template shipped with the app (`api/app/ingestion/prompts/lap
 - **Output:** a fixed set of Markdown files with fixed headings matching the profile sections (identity, experience, facts, skills, search preferences, application answers, open questions), file paths cited as evidence, no invented numbers.
 - **Finish:** run `gitleaks detect --no-git --source <output folder>` if available, and remind the user to read the dossier before uploading it.
 
-The page states plainly that Claude Code or Codex sends what it reads to its own model provider, under the user's own account. On upload, text matching common secret patterns (the gitleaks default rules, ported as a small regex set) triggers a warning and the user must confirm or remove the document.
+The page states plainly that Claude Code or Codex sends what it reads to its own model provider, under the user's own account. On upload, text matching common secret patterns (the gitleaks default rules, ported as a small regex set) sets the document's `secret_warning = true`; the user must confirm (`POST /api/ingestion/documents/{id}/confirm`) or delete it, and extraction refuses documents with an unconfirmed warning (422 naming them).
 
 ## Documents
 
@@ -37,7 +37,8 @@ The page states plainly that Claude Code or Codex sends what it reads to its own
 ingestion_documents(id uuid, user_id fk users on delete cascade, name text, mime text, size int,
                     sha256 bytea, bytes bytea null, text text null,
                     text_source enum(parsed, transcribed, pasted), text_status enum(pending, done, failed),
-                    pages int null, created_at, unique(user_id, sha256))
+                    pages int null, secret_warning bool default false, secret_confirmed_at null,
+                    created_at, unique(user_id, sha256))
 ingestion_runs(id uuid, user_id fk cascade, agent_run_id fk agent_runs, document_ids uuid[],
                base_revision int, status enum(queued, transcribing, extracting, merging, done, failed, cancelled),
                created_at, finished_at)
@@ -48,14 +49,24 @@ ingestion_runs(id uuid, user_id fk cascade, agent_run_id fk agent_runs, document
 - **Parser safety:** DOCX and ZIP opened with uncompressed-size and entry-count caps (zip bomb guard, 50 MB uncompressed, 200 entries), PDFs parsed with a page cap and a time budget, images opened with the same pixel guard as the profile photo (25 MP) and downscaled to the model's image limits before sending.
 - **Text extraction:** PDF text layer and DOCX text with pure-Python libraries (arm64 wheels, recorded in the plan). Images, and PDF pages without a text layer, are **transcribed by the model** in a first step of the run: the worker gives the file to the agent (the Agent SDK's file reading handles PDFs and images; to be verified against the SDK docs at implementation, before considering any rendering dependency such as pypdfium2, which would be "ask first"), the agent returns a plain transcription, and it is stored as the document's `text` with `text_source = transcribed`. Citations for those documents are checked against the transcription and flagged "transcribed, check it" in the review.
 - **Dedupe** by `unique(user_id, sha256)`: per user only, never revealing another user's uploads.
-- **Deletion is a hard delete:** removing a document deletes its row (bytes and text gone at once). It also removes the excerpts it supplied from every pending proposal (items left without a citation become invalid and are hidden), and its tool results from `agent_events` of ingestion runs. Runs' `input` and `output` only ever hold document ids, never text. SDK scratch directories are deleted when each run ends. Accepted profile changes stay, since they are the user's own profile now (their citation shows "source deleted"). Deleting the account cascades to everything above.
+- **Deletion is a hard delete:** removing a document deletes its row (bytes and text gone at once) and, in the same transaction:
+  - strips its excerpts from proposals of **every** status; a pending item left without any citation is deleted; accepted items keep only "source deleted" in place of the excerpt (the accepted value is the user's own profile now); rejected and superseded items keep only their section, key and value hash (needed so re-runs do not re-propose them);
+  - deletes every `agent_events` row of the ingestion runs that read the document (tool arguments, tool results and transcription output can hold its text); the run row stays with ids, status, tokens and cost;
+  - runs' `input` and `output` only ever hold document ids, never text; the UI shows ids of deleted documents as "deleted".
+- **No transcripts outside the database:** each ingestion run gives the Agent SDK a configuration directory inside its scratch directory, with session persistence turned off if the SDK allows it (to verify against the SDK docs at implementation), and the scratch directory is deleted when the run ends. Nothing about a run is left in the worker's home directory.
+- Deleting the account cascades to documents, runs, events and proposals.
 
 ## Extraction agent
 
-- Runs on the `agents` runtime with the user's credential, model `claude-opus-5-5`, with read-only tools over the run's documents (`list_documents`, `read_document(id, offset, limit)`, `get_profile_section`) and one write tool `propose_profile_changes(section, items[])` with a strict schema. Each item has:
+- Runs on the `agents` runtime with the user's credential, model `claude-opus-5-5`, max 80 turns and 30 minutes per run, with the only built-in tool being file reading scoped to the run's scratch directory (for transcription), and read-only app tools over the run's documents (`list_documents`, `read_document(id, offset, limit)`, `get_profile_section`) and one write tool `propose_profile_changes(section, items[])` with a strict schema. Each item has:
   - a **stable key**: the employer `key`, the school name and start, the facts block `title`, the skills category `name`, the board `org`, the answers field name; never an array index;
   - the action (`add`, `replace`, `remove`), the proposed value (validated against the section's Pydantic model before it is stored), and one or more citations `{document_id, excerpt}`.
-- **Citation check** (server side, before storing): Unicode NFKC, case folding, whitespace collapsed and hyphenation at line breaks removed on both the excerpt and the document text; the excerpt must be at least 20 characters (or the whole value, if shorter) and found in the text; numbers in the value must appear in the excerpts. Failing items are dropped; the drop is logged with ids and the reason only, never the excerpt or value.
+- **Citation check** (server side, before storing): Unicode NFKC, case folding, whitespace collapsed and hyphenation at line breaks removed on both the excerpt and the document text; the excerpt must be at least 20 characters (or the whole value, if shorter) and found in the text. Values are then checked against their excerpts by type:
+  - **dates** (`YYYY-MM` months, years): the year must appear, and the month as a number or as an English or French month name or abbreviation (`2023-01` matches "January 2023", "janv. 2023", "01/2023");
+  - **phone numbers**: digits only are compared;
+  - **other numbers** in a value (metrics, counts, sizes): each must appear in an excerpt;
+  - **`skills.years_experience`** is exempt from appearing literally, but must equal the span computed from the cited employment dates (sum of non-overlapping periods, in years with one decimal, never rounded up).
+  Failing items are dropped; the drop is logged with ids and the reason only, never the excerpt or value.
 - **Large inputs:** documents are read in pages or chunks; transcription, then extraction per document, then a merge step that dedupes and detects conflicts.
 - **Skills and search:** proposed advanced terms must pass `check_regex`; the `none` categories, gates and search preferences are proposed only when a document states them.
 - **Re-runs:** the run compares against the current profile and against items the user rejected before (by section, key and value hash): rejected items are not proposed again unless their value changed. Pending items from an older run are marked superseded when a newer run starts.
@@ -63,17 +74,18 @@ ingestion_runs(id uuid, user_id fk cascade, agent_run_id fk agent_runs, document
 
 ## Proposals mapping
 
-Ingestion uses the `proposals` table of SPEC-agents with `target = "profile"`, `target_id = null`, `kind = "profile_item"`, one row per item, and `payload = {section, key, action, value, citations[], base_revision, conflict?}`. Applying items:
+Ingestion uses the `proposals` table of SPEC-agents (amended in this PR: nullable `target_id`, statuses `superseded` and `invalid`, optional `edited_value` on accept) with `target = "profile"`, `target_id = null`, `kind = "profile_item"`, one row per item, and `payload = {section, key, action, value, citations[], base_revision, conflict?}`. Applying items:
 - `POST /api/proposals/{id}/accept` takes an optional `edited_value` (validated by the section schema; SPEC-agents' accept endpoint gains this optional field).
 - `POST /api/ingestion/runs/{id}/accept-section {section, proposal_ids[]}` applies several items of one section in **one profile save, so one revision**; locked items are refused in this call.
-- If the profile section changed since the run's `base_revision`, items whose key changed meanwhile are shown as **stale** and need a fresh look; others apply normally.
+- **Stale** is computed when proposals are read, never stored: if the profile section changed since the run's `base_revision` and the item's key changed meanwhile, the item is shown as stale and needs a fresh look; others apply normally.
+- The review page lists only `kind = "profile_item"` proposals of the run; the job pages list only job proposals (`GET /api/proposals?kind=`).
 
 ## API
 
 | Method and path | Does |
 |---|---|
 | GET /api/ingestion/prompt | the laptop-analysis prompt filled for the caller |
-| POST /api/ingestion/documents (raw body; filename in `X-Filename` as RFC 5987 UTF-8, sanitised to a safe display name), POST /api/ingestion/documents/text (pasted text) ; GET ; DELETE /{id} | manage documents |
+| POST /api/ingestion/documents (raw body; filename in `X-Filename` as RFC 5987 UTF-8, sanitised to a safe display name), POST /api/ingestion/documents/text (pasted text) ; GET ; DELETE /{id} ; POST /{id}/confirm | manage documents |
 | GET /api/ingestion/documents/{id}/text?offset=&limit= | extracted text preview, paginated |
 | POST /api/ingestion/runs `{document_ids}` ; GET /api/ingestion/runs/{id} ; POST /api/ingestion/runs/{id}/cancel | start, follow, stop an extraction |
 | GET /api/ingestion/runs/{id}/proposals ; POST /api/proposals/{id}/accept `{edited_value?}` ; POST /api/proposals/{id}/reject ; POST /api/ingestion/runs/{id}/accept-section | review |
@@ -105,4 +117,4 @@ Ingestion uses the `proposals` table of SPEC-agents with `target = "profile"`, `
 
 ## Review history
 
-- PR #5 review (2026-10-09): blocking points on image citations, deletion, proposals mapping, locked facts and limits addressed in this revision.
+- PR #5 review (2026-10-09): blocking points on image citations, deletion, proposals mapping, locked facts and limits addressed; second pass: deletion of all copies, typed citation checks for dates, phones and computed years, SPEC-agents amended for proposals.

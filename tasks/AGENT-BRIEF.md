@@ -1,9 +1,9 @@
 # Brief for implementation subagents
 
-You implement exactly one task of `tasks/todo.md`. The orchestrator verifies your work before ticking it.
+You implement exactly one task of `tasks/todo.md` or of your module's `tasks/<module>/todo.md`. The orchestrator verifies your work before ticking it.
 
 ## Read first
-- `CAPABILITY-MAP.md`, the `SPEC-<module>.md` of your module, `tasks/plan.md`, and your task block in `tasks/todo.md`.
+- `CAPABILITY-MAP.md`, the `SPEC-<module>.md` of your module, `tasks/plan.md`, and your task block in `tasks/todo.md` or `tasks/<module>/todo.md`.
 - The existing code you build on. Match its style.
 
 ## Environment
@@ -21,5 +21,5 @@ You implement exactly one task of `tasks/todo.md`. The orchestrator verifies you
 
 ## Finish
 - Commit on `main` with clear messages ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` and push.
-- Do not tick boxes in `tasks/todo.md`; the orchestrator does.
+- Do not tick boxes in `tasks/todo.md` or `tasks/<module>/todo.md`; the orchestrator does.
 - Report: files changed, commands run with key output, tests (count, what edge cases), Playwright evidence paths, what failed or was skipped and why, follow-ups for later tasks.
