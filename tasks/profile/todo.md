@@ -33,7 +33,7 @@ Spec: [SPEC-profile.md](../../SPEC-profile.md). Depends on identity (I1 to I3 at
 **Verify:** Vitest; Playwright locally; screenshots.
 **Files:** `web/src/features/profile/*`. **Scope:** M
 
-## P5: Editors for facts, skills and search, with the board check
+## P5: Editors for facts, skills and search, with the board check (done 2026-10-09)
 
 **Acceptance:** Markdown editor with preview and blocks; skills category and term chips; search terms chips, contract toggles, regex advanced mode with server error shown; board table with enable switches and add company verified through `POST /api/profile/boards/check`.
 **Verify:** pytest for the board check (mocked ATS: exists, 404, timeout); Vitest; Playwright.
