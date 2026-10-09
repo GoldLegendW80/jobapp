@@ -32,9 +32,9 @@ Invite-only accounts with server-side sessions, an admin area, and the `current_
 - [x] I6: Account password change and reset links
 
 ### Checkpoint I-B
-- [ ] Two-user journey works; isolation fixture proves cross-user reads fail
+- [x] Two-user journey works; isolation fixture proves cross-user reads fail
 
-- [ ] I7: Login throttling and auth hardening
+- [x] I7: Login throttling and auth hardening
 - [ ] I8: End-to-end identity journey on the Jetson, screenshots of every page
 
 ### Checkpoint I-C

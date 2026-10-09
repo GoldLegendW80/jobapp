@@ -104,14 +104,14 @@ Plan: [plan.md](plan.md). Spec: [SPEC-identity.md](../../SPEC-identity.md).
 **Scope:** M
 
 ## Checkpoint I-B
-- [ ] Two-user journey green; isolation fixture in place for later modules
+- [x] Two-user journey green; isolation fixture in place for later modules
 
 ## I7: Login throttling and auth hardening
 
 **Acceptance criteria:**
-- [ ] 5 failures per email or 20 per IP in 15 minutes give 429 with Retry-After; success after the window
-- [ ] Unknown email and wrong password give the same message and comparable timing
-- [ ] No password, token or cookie value appears in logs (log capture test)
+- [x] 5 failures per email or 20 per IP in 15 minutes give 429 with Retry-After; success after the window
+- [x] Unknown email and wrong password give the same message and comparable timing
+- [x] No password, token or cookie value appears in logs (log capture test)
 
 **Verification:** pytest; a log scan in the smoke
 
