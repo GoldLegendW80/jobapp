@@ -19,6 +19,7 @@ from app.identity import deps as identity_deps
 from app.identity import service as identity_service
 from app.identity.admin_router import router as admin_router
 from app.identity.router import router as auth_router
+from app.jobs.router import router as jobs_router
 from app.logging_config import configure_logging
 from app.profile.router import router as profile_router
 
@@ -136,5 +137,6 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(profile_router)
+    app.include_router(jobs_router)
     identity_deps.assert_default_deny(app)
     return app

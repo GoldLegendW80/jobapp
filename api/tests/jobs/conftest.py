@@ -1,5 +1,6 @@
 """Fixtures of the jobs tests: the identity fixtures (real Postgres at head, users emptied after
-each test, which cascades to every jobs table) and two users."""
+each test, which cascades to every jobs table; the app with a frozen clock and the
+cookie-explicit client) and two users."""
 
 import uuid
 from datetime import UTC, datetime
@@ -15,6 +16,9 @@ migrated_url = identity.migrated_url
 engine = identity.engine
 factory = identity.factory
 db = identity.db
+clock = identity.clock
+app = identity.app
+api = identity.api
 
 NOW = datetime(2026, 10, 8, 9, 30, tzinfo=UTC)
 

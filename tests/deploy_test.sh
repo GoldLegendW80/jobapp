@@ -10,7 +10,9 @@
 # container's last start, waiting, stopped or missing cloudflared), the backup and restore
 # options refused before any network call, *.dump and backups/ kept out of git and rsync, and the
 # typed confirmation of restore --into-live against a fake Jetson, and `admin create` (argument
-# checks before any network call; the CLI run in the api container with the tunnel URL, quoted).
+# checks before any network call; the CLI run in the api container with the tunnel URL, quoted),
+# and `jobs import` and `profile import` (argument checks; conversion on the Mac of a synthetic job
+# folder, the document streamed to the CLI in the api container; a bad source never sent).
 # Needs Docker (for the pinned shellcheck image) and rsync.
 set -euo pipefail
 
@@ -142,6 +144,20 @@ ok "admin create: wrong or missing action, extra arguments, no @, leading dash, 
 run 0 ./deploy.sh --help
 out_has "admin create <email>"
 ok "--help documents admin create"
+for module in jobs profile; do
+  for args in "$module" "$module export a@b.c" "$module import" "$module import a@b.c extra"; do
+    # shellcheck disable=SC2086 # word splitting wanted
+    run 1 nohost ./deploy.sh $args
+    out_has "usage: ./deploy.sh $module import <email>"
+  done
+  for email in "no-at-sign" "-x@example.org" "a b@example.org"; do
+    run 1 nohost ./deploy.sh "$module" import "$email"
+    grep -q "$module import" "$WORK/out" || fail "$module import $email: $(cat "$WORK/out")"
+  done
+  run 0 ./deploy.sh --help
+  out_has "$module import <email>"
+done
+ok "jobs import and profile import: wrong action, extra arguments and bad emails refused before any network call; --help documents both"
 run 1 ./deploy.sh deploy --bogus-flag
 out_has "unknown option for deploy: --bogus-flag"
 ok "unknown deploy option refused before any network call"
@@ -215,6 +231,13 @@ case "$cmd" in
     echo "$cmd" >>"$FAKE_CALLS"
     cat "$FAKE_CF_LOG"
     ;;
+  *"exec -T api python -m app.jobs.cli import"* | *"exec -T api python -m app.profile.cli import"*)
+    echo "$cmd" >>"$FAKE_CALLS"
+    # What reached the Jetson on stdin: kept whole, to compare with the local conversion.
+    cat >"$FAKE_STDIN"
+    echo "Imported 2 rows: 2 created, 0 updated, 0 unchanged, 0 skipped."
+    exit "${FAKE_CLI_EXIT:-0}"
+    ;;
   *"exec -T api python -m app.identity.cli"*)
     echo "$cmd" >>"$FAKE_CALLS"
     echo "Setup link for zoe@example.org, valid 7 days, single use:"
@@ -225,7 +248,7 @@ esac
 exit 0
 FAKE
 chmod +x "$WORK/bin/ssh"
-fake() { env PATH="$WORK/bin:$PATH" FAKE_CALLS="$WORK/calls" DEPLOY_HOST=fakejetson "$@"; }
+fake() { env PATH="$WORK/bin:$PATH" FAKE_CALLS="$WORK/calls" FAKE_STDIN="$WORK/stdin" DEPLOY_HOST=fakejetson "$@"; }
 # run_split <expected exit> <cmd...>: like run, stdout and stderr kept apart
 run_split() {
   local want="$1" got=0
@@ -302,6 +325,41 @@ grep -q "exec -T api" "$WORK/calls" && fail "the CLI ran without a public URL"
 ok "no tunnel URL: exit 1 before the CLI runs"
 run_split 2 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" FAKE_CLI_EXIT=2 ./deploy.sh admin create zoe@example.org
 ok "the CLI's exit code (2, invalid email) is passed through"
+
+step "jobs import and profile import against the fake Jetson"
+# A small synthetic job folder: data/jobs.csv with two rows, one with a posting and a cv.pdf.
+src="$WORK/jobfolder"
+mkdir -p "$src/data/jobs/acme-ai-engineer"
+printf '%s\n' "id,company,title,location,type,url,found_on,status,applied_on,fit,competencies,gaps,description,jd,cv,letter,report,notes" \
+  'acme-ai-engineer,Acme,AI Engineer,Paris,CDI,https://e.org/1,2026-10-07,applied,2026-10-08,88,"agents, python",,,,,,,"a note, with a comma"' \
+  'beta-ml,Beta,ML,Lyon,,https://e.org/2,2026-10-07,found,,,,,,,,,,' >"$src/data/jobs.csv"
+printf 'COMPANY: Acme\nTITLE: AI Engineer\n\nBuild agents.\n' >"$src/data/jobs/acme-ai-engineer/posting.txt"
+printf '%%PDF-1.7\nsynthetic\n' >"$src/data/jobs/acme-ai-engineer/cv.pdf"
+: >"$WORK/calls"
+rm -f "$WORK/stdin"
+run_split 0 fake JOBAPP_SOURCE_DIR="$src" ./deploy.sh jobs import Zoe@Example.org
+grep -qF -- "docker compose -f compose.yml --profile tunnel exec -T api python -m app.jobs.cli import --email Zoe@Example.org --file -" "$WORK/calls" ||
+  fail "remote command: $(cat "$WORK/calls")"
+grep -q '"format": "jobapp-jobs"' "$WORK/stdin" || fail "the document did not reach the Jetson on stdin"
+grep -q '"slug": "beta-ml"' "$WORK/stdin" || fail "rows missing from the document"
+grep -q "Converted 2 rows (applied 1, found 1), 1 posting texts, 1 files" "$WORK/stdout" ||
+  fail "conversion summary: $(cat "$WORK/stdout")"
+grep -q "Imported 2 rows" "$WORK/stdout" || fail "the CLI's summary is not shown: $(cat "$WORK/stdout")"
+ok "jobs import converts JOBAPP_SOURCE_DIR/data on the Mac, then streams the document to app.jobs.cli import in the api container"
+ls /tmp/jobapp-import.* >/dev/null 2>&1 && fail "the temporary document was left in /tmp"
+ok "the temporary document is removed afterwards"
+run_split 2 fake JOBAPP_SOURCE_DIR="$src" FAKE_CLI_EXIT=2 ./deploy.sh jobs import zoe@example.org
+ok "the import CLI's exit code is passed through"
+: >"$WORK/calls"
+run_split 1 fake JOBAPP_SOURCE_DIR="$WORK/empty-folder" ./deploy.sh jobs import zoe@example.org
+grep -q "is not a folder (set JOBAPP_SOURCE_DIR" "$WORK/stderr" || fail "missing source: $(cat "$WORK/stderr")"
+mkdir -p "$WORK/nocsv/data"
+run_split 1 fake JOBAPP_SOURCE_DIR="$WORK/nocsv" ./deploy.sh jobs import zoe@example.org
+grep -q "conversion failed, nothing was sent" "$WORK/stderr" || fail "bad source: $(cat "$WORK/stderr")"
+run_split 1 fake JOBAPP_SOURCE_DIR="$WORK/nocsv" ./deploy.sh profile import zoe@example.org
+grep -q "profile import: conversion failed, nothing was sent" "$WORK/stderr" || fail "bad profile source: $(cat "$WORK/stderr")"
+[[ ! -s "$WORK/calls" ]] || fail "a failed conversion still reached the Jetson: $(cat "$WORK/calls")"
+ok "a missing or unconvertible source fails before any remote call (jobs and profile)"
 
 step "restore --into-live confirmation, against a fake Jetson"
 # This fake swallows the ops/db.sh streamed to `bash -s` and records the command; it answers the

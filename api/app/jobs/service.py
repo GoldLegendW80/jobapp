@@ -8,19 +8,25 @@ show up at once. `now` is passed in (the app's clock), never read here. Nothing 
 posting texts or file contents.
 """
 
+import base64
+import binascii
+import enum
+import json
 import uuid
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections import defaultdict
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, undefer
 
 from app.jobs import slug as slugs
 from app.jobs.models import (
     ContractType,
+    FileOrigin,
     Job,
     JobEvent,
     JobEventKind,
@@ -30,6 +36,7 @@ from app.jobs.models import (
     SweepStatus,
     SweepTrigger,
 )
+from app.jobs.schemas import ImportFile, ImportJob
 from app.jobs.scoring import ScoreResult
 
 
@@ -298,3 +305,390 @@ def start_sweep(db: Session, user_id: uuid.UUID, trigger: SweepTrigger, now: dat
             raise
         raise SweepRunningError() from None
     return sweep
+
+
+# --- list page ----------------------------------------------------------------------------------
+
+
+class JobSort(enum.StrEnum):
+    """Orders of GET /api/jobs. Every order ends with the id, so ties have one stable order and
+    a cursor never skips or repeats a row."""
+
+    found_on = "found_on"  # newest found first, then best fit
+    fit = "fit"  # best fit first, unscored last, then newest found
+    company = "company"  # company A to Z (case-insensitive), then title
+    status = "status"  # pipeline order (found ... skipped), then best fit
+    updated = "updated"  # last changed first
+
+
+@dataclass(frozen=True)
+class _SortKey:
+    expression: Any
+    descending: bool
+    parse: Callable[[Any], Any]  # the cursor's JSON value back to a bound value
+    value_of: Callable[[Job], Any]  # the row's value, as JSON
+
+
+# An unscored job sorts as fit -1: after every scored one in a descending order.
+_FIT = _SortKey(sa.func.coalesce(Job.fit, -1), True, int, lambda j: -1 if j.fit is None else j.fit)
+_FOUND = _SortKey(Job.found_on, True, date.fromisoformat, lambda j: j.found_on.isoformat())
+_ID = _SortKey(Job.id, False, lambda v: uuid.UUID(str(v)), lambda j: str(j.id))
+SORT_KEYS: dict[JobSort, tuple[_SortKey, ...]] = {
+    JobSort.found_on: (_FOUND, _FIT, _ID),
+    JobSort.fit: (_FIT, _FOUND, _ID),
+    JobSort.company: (
+        _SortKey(sa.func.lower(Job.company), False, str, lambda j: j.company.lower()),
+        _SortKey(sa.func.lower(Job.title), False, str, lambda j: j.title.lower()),
+        _ID,
+    ),
+    JobSort.status: (_SortKey(Job.status, False, JobStatus, lambda j: j.status.value), _FIT, _ID),
+    JobSort.updated: (
+        _SortKey(Job.updated_at, True, datetime.fromisoformat, lambda j: j.updated_at.isoformat()),
+        _ID,
+    ),
+}
+
+
+class InvalidCursorError(ValueError):
+    """The cursor was not made by this API for this sort."""
+
+
+def encode_cursor(sort: JobSort, job: Job) -> str:
+    """An opaque cursor after `job` in `sort`: base64url of the sort and the row's sort values."""
+    values = [key.value_of(job) for key in SORT_KEYS[sort]]
+    raw = json.dumps({"s": sort.value, "k": values}, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_cursor(sort: JobSort, cursor: str) -> list[Any]:
+    """The bound sort values a cursor carries. Raises InvalidCursorError for anything else."""
+    keys = SORT_KEYS[sort]
+    try:
+        body = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        if not isinstance(body, dict) or body.get("s") != sort.value:
+            raise InvalidCursorError("The cursor belongs to another sort or is invalid.")
+        values = body.get("k")
+        if not isinstance(values, list) or len(values) != len(keys):
+            raise InvalidCursorError("The cursor is invalid.")
+        parsed = []
+        for key, value in zip(keys, values, strict=True):
+            if isinstance(value, (dict, list, bool)) or value is None:
+                raise InvalidCursorError("The cursor is invalid.")
+            parsed.append(key.parse(value))
+        return parsed
+    except InvalidCursorError:
+        raise
+    except (ValueError, TypeError, binascii.Error, RecursionError):
+        raise InvalidCursorError("The cursor is invalid.") from None
+
+
+def _after(keys: tuple[_SortKey, ...], values: list[Any]) -> sa.ColumnElement[bool]:
+    """Rows strictly after `values` in the order of `keys` (keyset pagination with mixed
+    directions: k1 beyond v1, or k1 = v1 and k2 beyond v2, ...)."""
+    clauses = []
+    for index, key in enumerate(keys):
+        equal = [k.expression == v for k, v in zip(keys[:index], values[:index], strict=True)]
+        value = values[index]
+        beyond = key.expression < value if key.descending else key.expression > value
+        clauses.append(sa.and_(*equal, beyond))
+    return sa.or_(*clauses)
+
+
+def _file_count() -> Any:
+    return (
+        sa.select(sa.func.count(JobFile.id))
+        .where(JobFile.job_id == Job.id)
+        .correlate(Job)
+        .scalar_subquery()
+    )
+
+
+@dataclass
+class ListPage:
+    rows: list[tuple[Job, int]]  # each job with its number of files
+    next_cursor: str | None
+
+
+def list_page(
+    db: Session,
+    user_id: uuid.UUID,
+    filters: JobFilters,
+    sort: JobSort,
+    limit: int,
+    cursor: str | None = None,
+) -> ListPage:
+    """One page of the user's jobs matching `filters`, in `sort`, after `cursor`. Raises
+    InvalidCursorError for a cursor this sort did not make."""
+    keys = SORT_KEYS[sort]
+    query = filtered(user_id, filters).add_columns(_file_count())
+    if cursor:
+        query = query.where(_after(keys, decode_cursor(sort, cursor)))
+    order = [k.expression.desc() if k.descending else k.expression.asc() for k in keys]
+    found = [(row[0], int(row[1])) for row in db.execute(query.order_by(*order).limit(limit + 1))]
+    page = found[:limit]
+    next_cursor = encode_cursor(sort, page[-1][0]) if len(found) > limit else None
+    return ListPage(rows=page, next_cursor=next_cursor)
+
+
+def status_counts(db: Session, user_id: uuid.UUID, filters: JobFilters) -> dict[JobStatus, int]:
+    """Rows per status matching `filters` except their status filter, every status listed in
+    pipeline order (0 when none), so status tabs can show what each would hold."""
+    base = filtered(user_id, replace(filters, statuses=())).with_only_columns(Job.status).subquery()
+    query = sa.select(base.c.status, sa.func.count()).group_by(base.c.status)
+    counts = {JobStatus(status): count for status, count in db.execute(query).all()}
+    return {status: int(counts.get(status, 0)) for status in JobStatus}
+
+
+FIT_BUCKETS = 10  # 0-9, 10-19, ..., 80-89, 90-100
+
+
+def fit_histogram(db: Session, user_id: uuid.UUID, filters: JobFilters) -> tuple[list[int], int]:
+    """Rows matching `filters` per fit bucket (100 falls in the last one), and the number of
+    unscored rows among them."""
+    base = filtered(user_id, filters).with_only_columns(Job.fit).subquery()
+    tens = base.c.fit // 10  # integer division; NULL stays NULL (LEAST would drop it)
+    buckets = [0] * FIT_BUCKETS
+    unscored = 0
+    for ten, count in db.execute(sa.select(tens, sa.func.count()).group_by(tens)).all():
+        if ten is None:
+            unscored = int(count)
+        else:
+            buckets[min(int(ten), FIT_BUCKETS - 1)] += int(count)
+    return buckets, unscored
+
+
+def recent_events(
+    db: Session, user_id: uuid.UUID, job_id: uuid.UUID, limit: int
+) -> tuple[list[JobEvent], int]:
+    """The newest `limit` events of one of the user's jobs, newest first, and how many exist."""
+    scope = (JobEvent.user_id == user_id, JobEvent.job_id == job_id)
+    newest = sa.select(JobEvent).where(*scope).order_by(JobEvent.at.desc(), JobEvent.id.desc())
+    events = list(db.execute(newest.limit(limit)).scalars())
+    total = db.execute(sa.select(sa.func.count()).select_from(JobEvent).where(*scope)).scalar_one()
+    return events, int(total)
+
+
+# --- import -------------------------------------------------------------------------------------
+
+# The fields an import sets, compared one by one on an existing row.
+IMPORTED_FIELDS = (
+    "company",
+    "title",
+    "location",
+    "contract_type",
+    "url",
+    "source",
+    "status",
+    "fit",
+    "competencies",
+    "gaps",
+    "description",
+    "posting_text",
+    "published_on",
+    "found_on",
+    "applied_on",
+    "notes",
+    "legacy",
+)
+
+
+@dataclass
+class ImportSummary:
+    created: int = 0
+    updated: int = 0
+    unchanged: int = 0
+    skipped: int = 0
+    files_added: int = 0
+    files_replaced: int = 0
+    files_unchanged: int = 0
+    files_kept: int = 0
+    warnings: list[str] = field(default_factory=list)
+
+
+def is_sent(job: Job) -> bool:
+    """Whether the job's files went to the company (hard rule 9: they are never replaced nor
+    deleted): its status is applied, or it has an applied_on date (interview, rejected...)."""
+    return job.status is JobStatus.applied or job.applied_on is not None
+
+
+class _Index:
+    """The user's rows as the import goes: by slug, by URL, by duplicate key, and their files."""
+
+    def __init__(self, db: Session, user_id: uuid.UUID) -> None:
+        self.jobs = list(
+            db.execute(
+                jobs_of(user_id).options(undefer(Job.posting_text)).order_by(Job.created_at, Job.id)
+            ).scalars()
+        )
+        self.by_slug = {job.slug: job for job in self.jobs}
+        self.by_url = {job.url: job for job in self.jobs if job.url}
+        self.keys = {job.id: self.key_of(job) for job in self.jobs}
+        self.files: dict[uuid.UUID, list[JobFile]] = defaultdict(list)
+        query = sa.select(JobFile).join(Job, Job.id == JobFile.job_id).where(Job.user_id == user_id)
+        for found in db.execute(query.order_by(JobFile.created_at, JobFile.id)).scalars():
+            self.files[found.job_id].append(found)
+        self.claimed: set[uuid.UUID] = set()
+
+    @staticmethod
+    def key_of(job: Job) -> slugs.PostingKey:
+        return slugs.PostingKey.of(job.company, job.title, job.location, job.url)
+
+    def match(self, item: ImportJob) -> Job | None:
+        """The row this item updates: the same slug, else the same posting by the duplicate
+        rules, never a row another item of this import already took."""
+        job = self.by_slug.get(item.slug)
+        if job is not None and job.id not in self.claimed:
+            return job
+        key = slugs.PostingKey.of(item.company, item.title, item.location, item.url)
+        free = (j for j in self.jobs if j.id not in self.claimed)
+        return slugs.find_duplicate(key, free, lambda j: self.keys[j.id])
+
+    def track(self, job: Job, old_url: str | None) -> None:
+        if job.id not in self.keys:
+            self.jobs.append(job)
+            self.by_slug[job.slug] = job
+        if old_url and self.by_url.get(old_url) is job:
+            del self.by_url[old_url]
+        if job.url:
+            self.by_url[job.url] = job
+        self.keys[job.id] = self.key_of(job)
+        self.claimed.add(job.id)
+
+
+def _new_file(job: Job, item: ImportFile, now: datetime) -> JobFile:
+    return JobFile(
+        job_id=job.id,
+        name=item.name,
+        mime=item.mime,
+        content=item.content,
+        size=item.size,
+        sha256=bytes.fromhex(item.sha256),
+        origin=FileOrigin.legacy,
+        created_at=now,
+    )
+
+
+def _create_imported(
+    db: Session, user_id: uuid.UUID, item: ImportJob, index: _Index, summary: ImportSummary,
+    now: datetime,
+) -> Job:  # fmt: skip
+    slug = item.slug
+    if slug in index.by_slug:  # the row with this slug was taken by another item
+        slug = slugs.unique_slug(slug, index.by_slug)
+        summary.warnings.append(f"{item.slug}: slug taken by another row, stored as {slug}")
+    job = Job(
+        user_id=user_id,
+        slug=slug,
+        **{name: getattr(item, name) for name in IMPORTED_FIELDS if name != "found_on"},
+        found_on=item.found_on or now.date(),
+        fit_overridden=False,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(job)
+    db.flush()
+    add_event(db, job, JobEventKind.created, {"slug": job.slug, "via": "import"}, now)
+    for file in item.files:
+        db.add(_new_file(job, file, now))
+    summary.created += 1
+    summary.files_added += len(item.files)
+    return job
+
+
+def _update_imported(
+    db: Session, job: Job, item: ImportJob, index: _Index, summary: ImportSummary, now: datetime
+) -> None:
+    changed: dict[str, Any] = {}
+    for name in IMPORTED_FIELDS:
+        new = getattr(item, name)
+        if name == "found_on" and new is None:
+            continue
+        if getattr(job, name) != new:
+            changed[name] = new
+
+    sent = is_sent(job) or item.status is JobStatus.applied
+    current = index.files[job.id]
+    by_name = {f.name: f for f in current}
+    digests = {bytes(f.sha256) for f in current}
+    added: list[str] = []
+    replaced: list[str] = []
+    for file in item.files:
+        digest = bytes.fromhex(file.sha256)
+        stored = by_name.get(file.name)
+        if (stored is not None and bytes(stored.sha256) == digest) or (
+            stored is None and digest in digests
+        ):
+            summary.files_unchanged += 1
+        elif stored is None:
+            new_file = _new_file(job, file, now)
+            db.add(new_file)
+            current.append(new_file)
+            digests.add(digest)
+            added.append(file.name)
+        elif sent:
+            summary.files_kept += 1
+            summary.warnings.append(
+                f"{job.slug}: {file.name} differs from the file already sent, the stored one "
+                "is kept (files of applied rows never change)"
+            )
+        else:
+            stored.content = file.content
+            stored.size = file.size
+            stored.sha256 = digest
+            stored.mime = file.mime
+            digests.add(digest)
+            replaced.append(file.name)
+
+    if not changed and not added and not replaced:
+        summary.unchanged += 1
+        return
+    data: dict[str, Any] = {"changed": sorted(changed)}
+    if "status" in changed:
+        data["status"] = {"from": job.status.value, "to": changed["status"].value}
+    if added:
+        data["files_added"] = added
+    if replaced:
+        data["files_replaced"] = replaced
+    for name, value in changed.items():
+        setattr(job, name, value)
+    job.updated_at = now
+    add_event(db, job, JobEventKind.import_, data, now)
+    summary.updated += 1
+    summary.files_added += len(added)
+    summary.files_replaced += len(replaced)
+
+
+def import_jobs(
+    db: Session, user_id: uuid.UUID, items: Sequence[ImportJob], now: datetime
+) -> ImportSummary:
+    """Load an import document's rows into the user's jobs; the caller commits (all or nothing).
+
+    Idempotent: a row is matched by slug, else by the duplicate rules (same URL, or same company,
+    title and location); a matched row gets only the fields that differ, with one `import` event
+    naming them, and a row with nothing new is left alone (no event, updated_at kept). New rows
+    are created with a `created` event. Files are matched by name, and a file whose bytes the job
+    already holds (same SHA-256, any name) is not stored twice. A different file under a stored
+    name replaces it, except on a sent row (`is_sent`), which keeps its file byte for byte with a
+    warning. An import never deletes a row or a file. A row whose URL belongs to another row is
+    skipped with a warning. The document wins on every field it carries, including status.
+    """
+    summary = ImportSummary()
+    index = _Index(db, user_id)
+    for item in items:
+        job = index.match(item)
+        owner = index.by_url.get(item.url) if item.url else None
+        if owner is not None and owner is not job:
+            summary.skipped += 1
+            summary.warnings.append(
+                f"{item.slug}: its url belongs to the row {owner.slug}, skipped"
+            )
+            continue
+        if job is None:
+            job = _create_imported(db, user_id, item, index, summary, now)
+            index.track(job, None)
+        else:
+            old_url = job.url
+            _update_imported(db, job, item, index, summary, now)
+            index.track(job, old_url)
+    db.flush()
+    return summary
