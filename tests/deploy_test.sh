@@ -45,7 +45,7 @@ run() {
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
 
 step "shellcheck"
-SCRIPTS=(deploy.sh ops/db.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
+SCRIPTS=(deploy.sh ops/db.sh ops/runner/entrypoint.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
   tests/crash_check.sh tests/reboot_check.sh)
 docker run --rm -v "$ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" "${SCRIPTS[@]}" || fail "shellcheck"
 ok "${SCRIPTS[*]} clean"
@@ -208,6 +208,28 @@ ok "logs needs exactly one service"
 run 1 env DEPLOY_DIR=/ ./deploy.sh ps
 out_has "DEPLOY_DIR must name a directory"
 ok "DEPLOY_DIR=/ refused"
+
+step "runner: arguments and settings refused before any network call"
+for args in "runner" "runner bogus" "runner install extra" "runner status remove"; do
+  # shellcheck disable=SC2086 # word splitting wanted
+  run 1 env DEPLOY_HOST=nonexistent-host.invalid ./deploy.sh $args
+  out_has "usage: ./deploy.sh runner install|status|remove"
+done
+run 1 env DEPLOY_HOST=nonexistent-host.invalid RUNNER_REPO=no-slash ./deploy.sh runner status
+out_has "RUNNER_REPO must be owner/name"
+run 1 env DEPLOY_HOST=nonexistent-host.invalid RUNNER_NAME='a b' ./deploy.sh runner status
+out_has "RUNNER_NAME may only hold"
+run 1 env DEPLOY_HOST=nonexistent-host.invalid DEPLOY_DIR=apps/jobapp ./deploy.sh runner install
+out_has "folder directly in the Jetson home"
+ok "runner: no action, unknown action, extra arguments, bad repo, name and folder refused before ssh"
+if command -v gh >/dev/null; then
+  run 1 env DEPLOY_HOST=nonexistent-host.invalid ./deploy.sh runner status
+  out_has "cannot reach nonexistent-host.invalid"
+  ok "runner status: an unreachable host fails with the ssh message"
+fi
+grep -q 'token' <(sed -n '/^runner_install()/,/^}/p' deploy.sh | grep -E 'echo|info|printf') &&
+  fail "runner_install prints something about the token"
+ok "runner_install never prints the token"
 
 step "unreachable host fails fast with a clear message"
 for host in nonexistent-host.invalid 192.0.2.1; do

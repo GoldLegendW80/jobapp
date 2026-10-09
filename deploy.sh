@@ -37,14 +37,14 @@
 #                                  (app.jobs.cli convert) and load it into that account's jobs on
 #                                  the Jetson (app.jobs.cli import, from stdin: no HTTP upload, so
 #                                  Caddy's 10 MiB body limit does not apply); idempotent
-#   ./deploy.sh runner install|status|remove
-#                                  the self-hosted GitHub Actions runner on the Jetson (ops/runner/):
-#                                  a container with the host Docker socket, registered to the repo
-#                                  with labels self-hosted, jetson, arm64; tokens from gh on the Mac
 #   ./deploy.sh jobs mark-overrides <email> [--apply]
 #                                  list the account's fits that differ from the computed ones
 #                                  (set by hand in the CSV); a dry run unless --apply, which
 #                                  marks them so no rescore replaces them (app.jobs.cli)
+#   ./deploy.sh runner install|status|remove
+#                                  the self-hosted GitHub Actions runner on the Jetson (ops/runner/):
+#                                  a container with the host Docker socket, registered to the repo
+#                                  with labels self-hosted, jetson, arm64; tokens from gh on the Mac
 #
 # The job folder holding profile/, engine/ and data/ is the parent of this repository, or
 # JOBAPP_SOURCE_DIR. Both imports convert first, so a bad source fails before any network call.

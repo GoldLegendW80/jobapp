@@ -6,6 +6,7 @@ A self-hosted job-search app for Harald and a few invited friends. It finds post
 
 - [CAPABILITY-MAP.md](CAPABILITY-MAP.md): the modules, their dependencies and the build order.
 - [SPEC-platform.md](SPEC-platform.md): the platform module (Compose stack, deploy, tunnel), built first.
+- [CONTRIBUTING.md](CONTRIBUTING.md): branches, pull requests, CI, review and automatic deploys.
 - [tasks/plan.md](tasks/plan.md) and [tasks/todo.md](tasks/todo.md): the implementation plan and task list of the current module.
 
 ## Setup
@@ -71,8 +72,46 @@ generated on the first deploy into the git-ignored `.env.jetson` (random `POSTGR
 `--env`; `--env` refuses to change `POSTGRES_PASSWORD` once the `pgdata` volume exists. If
 `.env.jetson` is lost, the next deploy copies the Jetson's `.env` back. Caddy listens on the
 Jetson's loopback only; from the Mac, open it with `ssh -N -L 18080:127.0.0.1:80 jetson` and browse
-http://127.0.0.1:18080. `DEPLOY_HOST` and `DEPLOY_DIR` override the target. Deploys are manual;
-GitHub Actions only runs lint and tests.
+http://127.0.0.1:18080. `DEPLOY_HOST` and `DEPLOY_DIR` override the target. Every green push to
+`main` also deploys by itself (next section); `./deploy.sh` stays for the first deploy, a new
+`.env`, and deploying by hand.
+
+## Continuous delivery
+
+Every change goes through a branch and a pull request ([CONTRIBUTING.md](CONTRIBUTING.md)). CI
+(`.github/workflows/ci.yml`) runs on each pull request and push to `main`: api (ruff, pytest against
+Postgres and Redis, coverage at least 95 percent), web (eslint, tsc, Vitest, build), shell
+(shellcheck, `tests/deploy_test.sh`), e2e (the Compose stack built on GitHub's runner, the
+Playwright journeys with throwaway accounts and a synthetic jobs import, never Harald's data) and
+pre-commit. When CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
+Jetson's self-hosted runner: rsync of that commit into `~/jobapp` (same `.rsyncignore`, `.env`
+kept), images built first (a failed build leaves the running stack untouched), a backup into
+`~/jobapp-backups/deploys/` (newest 10 kept, separate from the nightly ones), `compose up --wait`,
+migrations, `tests/jetson_smoke.sh` in quick mode, and the public URL in the run's summary. One
+deploy runs at a time and is never cancelled. `gh workflow run deploy.yml --ref <branch>` deploys
+any branch by hand (to test it before the merge; the next merge redeploys `main`).
+
+```bash
+./deploy.sh runner install     # build ops/runner on the Jetson, register it (labels self-hosted, jetson, arm64), start it
+./deploy.sh runner status      # the container on the Jetson and the runner as GitHub sees it (online, busy)
+./deploy.sh runner remove      # unregister, remove the container and its volume
+gh run list --workflow deploy.yml   # recent deploys; gh run view <id> --log for one
+```
+
+The runner is the official actions runner (arm64, pinned version and checksum) in a container,
+so it needs no sudo: persistent (registered once, its credentials in the `jobapp-runner` volume,
+self-updates kept), restart unless-stopped, host network, outbound connections only. It sees
+`~/jobapp` and `~/jobapp-backups` at their own paths and drives the host's Docker through its
+socket with the host's own Docker CLI. Registration and removal tokens come from `gh api` on the
+Mac, reach the container on stdin and are never stored. Persistent rather than ephemeral: an
+ephemeral runner must be registered again for every job, which needs a long-lived GitHub admin
+token on the Jetson, a larger secret than the runner's own repository-scoped credential.
+
+**Security.** Access to the Docker socket is equivalent to root on the Jetson, so this runner is
+root on the Jetson for whatever workflow runs on it. It is registered to this private repository
+only: never add it to a public repository, never let it run workflows from forks, and keep
+`deploy.yml` the only workflow that targets `[self-hosted, jetson]`; it runs automatically only for
+pushes to `main`. Anyone with write access to the repository can run code on the Jetson.
 
 ## Public URL
 
