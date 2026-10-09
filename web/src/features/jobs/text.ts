@@ -48,22 +48,53 @@ function show(value: unknown): string {
   return JSON.stringify(value);
 }
 
+const FIELD_LABELS: Record<string, string> = {
+  company: "company",
+  title: "title",
+  location: "location",
+  contract_type: "contract type",
+  url: "link",
+};
+
 /** One line for an event of the timeline. */
 export function describeEvent(
   kind: string,
   data: Record<string, unknown>,
 ): string {
+  const via =
+    data.via === "bulk"
+      ? " (bulk action)"
+      : data.via === "undo"
+        ? " (undone)"
+        : data.via === "rescore"
+          ? " (rescore)"
+          : "";
   switch (kind) {
     case "created":
       return data.via === "import" ? "Imported" : "Added";
     case "status":
-      return `Status changed from ${statusLabel(show(data.from))} to ${statusLabel(show(data.to))}`;
+      return `Status changed from ${statusLabel(show(data.from))} to ${statusLabel(show(data.to))}${via}`;
     case "fit":
-      return `Fit changed from ${show(data.from)} to ${show(data.to)}`;
+      if (data.manual === true && data.from === data.to)
+        return `Fit ${show(data.to)} marked as set by hand`;
+      if (data.manual === true)
+        return `Fit set by hand from ${show(data.from)} to ${show(data.to)}`;
+      if (data.was_manual === true)
+        return `Fit back to the computed ${show(data.to)}, was ${show(data.from)} set by hand${via}`;
+      return `Fit changed from ${show(data.from)} to ${show(data.to)}${via}`;
     case "note":
-      return "Note added";
-    case "edit":
-      return "Edited";
+      if (data.via === "bulk") return "Note added (bulk action)";
+      if (typeof data.to === "string" && data.to.trim() === "")
+        return "Notes cleared";
+      return "Notes edited";
+    case "edit": {
+      const changes = data.changes;
+      const names =
+        changes && typeof changes === "object"
+          ? Object.keys(changes).map((name) => FIELD_LABELS[name] ?? name)
+          : [];
+      return names.length ? `Edited the ${names.join(", ")}` : "Edited";
+    }
     case "import":
       return "Updated by an import";
     case "sweep":

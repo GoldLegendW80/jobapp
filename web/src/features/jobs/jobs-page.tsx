@@ -8,6 +8,7 @@ import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
 import { jobListKey, listJobs, listQuery } from "./api";
+import { AddPostingButton, BulkBar, PageMenu } from "./jobs-actions";
 import { FilterBar } from "./filter-bar";
 import {
   EMPTY_FILTERS,
@@ -18,6 +19,7 @@ import {
 import { FitHistogram } from "./fit-histogram";
 import { JobsList, JobsListSkeleton } from "./jobs-list";
 import { KpiTiles } from "./kpi-tiles";
+import { useSelection } from "./selection";
 import { useJobFilters } from "./use-job-filters";
 
 const EMPTY_BUCKETS = Array.from({ length: 10 }, (_, i) => ({
@@ -28,7 +30,9 @@ const EMPTY_BUCKETS = Array.from({ length: 10 }, (_, i) => ({
 
 /**
  * /jobs, the home page: counts per status, the fit histogram, the filters (all in the URL) and
- * the list of postings, loaded page by page as it scrolls. Read only in this slice.
+ * the list of postings, loaded page by page as it scrolls. Rows can be selected (Shift for a
+ * range, the header box for the whole view) for the bulk bar; the header adds a posting by
+ * hand, and its menu rescores.
  */
 export function JobsPage() {
   useTitle("Jobs");
@@ -48,20 +52,27 @@ export function JobsPage() {
   const loadMore = useCallback(() => {
     void fetchNextPage();
   }, [fetchNextPage]);
+  const selection = useSelection(items, apiQuery, first?.total ?? 0);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-6">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Jobs</h1>
-        <p
-          role="status"
-          aria-live="polite"
-          className="text-sm text-muted-foreground tabular-nums"
-        >
-          {first
-            ? `${first.total} ${first.total === 1 ? "posting" : "postings"}${filtered ? " match" : ""}`
-            : ""}
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="text-2xl font-semibold tracking-tight">Jobs</h1>
+          <p
+            role="status"
+            aria-live="polite"
+            className="text-sm text-muted-foreground tabular-nums"
+          >
+            {first
+              ? `${first.total} ${first.total === 1 ? "posting" : "postings"}${filtered ? " match" : ""}`
+              : ""}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <AddPostingButton />
+          <PageMenu selected={selection.ids} />
+        </div>
       </div>
 
       <KpiTiles
@@ -168,10 +179,19 @@ export function JobsPage() {
               isFetchingNextPage={isFetchingNextPage}
               fetchNextPage={loadMore}
               from={query ? `?${query}` : ""}
+              selection={selection}
             />
+            <div className="mt-2 flex sm:hidden">
+              <Button variant="outline" size="sm" onClick={selection.toggleAll}>
+                {selection.allState === "none"
+                  ? "Select every posting in this view"
+                  : "Clear the selection"}
+              </Button>
+            </div>
           </>
         )}
       </div>
+      <BulkBar selection={selection} />
     </div>
   );
 }

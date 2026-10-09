@@ -20,6 +20,13 @@ import { useTitle } from "@/lib/use-title";
 import { getJob, jobKey, type JobDetail } from "./api";
 import { FitBadge, StatusBadge } from "./badges";
 import { FilesSection } from "./files-section";
+import {
+  EditDetailsButton,
+  FitControl,
+  NotesEditor,
+  StatusControl,
+} from "./job-editor";
+import { useJobEditor } from "./use-job-editor";
 import { formatDate, formatDateTime } from "./format";
 import {
   describeEvent,
@@ -38,7 +45,7 @@ function useBackTo(): string {
     : "/jobs";
 }
 
-/** /jobs/:id: everything about one posting, read only in this slice. */
+/** /jobs/:id: everything about one posting; status, notes, fit and details are editable. */
 export function JobDetailPage() {
   const { id = "" } = useParams();
   const backTo = useBackTo();
@@ -141,15 +148,19 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 }
 
 function JobDetailView({ job }: { job: JobDetail }) {
+  const save = useJobEditor(job.id);
   const link = safeHttpUrl(job.url);
   const legacy = Object.entries(job.legacy);
   return (
     <article aria-labelledby="job-title" className="flex flex-col gap-8">
       <header className="flex flex-col gap-4">
         <div className="flex flex-col gap-1">
-          <p className="text-sm font-medium text-muted-foreground break-words">
-            {job.company}
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm font-medium text-muted-foreground break-words">
+              {job.company}
+            </p>
+            <EditDetailsButton job={job} save={save} />
+          </div>
           <h1
             id="job-title"
             className="text-2xl font-semibold tracking-tight break-words"
@@ -201,14 +212,15 @@ function JobDetailView({ job }: { job: JobDetail }) {
         <Terms label="Gaps" terms={job.gaps} tone="gap" />
       </header>
 
-      {job.notes.trim() ? (
-        <section aria-labelledby="notes-title" className="flex flex-col gap-2">
-          <h2 id="notes-title" className="text-lg font-semibold tracking-tight">
-            Notes
-          </h2>
-          <p className="text-sm break-words whitespace-pre-line">{job.notes}</p>
-        </section>
-      ) : null}
+      <section
+        aria-label="Edit status and fit"
+        className="flex flex-col gap-4 rounded-lg border p-4 sm:flex-row sm:items-start sm:gap-8"
+      >
+        <StatusControl job={job} save={save} />
+        <FitControl key={job.id} job={job} save={save} />
+      </section>
+
+      <NotesEditor key={job.id} job={job} save={save} />
 
       <section aria-labelledby="posting-title" className="flex flex-col gap-3">
         <h2 id="posting-title" className="text-lg font-semibold tracking-tight">

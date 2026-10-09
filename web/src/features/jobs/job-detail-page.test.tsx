@@ -70,7 +70,10 @@ describe("job detail", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Mistral AI")).toBeInTheDocument();
     expect(screen.getByText("Paris, France")).toBeInTheDocument();
-    expect(screen.getByText("CV ready")).toBeInTheDocument();
+    expect(
+      screen.getByText("CV ready", { selector: "[data-status]" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveValue("cv_ready");
     expect(screen.getByLabelText("Fit 88 out of 100")).toBeInTheDocument();
     expect(
       within(screen.getByRole("list", { name: "Competencies" })).getAllByRole(
@@ -184,7 +187,10 @@ describe("job detail", () => {
   it("falls back to a readable label for an unknown status", async () => {
     fakeJobDetail(makeDetail({ status: "offer_received" }));
     await openDetail();
-    expect(screen.getByText("Offer received")).toBeInTheDocument();
+    expect(
+      screen.getByText("Offer received", { selector: "[data-status]" }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Status")).toHaveValue("offer_received");
   });
 
   it("lists the files with their icons, sizes and links", async () => {

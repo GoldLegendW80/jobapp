@@ -180,3 +180,102 @@ export function fakeJobDetail(
   );
   return state;
 }
+
+/**
+ * A fake writable job: GET /api/jobs/:id answers the current state and PATCH applies the body
+ * as the api does (events with before and after, a new updated_at each time, 409 when the
+ * body's updated_at is not the current one). `fail` answers instead of applying, once per call.
+ */
+export function fakeEditableJob(
+  initial: JobDetail,
+  options: {
+    latencyMs?: number;
+    fail?: (body: Record<string, unknown>) => Response | undefined;
+  } = {},
+) {
+  const state = {
+    job: structuredClone(initial),
+    patches: [] as Record<string, unknown>[],
+    gets: 0,
+  };
+  let version = 0;
+  let eventId = 1000;
+  const event = (kind: string, data: Record<string, unknown>) => {
+    eventId += 1;
+    state.job.events = [
+      { id: eventId, at: "2026-10-09T09:00:00Z", kind, data },
+      ...state.job.events,
+    ];
+    state.job.events_total += 1;
+  };
+  server.use(
+    http.get("*/api/jobs/:id", ({ params }) => {
+      state.gets += 1;
+      if (params.id !== state.job.id)
+        return HttpResponse.json({ detail: "Job not found." }, { status: 404 });
+      return HttpResponse.json(state.job);
+    }),
+    http.patch("*/api/jobs/:id", async ({ request }) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      state.patches.push(body);
+      if (options.latencyMs) await delay(options.latencyMs);
+      const failed = options.fail?.(body);
+      if (failed) return failed;
+      if (
+        body.updated_at !== undefined &&
+        body.updated_at !== state.job.updated_at
+      )
+        return HttpResponse.json(
+          {
+            detail: "This job changed since you loaded it.",
+            updated_at: state.job.updated_at,
+          },
+          { status: 409 },
+        );
+      const job = state.job;
+      if (typeof body.status === "string" && body.status !== job.status) {
+        event("status", { from: job.status, to: body.status });
+        job.status = body.status;
+        if (body.status === "applied" && !job.applied_on)
+          job.applied_on = "2026-10-09";
+      }
+      if (typeof body.notes === "string" && body.notes !== job.notes) {
+        event("note", { from: job.notes, to: body.notes });
+        job.notes = body.notes;
+      }
+      if ("fit" in body) {
+        if (typeof body.fit === "number") {
+          event("fit", { from: job.fit, to: body.fit, manual: true });
+          job.fit = body.fit;
+          job.fit_overridden = true;
+        } else if (job.fit_overridden) {
+          event("fit", {
+            from: job.fit,
+            to: 61,
+            manual: false,
+            was_manual: true,
+          });
+          job.fit = 61;
+          job.fit_overridden = false;
+        }
+      }
+      const changes: Record<string, unknown> = {};
+      for (const name of [
+        "company",
+        "title",
+        "location",
+        "contract_type",
+        "url",
+      ] as const)
+        if (name in body && body[name] !== job[name]) {
+          changes[name] = { from: job[name], to: body[name] };
+          (job as Record<string, unknown>)[name] = body[name];
+        }
+      if (Object.keys(changes).length) event("edit", { changes });
+      version += 1;
+      job.updated_at = `2026-10-09T09:00:${String(version).padStart(2, "0")}Z`;
+      return HttpResponse.json(job);
+    }),
+  );
+  return state;
+}

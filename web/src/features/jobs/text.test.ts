@@ -95,6 +95,45 @@ describe("describeEvent", () => {
       "Status changed from Found to CV ready",
     ],
     ["fit", { from: null, to: 80 }, "Fit changed from none to 80"],
+    [
+      "status",
+      { from: "found", to: "skipped", via: "bulk" },
+      "Status changed from Found to Skipped (bulk action)",
+    ],
+    [
+      "status",
+      { from: "skipped", to: "found", via: "undo" },
+      "Status changed from Skipped to Found (undone)",
+    ],
+    [
+      "fit",
+      { from: 70, to: 42, manual: true },
+      "Fit set by hand from 70 to 42",
+    ],
+    [
+      "fit",
+      { from: 88, to: 88, manual: true, via: "mark-overrides" },
+      "Fit 88 marked as set by hand",
+    ],
+    [
+      "fit",
+      { from: 42, to: 70, manual: false, was_manual: true },
+      "Fit back to the computed 70, was 42 set by hand",
+    ],
+    [
+      "fit",
+      { from: 60, to: 70, manual: false, via: "rescore" },
+      "Fit changed from 60 to 70 (rescore)",
+    ],
+    ["note", { from: "", to: "x" }, "Notes edited"],
+    ["note", { from: "x", to: " " }, "Notes cleared"],
+    ["note", { from: "", to: "x", via: "bulk" }, "Note added (bulk action)"],
+    [
+      "edit",
+      { changes: { company: {}, contract_type: {}, url: {} } },
+      "Edited the company, contract type, link",
+    ],
+    ["edit", {}, "Edited"],
     ["import", { changed: ["notes"] }, "Updated by an import"],
     ["brand_new", {}, "Brand new"],
   ])("%s %j", (kind, data, text) => {

@@ -37,6 +37,7 @@ const proto = Element.prototype as unknown as Record<string, unknown>;
 for (const [name, fn] of [
   ["hasPointerCapture", () => false],
   ["releasePointerCapture", () => {}],
+  ["setPointerCapture", () => {}],
   ["scrollIntoView", () => {}],
 ] as const) {
   if (missing(name, proto)) proto[name] = fn;
