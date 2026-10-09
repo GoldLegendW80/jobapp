@@ -19,6 +19,15 @@ documents up to IMPORT_CLI_MAX_BYTES (64 MiB), past Caddy's 10 MiB body limit:
 
 `./deploy.sh jobs import <email>` does both, the import on the Jetson.
 
+    python -m app.jobs.cli mark-overrides --email <email> [--apply]
+
+mark-overrides finds the account's jobs whose fit differs from the one computed from their
+posting text (header included) with the profile's skills, and that are not marked as set by hand:
+fits Harald set by hand in the CSV, imported before the import learnt to mark them. A dry run by
+default (lists slug, stored fit and computed fit, changes nothing); `--apply` marks them
+fit_overridden with a `fit` event each, so no rescore replaces them. Running it again finds
+nothing. `./deploy.sh jobs mark-overrides <email> [--apply]` runs it on the Jetson.
+
 Output: counts and warnings (slugs and file names, never posting texts, notes or file
 contents, never the email). Exit codes: 0 done, 2 invalid arguments or file, 1 no such account
 or a database error.
@@ -58,6 +67,13 @@ def _parser() -> argparse.ArgumentParser:
     imp = commands.add_parser("import", help="load a jobs import document into a user's jobs")
     imp.add_argument("--email", required=True, help="the account whose jobs receive the rows")
     imp.add_argument("--file", required=True, help="the document, or - for stdin")
+    mark = commands.add_parser(
+        "mark-overrides", help="mark the fits that differ from the computed ones as set by hand"
+    )
+    mark.add_argument("--email", required=True, help="the account whose jobs are checked")
+    mark.add_argument(
+        "--apply", action="store_true", help="write the marks (default: dry run, nothing written)"
+    )
     return parser
 
 
@@ -154,9 +170,55 @@ def run_import(email: str, file: str) -> int:
         f"{summary.updated} updated, {summary.unchanged} unchanged, {summary.skipped} skipped. "
         f"Files: {summary.files_added} added, {summary.files_replaced} replaced, "
         f"{summary.files_unchanged} unchanged, {summary.files_kept} kept as sent. "
-        f"Warnings: {len(document.warnings) + len(summary.warnings)}."
+        + (
+            f"Fits set by hand: {summary.fits_manual}. "
+            if summary.fits_checked
+            else "Fits set by hand: not checked, the profile has no skills. "
+        )
+        + f"Warnings: {len(document.warnings) + len(summary.warnings)}."
     )
     _warnings([*document.warnings, *summary.warnings])
+    return 0
+
+
+def run_mark_overrides(email: str, apply: bool) -> int:
+    try:
+        email = identity_service.normalize_email(email)
+    except identity_service.InvalidEmailError:
+        _error("Invalid email address. Nothing was changed.")
+        return 2
+    settings = get_settings()
+    engine = build_engine(settings)
+    try:
+        with build_sessionmaker(engine)() as session, session.begin():
+            user = identity_service.get_user_by_email(session, email)
+            if user is None:
+                _error("No account with that email. Nothing was changed.")
+                return 1
+            skills = service.user_skills(session, user.id)
+            if skills is None:
+                _error(
+                    "The account's profile has no skills, so no fit can be computed. "
+                    "Nothing was changed."
+                )
+                return 1
+            candidates = service.override_candidates(session, user.id, skills)
+            rows = [(c.job.slug, c.job.fit, c.computed) for c in candidates]
+            if apply:
+                service.mark_overridden(session, candidates, identity_service.utcnow())
+            else:
+                session.rollback()
+    except SQLAlchemyError as exc:
+        _error(f"Database error, nothing was changed: {type(exc).__name__}")
+        return 1
+    finally:
+        engine.dispose()
+    verb = "Marked" if apply else "Dry run: would mark"
+    print(f"{verb} {len(rows)} fits as set by hand (they differ from the computed fit).")
+    for slug, fit, computed in rows:
+        print(f"  {slug}: fit {fit}, computed {computed}")
+    if not apply and rows:
+        print("Nothing was changed. Run again with --apply to mark them.")
     return 0
 
 
@@ -167,6 +229,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_convert(args.source_dir, args.out)
         if args.command == "import":
             return run_import(args.email, args.file)
+        if args.command == "mark-overrides":
+            return run_mark_overrides(args.email, args.apply)
     except ConfigError as exc:
         _error(str(exc))
         return 2

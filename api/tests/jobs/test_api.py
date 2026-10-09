@@ -563,7 +563,8 @@ def test_import_over_http_is_idempotent(api: Api, alice: Signed) -> None:
     assert first.headers["cache-control"] == "no-store"
     assert first.json() == {
         "created": 2, "updated": 0, "unchanged": 0, "skipped": 0, "files_added": 1,
-        "files_replaced": 0, "files_unchanged": 0, "files_kept": 0,
+        "files_replaced": 0, "files_unchanged": 0, "files_kept": 0, "fits_manual": 0,
+        "fits_checked": False,
         "warnings": ["from the converter"],
     }  # fmt: skip
     second = _post(api, alice, body).json()

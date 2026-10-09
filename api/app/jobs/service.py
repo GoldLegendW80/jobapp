@@ -16,14 +16,16 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, undefer
 
+from app.jobs import scoring
 from app.jobs import slug as slugs
+from app.jobs import undo as undo_tokens
 from app.jobs.models import (
     ContractType,
     FileOrigin,
@@ -38,6 +40,8 @@ from app.jobs.models import (
 )
 from app.jobs.schemas import ImportFile, ImportJob
 from app.jobs.scoring import ScoreResult
+from app.profile.models import Profile
+from app.profile.schemas import SkillsSection
 
 
 class DuplicateJobError(Exception):
@@ -155,12 +159,17 @@ def find_duplicate(
     title: str,
     location: str | None,
     url: str | None,
+    exclude: uuid.UUID | None = None,
 ) -> Job | None:
     """The user's job that is the same posting (slug.py: same URL, or same company, title and
-    location once normalised), or None. Compares in Python over the user's rows: the keys are
-    not stored, and one user holds hundreds of rows, not millions."""
+    location once normalised), or None; `exclude` leaves one job out (the one being edited).
+    Compares in Python over the user's rows: the keys are not stored, and one user holds
+    hundreds of rows, not millions."""
     key = slugs.PostingKey.of(company, title, location, url)
-    rows = db.execute(jobs_of(user_id).order_by(Job.created_at, Job.id)).scalars()
+    query = jobs_of(user_id).order_by(Job.created_at, Job.id)
+    if exclude is not None:
+        query = query.where(Job.id != exclude)
+    rows = db.execute(query).scalars()
     return slugs.find_duplicate(
         key, rows, lambda job: slugs.PostingKey.of(job.company, job.title, job.location, job.url)
     )
@@ -180,6 +189,18 @@ def free_slug(db: Session, user_id: uuid.UUID, base: str) -> str:
 
 
 # --- writing ------------------------------------------------------------------------------------
+
+
+TICK = timedelta(microseconds=1)
+
+
+def touch(job: Job, now: datetime) -> None:
+    """Mark the job changed: updated_at becomes `now`, or one microsecond past its current value
+    when the clock has not moved on (a frozen clock, two writes in the same instant). updated_at
+    therefore changes on every write, which makes it the job's version for optimistic
+    concurrency (PATCH) and for single-use undo tokens."""
+    current = job.updated_at
+    job.updated_at = now if current is None or now > current else current + TICK
 
 
 def add_event(
@@ -244,35 +265,56 @@ def create_job(db: Session, user_id: uuid.UUID, new: NewJob, now: datetime) -> J
 
 
 def apply_score(
-    db: Session, job: Job, result: ScoreResult, now: datetime, *, overwrite_manual: bool = False
+    db: Session,
+    job: Job,
+    result: ScoreResult,
+    now: datetime,
+    *,
+    overwrite_manual: bool = False,
+    via: str | None = None,
 ) -> bool:
     """Record a scoring result. A fit set by hand is kept unless `overwrite_manual`; the
     competencies and gaps are always refreshed, as engine/jobs.py score_row does. Returns
-    whether the fit changed (a `fit` event is recorded then)."""
+    whether anything changed (fit, override flag, competencies or gaps); a `fit` event
+    {from, to, manual: false} is recorded when the fit or its override flag changes, and the
+    job is touched only when something changed."""
     keep = job.fit_overridden and not overwrite_manual
+    changed = list(job.competencies) != list(result.competencies) or list(job.gaps) != list(
+        result.gaps
+    )
     job.competencies = list(result.competencies)
     job.gaps = list(result.gaps)
-    changed = not keep and job.fit != result.fit
-    if changed:
-        add_event(db, job, JobEventKind.fit, {"from": job.fit, "to": result.fit}, now)
+    if not keep and (job.fit != result.fit or job.fit_overridden):
+        data: dict[str, Any] = {"from": job.fit, "to": result.fit, "manual": False}
+        if job.fit_overridden:
+            data["was_manual"] = True
+        if via:
+            data["via"] = via
+        add_event(db, job, JobEventKind.fit, data, now)
         job.fit = result.fit
-    if not keep:
         job.fit_overridden = False
-    job.updated_at = now
+        changed = True
+    if changed:
+        touch(job, now)
     db.flush()
     return changed
 
 
-def set_status(db: Session, job: Job, status: JobStatus, now: datetime) -> bool:
+def set_status(
+    db: Session, job: Job, status: JobStatus, now: datetime, *, via: str | None = None
+) -> bool:
     """Move a job to `status` with a `status` event. Moving to applied fills `applied_on` the
     first time only. Returns False (and records nothing) when the status is unchanged."""
     if job.status == status:
         return False
-    add_event(db, job, JobEventKind.status, {"from": job.status.value, "to": status.value}, now)
+    data = {"from": job.status.value, "to": status.value}
+    if via:
+        data["via"] = via
+    add_event(db, job, JobEventKind.status, data, now)
     job.status = status
     if status is JobStatus.applied and job.applied_on is None:
         job.applied_on = now.date()
-    job.updated_at = now
+    touch(job, now)
     db.flush()
     return True
 
@@ -502,6 +544,10 @@ class ImportSummary:
     files_replaced: int = 0
     files_unchanged: int = 0
     files_kept: int = 0
+    # Rows of the document whose fit was set by hand (imported_fit_is_manual), marked so.
+    fits_manual: int = 0
+    # False when the profile has no skills: then no fit could be told apart, none is marked.
+    fits_checked: bool = True
     warnings: list[str] = field(default_factory=list)
 
 
@@ -570,7 +616,7 @@ def _new_file(job: Job, item: ImportFile, now: datetime) -> JobFile:
 
 def _create_imported(
     db: Session, user_id: uuid.UUID, item: ImportJob, index: _Index, summary: ImportSummary,
-    now: datetime,
+    now: datetime, manual: bool,
 ) -> Job:  # fmt: skip
     slug = item.slug
     if slug in index.by_slug:  # the row with this slug was taken by another item
@@ -581,7 +627,7 @@ def _create_imported(
         slug=slug,
         **{name: getattr(item, name) for name in IMPORTED_FIELDS if name != "found_on"},
         found_on=item.found_on or now.date(),
-        fit_overridden=False,
+        fit_overridden=manual,
         created_at=now,
         updated_at=now,
     )
@@ -596,8 +642,9 @@ def _create_imported(
 
 
 def _update_imported(
-    db: Session, job: Job, item: ImportJob, index: _Index, summary: ImportSummary, now: datetime
-) -> None:
+    db: Session, job: Job, item: ImportJob, index: _Index, summary: ImportSummary, now: datetime,
+    manual: bool,
+) -> None:  # fmt: skip
     changed: dict[str, Any] = {}
     for name in IMPORTED_FIELDS:
         new = getattr(item, name)
@@ -605,6 +652,8 @@ def _update_imported(
             continue
         if getattr(job, name) != new:
             changed[name] = new
+    if job.fit_overridden != manual:
+        changed["fit_overridden"] = manual
 
     sent = is_sent(job) or item.status is JobStatus.applied
     current = index.files[job.id]
@@ -651,7 +700,7 @@ def _update_imported(
         data["files_replaced"] = replaced
     for name, value in changed.items():
         setattr(job, name, value)
-    job.updated_at = now
+    touch(job, now)
     add_event(db, job, JobEventKind.import_, data, now)
     summary.updated += 1
     summary.files_added += len(added)
@@ -671,9 +720,17 @@ def import_jobs(
     name replaces it, except on a sent row (`is_sent`), which keeps its file byte for byte with a
     warning. An import never deletes a row or a file. A row whose URL belongs to another row is
     skipped with a warning. The document wins on every field it carries, including status.
+
+    Fits set by hand: a row whose fit differs from the one computed from its posting text
+    (header included, scoring.engine_text) with the user's skills is stored with
+    fit_overridden, so no rescore replaces it (imported_fit_is_manual; counted in
+    `fits_manual`). The flag is compared like any field, so a second import changes nothing.
+    Without a skills section nothing is marked (`fits_checked` is False).
     """
     summary = ImportSummary()
     index = _Index(db, user_id)
+    skills = user_skills(db, user_id)
+    summary.fits_checked = skills is not None
     for item in items:
         job = index.match(item)
         owner = index.by_url.get(item.url) if item.url else None
@@ -683,12 +740,484 @@ def import_jobs(
                 f"{item.slug}: its url belongs to the row {owner.slug}, skipped"
             )
             continue
+        manual = imported_fit_is_manual(item, skills)
+        summary.fits_manual += manual
         if job is None:
-            job = _create_imported(db, user_id, item, index, summary, now)
+            job = _create_imported(db, user_id, item, index, summary, now, manual)
             index.track(job, None)
         else:
             old_url = job.url
-            _update_imported(db, job, item, index, summary, now)
+            _update_imported(db, job, item, index, summary, now, manual)
             index.track(job, old_url)
     db.flush()
     return summary
+
+
+# --- skills and scoring -------------------------------------------------------------------------
+
+
+def user_skills(db: Session, user_id: uuid.UUID) -> SkillsSection | None:
+    """The skills section of the user's profile, or None when it was never saved (or no longer
+    validates). Reads the profile row without creating it."""
+    sections = db.execute(
+        sa.select(Profile.sections).where(Profile.user_id == user_id)
+    ).scalar_one_or_none()
+    raw = (sections or {}).get("skills")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SkillsSection.model_validate(raw)
+    except ValueError:
+        return None
+
+
+def scoring_text(job: Job) -> str | None:
+    """What a rescore reads for this job: the posting text with the imported posting.txt header
+    put back in front (scoring.engine_text), or None when the job has no posting text."""
+    if job.posting_text is None or not job.posting_text.strip():
+        return None
+    return scoring.engine_text(job.posting_text, (job.legacy or {}).get("posting_header"))
+
+
+def computed_score(job: Job, skills: SkillsSection) -> ScoreResult | None:
+    text = scoring_text(job)
+    return None if text is None else scoring.score(text, skills, title=job.title)
+
+
+def imported_fit_is_manual(item: ImportJob, skills: SkillsSection | None) -> bool:
+    """Whether an imported row's fit was set by hand: it has a fit and a posting text, and the
+    fit is not what the engine computes from that posting (header included). Without skills
+    nothing can be told apart, so nothing is marked."""
+    if skills is None or item.fit is None or item.posting_text is None:
+        return False
+    if not item.posting_text.strip():
+        return False
+    text = scoring.engine_text(item.posting_text, item.legacy.get("posting_header"))
+    return scoring.score(text, skills, title=item.title).fit != item.fit
+
+
+# --- editing (PATCH /api/jobs/{id}) -------------------------------------------------------------
+
+
+class StaleJobError(Exception):
+    """The edit was based on an older version of the job (its updated_at moved on)."""
+
+    def __init__(self, job: Job) -> None:
+        super().__init__("stale job")
+        self.job = job
+
+
+class NothingToComputeError(Exception):
+    """A fit cannot be computed: no posting text, or no skills in the profile."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+EDITABLE_FIELDS = ("company", "title", "location", "contract_type", "url")
+NOTE_COALESCE = timedelta(minutes=2)
+
+
+def lock_job(db: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> Job | None:
+    """One of the user's jobs, its row locked until the transaction ends, fresh from the
+    database (with its posting text)."""
+    return db.execute(
+        jobs_of(user_id)
+        .where(Job.id == job_id)
+        .options(undefer(Job.posting_text))
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+
+
+def _jsonable(value: Any) -> Any:
+    return value.value if isinstance(value, enum.Enum) else value
+
+
+def set_notes(db: Session, job: Job, notes: str, now: datetime, *, via: str | None = None) -> bool:
+    """Replace the notes with a `note` event {from, to}. Edits typed within NOTE_COALESCE of the
+    previous note edit of the same job (autosave while typing) extend that event instead of
+    adding one each: it keeps its `from` and takes the new `to`, and disappears when the text is
+    back to where it started. Bulk appends (`via`) always get their own event."""
+    if job.notes == notes:
+        return False
+    last = None
+    if via is None:
+        last = db.execute(
+            sa.select(JobEvent)
+            .where(JobEvent.job_id == job.id, JobEvent.user_id == job.user_id)
+            .order_by(JobEvent.at.desc(), JobEvent.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+    if (
+        last is not None
+        and last.kind is JobEventKind.note
+        and "via" not in last.data
+        and last.at >= now - NOTE_COALESCE
+    ):
+        if last.data.get("from") == notes:
+            db.delete(last)
+        else:
+            last.data = {**last.data, "to": notes}
+            last.at = max(now, last.at)
+    else:
+        data: dict[str, Any] = {"from": job.notes, "to": notes}
+        if via:
+            data["via"] = via
+        add_event(db, job, JobEventKind.note, data, now)
+    job.notes = notes
+    touch(job, now)
+    db.flush()
+    return True
+
+
+def set_manual_fit(db: Session, job: Job, fit: int, now: datetime) -> bool:
+    """Set the fit by hand: kept by every rescore until cleared."""
+    if job.fit == fit and job.fit_overridden:
+        return False
+    add_event(db, job, JobEventKind.fit, {"from": job.fit, "to": fit, "manual": True}, now)
+    job.fit = fit
+    job.fit_overridden = True
+    touch(job, now)
+    db.flush()
+    return True
+
+
+def clear_manual_fit(db: Session, job: Job, skills: SkillsSection | None, now: datetime) -> bool:
+    """Go back to the computed fit. Raises NothingToComputeError when it cannot be computed."""
+    if not job.fit_overridden:
+        return False
+    if skills is None:
+        raise NothingToComputeError("The fit cannot be computed: your profile has no skills yet.")
+    result = computed_score(job, skills)
+    if result is None:
+        raise NothingToComputeError("The fit cannot be computed: this job has no posting text.")
+    return apply_score(db, job, result, now, overwrite_manual=True)
+
+
+@dataclass
+class JobChanges:
+    """What a PATCH asks for. `fields` holds only the editable fields that were sent."""
+
+    fields: dict[str, Any] = field(default_factory=dict)
+    status: JobStatus | None = None
+    notes: str | None = None
+    set_fit: bool = False  # True when `fit` was sent (a number sets it, None clears it)
+    fit: int | None = None
+
+
+def edit_job(
+    db: Session,
+    job: Job,
+    changes: JobChanges,
+    now: datetime,
+    *,
+    expected_updated_at: datetime | None = None,
+    skills: Callable[[], SkillsSection | None] = lambda: None,
+) -> bool:
+    """Apply a PATCH to a locked job (lock_job). Every change writes its event: `edit`
+    {changes: {field: {from, to}}}, `status`, `note`, `fit`. Returns whether anything changed.
+
+    Raises StaleJobError when `expected_updated_at` is given and is not the job's updated_at,
+    DuplicateJobError when the edited company, title, location or url make it the same posting
+    as another of the user's jobs, NothingToComputeError when clearing a manual fit that cannot
+    be computed. Nothing is written when it raises (the caller rolls back).
+    """
+    if expected_updated_at is not None and job.updated_at != expected_updated_at:
+        raise StaleJobError(job)
+    edits = {
+        name: {"from": _jsonable(getattr(job, name)), "to": _jsonable(value)}
+        for name, value in changes.fields.items()
+        if getattr(job, name) != value
+    }
+    if edits.keys() & {"company", "title", "location", "url"}:
+        after = {name: changes.fields.get(name, getattr(job, name)) for name in EDITABLE_FIELDS}
+        existing = find_duplicate(
+            db,
+            job.user_id,
+            company=after["company"],
+            title=after["title"],
+            location=after["location"],
+            url=after["url"],
+            exclude=job.id,
+        )
+        if existing is not None:
+            raise DuplicateJobError(existing)
+    changed = False
+    if edits:
+        for name in edits:
+            setattr(job, name, changes.fields[name])
+        add_event(db, job, JobEventKind.edit, {"changes": edits}, now)
+        touch(job, now)
+        db.flush()
+        changed = True
+    if changes.status is not None:
+        changed = set_status(db, job, changes.status, now) or changed
+    if changes.notes is not None:
+        changed = set_notes(db, job, changes.notes, now) or changed
+    if changes.set_fit:
+        if changes.fit is None:
+            changed = clear_manual_fit(db, job, skills(), now) or changed
+        else:
+            changed = set_manual_fit(db, job, changes.fit, now) or changed
+    return changed
+
+
+# --- bulk ---------------------------------------------------------------------------------------
+
+
+class MissingJobsError(Exception):
+    """Some ids are not the user's jobs (or do not exist). Carries them, in request order."""
+
+    def __init__(self, missing: list[uuid.UUID]) -> None:
+        super().__init__("missing jobs")
+        self.missing = missing
+
+
+def lock_jobs(db: Session, user_id: uuid.UUID, ids: Sequence[uuid.UUID]) -> list[Job]:
+    """The user's jobs with these ids, in the order given (duplicates once), all locked.
+    Raises MissingJobsError naming every id that is not one of them."""
+    wanted = list(dict.fromkeys(ids))
+    found = {
+        job.id: job
+        for job in db.execute(
+            jobs_of(user_id)
+            .where(Job.id.in_(wanted))
+            .order_by(Job.id)  # one lock order for every caller: no deadlock between two bulks
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalars()
+    }
+    missing = [job_id for job_id in wanted if job_id not in found]
+    if missing:
+        raise MissingJobsError(missing)
+    return [found[job_id] for job_id in wanted]
+
+
+def append_note(existing: str, text: str) -> str:
+    """`text` on a new line after the notes, or alone when there are none."""
+    stripped = existing.rstrip()
+    return f"{stripped}\n{text}" if stripped else text
+
+
+@dataclass
+class BulkResult:
+    job: Job
+    previous_status: JobStatus
+    changed: bool
+
+
+@dataclass
+class BulkOutcome:
+    results: list[BulkResult]
+    undo: list[undo_tokens.Previous]
+
+
+def bulk_update(
+    db: Session,
+    user_id: uuid.UUID,
+    ids: Sequence[uuid.UUID],
+    now: datetime,
+    *,
+    status: JobStatus | None = None,
+    notes_append: str | None = None,
+) -> BulkOutcome:
+    """Set the status of and/or append a note to many of the user's jobs, all or nothing (the
+    caller commits). Raises MissingJobsError, before any change, when an id is not the user's.
+    Returns per job whether it changed, and what an undo of the status change restores."""
+    jobs = lock_jobs(db, user_id, ids)
+    results: list[BulkResult] = []
+    previous: list[tuple[Job, JobStatus, date | None]] = []
+    for job in jobs:
+        before_status, before_applied = job.status, job.applied_on
+        changed = False
+        if status is not None and set_status(db, job, status, now, via="bulk"):
+            previous.append((job, before_status, before_applied))
+            changed = True
+        if notes_append is not None:
+            changed = set_notes(db, job, append_note(job.notes, notes_append), now, via="bulk") or (
+                changed
+            )
+        results.append(BulkResult(job=job, previous_status=before_status, changed=changed))
+    db.flush()
+    undo = [
+        undo_tokens.Previous(
+            job_id=job.id, status=old, applied_on=applied, updated_at=job.updated_at
+        )
+        for job, old, applied in previous
+    ]
+    return BulkOutcome(results=results, undo=undo)
+
+
+@dataclass
+class UndoOutcome:
+    restored: list[uuid.UUID]
+    skipped: list[uuid.UUID]  # changed again since the bulk change, deleted, or already undone
+
+
+def undo_bulk(
+    db: Session, user_id: uuid.UUID, previous: Sequence[undo_tokens.Previous], now: datetime
+) -> UndoOutcome:
+    """Put back the status and applied_on each job had before a bulk change, for the jobs still
+    exactly as that change left them (same updated_at). Restoring moves updated_at on, so the
+    same token restores nothing the second time."""
+    ids = [p.job_id for p in previous]
+    jobs = {
+        job.id: job
+        for job in db.execute(
+            jobs_of(user_id)
+            .where(Job.id.in_(ids))
+            .order_by(Job.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalars()
+    }
+    restored: list[uuid.UUID] = []
+    skipped: list[uuid.UUID] = []
+    for p in previous:
+        job = jobs.get(p.job_id)
+        if job is None or job.updated_at != p.updated_at:
+            skipped.append(p.job_id)
+            continue
+        set_status(db, job, p.status, now, via="undo")
+        job.applied_on = p.applied_on
+        restored.append(job.id)
+    db.flush()
+    return UndoOutcome(restored=restored, skipped=skipped)
+
+
+# --- add by hand (POST /api/jobs) ---------------------------------------------------------------
+
+
+def add_manual_job(db: Session, user_id: uuid.UUID, new: NewJob, now: datetime) -> tuple[Job, bool]:
+    """Create a posting typed in by the user (create_job: DuplicateJobError when it is already
+    there) and score it at once when it has a posting text and the profile has skills. Returns
+    the job and whether it was scored."""
+    job = create_job(db, user_id, new, now)
+    if new.posting_text and new.posting_text.strip():
+        skills = user_skills(db, user_id)
+        if skills is not None:
+            result = scoring.score(new.posting_text, skills, title=new.title)
+            apply_score(db, job, result, now, via="add")
+            return job, True
+    return job, False
+
+
+# --- rescore (POST /api/jobs/rescore) -----------------------------------------------------------
+
+
+@dataclass
+class RescoreOutcome:
+    scored: int = 0
+    changed: int = 0
+    unchanged: int = 0
+    skipped_manual: int = 0  # fit set by hand, kept (competencies and gaps still refreshed)
+    skipped_no_text: int = 0
+    last_id: uuid.UUID | None = None  # the last job looked at, where a next call resumes
+
+
+def rescore_batch(
+    db: Session,
+    user_id: uuid.UUID,
+    skills: SkillsSection,
+    now: datetime,
+    *,
+    ids: Sequence[uuid.UUID] | None,
+    after: uuid.UUID | None,
+    limit: int,
+    overwrite_manual: bool,
+    outcome: RescoreOutcome,
+) -> int:
+    """Rescore up to `limit` of the user's jobs in id order after `after` (only `ids` when
+    given), adding to `outcome`. Returns how many jobs it looked at (0 when none are left)."""
+    query = jobs_of(user_id).options(undefer(Job.posting_text)).order_by(Job.id).limit(limit)
+    if ids is not None:
+        query = query.where(Job.id.in_(list(ids)))
+    if after is not None:
+        query = query.where(Job.id > after)
+    jobs = list(db.execute(query.with_for_update()).scalars())
+    for job in jobs:
+        outcome.last_id = job.id
+        result = computed_score(job, skills)
+        if result is None:
+            outcome.skipped_no_text += 1
+            continue
+        outcome.scored += 1
+        manual_kept = job.fit_overridden and not overwrite_manual
+        changed = apply_score(
+            db, job, result, now, overwrite_manual=overwrite_manual, via="rescore"
+        )
+        if manual_kept:
+            outcome.skipped_manual += 1
+        elif changed:
+            outcome.changed += 1
+        else:
+            outcome.unchanged += 1
+    db.flush()
+    return len(jobs)
+
+
+def count_after(
+    db: Session, user_id: uuid.UUID, ids: Sequence[uuid.UUID] | None, after: uuid.UUID | None
+) -> int:
+    query = sa.select(sa.func.count()).select_from(Job).where(Job.user_id == user_id)
+    if ids is not None:
+        query = query.where(Job.id.in_(list(ids)))
+    if after is not None:
+        query = query.where(Job.id > after)
+    return int(db.execute(query).scalar_one())
+
+
+def missing_ids(db: Session, user_id: uuid.UUID, ids: Sequence[uuid.UUID]) -> list[uuid.UUID]:
+    wanted = list(dict.fromkeys(ids))
+    found = set(
+        db.execute(sa.select(Job.id).where(Job.user_id == user_id, Job.id.in_(wanted))).scalars()
+    )
+    return [job_id for job_id in wanted if job_id not in found]
+
+
+# --- hand overrides of imported rows (python -m app.jobs.cli mark-overrides) --------------------
+
+
+@dataclass
+class OverrideCandidate:
+    job: Job
+    computed: int
+
+
+def override_candidates(
+    db: Session, user_id: uuid.UUID, skills: SkillsSection
+) -> list[OverrideCandidate]:
+    """The user's jobs whose fit differs from the one computed from their posting text (header
+    included) and that are not marked as set by hand yet, by slug. A rescore would replace
+    these fits, so they are the ones the user set by hand (or scored on another text)."""
+    jobs = db.execute(
+        jobs_of(user_id)
+        .where(Job.fit.is_not(None), Job.fit_overridden.is_(False))
+        .options(undefer(Job.posting_text))
+        .order_by(Job.slug)
+    ).scalars()
+    found = []
+    for job in jobs:
+        result = computed_score(job, skills)
+        if result is not None and result.fit != job.fit:
+            found.append(OverrideCandidate(job=job, computed=result.fit))
+    return found
+
+
+def mark_overridden(db: Session, candidates: Sequence[OverrideCandidate], now: datetime) -> int:
+    """Mark these fits as set by hand (fit unchanged), with a `fit` event each."""
+    for candidate in candidates:
+        job = candidate.job
+        add_event(
+            db,
+            job,
+            JobEventKind.fit,
+            {"from": job.fit, "to": job.fit, "manual": True, "via": "mark-overrides"},
+            now,
+        )
+        job.fit_overridden = True
+        touch(job, now)
+    db.flush()
+    return len(candidates)
