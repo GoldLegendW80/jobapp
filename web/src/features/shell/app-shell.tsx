@@ -34,6 +34,9 @@ export function AppShell() {
             {APP_NAME}
           </Link>
           <nav aria-label="Main" className="flex items-center gap-1">
+            <NavLink to="/profile" className={navLink}>
+              Profile
+            </NavLink>
             {user.role === "admin" ? (
               <NavLink to="/admin/users" className={navLink}>
                 Admin

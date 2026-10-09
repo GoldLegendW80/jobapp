@@ -7,6 +7,7 @@ import { AuthProvider } from "@/features/auth/auth-provider";
 import { PublicOnly, RequireAdmin, RequireAuth } from "@/features/auth/guards";
 import { LinkPage } from "@/features/auth/link-page";
 import { LoginPage } from "@/features/auth/login-page";
+import { ProfilePage } from "@/features/profile/profile-page";
 import { AppShell } from "@/features/shell/app-shell";
 import { HomePage } from "@/features/shell/home-page";
 import { NotFoundPage } from "@/features/shell/not-found-page";
@@ -43,6 +44,7 @@ export const routes: RouteObject[] = [
         children: [
           { index: true, element: <HomePage /> },
           { path: "account", element: <AccountPage /> },
+          { path: "profile", element: <ProfilePage /> },
           {
             path: "admin/users",
             element: (
