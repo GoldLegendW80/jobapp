@@ -175,6 +175,17 @@ if rc logs --no-log-prefix --since 2m api caddy | grep -qF -e "$spass" -e "$mark
 fi
 ok "401 recorded once in login_attempts (then deleted), neither password nor email in the api and caddy logs"
 
+step "auth: protected routes answer 401 without a session"
+for route in /api/auth/me /api/admin/users /api/admin/invites /api/profile /api/profile/revisions; do
+  for res in "$(rcurl "$route")" "$(rcurl "$route" -H "'Cookie: jobapp_session=forged'")"; do
+    [[ "$(status_of "$res")" == "401" ]] || fail "$route answered $(status_of "$res") without a session"
+    grep -q '"detail"' <<<"$(body_of "$res")" || fail "$route 401 body: $(body_of "$res")"
+  done
+done
+res="$(rcurl /api/health)"
+[[ "$(status_of "$res")" == "200" ]] || fail "/api/health is not public any more"
+ok "/api/auth/me, /api/admin/users, /api/admin/invites, /api/profile, /api/profile/revisions: 401 with no cookie and with a forged one; /api/health stays public"
+
 step "migrations rerun safely"
 for _ in 1 2; do rc exec -T api alembic upgrade head >/dev/null 2>&1 || fail "upgrade head"; done
 current="$(rc exec -T api alembic current 2>/dev/null | tr -d '\r')"
