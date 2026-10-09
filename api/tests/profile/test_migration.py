@@ -9,7 +9,7 @@ from alembic import command
 from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
-from tests.test_migrations import alembic_config, current_revision
+from tests.test_migrations import HEAD, alembic_config, current_revision
 
 TABLES = {"profiles", "profile_revisions"}
 
@@ -143,7 +143,7 @@ def test_up_down_up_with_data(at_base: sa.Engine) -> None:
     with at_base.connect() as conn:
         assert conn.execute(sa.text("SELECT count(*) FROM users")).scalar_one() == 1
     command.upgrade(alembic_config(), "head")
-    assert current_revision(url(at_base)) == "0003"
+    assert current_revision(url(at_base)) == HEAD
     assert set(sa.inspect(at_base).get_table_names()) >= TABLES
     command.check(alembic_config())
 
