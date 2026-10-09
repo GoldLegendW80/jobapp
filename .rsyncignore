@@ -40,3 +40,6 @@ test-results/
 
 # Screenshots and scripts of past checks: documentation, not runtime
 tasks/evidence/
+
+# Commit the deploy workflow last deployed (written on the Jetson after its smoke passed)
+.deployed-commit

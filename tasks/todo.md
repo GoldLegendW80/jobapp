@@ -124,25 +124,31 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 
 **Scope:** S
 
-## Task 7: CI workflow
+## Task 7: GitHub delivery: CI, pull request flow, self-hosted runner deploy
 
-**Description:** GitHub Actions on push and pull request: backend lint and pytest with a Postgres service container, frontend lint, typecheck, Vitest and build.
+**Description:** The pull request flow of CONTRIBUTING.md; GitHub Actions CI on every pull request and push to `main` (api, web, shell, e2e, pre-commit); a self-hosted runner in a container on the Jetson; a deploy workflow that ships every green `main` to the Jetson (SPEC-platform.md, Repository and automation).
 
-**Prerequisite (Harald):** `gh auth refresh -s workflow`.
+**Prerequisite (Harald):** `gh auth refresh -s workflow` (granted 2026-10-09).
 
 **Acceptance criteria:**
-- [ ] `.github/workflows/ci.yml` with two jobs, `api` and `web`, cached uv and pnpm
-- [ ] Green run on `main`
+- [ ] `.github/workflows/ci.yml` with jobs `api` (Postgres and Redis services, ruff, pytest, coverage at least 95 percent, JUnit summary), `web` (lint, typecheck, Vitest, build), `shell` (shellcheck, `tests/deploy_test.sh`), `e2e` (scratch Compose stack, Playwright journeys, synthetic jobs import, artifacts on failure) and `precommit`; cached uv and pnpm; actions pinned by SHA; minimal permissions; superseded runs cancelled
+- [ ] `.github/pull_request_template.md` and `CONTRIBUTING.md` (branch naming, conventional commits, review subagent, merge commits, enforcement by convention on the free plan)
+- [ ] `ops/runner/` and `./deploy.sh runner install|status|remove`: the runner online on GitHub with labels `self-hosted, jetson, arm64`, no sudo, no token stored
+- [ ] `.github/workflows/deploy.yml`: on green CI of a push to `main` and by `workflow_dispatch`; build before restart, backup before migrations, smoke, public URL in the summary; one deploy at a time
+- [ ] Green CI on the pull request and on `main`
 
 **Verification:**
-- [ ] `gh run watch` on the pushed commit ends in success
-- [ ] A deliberately failing test on a branch turns the run red, then is reverted
+- [ ] `gh run watch` on the pull request's run ends in success
+- [ ] A deliberately failing test on a throwaway branch turns the run red; the branch is deleted
+- [ ] `gh api repos/GoldLegendW80/jobapp/actions/runners` lists `jetson` online
+- [ ] `deploy.yml` dispatched on the task branch deploys that commit to the Jetson, smoke passes, and Harald's user row, profile revision and job counts per status are identical before and after
+- [ ] After the merge, the push to `main` deploys by itself
 
-**Dependencies:** Tasks 2, 5
+**Dependencies:** Tasks 2, 5, 9
 
-**Files:** `.github/workflows/ci.yml`
+**Files:** `.github/`, `CONTRIBUTING.md`, `ops/runner/`, `deploy.sh`, `tests/jetson_smoke.sh`, `tests/deploy_test.sh`, `README.md`, `SPEC-platform.md`
 
-**Scope:** S
+**Scope:** M
 
 ## Checkpoint C: full stack locally and in CI
 - [ ] Localhost through Caddy works, CI green, Jetson serves through Caddy on the LAN
