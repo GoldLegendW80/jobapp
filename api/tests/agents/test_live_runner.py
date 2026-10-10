@@ -143,7 +143,18 @@ def script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 # --- what is stored does not change -------------------------------------------------------------
 
-DETERMINISTIC = ("echo", "tool", "forbidden", "refused", "job_chat", "triage_invalid", "loop")
+DETERMINISTIC = (
+    "echo",
+    "tool",
+    "forbidden",
+    "refused",
+    "job_chat",
+    "triage_invalid",
+    "loop",
+    "long_answer",
+    # The recording: without partial messages its stream events are left out, as the CLI does.
+    "partial_recorded",
+)
 
 
 def stored(factory: sessionmaker[Session], run_id: uuid.UUID) -> Any:
