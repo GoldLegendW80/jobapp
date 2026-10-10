@@ -1,5 +1,9 @@
 # Production stack. Local development adds compose.dev.yml:
 #   docker compose -f compose.yml -f compose.dev.yml up --build
+# On an Apple silicon Mac a stack started from this file alone adds compose.mac.yml, or the api and
+# the worker die with SIGILL at import (OPENSSL_armcap=0, explained there). That variable never
+# belongs in this file: the Jetson keeps hardware AES (api/tests/test_openssl_armcap.py).
+#   docker compose -p jobapp-x -f compose.yml -f compose.mac.yml up -d --build --wait
 # caddy is the only service that publishes a host port: ${HTTP_BIND}:${HTTP_PORT}, loopback by
 # default, so the Jetson answers curl localhost over ssh and nothing on the LAN. Set HTTP_BIND=0.0.0.0
 # in .env to open it to the LAN (ask first, SPEC-platform.md). The public entry point is Tailscale

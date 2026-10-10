@@ -1,0 +1,24 @@
+# Mac only: add this file to every stack started from compose.yml alone on an Apple silicon Mac
+# (scratch stacks, the e2e recipes at the top of web/e2e/*.spec.ts, tests/compose_smoke.sh):
+#   HTTP_PORT=8093 docker compose -p jobapp-x -f compose.yml -f compose.mac.yml up -d --build --wait
+# Only `up` and `run` need it: `exec`, `ps`, `logs` and `down` reach containers that exist.
+# The dev stack needs nothing more: compose.dev.yml sets the same variable.
+#
+# Why. Since 47.0.0 the wheels of `cryptography` bundle OpenSSL 4. In the Linux guest of Docker
+# Desktop on an M4, which lists "sme" among its CPU features, importing it ends in SIGILL: the api
+# and the worker exit with status 132 and restart forever. Reproduced on 2026-10-10 (issue #19):
+# 47.0.0 and 50.0.2 crash, 46.0.7 does not, and all three run with OPENSSL_armcap=0, which makes
+# OpenSSL skip its CPU detection and use portable code, slower and with the same results.
+#
+# Never on the Jetson, never in compose.yml: its Cortex-A78AE has no SVE or SME, does not crash,
+# and must keep hardware AES. deploy.sh and the deploy workflow use compose.yml alone, and
+# api/tests/test_openssl_armcap.py fails if the variable reaches compose.yml, the Dockerfile or
+# .env.example. CI runs on x86, where OpenSSL does not read this variable.
+
+services:
+  api:
+    environment:
+      OPENSSL_armcap: "0"
+  worker:
+    environment:
+      OPENSSL_armcap: "0"
