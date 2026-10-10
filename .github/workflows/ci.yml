@@ -1,8 +1,14 @@
 # Continuous integration (SPEC-platform.md, Repository and automation; CONTRIBUTING.md).
 # Every pull request and every push to main: api lint and tests against Postgres and Redis service
-# containers, web lint, typecheck, Vitest and build, the shell scripts, the browser journeys against
-# a scratch Compose stack built on the runner, and the pre-commit hooks not covered elsewhere.
+# containers (two shards, coverage combined and held to its floor in api-coverage), web lint,
+# typecheck, Vitest and build, the shell scripts, the browser journeys against a scratch Compose
+# stack built on the runner, and the pre-commit hooks not covered elsewhere.
 # A green run on main is what .github/workflows/deploy.yml waits for.
+#
+# Exit codes: every run step uses `bash --noprofile --norc -eo pipefail` (defaults.run.shell
+# below; without it GitHub runs `bash -e`, where `gate | tail` ends with the status of tail).
+# A command that gates anything is still never piped, and never negated with `!` (bash -e does
+# not stop on a negated command): it runs on its own line or under an explicit `if`.
 #
 # Actions are pinned by full commit SHA (the tag in the comment). Runs on GitHub's x86 runners:
 # tests only, the arm64 images are built on the Jetson by the deploy workflow.
@@ -20,6 +26,10 @@ permissions:
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 env:
   UV_VERSION: "0.9.28"
@@ -98,12 +108,13 @@ jobs:
           include-hidden-files: true
           retention-days: 1
           if-no-files-found: error
-      # Serial, without -n: these stop, restart and pause Postgres containers of their own.
+          # "Re-run failed jobs" may run a shard whose upload already succeeded: replace it.
+          overwrite: true
+      # Serial, without -n: these stop, restart and pause Postgres containers of their own. No
+      # --cov: they add nothing to the combined coverage figure (and never did).
       - name: Pytest, docker-marked (own Postgres containers stopped, restarted, paused)
         if: matrix.shard.name == 'rest'
         timeout-minutes: 10
-        env:
-          COVERAGE_FILE: .coverage.docker
         run: |
           start=$SECONDS
           uv run --frozen pytest -m docker -p no:cacheprovider \
@@ -129,15 +140,24 @@ jobs:
             python3 ../.github/scripts/junit_summary.py "api (docker)" "${{ runner.temp }}/junit-api-docker.xml" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+  # Runs whatever the shards did (always()), and fails when one of them did not succeed: a
+  # skipped job would satisfy a required check, a failed one never does.
   api-coverage:
     name: api coverage (combined, at least 95 percent)
     needs: api
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
         working-directory: api
     steps:
+      - name: Both api shards succeeded
+        if: needs.api.result != 'success'
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "::error::the api shards ended with '${{ needs.api.result }}': coverage was not checked"
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -154,11 +174,19 @@ jobs:
           pattern: coverage-*
           merge-multiple: true
           path: api
-      - name: Combine and check
+      # Both files are named, so a missing shard fails here.
+      - name: Combine the two shards
+        id: combine
+        run: uv run --frozen coverage combine .coverage.jobs .coverage.rest
+      # The gate. Alone in its step and not piped: its exit status is the step's status.
+      - name: Coverage floor (at least 95 percent of the combined data)
+        run: uv run --frozen coverage report --fail-under=95
+      # --fail-under=0: this step only reports, also when the floor above failed.
+      - name: Coverage summary
+        if: ${{ !cancelled() && steps.combine.outcome == 'success' }}
         run: |
-          uv run --frozen coverage combine .coverage.jobs .coverage.rest
-          uv run --frozen coverage report --fail-under=95 | tail -n 3
-          { echo "### api coverage"; echo; uv run --frozen coverage report --format=total | sed 's/^/- total: /;s/$/ percent/'; } >> "$GITHUB_STEP_SUMMARY"
+          total="$(uv run --frozen coverage report --format=total --fail-under=0)"
+          { echo "### api coverage"; echo; echo "- total: ${total} percent (floor: 95)"; } >> "$GITHUB_STEP_SUMMARY"
 
   web:
     name: web checks (eslint, tsc, build)
@@ -289,7 +317,10 @@ jobs:
         run: |
           umask 077
           .github/scripts/ci_env.sh 8080 > .env
-          ! grep -q change-me .env
+          if grep -q change-me .env; then
+            echo "::error::a placeholder secret of .env.example was left in .env"
+            exit 1
+          fi
           # Agents A2: the worker replays recorded streams instead of calling a model (refused
           # when APP_ENV is production; this stack is development).
           echo "AGENTS_FAKE_BACKEND=true" >> .env
