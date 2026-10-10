@@ -237,7 +237,7 @@
       }
     }
   ],
-  "note": "Three real runs on the owner account with his Claude subscription token: triage, chat, then a follow-up chat message in the same thread (run-followup.log). cost_usd is what the SDK reports (total_cost_usd), a notional figure on a subscription. input_tokens_total is input plus cache creation plus cache read.",
+  "note": "Three real runs on the owner account with his Claude subscription token: triage, chat, then a follow-up chat message in the same thread (run-followup.log). cost_usd is what the SDK reports (total_cost_usd), a notional figure on a subscription. input_tokens_total is input plus cache creation plus cache read. This file was merged by hand: the script wrote the first two runs here and the third to a separate file of the follow-up call, which was folded in and not kept; the third run, this note, totals and the top level memory block were added by hand from run.log, run-followup.log and the memory samples.",
   "totals": {
     "runs": 3,
     "cost_usd": 0.504015,

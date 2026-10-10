@@ -124,7 +124,7 @@ tests/agents_real_run_jetson.sh, 2026-10-10T12:36:05Z, real runs: chat
         1 app.agents.runner: agent run started [ts,level,logger,msg,run_id,user_id,agent,model]
         1 arq.worker:   <n>s → agent-run:<id>:run_agent('<id>') [ts,level,logger,msg]
         1 arq.worker:  <n>s ← agent-run:<id>:run_agent ●  [ts,level,logger,msg]
-   log lines holding "en those two points ": 0
+   log lines holding "[redacted]": 0
    log lines holding "CLAUDE_CODE_OAUTH": 0
    log lines holding "ANTHROPIC_API": 0
    log lines holding "CREDENTIALS_KEY": 0
@@ -146,5 +146,5 @@ tests/agents_real_run_jetson.sh, 2026-10-10T12:36:05Z, real runs: chat
    runs added: 1 (started here: 1)
    proposals decided (accepted, rejected or other): 0
    host: available 5257 MiB
-   metrics: tasks/evidence/agents-a5/metrics-followup.json
+   metrics: [note added after the run: the file written here was merged by hand into metrics.json and not kept; the figures of this run are in metrics.json]
    PASS
