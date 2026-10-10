@@ -39,26 +39,32 @@ ingestion_documents(id uuid, user_id fk users on delete cascade, name text, mime
                     text_source enum(parsed, transcribed, pasted), text_status enum(pending, done, failed),
                     pages int null, secret_warning bool default false, secret_confirmed_at null,
                     created_at, unique(user_id, sha256))
-ingestion_runs(id uuid, user_id fk cascade, agent_run_id fk agent_runs, document_ids uuid[],
+ingestion_runs(id uuid, user_id fk cascade, document_ids uuid[],
                base_revision int, status enum(queued, transcribing, extracting, merging, done, failed, cancelled),
                created_at, finished_at)
+ingestion_run_steps(id, ingestion_run_id fk cascade, document_id, part int, kind enum(transcribe, extract),
+                    agent_run_id fk agent_runs null, status, position int)
+ingestion_items(id, user_id fk cascade, document_id fk cascade, step_id, section, key, action, value jsonb,
+                value_hash, citations jsonb, flags text[])
 ```
 
+As planned against the merged runner (tasks/ingestion/todo.md): the runner executes one SDK session per `agent_runs` row with fixed limits and has no sub-runs, so an ingestion run is a chain of steps, each an ordinary agent run, and the merge is code. Steps store checked candidates in `ingestion_items`; the merge turns them into proposals.
+
 - **Accepted types:** PDF, DOCX, TXT, MD, JSON, CSV, PNG, JPEG, ZIP (LinkedIn data export only: the CSV files inside are unpacked as separate documents, other entries ignored), and a pasted text box.
-- **Limits:** 20 MB per file, 100 MB per user (live documents only), 200 pages per PDF, 500,000 characters of text per document, 100,000 characters per paste; per run at most 30 documents, 1,500,000 characters of text and 60 images or rendered pages sent to the model. Over a limit: 413 or 422 with the limit named.
+- **Limits:** 10 MiB per file (the edge limit of `caddy/Caddyfile` as merged), 100 MB per user (live documents only), 200 pages per PDF, 500,000 characters of text per document, 100,000 characters per paste; per run at most 30 documents, 1,500,000 characters of text and 60 images or rendered pages sent to the model. Over a limit: 413 or 422 with the limit named.
 - **Parser safety:** DOCX and ZIP opened with uncompressed-size and entry-count caps (zip bomb guard, 50 MB uncompressed, 200 entries), PDFs parsed with a page cap and a time budget, images opened with the same pixel guard as the profile photo (25 MP) and downscaled to the model's image limits before sending.
-- **Text extraction:** PDF text layer and DOCX text with pure-Python libraries (arm64 wheels, recorded in the plan). Images, and PDF pages without a text layer, are **transcribed by the model** in a first step of the run: the worker gives the file to the agent (the Agent SDK's file reading handles PDFs and images; to be verified against the SDK docs at implementation, before considering any rendering dependency such as pypdfium2, which would be "ask first"), the agent returns a plain transcription, and it is stored as the document's `text` with `text_source = transcribed`. Citations for those documents are checked against the transcription and flagged "transcribed, check it" in the review.
+- **Text extraction:** PDF text layer and DOCX text with pure-Python libraries (arm64 wheels, recorded in the plan). Images are **transcribed by the model** in a first step of the run: an app tool hands the agent the stored image as an image block (no built-in file tool: verified 2026-10-10, the runner starts Claude Code without any, and the built-in `Read` renders PDF page ranges with `pdftoppm`, a dependency the image lacks), the agent returns a plain transcription, and it is stored as the document's `text` with `text_source = transcribed`. A PDF without a text layer is refused with a message asking for screenshots or a text version, until Harald decides on a rendering dependency such as pypdfium2 ("ask first", open question 1 of the plan). Parsing runs in a resource limited child process of the worker, and a document's `bytes` are set to null once its text is stored. Citations for those documents are checked against the transcription and flagged "transcribed, check it" in the review.
 - **Dedupe** by `unique(user_id, sha256)`: per user only, never revealing another user's uploads.
 - **Deletion is a hard delete:** removing a document deletes its row (bytes and text gone at once) and, in the same transaction:
   - strips its excerpts from proposals of **every** status; a pending item left without any citation is deleted; accepted items keep only "source deleted" in place of the excerpt (the accepted value is the user's own profile now); rejected and superseded items keep only their section, key and value hash (needed so re-runs do not re-propose them);
   - deletes every `agent_events` row of the ingestion runs that read the document (tool arguments, tool results and transcription output can hold its text); the run row stays with ids, status, tokens and cost;
   - runs' `input` and `output` only ever hold document ids, never text; the UI shows ids of deleted documents as "deleted".
-- **No transcripts outside the database:** each ingestion run gives the Agent SDK a configuration directory inside its scratch directory, with session persistence turned off if the SDK allows it (to verify against the SDK docs at implementation), and the scratch directory is deleted when the run ends. Nothing about a run is left in the worker's home directory.
+- **No transcripts outside the database:** as built in A2, every agent run has its Claude Code home and configuration directory inside its scratch directory on the worker's tmpfs, `CLAUDE_CODE_SKIP_PROMPT_HISTORY` stops transcripts and prompt history (the Python SDK has no session persistence option), and the scratch directory is deleted when the run ends. Ingestion writes no document into it. Nothing about a run is left in the worker's home directory.
 - Deleting the account cascades to documents, runs, events and proposals.
 
 ## Extraction agent
 
-- Runs on the `agents` runtime with the user's credential, model `claude-opus-5-5`, turn limit sized from the input (20 + 10 per document, at most 400) and 60 minutes per run, with one sub-run per document for transcription and extraction then one merge sub-run, with the only built-in tool being file reading scoped to the run's scratch directory (for transcription), and read-only app tools over the run's documents (`list_documents`, `read_document(id, offset, limit)`, `get_profile_section`) and one write tool `propose_profile_changes(section, items[])` with a strict schema. Each item has:
+- Runs on the `agents` runtime with the user's credential, model `claude-opus-5-5`, one agent run per document part for transcription and extraction (40 turns and 15 minutes each, 60 minutes for the whole ingestion run) then a merge done in code, with no built-in tool at all, and read-only app tools over the run's documents (`list_documents`, `read_document(id, offset)`, `view_document_image(id)` for transcription, `get_profile_section`) and one write tool `propose_profile_changes(section, items[])` with a strict schema. Each item has:
   - a **stable key**: the employer `key`, the school name and start, the facts block `title`, the skills category `name`, the board `org`, the answers field name; never an array index;
   - the action (`add`, `replace`, `remove`), the proposed value (validated against the section's Pydantic model before it is stored), and one or more citations `{document_id, excerpt}`.
 - **Citation check** (server side, before storing): Unicode NFKC, case folding, whitespace collapsed and hyphenation at line breaks removed on both the excerpt and the document text; the excerpt must be at least 20 characters (or the whole value, if shorter) and found in the text. Values are then checked against their excerpts by type:
@@ -66,7 +72,7 @@ ingestion_runs(id uuid, user_id fk cascade, agent_run_id fk agent_runs, document
   - **phone numbers**: digits only are compared;
   - **other numbers** in a value (metrics, counts, sizes): each must appear in an excerpt;
   - **`skills.years_experience`** is exempt from appearing literally, but must equal the span computed from the cited employment dates (sum of non-overlapping periods, in years with one decimal, never rounded up).
-  Failing items are dropped; the drop is logged with ids and the reason only, never the excerpt or value.
+  Failing items are refused: the tool answers the agent with the item's index and the rule it broke, nothing is stored, and the refusal is logged with ids and the reason only, never the excerpt or value.
 - **Large inputs:** documents are read in pages or chunks; transcription, then extraction per document, then a merge step that dedupes and detects conflicts.
 - **Skills and search:** proposed advanced terms must pass `check_regex`; the `none` categories, gates and search preferences are proposed only when a document states them.
 - **Re-runs:** the run compares against the current profile and against items the user rejected before (by section, key and value hash): rejected items are not proposed again unless their value changed. Pending items from an older run are marked superseded when a newer run starts.
@@ -74,7 +80,7 @@ ingestion_runs(id uuid, user_id fk cascade, agent_run_id fk agent_runs, document
 
 ## Proposals mapping
 
-Ingestion uses the `proposals` table of SPEC-agents (amended in this PR: nullable `target_id`, statuses `superseded` and `invalid`, optional `edited_value` on accept) with `target = "profile"`, `target_id = null`, `kind = "profile_item"`, one row per item, and `payload = {section, key, action, value, citations[], base_revision, conflict?}`. Applying items:
+Ingestion uses the `proposals` table of SPEC-agents as built in A3 (migration 0008: nullable `target_id` and `run_id`, statuses `superseded`, `invalid` and `undone`, `decided_by`, `reason`, optional `edited_value` on accept) with `target = "profile"`, `target_id = null`, `run_id = null` (the merge is not an agent run), `kind = "profile_item"`, one row per item, and `payload = {ingestion_run_id, section, key, action, value, value_hash, citations[], base_revision, flags[], conflict?}`. As merged, `proposals.accept` only applies the two job kinds and `proposals.create` supersedes only when `target_id` is set: ingestion adds the dispatch on `target` and supersedes its own older items. Applying items:
 - `POST /api/proposals/{id}/accept` takes an optional `edited_value` (validated by the section schema; SPEC-agents' accept endpoint gains this optional field).
 - `POST /api/ingestion/runs/{id}/accept-section {section, proposal_ids[]}` applies several items of one section in **one profile save, so one revision**; locked items are refused in this call.
 - **Invalid:** an item whose value no longer validates against its section's schema when it is read or accepted (the schema changed, or the stored value was edited elsewhere) is set to `invalid` and shown greyed out with the reason; it cannot be accepted.
@@ -97,7 +103,7 @@ Ingestion uses the `proposals` table of SPEC-agents (amended in this PR: nullabl
 
 ## Testing strategy
 
-- Unit: text extraction per type (fixtures generated in tests: PDF with text, image-only PDF, DOCX, Markdown, LinkedIn-like ZIP, unicode), limits and every guard (zip bomb, page cap, pixel bomb), per-user dedupe, the item schema and stable keys, citation normalisation and checks (including numbers), conflict detection, re-run filtering of rejected items, stale detection, accept-section as one revision, locked items refused in bulk, hard delete cascading into proposals and events, logs free of excerpts and values.
+- Unit: text extraction per type (fixtures generated in tests: PDF with text, PDF without a text layer (refused), DOCX, Markdown, LinkedIn-like ZIP, unicode), limits and every guard (zip bomb, page cap, pixel bomb), per-user dedupe, the item schema and stable keys, citation normalisation and checks (including numbers), conflict detection, re-run filtering of rejected items, stale detection, accept-section as one revision, locked items refused in bulk, hard delete cascading into proposals and events, logs free of excerpts and values.
 - Integration: transcription and extraction run against the fake model backend from `agents` (recorded tool calls), so CI makes no model calls; one active run per user; isolation between users for documents, runs and proposals; secret-pattern warning on upload.
 - Golden: Harald's real dossier (`profile/facts.md`, `profile.md`, `projects-deep-dive.md`, `cv-base.pdf`) extracted with a real model run once on the Jetson; the accepted proposals should reproduce his current profile closely (a report of differences, reviewed by hand, not a strict test).
 - End to end (Playwright): new user, copy the prompt, upload a synthetic dossier, a CV and a screenshot, run (fake backend in CI, real on the Jetson with an e2e account and a test credential if available), review with citations, accept some, edit and accept one, reject some, accept a whole section in one revision, delete a document and see its pending items disappear.
@@ -119,3 +125,4 @@ Ingestion uses the `proposals` table of SPEC-agents (amended in this PR: nullabl
 ## Review history
 
 - PR #5 review (2026-10-09): blocking points on image citations, deletion, proposals mapping, locked facts and limits addressed; second pass: deletion of all copies, typed citation checks for dates, phones and computed years, SPEC-agents amended for proposals.
+- Plan (2026-10-10, tasks/ingestion/todo.md): aligned with the code as merged after A1 to A4: no built-in `Read` (images through an app tool), session persistence as built, steps instead of sub-runs, the proposals table as built, 10 MiB per file, failing items refused instead of dropped silently.
