@@ -52,11 +52,21 @@ def get_run(db: Session, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun | No
 
 
 def list_runs(
-    db: Session, user_id: uuid.UUID, limit: int, before: datetime | None = None
+    db: Session,
+    user_id: uuid.UUID,
+    limit: int,
+    before: datetime | None = None,
+    *,
+    job_id: uuid.UUID | None = None,
+    agent: str | None = None,
 ) -> Sequence[AgentRun]:
     query = runs_of(user_id)
     if before is not None:
         query = query.where(AgentRun.created_at < before)
+    if job_id is not None:
+        query = query.where(AgentRun.job_id == job_id)
+    if agent is not None:
+        query = query.where(AgentRun.agent == agent)
     return db.scalars(
         query.order_by(AgentRun.created_at.desc(), AgentRun.id.desc()).limit(limit)
     ).all()

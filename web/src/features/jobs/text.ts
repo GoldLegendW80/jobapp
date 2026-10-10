@@ -68,7 +68,9 @@ export function describeEvent(
         ? " (undone)"
         : data.via === "rescore"
           ? " (rescore)"
-          : "";
+          : data.via === "agent"
+            ? " (agent proposal accepted)"
+            : "";
   switch (kind) {
     case "created":
       return data.via === "import" ? "Imported" : "Added";
@@ -84,6 +86,7 @@ export function describeEvent(
       return `Fit changed from ${show(data.from)} to ${show(data.to)}${via}`;
     case "note":
       if (data.via === "bulk") return "Note added (bulk action)";
+      if (data.via === "agent") return "Note added (agent proposal accepted)";
       if (typeof data.to === "string" && data.to.trim() === "")
         return "Notes cleared";
       return "Notes edited";

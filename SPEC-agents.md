@@ -44,9 +44,12 @@ agent_runs(id uuid, user_id, agent text, job_id null, status enum(queued, runnin
 agent_events(id bigserial, run_id fk, seq int, at, kind text, data jsonb)   -- streamed steps, kept for replay
 agent_threads(id uuid, user_id, job_id null, title, created_at, updated_at)   -- each message rebuilds the conversation from agent_messages (no SDK session kept on disk)
 agent_messages(id bigserial, thread_id fk, role enum(user, assistant), content jsonb, run_id null, at)
-proposals(id uuid, user_id, run_id, target text, target_id uuid null, kind text, payload jsonb,
-          status enum(pending, accepted, rejected, superseded, invalid, undone), decided_by enum(user, system) default user, decided_at)
+proposals(id uuid, user_id, run_id null, target text, target_id uuid null, kind text, payload jsonb,
+          status enum(pending, accepted, rejected, superseded, invalid, undone), decided_by enum(user, system) null, decided_at,
+          edited_value jsonb null, reason text null, created_at)
 ```
+
+As built in A3 (2026-10-10, migration 0008): `run_id` is nullable (a rule-based system proposal of SPEC-mail has no run, issue #17 item 1) and set to null when its run is deleted. `decided_by` and `decided_at` are null exactly while a proposal is pending (a check constraint), then `user` when the user accepts or rejects it, `system` when it is superseded (a newer pending proposal of the same kind for the same target replaces it), invalid (its job was deleted when the user accepted it) or created already accepted (SPEC-mail's exception). `edited_value` keeps what the user applied instead of the proposed value, `reason` why the system decided. Kinds of A3, on target `job`: `job_note` {text} (appended to the notes on a new line) and `job_status` {status, from, reason}. Accepting goes through the jobs service on the locked job row: a job event with `via: "agent"` and the proposal id, `applied_on` filled on applied, and the job version checked when the client sends it (409 `stale`). The triage agent (`triage`, `claude-opus-5-5`, effort medium, 12 turns) needs a job, reads it with `get_job` (posting text included) and the profile with `get_profile_section` (contact details and the board list left out), and may propose only `shortlisted` (from found), `skipped` or `closed`, and only while the job is found, shortlisted, cv_ready or staged; refused proposals come back to it as tool errors and nothing is stored. It writes in English whatever the posting's language (the profile has no answer language setting yet). Guards added in review: the posting text, description and notes reach the model only under `untrusted_*` keys and the prompt treats them as third-party data, never instructions; identity is an allow list (headline, city, country, languages); a pending status proposal is superseded whenever the job's status changes by any path, and an unedited one whose `from` is no longer the job's status is marked invalid on accept (409 `status_changed`); creating a proposal takes a transaction advisory lock per (user, target, kind), so two runs at once leave one pending; `input.script` (recorded streams) is refused in production.
 
 ## API
 
@@ -58,7 +61,7 @@ proposals(id uuid, user_id, run_id, target text, target_id uuid null, kind text,
 | GET /api/agents/runs/{id}/stream | server-sent events of a live run (resumable with Last-Event-ID) |
 | POST /api/agents/runs/{id}/cancel | stop |
 | GET/POST /api/agents/threads, GET /api/agents/threads/{id}, POST /api/agents/threads/{id}/messages | chat |
-| GET /api/proposals?status=&kind=, POST /api/proposals/{id}/accept `{edited_value?}` (validated by the target's schema), /reject | proposals |
+| GET /api/proposals?status=&kind=&target=&target_id=&run_id=, POST /api/proposals/{id}/accept `{edited_value?, updated_at?}` (validated by the target's schema; 409 not_pending, target_gone or stale), /reject | proposals |
 
 ## Frontend
 

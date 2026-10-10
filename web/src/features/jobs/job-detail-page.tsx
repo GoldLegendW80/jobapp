@@ -13,6 +13,7 @@ import { Link, useLocation, useParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { JobAssessment } from "@/features/agents/job-assessment";
 import { NotFoundPage } from "@/features/shell/not-found-page";
 import { describeError, isApiError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
@@ -220,6 +221,8 @@ function JobDetailView({ job }: { job: JobDetail }) {
         <StatusControl job={job} save={save} />
         <FitControl key={job.id} job={job} save={save} />
       </section>
+
+      <JobAssessment job={job} />
 
       <NotesEditor key={job.id} job={job} save={save} />
 

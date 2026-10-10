@@ -13,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app import health
+from app.agents import proposals_router
 from app.agents import router as agents_router
 from app.agents import runs_router as agent_runs_router
 from app.agents.crypto import Keyring
@@ -174,5 +175,6 @@ def create_app(
     app.include_router(jobs_router)
     app.include_router(agents_router.router)
     app.include_router(agent_runs_router.router)
+    app.include_router(proposals_router.router)
     identity_deps.assert_default_deny(app)
     return app

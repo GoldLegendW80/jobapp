@@ -1,0 +1,234 @@
+{
+ "description": "The triage agent on a good fit: reads the job and three profile sections, proposes a note and shortlisted, then sums up.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_job",
+     "mcp__app__get_profile_section",
+     "mcp__app__propose_note",
+     "mcp__app__propose_status"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "sleep": 1.0
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000101",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_101",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "",
+       "signature": "sig"
+      },
+      {
+       "type": "text",
+       "text": "I will read the posting, then your facts, skills and search rules."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_triage_01",
+       "name": "mcp__app__get_job",
+       "input": {
+        "job_id": "{job_id}"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 90,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 1.0
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000102",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_102",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_triage_02",
+       "name": "mcp__app__get_profile_section",
+       "input": {
+        "section": "facts"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_triage_03",
+       "name": "mcp__app__get_profile_section",
+       "input": {
+        "section": "skills"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_triage_04",
+       "name": "mcp__app__get_profile_section",
+       "input": {
+        "section": "search"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 90,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 1.0
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000103",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_103",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "The posting matches the profile well; one gap on years."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_triage_05",
+       "name": "mcp__app__propose_note",
+       "input": {
+        "text": "Strong fit: the posting asks for agent orchestration, LLM evaluation and tool integration, all proven in the profile's facts.\nMatches: agents in production, evaluation, MCP tools.\nGaps: five years asked, the profile shows about three and a half.\nCheck before applying: on site days in Paris and the start date."
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_triage_06",
+       "name": "mcp__app__propose_status",
+       "input": {
+        "status": "shortlisted",
+        "reason": "Strong fit on agents and evaluation; the years gap is small."
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 90,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 1.0
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000104",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_104",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "A strong fit with one gap on years of experience. I proposed a note with the assessment and to shortlist the job."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 90,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 4200,
+    "duration_api_ms": 3900,
+    "num_turns": 4,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "result": "A strong fit with one gap on years of experience. I proposed a note with the assessment and to shortlist the job.",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0874,
+    "usage": {
+     "input_tokens": 5200,
+     "output_tokens": 640,
+     "cache_creation_input_tokens": 2400,
+     "cache_read_input_tokens": 9100
+    },
+    "modelUsage": {
+     "{model}": {
+      "inputTokens": 5200,
+      "outputTokens": 640,
+      "cacheReadInputTokens": 9100,
+      "cacheCreationInputTokens": 2400,
+      "webSearchRequests": 0,
+      "costUSD": 0.0874,
+      "contextWindow": 200000
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}

@@ -1,11 +1,12 @@
 """Tables of the agents module. A1: model_credentials, one row per user at most. A2: agent_runs
-and agent_events.
+and agent_events. A3: proposals.
 
 The secret is stored only encrypted (`crypto.py`: AES-GCM, bound to the user id and the kind),
 with the version of the key that wrote it and its last four characters for display. It is
 deferred, so loading a row for GET never pulls the ciphertext along.
-Migrations: alembic/versions/0006_model_credentials.py and 0007_agent_runs.py, which must stay
-in step with this file (`alembic check` in the tests compares them).
+Migrations: alembic/versions/0006_model_credentials.py, 0007_agent_runs.py and
+0008_proposals.py, which must stay in step with this file (`alembic check` in the tests
+compares them).
 """
 
 import enum
@@ -166,4 +167,101 @@ class AgentEvent(Base):
     kind: Mapped[str] = mapped_column(sa.Text, nullable=False)
     data: Mapped[dict[str, Any]] = mapped_column(
         pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )
+
+
+# --- A3: proposals ------------------------------------------------------------------------------
+
+
+class ProposalStatus(enum.StrEnum):
+    """pending -> accepted | rejected (by the user), superseded (a newer proposal of the same
+    kind for the same target replaced it), invalid (its target was gone when the user accepted
+    it); accepted -> undone (mail's undo, SPEC-mail). Mail's automatic changes are created
+    accepted by the system."""
+
+    pending = "pending"
+    accepted = "accepted"
+    rejected = "rejected"
+    superseded = "superseded"
+    invalid = "invalid"
+    undone = "undone"
+
+
+class ProposalDecider(enum.StrEnum):
+    user = "user"
+    system = "system"
+
+
+PROPOSAL_STATUS_ENUM = sa.Enum(
+    ProposalStatus,
+    name="proposal_status",
+    values_callable=lambda members: [m.value for m in members],
+)
+PROPOSAL_DECIDER_ENUM = sa.Enum(
+    ProposalDecider,
+    name="proposal_decider",
+    values_callable=lambda members: [m.value for m in members],
+)
+
+PROPOSAL_TARGET_MAX = 32
+PROPOSAL_KIND_MAX = 64
+
+
+class Proposal(Base):
+    """A change an agent (or a rule) suggests to the user's data, applied only when accepted
+    (SPEC-agents.md, Runtime and Data model). `target` names what it changes ("job"),
+    `target_id` which row (null when the change creates one), `kind` the change (`job_note`,
+    `job_status`), `payload` its content. `run_id` is the run that proposed it: null for a
+    rule-based system proposal (SPEC-mail) and once the run is gone. `decided_by` and
+    `decided_at` are null exactly while it is pending; `edited_value` is what the user applied
+    instead of the payload's value; `reason` says why the system set it superseded or invalid."""
+
+    __tablename__ = "proposals"
+    __table_args__ = (
+        sa.CheckConstraint(
+            f"char_length(target) >= 1 AND char_length(target) <= {PROPOSAL_TARGET_MAX}",
+            name="target_length",
+        ),
+        sa.CheckConstraint(
+            f"char_length(kind) >= 1 AND char_length(kind) <= {PROPOSAL_KIND_MAX}",
+            name="kind_length",
+        ),
+        sa.CheckConstraint("jsonb_typeof(payload) = 'object'", name="payload_is_object"),
+        sa.CheckConstraint(
+            "(status = 'pending') = (decided_at IS NULL) "
+            "AND (status = 'pending') = (decided_by IS NULL)",
+            name="decided_unless_pending",
+        ),
+        sa.Index("ix_proposals_user_id_created_at", "user_id", sa.text("created_at DESC")),
+        sa.Index("ix_proposals_user_id_target_target_id", "user_id", "target", "target_id"),
+        sa.Index("ix_proposals_run_id", "run_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("agent_runs.id", ondelete="SET NULL")
+    )
+    target: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    target_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
+    kind: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )
+    status: Mapped[ProposalStatus] = mapped_column(
+        PROPOSAL_STATUS_ENUM, nullable=False, server_default=ProposalStatus.pending.value
+    )
+    decided_by: Mapped[ProposalDecider | None] = mapped_column(PROPOSAL_DECIDER_ENUM)
+    decided_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    edited_value: Mapped[Any | None] = mapped_column(pg.JSONB)
+    reason: Mapped[str | None] = mapped_column(sa.Text)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )
