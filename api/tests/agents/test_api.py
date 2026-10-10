@@ -14,6 +14,7 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.agents import credentials
 from app.agents import router as agents_router
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind, ModelCredential
@@ -162,6 +163,8 @@ LONG = "sk-ant-api03-" + "a" * 400
         ("anthropic_api_key", OAUTH, "This is a Claude subscription token"),
         ("anthropic_api_key", "sk-ant-sid01-" + "a" * 60, "not an Anthropic API key"),
         ("claude_subscription", API_KEY, "This is an Anthropic API key"),
+        ("anthropic_api_key", "sk-ant-admin01-" + "a" * 60, "Admin API key"),
+        ("claude_subscription", "sk-ant-admin01-" + "a" * 60, "Admin API key"),
         ("anthropic_api_key", "sk-ant-api03-short", "too short"),
         ("anthropic_api_key", LONG, "too long"),
         ("anthropic_api_key", "sk-ant-api03-" + "a" * 40 + "/+=", "Only letters"),
@@ -585,6 +588,73 @@ def test_replaced_during_the_check_is_409(
     response = api.post(VERIFY, token=alice)
     assert response.status_code == 409
     assert response.json() == {"detail": agents_router.CHANGED}
+
+
+@pytest.mark.parametrize("upstream", [200, 401])
+def test_save_committed_between_check_and_set_is_409(
+    api: Api,
+    alice: str,
+    factory: sessionmaker[Session],
+    anthropic_api: FakeAnthropic,
+    clock: Clock,
+    key: str,
+    monkeypatch: pytest.MonkeyPatch,
+    upstream: int,
+) -> None:
+    """A PUT that commits after the outbound check and before its outcome is written: the
+    conditional UPDATE matches no row, the new credential keeps verified_at as saved."""
+    put(api, alice)
+    uid = user_id(factory, ALICE)
+    if upstream != 200:
+        anthropic_api.answer(upstream)
+    original = credentials.set_verified_if_unchanged
+
+    def save_first(*args: object, **kwargs: object) -> bool:
+        with factory() as other, other.begin():
+            credentials.save(
+                other,
+                Keyring.from_text(key),
+                uid,
+                CredentialKind.anthropic_api_key,
+                OTHER_KEY,
+                clock.now + timedelta(seconds=1),
+            )
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(credentials, "set_verified_if_unchanged", save_first)
+    response = api.post(VERIFY, token=alice)
+    assert response.status_code == 409
+    assert response.json() == {"detail": agents_router.CHANGED}
+    row = stored(factory, ALICE)
+    assert row is not None
+    assert row.last4 == OTHER_KEY[-4:]
+    assert row.verified_at is None
+
+
+def test_set_verified_if_unchanged_matches_user_kind_and_time(
+    api: Api, alice: str, factory: sessionmaker[Session], clock: Clock
+) -> None:
+    put(api, alice)
+    uid = user_id(factory, ALICE)
+    kind = CredentialKind.anthropic_api_key
+    with factory() as db, db.begin():
+        assert not credentials.set_verified_if_unchanged(
+            db, uid, CredentialKind.claude_subscription, clock.now, clock.now
+        )
+        assert not credentials.set_verified_if_unchanged(
+            db, uid, kind, clock.now - timedelta(seconds=1), clock.now
+        )
+        assert not credentials.set_verified_if_unchanged(
+            db, uuid.uuid4(), kind, clock.now, clock.now
+        )
+    row = stored(factory, ALICE)
+    assert row is not None
+    assert row.verified_at is None
+    with factory() as db, db.begin():
+        assert credentials.set_verified_if_unchanged(db, uid, kind, clock.now, clock.now)
+    row = stored(factory, ALICE)
+    assert row is not None
+    assert row.verified_at == clock.now
 
 
 def test_removed_during_the_check_is_404(

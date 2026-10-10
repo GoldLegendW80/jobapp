@@ -103,6 +103,9 @@ export function ModelAccessCard() {
 
   const save = useMutation({
     mutationFn: saveModelCredential,
+    // The variables hold the secret: once the mutation has no observer it leaves the cache at
+    // once instead of after the default 5 minutes.
+    gcTime: 0,
     onMutate: () => {
       setFormError(undefined);
       setSecretError(undefined);
@@ -114,6 +117,9 @@ export function ModelAccessCard() {
       setShown(false);
       setKind(undefined);
       toast.success(SAVED);
+      // Drop the mutation (its variables are the secret) instead of keeping it until the next
+      // save; with gcTime 0 the cache forgets it too.
+      save.reset();
     },
     onError: (error) => {
       const wait = throttledFor(error);

@@ -13,6 +13,8 @@ Formats (checked before anything is stored, messages name the field like the acc
   Claude Code docs do not state the prefix, so any `sk-ant-` value that is not an API key is
   accepted for this kind; an API key pasted under the subscription choice (or the reverse) is
   refused with a message saying which choice it belongs to.
+- Admin API keys (`sk-ant-admin...`) are refused for both kinds: they manage an organization,
+  run no model, and are worse to hold than a user key.
 - Surrounding whitespace is trimmed (a pasted line break), inner whitespace is refused, and only
   letters, digits, `-` and `_` are allowed, MIN_LENGTH to MAX_LENGTH characters.
 """
@@ -35,6 +37,7 @@ MAX_LENGTH = 400
 PREFIX = "sk-ant-"
 API_KEY_PREFIX = "sk-ant-api"
 OAUTH_PREFIX = "sk-ant-oat"
+ADMIN_KEY_PREFIX = "sk-ant-admin"
 _ALLOWED = re.compile(r"[A-Za-z0-9_-]+")
 
 logger = logging.getLogger(__name__)
@@ -53,6 +56,11 @@ def clean_secret(kind: CredentialKind, raw: str) -> str:
         raise FormatError("Remove the spaces or line breaks inside the value.")
     if not secret.startswith(PREFIX):
         raise FormatError(f"This is not an Anthropic credential: those start with {PREFIX}")
+    if secret.startswith(ADMIN_KEY_PREFIX):
+        raise FormatError(
+            "This is an Anthropic Admin API key: it manages an organization and must not be "
+            f"stored here. Paste a regular API key, which starts with {API_KEY_PREFIX}"
+        )
     if kind is CredentialKind.anthropic_api_key and not secret.startswith(API_KEY_PREFIX):
         if secret.startswith(OAUTH_PREFIX):
             raise FormatError(
@@ -155,10 +163,27 @@ def reveal(db: Session, keyring: Keyring, user_id: uuid.UUID) -> Revealed | None
     return Revealed(row, opened.plaintext)
 
 
-def set_verified(db: Session, row: ModelCredential, verified_at: datetime | None) -> None:
-    """Record the outcome of a check: when it passed, or None once it was refused."""
-    row.verified_at = verified_at
-    db.flush()
+def set_verified_if_unchanged(
+    db: Session,
+    user_id: uuid.UUID,
+    kind: CredentialKind,
+    checked_at: datetime,
+    verified_at: datetime | None,
+) -> bool:
+    """Record a check's outcome only on the row that was checked: one UPDATE matching the user,
+    the kind and the `updated_at` read before the outbound call. False when no row matches (the
+    credential was replaced or removed meanwhile): nothing is written. The caller commits."""
+    result = db.execute(
+        sa.update(ModelCredential)
+        .where(
+            ModelCredential.user_id == user_id,
+            ModelCredential.kind == kind,
+            ModelCredential.updated_at == checked_at,
+        )
+        .values(verified_at=verified_at)
+        .execution_options(synchronize_session=False)
+    )
+    return bool(result.rowcount)
 
 
 def rotate_all(db: Session, keyring: Keyring) -> int:

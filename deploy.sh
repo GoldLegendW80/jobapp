@@ -62,7 +62,7 @@
 # this Mac went to sleep holding it).
 #
 # Secrets: the Jetson's .env is generated once into .env.jetson (git-ignored, mode 600) with
-# random POSTGRES_PASSWORD and SECRET_KEY, and copied to the Jetson only when the remote .env is
+# random POSTGRES_PASSWORD, SECRET_KEY and CREDENTIALS_KEY, and copied to the Jetson only when the remote .env is
 # missing or with --env. rsync never deletes the remote .env, and nothing here touches volumes.
 # Remote command strings are built here on purpose, with every value quoted by printf %q.
 # shellcheck disable=SC2029
@@ -272,9 +272,12 @@ awk "/^MemAvailable:/ {print \$2}" /proc/meminfo')"
 }
 
 generate_env() {
-  local pg_password secret
+  local pg_password secret credentials_key
+  # Only ever a new file: an existing one holds keys that data already depends on.
+  [[ ! -e "$LOCAL_ENV" ]] || die "$LOCAL_ENV exists; generate_env never overwrites it"
   pg_password="$(openssl rand -hex 32)"
   secret="$(openssl rand -hex 48)"
+  credentials_key="$(openssl rand -base64 32)"
   (
     umask 077
     cat >"$LOCAL_ENV" <<EOF
@@ -292,6 +295,10 @@ DATABASE_URL=postgresql+psycopg://jobapp:$pg_password@db:5432/jobapp
 
 REDIS_URL=redis://redis:6379/0
 
+# Encryption key of the users' model credentials (agents A1): 32 random bytes, base64. Keep it:
+# a lost or changed key makes every stored credential unreadable (rotation: .env.example).
+CREDENTIALS_KEY=$credentials_key
+
 # Loopback only: reached with ssh or through Tailscale Funnel, never from the LAN.
 HTTP_BIND=127.0.0.1
 HTTP_PORT=${JETSON_HTTP_PORT:-80}
@@ -306,6 +313,7 @@ EOF
 
 ensure_local_env() {
   if [[ -f "$LOCAL_ENV" ]]; then
+    warn_missing_credentials_key
     return 0
   fi
   if remote "test -f $RDIR_Q/.env"; then
@@ -315,10 +323,19 @@ ensure_local_env() {
       remote "cat $RDIR_Q/.env" >"$LOCAL_ENV"
     )
     info "copied the existing $HOST:$RDIR/.env to .env.jetson"
+    warn_missing_credentials_key
   else
     generate_env
-    info "generated .env.jetson with a random POSTGRES_PASSWORD and SECRET_KEY"
+    info "generated .env.jetson with a random POSTGRES_PASSWORD, SECRET_KEY and CREDENTIALS_KEY"
   fi
+}
+
+# An existing .env is never rewritten; say so when it predates CREDENTIALS_KEY, which the api and
+# the worker require in production.
+warn_missing_credentials_key() {
+  [[ -n "$(envval "$LOCAL_ENV" CREDENTIALS_KEY)" ]] && return 0
+  warn ".env.jetson has no CREDENTIALS_KEY: the api and worker refuse to start in production." \
+    "Add one line, CREDENTIALS_KEY=\$(openssl rand -base64 32), to .env.jetson and to the Jetson's .env"
 }
 
 push_env() { # push_env <force 0|1>

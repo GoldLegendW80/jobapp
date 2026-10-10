@@ -165,6 +165,24 @@ describe("model access card", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps no copy of the secret in the mutation cache after a save", async () => {
+    credentialApi();
+    const { user, client } = await openCard();
+    await screen.findByTestId("no-credential");
+    await user.type(within(form()).getByLabelText("API key"), API_KEY);
+    await user.click(
+      within(form()).getByRole("button", { name: "Save credential" }),
+    );
+    await screen.findByTestId("credential-last4");
+    await waitFor(() => {
+      const kept = client
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => JSON.stringify(mutation.state.variables ?? null));
+      expect(kept.join("\n")).not.toContain(API_KEY);
+    });
+  });
+
   it("saves a subscription token under its own kind", async () => {
     const state = credentialApi();
     const { user } = await openCard();

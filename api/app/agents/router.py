@@ -84,6 +84,13 @@ def _limit(limiter: RateLimiter, user: User, what: str) -> None:
         )
 
 
+def _changed_or_gone(db: Session, user: User) -> HTTPException:
+    """The credential no longer is the one checked: 404 when removed, 409 when replaced."""
+    if credentials.get(db, user.id) is None:
+        return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CHANGED)
+
+
 @router.get("", response_model=CredentialOut, responses=_404)
 def get_credential(user: CurrentUser, db: Db) -> CredentialOut:
     row = credentials.get(db, user.id)
@@ -153,27 +160,31 @@ def verify_credential(request: Request, user: CurrentUser, db: Db) -> VerifyOut:
     checked_kind, checked_at = revealed.row.kind, revealed.row.updated_at
     verifier: Verifier = request.app.state.model_verifier
     result = verifier.check(checked_kind, revealed.secret)
+    # Drops this function's reference only: Python cannot wipe a str from memory.
     del revealed
-    row = credentials.get(db, user.id)
-    if row is None:  # removed while the check ran
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
-    if row.updated_at != checked_at or row.kind is not checked_kind:
-        # Replaced while the check ran: its outcome says nothing about the new one.
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CHANGED)
-    if result.outcome is Outcome.verified:
-        credentials.set_verified(db, row, deps.clock(request))
+    if result.outcome in (Outcome.verified, Outcome.invalid):
+        # One conditional UPDATE on the row exactly as it was checked: a credential saved or
+        # removed while the check ran is never marked with this outcome.
+        stamp = deps.clock(request) if result.outcome is Outcome.verified else None
+        if not credentials.set_verified_if_unchanged(db, user.id, checked_kind, checked_at, stamp):
+            db.rollback()
+            raise _changed_or_gone(db, user)
         db.commit()
+        if result.outcome is Outcome.invalid:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID)
+        row = credentials.get(db, user.id)
+        if row is None:  # removed right after the update
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
         return VerifyOut(
             result="verified", message=VERIFIED, credential=CredentialOut.model_validate(row)
         )
     if result.outcome is Outcome.unverified:
+        row = credentials.get(db, user.id)
+        if row is None or row.updated_at != checked_at or row.kind is not checked_kind:
+            raise _changed_or_gone(db, user)
         return VerifyOut(
             result="unverified", message=UNVERIFIED, credential=CredentialOut.model_validate(row)
         )
-    if result.outcome is Outcome.invalid:
-        credentials.set_verified(db, row, None)
-        db.commit()
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=INVALID)
     if result.outcome is Outcome.busy:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,

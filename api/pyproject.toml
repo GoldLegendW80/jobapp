@@ -8,9 +8,16 @@ dependencies = [
     "anthropic==1.11.0",
     "argon2-cffi==25.1.0",
     "arq==0.28.0",
-    # Not 47 or later: their bundled OpenSSL dies with SIGILL (SME code paths) in Docker on Apple
-    # M4 Macs, so every local stack would crash at import. 46.0.7 runs there, on the Jetson's
-    # Cortex-A78AE and on CI's x86 runners. Recheck when upgrading (agents A1).
+    # Not 47 or later for now: their bundled OpenSSL dies with SIGILL (SME code paths) in Docker
+    # on Apple M4 Macs, so every local stack would crash at import. 46.0.7 runs there, on the
+    # Jetson's Cortex-A78AE and on CI's x86 runners (agents A1).
+    # Known advisories of 46.0.7: GHSA-537c-gmf6-5ccf (bundled OpenSSL, fixed in 48.0.1),
+    # CVE-2026-69247 (PKCS#7 padding oracle, fixed in 50.0.0), CVE-2026-69248 and CVE-2026-69249
+    # (X.509 path validation, fixed in 49.0.0). None reaches this app: it uses only the AESGCM
+    # AEAD primitive (app/agents/crypto.py), never PKCS#7 or CMS, X.509, OCSP, QUIC or AES-OCB,
+    # and TLS goes through Python's ssl module, not this package's OpenSSL.
+    # RULE while pinned here: AESGCM only. Anything else from cryptography first needs the move
+    # to >= 50.0.0 (issue #19: OPENSSL_armcap=0 in compose.dev.yml for the M4 Mac).
     "cryptography==46.0.7",
     "email-validator==2.3.0",
     "fastapi==0.142.4",
