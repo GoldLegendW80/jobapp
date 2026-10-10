@@ -11,7 +11,9 @@
 - GET /api/agents/runs/{id}/stream: server-sent events (app/sse.py `replay`): one `step` event
   per stored event, `id` = its seq, data {seq, at, kind, data}, from after the Last-Event-ID
   header (EventSource sends it when it reconnects) or the `after` query parameter, then each new
-  one as the worker writes it, and `end` once the run has ended and everything was sent.
+  one as the worker writes it, and `end` once the run has ended and everything was sent. Each
+  stream closes after STREAM_MAX_S (the browser resumes it, through the session check again) and
+  as soon as the client leaves; at most STREAMS_PER_USER open per user (429 beyond).
 - POST /api/agents/runs/{id}/cancel: 202 with the run: cancelled at once when still queued, or
   `cancel_requested` while the worker stops it (within about a second); 409 when it has ended.
 
@@ -22,6 +24,8 @@ logs an input or an output.
 
 import json
 import uuid
+import weakref
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -48,6 +52,50 @@ LIST_DEFAULT = 30
 LIST_MAX = 100
 EVENTS_MAX = 2000
 STREAM_PAGE = 200
+# Open streams per user in this process (one api process on the Jetson); one more answers 429.
+STREAMS_PER_USER = 8
+# A stream closes after this long and the browser resumes it at once with Last-Event-ID: each
+# resume goes through the session check again, so a sign out or a disabled account ends it soon.
+STREAM_MAX_S = 5 * 60
+TOO_MANY_STREAMS = f"At most {STREAMS_PER_USER} live run views at once. Close one and retry."
+
+
+class StreamSlots:
+    """The open streams per user, as weak references to their generators: a stream releases its
+    slot when it ends (`release`), and also when its generator is dropped without ever having
+    run (a client gone before the first byte), so a slot can never leak. Used from the event
+    loop only (no lock needed)."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.open: dict[uuid.UUID, weakref.WeakSet[object]] = {}
+
+    def count(self, user_id: uuid.UUID) -> int:
+        return len(self.open.get(user_id, ()))
+
+    def take(self, user_id: uuid.UUID, stream: object) -> bool:
+        held = self.open.setdefault(user_id, weakref.WeakSet())
+        if len(held) >= self.limit:
+            return False
+        held.add(stream)
+        return True
+
+    def release(self, user_id: uuid.UUID, stream: object) -> None:
+        held = self.open.get(user_id)
+        if held is not None:
+            held.discard(stream)
+            if not held:
+                self.open.pop(user_id, None)
+
+
+def slots_of(request: Request) -> StreamSlots:
+    slots: StreamSlots | None = getattr(request.app.state, "run_stream_slots", None)
+    if slots is None:
+        slots = StreamSlots(STREAMS_PER_USER)
+        request.app.state.run_stream_slots = slots
+    return slots
+
+
 NO_STORE = {"Cache-Control": "no-store"}
 
 NOT_FOUND = "Run not found."
@@ -309,11 +357,30 @@ async def stream_run(
 
     if not await run_in_threadpool(exists):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
+    slots = slots_of(request)
     start = sse.last_event_id(last_event_id, after)
-    settings = getattr(request.app.state, "sse_settings", {})
-    return sse.response(
-        sse.replay(lambda seq: _page(sessions, user.id, parsed, seq), after=start, **settings)
-    )
+    settings = {"max_s": STREAM_MAX_S, **getattr(request.app.state, "sse_settings", {})}
+
+    async def events() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in sse.replay(
+                lambda seq: _page(sessions, user.id, parsed, seq),
+                after=start,
+                disconnected=request.is_disconnected,
+                **settings,
+            ):
+                yield chunk
+        finally:
+            slots.release(user.id, stream)
+
+    stream = events()
+    if not slots.take(user.id, stream):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=TOO_MANY_STREAMS,
+            headers={"Retry-After": "10"},
+        )
+    return sse.response(stream)
 
 
 # --- cancel -------------------------------------------------------------------------------------

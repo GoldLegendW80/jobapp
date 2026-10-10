@@ -182,3 +182,48 @@ def test_run_deleted_mid_stream_ends_with_gone(
     finally:
         thread.join()
     assert [name for name, _, _ in found] == ["step", "gone"]
+
+
+def test_stream_slots_per_user() -> None:
+    import gc
+
+    from app.agents.runs_router import StreamSlots
+
+    class Stream:
+        pass
+
+    slots = StreamSlots(2)
+    alice, bob = uuid.uuid4(), uuid.uuid4()
+    first, second, third = Stream(), Stream(), Stream()
+    assert slots.take(alice, first)
+    assert slots.take(alice, second)
+    assert not slots.take(alice, third)
+    assert slots.take(bob, third)  # Bob is not limited by Alice's streams
+    slots.release(alice, first)
+    assert slots.count(alice) == 1
+    # A stream dropped without ever running gives its slot back too.
+    del second
+    gc.collect()
+    assert slots.count(alice) == 0
+    slots.release(alice, first)
+    assert alice not in slots.open
+    slots.release(uuid.uuid4(), first)  # unknown user: nothing to do
+
+
+def test_too_many_streams_is_429_and_an_ended_stream_frees_its_slot(
+    api: Api, alice: str, factory: sessionmaker[Session], app: FastAPI
+) -> None:
+    from app.agents.runs_router import StreamSlots
+
+    me = user_id(api, alice)
+    run_id = new_run(factory, me)
+    run_to_end(factory, run_id, texts=1)
+    app.state.run_stream_slots = StreamSlots(1)
+    response, found = stream(api, alice, run_id)
+    assert response.status_code == 200
+    assert found[-1][0] == "end"
+    assert app.state.run_stream_slots.count(me) == 0
+    app.state.run_stream_slots = StreamSlots(0)
+    response, _ = stream(api, alice, run_id)
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "10"

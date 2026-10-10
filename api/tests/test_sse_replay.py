@@ -75,3 +75,20 @@ def test_last_event_id_parsing() -> None:
         assert sse.last_event_id(bad) == 0, bad
     # str.isdigit accepts other scripts' digits; int() reads them too, which is harmless.
     assert sse.last_event_id("٣") == 3
+
+
+def test_stops_as_soon_as_the_client_left() -> None:
+    reads: list[int] = []
+
+    def read(after: int) -> sse.Page:
+        reads.append(after)
+        return sse.Page([], final=False)
+
+    calls = iter([False, False, True])
+
+    async def disconnected() -> bool:
+        return next(calls)
+
+    chunks = collect(read, interval_s=0, disconnected=disconnected)  # type: ignore[arg-type]
+    assert chunks == [b"retry: 2000\n\n"]
+    assert len(reads) == 2  # no read once the client has left

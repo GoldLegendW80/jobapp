@@ -21,7 +21,7 @@ Reads go through `asyncio.to_thread`, so a synchronous SQLAlchemy read never blo
 import asyncio
 import json
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -122,6 +122,7 @@ async def replay(
     heartbeat_s: float = 15.0,
     max_s: float = 30 * 60,
     retry_ms: int = 2000,
+    disconnected: Callable[[], Awaitable[bool]] | None = None,
 ) -> AsyncIterator[bytes]:
     """The event stream of a log that only grows (agent runs today): every event after `after`,
     then each new one as `read` finds it, each with its own id, so a client that reconnects with
@@ -132,11 +133,15 @@ async def replay(
     whether the log is final, or None when the thing is gone (a `gone` event ends the stream).
     Once the log is final and every event is sent, an `end` event (without id) tells the client
     to stop: EventSource would otherwise reconnect by itself. After `max_s` the stream just
-    closes and the client resumes from its last id."""
+    closes and the client resumes from its last id. `disconnected` (Starlette's
+    `request.is_disconnected`) is asked before every read: a client that left stops the polling
+    at once, not at the next heartbeat."""
     yield f"retry: {retry_ms}\n\n".encode()
     started = last_sent = time.monotonic()
     last = after
     while True:
+        if disconnected is not None and await disconnected():
+            return
         page = await asyncio.to_thread(read, last)
         if page is None:
             yield b"event: gone\ndata: {}\n\n"
