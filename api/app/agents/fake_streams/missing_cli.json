@@ -1,0 +1,8 @@
+{
+ "description": "The Claude Code CLI is not installed.",
+ "steps": [
+  {
+   "raise": "cli_not_found"
+  }
+ ]
+}

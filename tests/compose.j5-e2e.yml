@@ -14,7 +14,7 @@ services:
   api:
     image: jobapp-api:j5-e2e
   worker:
-    image: jobapp-api:j5-e2e
+    image: jobapp-worker:j5-e2e
     environment:
       ATS_BASE_URL: http://fakeats:8099
       ATS_BASE_URL_ORG_PREFIX: fake-

@@ -1,5 +1,6 @@
-# e2e only: a stub of the one Anthropic API call the credential check makes (tests/anthropic_stub.py)
-# and the api pointed at it, so the Model access journey never sends a key to Anthropic.
+# e2e only: a stub of the Anthropic API (tests/anthropic_stub.py): the credential check's model
+# list, and the Messages API the worker's Claude Code CLI calls (agents A2: real SDK and CLI, no
+# model). The api and the worker are pointed at it, so no journey sends a key to Anthropic.
 #   docker compose -p jobapp-a1 -f compose.yml -f tests/anthropic-stub.compose.yml up -d --build --wait
 #   E2E_MODEL_STUB=1 ... playwright test model-access.spec.ts
 # The api refuses MODEL_API_BASE_URL when APP_ENV is production (app/config.py).
@@ -11,10 +12,17 @@ services:
       anthropicstub:
         condition: service_healthy
 
+  worker:
+    environment:
+      MODEL_API_BASE_URL: http://anthropicstub:8080
+
   anthropicstub:
     # The api's own base image (api/Dockerfile PYTHON_IMAGE): pinned and already pulled.
     image: python:3.12.15-slim-trixie
     command: ["python", "/stub/anthropic_stub.py", "8080"]
+    environment:
+      STUB_CHUNKS: ${STUB_CHUNKS:-20}
+      STUB_DELAY_S: ${STUB_DELAY_S:-0.5}
     volumes:
       # Relative to the project directory, the folder of compose.yml.
       - ./tests/anthropic_stub.py:/stub/anthropic_stub.py:ro

@@ -1,0 +1,40 @@
+Agents A2: the real Claude Agent SDK 0.2.163 and its bundled Claude Code CLI 2.1.286, in the
+jobapp-worker image (Mac arm64, Docker), against tests/anthropic_stub.py (no model, no key sent to
+Anthropic). Scratch stack:
+  AGENTS_FAKE_BACKEND=false STUB_DELAY_S=1 HTTP_PORT=8127 docker compose -p jobapp-a2 \
+    -f compose.yml -f tests/anthropic-stub.compose.yml -f tests/compose.a2-e2e.yml up -d --build --wait
+Driven through caddy (http://127.0.0.1:8127) with a session, a stub API key, POST /api/agents/runs.
+Run 2026-10-10.
+
+Images (docker images, on disk, arm64)
+  jobapp-api:a2-baseline (origin/main)  437MB
+  jobapp-api:a2 (this branch)           437MB   no claude_agent_sdk module
+  jobapp-worker:a2                      799MB   claude_agent_sdk 0.2.163, CLI 2.1.286, uid 10001
+
+1. A job run: the in-process MCP tool through the real CLI
+   events: status queued, status running, init {model claude-opus-5-5, tools [mcp__app__get_job]},
+   tool_call {name mcp__app__get_job, input {job_id <the user's job>}},
+   tool_result {is_error false, content {"company": "Stub Corp", "title": "Agent Engineer", ...}},
+   text "Done: the tool answered. ...", usage {...}, status done
+
+2. The model asks for Bash ("please try bash now")
+   tool_call {name Bash, input {command env}}
+   tool_result {is_error true, content "<tool_use_error>Error: No such tool available: Bash. Bash
+   is disabled for this session, in subagents as well as here.</tool_use_error>"}
+   then text, usage, status done (the shell never ran)
+
+3. Turn limit (before the stub was fixed to stop after a tool result, it asked for get_job forever)
+   four tool calls, then usage {num_turns 5}, status failed "The run reached its limit of 4 turns."
+
+4. Memory: three runs started at once (each streams 20 chunks one second apart)
+   statuses after 6 s: queued, running, running   (max_jobs 2: the third waits)
+   worker cgroup memory.current, sampled every 0.5 s:
+     idle                                   141 MiB
+     two Claude Code processes streaming    332 to 357 MiB (peak sample 399 MiB)
+     one Claude Code process                237 MiB
+   per process RSS: worker python 158 MiB, each Claude Code CLI about 205 MiB
+   all three ended done, 20.3 s each, tokens 120 in and 30 out, cost 0.00108 USD (stub usage)
+   limit: 1536m. Not measured on the Jetson (no deploy before the merge).
+
+JOBAPP_LIVE_ANTHROPIC_API_KEY was not set in this environment: the opt-in real model run
+(api/tests/agents/test_live_run.py) was skipped.

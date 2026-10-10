@@ -1,8 +1,9 @@
 """The Redis queue between the api and the worker: arq (decision in tasks/jobs/todo.md, J5).
 
 Queues are named lists in Redis, each consumed by its own arq Worker inside the `worker`
-container (app/worker.py). Today: SWEEPS. The agents module adds AGENTS the same way: a queue
-name here, a QueueSpec in the worker, its job functions; nothing else changes.
+container (app/worker.py): SWEEPS (jobs J5) and AGENTS (agents A2, the user's agent runs). A
+later lane for automatic agent runs (mail triage, scheduled assessments) gets a queue name of its
+own here, consumed after the interactive one, so a batch never delays a run someone is watching.
 
 Messages are JSON, never pickle (arq's default): a job is a function name and string arguments,
 so nothing read from Redis can execute code. Job ids make enqueueing idempotent: arq refuses a
@@ -21,6 +22,7 @@ from typing import Any
 from arq.connections import ArqRedis, RedisSettings, create_pool
 
 SWEEPS = "jobapp:sweeps"
+AGENTS = "jobapp:agents"
 CONNECT_TIMEOUT_S = 2
 
 
@@ -50,6 +52,10 @@ def sweep_job_id(sweep_id: object) -> str:
 
 def schedule_job_id(user_id: object, slot: str) -> str:
     return f"schedule:{user_id}:{slot}"
+
+
+def agent_run_job_id(run_id: object) -> str:
+    return f"agent-run:{run_id}"
 
 
 class Queue:

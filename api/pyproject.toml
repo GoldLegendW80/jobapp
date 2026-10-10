@@ -31,6 +31,13 @@ dependencies = [
 ]
 
 [dependency-groups]
+agents = [
+    # On upgrade recheck: app/agents/fake_backend.py imports the private
+    # claude_agent_sdk._internal.message_parser.parse_message, and app/worker.py turns off the
+    # `claude -v` probe that SubprocessCLITransport starts without env= (SDK facts in
+    # tasks/agents/todo.md).
+    "claude-agent-sdk==0.2.163",
+]
 dev = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
@@ -40,6 +47,9 @@ dev = [
 
 [tool.uv]
 package = false
+# Local `uv sync` and CI install everything; the images choose: the api's `runtime` target syncs
+# with --no-default-groups (no SDK, no test tools), the `worker` target adds --group agents.
+default-groups = ["dev", "agents"]
 
 [tool.ruff]
 line-length = 100

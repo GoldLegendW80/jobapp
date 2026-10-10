@@ -133,15 +133,22 @@ services:
     expose:
       - "8000"
 
-  # --- worker (jobs J5) ----------------------------------------------------------------------
-  # Queue consumer: board sweeps and the users' sweep schedules today (app/worker.py), Claude agent
-  # runs later (SPEC-agents.md). Same image as the api, another command; no port, no tunnel.
+  # --- worker (jobs J5, agents A2) -----------------------------------------------------------
+  # Queue consumer (app/worker.py): board sweeps and the users' sweep schedules, and Claude agent
+  # runs (SPEC-agents.md, at most 2 at a time). Its own image: the `worker` target of
+  # api/Dockerfile, the api's code plus the Claude Agent SDK and the Claude Code CLI it bundles,
+  # so the api image stays small. No port, no tunnel.
   worker:
     <<: *restart
-    # The api's image, built by the api service (two builds to one tag would race); never pulled.
-    image: jobapp-api:latest
-    pull_policy: never
+    build:
+      context: ./api
+      target: worker
+    image: jobapp-worker:latest
     command: ["python", "-m", "app.worker"]
+    # Each agent run's scratch directory (Claude Code's HOME, config and temporary files) lives
+    # here and is deleted when the run ends; in memory, counted in mem_limit, never on disk.
+    tmpfs:
+      - /tmp:size=128m,mode=1777
     env_file:
       - path: .env
         required: true

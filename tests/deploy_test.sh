@@ -829,24 +829,41 @@ echo "docker $*" >>"$FAKE_CALLS"
 case "$*" in
   "compose -f compose.yml --profile tunnel ps -q --status running api") echo "${FAKE_API_ID:-}" ;;
   "compose -f compose.yml --profile tunnel ps -q --status running caddy") echo "${FAKE_CADDY_ID:-}" ;;
+  "compose -f compose.yml --profile tunnel ps -q --status running worker") echo "${FAKE_WORKER_ID:-}" ;;
   "inspect -f {{.Image}} c0ffee") echo "sha256:1111" ;;
   "inspect -f {{.Image}} beef") echo "sha256:2222" ;;
+  "inspect -f {{.Image}} feed") echo "sha256:3333" ;;
 esac
 exit 0
 FAKE
 chmod +x "$WORK/bin4/docker"
 prev() { env PATH="$WORK/bin4:$PATH" FAKE_CALLS="$WORK/calls4" "$@"; }
 : >"$WORK/calls4"
-run 0 prev FAKE_API_ID=c0ffee FAKE_CADDY_ID=beef ops/previous.sh tag-running
+run 0 prev FAKE_API_ID=c0ffee FAKE_WORKER_ID=feed FAKE_CADDY_ID=beef ops/previous.sh tag-running
 grep -qx "docker tag sha256:1111 jobapp-api:previous" "$WORK/calls4" || fail "api not tagged from its container: $(cat "$WORK/calls4")"
+grep -qx "docker tag sha256:3333 jobapp-worker:previous" "$WORK/calls4" || fail "worker not tagged from its container: $(cat "$WORK/calls4")"
 grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "caddy not tagged from its container"
 grep -q "jobapp-.*:latest" "$WORK/calls4" && fail ":latest was read: $(cat "$WORK/calls4")"
 : >"$WORK/calls4"
-run 0 prev FAKE_API_ID= FAKE_CADDY_ID=beef ops/previous.sh tag-running
+run 0 prev FAKE_API_ID= FAKE_WORKER_ID= FAKE_CADDY_ID=beef ops/previous.sh tag-running
 out_has "api: no running container, jobapp-api:previous left as it was"
+out_has "worker: no running container, jobapp-worker:previous left as it was"
 grep -q "jobapp-api:previous" "$WORK/calls4" && fail "a stopped api was still tagged: $(cat "$WORK/calls4")"
+grep -q "jobapp-worker:previous" "$WORK/calls4" && fail "a stopped worker was still tagged: $(cat "$WORK/calls4")"
 grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "caddy not tagged"
-ok "tag-running tags the image id of each running container (never :latest); a stopped service keeps its :previous"
+# First deploy of the worker image: the running worker still runs the api's image; its id is kept.
+: >"$WORK/calls4"
+run 0 prev FAKE_API_ID=c0ffee FAKE_WORKER_ID=c0ffee FAKE_CADDY_ID=beef ops/previous.sh tag-running
+grep -qx "docker tag sha256:1111 jobapp-worker:previous" "$WORK/calls4" || fail "the worker's old api image was not kept"
+ok "tag-running tags the image id of each running container, worker included (never :latest); a stopped service keeps its :previous"
+
+# Every image the stack builds is built before the restart and rolled back on failure.
+grep -q "^  for svc in api worker caddy; do$" deploy.sh || fail "deploy.sh does not build api, worker and caddy"
+grep -q "^          for svc in api worker caddy; do$" .github/workflows/deploy.yml || fail "deploy.yml does not build the worker"
+grep -q "^            for img in jobapp-api jobapp-worker jobapp-caddy; do$" .github/workflows/deploy.yml ||
+  fail "deploy.yml does not restore jobapp-worker:previous"
+grep -q "^IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy)$" ops/previous.sh || fail "previous.sh misses the worker"
+ok "deploy.sh and deploy.yml build api, worker and caddy; the rollback restores jobapp-worker too"
 
 app="$WORK/app"
 saved="$WORK/backups/previous-tree"

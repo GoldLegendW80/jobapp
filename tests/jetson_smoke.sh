@@ -120,11 +120,14 @@ ok ".env mode 600, APP_ENV production in the api, strong SECRET_KEY and POSTGRES
 if rc exec -T api python -c "'import pytest'" >/dev/null 2>&1; then
   fail "runtime image ships dev dependencies"
 fi
+if rc exec -T api python -c "'import claude_agent_sdk'" >/dev/null 2>&1; then
+  fail "the api image ships the Claude Agent SDK (it belongs to the worker image only)"
+fi
 [[ "$(rc exec -T api id -u | tr -d '\r')" == "10001" ]] || fail "api does not run as uid 10001"
 ok "runtime image: no dev dependencies, runs as uid 10001"
-[[ "$(r "docker inspect -f '{{.Architecture}}' jobapp-api:latest jobapp-caddy:latest" | sort -u)" == "arm64" ]] ||
+[[ "$(r "docker inspect -f '{{.Architecture}}' jobapp-api:latest jobapp-worker:latest jobapp-caddy:latest" | sort -u)" == "arm64" ]] ||
   fail "images are not arm64"
-ok "jobapp-api and jobapp-caddy images are arm64"
+ok "jobapp-api, jobapp-worker and jobapp-caddy images are arm64"
 
 step "health and the React shell through caddy"
 res="$(rcurl /api/health)"
