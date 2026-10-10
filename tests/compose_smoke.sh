@@ -93,8 +93,11 @@ assert deps["db"]["condition"] == deps["redis"]["condition"] == "service_healthy
 assert int(services["caddy"]["mem_limit"]) == 128 * 1024**2, services["caddy"]["mem_limit"]
 assert services["caddy"]["build"]["target"] == "caddy", services["caddy"]["build"]
 worker = services["worker"]
-assert worker["image"] == services["api"]["image"], worker["image"]
+assert worker["image"] == "jobapp-worker:latest", worker["image"]
+assert worker["build"]["target"] == "worker", worker["build"]
+assert services["api"]["build"]["target"] == "runtime", services["api"]["build"]
 assert worker["command"] == ["python", "-m", "app.worker"], worker["command"]
+assert worker["tmpfs"] == ["/tmp:size=128m,mode=1777"], worker.get("tmpfs")
 assert int(worker["mem_limit"]) == 1536 * 1024**2, worker["mem_limit"]
 assert worker["depends_on"]["db"]["condition"] == worker["depends_on"]["redis"]["condition"] == "service_healthy"
 # tailscale: the full checks of the service are in tests/tailscale_test.sh.

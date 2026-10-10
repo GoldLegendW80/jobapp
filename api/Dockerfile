@@ -1,7 +1,12 @@
 # api image: FastAPI on python:3.12-slim, dependencies installed by uv from uv.lock.
-# Multi-stage: uv and the build cache stay in the builder; the runtime holds the venv and code.
-# Targets: `runtime` (default, last stage) for production; `dev` adds the dev dependencies
-# (pytest, ruff) for compose.dev.yml, which bind-mounts the code and runs uvicorn --reload.
+# Multi-stage: uv and the build cache stay in the builders; the runtimes hold a venv and the code.
+# Targets:
+# - `runtime` (default, last stage): the api. No dev tools, no Claude Agent SDK.
+# - `worker`: the queue worker (python -m app.worker, image jobapp-worker): the same code plus the
+#   `agents` dependency group, the Claude Agent SDK, whose wheel bundles the native Claude Code
+#   CLI it drives (SDK facts in tasks/agents/todo.md: no Node runtime and no npm package needed).
+# - `dev`: every group (dev tools and the SDK) for compose.dev.yml, which bind-mounts the code and
+#   runs uvicorn --reload.
 
 ARG PYTHON_IMAGE=python:3.12.15-slim-trixie
 
@@ -16,8 +21,13 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/app/.venv
 WORKDIR /app
 COPY pyproject.toml uv.lock .python-version ./
+# The project's default groups are dev and agents (pyproject.toml); the api needs neither.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project
+    uv sync --frozen --no-default-groups --no-install-project
+
+FROM builder AS builder-worker
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-default-groups --group agents --no-install-project
 
 FROM builder AS dev
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -34,6 +44,25 @@ COPY app ./app
 USER app:app
 EXPOSE 8000
 CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "app"]
+
+FROM ${PYTHON_IMAGE} AS worker
+RUN groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --home-dir /app --no-create-home --shell /usr/sbin/nologin app
+# HOME: /app is read-only for uid 10001; each agent run gets its own HOME and Claude Code config
+# directory inside its scratch directory (app/agents/runner.py), /tmp is a tmpfs (compose.yml).
+ENV PATH=/app/.venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/tmp
+WORKDIR /app
+COPY --from=builder-worker --chown=root:root /app/.venv /app/.venv
+COPY --chown=root:root alembic.ini ./
+COPY --chown=root:root alembic ./alembic
+COPY --chown=root:root app ./app
+USER app:app
+HEALTHCHECK --interval=30s --timeout=8s --start-period=20s --retries=3 \
+    CMD ["python", "-m", "app.worker", "--check"]
+CMD ["python", "-m", "app.worker"]
 
 FROM ${PYTHON_IMAGE} AS runtime
 RUN groupadd --system --gid 10001 app \

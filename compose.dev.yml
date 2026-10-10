@@ -35,9 +35,13 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
 
-  # The worker on the dev image with the code bind-mounted (restart it to pick up changes).
+  # The worker on the dev target (every dependency group, the Claude Agent SDK included) with the
+  # code bind-mounted (restart it to pick up changes). A tag of its own: two builds to one tag race.
   worker:
-    image: jobapp-api:dev
+    build:
+      context: ./api
+      target: dev
+    image: jobapp-worker:dev
     volumes:
       - ./api/app:/app/app
 

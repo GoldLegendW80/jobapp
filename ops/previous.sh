@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # What a failed deploy rolls back to (.github/workflows/deploy.yml, issue #3).
 #
-#   ops/previous.sh tag-running            tag the image each running api and caddy container was
-#                                          started from as jobapp-<service>:previous
+#   ops/previous.sh tag-running            tag the image each running api, worker and caddy
+#                                          container was started from as jobapp-<service>:previous
 #   ops/previous.sh save-tree <app> <dir>  copy the deployed tree <app> to <dir> before the sync
 #   ops/previous.sh restore-tree <dir> <app>
 #                                          put that copy back over <app>
@@ -11,13 +11,16 @@
 # :previous is always an image that actually ran, never a :latest that was built but failed to
 # start. A service with no running container keeps the :previous it already had, and says so.
 # COMPOSE (default: docker compose -f compose.yml --profile tunnel) runs in the current directory.
+# The worker has its own image since agents A2 (jobapp-worker, the api's code plus the Claude
+# Agent SDK); on the first deploy of that change the running worker still runs jobapp-api, and
+# that image id becomes jobapp-worker:previous, which is what a rollback must start again.
 #
 # The trees are copied with .rsyncignore, the deploy's own sync rules: .env*, .deployed-commit and
 # the other ignored paths are neither saved nor overwritten, so a rollback never touches secrets.
 # restore-tree on a missing copy (first deploy) does nothing and says so.
 set -euo pipefail
 
-IMAGES=(api:jobapp-api caddy:jobapp-caddy)
+IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy)
 
 die() {
   printf 'ops/previous.sh: %s\n' "$*" >&2

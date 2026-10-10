@@ -131,7 +131,7 @@ jobs:
           restore_previous() { # the files and :latest images of what ran before; nothing restarts
             bash "$GITHUB_WORKSPACE/ops/previous.sh" restore-tree "$tree" "$APP" ||
               echo "::warning::the previous files could not be restored: $APP holds $COMMIT"
-            for img in jobapp-api jobapp-caddy; do
+            for img in jobapp-api jobapp-worker jobapp-caddy; do
               if docker image inspect "$img:previous" >/dev/null 2>&1; then
                 docker tag "$img:previous" "$img:latest"
               fi
@@ -153,7 +153,7 @@ jobs:
           cd "$APP"
 
           echo "::group::build (the running stack is untouched until this succeeds)"
-          for svc in api caddy; do
+          for svc in api worker caddy; do
             start=$SECONDS
             if ! $COMPOSE --progress=plain build "$svc"; then
               # The running containers never stopped; the files and tags go back to match them.
