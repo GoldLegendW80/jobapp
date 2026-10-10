@@ -107,36 +107,52 @@ def test_only_text_deltas_of_the_open_text_block_are_published() -> None:
     assert '{"a"' not in store.everything()
 
 
-def test_deltas_are_coalesced_by_the_pump() -> None:
-    async def go() -> tuple[RecordingStore, live.LiveText]:
+def test_deltas_are_coalesced_by_the_pump(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deltas that arrive while the pump pauses between two writes go out in one write. The
+    pause is held by the test, not by a clock: real time decides nothing here."""
+    pieces = ("two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+    turn = asyncio.sleep  # the real one, to let the pump run
+    pauses: list[float] = []
+
+    async def go() -> tuple[RecordingStore, live.LiveText, int]:
         store = RecordingStore()
+        resume = asyncio.Event()
+
+        async def pause(seconds: float) -> None:
+            pauses.append(seconds)
+            await resume.wait()
+            resume.clear()
+
+        def appends() -> int:
+            return len([op for op in store.ops if op[0] == "append"])
+
+        monkeypatch.setattr(live.asyncio, "sleep", pause)
         text = live.LiveText(store, RUN, lambda: 3, flush_s=0.05)
         pump = asyncio.create_task(text.pump())
         text.feed(start(0, text=""))
-        for piece in (
-            "one",
-            "two",
-            "three",
-            "four",
-            "five",
-            "six",
-            "seven",
-            "eight",
-            "nine",
-            "ten",
-        ):
+        text.feed(delta(0, "one "))
+        while len(pauses) < 1:  # the first delta is written at once, then the pump pauses
+            await turn(0)
+        assert appends() == 1
+        for piece in pieces:
             text.feed(delta(0, piece + " "))
-            await asyncio.sleep(0.005)
-        await asyncio.sleep(0.12)
+            await turn(0)  # the pump gets its turn after every delta, and stays paused
+        during = appends()
+        resume.set()
+        while len(pauses) < 2:
+            await turn(0)
         pump.cancel()
         await asyncio.gather(pump, return_exceptions=True)
-        return store, text
+        return store, text, during
 
-    store, text = asyncio.run(go())
-    appends = [op for op in store.ops if op[0] == "append"]
-    assert store.written() == {1: "one two three four five six seven eight nine ten "}
+    store, text, during = asyncio.run(go())
+    assert during == 1  # nothing was written while the pump paused
     assert text.deltas == 10
-    assert 1 <= len(appends) <= 3  # ten deltas in 50 ms: a couple of writes, not ten
+    assert [op for op in store.ops if op[0] == "append"] == [
+        ("append", 1, "one "),
+        ("append", 1, "two three four five six seven eight nine ten "),
+    ]
+    assert pauses == [0.05, 0.05]  # each write is followed by a pause of flush_s
 
 
 def test_complete_text_clears_the_block_and_the_next_one_starts_fresh() -> None:

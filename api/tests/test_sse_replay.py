@@ -56,6 +56,38 @@ def test_gone() -> None:
     assert collect(lambda after: None, interval_s=0)[1] == b"event: gone\ndata: {}\n\n"
 
 
+def test_gone_after_several_reads_with_a_transient_source() -> None:
+    """The thing is deleted while the stream idles: two reads find nothing new, each followed by
+    a poll of the transient source, and the third finds it gone. `gone` ends the stream: no
+    `end`, and nothing of the transient source after it."""
+    pages: list[sse.Page | None] = [sse.Page([], final=False), sse.Page([], final=False), None]
+    reads: list[int] = []
+    polls: list[int] = []
+
+    def read(after: int) -> sse.Page | None:
+        reads.append(after)
+        return pages[len(reads) - 1]
+
+    async def transient(last: int) -> sse.Transient:
+        polls.append(last)
+        return sse.Transient(events=(sse.format_transient("partial", {"n": len(polls)}),))
+
+    async def go() -> list[bytes]:
+        source = sse.replay(read, interval_s=0, transient=transient, transient_interval_s=0)
+        return [chunk async for chunk in source]
+
+    chunks = asyncio.run(go())
+    assert chunks == [
+        b"retry: 2000\n\n",
+        b'event: partial\ndata: {"n":1}\n\n',
+        b'event: partial\ndata: {"n":2}\n\n',
+        b"event: gone\ndata: {}\n\n",
+    ]
+    assert reads == [0, 0, 0]
+    assert polls == [0, 0]
+    assert sse.END not in chunks
+
+
 def test_heartbeat_and_time_limit_without_end() -> None:
     chunks = collect(
         lambda after: sse.Page([], final=False), interval_s=0.01, heartbeat_s=0.03, max_s=0.2
