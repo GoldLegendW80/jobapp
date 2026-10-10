@@ -42,23 +42,31 @@ step "where the jobs run: ci.yml on the Mac runners only, deploy.yml on the Jets
 RUNS_ON='    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"'"'["self-hosted", "mac-ci"]'"'"') }}'
 jobs_total="$(grep -c '^    runs-on:' .github/workflows/ci.yml)"
 jobs_mac="$(grep -cxF -- "$RUNS_ON" .github/workflows/ci.yml)"
-[[ "$jobs_total" -ge 7 && "$jobs_total" == "$jobs_mac" ]] ||
+[[ "$jobs_total" -ge 4 && "$jobs_total" == "$jobs_mac" ]] ||
   fail "ci.yml: $jobs_mac of $jobs_total jobs use the CI_RUNS_ON expression with the [self-hosted, mac-ci] default"
 ok "ci.yml: all $jobs_total jobs run on vars.CI_RUNS_ON, default [self-hosted, mac-ci] (never self-hosted alone)"
 [[ "$(grep -c '^    runs-on:' .github/workflows/deploy.yml)" == 1 ]] || fail "deploy.yml has more than one runs-on"
 grep -qx '    runs-on: \[self-hosted, jetson\]' .github/workflows/deploy.yml || fail "deploy.yml does not run on [self-hosted, jetson]"
 if grep -v '^ *#' .github/workflows/deploy.yml | grep -q 'ubuntu-latest\|mac-ci'; then fail "deploy.yml names a hosted or a Mac runner"; fi
 ok "deploy.yml: one job, on [self-hosted, jetson], no hosted minutes"
-# The gates of issue #83 that must survive the move: named so that removing one fails here.
-for gate in 'coverage report --fail-under=95' 'coverage combine .coverage.jobs .coverage.rest' \
-  'python3 .github/scripts/e2e_groups.py' 'tests/deploy_test.sh' 'tests/ci_runners_test.sh' \
-  'pre-commit run --all-files' 'group: [identity, sweep, apps]' 'pytest -m docker' \
-  'ruff format --check' 'cancel-in-progress: true' 'max-parallel: 2' '-n "$PYTEST_WORKERS"' \
+# The gates that must survive every change of layout (issues #83 and #91): named so that
+# removing one fails here. .github/scripts/ci_plan_test.py checks that their steps follow the plan.
+for gate in 'coverage report --fail-under=95' 'pytest tests -m "not docker"' 'pytest -m docker' \
+  'tests/jobs/test_scoring.py::test_long_text_is_bounded_and_fast' 'ruff check' 'ruff format --check' \
+  'pnpm lint' 'pnpm typecheck' 'pnpm build' 'vitest run' \
+  'python3 .github/scripts/e2e_groups.py' 'python3 .github/scripts/e2e_groups_test.py' \
+  'python3 .github/scripts/ci_plan_test.py' 'python3 .github/scripts/ci_plan.py verify' \
+  'tests/deploy_test.sh' 'tests/env_check_test.sh' 'tests/agents_real_run_test.sh' \
+  'tests/ci_runners_test.sh' 'tests/tailscale_test.sh' 'koalaman/shellcheck:v0.11.0' \
+  'pre-commit run --all-files' 'playwright test -c e2e/identity-all.config.ts' \
+  'playwright test jobs-sweep.spec.ts' 'agents-streaming.spec.ts' \
+  'needs: [api, checks, journeys]' 'cancel-in-progress: true' '-n "$PYTEST_WORKERS"' \
   '--maxWorkers="$VITEST_WORKERS"'; do
   grep -qF -- "$gate" .github/workflows/ci.yml || fail "ci.yml lost: $gate"
 done
 if grep -v '^ *#' .github/workflows/ci.yml | grep -q -- '-n auto'; then fail "ci.yml lets pytest take every core"; fi
-ok "ci.yml keeps the coverage floor, both shards, the e2e groups and their guard, the shell tests, pre-commit, cancel in progress; worker counts written out, two e2e stacks at most"
+if grep -v '^ *#' .github/workflows/ci.yml | grep -q 'continue-on-error'; then fail "ci.yml lets a step fail"; fi
+ok "ci.yml keeps the coverage floor, the whole pytest suite and its docker and timing tests, the web checks, vitest, the three e2e groups and their guard, the shell tests, pre-commit, the plan's own test and verification, the gate, cancel in progress; worker counts written out"
 if grep -v '^ *#' .github/workflows/ci.yml | grep -qi 'armcap'; then fail "ci.yml names the Mac's OpenSSL variable"; fi
 grep -q 'CI_COMPOSE_OVERLAY' .github/workflows/ci.yml || fail "ci.yml does not read the runner's CI_COMPOSE_OVERLAY"
 grep -q '^ENV OPENSSL_armcap=0 \\$' ops/ci-runner/Dockerfile || fail "ops/ci-runner/Dockerfile does not set OPENSSL_armcap=0"
@@ -95,7 +103,7 @@ grep -q '^    ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/bin/ci-job-completed.
 for f in job-started job-completed ci-clean; do
   grep -q "^COPY --chmod=755 $f.sh /usr/local/bin/" ops/ci-runner/Dockerfile || fail "the image does not copy $f.sh"
 done
-for f in ops/ci-runners.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh; do
+for f in ops/ci-runners.sh ops/ci-rerun.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh; do
   [[ -x "$f" ]] || fail "$f is not executable"
 done
 ok "runner $version from GitHub's release, sha256 checked, ubuntu by digest, both hooks set in the image"
@@ -135,23 +143,43 @@ case "$1 ${2:-}" in
     # configure and remove: the token arrives on stdin, and only there.
     if [[ "$*" == *" configure" || "$*" == *" remove" ]]; then cat >>"$FAKE_STDIN"; fi
     ;;
+  "logs "*)
+    # What a runner's listener prints once it takes jobs, unless the test says it never does.
+    [[ "${FAKE_NOT_LISTENING:-}" == 1 ]] || printf '%s\n' "√ Connected to GitHub" "Current runner version: '2.338.0'" "2026-10-10 17:22:25Z: Listening for Jobs"
+    ;;
   "image inspect")
     [[ "$*" == *"{{.Id}}"* ]] && echo "sha256:new"
     exit 0
     ;;
   "image ls") printf '%s\n' jobapp-ci-runner:2.338.0 jobapp-ci-runner:2.300.0 ;;
   "inspect "*)
-    if [[ "$*" == *"{{.State.Running}} {{.Image}}"* ]]; then
-      # A container exists once started in this test, or when the test says so; on the new image
-      # only when the test says so.
-      if grep -q "^run -d --name ${!#} " "$FAKE_LOG" || [[ -n "${FAKE_IMAGE:-}" ]]; then
-        echo "true sha256:${FAKE_IMAGE:-new}"
-      else
-        exit 1
-      fi
+    # A container exists once created in this test (on the new image, running once started), or
+    # because the test says so: FAKE_RUNNERS names it, FAKE_IMAGE says which image it runs and
+    # FAKE_STOPPED that it was stopped by hand.
+    name="${!#}"
+    if grep -q "^create --name $name " "$FAKE_LOG"; then
+      running=false
+      if grep -q "^start $name\$" "$FAKE_LOG"; then running=true; fi
+      image=new
+    elif [[ " ${FAKE_RUNNERS:-} " == *" $name "* && -n "${FAKE_IMAGE:-}" ]]; then
+      running=true
+      if [[ " ${FAKE_STOPPED:-} " == *" $name "* ]]; then running=false; fi
+      image="$FAKE_IMAGE"
     else
-      echo "running, restarts 0"
+      running=""
     fi
+    case "$*" in
+      *"{{.State.Running}} {{.Image}}"*)
+        [[ -n "$running" ]] || exit 1
+        echo "$running sha256:$image"
+        ;;
+      *"{{.State.Running}}"*)
+        [[ -n "$running" ]] || exit 1
+        echo "$running"
+        ;;
+      *"{{.State.StartedAt}}"*) echo "2026-10-10T17:22:00Z" ;;
+      *) echo "running, restarts 0" ;;
+    esac
     ;;
   "volume inspect") exit 1 ;;
   "volume prune") echo "Total reclaimed space: 0B" ;;
@@ -161,13 +189,18 @@ FAKE
 cat >"$WORK/bin/gh" <<'FAKE'
 #!/usr/bin/env bash
 printf 'gh %s\n' "$*" >>"$FAKE_LOG"
+# GitHub does not answer: every read of the runners fails (no `;;&` here: bash 3.2).
+if [[ "${FAKE_GH_FAIL:-}" == 1 && "$*" == *"actions/runners --paginate"* ]]; then
+  echo "gh: HTTP 502" >&2
+  exit 1
+fi
 case "$*" in
   *registration-token* | *remove-token*) echo "$FAKE_TOKEN" ;;
   *"actions/runners --paginate"*startswith*) [[ "${FAKE_BUSY:-}" == 1 ]] && echo mac-ci-1 ;;
   *"actions/runners --paginate"*"select(.name"*)
     # Listed and online once a container was started for it; gone once unregistered.
     if grep -q ' remove$' "$FAKE_LOG"; then exit 0; fi
-    if grep -q '^run -d ' "$FAKE_LOG" || [[ "${FAKE_LISTED:-}" == 1 ]]; then
+    if grep -q '^start ' "$FAKE_LOG" || [[ "${FAKE_LISTED:-}" == 1 ]]; then
       if [[ "${FAKE_BUSY:-}" == 1 ]]; then echo "7 online true"; else echo "7 online false"; fi
     fi
     ;;
@@ -309,28 +342,34 @@ if grep -q "$CANARY" "$WORK/out"; then fail "the registration token is in the ou
 if grep -q "$CANARY" "$WORK/docker.log"; then fail "the registration token is in a command line"; fi
 [[ "$(grep -c "$CANARY" "$WORK/stdin.log")" == 2 ]] || fail "the token did not reach configure on stdin once per runner"
 if grep -q 'leak-\|GH_TOKEN\|ANTHROPIC\|CLAUDE\|--env-file' "$WORK/docker.log"; then fail "a variable of the calling shell reached docker"; fi
-[[ "$(grep -c '^run -d ' "$WORK/docker.log")" == 2 ]] || fail "expected 2 runner containers"
-log_has "run -d --name jobapp-ci-1 --hostname mac-ci-1 --restart unless-stopped --privileged --cpuset-cpus 0-2 --memory 4g --memory-swap 4g"
-log_has "run -d --name jobapp-ci-2 --hostname mac-ci-2 --restart unless-stopped --privileged --cpuset-cpus 3-5 --memory 4g --memory-swap 4g"
+[[ "$(grep -c '^create --name ' "$WORK/docker.log")" == 2 ]] || fail "expected 2 runner containers"
+log_has "create --name jobapp-ci-1 --hostname mac-ci-1 --restart unless-stopped --privileged --cpuset-cpus 0-2 --memory 4g --memory-swap 4g"
+log_has "create --name jobapp-ci-2 --hostname mac-ci-2 --restart unless-stopped --privileged --cpuset-cpus 3-5 --memory 4g --memory-swap 4g"
+# One at a time: runner 1 is created, started and heard listening before runner 2 is touched.
+order="$(grep -nE '^(create --name|start|logs --since [^ ]+) jobapp-ci-[12]' "$WORK/docker.log" | sed -E 's/^[0-9]+:(create|start|logs).* (jobapp-ci-[12]).*/\1 \2/' | uniq | tr '\n' ',')"
+[[ "$order" == "create jobapp-ci-1,start jobapp-ci-1,logs jobapp-ci-1,create jobapp-ci-2,start jobapp-ci-2,logs jobapp-ci-2,"* ]] ||
+  fail "the runners were not started one at a time, each heard listening first: $order"
 log_has "-v jobapp-ci-docker-2:/var/lib/docker"
 log_has "-e RUNNER_LABELS=mac-ci"
 log_has "-e RUNNER_URL=https://github.com/GoldLegendW80/jobapp"
-if grep '^run ' "$WORK/docker.log" | grep -q 'docker\.sock\|/Users\|/home/\|\$HOME'; then
+if grep -E '^(run|create) ' "$WORK/docker.log" | grep -q 'docker\.sock\|/Users\|/home/\|\$HOME'; then
   fail "a runner container gets the host's Docker socket or a host folder"
 fi
 [[ -d "$WORK/rd/disk" && -z "$(ls -A "$WORK/rd/disk")" ]] || fail "the disk probe folder is missing or not empty"
-[[ "$(grep '^run ' "$WORK/docker.log" | grep -o -- '-v [^ ]*' | sort -u | tr '\n' ' ')" == "-v $WORK/rd/disk:/host-disk:ro -v jobapp-ci-docker-1:/var/lib/docker -v jobapp-ci-docker-2:/var/lib/docker -v jobapp-ci:/ci " ]] ||
-  fail "unexpected mounts: $(grep '^run ' "$WORK/docker.log" | grep -o -- '-v [^ ]*' | sort -u | tr '\n' ' ')"
+[[ "$(grep -E '^(run|create) ' "$WORK/docker.log" | grep -o -- '-v [^ ]*' | sort -u | tr '\n' ' ')" == "-v $WORK/rd/disk:/host-disk:ro -v jobapp-ci-docker-1:/var/lib/docker -v jobapp-ci-docker-2:/var/lib/docker -v jobapp-ci:/ci " ]] ||
+  fail "unexpected mounts: $(grep -E '^(run|create) ' "$WORK/docker.log" | grep -o -- '-v [^ ]*' | sort -u | tr '\n' ' ')"
 # Every -e the containers get, by name.
 allowed="CI_RUNNER_INDEX RUNNER_URL RUNNER_NAME RUNNER_LABELS"
 while IFS= read -r name; do
   [[ " $allowed " == *" $name "* ]] || fail "the containers get an unexpected variable: $name"
 done < <(grep -o -- '-e [A-Za-z_]*=' "$WORK/docker.log" | sed 's/^-e //; s/=$//' | sort -u)
-out_has "online on GitHub: 2 runner(s)"
-ok "2 runners: token on stdin only; labels mac-ci; privileged, restart unless-stopped, own CPUs, memory and Docker volume; no host socket, no host folder but the empty read only disk probe, only $allowed"
+out_has "online on GitHub and listening: 2 runner(s)"
+out_has "jobapp-ci-2: listening for jobs"
+ok "2 runners, one at a time, each heard listening before the next: token on stdin only; labels mac-ci; privileged, restart unless-stopped, own CPUs, memory and Docker volume; no host socket, no host folder but the empty read only disk probe, only $allowed"
 run 0 fake -- ops/ci-runners.sh install
-[[ "$(grep -c '^run -d ' "$WORK/docker.log")" == 2 ]] || fail "the default is not 2 runners"
-if grep '^run -d ' "$WORK/docker.log" | grep -vq -- '--cpuset-cpus [03]-[25] --memory 4g --memory-swap 4g'; then
+[[ "$(grep -c '^create --name ' "$WORK/docker.log")" == 3 ]] || fail "the default is not 3 runners"
+log_has "create --name jobapp-ci-3 --hostname mac-ci-3 --restart unless-stopped --privileged --cpuset-cpus 6-8 --memory 4g --memory-swap 4g"
+if grep '^create --name ' "$WORK/docker.log" | grep -vq -- '--cpuset-cpus [036]-[258] --memory 4g --memory-swap 4g'; then
   fail "a runner has no CPU set or no memory limit"
 fi
 run 0 fake HOME="$WORK/home-off" -- ops/ci-runners.sh install 1
@@ -340,28 +379,83 @@ echo '{"AutoStart": true}' >"$WORK/home-on/Library/Group Containers/group.com.do
 run 0 fake HOME="$WORK/home-on" -- ops/ci-runners.sh install 1
 out_has "come back by themselves after a reboot"
 [[ "$(cat "$WORK/home-on/Library/Group Containers/group.com.docker/settings-store.json")" == '{"AutoStart": true}' ]] || fail "Docker Desktop's settings were written"
-ok "the default is 2 runners, CPUs 0-2 and 3-5, 4g each with no swap beyond; install says whether Docker Desktop starts at login and never writes its settings"
+# With runners installed, install without a count keeps their number.
+run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_REGISTERED=1 FAKE_IMAGE=new -- ops/ci-runners.sh install
+log_lacks "jobapp-ci-3"
+out_has "online on GitHub and listening: 2 runner(s)"
+ok "the default is 3 runners on a Mac without any (CPUs 0-2, 3-5 and 6-8, 4g each with no swap beyond) and the number that exists otherwise; install says whether Docker Desktop starts at login and never writes its settings"
 
-step "update, stop and prune wait for jobs; uninstall removes only what install made"
+step "update, start, stop and prune: idle runners only, known states only, listeners heard; uninstall removes only what install made"
 # update: a container on an older image is recreated, but only once its runner is idle.
+untouched() { # no runner container was stopped, removed, created or started
+  if grep -qE '^(stop|rm|create|start) ' "$WORK/docker.log"; then
+    fail "a runner container was touched: $(grep -E '^(stop|rm|create|start) ' "$WORK/docker.log" | head -n 3)"
+  fi
+}
 run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_BUSY=1 FAKE_IMAGE=old -- env CI_UPDATE_WAIT_S=0 ops/ci-runners.sh update
 out_has "mac-ci-1 is still running a job after 0s: nothing was changed on it"
-log_lacks "run -d"
-log_lacks "rm -f jobapp-ci"
+untouched
 run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=old -- ops/ci-runners.sh update
-[[ "$(grep -c '^run -d ' "$WORK/docker.log")" == 2 ]] || fail "update did not recreate both idle runners"
-log_has "image prune -f --filter label=jobapp.ci=runner"
+[[ "$(grep -c '^create --name ' "$WORK/docker.log")" == 2 ]] || fail "update did not recreate both idle runners"
+# The listener is stopped, not killed, so it ends its session at GitHub; then the container goes.
+order="$(grep -nE '^(stop -t 30|rm -f|create --name|start|logs --since [^ ]+) jobapp-ci-[12]' "$WORK/docker.log" | sed -E 's/^[0-9]+:(stop|rm|create|start|logs).* (jobapp-ci-[12]).*/\1 \2/' | uniq | tr '\n' ',')"
+[[ "$order" == "stop jobapp-ci-1,rm jobapp-ci-1,create jobapp-ci-1,start jobapp-ci-1,logs jobapp-ci-1,stop jobapp-ci-2,rm jobapp-ci-2,create jobapp-ci-2,start jobapp-ci-2,logs jobapp-ci-2," ]] ||
+  fail "update did not go one runner at a time, stop, remove, create, start, hear it listen: $order"
+out_has "online on GitHub and listening: 2 of 2 runner(s)"
+# The image the containers ran is pruned once none of them runs it: after the last recreation.
+[[ "$(grep -n 'image prune -f --filter label=jobapp.ci=runner' "$WORK/docker.log" | tail -n 1 | cut -d: -f1)" -gt "$(grep -n '^start jobapp-ci-2' "$WORK/docker.log" | cut -d: -f1)" ]] ||
+  fail "the replaced image is not pruned after the last recreation"
+# A runner that never says it listens stops the update there: the next one is not touched.
+run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=old FAKE_NOT_LISTENING=1 -- env CI_LISTEN_WAIT_S=0 ops/ci-runners.sh update
+out_has 'jobapp-ci-1 did not say "Listening for Jobs" within 0s'
+log_lacks "jobapp-ci-2 "
+# GitHub does not answer: unknown is not idle. Nothing is touched, by update, install or prune.
+run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_IMAGE=old FAKE_GH_FAIL=1 -- ops/ci-runners.sh update
+out_has "GitHub did not answer about mac-ci-1"
+out_has "nothing was changed on it"
+untouched
+run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_REGISTERED=1 FAKE_IMAGE=old FAKE_GH_FAIL=1 -- ops/ci-runners.sh install
+out_has "GitHub did not answer about mac-ci-1"
+untouched
+if grep -q 'registration-token' "$WORK/docker.log"; then fail "install asked for a token for a runner whose state it could not read"; fi
+run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_IMAGE=new FAKE_GH_FAIL=1 -- ops/ci-runners.sh prune
+out_has "whether a job is running is unknown"
+log_lacks "prune"
+run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_IMAGE=new FAKE_GH_FAIL=1 -- ops/ci-runners.sh status
+out_has "unknown, GitHub did not answer"
+run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_IMAGE=new FAKE_GH_FAIL=1 -- ops/ci-runners.sh uninstall
+out_has "GitHub did not answer"
+if grep -q '^volume rm' "$WORK/docker.log"; then fail "uninstall removed volumes without knowing the runner was unregistered"; fi
+# A runner GitHub no longer lists is not recreated by update: install registers it again.
+run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_IMAGE=old -- ops/ci-runners.sh update
+out_has "mac-ci-1 is not registered at GitHub any more"
+untouched
+# A runner stopped by hand gets the new image and stays stopped; the other one is updated.
+run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=old FAKE_STOPPED="jobapp-ci-2" -- ops/ci-runners.sh update
+log_has "create --name jobapp-ci-2 "
+log_has "start jobapp-ci-1"
+log_lacks "start jobapp-ci-2"
+out_has "jobapp-ci-2: was stopped and stays stopped"
+out_has "online on GitHub and listening: 1 of 2 runner(s)"
+# No update on a disk where no job would start anyway.
+run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=old FAKE_FREE_KB=9437184 -- ops/ci-runners.sh update
+out_has "only 9 GB free on this Mac"
+log_lacks "build"
+untouched
 # Run again, or after an install: containers already on the built image are left alone, busy or not.
 run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_BUSY=1 FAKE_IMAGE=new -- ops/ci-runners.sh update
 out_has "jobapp-ci-2: already running"
-log_lacks "run -d"
-log_lacks "rm -f jobapp-ci"
+untouched
 run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_REGISTERED=1 FAKE_BUSY=1 FAKE_IMAGE=new -- ops/ci-runners.sh install
-log_lacks "run -d"
-log_lacks "rm -f jobapp-ci"
+untouched
 run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_REGISTERED=1 FAKE_BUSY=1 FAKE_IMAGE=old -- env CI_UPDATE_WAIT_S=0 ops/ci-runners.sh install
 out_has "still running a job"
-log_lacks "run -d"
+untouched
+# start waits for the listeners too; status says whether each one listens.
+run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=new -- ops/ci-runners.sh start
+out_has "jobapp-ci-2: listening for jobs"
+run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_NOT_LISTENING=1 -- ops/ci-runners.sh status
+out_has "not listening for jobs"
 run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2 jobapp-ci-3" FAKE_LISTED=1 -- ops/ci-runners.sh install 2
 out_has "3 runners exist and 2 were asked for"
 log_lacks "build"
@@ -380,10 +474,95 @@ log_has "volume rm jobapp-ci-docker-2"
 log_has "volume rm jobapp-ci"
 log_has "image rm jobapp-ci-runner:$version"
 log_has "image rm jobapp-ci-runner:2.300.0"
-if grep -E '^(rm|volume rm|image rm|stop) ' "$WORK/docker.log" | grep -vE '^(rm -f jobapp-ci-[0-9]+|volume rm jobapp-ci(-docker-[0-9]+)?|image rm jobapp-ci-runner:[0-9.]+)$' | grep -q .; then
+if grep -E '^(rm|volume rm|image rm|stop) ' "$WORK/docker.log" | grep -vE '^(stop -t 30 jobapp-ci-[0-9]+|rm -f jobapp-ci-[0-9]+|volume rm jobapp-ci(-docker-[0-9]+)?|image rm jobapp-ci-runner:[0-9.]+)$' | grep -q .; then
   fail "uninstall removed something that is not a CI runner object: $(grep -E '^(rm|volume rm|image rm) ' "$WORK/docker.log")"
 fi
 if grep -q 'prune' "$WORK/docker.log"; then fail "uninstall prunes"; fi
-ok "update and a second install recreate a container only when it is not on the built image and its runner is idle, and wait otherwise; a lower count is refused; prune refused while a job runs; stop stops each runner; uninstall: removal token on stdin only, only jobapp-ci-<n>, their volumes and every tag of the image, never a prune"
+ok "update and a second install recreate a container only when it is not on the built image and its runner is idle, one at a time (stop, remove, create, start, wait for Listening for Jobs), and wait otherwise; the replaced image is pruned after the last one; a runner that does not listen, GitHub not answering, a runner GitHub no longer lists and a disk under 10 GB each stop the command with nothing touched; a stopped runner stays stopped; a lower count is refused; prune refused while a job runs; start and status hear the listeners; stop stops each runner; uninstall: removal token on stdin only, only jobapp-ci-<n>, their volumes and every tag of the image, never a prune"
+
+step "ops/ci-rerun.sh: a fresh run of an open pull request, only from GitHub's fresh merge commit"
+mkdir -p "$WORK/bin2"
+cat >"$WORK/bin2/gh" <<'FAKE'
+#!/usr/bin/env bash
+# Pull request 7, feature/x at headsha1111, base main at basesha2222. FAKE_MERGE says what
+# GitHub reports as its merge commit: fresh (default), stale (the old base, for ever), late
+# (unknown, then stale, then fresh from the third question on) or conflict.
+printf 'gh %s\n' "$*" >>"$FAKE_LOG"
+asked="$(cat "$FAKE_STATE" 2>/dev/null || echo 0)"
+case "$*" in
+  *"/pulls/7 --jq .state") echo "${FAKE_PR_STATE:-open}" ;;
+  *"/pulls/7 --jq .base.ref") echo main ;;
+  *"/pulls/7 --jq .head.ref") echo feature/x ;;
+  *"/pulls/7 --jq .head.sha") echo headsha1111 ;;
+  *"/commits/main --jq .sha") echo basesha2222 ;;
+  *"/pulls/7 --jq .mergeable | tostring")
+    asked=$((asked + 1))
+    echo "$asked" >"$FAKE_STATE"
+    case "${FAKE_MERGE:-fresh}" in
+      conflict) echo false ;;
+      late) if ((asked < 2)); then echo null; else echo true; fi ;;
+      *) echo true ;;
+    esac
+    ;;
+  *"/pulls/7 --jq .merge_commit_sha"*)
+    case "${FAKE_MERGE:-fresh}" in
+      stale) echo mergeOLD ;;
+      late) if ((asked < 3)); then echo mergeOLD; else echo mergeNEW; fi ;;
+      *) echo mergeNEW ;;
+    esac
+    ;;
+  *"/commits/mergeNEW --jq"*) echo "basesha2222 headsha1111" ;;
+  *"/commits/mergeOLD --jq"*) echo "oldbase0000 headsha1111" ;;
+  "pr reopen 7 "*) if [[ "${FAKE_REOPEN_FAIL:-}" == 1 ]]; then exit 1; fi ;;
+  "pr close 7 "*) ;;
+  *) echo "fake gh: unexpected call: $*" >&2; exit 1 ;;
+esac
+exit 0
+FAKE
+chmod +x "$WORK/bin2/gh"
+rerun() { # rerun <exit> <VAR=value...> -- <arguments of ci-rerun.sh>
+  local want="$1" envs=()
+  shift
+  while [[ "$1" != -- ]]; do
+    envs+=("$1")
+    shift
+  done
+  shift
+  : >"$WORK/docker.log"
+  rm -f "$WORK/asked"
+  run "$want" env PATH="$WORK/bin2:$PATH" FAKE_LOG="$WORK/docker.log" FAKE_STATE="$WORK/asked" \
+    CI_RERUN_POLL_S=0 ${envs[@]+"${envs[@]}"} ops/ci-rerun.sh "$@"
+}
+rerun 0 -- 7
+order="$(grep -n '^gh pr ' "$WORK/docker.log" | sed 's/^[0-9]*:gh pr \([a-z]*\) 7 .*/\1/' | tr '\n' ',')"
+[[ "$order" == "close,reopen," ]] || fail "expected one close then one reopen, got: $order"
+log_has "pr close 7 --repo GoldLegendW80/jobapp"
+out_has "GitHub's merge commit mergeNE is main at basesha plus the branch"
+rerun 0 -- 7 --check
+log_lacks "gh pr "
+out_has "Nothing was changed"
+ok "a fresh merge commit (the base as it is now plus the head): close, then reopen; --check only says so"
+rerun 0 FAKE_MERGE=late -- 7
+[[ "$(cat "$WORK/asked")" == 3 ]] || fail "expected three questions before GitHub's merge commit was fresh, asked $(cat "$WORK/asked")"
+[[ "$(grep -c '^gh pr ' "$WORK/docker.log")" == 2 ]] || fail "expected a close and a reopen after the wait"
+rerun 1 FAKE_MERGE=stale CI_RERUN_WAIT_S=0 -- 7
+out_has "still reports a merge commit that is not main at basesha plus headsha"
+out_has "Nothing was changed"
+log_lacks "gh pr "
+ok "while GitHub's merge commit is unknown or still the old base it waits, and gives up without closing anything"
+rerun 1 FAKE_MERGE=conflict -- 7
+out_has "conflicts with main"
+log_lacks "gh pr "
+rerun 1 FAKE_PR_STATE=closed -- 7
+out_has "pull request 7 is closed"
+log_lacks "gh pr "
+rerun 1 FAKE_REOPEN_FAIL=1 -- 7
+out_has "PULL REQUEST 7 IS CLOSED and could not be reopened"
+[[ "$(grep -c '^gh pr reopen ' "$WORK/docker.log")" == 3 ]] || fail "expected three attempts to reopen"
+rerun 1 -- abc
+rerun 1 -- 7 --force
+rerun 1 --
+out_has "usage: ops/ci-rerun.sh"
+ok "a conflict, a closed pull request and bad arguments change nothing; a reopen that fails is tried three times and then says the pull request is closed"
 
 printf '\nci_runners_test: %s checks passed\n' "$passed"

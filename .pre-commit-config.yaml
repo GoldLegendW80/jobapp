@@ -59,10 +59,19 @@ repos:
         files: ^(web/e2e/.*\.(spec|config)\.ts|\.github/workflows/ci\.yml|\.github/scripts/e2e_groups\.py)$
         pass_filenames: false
 
+      # The path rules of the CI plan, the reasons that let a rule skip a unit, and that the
+      # steps of ci.yml follow the plan (issue #91).
+      - id: ci-plan
+        name: CI plan (ci.yml follows ci_plan.py)
+        language: system
+        entry: python3 .github/scripts/ci_plan_test.py
+        files: ^(\.github/workflows/ci\.yml|\.github/scripts/ci_plan(_test)?\.py)$
+        pass_filenames: false
+
   # deploy.sh and the scripts that test it. tests/compose_smoke.sh predates the hook and still
   # has info-level findings (SC2015, SC2046, SC2086), so it is not listed yet.
   - repo: https://github.com/shellcheck-py/shellcheck-py
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
-        files: ^(deploy\.sh|ops/(db|previous|migrate|env_check)\.sh|ops/runner/(entrypoint|job-guard)\.sh|ops/ci-runners\.sh|ops/ci-runner/(entrypoint|job-started|job-completed|ci-clean)\.sh|\.github/scripts/ci_env\.sh|tests/(ci_runners_test|deploy_test|migrate_test|env_check_test|jetson_smoke|backup_test|crash_check|reboot_check|e2e_jetson|tailscale_test)\.sh)$
+        files: ^(deploy\.sh|ops/(db|previous|migrate|env_check)\.sh|ops/runner/(entrypoint|job-guard)\.sh|ops/ci-(runners|rerun)\.sh|ops/ci-runner/(entrypoint|job-started|job-completed|ci-clean)\.sh|\.github/scripts/ci_env\.sh|tests/(ci_runners_test|deploy_test|migrate_test|env_check_test|jetson_smoke|backup_test|crash_check|reboot_check|e2e_jetson|tailscale_test)\.sh)$
