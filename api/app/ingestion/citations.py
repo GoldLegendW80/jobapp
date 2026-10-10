@@ -5,7 +5,8 @@ An extraction agent proposes a profile item: a value, and excerpts of the docume
 takes the passage it quotes (the cited span, never cutting a word or a number) and checks every
 part of the value against those passages by its field type: an address must be written there
 exactly, a name as whole words, a date with its month next to its year, a phone number whole, and
-every other number must be a number of the passage.
+every other number must be a number of the passage. A span is read in its place in the document:
+an address, a phone number or a date that the excerpt cuts is not read.
 
 Pure: no database, no network, no model call, standard library only. It is called on hostile
 input, a document and a model's output, so it never raises on any text, gives the same answer for
@@ -451,7 +452,9 @@ def is_token_boundary(norm: str, at: int) -> bool:
 @dataclass(frozen=True, slots=True)
 class Span:
     """The passage of a document that an excerpt cites: `start` and `end` in N(document), on
-    token boundaries. Every value rule reads `text`, never what the agent typed."""
+    token boundaries. Every value rule reads the span in its document, never what the agent
+    typed: what stands right before and right after it tells whether an address, a phone
+    number or a date is whole."""
 
     document: Document
     start: int
@@ -602,10 +605,11 @@ def readings(run: str) -> frozenset[str]:
     return frozenset(_decimal(part) for part in parts)
 
 
-def _number_runs(norm: str) -> Iterator[tuple[str, bool]]:
-    """Each number run of a normalised text, and whether it is written as a version."""
-    for run in _NUMBER_RUN.finditer(norm):
-        before = norm[max(0, run.start() - _VERSION_WINDOW) : run.start()]
+def _number_runs(text: str, start: int = 0, end: int | None = None) -> Iterator[tuple[str, bool]]:
+    """Each number run of `text[start:end]`, and whether it is written as a version: what
+    stands before the run counts even when it is before `start`."""
+    for run in _NUMBER_RUN.finditer(text, start, len(text) if end is None else end):
+        before = text[max(0, run.start() - _VERSION_WINDOW) : run.start()]
         yield run.group(), _VERSION_BEFORE.search(before) is not None
 
 
@@ -621,51 +625,47 @@ def numbers_of(norm: str) -> frozenset[str]:
 
 # Month words are compared without accents: "février" is looked up as "fevrier".
 MONTH_NAMES: Mapping[str, int] = {
-    "january": 1,
-    "janvier": 1,
-    "february": 2,
-    "fevrier": 2,
-    "march": 3,
-    "mars": 3,
-    "april": 4,
-    "avril": 4,
-    "may": 5,
-    "mai": 5,
-    "june": 6,
-    "juin": 6,
-    "july": 7,
-    "juillet": 7,
-    "august": 8,
-    "aout": 8,
-    "september": 9,
-    "septembre": 9,
-    "october": 10,
-    "octobre": 10,
-    "november": 11,
-    "novembre": 11,
-    "december": 12,
-    "decembre": 12,
+    name: month
+    for month, names in enumerate(
+        (
+            "january janvier",
+            "february fevrier",
+            "march mars",
+            "april avril",
+            "may mai",
+            "june juin",
+            "july juillet",
+            "august aout",
+            "september septembre",
+            "october octobre",
+            "november novembre",
+            "december decembre",
+        ),
+        start=1,
+    )
+    for name in names.split()
 }
 # Only an abbreviation may carry a full stop: "janv. 2023" is January, "may. 2023" is not May.
 MONTH_ABBREVIATIONS: Mapping[str, int] = {
-    "jan": 1,
-    "janv": 1,
-    "feb": 2,
-    "fev": 2,
-    "fevr": 2,
-    "mar": 3,
-    "apr": 4,
-    "avr": 4,
-    "jun": 6,
-    "jul": 7,
-    "juil": 7,
-    "juill": 7,
-    "aug": 8,
-    "sep": 9,
-    "sept": 9,
-    "oct": 10,
-    "nov": 11,
-    "dec": 12,
+    name: month
+    for month, names in enumerate(
+        (
+            "jan janv",
+            "feb fev fevr",
+            "mar",
+            "apr avr",
+            "",
+            "jun",
+            "jul juil juill",
+            "aug",
+            "sep sept",
+            "oct",
+            "nov",
+            "dec",
+        ),
+        start=1,
+    )
+    for name in names.split()
 }
 _RANGE_WORDS = frozenset({"a", "au", "to", "until", "till", "through", "-", "\u2192"})
 _LIST_WORDS = frozenset({"et", "and", "/", ","})
@@ -684,14 +684,21 @@ _PRESENT_WORDS = frozenset(
     }
 )
 _PRESENT_PHRASES = (("aujourd", "'", "hui"), ("ce", "jour"), ("en", "cours"))
+_DATE_SEPARATORS = ("/", ".", "-")
 _DATE_TOKEN = re.compile(r"[0-9]+|\n|[^\W\d_]+|\S")
 _DATE_VALUE = re.compile(r"([0-9]{4})(?:-(0[1-9]|1[0-2]))?")
+# What a span needs of the document around it: the two characters before it tell whether its
+# first number goes on a date that started earlier, the next word tells what follows its last.
+_DATE_BEFORE = 2
+_DATE_AFTER = 24
 
 
 class _Token(NamedTuple):
     kind: str  # "w" a word without its accents, "d" digits, "b" a break, "p" one other character
     text: str
     glued: bool  # no space before it
+    start: int
+    end: int
 
 
 class _Atom(NamedTuple):
@@ -711,11 +718,20 @@ class DateFacts:
     never read as a year on their own, `implied` the years written by their last two digits
     after a full year ("2019-20"), and `apart` the (year, month) that a break alone separates."""
 
-    years: frozenset[int]
-    pairs: frozenset[tuple[int, int]]
-    short: frozenset[tuple[int, int]]
-    implied: frozenset[int]
-    apart: frozenset[tuple[int, int]]
+    years: frozenset[int] = frozenset()
+    pairs: frozenset[tuple[int, int]] = frozenset()
+    short: frozenset[tuple[int, int]] = frozenset()
+    implied: frozenset[int] = frozenset()
+    apart: frozenset[tuple[int, int]] = frozenset()
+
+    def __or__(self, other: DateFacts) -> DateFacts:
+        return DateFacts(
+            self.years | other.years,
+            self.pairs | other.pairs,
+            self.short | other.short,
+            self.implied | other.implied,
+            self.apart | other.apart,
+        )
 
 
 @lru_cache(maxsize=4096)
@@ -729,28 +745,39 @@ def _unaccent(text: str) -> str:
     return text if text.isascii() else "".join(_unaccent_char(char) for char in text)
 
 
-def _date_tokens(norm: str) -> list[_Token]:
+def _date_tokens(text: str, start: int, end: int) -> list[_Token]:
     tokens = []
-    for found in _DATE_TOKEN.finditer(norm):
-        text = found.group()
-        glued = found.start() > 0 and norm[found.start() - 1] not in " \n"
-        if _digit(text[0]):
-            tokens.append(_Token("d", text, glued))
-        elif text == "\n":
-            tokens.append(_Token("b", text, glued))
-        elif text[0].isalpha():
-            tokens.append(_Token("w", _unaccent(text), glued))
+    for found in _DATE_TOKEN.finditer(text, start, end):
+        piece = found.group()
+        glued = found.start() > 0 and text[found.start() - 1] not in " \n"
+        if _digit(piece[0]):
+            kind = "d"
+        elif piece == "\n":
+            kind = "b"
+        elif piece[0].isalpha():
+            kind, piece = "w", _unaccent(piece)
         else:
-            tokens.append(_Token("p", text, glued))
+            kind = "p"
+        tokens.append(_Token(kind, piece, glued, found.start(), found.end()))
     return tokens
 
 
 class _DateReader:
-    """Reads the dates of one cited span. Linear in its tokens: every look ahead is bounded."""
+    """Reads the dates of `text[start:end]`, a span in its document. A fact counts when every
+    token it is made of lies inside the span; the tokens around the span are read only to know
+    that a date goes on beyond it. Linear in the tokens: every look ahead is bounded."""
 
-    def __init__(self, norm: str) -> None:
-        self.tokens = _date_tokens(norm)
-        self.years: set[int] = set()
+    def __init__(self, text: str, start: int, end: int) -> None:
+        self.tokens = tokens = _date_tokens(
+            text, max(0, start - _DATE_BEFORE), min(len(text), end + _DATE_AFTER)
+        )
+        first = 0
+        while first < len(tokens) and tokens[first].start < start:
+            first += 1
+        limit = first
+        while limit < len(tokens) and tokens[limit].end <= end:
+            limit += 1
+        self.first, self.limit = first, limit
         self.pairs: set[tuple[int, int]] = set()
         self.short: set[tuple[int, int]] = set()
         self.implied: set[int] = set()
@@ -758,12 +785,13 @@ class _DateReader:
 
     def facts(self) -> DateFacts:
         tokens = self.tokens
-        self.years = {int(t.text) for t in tokens if t.kind == "d" and len(t.text) == 4}
-        for at in range(len(tokens)):
+        cited = tokens[self.first : self.limit]
+        years = {int(token.text) for token in cited if token.kind == "d" and len(token.text) == 4}
+        for at in range(self.first, self.limit):
             self._month_word(at)
         self._numeric()
         return DateFacts(
-            frozenset(self.years),
+            frozenset(years),
             frozenset(self.pairs),
             frozenset(self.short),
             frozenset(self.implied),
@@ -817,14 +845,15 @@ class _DateReader:
             return 3 if tokens[at + 2].text in ("a", "au", "en") else 0
         return 0
 
-    def _present(self, at: int) -> bool:
+    def _present(self, at: int) -> int:
+        """How many tokens the present takes at `at` ("present", "aujourd'hui"), or 0."""
         tokens = self.tokens
         if at < len(tokens) and tokens[at].kind == "w" and tokens[at].text in _PRESENT_WORDS:
-            return True
-        return any(
-            all(self._is(at + offset, part) for offset, part in enumerate(phrase))
-            for phrase in _PRESENT_PHRASES
-        )
+            return 1
+        for phrase in _PRESENT_PHRASES:
+            if all(self._is(at + offset, part) for offset, part in enumerate(phrase)):
+                return len(phrase)
+        return 0
 
     def _year_after(self, at: int, *, across_breaks: bool = False) -> int:
         """The index of the year that the month word ending before `at` belongs to, or -1:
@@ -858,7 +887,8 @@ class _DateReader:
         month, after = found
         year_at = self._year_after(after)
         if year_at >= 0:
-            # "sept 2021 collaborateurs" is seven of them, not a month.
+            # "sept 2021 collaborateurs" is seven of them, not a month. What follows the year
+            # counts even when the span stops at the year.
             bare_sept = tokens[at].text == "sept" and year_at == at + 1
             counted = (
                 year_at + 1 < len(tokens)
@@ -866,29 +896,31 @@ class _DateReader:
                 and not self._connector(year_at + 1, lists=True)
                 and not self._present(year_at + 1)
             )
-            if not (bare_sept and counted):
+            if year_at < self.limit and not (bare_sept and counted):
                 self.pairs.add((int(tokens[year_at].text), month))
             return
         if self._is(after, "'") and self._digits(after + 1, 2) and tokens[after + 1].glued:
-            self.short.add((int(tokens[after + 1].text), month))  # "Jan '23"
+            if after + 1 < self.limit:
+                self.short.add((int(tokens[after + 1].text), month))  # "Jan '23"
             return
         broken = self._year_after(after, across_breaks=True)
-        if broken >= 0:
+        if 0 <= broken < self.limit:
             self.apart.add((int(tokens[broken].text), month))
         shared = self._shared_year(after, month)
-        if shared is not None:
-            self.pairs.add((shared, month))
+        if 0 <= shared < self.limit:
+            self.pairs.add((int(tokens[shared].text), month))
 
-    def _shared_year(self, at: int, month: int) -> int | None:
-        """The year a month takes from the months that follow it in a range or a list: "juin à
-        août 2019", "du 1er juin au 31 août 2019", "juin, juillet et août 2019". The chain must
-        go forward in the calendar: "novembre à février 2023" starts in 2022."""
+    def _shared_year(self, at: int, month: int) -> int:
+        """The index of the year a month takes from the months that follow it in a range or a
+        list, or -1: "juin à août 2019", "du 1er juin au 31 août 2019", "juin, juillet et août
+        2019". The chain must go forward in the calendar: "novembre à février 2023" starts in
+        2022."""
         previous = month
         at += self._day(at)  # "June 1st to August 31st, 2019"
         for _ in range(CHAIN_LINKS_MAX):
             step = self._connector(at, lists=True)
             if not step:
-                return None
+                return -1
             at += step
             day_at = at + 1 if self._is(at, "the") else at
             day = self._day(day_at)
@@ -898,55 +930,82 @@ class _DateReader:
                     at += 1
             found = self._month(at)
             if found is None:
-                return None
+                return -1
             following, at = found
             if following < previous:
-                return None
+                return -1
             previous = following
             year_at = self._year_after(at)
             if year_at >= 0:
-                return int(self.tokens[year_at].text)
+                return year_at
             at += self._day(at)
-        return None
+        return -1
 
     # -- dates written as numbers
 
     def _numeric(self) -> None:
+        """Every chain of numbers glued by slashes, full stops or hyphens that lies whole inside
+        the span. A chain that the span cuts, or that is glued to a word, is not read."""
         tokens = self.tokens
         atoms: list[_Atom] = []
         at = 0
         while at < len(tokens):
-            token = tokens[at]
-            if token.kind != "d" or (token.glued and tokens[at - 1].kind == "w"):
+            if tokens[at].kind != "d":
                 at += 1
                 continue
-            parts = [token.text]
-            separator = ""
+            parts = [at]
+            separators: list[str] = []
             end = at + 1
             while (
                 end + 1 < len(tokens)
-                and tokens[end].text in ("/", ".", "-")
+                and tokens[end].text in _DATE_SEPARATORS
                 and tokens[end].glued
                 and tokens[end + 1].kind == "d"
                 and tokens[end + 1].glued
-                and separator in ("", tokens[end].text)
             ):
-                separator = tokens[end].text
-                parts.append(tokens[end + 1].text)
+                separators.append(tokens[end].text)
+                parts.append(end + 1)
                 end += 2
-            atom = self._atom(at, end, parts, separator)
+            after_word = tokens[at].glued and at > 0 and tokens[at - 1].kind == "w"
+            if at >= self.first and end <= self.limit and not after_word:
+                atoms.extend(self._chain(parts, separators))
+            at = end
+        self._ranges(atoms)
+
+    def _chain(self, parts: list[int], separators: list[str]) -> list[_Atom]:
+        """The dates of one chain: one date when it has one kind of separator, and the dates on
+        each side of a hyphen when the others are all slashes or all full stops
+        ("01/2019-06/2020"). Anything else is not a date."""
+        kinds = set(separators)
+        groups: list[tuple[list[int], str]] = []
+        if len(kinds) <= 1:
+            groups.append((parts, separators[0] if separators else ""))
+        elif len(kinds) == 2 and "-" in kinds:
+            other = next(kind for kind in kinds if kind != "-")
+            current = [parts[0]]
+            for part, separator in zip(parts[1:], separators, strict=True):
+                if separator == "-":
+                    groups.append((current, other))
+                    current = [part]
+                else:
+                    current.append(part)
+            groups.append((current, other))
+        atoms = []
+        for group, separator in groups:
+            atom = self._atom(group, separator)
             if atom is not None:
                 atoms.append(atom)
                 if atom.kind == "firm":
                     self.pairs.add((atom.year, atom.month))
-            at = end
-        self._ranges(atoms)
+        return atoms
 
-    def _atom(self, start: int, end: int, parts: list[str], separator: str) -> _Atom | None:
-        sizes = [len(part) for part in parts]
-        if max(sizes) > 4:
+    def _atom(self, parts: list[int], separator: str) -> _Atom | None:
+        texts = [self.tokens[part].text for part in parts]
+        sizes = [len(text) for text in texts]
+        if len(parts) < 2 or max(sizes) > 4:
             return None
-        numbers = [int(part) for part in parts]
+        start, end = parts[0], parts[-1] + 1
+        numbers = [int(text) for text in texts]
         if sizes == [2, 4] and 1 <= numbers[0] <= 12:  # MM/YYYY, MM.YYYY, MM-YYYY
             return _Atom(start, end, numbers[1], numbers[0], "firm")
         if sizes == [1, 4] and numbers[0] >= 1:  # a month only inside a range: "9/2021 to present"
@@ -991,7 +1050,8 @@ class _DateReader:
             self._inside_range(second)
         for atom in atoms:
             step = self._connector(atom.end, lists=False)
-            if step and self._present(atom.end + step):
+            present = self._present(atom.end + step) if step else 0
+            if present and atom.end + step + present <= self.limit:
                 self._inside_range(atom)
 
     def _inside_range(self, atom: _Atom) -> None:
@@ -1014,7 +1074,7 @@ def _school_year(atom: _Atom) -> bool:
 def dates_of(norm: str) -> DateFacts:
     """What a normalised text says about dates (rule D). A month word belongs to the year that
     follows it, never to a year written before it, and nothing pairs across a break."""
-    return _DateReader(norm).facts()
+    return _DateReader(norm, 0, len(norm)).facts()
 
 
 # --- rule P: phones -------------------------------------------------------------------------------
@@ -1029,19 +1089,41 @@ _FRENCH = (
     re.compile(r"\+33[ .-]?(?:\(0\)[ .-]?|0)?[1-9](?:[ .-]?[0-9]{2}){4}(?= )"),
 )
 _NOT_DIGIT = re.compile(r"[^0-9]")
+_PHONE_CHARS = frozenset("0123456789().-/+ ")
+_PHONE_CONTEXT = 48
+
+
+def _phones(text: str, start: int, end: int) -> set[str]:
+    """The digits of every phone number that lies whole in `text[start:end]`. A number that
+    starts before the span or goes on after it is not one of them."""
+    low = start
+    floor = max(0, start - _PHONE_CONTEXT)
+    while low > floor and text[low - 1] in _PHONE_CHARS:
+        low -= 1
+    high = end
+    ceiling = min(len(text), end + _PHONE_CONTEXT)
+    while high < ceiling and text[high] in _PHONE_CHARS:
+        high += 1
+    clear = start
+    if low > 0 and text[low - 1] in _PHONE_CHARS:
+        # More of a number may stand before what was read: the one at the edge is not known.
+        while clear < end and text[clear] in _PHONE_CHARS:
+            clear += 1
+    out: set[str] = set()
+    for run in _PHONE_RUN.finditer(text, low, high):
+        if run.start() < clear or run.end() > end:
+            continue
+        out.add(_NOT_DIGIT.sub("", run.group()))
+        for pattern in _FRENCH:
+            head = pattern.match(text, run.start(), run.end())
+            if head is not None:
+                out.add(_NOT_DIGIT.sub("", head.group()))
+    return out
 
 
 def phones_of(norm: str) -> frozenset[str]:
     """The digits of every phone number of a normalised text. A break ends a phone number."""
-    out: set[str] = set()
-    for run in _PHONE_RUN.finditer(norm):
-        text = run.group()
-        out.add(_NOT_DIGIT.sub("", text))
-        for pattern in _FRENCH:
-            head = pattern.match(text)
-            if head is not None:
-                out.add(_NOT_DIGIT.sub("", head.group()))
-    return frozenset(out)
+    return frozenset(_phones(norm, 0, len(norm)))
 
 
 # --- instruction patterns -------------------------------------------------------------------------
@@ -1073,49 +1155,67 @@ def looks_like_instruction(norm: str) -> bool:
     return _INSTRUCTION.search(_unaccent(norm).replace("\n", " ")) is not None
 
 
-# --- the rules, as functions of the value and the cited spans -------------------------------------
+# --- rule V: addresses and names ------------------------------------------------------------------
 
-_URL_START = re.compile(r"(?<![\w.%+@/-])(?:https?://(?:www\.)?|www\.)")
+_URL_HEAD = re.compile(r"(?:https?://(?:www\.)?|www\.)")
+_URL_PREFIXES = ("https://www.", "http://www.", "https://", "http://", "www.")
 _ADDRESS_BEFORE = "._%+-@/"
 _ADDRESS_AFTER = "_%+-@"
 _ADDRESS_GOES_ON = "./?#:=&~"
-
-
-def _bare(norm: str) -> str:
-    """A normalised text without "http://", "https://" and "www.", removed only where an
-    address starts."""
-    return _URL_START.sub("", norm)
+_GOES_ON_MAX = 64
 
 
 def _address_char(char: str, others: str) -> bool:
-    return char.isalnum() or char in others or _mark(char)
+    """Whether `char` can be part of an address: a letter of a script written with spaces, a
+    digit, a mark, or one of `others`."""
+    return (char.isalnum() and not _unspaced(char)) or char in others or _mark(char)
+
+
+def _address_starts(text: str, at: int, url: bool) -> bool:
+    """Whether an address can start at `at`: nothing of an address stands before it. For a
+    URL, "http://", "https://" and "www." may, where an address starts."""
+    if at == 0 or not _address_char(text[at - 1], _ADDRESS_BEFORE):
+        return True
+    if url:
+        for prefix in _URL_PREFIXES:
+            head = at - len(prefix)
+            if head >= 0 and text.startswith(prefix, head):
+                return head == 0 or not _address_char(text[head - 1], _ADDRESS_BEFORE)
+    return False
+
+
+def _address_ends(text: str, end: int) -> bool:
+    """Whether an address can end at `end`. A full stop, a slash or a sign of a query there is
+    punctuation only when what follows is not more of the address."""
+    rest = end
+    stop = min(len(text), end + _GOES_ON_MAX)
+    while rest < stop and text[rest] in _ADDRESS_GOES_ON:
+        rest += 1
+    if rest == len(text):
+        return True
+    return rest < stop and not _address_char(text[rest], _ADDRESS_AFTER)
 
 
 def rule_address(value: str, spans: Sequence[Span], *, url: bool = False) -> Rule | None:
     """Rule V for an email or a URL: N(value) is written in a span, hyphens and spaces kept,
-    and bounded on both sides, so a part of an address never passes."""
+    and bounded on both sides in the document, so a part of an address never passes, even when
+    the excerpt starts or stops inside it. For a URL the scheme, "www." and the final slash of
+    the value are left out."""
     wanted = normalise(value).text
     if url:
-        wanted = _bare(wanted).rstrip("/")
+        head = _URL_HEAD.match(wanted)
+        wanted = (wanted[head.end() :] if head else wanted).rstrip("/")
     if not wanted:
         return Rule.VALUE_EMPTY
     for span in spans:
-        text = _bare(span.text) if url else span.text
-        if len(wanted) > len(text):
-            continue
-        at = text.find(wanted)
-        while at >= 0:
-            end = at + len(wanted)
-            starts = at == 0 or not _address_char(text[at - 1], _ADDRESS_BEFORE)
-            # A full stop, a slash or a sign of a query after it is punctuation only when what
-            # follows is not more of the address.
-            rest = end
-            while rest < len(text) and text[rest] in _ADDRESS_GOES_ON:
-                rest += 1
-            ends = rest == len(text) or not _address_char(text[rest], _ADDRESS_AFTER)
-            if starts and ends:
+        text = span.document.text
+        at = text.find(wanted, span.start, span.end)
+        for _ in range(OCCURRENCES_MAX):
+            if at < 0:
+                break
+            if _address_starts(text, at, url) and _address_ends(text, at + len(wanted)):
                 return None
-            at = text.find(wanted, at + 1)
+            at = text.find(wanted, at + 1, span.end)
     return Rule.ADDRESS_NOT_IN_SOURCE
 
 
@@ -1123,29 +1223,44 @@ def _bones(text: str, *, casefold: bool = True) -> str:
     return skeleton(normalise(text, casefold=casefold).text).text
 
 
+def _words_kept(text: str, bones: Skeleton, at: int, value: Skeleton) -> bool:
+    """Whether the value splits its words where the document does. Where the document writes one
+    space between two characters of the match, the value has a space or a hyphen, and the value
+    has none inside a token of the document. A hyphen or a break in the document asks for
+    nothing, since it may be a word cut at the end of a line: "Therapist" is not written in
+    "the rapist" nor "Dev Tech" in "DevTech", and "University" is in "Uni-" then "versity"."""
+    for offset in range(len(value.text) - 1):
+        before, after = bones.index[at + offset], bones.index[at + offset + 1]
+        glued = value.index[offset + 1] - value.index[offset] == 1
+        if glued and after - before == 2 and text[before + 1] == " ":
+            return False
+        if not glued and after - before == 1 and _inside(text, after):
+            return False
+    return True
+
+
 def _name(value: str, spans: Sequence[Span]) -> Rule | None:
-    wanted = _bones(value)
-    if not wanted:
+    wanted = skeleton(normalise(value).text)
+    if not wanted.text:
         return Rule.VALUE_EMPTY
+    size = len(wanted.text)
     exact = _bones(value, casefold=False)
     for span in spans:
         text = span.text
         bones = skeleton(text)
-        if len(wanted) > len(bones.text):
-            continue
-        at = bones.text.find(wanted)
-        while at >= 0:
-            start, end = bones.index[at], bones.index[at + len(wanted) - 1] + 1
+        at = bones.text.find(wanted.text)
+        for _ in range(OCCURRENCES_MAX):
+            if at < 0:
+                break
+            start, end = bones.index[at], bones.index[at + size - 1] + 1
             if (
                 is_token_boundary(text, start)
                 and is_token_boundary(text, end)
-                and (
-                    len(wanted) >= SHORT_NAME
-                    or _bones(span.source(start, end), casefold=False) == exact
-                )
+                and (size >= SHORT_NAME or _bones(span.source(start, end), casefold=False) == exact)
+                and _words_kept(text, bones, at, wanted)
             ):
                 return None
-            at = bones.text.find(wanted, at + 1)
+            at = bones.text.find(wanted.text, at + 1)
     return Rule.NAME_NOT_IN_SOURCE
 
 
@@ -1177,8 +1292,9 @@ def _phone(value: str, phones: frozenset[str]) -> Rule | None:
 
 def rule_name(value: str, spans: Sequence[Span]) -> Rule | None:
     """Rule V for a name: its skeleton is in a span as whole tokens, the match starting and
-    ending on token boundaries. A name whose skeleton has fewer than four characters must also
-    be written there with the same capitals. Then rule N, since digits in a name are numbers."""
+    ending on token boundaries, its words split where the document splits them.
+    A name whose skeleton has fewer than four characters must also be written there with the
+    same capitals. Then rule N, since digits in a name are numbers."""
     return _name(value, spans) or rule_numbers(value, spans)
 
 
@@ -1196,13 +1312,14 @@ def rule_phone(value: str, spans: Sequence[Span]) -> Rule | None:
 
 def rule_numbers(value: str, spans: Sequence[Span]) -> Rule | None:
     """Rule N: each number run of the value is a number run of a span, or has a reading in
-    common with one. A run that follows "version" or "v", in the value or in the span, is a
-    version and is compared as text: "1.10" is not "1.1"."""
+    common with one. A run that follows "version" or "v", in the value or in the document, is
+    a version and is compared as text: "1.10" is not "1.1"."""
     return _Evidence(spans).numbers(value)
 
 
 class _Evidence:
-    """The cited spans of one item, read once for every part of its value."""
+    """The cited spans of one item, each read once, in its place in the document, for every
+    part of the value."""
 
     def __init__(self, spans: Sequence[Span]) -> None:
         self.spans = spans
@@ -1213,19 +1330,18 @@ class _Evidence:
 
     def dates(self) -> DateFacts:
         if self._dates is None:
-            each = [dates_of(span.text) for span in self.spans]
-            self._dates = DateFacts(
-                frozenset().union(*(facts.years for facts in each)),
-                frozenset().union(*(facts.pairs for facts in each)),
-                frozenset().union(*(facts.short for facts in each)),
-                frozenset().union(*(facts.implied for facts in each)),
-                frozenset().union(*(facts.apart for facts in each)),
-            )
+            facts = DateFacts()
+            for span in self.spans:
+                facts |= _DateReader(span.document.text, span.start, span.end).facts()
+            self._dates = facts
         return self._dates
 
     def phones(self) -> frozenset[str]:
         if self._phones is None:
-            self._phones = frozenset().union(*(phones_of(span.text) for span in self.spans))
+            found: set[str] = set()
+            for span in self.spans:
+                found |= _phones(span.document.text, span.start, span.end)
+            self._phones = frozenset(found)
         return self._phones
 
     def numbers(self, value: str) -> Rule | None:
@@ -1233,7 +1349,7 @@ class _Evidence:
             runs: set[str] = set()
             found: set[str] = set()
             for span in self.spans:
-                for run, version in _number_runs(span.text):
+                for run, version in _number_runs(span.document.text, span.start, span.end):
                     runs.add(run)
                     if not version:
                         found |= readings(run)
@@ -1339,14 +1455,13 @@ def _leaves(
             below = f"{path}[]"
             if below not in types and below not in containers:
                 unknown = unknown or index
-                continue
-            if len(node) > VALUE_LEAVES_MAX:
+            elif len(node) > VALUE_LEAVES_MAX:
                 too_large = True
-                continue
-            stack.extend(
-                (below, f"{index}[{position}]", child)
-                for position, child in reversed(list(enumerate(node)))
-            )
+            else:
+                stack.extend(
+                    (below, f"{index}[{position}]", child)
+                    for position, child in reversed(list(enumerate(node)))
+                )
         elif path not in types:
             unknown = unknown or index
         elif types[path] is FieldType.SETTING:
