@@ -23,7 +23,7 @@ const shots = makeShots("agents-a2", "runs");
  * the stream with no step lost or shown twice; another run is cancelled; the first one ends with
  * its tokens and cost; a run trying forbidden tools shows them refused.
  *
- *   HTTP_PORT=8127 docker compose -p jobapp-a2 -f compose.yml -f tests/anthropic-stub.compose.yml \
+ *   HTTP_PORT=8127 docker compose -p jobapp-a2 -f compose.yml -f compose.mac.yml -f tests/anthropic-stub.compose.yml \
  *     -f tests/compose.a2-e2e.yml up -d --build --wait
  *   docker compose -p jobapp-a2 -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8127 E2E_COMPOSE_PROJECT=jobapp-a2 \

@@ -43,6 +43,31 @@ without `-n`). The suite hashes passwords with a cheap argon2 cost in-process; t
 Migrations live in `api/alembic/versions/`; models register on `app.models_base.Base` and are imported
 in `api/app/models.py` so `alembic revision --autogenerate` sees them.
 
+### Apple silicon: `OPENSSL_armcap=0`, on the Mac only
+
+The api and the worker import `cryptography` (AES-GCM for the model credentials,
+`api/app/agents/crypto.py`). Since 47.0.0 its wheels bundle OpenSSL 4, and inside Docker on an Apple
+silicon Mac with SME (the M4) that OpenSSL dies with SIGILL the moment it is imported: the
+containers exit with status 132 and restart forever. Reproduced with 50.0.2 on 2026-10-10
+(issue #19); 46.0.7 did not crash, which is why it stayed pinned until then. `OPENSSL_armcap=0`
+turns off OpenSSL's CPU detection, so it runs portable code: slower, same results.
+
+- The dev stack has it: `compose.dev.yml` sets it for `api` and `worker`.
+- A stack started from `compose.yml` alone (every scratch stack and e2e recipe below and at the top
+  of `web/e2e/*.spec.ts`) adds `compose.mac.yml` to its `up`:
+  `docker compose -p <project> -f compose.yml -f compose.mac.yml up -d --build --wait`. Only `up`
+  and `run` need the file; `exec`, `logs`, `ps` and `down` work on the containers that exist.
+  `tests/compose_smoke.sh` adds it by itself.
+- pytest outside Docker (`uv run pytest` in `api/`) needs nothing: the macOS wheel does not crash,
+  and the `docker`-marked tests only start Postgres containers.
+- Never on the Jetson and never in `compose.yml`: its Cortex-A78AE has no SVE or SME, runs
+  `cryptography` as it is and keeps hardware AES. Deploys use `compose.yml` alone, and
+  `api/tests/test_openssl_armcap.py` fails if the variable appears in `compose.yml`, the Dockerfile,
+  `.env.example`, the deploy scripts or the CI stack. CI runs on x86, where OpenSSL does not read it.
+
+Symptom when the file is forgotten: `docker compose ps` shows `api` and `worker` restarting, and
+`docker inspect -f '{{.State.ExitCode}}' <container>` prints 132.
+
 ## Deploy to the Jetson
 
 ```bash
@@ -220,7 +245,7 @@ any api answer 401 sends the browser to `/login?next=<page>`.
 The identity journey runs in a real browser against the real stack, locally on a scratch project:
 
 ```bash
-HTTP_PORT=8093 docker compose -p jobapp-i3 -f compose.yml up -d --build --wait
+HTTP_PORT=8093 docker compose -p jobapp-i3 -f compose.yml -f compose.mac.yml up -d --build --wait
 docker compose -p jobapp-i3 -f compose.yml exec -T api alembic upgrade head
 E2E_CADDY_URL=http://127.0.0.1:8093 E2E_COMPOSE_PROJECT=jobapp-i3 pnpm --dir web exec playwright test identity.spec.ts
 docker compose -p jobapp-i3 -f compose.yml down -v       # that scratch project only
@@ -257,7 +282,7 @@ Locally the same config runs on a scratch project (one shared admin, so the last
 too):
 
 ```bash
-HTTP_PORT=8098 docker compose -p jobapp-i8 -f compose.yml up -d --build --wait
+HTTP_PORT=8098 docker compose -p jobapp-i8 -f compose.yml -f compose.mac.yml up -d --build --wait
 docker compose -p jobapp-i8 -f compose.yml exec -T api alembic upgrade head
 E2E_CADDY_URL=http://127.0.0.1:8098 E2E_COMPOSE_PROJECT=jobapp-i8 E2E_ADMIN_EMAIL=e2e-admin@example.org \
   E2E_PASSWORD_THROTTLE=1 pnpm --dir web exec playwright test -c e2e/identity-all.config.ts
@@ -285,7 +310,7 @@ The invites journey (`web/e2e/invites.spec.ts`) runs like the identity one, on i
 project:
 
 ```bash
-HTTP_PORT=8094 docker compose -p jobapp-i4 -f compose.yml up -d --build --wait
+HTTP_PORT=8094 docker compose -p jobapp-i4 -f compose.yml -f compose.mac.yml up -d --build --wait
 docker compose -p jobapp-i4 -f compose.yml exec -T api alembic upgrade head
 E2E_CADDY_URL=http://127.0.0.1:8094 E2E_COMPOSE_PROJECT=jobapp-i4 E2E_FRIEND_EMAIL=friend@example.org \
   pnpm --dir web exec playwright test invites.spec.ts

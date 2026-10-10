@@ -22,7 +22,7 @@ const shots = makeShots("identity-i5", "users");
  * Disable and enable, promote and demote, demoting yourself, and the last admin rule.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
- *   HTTP_PORT=8095 docker compose -p jobapp-i5 -f compose.yml up -d --build --wait
+ *   HTTP_PORT=8095 docker compose -p jobapp-i5 -f compose.yml -f compose.mac.yml up -d --build --wait
  *   docker compose -p jobapp-i5 -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8095 E2E_COMPOSE_PROJECT=jobapp-i5 \
  *     pnpm --dir web exec playwright test users.spec.ts

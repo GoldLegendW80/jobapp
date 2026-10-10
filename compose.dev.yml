@@ -6,6 +6,9 @@
 #   pnpm --dir web dev            # http://localhost:5173
 # No public URL on the Mac: tailscale (Funnel) is in the `tunnel` profile of compose.yml, which only
 # deploy.sh enables on the Jetson. Never pass --profile tunnel here unless you mean to publish.
+# OPENSSL_armcap=0 on api and worker: without it `cryptography` dies with SIGILL at import inside
+# Docker on an M4 (compose.mac.yml explains, and carries the same setting for stacks started from
+# compose.yml alone). This file is never used on the Jetson, which keeps hardware AES.
 
 services:
   api:
@@ -26,6 +29,8 @@ services:
       - app
       - --reload-dir
       - alembic
+    environment:
+      OPENSSL_armcap: "0"
     volumes:
       - ./api/app:/app/app
       - ./api/alembic:/app/alembic
@@ -42,6 +47,8 @@ services:
       context: ./api
       target: dev
     image: jobapp-worker:dev
+    environment:
+      OPENSSL_armcap: "0"
     volumes:
       - ./api/app:/app/app
 

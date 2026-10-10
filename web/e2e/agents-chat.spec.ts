@@ -22,7 +22,7 @@ const shots = makeShots("agents-a4", "chat");
  * the answer stream, reload and find the conversation (and the panel) again, send a second
  * message whose prompt holds the first exchange, delete the conversation.
  *
- *   HTTP_PORT=8128 docker compose -p jobapp-a4 -f compose.yml -f tests/compose.a2-e2e.yml \
+ *   HTTP_PORT=8128 docker compose -p jobapp-a4 -f compose.yml -f compose.mac.yml -f tests/compose.a2-e2e.yml \
  *     up -d --build --wait
  *   docker compose -p jobapp-a4 -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8128 E2E_COMPOSE_PROJECT=jobapp-a4 \

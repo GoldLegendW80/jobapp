@@ -1,7 +1,7 @@
 # e2e only: a stub of the Anthropic API (tests/anthropic_stub.py): the credential check's model
 # list, and the Messages API the worker's Claude Code CLI calls (agents A2: real SDK and CLI, no
 # model). The api and the worker are pointed at it, so no journey sends a key to Anthropic.
-#   docker compose -p jobapp-a1 -f compose.yml -f tests/anthropic-stub.compose.yml up -d --build --wait
+#   docker compose -p jobapp-a1 -f compose.yml -f compose.mac.yml -f tests/anthropic-stub.compose.yml up -d --build --wait
 #   E2E_MODEL_STUB=1 ... playwright test model-access.spec.ts
 # The api refuses MODEL_API_BASE_URL when APP_ENV is production (app/config.py).
 services:

@@ -30,7 +30,7 @@ async function shots(page: Page, name: string, fullPage = true) {
  * changes it, imports the export back and finds the data and the completeness restored.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
- *   HTTP_PORT=8096 docker compose -p jobapp-p6 -f compose.yml up -d --build --wait
+ *   HTTP_PORT=8096 docker compose -p jobapp-p6 -f compose.yml -f compose.mac.yml up -d --build --wait
  *   docker compose -p jobapp-p6 -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8096 E2E_COMPOSE_PROJECT=jobapp-p6 \
  *     pnpm --dir web exec playwright test profile-history.spec.ts

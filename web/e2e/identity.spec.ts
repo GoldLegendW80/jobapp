@@ -30,7 +30,7 @@ const prefix = (process.env.E2E_SHOT_PREFIX ?? "").replace(
  * The identity journey against the real stack through Caddy: no mocks at all.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
- *   HTTP_PORT=8093 docker compose -p jobapp-i3 -f compose.yml up -d --build --wait
+ *   HTTP_PORT=8093 docker compose -p jobapp-i3 -f compose.yml -f compose.mac.yml up -d --build --wait
  *   docker compose -p jobapp-i3 -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8093 E2E_COMPOSE_PROJECT=jobapp-i3 \
  *     pnpm --dir web exec playwright test identity.spec.ts

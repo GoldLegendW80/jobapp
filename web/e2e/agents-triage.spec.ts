@@ -22,7 +22,7 @@ const shots = makeShots("agents-a3", "triage");
  * rejected (the status stays), a second assessment's note is edited then accepted, and /runs
  * links the runs to the job.
  *
- *   HTTP_PORT=8127 docker compose -p jobapp-a3 -f compose.yml -f tests/compose.a2-e2e.yml \
+ *   HTTP_PORT=8127 docker compose -p jobapp-a3 -f compose.yml -f compose.mac.yml -f tests/compose.a2-e2e.yml \
  *     up -d --build --wait
  *   docker compose -p jobapp-a3 -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8127 E2E_COMPOSE_PROJECT=jobapp-a3 \
