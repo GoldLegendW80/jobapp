@@ -114,6 +114,11 @@ test("a message streams its answer live, then the stored answer replaces it", as
   await composer().press("Enter");
   await expect(messages().first()).toContainText(FIRST);
   await expect(live()).toBeVisible();
+  // The whole conversation is on screen: the message and the answer being written.
+  await expect(messages()).toHaveCount(1);
+  await expect(panel().getByText("Older messages are not shown.")).toHaveCount(
+    0,
+  );
   await expect(panel().getByRole("button", { name: "Send" })).toBeDisabled();
   // The recorded stream: the agent reads the posting, says so, then answers.
   await expect(live()).toContainText(
