@@ -71,7 +71,7 @@ Symptom when the file is forgotten: `docker compose ps` shows `api` and `worker`
 ## Deploy to the Jetson
 
 ```bash
-./deploy.sh                    # preflight, rsync to jetson:~/jobapp, build there, compose up --wait, migrate, health
+./deploy.sh                    # preflight, rsync to jetson:~/jobapp, build there, migrate (before the new code starts), compose up --wait, health
 ./deploy.sh --env              # same, and replace the Jetson's .env with .env.jetson
 ./deploy.sh logs api           # follow the logs of one service (last 200 lines first)
 ./deploy.sh ps                 # docker compose ps on the Jetson
@@ -87,6 +87,7 @@ Symptom when the file is forgotten: `docker compose ps` shows `api` and `worker`
 ./deploy.sh backup-schedule install|remove|status   # nightly backup in the Jetson user's crontab
 ./deploy.sh admin create <email>   # one-time admin setup link on the public URL (a reset link if that admin exists)
 tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore, url, restore prompt, admin create
+tests/migrate_test.sh          # by hand on the Mac, not in CI (real Docker, builds the api image four times): migrate with the new image while the old api serves, failing, hanging and killed migrations, then compose up
 tests/jetson_smoke.sh          # smoke of the deployed stack over ssh (stops and starts db once)
 tests/backup_test.sh           # backup and restore round trip and refusals on the Jetson (BACKUP_TEST_LIVE=1: live restore too)
 tests/crash_check.sh           # kill each service's main process, check the daemon restarts it, then smoke
@@ -127,16 +128,74 @@ stack untouched and puts those files back; beforehand, `ops/previous.sh tag-runn
 `:previous` the image each running api and caddy container was started from, read with
 `docker inspect`, so `:previous` is always an image that ran), a
 backup into `~/jobapp-backups/deploys/` whenever the database volume exists (db started first if
-it was stopped; newest 10 kept, separate from the nightly ones), `compose up --wait`, migrations,
+it was stopped; newest 10 kept, separate from the nightly ones), the migrations (next
+paragraph), `compose up --wait`,
 `tests/jetson_smoke.sh` in quick mode, `~/jobapp/.deployed-commit` written once the smoke passed,
-and the public URL in the run's summary. If `up` or a migration fails, the previous files
+and the public URL in the run's summary. If `up` fails, the previous files
 (`compose.yml`, the Caddyfile and the rest of the tree, `.env` never touched) and the `:previous`
-images are put back and started again; a migration runs in one transaction and rolls back, and for data the
+images are put back and started again, on the migrated schema; for data the
 log names the predeploy dump to restore with `ops/db.sh restore-live`. Any other failure between
-the sync and the migrations (the backup included) puts the previous files and `:latest` tags back
-without restarting anything. A smoke that fails after the migrations does not roll back, on
-purpose: the run is red, `.deployed-commit` keeps the previous commit, and going back is a human
-decision (the previous code may not run on the migrated schema). When the api is not running at
+the sync and `up` (the backup and the migrations included) puts the previous files and `:latest`
+tags back without restarting anything. A smoke that fails once the new stack is up does not roll
+back, on purpose: the run is red, `.deployed-commit` keeps the previous commit, and going back is
+a human decision.
+
+Migrations run before the new code starts (issue #81), in the workflow and in `./deploy.sh`
+alike: after the build, `ops/migrate.sh` runs `alembic upgrade head` in a one off container of
+the new api image (`docker compose run --rm --no-deps`, the api's environment and network, no
+published port, removed afterwards) against the live database, while the containers of the
+previous release keep serving. New code never queries a column that is not there yet. This asks
+one thing of every migration: the previous release must be able to run on the new schema, so a
+change expands first and contracts in a later release ([CONTRIBUTING.md](CONTRIBUTING.md),
+Migrations; `api/tests/test_migration_rules.py` flags a drop, a rename or a new `NOT NULL`). What
+happens when it goes wrong:
+
+- The migration fails: the upgrade is one transaction, Postgres rolls it back, the deploy stops
+  with a non zero exit before anything restarts, and the previous release keeps serving. The log
+  shows alembic's error. Fix the migration and deploy again.
+- The migration hangs (usually waiting for a lock the running release holds): it is stopped after
+  `MIGRATE_TIMEOUT_S` (300 seconds by default), its session ended in Postgres so no lock stays
+  behind, and the deploy stops the same way.
+- The migration's container is killed before that limit (exit 137, for instance by the kernel when
+  it runs out of the api's memory limit): the log says killed, not timed out, its session is
+  ended in Postgres too, and the deploy stops the same way.
+- The migration applies and the new stack does not come up: the workflow starts the previous
+  images again on the migrated schema, which the expand rule makes safe. The schema is never
+  downgraded automatically; `alembic downgrade` by hand or the predeploy dump are a human's call.
+- At head it is a no-op of a couple of seconds. On a first install it starts `db` alone, creates
+  the schema, and only then does the stack start.
+
+Recovery by hand, from the Mac in `app/`, if the migration step itself misbehaves on the Jetson:
+
+```bash
+./deploy.sh ps                                   # the previous release should still be Up and healthy
+ssh jetson 'docker ps -a --filter name=jobapp-migrate'    # a leftover one off container
+ssh jetson 'docker rm -f jobapp-migrate'                  # remove it; this alone does not end its transaction
+# Postgres notices a client that went away only when its running statement ends, and keeps the
+# migration's locks until then. End the sessions of this database that hold or wait for the
+# migration's advisory lock (ops/migrate.sh does it itself after a timeout or a kill); the
+# statement prints the pids it ended, and nothing when there was none.
+ssh jetson 'cd ~/jobapp && docker compose -f compose.yml --profile tunnel exec -T db sh -c "psql -X -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\""' <<'SQL'
+select pid, pg_terminate_backend(pid) as ended from pg_locks
+where locktype = 'advisory' and objsubid = 1
+  and ((classid::bigint << 32) | objid::bigint) = 7406202610
+  and database = (select oid from pg_database where datname = current_database())
+  and pid <> pg_backend_pid();
+SQL
+ssh jetson 'cd ~/jobapp && docker compose -f compose.yml --profile tunnel exec -T api alembic current'   # the revision the database is at
+ssh jetson 'cd ~/jobapp && bash ops/migrate.sh'           # run the step alone, safe to repeat
+./deploy.sh                                      # or deploy again by hand once the cause is fixed
+```
+
+`tests/migrate_test.sh` plays all of this with real Docker, Postgres and alembic on a scratch
+stack of its own (first install, a failing, a hanging and a killed migration, the statement
+above, an expanding migration under the old api, then `compose up`). It is run by hand on the
+Mac, not in CI: it builds the api image four times, and the CI runners have a tight disk and CPU
+budget. Run it when `ops/migrate.sh`, `api/alembic/env.py` or the api's Dockerfile change, with
+no other scratch stack up (`docker ps`); it removes its containers, volumes and image at the end.
+CI covers the same paths with fakes in `tests/deploy_test.sh`.
+
+When the api is not running at
 deploy time, the log warns that `jobapp-api:previous` is older than the saved tree. Before any of
 this, `ops/env_check.sh` checks the syntax of `~/jobapp/.env` (`KEY=VALUE` with a shell variable
 name, comments and blank lines only; a value with spaces or quotes in quotes, closed on its line),

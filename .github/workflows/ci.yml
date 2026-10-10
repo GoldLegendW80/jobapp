@@ -290,10 +290,10 @@ jobs:
       - name: Shellcheck (pinned image, as tests/deploy_test.sh and pre-commit)
         run: >-
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
-          deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
+          deploy.sh ops/db.sh ops/previous.sh ops/migrate.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
           ops/ci-runners.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh
           ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh
-          tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
+          tests/deploy_test.sh tests/migrate_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
           tests/reboot_check.sh tests/e2e_jetson.sh tests/tailscale_test.sh tests/agents_real_run_jetson.sh
           tests/agents_real_run_test.sh
           ops/env_check.sh tests/env_check_test.sh

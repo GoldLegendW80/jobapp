@@ -9,24 +9,39 @@
 #
 # The same steps as ./deploy.sh, run on the Jetson itself, under the Jetson's deploy lock
 # (flock on ~/jobapp-backups/.deploy.lock, shared with ./deploy.sh): rsync of the commit into
-# ~/jobapp with .rsyncignore (the .env there is never touched), build, a database backup,
-# compose up --wait, migrations, tests/jetson_smoke.sh in quick mode, the public URL in the job
+# ~/jobapp with .rsyncignore (the .env there is never touched), build, a database backup, the
+# migrations, compose up --wait, tests/jetson_smoke.sh in quick mode, the public URL in the job
 # summary. Images are built before anything restarts, so a failed build leaves the running stack
-# as it was; a failed up or migration puts back what ran before and starts it again: the images
-# of the containers that were running (tagged :previous from their image ids, ops/previous.sh
-# tag-running) and the files of ~/jobapp they ran with (compose.yml, Caddyfile and the rest,
-# copied to ~/jobapp-backups/previous-tree before the sync and synced back). A migration runs in
-# one transaction and rolls back on failure; for data, the predeploy dump named in the log
-# restores with ops/db.sh restore-live.
+# as it was.
 #
-# Issue #16. From the sync on (the rsync itself and the pre-migration backup included), any
-# command that fails puts the previous files and :latest tags back first (trap restore_previous
-# ERR, set once the tree is saved), so ~/jobapp never stays synced to a commit whose images were not built. The trap is cleared once the migrations have
-# run: a smoke that fails after them does NOT roll back, on purpose. The new code is up and
-# migrated by then, the previous code may not run on the migrated schema, and a downgrade is a
-# decision for a human (the log names the predeploy dump). The failed run is red and
-# .deployed-commit keeps the previous commit. When the api is not running at deploy time,
-# jobapp-api:previous keeps an older image than the saved tree; the log warns about it.
+# Issue #81. The migrations run BEFORE the new code starts: ops/migrate.sh runs
+# `alembic upgrade head` in a one off container of the api image just built (same env_file and
+# network as the api, no published port, removed afterwards, stopped after MIGRATE_TIMEOUT_S),
+# against the live database, while the containers of the previous release keep serving. New code
+# never queries a schema that lacks its columns. The price is a rule on migrations: the previous
+# release must run on the migrated schema (expand first, contract in a later release:
+# CONTRIBUTING.md, Migrations; api/tests/test_migration_rules.py flags the obvious breaches).
+#   The migration fails or times out: the deploy stops there. Nothing was restarted, the previous
+#     release keeps serving, the schema is what it was (one transaction, rolled back), the files
+#     and :latest tags of what ran before are put back, and the run is red.
+#   The migration succeeds and `up` does not become healthy: the rollback puts back what ran
+#     before and starts it again, on the MIGRATED schema. That is the same expand rule. Nothing
+#     here ever downgrades the schema: going back in schema is a human decision (`alembic
+#     downgrade` by hand, or the predeploy dump named in the log with ops/db.sh restore-live).
+# What a rollback puts back: the images of the containers that were running (tagged :previous
+# from their image ids, ops/previous.sh tag-running) and the files of ~/jobapp they ran with
+# (compose.yml, Caddyfile and the rest, copied to ~/jobapp-backups/previous-tree before the sync
+# and synced back).
+#
+# Issue #16. From the sync on (the rsync itself, the pre-migration backup and the migrations
+# included), any command that fails puts the previous files and :latest tags back first (trap
+# restore_previous ERR, set once the tree is saved), so ~/jobapp never stays synced to a commit
+# whose images were not built or whose migrations did not apply. The trap is cleared once the new
+# stack is up and healthy: a smoke that fails after that does NOT roll back, on purpose. The new
+# code is up on its schema by then and going back is a decision for a human (the log names the
+# predeploy dump). The failed run is red and .deployed-commit keeps the previous commit. When the
+# api is not running at deploy time, jobapp-api:previous keeps an older image than the saved
+# tree; the log warns about it.
 #
 # Issue #18. The Preflight checks the syntax of ~/jobapp/.env with ops/env_check.sh before
 # anything is built: a malformed line fails the run at once with "line N: invalid (reason)",
@@ -138,10 +153,10 @@ jobs:
             done
           }
 
-          # Issue #16 (header): from the sync to the migrations, a failing command restores the
-          # previous files and tags before the step fails; set before the rsync (the tree is
-          # saved above), so a sync that fails part way is undone too. Explicit `exit 1` paths
-          # below call restore_previous themselves (or rollback); an exit does not fire ERR.
+          # Issue #16 (header): from the sync until the new stack is up, a failing command
+          # restores the previous files and tags before the step fails; set before the rsync (the
+          # tree is saved above), so a sync that fails part way is undone too. Explicit `exit 1`
+          # paths below call restore_previous themselves (or rollback); an exit does not fire ERR.
           trap 'echo "::error::a deploy command failed: restoring the previous files and tags"; restore_previous' ERR
 
           echo "::group::sync ~/jobapp from $COMMIT"
@@ -180,11 +195,23 @@ jobs:
           fi
           echo "::endgroup::"
 
-          rollback() { # the previous files and images back, started again
+          # Issue #81 (header): the schema moves first, in a one off container of the new api
+          # image, while the previous release still serves. A failure stops the deploy before
+          # anything restarts; ops/migrate.sh says why, and never downgrades.
+          echo "::group::migrations (one off container of the new api image, before the new code starts)"
+          if ! bash ops/migrate.sh; then
+            echo "::error::the migrations did not apply: the deploy stopped before starting the new code, the running stack was not touched and still runs the previous release. Fix the migration and deploy again"
+            restore_previous
+            exit 1
+          fi
+          echo "::endgroup::"
+
+          rollback() { # the previous files and images back, started again; the schema stays migrated
             echo "::error::$1: rolling back to the previous files and images"
             restore_previous
             $COMPOSE up -d --remove-orphans --wait --wait-timeout 180 || true
             $COMPOSE ps -a || true
+            echo "::warning::the schema stays migrated, it is never downgraded automatically: the previous release runs on it by the expand rule (CONTRIBUTING.md, Migrations)"
             if [[ -n "$dump" ]]; then
               echo "::warning::database dump taken before this deploy: $dump (restore: BACKUP_DIR=$BACKUPS/deploys bash ops/db.sh restore-live $dump)"
             fi
@@ -193,14 +220,10 @@ jobs:
 
           echo "::group::compose up --wait"
           $COMPOSE up -d --remove-orphans --wait --wait-timeout 180 || rollback "compose up did not become healthy"
-          echo "::endgroup::"
-
-          echo "::group::migrations"
-          $COMPOSE exec -T api alembic upgrade head || rollback "alembic upgrade head failed"
           echo "alembic current: $($COMPOSE exec -T api alembic current 2>/dev/null | tr -d '\r')"
           echo "::endgroup::"
 
-          # Migrated: from here a failure does not roll back (header, issue #16).
+          # Up on the migrated schema: from here a failure does not roll back (header, issue #16).
           trap - ERR
 
           echo "::group::smoke (tests/jetson_smoke.sh, quick mode, on the Jetson)"
