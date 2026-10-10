@@ -17,6 +17,7 @@ from app.agents import chat_router, proposals_router
 from app.agents import router as agents_router
 from app.agents import runs_router as agent_runs_router
 from app.agents.crypto import Keyring
+from app.agents.live import RedisLiveStore
 from app.agents.ratelimit import RateLimiter
 from app.agents.verify import Verifier
 from app.config import Settings, get_settings
@@ -116,6 +117,10 @@ def create_app(
     app.state.health = checker
     # The worker's queue (jobs J5); the Redis pool opens on the first enqueue.
     app.state.queue = Queue(settings.redis_url.get_secret_value())
+    # The answer an agent is writing, read from Redis by the run stream (app/agents/live.py).
+    app.state.live_store = (
+        RedisLiveStore(app.state.queue.pool) if settings.agents_live_text else None
+    )
     # Model credentials (agents A1): the encryption keys (None without CREDENTIALS_KEY, then the
     # credential routes answer 503), the real check and the per-user limits.
     app.state.credentials_keyring = credentials_keyring(settings)

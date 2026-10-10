@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # Where each run's scratch directory is made (deleted when the run ends). Default: the
     # system temporary directory, a tmpfs in the worker container (compose.yml).
     agents_scratch_dir: str | None = None
+    # The answer streams to the browser while it is written (issue #33, app/agents/live.py):
+    # the worker asks Claude Code for partial messages and publishes the text to Redis, the
+    # api's run stream relays it. Off: the answer arrives when it is complete, as before.
+    agents_live_text: bool = True
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod

@@ -13,12 +13,18 @@
    tool outside the allow list in code (the gate below);
 5. streams the run through the backend (the SDK, or the fake in tests), appending each step to
    agent_events: text, tool calls (name and a short argument summary), tool results (truncated),
-   denied tools, usage and cost;
+   denied tools, usage and cost. While a text block is being written, its text is published
+   live next to the log (app/agents/live.py, issue #33): Claude Code is asked for partial
+   messages, their text deltas feed a per-block buffer in Redis that the run stream relays, and
+   the block's `text` event, written as before when the block is complete, replaces it. Thinking
+   and tool input deltas are never read;
 6. stops it when the user cancels (POST /api/agents/runs/{id}/cancel sets cancel_requested_at,
    polled every CANCEL_POLL_S) or when the wall time limit passes: the backend is interrupted
    (`ClaudeSDKClient.interrupt()`), given INTERRUPT_GRACE_S to end, then cancelled;
 7. records the outcome (done, failed or cancelled, tokens, cost, the final text) and deletes the
-   scratch directory, on every path: success, failure, cancel, worker shutdown.
+   scratch directory and the live text, on every path: success, failure, cancel, worker
+   shutdown. A run that does not end `done` stores no answer: text that was only live is gone
+   (the log keeps the `text` event of a cut block when Claude Code reports one).
 
 The credential goes to Claude Code only through the environment of that one process
 (`options.env`: ANTHROPIC_API_KEY for an API key, CLAUDE_CODE_OAUTH_TOKEN for a subscription
@@ -63,6 +69,7 @@ from claude_agent_sdk import (
     ProcessError,
     RateLimitEvent,
     ResultMessage,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
@@ -72,7 +79,7 @@ from claude_agent_sdk import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import chat, credentials, definitions, runs
+from app.agents import chat, credentials, definitions, live, runs
 from app.agents import tools as app_tools
 from app.agents.backend import Backend, BackendFactory, BackendRequest
 from app.agents.crypto import DecryptError, Keyring
@@ -184,6 +191,10 @@ class RunContext:
     interrupt_grace_s: float = INTERRUPT_GRACE_S
     # Tests replace an agent's definition (shorter limits); production uses definitions.AGENTS.
     agents: dict[str, definitions.AgentDefinition] | None = None
+    # Where the answer being written is published (app/agents/live.py); None: no live text, and
+    # Claude Code is not asked for partial messages.
+    live_store: live.LiveStore | None = None
+    live_flush_s: float = live.FLUSH_S
 
     def definition(self, name: str) -> definitions.AgentDefinition:
         if self.agents is not None and name in self.agents:
@@ -315,6 +326,7 @@ def build_options(
     workdir: Path,
     gate: Gate,
     stderr: Callable[[str], None] | None = None,
+    partial_messages: bool = False,
 ) -> ClaudeAgentOptions:
     return ClaudeAgentOptions(
         system_prompt=definition.system_prompt,
@@ -333,6 +345,8 @@ def build_options(
         env=env,
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[gate])]},  # type: ignore[list-item]
         stderr=stderr,
+        # StreamEvent messages next to the complete ones (the text deltas of the live answer).
+        include_partial_messages=partial_messages,
     )
 
 
@@ -362,6 +376,10 @@ class Recorder:
     # come before the run in the lock order (A4, issue #27: the chat thread, see chat.py).
     lock_first: Callable[[Session], None] | None = field(default=None, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def last_seq(self) -> int:
+        """The seq of the newest event of this run (written, or being written)."""
+        return self.seq - 1
 
     def _write(self, seq: int, kind: str, data: dict[str, Any]) -> None:
         with self.context.sessions() as db:
@@ -419,16 +437,24 @@ class _State:
     result: ResultMessage | None = None
     last_text: str = ""
     denied: int = 0
+    live_text: live.LiveText | None = None
 
 
 async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
-    if isinstance(message, AssistantMessage):
+    if isinstance(message, StreamEvent):
+        # Partial messages: only the text deltas of a text block are read (live.LiveText.feed).
+        if state.live_text is not None:
+            state.live_text.feed(message.event)
+    elif isinstance(message, AssistantMessage):
         state.model = message.model or state.model
         for block in message.content:
             if isinstance(block, TextBlock):
                 if block.text:
                     state.last_text = block.text
                     await recorder.emit("text", {"text": _clip(block.text, TEXT_MAX)})
+                if state.live_text is not None:
+                    # The complete text is stored: it replaces the live one.
+                    await state.live_text.close_block()
             elif isinstance(block, ThinkingBlock):
                 await recorder.emit("thinking", {})
             elif isinstance(block, ToolUseBlock):
@@ -716,6 +742,7 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
     scratch: Path | None = None
     outcome: runs.Outcome | None = None
     secret: _Secret | None = None
+    pump: asyncio.Task[None] | None = None
     try:
         try:
             definition = context.definition(run.agent)
@@ -771,7 +798,19 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             scratch / "work",
             make_gate(frozenset(tools.allowed_names), denied),
             stderr=stderr_lines.append,
+            partial_messages=context.live_store is not None,
         )
+        if context.live_store is not None:
+            state.live_text = live.LiveText(
+                context.live_store,
+                run_id,
+                recorder.last_seq,
+                secret=secret.value,
+                redacted=REDACTED,
+                cap=TEXT_MAX,
+                flush_s=context.live_flush_s,
+            )
+            pump = asyncio.create_task(state.live_text.pump())
         request = BackendRequest(
             prompt=prompt,
             options=options,
@@ -819,6 +858,13 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
         outcome = runs.Outcome(status=RunStatus.failed, error=INTERNAL, model=state.model)
         return RunStatus.failed
     finally:
+        if pump is not None:
+            pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
+        if state.live_text is not None:
+            # Nothing is live once the run ends, whatever the end.
+            with contextlib.suppress(Exception):
+                await asyncio.shield(state.live_text.aclose())
         if scratch is not None:
             await asyncio.to_thread(shutil.rmtree, scratch, True)
         if outcome is not None:
@@ -838,6 +884,9 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
                     "output_tokens": outcome.output_tokens,
                     "cost_usd": str(outcome.cost_usd) if outcome.cost_usd is not None else None,
                     "denied_tools": state.denied,
+                    "live_deltas": state.live_text.deltas if state.live_text else None,
+                    "live_dropped": state.live_text.dropped if state.live_text else None,
+                    "live_failures": state.live_text.failures if state.live_text else None,
                 },
             )
         secret = None

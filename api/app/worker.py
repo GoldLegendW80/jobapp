@@ -189,10 +189,16 @@ async def scheduled_sweeps(ctx: dict[str, Any]) -> int:
 def agent_context(ctx: dict[str, Any]) -> Any:
     """The runner's view of the job context. Imported here, not at the top: the SDK lives in the
     worker image only, and `python -m app.worker --check` must not need it."""
-    from app.agents import backend, runner
+    from app.agents import backend, live, runner
 
     settings: Settings = ctx["settings"]
     factory = ctx.get("agent_backend") or backend.for_settings(settings)
+    # The answer being written goes to Redis for the api's run stream (issue #33): arq puts its
+    # pool in the job context. Without one, or with AGENTS_LIVE_TEXT off, no live text.
+    store = ctx.get("agent_live_store")
+    if store is None and ctx.get("redis") is not None:
+        pool = ctx["redis"]
+        store = live.RedisLiveStore(lambda: pool)
     return runner.RunContext(
         settings=settings,
         sessions=sessions_of(ctx),
@@ -202,6 +208,7 @@ def agent_context(ctx: dict[str, Any]) -> Any:
         cancel_poll_s=ctx.get("agent_cancel_poll_s", runner.CANCEL_POLL_S),
         interrupt_grace_s=ctx.get("agent_interrupt_grace_s", runner.INTERRUPT_GRACE_S),
         agents=ctx.get("agent_definitions"),
+        live_store=store if settings.agents_live_text else None,
     )
 
 

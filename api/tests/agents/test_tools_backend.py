@@ -7,7 +7,13 @@ import uuid
 from typing import Any
 
 import pytest
-from claude_agent_sdk import AssistantMessage, ResultMessage, SystemMessage, UserMessage
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    StreamEvent,
+    SystemMessage,
+    UserMessage,
+)
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import backend, definitions, fake_backend
@@ -103,7 +109,12 @@ def test_every_recorded_stream_parses(name: str) -> None:
         assert seen[0] is SystemMessage
     if name not in ("crash", "missing_cli"):
         assert seen[-1] is ResultMessage
-        assert all(t in (SystemMessage, AssistantMessage, UserMessage, ResultMessage) for t in seen)
+        complete = (SystemMessage, AssistantMessage, UserMessage, ResultMessage)
+        # Only the recording of the CLI's partial messages holds stream events itself (issue #33).
+        allowed = (*complete, StreamEvent) if name == "partial_recorded" else complete
+        assert all(t in allowed for t in seen)
+    if name == "partial_recorded":
+        assert StreamEvent in seen
 
 
 def test_unknown_or_unsafe_script_names() -> None:
