@@ -41,6 +41,37 @@ in the job folder that holds this repository (it is not part of the repository).
 
 `main` is always deployable: nothing is pushed to it directly, and a red `main` is fixed first.
 
+## Migrations: expand first, contract in a later release
+
+A deploy applies the migrations of the new release while the previous release is still serving,
+then starts the new code (`ops/migrate.sh`, issue #81). If the new code does not come up, the
+previous images are started again on the migrated schema, and nothing ever downgrades it. So for
+a few seconds on every deploy, and for as long as it takes after a rollback, **the previous
+release runs on the new schema**. A migration must leave it able to.
+
+- **Expand** in the release that needs the change: new tables, new nullable columns or columns
+  with a `server_default`, new indexes, new enum values. The previous release ignores them.
+- **Contract** in a later release, once no deployed code reads or writes the thing: drop a column
+  or a table, rename, change a type, add `NOT NULL`. A rename is three steps over releases: add
+  the new column and write both, move the readers, drop the old one.
+- Never in one release: drop or rename something the previous release uses, add a `NOT NULL`
+  column without a `server_default` (the previous release inserts rows without it), tighten a
+  constraint its writes would break.
+- A migration is one transaction and must be quick: it waits for the locks of the running release
+  and is stopped after `MIGRATE_TIMEOUT_S` (300 seconds), rolled back.
+- `downgrade()` is still written and tested, for a human who decides to go back; no deploy runs it.
+
+`api/tests/test_migration_rules.py` reads every revision and fails on a drop, a rename, a type
+change, a new `NOT NULL` in `upgrade()`. When the previous release really no longer uses the
+thing, say so on the statement and the guard lets it through:
+
+```python
+# contract-ok: jobs.legacy_fit is not read or written since release 0011
+op.drop_column("jobs", "legacy_fit")
+```
+
+The guard is a net for the obvious cases, not a proof. The rule is what holds.
+
 ## Enforcement
 
 The repository is private on GitHub's free plan, where protected branches and rulesets are a paid
