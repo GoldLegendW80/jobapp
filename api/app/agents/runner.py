@@ -23,8 +23,10 @@
    (`ClaudeSDKClient.interrupt()`), given INTERRUPT_GRACE_S to end, then cancelled;
 7. records the outcome (done, failed or cancelled, tokens, cost, the final text) and deletes the
    scratch directory and the live text, on every path: success, failure, cancel, worker
-   shutdown. A run that does not end `done` stores no answer: text that was only live is gone
-   (the log keeps the `text` event of a cut block when Claude Code reports one).
+   shutdown. An agent whose definition turns live text off (`live_text=False`) is never asked
+   for partial messages and publishes nothing. A run that does not end `done` stores no
+   answer: text that was only live is gone (the log keeps the `text` event of a cut block
+   when Claude Code reports one).
 
 The credential goes to Claude Code only through the environment of that one process
 (`options.env`: ANTHROPIC_API_KEY for an API key, CLAUDE_CODE_OAUTH_TOKEN for a subscription
@@ -195,6 +197,10 @@ class RunContext:
     # Claude Code is not asked for partial messages.
     live_store: live.LiveStore | None = None
     live_flush_s: float = live.FLUSH_S
+    # How long one attempt on the live store may take, and how long it is left alone after a
+    # failed one (app/agents/live.py: a Redis that does not answer must not slow the run).
+    live_timeout_s: float = live.STORE_TIMEOUT_S
+    live_backoff_s: float = live.WRITE_BACKOFF_S
 
     def definition(self, name: str) -> definitions.AgentDefinition:
         if self.agents is not None and name in self.agents:
@@ -469,8 +475,11 @@ class _State:
 
 async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
     if isinstance(message, StreamEvent):
-        # Partial messages: only the text deltas of a text block are read (live.LiveText.feed).
-        if state.live_text is not None:
+        # Partial messages: only the text deltas of a text block are read (live.LiveText.feed),
+        # and only those of the run's own session: an event of a sub agent (it names the tool
+        # call it runs under) is never published. The SDK documents the field as always None,
+        # and no agent here may start a sub agent: this holds if either ever changes.
+        if state.live_text is not None and message.parent_tool_use_id is None:
             state.live_text.feed(message.event)
     elif isinstance(message, AssistantMessage):
         state.model = message.model or state.model
@@ -833,6 +842,8 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             redact=lambda value: scrub(value, recorder.secret),
         )
         stderr_lines: deque[str] = deque(maxlen=50)
+        # Live text needs a store (AGENTS_LIVE_TEXT, Redis) and an agent that allows it.
+        live_store = context.live_store if definition.live_text else None
         options = build_options(
             definition,
             tools,
@@ -840,17 +851,19 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             scratch / "work",
             make_gate(frozenset(tools.allowed_names), denied),
             stderr=stderr_lines.append,
-            partial_messages=context.live_store is not None,
+            partial_messages=live_store is not None,
         )
-        if context.live_store is not None:
+        if live_store is not None:
             state.live_text = live.LiveText(
-                context.live_store,
+                live_store,
                 run_id,
                 recorder.last_seq,
                 secret=secret.value,
                 redacted=REDACTED,
                 cap=TEXT_MAX,
                 flush_s=context.live_flush_s,
+                timeout_s=context.live_timeout_s,
+                backoff_s=context.live_backoff_s,
             )
             pump = asyncio.create_task(state.live_text.pump())
         request = BackendRequest(
@@ -901,7 +914,10 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
         return RunStatus.failed
     finally:
         if pump is not None:
+            # Cancelled and awaited: the pump may be in the middle of a write, and the clear
+            # below must come after it, not next to it.
             pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
         if scratch is not None:
             await asyncio.to_thread(shutil.rmtree, scratch, True)
         if outcome is not None:
