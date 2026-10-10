@@ -4,16 +4,22 @@
 # framed by the proof that the owner's jobs and profile are untouched and by a memory sampler.
 #
 #   tests/agents_real_run_jetson.sh <job-id>                 dry run: every check, no model call
-#   REAL_RUN=1 tests/agents_real_run_jetson.sh <job-id>      one triage run, then one chat message
-#   REAL_RUN=1 RUNS=chat LABEL=followup MESSAGE='...' tests/agents_real_run_jetson.sh <job-id>
+#   REAL_RUN=1 LABEL=second tests/agents_real_run_jetson.sh <job-id>     one triage run, then one chat message
+#   REAL_RUN=1 RUNS=chat LABEL=third MESSAGE='...' tests/agents_real_run_jetson.sh <job-id>
+#
+# Follow up, issue #39: the start of a run below calls underscore prefixed functions of the
+# routers (runs_router._create, chat_router._open and _send). A public operator entry point shared
+# with the routers, or an api test that runs the embedded Python against the test database, will
+# keep this script from drifting away from the endpoints.
 #
 # What it does, in order:
 # 1. Before: every Compose service healthy, the deployed commit, the worker's code has the chat
-#    lock hook (issue #27), the owner has a credential (kind and verified flag only, never the
-#    secret) and no run queued or running; the job is the owner's, has a posting text, and neither
-#    its title, its company nor its posting mentions security (hard rule: never a cybersecurity
-#    role). Snapshot of the owner's data: jobs (count, per status, md5 over every column of every
-#    row), job events, files, sweeps, profile (revision and md5), and the agent tables.
+#    lock hook (issue #27), the owner is an admin account with a credential of the subscription
+#    kind (role, kind and verified flag only, never the secret) and no run queued or running; the
+#    job is the owner's, has a posting text, and neither its title, its company nor its posting
+#    mentions security (hard rule: never a cybersecurity role). Snapshot of the owner's data: jobs
+#    (count, per status, md5 over every column of every row), profile (revision and md5), job
+#    events (count and highest id), files and sweeps (count only), and the agent tables.
 # 2. For each run: a sampler on the Jetson writes, every second, the worker's and the api's
 #    cgroup memory, the host's available memory and the Claude Code processes (count, RSS).
 #    The run is started with no web session: inside the api container, the functions the HTTP
@@ -24,12 +30,25 @@
 # 3. Metrics from the database: status, model, tokens, cost, turns, duration, event kinds, tool
 #    calls, denials, proposals. Never a prompt, a posting, a profile, an answer or a proposal text.
 # 4. Checks: scratch directory gone, no transcript in the worker, the logs of the run hold no
-#    message text and no credential variable name (matches are counted, never printed).
+#    message text, no credential variable name and no token shaped value (matches are counted,
+#    never printed, and the text looked for is never printed either).
 # 5. After: the same snapshot. The owner's jobs and profile must be identical; only the agent
-#    tables may differ, by exactly the runs made here. Nothing is accepted, rejected or deleted.
+#    tables may differ, by exactly the runs made here, and no proposal may have been decided
+#    meanwhile. Nothing is accepted, rejected or deleted.
 #
-# Evidence in tasks/evidence/agents-a5/: run.log, metrics.json, memory-<run>.tsv (LABEL adds a
-# suffix). Settings as deploy.sh: DEPLOY_HOST (default jetson), DEPLOY_DIR (default ~/jobapp).
+# Where it writes. A dry run writes only under a temporary directory that is removed at the end:
+# nothing under tasks/evidence/ and nothing on the Jetson. A real run writes its evidence to
+# tasks/evidence/agents-a5/: run.log, metrics.json, memory-<run>.tsv (LABEL adds a suffix), and
+# refuses to start, before any connection to the Jetson, when one of those files already exists:
+# the committed files are the record of the runs of 2026-10-10, so a new real run needs a new LABEL.
+#
+# Limits. At most two runs per call, each triage or chat, and never a second run after a failed
+# one; nothing limits the number of calls. The same kind twice (RUNS="chat chat") keeps both
+# sets of samples and metrics: the second is suffixed with its index (memory-chat-2.tsv).
+# OWNER may name another account only if it is an admin with a credential of the subscription
+# kind: the script never starts a run with the Anthropic API key of a member.
+#
+# Settings as deploy.sh: DEPLOY_HOST (default jetson), DEPLOY_DIR (default ~/jobapp).
 # OWNER (default hthautin@gmail.com), RUNS (default "triage chat"), MESSAGE, LABEL.
 set -euo pipefail
 
@@ -41,16 +60,24 @@ RDIR="${RDIR#\~/}"
 OWNER="${OWNER:-hthautin@gmail.com}"
 RUNS="${RUNS:-triage chat}"
 MESSAGE="${MESSAGE:-What are the two strongest points of my profile for this role, and the one gap I should address in the letter?}"
+RAW_LABEL="${LABEL:-}"
 LABEL="${LABEL:+-$LABEL}"
 REAL="${REAL_RUN:-0}"
 JOB="${1:-}"
 EVIDENCE="${EVIDENCE:-$ROOT/tasks/evidence/agents-a5}"
-LOG="$EVIDENCE/run$LABEL.log"
-METRICS="$EVIDENCE/metrics$LABEL.json"
+# Only an account with this role (identity Role) and a credential of this kind (agents
+# CredentialKind, the owner's personal option by A1) gets a run.
+OWNER_ROLE="admin"
+OWNER_CREDENTIAL="claude_subscription"
 # Never a cybersecurity role: the job is refused when its title, company or posting matches.
 FORBIDDEN='(cyber|security|sécurité|securite|pentest|threat)'
 # The wall time of every agent (definitions.DEFAULT_WALL_TIME_S) plus a minute.
 WAIT_S="${WAIT_S:-660}"
+# Seconds of idle baseline before a run, and between two reads of the run row.
+IDLE_S="${IDLE_S:-5}"
+POLL_S="${POLL_S:-3}"
+# The shortest message text worth looking for in the logs: shorter matches too much by chance.
+NEEDLE_MIN=8
 WORK="$(mktemp -d)"
 SAMPLER=""
 
@@ -70,11 +97,42 @@ die() {
 
 [[ "$JOB" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || die "usage: [REAL_RUN=1] $0 <job-id>"
 [[ "$OWNER" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
+[[ "$RAW_LABEL" =~ ^[A-Za-z0-9_-]*$ ]] || die "LABEL holds letters, digits, _ and - only"
+[[ "$IDLE_S" =~ ^[0-9]+$ && "$POLL_S" =~ ^[0-9]+$ ]] || die "IDLE_S and POLL_S are whole seconds"
+# One key per run, the name of its files: the kind, suffixed by its index when the kind repeats.
+KEYS=()
+seen=""
 for kind in $RUNS; do
   [[ "$kind" == triage || "$kind" == chat ]] || die "RUNS holds triage and chat only"
+  n=1
+  for earlier in $seen; do
+    if [[ "$earlier" == "$kind" ]]; then n=$((n + 1)); fi
+  done
+  seen="$seen $kind"
+  if ((n == 1)); then KEYS+=("$kind"); else KEYS+=("$kind-$n"); fi
+  if [[ "$kind" == chat && -z "${MESSAGE//[[:space:]]/}" ]]; then die "MESSAGE is empty"; fi
 done
-[[ "$(wc -w <<<"$RUNS" | tr -d ' ')" -le 2 ]] || die "at most two runs per call"
+((${#KEYS[@]} >= 1)) || die "RUNS is empty"
+((${#KEYS[@]} <= 2)) || die "at most two runs per call"
 command -v jq >/dev/null || die "jq is needed"
+
+# Where this call writes: a dry run only under the temporary directory, a real run in the evidence
+# folder, and only files that do not exist yet. Checked here, before any connection to the Jetson.
+if [[ "$REAL" == "1" ]]; then OUT="$EVIDENCE"; else OUT="$WORK"; fi
+LOG="$OUT/run$LABEL.log"
+METRICS="$OUT/metrics$LABEL.json"
+samples_of() { printf '%s/memory%s-%s.tsv' "$OUT" "$LABEL" "$1"; }
+if [[ "$REAL" == "1" ]]; then
+  existing=""
+  for path in "$LOG" "$METRICS"; do
+    if [[ -e "$path" ]]; then existing="$existing ${path#"$ROOT"/}"; fi
+  done
+  for key in "${KEYS[@]}"; do
+    path="$(samples_of "$key")"
+    if [[ -e "$path" ]]; then existing="$existing ${path#"$ROOT"/}"; fi
+  done
+  [[ -z "$existing" ]] || die "refused, nothing was started: evidence of an earlier run exists and would be overwritten:$existing. Give this run a new LABEL."
+fi
 
 remote() { # a command in the stack's directory on the Jetson
   ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && $1"
@@ -91,6 +149,7 @@ fixed() { # what must not change: the owner's jobs and profile, one field per li
 with me as (select id from users where email = '$OWNER'),
      j as (select * from jobs where user_id = (select id from me))
 select 'users=' || (select count(*) from users),
+       'owner_role=' || coalesce((select role::text from users where email = '$OWNER'), 'none'),
        'jobs=' || (select count(*) from j),
        'per_status=' || coalesce((select string_agg(status::text || ':' || n, ',' order by status)
                                   from (select status, count(*) n from j group by status) s), 'none'),
@@ -120,6 +179,7 @@ select 'agent_runs=' || (select count(*) from agent_runs),
        'proposals_owner=' || coalesce((select string_agg(status::text || ':' || n, ',' order by status)
                                        from (select status, count(*) n from proposals
                                              where user_id = (select id from me) group by status) s), 'none'),
+       'proposals_decided=' || (select count(*) from proposals where decided_at is not null or status <> 'pending'),
        'agent_threads=' || (select count(*) from agent_threads),
        'agent_messages=' || (select count(*) from agent_messages),
        'credential_verified=' || coalesce((select (verified_at is not null)::text from model_credentials
@@ -257,6 +317,8 @@ try:
         asyncio.run(enqueue(made))
 except HTTPException as exc:
     out.update(http=exc.status_code, detail=str(exc.detail))
+except Exception as exc:  # the class name only: a message could quote the input or a statement
+    out.update(http=500, error_class=type(exc).__name__)
 finally:
     engine.dispose()
 print(json.dumps(out))
@@ -297,26 +359,36 @@ select jsonb_build_object(
 SQL
 }
 
-one_run() { # one_run <triage|chat>
-  local kind="$1" samples="$EVIDENCE/memory$LABEL-$1.tsv" started run status events waited=0 since
+one_run() { # one_run <triage|chat> <key>
+  local kind="$1" key="$2" samples started run status events waited=0 since rc=0 http
+  samples="$(samples_of "$key")"
   step "$kind run"
   since="$(remote 'date -u +%Y-%m-%dT%H:%M:%SZ')"
   sampler "$samples"
-  sleep 5 # the idle baseline
+  sleep "$IDLE_S" # the idle baseline
   if [[ "$REAL" != "1" ]]; then
-    sleep 3
+    sleep "$POLL_S"
     stop_sampler
     info "dry run: nothing started (REAL_RUN=1 starts it)"
     info "memory: $(memory_json "$samples")"
-    rm -f "$samples"
     checks 00000000-0000-0000-0000-000000000000 "$since"
     return 0
   fi
-  started="$(start "$kind")"
-  info "started through the app's own service functions: $(jq -c 'del(.detail)' <<<"$started")"
-  if [[ "$(jq -r .http <<<"$started")" != "202" ]]; then
+  # The remote Python's stderr stays out of the evidence: a traceback could quote the message.
+  started="$(start "$kind" 2>"$WORK/start.stderr" | tail -n 1)" || rc=$?
+  info "start: exit $rc, $(wc -l <"$WORK/start.stderr" | tr -d ' ') lines on its stderr (not printed)"
+  http="$(jq -r '.http // empty' <<<"$started" 2>/dev/null || true)"
+  if [[ -z "$http" ]]; then
+    # No answer is not a refusal: the connection may have dropped after the run was queued.
     stop_sampler
-    info "FAIL: refused: $(jq -r '.detail // "no detail"' <<<"$started")"
+    run="$(sql <<<"select id from agent_runs where job_id = '$JOB' and created_at >= '$since' order by created_at desc limit 1" 2>/dev/null || true)"
+    info "FAIL: unknown, check the run row: the start gave no answer (exit $rc), so a run may be queued or running. Run id: ${run:-not known}. Do not start another one before reading it."
+    return 1
+  fi
+  info "started through the app's own service functions: $(jq -c 'del(.detail)' <<<"$started")"
+  if [[ "$http" != "202" ]]; then
+    stop_sampler
+    info "FAIL: refused: $(jq -r '.detail // .error_class // "no detail"' <<<"$started")"
     return 1
   fi
   run="$(jq -r .run_id <<<"$started")"
@@ -329,16 +401,16 @@ one_run() { # one_run <triage|chat>
       info "FAIL: still $status after ${WAIT_S}s; left as it is (the worker's own limits end it)"
       break
     fi
-    sleep 3
-    waited=$((waited + 3))
+    sleep "$POLL_S"
+    waited=$((waited + POLL_S))
   done
-  sleep 3
+  sleep "$POLL_S"
   stop_sampler
-  run_metrics "$run" >"$WORK/$kind.run.json"
-  memory_json "$samples" >"$WORK/$kind.memory.json"
-  jq -n --slurpfile run "$WORK/$kind.run.json" --slurpfile memory "$WORK/$kind.memory.json" \
-    '$run[0] + {memory: $memory[0]}' >"$WORK/$kind.json"
-  jq . "$WORK/$kind.json" | sed 's/^/   /'
+  run_metrics "$run" >"$WORK/$key.run.json"
+  memory_json "$samples" >"$WORK/$key.memory.json"
+  jq -n --slurpfile run "$WORK/$key.run.json" --slurpfile memory "$WORK/$key.memory.json" \
+    '$run[0] + {memory: $memory[0]}' >"$WORK/$key.json"
+  jq . "$WORK/$key.json" | sed 's/^/   /'
   if [[ "$kind" == chat ]]; then
     info "message sent: ${#MESSAGE} characters, md5 $(md5_of "$MESSAGE") (the stored user message must show the same)"
   fi
@@ -347,8 +419,12 @@ one_run() { # one_run <triage|chat>
   [[ "$status" == "done" ]]
 }
 
+count_in_logs() { # how many log lines hold the text $1, whatever its case; the text is never printed
+  grep -c -i -F -e "$1" "$WORK/logs" || true
+}
+
 checks() { # checks <run-id> <since>: what the run left behind, matches counted and never printed
-  local run="$1" since="$2" fragment left transcripts
+  local run="$1" since="$2" fragment left transcripts hits needle
   left="$(remote 'docker compose -f compose.yml exec -T worker sh -c "ls -A /tmp | wc -l"' | tr -d ' \r')"
   info "entries left in the worker's /tmp (scratch directories live there): $left"
   transcripts="$(remote 'docker compose -f compose.yml exec -T worker sh -c "find / /tmp -xdev \\( -name \"*.jsonl\" -o -name .claude -o -name .claude.json \\) -not -path \"/proc/*\" -not -path \"*/site-packages/*\" 2>/dev/null | wc -l"' | tr -d ' \r')"
@@ -356,15 +432,35 @@ checks() { # checks <run-id> <since>: what the run left behind, matches counted 
   [[ "$left" == "0" && "$transcripts" == "0" ]] || CHECKS_OK=0
   remote "docker compose -f compose.yml logs --no-color --no-log-prefix --since $since worker api" >"$WORK/logs" 2>/dev/null
   info "log lines of worker and api since $since: $(wc -l <"$WORK/logs" | tr -d ' '), naming the run: $(grep -c -F "$run" "$WORK/logs" || true)"
-  grep -F "$run" "$WORK/logs" | jq -R -r 'fromjson? | "\(.logger): \(.msg) [\(keys_unsorted | join(","))]"' |
-    sed -E 's/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}/<id>/g; s/[0-9]+\.[0-9]+s/<n>s/' | sort | uniq -c | sed 's/^/     /'
-  fragment="${FRAGMENT:-${MESSAGE:13:20}}"
-  for needle in "$fragment" "CLAUDE_CODE_OAUTH" "ANTHROPIC_API" "CREDENTIALS_KEY" "Job id:"; do
-    local hits
-    hits="$(grep -c -i -F -e "$needle" "$WORK/logs" || true)"
+  # Per logger: the count, the two fixed event names of the runner and the field names. Any other
+  # message is counted and not printed, since a message can embed an error text.
+  grep -F "$run" "$WORK/logs" | jq -R -r 'fromjson?
+      | (.msg | tostring) as $m
+      | "\(.logger): \(if $m == "agent run started" or $m == "agent run finished" then $m else "(message not printed)" end) [\(keys_unsorted | join(","))]"' |
+    sort | uniq -c | sed 's/^/     /'
+  # The message text: 20 characters from its middle, or all of it when it is short. Never printed.
+  if [[ -n "${FRAGMENT:-}" ]]; then
+    fragment="$FRAGMENT"
+  elif ((${#MESSAGE} >= 33)); then
+    fragment="${MESSAGE:13:20}"
+  else
+    fragment="$MESSAGE"
+  fi
+  if ((${#fragment} >= NEEDLE_MIN)); then
+    hits="$(count_in_logs "$fragment")"
+    info "log lines holding a fragment of the message (${#fragment} characters, not printed): $hits"
+    [[ "$hits" == "0" ]] || CHECKS_OK=0
+  else
+    info "log lines holding the message: not checked, the message is shorter than $NEEDLE_MIN characters"
+  fi
+  for needle in "CLAUDE_CODE_OAUTH" "ANTHROPIC_API" "CREDENTIALS_KEY" "Job id:"; do
+    hits="$(count_in_logs "$needle")"
     info "log lines holding \"$needle\": $hits"
     [[ "$hits" == "0" ]] || CHECKS_OK=0
   done
+  hits="$(count_in_logs "sk-ant-")"
+  info "log lines holding a token shaped value (prefix sk-ant-): $hits"
+  [[ "$hits" == "0" ]] || CHECKS_OK=0
   rm -f "$WORK/logs"
   info "worker OOM kills (memory.events): $(oom_kills)"
 }
@@ -375,10 +471,14 @@ oom_kills() {
     awk '$1 == "oom_kill" {print $2}'
 }
 
-mkdir -p "$EVIDENCE"
-exec > >(tee "$LOG") 2>&1
+if [[ "$REAL" == "1" ]]; then
+  mkdir -p "$EVIDENCE"
+  exec > >(tee "$LOG") 2>&1
+else
+  exec 2>&1 # a dry run keeps no log: the terminal is its only output
+fi
 printf 'tests/agents_real_run_jetson.sh, %s, %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  "$([[ "$REAL" == "1" ]] && echo "real runs: $RUNS" || echo "dry run")"
+  "$([[ "$REAL" == "1" ]] && echo "real runs: $RUNS" || echo "dry run, nothing written outside a temporary directory")"
 
 step "before"
 health="$(remote "docker compose -f compose.yml ps --format '{{.Service}}:{{.Health}}'" | sort | tr '\n' ' ')"
@@ -396,7 +496,13 @@ info "worker OOM kills (memory.events): $(oom_kills)"
 fixed >"$WORK/fixed.before"
 agents >"$WORK/agents.before"
 sed 's/^/   /' "$WORK/fixed.before" "$WORK/agents.before"
-[[ "$(field credential "$WORK/fixed.before")" != none ]] || die "$OWNER has no model credential"
+role="$(field owner_role "$WORK/fixed.before")"
+credential="$(field credential "$WORK/fixed.before")"
+[[ "$credential" != none ]] || die "$OWNER has no model credential"
+# Never a run with another user's Anthropic API key: the account is an admin and the credential
+# its own subscription, whatever OWNER says.
+[[ "$role" == "$OWNER_ROLE" && "${credential%%,*}" == "$OWNER_CREDENTIAL" ]] ||
+  die "refused, nothing was started: $OWNER has the role ${role:-none} and a credential of kind ${credential%%,*}; runs are started only for an account with the role $OWNER_ROLE and a credential of kind $OWNER_CREDENTIAL"
 [[ "$(field agent_runs_active "$WORK/agents.before")" == 0 ]] || die "a run is queued or running: wait for it"
 job="$(sql <<SQL
 select status, fit, length(coalesce(posting_text, '')),
@@ -416,18 +522,20 @@ info "on this job before: runs=$jruns proposals=$jproposals threads=$jthreads"
 DONE=0
 CHECKS_OK=1
 status=0
+index=0
 for kind in $RUNS; do
-  one_run "$kind" || {
+  one_run "$kind" "${KEYS[$index]}" || {
     status=1
     break # never a second run after a failed one: read its error first
   }
+  index=$((index + 1))
 done
 
 step "after: the owner's jobs and profile unchanged, only agent rows added"
 fixed >"$WORK/fixed.after"
 agents >"$WORK/agents.after"
 if diff -u "$WORK/fixed.before" "$WORK/fixed.after"; then
-  info "jobs, job events, files, sweeps, profile, credential row: identical before and after ($(wc -l <"$WORK/fixed.after" | tr -d ' ') fields)"
+  info "unchanged before and after ($(wc -l <"$WORK/fixed.after" | tr -d ' ') fields): jobs (md5 over every column of every row), profile (md5 of its sections and date), credential row (kind and date), owner role; job events (count and highest id only); files and sweeps (count only)"
 else
   printf '   FAIL: the owner'"'"'s data changed\n'
   status=1
@@ -437,13 +545,19 @@ paste -d' ' "$WORK/agents.before" "$WORK/agents.after" | awk '{split($2, a, "=")
 added=$(($(field agent_runs "$WORK/agents.after") - $(field agent_runs "$WORK/agents.before")))
 info "runs added: $added (started here: $DONE)"
 [[ "$added" == "$DONE" ]] || status=1
-decided="$(sql <<<"select count(*) from proposals where decided_at is not null or status <> 'pending'")"
-info "proposals decided (accepted, rejected or other): $decided"
+decided=$(($(field proposals_decided "$WORK/agents.after") - $(field proposals_decided "$WORK/agents.before")))
+info "proposals decided (accepted, rejected or other) during this call: $decided (count only)"
+if [[ "$decided" != "0" ]]; then
+  info "FAIL: a proposal was decided while the script ran"
+  status=1
+fi
 info "host: $(remote 'free -m' | awk '/^Mem:/ {print "available " $7 " MiB"}')"
 ((CHECKS_OK == 1)) || status=1
 if [[ "$REAL" == "1" ]]; then
   files=()
-  for kind in $RUNS; do [[ -f "$WORK/$kind.json" ]] && files+=("$WORK/$kind.json"); done
+  for key in "${KEYS[@]}"; do
+    if [[ -f "$WORK/$key.json" ]]; then files+=("$WORK/$key.json"); fi
+  done
   if ((${#files[@]})); then
     jq -n --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg host "$HOST" --arg commit "$(remote 'cat .deployed-commit')" \
       --arg job "$JOB" '{at: $at, host: $host, deployed_commit: $commit, job_id: $job, runs: [inputs]}' "${files[@]}" >"$METRICS"
