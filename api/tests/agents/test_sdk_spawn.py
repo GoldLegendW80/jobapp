@@ -36,11 +36,12 @@ SKIP = "CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK"
 
 @pytest.fixture
 def secrets_in_environ(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name, value in WORKER_SECRETS.items():
-        monkeypatch.setenv(name, value)
-    # Recorded first, so the test's own changes to it are undone afterwards.
-    monkeypatch.setenv(SKIP, "x")
-    monkeypatch.delenv(SKIP)
+    # A copy of the environment for this test only: drop_secrets_from_environ deletes names
+    # (TEST_DATABASE_URL, REDIS_URL of CI...) that the rest of the test session still needs.
+    environ = dict(os.environ)
+    environ.pop(SKIP, None)
+    environ.update(WORKER_SECRETS)
+    monkeypatch.setattr(os, "environ", environ)
 
 
 @pytest.fixture
@@ -110,8 +111,7 @@ def test_once_the_worker_dropped_its_secrets_nothing_can_inherit_them(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("PATH", os.environ["PATH"])  # recorded, so it comes back whatever happens
-    monkeypatch.setenv("APP_ENV", "test")
+    os.environ["APP_ENV"] = "test"  # the test's own copy (fixture)
     dropped = worker.drop_secrets_from_environ()
     assert set(WORKER_SECRETS) <= set(dropped)
     assert "PATH" not in dropped
