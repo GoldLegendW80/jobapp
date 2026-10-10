@@ -987,6 +987,82 @@ def test_text_around_the_cited_lines_changes_nothing(seed: int) -> None:
             assert citation.excerpt.strip() == line.strip()
 
 
+SOUP = (
+    list(EN[:6])
+    + list(FR[5:])
+    + ["janv.", "sept", "sept.", "Mar", "mar.", "may.", "déc"]
+    + ["2019", "2020", "2021", "2023", "1999", "21", "23", "09", "03", "12", "13", "3", "9", "15"]
+    + ["1er", "15th", "3rd", "06", "39", "98", "0639981234", "+33", "(0)6", "10 000", "3,5", "1.10"]
+    + ["/", "/", "-", "-", ".", ",", "'", ":", "(", ")", "\u2013", "\u2192"]
+    + [" ", " ", " ", " ", "\n", "   ", " à ", " to ", " et ", " and ", " jusqu'à ", " au "]
+    + ["the ", " of ", "present", "aujourd'hui", "en cours", "collaborateurs", "S", "x", "v", "T"]
+    + ["version ", "camille@example.org", "www.example.org/x", "https://", "Betclic", "Thales"]
+)
+
+
+def soup(rng: random.Random, low: int = 10, high: int = 40) -> str:
+    """Pieces of dates, numbers, phone numbers and addresses glued at random: no sense, every
+    shape."""
+    return "".join(rng.choice(SOUP) for _ in range(rng.randint(low, high))).strip()
+
+
+@seeded
+def test_a_part_of_a_text_says_no_more_than_the_text(seed: int) -> None:
+    """What a span reads, in its place, is read by the whole text too: years, months next to
+    their year, two digit years, phone numbers, numbers. So cutting an excerpt never adds a
+    fact."""
+    rng = generator(17_000 + seed)
+    for _ in range(25):
+        norm = citations.normalise(soup(rng)).text
+        whole_dates = citations.dates_of(norm)
+        whole_phones = citations.phones_of(norm)
+        whole_numbers = citations.numbers_of(norm)
+        cuts = boundaries(norm)
+        if len(cuts) < 2:
+            continue
+        for _ in range(25):
+            start, end = sorted(rng.sample(cuts, 2))
+            context = (seed, norm, start, end)
+            part = citations.dates_of(norm, start, end)
+            assert part.years <= whole_dates.years, context
+            assert part.pairs <= whole_dates.pairs, context
+            assert part.short <= whole_dates.short, context
+            assert part.implied <= whole_dates.implied, context
+            assert citations.phones_of(norm, start, end) <= whole_phones, context
+            assert citations.numbers_of(norm, start, end) <= whole_numbers, context
+
+
+@seeded
+def test_what_a_part_of_a_line_supports_the_line_supports(seed: int) -> None:
+    """Whatever the value, an excerpt that is a part of a line never supports what the whole
+    line does not."""
+    rng = generator(18_000 + seed)
+    for _ in range(6):
+        line = soup(rng, 15, 45).replace("\n", " ").replace("   ", " ")
+        prepared = prepare(line)
+        if not (25 <= len(prepared.text) <= 500):
+            continue
+        whole = find(prepared, line)
+        if isinstance(whole, Refusal):
+            continue
+        pieces = [line[a : a + rng.randint(1, 30)] for a in rng.sample(range(len(line)), 6)]
+        values = {
+            "date": [f"{year}-{month:02d}" for year in (2019, 2021, 2023) for month in (1, 3, 9)],
+            "phone": [*pieces, "0639981234", "39981234", "33639981234"],
+            "email": [*pieces, "camille@example.org", "amille@example.org", "camille@example"],
+            "url": [*pieces, "example.org/x", "example.org", "www.example.org", "org/x"],
+            "name": [*pieces, "Betclic", "Bet", "Thales", "janv"],
+            "text": [*pieces, "10 000", "10", "3,5", "5", "1.1", "version 1.1", "2019"],
+        }
+        for excerpt in every_part(rng, line, sample=8):
+            for field, candidates in values.items():
+                for value in candidates:
+                    by_part = check_item(field, value, prepared, [excerpt])
+                    if isinstance(by_part, Accepted):
+                        by_line = check_item(field, value, prepared, [line])
+                        assert isinstance(by_line, Accepted), (seed, line, excerpt, field, value)
+
+
 # --- 8. hostile text -----------------------------------------------------------------------------
 
 HOSTILE = [
@@ -999,7 +1075,7 @@ HOSTILE = [
     "\x85",
     "\xa0",
     "\xad",
-    "͏",
+    "\u034f",
     "\u200b",
     "\u200d",
     "\u200e",
@@ -1009,27 +1085,27 @@ HOSTILE = [
     "\u2066",
     "\u2069",
     "\ufeff",
-    "́",
-    "̖",
-    "̈",
-    "⃣",
-    "️",
-    "゙",
-    "‘",
-    "’",
-    "“",
-    "–",
-    "—",
-    "−",
-    "´",
-    "″",
-    "→",
+    "\u0301",
+    "\u0316",
+    "\u0308",
+    "\u20e3",
+    "\ufe0f",
+    "\u3099",
+    "\u2018",
+    "\u2019",
+    "\u201c",
+    "\u2013",
+    "\u2014",
+    "\u2212",
+    "\u00b4",
+    "\u2033",
+    "\u2192",
     "ﬁ",
-    "²",
-    "½",
-    "①",
-    "１",
-    "٣",
+    "\u00b2",
+    "\u00bd",
+    "\u2460",
+    "\uff11",
+    "\u0663",
     "\u2028",
     "\u2029",
     "\u3000",
@@ -1038,17 +1114,17 @@ HOSTILE = [
     "メ",
     "ル",
     "ก",
-    "ี",
+    "\u0e35",
     "한",
     "ᄒ",
     "ᅡ",
     "م",
     "ه",
     "ক",
-    "ে",
-    "😀",
+    "\u09c7",
+    "\U0001f600",
     "\U000e0041",
-    "�",
+    "\ufffd",
     "ﷺ",
     "ẞ",
     chr(55296),

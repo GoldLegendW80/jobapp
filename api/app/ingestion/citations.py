@@ -613,10 +613,11 @@ def _number_runs(text: str, start: int = 0, end: int | None = None) -> Iterator[
         yield run.group(), _VERSION_BEFORE.search(before) is not None
 
 
-def numbers_of(norm: str) -> frozenset[str]:
-    """Every reading of every number run of a normalised text."""
+def numbers_of(norm: str, start: int = 0, end: int | None = None) -> frozenset[str]:
+    """Every reading of every number run of a normalised text, or of `norm[start:end]` read in
+    its place when `start` and `end` are the bounds of a span."""
     out: set[str] = set()
-    for run, _ in _number_runs(norm):
+    for run, _ in _number_runs(norm, start, end):
         out |= readings(run)
     return frozenset(out)
 
@@ -1071,10 +1072,12 @@ def _school_year(atom: _Atom) -> bool:
     return atom.kind == "ambiguous" and atom.month == (atom.year + 1) % 100
 
 
-def dates_of(norm: str) -> DateFacts:
-    """What a normalised text says about dates (rule D). A month word belongs to the year that
-    follows it, never to a year written before it, and nothing pairs across a break."""
-    return _DateReader(norm, 0, len(norm)).facts()
+def dates_of(norm: str, start: int = 0, end: int | None = None) -> DateFacts:
+    """What a normalised text says about dates (rule D), or what `norm[start:end]` says, read in
+    its place, when `start` and `end` are the bounds of a span: a date that the span cuts is not
+    read. A month word belongs to the year that follows it, never to a year written before it,
+    and nothing pairs across a break."""
+    return _DateReader(norm, start, len(norm) if end is None else end).facts()
 
 
 # --- rule P: phones -------------------------------------------------------------------------------
@@ -1121,9 +1124,11 @@ def _phones(text: str, start: int, end: int) -> set[str]:
     return out
 
 
-def phones_of(norm: str) -> frozenset[str]:
-    """The digits of every phone number of a normalised text. A break ends a phone number."""
-    return frozenset(_phones(norm, 0, len(norm)))
+def phones_of(norm: str, start: int = 0, end: int | None = None) -> frozenset[str]:
+    """The digits of every phone number of a normalised text, or of those that lie whole in
+    `norm[start:end]` when `start` and `end` are the bounds of a span. A break ends a phone
+    number."""
+    return frozenset(_phones(norm, start, len(norm) if end is None else end))
 
 
 # --- instruction patterns -------------------------------------------------------------------------
@@ -1196,12 +1201,8 @@ def _address_ends(text: str, end: int) -> bool:
     return rest < stop and not _address_char(text[rest], _ADDRESS_AFTER)
 
 
-def rule_address(value: str, spans: Sequence[Span], *, url: bool = False) -> Rule | None:
-    """Rule V for an email or a URL: N(value) is written in a span, hyphens and spaces kept,
-    and bounded on both sides in the document, so a part of an address never passes, even when
-    the excerpt starts or stops inside it. For a URL the scheme, "www." and the final slash of
-    the value are left out."""
-    wanted = normalise(value).text
+def _address(norm: str, spans: Sequence[Span], url: bool) -> Rule | None:
+    wanted = norm
     if url:
         head = _URL_HEAD.match(wanted)
         wanted = (wanted[head.end() :] if head else wanted).rstrip("/")
@@ -1239,12 +1240,15 @@ def _words_kept(text: str, bones: Skeleton, at: int, value: Skeleton) -> bool:
     return True
 
 
-def _name(value: str, spans: Sequence[Span]) -> Rule | None:
-    wanted = skeleton(normalise(value).text)
-    if not wanted.text:
-        return Rule.VALUE_EMPTY
+def _name(value: str, norm: str, spans: Sequence[Span]) -> Rule | None:
+    wanted = skeleton(norm)
     size = len(wanted.text)
-    exact = _bones(value, casefold=False)
+    if not size:
+        return Rule.VALUE_EMPTY
+    if size > SPAN_MAX:
+        return Rule.NAME_NOT_IN_SOURCE  # longer than any span
+    # A short name is compared with its capitals, as the document writes them at that place.
+    exact = _bones(value, casefold=False) if size < SHORT_NAME else ""
     for span in spans:
         text = span.text
         bones = skeleton(text)
@@ -1283,19 +1287,28 @@ def _date(value: str, facts: DateFacts) -> Rule | None:
     return Rule.MONTH_NOT_IN_SOURCE
 
 
-def _phone(value: str, phones: frozenset[str]) -> Rule | None:
-    digits = _NOT_DIGIT.sub("", normalise(value).text)
+def _phone(norm: str, phones: frozenset[str]) -> Rule | None:
+    digits = _NOT_DIGIT.sub("", norm)
     if len(digits) < PHONE_DIGITS_MIN:
         return Rule.PHONE_TOO_SHORT
     return None if digits in phones else Rule.PHONE_NOT_IN_SOURCE
 
 
+def rule_address(value: str, spans: Sequence[Span], *, url: bool = False) -> Rule | None:
+    """Rule V for an email or a URL: N(value) is written in a span, hyphens and spaces kept,
+    and bounded on both sides in the document, so a part of an address never passes, even when
+    the excerpt starts or stops inside it. For a URL the scheme, "www." and the final slash of
+    the value are left out."""
+    return _address(normalise(value).text, spans, url)
+
+
 def rule_name(value: str, spans: Sequence[Span]) -> Rule | None:
     """Rule V for a name: its skeleton is in a span as whole tokens, the match starting and
-    ending on token boundaries, its words split where the document splits them.
-    A name whose skeleton has fewer than four characters must also be written there with the
-    same capitals. Then rule N, since digits in a name are numbers."""
-    return _name(value, spans) or rule_numbers(value, spans)
+    ending on token boundaries, its words split where the document splits them. A name whose
+    skeleton has fewer than four characters must also be written there with the same capitals.
+    Then rule N, since digits in a name are numbers."""
+    norm = normalise(value).text
+    return _name(value, norm, spans) or _Evidence(spans).numbers(norm)
 
 
 def rule_date(value: str, spans: Sequence[Span]) -> Rule | None:
@@ -1307,14 +1320,14 @@ def rule_date(value: str, spans: Sequence[Span]) -> Rule | None:
 def rule_phone(value: str, spans: Sequence[Span]) -> Rule | None:
     """Rule P: the digits of the value are all the digits of one phone number of a span. No
     conversion between national and international forms."""
-    return _phone(value, _Evidence(spans).phones())
+    return _phone(normalise(value).text, _Evidence(spans).phones())
 
 
 def rule_numbers(value: str, spans: Sequence[Span]) -> Rule | None:
     """Rule N: each number run of the value is a number run of a span, or has a reading in
     common with one. A run that follows "version" or "v", in the value or in the document, is
     a version and is compared as text: "1.10" is not "1.1"."""
-    return _Evidence(spans).numbers(value)
+    return _Evidence(spans).numbers(normalise(value).text)
 
 
 class _Evidence:
@@ -1332,7 +1345,7 @@ class _Evidence:
         if self._dates is None:
             facts = DateFacts()
             for span in self.spans:
-                facts |= _DateReader(span.document.text, span.start, span.end).facts()
+                facts |= dates_of(span.document.text, span.start, span.end)
             self._dates = facts
         return self._dates
 
@@ -1344,7 +1357,8 @@ class _Evidence:
             self._phones = frozenset(found)
         return self._phones
 
-    def numbers(self, value: str) -> Rule | None:
+    def numbers(self, norm: str) -> Rule | None:
+        """Rule N for the normalised text of a value."""
         if self._runs is None:
             runs: set[str] = set()
             found: set[str] = set()
@@ -1354,40 +1368,43 @@ class _Evidence:
                     if not version:
                         found |= readings(run)
             self._runs, self._readings = frozenset(runs), frozenset(found)
-        for run, version in _number_runs(normalise(value).text):
+        for run, version in _number_runs(norm):
             if run in self._runs:
                 continue
             if version or not readings(run) & self._readings:
                 return Rule.NUMBER_NOT_IN_SOURCE
         return None
 
-    def check(self, field_type: FieldType, value: object) -> Rule | None:
-        """The rule that `value` breaks as a field of type `field_type`, or None."""
+    def check(self, field_type: FieldType, value: object) -> tuple[Rule | None, str]:
+        """The rule that `value` breaks as a field of type `field_type`, or None, and the
+        normalised text of the value when it was read."""
         if field_type is FieldType.SETTING:
-            return Rule.SETTING
+            return Rule.SETTING, ""
         if value is None or field_type in (FieldType.TERM, FieldType.ENUM):
-            return None
+            return None, ""
         if field_type is FieldType.TEXT:
             if isinstance(value, bool):
-                return None
+                return None, ""
             if isinstance(value, int | float):
                 try:
                     value = repr(value)
                 except ValueError:  # an integer too long to print
-                    return Rule.NUMBER_NOT_IN_SOURCE
+                    return Rule.NUMBER_NOT_IN_SOURCE, ""
         if not isinstance(value, str):
-            return Rule.DATE_FORMAT if field_type is FieldType.DATE else Rule.VALUE_NOT_TEXT
+            other = Rule.DATE_FORMAT if field_type is FieldType.DATE else Rule.VALUE_NOT_TEXT
+            return other, ""
         if field_type is FieldType.DATE:
-            return _date(value, self.dates())
+            return _date(value, self.dates()), ""
+        norm = normalise(value).text
         if field_type is FieldType.PHONE:
-            return _phone(value, self.phones())
+            return _phone(norm, self.phones()), norm
         if field_type is FieldType.EMAIL:
-            return rule_address(value, self.spans)
+            return _address(norm, self.spans, url=False), norm
         if field_type is FieldType.URL:
-            return rule_address(value, self.spans, url=True)
+            return _address(norm, self.spans, url=True), norm
         if field_type is FieldType.NAME:
-            return _name(value, self.spans) or self.numbers(value)
-        return self.numbers(value)
+            return _name(value, norm, self.spans) or self.numbers(norm), norm
+        return self.numbers(norm), norm
 
 
 def check_value(
@@ -1400,7 +1417,7 @@ def check_value(
         kind = FieldType(field_type)
     except ValueError:
         return _refuse(Rule.UNKNOWN_FIELD, "value")
-    rule = _Evidence(spans).check(kind, value)
+    rule, _ = _Evidence(spans).check(kind, value)
     return None if rule is None else _refuse(rule, "value")
 
 
@@ -1513,10 +1530,10 @@ def check_item(
     evidence = _Evidence(spans)
     flagged = any(looks_like_instruction(span.text) for span in spans)
     for leaf in leaves:
-        rule = evidence.check(leaf.field_type, leaf.value)
+        rule, norm = evidence.check(leaf.field_type, leaf.value)
         if rule is not None:
             return _refuse(rule, leaf.index)
         if not flagged and isinstance(leaf.value, str):
-            flagged = looks_like_instruction(normalise(leaf.value).text)
+            flagged = looks_like_instruction(norm or normalise(leaf.value).text)
     citations = tuple(Citation(span.source_start, span.source_end, span.source()) for span in spans)
     return Accepted(citations, (LOOKS_LIKE_INSTRUCTION,) if flagged else ())

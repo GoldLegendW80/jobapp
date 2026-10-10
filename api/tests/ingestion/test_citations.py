@@ -2063,3 +2063,48 @@ def test_a_span_gives_the_text_under_it() -> None:
     assert found.source(0, 10) == "Uni\u00adversity"
     assert found.source(14, 22) == "Bordeaux"
     assert (found.source_start, found.source_end) == (19, 53)
+
+
+# --- the stated bounds ----------------------------------------------------------------------------
+
+
+def test_an_excerpt_that_stops_inside_a_word_too_long_to_cite_is_refused() -> None:
+    word = "a" * (citations.SPAN_MAX + 50)
+    source = f"Le mot le plus long du document est {word} et il continue"
+    assert rule_of(find(source, "Le mot le plus long du document est aaaa")) is Rule.SPAN_TOO_LONG
+    assert rule_of(find(source, "aaaaaa et il continue")) is Rule.SPAN_TOO_LONG
+    assert isinstance(find(source, "Le mot le plus long du document est"), Span)
+
+
+def test_only_the_first_places_of_a_name_in_a_span_are_looked_at() -> None:
+    """Stated bound: OCCURRENCES_MAX places per span for one value."""
+    limit = citations.OCCURRENCES_MAX
+    cutting, whole = "xab ", "ab est une langue"
+    few = cutting * (limit - 1) + whole
+    assert rule_of(check_item("name", "ab", few, [few])) is None
+    many = cutting * limit + whole
+    assert rule_of(check_item("name", "ab", many, [many])) is Rule.NAME_NOT_IN_SOURCE
+    # cited where it stands, it is found
+    assert rule_of(check_item("name", "ab", many, [many[-80:]])) is None
+
+
+def test_only_the_first_places_of_an_address_in_a_span_are_looked_at() -> None:
+    limit = citations.OCCURRENCES_MAX
+    longer, exact = "xa@b ", "a@b pour écrire à Camille"
+    few = longer * (limit - 1) + exact
+    assert rule_of(check_item("email", "a@b", few, [few])) is None
+    many = longer * limit + exact
+    assert rule_of(check_item("email", "a@b", many, [many])) is Rule.ADDRESS_NOT_IN_SOURCE
+    assert rule_of(check_item("email", "a@b", many, [many[-100:]])) is None
+
+
+def test_the_spans_are_read_once_for_all_the_parts_of_a_value() -> None:
+    source = "Mobile 06 39 98 12 34, fixe 06 39 98 56 78, depuis janvier 2023 et mars 2024."
+    assert rule_of(check_item("phone", ["06 39 98 12 34", "0639985678"], source, [source])) is None
+    result = check_item("phone", ["06 39 98 12 34", "06 39 98 00 00"], source, [source])
+    assert isinstance(result, Refusal)
+    assert (result.index, result.rule) == ("value[1]", Rule.PHONE_NOT_IN_SOURCE)
+    assert rule_of(check_item("date", ["2023-01", "2024-03", "2024"], source, [source])) is None
+    result = check_item("date", ["2023-01", "2024-01"], source, [source])
+    assert isinstance(result, Refusal)
+    assert (result.index, result.rule) == ("value[1]", Rule.MONTH_NOT_IN_SOURCE)
