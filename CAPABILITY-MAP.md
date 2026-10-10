@@ -10,7 +10,7 @@ Intent: [docs/intent/jetson-job-app.md](../docs/intent/jetson-job-app.md). Appro
 | jobs | Postings table, API board sweep (Ashby, Greenhouse, Lever), scoring, statuses, list and filters, multi-select, import of the existing CSV | profile |
 | agents | Claude Agent SDK runtime in a worker, task queue, run logs, chat UI primitives; model credentials per user (Harald's Claude subscription, others' Anthropic API keys stored encrypted) | jobs |
 | ingestion | Profile from documents: copyable laptop-analysis prompt, paste or upload any document (text, PDF, images), extraction agent proposing per-section additions the user accepts | agents, profile |
-| mail | Gmail connector per user (Google OAuth, testing mode): mails linked to jobs, history per job, status updates from mail, reply drafts, draft-with-agent chat, send on click only | agents, jobs |
+| mail | Gmail connector per user (Google OAuth, Production unverified, up to 100 users): mails linked to jobs, history per job, status updates from mail, reply drafts, draft-with-agent chat, send on click only | agents, jobs |
 | documents | CV and letter per job: generation, manual editing, PDF render, one-page check | agents, profile, jobs |
 | browser | Headed Chromium under Xvfb, Playwright MCP endpoint, noVNC live view in the UI, one persistent browser profile per user | platform |
 | apply | Apply button, agent fills and submits the form, status update, run report | agents, documents, browser |
