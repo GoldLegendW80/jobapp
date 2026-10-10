@@ -1,0 +1,248 @@
+tests/agents_real_run_jetson.sh, 2026-10-10T12:33:56Z, real runs: triage chat
+
+== before
+   services: api:healthy caddy:healthy db:healthy redis:healthy tailscale:healthy worker:healthy
+   deployed commit: e1883640f1ff
+   worker code: chat lock hook of issue #27 present (lock_first, 4 lines)
+   host: total 7619 MiB, used 2002, available 5291, swap used 263 MiB
+   containers: jobapp-worker-1 118MiB / 1.5GiB;jobapp-api-1 117.3MiB / 512MiB;
+   worker OOM kills (memory.events): 0
+   users=1
+   jobs=442
+   per_status=found:167,shortlisted:146,cv_ready:3,staged:29,applied:29,interview:2,closed:6,skipped:60
+   fit_sum=35221
+   max_updated_at=2026-10-10 10:55:17.278472+00
+   rows_md5=1a2a40ed12c5dfc5dc344a9d5611feb1
+   job_events=500,max_id:1012
+   files=330
+   sweeps=2
+   profile_revision=6
+   profile_md5=1de5c4ed5b7581816955fa2118e8d770
+   credential=claude_subscription,updated_at:2026-10-10 11:06:08.61732+00
+   agent_runs=0
+   agent_runs_owner=0
+   agent_runs_active=0
+   agent_events=0
+   proposals=0
+   proposals_owner=none
+   agent_threads=0
+   agent_messages=0
+   credential_verified=false
+   job 280af3db-5fae-4219-9300-cd65035fdbd4 (status shortlisted, fit 100, posting 3707 characters)
+   on this job before: runs=0 proposals=0 threads=0
+
+== triage run
+   started through the app's own service functions: {"http":202,"run_id":"01eb6e3a-5ff2-49db-9e05-ccac02a33537","enqueued":true}
+   t+0s status=running events=2 scratch_dirs=1
+   t+3s status=running events=12 scratch_dirs=1
+   t+6s status=running events=13 scratch_dirs=1
+   t+9s status=running events=15 scratch_dirs=1
+   t+12s status=done events=20 scratch_dirs=0
+   {
+     "agent": "triage",
+     "error": null,
+     "model": "claude-opus-5-5",
+     "usage": {
+       "cost_usd": 0.1928986,
+       "num_turns": 6,
+       "duration_ms": 12471,
+       "input_tokens": 6,
+       "output_tokens": 1116,
+       "cache_read_input_tokens": 22333,
+       "cache_creation_input_tokens": 20761
+     },
+     "events": 20,
+     "job_id": "280af3db-5fae-4219-9300-cd65035fdbd4",
+     "run_id": "01eb6e3a-5ff2-49db-9e05-ccac02a33537",
+     "status": "done",
+     "cost_usd": 0.192899,
+     "messages": [],
+     "queued_s": 1.740,
+     "proposals": [
+       {
+         "kind": "job_note",
+         "status": "pending",
+         "target": "job",
+         "decided": false,
+         "payload_chars": 1067
+       }
+     ],
+     "created_at": "2026-10-10T12:34:14.20856+00:00",
+     "duration_s": 13.859,
+     "init_tools": [
+       "mcp__app__get_job",
+       "mcp__app__get_profile_section",
+       "mcp__app__propose_note",
+       "mcp__app__propose_status"
+     ],
+     "started_at": "2026-10-10T12:34:15.948739+00:00",
+     "tool_calls": {
+       "mcp__app__get_job": 1,
+       "mcp__app__propose_note": 1,
+       "mcp__app__get_profile_section": 3
+     },
+     "event_kinds": {
+       "init": 1,
+       "text": 1,
+       "usage": 1,
+       "status": 3,
+       "thinking": 2,
+       "tool_call": 5,
+       "rate_limit": 2,
+       "tool_result": 5
+     },
+     "finished_at": "2026-10-10T12:34:29.807692+00:00",
+     "tools_denied": 0,
+     "output_tokens": 1116,
+     "output_text_chars": 571,
+     "input_tokens_total": 43100,
+     "tool_results_error": 0,
+     "event_seconds_distinct": 9,
+     "thinking_events_with_content": 0,
+     "memory": {
+       "samples": 33,
+       "interval_s": 1,
+       "worker_idle_mib": 118.8,
+       "worker_min_mib": 118.8,
+       "worker_peak_mib": 332.6,
+       "worker_limit_mib": 1536,
+       "api_peak_mib": 220.9,
+       "host_available_min_mib": 5072,
+       "host_available_max_mib": 5290,
+       "claude_processes_max": 1,
+       "claude_rss_sum_peak_mib": 241.0,
+       "claude_rss_one_peak_mib": 241.0
+     }
+   }
+   entries left in the worker's /tmp (scratch directories live there): 0
+   session transcripts or Claude Code config left in the worker (*.jsonl, .claude, .claude.json): 0
+   log lines of worker and api since 2026-10-10T12:34:03Z: 13, naming the run: 4
+        1 app.agents.runner: agent run finished [ts,level,logger,msg,run_id,user_id,agent,status,recorded,duration_ms,input_tokens,output_tokens,cost_usd,denied_tools]
+        1 app.agents.runner: agent run started [ts,level,logger,msg,run_id,user_id,agent,model]
+        1 arq.worker:   <n>s → agent-run:<id>:run_agent('<id>') [ts,level,logger,msg]
+        1 arq.worker:  <n>s ← agent-run:<id>:run_agent ●  [ts,level,logger,msg]
+   log lines holding "two strongest points": 0
+   log lines holding "CLAUDE_CODE_OAUTH": 0
+   log lines holding "ANTHROPIC_API": 0
+   log lines holding "CREDENTIALS_KEY": 0
+   log lines holding "Job id:": 0
+   worker OOM kills (memory.events): 0
+
+== chat run
+   started through the app's own service functions: {"thread_id":"e61c0ded-2a63-4963-81a9-9cac5057b79c","thread_created":true,"message_id":1,"http":202,"run_id":"dea30b1f-239c-49d1-87cb-30a5f6b758aa","enqueued":true}
+   t+0s status=running events=2 scratch_dirs=1
+   t+3s status=running events=10 scratch_dirs=1
+   t+6s status=running events=10 scratch_dirs=1
+   t+9s status=running events=10 scratch_dirs=1
+   t+12s status=running events=11 scratch_dirs=1
+   t+15s status=done events=14 scratch_dirs=0
+   {
+     "agent": "job_chat",
+     "error": null,
+     "model": "claude-opus-5-5",
+     "usage": {
+       "cost_usd": 0.17776599999999998,
+       "num_turns": 4,
+       "duration_ms": 17447,
+       "input_tokens": 4,
+       "output_tokens": 1567,
+       "cache_read_input_tokens": 1690,
+       "cache_creation_input_tokens": 18259
+     },
+     "events": 14,
+     "job_id": "280af3db-5fae-4219-9300-cd65035fdbd4",
+     "run_id": "dea30b1f-239c-49d1-87cb-30a5f6b758aa",
+     "status": "done",
+     "cost_usd": 0.177766,
+     "messages": [
+       {
+         "md5": "1de8d36e6d63baf5c4c22e7a595b0562",
+         "role": "user",
+         "chars": 110,
+         "prompt_escapes": false
+       },
+       {
+         "md5": "6d6ea80a2a6857b530f78e8505604aa7",
+         "role": "assistant",
+         "chars": 2914,
+         "prompt_escapes": false
+       }
+     ],
+     "queued_s": 0.482,
+     "proposals": [],
+     "created_at": "2026-10-10T12:34:51.083434+00:00",
+     "duration_s": 18.698,
+     "init_tools": [
+       "mcp__app__get_job",
+       "mcp__app__get_profile_section"
+     ],
+     "started_at": "2026-10-10T12:34:51.565791+00:00",
+     "tool_calls": {
+       "mcp__app__get_job": 1,
+       "mcp__app__get_profile_section": 2
+     },
+     "event_kinds": {
+       "init": 1,
+       "text": 1,
+       "usage": 1,
+       "status": 3,
+       "thinking": 1,
+       "tool_call": 3,
+       "rate_limit": 1,
+       "tool_result": 3
+     },
+     "finished_at": "2026-10-10T12:35:10.264013+00:00",
+     "tools_denied": 0,
+     "output_tokens": 1567,
+     "output_text_chars": 2914,
+     "input_tokens_total": 19953,
+     "tool_results_error": 0,
+     "event_seconds_distinct": 6,
+     "thinking_events_with_content": 0,
+     "memory": {
+       "samples": 35,
+       "interval_s": 1,
+       "worker_idle_mib": 144.4,
+       "worker_min_mib": 144.4,
+       "worker_peak_mib": 313.0,
+       "worker_limit_mib": 1536,
+       "api_peak_mib": 221.1,
+       "host_available_min_mib": 5095,
+       "host_available_max_mib": 5264,
+       "claude_processes_max": 1,
+       "claude_rss_sum_peak_mib": 241.7,
+       "claude_rss_one_peak_mib": 241.7
+     }
+   }
+   message sent: 110 characters, md5 1de8d36e6d63baf5c4c22e7a595b0562 (the stored user message must show the same)
+   entries left in the worker's /tmp (scratch directories live there): 0
+   session transcripts or Claude Code config left in the worker (*.jsonl, .claude, .claude.json): 0
+   log lines of worker and api since 2026-10-10T12:34:40Z: 14, naming the run: 4
+        1 app.agents.runner: agent run finished [ts,level,logger,msg,run_id,user_id,agent,status,recorded,duration_ms,input_tokens,output_tokens,cost_usd,denied_tools]
+        1 app.agents.runner: agent run started [ts,level,logger,msg,run_id,user_id,agent,model]
+        1 arq.worker:   <n>s → agent-run:<id>:run_agent('<id>') [ts,level,logger,msg]
+        1 arq.worker:  <n>s ← agent-run:<id>:run_agent ●  [ts,level,logger,msg]
+   log lines holding "two strongest points": 0
+   log lines holding "CLAUDE_CODE_OAUTH": 0
+   log lines holding "ANTHROPIC_API": 0
+   log lines holding "CREDENTIALS_KEY": 0
+   log lines holding "Job id:": 0
+   worker OOM kills (memory.events): 0
+
+== after: the owner's jobs and profile unchanged, only agent rows added
+   jobs, job events, files, sweeps, profile, credential row: identical before and after (12 fields)
+   agent tables, before then after:
+     agent_runs=0 -> 2
+     agent_runs_owner=0 -> 2
+     agent_runs_active=0 -> 0
+     agent_events=0 -> 34
+     proposals=0 -> 1
+     proposals_owner=none -> pending:1
+     agent_threads=0 -> 1
+     agent_messages=0 -> 2
+     credential_verified=false -> true
+   runs added: 2 (started here: 2)
+   proposals decided (accepted, rejected or other): 0
+   host: available 5225 MiB
+   metrics: tasks/evidence/agents-a5/metrics.json
+   PASS
