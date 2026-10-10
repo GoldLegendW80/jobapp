@@ -471,6 +471,68 @@ def test_the_end_of_a_private_run_cannot_be_recorded(
     assert MARKER not in logged(caplog, capsys)
 
 
+@pytest.mark.parametrize("private", [True, False], ids=["private", "public, the control"])
+@pytest.mark.parametrize("site", ["the stream", "the runner", "the end", "the hook"])
+def test_a_log_handler_that_cannot_write_does_not_print_the_failure_either(
+    site: str,
+    private: bool,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    streams: Streams,
+    g6_tools: None,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a log handler fails, Python prints the failure of the handler together with the
+    exception that was being handled at that moment, message included. Found by this suite: a
+    handler left on a closed stream printed a test's document. A private run therefore logs
+    its failures once they are no longer being handled, in each of the four places."""
+    import io
+    from dataclasses import replace
+
+    def failing(*_: Any, **__: Any) -> Any:
+        raise RuntimeError(f"it broke while handling {MARKER}")
+
+    async def hook(final: definitions.FinalRun) -> None:
+        failing()
+
+    found = replace(PRIVATE, private_io=private)
+    if site == "the stream":
+        original = runs.append_event
+
+        def on_result(db: Any, run_id: Any, seq: int, kind: str, data: Any, at: Any) -> None:
+            if kind == "tool_result":
+                failing()
+            original(db, run_id, seq, kind, data, at)
+
+        monkeypatch.setattr(runs, "append_event", on_result)
+    elif site == "the runner":
+        found = replace(found, bind=failing)
+    elif site == "the end":
+        monkeypatch.setattr(runs, "finish", failing)
+    else:
+        found = replace(found, on_final=hook)
+    closed = io.StringIO()
+    handler = logging.StreamHandler(closed)
+    closed.close()
+    logger = logging.getLogger("app.agents.runner")
+    logger.addHandler(handler)
+    streams.add("g6_private", EXTRACTION)
+    run_id = new_run(factory, alice_id, {}, agent="g6_private")
+    try:
+        execute(run_context(settings, factory, keyring, found), run_id)
+    finally:
+        logger.removeHandler(handler)
+    printed = capsys.readouterr().err
+    assert "--- Logging error ---" in printed  # the handler did fail, and Python said so
+    if private:
+        assert MARKER not in printed
+    else:
+        assert MARKER in printed  # what the same failure prints for any other run
+
+
 def test_a_private_run_that_never_reached_the_model_still_has_counts(
     settings: Settings,
     factory: sessionmaker[Session],

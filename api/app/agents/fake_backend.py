@@ -185,7 +185,10 @@ class FakeBackend:
                 continue  # the CLI prints these only when asked
             raw = _fill(step["message"], variables)
             if raw.get("type") == "assistant":
-                self.seen_requests.append(str(raw.get("message", {}).get("id", "")))
+                # Several lines with one id are the content blocks of one API message.
+                made = str(raw.get("message", {}).get("id", ""))
+                if not made or self.seen_requests[-1:] != [made]:
+                    self.seen_requests.append(made)
             built = (
                 partial and not recorded and raw.get("type") == "assistant" and "error" not in raw
             )

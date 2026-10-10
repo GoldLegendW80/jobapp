@@ -1060,13 +1060,29 @@ def _bind(context: RunContext, bind: definitions.Bind, run: Any) -> Mapping[str,
         return None if found is None else MappingProxyType(dict(found))
 
 
-def _log_failure(what: str, log: dict[str, Any], exc: BaseException, private: bool) -> None:
-    """An unexpected failure, with its traceback, except for a private run: an exception's
-    message can quote what the run read, so only its type is logged."""
-    if private:
-        logger.error(what, extra={**log, "error": type(exc).__name__})
-    else:
+# Log lines of a private run that wait until the failure they are about is no longer being
+# handled: (level, message, extra).
+_Later = list[tuple[int, str, dict[str, Any]]]
+
+
+def _log_failure(what: str, log: dict[str, Any], exc: BaseException, later: _Later | None) -> None:
+    """An unexpected failure. For a public run (`later` is None): logged here and now, with
+    its traceback. For a private run: its type alone, since an exception's message can quote
+    what the run read, and not from here but through `_log_later`, once the exception is no
+    longer being handled. While it is, anything that goes wrong inside the logging itself (a
+    handler that cannot write) is reported by Python together with the exception being
+    handled, message included: seen in the test suite, where it printed a test's document."""
+    if later is None:
         logger.error(what, extra=log, exc_info=exc)
+    else:
+        later.append((logging.ERROR, what, {**log, "error": type(exc).__name__}))
+
+
+def _log_later(later: _Later) -> None:
+    """Write the lines `_log_failure` kept back. Called outside every `except` block."""
+    while later:
+        level, what, extra = later.pop(0)
+        logger.log(level, what, extra=extra)
 
 
 async def _final(
@@ -1090,11 +1106,13 @@ async def _final(
         settings=context.settings,
         services=context.services,
     )
+    later: _Later = []
     try:
         async with asyncio.timeout(context.final_hook_timeout_s):
             await hook(final)
     except Exception as exc:
-        _log_failure("agent final hook failed", log, exc, private)
+        _log_failure("agent final hook failed", log, exc, later if private else None)
+    _log_later(later)
 
 
 def _complete(
@@ -1143,6 +1161,8 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
     definition: definitions.AgentDefinition | None = None
     recorded = False
     stopping = False
+    # What a private run has to say about its failures, written once they are handled.
+    later: _Later = []
     try:
         try:
             definition = context.definition(run.agent)
@@ -1258,10 +1278,11 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
                 context, run_id, definition, backend, request, state, recorder
             )
         except Exception as exc:
-            logger.warning(
-                "agent run error",
-                extra={**log, "error": type(exc).__name__, "stderr_lines": len(stderr_lines)},
-            )
+            what = {**log, "error": type(exc).__name__, "stderr_lines": len(stderr_lines)}
+            if recorder.private:
+                later.append((logging.WARNING, "agent run error", what))
+            else:
+                logger.warning("agent run error", extra=what)
             outcome = runs.Outcome(
                 status=RunStatus.failed,
                 error=error_of(exc),
@@ -1287,10 +1308,11 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
         outcome = runs.Outcome(status=RunStatus.failed, error=runs.STOPPED, model=state.model)
         raise
     except Exception as exc:
-        _log_failure("agent run crashed", log, exc, recorder.private)
+        _log_failure("agent run crashed", log, exc, later if recorder.private else None)
         outcome = runs.Outcome(status=RunStatus.failed, error=INTERNAL, model=state.model)
         return RunStatus.failed
     finally:
+        _log_later(later)
         if pump is not None:
             # Cancelled and awaited: the pump may be in the middle of a write, and the clear
             # below must come after it, not next to it.
@@ -1305,7 +1327,10 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
                 recorded = await asyncio.shield(recorder.finish(outcome))
             except Exception as exc:
                 recorded = False
-                _log_failure("agent run end not recorded", log, exc, recorder.private)
+                _log_failure(
+                    "agent run end not recorded", log, exc, later if recorder.private else None
+                )
+            _log_later(later)
             logger.info(
                 "agent run finished",
                 extra={
