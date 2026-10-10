@@ -29,7 +29,8 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
-cancelled agent run likewise (runner.execute), its scratch directory removed.
+cancelled agent run likewise (runner.execute), its scratch directory removed. Every Worker is
+then closed (close_worker), even when a job was cancelled while still being picked up.
 """
 
 import argparse
@@ -320,6 +321,26 @@ def make_context(settings: Settings, clock: Callable[[], datetime] = utcnow) -> 
     }
 
 
+async def close_worker(worker: Worker) -> None:
+    """Stop one Worker: cancel its jobs still in flight, wait for them, then close it.
+
+    arq's Worker.close() cancels them itself, then awaits them with a plain asyncio.gather. A job
+    cancelled inside its function is caught by arq (run_job records it), but one cancelled while
+    run_job still awaits Redis (a job just picked up) re-raises CancelledError from that gather:
+    close() then stops before deleting the health key and closing the Redis pool, and serve()
+    never reaches the next Worker. Draining the tasks here, with return_exceptions, leaves
+    close() nothing to raise. Done tasks are dropped from `tasks` as arq's own poll does."""
+    in_flight = list(worker.tasks.values())
+    for task in in_flight:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*in_flight, return_exceptions=True)
+    for job_id, task in list(worker.tasks.items()):
+        if task.done():
+            del worker.tasks[job_id]
+    await worker.close()
+
+
 async def serve(
     settings: Settings,
     specs: Sequence[QueueSpec] | None = None,
@@ -367,7 +388,11 @@ async def serve(
         await asyncio.wait([stopper, *runs], return_when=asyncio.FIRST_COMPLETED)
         stopper.cancel()
         for worker in workers:
-            await worker.close()
+            # One Worker failing to close must not leave the others' Redis pools open.
+            try:
+                await close_worker(worker)
+            except Exception:
+                logger.exception("queue worker close failed", extra={"queue": worker.queue_name})
         for run in runs:
             run.cancel()
         await asyncio.gather(*runs, return_exceptions=True)
