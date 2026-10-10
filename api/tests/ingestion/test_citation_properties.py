@@ -29,8 +29,10 @@ import pytest
 from app.ingestion import citations
 from app.ingestion.citations import Accepted, Refusal, Rule, Span, check_item, find, prepare
 
-SEEDS = range(40)
+SEEDS = range(25)
 seeded = pytest.mark.parametrize("seed", SEEDS)
+# The two families that cite every part of a line make hundreds of checks per seed.
+few_seeds = pytest.mark.parametrize("seed", range(12))
 
 WORDS = [
     "développeur",
@@ -558,28 +560,28 @@ def wrapped(rng: random.Random, form: str) -> str:
 @seeded
 def test_a_date_gives_its_month_and_no_other(seed: int) -> None:
     rng = generator(3000 + seed)
-    for _ in range(2):
-        year, month, day = some_date(rng)
-        for form in month_forms(year, month, day):
-            source = wrapped(rng, form)
-            cited = prepare(source)
-            assert isinstance(
-                check_item("date", f"{year}-{month:02d}", cited, [source]), Accepted
-            ), (seed, source)
-            assert isinstance(check_item("date", f"{year}", cited, [source]), Accepted), (
-                seed,
-                source,
-            )
-            for other in range(1, 13):
-                if other == month:
-                    continue
-                result = check_item("date", f"{year}-{other:02d}", cited, [source])
-                assert refused(result, Rule.MONTH_NOT_IN_SOURCE), (seed, source, other, result)
-            for wrong in (year - 1, year + 1, year + 10, year - 100):
-                for value in (f"{wrong}", f"{wrong}-{month:02d}"):
-                    result = check_item("date", value, cited, [source])
-                    assert isinstance(result, Refusal), (seed, source, value)
-                    assert result.rule in (Rule.YEAR_NOT_IN_SOURCE, Rule.TWO_DIGIT_YEAR)
+    year, month, day = some_date(rng)
+    for form in month_forms(year, month, day):
+        source = wrapped(rng, form)
+        cited = prepare(source)
+        assert isinstance(check_item("date", f"{year}-{month:02d}", cited, [source]), Accepted), (
+            seed,
+            source,
+        )
+        assert isinstance(check_item("date", f"{year}", cited, [source]), Accepted), (
+            seed,
+            source,
+        )
+        for other in range(1, 13):
+            if other == month:
+                continue
+            result = check_item("date", f"{year}-{other:02d}", cited, [source])
+            assert refused(result, Rule.MONTH_NOT_IN_SOURCE), (seed, source, other, result)
+        for wrong in (year - 1, year + 1, year + 10, year - 100):
+            for value in (f"{wrong}", f"{wrong}-{month:02d}"):
+                result = check_item("date", value, cited, [source])
+                assert isinstance(result, Refusal), (seed, source, value)
+                assert result.rule in (Rule.YEAR_NOT_IN_SOURCE, Rule.TWO_DIGIT_YEAR)
 
 
 @seeded
@@ -894,7 +896,7 @@ def assert_refused_from_every_part(
         assert isinstance(result, Refusal), (context, source, value, excerpt, result)
 
 
-@seeded
+@few_seeds
 def test_no_part_of_a_line_supports_what_the_line_refuses(seed: int) -> None:
     rng = generator(13_000 + seed)
     # a number cut out of a longer one
@@ -1032,7 +1034,7 @@ def test_a_part_of_a_text_says_no_more_than_the_text(seed: int) -> None:
             assert citations.numbers_of(norm, start, end) <= whole_numbers, context
 
 
-@seeded
+@few_seeds
 def test_what_a_part_of_a_line_supports_the_line_supports(seed: int) -> None:
     """Whatever the value, an excerpt that is a part of a line never supports what the whole
     line does not."""

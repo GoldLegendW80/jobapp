@@ -1447,6 +1447,21 @@ def test_a_name_must_be_text() -> None:
             Rule.MONTH_NOT_IN_SOURCE,
         ),
         (
+            # 11/01/2023 is the 11th of January or the 1st of November: no month, cut or not
+            "date",
+            "2023-01",
+            "Arrivé le 11/01/2023 dans l'équipe produit",
+            "01/2023 dans l'équipe produit",
+            Rule.MONTH_NOT_IN_SOURCE,
+        ),
+        (
+            "date",
+            "2023-05",
+            "Référence 25/13/2023 du dossier de candidature",
+            "13/2023 du dossier de candidature",
+            Rule.MONTH_NOT_IN_SOURCE,
+        ),
+        (
             "date",
             "2019-12",
             "Semestre S12/2019, échange à Montréal",

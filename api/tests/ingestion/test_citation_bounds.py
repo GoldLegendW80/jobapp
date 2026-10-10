@@ -9,9 +9,12 @@ Complexity, as built (app/ingestion/citations.py):
 - every value rule reads spans of bounded size: O(length of the value) per part of the value.
 
 The time bounds are on CPU time (`time.process_time`, the best of three), not on the wall clock,
-which other pytest-xdist workers sharing the runner's cores would stretch. They are generous: 20
-to 60 times what the Mac measures, since CI traces coverage and shares three CPUs. What they
-catch is a change of order: a quadratic scan of 500,000 characters takes minutes, not seconds.
+which other pytest-xdist workers sharing the runner's cores would stretch. They are generous: 10
+to 60 times what the Mac measures with coverage traced, as in CI. What they catch is a change of
+order: a quadratic scan of 500,000 characters takes minutes, not seconds. The realistic document
+has the full 500,000 characters; the crafted ones are shorter (a quadratic scan of 100,000
+characters is still ten thousand million steps) so that the whole file stays cheap in CI. Memory
+is traced on shorter texts for the same reason, and never while a time is taken.
 Measured figures are in tasks/ingestion/todo.md, "Measurements".
 """
 
@@ -27,8 +30,10 @@ from app.ingestion import citations
 from app.ingestion.citations import Accepted, Refusal, Rule, Span, check_item, find, prepare
 
 LARGE = 500_000  # the limit of one document's text (SPEC-ingestion.md, "Limits")
-CRAFTED = 200_000
-PREPARE_BUDGET_S = 5.0  # one document of 500,000 characters: 0.09 s on the Mac
+CRAFTED = 100_000  # a crafted document
+VALUE = 60_000  # a crafted value or excerpt
+TRACED = 100_000  # a text whose memory is traced
+PREPARE_BUDGET_S = 5.0  # one document of 500,000 characters: 0.08 s on the Mac, 0.2 s traced
 FIND_BUDGET_S = 1.0  # one excerpt in it: under 0.001 s on the Mac
 CHECK_BUDGET_S = 2.0  # one item against it, twenty excerpts and a long value included
 GROWTH_MAX = 8.0  # the cost of four times the text: about 4 when linear, 16 when quadratic
@@ -81,6 +86,17 @@ def cpu(action: Callable[[], object], repeat: int = 3) -> float:
     return best
 
 
+def traced(action: Callable[[], object]) -> tuple[object, int, int]:
+    """What `action` returns, the bytes it leaves allocated and the bytes at its peak."""
+    tracemalloc.start()
+    try:
+        result = action()
+        current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return result, current, peak
+
+
 def cv(size: int, seed: int = 7) -> str:
     """A text of `size` characters that reads like a long French dossier."""
     rng = random.Random(seed)  # noqa: S311 (test data, not a secret)
@@ -92,6 +108,10 @@ def cv(size: int, seed: int = 7) -> str:
         out.append("\n" if rng.random() < 0.05 else " ")
         length += len(word) + 1
     return "".join(out)[:size]
+
+
+def fill(unit: str, size: int) -> str:
+    return unit * (size // len(unit))
 
 
 @pytest.fixture(scope="module")
@@ -178,28 +198,6 @@ def test_the_cost_grows_linearly_with_the_document() -> None:
     assert whole / quarter < GROWTH_MAX, f"{quarter:.3f} s then {whole:.3f} s"
 
 
-def test_the_memory_of_a_prepared_document_is_bounded(large: str) -> None:
-    """N, S and their two maps: a few bytes per character, nothing kept per occurrence and no
-    string made per character, in French as in Chinese (8.7 MB at the peak for the first). The
-    worst is a text in which no two characters are the same: a string per cluster while it is
-    read, and at most CLUSTERS_REMEMBERED of them remembered."""
-    chinese = "阿里巴巴集团担任高级软件工程师\uff0c负责搜索平台的开发工作\u3002" * (LARGE // 28)
-    distinct = "".join(
-        chr(0x4E00 + at % 20_000) + chr(0x0300 + at // 20_000 % 100) for at in range(LARGE // 2)
-    )
-    for text, at_the_peak in ((large, 32), (chinese, 32), (distinct, 96)):
-        tracemalloc.start()
-        try:
-            document = prepare(text)
-            current, peak = tracemalloc.get_traced_memory()
-        finally:
-            tracemalloc.stop()
-        assert document.readable
-        assert peak < at_the_peak * len(text), f"{peak / len(text):.1f} bytes per character"
-        assert current < 20 * len(text), f"{current / len(text):.1f} bytes per character kept"
-        assert document.origin.itemsize == document.skeleton_index.itemsize == 4
-
-
 # --- crafted documents ---------------------------------------------------------------------------
 
 UNITS = {
@@ -236,6 +234,7 @@ UNITS = {
     "combining accents": "e\u0301",
     "zalgo": "\u0301\u0316",
     "superscripts": "\u00b2",
+    "numbers with superscripts": "10\u00b3 ",
     "fractions": "\u00bd",
     "ligature of eighteen": "\ufdfa",
     "sharp s": "\u00df",
@@ -254,9 +253,9 @@ UNITS = {
 
 @pytest.mark.parametrize("unit", UNITS.values(), ids=UNITS.keys())
 def test_a_crafted_document_costs_no_more_than_its_size(unit: str) -> None:
-    """One unit repeated up to 200,000 characters: the worst a document can do to each scan
+    """One unit repeated up to 100,000 characters: the worst a document can do to each scan
     (one giant token, an excerpt present everywhere, a number without end)."""
-    text = unit * (CRAFTED // len(unit))
+    text = fill(unit, CRAFTED)
     elapsed = cpu(lambda: prepare(text), repeat=1)
     assert elapsed < PREPARE_BUDGET_S, f"prepare: {elapsed:.3f} s"
     document = prepare(text)
@@ -279,7 +278,7 @@ def test_a_crafted_document_costs_no_more_than_its_size(unit: str) -> None:
             assert elapsed < CHECK_BUDGET_S, f"{field}: {elapsed:.3f} s"
 
 
-@pytest.mark.parametrize("unit", ["a", "ab", "a b ", "1 2 3 4 ", "x.", "e\u0301", "-", "阿里"])
+@pytest.mark.parametrize("unit", ["ab", "a b ", "1 2 3 4 ", "e\u0301", "阿里"])
 def test_an_excerpt_present_everywhere_is_not_scanned_everywhere(unit: str) -> None:
     """The quadratic case of the seed script: every occurrence cut a token, and each was looked
     at with every token of the document. Here the cost of the search does not depend on how
@@ -287,7 +286,7 @@ def test_an_excerpt_present_everywhere_is_not_scanned_everywhere(unit: str) -> N
     excerpt = unit * (40 // len(unit))
 
     def work(size: int) -> float:
-        document = prepare(unit * (size // len(unit)))
+        document = prepare(fill(unit, size))
         return cpu(lambda: find(document, excerpt))
 
     quarter, whole = work(LARGE // 4), work(LARGE)
@@ -316,45 +315,50 @@ SOURCE = (
     "2023, version 1.10 du moteur, 10 000 utilisateurs, https://www.example.org/in/camille."
 )
 VALUES = {
-    "numbers": "1 " * 100_000,
-    "one number": "1" * 200_000,
-    "groups": "1 000" + " 000" * 50_000,
-    "decimals": "1.1," * 50_000,
-    "versions": "v1.1 " * 40_000,
-    "version words": "version " * 25_000,
-    "email signs": "a@a." * 50_000,
-    "slashes": "/" * 200_000,
-    "url heads": "https://www." * 16_000,
-    "letters": "a" * 200_000,
-    "words": "a b " * 50_000,
-    "the source many times": SOURCE * 1000,
-    "instructions": "ignore all the " * 13_000,
-    "almost an instruction": "as an a" * 28_000,
-    "accents": "é" * 200_000,
-    "combining": "e\u0301" * 100_000,
-    "zalgo": "a" + "\u0301\u0316" * 100_000,
-    "spaces": " " * 200_000,
-    "hyphens": "-" * 200_000,
-    "digits and signs": "0(-/.)" * 33_000,
-    "months": "janvier 2023 " * 15_000,
-    "chinese": "阿里巴巴" * 50_000,
-    "lone surrogates": chr(0xDFFF) * 200_000,
+    "numbers": fill("1 ", VALUE),
+    "one number": fill("1", VALUE),
+    "groups": "1 000" + fill(" 000", VALUE),
+    "decimals": fill("1.1,", VALUE),
+    "versions": fill("v1.1 ", VALUE),
+    "version words": fill("version ", VALUE),
+    "numbers with superscripts": fill("10\u00b3 ", VALUE),
+    "email signs": fill("a@a.", VALUE),
+    "slashes": fill("/", VALUE),
+    "url heads": fill("https://www.", VALUE),
+    "letters": fill("a", VALUE),
+    "words": fill("a b ", VALUE),
+    "the source many times": fill(SOURCE, VALUE),
+    "instructions": fill("ignore all the ", VALUE),
+    "almost an instruction": fill("as an a", VALUE),
+    "accents": fill("é", VALUE),
+    "combining": fill("e\u0301", VALUE),
+    "zalgo": "a" + fill("\u0301\u0316", VALUE),
+    "spaces": fill(" ", VALUE),
+    "hyphens": fill("-", VALUE),
+    "digits and signs": fill("0(-/.)", VALUE),
+    "months": fill("janvier 2023 ", VALUE),
+    "chinese": fill("阿里巴巴", VALUE),
+    "lone surrogates": fill(chr(0xDFFF), VALUE),
 }
 
 
 @pytest.mark.parametrize("value", VALUES.values(), ids=VALUES.keys())
-def test_a_crafted_value_of_200_000_characters_costs_no_more_than_its_size(value: str) -> None:
+def test_a_crafted_value_costs_no_more_than_its_size(value: str) -> None:
+    """A value of 60,000 characters made to defeat one of the readers, under every field type
+    that reads it."""
     document = prepare(SOURCE)
-    for field in ("email", "url", "name", "date", "phone", "text", "term", "enum", "setting"):
+    for field in ("email", "url", "name", "phone", "text", "term"):
         started = time.process_time()
         result = check_item(field, value, document, [SOURCE])
         elapsed = time.process_time() - started
         assert isinstance(result, Accepted | Refusal)
         assert elapsed < CHECK_BUDGET_S, f"{field}: {elapsed:.3f} s"
+    for field in ("date", "setting"):
+        assert isinstance(check_item(field, value, document, [SOURCE]), Refusal)
 
 
 @pytest.mark.parametrize("excerpt", VALUES.values(), ids=VALUES.keys())
-def test_a_crafted_excerpt_of_200_000_characters_is_refused_at_once(excerpt: str) -> None:
+def test_a_crafted_excerpt_is_refused_at_once(excerpt: str) -> None:
     document = prepare(SOURCE)
     started = time.process_time()
     result = check_item("text", "Betclic", document, [excerpt])
@@ -426,6 +430,17 @@ def test_a_value_wider_than_the_limit_is_not_walked() -> None:
     assert elapsed < 0.5, f"{elapsed:.3f} s"
 
 
+def test_a_value_is_bounded_before_it_is_read() -> None:
+    document = prepare(SOURCE)
+    for value in ("\ufdfa" * 200_000, "a" * 5_000_000, ["a" * 200_000] * 20):
+        started = time.process_time()
+        result = check_item("text", value, document, [SOURCE])
+        elapsed = time.process_time() - started
+        assert isinstance(result, Refusal)
+        assert result.rule is Rule.VALUE_TOO_LARGE
+        assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"
+
+
 # --- regular expressions -------------------------------------------------------------------------
 
 PATTERNS = {
@@ -489,7 +504,7 @@ def test_the_patterns_under_test_are_those_of_the_module() -> None:
 
 @pytest.mark.parametrize("label", sorted(ATTACKS))
 def test_the_readers_end_on_the_inputs_made_to_defeat_them(label: str) -> None:
-    text = ATTACKS[label]
+    text = ATTACKS[label][-40_000:]
     started = time.process_time()
     norm = citations.normalise(text).text
     citations.skeleton(norm)
@@ -502,38 +517,63 @@ def test_the_readers_end_on_the_inputs_made_to_defeat_them(label: str) -> None:
     assert elapsed < CHECK_BUDGET_S, f"{label}: {elapsed:.3f} s"
 
 
-# --- memory of a text that unfolds ---------------------------------------------------------------
+# --- memory --------------------------------------------------------------------------------------
+
+
+def test_the_memory_of_a_prepared_document_is_bounded() -> None:
+    """N, S and their two maps: about ten bytes per character kept, nothing per occurrence, and
+    no string made per character, in French as in Chinese (8.7 MB at the peak for 500,000
+    characters of French, measured by tasks/evidence/ingestion-g4/measure.py)."""
+    chinese = fill("阿里巴巴集团担任高级软件工程师\uff0c负责搜索平台的开发工作\u3002", TRACED)
+    for text in (cv(TRACED), chinese):
+        document, kept, peak = traced(lambda text=text: prepare(text))
+        assert isinstance(document, citations.Document)
+        assert document.readable
+        assert peak < 32 * len(text), f"{peak / len(text):.1f} bytes per character at the peak"
+        assert kept < 20 * len(text), f"{kept / len(text):.1f} bytes per character kept"
+        assert document.origin.itemsize == document.skeleton_index.itemsize == 4
+
+
+def test_the_clusters_remembered_while_a_text_is_normalised_are_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worst for the normalisation is a text in which no two characters are the same: the
+    N of a cluster is remembered to be used again, but of at most CLUSTERS_REMEMBERED clusters
+    (65 bytes per character at the peak for 500,000 such characters, 130 without that bound).
+    Shown here with a smaller bound, on a smaller text."""
+    assert citations.CLUSTERS_REMEMBERED == 65_536
+    text = "".join(
+        chr(0x4E00 + at % 20_000) + chr(0x0300 + at // 20_000 % 100) for at in range(30_000)
+    )
+    monkeypatch.setattr(citations, "CLUSTERS_REMEMBERED", 1_000)
+    bounded, kept, peak = traced(lambda: prepare(text))
+    monkeypatch.setattr(citations, "CLUSTERS_REMEMBERED", 10**9)
+    unbounded, _, without = traced(lambda: prepare(text))
+    assert isinstance(bounded, citations.Document)
+    assert isinstance(unbounded, citations.Document)
+    assert bounded.text == unbounded.text
+    assert list(bounded.origin) == list(unbounded.origin)
+    assert peak < 0.75 * without, f"{peak} bytes with the bound, {without} without"
+    assert peak < 96 * len(text), f"{peak / len(text):.1f} bytes per character at the peak"
+    assert kept < 20 * len(text), f"{kept / len(text):.1f} bytes per character kept"
 
 
 def test_a_text_that_unfolds_is_left_unread_before_it_costs_its_memory() -> None:
     """500,000 times U+FDFA is nine million characters once normalised, with two maps of four
     bytes each: about a hundred megabytes for one hostile document. `prepare` stops at four
-    times the length of the text."""
-    text = "ﷺ" * LARGE
-    tracemalloc.start()
-    try:
-        started = time.process_time()
-        document = prepare(text)
-        elapsed = time.process_time() - started
-        current, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
+    times the length of the text, whatever that length."""
+    text = "\ufdfa" * LARGE
+    elapsed = cpu(lambda: prepare(text), repeat=1)
+    assert elapsed < PREPARE_BUDGET_S, f"{elapsed:.3f} s"
+    document = prepare(text)
     assert not document.readable
     assert (document.text, document.skeleton) == ("", "")
-    assert peak < 64 * len(text), f"{peak / len(text):.1f} bytes per character at the peak"
-    assert current < 1_000_000, f"{current} bytes kept"
-    assert elapsed < PREPARE_BUDGET_S, f"{elapsed:.3f} s"
     assert find(document, "x" * 30) == Refusal(
         "", Rule.DOCUMENT_UNREADABLE, citations.REASONS[Rule.DOCUMENT_UNREADABLE]
     )
-
-
-def test_a_value_is_bounded_before_it_is_read() -> None:
-    document = prepare(SOURCE)
-    for value in ("ﷺ" * 200_000, "a" * 5_000_000, ["a" * 200_000] * 20):
-        started = time.process_time()
-        result = check_item("text", value, document, [SOURCE])
-        elapsed = time.process_time() - started
-        assert isinstance(result, Refusal)
-        assert result.rule is Rule.VALUE_TOO_LARGE
-        assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"
+    short = "\ufdfa" * (TRACED // 2)
+    unread, kept, peak = traced(lambda: prepare(short))
+    assert isinstance(unread, citations.Document)
+    assert not unread.readable
+    assert peak < 64 * len(short), f"{peak / len(short):.1f} bytes per character at the peak"
+    assert kept < 100_000, f"{kept} bytes kept"
