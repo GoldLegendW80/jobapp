@@ -287,8 +287,13 @@ def accept(
     caller commits that); jobs_service.StaleJobError when `expected_updated_at` is not the job's
     version (the caller rolls back); StatusChangedError (a TargetGoneError) when an unedited
     status proposal was made from another status than the job has now, after marking it
-    invalid (the caller commits that). An edited status is the user's own choice: applied."""
-    proposal = get(db, user_id, proposal_id, lock=True)
+    invalid (the caller commits that). An edited status is the user's own choice: applied.
+
+    Lock order (issue #25): the job first, then the proposal, as PATCH, bulk and undo do (they
+    lock the job, then supersede its pending status proposals). The proposal is read without a
+    lock to find its job, then read again under lock once the job is held: whatever decided it
+    in between (a status change superseding it, a reject) wins, and nothing is applied."""
+    proposal = get(db, user_id, proposal_id)
     if proposal is None:
         return None
     if proposal.status is not ProposalStatus.pending:
@@ -301,13 +306,18 @@ def accept(
     if edited:
         cleaned = _CLEAN[kind](edited_value)
         value: Any = cleaned.value if isinstance(cleaned, JobStatus) else cleaned
-    else:
-        value = proposal.payload.get(_VALUE_KEY[kind])
     job = (
         jobs_service.lock_job(db, user_id, proposal.target_id)
         if proposal.target == TARGET_JOB and proposal.target_id is not None
         else None
     )
+    proposal = get(db, user_id, proposal_id, lock=True)  # still the caller's, filtered by user
+    if proposal is None:
+        return None
+    if proposal.status is not ProposalStatus.pending:
+        raise NotPendingError(proposal)
+    if not edited:
+        value = proposal.payload.get(_VALUE_KEY[kind])
     if job is None:
         _decide(proposal, ProposalStatus.invalid, ProposalDecider.system, now, JOB_GONE)
         db.flush()

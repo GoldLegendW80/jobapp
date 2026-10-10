@@ -309,10 +309,13 @@ def set_status(
     *,
     via: str | None = None,
     extra: dict[str, Any] | None = None,
+    supersede: bool = True,
 ) -> bool:
     """Move a job to `status` with a `status` event. Moving to applied fills `applied_on` the
     first time only. Returns False (and records nothing) when the status is unchanged. `extra`
-    joins the event's data (an accepted agent proposal records its id)."""
+    joins the event's data (an accepted agent proposal records its id). `supersede=False` leaves
+    the job's pending status proposals to the caller, which supersedes those of many jobs at
+    once (supersede_status_proposals)."""
     if job.status == status:
         return False
     data: dict[str, Any] = {"from": job.status.value, "to": status.value}
@@ -325,7 +328,10 @@ def set_status(
     if status is JobStatus.applied and job.applied_on is None:
         job.applied_on = now.date()
     touch(job, now)
-    _supersede_status_proposals(db, job, now, keep=(extra or {}).get("proposal_id"))
+    if supersede:
+        supersede_status_proposals(
+            db, job.user_id, [job.id], now, keep=(extra or {}).get("proposal_id")
+        )
     db.flush()
     return True
 
@@ -333,14 +339,24 @@ def set_status(
 STATUS_MOVED = "The job's status was changed."
 
 
-def _supersede_status_proposals(db: Session, job: Job, now: datetime, keep: Any) -> None:
-    """Pending agent proposals to change this job's status were made for the status it had: once
-    it changes (by hand, in bulk, by mail or by accepting another proposal), they are superseded
-    by the system. `keep` is the proposal being accepted, if any."""
+def supersede_status_proposals(
+    db: Session,
+    user_id: uuid.UUID,
+    job_ids: Sequence[uuid.UUID],
+    now: datetime,
+    keep: Any = None,
+) -> None:
+    """Pending agent proposals to change these jobs' status were made for the status they had:
+    once it changes (by hand, in bulk, by undo, by mail or by accepting another proposal), they
+    are superseded by the system, in one statement whatever the number of jobs. The callers hold
+    the jobs' locks (job first, then its proposals: one lock order, issue #25). `keep` is the
+    proposal being accepted, if any. Undoing the status change later does not bring them back."""
+    if not job_ids:
+        return
     condition = sa.and_(
-        Proposal.user_id == job.user_id,
+        Proposal.user_id == user_id,
         Proposal.target == "job",
-        Proposal.target_id == job.id,
+        Proposal.target_id == sa.any_(sa.literal(list(job_ids), sa.ARRAY(sa.Uuid()))),
         Proposal.kind == "job_status",
         Proposal.status == ProposalStatus.pending,
     )
@@ -1083,7 +1099,7 @@ def bulk_update(
     for job in jobs:
         before_status, before_applied = job.status, job.applied_on
         changed = False
-        if status is not None and set_status(db, job, status, now, via="bulk"):
+        if status is not None and set_status(db, job, status, now, via="bulk", supersede=False):
             previous.append((job, before_status, before_applied))
             changed = True
         if notes_append is not None:
@@ -1091,6 +1107,7 @@ def bulk_update(
                 changed
             )
         results.append(BulkResult(job=job, previous_status=before_status, changed=changed))
+    supersede_status_proposals(db, user_id, [job.id for job, _, _ in previous], now)
     db.flush()
     undo = [
         undo_tokens.Previous(
@@ -1131,9 +1148,12 @@ def undo_bulk(
         if job is None or job.updated_at != p.updated_at:
             skipped.append(p.job_id)
             continue
-        set_status(db, job, p.status, now, via="undo")
+        set_status(db, job, p.status, now, via="undo", supersede=False)
         job.applied_on = p.applied_on
         restored.append(job.id)
+    # Every restored job changed status: the token holds only jobs the bulk moved, and an
+    # unchanged updated_at means they still have the status the bulk gave them.
+    supersede_status_proposals(db, user_id, restored, now)
     db.flush()
     return UndoOutcome(restored=restored, skipped=skipped)
 
