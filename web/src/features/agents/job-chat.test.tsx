@@ -512,4 +512,242 @@ describe("job detail: chat panel", () => {
     // The draft is kept.
     expect(composer()).toHaveValue("Hello");
   });
+
+  /** A chat on RUN_2 being answered, its stream open, with the thread's reads under control. */
+  async function answering() {
+    const state = fakeApi({
+      thread: true,
+      messages: [
+        message(1, "user", "Earlier question"),
+        message(2, "assistant", "Earlier answer"),
+        message(3, "user", "Does it fit?", {
+          run_id: RUN_2,
+          run_status: "running",
+        }),
+      ],
+      active: RUN_2,
+    });
+    const opened = await openChat(`/jobs/${JOB}?chat=open`);
+    await within(opened.panel).findByTestId("chat-live-reply");
+    await waitFor(() => {
+      expect(streamOf(RUN_2)).toBeDefined();
+    });
+    const source = streamOf(RUN_2)!;
+    act(() => {
+      source.open();
+      source.emit("step", {
+        seq: 1,
+        at: "2026-10-10T08:00:01Z",
+        kind: "status",
+        data: { status: "running" },
+      });
+    });
+    const emit = (name: string, data: unknown) => {
+      act(() => {
+        source.emit(name, data);
+      });
+    };
+    const stepOf = (seq: number, kind: string, data: object) => ({
+      seq,
+      at: "2026-10-10T08:00:02Z",
+      kind,
+      data,
+    });
+    return { ...opened, state, source, emit, stepOf };
+  }
+
+  it("shows the answer growing piece by piece, without announcing the pieces", async () => {
+    const { panel, emit, stepOf } = await answering();
+    const live = within(panel).getByTestId("chat-live-reply");
+    const text = within(panel).getByTestId("chat-live-text");
+    const region = within(panel).getByRole("status");
+    expect(text).toHaveTextContent("Thinking");
+    expect(live).toHaveAttribute("aria-busy", "true");
+    expect(live).toHaveAttribute("aria-live", "off");
+    // An intermediate state, then a longer one, then the whole text: each is on screen.
+    emit("partial", { block: 1, after: 1, offset: 0, text: "It fi" });
+    expect(text.textContent).toBe("It fi");
+    expect(live).toHaveAttribute("data-writing", "true");
+    expect(live).toHaveTextContent("Writing");
+    emit("partial", {
+      block: 1,
+      after: 1,
+      offset: 5,
+      text: "ts, with 👩\u200d",
+    });
+    expect(text.textContent).toBe("It fits, with 👩\u200d");
+    emit("partial", { block: 1, after: 1, offset: 17, text: "💻 a gap." });
+    expect(text.textContent).toBe("It fits, with 👩\u200d💻 a gap.");
+    // The same node all along: the bubble is updated in place, not replaced.
+    expect(within(panel).getByTestId("chat-live-text")).toBe(text);
+    // Nothing was announced: the live region speaks once, for the stored answer.
+    expect(region).toBeEmptyDOMElement();
+    // The block's stored text takes over without a change on screen.
+    emit(
+      "step",
+      stepOf(2, "text", { text: "It fits, with 👩\u200d💻 a gap." }),
+    );
+    expect(text.textContent).toBe("It fits, with 👩\u200d💻 a gap.");
+    expect(live).not.toHaveAttribute("data-writing");
+    expect(region).toBeEmptyDOMElement();
+    // The earlier messages never moved or changed.
+    const items = within(panel).getAllByTestId("chat-message");
+    expect(items.map((item) => item.textContent)).toEqual([
+      "You:Earlier question",
+      "Agent:Earlier answer",
+      "You:Does it fit?",
+    ]);
+  });
+
+  it("writes what the agent wrote, with no escaping in the growing text", async () => {
+    const { panel, emit } = await answering();
+    const raw = "a < b && c &lt; d &amp; <b>not bold</b> </message>";
+    emit("partial", { block: 1, after: 1, offset: 0, text: raw });
+    const text = within(panel).getByTestId("chat-live-text");
+    expect(text.textContent).toBe(raw);
+    expect(text.querySelector("b")).toBeNull();
+  });
+
+  it("keeps the answer on screen from the last piece to the stored message", async () => {
+    const { panel, state, emit, stepOf } = await answering();
+    emit("partial", { block: 1, after: 1, offset: 0, text: "It fits" });
+    // The thread's next read is held back: the run is done, the stored answer not here yet.
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get(`*/api/agents/threads/${THREAD}`, async () => {
+        await held;
+        return HttpResponse.json({
+          ...thread,
+          messages: state.messages,
+          messages_truncated: false,
+          active_run_id: state.active,
+        });
+      }),
+    );
+    emit("step", stepOf(2, "text", { text: "It fits well." }));
+    emit("step", stepOf(3, "status", { status: "done" }));
+    // In between: the final text is there, drawn as an answer, and nothing says "writing".
+    expect(within(panel).queryByTestId("chat-live-reply")).toBeNull();
+    let answers = within(panel)
+      .getAllByTestId("chat-message")
+      .filter((item) => item.dataset.role === "assistant");
+    expect(answers.map((item) => item.textContent)).toEqual([
+      "Agent:Earlier answer",
+      "Agent:It fits well.",
+    ]);
+    const settling = answers[1]!;
+    expect(settling).toHaveAttribute("data-settling", "true");
+    const box = settling.querySelector("div")!.className;
+    // The stored answer arrives: one answer, the same box, announced once.
+    state.messages = [
+      ...state.messages.map((m) =>
+        m.id === 3 ? { ...m, run_status: "done" as const } : m,
+      ),
+      message(4, "assistant", "It fits well.", { run_id: RUN_2 }),
+    ];
+    state.active = null;
+    release();
+    await waitFor(() => {
+      expect(
+        within(panel).queryByText("It fits well.")?.closest("li"),
+      ).not.toHaveAttribute("data-settling");
+    });
+    answers = within(panel)
+      .getAllByTestId("chat-message")
+      .filter((item) => item.dataset.role === "assistant");
+    expect(answers.map((item) => item.textContent)).toEqual([
+      "Agent:Earlier answer",
+      "Agent:It fits well.",
+    ]);
+    expect(answers[1]!.querySelector("div")!.className).toBe(box);
+    await waitFor(() => {
+      expect(within(panel).getByRole("status")).toHaveTextContent(
+        "Answer: It fits well.",
+      );
+    });
+  });
+
+  it.each([
+    ["cancelled", "the answer was stopped."],
+    ["failed", "the agent failed."],
+  ] as const)(
+    "drops the unfinished answer when the run is %s in the middle of it",
+    async (status, reason) => {
+      const { panel, state, emit, stepOf } = await answering();
+      emit("partial", { block: 1, after: 1, offset: 0, text: "Half an ans" });
+      expect(within(panel).getByTestId("chat-live-text").textContent).toBe(
+        "Half an ans",
+      );
+      state.messages = state.messages.map((m) =>
+        m.id === 3 ? { ...m, run_status: status } : m,
+      );
+      state.active = null;
+      emit("step", stepOf(2, "status", { status }));
+      expect(within(panel).queryByText("Half an ans")).not.toBeInTheDocument();
+      expect(
+        await within(panel).findByText(new RegExp(`No answer: ${reason}`)),
+      ).toBeInTheDocument();
+      expect(within(panel).queryByTestId("chat-live-reply")).toBeNull();
+      expect(
+        within(panel)
+          .getAllByTestId("chat-message")
+          .map((item) => item.dataset.role),
+      ).toEqual(["user", "assistant", "user"]);
+    },
+  );
+
+  it("follows the growing answer only while the reader is at the bottom", async () => {
+    const { panel, emit } = await answering();
+    const list = within(panel).getByTestId("chat-scroll");
+    // jsdom lays nothing out: give the list a height and a content that grows with the text.
+    let height = 0;
+    Object.defineProperty(list, "clientHeight", { get: () => 400 });
+    Object.defineProperty(list, "scrollHeight", { get: () => height });
+    height = 1000;
+    const grow = (offset: number, text: string) => {
+      height += 60;
+      emit("partial", { block: 1, after: 1, offset, text });
+    };
+    // At the bottom: each piece brings the list to its new bottom.
+    grow(0, "One ");
+    expect(list.scrollTop).toBe(1060);
+    grow(4, "two ");
+    expect(list.scrollTop).toBe(1120);
+    // The reader scrolls up to read an earlier message: the view is left alone.
+    list.scrollTop = 200;
+    grow(8, "three ");
+    grow(14, "four ");
+    expect(list.scrollTop).toBe(200);
+    // Back at the bottom (within a few pixels): it follows again.
+    list.scrollTop = height - 400 - 10;
+    grow(19, "five");
+    expect(list.scrollTop).toBe(height);
+  });
+
+  it("goes to the bottom when the reader sends, even from further up", async () => {
+    fakeApi({
+      thread: true,
+      messages: [
+        message(1, "user", "Earlier question"),
+        message(2, "assistant", "Earlier answer"),
+      ],
+    });
+    const { user, panel } = await openChat(`/jobs/${JOB}?chat=open`);
+    await within(panel).findByText("Earlier answer");
+    const list = within(panel).getByTestId("chat-scroll");
+    Object.defineProperty(list, "clientHeight", { get: () => 400 });
+    Object.defineProperty(list, "scrollHeight", { get: () => 2000 });
+    list.scrollTop = 100;
+    await waitFor(() => {
+      expect(composer()).toBeEnabled();
+    });
+    await user.type(composer(), "A new question{Enter}");
+    await within(panel).findByText("A new question");
+    await waitFor(() => {
+      expect(list.scrollTop).toBe(2000);
+    });
+  });
 });

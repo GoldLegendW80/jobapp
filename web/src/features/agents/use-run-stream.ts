@@ -1,12 +1,18 @@
 /**
  * One run as the panel shows it: its detail (GET /api/agents/runs/{id}, refreshed when a step
  * changes its status or totals) and its steps, streamed live from the start (followRun), with the
- * state of the connection. Reloading the page or losing the network costs nothing: the stream
- * replays what was missed.
+ * state of the connection, and the text of the answer being written (`live`, live-text.ts).
+ * Reloading the page or losing the network costs nothing: the stream replays what was missed.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
+import {
+  applyPartial,
+  applyStep,
+  emptyStream,
+  type LiveText,
+} from "./live-text";
 import {
   FINAL_STATUSES,
   followRun,
@@ -21,6 +27,7 @@ import {
 interface Followed {
   id: string;
   steps: RunStep[];
+  live: LiveText | null;
   connection: Connection;
   gone: boolean;
 }
@@ -40,19 +47,16 @@ export function useRunStream(id: string) {
         change(
           old?.id === id
             ? old
-            : { id, steps: [], connection: "connecting", gone: false },
+            : { id, ...emptyStream, connection: "connecting", gone: false },
         ),
       );
     };
     return followRun(id, {
       onStep: (step) => {
-        // followRun already drops repeats; this guard also holds if a follow ever restarts
-        // from the beginning for the same run (an effect run again).
-        update((old) =>
-          step.seq <= (old.steps.at(-1)?.seq ?? 0)
-            ? old
-            : { ...old, steps: [...old.steps, step] },
-        );
+        // followRun already drops repeats; applyStep also does, if a follow ever restarts
+        // from the beginning for the same run (an effect run again). The stored text replaces
+        // the live one in this same update: no frame shows both, or neither.
+        update((old) => ({ ...old, ...applyStep(old, step) }));
         if (step.kind === "status" || step.kind === "usage") {
           void client.invalidateQueries({ queryKey: runKey(id) });
         }
@@ -62,6 +66,9 @@ export function useRunStream(id: string) {
         ) {
           void client.invalidateQueries({ queryKey: runsKey, exact: true });
         }
+      },
+      onPartial: (part) => {
+        update((old) => ({ ...old, ...applyPartial(old, part) }));
       },
       onConnection: (connection) => {
         update((old) => ({ ...old, connection }));
@@ -84,6 +91,8 @@ export function useRunStream(id: string) {
   return {
     detail,
     steps,
+    /** The answer being written, or null. Always a beginning of the text of its block. */
+    live: current?.live ?? null,
     status,
     connection: current?.connection ?? "connecting",
     gone: current?.gone ?? false,

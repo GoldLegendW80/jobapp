@@ -52,6 +52,7 @@ const TEST_SCRIPTS = [
   ["echo", "Short answer"],
   ["tool", "Reads a job with get_job"],
   ["slow", "Thirty steps, one a second"],
+  ["long_answer", "A long answer, written slowly"],
   ["forbidden", "Tries forbidden tools"],
   ["loop", "Hits the turn limit"],
   ["crash", "The process dies"],
