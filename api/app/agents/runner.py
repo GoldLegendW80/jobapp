@@ -860,11 +860,6 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
     finally:
         if pump is not None:
             pump.cancel()
-            await asyncio.gather(pump, return_exceptions=True)
-        if state.live_text is not None:
-            # Nothing is live once the run ends, whatever the end.
-            with contextlib.suppress(Exception):
-                await asyncio.shield(state.live_text.aclose())
         if scratch is not None:
             await asyncio.to_thread(shutil.rmtree, scratch, True)
         if outcome is not None:
@@ -889,4 +884,10 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
                     "live_failures": state.live_text.failures if state.live_text else None,
                 },
             )
+        if state.live_text is not None:
+            # Nothing is live once the run ends, whatever the end. After the end is recorded:
+            # the stream stops reading the buffer of a run that has ended, and nothing here may
+            # keep the final status from being written.
+            with contextlib.suppress(Exception):
+                await asyncio.shield(state.live_text.aclose())
         secret = None
