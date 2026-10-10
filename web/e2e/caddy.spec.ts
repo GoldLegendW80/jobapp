@@ -25,7 +25,7 @@ const evidence = path.join(
  *     pnpm --dir web exec playwright test caddy.spec.ts
  * E2E_COMPOSE_DIR names the deploy directory on that host (default jobapp, under its home).
  *
- * Through the public quick tunnel (from any network, Cloudflare in front):
+ * Through the public Funnel URL (from any network, Tailscale Funnel in front):
  *   E2E_CADDY_URL=$(./deploy.sh url) E2E_COMPOSE_SSH=jetson E2E_EVIDENCE=task8 \
  *     pnpm --dir web exec playwright test caddy.spec.ts
  */

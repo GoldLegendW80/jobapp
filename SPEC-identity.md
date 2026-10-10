@@ -53,7 +53,7 @@ All under `/api/auth` and `/api/admin`; JSON; errors are `{"detail": "..."}` wit
 | DELETE /api/admin/invites/{id} | admin | revoke an unused invite |
 
 Rules:
-- Cookie `jobapp_session`: HttpOnly, Secure when served over https (the tunnel), SameSite=Lax, Path=/, Max-Age 30 days, sliding (refreshed at most once a day).
+- Cookie `jobapp_session`: HttpOnly, Secure when served over https (Tailscale Funnel), SameSite=Lax, Path=/, Max-Age 30 days, sliding (refreshed at most once a day).
 - CSRF: every non-GET request must carry header `X-Requested-With: jobapp` (set by the frontend client); together with SameSite=Lax and JSON-only bodies this blocks cross-site forms.
 - Rate limit: 5 failed logins per email per 15 minutes and 20 per IP per 15 minutes → 429 with `Retry-After`. Same message for unknown email and wrong password, and comparable timing (hash a dummy password for unknown emails).
 - Passwords: 10 to 128 characters, not equal to the email, checked against a small bundled list of the most common passwords.
@@ -89,7 +89,7 @@ web/e2e/identity.spec.ts
 - Unit: password rules, token hashing, cookie flags, rate limiter windows.
 - Integration (real Postgres): every endpoint, every rule above, including the edge cases: expired, used, revoked and malformed tokens; case-insensitive email; unicode names; concurrent accept of the same invite (only one wins); disabling a user kills an open session on its next request; last admin protection; 429 and recovery after the window; session expiry and sliding refresh; logout of one session leaves the other browsers signed in; password change ends the other sessions; CSRF header missing → 403; SQL-looking and very long inputs.
 - Isolation: a fixture with two users proves cross-user access returns 404, not 403, on admin and user routes.
-- End to end (Playwright, through Caddy, locally and on the Jetson through the tunnel): first admin from the CLI link, invite a friend, friend accepts in a second browser context, both sign in, friend cannot open `/admin/users`, admin disables friend and the friend's next click lands on `/login`, password reset link, sign out. Screenshots of every page in light and dark, desktop and 375px.
+- End to end (Playwright, through Caddy, locally and on the Jetson through the public URL): first admin from the CLI link, invite a friend, friend accepts in a second browser context, both sign in, friend cannot open `/admin/users`, admin disables friend and the friend's next click lands on `/login`, password reset link, sign out. Screenshots of every page in light and dark, desktop and 375px.
 
 ## Boundaries
 
@@ -99,7 +99,7 @@ web/e2e/identity.spec.ts
 
 ## Success criteria
 
-1. Harald creates himself as admin from the CLI on the Jetson and signs in through the public tunnel URL.
+1. Harald creates himself as admin from the CLI on the Jetson and signs in through the public URL.
 2. A friend invited by link signs in from another browser and sees only their own space; `/admin/users` is refused to them.
 3. Every API route except health and the public auth routes returns 401 without a session (an automated test enumerates the routes).
 4. Brute force on login is throttled with 429; disabled users are signed out on their next request.

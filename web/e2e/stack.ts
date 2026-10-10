@@ -106,7 +106,7 @@ export function cliImportProfile(email: string, document: unknown): string {
 /**
  * Delete the sign in attempts recorded for these emails, so the next spec or a rerun within 15
  * minutes is not throttled by this one: every local browser reaches the api from one address
- * (Caddy's peer), and every browser of the Mac from one address through the tunnel, which allows
+ * (Caddy's peer), and every browser of the Mac from one address through Funnel, which allows
  * 20 failures per 15 minutes. On a local scratch stack it deletes every row of the emails; on the
  * Jetson (E2E_ADMIN_VIA_DEPLOY) it runs `./deploy.sh admin unlock <email>`, which deletes their
  * failures in the window (tests/e2e_jetson.sh removes the rest at the end). Returns how many rows

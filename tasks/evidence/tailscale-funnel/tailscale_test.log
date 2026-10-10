@@ -1,0 +1,22 @@
+
+== compose config: tailscale pinned, userspace, unprivileged, unpublished, in the tunnel profile
+   ok: pinned by version and digest (arm64), TS_USERSPACE, cap_drop ALL, no-new-privileges, no port, no device, state on tsstate, serve.json read only, 128m, restart, healthcheck, after a healthy caddy
+   ok: TS_AUTHKEY and TS_HOSTNAME come from .env; no service is privileged or has NET_ADMIN or /dev/net/tun; no cloudflared
+   ok: without TS_ lines (the key removed after the first login) the config validates: empty key, hostname jobapp
+   ok: tailscale only with --profile tunnel: a plain compose.yml or the dev stack never joins the tailnet
+   ok: serve.json: HTTPS 443 only, / proxied to http://caddy:8080 (the tunnel listener), Funnel on for that port only
+
+== caddy :8080 trusts Funnel's X-Forwarded-For only; :80 trusts nothing
+   ok: :8080, as Funnel sends it: the api sees the visitor 198.51.100.7 and https; Cf-Connecting-Ip, X-Real-Ip, True-Client-Ip, Forwarded ignored
+   ok: :8080 reads a list right to left (trusted_proxies_strict): a value prepended by a visitor never wins
+   ok: :8080 without X-Forwarded-For: the peer 172.22.0.2, never a forged Cf-Connecting-Ip
+   ok: :80 trusts no header: the peer 172.22.0.2 and http, whatever the client sends
+
+== live: the pinned image without an auth key never comes up
+   ok: running unprivileged, every capability dropped, no device, 128 MiB
+   ok: tailscale status --json: BackendState NeedsLogin (no key, no saved login)
+   ok: TUN false: userspace networking, no /dev/net/tun
+   ok: compose up --wait fails after 150s: application not healthy after 2m30s
+   ok: the logs say why: 'To authenticate, visit ...', then 'failed to auth tailscale', and the container restarts (2 so far)
+
+All 14 checks passed.

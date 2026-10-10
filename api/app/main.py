@@ -120,7 +120,7 @@ def create_app(
                 extra={
                     "request_id": request_id,
                     # The visitor's address: uvicorn --proxy-headers takes it from the single
-                    # X-Forwarded-For that caddy sets (Cf-Connecting-Ip through the tunnel).
+                    # X-Forwarded-For that caddy sets (Funnel's, on the tunnel listener).
                     "client": request.client.host if request.client else None,
                     "method": request.method,
                     "path": log_path(request),

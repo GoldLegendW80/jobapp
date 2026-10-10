@@ -35,7 +35,7 @@ def _parser() -> argparse.ArgumentParser:
     create.add_argument(
         "--base-url",
         default="",
-        help="public URL of the app (for example https://abc.trycloudflare.com) to print a "
+        help="public URL of the app (for example https://jobapp.taild83d16.ts.net) to print a "
         "full link instead of a path",
     )
     return parser
