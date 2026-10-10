@@ -19,6 +19,19 @@
 # one transaction and rolls back on failure; for data, the predeploy dump named in the log
 # restores with ops/db.sh restore-live.
 #
+# Issue #16. From the sync on, any command that fails (the pre-migration backup included) puts the
+# previous files and :latest tags back first (trap restore_previous ERR), so ~/jobapp never stays
+# synced to a commit whose images were not built. The trap is cleared once the migrations have
+# run: a smoke that fails after them does NOT roll back, on purpose. The new code is up and
+# migrated by then, the previous code may not run on the migrated schema, and a downgrade is a
+# decision for a human (the log names the predeploy dump). The failed run is red and
+# .deployed-commit keeps the previous commit. When the api is not running at deploy time,
+# jobapp-api:previous keeps an older image than the saved tree; the log warns about it.
+#
+# Issue #18. The Preflight checks the syntax of ~/jobapp/.env with ops/env_check.sh before
+# anything is built: a malformed line fails the run at once with "line N: invalid (reason)",
+# never the value, instead of docker compose refusing the file in the middle of the build.
+#
 # Security: the runner has the host Docker socket, which is root on the Jetson. Only this private
 # repository's deploy.yml from main reaches it; it must never be offered to forks or public
 # repositories.
@@ -81,6 +94,10 @@ jobs:
           } >> "$GITHUB_ENV"
           [[ "$(uname -m)" == "aarch64" ]] || { echo "::error::not on the Jetson"; exit 1; }
           [[ -f "$app/.env" ]] || { echo "::error::$app/.env is missing: the first deploy is ./deploy.sh from the Mac"; exit 1; }
+          # Issue #18: compose must be able to read .env; each bad line is named, never printed.
+          bash ops/env_check.sh "$app/.env" "$app/.env" ||
+            { echo "::error::$app/.env has invalid lines (above): fix them on the Jetson, nothing was built"; exit 1; }
+          echo ".env: syntax ok"
           docker info --format 'docker {{.ServerVersion}}'
           docker compose version
           free_gb="$(df -Pk "$HOME" | awk 'NR==2 {print int($4 / 1024 / 1024)}')"
@@ -105,6 +122,10 @@ jobs:
             echo "nothing deployed in $APP yet: no images to keep"
           fi
           bash ops/previous.sh save-tree "$APP" "$tree"
+          # Issue #16: no running api means jobapp-api:previous is whatever an older deploy left.
+          if [[ -f "$APP/compose.yml" && -z "$(cd "$APP" && $COMPOSE ps -q --status running api 2>/dev/null)" ]]; then
+            echo "::warning::the api is not running: jobapp-api:previous is older than the saved tree, so a rollback would pair them"
+          fi
           echo "::endgroup::"
 
           echo "::group::sync ~/jobapp from $COMMIT"
@@ -124,6 +145,11 @@ jobs:
               fi
             done
           }
+
+          # Issue #16 (header): from here to the migrations, a failing command restores the
+          # previous files and tags before the step fails. Explicit `exit 1` paths below call
+          # restore_previous themselves (or rollback); an exit does not fire ERR.
+          trap 'echo "::error::a deploy command failed: restoring the previous files and tags"; restore_previous' ERR
 
           echo "::group::build (the running stack is untouched until this succeeds)"
           for svc in api caddy; do
@@ -147,7 +173,7 @@ jobs:
             out="$(BACKUP_DIR="$BACKUPS/deploys" BACKUP_KEEP=10 bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}")"
             echo "$out"
             dump="$(sed -n 's/^backup=//p' <<<"$out" | tail -n 1)"
-            [[ -n "$dump" ]] || { echo "::error::ops/db.sh reported no backup file"; exit 1; }
+            [[ -n "$dump" ]] || { echo "::error::ops/db.sh reported no backup file"; restore_previous; exit 1; }
           else
             echo "no jobapp_pgdata volume: first start, nothing to back up"
           fi
@@ -172,6 +198,9 @@ jobs:
           $COMPOSE exec -T api alembic upgrade head || rollback "alembic upgrade head failed"
           echo "alembic current: $($COMPOSE exec -T api alembic current 2>/dev/null | tr -d '\r')"
           echo "::endgroup::"
+
+          # Migrated: from here a failure does not roll back (header, issue #16).
+          trap - ERR
 
           echo "::group::smoke (tests/jetson_smoke.sh, quick mode, on the Jetson)"
           cd "$GITHUB_WORKSPACE"
