@@ -1,0 +1,54 @@
+Recorded on 2026-10-10 on the Mac: claude-agent-sdk 0.2.163 and its bundled Claude Code CLI
+2.1.286, ClaudeSDKClient with include_partial_messages=True, ANTHROPIC_BASE_URL pointed at a
+local stub of the Messages API (no model, a made up key). The stub answered a first request with
+a thinking block, a text block in four deltas and a tool call, and the request after the tool
+result with a text block in three deltas. What the CLI printed, in order (SE = stream_event):
+
+SYSTEM init
+SYSTEM status
+  SE message_start
+  SE content_block_start 0 thinking
+SYSTEM thinking_tokens
+  SE content_block_delta 0 thinking_delta   (carries the thinking text)
+SYSTEM thinking_tokens
+  SE content_block_delta 0 thinking_delta
+  SE content_block_delta 0 signature_delta
+ASSISTANT [thinking]
+  SE content_block_stop 0
+  SE content_block_start 1 text
+  SE content_block_delta 1 text_delta 'Let me '
+  SE content_block_delta 1 text_delta 'look: caf'
+  SE content_block_delta 1 text_delta (an accent, a space, the first half of an emoji sequence)
+  SE content_block_delta 1 text_delta (its second half, ' ok.')
+ASSISTANT [text]            the complete block, before its content_block_stop
+  SE content_block_stop 1
+  SE content_block_start 2 tool_use
+  SE content_block_delta 2 input_json_delta
+  SE content_block_delta 2 input_json_delta
+ASSISTANT [tool_use]
+  SE content_block_stop 2
+USER [tool_result]          before message_delta and message_stop
+  SE message_delta
+  SE message_stop
+SYSTEM status
+  SE message_start
+  SE content_block_start 0 text
+  SE content_block_delta 0 text_delta 'The final '
+  SE content_block_delta 0 text_delta 'answer, in '
+  SE content_block_delta 0 text_delta 'three pieces.'
+ASSISTANT [text]
+  SE content_block_stop 0
+  SE message_delta
+  SE message_stop
+RESULT success 'The final answer, in three pieces.'
+
+The API's ping events are not forwarded. The same run with interrupt() sent after the first
+text delta ended like this (no content_block_stop, no message_stop):
+
+  SE content_block_start 1 text
+  SE content_block_delta 1 text_delta 'Let me '
+ASSISTANT [text 'Let me ']  the text so far, as a complete message
+USER
+RESULT error_during_execution is_error=True terminal_reason=aborted_streaming
+
+The first recording, adapted for replay, is api/app/agents/fake_streams/partial_recorded.json.

@@ -401,7 +401,8 @@ jobs:
         if: matrix.group == 'apps'
         run: python3 .github/scripts/synthetic_jobs.py "$RUNNER_TEMP/synthetic/data"
       # Jobs on the synthetic import and the map; agents A2 to A4 on the fake backend (a run
-      # streaming, reload and network loss, cancel, forbidden tools, triage proposals, job chat).
+      # streaming, reload and network loss, cancel, forbidden tools, triage proposals, job chat),
+      # and the answer appearing while it is written (issue #33, partial messages replayed).
       - name: Jobs, map and agent journeys
         if: matrix.group == 'apps'
         working-directory: web
@@ -410,7 +411,8 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/apps
         run: >-
           pnpm exec playwright test jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts
-          agents-triage.spec.ts agents-chat.spec.ts --workers=1 --reporter=list,html
+          agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts
+          --workers=1 --reporter=list,html
       - name: Stack logs
         if: failure()
         run: |

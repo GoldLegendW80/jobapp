@@ -1,0 +1,644 @@
+{
+ "description": "Recorded on 2026-10-10 from the pinned Claude Code CLI (2.1.286, claude-agent-sdk 0.2.163) run with include_partial_messages against a local stub of the Messages API, no model: one message with a thinking block, a text block in four deltas (an accent and an emoji sequence cut between deltas) and a tool call, then the final answer in three deltas. Every stream_event is the CLI's own line. Adapted for replay: session id, model and tool name made placeholders, the init message cut down to the fields the other streams hold, the tool result left out (the fake backend runs the tool), and a pause added before each text delta.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "7a2eff90-193c-4520-885b-a2c0ddd5ab6e",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_job"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "{session_id}",
+    "uuid": "e2d243bc-f333-4ede-8ea1-0a79dc5a035e"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_start",
+     "message": {
+      "id": "msg_rec_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "{model}",
+      "content": [],
+      "stop_reason": null,
+      "stop_sequence": null,
+      "usage": {
+       "input_tokens": 100,
+       "output_tokens": 1
+      }
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "fe76ff65-20cb-4c3e-ba5e-e614770c984d",
+    "ttft_ms": 4
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "thinking",
+      "thinking": "",
+      "signature": ""
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "56618992-cf53-4af9-8686-90cc2cd5be90"
+   }
+  },
+  {
+   "message": {
+    "type": "system",
+    "subtype": "thinking_tokens",
+    "estimated_tokens": 7,
+    "estimated_tokens_delta": 7,
+    "session_id": "{session_id}",
+    "uuid": "d8b1ec26-adbc-41d9-ae0d-62d9061eb0c7"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "thinking_delta",
+      "thinking": "SECRET-THOUGHT part one, "
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "e7815b6c-f632-4a98-bd84-2e976940298a"
+   }
+  },
+  {
+   "message": {
+    "type": "system",
+    "subtype": "thinking_tokens",
+    "estimated_tokens": 10,
+    "estimated_tokens_delta": 3,
+    "session_id": "{session_id}",
+    "uuid": "96e39004-220b-40f9-b135-8832205d537a"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "thinking_delta",
+      "thinking": "part two."
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "7169e43d-548c-4ef6-b75f-02c78d5cccc8"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "signature_delta",
+      "signature": "c2ln"
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "937df1b1-0657-456b-848b-f47514863e47"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "message": {
+     "id": "msg_rec_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "SECRET-THOUGHT part one, part two.",
+       "signature": "c2ln"
+      }
+     ],
+     "stop_reason": null,
+     "stop_sequence": null,
+     "usage": {
+      "input_tokens": 100,
+      "output_tokens": 1
+     },
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "{session_id}",
+    "uuid": "4c033942-aaac-4dc1-8de5-0ff1c0c0fe03"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 0
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "a7368512-eda3-447b-97da-81827ecfdec8"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 1,
+     "content_block": {
+      "type": "text",
+      "text": ""
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "4a1e64cc-a254-4fed-848d-c66003f446e0"
+   }
+  },
+  {
+   "sleep": 0.3
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 1,
+     "delta": {
+      "type": "text_delta",
+      "text": "Let me "
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "ffa29143-85a9-4cc3-bc38-18bf659f3ab2"
+   }
+  },
+  {
+   "sleep": 0.3
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 1,
+     "delta": {
+      "type": "text_delta",
+      "text": "look: caf"
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "09a8c18c-0987-4bb0-bdfe-b869b1a3165c"
+   }
+  },
+  {
+   "sleep": 0.3
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 1,
+     "delta": {
+      "type": "text_delta",
+      "text": "é 👩‍"
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "ef0cec5c-61db-4500-ad52-a034b52b6839"
+   }
+  },
+  {
+   "sleep": 0.3
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 1,
+     "delta": {
+      "type": "text_delta",
+      "text": "💻 ok."
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "5daf4a3c-fe3c-46fb-a984-9211f3c178b8"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "message": {
+     "id": "msg_rec_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "Let me look: café 👩‍💻 ok."
+      }
+     ],
+     "stop_reason": null,
+     "stop_sequence": null,
+     "usage": {
+      "input_tokens": 100,
+      "output_tokens": 1
+     },
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "{session_id}",
+    "uuid": "c189a86a-794b-4056-ae02-5830cc39b454"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 1
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "786a404d-2a0b-4990-b3b5-d65f8b615de2"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 2,
+     "content_block": {
+      "type": "tool_use",
+      "id": "toolu_rec_1",
+      "name": "mcp__app__get_job",
+      "input": {}
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "38e1e25a-683f-43f4-9cdc-1c374e3e0ebf"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 2,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "{\"job_"
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "d01e1bae-10bb-429e-9751-439ba4e0c17c"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 2,
+     "delta": {
+      "type": "input_json_delta",
+      "partial_json": "id\": \"{job_id}\"}"
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "a539dbcc-f637-437a-91df-8a610e0f4577"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "message": {
+     "id": "msg_rec_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_rec_1",
+       "name": "mcp__app__get_job",
+       "input": {
+        "job_id": "{job_id}"
+       }
+      }
+     ],
+     "stop_reason": null,
+     "stop_sequence": null,
+     "usage": {
+      "input_tokens": 100,
+      "output_tokens": 1
+     },
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "{session_id}",
+    "uuid": "889963dc-9018-40dc-ac80-7810e8a31e7e",
+    "tool_use_meta": [
+     {
+      "id": "toolu_rec_1",
+      "display_name": "Get Thing",
+      "server_display_name": "app"
+     }
+    ]
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 2
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "fa2eb8cf-48bd-4162-bc76-67efc8bcbbde"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "tool_use",
+      "stop_sequence": null
+     },
+     "usage": {
+      "output_tokens": 30
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "7a06db4d-63e5-406d-a426-8b39e99570b4"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_stop"
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "4c15b569-0c86-4758-9540-e28d52fa7f8f"
+   }
+  },
+  {
+   "message": {
+    "type": "system",
+    "subtype": "status",
+    "status": "requesting",
+    "session_id": "{session_id}",
+    "uuid": "ccc44d91-0e0a-4139-9501-a1d7797e2a79"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_start",
+     "message": {
+      "id": "msg_rec_2",
+      "type": "message",
+      "role": "assistant",
+      "model": "{model}",
+      "content": [],
+      "stop_reason": null,
+      "stop_sequence": null,
+      "usage": {
+       "input_tokens": 100,
+       "output_tokens": 1
+      }
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "39c5a70b-2fa5-42a7-8e69-a810c61db922",
+    "ttft_ms": 2
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_start",
+     "index": 0,
+     "content_block": {
+      "type": "text",
+      "text": ""
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "ad63891d-403c-4615-b1e5-0488a6aa4e34"
+   }
+  },
+  {
+   "sleep": 0.3
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": "The final "
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "e9f1ecf9-0c6f-444f-9871-75da4f137ea7"
+   }
+  },
+  {
+   "sleep": 0.3
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": "answer, in "
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "9fc4e1ed-df13-4383-959d-2e2160460ca5"
+   }
+  },
+  {
+   "sleep": 0.3
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_delta",
+     "index": 0,
+     "delta": {
+      "type": "text_delta",
+      "text": "three pieces."
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "609bfefc-635b-4322-8186-c3b5343fa7a4"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "message": {
+     "id": "msg_rec_2",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "The final answer, in three pieces."
+      }
+     ],
+     "stop_reason": null,
+     "stop_sequence": null,
+     "usage": {
+      "input_tokens": 100,
+      "output_tokens": 1
+     },
+     "context_management": null
+    },
+    "parent_tool_use_id": null,
+    "session_id": "{session_id}",
+    "uuid": "ebc4d84f-f897-40d5-a504-8e70fbd889cf"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "content_block_stop",
+     "index": 0
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "1531a82e-ba18-426f-ba39-1c757acaf58e"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_delta",
+     "delta": {
+      "stop_reason": "end_turn",
+      "stop_sequence": null
+     },
+     "usage": {
+      "output_tokens": 30
+     }
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "5c76763f-0f63-444e-8ec5-3b1bd47514f3"
+   }
+  },
+  {
+   "message": {
+    "type": "stream_event",
+    "event": {
+     "type": "message_stop"
+    },
+    "session_id": "{session_id}",
+    "parent_tool_use_id": null,
+    "uuid": "244a006d-dd39-478e-81e7-b8e4a084ffed"
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 1640,
+    "duration_api_ms": 1612,
+    "num_turns": 2,
+    "session_id": "{session_id}",
+    "uuid": "e4eb1f23-e35b-46c5-8801-f8a8168d4575",
+    "result": "The final answer, in three pieces.",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.002,
+    "terminal_reason": "completed",
+    "usage": {
+     "input_tokens": 200,
+     "output_tokens": 60,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "permission_denials": []
+   }
+  }
+ ]
+}

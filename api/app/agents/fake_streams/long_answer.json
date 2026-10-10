@@ -1,0 +1,89 @@
+{
+ "description": "One long answer after a thinking block, for watching the text grow (issue #33): with partial messages it is written in pieces of 6 characters every 0.1 s, about 13 s in all; without them it arrives whole. The thinking block holds text that must never leave the worker.",
+ "partial": {
+  "chars": 6,
+  "sleep": 0.1
+ },
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_job"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "sleep": 1.0
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000101",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_long_101",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "PRIVATE-REASONING: weigh the years against the tools.",
+       "signature": "fake-signature"
+      },
+      {
+       "type": "text",
+       "text": "You asked: {message}\nHere is a long answer, written slowly so that it can be watched while it grows.\n\n- First, the posting asks for Python and for agents that call tools: both are in the profile.\n- Second, it asks for evaluation work: comparisons such as a < b && b < c are fine in plain text.\n- Third, a few characters that take more than one byte: café, déjà vu, 日本語, 😀 and 👩‍💻.\n\nOne gap stays: the posting wants five years and the profile shows fewer. I would rather say so than round up.\n\nWhat to check before applying: the location, the contract, and whether the team works in English. That is the whole answer, every character of it exactly once."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 260,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 14000,
+    "duration_api_ms": 13500,
+    "num_turns": 1,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "result": "You asked: {message}\nHere is a long answer, written slowly so that it can be watched while it grows.\n\n- First, the posting asks for Python and for agents that call tools: both are in the profile.\n- Second, it asks for evaluation work: comparisons such as a < b && b < c are fine in plain text.\n- Third, a few characters that take more than one byte: café, déjà vu, 日本語, 😀 and 👩‍💻.\n\nOne gap stays: the posting wants five years and the profile shows fewer. I would rather say so than round up.\n\nWhat to check before applying: the location, the contract, and whether the team works in English. That is the whole answer, every character of it exactly once.",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0312,
+    "usage": {
+     "input_tokens": 1200,
+     "output_tokens": 260,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}

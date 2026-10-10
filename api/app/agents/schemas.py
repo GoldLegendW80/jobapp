@@ -71,6 +71,10 @@ class RunOut(BaseModel):
     input_tokens: int | None
     output_tokens: int | None
     cost_usd: float | None
+    # The kind of credential the run used: `cost_usd` was billed with an API key, and is an
+    # estimate at API prices, billed to nobody, with a subscription. Null when it was not
+    # recorded (older runs, runs that failed before reading it).
+    credential_kind: CredentialKind | None = None
     cancel_requested: bool
     created_at: datetime
     started_at: datetime | None

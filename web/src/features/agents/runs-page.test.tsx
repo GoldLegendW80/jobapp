@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -410,5 +410,227 @@ describe("/runs/:id, the run panel", () => {
     source.emit("step", step(1, "text", { text: "once" }));
     const steps = await within(panel).findByRole("list", { name: "Steps" });
     expect(within(steps).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("shows the answer while it is written, then the stored step in its place", async () => {
+    agentsApi();
+    renderApp(`/runs/${ID}`);
+    const panel = await screen.findByTestId("run-panel");
+    const source = FakeEventSource.last!;
+    act(() => {
+      source.open();
+      source.emit("step", step(1, "status", { status: "running" }));
+      source.emit("step", step(2, "thinking"));
+    });
+    const steps = await within(panel).findByRole("list", { name: "Steps" });
+    const region = within(panel)
+      .getAllByRole("status")
+      .find((node) => node.getAttribute("aria-live") === "polite")!;
+    expect(region).toHaveTextContent("Thinking");
+    // An empty block is not an answer yet: no item for it.
+    act(() => {
+      source.emit("partial", { block: 1, after: 2, offset: 0, text: "" });
+    });
+    expect(within(steps).getAllByRole("listitem")).toHaveLength(2);
+    act(() => {
+      source.emit("partial", { block: 1, after: 2, offset: 0, text: "It fi" });
+    });
+    let items = within(steps).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(items[2]).toHaveAttribute("data-live", "true");
+    expect(items[2]).toHaveAttribute("aria-busy", "true");
+    expect(items[2]).toHaveAttribute("data-kind", "text");
+    expect(items[2]).toHaveTextContent("AnswerIt fi");
+    // The title is announced once, the growing text never.
+    expect(region).toHaveTextContent(/^Answer$/);
+    const before = items[2]!.querySelector("p:last-of-type")!.className;
+    act(() => {
+      source.emit("partial", {
+        block: 1,
+        after: 2,
+        offset: 5,
+        text: "ts well",
+      });
+    });
+    items = within(steps).getAllByRole("listitem");
+    expect(items[2]).toHaveTextContent("AnswerIt fits well");
+    expect(region).toHaveTextContent(/^Answer$/);
+    // The stored step replaces it in one render: one answer, the same markup, not live.
+    act(() => {
+      source.emit("step", step(3, "text", { text: "It fits well." }));
+    });
+    items = within(steps).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(items[2]).not.toHaveAttribute("data-live");
+    expect(items[2]).not.toHaveAttribute("aria-busy");
+    expect(items[2]).toHaveTextContent("AnswerIt fits well.");
+    expect(items[2]!.querySelector("p:last-of-type")!.className).toBe(before);
+    expect(region).toHaveTextContent(/^Answer$/);
+    // A delta that arrives after the complete message changes nothing.
+    act(() => {
+      source.emit("partial", { block: 1, after: 2, offset: 12, text: "!!" });
+    });
+    expect(within(steps).getAllByRole("listitem")).toHaveLength(3);
+    expect(panel).not.toHaveTextContent("!!");
+  });
+
+  it("drops the unfinished answer when the run is cancelled in the middle of it", async () => {
+    agentsApi();
+    renderApp(`/runs/${ID}`);
+    const panel = await screen.findByTestId("run-panel");
+    const source = FakeEventSource.last!;
+    act(() => {
+      source.open();
+      source.emit("step", step(1, "status", { status: "running" }));
+      source.emit("partial", {
+        block: 1,
+        after: 1,
+        offset: 0,
+        text: "Half an ans",
+      });
+    });
+    expect(await within(panel).findByText("Half an ans")).toBeInTheDocument();
+    act(() => {
+      source.emit("step", step(2, "status", { status: "cancelled" }));
+      source.emit("end", {});
+    });
+    expect(within(panel).queryByText("Half an ans")).not.toBeInTheDocument();
+    const steps = within(panel).getByRole("list", { name: "Steps" });
+    expect(
+      within(steps)
+        .getAllByRole("listitem")
+        .map((item) => item.dataset.kind),
+    ).toEqual(["status", "status"]);
+  });
+
+  /**
+   * Issue #33: a run on a subscription is not billed, so its amount is an estimate; with an API
+   * key it is the cost; a run with no recorded kind is worded neutrally.
+   */
+  describe("the amount, by the kind of credential the run used", () => {
+    const done = (changes: Partial<Run>) =>
+      run({
+        status: "done",
+        input_tokens: 43100,
+        output_tokens: 1116,
+        cost_usd: 0.193,
+        finished_at: "2026-10-10T08:00:15Z",
+        duration_s: 13.9,
+        ...changes,
+      });
+    const usage = step(3, "usage", {
+      input_tokens: 43100,
+      output_tokens: 1116,
+      cost_usd: 0.193,
+    });
+
+    async function openRun(detail: Run) {
+      agentsApi({ detail });
+      renderApp(`/runs/${ID}`);
+      const panel = await screen.findByTestId("run-panel");
+      const source = FakeEventSource.last!;
+      source.open();
+      source.emit("step", step(1, "status", { status: "running" }));
+      source.emit("step", usage);
+      const steps = await within(panel).findByRole("list", { name: "Steps" });
+      const metrics = panel.querySelector("dl")!;
+      await waitFor(() => {
+        expect(metrics).toHaveTextContent("$0.193");
+      });
+      return { panel, steps, metrics };
+    }
+
+    it("is the cost with an API key", async () => {
+      const { panel, steps, metrics } = await openRun(
+        done({ credential_kind: "anthropic_api_key" }),
+      );
+      expect(within(metrics).getByText("Cost")).toBeInTheDocument();
+      expect(metrics).toHaveTextContent("Cost$0.193");
+      expect(within(panel).queryByTestId("cost-note")).not.toBeInTheDocument();
+      expect(
+        within(steps).getByText("43,100 in, 1,116 out, $0.193"),
+      ).toBeInTheDocument();
+      expect(panel).not.toHaveTextContent(/estimate|not billed/i);
+    });
+
+    it("is an estimate at API prices, not billed, with a subscription", async () => {
+      const { panel, steps, metrics } = await openRun(
+        done({ credential_kind: "claude_subscription" }),
+      );
+      expect(metrics).toHaveTextContent("Estimate at API prices$0.193");
+      expect(within(metrics).queryByText("Cost")).not.toBeInTheDocument();
+      expect(within(panel).getByTestId("cost-note")).toHaveTextContent(
+        "This run used your Claude subscription, which is not billed per run. The estimate is what the same tokens cost at API prices.",
+      );
+      expect(
+        within(steps).getByText(
+          "43,100 in, 1,116 out, $0.193 estimated at API prices, not billed",
+        ),
+      ).toBeInTheDocument();
+      expect(panel.textContent).not.toMatch(/[–—]| - /);
+    });
+
+    it.each([
+      ["null", { credential_kind: null }],
+      ["absent, from an older api", {}],
+    ])(
+      "is worded neutrally when the kind is %s",
+      async (_name, changes: Partial<Run>) => {
+        const { panel, steps, metrics } = await openRun(done(changes));
+        expect(metrics).toHaveTextContent("Amount at API prices$0.193");
+        expect(within(metrics).queryByText("Cost")).not.toBeInTheDocument();
+        expect(within(panel).getByTestId("cost-note")).toHaveTextContent(
+          "The kind of credential this run used was not recorded, so whether this amount was billed is not known.",
+        );
+        expect(
+          within(steps).getByText("43,100 in, 1,116 out, $0.193 at API prices"),
+        ).toBeInTheDocument();
+        expect(metrics).not.toHaveTextContent(/estimate|not billed/i);
+      },
+    );
+
+    it("says only that there is no amount yet while the run has none", async () => {
+      agentsApi({
+        detail: run({ credential_kind: "claude_subscription" }),
+      });
+      renderApp(`/runs/${ID}`);
+      const panel = await screen.findByTestId("run-panel");
+      const metrics = panel.querySelector("dl")!;
+      expect(metrics).toHaveTextContent("CostNone yet");
+      expect(within(panel).queryByTestId("cost-note")).not.toBeInTheDocument();
+    });
+
+    it("qualifies each amount of the list", async () => {
+      const ids = ["a", "b", "c", "d"].map(
+        (letter) => `44444444-4444-4444-8444-00000000000${letter}`,
+      );
+      agentsApi({
+        runs: [
+          done({ id: ids[0], credential_kind: "anthropic_api_key" }),
+          done({ id: ids[1], credential_kind: "claude_subscription" }),
+          done({ id: ids[2], credential_kind: null }),
+          run({
+            id: ids[3],
+            status: "failed",
+            credential_kind: "claude_subscription",
+          }),
+        ],
+      });
+      renderApp("/runs");
+      const list = await screen.findByRole("list", { name: "Runs" });
+      const costs = within(list)
+        .getAllByTestId("run-cost")
+        .map((node) => node.textContent);
+      expect(costs).toEqual([
+        "$0.193",
+        "$0.193Estimate, not billed",
+        "$0.193At API prices",
+        "None yet",
+      ]);
+      expect(
+        screen.getByText(/On a Claude subscription the amount is an estimate/),
+      ).toBeInTheDocument();
+      expect(document.body.textContent).not.toMatch(/[–—]| - /);
+    });
   });
 });

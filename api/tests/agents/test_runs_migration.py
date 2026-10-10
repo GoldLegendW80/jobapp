@@ -75,6 +75,7 @@ def test_schema(at_head: sa.Engine) -> None:
         "input_tokens",
         "output_tokens",
         "cost_usd",
+        "credential_kind",  # added by 0010 (issue #33)
         "cancel_requested_at",
         "started_at",
         "finished_at",

@@ -207,6 +207,71 @@ def test_triage_definition() -> None:
         triage.validate_input({"message": "free text"})
 
 
+def test_triage_prompt_asks_for_the_second_person_in_everything_the_user_reads() -> None:
+    """Issue #33: the real runs wrote the note about the user in the third person ("he needs no
+    permit", "his location list") while the summary said "you". The prompt now settles the
+    voice for the three texts the user reads: the note, the status reason and the summary."""
+    prompt = definitions.get("triage", "production").system_prompt
+    rule = next(line for line in prompt.splitlines() if line.startswith("- Voice:"))
+    assert "second person" in rule
+    assert '"you" and "your"' in rule
+    # The three texts are named, each by the tool or the step that writes it.
+    for text in ("note of propose_note", "reason of propose_status", "final summary"):
+        assert text in rule, text
+    # The third person is ruled out by name, the forms the real runs used included.
+    for word in ('"the candidate"', '"the user"', '"he"', '"she"', '"they"', "the user's name"):
+        assert word in rule, word
+    assert "Never speak about the user in the third person" in rule
+    # And each step that writes for the user says so where it is read.
+    steps = {line[:2]: line for line in prompt.splitlines() if line[:2] in ("5.", "6.", "7.")}
+    assert 'addressed to the user ("you")' in steps["5."]
+    assert "Its reason is one sentence addressed to the user." in steps["6."]
+    assert steps["7."] == "7. End with a summary of at most two sentences, addressed to the user."
+    # The example wording handed to the model is itself in the second person.
+    assert '"not in your profile"' in prompt
+    assert "not in the profile" not in prompt
+    for dash in ("–", "—", " - "):
+        assert dash not in prompt
+
+
+def test_triage_tools_are_what_they_were() -> None:
+    """The voice is a matter of the prompt only: the agent's tools, model and limits and what
+    the tools accept did not change with it."""
+    triage = definitions.get("triage", "production")
+    assert triage.tools == ("get_job", "get_profile_section", "propose_note", "propose_status")
+    assert (triage.model, triage.max_turns, triage.effort) == ("claude-opus-5-5", 12, "medium")
+    assert triage.default_message == "Assess this job posting for me."
+
+
+@pytest.mark.parametrize(
+    "name", ["triage", "triage_invalid", "triage_never_apply", "triage_injection"]
+)
+def test_recorded_triage_texts_speak_to_the_user(name: str) -> None:
+    """The recorded streams show the voice the prompt asks for: what the user reads (notes,
+    reasons, summaries) never speaks of the user in the third person."""
+    import re
+
+    from app.agents import fake_backend
+
+    third_person = re.compile(r"\b(the candidate|the user|the profile|he|she|his|him)\b", re.I)
+    read_by_the_user: list[str] = []
+
+    def collect(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in ("text", "reason", "result") and isinstance(item, str):
+                    read_by_the_user.append(item)
+                collect(item)
+        elif isinstance(value, list):
+            for item in value:
+                collect(item)
+
+    collect(fake_backend.load_script(name))
+    assert read_by_the_user
+    for text in read_by_the_user:
+        assert not third_person.search(text), text
+
+
 # --- the tools one by one ------------------------------------------------------------------------
 
 

@@ -2,12 +2,16 @@
  * Chat about one job (agents A4): a Chat button on job detail opens a side panel (a full screen
  * sheet on a phone) holding the conversation with the chat agent. The conversation lives in the
  * database, one thread per job: it survives a reload, and so does the panel being open (`?chat`
- * in the URL). Each message starts a run of the chat agent, whose answer streams in live through
- * the run stream (useRunStream) until the stored answer replaces it.
+ * in the URL). Each message starts a run of the chat agent, whose answer appears while it is
+ * written (issue #33: useRunStream's `live` text, a few updates a second) until the stored answer
+ * replaces it, in the same bubble markup and the same render, so nothing flickers or jumps.
  *
  * Messages are plain text (no markdown is rendered). While an answer is pending the Send button
  * is disabled (the server would answer 409); the draft can still be written. Screen readers hear
- * each new answer once, through one polite live region, not every streamed step.
+ * each new answer once, through one polite live region, never the pieces of a growing answer
+ * (its bubble is aria-busy and not live). The list follows the newest text only while the reader
+ * is at its bottom (use-stick-to-bottom.ts). Nothing here is animated but the small spinners,
+ * which stand still under prefers-reduced-motion.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -20,6 +24,7 @@ import {
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -56,8 +61,10 @@ import {
   type ChatMessage,
   type ThreadDetail,
 } from "./chat-api";
+import { lastText } from "./live-text";
 import { FINAL_STATUSES, runsKey, type RunStep } from "./runs-api";
 import { useRunStream } from "./use-run-stream";
+import { useStickToBottom } from "./use-stick-to-bottom";
 
 const CHAT_PARAM = "chat";
 
@@ -116,39 +123,83 @@ function activity(steps: RunStep[], queued: boolean): string {
   return "Thinking";
 }
 
-/** The answer being written: the newest text the run streamed, or what it is doing. */
-function LiveReply({ runId, onEnd }: { runId: string; onEnd: () => void }) {
-  const { steps, status } = useRunStream(runId);
+/** One bubble for a stored message and for the answer being written: the same box. */
+const BUBBLE =
+  "max-w-[85%] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap";
+const AGENT_BUBBLE = `${BUBBLE} rounded-bl-sm bg-muted`;
+
+/**
+ * The answer being written: its text as it grows (the run's live text), else the newest text the
+ * run stored, else what the agent is doing. Once the run is done the final text stays, drawn as
+ * a stored answer, until the thread's read brings the stored one and this unmounts: the answer
+ * is never absent in between. A run that failed or was cancelled stores no answer, so its
+ * unfinished text goes, and the message above says why there is none.
+ */
+function LiveReply({
+  runId,
+  onEnd,
+  onGrow,
+}: {
+  runId: string;
+  onEnd: () => void;
+  onGrow: () => void;
+}) {
+  const { steps, live, status } = useRunStream(runId);
   const ended = status !== undefined && FINAL_STATUSES.has(status);
   const endRef = useRef(onEnd);
+  const growRef = useRef(onGrow);
   useEffect(() => {
     endRef.current = onEnd;
+    growRef.current = onGrow;
   });
   useEffect(() => {
     if (ended) endRef.current();
   }, [ended]);
-  if (ended) return null;
-  const texts = steps.filter(
-    (step) => step.kind === "text" && typeof step.data.text === "string",
-  );
-  const text = texts.at(-1)?.data.text as string | undefined;
+  const stored = lastText(steps);
+  const writing = live?.text ? live.text : undefined;
+  const text = writing ?? stored;
+  // Before paint: the list is at its bottom again in the frame that shows the new text.
+  useLayoutEffect(() => {
+    growRef.current();
+  }, [text, ended]);
+  if (ended) {
+    if (status !== "done" || stored === undefined) return null;
+    return (
+      <li
+        data-testid="chat-message"
+        data-role="assistant"
+        data-settling="true"
+        className="flex flex-col items-start gap-1"
+      >
+        <span className="sr-only">Agent:</span>
+        <div className={AGENT_BUBBLE}>{stored}</div>
+      </li>
+    );
+  }
   return (
     <li
       data-testid="chat-live-reply"
-      className="flex flex-col items-start gap-1"
+      data-writing={writing ? "true" : undefined}
+      className="relative flex flex-col items-start gap-1"
       aria-busy="true"
+      aria-live="off"
     >
       <span className="sr-only">The agent is answering:</span>
-      <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-sm break-words whitespace-pre-wrap">
+      <div className={AGENT_BUBBLE} data-testid="chat-live-text">
         {text ?? (
           <span className="text-muted-foreground">
             {activity(steps, status === "queued")}
           </span>
         )}
       </div>
-      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-        <LoaderCircle aria-hidden="true" className="size-3 animate-spin" />
-        {text ? activity(steps, false) : "Answering"}
+      {/* Out of the flow, in the space the list keeps free below its last item: the bubble
+          does not move when this line goes. */}
+      <span className="absolute top-full mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+        <LoaderCircle
+          aria-hidden="true"
+          className="size-3 animate-spin motion-reduce:animate-none"
+        />
+        {writing ? "Writing" : text ? activity(steps, false) : "Answering"}
       </span>
     </li>
   );
@@ -180,12 +231,11 @@ function MessageItem({
     >
       <span className="sr-only">{mine ? "You:" : "Agent:"}</span>
       <div
-        className={cn(
-          "max-w-[85%] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap",
+        className={
           mine
-            ? "rounded-br-sm bg-primary text-primary-foreground"
-            : "rounded-bl-sm bg-muted",
-        )}
+            ? cn(BUBBLE, "rounded-br-sm bg-primary text-primary-foreground")
+            : AGENT_BUBBLE
+        }
       >
         {message.text || (
           <span className="text-muted-foreground">The agent gave no text.</span>
@@ -252,6 +302,7 @@ function ChatBody({ job }: { job: JobDetail }) {
   const [confirming, setConfirming] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const announced = useRef<number | null | undefined>(undefined);
+  const { follow } = useStickToBottom(list);
 
   const credential = useQuery({
     queryKey: modelCredentialQueryKey,
@@ -299,12 +350,12 @@ function ChatBody({ job }: { job: JobDetail }) {
     }
   }, [detail]);
 
-  // Keep the newest message in view.
+  // Keep the newest message in view, for a reader who is at the bottom (always after sending:
+  // `follow(true)` below). Someone reading further up is left there.
   const liveSteps = activeRun ?? "";
-  useEffect(() => {
-    const node = list.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [messages.length, liveSteps]);
+  useLayoutEffect(() => {
+    follow();
+  }, [follow, messages.length, liveSteps]);
 
   const send = useMutation({
     mutationFn: async (text: string) => {
@@ -317,6 +368,7 @@ function ChatBody({ job }: { job: JobDetail }) {
     },
     onSuccess: async ({ target, sent }) => {
       setDraft("");
+      follow(true); // the reader just sent: show the message and the answer to come
       const id = target.id;
       // A read of the thread may be in flight, started before the message was stored (on the
       // first message it starts as soon as the thread exists, next to the send). Its answer is
@@ -436,7 +488,11 @@ function ChatBody({ job }: { job: JobDetail }) {
           )}
         </div>
       ) : null}
-      <div ref={list} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div
+        ref={list}
+        data-testid="chat-scroll"
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+      >
         {loading ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
@@ -461,7 +517,9 @@ function ChatBody({ job }: { job: JobDetail }) {
                 Older messages are not shown.
               </p>
             ) : null}
-            <ol aria-label="Messages" className="flex flex-col gap-4">
+            {/* pb-6: room for the "Writing" line under the answer being written, kept when
+                it goes so the list does not shift. */}
+            <ol aria-label="Messages" className="flex flex-col gap-4 pb-6">
               {messages.map((message) => (
                 <MessageItem
                   key={message.id}
@@ -470,7 +528,12 @@ function ChatBody({ job }: { job: JobDetail }) {
                 />
               ))}
               {activeRun ? (
-                <LiveReply key={activeRun} runId={activeRun} onEnd={refresh} />
+                <LiveReply
+                  key={activeRun}
+                  runId={activeRun}
+                  onEnd={refresh}
+                  onGrow={follow}
+                />
               ) : null}
             </ol>
           </>

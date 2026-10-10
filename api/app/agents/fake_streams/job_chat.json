@@ -1,5 +1,9 @@
 {
  "description": "The chat agent answering one message: reads the job, then answers, echoing the message and how many earlier messages its prompt held ({history}, {omitted} left out).",
+ "partial": {
+  "chars": 4,
+  "sleep": 0.15
+ },
  "steps": [
   {
    "message": {

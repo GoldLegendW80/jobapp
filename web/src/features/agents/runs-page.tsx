@@ -32,7 +32,13 @@ import { formatDateTime } from "@/features/jobs/format";
 import { describeError, errorDetail } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
-import { elapsed, formatCost, formatDuration, formatTokens } from "./format";
+import {
+  costQualifier,
+  elapsed,
+  formatCost,
+  formatDuration,
+  formatTokens,
+} from "./format";
 import { RunPanel, StatusBadge } from "./run-panel";
 import { useNow } from "./use-now";
 import {
@@ -52,6 +58,7 @@ const TEST_SCRIPTS = [
   ["echo", "Short answer"],
   ["tool", "Reads a job with get_job"],
   ["slow", "Thirty steps, one a second"],
+  ["long_answer", "A long answer, written slowly"],
   ["forbidden", "Tries forbidden tools"],
   ["loop", "Hits the turn limit"],
   ["crash", "The process dies"],
@@ -204,7 +211,14 @@ function RunRow({ run, now }: { run: Run; now: number }) {
         </span>
         <span className="grid grid-cols-3 gap-3 text-sm tabular-nums sm:w-96">
           <span>{formatTokens(run.input_tokens, run.output_tokens)}</span>
-          <span>{formatCost(run.cost_usd)}</span>
+          <span data-testid="run-cost">
+            {formatCost(run.cost_usd)}
+            {run.cost_usd !== null && costQualifier(run.credential_kind) ? (
+              <span className="block text-xs font-normal text-muted-foreground">
+                {costQualifier(run.credential_kind)}
+              </span>
+            ) : null}
+          </span>
           <span>{formatDuration(elapsed(run, now))}</span>
         </span>
       </Link>
@@ -240,7 +254,9 @@ export function RunsPage() {
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Agent runs</h1>
         <p className="text-muted-foreground">
-          Every run of your agents, with what it cost and how long it took.
+          Every run of your agents, with its tokens, its cost and how long it
+          took. On a Claude subscription the amount is an estimate at API
+          prices: nothing is billed per run.
         </p>
       </header>
       {testAgents.length ? <TestRunCard agents={testAgents} /> : null}

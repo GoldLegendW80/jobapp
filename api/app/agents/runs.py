@@ -26,7 +26,13 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.agents.models import FINAL_STATUSES, AgentEvent, AgentRun, RunStatus
+from app.agents.models import (
+    FINAL_STATUSES,
+    AgentEvent,
+    AgentRun,
+    CredentialKind,
+    RunStatus,
+)
 
 # At most this many queued or running runs per user at once; a further start answers 429.
 ACTIVE_PER_USER = 4
@@ -206,6 +212,18 @@ def claim(db: Session, run_id: uuid.UUID, now: datetime) -> AgentRun | None:
     if claimed is None:
         return None
     return db.get(AgentRun, run_id, populate_existing=True)
+
+
+def record_credential_kind(db: Session, run_id: uuid.UUID, kind: CredentialKind) -> None:
+    """The kind of credential the run is about to use (never the secret): what says later
+    whether its cost was billed (an API key) or is an estimate (a subscription). The caller
+    commits."""
+    db.execute(
+        sa.update(AgentRun)
+        .where(AgentRun.id == run_id)
+        .values(credential_kind=kind)
+        .execution_options(synchronize_session=False)
+    )
 
 
 @dataclass(frozen=True)
