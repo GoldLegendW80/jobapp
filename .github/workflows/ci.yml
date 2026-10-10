@@ -87,7 +87,7 @@ jobs:
           start=$SECONDS
           # shellcheck disable=SC2086 # the paths of the shard split on purpose
           uv run --frozen pytest ${{ matrix.shard.paths }} -m "not docker" -p no:cacheprovider \
-            -n auto --cov --cov-report= --durations=10 \
+            -n auto --cov --cov-report= --cov-fail-under=0 --durations=10 \
             --junitxml=${{ runner.temp }}/junit-api.xml
           echo "pytest ${{ matrix.shard.name }} (not docker, -n auto): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
       - name: Upload coverage data
