@@ -271,6 +271,53 @@ def test_a_failing_store_gives_the_block_up_and_the_next_block_tries_again(
     assert "one" not in caplog.text
 
 
+def test_a_block_that_begins_while_the_store_is_written_is_published_whole() -> None:
+    """The run does not wait for the store: while one write is in flight the block can end and
+    the next one begin. Nothing of one block may land in the other's buffer."""
+
+    class Slow(RecordingStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gate = asyncio.Event()
+            self.held = 0
+
+        async def open(
+            self, run_id: uuid.UUID, block: int, after: int, previous: int | None
+        ) -> None:
+            if block == 1:
+                self.held += 1
+                await self.gate.wait()  # the write of block 1 is in flight
+            await super().open(run_id, block, after, previous)
+
+    async def go() -> Slow:
+        store = Slow()
+        seq = [3]
+        text = live.LiveText(store, RUN, lambda: seq[0], flush_s=0, timeout_s=5)
+        pump = asyncio.create_task(text.pump())
+        text.feed(start(0, text=""))
+        text.feed(delta(0, "first block"))
+        while not store.held:  # noqa: ASYNC110
+            await asyncio.sleep(0)
+        # Meanwhile the request is retried: a new message, a new text block.
+        seq[0] = 5
+        text.feed({"type": "message_start"})
+        text.feed(start(0, text=""))
+        text.feed(delta(0, "second block"))
+        store.gate.set()
+        for _ in range(50):
+            await asyncio.sleep(0.001)
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+        return store
+
+    store = asyncio.run(go())
+    written = store.written()
+    assert written[1] == "first block"  # what block 1 held when its write began, no more
+    assert written[text_block := max(written)] == "second block"
+    assert store.meta[RUN] == (text_block, 5)
+    assert store.text == {(RUN, text_block): b"second block"}
+
+
 def test_a_slow_store_times_out_instead_of_holding_the_run() -> None:
     class Stuck(RecordingStore):
         async def append(self, run_id: uuid.UUID, block: int, text: str) -> None:

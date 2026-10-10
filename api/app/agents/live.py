@@ -318,33 +318,38 @@ class LiveText:
 
     async def _sync(self) -> None:
         """Bring the store to what the run is writing now. A failure gives the block's live text
-        up (the buffer could miss a piece) and leaves a clear owed, paid by the next call."""
+        up (the buffer could miss a piece) and leaves a clear owed, paid by the next call.
+
+        The run goes on while this waits for the store (`feed` never waits), so the block, its
+        text and whether it is open are read once, here, and used as read: a block that begins
+        meanwhile set the wake flag again and is handled by the next call."""
         async with self._lock:
-            touched = self._stored_block if self._stored_block is not None else self.block
+            block, after, text, is_open = self.block, self._after, self._text, self._open
+            touched = self._stored_block if self._stored_block is not None else block
             try:
                 async with asyncio.timeout(self._timeout_s):
                     if self._owed is not None:
                         await self._store.clear(self._run_id, self._owed)
                         self._owed = None
-                    if not self._open:
+                    if not is_open:
                         if self._stored_block is not None:
-                            block, self._stored_block = self._stored_block, None
-                            await self._store.clear(self._run_id, block)
+                            stored, self._stored_block = self._stored_block, None
+                            await self._store.clear(self._run_id, stored)
                         return
-                    if self._broken == self.block:
+                    if self._broken == block:
                         return
-                    if self._stored_block != self.block:
-                        previous, self._stored_block = self._stored_block, self.block
+                    if self._stored_block != block:
+                        previous, self._stored_block = self._stored_block, block
                         self._stored = 0
-                        await self._store.open(self._run_id, self.block, self._after, previous)
-                    safe = publishable(self._text, self._secret, self._redacted)
+                        await self._store.open(self._run_id, block, after, previous)
+                    safe = publishable(text, self._secret, self._redacted)
                     if len(safe) > self._stored:
                         piece, self._stored = safe[self._stored :], len(safe)
-                        await self._store.append(self._run_id, self.block, piece)
+                        await self._store.append(self._run_id, block, piece)
             except Exception as exc:
                 self.failures += 1
-                if self._open:
-                    self._broken = self.block
+                if is_open:
+                    self._broken = block
                 self._stored_block = None
                 if self._owed is None:
                     self._owed = touched
