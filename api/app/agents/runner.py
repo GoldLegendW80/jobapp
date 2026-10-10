@@ -361,9 +361,13 @@ def result_text(content: Any) -> str:
 
 
 def size_of(args: Any) -> int:
-    """How large a tool call's arguments are: the characters of their compact JSON. What a
+    """How large a tool call's arguments are: the characters of their compact JSON (of their
+    text, for something JSON cannot write: a size is never a reason to fail a run). What a
     private run stores of them."""
-    return len(json.dumps(args, ensure_ascii=False, default=str, separators=(",", ":")))
+    try:
+        return len(json.dumps(args, ensure_ascii=False, default=str, separators=(",", ":")))
+    except (TypeError, ValueError):
+        return len(str(args))
 
 
 def result_size(content: Any) -> tuple[int, int]:
@@ -528,8 +532,9 @@ def make_gate(
     the next tool call, whatever the tool, is answered with a stop (`continue: false`, a
     documented hook answer). The tool does not run and Claude Code ends the turn itself, in
     order, with no further request (measured on the pinned CLI: the result's terminal reason is
-    `hook_stopped`). A hook that merely never answered would not hold: Claude Code treats a
-    hook it cannot reach as passed and goes on."""
+    `hook_stopped`). A hook that merely never answered would not hold: when the wait for it
+    ends without an answer (the client is closed), Claude Code goes on as if nothing had been
+    asked (measured too)."""
 
     async def gate(
         input_data: dict[str, Any], tool_use_id: str | None, context: Any

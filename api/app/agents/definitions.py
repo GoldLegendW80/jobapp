@@ -329,8 +329,9 @@ AGENTS: dict[str, AgentDefinition] = {
 def register(definition: AgentDefinition) -> AgentDefinition:
     """Add an agent of another module to the ones this runtime knows (module docstring). Called
     at import, in every process that must know the agent: the worker to run it, the api to
-    refuse it and to keep its text out of the live stream. The same definition again is fine (a
-    module imported twice); another one under a taken name fails loudly."""
+    refuse it and to keep its text out of the live stream. The same definition again is fine;
+    another one under a taken name fails loudly, an agent of this file included (and so does
+    a module run a second time that defines its hooks anew: register once, at import)."""
     name = definition.name
     if not NAME_PATTERN.fullmatch(name) or len(name) > AGENT_NAME_MAX:
         raise ValueError(f"not an agent name: {name!r}")

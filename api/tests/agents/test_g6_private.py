@@ -639,6 +639,10 @@ def test_sizes() -> None:
     assert runner.size_of({"text": "é日"}) == len('{"text":"é日"}')  # characters, not bytes
     assert runner.size_of(["a", 1]) == len('["a",1]')
     assert runner.size_of({"when": uuid.UUID(int=0)}) > 0  # anything is measured, never raised
+    assert runner.size_of({1j: "a key JSON cannot write"}) == len("{1j: 'a key JSON cannot write'}")
+    loop: list[Any] = []
+    loop.append(loop)
+    assert runner.size_of(loop) == len("[[...]]")
     assert runner.result_size(None) == (0, 0)
     assert runner.result_size("plain") == (5, 0)
     assert runner.result_size(
