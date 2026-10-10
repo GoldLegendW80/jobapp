@@ -32,6 +32,9 @@ def delta(index: int, text: str, kind: str = "text_delta", key: str = "text") ->
 
 def make(store: live.LiveStore, seq: list[int] | None = None, **options: Any) -> live.LiveText:
     counter = seq if seq is not None else [3]
+    # No back off after a failed write unless a test asks for one (issue #80; the back off has
+    # its own tests in test_live_hardening.py).
+    options.setdefault("backoff_s", 0)
     return live.LiveText(store, RUN, lambda: counter[0], flush_s=0, **options)
 
 
@@ -494,6 +497,10 @@ class World:
         self.final = False
         self.truth: dict[int, str] = {}
 
+    def feed(self) -> live.LiveFeed:
+        """The feed of one connection."""
+        return live.LiveFeed(self.store, RUN)
+
     def advance(self) -> None:
         if self.position >= len(self.changes):
             return
@@ -570,7 +577,7 @@ def connect(world: World, browser: Browser, stop_after: int | None, budget: list
     """One connection of `browser`, resumed from its Last-Event-ID, cut after `stop_after` events
     (None: until the stream ends). The world advances one change per poll. Returns whether the
     stream reached its end."""
-    feed = live.LiveFeed(world.store, RUN)
+    feed = world.feed()
 
     async def transient(last: int) -> sse.Transient:
         found = await feed.poll(last)
@@ -707,3 +714,118 @@ def test_two_tabs_and_a_slow_client_see_the_same_answer() -> None:
     assert tabs["fast"].live_text() == text
     assert tabs["slow"].live_text() == text
     assert slow_events < len(pieces_of(text, 3)) / 20
+
+
+# --- the same guarantee with a feed that reads only while the run is running (issue #80) --------
+
+
+class GatedWorld(World):
+    """The world as the run stream sees it since issue #80: a feed that starts idle and is told
+    at every read of the log whether the run is running, and reads the store only then."""
+
+    def __init__(self, changes: list[tuple[Any, ...]]) -> None:
+        super().__init__(changes)
+        self.feeds: list[live.LiveFeed] = []
+
+    def feed(self) -> live.LiveFeed:
+        made = live.LiveFeed(self.store, RUN, running=False)
+        self.feeds.append(made)
+        return made
+
+    def running(self) -> bool:
+        statuses = [data.get("status") for _, kind, data in self.steps if kind == "status"]
+        return bool(statuses) and statuses[-1] == "running"
+
+    def page(self, after: int, feed: live.LiveFeed) -> sse.Page:
+        feed.active(self.running())
+        return super().page(after, feed)
+
+
+@pytest.mark.parametrize("clear_first", [True, False])
+@pytest.mark.parametrize("gap", [0, 2, 50])
+def test_gated_reconnect_at_every_event_ends_with_the_full_text_once(
+    clear_first: bool, gap: int
+) -> None:
+    first, second = "Let me read: " + UNICODE, UNICODE * 3
+    changes = answer_world(first, second, 7, clear_first=clear_first, ending="done")
+    whole = Browser()
+    finish(GatedWorld(changes), whole, [], 0)
+    total = len(whole.steps) + len(whole.shown)
+    assert whole.texts() == [first, second]
+    assert len(whole.shown) > 10, "the answer must be seen partial before it is complete"
+    assert any(text != second and second.startswith(text) for _, text in whole.shown)
+    for cut in range(1, total + 1):
+        browser = Browser()
+        world = GatedWorld(changes)
+        finish(world, browser, [cut], gap)
+        assert [step["seq"] for step in browser.steps] == list(range(1, len(world.steps) + 1)), cut
+        assert browser.texts() == [first, second], cut
+        assert browser.live is None, cut
+        assert browser.ended, cut
+        for block, text in browser.shown:
+            assert world.truth[block].startswith(text), cut
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_gated_reconnecting_many_times_at_random_moments(seed: int) -> None:
+    rng = random.Random(seed)  # noqa: S311, a test's dice
+    first = "".join(rng.choice("ab é日\U0001f600\u0301") for _ in range(rng.randint(0, 40)))
+    second = "".join(rng.choice("xyz \n&<>é日\U0001f469\u200d") for _ in range(rng.randint(1, 300)))
+    changes = answer_world(
+        first or "x",
+        second,
+        rng.randint(1, 9),
+        clear_first=rng.random() < 0.5,
+        ending="done",
+    )
+    world, browser = GatedWorld(changes), Browser()
+    cuts = [rng.randint(1, 6) for _ in range(rng.randint(1, 60))]
+    finish(world, browser, cuts, rng.choice([0, 1, 3]))
+    assert [step["seq"] for step in browser.steps] == list(range(1, len(world.steps) + 1))
+    assert browser.texts() == [first or "x", second]
+    assert browser.live is None
+
+
+@pytest.mark.parametrize("ending", ["cancelled", "failed"])
+def test_gated_a_run_stopped_mid_answer_leaves_no_live_text_whatever_the_cut(ending: str) -> None:
+    changes = answer_world("first", UNICODE * 2, 5, clear_first=True, ending=ending)
+    whole = Browser()
+    finish(GatedWorld(changes), whole, [], 0)
+    assert any(block == 2 and text for block, text in whole.shown)  # it was being shown
+    for cut in range(1, len(whole.steps) + len(whole.shown) + 1):
+        browser, world = Browser(), GatedWorld(changes)
+        finish(world, browser, [cut], 1)
+        assert browser.texts() == ["first"], cut  # the cut block is stored nowhere
+        assert browser.live is None, cut
+        assert browser.ended, cut
+        assert not world.feeds[-1]._running, cut  # the last feed was told the run had ended
+
+
+def test_a_feed_reads_the_store_only_while_the_run_is_running() -> None:
+    store = RecordingStore()
+    feed = live.LiveFeed(store, RUN, running=False)
+    asyncio.run(store.open(RUN, 1, 0, None))
+    asyncio.run(store.append(RUN, 1, "stale"))
+    for _ in range(50):  # queued: a buffer left by an earlier life of the key is never read
+        assert poll(feed, 0) == ([], False)
+    assert feed.reads == 0
+    feed.active(True)
+    assert poll(feed, 0) == ([{"block": 1, "after": 0, "offset": 0, "text": "stale"}], False)
+    assert poll(feed, 0) == ([], False)
+    assert feed.reads == 2  # running: every poll reads, block or no block
+    feed.active(False)  # ended
+    asyncio.run(store.append(RUN, 1, " more"))
+    for _ in range(50):
+        assert poll(feed, 0) == ([], False)
+    assert feed.reads == 2
+    # Running again (a status read in between was stale): it continues where it was.
+    feed.active(True)
+    assert poll(feed, 0) == ([{"block": 1, "after": 0, "offset": 5, "text": " more"}], False)
+
+
+def test_a_feed_made_without_options_reads_at_every_poll_as_before() -> None:
+    store = RecordingStore()
+    feed = live.LiveFeed(store, RUN)
+    for _ in range(5):
+        assert poll(feed, 0) == ([], False)
+    assert feed.reads == 5

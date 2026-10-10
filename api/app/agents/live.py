@@ -34,6 +34,26 @@ costs the worker a bounded buffer. Logs carry counts and error types, never text
 
 When Redis fails, the block's live text is given up (the buffer could be missing a piece) and
 the run goes on: the stored step still arrives, as it did before this module existed.
+
+A Redis that does not answer must not slow a run down (issue #80). The runner waits for the store
+in one place only, `close_block`, after each complete text block. One attempt on the store takes
+at most `timeout_s` (STORE_TIMEOUT_S), and after a failed attempt the store is left alone for a
+back off that starts at WRITE_BACKOFF_S and doubles up to WRITE_BACKOFF_MAX_S (back to the start
+after a success): during it nothing is published and `close_block` returns at once. So a run
+waits at most `timeout_s` per attempt, and a run of ten minutes on a Redis that never answers
+makes about thirteen attempts: it loses its live text and about thirteen seconds, not its speed.
+At the end of the run the buffer is cleared whatever the back off (`aclose`, one retry), after
+the run's final status is stored.
+
+Which agents are live, and when the api reads. An agent definition can turn its live text off
+(`AgentDefinition.live_text`, for agents reading private documents): the runner then asks for
+no partial messages and creates no `LiveText`, and the run stream creates no `LiveFeed`, so
+nothing of such a run is ever written to Redis or read from it. A feed reads Redis only while
+its run is running (`LiveFeed.active`, told by the stream at each read of the log): never for a
+run still queued or already ended. While the run is running it reads every POLL_S, block or no
+block. A slower cadence until a block appears was built in issue #80 and given up: the first
+characters of every block would show up to half a second late, to save a few GETs a second on
+a Redis that serves one box.
 """
 
 import asyncio
@@ -60,6 +80,12 @@ STORE_TIMEOUT_S = 1.0
 TTL_S = 20 * 60
 # After a failed read the feed leaves Redis alone for this long.
 READ_BACKOFF_S = 5.0
+# After a failed write the worker leaves Redis alone for this long, doubling at each failure in
+# a row up to the maximum; a success starts over.
+WRITE_BACKOFF_S = 5.0
+WRITE_BACKOFF_MAX_S = 60.0
+# At the end of a run a clear that failed is tried again once, after this pause.
+CLOSE_RETRY_S = 0.2
 KEY = "jobapp:agents:live:"
 
 
@@ -221,7 +247,9 @@ class LiveText:
     `feed(event)` takes the raw API stream event of a StreamEvent and never waits: it only
     updates the buffer. `pump()` (a task of the run) appends what is new to the store, at most
     every `flush_s`. `close_block()` is awaited by the runner after it stored the block's
-    complete `text` step; `aclose()` when the run ends.
+    complete `text` step; `aclose()` when the run ends, once the pump has been cancelled and
+    awaited. After a failed attempt the store is left alone for `backoff_s`, doubling up to
+    `backoff_max_s` (module docstring).
     """
 
     def __init__(
@@ -235,6 +263,10 @@ class LiveText:
         cap: int = 20_000,
         flush_s: float = FLUSH_S,
         timeout_s: float = STORE_TIMEOUT_S,
+        backoff_s: float = WRITE_BACKOFF_S,
+        backoff_max_s: float = WRITE_BACKOFF_MAX_S,
+        close_retry_s: float = CLOSE_RETRY_S,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._store = store
         self._run_id = run_id
@@ -244,6 +276,13 @@ class LiveText:
         self._cap = cap
         self._flush_s = flush_s
         self._timeout_s = timeout_s
+        self._backoff_s = backoff_s
+        self._backoff_max_s = max(backoff_s, backoff_max_s)
+        self._close_retry_s = close_retry_s
+        self._clock = clock
+        # The store is left alone until then, and for how long after the next failure.
+        self._quiet_until = 0.0
+        self._next_backoff = backoff_s
         # What the run is writing.
         self.block = 0
         self._open = False
@@ -261,6 +300,7 @@ class LiveText:
         self.deltas = 0
         self.dropped = 0
         self.failures = 0
+        self.attempts = 0  # times the store was called for
 
     # The run's stream, in order.
 
@@ -272,7 +312,8 @@ class LiveText:
             block = event.get("content_block")
             if isinstance(block, dict) and block.get("type") == "text":
                 index = event.get("index")
-                self._begin(index if isinstance(index, int) else None)
+                # A whole number only: True is an int to Python and equals 1.
+                self._begin(index if type(index) is int else None)
                 first = block.get("text")
                 if isinstance(first, str) and first:
                     self._add(first)
@@ -281,6 +322,7 @@ class LiveText:
             if (
                 self._open
                 and self._index is not None
+                and type(event.get("index")) is int
                 and event.get("index") == self._index
                 and isinstance(delta, dict)
                 and delta.get("type") == "text_delta"
@@ -322,10 +364,19 @@ class LiveText:
 
         The run goes on while this waits for the store (`feed` never waits), so the block, its
         text and whether it is open are read once, here, and used as read: a block that begins
-        meanwhile set the wake flag again and is handled by the next call."""
+        meanwhile set the wake flag again and is handled by the next call.
+
+        After a failure the store is left alone for the back off: this returns at once, the
+        owed clear stays owed, and a block that began meanwhile is published whole afterwards
+        (all of its text is here, nothing of it was written)."""
         async with self._lock:
+            if self._clock() < self._quiet_until:
+                return
             block, after, text, is_open = self.block, self._after, self._text, self._open
             touched = self._stored_block if self._stored_block is not None else block
+            if not self._due(block, is_open, text):
+                return
+            self.attempts += 1
             try:
                 async with asyncio.timeout(self._timeout_s):
                     if self._owed is not None:
@@ -346,18 +397,42 @@ class LiveText:
                     if len(safe) > self._stored:
                         piece, self._stored = safe[self._stored :], len(safe)
                         await self._store.append(self._run_id, block, piece)
+                self._next_backoff = self._backoff_s
+            except asyncio.CancelledError:
+                # Cancelled in the middle of a call (the pump, at the end of the run): what
+                # the store holds is not known any more, so its clear is owed (paid by aclose).
+                self._give_up(block, is_open, touched)
+                raise
             except Exception as exc:
                 self.failures += 1
-                if is_open:
-                    self._broken = block
-                self._stored_block = None
-                if self._owed is None:
-                    self._owed = touched
+                self._give_up(block, is_open, touched)
+                self._quiet_until = self._clock() + self._next_backoff
+                self._next_backoff = min(self._next_backoff * 2, self._backoff_max_s)
                 if self.failures == 1:
                     logger.warning(
                         "live text not published",
                         extra={"run_id": str(self._run_id), "error": type(exc).__name__},
                     )
+
+    def _due(self, block: int, is_open: bool, text: str) -> bool:
+        """Whether the store has anything to be told: a call that would do nothing is not an
+        attempt (and the store is not asked for nothing)."""
+        if self._owed is not None:
+            return True
+        if not is_open:
+            return self._stored_block is not None
+        if self._broken == block:
+            return False
+        if self._stored_block != block:
+            return True
+        return len(publishable(text, self._secret, self._redacted)) > self._stored
+
+    def _give_up(self, block: int, is_open: bool, touched: int) -> None:
+        if is_open:
+            self._broken = block
+        self._stored_block = None
+        if self._owed is None:
+            self._owed = touched
 
     async def pump(self) -> None:
         while True:
@@ -376,7 +451,20 @@ class LiveText:
         await self._sync()
 
     async def aclose(self) -> None:
-        await self.close_block()
+        """The run has ended: nothing may stay live. The back off does not apply (this is the
+        last chance to clear the buffer, and the run's end is already stored), and a clear that
+        fails is tried once more. What still fails expires by itself (TTL_S), and the stream
+        never reads the buffer of a run that has ended."""
+        self._open = False
+        self._index = None
+        self._text = ""
+        for attempt in range(2):
+            self._quiet_until = 0.0
+            await self._sync()
+            if self._owed is None and self._stored_block is None:
+                return
+            if attempt == 0:
+                await asyncio.sleep(self._close_retry_s)
 
 
 # --- api side -----------------------------------------------------------------------------------
@@ -385,7 +473,8 @@ class LiveText:
 class LiveFeed:
     """One connection's view of a run's live text: what `app.sse.replay` polls between its reads
     of the stored steps (module docstring). `stored(kinds)` is told every stored step the
-    connection sends, so the feed knows which blocks are already complete."""
+    connection sends, so the feed knows which blocks are already complete, and `active(running)`
+    whether the run is running: the store is read only then."""
 
     def __init__(
         self,
@@ -395,12 +484,15 @@ class LiveFeed:
         clock: Callable[[], float] = time.monotonic,
         backoff_s: float = READ_BACKOFF_S,
         timeout_s: float = STORE_TIMEOUT_S,
+        running: bool = True,
     ) -> None:
         self._store = store
         self._run_id = run_id
         self._clock = clock
         self._backoff_s = backoff_s
         self._timeout_s = timeout_s
+        self._running = running
+        self.reads = 0  # times the store was read (tests, never logged)
         self._block: int | None = None
         self._bytes = 0
         self._units = 0
@@ -414,9 +506,17 @@ class LiveFeed:
             if kind == "text":
                 self._text_seq = max(self._text_seq, seq)
 
+    def active(self, running: bool) -> None:
+        """Whether the run is running, as the stream just read it. A run that is queued has no
+        block yet and one that has ended has none any more: the store is not read for them."""
+        self._running = running
+
     async def poll(self, last: int) -> sse.Transient:
+        if not self._running:
+            return sse.Transient()
         if self._clock() < self._quiet_until:
             return sse.Transient()
+        self.reads += 1
         try:
             async with asyncio.timeout(self._timeout_s):
                 chunk = await self._store.read(self._run_id, self._block, self._bytes)

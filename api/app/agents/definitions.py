@@ -60,6 +60,11 @@ class AgentDefinition:
     chat: bool = False
     # get_job reads the run's own job only (tools.Scope.job_only).
     bind_job: bool = False
+    # The answer is shown while it is written (app/agents/live.py). False for an agent whose
+    # text must not pass through Redis (ingestion of private documents): the runner then asks
+    # Claude Code for no partial messages and publishes nothing, and the run stream reads
+    # nothing. The stored steps are the same either way.
+    live_text: bool = True
 
     def validate_input(self, raw: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -236,6 +241,13 @@ def available(app_env: str) -> dict[str, AgentDefinition]:
         for name, agent in AGENTS.items()
         if not (agent.test_only and app_env == "production")
     }
+
+
+def live_text(name: str) -> bool:
+    """Whether runs of this agent show their answer live. An agent that no longer exists has
+    nothing live."""
+    found = AGENTS.get(name)
+    return found is not None and found.live_text
 
 
 def get(name: str, app_env: str) -> AgentDefinition:

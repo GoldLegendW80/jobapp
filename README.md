@@ -725,7 +725,8 @@ or repeating a step (`app/sse.py` `replay`, keyed by the step's seq). The answer
 it is written: the worker publishes the text of the block being written to Redis
 (`app/agents/live.py`, nothing per token in Postgres) and the stream relays it as `partial`
 events until the stored `text` step replaces it; `AGENTS_LIVE_TEXT=false` in `.env` (api and
-worker) turns that off, and the answer then arrives when it is complete. `echo` is a test agent,
+worker) turns that off, and the answer then arrives when it is complete; an agent definition can
+turn it off for its own runs (`live_text=False`). `echo` is a test agent,
 refused when `APP_ENV=production`; outside production `/runs` offers a test run with it. `AGENTS_FAKE_BACKEND=true` (test
 stacks and CI only, refused in production) replaces the model with recorded message streams
 (`api/app/agents/fake_streams/`); `tests/compose.a2-e2e.yml` with `AGENTS_FAKE_BACKEND=false` runs
