@@ -6,6 +6,7 @@ import {
   costQualifier,
   describeCost,
   formatCost,
+  kindOfUsage,
 } from "./format";
 
 /**
@@ -25,7 +26,7 @@ describe("the amount of a run, by the kind of credential it used", () => {
     expect(costLabel("claude_subscription")).toBe("Estimate at API prices");
     expect(costQualifier("claude_subscription")).toBe("Estimate, not billed");
     expect(costNote("claude_subscription")).toBe(
-      "This run used your Claude subscription, which is not billed per run. The estimate is what the same tokens cost at API prices.",
+      "This run used your Claude subscription. It is not billed per run, and it counts toward your plan's usage limits. The estimate is what the same tokens cost at API prices.",
     );
     expect(describeCost(0.193, "claude_subscription")).toBe(
       "$0.193 estimated at API prices, not billed",
@@ -60,6 +61,32 @@ describe("the amount of a run, by the kind of credential it used", () => {
     ] as const) {
       expect(describeCost(null, kind)).toBe(formatCost(null));
       expect(describeCost(undefined, kind)).toBe("None yet");
+    }
+  });
+
+  it("says that a subscription run counts toward the plan's usage limits", () => {
+    expect(costNote("claude_subscription")).toContain(
+      "it counts toward your plan's usage limits",
+    );
+    expect(costNote("claude_subscription")).toContain("not billed per run");
+    expect(costNote(null)).not.toContain("usage limits");
+  });
+
+  it("reads the credential kind a usage step carries, and nothing else", () => {
+    expect(kindOfUsage({ credential_kind: "claude_subscription" })).toBe(
+      "claude_subscription",
+    );
+    expect(kindOfUsage({ credential_kind: "anthropic_api_key" })).toBe(
+      "anthropic_api_key",
+    );
+    for (const data of [
+      {},
+      { credential_kind: null },
+      { credential_kind: "something_new" },
+      { credential_kind: 3 },
+      { credential_kind: ["claude_subscription"] },
+    ]) {
+      expect(kindOfUsage(data)).toBeUndefined();
     }
   });
 

@@ -256,7 +256,8 @@ export function RunsPage() {
         <p className="text-muted-foreground">
           Every run of your agents, with its tokens, its cost and how long it
           took. On a Claude subscription the amount is an estimate at API
-          prices: nothing is billed per run.
+          prices: nothing is billed per run, and each run counts toward your
+          plan&apos;s usage limits.
         </p>
       </header>
       {testAgents.length ? <TestRunCard agents={testAgents} /> : null}

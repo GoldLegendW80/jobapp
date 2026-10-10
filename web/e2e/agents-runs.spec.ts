@@ -255,11 +255,15 @@ test("a run on a subscription shows an estimate that is not billed, a run on an 
   await expect(metrics()).toContainText("Estimate at API prices$0.0123");
   await expect(metrics()).not.toContainText("Cost");
   await expect(panel().getByTestId("cost-note")).toHaveText(
-    "This run used your Claude subscription, which is not billed per run. The estimate is what the same tokens cost at API prices.",
+    "This run used your Claude subscription. It is not billed per run, and it counts toward your plan's usage limits. The estimate is what the same tokens cost at API prices.",
   );
   await expect(steps().locator("li[data-kind=usage]")).toContainText(
     "$0.0123 estimated at API prices, not billed",
   );
+  // Issue #80: the note is the description of the amount for assistive technology.
+  await expect(
+    metrics().locator("dd", { hasText: "$0.0123" }),
+  ).toHaveAccessibleDescription(/counts toward your plan's usage limits/);
   await expect(page.locator("body")).not.toContainText(/[–—]| - /);
   await costShots(page, "cost-subscription");
   // The api says which kind each run used, and the earlier run kept its own.
@@ -271,6 +275,15 @@ test("a run on a subscription shows an estimate that is not billed, a run on an 
     }),
   );
   expect(kinds).toEqual(["claude_subscription", "anthropic_api_key"]);
+  // Issue #80: the usage step itself says which kind, next to the amount, never the secret.
+  const stored = (await (
+    await page.request.get(`/api/agents/runs/${id}`)
+  ).json()) as { events: { kind: string; data: Record<string, unknown> }[] };
+  const usage = stored.events.filter((event) => event.kind === "usage");
+  expect(usage.map((event) => event.data.credential_kind)).toEqual([
+    "claude_subscription",
+  ]);
+  expect(JSON.stringify(stored)).not.toContain(token);
 
   await page.goto("/runs");
   const list = page.getByRole("list", { name: "Runs" });
@@ -282,6 +295,6 @@ test("a run on a subscription shows an estimate that is not billed, a run on an 
   );
   await expect(
     page.getByText(/On a Claude subscription the amount is an estimate/),
-  ).toBeVisible();
+  ).toContainText("each run counts toward your plan's usage limits");
   await costShots(page, "cost-list");
 });
