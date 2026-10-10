@@ -19,6 +19,9 @@ the same input, and its cost is bounded (figures in tasks/ingestion/todo.md, "Me
   costs O(length of the value).
 - No regular expression here can backtrack: each is an alternation of plain classes, or a chain
   in which the next character decides alone which branch goes on.
+- Memory: a prepared document keeps N, S and two maps of four bytes per character. A text that
+  unfolds past UNFOLD_MAX times its length is not read, and a value holds at most
+  VALUE_CHARS_MAX characters.
 
     document = citations.prepare(text)                       # once per step
     result = citations.check_item(field_types, value, document, excerpts)
@@ -100,6 +103,7 @@ VALUE_CHARS_MAX = 250_000  # characters of text in one value, all its parts toge
 UNFOLD_MAX = 4  # N of a text is at most that many times its length, plus UNFOLD_SLACK
 UNFOLD_SLACK = 1_000
 CLUSTER_MAX = 32  # characters of one cluster: a longer run of combining marks is cut there
+CLUSTERS_REMEMBERED = 65_536  # distinct clusters whose N is kept while one text is normalised
 SHORT_NAME = 4  # a name whose skeleton is shorter keeps its capitals
 PHONE_DIGITS_MIN = 6
 CHAIN_LINKS_MAX = 12  # months of one range or list sharing a year
@@ -154,7 +158,7 @@ class Rule(StrEnum):
 # One sentence per rule, shown to the agent and to the user. Constants: a reason never quotes
 # the document, the excerpt or the value.
 REASONS: Mapping[Rule, str] = {
-    Rule.DOCUMENT_UNREADABLE: "the document cannot be cited: its text is not readable text",
+    Rule.DOCUMENT_UNREADABLE: "this document cannot be read as text: nothing can be cited from it",
     Rule.NO_CITATION: "no excerpt: every item cites at least one excerpt of the document",
     Rule.TOO_MANY_CITATIONS: f"too many excerpts: an item cites at most {EXCERPTS_MAX}",
     Rule.EXCERPT_NOT_TEXT: "an excerpt is text",
@@ -354,7 +358,9 @@ def _normalise(text: str, casefold: bool, limit: int | None) -> tuple[Normalised
         cluster = text[position:end]
         folded = cache.get(cluster)
         if folded is None:
-            folded = cache[cluster] = _PARTS.findall(_fold(cluster, casefold))
+            folded = _PARTS.findall(_fold(cluster, casefold))
+            if len(cache) < CLUSTERS_REMEMBERED:
+                cache[cluster] = folded
         for part in folded:
             if part in (" ", "\n"):
                 if not pending:
@@ -1006,23 +1012,23 @@ class _DateReader:
         self._ranges(atoms)
 
     def _chain(self, parts: list[int], separators: list[str]) -> list[_Atom]:
-        """The dates of one chain: one date when it has one kind of separator, and the dates on
-        each side of a hyphen when the others are all slashes or all full stops
-        ("01/2019-06/2020"). Anything else is not a date."""
+        """The dates of one chain. One kind of separator: one date. Two kinds, one of them a
+        hyphen: two dates and the sign between them, "01/2019-06/2020" as "2019-01/2020-06".
+        A slash and a hyphen can each be that sign: the reading that leaves fewer numbers on
+        their own is taken, and none when they leave as many. Anything else is not a date."""
         kinds = set(separators)
-        groups: list[tuple[list[int], str]] = []
         if len(kinds) <= 1:
-            groups.append((parts, separators[0] if separators else ""))
-        elif len(kinds) == 2 and "-" in kinds:
-            other = next(kind for kind in kinds if kind != "-")
-            current = [parts[0]]
-            for part, separator in zip(parts[1:], separators, strict=True):
-                if separator == "-":
-                    groups.append((current, other))
-                    current = [part]
-                else:
-                    current.append(part)
-            groups.append((current, other))
+            groups = [(parts, separators[0] if separators else "")]
+        elif kinds == {"-", "."}:
+            groups = _split(parts, separators, "-")
+        elif kinds == {"-", "/"}:
+            both = (_split(parts, separators, "-"), _split(parts, separators, "/"))
+            alone = [sum(len(group) == 1 for group, _ in groups) for groups in both]
+            if alone[0] == alone[1]:
+                return []
+            groups = both[0] if alone[0] < alone[1] else both[1]
+        else:
+            return []
         atoms = []
         for group, separator in groups:
             atom = self._atom(group, separator)
@@ -1092,6 +1098,19 @@ class _DateReader:
             self.short.add((atom.year, atom.month))
         else:
             self.pairs.add((atom.year, atom.month))
+
+
+def _split(parts: list[int], separators: list[str], at: str) -> list[tuple[list[int], str]]:
+    """The numbers of a chain in groups, cut at each separator `at`, each with the separator
+    that holds it together (the other one of the chain)."""
+    inside = next(separator for separator in separators if separator != at)
+    groups = [[parts[0]]]
+    for part, separator in zip(parts[1:], separators, strict=True):
+        if separator == at:
+            groups.append([part])
+        else:
+            groups[-1].append(part)
+    return [(group, inside) for group in groups]
 
 
 def _later(first: _Atom, second: _Atom) -> bool:

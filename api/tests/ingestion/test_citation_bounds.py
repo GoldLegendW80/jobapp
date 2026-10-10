@@ -180,9 +180,14 @@ def test_the_cost_grows_linearly_with_the_document() -> None:
 
 def test_the_memory_of_a_prepared_document_is_bounded(large: str) -> None:
     """N, S and their two maps: a few bytes per character, nothing kept per occurrence and no
-    string made per character, in French as in Chinese (8.7 MB at the peak for the first)."""
+    string made per character, in French as in Chinese (8.7 MB at the peak for the first). The
+    worst is a text in which no two characters are the same: a string per cluster while it is
+    read, and at most CLUSTERS_REMEMBERED of them remembered."""
     chinese = "阿里巴巴集团担任高级软件工程师\uff0c负责搜索平台的开发工作\u3002" * (LARGE // 28)
-    for text in (large, chinese):
+    distinct = "".join(
+        chr(0x4E00 + at % 20_000) + chr(0x0300 + at // 20_000 % 100) for at in range(LARGE // 2)
+    )
+    for text, at_the_peak in ((large, 32), (chinese, 32), (distinct, 96)):
         tracemalloc.start()
         try:
             document = prepare(text)
@@ -190,7 +195,7 @@ def test_the_memory_of_a_prepared_document_is_bounded(large: str) -> None:
         finally:
             tracemalloc.stop()
         assert document.readable
-        assert peak < 32 * len(text), f"{peak / len(text):.1f} bytes per character at the peak"
+        assert peak < at_the_peak * len(text), f"{peak / len(text):.1f} bytes per character"
         assert current < 20 * len(text), f"{current / len(text):.1f} bytes per character kept"
         assert document.origin.itemsize == document.skeleton_index.itemsize == 4
 

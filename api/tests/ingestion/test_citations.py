@@ -2191,3 +2191,30 @@ def test_a_value_that_unfolds_is_refused_whole_never_checked_in_part() -> None:
     assert rule_of(check_item("text", "ﷺ 99999 utilisateurs", LONG, [LONG])) is (
         Rule.NUMBER_NOT_IN_SOURCE
     )
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # a hyphen between two dates written with slashes or full stops
+        ("01/2019-06/2020", {(2019, 1), (2020, 6)}),
+        ("01.2019-06.2020", {(2019, 1), (2020, 6)}),
+        ("15/06/2019-31/01/2020", {(2019, 6), (2020, 1)}),
+        # a slash between two dates written with hyphens: 01/2020 is not one of them
+        ("2019-01/2020-06", {(2019, 1), (2020, 6)}),
+        ("2019-06-15/2020-01-31", {(2019, 6), (2020, 1)}),
+        # days before a date
+        ("12-13/04/2023", {(2023, 4)}),
+        ("7-03/04/2023", set()),
+        # as many numbers left alone either way: no telling which sign stands between the dates
+        ("2019/01-06", set()),
+        ("06-2019/01", set()),
+        ("1/2/3-4", set()),
+        # a slash is not the sign of a range: an ambiguous month stays ambiguous
+        ("2003-06/2005-09", set()),
+        # three kinds of separators
+        ("01.02/2019-06", set()),
+    ],
+)
+def test_a_chain_of_numbers_is_read_as_a_whole(text: str, expected: set[tuple[int, int]]) -> None:
+    assert pairs(text) == expected
