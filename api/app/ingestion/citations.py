@@ -107,6 +107,7 @@ CLUSTERS_REMEMBERED = 65_536  # distinct clusters whose N is kept while one text
 SHORT_NAME = 4  # a name whose skeleton is shorter keeps its capitals
 PHONE_DIGITS_MIN = 6
 CHAIN_LINKS_MAX = 12  # months of one range or list sharing a year
+WRITTEN_MAX = 64  # characters looked at around a number for a superscript glued to it
 
 # --- field types, rules and reasons ---------------------------------------------------------------
 
@@ -643,20 +644,66 @@ def readings(run: str) -> frozenset[str]:
     return frozenset(_decimal(part) for part in parts)
 
 
-def _number_runs(text: str, start: int = 0, end: int | None = None) -> Iterator[tuple[str, bool]]:
-    """Each number run of `text[start:end]`, and whether it is written as a version: what
-    stands before the run counts even when it is before `start`."""
+@lru_cache(maxsize=4096)
+def _compatibility_digit(char: str) -> bool:
+    """Whether `char` is not a digit and NFKC writes it with one: a superscript, a subscript, a
+    fraction, a circled number, the sign of the square metre."""
+    return not char.isdecimal() and any(c.isdecimal() for c in unicodedata.normalize("NFKC", char))
+
+
+def _digit_like(char: str) -> bool:
+    return char.isdecimal() or (char >= "\u00b2" and _compatibility_digit(char))
+
+
+def _written(source: str, first: int, last: int) -> str:
+    """How `source` writes the number at `source[first:last + 1]` when a superscript, a subscript
+    or a fraction is glued to it (ten with a superscript three, three and the sign of a half,
+    the superscript two of a square metre), or "" for a plain number. Such a form is one written
+    thing: ten to the power of three is neither 10 nor 3."""
+    low, high = first, last + 1
+    for _ in range(WRITTEN_MAX):
+        if low > 0 and _digit_like(source[low - 1]):
+            low -= 1
+        elif high < len(source) and _digit_like(source[high]):
+            high += 1
+        else:
+            break
+    glued = source[low:first] + source[last + 1 : high]
+    if _digit_like(source[first]) and not source[first].isdecimal():
+        return source[low:high]
+    return source[low:high] if any(not char.isdecimal() for char in glued) else ""
+
+
+class _Run(NamedTuple):
+    text: str  # the number run, in N
+    version: bool  # it follows "version" or "v"
+    form: str  # how the source writes it with the superscript or fraction glued to it, or ""
+
+
+def _number_runs(
+    text: str,
+    start: int = 0,
+    end: int | None = None,
+    source: str = "",
+    origin: Sequence[int] | None = None,
+) -> Iterator[_Run]:
+    """Each number run of `text[start:end]`. What stands before the run counts even when it is
+    before `start`. With `source` and `origin`, the text that `text` is N of and its map, a run
+    also tells how the source writes it (see `_written`)."""
     for run in _NUMBER_RUN.finditer(text, start, len(text) if end is None else end):
         before = text[max(0, run.start() - _VERSION_WINDOW) : run.start()]
-        yield run.group(), _VERSION_BEFORE.search(before) is not None
+        form = ""
+        if origin is not None:
+            form = _written(source, origin[run.start()], origin[run.end() - 1])
+        yield _Run(run.group(), _VERSION_BEFORE.search(before) is not None, form)
 
 
 def numbers_of(norm: str, start: int = 0, end: int | None = None) -> frozenset[str]:
     """Every reading of every number run of a normalised text, or of `norm[start:end]` read in
     its place when `start` and `end` are the bounds of a span."""
     out: set[str] = set()
-    for run, _ in _number_runs(norm, start, end):
-        out |= readings(run)
+    for run in _number_runs(norm, start, end):
+        out |= readings(run.text)
     return frozenset(out)
 
 
@@ -1358,8 +1405,8 @@ def rule_name(value: str, spans: Sequence[Span]) -> Rule | None:
     ending on token boundaries, its words split where the document splits them. A name whose
     skeleton has fewer than four characters must also be written there with the same capitals.
     Then rule N, since digits in a name are numbers."""
-    norm = normalise(value).text
-    return _name(value, norm, spans) or _Evidence(spans).numbers(norm)
+    norm = normalise(value)
+    return _name(value, norm.text, spans) or _Evidence(spans).numbers(norm, value)
 
 
 def rule_date(value: str, spans: Sequence[Span]) -> Rule | None:
@@ -1377,8 +1424,10 @@ def rule_phone(value: str, spans: Sequence[Span]) -> Rule | None:
 def rule_numbers(value: str, spans: Sequence[Span]) -> Rule | None:
     """Rule N: each number run of the value is a number run of a span, or has a reading in
     common with one. A run that follows "version" or "v", in the value or in the document, is
-    a version and is compared as text: "1.10" is not "1.1"."""
-    return _Evidence(spans).numbers(normalise(value).text)
+    a version and is compared as text: "1.10" is not "1.1". A number with a superscript, a
+    subscript or a fraction glued to it is one written form: ten with a superscript three in a
+    document supports neither 10 nor 3, and a value may hold it only as a span writes it."""
+    return _Evidence(spans).numbers(normalise(value), value)
 
 
 class _Evidence:
@@ -1390,7 +1439,8 @@ class _Evidence:
         self._dates: DateFacts | None = None
         self._phones: frozenset[str] | None = None
         self._runs: frozenset[str] | None = None
-        self._readings: frozenset[str] = frozenset()
+        self._forms: frozenset[str] = frozenset()
+        self._readings: set[str] = set()
 
     def dates(self) -> DateFacts:
         if self._dates is None:
@@ -1408,21 +1458,32 @@ class _Evidence:
             self._phones = frozenset(found)
         return self._phones
 
-    def numbers(self, norm: str) -> Rule | None:
-        """Rule N for the normalised text of a value."""
+    def numbers(self, norm: Normalised, value: str) -> Rule | None:
+        """Rule N for a value and its normalised text."""
         if self._runs is None:
             runs: set[str] = set()
+            forms: set[str] = set()
             found: set[str] = set()
             for span in self.spans:
-                for run, version in _number_runs(span.document.text, span.start, span.end):
-                    runs.add(run)
-                    if not version:
-                        found |= readings(run)
-            self._runs, self._readings = frozenset(runs), frozenset(found)
-        for run, version in _number_runs(norm):
-            if run in self._runs:
-                continue
-            if version or not readings(run) & self._readings:
+                document = span.document
+                for run in _number_runs(
+                    document.text, span.start, span.end, document.source, document.origin
+                ):
+                    if run.form:
+                        forms.add(run.form)  # a number with a superscript is not that number
+                        continue
+                    runs.add(run.text)
+                    if not run.version:
+                        found |= readings(run.text)
+            self._runs, self._forms, self._readings = frozenset(runs), frozenset(forms), found
+        for run in _number_runs(norm.text, source=value, origin=norm.origin):
+            if run.form:
+                # Written with a superscript or a fraction: only as a span writes it.
+                if run.form not in self._forms:
+                    return Rule.NUMBER_NOT_IN_SOURCE
+            elif run.text not in self._runs and (
+                run.version or not readings(run.text) & self._readings
+            ):
                 return Rule.NUMBER_NOT_IN_SOURCE
         return None
 
@@ -1461,8 +1522,8 @@ class _Evidence:
         if field_type is FieldType.URL:
             return _address(norm, self.spans, url=True), norm
         if field_type is FieldType.NAME:
-            return _name(value, norm, self.spans) or self.numbers(norm), norm
-        return self.numbers(norm), norm
+            return _name(value, norm, self.spans) or self.numbers(normalised, value), norm
+        return self.numbers(normalised, value), norm
 
 
 def check_value(

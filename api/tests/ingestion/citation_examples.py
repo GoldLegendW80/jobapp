@@ -99,6 +99,7 @@ ARABIC_DIGITS = "مهندس برمجيات في شركة المثال منذ ع�
 KOREAN = "2020년부터 삼성전자에서 소프트웨어 엔지니어로 근무"
 VERTICAL_TAB = "Équipe de 5\u000b100 % en télétravail complet"
 CUBE = "Surface de 10\u00b3 m\u00b2 pour le nouvel entrepôt"
+HALF = "Expérience de 3\u00bd ans en développement web"
 TWICE = (
     "Pendant 13,5 ans d\u2019expérience en ingénierie, "
     "puis 5 ans d\u2019expérience en ingénierie logicielle"
@@ -1019,7 +1020,7 @@ EXAMPLES: tuple[Example, ...] = (
     ),
     Example(
         162,
-        "Expérience de 3\u00bd ans en développement web",
+        HALF,
         "text",
         "31 ans",
         REFUSE,
@@ -1262,6 +1263,33 @@ EXAMPLES: tuple[Example, ...] = (
         note="the slash stands between two dates: 01/2020 is not one of them",
     ),
     Example(189, ISO_RANGE, "date", "2019-01", ACCEPT),
+    # a number with a superscript or a fraction glued to it is one written form
+    Example(
+        190,
+        CUBE,
+        "text",
+        "Surface de 10 m",
+        REFUSE,
+        Rule.NUMBER_NOT_IN_SOURCE,
+        note="ten to the power of three is not 10",
+    ),
+    Example(
+        191,
+        CUBE,
+        "text",
+        "Surface de 10\u00b3 m\u00b2",
+        ACCEPT,
+        note="as the document writes it",
+    ),
+    Example(
+        192,
+        HALF,
+        "text",
+        "3 ans de développement web",
+        REFUSE,
+        Rule.NUMBER_NOT_IN_SOURCE,
+        note="three and a half is not 3",
+    ),
 )
 
 

@@ -2218,3 +2218,62 @@ def test_a_value_that_unfolds_is_refused_whole_never_checked_in_part() -> None:
 )
 def test_a_chain_of_numbers_is_read_as_a_whole(text: str, expected: set[tuple[int, int]]) -> None:
     assert pairs(text) == expected
+
+
+CUBE = "Surface de 10\u00b3 m\u00b2 pour le nouvel entrepôt"
+HALF = "Expérience de 3\u00bd ans en développement web"
+FOOTNOTE = "Depuis 2023\u00b9 chez Betclic comme ingénieur IA, 12 000\u00b2 utilisateurs"
+
+
+@pytest.mark.parametrize(
+    ("source", "value", "holds"),
+    [
+        # ten to the power of three is neither 10 nor 3, and the square of the metre is not 2
+        (CUBE, "Surface de 10 m", False),
+        (CUBE, "3 entrepôts", False),
+        (CUBE, "2 entrepôts", False),
+        (CUBE, "Surface de 103 m2", False),
+        (CUBE, "Surface de 10 3", False),
+        (CUBE, "Surface de 10\u00b2 m", False),
+        (CUBE, "Surface en m\u00b3", False),
+        # as the document writes it
+        (CUBE, "Surface de 10\u00b3 m\u00b2", True),
+        (CUBE, "Surface de 10\u00b3 m", True),
+        (CUBE, "Surface en m\u00b2", True),
+        # three and a half is not 3, and the half alone is not written
+        (HALF, "3 ans", False),
+        (HALF, "3,5 ans", False),
+        (HALF, "31 ans", False),
+        (HALF, "\u00bd an", False),
+        (HALF, "1 an", False),
+        (HALF, "3\u00bd ans", True),
+        # a footnote mark glued to a number: only as written (the stated cost)
+        (FOOTNOTE, "Depuis 2023", False),
+        (FOOTNOTE, "12 000 utilisateurs", False),
+        (FOOTNOTE, "1 an", False),
+        (FOOTNOTE, "Depuis 2023\u00b9", True),
+        (FOOTNOTE, "12 000\u00b2 utilisateurs", True),
+        (FOOTNOTE, "12\u00a0000\u00b2 utilisateurs", False),
+        # a superscript that is not glued to a number changes nothing
+        ("Réduction de 12 % des émissions de CO\u2082 sur 120 m\u00b2", "12 % de CO\u2082", True),
+        ("Réduction de 12 % des émissions de CO\u2082 sur 120 m\u00b2", "120 m\u00b2", True),
+        ("Réduction de 12 % des émissions de CO\u2082 sur 120 m\u00b2", "120 m2", False),
+        ("Réduction de 12 % des émissions de CO2 sur 120 m2 de bureaux", "120 m\u00b2", False),
+        ("Réduction de 12 % des émissions de CO2 sur 120 m2 de bureaux", "CO2, 120 m2", True),
+        ("Le 1ᵉʳ janvier 2023, 2ᵉ de la promotion de 40", "2e de la promotion", True),
+    ],
+)
+def test_a_number_with_a_superscript_or_a_fraction_is_one_written_form(
+    source: str, value: str, holds: bool
+) -> None:
+    result = check_item("text", value, source, [source])
+    assert (rule_of(result) is None) == holds, result
+    if not holds:
+        assert rule_of(result) is Rule.NUMBER_NOT_IN_SOURCE
+
+
+def test_a_footnote_mark_does_not_hide_a_year_from_rule_d() -> None:
+    assert rule_of(check_item("date", "2023", FOOTNOTE, [FOOTNOTE])) is None
+    assert rule_of(check_item("date", "2023-01", FOOTNOTE, [FOOTNOTE])) is Rule.MONTH_NOT_IN_SOURCE
+    dated = "Arrivée en janvier 2023\u00b9 chez Betclic à Bordeaux"
+    assert rule_of(check_item("date", "2023-01", dated, [dated])) is None
