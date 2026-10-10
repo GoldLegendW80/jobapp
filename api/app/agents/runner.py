@@ -358,6 +358,9 @@ class Recorder:
     # Called in the transaction that records a successful end (A4: the chat answer is stored
     # with the run's final status, so a client that sees "done" finds the answer).
     on_done: Callable[[Session, runs.Outcome], None] | None = field(default=None, repr=False)
+    # Called first in that transaction, before the run row is updated, to take the locks that
+    # come before the run in the lock order (A4, issue #27: the chat thread, see chat.py).
+    lock_first: Callable[[Session], None] | None = field(default=None, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def _write(self, seq: int, kind: str, data: dict[str, Any]) -> None:
@@ -375,6 +378,9 @@ class Recorder:
 
     def _finish(self, outcome: runs.Outcome) -> bool:
         with self.context.sessions() as db:
+            if self.lock_first is not None and outcome.status is RunStatus.done:
+                # Lock order: whatever on_done will lock, before runs.finish locks the run.
+                self.lock_first(db)
             if not runs.finish(db, self.run_id, outcome, self.context.clock()):
                 db.rollback()
                 return False
@@ -660,6 +666,13 @@ def _chat_reply(context: RunContext, run_id: uuid.UUID) -> Callable[[Session, ru
     return record
 
 
+def _chat_lock(run_id: uuid.UUID) -> Callable[[Session], None]:
+    def lock(db: Session) -> None:
+        chat.lock_thread_of_run(db, run_id)
+
+    return lock
+
+
 def _reveal(context: RunContext, user_id: uuid.UUID) -> _Secret | str:
     """The decrypted credential, or the error message to fail the run with."""
     if context.keyring is None:
@@ -723,6 +736,7 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             variables.update(
                 message=built.current, history=str(built.included), omitted=str(built.omitted)
             )
+            recorder.lock_first = _chat_lock(run_id)
             recorder.on_done = _chat_reply(context, run_id)
         else:
             prompt = definition.prompt(data, run.job_id)

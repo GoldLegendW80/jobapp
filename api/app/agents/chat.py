@@ -19,6 +19,22 @@ agent reads the posting and the profile through its tools at every answer.
 One answer at a time per thread: a new message is refused (ThreadBusyError, 409) while the run of
 the previous one is queued or running. The thread row is locked for the check and the insert, so
 two sends at once cannot both pass.
+
+Lock order (issue #27): the thread row first, then the user's run lock (the advisory lock of
+runs.create_run), then the run row. Every path that touches a thread and its run in one
+transaction follows it: `send` (thread, then create_run), `delete_thread` (thread, then
+runs.request_cancel) and the worker ending a chat run (`lock_thread_of_run` before runs.finish,
+see Recorder in runner.py, then `record_reply`). The thread goes first because it is the lock
+that decides whether an answer is pending: `delete_thread` cannot know which run to cancel
+before it holds it (a send could slip a new run in between). Paths that only touch runs (the
+cancel endpoint, claim, the reapers) take no thread lock and fit any order. Nothing hard deletes
+a job or a user today; a path that did would cascade to runs and threads in trigger order, so it
+would have to lock the threads itself first.
+
+Quoting (issue #27): in the prompt, every message sits inside <message> tags, with "&" and "<"
+written as "&amp;" and "&lt;" (`quoted`), so no message can close its own block, fake another
+turn or end the conversation. Only the prompt is escaped: the database, the api and the UI keep
+the raw text.
 """
 
 import math
@@ -179,7 +195,10 @@ def send(
 
 def delete_thread(db: Session, user_id: uuid.UUID, thread_id: uuid.UUID, now: datetime) -> bool:
     """Delete the thread and its messages; a reply still pending is cancelled first. The runs
-    stay in the run log (as when a job is deleted). The caller commits."""
+    stay in the run log (as when a job is deleted). The caller commits.
+
+    Lock order (module docstring): the thread, then the run. The worker ending that run takes
+    them in the same order, so the two wait for each other in turn and never deadlock."""
     thread = get_thread(db, user_id, thread_id, lock=True)
     if thread is None:
         return False
@@ -205,6 +224,20 @@ class History:
     omitted: int  # earlier messages left out
 
 
+def quoted(text: str) -> str:
+    """A message as it stands inside the prompt's <message> tags: "&" becomes "&amp;" and "<"
+    becomes "&lt;". Without a raw "<" the text holds no tag at all, so it cannot close
+    </message> or </conversation>, nor open a turn of its own. ">" is left alone (it means
+    nothing without "<").
+
+    "&" is escaped too so that the quoting loses nothing: a user who types "&lt;" literally is
+    quoted as "&amp;lt;" and the model can tell it from a typed "<". The price, accepted, is
+    that text which already holds entities is escaped once more, and that a plain "&" reads
+    "&amp;" in the prompt (the chat agent's system prompt says how quoted text is written).
+    Never apply it twice, and never store or show its result."""
+    return text.replace("&", "&amp;").replace("<", "&lt;")
+
+
 def estimate_tokens(text: str) -> int:
     """A cheap, deterministic upper-leaning estimate: about four characters per token."""
     return math.ceil(len(text) / CHARS_PER_TOKEN) + MESSAGE_OVERHEAD_TOKENS
@@ -212,11 +245,12 @@ def estimate_tokens(text: str) -> int:
 
 def fit_history(turns: Sequence[Turn], budget: int) -> History:
     """The newest turns whose estimated tokens fit `budget`, oldest first. Stops at the first
-    turn that does not fit (so the kept turns are always one unbroken tail)."""
+    turn that does not fit (so the kept turns are always one unbroken tail). A turn costs what
+    it takes in the prompt, that is, once quoted."""
     kept: list[Turn] = []
     used = 0
     for turn in reversed(turns):
-        cost = estimate_tokens(turn.text)
+        cost = estimate_tokens(quoted(turn.text))
         if used + cost > budget:
             break
         kept.append(turn)
@@ -235,7 +269,8 @@ def omitted_note(count: int) -> str:
 
 def render_prompt(job_id: uuid.UUID | None, history: History, current: str) -> str:
     """The run's first and only user message: the job, the conversation so far, the new
-    message. Everything inside <conversation> and <message> is data written earlier."""
+    message. Everything inside <conversation> and <message> is data written earlier, quoted
+    (`quoted`) so that it cannot hold a tag of this layout."""
     parts = []
     if job_id is not None:
         parts.append(f"Job id: {job_id}")
@@ -244,7 +279,8 @@ def render_prompt(job_id: uuid.UUID | None, history: History, current: str) -> s
         if history.omitted:
             lines.append(omitted_note(history.omitted))
         lines.extend(
-            f'<message role="{turn.role.value}">\n{turn.text}\n</message>' for turn in history.turns
+            f'<message role="{turn.role.value}">\n{quoted(turn.text)}\n</message>'
+            for turn in history.turns
         )
         parts.append(
             "The conversation so far, oldest first:\n<conversation>\n"
@@ -253,7 +289,7 @@ def render_prompt(job_id: uuid.UUID | None, history: History, current: str) -> s
         )
     else:
         parts.append("This is the first message of the conversation.")
-    parts.append(f'The user\'s new message:\n<message role="user">\n{current}\n</message>')
+    parts.append(f'The user\'s new message:\n<message role="user">\n{quoted(current)}\n</message>')
     return "\n\n".join(parts)
 
 
@@ -302,7 +338,7 @@ def prompt_for_run(
     ).all()
     current = _turn(message).text
     turns = [_turn(row) for row in reversed(earlier)]
-    history = fit_history(turns, max(0, budget - estimate_tokens(current)))
+    history = fit_history(turns, max(0, budget - estimate_tokens(quoted(current))))
     if len(earlier) == HISTORY_READ_MAX:
         # Messages past HISTORY_READ_MAX were never read: they are left out too.
         total = db.scalar(
@@ -319,20 +355,31 @@ def prompt_for_run(
     )
 
 
-def record_reply(db: Session, run_id: uuid.UUID, text: str, now: datetime) -> bool:
-    """Store a finished run's answer in the thread of the message it answered. False (and
-    nothing stored) when that thread was deleted meanwhile. The caller commits."""
+def lock_thread_of_run(db: Session, run_id: uuid.UUID) -> uuid.UUID | None:
+    """Lock the thread of the message this run answers, until the transaction ends. None when
+    that message or its thread is gone (deleted meanwhile).
+
+    Lock order (module docstring): the worker calls this BEFORE runs.finish touches the run row,
+    because `delete_thread` holds the thread while it cancels the run. Locking the run first
+    here is the deadlock of issue #27."""
     thread_id = db.scalar(
         sa.select(AgentMessage.thread_id).where(
             AgentMessage.run_id == run_id, AgentMessage.role == MessageRole.user
         )
     )
     if thread_id is None:
-        return False
-    locked = db.scalar(
-        sa.select(AgentThread.id).where(AgentThread.id == thread_id).with_for_update()
-    )
-    if locked is None:
+        return None
+    return db.scalar(sa.select(AgentThread.id).where(AgentThread.id == thread_id).with_for_update())
+
+
+def record_reply(db: Session, run_id: uuid.UUID, text: str, now: datetime) -> bool:
+    """Store a finished run's answer in the thread of the message it answered. False (and
+    nothing stored) when that thread was deleted meanwhile. The caller commits.
+
+    A caller that updates the run in the same transaction (the worker) must have called
+    `lock_thread_of_run` before that update; the lock taken here is then already held."""
+    thread_id = lock_thread_of_run(db, run_id)
+    if thread_id is None:
         return False
     db.add(
         AgentMessage(
