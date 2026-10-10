@@ -6,7 +6,8 @@
 #   ./deploy.sh ps                 docker compose ps on the Jetson
 #   ./deploy.sh stats              docker stats --no-stream of the stack
 #   ./deploy.sh ssh                interactive shell in the deploy directory
-#   ./deploy.sh url                print the current https://*.trycloudflare.com URL, alone on stdout
+#   ./deploy.sh url                print the public Tailscale Funnel URL (https://<node>.<tailnet>.ts.net),
+#                                  read from `tailscale status`, alone on stdout
 #   ./deploy.sh smoke [--full]     checks on the Jetson, then through the public URL; --full also
 #                                  stops and starts db once (tests/jetson_smoke.sh)
 #   ./deploy.sh backup [--pull]    pg_dump -Fc to jetson:~/jobapp-backups/jobapp-<UTC time>.dump,
@@ -56,7 +57,9 @@
 # Settings, first found wins: the shell environment, then .env at the repository root, then
 # the defaults below. DEPLOY_HOST (ssh alias, default jetson), DEPLOY_DIR (default ~/jobapp),
 # BACKUP_DIR (on the Jetson, default ~/jobapp-backups), BACKUP_KEEP (default 14),
-# BACKUP_CRON (schedule of backup-schedule, default "17 3 * * *", the Jetson's local time).
+# BACKUP_CRON (schedule of backup-schedule, default "17 3 * * *", the Jetson's local time),
+# DEPLOY_LOCK_MAX_S (default 3600: the Jetson releases the deploy lock after that long even if
+# this Mac went to sleep holding it).
 #
 # Secrets: the Jetson's .env is generated once into .env.jetson (git-ignored, mode 600) with
 # random POSTGRES_PASSWORD and SECRET_KEY, and copied to the Jetson only when the remote .env is
@@ -73,12 +76,12 @@ LOCAL_ENV="$ROOT/.env.jetson"
 MIN_DISK_GB=5
 HEALTH_TIMEOUT_S=90
 SSH_TIMEOUT_S=5
-# How long `url` waits for cloudflared to log its URL after a (re)start.
+# How long `url` waits for tailscale to be connected after a (re)start.
 URL_TIMEOUT_S="${DEPLOY_URL_TIMEOUT:-30}"
-# How long the public checks wait for a fresh trycloudflare hostname to resolve and route. macOS
-# caches a negative DNS answer for the zone's 60s, so this must outlast one negative TTL.
+# How long the public checks wait for the Funnel URL to answer: the first request after a first
+# login also waits for the node's Let's Encrypt certificate.
 PUBLIC_TIMEOUT_S="${DEPLOY_PUBLIC_TIMEOUT:-90}"
-# Compose profile of the cloudflared service (compose.yml): enabled on the Jetson only.
+# Compose profile of the tailscale service (compose.yml): enabled on the Jetson only.
 PROFILE=tunnel
 
 # --- output -------------------------------------------------------------------------------
@@ -161,20 +164,32 @@ require_deployed() {
 }
 
 # --- deploy steps -------------------------------------------------------------------------
+# lock_script <dir> <max seconds>: the remote shell that takes flock on <dir>/.deploy.lock (waiting
+# up to 15 minutes), prints `locked`, then holds it until its stdin closes or <max seconds> pass,
+# whichever comes first. The cap is enforced on the Jetson: a Mac that sleeps mid deploy keeps its
+# ssh session half open for hours (sshd only notices through TCP keepalive), and without the cap
+# that session would block every GitHub deploy until then. A deploy takes minutes, so an hour is
+# far above any real one.
+lock_script() {
+  printf 'mkdir -p %q && exec 9>>%q && { flock -n 9 || { echo busy; flock -w 900 9; }; } && echo locked && { timeout %q cat >/dev/null; true; }' \
+    "$1" "$1/.deploy.lock" "$2"
+}
+
 # remote_lock: hold flock on <BACKUP_DIR>/.deploy.lock on the Jetson for the rest of this run. It
 # is the lock .github/workflows/deploy.yml takes on the self-hosted runner, so a deploy from this
 # Mac and one from GitHub never rsync or compose at the same time. A background ssh holds it while
-# its stdin, a FIFO kept open on fd 8, stays open; cleanup closes fd 8 and the lock goes.
+# its stdin, a FIFO kept open on fd 8, stays open; cleanup closes fd 8 and the lock goes. The
+# Jetson drops it on its own after DEPLOY_LOCK_MAX_S (lock_script).
 remote_lock() {
   step "deploy lock on $HOST"
-  local bdir lock fifo="$CTL_DIR/lock.in" out="$CTL_DIR/lock.out" deadline
+  local bdir max fifo="$CTL_DIR/lock.in" out="$CTL_DIR/lock.out" deadline
   # shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
   bdir="$(setting BACKUP_DIR '~/jobapp-backups')"
   bdir="${bdir#\~/}"
-  lock="$(printf '%q' "$bdir/.deploy.lock")"
+  max="$(setting DEPLOY_LOCK_MAX_S 3600)"
+  [[ "$max" =~ ^[1-9][0-9]*$ ]] || die "DEPLOY_LOCK_MAX_S must be a whole number of seconds, got '$max'"
   mkfifo "$fifo"
-  remote "mkdir -p $(printf '%q' "$bdir") && exec 9>>$lock && { flock -n 9 || { echo busy; flock -w 900 9; }; } &&
-    echo locked && cat >/dev/null" <"$fifo" >"$out" 2>&1 &
+  remote "$(lock_script "$bdir" "$max")" <"$fifo" >"$out" 2>&1 &
   LOCK_PID=$!
   exec 8>"$fifo"
   deadline=$((SECONDS + 960))
@@ -186,7 +201,7 @@ remote_lock() {
   if grep -q '^busy' "$out"; then
     info "waited for another deploy (GitHub or another Mac) to finish"
   fi
-  info "held: $bdir/.deploy.lock"
+  info "held: $bdir/.deploy.lock (released by the Jetson after ${max}s at the latest)"
 }
 TIMES=()
 record() { # record <label> <start SECONDS>: keep and print the duration of one phase
@@ -277,9 +292,14 @@ DATABASE_URL=postgresql+psycopg://jobapp:$pg_password@db:5432/jobapp
 
 REDIS_URL=redis://redis:6379/0
 
-# Loopback only: reached with ssh or through the tunnel, never from the LAN.
+# Loopback only: reached with ssh or through Tailscale Funnel, never from the LAN.
 HTTP_BIND=127.0.0.1
 HTTP_PORT=${JETSON_HTTP_PORT:-80}
+
+# Tailscale Funnel (service tailscale): the node name, so the public URL is
+# https://<TS_HOSTNAME>.<tailnet>.ts.net. For the first login only, add TS_AUTHKEY=<one-time key
+# from the admin console>; remove it once ./deploy.sh url answers (the login is kept in tsstate).
+TS_HOSTNAME=jobapp
 EOF
   )
 }
@@ -397,59 +417,81 @@ health() {
   info "/some/route: React shell"
 }
 
-# --- tunnel -------------------------------------------------------------------------------
-# extract_url: the last https://<name>.trycloudflare.com on stdin. cloudflared prints it in a box
-# ("Your quick Tunnel has been created! Visit it at ..."); api.trycloudflare.com is the service it
-# asks for the hostname, never the answer.
-extract_url() {
-  grep -oE 'https://[a-z0-9]+(-[a-z0-9]+)*\.trycloudflare\.com([^A-Za-z0-9.-]|$)' |
-    sed -E 's/(\.com).*$/\1/' | grep -v '^https://api\.' | tail -n 1 || true
+# --- public URL (tailscale: Tailscale Funnel) ----------------------------------------------
+# ts_field <name>: the first "<name>": "<string>" of `tailscale status --json --peers=false` on
+# stdin. Without peers, Self comes first and is the only node, so DNSName and HostName are this
+# node's; BackendState and AuthURL are top-level fields printed before Self.
+ts_field() {
+  sed -n "s/^[[:space:]]*\"$1\":[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1 || true
 }
 
-# tunnel_url: print the URL of the running cloudflared's current start on stdout, waiting up to
-# URL_TIMEOUT_S for it to appear. Only logs since the container's last StartedAt are read, so a
-# restart never yields the previous, dead hostname. Diagnostics on stderr; exit 1 if none.
-tunnel_url() {
-  local deadline=$((SECONDS + URL_TIMEOUT_S)) id state started url="" waited=0
+# public_url: print https://<node>.<tailnet>.ts.net, the stable Funnel URL, on stdout. It comes
+# from the running tailscale container (Self.DNSName), waiting up to URL_TIMEOUT_S for it to
+# connect after a (re)start. A container that is missing, stopped or not logged in is an exit 1
+# with the reason on stderr, stdout empty.
+public_url() {
+  local deadline=$((SECONDS + URL_TIMEOUT_S)) id state json backend="" dns="" waited=0
   while :; do
-    id="$(rcompose ps -a -q cloudflared 2>/dev/null | head -n 1 || true)"
-    [[ -n "$id" ]] || die "cloudflared is not running on $HOST: no container (deploy with ./deploy.sh, then ./deploy.sh ps)"
-    read -r state started <<<"$(remote "docker inspect -f '{{.State.Status}} {{.State.StartedAt}}' $(printf '%q' "$id")" || true)"
+    id="$(rcompose ps -a -q tailscale 2>/dev/null | head -n 1 || true)"
+    [[ -n "$id" ]] || die "tailscale is not running on $HOST: no container (deploy with ./deploy.sh, then ./deploy.sh ps)"
+    state="$(remote "docker inspect -f '{{.State.Status}}' $(printf '%q' "$id")" || true)"
     if [[ "$state" == "running" ]]; then
-      url="$(remote "docker logs --since $(printf '%q' "$started") $(printf '%q' "$id") 2>&1" | extract_url)"
-      [[ -n "$url" ]] && break
+      json="$(remote "docker exec $(printf '%q' "$id") tailscale status --json --peers=false" 2>/dev/null || true)"
+      backend="$(ts_field BackendState <<<"$json")"
+      dns="$(ts_field DNSName <<<"$json")"
+      dns="${dns%.}"
+      case "$backend" in
+        Running)
+          [[ "$dns" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.[a-z0-9-]+\.ts\.net$ ]] && break
+          die "tailscale on $HOST is connected but reports no ts.net name ('${dns:-none}'): is MagicDNS on in the tailnet?"
+          ;;
+        NeedsLogin)
+          local auth
+          auth="$(ts_field AuthURL <<<"$json")"
+          die "tailscale on $HOST is not logged in (NeedsLogin): put a fresh one-time TS_AUTHKEY in $RDIR/.env there and run ./deploy.sh${auth:+, or log in once at $auth}"
+          ;;
+        NeedsMachineAuth)
+          die "tailscale on $HOST waits for the device to be approved in the Tailscale admin console (Machines)"
+          ;;
+      esac
     elif [[ "$state" != "restarting" && "$state" != "created" ]]; then
-      die "cloudflared is ${state:-gone} on $HOST, not running (./deploy.sh logs cloudflared; start it with ./deploy.sh)"
+      die "tailscale is ${state:-gone} on $HOST, not running (./deploy.sh logs tailscale; start it with ./deploy.sh)"
     fi
     if ((SECONDS >= deadline)); then
-      die "cloudflared ($state since ${started:-?}) logged no trycloudflare URL within ${URL_TIMEOUT_S}s; see ./deploy.sh logs cloudflared"
+      die "tailscale ($state, ${backend:-no status yet}) did not connect within ${URL_TIMEOUT_S}s; see ./deploy.sh logs tailscale"
     fi
     if ((waited == 0)); then
-      note "waiting up to ${URL_TIMEOUT_S}s for cloudflared to log its URL"
+      note "waiting up to ${URL_TIMEOUT_S}s for tailscale to connect"
       waited=1
     fi
     sleep 2
   done
-  printf '%s\n' "$url"
+  # A node of the same name already in the tailnet makes this one jobapp-1: the URL moved.
+  local host
+  host="$(ts_field HostName <<<"$json")"
+  if [[ -n "$host" && "${dns%%.*}" != "$host" ]]; then
+    warn "the node is ${dns%%.*}, not $host: another device holds that name; remove it in the admin console (Machines) and rename this one, or OAuth redirect URIs will not match"
+  fi
+  printf 'https://%s\n' "$dns"
 }
 
-# --- public checks, from this machine through the tunnel ------------------------------------
+# --- public checks, from this machine through Tailscale Funnel ------------------------------
 PIN=() # --resolve host:443:ip, set when the system resolver still caches a negative answer
 pcurl() { # pcurl <url> [curl args]: status code on stdout, headers in $PDIR/h, body in $PDIR/b
   local url="$1"
   shift
   curl -s --max-time 30 ${PIN[@]+"${PIN[@]}"} -D "$PDIR/h" -o "$PDIR/b" -w '%{http_code}' "$@" "$url" || true
 }
-pbrief() { # one line about the last body: an HTML page's <title> (Cloudflare's error pages), else its start
+pbrief() { # one line about the last body: an HTML page's <title> (error pages), else its start
   local title
   title="$(tr -d '\r\n' <"$PDIR/b" | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/p' | head -c 120)"
   if [[ -n "$title" ]]; then printf 'page "%s"' "$title"; else tr -d '\r\n' <"$PDIR/b" | head -c 120; fi
 }
 phdr() { tr -d '\r' <"$PDIR/h" | grep -i "^$1:" | tail -n 1 | cut -d' ' -f2-; }
 
-# wait_public <url>: until caddy's /healthz answers through the tunnel. A fresh hostname takes a
-# few seconds to exist in DNS and to route to this connector; back off 2, 4, 8, 15, 15... seconds,
-# so a slow start costs a handful of requests, not a stream (quick tunnels are rate limited).
+# wait_public <url>: until caddy's /healthz answers through Funnel. Right after a first login the
+# ts.net name takes a few seconds to exist in public DNS and the first request waits for the
+# node's certificate; back off 2, 4, 8, 15, 15... seconds, a handful of requests, not a stream.
 wait_public() {
   local url="$1" host deadline=$((SECONDS + PUBLIC_TIMEOUT_S)) delay=2 code ip
   host="${url#https://}"
@@ -466,6 +508,23 @@ wait_public() {
     sleep "$delay"
     delay=$((delay * 2 > 15 ? 15 : delay * 2))
   done
+}
+
+# public_ipv4: this machine's public IPv4 as an outside service sees it (over HTTPS, the path the
+# smoke's own requests take; DNS to OpenDNS as a fallback), or nothing when neither answers.
+public_ipv4() {
+  local ip
+  ip="$(curl -s -4 --max-time 8 https://api.ipify.org 2>/dev/null || true)"
+  if [[ ! "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && command -v dig >/dev/null; then
+    ip="$(dig -4 +short +time=3 +tries=1 myip.opendns.com A @resolver1.opendns.com 2>/dev/null | tail -n 1 || true)"
+  fi
+  [[ ! "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || printf '%s' "$ip"
+}
+
+# is_public_ip <ip>: a globally routable address (not private, loopback, the tailnet's
+# 100.64.0.0/10, documentation or link-local ranges).
+is_public_ip() {
+  python3 -c 'import ipaddress, sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]).is_global else 1)' "$1" 2>/dev/null
 }
 
 cmd_deploy() {
@@ -496,10 +555,10 @@ cmd_deploy() {
   health
   step "public URL"
   local url
-  url="$(tunnel_url)"
+  url="$(public_url)"
   PDIR="$(mktemp -d)"
   if wait_public "$url"; then
-    info "answers through the tunnel"
+    info "$url answers through Tailscale Funnel"
   else
     warn "$url does not answer from here yet; try ./deploy.sh smoke in a minute"
   fi
@@ -560,7 +619,7 @@ cmd_admin() {
   require_remote
   require_deployed
   local url
-  url="$(tunnel_url)" # dies with the reason when cloudflared has no URL
+  url="$(public_url)" # dies with the reason when tailscale has no URL
   note "public URL: $url"
   # The link (and its token) goes to stdout only, never to a log.
   rcompose exec -T api python -m app.identity.cli create-admin "$email" --base-url "$url"
@@ -669,7 +728,7 @@ cmd_url() {
   ssh_master
   require_remote
   require_deployed
-  tunnel_url
+  public_url
 }
 
 # smoke: tests/jetson_smoke.sh over ssh (quick unless --full), then the public checks. Every
@@ -691,10 +750,10 @@ cmd_smoke() {
     failed=$((failed + 1))
   fi
 
-  step "public, through the quick tunnel"
+  step "public, through Tailscale Funnel"
   local url
-  if ! url="$(tunnel_url)"; then
-    printf '\nSMOKE FAILED: no tunnel URL\n' >&2
+  if ! url="$(public_url)"; then
+    printf '\nSMOKE FAILED: no public URL\n' >&2
     exit 1
   fi
   info "$url"
@@ -707,11 +766,11 @@ cmd_smoke() {
     failed=$((failed + 1))
   }
   if ! wait_public "$url"; then
-    flunk "$url/healthz never answered within ${PUBLIC_TIMEOUT_S}s (DNS, or cloudflared not connected)"
+    flunk "$url/healthz never answered within ${PUBLIC_TIMEOUT_S}s (DNS, Funnel not allowed for the node, or tailscale not connected: ./deploy.sh logs tailscale)"
     printf '\nSMOKE FAILED: %d check(s)\n' "$failed" >&2
     exit 1
   fi
-  pass "caddy answers through the tunnel"
+  pass "caddy answers through Funnel"
 
   local code body
   code="$(pcurl "$url/api/health")"
@@ -742,14 +801,17 @@ cmd_smoke() {
   done
   pass "security headers and no-cache on index.html"
 
-  # The visitor's address must reach the api: Cloudflare's view of this machine (cdn-cgi/trace)
-  # against the client the api logs for one tagged request carrying a spoofed X-Forwarded-For.
+  # The visitor's address must reach the api, and no header a visitor sends may replace it. One
+  # tagged request carries every client address header there is, forged; the api must log this
+  # machine's public IPv4 (as an echo service sees it) and none of the forged values. Funnel sets
+  # X-Forwarded-For itself, replacing the visitor's, and caddy's :8080 trusts no other header.
   # IPv4 for both, so the two requests cannot leave by different address families.
-  local rid trace_ip logged
+  local rid mine logged forged="203.0.113.9 203.0.113.10 203.0.113.11 203.0.113.12 203.0.113.13"
   rid="smoke-$(date +%s)-$RANDOM"
-  pcurl "$url/cdn-cgi/trace" -4 >/dev/null
-  trace_ip="$(sed -n 's/^ip=//p' "$PDIR/b")"
-  code="$(pcurl "$url/api/health" -4 -H "X-Request-ID: $rid" -H 'X-Forwarded-For: 203.0.113.9')"
+  mine="$(public_ipv4)"
+  code="$(pcurl "$url/api/health" -4 -H "X-Request-ID: $rid" -H 'X-Forwarded-For: 203.0.113.9' \
+    -H 'Cf-Connecting-Ip: 203.0.113.10' -H 'X-Real-Ip: 203.0.113.11' -H 'True-Client-Ip: 203.0.113.12' \
+    -H 'Forwarded: for=203.0.113.13' -H 'Tailscale-User-Login: forged@example.org')"
   logged=""
   local i
   for i in 1 2 3 4 5; do
@@ -758,34 +820,32 @@ cmd_smoke() {
     [[ -n "$logged" ]] && break
     sleep "$i"
   done
-  if [[ -z "$trace_ip" ]]; then
-    flunk "cdn-cgi/trace gave no ip (HTTP $code for the tagged request)"
-  elif [[ "$logged" == "$trace_ip" ]]; then
-    pass "the api logs the visitor's address $logged (Cf-Connecting-Ip), spoofed headers ignored"
+  logged="${logged#::ffff:}"
+  if [[ -z "$logged" ]]; then
+    flunk "the api logged no request $rid (HTTP $code)"
+  elif [[ " $forged " == *" $logged "* ]]; then
+    flunk "the api logged the forged address $logged: a visitor can spoof its IP through Funnel"
+  elif ! is_public_ip "$logged"; then
+    flunk "the api logged '$logged', not a public address (reached over the tailnet or a private path, not through Funnel?)"
+  elif [[ -n "$mine" && "$logged" != "$mine" ]]; then
+    flunk "the api logged client $logged for $rid, but this machine's public IPv4 is $mine"
+  elif [[ -n "$mine" ]]; then
+    pass "the api logs the visitor's address $logged (Funnel's X-Forwarded-For); forged X-Forwarded-For, Cf-Connecting-Ip, X-Real-Ip, True-Client-Ip and Forwarded ignored"
   else
-    flunk "the api logged client '${logged:-nothing}' for $rid, Cloudflare sees this machine as $trace_ip"
+    pass "the api logs the public address $logged and none of the forged ones (this machine's own IPv4 could not be looked up to compare)"
   fi
 
-  # The Cloudflare edge refuses a visitor who sends Cf-Connecting-Ip (403), so the header caddy
-  # trusts on the tunnel listener cannot be forged from outside.
-  code="$(pcurl "$url/api/health" -H 'Cf-Connecting-Ip: 203.0.113.10')"
-  if [[ "$code" == "403" ]]; then
-    pass "a forged Cf-Connecting-Ip is refused by the Cloudflare edge (403)"
-  else
-    flunk "a forged Cf-Connecting-Ip answered $code, expected the edge's 403"
-  fi
-
-  # A 5 MB body, half the caddy limit, crosses the tunnel and reaches the api, which answers 405
-  # (POST on a GET route) rather than caddy's 413 or a tunnel error. It carries the CSRF header
+  # A 5 MB body, half the caddy limit, crosses Funnel and reaches the api, which answers 405
+  # (POST on a GET route) rather than caddy's 413 or a proxy error. It carries the CSRF header
   # every non-GET api request needs (identity), else the api would answer 403 first.
   code="$(head -c 5000000 /dev/zero | pcurl "$url/api/health" -X POST --data-binary @- -H 'Content-Type: application/octet-stream' -H 'X-Requested-With: jobapp')"
   if [[ "$code" == "405" ]] && grep -q 'Method Not Allowed' "$PDIR/b"; then
-    pass "5 MB upload reaches the api through the tunnel (405 from FastAPI)"
+    pass "5 MB upload reaches the api through Funnel (405 from FastAPI)"
   else
     flunk "5 MB upload answered $code: $(pbrief)"
   fi
 
-  # Identity through the tunnel: no session is a 401, a state-changing call without the CSRF
+  # Identity through Funnel: no session is a 401, a state-changing call without the CSRF
   # header a 403.
   # Protected routes of every kind (the user, the admin area, a user's own data, and a write
   # carrying the CSRF header) answer 401 without a session, a forged cookie included.

@@ -124,7 +124,7 @@ def test_json_formatter_handles_unicode_and_exceptions() -> None:
 
 def test_client_comes_from_the_forwarded_header(capsys: pytest.CaptureFixture[str]) -> None:
     # As in production: uvicorn --proxy-headers --forwarded-allow-ips "*" behind caddy, which
-    # sends exactly one X-Forwarded-For (the visitor, from Cf-Connecting-Ip through the tunnel).
+    # sends exactly one X-Forwarded-For (the visitor, from Funnel's X-Forwarded-For on :8080).
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
     app = ProxyHeadersMiddleware(create_app(make_settings(UNREACHABLE)), trusted_hosts="*")

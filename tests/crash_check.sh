@@ -15,8 +15,8 @@
 #    container to its PID 1 is ignored unless the process handles it (redis even survives its own
 #    SIGSEGV handler that way), so it emulates nothing.
 # 3. Control: `docker kill` on redis leaves it exited (manual stop), then it is started again.
-# 4. The app answers on loopback and ./deploy.sh smoke passes, with the new tunnel URL (cloudflared
-#    was restarted, so the URL changed).
+# 4. The app answers on loopback and ./deploy.sh smoke passes through the public URL, the same
+#    stable Funnel URL as before (tailscale was restarted and logged in again from its saved state).
 # Leaves every service running. Takes about two minutes.
 set -euo pipefail
 
@@ -25,7 +25,7 @@ cd "$ROOT"
 HOST="${DEPLOY_HOST:-jetson}"
 RDIR="${DEPLOY_DIR:-jobapp}"
 RDIR="${RDIR#\~/}"
-SERVICES=(redis db api caddy cloudflared)
+SERVICES=(redis db api caddy tailscale)
 # Any image already on the Jetson with a busybox `kill`: the stack's own redis image, no pull.
 KILLER_IMAGE="redis:7.4.11-alpine"
 
@@ -116,6 +116,6 @@ ok "/api/health through caddy: $body"
   tail -n 30 "$CTL/smoke.log" >&2
   fail "./deploy.sh smoke failed after the crashes"
 }
-ok "./deploy.sh smoke passes through $(./deploy.sh url 2>/dev/null) (new URL: cloudflared restarted)"
+ok "./deploy.sh smoke passes through $(./deploy.sh url 2>/dev/null) (tailscale restarted, same stable URL)"
 
 printf '\nAll %d checks passed.\n' "$passed"

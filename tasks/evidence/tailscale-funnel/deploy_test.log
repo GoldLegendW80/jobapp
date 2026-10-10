@@ -1,0 +1,97 @@
+
+== shellcheck
+   ok: deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh tests/reboot_check.sh tests/tailscale_test.sh clean
+   ok: executable, env bash, set -euo pipefail
+
+== dispatcher
+   ok: --help prints usage
+   ok: unknown subcommand exits 2 with the usage
+   ok: --help documents backup, restore and backup-schedule
+
+== backup and restore options, refused before any network call
+   ok: unknown options, extra or missing files, --keep with --into-live, --yes alone, --drop-scratch with a file
+   ok: --into-live without a terminal and without --yes is refused before anything
+   ok: BACKUP_KEEP 0, -1, abc, 1.5 refused; BACKUP_DIR inside the deploy directory, with a space, or / refused
+   ok: backup-schedule needs one of install, remove, status; BACKUP_CRON must be five plain fields (no injection)
+   ok: backup, backups, restore and backup-schedule fail fast on an unreachable host
+   ok: url takes no argument, smoke refuses an unknown option, both before any network call
+   ok: admin create: wrong or missing action, extra arguments, no @, leading dash, over 320 characters, whitespace or control characters refused before any network call; a good email reaches the ssh check
+   ok: --help documents admin create
+   ok: admin unlock: no email, two emails, --ip without a value, unknown option, leading dash, whitespace, over 320 characters and a non address --ip refused before any network call; a good email with an IPv4 or IPv6 --ip, in either order, reaches the ssh check
+   ok: --help documents admin unlock
+   ok: jobs import and profile import: wrong action, extra arguments and bad emails refused before any network call; --help documents both
+   ok: jobs mark-overrides: missing email, unknown option, extra argument refused before any network call; --help documents it
+   ok: unknown deploy option refused before any network call
+   ok: logs needs exactly one service
+   ok: DEPLOY_DIR=/ refused
+
+== runner: arguments and settings refused before any network call
+   ok: runner: no action, unknown action, extra arguments, bad repo, name and folder refused before ssh
+   ok: runner status: an unreachable host fails with the ssh message
+
+== runner image: the job guard is baked in and refuses every job but deploy.yml from main
+   ok: hook set in the image; allowed: deploy.yml@main on workflow_run and workflow_dispatch; refused: push, pull_request, another branch, another workflow, a fork, no context
+
+== runner install and remove against a fake Jetson and a fake gh: the token never shows
+   ok: configure and remove get the token on stdin only; it is on no command line and in no output
+
+== unreachable host fails fast with a clear message
+   ok: nonexistent-host.invalid: exit 1 in 0s
+   ok: 192.0.2.1: exit 1 in 5s
+   ok: logs, ps, url and smoke fail the same way
+
+== .rsyncignore: what ships and what --delete keeps
+   ok: remote .env kept byte for byte through --delete
+   ok: stale remote file deleted
+   ok: code and unicode file names shipped
+   ok: never shipped: .env.jetson, node_modules, .venv, __pycache__, .git, evidence, dist, .claude, .DS_Store, backups/, *.dump
+   ok: .env.jetson, backups/ and any *.dump are git-ignored
+
+== url against a fake Jetson (fake ssh on PATH)
+   ok: stdout is https://<Self.DNSName> alone, trailing dot dropped, one line, so $(./deploy.sh url) works
+   ok: the name comes from tailscale status --json --peers=false in the tailscale container (CertDomains and users ignored)
+   ok: a node renamed by a name clash (jobapp-1): URL printed, warning on stderr
+   ok: not logged in (no key, expired key): exit 1 at once, says to set TS_AUTHKEY, shows the login link
+   ok: device approval pending: exit 1 with the reason
+   ok: connected without a ts.net name (MagicDNS off, or a foreign name): exit 1, nothing on stdout
+   ok: still starting, or no status from the CLI: waits, then exit 1 after the timeout, stdout empty
+   ok: tailscale container stopped or missing: exit 1 with a clear message, stdout empty
+
+== admin create against the fake Jetson
+   ok: admin create runs the CLI in the api container with --base-url set to the Funnel URL, the full link on stdout
+   ok: quotes, $ and parentheses in the email reach the CLI quoted, never run by the remote shell
+   ok: no public URL: exit 1 before the CLI runs
+   ok: the CLI's exit code (2, invalid email) is passed through
+
+== admin unlock against the fake Jetson
+   ok: admin unlock runs psql in the db container with the email and address as quoted arguments bound as psql variables, failures in the 15 minute window only, and prints the count
+   ok: without --ip the address is passed empty and only the email's rows go
+   ok: an answer that is not a count fails with exit 1
+
+== jobs import and profile import against the fake Jetson
+   ok: jobs import converts JOBAPP_SOURCE_DIR/data on the Mac, then streams the document to app.jobs.cli import in the api container
+   ok: the temporary document is removed afterwards
+   ok: the import CLI's exit code is passed through
+   ok: jobs mark-overrides runs app.jobs.cli mark-overrides in the api container, dry run unless --apply, exit code passed through
+   ok: a missing or unconvertible source fails before any remote call (jobs and profile)
+
+== restore --into-live confirmation, against a fake Jetson
+   ok: a wrong answer (lowercase) refuses after the verification, restore-live never runs
+   ok: an empty answer refuses too
+   ok: the exact phrase runs restore-live on the path verify resolved (latest pinned), then the health check
+   ok: --yes skips the prompt without a terminal; BACKUP_DIR and BACKUP_KEEP reach ops/db.sh
+   ok: backup passes BACKUP_KEEP, and fails when ops/db.sh reports no file
+
+== ops/db.sh restore-live stops the api and the worker, and starts both on every path
+   ok: restore-live: api and worker stopped through drop and restore, started healthy after the migrations
+   ok: a failed restore rolls back with both still stopped, then starts api and worker
+   ok: any other failure after the stop starts api and worker again on exit
+
+== deploy lock: the Jetson releases it after DEPLOY_LOCK_MAX_S even if the Mac never closes it
+   ok: the remote lock command runs timeout <DEPLOY_LOCK_MAX_S> cat (no flock here: the release itself is checked in CI)
+
+== ops/previous.sh: :previous from the running containers, the deployed tree saved and restored
+   ok: tag-running tags the image id of each running container (never :latest); a stopped service keeps its :previous
+   ok: save-tree and restore-tree bring back compose.yml, the Caddyfile and the file list; .env and .deployed-commit untouched; first deploy and bad arguments
+
+All 63 checks passed.

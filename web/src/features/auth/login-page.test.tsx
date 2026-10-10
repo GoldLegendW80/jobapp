@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, http, HttpResponse } from "msw";
 import { describe, expect, it, vi } from "vitest";
@@ -168,11 +168,10 @@ describe("login page", () => {
   });
 
   it("after a 429 disables the button with a countdown until Retry-After has passed", async () => {
-    // Fake only the interval and the clock: msw and user-event keep their real timeouts.
-    vi.useFakeTimers({
-      shouldAdvanceTime: true,
-      toFake: ["setInterval", "clearInterval", "Date"],
-    });
+    // Fake only the clock, and keep it still: the countdown reads Date.now() on its real 250 ms
+    // interval, so the time it shows moves only when the test moves it, however slow the machine.
+    // msw, user-event and waitFor keep their real timers.
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["Date"] });
     try {
       const detail = "Too many sign in attempts. Try again in 2 minutes.";
       let call = 0;
@@ -192,30 +191,34 @@ describe("login page", () => {
       expect(locked).toBeDisabled();
       expect(locked).toHaveTextContent("Try again in 1:05");
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000);
+      vi.advanceTimersByTime(30_000);
+      await waitFor(() => {
+        expect(locked).toHaveTextContent("Try again in 0:35");
       });
-      expect(locked).toHaveTextContent("Try again in 0:35");
       expect(locked).toBeDisabled();
       await user.click(locked); // disabled: sends nothing
       expect(seen).toHaveLength(1);
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(34_000);
+      vi.advanceTimersByTime(34_000);
+      await waitFor(() => {
+        expect(locked).toHaveTextContent("Try again in 0:01");
       });
-      expect(locked).toHaveTextContent("Try again in 0:01");
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1_000);
-      });
-      const again = screen.getByRole("button", { name: "Sign in" });
+      expect(locked).toBeDisabled();
+      vi.advanceTimersByTime(1_000);
+      const again = await screen.findByRole("button", { name: "Sign in" });
       expect(again).toBeEnabled();
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
       await user.click(again);
+      // Signed in: PublicOnly leaves for "/", whose index route redirects to "/jobs". Wait for
+      // the end of that chain, then check it is where the app settled.
       await waitFor(() => {
-        // Signed in: "/", which the index route redirects to "/jobs" (either may be seen).
-        expect(location()).toMatch(/^\/(jobs)?$/);
+        expect(location()).toBe("/jobs");
       });
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "Jobs" }),
+      ).toBeInTheDocument();
+      expect(location()).toBe("/jobs");
       expect(seen).toHaveLength(2);
     } finally {
       vi.useRealTimers();
@@ -223,10 +226,7 @@ describe("login page", () => {
   });
 
   it("a later 429 restarts the countdown with its own Retry-After", async () => {
-    vi.useFakeTimers({
-      shouldAdvanceTime: true,
-      toFake: ["setInterval", "clearInterval", "Date"],
-    });
+    vi.useFakeTimers({ shouldAdvanceTime: false, toFake: ["Date"] });
     try {
       let call = 0;
       loginAnswers(() => {
@@ -244,10 +244,8 @@ describe("login page", () => {
       expect(
         await screen.findByRole("button", { name: /try again in 0:03/i }),
       ).toBeDisabled();
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(3_000);
-      });
-      await user.click(screen.getByRole("button", { name: "Sign in" }));
+      vi.advanceTimersByTime(3_000);
+      await user.click(await screen.findByRole("button", { name: "Sign in" }));
       expect(
         await screen.findByRole("button", { name: /try again in 2:00/i }),
       ).toBeDisabled();

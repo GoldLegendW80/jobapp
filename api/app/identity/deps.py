@@ -85,7 +85,7 @@ def clear_cookie(request: Request) -> None:
 
 def cookie_is_secure(request: Request) -> bool:
     """Secure when the visitor's connection is https (the scheme uvicorn --proxy-headers takes
-    from X-Forwarded-Proto: https through the tunnel), and always in production."""
+    from X-Forwarded-Proto: https through Tailscale Funnel), and always in production."""
     return request.url.scheme == "https" or request.app.state.settings.app_env == "production"
 
 

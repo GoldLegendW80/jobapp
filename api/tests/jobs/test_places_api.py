@@ -11,7 +11,7 @@ import httpx
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.jobs import gazetteer
+from app.jobs import gazetteer, places
 from app.jobs.models import ContractType, JobStatus
 from tests.identity.api_helpers import Api
 from tests.jobs.test_api import ALICE, BOB, Signed, seed, sign_in
@@ -62,6 +62,7 @@ def test_empty(api: Api, alice: Signed) -> None:
         "places": [],
         "jobs": {},
         "unplaced": [],
+        "unplaced_locations": 0,
         "total": 0,
         "placed": 0,
         "unplaced_total": 0,
@@ -106,6 +107,7 @@ def test_places_counts_and_unplaced(
         {"location": "", "count": 1},
         {"location": "東京", "count": 1},
     ]
+    assert body["unplaced_locations"] == 3
 
 
 @pytest.mark.parametrize(
@@ -201,3 +203,42 @@ def test_not_shadowed_by_a_job_id(api: Api, alice: Signed) -> None:
     # "places" is not a job id: the route answers, not the detail's 404.
     assert get(api, alice).status_code == 200
     assert api.get(f"/api/jobs/{uuid.uuid4()}", token=alice.token).status_code == 404
+
+
+def test_unplaced_is_capped_most_frequent_first_ties_by_text(
+    api: Api, alice: Signed, factory: sessionmaker[Session]
+) -> None:
+    """UNPLACED_MAX locations at most, the most frequent first, equal counts in code point order
+    of the text; unplaced_locations and unplaced_total keep the full numbers."""
+    rows: list[dict[str, Any]] = []
+    # 260 distinct unplaced texts: "Nowhere 000" to "Nowhere 259" once each, then three of them,
+    # and a lowercase twin, more often, so the head of the list is decided by count, the rest by
+    # text. Plus placed rows, which never show in the list.
+    rows += [{"location": f"Nowhere {i:03d}"} for i in range(260)]
+    rows += [{"location": "Nowhere 250"}] * 4  # 5 in all
+    rows += [{"location": "Nowhere 007"}] * 2  # 3 in all
+    rows += [{"location": "Nowhere 100"}] * 2  # 3 in all, ties with 007
+    rows += [{"location": "nowhere 007"}] * 3  # 3 in all, ties too; lowercase sorts after
+    rows += [{"location": "Paris"}] * 5
+    seed(factory, alice.id, rows)
+    body = ok(api, alice)
+    assert len(body["unplaced"]) == places.UNPLACED_MAX == 200
+    assert body["unplaced_locations"] == 261
+    assert body["unplaced_total"] == 260 + 4 + 2 + 2 + 3
+    assert body["total"] == body["unplaced_total"] + 5
+    head = [(u["location"], u["count"]) for u in body["unplaced"][:4]]
+    assert head == [("Nowhere 250", 5), ("Nowhere 007", 3), ("Nowhere 100", 3), ("nowhere 007", 3)]
+    rest = [u["location"] for u in body["unplaced"][4:]]
+    expected = sorted(f"Nowhere {i:03d}" for i in range(260) if i not in (7, 100, 250))[:196]
+    assert rest == expected
+    assert all(u["count"] == 1 for u in body["unplaced"][4:])
+    # Same answer every time: the order is total, not left to the database.
+    assert ok(api, alice)["unplaced"] == body["unplaced"]
+
+
+def test_unplaced_under_the_cap_is_listed_whole(
+    api: Api, alice: Signed, factory: sessionmaker[Session]
+) -> None:
+    seed(factory, alice.id, [{"location": f"Nowhere {i:03d}"} for i in range(places.UNPLACED_MAX)])
+    body = ok(api, alice)
+    assert len(body["unplaced"]) == body["unplaced_locations"] == places.UNPLACED_MAX

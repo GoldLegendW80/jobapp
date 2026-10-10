@@ -1,8 +1,11 @@
 """Unit tests of app.identity.security: no database."""
 
 import base64
+import subprocess
+import sys
 import time
 import unicodedata
+from pathlib import Path
 
 import pytest
 from argon2 import PasswordHasher
@@ -108,6 +111,7 @@ def test_needs_rehash() -> None:
     assert needs_rehash("garbage")
 
 
+@pytest.mark.production_argon2
 def test_hash_dummy_spends_comparable_time() -> None:
     hashed = hash_password(GOOD)
     hash_dummy()  # warm the cached dummy hash
@@ -307,7 +311,56 @@ def test_tokens_equal() -> None:
 
 # --- cost ------------------------------------------------------------------------------------
 
+PRODUCTION = (3, 65536, 4, 32, 16, "ID")  # RFC 9106 low-memory profile
 
+
+def params(hasher: PasswordHasher) -> tuple[object, ...]:
+    return (
+        hasher.time_cost,
+        hasher.memory_cost,
+        hasher.parallelism,
+        hasher.hash_len,
+        hasher.salt_len,
+        hasher.type.name,
+    )
+
+
+def test_production_parameters_are_unchanged_outside_the_test_suite() -> None:
+    """A fresh interpreter, without the test fixtures, hashes with the production parameters:
+    the cheap test hasher exists only inside this test process."""
+    code = (
+        "from app.identity import security as s; h = s._hasher; "
+        "print(h.time_cost, h.memory_cost, h.parallelism, h.hash_len, h.salt_len, h.type.name); "
+        "print(s.hash_password('correct horse battery staple'))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).resolve().parents[2],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert tuple(out[:6]) == tuple(str(v) for v in PRODUCTION)
+    assert out[6].startswith("$argon2id$v=19$m=65536,t=3,p=4$")
+    assert params(PasswordHasher.from_parameters(security.PASSWORD_HASH_PARAMETERS)) == PRODUCTION
+
+
+def test_the_suite_hashes_cheaply_unless_marked() -> None:
+    assert params(security._hasher)[:3] == (1, 1024, 1)
+    assert hash_password(GOOD).startswith("$argon2id$v=19$m=1024,t=1,p=1$")
+
+
+@pytest.mark.production_argon2
+def test_the_marker_restores_the_production_hasher() -> None:
+    assert params(security._hasher) == PRODUCTION
+    hashed = hash_password(GOOD)
+    assert hashed.startswith("$argon2id$v=19$m=65536,t=3,p=4$")
+    assert not needs_rehash(hashed)
+    # A hash made at the cheap test cost would be upgraded at the next sign in.
+    assert needs_rehash(PasswordHasher(time_cost=1, memory_cost=1024, parallelism=1).hash(GOOD))
+
+
+@pytest.mark.production_argon2
 def test_argon2_cost_is_measured_and_bounded(capsys: pytest.CaptureFixture[str]) -> None:
     """Reports the hashing and verification time on this machine (printed even without -s).
     The bound is loose: the point is to notice a parameter change that makes sign in slow."""

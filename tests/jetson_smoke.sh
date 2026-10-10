@@ -11,7 +11,8 @@
 #                                             of .github/workflows/deploy.yml, host network)
 #
 # The full local checks live in tests/compose_smoke.sh; this keeps the ones that matter on the
-# target: health and SPA through caddy on loopback, nothing on the LAN, production settings,
+# target: health and SPA through caddy on loopback, nothing on the LAN, tailscale logged in with
+# Funnel on and caddy's tunnel listener trusting only its X-Forwarded-For, production settings,
 # migrations, redis persistence, database outage and recovery, memory limits.
 set -euo pipefail
 
@@ -73,7 +74,7 @@ body_of() { sed -n '/^---8<---$/,$p' <<<"$1" | tail -n +2; }
 hdr() { headers_of "$1" | grep -i "^$2:" | head -n 1 | cut -d' ' -f2-; }
 
 step "services healthy, only caddy published, on loopback"
-for svc in api caddy db redis worker cloudflared; do
+for svc in api caddy db redis worker tailscale; do
   id="$(rc ps -q "$svc")"
   [[ -n "$id" ]] || fail "$svc is not running"
   # A service that has just (re)started is `starting` until its first healthcheck: give it a minute.
@@ -90,7 +91,7 @@ for svc in api caddy db redis worker cloudflared; do
     [[ -z "$ports" ]] || fail "$svc publishes $ports"
   fi
 done
-ok "api, caddy, db, redis, worker, cloudflared healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
+ok "api, caddy, db, redis, worker, tailscale healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
 if [[ "$HOST" == "local" ]]; then
   ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')"
 else
@@ -166,6 +167,42 @@ done
 python3 -c 'import ipaddress, sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]).is_private else 1)' "${client:-x}" 2>/dev/null ||
   fail "the api logged client '${client:-nothing}' for a spoofed request on loopback"
 ok "the api logs the TCP peer $client, not the spoofed Cf-Connecting-Ip or X-Forwarded-For"
+
+# --- tailscale (Tailscale Funnel) ------------------------------------------------------------
+step "tailscale: logged in, Funnel on 443 to caddy:8080, userspace, unprivileged"
+ts="$(rc exec -T tailscale tailscale status --json --peers=false | tr -d '\r')"
+backend="$(sed -n 's/^[[:space:]]*"BackendState":[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$ts" | head -n 1)"
+dns="$(sed -n 's/^[[:space:]]*"DNSName":[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$ts" | head -n 1)"
+dns="${dns%.}"
+[[ "$backend" == "Running" ]] || fail "tailscale BackendState is '${backend:-none}' (NeedsLogin: a fresh TS_AUTHKEY is needed in .env)"
+[[ "$dns" =~ \.ts\.net$ ]] || fail "tailscale has no ts.net name: '${dns:-none}'"
+ok "logged in (BackendState Running) as $dns"
+serve="$(rc exec -T tailscale tailscale serve status --json | tr -d '\r' | tr -d ' \n')"
+[[ "$serve" == *"\"AllowFunnel\":{\"$dns:443\":true}"* ]] ||
+  fail "Funnel is not on for $dns:443 (is the funnel node attribute in the tailnet policy?): $serve"
+[[ "$serve" == *"\"Proxy\":\"http://caddy:8080\""* ]] || fail "serve does not proxy to http://caddy:8080: $serve"
+ok "serve config applied: https://$dns:443 proxied to http://caddy:8080, Funnel allowed"
+tsid="$(rc ps -q tailscale)"
+[[ "$(r "docker inspect -f '{{.HostConfig.Privileged}} {{.HostConfig.CapDrop}} {{len .HostConfig.Devices}}' $tsid")" == "false [ALL] 0" ]] ||
+  fail "the tailscale container is privileged, keeps capabilities or has devices"
+[[ "$(sed -n 's/^[[:space:]]*"TUN":[[:space:]]*\([a-z]*\).*/\1/p' <<<"$ts" | head -n 1)" == "false" ]] || fail "tailscale uses a TUN device"
+ok "userspace networking (TUN false), not privileged, every capability dropped, no device"
+# The tunnel listener trusts X-Forwarded-For from tailscale (what Funnel sets) and nothing else: a
+# request from the tailscale container with only a forged Cf-Connecting-Ip logs the container.
+rid="jetson-smoke-ts-$RANDOM$RANDOM"
+rc exec -T tailscale wget -q -O /dev/null --header "'X-Request-ID: $rid'" --header "'Cf-Connecting-Ip: 203.0.113.10'" \
+  http://caddy:8080/api/health || fail "caddy:8080 does not answer the tailscale container"
+client=""
+for i in 1 2 3; do
+  client="$(rc logs --no-log-prefix --since 2m api | grep -F "\"request_id\": \"$rid\"" |
+    sed -n 's/.*"client": "\([^"]*\)".*/\1/p' | tail -n 1 || true)"
+  [[ -n "$client" ]] && break
+  sleep "$i"
+done
+python3 -c 'import ipaddress, sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]).is_private else 1)' "${client:-x}" 2>/dev/null ||
+  fail "the api logged client '${client:-nothing}' for a forged Cf-Connecting-Ip on caddy:8080"
+ok "caddy:8080 ignores a forged Cf-Connecting-Ip: the api logs the tailscale container $client"
+# --- end of tailscale ------------------------------------------------------------------------
 
 step "log hygiene: a failed sign in leaves no password and no email in the logs"
 PGU="$(renv POSTGRES_USER)"
@@ -243,11 +280,11 @@ fi
 step "memory under the limits"
 stats="$(r "docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \$(cd $RDIR && docker compose -f compose.yml --profile tunnel ps -q)")"
 printf '%s\n' "$stats" | sed 's/^/   /'
-for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB" "worker 1.5GiB" "cloudflared 128MiB"; do
+for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB" "worker 1.5GiB" "tailscale 128MiB"; do
   name="${pair% *}"
   limit="${pair#* }"
   grep -Eq "^jobapp-$name-[0-9]+ .* / $limit\$" <<<"$stats" || fail "$name limit is not $limit"
 done
-ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, worker 1.5GiB, cloudflared 128MiB"
+ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, worker 1.5GiB, tailscale 128MiB"
 
 printf '\nAll %d checks passed on %s.\n' "$passed" "$HOST"

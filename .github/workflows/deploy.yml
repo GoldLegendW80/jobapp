@@ -12,9 +12,12 @@
 # ~/jobapp with .rsyncignore (the .env there is never touched), build, a database backup,
 # compose up --wait, migrations, tests/jetson_smoke.sh in quick mode, the public URL in the job
 # summary. Images are built before anything restarts, so a failed build leaves the running stack
-# as it was; a failed up or migration puts the previous images back (tagged :previous before the
-# build) and starts them again. A migration runs in one transaction and rolls back on failure;
-# for data, the predeploy dump named in the log restores with ops/db.sh restore-live.
+# as it was; a failed up or migration puts back what ran before and starts it again: the images
+# of the containers that were running (tagged :previous from their image ids, ops/previous.sh
+# tag-running) and the files of ~/jobapp they ran with (compose.yml, Caddyfile and the rest,
+# copied to ~/jobapp-backups/previous-tree before the sync and synced back). A migration runs in
+# one transaction and rolls back on failure; for data, the predeploy dump named in the log
+# restores with ops/db.sh restore-live.
 #
 # Security: the runner has the host Docker socket, which is root on the Jetson. Only this private
 # repository's deploy.yml from main reaches it; it must never be offered to forks or public
@@ -94,6 +97,16 @@ jobs:
           echo "waiting for the deploy lock (shared with ./deploy.sh)"
           flock -w 900 9 || { echo "::error::another deploy held the lock for 15 minutes"; exit 1; }
 
+          echo "::group::what ran before: images of the running containers, files of ~/jobapp"
+          tree="$BACKUPS/previous-tree"
+          if [[ -f "$APP/compose.yml" ]]; then
+            (cd "$APP" && COMPOSE="$COMPOSE" bash "$GITHUB_WORKSPACE/ops/previous.sh" tag-running)
+          else
+            echo "nothing deployed in $APP yet: no images to keep"
+          fi
+          bash ops/previous.sh save-tree "$APP" "$tree"
+          echo "::endgroup::"
+
           echo "::group::sync ~/jobapp from $COMMIT"
           # deploy.sh sync_tree rules: .rsyncignore excludes .env* and .deployed-commit, so
           # --delete never removes them.
@@ -102,15 +115,25 @@ jobs:
           echo "::endgroup::"
           cd "$APP"
 
+          restore_previous() { # the files and :latest images of what ran before; nothing restarts
+            bash "$GITHUB_WORKSPACE/ops/previous.sh" restore-tree "$tree" "$APP" ||
+              echo "::warning::the previous files could not be restored: $APP holds $COMMIT"
+            for img in jobapp-api jobapp-caddy; do
+              if docker image inspect "$img:previous" >/dev/null 2>&1; then
+                docker tag "$img:previous" "$img:latest"
+              fi
+            done
+          }
+
           echo "::group::build (the running stack is untouched until this succeeds)"
-          for img in jobapp-api jobapp-caddy; do
-            if docker image inspect "$img:latest" >/dev/null 2>&1; then
-              docker tag "$img:latest" "$img:previous"
-            fi
-          done
           for svc in api caddy; do
             start=$SECONDS
-            $COMPOSE --progress=plain build "$svc"
+            if ! $COMPOSE --progress=plain build "$svc"; then
+              # The running containers never stopped; the files and tags go back to match them.
+              echo "::error::build of $svc failed: the running stack is untouched"
+              restore_previous
+              exit 1
+            fi
             echo "build $svc: $((SECONDS - start))s"
           done
           echo "::endgroup::"
@@ -130,13 +153,9 @@ jobs:
           fi
           echo "::endgroup::"
 
-          rollback() { # the previous images back under :latest, started again
-            echo "::error::$1: rolling back to the previous images"
-            for img in jobapp-api jobapp-caddy; do
-              if docker image inspect "$img:previous" >/dev/null 2>&1; then
-                docker tag "$img:previous" "$img:latest"
-              fi
-            done
+          rollback() { # the previous files and images back, started again
+            echo "::error::$1: rolling back to the previous files and images"
+            restore_previous
             $COMPOSE up -d --remove-orphans --wait --wait-timeout 180 || true
             $COMPOSE ps -a || true
             if [[ -n "$dump" ]]; then
@@ -163,21 +182,23 @@ jobs:
           echo "$COMMIT" > "$APP/.deployed-commit"
           echo "deployed $COMMIT"
 
+      # --- tailscale: the stable Funnel URL (https://<node>.<tailnet>.ts.net) -----------------
       - name: Public URL
         working-directory: ${{ env.APP }}
         run: |
           set -euo pipefail
-          id="$($COMPOSE ps -q cloudflared)"
+          # Self.DNSName of `tailscale status --json --peers=false`, as ./deploy.sh url reads it.
           url=""
           for _ in $(seq 1 15); do
-            started="$(docker inspect -f '{{.State.StartedAt}}' "$id")"
-            url="$(docker logs --since "$started" "$id" 2>&1 |
-              grep -oE 'https://[a-z0-9]+(-[a-z0-9]+)*\.trycloudflare\.com' | grep -v '^https://api\.' | tail -n 1 || true)"
-            [[ -n "$url" ]] && break
+            status="$($COMPOSE exec -T tailscale tailscale status --json --peers=false 2>/dev/null || true)"
+            if [[ "$(sed -n 's/^[[:space:]]*"BackendState":[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$status" | head -n 1)" == "Running" ]]; then
+              dns="$(sed -n 's/^[[:space:]]*"DNSName":[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$status" | head -n 1)"
+              [[ "${dns%.}" =~ \.ts\.net$ ]] && url="https://${dns%.}" && break
+            fi
             sleep 2
           done
-          [[ -n "$url" ]] || { echo "::error::cloudflared logged no trycloudflare URL"; exit 1; }
-          public="no answer yet (a fresh hostname can take a minute)"
+          [[ -n "$url" ]] || { echo "::error::tailscale is not connected or has no ts.net name (docker compose logs tailscale)"; exit 1; }
+          public="no answer yet (the first request after a first login waits for the certificate)"
           for delay in 2 4 8 15 15 15; do
             if [[ "$(curl -s --max-time 10 "$url/api/health" || true)" == '{"status":"ok"}' ]]; then
               public="answers /api/health"
@@ -193,6 +214,7 @@ jobs:
             echo "- alembic: $($COMPOSE exec -T api alembic current 2>/dev/null | tr -d '\r')"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "$url"
+      # --- end of tailscale -------------------------------------------------------------------
 
       - name: State on failure
         if: failure()

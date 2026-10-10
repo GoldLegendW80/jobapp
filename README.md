@@ -1,11 +1,11 @@
 # jobapp
 
-A self-hosted job-search app for Harald and a few invited friends. It finds postings, scores them against a profile, writes a tailored CV and letter per job, and lets an agent fill application forms in a live browser. It runs as a Docker Compose stack on a Jetson Orin Nano at home and is reached through a Cloudflare quick tunnel.
+A self-hosted job-search app for Harald and a few invited friends. It finds postings, scores them against a profile, writes a tailored CV and letter per job, and lets an agent fill application forms in a live browser. It runs as a Docker Compose stack on a Jetson Orin Nano at home and is reached at a stable public URL through Tailscale Funnel.
 
 ## Documents
 
 - [CAPABILITY-MAP.md](CAPABILITY-MAP.md): the modules, their dependencies and the build order.
-- [SPEC-platform.md](SPEC-platform.md): the platform module (Compose stack, deploy, tunnel), built first.
+- [SPEC-platform.md](SPEC-platform.md): the platform module (Compose stack, deploy, public URL through Tailscale Funnel), built first.
 - [CONTRIBUTING.md](CONTRIBUTING.md): branches, pull requests, CI, review and automatic deploys.
 - [tasks/plan.md](tasks/plan.md) and [tasks/todo.md](tasks/todo.md): the implementation plan and task list of the current module.
 
@@ -36,6 +36,10 @@ to `index.html` for client routes, and proxies `/api/*` to `api:8000` with the p
 
 `docker compose exec api pytest` needs a test database: the smoke script creates `jobapp_test` in the
 compose `db` and runs `pytest -m "not docker"` with `TEST_DATABASE_URL` pointing at it.
+`pytest -n 4` (pytest-xdist) runs four workers, each on a database of its own created next to
+`TEST_DATABASE_URL`'s and dropped at the end; keep the `docker`-marked tests serial (`-m docker`
+without `-n`). The suite hashes passwords with a cheap argon2 cost in-process; tests marked
+`production_argon2` and a fresh-interpreter check keep the production cost honest.
 Migrations live in `api/alembic/versions/`; models register on `app.models_base.Base` and are imported
 in `api/app/models.py` so `alembic revision --autogenerate` sees them.
 
@@ -48,7 +52,7 @@ in `api/app/models.py` so `alembic revision --autogenerate` sees them.
 ./deploy.sh ps                 # docker compose ps on the Jetson
 ./deploy.sh stats              # memory and CPU per service
 ./deploy.sh ssh                # shell in the deploy directory
-./deploy.sh url                # the current https://*.trycloudflare.com URL, alone on stdout
+./deploy.sh url                # the stable public URL, https://jobapp.taild83d16.ts.net, alone on stdout
 ./deploy.sh smoke              # checks on the Jetson, then through the public URL; exit 1 if any fails
 ./deploy.sh smoke --full       # same, plus a database outage and recovery (stops and starts db once)
 ./deploy.sh backup [--pull]    # verified pg_dump -Fc to jetson:~/jobapp-backups/, --pull copies it to backups/
@@ -85,14 +89,20 @@ Postgres and Redis, coverage at least 95 percent), web (eslint, tsc, Vitest, bui
 Playwright journeys with throwaway accounts and a synthetic jobs import, never Harald's data) and
 pre-commit. When CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
 Jetson's self-hosted runner, under the Jetson's deploy lock (`flock` on
-`~/jobapp-backups/.deploy.lock`, which `./deploy.sh` takes too, so the two never overlap): rsync of
-that commit into `~/jobapp` (same `.rsyncignore`, `.env` kept), images built first (a failed build
-leaves the running stack untouched; the running images are tagged `:previous` beforehand), a
+`~/jobapp-backups/.deploy.lock`, which `./deploy.sh` takes too, so the two never overlap; the Jetson
+lets go of the Mac's hold after `DEPLOY_LOCK_MAX_S`, an hour by default, so a Mac that sleeps mid
+deploy cannot block GitHub's deploys for hours): rsync of
+that commit into `~/jobapp` (same `.rsyncignore`, `.env` kept; the tree it replaces is copied to
+`~/jobapp-backups/previous-tree` first), images built first (a failed build leaves the running
+stack untouched and puts those files back; beforehand, `ops/previous.sh tag-running` tags as
+`:previous` the image each running api and caddy container was started from, read with
+`docker inspect`, so `:previous` is always an image that ran), a
 backup into `~/jobapp-backups/deploys/` whenever the database volume exists (db started first if
 it was stopped; newest 10 kept, separate from the nightly ones), `compose up --wait`, migrations,
 `tests/jetson_smoke.sh` in quick mode, `~/jobapp/.deployed-commit` written once the smoke passed,
-and the public URL in the run's summary. If `up` or a migration fails, the `:previous` images are
-put back and started again; a migration runs in one transaction and rolls back, and for data the
+and the public URL in the run's summary. If `up` or a migration fails, the previous files
+(`compose.yml`, the Caddyfile and the rest of the tree, `.env` never touched) and the `:previous`
+images are put back and started again; a migration runs in one transaction and rolls back, and for data the
 log names the predeploy dump to restore with `ops/db.sh restore-live`. A started deploy is never
 cancelled. `gh workflow run deploy.yml -f ref=<branch or sha>` deploys a branch by hand to test it
 before the merge (the next merge redeploys `main`); the workflow itself always comes from `main`.
@@ -127,34 +137,65 @@ file and images), so dispatch only reviewed branches. Anyone with write access t
 
 ## Public URL
 
-`cloudflared` runs a Cloudflare quick tunnel (free, no account, no domain) from the Jetson to
-Caddy. It only makes outbound connections, so no port is opened on the router. The URL is
-random and changes every time the container starts (deploy that recreates it, `restart`, reboot):
+The service `tailscale` puts the Jetson on Harald's tailnet (`taild83d16.ts.net`, free plan) and
+opens Caddy to the internet with [Tailscale Funnel](https://tailscale.com/kb/1223/funnel). The URL
+is stable, `https://jobapp.taild83d16.ts.net` (the node name `TS_HOSTNAME` plus the tailnet), so
+OAuth redirect URIs can point at it. It survives restarts, redeploys and reboots. The container only
+makes outbound connections (no port opened on the router, none published on the Jetson) and runs
+with userspace networking: no `/dev/net/tun`, no `NET_ADMIN`, every capability dropped, no sudo.
 
 ```bash
+./deploy.sh url                          # https://jobapp.taild83d16.ts.net
 curl "$(./deploy.sh url)/api/health"     # {"status":"ok"} from anywhere
 ```
 
-`./deploy.sh url` reads the logs of the container's current start only, so it never prints the
-dead URL of a previous start, and waits up to 30s for a fresh one. `./deploy.sh` prints the URL at
-the end. A new hostname can take up to a minute to resolve (the zone's negative DNS cache is 60s);
-the smoke backs off and retries rather than hammering it, because quick tunnels are rate limited
-and have no uptime guarantee.
+`./deploy.sh url` asks the running container (`tailscale status --json`, `Self.DNSName`) and waits
+up to 30s for it to connect. A missing or stopped container, a node that is not logged in (it then
+shows the login link) or one without a ts.net name is an exit 1 with the reason, nothing on stdout.
+If another device of the tailnet already holds the name, the node becomes `jobapp-1`: `url` prints
+the real name with a warning, and the old device must be removed in the admin console (Machines).
+`./deploy.sh` prints the URL at the end; `.github/workflows/deploy.yml` puts it in the job summary.
 
-cloudflared reaches Caddy on its own listener, `caddy:8080`, never published. That listener trusts
-the Compose network as a proxy and takes the visitor's address from `Cf-Connecting-Ip`, which the
-Cloudflare edge sets (and refuses with 403 when a visitor sends it). The published `:80` trusts
-nobody. Either way the api receives exactly one `X-Forwarded-For` and logs it as `client`.
+**Login.** The first start needs a one-time auth key from the admin console (Settings, Keys), as
+`TS_AUTHKEY=` in the Jetson's `~/jobapp/.env` next to `TS_HOSTNAME=jobapp`. It is read once
+(`TS_AUTH_ONCE`): the node's login, key and HTTPS certificate then live in the `tsstate` volume, so
+**remove `TS_AUTHKEY` from the Jetson's `.env` (and from `.env.jetson`) once `./deploy.sh url`
+answers**. A new key is needed only if `tsstate` is deleted or the node is removed from the
+tailnet. Without a key and without a saved login the container never turns healthy (its logs say
+`To authenticate, visit: ...`, then `failed to auth tailscale`), so a deploy fails loudly. The api
+reads the same `.env`, so the key is in its environment until it is removed: another reason to
+remove it. Funnel needs the `funnel` node attribute in the tailnet policy (granted to
+`autogroup:member`) and HTTPS certificates enabled in the tailnet, both set on 2026-10-10.
+
+**Headers.** `tailscale/serve.json` (its folder mounted read only, `TS_SERVE_CONFIG`) terminates TLS for
+`${TS_CERT_DOMAIN}:443`, proxies everything to Caddy's own listener `caddy:8080` (never
+published) and allows Funnel on that port only. Funnel's proxy sets `X-Forwarded-For` to the
+address the visitor connected from, replacing anything the visitor sent, and `X-Forwarded-Proto:
+https`. The `:8080` listener trusts the Compose network as a proxy and reads the client from
+`X-Forwarded-For` only (strictly right to left); `Cf-Connecting-Ip`, `X-Real-Ip` and the like pass
+through Funnel untouched, so they are never trusted. The published `:80` trusts nobody. Either way
+the api receives exactly one `X-Forwarded-For` and logs it as `client`. `./deploy.sh smoke` proves
+it from outside: one request forging every client address header, and the api must log this
+machine's public address. `tests/tailscale_test.sh` checks the Compose definition, Caddy's trust
+rules and a start without a key, locally and without joining the tailnet.
 
 The service sits in the Compose profile `tunnel`, which `deploy.sh` enables on the Jetson. Neither
-the dev stack nor a plain `docker compose -f compose.yml up` on the Mac opens a public tunnel.
+the dev stack nor a plain `docker compose -f compose.yml up` on the Mac joins the tailnet.
+
+**Bringing the Cloudflare quick tunnel back** (it was the public entry point until 2026-10-10:
+free, no account, but a random `*.trycloudflare.com` URL on every start): restore the
+`cloudflared` service of compose.yml (`cloudflare/cloudflared` running `tunnel --no-autoupdate
+--url http://caddy:8080`, profile `tunnel`), add `Cf-Connecting-Ip` back to the `:8080`
+`client_ip_headers` of caddy/Caddyfile only if tailscale is removed at the same time (Funnel
+does not strip it), and take `tunnel_url` and its tests from the history of deploy.sh (git log
+`-S trycloudflare`).
 
 ## Accounts
 
 Nobody signs up alone. The first admin comes from the Jetson's command line:
 
 ```bash
-./deploy.sh admin create you@example.org    # prints https://<tunnel>/invite/<token>, valid 7 days, single use
+./deploy.sh admin create you@example.org    # prints https://jobapp.taild83d16.ts.net/invite/<token>, valid 7 days, single use
 ```
 
 Open the link, choose a name and a password (10 to 128 characters, not the email, not a common
@@ -310,7 +351,7 @@ throwaway admin `e2e-admin@example.org` only, removed afterwards with the same c
 
 Every sign in attempt is recorded in `login_attempts` (the normalised email, or the trimmed
 lowercase text when it is not an address; the client address the api sees, which is
-`Cf-Connecting-Ip` through the tunnel and the TCP peer on loopback; the time; success or not),
+Funnel's `X-Forwarded-For` through the public URL and the TCP peer on loopback; the time; success or not),
 unknown and disabled accounts included. Before any password is checked:
 
 - 5 failures for one email in 15 minutes, or 20 from one address, answer **429**
@@ -476,7 +517,7 @@ line, at `BACKUP_CRON` (default `17 3 * * *`, the Jetson's local time):
 ## Reboot and crash recovery
 
 Every service has `restart: unless-stopped` and `docker.service` is enabled at boot, so the daemon
-starts the stack again after a reboot; `cloudflared` comes back with a new URL.
+starts the stack again after a reboot; `tailscale` logs in again from its saved state, with the same URL.
 `tests/crash_check.sh` proves the restart half without sudo: it kills each container's main process
 with SIGKILL from the host PID namespace (what the OOM killer or a segfault looks like) and waits
 for the daemon to restart it healthy. `docker kill` and `docker compose kill` count as a manual

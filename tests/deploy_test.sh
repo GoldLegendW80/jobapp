@@ -6,11 +6,12 @@
 #
 # Covers: shellcheck, the subcommand dispatcher, an unreachable host failing fast, the
 # .rsyncignore rules (secrets and junk never shipped, a remote .env never deleted by --delete), and
-# `url` against a fake ssh that plays the Jetson's docker (URL alone on stdout, logs read since the
-# container's last start, waiting, stopped or missing cloudflared), the backup and restore
+# `url` against a fake ssh that plays the Jetson's docker (the Funnel URL from tailscale status
+# alone on stdout; a renamed node warned; not logged in, approval pending, no ts.net name, still
+# starting, stopped or missing tailscale all an exit 1 with the reason), the backup and restore
 # options refused before any network call, *.dump and backups/ kept out of git and rsync, and the
 # typed confirmation of restore --into-live against a fake Jetson, `admin create` (argument
-# checks before any network call; the CLI run in the api container with the tunnel URL, quoted),
+# checks before any network call; the CLI run in the api container with the Funnel URL, quoted),
 # `admin unlock` (argument checks first; psql in the db container, values bound, count printed),
 # and `jobs import` and `profile import` (argument checks; conversion on the Mac of a synthetic job
 # folder, the document streamed to the CLI in the api container; a bad source never sent).
@@ -45,8 +46,8 @@ run() {
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
 
 step "shellcheck"
-SCRIPTS=(deploy.sh ops/db.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
-  tests/crash_check.sh tests/reboot_check.sh)
+SCRIPTS=(deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
+  tests/crash_check.sh tests/reboot_check.sh tests/tailscale_test.sh)
 docker run --rm -v "$ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" "${SCRIPTS[@]}" || fail "shellcheck"
 ok "${SCRIPTS[*]} clean"
 for f in "${SCRIPTS[@]}"; do
@@ -348,18 +349,19 @@ done
 ok ".env.jetson, backups/ and any *.dump are git-ignored"
 
 step "url against a fake Jetson (fake ssh on PATH)"
-# The fake answers the remote commands deploy.sh sends: the cloudflared container id, its state
-# and start time, and its logs, from FAKE_* variables; it records every docker logs command.
+# The fake answers the remote commands deploy.sh sends: the tailscale container id, its state,
+# and its `tailscale status --json --peers=false`, from FAKE_* variables; it records every status
+# command.
 mkdir -p "$WORK/bin"
 cat >"$WORK/bin/ssh" <<'FAKE'
 #!/usr/bin/env bash
 cmd="${*: -1}"
 case "$cmd" in
-  *"ps -a -q cloudflared"*) [[ -z "${FAKE_CF_ID:-}" ]] || echo "$FAKE_CF_ID" ;;
-  *"docker inspect"*) echo "${FAKE_CF_STATE:-running} ${FAKE_CF_STARTED:-2026-10-08T12:34:54.123456789Z}" ;;
-  *"docker logs"*)
+  *"ps -a -q tailscale"*) [[ -z "${FAKE_TS_ID:-}" ]] || echo "$FAKE_TS_ID" ;;
+  *"docker inspect"*) echo "${FAKE_TS_STATE:-running}" ;;
+  *"tailscale status --json"*)
     echo "$cmd" >>"$FAKE_CALLS"
-    cat "$FAKE_CF_LOG"
+    cat "$FAKE_TS_JSON"
     ;;
   *"exec -T db sh -c"*"psql"*)
     echo "$cmd" >>"$FAKE_CALLS"
@@ -381,7 +383,7 @@ case "$cmd" in
   *"exec -T api python -m app.identity.cli"*)
     echo "$cmd" >>"$FAKE_CALLS"
     echo "Setup link for zoe@example.org, valid 7 days, single use:"
-    echo "  https://gathering-saves-below-twelve.trycloudflare.com/invite/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    echo "  https://jobapp.taild83d16.ts.net/invite/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     exit "${FAKE_CLI_EXIT:-0}"
     ;;
 esac
@@ -396,74 +398,141 @@ run_split() {
   "$@" >"$WORK/stdout" 2>"$WORK/stderr" || got=$?
   [[ "$got" == "$want" ]] || fail "$* exited $got, expected $want: $(head -c 400 "$WORK/stderr")"
 }
-cat >"$WORK/cf.log" <<'LOG'
-2026-10-08T12:34:54Z INF Requesting new quick Tunnel on trycloudflare.com...
-2026-10-08T12:34:54Z INF Requesting https://api.trycloudflare.com/tunnel
-2026-10-08T12:34:59Z INF +--------------------------------------------------------------------------------------------+
-2026-10-08T12:34:59Z INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |
-2026-10-08T12:34:59Z INF |  https://gathering-saves-below-twelve.trycloudflare.com                                    |
-2026-10-08T12:34:59Z INF +--------------------------------------------------------------------------------------------+
-2026-10-08T12:34:59Z INF Settings: map[ha-connections:1 metrics:127.0.0.1:20241 no-autoupdate:true url:http://caddy:8080]
-2026-10-08T12:35:00Z INF Registered tunnel connection connIndex=0 location=cdg12 protocol=quic ✓
-LOG
+# ts_status <BackendState> <DNSName> <HostName> [AuthURL]: a `tailscale status --json --peers=false`
+# as v1.102 prints it (indented, Self after the top-level fields, CertDomains and a User map after).
+ts_status() {
+  cat <<JSON
+{
+  "Version": "1.102.5-t1b2c3d4e-gabcdef012",
+  "TUN": false,
+  "BackendState": "$1",
+  "HaveNodeKey": true,
+  "AuthURL": "${4:-}",
+  "TailscaleIPs": [
+    "100.101.102.103",
+    "fd7a:115c:a1e0::1"
+  ],
+  "Self": {
+    "ID": "nABCDEF1CNTRL",
+    "PublicKey": "nodekey:0000000000000000000000000000000000000000000000000000000000000000",
+    "HostName": "$3",
+    "DNSName": "$2",
+    "OS": "linux",
+    "UserID": 1234567890,
+    "TailscaleIPs": [
+      "100.101.102.103"
+    ],
+    "Online": true,
+    "Capabilities": [
+      "funnel",
+      "https"
+    ]
+  },
+  "Health": [],
+  "MagicDNSSuffix": "taild83d16.ts.net",
+  "CurrentTailnet": {
+    "Name": "hthautin@example.org",
+    "MagicDNSSuffix": "taild83d16.ts.net",
+    "MagicDNSEnabled": true
+  },
+  "CertDomains": [
+    "otherhost.taild83d16.ts.net"
+  ],
+  "User": {
+    "1234567890": {
+      "ID": 1234567890,
+      "LoginName": "someone@example.org",
+      "DisplayName": "Someone"
+    }
+  },
+  "ClientVersion": null
+}
+JSON
+}
+ts_status Running jobapp.taild83d16.ts.net. jobapp >"$WORK/ts.json"
 : >"$WORK/calls"
-run_split 0 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh url
-[[ "$(cat "$WORK/stdout")" == "https://gathering-saves-below-twelve.trycloudflare.com" ]] ||
+run_split 0 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/ts.json" ./deploy.sh url
+[[ "$(cat "$WORK/stdout")" == "https://jobapp.taild83d16.ts.net" ]] ||
   fail "stdout is not exactly the URL: $(cat "$WORK/stdout")"
 [[ "$(wc -l <"$WORK/stdout" | tr -d ' ')" == "1" ]] || fail "stdout has more than one line"
-url="$(fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh url 2>/dev/null)"
-[[ "$url" == "https://gathering-saves-below-twelve.trycloudflare.com" ]] || fail "\$(./deploy.sh url) gave '$url'"
-ok "stdout is the URL alone, one line, so \$(./deploy.sh url) works; api.trycloudflare.com ignored"
-grep -q -- "docker logs --since 2026-10-08T12:34:54.123456789Z abc123" "$WORK/calls" ||
-  fail "logs not read since the container start: $(cat "$WORK/calls")"
-ok "logs read with --since the container's StartedAt, so a stale URL of a previous start is never seen"
+[[ ! -s "$WORK/stderr" ]] || fail "stderr not empty on success: $(cat "$WORK/stderr")"
+url="$(fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/ts.json" ./deploy.sh url 2>/dev/null)"
+[[ "$url" == "https://jobapp.taild83d16.ts.net" ]] || fail "\$(./deploy.sh url) gave '$url'"
+ok "stdout is https://<Self.DNSName> alone, trailing dot dropped, one line, so \$(./deploy.sh url) works"
+grep -qF -- "docker exec abc123 tailscale status --json --peers=false" "$WORK/calls" ||
+  fail "status not asked of the running container: $(cat "$WORK/calls")"
+ok "the name comes from tailscale status --json --peers=false in the tailscale container (CertDomains and users ignored)"
 
-# Two URLs in the window (a restart between StartedAt and the read): the newest wins.
-printf '%s\n' "INF |  https://old-name-one.trycloudflare.com  |" "INF |  https://new-name-two.trycloudflare.com  |" >"$WORK/two.log"
-run_split 0 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/two.log" ./deploy.sh url
-[[ "$(cat "$WORK/stdout")" == "https://new-name-two.trycloudflare.com" ]] || fail "not the newest: $(cat "$WORK/stdout")"
-ok "the last URL logged wins"
+# Another device already holds the name: the node became jobapp-1, the URL moved. Printed, with a
+# warning on stderr, so OAuth redirect URIs are fixed before anyone wonders why sign in fails.
+ts_status Running jobapp-1.taild83d16.ts.net. jobapp >"$WORK/ts1.json"
+run_split 0 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/ts1.json" ./deploy.sh url
+[[ "$(cat "$WORK/stdout")" == "https://jobapp-1.taild83d16.ts.net" ]] || fail "renamed node: $(cat "$WORK/stdout")"
+grep -q "the node is jobapp-1, not jobapp: another device holds that name" "$WORK/stderr" ||
+  fail "no warning for a renamed node: $(cat "$WORK/stderr")"
+ok "a node renamed by a name clash (jobapp-1): URL printed, warning on stderr"
 
-: >"$WORK/empty.log"
-start=$SECONDS
-run_split 1 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/empty.log" DEPLOY_URL_TIMEOUT=3 ./deploy.sh url
+ts_status NeedsLogin "" jobapp "https://login.tailscale.com/a/0123456789abc" >"$WORK/login.json"
+run_split 1 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/login.json" ./deploy.sh url
 [[ ! -s "$WORK/stdout" ]] || fail "stdout not empty on failure: $(cat "$WORK/stdout")"
-grep -q "waiting up to 3s" "$WORK/stderr" || fail "no waiting note on stderr"
-grep -q "logged no trycloudflare URL within 3s" "$WORK/stderr" || fail "timeout message: $(cat "$WORK/stderr")"
+grep -q "tailscale on fakejetson is not logged in (NeedsLogin): put a fresh one-time TS_AUTHKEY in jobapp/.env" "$WORK/stderr" ||
+  fail "NeedsLogin message: $(cat "$WORK/stderr")"
+grep -qF "or log in once at https://login.tailscale.com/a/0123456789abc" "$WORK/stderr" || fail "no login link: $(cat "$WORK/stderr")"
+ok "not logged in (no key, expired key): exit 1 at once, says to set TS_AUTHKEY, shows the login link"
+
+ts_status NeedsMachineAuth "" jobapp >"$WORK/approve.json"
+run_split 1 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/approve.json" ./deploy.sh url
+grep -q "waits for the device to be approved" "$WORK/stderr" || fail "NeedsMachineAuth: $(cat "$WORK/stderr")"
+ok "device approval pending: exit 1 with the reason"
+
+ts_status Running "" jobapp >"$WORK/nodns.json"
+run_split 1 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/nodns.json" ./deploy.sh url
+grep -q "reports no ts.net name ('none'): is MagicDNS on" "$WORK/stderr" || fail "no DNSName: $(cat "$WORK/stderr")"
+ts_status Running 'evil.example.org.' jobapp >"$WORK/evil.json"
+run_split 1 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/evil.json" ./deploy.sh url
+[[ ! -s "$WORK/stdout" ]] || fail "accepted a name outside ts.net: $(cat "$WORK/stdout")"
+grep -q "reports no ts.net name ('evil.example.org')" "$WORK/stderr" || fail "foreign name: $(cat "$WORK/stderr")"
+ok "connected without a ts.net name (MagicDNS off, or a foreign name): exit 1, nothing on stdout"
+
+ts_status Starting "" jobapp >"$WORK/starting.json"
+start=$SECONDS
+run_split 1 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/starting.json" DEPLOY_URL_TIMEOUT=3 ./deploy.sh url
+[[ ! -s "$WORK/stdout" ]] || fail "stdout not empty on failure: $(cat "$WORK/stdout")"
+grep -q "waiting up to 3s for tailscale to connect" "$WORK/stderr" || fail "no waiting note on stderr"
+grep -q "tailscale (running, Starting) did not connect within 3s" "$WORK/stderr" || fail "timeout message: $(cat "$WORK/stderr")"
 ((SECONDS - start >= 3 && SECONDS - start <= 10)) || fail "timeout took $((SECONDS - start))s"
-ok "no URL yet: waits, then exit 1 after the timeout, message on stderr, stdout empty"
+: >"$WORK/empty.json"
+run_split 1 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/empty.json" DEPLOY_URL_TIMEOUT=1 ./deploy.sh url
+grep -q "tailscale (running, no status yet) did not connect within 1s" "$WORK/stderr" || fail "no status: $(cat "$WORK/stderr")"
+ok "still starting, or no status from the CLI: waits, then exit 1 after the timeout, stdout empty"
 
-printf 'INF |  https://evil.trycloudflare.com.attacker.example  |\nINF https://trycloudflare.com/\n' >"$WORK/bad.log"
-run_split 1 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/bad.log" DEPLOY_URL_TIMEOUT=1 ./deploy.sh url
-[[ ! -s "$WORK/stdout" ]] || fail "accepted a lookalike URL: $(cat "$WORK/stdout")"
-ok "lookalike hosts and the bare domain are not taken for the tunnel URL"
-
-run_split 1 fake FAKE_CF_ID=abc123 FAKE_CF_STATE=exited FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh url
-grep -q "cloudflared is exited on fakejetson, not running" "$WORK/stderr" || fail "exited: $(cat "$WORK/stderr")"
+run_split 1 fake FAKE_TS_ID=abc123 FAKE_TS_STATE=exited FAKE_TS_JSON="$WORK/ts.json" ./deploy.sh url
+grep -q "tailscale is exited on fakejetson, not running (./deploy.sh logs tailscale" "$WORK/stderr" || fail "exited: $(cat "$WORK/stderr")"
 [[ ! -s "$WORK/stdout" ]] || fail "stdout not empty"
-run_split 1 fake FAKE_CF_ID= FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh url
-grep -q "cloudflared is not running on fakejetson: no container" "$WORK/stderr" || fail "missing: $(cat "$WORK/stderr")"
-ok "cloudflared stopped or missing: exit 1 with a clear message, stdout empty"
+run_split 1 fake FAKE_TS_ID= FAKE_TS_JSON="$WORK/ts.json" ./deploy.sh url
+grep -q "tailscale is not running on fakejetson: no container" "$WORK/stderr" || fail "missing: $(cat "$WORK/stderr")"
+[[ ! -s "$WORK/stdout" ]] || fail "stdout not empty"
+ok "tailscale container stopped or missing: exit 1 with a clear message, stdout empty"
 
 step "admin create against the fake Jetson"
 : >"$WORK/calls"
-run_split 0 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh admin create Zoe@Example.org
-grep -q "https://gathering-saves-below-twelve.trycloudflare.com/invite/A\{43\}$" "$WORK/stdout" ||
+run_split 0 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/ts.json" ./deploy.sh admin create Zoe@Example.org
+grep -q "https://jobapp.taild83d16.ts.net/invite/A\{43\}$" "$WORK/stdout" ||
   fail "full link not on stdout: $(cat "$WORK/stdout")"
-grep -qF -- "docker compose -f compose.yml --profile tunnel exec -T api python -m app.identity.cli create-admin Zoe@Example.org --base-url https://gathering-saves-below-twelve.trycloudflare.com" "$WORK/calls" ||
+grep -qF -- "docker compose -f compose.yml --profile tunnel exec -T api python -m app.identity.cli create-admin Zoe@Example.org --base-url https://jobapp.taild83d16.ts.net" "$WORK/calls" ||
   fail "remote command: $(cat "$WORK/calls")"
-ok "admin create runs the CLI in the api container with --base-url set to the tunnel URL, the full link on stdout"
+ok "admin create runs the CLI in the api container with --base-url set to the Funnel URL, the full link on stdout"
 : >"$WORK/calls"
-run_split 0 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh admin create "o'brien+\$(id)@example.org"
+run_split 0 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/ts.json" ./deploy.sh admin create "o'brien+\$(id)@example.org"
 grep -qF -- "create-admin o\'brien+\\\$\(id\)@example.org --base-url" "$WORK/calls" ||
   fail "email not quoted for the remote shell: $(cat "$WORK/calls")"
 ok "quotes, \$ and parentheses in the email reach the CLI quoted, never run by the remote shell"
 : >"$WORK/calls"
-run_split 1 fake FAKE_CF_ID= FAKE_CF_LOG="$WORK/cf.log" ./deploy.sh admin create zoe@example.org
-grep -q "cloudflared is not running on fakejetson" "$WORK/stderr" || fail "no tunnel: $(cat "$WORK/stderr")"
+run_split 1 fake FAKE_TS_ID= FAKE_TS_JSON="$WORK/ts.json" ./deploy.sh admin create zoe@example.org
+grep -q "tailscale is not running on fakejetson" "$WORK/stderr" || fail "no tailscale: $(cat "$WORK/stderr")"
 grep -q "exec -T api" "$WORK/calls" && fail "the CLI ran without a public URL"
-ok "no tunnel URL: exit 1 before the CLI runs"
-run_split 2 fake FAKE_CF_ID=abc123 FAKE_CF_LOG="$WORK/cf.log" FAKE_CLI_EXIT=2 ./deploy.sh admin create zoe@example.org
+ok "no public URL: exit 1 before the CLI runs"
+run_split 2 fake FAKE_TS_ID=abc123 FAKE_TS_JSON="$WORK/ts.json" FAKE_CLI_EXIT=2 ./deploy.sh admin create zoe@example.org
 ok "the CLI's exit code (2, invalid email) is passed through"
 
 step "admin unlock against the fake Jetson"
@@ -688,5 +757,93 @@ out_has "starting api and worker again after a failure"
 calls_are "stop api worker" "drop while stopped: api worker" "restore while stopped: api worker" \
   "alembic" "start api worker"
 ok "any other failure after the stop starts api and worker again on exit"
+
+step "deploy lock: the Jetson releases it after DEPLOY_LOCK_MAX_S even if the Mac never closes it"
+# lock_script is the remote shell remote_lock sends; it is taken from deploy.sh itself.
+eval "$(sed -n '/^lock_script() {/,/^}/p' deploy.sh)"
+script_text="$(lock_script jobapp-backups 3600)"
+[[ "$script_text" == *"timeout 3600 cat >/dev/null"* ]] || fail "no remote timeout in the lock script: $script_text"
+# shellcheck disable=SC2016 # the literal text of deploy.sh, not an expansion
+grep -qF 'remote "$(lock_script "$bdir" "$max")"' deploy.sh || fail "remote_lock does not send lock_script"
+if command -v flock >/dev/null && command -v timeout >/dev/null; then
+  lockdir="$WORK/lockhome"
+  mkdir -p "$lockdir"
+  # The holder's stdin never closes (a sleeping Mac): only the 2 second cap can end it.
+  (cd "$lockdir" && sleep 30 | bash -c "$(lock_script backups 2)") >"$WORK/holder" 2>&1 &
+  holder=$!
+  for _ in $(seq 1 50); do
+    grep -q '^locked' "$WORK/holder" && break
+    sleep 0.1
+  done
+  grep -q '^locked' "$WORK/holder" || fail "the holder never took the lock: $(cat "$WORK/holder")"
+  flock -n "$lockdir/backups/.deploy.lock" true && fail "the lock was free while held"
+  start=$SECONDS
+  flock -w 10 "$lockdir/backups/.deploy.lock" true || fail "the lock was still held after 10s"
+  ((SECONDS - start <= 5)) || fail "the lock took $((SECONDS - start))s to go"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  ok "the remote lock command holds flock, then lets go after its cap with stdin still open"
+else
+  ok "the remote lock command runs timeout <DEPLOY_LOCK_MAX_S> cat (no flock here: the release itself is checked in CI)"
+fi
+
+step "ops/previous.sh: :previous from the running containers, the deployed tree saved and restored"
+mkdir -p "$WORK/bin4"
+cat >"$WORK/bin4/docker" <<'FAKE'
+#!/usr/bin/env bash
+echo "docker $*" >>"$FAKE_CALLS"
+case "$*" in
+  "compose -f compose.yml --profile tunnel ps -q --status running api") echo "${FAKE_API_ID:-}" ;;
+  "compose -f compose.yml --profile tunnel ps -q --status running caddy") echo "${FAKE_CADDY_ID:-}" ;;
+  "inspect -f {{.Image}} c0ffee") echo "sha256:1111" ;;
+  "inspect -f {{.Image}} beef") echo "sha256:2222" ;;
+esac
+exit 0
+FAKE
+chmod +x "$WORK/bin4/docker"
+prev() { env PATH="$WORK/bin4:$PATH" FAKE_CALLS="$WORK/calls4" "$@"; }
+: >"$WORK/calls4"
+run 0 prev FAKE_API_ID=c0ffee FAKE_CADDY_ID=beef ops/previous.sh tag-running
+grep -qx "docker tag sha256:1111 jobapp-api:previous" "$WORK/calls4" || fail "api not tagged from its container: $(cat "$WORK/calls4")"
+grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "caddy not tagged from its container"
+grep -q "jobapp-.*:latest" "$WORK/calls4" && fail ":latest was read: $(cat "$WORK/calls4")"
+: >"$WORK/calls4"
+run 0 prev FAKE_API_ID= FAKE_CADDY_ID=beef ops/previous.sh tag-running
+out_has "api: no running container, jobapp-api:previous left as it was"
+grep -q "jobapp-api:previous" "$WORK/calls4" && fail "a stopped api was still tagged: $(cat "$WORK/calls4")"
+grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "caddy not tagged"
+ok "tag-running tags the image id of each running container (never :latest); a stopped service keeps its :previous"
+
+app="$WORK/app"
+saved="$WORK/backups/previous-tree"
+mkdir -p "$app/caddy"
+cp .rsyncignore "$app/"
+printf 'old compose\n' >"$app/compose.yml"
+printf 'old caddy\n' >"$app/caddy/Caddyfile"
+printf 'gone later\n' >"$app/removed-by-new.txt"
+printf 'SECRET=1\n' >"$app/.env"
+printf 'abc123\n' >"$app/.deployed-commit"
+run 0 ops/previous.sh save-tree "$app" "$saved"
+[[ ! -e "$saved/.env" && ! -e "$saved/.deployed-commit" ]] || fail "secrets or the commit marker were copied"
+# The new deploy: files changed, one removed, one added; the secrets left alone.
+printf 'new compose\n' >"$app/compose.yml"
+printf 'new caddy\n' >"$app/caddy/Caddyfile"
+rm "$app/removed-by-new.txt"
+printf 'new\n' >"$app/added-by-new.txt"
+run 0 ops/previous.sh restore-tree "$saved" "$app"
+[[ "$(cat "$app/compose.yml")" == "old compose" && "$(cat "$app/caddy/Caddyfile")" == "old caddy" ]] ||
+  fail "compose.yml or the Caddyfile were not restored"
+[[ -f "$app/removed-by-new.txt" && ! -e "$app/added-by-new.txt" ]] || fail "the tree is not the previous one"
+[[ "$(cat "$app/.env")" == "SECRET=1" && "$(cat "$app/.deployed-commit")" == "abc123" ]] ||
+  fail ".env or .deployed-commit changed"
+run 0 ops/previous.sh save-tree "$WORK/never-deployed" "$saved"
+out_has "nothing deployed"
+[[ ! -e "$saved" ]] || fail "a stale previous tree survived a first deploy"
+run 0 ops/previous.sh restore-tree "$saved" "$app"
+out_has "no previous tree"
+[[ "$(cat "$app/compose.yml")" == "old compose" ]] || fail "restore without a copy changed files"
+run 1 ops/previous.sh bogus
+run 1 ops/previous.sh save-tree only-one
+ok "save-tree and restore-tree bring back compose.yml, the Caddyfile and the file list; .env and .deployed-commit untouched; first deploy and bad arguments"
 
 printf '\nAll %d checks passed.\n' "$passed"
