@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Ship the app to the Jetson and run it there (platform module, SPEC-platform.md).
 #
-#   ./deploy.sh [deploy] [--env]   rsync the tree, build on the Jetson, compose up, migrate, health
+#   ./deploy.sh [deploy] [--env]   rsync the tree, build on the Jetson, migrate (one off container of
+#                                  the new image, the previous release still serving), compose up,
+#                                  health. A migration that fails stops the deploy before anything
+#                                  restarts (ops/migrate.sh, issue #81)
 #   ./deploy.sh logs <service>     follow the logs of one service (last 200 lines first)
 #   ./deploy.sh ps                 docker compose ps on the Jetson
 #   ./deploy.sh stats              docker stats --no-stream of the stack
@@ -59,7 +62,8 @@
 # BACKUP_DIR (on the Jetson, default ~/jobapp-backups), BACKUP_KEEP (default 14),
 # BACKUP_CRON (schedule of backup-schedule, default "17 3 * * *", the Jetson's local time),
 # DEPLOY_LOCK_MAX_S (default 3600: the Jetson releases the deploy lock after that long even if
-# this Mac went to sleep holding it).
+# this Mac went to sleep holding it), MIGRATE_TIMEOUT_S (default 300: the longest the migrations of
+# one deploy may take before they are stopped and rolled back).
 #
 # Secrets: the Jetson's .env is generated once into .env.jetson (git-ignored, mode 600) with
 # random POSTGRES_PASSWORD, SECRET_KEY and CREDENTIALS_KEY, and copied to the Jetson only when the remote .env is
@@ -444,22 +448,31 @@ build_images() {
   done
 }
 
+# migrate: ops/migrate.sh of the tree just synced, on the Jetson, BEFORE start_stack (issue #81).
+# `alembic upgrade head` runs in a one off container of the api image just built, against the live
+# database, while the containers of the previous release keep serving: new code never queries a
+# schema that lacks its columns. That needs migrations the previous release can live with (expand
+# first, contract later: CONTRIBUTING.md, Migrations). A failure stops the deploy here, with the
+# schema as it was (one transaction) and nothing restarted. Never a downgrade.
+migrate() {
+  step "migrations (one off container of the new api image, before the new code starts)"
+  local start=$SECONDS timeout_s
+  timeout_s="$(setting MIGRATE_TIMEOUT_S 300)"
+  [[ "$timeout_s" =~ ^[1-9][0-9]*$ ]] || die "MIGRATE_TIMEOUT_S must be a whole number of seconds, got '$timeout_s'"
+  if ! remote "cd $RDIR_Q && MIGRATE_TIMEOUT_S=$timeout_s bash ops/migrate.sh"; then
+    die "the migrations did not apply (above), so the deploy stopped before starting the new code: the containers on $HOST were not touched and still run the previous release (./deploy.sh ps). $HOST:$RDIR and the :latest images already hold the new release, so do not run compose up there by hand. Fix the migration and run ./deploy.sh again"
+  fi
+  record migrations "$start"
+}
+
 start_stack() {
   step "compose up"
   local start=$SECONDS
   if ! rcompose up -d --remove-orphans --wait --wait-timeout 180; then
     rcompose ps -a || true
-    die "the stack did not become healthy; see ./deploy.sh logs <service>"
+    die "the stack did not become healthy; see ./deploy.sh logs <service>. The migrations of this release are applied and stay applied (never downgraded automatically): the previous release runs on that schema by the expand rule of CONTRIBUTING.md"
   fi
   record "up --wait" "$start"
-}
-
-migrate() {
-  step "migrations"
-  local start=$SECONDS
-  rcompose exec -T api alembic upgrade head || die "alembic upgrade head failed"
-  info "alembic current: $(rcompose exec -T api alembic current 2>/dev/null | tr -d '\r')"
-  record migrations "$start"
 }
 
 health() {
@@ -610,8 +623,8 @@ cmd_deploy() {
   push_env "$force_env"
   check_port
   build_images
-  start_stack
   migrate
+  start_stack
   health
   step "public URL"
   local url

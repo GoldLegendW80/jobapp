@@ -245,7 +245,7 @@ smoke_grep "$WORK/smoke2.env" || fail "smoke grep missed a single-quoted key"
 if smoke_grep "$WORK/smoke3.env"; then fail "smoke grep matched an empty or commented key"; fi
 ok "the smoke streams the check to the Jetson; its TS_AUTHKEY grep finds quoted keys and ignores empty or commented ones"
 
-step "deploy.yml: the .env check before the build; the rollback trap from the sync to the migrations"
+step "deploy.yml: the .env check before the build; the rollback trap from the sync until the new stack is up"
 yml=.github/workflows/deploy.yml
 line_of() { grep -nF -- "$1" "$yml" | head -n 1 | cut -d: -f1; }
 check="$(line_of 'bash ops/env_check.sh "$app/.env" "$app/.env"')"
@@ -254,19 +254,21 @@ sync="$(line_of 'rsync -a --delete --exclude-from=.rsyncignore')"
 trap_on="$(line_of "trap 'echo \"::error::a deploy command failed")"
 trap_off="$(line_of 'trap - ERR')"
 backup="$(line_of '::group::backup before migrations')"
-migrations="$(line_of 'alembic upgrade head || rollback')"
-for v in check build sync trap_on trap_off backup migrations; do
+# Issue #81: the migrations run in a one off container before compose up, the trap still set.
+migrations="$(line_of 'if ! bash ops/migrate.sh; then')"
+up="$(line_of 'up -d --remove-orphans --wait --wait-timeout 180 || rollback')"
+for v in check build sync trap_on trap_off backup migrations up; do
   [[ -n "${!v}" ]] || fail "deploy.yml: $v not found"
 done
-((check < build && trap_on < sync && sync < build && trap_on < backup && migrations < trap_off)) ||
-  fail "deploy.yml order: check $check build $build sync $sync trap $trap_on backup $backup migrations $migrations untrap $trap_off"
+((check < build && trap_on < sync && sync < build && trap_on < backup && backup < migrations && migrations < up && up < trap_off)) ||
+  fail "deploy.yml order: check $check build $build sync $sync trap $trap_on backup $backup migrations $migrations up $up untrap $trap_off"
 # trap - ERR is the line just before the smoke group (the first match of tests/jetson_smoke.sh is
 # in the header comment, so look for the step's own line).
 smoke_run="$(grep -nF 'DEPLOY_HOST=local JETSON_SMOKE_FULL=0 tests/jetson_smoke.sh' "$yml" | cut -d: -f1)"
 ((trap_off < smoke_run)) || fail "the trap is still set when the smoke runs"
 grep -qF 'reported no backup file"; restore_previous; exit 1;' "$yml" || fail "the explicit backup failure does not restore"
-grep -qF 'a smoke that fails after them does NOT roll back, on purpose' "$yml" || fail "header lacks the no-rollback note"
+grep -qF 'a smoke that fails after that does NOT roll back, on purpose' "$yml" || fail "header lacks the no-rollback note"
 grep -qF '::warning::the api is not running' "$yml" || fail "no warning for an api that is not running"
-ok "env check before the build; ERR trap set after the tree is saved and before the rsync, cleared after the migrations and before the smoke; header and api warning present"
+ok "env check before the build; ERR trap set after the tree is saved and before the rsync, the backup before the migrations, the migrations before compose up, the trap cleared after compose up and before the smoke; header and api warning present"
 
 printf '\nAll %d checks passed.\n' "$passed"

@@ -721,6 +721,8 @@ class _State:
     last_text: str = ""
     denied: int = 0
     live_text: live.LiveText | None = None
+    # The kind of credential the run uses (never the secret), for the `usage` event.
+    credential_kind: str | None = None
     # The run's token budget and what it has used of it; None: no limit, nothing counted.
     budget: Budget | None = None
     # What the run did, in numbers: the output of a private run.
@@ -780,7 +782,12 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
                     await recorder.emit("tool_result", recorder.tool_result(block))
     elif isinstance(message, ResultMessage):
         state.result = message
-        await recorder.emit("usage", usage_of(message))
+        # The kind goes with the amount: the browser words the amount by kind (a cost, or an
+        # estimate on a subscription) and has it in the same step, without waiting for the
+        # run's detail to be read again (issue #80: the label flickered until then).
+        await recorder.emit(
+            "usage", {**usage_of(message), "credential_kind": state.credential_kind}
+        )
     elif isinstance(message, SystemMessage):
         if message.subtype == "init":
             data = message.data
@@ -1203,6 +1210,7 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             return RunStatus.failed
         secret = found
         recorder.secret = secret.value
+        state.credential_kind = secret.kind.value
         model = definition.model_for(secret.kind)
         limit = token_budget(data)
         if limit is not None:

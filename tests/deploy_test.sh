@@ -15,6 +15,11 @@
 # `admin unlock` (argument checks first; psql in the db container, values bound, count printed),
 # and `jobs import` and `profile import` (argument checks; conversion on the Mac of a synthetic job
 # folder, the document streamed to the CLI in the api container; a bad source never sent).
+# Issue #81: ops/migrate.sh against a fake docker (a one off container of the new image, the no-op
+# at head, a failing migration, a timeout, a kill, a concurrent run, a first install, masked credentials),
+# the order of cmd_deploy (build, migrate, compose up), and the deploy step of deploy.yml cut out of
+# the workflow and run against the same fakes (backup, then migrate, then up; a failing migration
+# stops with the stack untouched; a failed start rolls back without a downgrade).
 # Needs Docker (for the pinned shellcheck image) and rsync.
 set -euo pipefail
 
@@ -46,8 +51,8 @@ run() {
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
 
 step "shellcheck"
-SCRIPTS=(deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
-  tests/crash_check.sh tests/reboot_check.sh tests/tailscale_test.sh)
+SCRIPTS=(deploy.sh ops/db.sh ops/previous.sh ops/migrate.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
+  tests/crash_check.sh tests/reboot_check.sh tests/tailscale_test.sh tests/migrate_test.sh)
 docker run --rm -v "$ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" "${SCRIPTS[@]}" || fail "shellcheck"
 ok "${SCRIPTS[*]} clean"
 for f in "${SCRIPTS[@]}"; do
@@ -896,5 +901,394 @@ out_has "no previous tree"
 run 1 ops/previous.sh bogus
 run 1 ops/previous.sh save-tree only-one
 ok "save-tree and restore-tree bring back compose.yml, the Caddyfile and the file list; .env and .deployed-commit untouched; first deploy and bad arguments"
+
+step "issue #81: a fake docker and a fake timeout for ops/migrate.sh and the deploy step of deploy.yml"
+# One stateful fake for both: every call goes to $FAKE_DIR/calls, in order, and FAKE_* variables
+# choose what the Jetson answers (pending migrations, a failing one, a db that is down, an `up`
+# that does not become healthy). The fake timeout records its limit and runs the command, or plays
+# a limit that was reached (124) or a container that was killed (137).
+MIG="$WORK/migrate"
+mkdir -p "$MIG/bin" "$MIG/app"
+printf 'name: fake\n' >"$MIG/app/compose.yml"
+printf 'POSTGRES_USER=jobapp\n' >"$MIG/app/.env"
+cat >"$MIG/bin/docker" <<'FAKE'
+#!/usr/bin/env bash
+args="$*"
+echo "docker $args" >>"$FAKE_DIR/calls"
+case "$args" in
+  "inspect -f {{.State.Status}} "*)
+    [[ -n "${FAKE_MIGRATE_STATE:-}" ]] || exit 1
+    echo "$FAKE_MIGRATE_STATE"
+    ;;
+  "inspect -f {{.Image}} "*) echo "sha256:ran-${args##* }" ;;
+  *" ps -q --status running db")
+    [[ -n "${FAKE_DB_DOWN:-}" && ! -e "$FAKE_DIR/db-up" ]] || echo db-id
+    ;;
+  *" ps -q --status running "*) echo "${args##* }-id" ;;
+  *" up -d --wait"*" db")
+    [[ -z "${FAKE_FAIL_DB:-}" ]] || exit 1
+    touch "$FAKE_DIR/db-up"
+    ;;
+  *" run --rm "*"alembic upgrade head"*)
+    echo "INFO  [alembic.runtime.migration] Context impl PostgresqlImpl." >&2
+    for ((n = 1; n <= ${FAKE_PENDING:-0}; n++)); do
+      echo "INFO  [alembic.runtime.migration] Running upgrade 00$((9 + n)) -> 00$((10 + n)), step $n" >&2
+    done
+    if [[ -n "${FAKE_LEAK:-}" ]]; then
+      echo "OperationalError: postgresql+psycopg://jobapp:CANARYPASSWORD@db:5432/jobapp refused" >&2
+    fi
+    if [[ -n "${FAKE_FAIL_MIGRATE:-}" ]]; then
+      echo "psycopg.errors.DuplicateColumn: column \"credential_kind\" already exists" >&2
+      exit 1
+    fi
+    echo "00$((10 + ${FAKE_PENDING:-0})) (head)"
+    ;;
+  *" up -d --remove-orphans "*)
+    echo up >>"$FAKE_DIR/ups"
+    if [[ -n "${FAKE_FAIL_UP:-}" && "$(wc -l <"$FAKE_DIR/ups" | tr -d ' ')" == 1 ]]; then exit 1; fi
+    ;;
+  "volume inspect jobapp_pgdata") [[ -z "${FAKE_NO_VOLUME:-}" ]] || exit 1 ;;
+  *" exec -T db sh -c psql "*"pg_terminate_backend"*) echo 1 ;;
+esac
+exit 0
+FAKE
+cat >"$MIG/bin/timeout" <<'FAKE'
+#!/usr/bin/env bash
+echo "timeout $1 $2 $3" >>"$FAKE_DIR/calls"
+shift 3
+[[ -z "${FAKE_TIMEOUT:-}" ]] || exit 124
+if [[ -n "${FAKE_KILLED:-}" ]]; then
+  sleep "${FAKE_KILL_AFTER:-0}"
+  exit 137
+fi
+exec "$@"
+FAKE
+cat >"$MIG/bin/flock" <<'FAKE'
+#!/usr/bin/env bash
+exit 0
+FAKE
+chmod +x "$MIG/bin/"*
+MIG_RUN="docker compose -f compose.yml --profile tunnel run --rm --no-deps -T --name jobapp-migrate api sh -c alembic upgrade head && alembic current"
+in_dir() { # in_dir <dir> <cmd...>: run cmd there
+  (cd "$1" && shift && "$@")
+}
+# mig <expected exit> [env assignments]: ops/migrate.sh in the fake deploy directory
+mig() {
+  local want="$1"
+  shift
+  rm -f "$MIG/calls" "$MIG/db-up" "$MIG/ups"
+  : >"$MIG/calls"
+  run "$want" in_dir "$MIG/app" env -u COMPOSE -u MIGRATE_TIMEOUT_S -u MIGRATE_CONTAINER "$@" \
+    FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh"
+}
+# mig_calls_are <expected, one per line>: every docker and timeout call of the last run, in order
+mig_calls_are() {
+  diff <(printf '%s\n' "$@") "$MIG/calls" >/dev/null || fail "calls: $(cat "$MIG/calls")"
+}
+# untouched <calls file>: nothing stopped, restarted, recreated or downgraded
+untouched() {
+  grep -Eq ' (stop|restart|down|kill|rm -s|up -d --remove-orphans)( |$)' "$1" && fail "the running stack was touched: $(cat "$1")"
+  grep -q "downgrade" "$1" && fail "a downgrade was run: $(cat "$1")"
+  return 0
+}
+ok "fakes ready"
+
+step "ops/migrate.sh: one off container of the new image, no-op at head, stops safely on every failure"
+mig 0
+out_has "already at head, nothing to apply"
+out_has "0010 (head)"
+mig_calls_are "docker inspect -f {{.State.Status}} jobapp-migrate" \
+  "docker compose -f compose.yml --profile tunnel ps -q --status running db" \
+  "timeout -k 20 300" "$MIG_RUN" "docker rm -f jobapp-migrate"
+untouched "$MIG/calls"
+grep -Eq -- '--service-ports|--publish| -p ' "$MIG/calls" && fail "the one off container publishes a port: $(cat "$MIG/calls")"
+ok "at head: one container of the api service (--rm, --no-deps, no port, named), nothing to apply, the running db left alone, exit 0"
+mig 0 FAKE_PENDING=2
+out_has "Running upgrade 0010 -> 0011"
+out_has "migrations applied: 2"
+out_has "0012 (head)"
+untouched "$MIG/calls"
+ok "pending migrations: alembic's lines in the log, the count and the revision reached; nothing restarted"
+mig 1 FAKE_PENDING=1 FAKE_FAIL_MIGRATE=1
+out_has "DuplicateColumn"
+out_has "alembic upgrade head failed (exit 1, see above)"
+out_has "the schema is what it was, and nothing was restarted"
+grep -q "migrations applied" "$WORK/out" && fail "a failed migration was reported as applied"
+untouched "$MIG/calls"
+grep -qx "docker rm -f jobapp-migrate" "$MIG/calls" || fail "the one off container was not removed after a failure"
+ok "a failing migration: exit 1 with alembic's error and what to do, the stack untouched, the container removed"
+mig 1 FAKE_TIMEOUT=1 MIGRATE_TIMEOUT_S=7
+out_has "did not finish within 7s and were stopped"
+out_has "nothing was restarted"
+grep -qx "timeout -k 20 7" "$MIG/calls" || fail "MIGRATE_TIMEOUT_S did not reach timeout: $(cat "$MIG/calls")"
+grep -qx "docker rm -f jobapp-migrate" "$MIG/calls" || fail "the container was not removed after a timeout"
+out_has "migration sessions ended in Postgres: 1"
+lock_id="$(sed -n 's/^MIGRATION_LOCK_ID = //p' api/alembic/env.py | tr -d '_')"
+[[ -n "$lock_id" ]] || fail "no MIGRATION_LOCK_ID in api/alembic/env.py"
+grep -qx "MIGRATION_LOCK_ID=$lock_id" ops/migrate.sh || fail "ops/migrate.sh does not hold the advisory lock id of alembic/env.py ($lock_id)"
+# The sessions it ends: on the migration's advisory lock (single key form, objsubid 1), in the
+# current database only (pg_locks is cluster wide), never its own. The whole clause, as sent.
+SESSIONS_WHERE="from pg_locks where locktype = 'advisory' and objsubid = 1 and ((classid::bigint << 32) | objid::bigint) = $lock_id and database = (select oid from pg_database where datname = current_database()) and pid <> pg_backend_pid()"
+grep -q "exec -T db sh -c psql .* sh select count(\*) from (select pg_terminate_backend(pid) from pg_locks " "$MIG/calls" ||
+  fail "the sessions on the migration's advisory lock were not ended in the db container: $(cat "$MIG/calls")"
+sent="$(grep -o "from pg_locks where .* pid <> pg_backend_pid()" "$MIG/calls")"
+[[ "$sent" == "$SESSIONS_WHERE" ]] || fail "the sessions ended are not those of the current database on the migration's lock: $sent"
+untouched "$MIG/calls"
+ok "a migration over MIGRATE_TIMEOUT_S: stopped, its container removed, the sessions of the current database on the migration's advisory lock (the id of alembic/env.py) ended in Postgres, exit 1, the stack untouched"
+# Exit 137 is a SIGKILL. Before the limit it did not come from timeout: said as a kill, possibly
+# out of memory. At the limit (timeout had to send KILL after its grace) it is a timeout.
+mig 1 FAKE_KILLED=1
+out_has "the migration container was killed after [0-9]*s, before the 300s limit (exit 137): possibly out of memory"
+out_has "This is not a timeout"
+out_has "nothing was restarted"
+grep -q "did not finish within" "$WORK/out" && fail "a container killed before the limit was reported as a timeout"
+out_has "migration sessions ended in Postgres: 1"
+grep -qx "docker rm -f jobapp-migrate" "$MIG/calls" || fail "the container was not removed after a kill"
+untouched "$MIG/calls"
+mig 1 FAKE_KILLED=1 FAKE_KILL_AFTER=1 MIGRATE_TIMEOUT_S=1
+out_has "did not finish within 1s and were stopped"
+grep -q "was killed after" "$WORK/out" && fail "a kill by timeout at the limit was reported as out of memory"
+out_has "migration sessions ended in Postgres: 1"
+ok "exit 137 before the limit: reported as killed, possibly out of memory, not as a timeout, its session ended and the stack untouched; exit 137 at the limit: a timeout"
+# The README's recovery block gives a human the same statement, and no longer says that removing
+# the container ends the transaction.
+readme_where="$(tr '\n' ' ' <README.md | tr -s ' ' | grep -o "from pg_locks where [^;]* pid <> pg_backend_pid()" || true)"
+[[ "$readme_where" == "$SESSIONS_WHERE" ]] || fail "the README's recovery statement is not the one ops/migrate.sh runs: $readme_where"
+grep -q "remove it (ends its transaction)" README.md && fail "the README still says docker rm ends the transaction"
+grep -q "this alone does not end its transaction" README.md || fail "the README does not say that docker rm alone leaves the session"
+ok "README recovery: docker rm alone does not end the transaction, and the statement to end the session is the one ops/migrate.sh runs"
+for state in running restarting created; do
+  mig 1 FAKE_MIGRATE_STATE="$state"
+  out_has "another migration is in progress (container jobapp-migrate is $state): nothing was run"
+  mig_calls_are "docker inspect -f {{.State.Status}} jobapp-migrate"
+done
+ok "a migration container that is running, restarting or created: this run stops, and never removes or kills it"
+mig 0 FAKE_MIGRATE_STATE=exited
+out_has "removed the exited container jobapp-migrate left by an earlier run"
+grep -qx "$MIG_RUN" "$MIG/calls" || fail "the migration did not run after the leftover was removed"
+ok "a leftover container that exited is removed, then the migration runs"
+mig 0 FAKE_DB_DOWN=1 FAKE_PENDING=10
+out_has "db is not running: starting it"
+out_has "migrations applied: 10"
+mig_calls_are "docker inspect -f {{.State.Status}} jobapp-migrate" \
+  "docker compose -f compose.yml --profile tunnel ps -q --status running db" \
+  "docker compose -f compose.yml --profile tunnel up -d --wait --wait-timeout 120 db" \
+  "timeout -k 20 300" "$MIG_RUN" "docker rm -f jobapp-migrate"
+ok "first install or a stopped db: db alone is started first, then every migration applies"
+mig 1 FAKE_DB_DOWN=1 FAKE_FAIL_DB=1
+out_has "db did not become healthy within 120s: no migration was run"
+grep -q " run --rm " "$MIG/calls" && fail "a migration ran without a database"
+ok "a db that does not start: exit 1 before any migration"
+mig 1 FAKE_LEAK=1 FAKE_FAIL_MIGRATE=1
+out_has "postgresql+psycopg://\*\*\*:\*\*\*@db:5432/jobapp"
+grep -q "CANARYPASSWORD" "$WORK/out" && fail "a password in a URL reached the log"
+ok "credentials in anything shaped like a URL are masked on the way to the log"
+for bad in abc 0 -5 1.5; do
+  mig 1 MIGRATE_TIMEOUT_S="$bad"
+  out_has "MIGRATE_TIMEOUT_S must be a whole number of seconds, got '$bad'"
+  [[ ! -s "$MIG/calls" ]] || fail "docker was called with a bad timeout: $(cat "$MIG/calls")"
+done
+mig 1 MIGRATE_CONTAINER='x; rm -rf /'
+out_has "MIGRATE_CONTAINER must be a container name"
+run 1 in_dir "$MIG/app" env FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh" downgrade
+out_has "usage: ops/migrate.sh"
+: >"$MIG/calls"
+run 1 in_dir "$WORK" env FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh"
+out_has "no deployed tree here"
+[[ ! -s "$MIG/calls" ]] || fail "docker was called outside a deploy directory"
+ok "a bad MIGRATE_TIMEOUT_S or container name, any argument (there is no downgrade), or no compose.yml and .env: refused before docker"
+mig 0 COMPOSE="docker compose -p scratch -f compose.yml -f compose.mac.yml" MIGRATE_CONTAINER=scratch-migrate
+grep -qx "docker compose -p scratch -f compose.yml -f compose.mac.yml run --rm --no-deps -T --name scratch-migrate api sh -c alembic upgrade head && alembic current" "$MIG/calls" ||
+  fail "COMPOSE and MIGRATE_CONTAINER not honoured: $(cat "$MIG/calls")"
+ok "COMPOSE and MIGRATE_CONTAINER choose the project and the name (scratch stacks on the Mac)"
+
+step "deploy.sh: the migrations run after the build and before the new code starts"
+# cmd_deploy, build_images, migrate and start_stack as deploy.sh defines them; every other step
+# is a stub that records its name, and `remote` records the command sent to the Jetson.
+deploy_order() { # deploy_order <substring of the remote command that fails, or ''>
+  local failing="$1"
+  : >"$WORK/order"
+  (
+    eval "$(sed -n -e '/^step() {/p' -e '/^info() {/p' -e '/^die() {/,/^}/p' -e '/^envval() {/,/^}/p' \
+      -e '/^setting() {/,/^}/p' -e '/^record() {/,/^}/p' -e '/^rcompose() {/,/^}/p' \
+      -e '/^build_images() {/,/^}/p' -e '/^migrate() {/,/^}/p' -e '/^start_stack() {/,/^}/p' \
+      -e '/^cmd_deploy() {/,/^}/p' deploy.sh)"
+    # shellcheck disable=SC2034 # read by the evaluated functions
+    ROOT="$WORK/norepo" HOST=fakejetson RDIR=jobapp RDIR_Q=jobapp TIMES=() \
+      RCOMPOSE="docker compose -f compose.yml --profile tunnel"
+    # shellcheck disable=SC2329 # called by the evaluated functions
+    remote() {
+      echo "remote: $*" >>"$WORK/order"
+      [[ -z "$failing" || "$*" != *"$failing"* ]]
+    }
+    for stub in take_lock ssh_master preflight remote_lock sync_tree push_env check_port health warn_leftover_authkey; do
+      eval "$stub() { echo $stub >>\"\$WORK/order\"; }"
+    done
+    # shellcheck disable=SC2329 # called by the evaluated cmd_deploy
+    public_url() { echo https://jobapp.example.ts.net; }
+    # shellcheck disable=SC2329 # called by the evaluated cmd_deploy
+    wait_public() { return 0; }
+    cmd_deploy
+  )
+}
+line_of() { grep -n -- "$1" "$WORK/order" | head -n 1 | cut -d: -f1; }
+run 0 deploy_order ""
+grep -qx "remote: cd jobapp && MIGRATE_TIMEOUT_S=300 bash ops/migrate.sh" "$WORK/order" ||
+  fail "migrate does not run ops/migrate.sh in the deploy directory: $(cat "$WORK/order")"
+built="$(line_of "build caddy")" migrated="$(line_of "ops/migrate.sh")" upped="$(line_of "up -d --remove-orphans")" healthy="$(line_of "^health$")"
+[[ -n "$built" && -n "$migrated" && -n "$upped" && -n "$healthy" ]] || fail "a step is missing: $(cat "$WORK/order")"
+((built < migrated && migrated < upped && upped < healthy)) ||
+  fail "order is build $built, migrate $migrated, up $upped, health $healthy: $(cat "$WORK/order")"
+grep -q "exec -T api alembic" "$WORK/order" && fail "a migration still runs in the started api container"
+out_has "migrations: "
+ok "cmd_deploy: build api, worker, caddy, then ops/migrate.sh, then compose up --wait, then health"
+run 1 deploy_order "ops/migrate.sh"
+out_has "the migrations did not apply"
+out_has "the containers on fakejetson were not touched and still run the previous release"
+out_has "Fix the migration and run ./deploy.sh again"
+untouched "$WORK/order"
+grep -qx "health" "$WORK/order" && fail "the deploy went on after a failed migration"
+ok "a failing migration stops ./deploy.sh before compose up: exit 1, nothing restarted, the message says what to do"
+run 1 deploy_order "up -d --remove-orphans"
+out_has "the stack did not become healthy"
+out_has "The migrations of this release are applied and stay applied (never downgraded automatically)"
+grep -q "downgrade" "$WORK/order" && fail "./deploy.sh ran a downgrade"
+ok "a stack that does not start after the migrations: exit 1, the schema is kept, no downgrade"
+MIGRATE_TIMEOUT_S="1; rm -rf /" run 1 deploy_order ""
+out_has "MIGRATE_TIMEOUT_S must be a whole number of seconds"
+grep -q "ops/migrate.sh" "$WORK/order" && fail "a bad MIGRATE_TIMEOUT_S reached the Jetson"
+ok "MIGRATE_TIMEOUT_S is checked before it is sent to the Jetson"
+grep -Eq '^[[:space:]]*[^#[:space:]].*exec -T api alembic upgrade' deploy.sh .github/workflows/deploy.yml &&
+  fail "deploy.sh or deploy.yml still migrates inside the started api container"
+grep -Eq '^[[:space:]]*[^#[:space:]].*alembic downgrade' deploy.sh ops/migrate.sh ops/previous.sh ops/db.sh .github/workflows/deploy.yml &&
+  fail "a deploy script runs alembic downgrade"
+ok "no migration in the started api container, and no downgrade command, in deploy.sh, ops/ or deploy.yml"
+
+step "deploy.yml: the deploy step itself, run against the fakes"
+# The `run:` script of the step "Deploy under the Jetson deploy lock", cut out of the workflow and
+# run as the runner would: a checkout ($GITHUB_WORKSPACE) with the real ops/migrate.sh and
+# ops/previous.sh, a stub ops/db.sh and smoke that record their call, and a deployed tree ($APP).
+WF="$WORK/workflow"
+mkdir -p "$WF"
+awk '
+  /^      - name: Deploy under the Jetson deploy lock$/ { on = 1; next }
+  on && /^      (- name:|# ---)/ { exit }
+  on && /^        run: \|$/ { body = 1; next }
+  on && body { sub(/^          /, ""); print }
+' .github/workflows/deploy.yml >"$WF/step.sh"
+head -n 1 "$WF/step.sh" | grep -qx "set -euo pipefail" || fail "the deploy step was not found in deploy.yml"
+# shellcheck disable=SC2016 # the literal text of the workflow, not an expansion
+grep -q 'echo "deployed \$COMMIT"' "$WF/step.sh" || fail "the deploy step was cut short"
+# shellcheck disable=SC2016 # the literal text of the workflow, not an expansion
+grep -q '\${{' "$WF/step.sh" && fail "the deploy step holds a workflow expression the test cannot run"
+WF_COMMIT="0123456789abcdef0123456789abcdef01234567"
+# wf <expected exit> [env assignments]: a fresh checkout and deployed tree, then the step
+wf() {
+  local want="$1"
+  shift
+  rm -rf "$WF/ws" "$WF/app" "$WF/backups" "$MIG/calls" "$MIG/db-up" "$MIG/ups"
+  mkdir -p "$WF/ws/ops" "$WF/ws/tests" "$WF/app"
+  : >"$MIG/calls"
+  cp .rsyncignore "$WF/ws/"
+  cp ops/migrate.sh ops/previous.sh "$WF/ws/ops/"
+  printf 'name: new release\n' >"$WF/ws/compose.yml"
+  cat >"$WF/ws/ops/db.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "db.sh $* in $BACKUP_DIR" >>"$FAKE_DIR/calls"
+echo "backup=$BACKUP_DIR/jobapp-2026-10-10T120000-predeploy.dump"
+STUB
+  cat >"$WF/ws/tests/jetson_smoke.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "smoke" >>"$FAKE_DIR/calls"
+[[ -z "${FAKE_FAIL_SMOKE:-}" ]] || exit 1
+STUB
+  chmod +x "$WF/ws/tests/jetson_smoke.sh"
+  printf 'POSTGRES_USER=jobapp\n' >"$WF/app/.env"
+  if [[ " $* " != *" FIRST_INSTALL=1 "* ]]; then
+    cp .rsyncignore "$WF/app/"
+    printf 'name: previous release\n' >"$WF/app/compose.yml"
+    printf 'previous-commit\n' >"$WF/app/.deployed-commit"
+  fi
+  run "$want" in_dir "$WF/ws" env -u MIGRATE_TIMEOUT_S -u MIGRATE_CONTAINER "$@" FAKE_DIR="$MIG" \
+    PATH="$MIG/bin:$PATH" APP="$WF/app" BACKUPS="$WF/backups" COMMIT="$WF_COMMIT" \
+    GITHUB_WORKSPACE="$WF/ws" COMPOSE="docker compose -f compose.yml --profile tunnel" bash -e "$WF/step.sh"
+}
+wf_line() { grep -n -- "$1" "$MIG/calls" | head -n 1 | cut -d: -f1; }
+wf_count() { grep -c -- "$1" "$MIG/calls" || true; }
+WF_UP="docker compose -f compose.yml --profile tunnel up -d --remove-orphans --wait --wait-timeout 180"
+
+wf 0 FAKE_PENDING=1
+tagged="$(wf_line "tag sha256:ran-api-id jobapp-api:previous")" built="$(wf_line " build caddy")"
+dumped="$(wf_line "^db.sh backup --tag predeploy-0123456789ab in $WF/backups/deploys")"
+migrated="$(wf_line " run --rm --no-deps -T --name jobapp-migrate api ")" upped="$(wf_line "^$WF_UP$")" smoked="$(wf_line "^smoke$")"
+[[ -n "$tagged" && -n "$built" && -n "$dumped" && -n "$migrated" && -n "$upped" && -n "$smoked" ]] ||
+  fail "a step is missing: $(cat "$MIG/calls")"
+((tagged < built && built < dumped && dumped < migrated && migrated < upped && upped < smoked)) ||
+  fail "order is tag $tagged, build $built, backup $dumped, migrate $migrated, up $upped, smoke $smoked: $(cat "$MIG/calls")"
+out_has "Running upgrade 0010 -> 0011"
+out_has "migrations applied: 1"
+[[ "$(wf_count " up -d --remove-orphans ")" == 1 ]] || fail "compose up ran more than once on a good deploy"
+[[ "$(wf_count "exec -T api alembic upgrade")" == 0 ]] || fail "a migration ran in the started api container"
+[[ "$(cat "$WF/app/.deployed-commit")" == "$WF_COMMIT" ]] || fail ".deployed-commit not written"
+[[ "$(cat "$WF/app/compose.yml")" == "name: new release" ]] || fail "the new tree is not in place"
+ok "a pending migration: :previous tagged, images built, the predeploy backup, the migration in the one off container, then compose up, then the smoke"
+
+wf 0
+out_has "already at head, nothing to apply"
+[[ "$(wf_count " run --rm ")" == 1 ]] || fail "the no-op did not cost exactly one container"
+[[ "$(cat "$WF/app/.deployed-commit")" == "$WF_COMMIT" ]] || fail ".deployed-commit not written"
+ok "a database already at head: a no-op, the deploy goes on"
+
+wf 1 FAKE_PENDING=1 FAKE_FAIL_MIGRATE=1
+out_has "alembic upgrade head failed (exit 1, see above)"
+out_has "::error::the migrations did not apply: the deploy stopped before starting the new code"
+untouched "$MIG/calls"
+[[ "$(wf_count "^smoke$")" == 0 ]] || fail "the smoke ran after a failed migration"
+(($(wf_line "^db.sh backup") < $(wf_line " run --rm "))) || fail "no backup before the failed migration"
+for img in jobapp-api jobapp-worker jobapp-caddy; do
+  grep -qx "docker tag $img:previous $img:latest" "$MIG/calls" || fail "$img:latest was not put back: $(cat "$MIG/calls")"
+done
+[[ "$(cat "$WF/app/compose.yml")" == "name: previous release" ]] || fail "the previous tree was not put back"
+[[ "$(cat "$WF/app/.deployed-commit")" == "previous-commit" ]] || fail ".deployed-commit changed"
+ok "a failing migration: exit 1 before compose up, nothing stopped or restarted, the previous files and :latest tags back, .deployed-commit kept"
+
+wf 1 FAKE_TIMEOUT=1
+out_has "did not finish within 300s and were stopped"
+untouched "$MIG/calls"
+[[ "$(cat "$WF/app/compose.yml")" == "name: previous release" ]] || fail "the previous tree was not put back after a timeout"
+ok "a migration that times out: the same stop, the stack untouched"
+
+wf 1 FAKE_PENDING=1 FAKE_FAIL_UP=1
+out_has "migrations applied: 1"
+out_has "::error::compose up did not become healthy: rolling back to the previous files and images"
+out_has "the schema stays migrated, it is never downgraded automatically"
+out_has "database dump taken before this deploy: $WF/backups/deploys/jobapp-2026-10-10T120000-predeploy.dump"
+[[ "$(wf_count " up -d --remove-orphans ")" == 2 ]] || fail "the rollback did not start the previous stack: $(cat "$MIG/calls")"
+[[ "$(wf_count " run --rm ")" == 1 ]] || fail "the rollback ran alembic again: $(cat "$MIG/calls")"
+grep -q "downgrade" "$MIG/calls" && fail "the rollback downgraded the schema: $(cat "$MIG/calls")"
+restored="$(wf_line "tag jobapp-api:previous jobapp-api:latest")"
+second_up="$(grep -n -- " up -d --remove-orphans " "$MIG/calls" | tail -n 1 | cut -d: -f1)"
+((restored < second_up)) || fail "the previous images were not back before the second up"
+[[ "$(cat "$WF/app/compose.yml")" == "name: previous release" ]] || fail "the previous tree was not put back"
+[[ "$(cat "$WF/app/.deployed-commit")" == "previous-commit" ]] || fail ".deployed-commit changed"
+[[ "$(wf_count "^smoke$")" == 0 ]] || fail "the smoke ran after a rollback"
+ok "the migration applies, then compose up fails: the previous files and images are started again on the migrated schema, alembic is not run again, nothing downgrades, exit 1"
+
+wf 1 FAKE_FAIL_SMOKE=1
+[[ "$(wf_count " up -d --remove-orphans ")" == 1 ]] || fail "a failed smoke rolled back"
+[[ "$(wf_count ":previous jobapp-api:latest")" == 0 ]] || fail "a failed smoke put the previous images back"
+[[ "$(cat "$WF/app/compose.yml")" == "name: new release" ]] || fail "a failed smoke put the previous tree back"
+[[ "$(cat "$WF/app/.deployed-commit")" == "previous-commit" ]] || fail ".deployed-commit written although the smoke failed"
+ok "a smoke that fails once the new stack is up: red, no rollback, .deployed-commit kept (issue #16, unchanged)"
+
+wf 0 FIRST_INSTALL=1 FAKE_NO_VOLUME=1 FAKE_DB_DOWN=1 FAKE_PENDING=10
+out_has "no jobapp_pgdata volume: first start, nothing to back up"
+out_has "db is not running: starting it"
+out_has "migrations applied: 10"
+started_db="$(wf_line " up -d --wait --wait-timeout 120 db")" migrated="$(wf_line " run --rm ")" upped="$(wf_line "^$WF_UP$")"
+[[ -n "$started_db" && -n "$migrated" && -n "$upped" ]] || fail "a step is missing: $(cat "$MIG/calls")"
+((started_db < migrated && migrated < upped)) || fail "first install order: db $started_db, migrate $migrated, up $upped"
+[[ "$(wf_count "^db.sh backup")" == 0 ]] || fail "a backup ran without a database"
+ok "first install on an empty database: db started alone, every migration applied, then the stack"
 
 printf '\nAll %d checks passed.\n' "$passed"
