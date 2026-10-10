@@ -19,18 +19,21 @@ in the job folder that holds this repository (it is not part of the repository).
    (`.github/pull_request_template.md`) asks for what, why, the spec and task, tests, evidence and
    risks.
 4. CI (`.github/workflows/ci.yml`) runs on the pull request, on the self-hosted runners of
-   Harald's Mac (`[self-hosted, mac-ci]`, two of them with 3 CPUs and 4 GB each: a run's jobs
-   go through them two at a time, and all of them wait while the Mac is asleep or Docker Desktop
-   is closed; README, CI runners on the Mac),
-   every job on a runner of its own:
-   `api (jobs)` and `api (rest)` (ruff, then pytest against Postgres and Redis in two shards),
-   `api coverage` (the coverage of both shards combined, at least 95 percent: this job is where
-   the floor is checked, and it fails when a shard failed), `web checks` (eslint, tsc, build),
-   `web vitest` (two shards), `shell` (shellcheck, `tests/deploy_test.sh`, the e2e groups guard),
-   `e2e (identity)`, `e2e (sweep)` and `e2e (apps)` (the Playwright journeys in three groups, each
-   against its own scratch Compose stack, with a synthetic jobs import) and `pre-commit`. It must
-   be green. A new `web/e2e/*.spec.ts` joins one of the e2e groups in the workflow, or the
-   exclusion list of `.github/scripts/e2e_groups.py` with its reason; CI fails otherwise.
+   Harald's Mac (`[self-hosted, mac-ci]`, three of them with 3 CPUs and 4 GB each; all of them
+   wait while the Mac is asleep or Docker Desktop is closed; README, CI runners on the Mac), in
+   three jobs, one per runner, and a gate:
+   `api` (ruff, the whole pytest suite against Postgres and Redis, the coverage floor of 95
+   percent, the docker marked tests), `checks` (pre-commit, shellcheck, the `tests/*.sh`
+   scripts and the guards, eslint, tsc, build, then the e2e group apps), `journeys` (Vitest, then
+   the e2e groups identity and sweep; every e2e group against its own scratch Compose stack) and
+   `CI gate`, which is the one result to read: it must be green. A pull request that touches
+   documentation only (`tasks/`, `docs/`, the Markdown files at the root) runs pre-commit and
+   the gate, nothing else; one that touches `web/` only skips the api tests; anything else runs
+   everything, and so does every push to `main` (README, What a CI run does). A new
+   `web/e2e/*.spec.ts` joins one of the e2e groups in the workflow, or the exclusion list of
+   `.github/scripts/e2e_groups.py` with its reason; CI fails otherwise. A new check in `ci.yml`
+   gets an `id`, a condition on its unit's plan output and a line in `LANES` of
+   `.github/scripts/ci_plan.py`; `ci_plan_test.py` fails otherwise.
 5. A separate Claude review subagent, run by the orchestrator with fresh context, reviews the diff
    and posts its verdict as a review comment, `gh pr review <n> --comment --body-file <review>`,
    whose first line is `REVIEW VERDICT: APPROVE` or `REVIEW VERDICT: REQUEST CHANGES`, followed
@@ -46,8 +49,18 @@ in the job folder that holds this repository (it is not part of the repository).
 `main` is always deployable: nothing is pushed to it directly, and a red `main` is fixed first.
 
 A job that never starts ("Waiting for a runner") means the Mac's runners are offline:
-`ops/ci-runners.sh status` on the Mac, then `ops/ci-runners.sh start`. A job that died with a
-lost runner (the Mac went to sleep) is rerun with `gh run rerun <id> --failed`. A new workflow
+`ops/ci-runners.sh status` on the Mac, then `ops/ci-runners.sh start`. A run that stays queued
+although `status` shows the runners listening and idle was queued while a runner was being
+recreated and is never assigned: cancel it and start it again. A job that died with a lost runner
+(the Mac went to sleep) is rerun with `gh run rerun <id> --failed`.
+
+To test an open pull request again after `main` moved (the merge queue, a changed workflow):
+`ops/ci-rerun.sh <number>`. It waits until GitHub's merge commit for the pull request is `main`
+as it is now plus the branch, then closes and reopens the pull request, which starts a pull
+request run on that commit; the branch gets no commit, so a review of its head stays valid.
+`gh run rerun` would test the old merge commit with the old workflow, `gh workflow run` the
+branch alone with its own copy of the workflow, and a close and reopen done by hand right after
+`main` moved the stale merge commit (README, What a CI run does). A new workflow
 file cannot use the Mac's runners until `ops/ci-runner/job-started.sh` allows it, and no job may
 target `self-hosted` alone: that label is also the Jetson's. Test jobs name their worker count
 (`PYTEST_WORKERS`, `VITEST_WORKERS`) and never ask for every core: the Mac is shared.
@@ -99,5 +112,6 @@ pre-commit run --all-files
 pnpm --dir web lint && pnpm --dir web typecheck && pnpm --dir web test && pnpm --dir web build
 tests/deploy_test.sh                                     # when deploy.sh, ops/ or tests/*.sh change
 tests/migrate_test.sh                                    # by hand, not in CI: when ops/migrate.sh or api/alembic/env.py change (real Docker, four api builds, no other scratch stack up)
-tests/ci_runners_test.sh                                 # when ops/ci-runners.sh, ops/ci-runner/ or the workflows change
+tests/ci_runners_test.sh                                 # when ops/ci-runners.sh, ops/ci-rerun.sh, ops/ci-runner/ or the workflows change
+python3 .github/scripts/ci_plan_test.py                  # when ci.yml or the path rules of ci_plan.py change
 ```
