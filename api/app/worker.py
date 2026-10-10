@@ -70,6 +70,9 @@ BODIES_IN_FLIGHT = 4
 SCHEDULE_MINUTES = set(range(0, 60, 5))  # schedule.TICK
 # TEST_FAST_TIMERS (tests only, refused in production): every minute, and a short board timeout
 # with a single attempt. The slots are idempotent, so a faster tick never fires one twice.
+# A stack running with it (the CI e2e one) therefore proves neither the retry and backoff path
+# nor the five minute tick: the unit tests of tests/jobs do. If a large board starts timing out
+# on a slow runner, raise FAST_ATS_TIMEOUT_S first.
 FAST_SCHEDULE_MINUTES = set(range(60))
 FAST_ATS_TIMEOUT_S = 2.0
 HEALTH_INTERVAL_S = 10

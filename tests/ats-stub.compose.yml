@@ -30,7 +30,9 @@ services:
   fakeats:
     # Standard library only: the same pinned base image as atsstub.
     image: python:3.12.15-slim-trixie
-    # --slow 21: fake-timeout answers after the worker's 20 s timeout (jobs-sweep.spec.ts).
+    # --slow 21: fake-timeout answers after 21 s, far past the worker's board timeout (2 s here
+    # with TEST_FAST_TIMERS, 20 s in production), so the journey of jobs-sweep.spec.ts sees a
+    # timeout either way.
     command: ["python", "/fake/fake_ats.py", "--port", "8099", "--slow", "21"]
     volumes:
       - ./api/tests/jobs/fake_ats.py:/fake/fake_ats.py:ro
