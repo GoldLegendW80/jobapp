@@ -79,6 +79,8 @@ class FakeBackend:
         # What the runner handed over, kept for the tests' assertions (never logged).
         self.seen_env: dict[str, str] | None = None
         self.seen_cwd: str | None = None
+        self.seen_prompt: str | None = None
+        self.seen_options: Any = None
 
     async def interrupt(self) -> None:
         self._interrupted.set()
@@ -95,6 +97,8 @@ class FakeBackend:
         options = request.options
         self.seen_env = dict(options.env)
         self.seen_cwd = str(options.cwd) if options.cwd is not None else None
+        self.seen_prompt = request.prompt
+        self.seen_options = options
         variables = {
             "model": options.model or "",
             "session_id": str(uuid.uuid4()),
