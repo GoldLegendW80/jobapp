@@ -238,7 +238,7 @@ jobs:
         run: pnpm exec playwright test jobs.spec.ts jobs-map.spec.ts --workers=1 --reporter=list,html
       # Issue #11: Find jobs with live progress, the summary and failed boards, the history, the
       # schedule firing on the worker's tick, a 5,000 posting sweep under the worker's memory
-      # limit. The worker reads api/tests/jobs/fake_ats.py for "fake-" orgs
+      # limit. The worker reads api/tests/jobs/fake_ats.py for every org (a real one is a 404)
       # (tests/ats-stub.compose.yml); the spec's one real sweep is skipped here.
       - name: Sweep journeys against the fake ATS
         working-directory: web

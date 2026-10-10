@@ -18,9 +18,12 @@
 #       padding stays in the value);
 #       'single quoted' (no ' inside) or "double quoted" (\" and \\ escapes, no bare " inside),
 #       closed on the same line;
-#     followed by nothing but spaces and an optional comment (spaces, then #...).
+#     followed by nothing but spaces and an optional comment (spaces, then #...);
+#     outside single quotes, a $ only as $$ (compose interpolates $NAME and ${...} there, and an
+#     unclosed ${ makes it refuse the whole file).
 # A trailing carriage return (a file saved with CRLF) is ignored, as compose ignores it.
-# This is stricter than compose in one way only: a multi-line quoted value is refused.
+# It is stricter than compose on purpose: no `export `, no spaces around = or before the key, no
+# multi-line quoted value, and no $NAME reference (a .env of secrets needs no interpolation).
 #
 # Each invalid line is reported as "<label>: line N: invalid (<reason>)" on stderr. Neither the
 # value nor the rest of the line is ever printed: a .env holds secrets, and a broken line may be
@@ -63,9 +66,19 @@ env_line_problem() {
       ;;
     *) [[ "$value" =~ $ENV_UNQUOTED_RE ]] ;;
   esac
-  rest="${value:${#BASH_REMATCH[0]}}"
+  local matched="${BASH_REMATCH[0]}"
+  rest="${value:${#matched}}"
   if [[ ! "$rest" =~ $ENV_COMMENT_RE ]]; then
     printf 'spaces or quotes in the value need the whole value in quotes'
+    return 0
+  fi
+  # compose interpolates $ in unquoted and double-quoted values: ${B fails the whole file
+  # ("Invalid template") and $B is silently replaced. Only $$ (a literal $) is safe there.
+  if [[ "$matched" != \'* ]]; then
+    local unescaped="${matched//\$\$/}"
+    if [[ "$unescaped" == *\$* ]]; then
+      printf 'a $ outside single quotes is interpolated by compose: single-quote the value or write $$'
+    fi
   fi
   return 0
 }

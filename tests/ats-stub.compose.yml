@@ -2,11 +2,12 @@
 # worker's sweeps never call Ashby, Greenhouse or Lever from CI.
 #   docker compose -p jobapp-ci -f compose.yml -f tests/ats-stub.compose.yml up -d --build --wait
 # - atsstub (tests/ats_stub.py): the api's board check, every org.
-# - fakeats (api/tests/jobs/fake_ats.py, as tests/compose.j5-e2e.yml runs it): the worker's sweeps
-#   of web/e2e/jobs-sweep.spec.ts, for the orgs starting "fake-" (ATS_BASE_URL with
-#   ATS_BASE_URL_ORG_PREFIX): every failure mode, 5,000 posting boards, unicode. Another org
-#   would go to its real ATS; the CI step skips the spec's one real sweep (E2E_SKIP_REAL_SWEEP),
-#   so no sweep in CI names one.
+# - fakeats (api/tests/jobs/fake_ats.py, as tests/compose.j5-e2e.yml runs it): every ATS call of
+#   the worker's sweeps (ATS_BASE_URL with no ATS_BASE_URL_ORG_PREFIX), so CI never reaches a
+#   real ATS by configuration, whatever a spec sweeps. The "fake-" orgs of
+#   web/e2e/jobs-sweep.spec.ts give every failure mode, 5,000 posting boards and unicode; any
+#   other org answers 404 ("board not found"). The spec's real sweep is skipped in CI
+#   (E2E_SKIP_REAL_SWEEP). Local scratch stacks and the Jetson keep their own settings.
 # The api refuses ATS_BASE_URL when APP_ENV is production (app/config.py).
 services:
   api:
@@ -19,7 +20,6 @@ services:
   worker:
     environment:
       ATS_BASE_URL: http://fakeats:8099
-      ATS_BASE_URL_ORG_PREFIX: fake-
     depends_on:
       fakeats:
         condition: service_healthy

@@ -119,6 +119,18 @@ expect_invalid "a double quote is not closed" "KEY=\"$CANARY"
 expect_invalid "a double quote is not closed" "KEY=\"$CANARY\\\""
 expect_invalid "a single quote is not closed" "KEY='$CANARY"
 ok "bare word, leading space, export, digit first, dash, space before =, empty name, non-ASCII name, unquoted spaces or quotes, text after a closing quote, unclosed quotes (multi-line values)"
+
+step "a \$ outside single quotes: compose interpolates it (review of PR #20)"
+# shellcheck disable=SC2016 # literal $ in the lines under test
+for line in 'A=a${B' 'A=a$B' 'A="a$B"' 'A="a${B"' 'A=${B:?err}' 'A=$' 'A=a$$$B' 'A="$$$x"'; do
+  expect_invalid 'a $ outside single quotes is interpolated by compose' "$line"
+done
+# shellcheck disable=SC2016
+for line in "A='a\$B'" "A='\${B'" 'A=a$$B' 'A="a$$B"' 'A=$$' 'A=x # a $comment'; do
+  printf '%s\n' "$line" >"$WORK/dollar.env"
+  run 0 "$CHECK" "$WORK/dollar.env"
+done
+ok "\${ unclosed, \$NAME, \${NAME:?}, a lone or odd \$ refused unquoted and in double quotes; single quotes, \$\$ and a \$ in a comment pass"
 long="$(printf 'x%.0s' {1..20000})"
 printf 'LONG=%s\nLONG_BAD=%s %s\n' "$long" "$long" "$CANARY" >"$WORK/long.env"
 run 1 "$CHECK" "$WORK/long.env"
@@ -246,7 +258,7 @@ migrations="$(line_of 'alembic upgrade head || rollback')"
 for v in check build sync trap_on trap_off backup migrations; do
   [[ -n "${!v}" ]] || fail "deploy.yml: $v not found"
 done
-((check < build && sync < trap_on && trap_on < build && trap_on < backup && migrations < trap_off)) ||
+((check < build && trap_on < sync && sync < build && trap_on < backup && migrations < trap_off)) ||
   fail "deploy.yml order: check $check build $build sync $sync trap $trap_on backup $backup migrations $migrations untrap $trap_off"
 # trap - ERR is the line just before the smoke group (the first match of tests/jetson_smoke.sh is
 # in the header comment, so look for the step's own line).
@@ -255,6 +267,6 @@ smoke_run="$(grep -nF 'DEPLOY_HOST=local JETSON_SMOKE_FULL=0 tests/jetson_smoke.
 grep -qF 'reported no backup file"; restore_previous; exit 1;' "$yml" || fail "the explicit backup failure does not restore"
 grep -qF 'a smoke that fails after them does NOT roll back, on purpose' "$yml" || fail "header lacks the no-rollback note"
 grep -qF '::warning::the api is not running' "$yml" || fail "no warning for an api that is not running"
-ok "env check before the build; ERR trap set after the sync, before the backup, cleared after the migrations and before the smoke; header and api warning present"
+ok "env check before the build; ERR trap set after the tree is saved and before the rsync, cleared after the migrations and before the smoke; header and api warning present"
 
 printf '\nAll %d checks passed.\n' "$passed"

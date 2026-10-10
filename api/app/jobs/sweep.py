@@ -733,6 +733,20 @@ def reap_stale(
     return reaped
 
 
+INVALID_LOG_EVERY = timedelta(hours=1)
+# user id -> when its invalid section was last logged by scheduled_due (this process only).
+_invalid_logged: dict[uuid.UUID, datetime] = {}
+
+
+def _log_due(user_id: uuid.UUID, now: datetime) -> bool:
+    """Whether the invalid-section warning of this user is due again (at most hourly)."""
+    last = _invalid_logged.get(user_id)
+    if last is not None and timedelta(0) <= now - last < INVALID_LOG_EVERY:
+        return False
+    _invalid_logged[user_id] = now
+    return True
+
+
 @dataclass(frozen=True)
 class DueSweep:
     user_id: uuid.UUID
@@ -762,8 +776,9 @@ def scheduled_due(
     active users whose schedule is enabled, with an enabled board, for slots in the window
     that have no sweep yet. A disabled schedule, a section that does not validate, an inactive
     user or a user without boards never appears; a section that does not validate while its
-    stored schedule is on is logged at every tick (the user id, never the contents), since the
-    user expects sweeps that cannot run until the Search tab is saved again."""
+    stored schedule is on is logged (the user id, never the contents) at most once per user per
+    INVALID_LOG_EVERY in this process, since the user expects sweeps that cannot run until the
+    Search tab is saved again."""
     rows = db.execute(
         sa.select(Profile.user_id, Profile.sections)
         .join(User, User.id == Profile.user_id)
@@ -779,7 +794,11 @@ def scheduled_due(
             search = SearchSection.model_validate(raw)
         except ValueError:
             stored = raw.get("sweep_schedule")
-            if isinstance(stored, dict) and stored.get("enabled") is True:
+            if (
+                isinstance(stored, dict)
+                and stored.get("enabled") is True
+                and _log_due(user_id, now)
+            ):
                 logger.warning(
                     "scheduled sweep skipped: the stored search section does not validate, "
                     "the user must save the Search tab again",

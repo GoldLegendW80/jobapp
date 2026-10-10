@@ -19,9 +19,9 @@
 # one transaction and rolls back on failure; for data, the predeploy dump named in the log
 # restores with ops/db.sh restore-live.
 #
-# Issue #16. From the sync on, any command that fails (the pre-migration backup included) puts the
-# previous files and :latest tags back first (trap restore_previous ERR), so ~/jobapp never stays
-# synced to a commit whose images were not built. The trap is cleared once the migrations have
+# Issue #16. From the sync on (the rsync itself and the pre-migration backup included), any
+# command that fails puts the previous files and :latest tags back first (trap restore_previous
+# ERR, set once the tree is saved), so ~/jobapp never stays synced to a commit whose images were not built. The trap is cleared once the migrations have
 # run: a smoke that fails after them does NOT roll back, on purpose. The new code is up and
 # migrated by then, the previous code may not run on the migrated schema, and a downgrade is a
 # decision for a human (the log names the predeploy dump). The failed run is red and
@@ -128,14 +128,6 @@ jobs:
           fi
           echo "::endgroup::"
 
-          echo "::group::sync ~/jobapp from $COMMIT"
-          # deploy.sh sync_tree rules: .rsyncignore excludes .env* and .deployed-commit, so
-          # --delete never removes them.
-          rsync -a --delete --exclude-from=.rsyncignore ./ "$APP/"
-          echo "files: $(find "$APP" -type f | wc -l)"
-          echo "::endgroup::"
-          cd "$APP"
-
           restore_previous() { # the files and :latest images of what ran before; nothing restarts
             bash "$GITHUB_WORKSPACE/ops/previous.sh" restore-tree "$tree" "$APP" ||
               echo "::warning::the previous files could not be restored: $APP holds $COMMIT"
@@ -146,10 +138,19 @@ jobs:
             done
           }
 
-          # Issue #16 (header): from here to the migrations, a failing command restores the
-          # previous files and tags before the step fails. Explicit `exit 1` paths below call
-          # restore_previous themselves (or rollback); an exit does not fire ERR.
+          # Issue #16 (header): from the sync to the migrations, a failing command restores the
+          # previous files and tags before the step fails; set before the rsync (the tree is
+          # saved above), so a sync that fails part way is undone too. Explicit `exit 1` paths
+          # below call restore_previous themselves (or rollback); an exit does not fire ERR.
           trap 'echo "::error::a deploy command failed: restoring the previous files and tags"; restore_previous' ERR
+
+          echo "::group::sync ~/jobapp from $COMMIT"
+          # deploy.sh sync_tree rules: .rsyncignore excludes .env* and .deployed-commit, so
+          # --delete never removes them.
+          rsync -a --delete --exclude-from=.rsyncignore ./ "$APP/"
+          echo "files: $(find "$APP" -type f | wc -l)"
+          echo "::endgroup::"
+          cd "$APP"
 
           echo "::group::build (the running stack is untouched until this succeeds)"
           for svc in api caddy; do

@@ -470,6 +470,35 @@ def test_fetched_boards_in_memory_never_exceed_the_concurrency(
     assert in_memory == 0
 
 
+def test_without_an_org_prefix_every_org_goes_to_the_stub_and_real_ones_are_not_found(
+    fake_ats: FakeAts,
+) -> None:
+    """The CI stack (tests/ats-stub.compose.yml) sets ATS_BASE_URL with no org prefix: a real org
+    named by any spec reaches the fake server and answers "board not found", never the real ATS."""
+
+    async def go() -> list[str]:
+        codes = []
+        async with sweep.ats.AtsClient(tz=sweep.SWEEP_TZ, stub_base_url=fake_ats.url) as c:
+            for ats_name, org in (
+                ("ashby", "mistral.ai"),
+                ("greenhouse", "anthropic"),
+                ("lever", "x"),
+            ):
+                with pytest.raises(sweep.ats.BoardError) as caught:
+                    await c.fetch_board(ats_name, org)
+                codes.append(caught.value.code)
+            assert len((await c.fetch_board("ashby", "fake-ok")).postings) == 3
+        return codes
+
+    assert asyncio.run(go()) == ["not_found"] * 3
+    assert fake_ats.state.counts == {
+        "ashby/mistral.ai": 1,
+        "greenhouse/anthropic": 1,
+        "lever/x": 1,
+        "ashby/fake-ok": 1,
+    }
+
+
 def test_a_failed_board_gives_its_slot_back(
     factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
 ) -> None:
@@ -798,11 +827,22 @@ def test_a_scheduled_sweep_of_a_section_that_no_longer_validates_is_logged(
     )
     set_profile(factory, bob, search(board("fake-ok"), title_exclude=BROKEN_LIST))  # off
     caplog.set_level("WARNING", logger="app.sweep")
+    sweep._invalid_logged.clear()
+
+    def logged() -> list[str]:
+        return [r.user_id for r in caplog.records if "scheduled sweep skipped" in r.getMessage()]
+
     assert due_users(factory) == []
+    assert logged() == [str(alice)]
     records = [r for r in caplog.records if "scheduled sweep skipped" in r.getMessage()]
-    assert [r.user_id for r in records] == [str(alice)]
     assert "Search tab" in records[0].getMessage()
     assert "agent" not in records[0].getMessage()
+    # At most once per user per hour: the next ticks of the hour stay quiet.
+    for minutes in (5, 30, 59):
+        assert due_users(factory, TICK + timedelta(minutes=minutes)) == []
+    assert logged() == [str(alice)]
+    assert due_users(factory, TICK + timedelta(minutes=60)) == []
+    assert logged() == [str(alice)] * 2
 
 
 def test_a_section_without_a_schedule_or_with_the_old_flag_is_off(

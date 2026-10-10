@@ -34,7 +34,8 @@ import {
  *   E2E_CADDY_URL=http://127.0.0.1:8125 E2E_COMPOSE_PROJECT=jobapp-j5e2e \
  *     pnpm --dir web exec playwright test jobs-sweep.spec.ts
  * CI runs it on the scratch stack of tests/ats-stub.compose.yml (the worker reads the same fake
- * ATS for "fake-" orgs) with E2E_SKIP_REAL_SWEEP=1: every journey except the real sweep.
+ * ATS for every org, a real org answering 404) with E2E_SKIP_REAL_SWEEP=1: every journey except
+ * the real sweep.
  * E2E_REAL_ONLY=1 (the Jetson, tests/e2e_jobs_sweep_jetson.sh): only the real sweep, for an e2e
  * account; nothing of Harald's is read or touched. The stats of the real sweep are written to
  * tasks/evidence/<evidence>/real-sweep.json.
