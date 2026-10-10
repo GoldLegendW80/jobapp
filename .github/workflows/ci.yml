@@ -271,6 +271,11 @@ jobs:
       # Issue #18: the .env syntax check and where it runs (deploy.sh, deploy.yml, the smoke).
       - name: tests/env_check_test.sh
         run: tests/env_check_test.sh
+      # Every web/e2e/*.spec.ts is run by one e2e group or is excluded with a written reason.
+      - name: e2e spec groups (.github/scripts/e2e_groups.py and its test)
+        run: |
+          python3 .github/scripts/e2e_groups_test.py
+          python3 .github/scripts/e2e_groups.py
       # deploy.sh against fake ssh and docker: no Jetson, nothing remote.
       - name: tests/deploy_test.sh
         run: tests/deploy_test.sh
@@ -279,11 +284,44 @@ jobs:
       - name: tests/tailscale_test.sh
         run: tests/tailscale_test.sh
 
-  # Browser journeys in three groups on three runners, each against its own scratch Compose stack.
-  # The images are built once per change and reused through the GitHub Actions cache (buildx
-  # bake); the worker runs with TEST_FAST_TIMERS (tests/ats-stub.compose.yml).
+  # The images of the e2e stack, built once and written to the GitHub Actions layer cache
+  # (buildx bake); the three e2e groups below only read that cache.
+  e2e-images:
+    name: e2e images (build, write the layer cache)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # compose.yml cannot be read without the variables of .env; none of it enters an image.
+      - name: Environment (random secrets, never committed)
+        run: |
+          umask 077
+          .github/scripts/ci_env.sh 8080 > .env
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the images into the layer cache
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        with:
+          source: .
+          files: compose.yml
+          targets: api,worker,caddy
+          set: |
+            *.output=type=cacheonly
+            api.cache-from=type=gha,scope=e2e-api
+            api.cache-to=type=gha,scope=e2e-api,mode=max
+            worker.cache-from=type=gha,scope=e2e-worker
+            worker.cache-to=type=gha,scope=e2e-worker,mode=max
+            caddy.cache-from=type=gha,scope=e2e-caddy
+            caddy.cache-to=type=gha,scope=e2e-caddy,mode=max
+
+  # Browser journeys in three groups on three runners, each against its own scratch Compose stack
+  # made of the images cached by e2e-images; the worker runs with TEST_FAST_TIMERS
+  # (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts is in one group or in the exclusion
+  # list of .github/scripts/e2e_groups.py, which fails the shell job otherwise.
   e2e:
     name: e2e (${{ matrix.group }})
+    needs: e2e-images
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -325,7 +363,7 @@ jobs:
           # when APP_ENV is production; this stack is development).
           echo "AGENTS_FAKE_BACKEND=true" >> .env
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build the images (buildx bake, GitHub Actions layer cache)
+      - name: Load the images from the layer cache (buildx bake, read only)
         uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         with:
           source: .
@@ -334,11 +372,8 @@ jobs:
           load: true
           set: |
             api.cache-from=type=gha,scope=e2e-api
-            api.cache-to=type=gha,scope=e2e-api,mode=max
             worker.cache-from=type=gha,scope=e2e-worker
-            worker.cache-to=type=gha,scope=e2e-worker,mode=max
             caddy.cache-from=type=gha,scope=e2e-caddy
-            caddy.cache-to=type=gha,scope=e2e-caddy,mode=max
       # tests/ats-stub.compose.yml: the board check asks a stub (tests/ats_stub.py) and the worker
       # api/tests/jobs/fake_ats.py, never the real Ashby, Greenhouse or Lever.
       - name: Start the stack
