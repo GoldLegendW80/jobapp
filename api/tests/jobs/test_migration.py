@@ -400,7 +400,7 @@ def test_up_down_up_with_data(at_head: sa.Engine) -> None:
         assert conn.execute(sa.text("SELECT count(*) FROM users")).scalar_one() == 1
         assert conn.execute(sa.text("SELECT count(*) FROM profiles")).scalar_one() == 1
     command.upgrade(alembic_config(), "head")
-    assert current_revision(url(at_head)) == HEAD == "0005"
+    assert current_revision(url(at_head)) == HEAD
     with at_head.begin() as conn:
         add_job(conn, user, "a", "https://x.example/1")  # a fresh, empty schema
     command.downgrade(alembic_config(), "0003")

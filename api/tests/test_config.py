@@ -129,7 +129,12 @@ def test_production_requires_a_real_secret(secret: str | None) -> None:
 
 
 def test_production_accepts_a_long_secret() -> None:
-    settings = Settings(database_url=URL, app_env="production", secret_key="x" * 48)  # type: ignore[arg-type]
+    settings = Settings(
+        database_url=URL,  # type: ignore[arg-type]
+        app_env="production",
+        secret_key="x" * 48,  # type: ignore[arg-type]
+        credentials_key="A" * 43,  # type: ignore[arg-type]
+    )
     assert settings.app_env == "production"
 
 

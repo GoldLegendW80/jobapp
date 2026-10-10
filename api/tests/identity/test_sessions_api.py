@@ -249,6 +249,7 @@ def test_cookie_is_secure_in_production_even_over_http(
         database_url=migrated_url,  # type: ignore[arg-type]
         app_env="production",
         secret_key="s" * 40,  # type: ignore[arg-type]
+        credentials_key="A" * 43,  # type: ignore[arg-type]
     )
     app = create_app(settings, clock=clock)
     with TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*")) as client:

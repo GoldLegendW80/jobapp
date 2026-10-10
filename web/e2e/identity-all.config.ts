@@ -9,6 +9,8 @@ import { defineConfig, devices } from "@playwright/test";
  *   invites   admin creates and revokes links, a friend accepts in another browser, member 404
  *   users     accounts table: disable signs out at once, enable, promote, demote
  *   account   rename, wrong current password, password change signs the other browser out
+ *   model-access  Model access card: format error, save, subscription token, remove (the API
+ *             key checks only with E2E_MODEL_STUB=1, so this run never calls Anthropic)
  *   profile   a made up profile through the CLI, every tab
  *   profile-editors  Facts, Skills and Search editors, the board check against a real ATS
  *   profile-history  empty to 100% in the browser, History diff and restore, export, import
@@ -27,6 +29,7 @@ const SPECS = [
   "invites",
   "users",
   "account",
+  "model-access",
   "profile",
   "profile-editors",
   "profile-history",

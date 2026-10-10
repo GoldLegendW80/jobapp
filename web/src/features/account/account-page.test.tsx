@@ -78,7 +78,7 @@ const submitPassword = (user: ReturnType<typeof userEvent.setup>) =>
   );
 
 describe("account page", () => {
-  it("opens from the user menu and shows both cards", async () => {
+  it("opens from the user menu and shows the three cards", async () => {
     account();
     const { location, user } = await (async () => {
       const utils = renderApp("/");
@@ -98,6 +98,7 @@ describe("account page", () => {
     expect(headings.map((h) => h.textContent)).toEqual([
       "Profile name",
       "Change password",
+      "Model access",
     ]);
   });
 

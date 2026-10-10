@@ -1,0 +1,32 @@
+# e2e only: a stub of the one Anthropic API call the credential check makes (tests/anthropic_stub.py)
+# and the api pointed at it, so the Model access journey never sends a key to Anthropic.
+#   docker compose -p jobapp-a1 -f compose.yml -f tests/anthropic-stub.compose.yml up -d --build --wait
+#   E2E_MODEL_STUB=1 ... playwright test model-access.spec.ts
+# The api refuses MODEL_API_BASE_URL when APP_ENV is production (app/config.py).
+services:
+  api:
+    environment:
+      MODEL_API_BASE_URL: http://anthropicstub:8080
+    depends_on:
+      anthropicstub:
+        condition: service_healthy
+
+  anthropicstub:
+    # The api's own base image (api/Dockerfile PYTHON_IMAGE): pinned and already pulled.
+    image: python:3.12.15-slim-trixie
+    command: ["python", "/stub/anthropic_stub.py", "8080"]
+    volumes:
+      # Relative to the project directory, the folder of compose.yml.
+      - ./tests/anthropic_stub.py:/stub/anthropic_stub.py:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 64m
+    expose:
+      - "8080"
