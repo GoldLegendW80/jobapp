@@ -88,7 +88,7 @@ stuck_containers() {
   ids="$(docker ps -a --filter 'name=jobapp-test-pg-' --filter status=created -q 2>/dev/null || true)"
   if [[ -n "$ids" ]]; then
     # shellcheck disable=SC2086 # one id per word
-    docker rm $ids >/dev/null
+    docker rm -v $ids >/dev/null
     info "removed $(wc -w <<<"$ids" | tr -d ' ') jobapp-test-pg-* container(s) stuck in Created"
   else
     info "no jobapp-test-pg-* container stuck in Created"

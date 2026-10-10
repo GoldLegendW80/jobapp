@@ -1,0 +1,8 @@
+{
+  "storage-driver": "overlay2",
+  "features": { "containerd-snapshotter": false },
+  "bip": "10.213.0.1/24",
+  "default-address-pools": [{ "base": "10.214.0.0/16", "size": 24 }],
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "10m", "max-file": "2" }
+}
