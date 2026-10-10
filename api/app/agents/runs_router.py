@@ -8,12 +8,16 @@
   queue (Redis) is down (the run is then failed at once, never left queued).
 - GET /api/agents/runs?limit=&before=: the caller's runs, newest first.
 - GET /api/agents/runs/{id}: one run with its events (at most EVENTS_MAX; the stream replays all).
+- GET /api/agents/runs/{id}/stream: server-sent events (app/sse.py `replay`): one `step` event
+  per stored event, `id` = its seq, data {seq, at, kind, data}, from after the Last-Event-ID
+  header (EventSource sends it when it reconnects) or the `after` query parameter, then each new
+  one as the worker writes it, and `end` once the run has ended and everything was sent.
 - POST /api/agents/runs/{id}/cancel: 202 with the run: cancelled at once when still queued, or
   `cancel_requested` while the worker stops it (within about a second); 409 when it has ended.
 
-Another user's run answers 404 like one that does not exist, for reads and cancel alike. The
-user always comes from the session (default deny, CSRF on every write). Nothing here logs an
-input or an output.
+Another user's run answers 404 like one that does not exist, for reads, the stream and cancel
+alike. The user always comes from the session (default deny, CSRF on every write). Nothing here
+logs an input or an output.
 """
 
 import json
@@ -21,13 +25,15 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
+from app import sse
 from app.agents import credentials, definitions, runs
-from app.agents.models import AgentRun
+from app.agents.models import FINAL_STATUSES, AgentRun
 from app.agents.schemas import AgentList, AgentOut, EventOut, RunDetail, RunIn, RunList, RunOut
 from app.identity import deps
 from app.identity.models import User
@@ -41,6 +47,7 @@ INPUT_MAX_BYTES = 16_384
 LIST_DEFAULT = 30
 LIST_MAX = 100
 EVENTS_MAX = 2000
+STREAM_PAGE = 200
 NO_STORE = {"Cache-Control": "no-store"}
 
 NOT_FOUND = "Run not found."
@@ -249,6 +256,64 @@ async def read_run(run_id: str, user: CurrentUser, request: Request) -> RunDetai
     if found is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
     return found
+
+
+# --- stream -------------------------------------------------------------------------------------
+
+
+def _page(
+    sessions: sessionmaker[Session], user_id: uuid.UUID, run_id: uuid.UUID, after: int
+) -> sse.Page | None:
+    """The run's events after `after`, and whether the run has ended. The status is read before
+    the events: the final status is committed with the run's last event, so a run read as ended
+    has all its events visible to the read that follows."""
+    with sessions() as db:
+        run = runs.get_run(db, user_id, run_id)
+        if run is None:
+            return None
+        ended = run.status in FINAL_STATUSES
+        rows = runs.events_after(db, run_id, after, STREAM_PAGE)
+        events = [
+            sse.Event(
+                row.seq,
+                "step",
+                {"seq": row.seq, "at": row.at.isoformat(), "kind": row.kind, "data": row.data},
+            )
+            for row in rows
+        ]
+        return sse.Page(events, final=ended and len(rows) < STREAM_PAGE)
+
+
+@router.get(
+    "/runs/{run_id}/stream",
+    responses={
+        **_401,
+        **_404,
+        200: {"content": {"text/event-stream": {}}, "description": "The run's events"},
+    },
+    response_class=StreamingResponse,
+)
+async def stream_run(
+    run_id: str,
+    user: CurrentUser,
+    request: Request,
+    after: str | None = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    """Server-sent events of one run: its stored events, then the new ones, then `end`."""
+    sessions, parsed = sessions_of(request), _run_id(run_id)
+
+    def exists() -> bool:
+        with sessions() as db:
+            return runs.get_run(db, user.id, parsed) is not None
+
+    if not await run_in_threadpool(exists):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
+    start = sse.last_event_id(last_event_id, after)
+    settings = getattr(request.app.state, "sse_settings", {})
+    return sse.response(
+        sse.replay(lambda seq: _page(sessions, user.id, parsed, seq), after=start, **settings)
+    )
 
 
 # --- cancel -------------------------------------------------------------------------------------

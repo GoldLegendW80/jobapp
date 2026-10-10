@@ -36,6 +36,7 @@ describe("App shell", () => {
     expect(links.map((link) => link.textContent)).toEqual([
       "Jobs",
       "Profile",
+      "Runs",
       "Admin",
     ]);
     expect(links[0]).toHaveAttribute("aria-current", "page");
