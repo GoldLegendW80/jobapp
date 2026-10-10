@@ -10,11 +10,11 @@
 8 | date | 2023-01 | accept | accept | three part date whose middle number is over 12: the month comes first
 9 | date | 2022-02 | refuse | refuse | excerpt not found
 10 | date | 2022-02 | accept | accept | all rules hold
-11 | email | hthautin@gmail.com | accept | accept | all rules hold
-12 | email | harald@evil.example | refuse | refuse | rule V: the value is not written in an excerpt
-13 | url | https://linkedin.com/in/harald-thorvald-hautin | accept | accept | scheme and www. removed on both sides, the final / is punctuation
-14 | phone | +33 7 89 36 56 92 | accept | accept | all rules hold
-15 | phone | 07 89 36 56 92 | refuse | refuse | rule P: the digits are not a phone number of an excerpt
+11 | email | camille.durand@example.org | accept | accept | all rules hold
+12 | email | camille@evil.example | refuse | refuse | rule V: the value is not written in an excerpt
+13 | url | https://example.org/in/camille-durand-martin | accept | accept | scheme and www. removed where an address starts, the final / is punctuation
+14 | phone | +33 6 39 98 12 34 | accept | accept | all rules hold
+15 | phone | 06 39 98 12 34 | refuse | refuse | rule P: the digits are not a phone number of an excerpt
 16 | text | 10 000 utilisateurs actifs | accept | accept | NFKC turns U+202F into a space; reading b gives 10000 on both sides
 17 | text | 10k active users | refuse | refuse | rule N: 10 is not a number of the source
 18 | text | 3.5 years of software engineering | accept | accept | all rules hold
@@ -53,7 +53,7 @@
 51 | date | 2019 | accept | accept | all rules hold
 52 | date | 2020 | refuse | refuse | rule D: two digit year, not read
 53 | date | 2021-09 | accept | accept | the month sits next to a two digit year and another excerpt gives 2021
-54 | date | 2010-11 | refuse | refuse | rule D: month not in the source, propose the year alone: 11 is the year after 2010: read as a school year
+54 | date | 2010-11 | refuse | refuse | rule D: month not in the source, propose the year alone: 11 is over 10: it can be a later year, so no month
 55 | date | 2010 | accept | accept | all rules hold
 56 | date | 2019-06 | accept | accept | a range sharing its year
 57 | date | 2019-08 | accept | accept | all rules hold
@@ -66,14 +66,46 @@
 64 | date | 2021-09 | accept | accept | all rules hold
 65 | name | Thales | refuse | refuse | rule V: the value is not written in an excerpt: whole tokens: Thales is not Thalesgroup
 66 | name | Thalesgroup Services | accept | accept | all rules hold
-67 | phone | 89 36 56 | refuse | refuse | rule P: the digits are not a phone number of an excerpt: the digits must be the whole phone number
+67 | phone | 39 98 12 | refuse | refuse | rule P: the digits are not a phone number of an excerpt: the digits must be the whole phone number
 68 | text | Python | accept | accept | all rules hold
 69 | text | Python | refuse | refuse | excerpt must be the whole document
 70 | setting | 25 | refuse | refuse | not proposable by the agent: a setting is not proposable
 71 | term | python3 | accept | accept | a search term is not a claim: rule N does not apply
-72 | url | https://harald.dev/projets | refuse | refuse | rule V: the value is not written in an excerpt: the address goes on after the value
-73 | email | hthautin@gmail.com | accept | accept | all rules hold
+72 | url | https://camille.example.org/projets | refuse | refuse | rule V: the value is not written in an excerpt: the address goes on after the value
+73 | email | camille.durand@example.org | accept | accept | all rules hold
 74 | text | 1234.56 euros | accept | accept | all rules hold
 75 | text | 150 people in 2021 | accept | accept | reading e: 2021 and 150
 76 | text | Fait ajouté | accept, flagged | accept, flagged | looks_like_instruction
-# 76 examples, 76 as the table states, 0 not
+77 | date | 2019-06 | refuse | refuse | rule D: month not in the source, propose the year alone: June is followed by 2020: it belongs to 2020 only
+78 | date | 2021-03 | refuse | refuse | rule D: month not in the source, propose the year alone: March is followed by 2020, and nothing pairs across a line break
+79 | date | 2020-06 | accept | accept | all rules hold
+80 | date | 2020-03 | accept | accept | all rules hold
+81 | phone | 06 39 98 12 34 | accept | accept | the line break ends the phone number
+82 | phone | 06 39 98 12 34 | accept | accept | all rules hold
+83 | text | Équipe de 5 | accept | accept | the line break ends the number: 5, not 5100
+84 | text | 5100 personnes | refuse | refuse | rule N: 5100 is not a number of the source
+85 | text | 150 euros | accept | accept | three spaces or more are a break: three numbers
+86 | text | 150 euros | refuse | refuse | rule N: 150 is not a number of the source: one space between groups of three: the number 12150300
+87 | date | 2019-06 | accept | accept | month, day, comma, year
+88 | date | 2019-06 | accept | accept | days inside a range sharing its year
+89 | date | 2019-08 | accept | accept | all rules hold
+90 | date | 2023-01 | accept | accept | an arrow is a connector
+91 | date | 2022-05 | accept | accept | all rules hold
+92 | date | 2019-06 | accept | accept | a list of months sharing its year
+93 | date | 2019-07 | accept | accept | all rules hold
+94 | date | 2010-12 | refuse | refuse | rule D: month not in the source, propose the year alone: 12 is over 10: it can be the year 2012, so no month
+95 | date | 2015-09 | accept | accept | 09 is not over 15: a month
+96 | date | 2005-09 | refuse | refuse | rule D: month not in the source, propose the year alone: the cost of that rule: 09 is over 05, the year alone
+97 | date | 2005 | accept | accept | all rules hold
+98 | text | 10 users | refuse | refuse | rule N: 10 is not a number of the source: three digits after the separator: only the grouped reading
+99 | text | 10 utilisateurs | refuse | refuse | rule N: 10 is not a number of the source
+100 | text | 125 s | refuse | refuse | rule N: 125 is not a number of the source: an integer part of 0 makes it a decimal: 0.125
+101 | text | 0.125 s | accept | accept | all rules hold
+102 | date | 2010-10 | refuse | refuse | rule D: month not in the source, propose the year alone: a month and a two digit year as numbers count only inside a range of dates
+103 | date | 2019-01 | refuse | refuse | rule D: month not in the source, propose the year alone: the month of MM/YYYY is written in two digits
+104 | date | 2019 | accept | accept | all rules hold
+105 | date | 2021-09 | refuse | refuse | rule D: month not in the source, propose the year alone: sept without a full stop, the year followed by a word: seven
+106 | url | asite.fr | refuse | refuse | rule V: the value is not written in an excerpt: www. is removed only where an address starts
+107 | name | IT | refuse | refuse | rule V: the value is not written in an excerpt: a name under four characters keeps its capitals
+108 | name | IT | accept | accept | all rules hold
+# 108 examples, 108 as the table states, 0 not
