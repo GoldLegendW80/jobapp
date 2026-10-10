@@ -1,0 +1,22 @@
+# Scratch stack of the agents A2 journeys (web/e2e/agents-runs.spec.ts) and of the worker memory
+# measurement, over compose.yml and tests/anthropic-stub.compose.yml:
+#   HTTP_PORT=8127 docker compose -p jobapp-a2 -f compose.yml -f tests/anthropic-stub.compose.yml \
+#     -f tests/compose.a2-e2e.yml up -d --build --wait
+#   docker compose -p jobapp-a2 -f compose.yml exec -T api alembic upgrade head
+#   E2E_CADDY_URL=http://127.0.0.1:8127 E2E_COMPOSE_PROJECT=jobapp-a2 \
+#     pnpm --dir web exec playwright test agents-runs.spec.ts
+#   docker compose -p jobapp-a2 -f compose.yml -f tests/anthropic-stub.compose.yml \
+#     -f tests/compose.a2-e2e.yml down -v
+# Its own image tags, so the dev and production images are never replaced. The worker replays
+# recorded streams (AGENTS_FAKE_BACKEND, refused when APP_ENV is production); with
+# AGENTS_FAKE_BACKEND=false it runs the real Claude Agent SDK and Claude Code CLI against the
+# Anthropic stub instead (tests/anthropic_stub.py), still without any model call.
+services:
+  api:
+    image: jobapp-api:a2-e2e
+  worker:
+    image: jobapp-worker:a2-e2e
+    environment:
+      AGENTS_FAKE_BACKEND: ${AGENTS_FAKE_BACKEND:-true}
+  caddy:
+    image: jobapp-caddy:a2-e2e

@@ -1,0 +1,62 @@
+{
+ "description": "The API refuses the credential: an error result with api_error_status 401.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_job"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": true,
+    "duration_ms": 1830,
+    "duration_api_ms": 1500,
+    "num_turns": 0,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "result": "Invalid API key",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0,
+    "usage": {
+     "input_tokens": 0,
+     "output_tokens": 0,
+     "cache_creation_input_tokens": 1200,
+     "cache_read_input_tokens": 3400
+    },
+    "modelUsage": {
+     "{model}": {
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "cacheReadInputTokens": 3400,
+      "cacheCreationInputTokens": 1200,
+      "webSearchRequests": 0,
+      "costUSD": 0.0,
+      "contextWindow": 200000
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "api_error",
+    "api_error_status": 401
+   }
+  }
+ ]
+}

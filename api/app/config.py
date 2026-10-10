@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     # /api/me/model-credential/verify calls instead of https://api.anthropic.com. Refused in
     # production.
     model_api_base_url: str | None = None
+    # Agent runs (agents A2, app/agents/runner.py). Tests and scratch stacks only: replace the
+    # Claude Agent SDK with a replayer of recorded message streams (app/agents/fake_backend.py),
+    # so no model is ever called. Refused in production, and the runner checks again.
+    agents_fake_backend: bool = False
+    # Where each run's scratch directory is made (deleted when the run ends). Default: the
+    # system temporary directory, a tmpfs in the worker container (compose.yml).
+    agents_scratch_dir: str | None = None
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod
@@ -135,6 +142,11 @@ class Settings(BaseSettings):
         if self.app_env == "production" and self.model_api_base_url is not None:
             raise ValueError(
                 "MODEL_API_BASE_URL points the credential check at a test stub and must not be "
+                "set in production"
+            )
+        if self.app_env == "production" and self.agents_fake_backend:
+            raise ValueError(
+                "AGENTS_FAKE_BACKEND replaces the model with recorded streams and must not be "
                 "set in production"
             )
         return self

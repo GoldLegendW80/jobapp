@@ -464,8 +464,8 @@ Greenhouse and Lever public APIs, four boards at a time), keeps the postings the
 match (title include and exclude, the board's own exclude, location, days window, contract
 types), skips the ones already in the list, stores the new ones as `found` and scores them; a
 posting matching a never apply rule ("Label: term, term") is stored as `skipped` with the rule as
-its note. The work happens in the `worker` service (same image as the api, `python -m
-app.worker`, arq on Redis), one sweep per user at a time. The page follows it live (server-sent
+its note. The work happens in the `worker` service (`python -m app.worker`, arq on Redis; its
+own image `jobapp-worker`, see Agent runs), one sweep per user at a time. The page follows it live (server-sent
 events, polling as the fallback) and shows a summary: the new postings and the boards that could
 not be read (not found, blocked, rate limited, timeout...). Automatic search is off by default:
 "Schedule" next to Find jobs (or the Search tab of the profile) turns it on for weekdays, one to
@@ -486,6 +486,32 @@ start. `ATS_BASE_URL` (test stacks only, refused when `APP_ENV=production`) send
 and the sweeps to a stub of the three APIs; with `ATS_BASE_URL_ORG_PREFIX=fake-` only the orgs
 starting with it go there (`tests/compose.j5-e2e.yml`), the CI stack sends every org
 (`tests/ats-stub.compose.yml`).
+
+## Agent runs
+
+Claude agents run in the `worker` (SPEC-agents.md, agents A2), on the user's own model credential
+(Account, Model access). The worker image `jobapp-worker` is the `worker` target of
+`api/Dockerfile`: the api's code plus the Claude Agent SDK, whose wheel bundles the Claude Code CLI
+it drives (no Node runtime); the api image (`runtime` target) stays without it. At most two runs at
+once (a third waits in the queue); each run gets a scratch directory on the worker's `/tmp`
+tmpfs, deleted when it ends, its credential only in the environment of its own Claude Code
+process, no built-in tool (no shell, files or web), and only the app tools of its agent, bound to
+its user. A run stops at its turn limit, after its wall time (10 minutes by default) or when the
+user cancels it; a worker restart fails the runs it was running.
+
+```bash
+curl -s -b cookies http://localhost/api/agents                                                    # agents available here
+curl -s -X POST -H 'X-Requested-With: jobapp' -H 'Content-Type: application/json' -b cookies \
+  -d '{"agent":"echo","input":{"message":"hi"}}' http://localhost/api/agents/runs                 # 202, queued
+curl -s -b cookies http://localhost/api/agents/runs/<id>                                          # status, events, tokens, cost
+curl -s -X POST -H 'X-Requested-With: jobapp' -b cookies http://localhost/api/agents/runs/<id>/cancel
+```
+
+`echo` is a test agent, refused when `APP_ENV=production`. `AGENTS_FAKE_BACKEND=true` (test
+stacks and CI only, refused in production) replaces the model with recorded message streams
+(`api/app/agents/fake_streams/`); `tests/compose.a2-e2e.yml` with `AGENTS_FAKE_BACKEND=false` runs
+the real SDK and CLI against the Anthropic stub (`tests/anthropic_stub.py`), still with no model
+call.
 
 ## Backups and restores
 
