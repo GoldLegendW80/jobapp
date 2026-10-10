@@ -6,7 +6,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-import { FakeEventSource } from "./fake-event-source";
+import { FakeEventSource } from "@/test/fake-event-source";
 import type { Run } from "./runs-api";
 
 const JOB = "00000000-0000-4000-9000-000000000007";

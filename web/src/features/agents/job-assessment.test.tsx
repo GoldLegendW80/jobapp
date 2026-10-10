@@ -9,7 +9,7 @@ import { makeDetail } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-import { FakeEventSource } from "./fake-event-source";
+import { FakeEventSource } from "@/test/fake-event-source";
 import type { Proposal } from "./proposals-api";
 import type { Run } from "./runs-api";
 
