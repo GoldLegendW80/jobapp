@@ -18,7 +18,10 @@ in the job folder that holds this repository (it is not part of the repository).
 3. The branch is pushed and a pull request is opened with `gh pr create`; the template
    (`.github/pull_request_template.md`) asks for what, why, the spec and task, tests, evidence and
    risks.
-4. CI (`.github/workflows/ci.yml`) runs on the pull request, every job on a runner of its own:
+4. CI (`.github/workflows/ci.yml`) runs on the pull request, on the self-hosted runners of
+   Harald's Mac (`[self-hosted, mac-ci]`, four of them: jobs beyond four queue, and all of them
+   wait while the Mac is asleep or Docker Desktop is closed; README, CI runners on the Mac),
+   every job on a runner of its own:
    `api (jobs)` and `api (rest)` (ruff, then pytest against Postgres and Redis in two shards),
    `api coverage` (the coverage of both shards combined, at least 95 percent: this job is where
    the floor is checked, and it fails when a shard failed), `web checks` (eslint, tsc, build),
@@ -41,6 +44,12 @@ in the job folder that holds this repository (it is not part of the repository).
 
 `main` is always deployable: nothing is pushed to it directly, and a red `main` is fixed first.
 
+A job that never starts ("Waiting for a runner") means the Mac's runners are offline:
+`ops/ci-runners.sh status` on the Mac, then `ops/ci-runners.sh start`. A job that died with a
+lost runner (the Mac went to sleep) is rerun with `gh run rerun <id> --failed`. A new workflow
+file cannot use the Mac's runners until `ops/ci-runner/job-started.sh` allows it, and no job may
+target `self-hosted` alone: that label is also the Jetson's.
+
 ## Enforcement
 
 The repository is private on GitHub's free plan, where protected branches and rulesets are a paid
@@ -56,4 +65,5 @@ pre-commit run --all-files
 (cd api && uv run --native-tls pytest -m "not docker")    # with TEST_DATABASE_URL, or Docker for a throwaway database
 pnpm --dir web lint && pnpm --dir web typecheck && pnpm --dir web test && pnpm --dir web build
 tests/deploy_test.sh                                     # when deploy.sh, ops/ or tests/*.sh change
+tests/ci_runners_test.sh                                 # when ops/ci-runners.sh, ops/ci-runner/ or the workflows change
 ```

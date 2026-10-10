@@ -13,7 +13,10 @@
 # Never on the Jetson, never in compose.yml: its Cortex-A78AE has no SVE or SME, does not crash,
 # and must keep hardware AES. deploy.sh and the deploy workflow use compose.yml alone, and
 # api/tests/test_openssl_armcap.py fails if the variable reaches compose.yml, the Dockerfile or
-# .env.example. CI runs on x86, where OpenSSL does not read this variable.
+# .env.example. CI runs on this Mac since issue #83 (Linux arm64 runners in Docker Desktop):
+# the runner image sets the variable for a job's own processes and CI_COMPOSE_OVERLAY to this
+# file for its scratch stacks (ops/ci-runner/Dockerfile); ci.yml never names either, and on
+# GitHub's x86 machines OpenSSL does not read the variable.
 
 services:
   api:

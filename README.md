@@ -112,9 +112,11 @@ Every change goes through a branch and a pull request ([CONTRIBUTING.md](CONTRIB
 two shards (ruff, pytest against Postgres and Redis), api coverage (both shards combined, at least
 95 percent, checked in that job), web checks (eslint, tsc, build), web Vitest in two shards, shell
 (shellcheck, `tests/deploy_test.sh`, the guard that every e2e spec is in a group), e2e in three
-groups (identity, sweep, apps; each on its own Compose stack built on GitHub's runner, the
+groups (identity, sweep, apps; each on its own Compose stack built on its runner, the
 Playwright journeys with throwaway accounts and a synthetic jobs import, never Harald's data) and
-pre-commit. When CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
+pre-commit. Since 2026-10-10 the jobs are written for self-hosted runners on Harald's Mac (CI
+runners on the Mac, below), because the free minutes of GitHub's own machines were used up; the
+Jetson's runner keeps the deploys and nothing uses paid minutes. When CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
 Jetson's self-hosted runner, under the Jetson's deploy lock (`flock` on
 `~/jobapp-backups/.deploy.lock`, which `./deploy.sh` takes too, so the two never overlap; the Jetson
 lets go of the Mac's hold after `DEPLOY_LOCK_MAX_S`, an hour by default, so a Mac that sleeps mid
@@ -170,6 +172,101 @@ step unless it is this repository's `deploy.yml` from `refs/heads/main`, run by 
 `[self-hosted, jetson]` is refused. Never add the runner to a public repository or allow fork
 workflows. Dispatching a branch deploys and runs that branch's code on the Jetson (its compose
 file and images), so dispatch only reviewed branches. Anyone with write access to the repository can run code on the Jetson.
+
+### CI runners on the Mac
+
+CI runs on four self-hosted runners on the Mac (issue #83), `mac-ci-1` to `mac-ci-4`, labels
+`self-hosted, Linux, ARM64, mac-ci`. Every job of `ci.yml` targets `[self-hosted, mac-ci]`, never
+`self-hosted` alone, so a CI job cannot land on the Jetson's runner, and `deploy.yml` keeps
+`[self-hosted, jetson]`.
+
+```bash
+ops/ci-runners.sh install [count]   # build the image, register and start the runners (default 4); safe to run again
+ops/ci-runners.sh status            # containers, GitHub's view (online, busy), memory, disk used
+ops/ci-runners.sh stop              # stop them; queued jobs wait
+ops/ci-runners.sh start             # start them again
+ops/ci-runners.sh update            # rebuild the image from ops/ci-runner, recreate the containers (registration and caches kept)
+ops/ci-runners.sh prune             # empty the tool caches and every runner's Docker daemon
+ops/ci-runners.sh uninstall         # unregister, remove containers, volumes and image
+```
+
+**Shape.** Each runner is the official actions runner for Linux arm64 (version and SHA-256
+pinned in `ops/ci-runner/Dockerfile`, checked at build) in a container of Docker Desktop, with a
+Docker daemon of its own inside (the same Engine and Compose versions as the Jetson). Chosen over
+runners installed natively on macOS for three reasons. It is the Jetson's platform, Linux arm64,
+so tests run on what production runs on. GitHub's `services:` and container features need a Linux
+runner with Docker, so the workflow is the one that ran on GitHub's machines, and one variable
+sends it back there. And a job sees a machine of its own: its own `127.0.0.1`, container names,
+Compose project and ports, so parallel jobs cannot collide, and nothing a job starts, stops or
+prunes is in the Mac's own Docker daemon, where Harald's containers and the agents' scratch
+stacks live. A native runner would run job code as Harald's macOS user, next to his keys.
+
+**Where things live.** Nothing in the repository and nothing in the home folder: the image
+`jobapp-ci-runner:<version>`, the containers `jobapp-ci-1` to `jobapp-ci-4` (restart
+unless-stopped), the volume `jobapp-ci` (each runner's directory, registration and work folder,
+plus the caches the runners share: uv, the pnpm store, Playwright's Chromium, pre-commit) and one
+volume `jobapp-ci-docker-<n>` per runner (its Docker daemon's images and layer cache). All carry
+the label `jobapp.ci=runner`. To add a runner: `ops/ci-runners.sh install 5`.
+
+**Limits.** A runner takes one job at a time, so four runners are the bound on what runs at
+once, whatever the number of pushes; the other jobs queue, and a newer push to the same branch
+cancels the older run. Four because the three e2e groups each start a full stack (memory limits
+of 3.5 GB summed, Chromium and an image build on top) and Docker Desktop has 12 CPUs and about
+18 GB that the agents' own stacks share: each runner gets 3 CPUs and at most 5 GB. Disk: after
+every job a hook removes the job's containers, networks and volumes, dangling images and build
+cache beyond 2 GB, and Playwright's reports and traces; a runner whose Docker data passes 6 GB is
+emptied and starts cold. The shared tool caches only grow when a lock file changes;
+`ops/ci-runners.sh status` shows their size and `prune` empties them.
+
+**When the Mac is off, asleep or Docker Desktop is closed.** The runners are offline and CI
+waits: jobs stay queued (GitHub keeps a queued job for 24 hours, then fails it) and start when
+the Mac is back. A job that was running when the Mac went to sleep can fail with a lost runner:
+rerun it (`gh run rerun <id> --failed`). Nothing deploys meanwhile, since the deploy waits for a
+green CI on `main`. The containers come back with Docker Desktop, so the runners start at login
+only if Docker Desktop does (Settings, General, "Start Docker Desktop when you sign in to your
+computer"). No power setting was changed; for a long unattended session, `caffeinate -s` in a
+terminal keeps a Mac on mains power awake while it runs.
+
+**Back to GitHub's machines.** One repository variable, no edit of the workflow:
+
+```bash
+gh variable set CI_RUNS_ON --body '"ubuntu-latest"'    # CI on GitHub's runners (uses the free minutes)
+gh variable delete CI_RUNS_ON                          # back on the Mac
+```
+
+`CI_RUNS_ON` is the JSON of a `runs-on` value; unset, it is `["self-hosted", "mac-ci"]`. The
+steps that differ test `runner.environment`: on GitHub's machines the caches go to GitHub's cache
+service as before, on the Mac they stay on the runner.
+
+**Updating.** The runner updates itself when GitHub publishes a release (the update lands in the
+`jobapp-ci` volume and survives restarts). To move the pinned version, the Docker Engine or the
+packages of the image: edit `ops/ci-runner/Dockerfile` (version and the SHA-256 from the release
+notes of `actions/runner`), then `ops/ci-runners.sh update`.
+
+**Security.** The runners are registered to this private repository only, and a job-started hook
+baked into the image (`ops/ci-runner/job-started.sh`) refuses every job that is not this
+repository's `ci.yml`. A container gets no variable of the shell that installs it (no token, no
+key, no `.env`), no folder of the Mac and not the Mac's Docker socket; the registration token
+goes from `gh api` into the container's stdin and is stored nowhere. Jobs use throwaway secrets
+(`.github/scripts/ci_env.sh`) and synthetic data, never the Jetson's database or Harald's files.
+This keeps accidents and collisions out; it is not a wall against hostile code: the containers
+are privileged (they run a Docker daemon), and a privileged container can reach the Docker
+Desktop virtual machine and what Docker Desktop shares with it. Whoever can push a branch to this
+repository can run code on the Mac, so the repository stays private and fork pull requests stay
+off. The caches are shared by all runs, so a branch can leave a poisoned cache entry for the
+next run: `ops/ci-runners.sh prune` empties them.
+
+**Apple silicon.** The runners sit in the same Linux guest as every other container of this Mac,
+so they need `OPENSSL_armcap=0` too (Development on the Mac, above). The runner image sets it
+for a job's own processes and sets `CI_COMPOSE_OVERLAY=compose.mac.yml`, which the e2e jobs add
+to their `compose up`. `ci.yml` never names the variable and `compose.yml` never has it.
+
+To try a CI step by hand in the runner's exact environment, without registering anything:
+
+```bash
+docker run --rm -it --privileged -e CI_RUNNER_INDEX=99 -v jobapp-ci-try:/ci \
+  -v jobapp-ci-try-docker:/var/lib/docker jobapp-ci-runner:2.338.0 exec bash
+```
 
 ## Public URL
 
