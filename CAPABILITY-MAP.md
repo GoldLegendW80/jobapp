@@ -4,7 +4,7 @@ Intent: [docs/intent/jetson-job-app.md](../docs/intent/jetson-job-app.md). Appro
 
 | Module id | Responsibility | Depends on |
 |---|---|---|
-| platform | Docker Compose, Postgres, Redis, Caddy, cloudflared, deploy script to the Jetson; GitHub delivery: branches, PRs, Actions CI, review subagent, self-hosted runner deploying main | none |
+| platform | Docker Compose, Postgres, Redis, Caddy, Tailscale Funnel, deploy script to the Jetson; GitHub delivery: branches, PRs, Actions CI, review subagent, self-hosted runner deploying main | none |
 | identity | Invite-only accounts, sessions, per-user isolation | platform |
 | profile | Facts, skills, approved positioning, contact info, search options (titles, locations, contracts, exclusions), all editable in the UI | identity |
 | jobs | Postings table, API board sweep (Ashby, Greenhouse, Lever), scoring, statuses, list and filters, multi-select, import of the existing CSV | profile |

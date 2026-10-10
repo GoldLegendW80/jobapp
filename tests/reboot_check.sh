@@ -8,12 +8,12 @@
 #       no reboot and no sudo: the same checks on the current boot (dry run, or after a reboot or a
 #       power cut that already happened)
 #
-# Steps: record the boot id and the tunnel URL; `sudo systemctl reboot`; wait for ssh to answer
+# Steps: record the boot id and the public URL; `sudo systemctl reboot`; wait for ssh to answer
 # with a new boot id (up to REBOOT_SSH_TIMEOUT_S, 300s); wait until api, caddy, db, redis and
-# cloudflared are running and healthy (up to 300s more), noting the Jetson's uptime when they are;
+# tailscale are running and healthy (up to 300s more), noting the Jetson's uptime when they are;
 # run ./deploy.sh smoke; print the new URL, the boot time, the uptime when the stack was healthy
 # and when the smoke passed. Pass: the stack healthy within REBOOT_LIMIT_S (120s) of boot and the
-# smoke green. Exit 0 on pass, 1 otherwise.
+# smoke green, the public URL unchanged. Exit 0 on pass, 1 otherwise.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,7 +23,7 @@ RDIR="${DEPLOY_DIR:-jobapp}"
 RDIR="${RDIR#\~/}"
 LIMIT="${REBOOT_LIMIT_S:-120}"
 SSH_WAIT="${REBOOT_SSH_TIMEOUT_S:-300}"
-SERVICES=(api caddy db redis cloudflared)
+SERVICES=(api caddy db redis tailscale)
 REBOOT=1
 case "${1:-}" in
   "") ;;
@@ -49,7 +49,7 @@ uptime_s() { r "awk '{print int(\$1)}' /proc/uptime"; }
 
 old_id="$(boot_id)" || die "cannot reach $HOST over ssh"
 old_url="$(./deploy.sh url 2>/dev/null || echo none)"
-say "$HOST boot id $old_id, up since $(r 'uptime -s'), tunnel $old_url"
+say "$HOST boot id $old_id, up since $(r 'uptime -s'), public URL $old_url"
 say "docker.service at boot: $(r 'systemctl is-enabled docker'), containerd: $(r 'systemctl is-enabled containerd')"
 
 if ((REBOOT)); then
@@ -105,8 +105,8 @@ printf '\n== reboot check on %s\n' "$HOST"
 printf '   booted at          %s\n' "$booted"
 printf '   stack healthy at   %ss after boot\n' "$healthy_at"
 printf '   smoke %s at    %ss after boot\n' "$( ((smoke_ok)) && echo passed || echo FAILED)" "$smoke_at"
-printf '   tunnel URL before  %s\n' "$old_url"
-printf '   tunnel URL now     %s\n' "$new_url"
+printf '   public URL before  %s\n' "$old_url"
+printf '   public URL now     %s\n' "$new_url"
 printf '   memory             %s\n' "$(r "free -m | awk '/^Mem:/ {print \$3\"M used of \"\$2\"M, \"\$7\"M available\"}'")"
 if ((REBOOT == 0)); then
   ((smoke_ok)) || die "smoke failed"
@@ -114,6 +114,6 @@ if ((REBOOT == 0)); then
   exit 0
 fi
 ((smoke_ok)) || die "smoke failed after the reboot"
-[[ "$new_url" != "$old_url" ]] || say "note: the tunnel URL did not change, unexpected after a reboot"
+[[ "$new_url" == "$old_url" ]] || die "the public URL changed from $old_url to $new_url: the Funnel URL must survive a reboot"
 ((healthy_at <= LIMIT)) || die "the stack was healthy ${healthy_at}s after boot, over the ${LIMIT}s limit"
 say "PASS: the stack came back by itself, healthy ${healthy_at}s after boot (limit ${LIMIT}s), smoke green"

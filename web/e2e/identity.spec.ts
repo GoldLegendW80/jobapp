@@ -37,7 +37,7 @@ const prefix = (process.env.E2E_SHOT_PREFIX ?? "").replace(
  *   docker compose -p jobapp-i3 -f compose.yml down -v
  * The admin link comes from the CLI in the api container of that project.
  *
- * On the Jetson, through the public quick tunnel (Checkpoint I-A):
+ * On the Jetson, through the public Funnel URL (Checkpoint I-A):
  *   E2E_CADDY_URL=$(./deploy.sh url) E2E_ADMIN_VIA_DEPLOY=1 E2E_ADMIN_EMAIL=e2e-admin@example.org \
  *     E2E_SHOT_PREFIX=jetson- pnpm --dir web exec playwright test identity.spec.ts
  * The link then comes from `./deploy.sh admin create <email>`, which prints the public link.

@@ -86,11 +86,11 @@ commit;
 SQL
 }
 
-mac_ips() { # the addresses Cloudflare sees for this Mac, IPv4 and IPv6 when it has one
-  local family
-  for family in -4 -6; do
-    curl -s --max-time 10 "$family" "$URL/cdn-cgi/trace" 2>/dev/null | sed -n 's/^ip=//p' || true
-  done
+mac_ips() { # this Mac's public addresses as an outside service sees them (what Funnel passes on), IPv4 and IPv6 when it has one
+  curl -s --max-time 10 -4 https://api.ipify.org 2>/dev/null || true
+  echo
+  curl -s --max-time 10 -6 https://api6.ipify.org 2>/dev/null || true
+  echo
 }
 
 stuck_containers() {

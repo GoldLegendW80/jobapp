@@ -2,20 +2,21 @@
 #   docker compose -f compose.yml -f compose.dev.yml up --build
 # caddy is the only service that publishes a host port: ${HTTP_BIND}:${HTTP_PORT}, loopback by
 # default, so the Jetson answers curl localhost over ssh and nothing on the LAN. Set HTTP_BIND=0.0.0.0
-# in .env to open it to the LAN (ask first, SPEC-platform.md). The public entry point is the
-# cloudflared quick tunnel, which reaches caddy's unpublished tunnel listener http://caddy:8080 over
-# the Compose network (caddy/Caddyfile explains the two listeners).
+# in .env to open it to the LAN (ask first, SPEC-platform.md). The public entry point is Tailscale
+# Funnel (service tailscale), which reaches caddy's unpublished tunnel listener http://caddy:8080
+# over the Compose network (caddy/Caddyfile explains the two listeners).
 #
-# cloudflared sits behind the `tunnel` profile, so nothing on the Mac opens a public tunnel by
-# accident (the dev stack, the scratch stack of tests/compose_smoke.sh). deploy.sh enables it on the
-# Jetson with --profile tunnel; by hand there: docker compose -f compose.yml --profile tunnel up -d
+# tailscale sits behind the `tunnel` profile, so nothing on the Mac joins the tailnet or opens a
+# public URL by accident (the dev stack, the scratch stack of tests/compose_smoke.sh). deploy.sh
+# enables it on the Jetson with --profile tunnel; by hand there:
+#   docker compose -f compose.yml --profile tunnel up -d
 #
 # Service names reserved for later modules, so nothing else takes them:
 #   web          name kept free: the React build ships inside the caddy image
 #   browser      headed Chromium, Xvfb, noVNC (browser module)
 #
 # Memory budget, 5G for the whole stack on the 7.4G Jetson (each service sets mem_limit):
-#   api 512m, db 768m, redis 256m, caddy 128m, cloudflared 128m, worker 1536m  this file: 3328m
+#   api 512m, db 768m, redis 256m, caddy 128m, tailscale 128m, worker 1536m  this file: 3328m
 #   browser 1536m                              reserved for the browser module
 #   total 4864m, leaving about 250m of headroom inside the 5G budget
 
@@ -49,32 +50,58 @@ services:
     expose:
       - "8080"
 
-  # Cloudflare quick tunnel: free, no account, no domain. The https://<random>.trycloudflare.com
-  # URL changes every time the container starts; ./deploy.sh url reads the current one from the
-  # logs of the current start. Outbound connections only, no published port.
-  cloudflared:
+  # --- tailscale (platform: Tailscale Funnel) ---------------------------------------------------
+  # The public entry point: Tailscale Funnel, free, with a stable URL https://<TS_HOSTNAME>.<tailnet>
+  # (https://jobapp.taild83d16.ts.net), which OAuth redirect URIs need. Outbound connections only,
+  # no published port. Userspace networking: no /dev/net/tun, no NET_ADMIN, no capability at all.
+  # TLS ends in this container (a Let's Encrypt certificate for the ts.net name, kept in the
+  # state). tailscale/serve.json proxies HTTPS 443 to caddy's unpublished tunnel listener
+  # http://caddy:8080 and opens it to the internet (AllowFunnel). Funnel sets X-Forwarded-For to
+  # the visitor's address, replacing any value the visitor sent (caddy/Caddyfile).
+  #
+  # Login: TS_AUTHKEY (a one-time key from the admin console) is used on the first start only
+  # (TS_AUTH_ONCE). The node key then lives in the `tsstate` volume, so restarts and redeploys
+  # need no key: remove TS_AUTHKEY from the Jetson's .env after the first login. A new key is
+  # only needed if tsstate is deleted or the node is removed from the tailnet.
+  tailscale:
     <<: *restart
-    image: cloudflare/cloudflared:2026.9.3
+    # v1.102.5, the linux/arm64 manifest (its multi-arch index is
+    # sha256:c507f3a2a6ab1cabd8d809b98edeb41edbd5c3fb6ad9632ffd098b4c7d0b4065).
+    image: tailscale/tailscale:v1.102.5@sha256:472c549d2ef8cebc000de2c8a94061bbdc864d2454177b2ada713262475449ef
+    platform: linux/arm64
     profiles: [tunnel]
-    command:
-      - tunnel
-      - --no-autoupdate
-      - --metrics
-      - 127.0.0.1:20241
-      - --url
-      - http://caddy:8080
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_HOSTNAME: ${TS_HOSTNAME:-jobapp}
+      TS_AUTH_ONCE: "true"
+      TS_USERSPACE: "true"
+      TS_ACCEPT_DNS: "false"
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - tsstate:/var/lib/tailscale
+      # The folder, not the file: rsync (deploy, and the rollback's restore-tree) replaces a
+      # changed serve.json by rename, which a single-file bind mount would never see; through the
+      # folder the running node reads the new file (containerboot watches it). An unchanged file
+      # is not rewritten (rsync skips it), so a deploy or a rollback leaves the node alone.
+      - ./tailscale:/config:ro
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       caddy:
         condition: service_healthy
-    # The image is distroless (no shell, no curl): cloudflared asks its own /ready endpoint, which
-    # answers 200 once at least one connection to the Cloudflare edge is up.
+    # Healthy once logged in and connected (BackendState Running). Without a saved login and
+    # without a valid key it stays NeedsLogin and never turns healthy, so a deploy fails loudly.
     healthcheck:
-      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      test: ["CMD-SHELL", "tailscale status --json --peers=false | grep -q '\"BackendState\": \"Running\"'"]
       interval: 15s
       timeout: 5s
-      start_period: 20s
+      start_period: 30s
       retries: 3
     mem_limit: 128m
+  # --- end of tailscale ----------------------------------------------------------------------
 
   api:
     <<: *restart
@@ -182,3 +209,6 @@ services:
 volumes:
   pgdata:
   redisdata:
+  # tailscale: the node's login, key and Funnel certificate. Never delete it on the Jetson, or the
+  # next start needs a fresh TS_AUTHKEY.
+  tsstate:

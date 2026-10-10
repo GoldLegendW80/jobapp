@@ -75,7 +75,7 @@ step "production config: only caddy publishes a port, mem_limit and restart ever
 import json, sys
 cfg = json.load(sys.stdin)
 services = cfg["services"]
-assert set(services) == {"api", "caddy", "db", "redis", "cloudflared", "worker"}, sorted(services)
+assert set(services) == {"api", "caddy", "db", "redis", "tailscale", "worker"}, sorted(services)
 for name, svc in services.items():
     ports, restart = svc.get("ports"), svc.get("restart")
     if name == "caddy":
@@ -97,19 +97,20 @@ assert worker["image"] == services["api"]["image"], worker["image"]
 assert worker["command"] == ["python", "-m", "app.worker"], worker["command"]
 assert int(worker["mem_limit"]) == 1536 * 1024**2, worker["mem_limit"]
 assert worker["depends_on"]["db"]["condition"] == worker["depends_on"]["redis"]["condition"] == "service_healthy"
-cf = services["cloudflared"]
+# tailscale: the full checks of the service are in tests/tailscale_test.sh.
+ts = services["tailscale"]
 import re
-assert re.fullmatch(r"cloudflare/cloudflared:\d{4}\.\d+\.\d+", cf["image"]), cf["image"]
-assert cf["profiles"] == ["tunnel"], cf.get("profiles")
-assert cf["depends_on"]["caddy"]["condition"] == "service_healthy", cf["depends_on"]
-assert int(cf["mem_limit"]) == 128 * 1024**2, cf["mem_limit"]
-assert "http://caddy:8080" in cf["command"] and "--no-autoupdate" in cf["command"], cf["command"]
+assert re.fullmatch(r"tailscale/tailscale:v\d+\.\d+\.\d+@sha256:[0-9a-f]{64}", ts["image"]), ts["image"]
+assert ts["profiles"] == ["tunnel"], ts.get("profiles")
+assert ts["depends_on"]["caddy"]["condition"] == "service_healthy", ts["depends_on"]
+assert int(ts["mem_limit"]) == 128 * 1024**2, ts["mem_limit"]
+assert ts["environment"]["TS_USERSPACE"] == "true" and not ts.get("privileged"), ts["environment"]
 print(f"   total mem_limit today: {total // 1024**2} MiB")
 ' || fail "production config"
-ok "caddy alone publishes, on 127.0.0.1; limits, restart policy, healthchecks, depends_on healthy; cloudflared pinned, in the tunnel profile"
+ok "caddy alone publishes, on 127.0.0.1; limits, restart policy, healthchecks, depends_on healthy; tailscale pinned, userspace, in the tunnel profile"
 for files in "compose.yml" "compose.yml -f compose.dev.yml"; do
   # shellcheck disable=SC2086 # two words on purpose
-  ! docker compose -f $files config --services | grep -qx cloudflared || fail "$files starts cloudflared without --profile tunnel"
+  ! docker compose -f $files config --services | grep -qx tailscale || fail "$files starts tailscale without --profile tunnel"
 done
 ok "no tunnel without --profile tunnel: neither the dev stack nor a plain compose.yml opens one on the Mac"
 "${DEV[@]}" config --format json | python3 -c '

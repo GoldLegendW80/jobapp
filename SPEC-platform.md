@@ -4,7 +4,7 @@ Module of [CAPABILITY-MAP.md](CAPABILITY-MAP.md). Depends on nothing; every othe
 
 ## Objective
 
-A repeatable way to build, run and deploy the app on the Jetson. After this module, a single command on the Mac ships the code to the Jetson and brings up a stack that answers `https://<random>.trycloudflare.com/api/health` from the internet through a Cloudflare quick tunnel, with an empty React page at `/`. No product features yet: this is the skeleton every later module plugs into.
+A repeatable way to build, run and deploy the app on the Jetson. After this module, a single command on the Mac ships the code to the Jetson and brings up a stack that answers `https://jobapp.taild83d16.ts.net/api/health` from the internet through Tailscale Funnel (a Cloudflare quick tunnel until 2026-10-10, see Public access), with an empty React page at `/`. No product features yet: this is the skeleton every later module plugs into.
 
 Who uses it: Harald, as operator. Friends never see this layer.
 
@@ -28,7 +28,7 @@ RAM budget for the whole stack, all modules included: 5G, leaving the rest to th
 | `api` | build `api/` (`python:3.12-slim`) | FastAPI, SQLAlchemy 2, Alembic, Pydantic 2, uvicorn |
 | `db` | `postgres:16-alpine` | Database, volume `pgdata` |
 | `redis` | `redis:7-alpine` | Queue between `api` and `worker` (used from the `agents` module on) |
-| `cloudflared` | `cloudflare/cloudflared` | Quick tunnel to Caddy (`tunnel --no-autoupdate --url http://caddy:8080`, Caddy's unpublished tunnel listener that trusts `Cf-Connecting-Ip`): free, no account, no domain; the `*.trycloudflare.com` URL changes on every restart of the container |
+| `tailscale` | `tailscale/tailscale` (pinned by version and arm64 digest) | Tailscale Funnel to Caddy (`tailscale/serve.json`: HTTPS 443 proxied to `http://caddy:8080`, Caddy's unpublished tunnel listener that trusts only Funnel's `X-Forwarded-For`): free, stable URL `https://jobapp.taild83d16.ts.net`, userspace networking, state in the `tsstate` volume (see Public access) |
 
 `worker` and `browser` are added by their own modules; the Compose file reserves their names.
 
@@ -48,7 +48,7 @@ pnpm --dir web lint && uv run --directory api ruff check .     # lint
 ./deploy.sh                    # rsync app/ to jetson:~/jobapp, then on the Jetson:
                                # docker compose up -d --build && docker compose exec api alembic upgrade head
 ./deploy.sh logs api           # tail logs of one service
-./deploy.sh url                # print the current trycloudflare URL from the cloudflared logs
+./deploy.sh url                # print the stable Funnel URL, from tailscale status in the tailscale container
 ./deploy.sh backup             # pg_dump -Fc to jetson:~/jobapp-backups/jobapp-YYYY-MM-DDTHHMMSS.dump
 ./deploy.sh restore <file>     # into a scratch database; --into-live replaces the live one
 ```
@@ -61,10 +61,11 @@ Images are built on the Jetson itself (native arm64), so no cross-build is neede
 app/
   CAPABILITY-MAP.md  SPEC-*.md
   compose.yml           production stack
-  compose.dev.yml       dev overrides (bind mounts, reload, no cloudflared)
+  compose.dev.yml       dev overrides (bind mounts, reload, no tailscale)
   .env.example          every variable, no secrets; .env is git-ignored
   deploy.sh             rsync + remote compose + migrations + backup
   Caddyfile
+  tailscale/serve.json  Funnel config of the tailscale service: HTTPS 443 to http://caddy:8080
   api/
     pyproject.toml  uv.lock  Dockerfile
     alembic/            migrations
@@ -111,19 +112,19 @@ Frontend: function components, shadcn primitives, data through TanStack Query, n
 
 - Backend: pytest with a throwaway Postgres (the dev `db` service, one database per test session). `/api/health` has a test from day one.
 - Frontend: Vitest and Testing Library for components; Playwright end-to-end tests arrive with the `identity` module.
-- Platform itself is verified by a smoke script, `deploy.sh smoke`: health through Caddy on the Jetson, then through the public tunnel URL.
+- Platform itself is verified by a smoke script, `deploy.sh smoke`: health through Caddy on the Jetson, then through the public Funnel URL.
 
 ## Boundaries
 
 - **Always:** pin image tags and dependency versions; arm64 images only; `mem_limit` on every service; secrets only in `.env`; run tests before deploying.
-- **Ask first:** adding a service to Compose, exposing a port on the Jetson's network interface, changing the tunnel setup, anything run with `sudo` on the Jetson.
+- **Ask first:** adding a service to Compose, exposing a port on the Jetson's network interface, changing the public access setup (Tailscale Funnel), anything run with `sudo` on the Jetson.
 - **Never:** commit `.env` or any token; open a port on the home router; touch the Jetson's existing Ollama or system services; run `docker system prune` or delete volumes without asking.
 
 ## Success criteria
 
 1. `./deploy.sh` from a clean clone brings the stack up on the Jetson with no manual step beyond writing `.env`.
 2. `curl $(./deploy.sh url)/api/health` from outside the home network returns `{"status":"ok"}`, with a database round trip.
-3. The tunnel URL serves the React shell with Tailwind and one shadcn component rendered.
+3. The public URL serves the React shell with Tailwind and one shadcn component rendered.
 4. A reboot of the Jetson brings everything back (`restart: unless-stopped`) within 2 minutes.
 5. The idle stack uses under 1G of RAM (`docker stats`).
 6. `./deploy.sh backup` produces a restorable dump; a restore into a fresh database is tested once.
@@ -138,9 +139,19 @@ Frontend: function components, shadcn primitives, data through TanStack Query, n
 - Self-hosted runner (`ops/runner/`, `./deploy.sh runner install|status|remove`): the official arm64 actions runner in a container on the Jetson (no sudo), persistent, labels `self-hosted, jetson, arm64`, host network, the host Docker socket and CLI, `~/jobapp` and `~/jobapp-backups` mounted at their own paths, restart unless-stopped. Outbound connections only. With the Docker socket it is root-equivalent on the Jetson, so a job-started hook baked into the image (`ops/runner/job-guard.sh`) refuses every job except this repository's `deploy.yml` from `refs/heads/main` on `workflow_run` or `workflow_dispatch`; pull requests, branches and other workflows never run there.
 - `./deploy.sh` from the Mac stays the way to deploy by hand, to write the Jetson's `.env` the first time, and to deploy when GitHub is unreachable.
 
+## Public access: Tailscale Funnel (decided 2026-10-10)
+
+- Decided by Harald on 2026-10-10, replacing the Cloudflare quick tunnel: the Gmail module needs Google OAuth redirect URIs, and those need a URL that does not change on every restart.
+- Tailscale Funnel on Harald's tailnet `taild83d16.ts.net` (free plan, MagicDNS on, HTTPS certificates enabled, the `funnel` node attribute granted to `autogroup:member`). Free, and the URL is stable: `https://jobapp.taild83d16.ts.net`, the node name `TS_HOSTNAME` plus the tailnet. It survives restarts, redeploys and reboots.
+- Service `tailscale` in compose.yml, in the `tunnel` profile (Jetson only, never on the Mac): the official image pinned by version and arm64 digest, userspace networking (`TS_USERSPACE=true`, no `/dev/net/tun`, no `NET_ADMIN`, every capability dropped, no sudo on the Jetson), 128m, restart unless-stopped, healthy when `tailscale status` says `Running`. Outbound connections only; no port published.
+- Login: a one-time, user-owned auth key in `TS_AUTHKEY` of the Jetson's `.env`, used on the first start only (`TS_AUTH_ONCE`); the login then lives in the `tsstate` volume and the key is removed from `.env`. Without either the service never turns healthy and the deploy fails.
+- `tailscale/serve.json` (`TS_SERVE_CONFIG`) terminates TLS on 443 with the node's Let's Encrypt certificate and proxies to `http://caddy:8080`, with Funnel allowed on that port only.
+- Client address: Funnel sets `X-Forwarded-For` to the address the visitor connected from, replacing any value sent (checked in the tailscale v1.102.5 source, `ipn/ipnlocal/serve.go`). Caddy's `:8080` trusts private peers and reads `X-Forwarded-For` only, strictly; `Cf-Connecting-Ip` and similar headers pass through Funnel untouched and are never trusted. `./deploy.sh smoke` proves from outside that a visitor cannot spoof its address.
+- `./deploy.sh url` reads `Self.DNSName` of `tailscale status --json`; it fails with the reason when the container is down or not logged in.
+
 ## Decisions (2026-10-08)
 
 1. Docker group: add `yessai` to the `docker` group once. Harald runs `ssh -t jetson 'sudo usermod -aG docker yessai'` (needs his password), then reconnects.
-2. Public access: Cloudflare quick tunnel, everything free; a changing URL is accepted.
+2. Public access: Cloudflare quick tunnel, everything free; a changing URL is accepted. Superseded on 2026-10-10 by Tailscale Funnel (see Public access).
 3. Fixed IP: reserving 192.168.1.47 on the router is recommended, not blocking.
 4. Git remote: private GitHub repo with CI and pre-commit, as above. The `gh` token lacks the `workflow` scope, which pushing `.github/workflows/` requires: Harald runs `gh auth refresh -s workflow` once (granted 2026-10-09).

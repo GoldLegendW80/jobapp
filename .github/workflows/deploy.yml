@@ -182,21 +182,23 @@ jobs:
           echo "$COMMIT" > "$APP/.deployed-commit"
           echo "deployed $COMMIT"
 
+      # --- tailscale: the stable Funnel URL (https://<node>.<tailnet>.ts.net) -----------------
       - name: Public URL
         working-directory: ${{ env.APP }}
         run: |
           set -euo pipefail
-          id="$($COMPOSE ps -q cloudflared)"
+          # Self.DNSName of `tailscale status --json --peers=false`, as ./deploy.sh url reads it.
           url=""
           for _ in $(seq 1 15); do
-            started="$(docker inspect -f '{{.State.StartedAt}}' "$id")"
-            url="$(docker logs --since "$started" "$id" 2>&1 |
-              grep -oE 'https://[a-z0-9]+(-[a-z0-9]+)*\.trycloudflare\.com' | grep -v '^https://api\.' | tail -n 1 || true)"
-            [[ -n "$url" ]] && break
+            status="$($COMPOSE exec -T tailscale tailscale status --json --peers=false 2>/dev/null || true)"
+            if [[ "$(sed -n 's/^[[:space:]]*"BackendState":[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$status" | head -n 1)" == "Running" ]]; then
+              dns="$(sed -n 's/^[[:space:]]*"DNSName":[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$status" | head -n 1)"
+              [[ "${dns%.}" =~ \.ts\.net$ ]] && url="https://${dns%.}" && break
+            fi
             sleep 2
           done
-          [[ -n "$url" ]] || { echo "::error::cloudflared logged no trycloudflare URL"; exit 1; }
-          public="no answer yet (a fresh hostname can take a minute)"
+          [[ -n "$url" ]] || { echo "::error::tailscale is not connected or has no ts.net name (docker compose logs tailscale)"; exit 1; }
+          public="no answer yet (the first request after a first login waits for the certificate)"
           for delay in 2 4 8 15 15 15; do
             if [[ "$(curl -s --max-time 10 "$url/api/health" || true)" == '{"status":"ok"}' ]]; then
               public="answers /api/health"
@@ -212,6 +214,7 @@ jobs:
             echo "- alembic: $($COMPOSE exec -T api alembic current 2>/dev/null | tr -d '\r')"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "$url"
+      # --- end of tailscale -------------------------------------------------------------------
 
       - name: State on failure
         if: failure()
