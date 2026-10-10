@@ -81,7 +81,11 @@ services:
       TS_SERVE_CONFIG: /config/serve.json
     volumes:
       - tsstate:/var/lib/tailscale
-      - ./tailscale/serve.json:/config/serve.json:ro
+      # The folder, not the file: rsync (deploy, and the rollback's restore-tree) replaces a
+      # changed serve.json by rename, which a single-file bind mount would never see; through the
+      # folder the running node reads the new file (containerboot watches it). An unchanged file
+      # is not rewritten (rsync skips it), so a deploy or a rollback leaves the node alone.
+      - ./tailscale:/config:ro
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true

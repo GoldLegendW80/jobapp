@@ -100,9 +100,9 @@ assert env["TS_HOSTNAME"] == "jobapp-config-check", "TS_HOSTNAME not read from .
 assert env["TS_STATE_DIR"] == "/var/lib/tailscale", env
 assert env["TS_SERVE_CONFIG"] == "/config/serve.json", env
 assert "TS_EXTRA_ARGS" not in env, env
-mounts = {(v["type"], v.get("source", "").rsplit("/", 2)[-2:] == ["tailscale", "serve.json"] or v.get("source"), v["target"], v.get("read_only", False)) for v in ts["volumes"]}
+mounts = {(v["type"], v.get("source", "").rsplit("/", 1)[-1] == "tailscale" if v["type"] == "bind" else v.get("source"), v["target"], v.get("read_only", False)) for v in ts["volumes"]}
 assert ("volume", "tsstate", "/var/lib/tailscale", False) in mounts, mounts
-assert ("bind", True, "/config/serve.json", True) in mounts, mounts
+assert ("bind", True, "/config", True) in mounts, mounts  # the folder: renames by rsync are seen
 assert len(ts["volumes"]) == 2, ts["volumes"]
 assert "tsstate" in cfg["volumes"], cfg["volumes"]
 assert int(ts["mem_limit"]) == 128 * 1024**2, ts["mem_limit"]
@@ -115,7 +115,7 @@ for name, svc in services.items():
     assert "/dev/net/tun" not in json.dumps(svc.get("devices", [])), f"{name} has /dev/net/tun"
     assert "NET_ADMIN" not in (svc.get("cap_add") or []), f"{name} adds NET_ADMIN"
 PY
-ok "pinned by version and digest (arm64), TS_USERSPACE, cap_drop ALL, no-new-privileges, no port, no device, state on tsstate, serve.json read only, 128m, restart, healthcheck, after a healthy caddy"
+ok "pinned by version and digest (arm64), TS_USERSPACE, cap_drop ALL, no-new-privileges, no port, no device, state on tsstate, the tailscale/ folder read only at /config, 128m, restart, healthcheck, after a healthy caddy"
 ok "TS_AUTHKEY and TS_HOSTNAME come from .env; no service is privileged or has NET_ADMIN or /dev/net/tun; no cloudflared"
 sed -i.bak '/^TS_/d' "$WORK/scratch/.env"
 sc --profile tunnel config --format json >"$WORK/config-nokey.json" || fail "compose.yml needs TS_AUTHKEY to validate"
@@ -187,6 +187,36 @@ ok ":8080 without X-Forwarded-For: the peer $peer, never a forged Cf-Connecting-
 read -r xff proto <<<"$(seen http://caddy:80/api/echo "X-Forwarded-For: 198.51.100.7" "X-Forwarded-Proto: https" "${forged[@]}")"
 [[ "$xff" == "$peer" && "$proto" == "http" ]] || fail ":80 gave '$xff' '$proto', expected the peer $peer and http"
 ok ":80 trusts no header: the peer $peer and http, whatever the client sends"
+
+step "deploy rollback (ops/previous.sh) and tailscale/serve.json"
+# A rollback restores the previous tree with rsync --checksum --delete. An unchanged serve.json
+# must not be rewritten (same inode: the running node is left alone); a changed one is replaced by
+# rename, which the running node sees because the folder, not the file, is mounted; rolling back
+# past this change (a tree without tailscale/) removes the folder, and compose up --remove-orphans
+# then removes the tailscale container. Named volumes (tsstate) are never touched by any of it.
+app="$WORK/rb/app"
+mkdir -p "$app/tailscale"
+cp compose.yml .rsyncignore "$app/"
+cp tailscale/serve.json "$app/tailscale/"
+bash ops/previous.sh save-tree "$app" "$WORK/rb/prev" >/dev/null
+inode() { python3 -c 'import os, sys; print(os.stat(sys.argv[1]).st_ino)' "$1"; }
+before="$(inode "$app/tailscale/serve.json")"
+printf '# a new commit\n' >>"$app/compose.yml"
+bash ops/previous.sh restore-tree "$WORK/rb/prev" "$app" >/dev/null
+[[ "$(inode "$app/tailscale/serve.json")" == "$before" ]] || fail "restore-tree rewrote an unchanged serve.json"
+cmp -s compose.yml "$app/compose.yml" || fail "restore-tree did not put compose.yml back"
+ok "restore-tree puts compose.yml back and leaves an unchanged serve.json as it is (same inode)"
+printf '{}\n' >"$app/tailscale/serve.json"
+bash ops/previous.sh restore-tree "$WORK/rb/prev" "$app" >/dev/null
+cmp -s tailscale/serve.json "$app/tailscale/serve.json" || fail "restore-tree did not restore a changed serve.json"
+ok "a changed serve.json is restored (by rename, seen through the mounted folder)"
+mkdir -p "$WORK/rb/old"
+cp compose.yml .rsyncignore "$WORK/rb/old/"
+bash ops/previous.sh save-tree "$WORK/rb/old" "$WORK/rb/prev-old" >/dev/null
+rm -rf "$WORK/rb/prev-old/tailscale"
+bash ops/previous.sh restore-tree "$WORK/rb/prev-old" "$app" >/dev/null
+[[ ! -e "$app/tailscale" ]] || fail "rolling back to a tree without tailscale/ left the folder"
+ok "rolling back to a tree before tailscale removes tailscale/ (compose up --remove-orphans then removes the container; tsstate stays)"
 
 step "live: the pinned image without an auth key never comes up"
 live="${TAILSCALE_LIVE:-}"

@@ -167,7 +167,7 @@ reads the same `.env`, so the key is in its environment until it is removed: ano
 remove it. Funnel needs the `funnel` node attribute in the tailnet policy (granted to
 `autogroup:member`) and HTTPS certificates enabled in the tailnet, both set on 2026-10-10.
 
-**Headers.** `tailscale/serve.json` (mounted read only, `TS_SERVE_CONFIG`) terminates TLS for
+**Headers.** `tailscale/serve.json` (its folder mounted read only, `TS_SERVE_CONFIG`) terminates TLS for
 `${TS_CERT_DOMAIN}:443`, proxies everything to Caddy's own listener `caddy:8080` (never
 published) and allows Funnel on that port only. Funnel's proxy sets `X-Forwarded-For` to the
 address the visitor connected from, replacing anything the visitor sent, and `X-Forwarded-Proto:

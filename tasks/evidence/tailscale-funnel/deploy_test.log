@@ -1,6 +1,6 @@
 
 == shellcheck
-   ok: deploy.sh ops/db.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh tests/reboot_check.sh tests/tailscale_test.sh clean
+   ok: deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh tests/reboot_check.sh tests/tailscale_test.sh clean
    ok: executable, env bash, set -euo pipefail
 
 == dispatcher
@@ -37,7 +37,7 @@
 
 == unreachable host fails fast with a clear message
    ok: nonexistent-host.invalid: exit 1 in 0s
-   ok: 192.0.2.1: exit 1 in 6s
+   ok: 192.0.2.1: exit 1 in 5s
    ok: logs, ps, url and smoke fail the same way
 
 == .rsyncignore: what ships and what --delete keeps
@@ -87,4 +87,11 @@
    ok: a failed restore rolls back with both still stopped, then starts api and worker
    ok: any other failure after the stop starts api and worker again on exit
 
-All 60 checks passed.
+== deploy lock: the Jetson releases it after DEPLOY_LOCK_MAX_S even if the Mac never closes it
+   ok: the remote lock command runs timeout <DEPLOY_LOCK_MAX_S> cat (no flock here: the release itself is checked in CI)
+
+== ops/previous.sh: :previous from the running containers, the deployed tree saved and restored
+   ok: tag-running tags the image id of each running container (never :latest); a stopped service keeps its :previous
+   ok: save-tree and restore-tree bring back compose.yml, the Caddyfile and the file list; .env and .deployed-commit untouched; first deploy and bad arguments
+
+All 63 checks passed.
