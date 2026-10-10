@@ -9,7 +9,10 @@ first, so nothing is lost by resuming from scratch.
 
 `replay(read, after=...)` streams a log that only grows (agent_events of a run): each stored
 event once, with its own id, from after the client's Last-Event-ID (`last_event_id`), then the
-new ones as they are written, and an `end` event once the log is final.
+new ones as they are written, and an `end` event once the log is final. Between its reads of
+the log it can poll a `transient` source (agents: the answer being written, app/agents/live.py)
+whose events carry no id: they never move Last-Event-ID, so a reconnect still resumes the log
+exactly where it stopped, and the source itself says from where it continues.
 
 `response(events)` wraps a stream in a StreamingResponse with the headers live streams need:
 text/event-stream, no caching, no transformation (Caddy compresses text/* otherwise, which would
@@ -96,6 +99,21 @@ class Page:
     final: bool
 
 
+@dataclass(frozen=True)
+class Transient:
+    """What a transient source has now: events already formatted (`format_transient`), and
+    whether the log should be read at once (the source knows something was just written)."""
+
+    events: Sequence[bytes] = ()
+    read_now: bool = False
+
+
+def format_transient(event: str, data: Any) -> bytes:
+    """An event without an id: the browser's Last-Event-ID stays what it was."""
+    body = json.dumps(data, separators=(",", ":"), default=str)
+    return f"event: {event}\ndata: {body}\n\n".encode()
+
+
 END = b"event: end\ndata: {}\n\n"
 
 
@@ -123,6 +141,8 @@ async def replay(
     max_s: float = 30 * 60,
     retry_ms: int = 2000,
     disconnected: Callable[[], Awaitable[bool]] | None = None,
+    transient: Callable[[int], Awaitable[Transient]] | None = None,
+    transient_interval_s: float = 0.15,
 ) -> AsyncIterator[bytes]:
     """The event stream of a log that only grows (agent runs today): every event after `after`,
     then each new one as `read` finds it, each with its own id, so a client that reconnects with
@@ -135,33 +155,49 @@ async def replay(
     to stop: EventSource would otherwise reconnect by itself. After `max_s` the stream just
     closes and the client resumes from its last id. `disconnected` (Starlette's
     `request.is_disconnected`) is asked before every read: a client that left stops the polling
-    at once, not at the next heartbeat."""
+    at once, not at the next heartbeat.
+
+    `transient(last)` is polled every `transient_interval_s` between the reads of the log, which
+    stay `interval_s` apart, and is given the id of the last log event sent. Its events go out
+    as they are, after every log event read so far; `read_now` brings the next read of the log
+    forward. It is never polled once the log is final."""
     yield f"retry: {retry_ms}\n\n".encode()
     started = last_sent = time.monotonic()
     last = after
+    read_at = started  # when the log is read next
+    pause = interval_s if transient is None else min(interval_s, transient_interval_s)
     while True:
         if disconnected is not None and await disconnected():
             return
-        page = await asyncio.to_thread(read, last)
-        if page is None:
-            yield b"event: gone\ndata: {}\n\n"
-            return
-        for item in page.events:
-            yield format_event(item.id, item.event, item.data)
-            last = max(last, item.id)
-            last_sent = time.monotonic()
-        if page.events:
-            continue  # read on at once: a full page may have more behind it
-        if page.final:
-            yield END
-            return
+        if transient is None or time.monotonic() >= read_at:
+            page = await asyncio.to_thread(read, last)
+            if page is None:
+                yield b"event: gone\ndata: {}\n\n"
+                return
+            for item in page.events:
+                yield format_event(item.id, item.event, item.data)
+                last = max(last, item.id)
+                last_sent = time.monotonic()
+            if page.events:
+                continue  # read on at once: a full page may have more behind it
+            if page.final:
+                yield END
+                return
+            read_at = time.monotonic() + interval_s
+        if transient is not None:
+            extra = await transient(last)
+            for chunk in extra.events:
+                yield chunk
+                last_sent = time.monotonic()
+            if extra.read_now:
+                read_at = 0.0
         now = time.monotonic()
         if now - started >= max_s:
             return
         if now - last_sent >= heartbeat_s:
             last_sent = now
             yield b": ping\n\n"
-        await asyncio.sleep(interval_s)
+        await asyncio.sleep(pause)
 
 
 def response(events: AsyncIterator[bytes]) -> StreamingResponse:

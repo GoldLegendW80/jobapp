@@ -537,7 +537,11 @@ curl -s -X POST -H 'X-Requested-With: jobapp' -b cookies http://localhost/api/ag
 
 The `/runs` page lists the runs; `/runs/<id>` is the live run panel (steps, tool calls,
 tokens, cost, Cancel), which resumes its stream after a reload or a network loss without losing
-or repeating a step (`app/sse.py` `replay`, keyed by the step's seq). `echo` is a test agent,
+or repeating a step (`app/sse.py` `replay`, keyed by the step's seq). The answer appears while
+it is written: the worker publishes the text of the block being written to Redis
+(`app/agents/live.py`, nothing per token in Postgres) and the stream relays it as `partial`
+events until the stored `text` step replaces it; `AGENTS_LIVE_TEXT=false` in `.env` (api and
+worker) turns that off, and the answer then arrives when it is complete. `echo` is a test agent,
 refused when `APP_ENV=production`; outside production `/runs` offers a test run with it. `AGENTS_FAKE_BACKEND=true` (test
 stacks and CI only, refused in production) replaces the model with recorded message streams
 (`api/app/agents/fake_streams/`); `tests/compose.a2-e2e.yml` with `AGENTS_FAKE_BACKEND=false` runs

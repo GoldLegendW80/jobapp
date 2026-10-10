@@ -3,6 +3,8 @@
  * calls and their results, refused tools, usage, status changes), the model, tokens, cost and
  * duration, a Cancel button while it is queued or running, and the state of the live connection
  * (it reconnects by itself after a network loss and picks up exactly where it stopped).
+ * The answer appears while it is written (issue #33): the last item of the timeline grows with
+ * the text, then the stored step takes its place, same title, same markup, in one render.
  * Reusable: the /runs pages show it today, job detail embeds it from A3 on.
  */
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -39,6 +41,7 @@ import {
 import { describeError, errorDetail } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+import type { LiveText } from "./live-text";
 import {
   STATUS_LABEL,
   elapsed,
@@ -158,15 +161,7 @@ function describeStep(step: RunStep): StepView | null {
     case "thinking":
       return { icon: Brain, title: "Thinking", tone: "muted" };
     case "text":
-      return {
-        icon: MessageSquareText,
-        title: "Answer",
-        body: (
-          <p className="text-sm whitespace-pre-wrap text-foreground">
-            {text(data.text)}
-          </p>
-        ),
-      };
+      return answerView(text(data.text));
     case "tool_call": {
       const name = text(data.name).replace(/^mcp__app__/, "");
       const args =
@@ -247,29 +242,69 @@ function describeStep(step: RunStep): StepView | null {
   }
 }
 
-function Timeline({ steps }: { steps: RunStep[] }) {
+/** An answer in the timeline: the stored step and the text being written look the same. */
+function answerView(value: string): StepView {
+  return {
+    icon: MessageSquareText,
+    title: "Answer",
+    body: (
+      <p className="text-sm break-words whitespace-pre-wrap text-foreground">
+        {value}
+      </p>
+    ),
+  };
+}
+
+interface TimelineItem {
+  key: string;
+  kind: string;
+  view: StepView;
+  live: boolean;
+}
+
+function Timeline({
+  steps,
+  live,
+}: {
+  steps: RunStep[];
+  live: LiveText | null;
+}) {
   if (steps.length === 0) {
     return <p className="text-sm text-muted-foreground">No step yet.</p>;
   }
-  const views = steps
-    .map((step) => ({ step, view: describeStep(step) }))
-    .filter(
-      (item): item is { step: RunStep; view: StepView } => item.view !== null,
-    );
+  const views: TimelineItem[] = [];
+  for (const step of steps) {
+    const view = describeStep(step);
+    if (view !== null) {
+      views.push({ key: String(step.seq), kind: step.kind, view, live: false });
+    }
+  }
+  // The answer being written comes last. Its item is the stored step's, before the step exists.
+  if (live?.text) {
+    views.push({
+      key: "live",
+      kind: "text",
+      view: answerView(live.text),
+      live: true,
+    });
+  }
   const latest = views.at(-1)?.view.title ?? "";
   return (
     <>
-      {/* Screen readers hear the newest step's title only, not every answer in full. */}
+      {/* Screen readers hear the newest step's title only: "Answer" once when the answer
+          starts, not every piece of it, and not again when the stored step replaces it. */}
       <p className="sr-only" role="status" aria-live="polite">
         {latest}
       </p>
       <ol aria-label="Steps" className="flex flex-col">
-        {views.map(({ step, view }) => {
+        {views.map(({ key, kind, view, live: writing }) => {
           const Icon = view.icon;
           return (
             <li
-              key={step.seq}
-              data-kind={step.kind}
+              key={key}
+              data-kind={kind}
+              data-live={writing ? "true" : undefined}
+              aria-busy={writing ? "true" : undefined}
               className="group relative flex gap-3 pb-4 last:pb-0"
             >
               <span
@@ -315,7 +350,7 @@ function Timeline({ steps }: { steps: RunStep[] }) {
 
 export function RunPanel({ runId, title }: { runId: string; title?: string }) {
   const client = useQueryClient();
-  const { detail, steps, status, connection, gone } = useRunStream(runId);
+  const { detail, steps, live, status, connection, gone } = useRunStream(runId);
   const run = detail.data;
   const active = status === "queued" || status === "running";
   const now = useNow(active);
@@ -431,7 +466,7 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
           <Metric label="Cost" value={formatCost(run.cost_usd)} />
           <Metric label="Duration" value={formatDuration(elapsed(run, now))} />
         </dl>
-        <Timeline steps={steps} />
+        <Timeline steps={steps} live={live} />
       </CardContent>
     </Card>
   );

@@ -14,7 +14,9 @@
 - GET /api/agents/runs/{id}/stream: server-sent events (app/sse.py `replay`): one `step` event
   per stored event, `id` = its seq, data {seq, at, kind, data}, from after the Last-Event-ID
   header (EventSource sends it when it reconnects) or the `after` query parameter, then each new
-  one as the worker writes it, and `end` once the run has ended and everything was sent. Each
+  one as the worker writes it, and `end` once the run has ended and everything was sent. While
+  an answer is being written, `partial` events without an id carry its text as it grows
+  ({block, after, offset, text}, app/agents/live.py); the `text` step replaces it. Each
   stream closes after STREAM_MAX_S (the browser resumes it, through the session check again) and
   as soon as the client leaves; at most STREAMS_PER_USER open per user (429 beyond).
 - POST /api/agents/runs/{id}/cancel: 202 with the run: cancelled at once when still queued, or
@@ -40,7 +42,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
 from app import sse
-from app.agents import credentials, definitions, runs
+from app.agents import credentials, definitions, live, runs
 from app.agents.models import FINAL_STATUSES, AgentRun
 from app.agents.schemas import (
     AgentList,
@@ -372,17 +374,24 @@ async def read_run(run_id: str, user: CurrentUser, request: Request) -> RunDetai
 
 
 def _page(
-    sessions: sessionmaker[Session], user_id: uuid.UUID, run_id: uuid.UUID, after: int
+    sessions: sessionmaker[Session],
+    user_id: uuid.UUID,
+    run_id: uuid.UUID,
+    after: int,
+    feed: live.LiveFeed | None = None,
 ) -> sse.Page | None:
     """The run's events after `after`, and whether the run has ended. The status is read before
     the events: the final status is committed with the run's last event, so a run read as ended
-    has all its events visible to the read that follows."""
+    has all its events visible to the read that follows. `feed` (the connection's live text) is
+    told which steps are about to be sent."""
     with sessions() as db:
         run = runs.get_run(db, user_id, run_id)
         if run is None:
             return None
         ended = run.status in FINAL_STATUSES
         rows = runs.events_after(db, run_id, after, STREAM_PAGE)
+        if feed is not None:
+            feed.stored([(row.seq, row.kind) for row in rows])
         events = [
             sse.Event(
                 row.seq,
@@ -422,13 +431,19 @@ async def stream_run(
     slots = slots_of(request)
     start = sse.last_event_id(last_event_id, after)
     settings = {"max_s": STREAM_MAX_S, **getattr(request.app.state, "sse_settings", {})}
+    # The answer being written (issue #33): None when live text is turned off.
+    store: live.LiveStore | None = getattr(request.app.state, "live_store", None)
+    feed = live.LiveFeed(store, parsed) if store is not None else None
+    if feed is not None:
+        settings = {"transient_interval_s": live.POLL_S, **settings}
 
     async def events() -> AsyncIterator[bytes]:
         try:
             async for chunk in sse.replay(
-                lambda seq: _page(sessions, user.id, parsed, seq),
+                lambda seq: _page(sessions, user.id, parsed, seq, feed),
                 after=start,
                 disconnected=request.is_disconnected,
+                transient=feed.poll if feed is not None else None,
                 **settings,
             ):
                 yield chunk

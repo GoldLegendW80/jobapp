@@ -115,6 +115,21 @@ def test_secrets_are_not_in_the_settings_repr(monkeypatch: pytest.MonkeyPatch) -
     assert previous not in text
 
 
+def test_live_text_is_on_by_default_and_can_be_turned_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AGENTS_LIVE_TEXT (issue #33): the kill switch of the answer streamed while written."""
+    monkeypatch.setenv("DATABASE_URL", URL)
+    assert load_settings().agents_live_text is True
+    monkeypatch.setenv("AGENTS_LIVE_TEXT", "false")
+    assert load_settings().agents_live_text is False
+    # Production takes it too: unlike the test switches, it is a setting of the real thing.
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SECRET_KEY", "s" * 40)
+    monkeypatch.setenv("CREDENTIALS_KEY", new_key())
+    assert load_settings().agents_live_text is False
+
+
 def test_model_api_stub_read_outside_production(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", URL)
     monkeypatch.setenv("MODEL_API_BASE_URL", " http://anthropic-stub:8098/ ")

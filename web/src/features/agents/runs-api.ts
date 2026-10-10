@@ -8,6 +8,10 @@
  * reconnect (EventSource's own, after a network blip, with the Last-Event-ID header; or ours,
  * with `?after=`, when the browser gave up because the server answered an error) resumes exactly
  * where it stopped: steps are never lost and never shown twice.
+ *
+ * While an answer is being written the stream also sends `partial` events, the text so far of
+ * the block being written (issue #33). They carry no id, so they never move the resume point;
+ * live-text.ts says how they are applied.
  */
 import { z } from "zod";
 
@@ -59,6 +63,14 @@ export const stepSchema = z.object({
   data: z.record(z.string(), z.unknown()),
 });
 export type RunStep = z.infer<typeof stepSchema>;
+
+/** A piece of the text being written (live-text.ts `TextPart`). */
+export const partialSchema = z.object({
+  block: z.number().int().nonnegative(),
+  after: z.number().int().nonnegative(),
+  offset: z.number().int().nonnegative(),
+  text: z.string(),
+});
 
 export const runDetailSchema = runSchema.extend({
   events: z.array(stepSchema),
@@ -151,6 +163,8 @@ export type Connection = "connecting" | "live" | "reconnecting" | "ended";
 
 export interface FollowHandlers {
   onStep: (step: RunStep) => void;
+  /** A piece of the answer being written; not a step, it has no seq. */
+  onPartial?: (part: z.infer<typeof partialSchema>) => void;
   onConnection: (state: Connection) => void;
   /** The run was deleted, or is not (or no longer) the user's. */
   onGone?: () => void;
@@ -202,6 +216,18 @@ export function followRun(
       if (!parsed.success || parsed.data.seq <= last) return; // never twice
       last = parsed.data.seq;
       handlers.onStep(parsed.data);
+    });
+    current.addEventListener("partial", (event) => {
+      if (stopped || source !== current || !handlers.onPartial) return;
+      let parsed: ReturnType<typeof partialSchema.safeParse>;
+      try {
+        parsed = partialSchema.safeParse(
+          JSON.parse((event as MessageEvent<string>).data),
+        );
+      } catch {
+        return;
+      }
+      if (parsed.success) handlers.onPartial(parsed.data);
     });
     current.addEventListener("end", () => {
       if (stopped || source !== current) return;

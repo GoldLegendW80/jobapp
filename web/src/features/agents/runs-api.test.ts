@@ -186,4 +186,57 @@ describe("followRun", () => {
     source.emit("step", step(1));
     expect(steps).toEqual([]);
   });
+
+  it("hands over the pieces of the answer being written without moving the resume point", async () => {
+    vi.useFakeTimers();
+    server.use(
+      http.get(`*/api/agents/runs/${ID}`, () => HttpResponse.json(detail())),
+    );
+    const parts: unknown[] = [];
+    const steps: RunStep[] = [];
+    followRun(ID, {
+      onStep: (s) => steps.push(s),
+      onPartial: (part) => parts.push(part),
+      onConnection: () => undefined,
+    });
+    const source = FakeEventSource.last!;
+    source.open();
+    source.emit("step", step(1, "status", { status: "running" }));
+    source.emit("partial", { block: 1, after: 1, offset: 0, text: "It f" });
+    source.emit("partial", { block: 1, after: 1, offset: 4, text: "its" });
+    source.emit("partial", { block: 1, after: 1, offset: "4", text: "x" });
+    source.emit("partial", { block: 1, after: 1, offset: -1, text: "x" });
+    source.emit("partial", "{broken json");
+    expect(parts).toEqual([
+      { block: 1, after: 1, offset: 0, text: "It f" },
+      { block: 1, after: 1, offset: 4, text: "its" },
+    ]);
+    // The connection drops in the middle of the answer: the follow resumes after the last
+    // step, whatever number of pieces came since.
+    source.fail(true);
+    await vi.advanceTimersByTimeAsync(followTiming.retryMs + 50);
+    await vi.waitFor(() => {
+      expect(FakeEventSource.all).toHaveLength(2);
+    });
+    expect(FakeEventSource.last!.url).toMatch(/\?after=1$/);
+    // A late piece of the old connection is ignored, like its steps.
+    source.emit("partial", { block: 1, after: 1, offset: 7, text: " late" });
+    expect(parts).toHaveLength(2);
+    FakeEventSource.last!.emit("partial", {
+      block: 1,
+      after: 1,
+      offset: 0,
+      text: "It fits well",
+    });
+    expect(parts).toHaveLength(3);
+  });
+
+  it("follows a run without a handler for the pieces", () => {
+    const { steps } = follow();
+    const source = FakeEventSource.last!;
+    source.open();
+    source.emit("partial", { block: 1, after: 0, offset: 0, text: "ignored" });
+    source.emit("step", step(1));
+    expect(steps.map((s) => s.seq)).toEqual([1]);
+  });
 });

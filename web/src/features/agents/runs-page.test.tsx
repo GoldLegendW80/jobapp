@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -410,5 +410,96 @@ describe("/runs/:id, the run panel", () => {
     source.emit("step", step(1, "text", { text: "once" }));
     const steps = await within(panel).findByRole("list", { name: "Steps" });
     expect(within(steps).getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("shows the answer while it is written, then the stored step in its place", async () => {
+    agentsApi();
+    renderApp(`/runs/${ID}`);
+    const panel = await screen.findByTestId("run-panel");
+    const source = FakeEventSource.last!;
+    act(() => {
+      source.open();
+      source.emit("step", step(1, "status", { status: "running" }));
+      source.emit("step", step(2, "thinking"));
+    });
+    const steps = await within(panel).findByRole("list", { name: "Steps" });
+    const region = within(panel)
+      .getAllByRole("status")
+      .find((node) => node.getAttribute("aria-live") === "polite")!;
+    expect(region).toHaveTextContent("Thinking");
+    // An empty block is not an answer yet: no item for it.
+    act(() => {
+      source.emit("partial", { block: 1, after: 2, offset: 0, text: "" });
+    });
+    expect(within(steps).getAllByRole("listitem")).toHaveLength(2);
+    act(() => {
+      source.emit("partial", { block: 1, after: 2, offset: 0, text: "It fi" });
+    });
+    let items = within(steps).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(items[2]).toHaveAttribute("data-live", "true");
+    expect(items[2]).toHaveAttribute("aria-busy", "true");
+    expect(items[2]).toHaveAttribute("data-kind", "text");
+    expect(items[2]).toHaveTextContent("AnswerIt fi");
+    // The title is announced once, the growing text never.
+    expect(region).toHaveTextContent(/^Answer$/);
+    const before = items[2]!.querySelector("p:last-of-type")!.className;
+    act(() => {
+      source.emit("partial", {
+        block: 1,
+        after: 2,
+        offset: 5,
+        text: "ts well",
+      });
+    });
+    items = within(steps).getAllByRole("listitem");
+    expect(items[2]).toHaveTextContent("AnswerIt fits well");
+    expect(region).toHaveTextContent(/^Answer$/);
+    // The stored step replaces it in one render: one answer, the same markup, not live.
+    act(() => {
+      source.emit("step", step(3, "text", { text: "It fits well." }));
+    });
+    items = within(steps).getAllByRole("listitem");
+    expect(items).toHaveLength(3);
+    expect(items[2]).not.toHaveAttribute("data-live");
+    expect(items[2]).not.toHaveAttribute("aria-busy");
+    expect(items[2]).toHaveTextContent("AnswerIt fits well.");
+    expect(items[2]!.querySelector("p:last-of-type")!.className).toBe(before);
+    expect(region).toHaveTextContent(/^Answer$/);
+    // A delta that arrives after the complete message changes nothing.
+    act(() => {
+      source.emit("partial", { block: 1, after: 2, offset: 12, text: "!!" });
+    });
+    expect(within(steps).getAllByRole("listitem")).toHaveLength(3);
+    expect(panel).not.toHaveTextContent("!!");
+  });
+
+  it("drops the unfinished answer when the run is cancelled in the middle of it", async () => {
+    agentsApi();
+    renderApp(`/runs/${ID}`);
+    const panel = await screen.findByTestId("run-panel");
+    const source = FakeEventSource.last!;
+    act(() => {
+      source.open();
+      source.emit("step", step(1, "status", { status: "running" }));
+      source.emit("partial", {
+        block: 1,
+        after: 1,
+        offset: 0,
+        text: "Half an ans",
+      });
+    });
+    expect(await within(panel).findByText("Half an ans")).toBeInTheDocument();
+    act(() => {
+      source.emit("step", step(2, "status", { status: "cancelled" }));
+      source.emit("end", {});
+    });
+    expect(within(panel).queryByText("Half an ans")).not.toBeInTheDocument();
+    const steps = within(panel).getByRole("list", { name: "Steps" });
+    expect(
+      within(steps)
+        .getAllByRole("listitem")
+        .map((item) => item.dataset.kind),
+    ).toEqual(["status", "status"]);
   });
 });
