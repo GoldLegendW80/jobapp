@@ -5,7 +5,13 @@
  * run panel is exercised before a real agent exists (A3 adds the first).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, FlaskConical, LoaderCircle, Play } from "lucide-react";
+import {
+  ArrowLeft,
+  Briefcase,
+  FlaskConical,
+  LoaderCircle,
+  Play,
+} from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -31,8 +37,10 @@ import { RunPanel, StatusBadge } from "./run-panel";
 import { useNow } from "./use-now";
 import {
   agentsKey,
+  getRun,
   listAgents,
   listRuns,
+  runKey,
   runsKey,
   startRun,
   type Agent,
@@ -151,12 +159,38 @@ function TestRunCard({ agents }: { agents: Agent[] }) {
   );
 }
 
+/** The job a run worked on, as a link to it (A3); a deleted job is named as such. */
+export function RunJobLink({ run }: { run: Run }) {
+  if (run.job) {
+    return (
+      <Link
+        to={`/jobs/${run.job.id}`}
+        className="inline-flex w-fit min-w-0 items-center gap-1 text-sm underline underline-offset-4"
+      >
+        <Briefcase aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="truncate">
+          {run.job.title} at {run.job.company}
+        </span>
+      </Link>
+    );
+  }
+  if (run.job_id) {
+    return (
+      <span className="text-sm text-muted-foreground">
+        On a job that no longer exists
+      </span>
+    );
+  }
+  return null;
+}
+
 function RunRow({ run, now }: { run: Run; now: number }) {
+  // The job link sits under the run's link, never inside it.
   return (
-    <li>
+    <li className="flex flex-col rounded-lg border">
       <Link
         to={`/runs/${run.id}`}
-        className="flex flex-col gap-2 rounded-lg border p-4 transition-colors hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none sm:flex-row sm:items-center sm:gap-4"
+        className="flex flex-col gap-2 rounded-lg p-4 transition-colors hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none sm:flex-row sm:items-center sm:gap-4"
       >
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex flex-wrap items-center gap-2">
@@ -165,7 +199,6 @@ function RunRow({ run, now }: { run: Run; now: number }) {
           </span>
           <span className="truncate text-sm text-muted-foreground">
             {formatDateTime(run.created_at)}
-            {run.job_id ? ", on a job" : ""}
             {run.error ? `: ${run.error}` : ""}
           </span>
         </span>
@@ -175,6 +208,11 @@ function RunRow({ run, now }: { run: Run; now: number }) {
           <span>{formatDuration(elapsed(run, now))}</span>
         </span>
       </Link>
+      {run.job_id ? (
+        <span className="flex min-w-0 px-4 pb-3">
+          <RunJobLink run={run} />
+        </span>
+      ) : null}
     </li>
   );
 }
@@ -241,15 +279,23 @@ export function RunsPage() {
 export function RunPage() {
   useTitle("Agent run");
   const { id = "" } = useParams();
+  // The same query as the panel's (shared cache): only read here for the job link.
+  const detail = useQuery({
+    queryKey: runKey(id),
+    queryFn: ({ signal }) => getRun(id, signal),
+  });
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
-      <Link
-        to="/runs"
-        className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft aria-hidden="true" className="size-4" />
-        All runs
-      </Link>
+      <div className="flex flex-col gap-2">
+        <Link
+          to="/runs"
+          className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft aria-hidden="true" className="size-4" />
+          All runs
+        </Link>
+        {detail.data ? <RunJobLink run={detail.data} /> : null}
+      </div>
       <RunPanel key={id} runId={id} />
     </div>
   );

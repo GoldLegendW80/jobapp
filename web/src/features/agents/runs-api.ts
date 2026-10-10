@@ -44,6 +44,11 @@ export const runSchema = z.object({
   started_at: z.string().nullable(),
   finished_at: z.string().nullable(),
   duration_s: z.number().nullable(),
+  /** The job the run worked on (A3), null without one or once it is deleted. */
+  job: z
+    .object({ id: z.string(), company: z.string(), title: z.string() })
+    .nullable()
+    .optional(),
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -70,6 +75,7 @@ export const agentSchema = z.object({
   max_turns: z.number().int(),
   wall_time_s: z.number(),
   test_only: z.boolean(),
+  needs_job: z.boolean().optional(),
 });
 export type Agent = z.infer<typeof agentSchema>;
 const agentListSchema = z.object({ items: z.array(agentSchema) });
@@ -84,6 +90,23 @@ export async function listAgents(signal?: AbortSignal): Promise<Agent[]> {
     validate: (data) => agentListSchema.parse(data),
   });
   return body.items;
+}
+
+export const jobRunsKey = (jobId: string, agent: string) =>
+  [...runsKey, "job", jobId, agent] as const;
+
+/** The newest run of `agent` on one job (A3: the job's latest assessment), or none. */
+export async function latestJobRun(
+  jobId: string,
+  agent: string,
+  signal?: AbortSignal,
+): Promise<Run | null> {
+  const query = new URLSearchParams({ job_id: jobId, agent, limit: "1" });
+  const body = await request(`/agents/runs?${query.toString()}`, {
+    signal,
+    validate: (data) => runListSchema.parse(data),
+  });
+  return body.items[0] ?? null;
 }
 
 export async function listRuns(signal?: AbortSignal): Promise<Run[]> {

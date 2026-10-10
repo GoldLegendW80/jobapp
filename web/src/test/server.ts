@@ -50,6 +50,9 @@ export const handlers = [
       { status: 404 },
     ),
   ),
+  // No agent run and no proposal yet (job detail's Agent assessment section).
+  http.get("*/api/agents/runs", () => HttpResponse.json({ items: [] })),
+  http.get("*/api/proposals", () => HttpResponse.json({ items: [] })),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),
   ),
