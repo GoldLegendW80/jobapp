@@ -5,7 +5,8 @@
   (201) or the existing one (200): one thread per job and user. 404 when the job is not one of
   the caller's.
 - GET /api/agents/threads/{id}: the thread with its newest messages (oldest first), each with the
-  state of its run, and the run still answering, if any.
+  state of its run, and the run still answering, if any. One snapshot of the database: a send
+  committing meanwhile is in it whole (the message and its run) or not at all.
 - POST /api/agents/threads/{id}/messages {text}: store the message and queue the run that answers
   it (202 with both). 409 while the previous answer is queued or running (`active_run_id` names
   it) and 409 without a saved model credential; 429 over the user's active runs; 503 when the
@@ -168,6 +169,10 @@ def _detail(
     sessions: sessionmaker[Session], user_id: uuid.UUID, thread_id: uuid.UUID
 ) -> ThreadDetail | None:
     with sessions() as db:
+        # One snapshot for the three reads below. At READ COMMITTED each statement sees what is
+        # committed when it starts, so a send committing in between gave a thread whose answer
+        # was pending (and whose count said one message) while its message list was still empty.
+        db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
         thread = chat.get_thread(db, user_id, thread_id)
         if thread is None:
             return None
