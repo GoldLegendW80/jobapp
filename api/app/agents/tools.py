@@ -23,7 +23,9 @@ Tools:
 - propose_note(text), propose_status(status, reason): create a pending proposal bound to the run,
   the user and the run's job (app/agents/proposals.py), never a direct write. propose_status
   checks the status against the jobs enum and the transitions the triage agent may propose;
-  a refused proposal is an error result that says why, and nothing is stored.
+  a refused proposal is an error result that says why, and nothing is stored. What the model
+  wrote (the note, the reason) goes through the run's `redact` before it is checked and stored:
+  the runner passes its scrub, so the run's credential never lands in a proposal either.
 """
 
 import asyncio
@@ -73,6 +75,10 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _as_is(value: Any) -> Any:
+    return value
+
+
 @dataclass(frozen=True)
 class Scope:
     """What every tool of one run is bound to."""
@@ -84,6 +90,9 @@ class Scope:
     clock: Callable[[], datetime] = _now
     # get_job reads the run's own job only (A4 chat: the thread's job).
     job_only: bool = False
+    # Applied to the arguments of a write tool before anything of them is checked or stored
+    # (the runner's scrub of the run's credential).
+    redact: Callable[[Any], Any] = _as_is
 
 
 def _clip(text: str | None, limit: int) -> tuple[str, bool]:
@@ -206,6 +215,9 @@ def _propose(scope: Scope, kind: proposals.ProposalKind, raw: dict[str, Any]) ->
     """Create the proposal, or say why not. Returns (text for the model, is_error)."""
     if scope.job_id is None:
         return NO_JOB, True
+    # First, on the arguments as the model wrote them: the checks below strip and join
+    # whitespace and measure the length of what will be stored.
+    raw = scope.redact(raw) if isinstance(raw, dict) else {}
     with scope.sessions() as db:
         job = jobs_service.get_job(db, scope.user_id, scope.job_id)
         if job is None:
@@ -335,6 +347,7 @@ def build(
     job_id: uuid.UUID | None = None,
     clock: Callable[[], datetime] = _now,
     job_only: bool = False,
+    redact: Callable[[Any], Any] = _as_is,
 ) -> AppTools:
     """A server holding exactly `names`, bound to the user (and to the run and its job for the
     write tools). Unknown names fail loudly (a definition naming a tool that does not exist is a
@@ -349,6 +362,7 @@ def build(
         job_id=job_id,
         clock=clock,
         job_only=job_only,
+        redact=redact,
     )
     tools = [FACTORIES[name](scope) for name in names]
     server = create_sdk_mcp_server(name=SERVER, version="1.0.0", tools=tools)
