@@ -308,25 +308,36 @@ function ChatBody({ job }: { job: JobDetail }) {
 
   const send = useMutation({
     mutationFn: async (text: string) => {
-      let id = threadId;
-      if (id === null) {
-        const created = await openJobThread(job.id);
-        client.setQueryData(jobThreadKey(job.id), created);
-        id = created.id;
+      let target = found.data ?? null;
+      if (target === null) {
+        target = await openJobThread(job.id);
+        client.setQueryData(jobThreadKey(job.id), target);
       }
-      return { threadId: id, sent: await sendMessage(id, text) };
+      return { target, sent: await sendMessage(target.id, text) };
     },
-    onSuccess: ({ threadId: id, sent }) => {
+    onSuccess: async ({ target, sent }) => {
       setDraft("");
-      client.setQueryData<ThreadDetail>(threadKey(id), (old) =>
-        old
-          ? {
-              ...old,
-              messages: [...old.messages, sent.message],
-              active_run_id: sent.run.id,
-            }
-          : old,
-      );
+      const id = target.id;
+      // A read of the thread may be in flight, started before the message was stored (on the
+      // first message it starts as soon as the thread exists, next to the send). Its answer is
+      // older than the send: drop it, so it can neither hide the message nor be the only read.
+      await client.cancelQueries({ queryKey: threadKey(id) });
+      client.setQueryData<ThreadDetail>(threadKey(id), (old) => {
+        const known = old ?? {
+          ...target,
+          messages: [],
+          messages_truncated: false,
+          active_run_id: null,
+        };
+        return {
+          ...known,
+          messages: [
+            ...known.messages.filter((m) => m.id !== sent.message.id),
+            sent.message,
+          ],
+          active_run_id: sent.run.id,
+        };
+      });
       void client.invalidateQueries({ queryKey: threadKey(id) });
       void client.invalidateQueries({ queryKey: runsKey, exact: true });
     },

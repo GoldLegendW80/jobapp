@@ -322,6 +322,73 @@ describe("job detail: chat panel", () => {
     expect(state.opens).toBe(1);
   });
 
+  // The first message creates the thread, and the thread's first read then runs next to the
+  // send. That read can answer after the send with the thread as it was before it (empty), or
+  // torn (the pending run and the count of the send, the message list from before it).
+  it.each([
+    [
+      "from before the send",
+      { active_run_id: null, messages_truncated: false },
+    ],
+    ["torn by the send", { active_run_id: RUN_1, messages_truncated: true }],
+  ])(
+    "shows the first message at once when the thread's read answers late, %s",
+    async (_name, late) => {
+      const state = fakeApi();
+      let reads = 0;
+      let release = () => {};
+      const sendAnswered = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      server.use(
+        http.get(`*/api/agents/threads/${THREAD}`, async () => {
+          reads += 1;
+          if (reads > 1) {
+            return HttpResponse.json({
+              ...thread,
+              messages: state.messages,
+              messages_truncated: false,
+              active_run_id: state.active,
+            });
+          }
+          await sendAnswered;
+          return HttpResponse.json({ ...thread, messages: [], ...late });
+        }),
+      );
+      const { user, panel } = await openChat();
+      await waitFor(() => {
+        expect(composer()).toBeEnabled();
+      });
+      await user.type(composer(), "Does it fit?{Enter}");
+      // The send was answered (the composer is emptied), the first read is still out.
+      await waitFor(() => {
+        expect(composer()).toHaveValue("");
+      });
+      expect(state.sends).toEqual(["Does it fit?"]);
+      const shown = () =>
+        within(panel)
+          .queryAllByTestId("chat-message")
+          .map((item) => item.textContent);
+      expect(shown()).toEqual(["You:Does it fit?"]);
+      expect(within(panel).getByTestId("chat-live-reply")).toBeInTheDocument();
+      // The late answer changes nothing, and a read made after the send follows.
+      release();
+      await waitFor(() => {
+        expect(reads).toBeGreaterThan(1);
+      });
+      await waitFor(() => {
+        expect(streamOf(RUN_1)).toBeDefined();
+      });
+      expect(shown()).toEqual(["You:Does it fit?"]);
+      expect(within(panel).getByTestId("chat-live-reply")).toBeInTheDocument();
+      expect(
+        within(panel).queryByText("Older messages are not shown."),
+      ).not.toBeInTheDocument();
+      expect(within(panel).queryByTestId("chat-empty")).not.toBeInTheDocument();
+      expect(sendButton()).toBeDisabled();
+    },
+  );
+
   it("adds a line with Shift and Enter instead of sending", async () => {
     const state = fakeApi();
     const { user } = await openChat();
