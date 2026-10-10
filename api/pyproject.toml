@@ -5,8 +5,13 @@ description = "Backend of jobapp: FastAPI, SQLAlchemy 2, Postgres"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic==1.20.0",
+    "anthropic==1.11.0",
     "argon2-cffi==25.1.0",
     "arq==0.28.0",
+    # Not 47 or later: their bundled OpenSSL dies with SIGILL (SME code paths) in Docker on Apple
+    # M4 Macs, so every local stack would crash at import. 46.0.7 runs there, on the Jetson's
+    # Cortex-A78AE and on CI's x86 runners. Recheck when upgrading (agents A1).
+    "cryptography==46.0.7",
     "email-validator==2.3.0",
     "fastapi==0.142.4",
     "httpx==0.28.1",

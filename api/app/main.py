@@ -13,6 +13,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app import health
+from app.agents import router as agents_router
+from app.agents.crypto import Keyring
+from app.agents.ratelimit import RateLimiter
+from app.agents.verify import Verifier
 from app.config import Settings, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity import deps as identity_deps
@@ -51,6 +55,17 @@ def validation_detail(exc: RequestValidationError) -> str:
     where = ".".join(str(part) for part in first.get("loc", ()) if part != "body")
     message = str(first.get("msg", "invalid value"))
     return f"{where}: {message}" if where else f"Invalid request body: {message}"
+
+
+def credentials_keyring(settings: Settings) -> Keyring | None:
+    """The keys of the model credentials, from CREDENTIALS_KEY (and _PREVIOUS), or None."""
+    if settings.credentials_key is None:
+        return None
+    previous = settings.credentials_key_previous
+    return Keyring.from_text(
+        settings.credentials_key.get_secret_value(),
+        previous.get_secret_value() if previous is not None else None,
+    )
 
 
 def create_app(
@@ -99,6 +114,14 @@ def create_app(
     app.state.health = checker
     # The worker's queue (jobs J5); the Redis pool opens on the first enqueue.
     app.state.queue = Queue(settings.redis_url.get_secret_value())
+    # Model credentials (agents A1): the encryption keys (None without CREDENTIALS_KEY, then the
+    # credential routes answer 503), the real check and the per-user limits.
+    app.state.credentials_keyring = credentials_keyring(settings)
+    if app.state.credentials_keyring is None:
+        logger.warning("CREDENTIALS_KEY is not set: saving model credentials is disabled")
+    app.state.model_verifier = Verifier(base_url=settings.model_api_base_url)
+    app.state.credential_saves = RateLimiter(agents_router.SAVE_LIMIT, agents_router.WINDOW_S)
+    app.state.credential_checks = RateLimiter(agents_router.VERIFY_LIMIT, agents_router.WINDOW_S)
 
     # Middleware added last runs first: request_log, then CSRF, then the cookie writer.
     app.middleware("http")(identity_deps.session_cookie_middleware)
@@ -148,5 +171,6 @@ def create_app(
     # Before the jobs router: /api/jobs/sweeps must not be read as /api/jobs/{job_id}.
     app.include_router(sweeps_router)
     app.include_router(jobs_router)
+    app.include_router(agents_router.router)
     identity_deps.assert_default_deny(app)
     return app

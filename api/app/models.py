@@ -3,9 +3,10 @@
 Alembic's env.py imports this module before comparing metadata with the database.
 """
 
+from app.agents import models as agents_models
 from app.identity import models as identity_models
 from app.jobs import models as jobs_models
 from app.models_base import Base
 from app.profile import models as profile_models
 
-__all__ = ["Base", "identity_models", "jobs_models", "profile_models"]
+__all__ = ["Base", "agents_models", "identity_models", "jobs_models", "profile_models"]

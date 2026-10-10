@@ -43,6 +43,13 @@ export const handlers = [
   http.get("*/api/jobs", () => HttpResponse.json(emptyJobsPage)),
   http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
   http.get("*/api/health", () => HttpResponse.json({ status: "ok" })),
+  // No model credential saved (the Account page's Model access card).
+  http.get("*/api/me/model-credential", () =>
+    HttpResponse.json(
+      { detail: "No model credential is saved." },
+      { status: 404 },
+    ),
+  ),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),
   ),
