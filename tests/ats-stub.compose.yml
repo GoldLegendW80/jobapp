@@ -1,7 +1,13 @@
-# CI e2e only: a stub of the ATS posting APIs (tests/ats_stub.py) and the api pointed at it, so
-# the board check of the profile journeys and the worker's sweeps never call Ashby, Greenhouse or
-# Lever from CI.
+# CI e2e only: stubs of the ATS posting APIs, so the board check of the profile journeys and the
+# worker's sweeps never call Ashby, Greenhouse or Lever from CI.
 #   docker compose -p jobapp-ci -f compose.yml -f tests/ats-stub.compose.yml up -d --build --wait
+# - atsstub (tests/ats_stub.py): the api's board check, every org.
+# - fakeats (api/tests/jobs/fake_ats.py, as tests/compose.j5-e2e.yml runs it): every ATS call of
+#   the worker's sweeps (ATS_BASE_URL with no ATS_BASE_URL_ORG_PREFIX), so CI never reaches a
+#   real ATS by configuration, whatever a spec sweeps. The "fake-" orgs of
+#   web/e2e/jobs-sweep.spec.ts give every failure mode, 5,000 posting boards and unicode; any
+#   other org answers 404 ("board not found"). The spec's real sweep is skipped in CI
+#   (E2E_SKIP_REAL_SWEEP). Local scratch stacks and the Jetson keep their own settings.
 # The api refuses ATS_BASE_URL when APP_ENV is production (app/config.py).
 services:
   api:
@@ -11,13 +17,32 @@ services:
       atsstub:
         condition: service_healthy
 
-  # The worker's sweeps read the same stub (one override for the board check and the sweeps).
   worker:
     environment:
-      ATS_BASE_URL: http://atsstub:8080
+      ATS_BASE_URL: http://fakeats:8099
     depends_on:
-      atsstub:
+      fakeats:
         condition: service_healthy
+
+  fakeats:
+    # Standard library only: the same pinned base image as atsstub.
+    image: python:3.12.15-slim-trixie
+    # --slow 21: fake-timeout answers after the worker's 20 s timeout (jobs-sweep.spec.ts).
+    command: ["python", "/fake/fake_ats.py", "--port", "8099", "--slow", "21"]
+    volumes:
+      - ./api/tests/jobs/fake_ats.py:/fake/fake_ats.py:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8099/_health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 256m
+    expose:
+      - "8099"
 
   atsstub:
     # The api's own base image (api/Dockerfile PYTHON_IMAGE): pinned and already pulled.

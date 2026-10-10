@@ -93,6 +93,14 @@ jobs:
           uv run --frozen pytest -m docker -p no:cacheprovider \
             --junitxml=${{ runner.temp }}/junit-api-docker.xml
           echo "pytest (docker-marked, serial): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
+      # Issue #16: the scorer's speed bound without coverage tracing or other workers sharing the
+      # cores, so it can be tight (0.3 s of CPU, the best of 3) where the step above allows 1 s.
+      - name: Pytest, scoring timing alone (no coverage, 0.3 s)
+        env:
+          SCORE_BUDGET_S: "0.3"
+        run: >-
+          uv run --frozen pytest -p no:cacheprovider
+          "tests/jobs/test_scoring.py::test_long_text_is_bounded_and_fast"
       - name: Test summary
         if: always()
         run: |
@@ -155,6 +163,10 @@ jobs:
           deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
           tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
           tests/reboot_check.sh tests/e2e_jetson.sh tests/tailscale_test.sh
+          ops/env_check.sh tests/env_check_test.sh
+      # Issue #18: the .env syntax check and where it runs (deploy.sh, deploy.yml, the smoke).
+      - name: tests/env_check_test.sh
+        run: tests/env_check_test.sh
       # deploy.sh against fake ssh and docker: no Jetson, nothing remote.
       - name: tests/deploy_test.sh
         run: tests/deploy_test.sh
@@ -224,6 +236,17 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/jobs
           PLAYWRIGHT_HTML_OPEN: never
         run: pnpm exec playwright test jobs.spec.ts jobs-map.spec.ts --workers=1 --reporter=list,html
+      # Issue #11: Find jobs with live progress, the summary and failed boards, the history, the
+      # schedule firing on the worker's tick, a 5,000 posting sweep under the worker's memory
+      # limit. The worker reads api/tests/jobs/fake_ats.py for every org (a real one is a 404)
+      # (tests/ats-stub.compose.yml); the spec's one real sweep is skipped here.
+      - name: Sweep journeys against the fake ATS
+        working-directory: web
+        env:
+          E2E_SKIP_REAL_SWEEP: "1"
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/sweep
+          PLAYWRIGHT_HTML_OPEN: never
+        run: pnpm exec playwright test jobs-sweep.spec.ts --workers=1 --reporter=list,html
       - name: Stack logs
         if: failure()
         run: |

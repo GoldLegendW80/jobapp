@@ -267,7 +267,27 @@ describe("Find jobs", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Open the profile" }));
-    expect(app.location()).toBe("/profile");
+    expect(app.location()).toBe("/profile?tab=search");
+  });
+
+  it("asks to save the Search tab again when the stored section no longer passes (422)", async () => {
+    const detail =
+      "The search section of your profile no longer passes the checks. Open the Search tab of your profile and save it again.";
+    fakeSweeps({
+      start: () => HttpResponse.json({ detail }, { status: 422 }),
+    });
+    const { app } = await openJobs();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Find jobs" }));
+    const message = await screen.findByText(detail);
+    expect(screen.getByRole("button", { name: "Find jobs" })).toBeEnabled();
+    // The toast of this 422 (toasts of earlier tests may still be on screen).
+    const toastOf = message.closest("li");
+    if (!toastOf) throw new Error("the message is not in a toast");
+    await user.click(
+      within(toastOf).getByRole("button", { name: "Open the profile" }),
+    );
+    expect(app.location()).toBe("/profile?tab=search");
   });
 
   it("reports a sweep that could not start (503) and stays usable", async () => {

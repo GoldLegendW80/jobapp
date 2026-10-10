@@ -91,11 +91,13 @@ export function useSweepRunner(): SweepRunner {
           return;
         }
         if (isApiError(error) && error.status === 422) {
+          // No enabled board, or a stored search section to save again: both are fixed in
+          // the Search tab of the profile.
           toast.error(errorDetail(error) ?? "No board to sweep.", {
             action: {
               label: "Open the profile",
               onClick: () => {
-                void navigate("/profile");
+                void navigate("/profile?tab=search");
               },
             },
           });

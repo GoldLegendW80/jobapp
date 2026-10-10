@@ -112,6 +112,10 @@ TIMED_OUT = "The sweep took too long and was stopped."
 INTERRUPTED = "The sweep was interrupted (the worker restarted). Start it again."
 INTERNAL = "The sweep failed because of an internal error."
 NO_BOARDS = "No board is enabled in the search section of your profile."
+SEARCH_INVALID = (
+    "The search section of your profile no longer passes the checks. "
+    "Open the Search tab of your profile and save it again."
+)
 QUEUE_DOWN = "The sweep could not be queued. Try again in a minute."
 
 
@@ -143,48 +147,19 @@ def never_apply_rules(search: SearchSection) -> list[NeverApplyRule]:
     return [NeverApplyRule.parse(text) for text in search.never_apply]
 
 
-class AnyOf:
-    """The terms of a list that would not compile together, each compiled alone: a search
-    finds what any of them finds (the same decisions as the list, minus the broken terms)."""
-
-    def __init__(self, patterns: list[re.Pattern[str]]) -> None:
-        self.patterns = patterns
-
-    def search(self, text: str) -> re.Match[str] | None:
-        for pattern in self.patterns:
-            found = pattern.search(text)
-            if found is not None:
-                return found
-        return None
+Matcher = re.Pattern[str]
 
 
-Matcher = re.Pattern[str] | AnyOf
+def term_matcher(terms: Sequence[str], advanced_regex: bool) -> Matcher | None:
+    """The matcher of a stored term list, None for an empty one (no restriction).
 
-
-def term_matcher(terms: Sequence[str], advanced_regex: bool, where: str) -> Matcher | None:
-    """The matcher of a stored term list, None for an empty one (no restriction). A list that
-    does not compile as a whole (stored before the profile refused such lists, as scoring.py
-    tolerates too) never fails the sweep: its terms are compiled one by one, those that fail
-    alone are dropped, with one warning naming the list's place, never its contents. A list
-    left with no term matches nothing, so a broken include list keeps nothing rather than
-    everything."""
-    try:
-        return matching.compile_terms(list(terms), advanced_regex)
-    except re.error:
-        pass
-    kept = []
-    for term in terms:
-        try:
-            pattern = matching.compile_terms([term], advanced_regex)
-        except re.error:
-            continue
-        if pattern is not None:
-            kept.append(pattern)
-    logger.warning(
-        "search term list does not compile, broken terms skipped",
-        extra={"list": where, "terms": len(terms), "kept": len(kept)},
-    )
-    return AnyOf(kept)
+    There is no fallback for a list that does not compile: the profile refuses such lists
+    (schemas.check_joined compiles them exactly as matching.compile_terms does), and the claim
+    validates the whole section before it builds the filter, so a sweep never sees one. Should
+    one get through anyway (a regex engine that changed between the save and the sweep), re.error
+    reaches `claim`, which fails the sweep with SEARCH_INVALID: an exclude list is never weakened
+    by dropping its broken terms, and nothing is kept that the user asked to leave out."""
+    return matching.compile_terms(list(terms), advanced_regex)
 
 
 @dataclass(frozen=True)
@@ -199,13 +174,13 @@ class SearchFilter:
 
     @classmethod
     def of(cls, search: SearchSection) -> "SearchFilter":
-        def compile_list(terms: Any, where: str) -> Matcher | None:
-            return term_matcher(terms.terms, terms.advanced_regex, where)
+        def compile_list(terms: Any) -> Matcher | None:
+            return term_matcher(terms.terms, terms.advanced_regex)
 
         return cls(
-            include=compile_list(search.title_include, "title_include"),
-            exclude=compile_list(search.title_exclude, "title_exclude"),
-            location=compile_list(search.location, "location"),
+            include=compile_list(search.title_include),
+            exclude=compile_list(search.title_exclude),
+            location=compile_list(search.location),
             contract_types=frozenset(search.contract_types),
             days=search.days,
         )
@@ -213,7 +188,7 @@ class SearchFilter:
     @staticmethod
     def board_exclude(board: Board) -> Matcher | None:
         extra = board.extra_exclude
-        return term_matcher(extra.terms, extra.advanced_regex, f"extra_exclude of {board.org}")
+        return term_matcher(extra.terms, extra.advanced_regex)
 
     def since(self, today: date) -> str:
         return (today - timedelta(days=self.days)).isoformat()
@@ -249,7 +224,13 @@ class SearchFilter:
 # --- what a sweep reads -------------------------------------------------------------------------
 
 
-def user_search(db: Session, user_id: uuid.UUID) -> SearchSection | None:
+class InvalidSearchError(ValueError):
+    """The stored search section does not pass the profile's checks any more."""
+
+
+def load_search(db: Session, user_id: uuid.UUID) -> SearchSection | None:
+    """The user's search section, None when there is none. Raises InvalidSearchError when the
+    stored one no longer validates (never with its contents)."""
     sections = db.execute(
         sa.select(Profile.sections).where(Profile.user_id == user_id)
     ).scalar_one_or_none()
@@ -259,6 +240,14 @@ def user_search(db: Session, user_id: uuid.UUID) -> SearchSection | None:
     try:
         return SearchSection.model_validate(raw)
     except ValueError:
+        raise InvalidSearchError("the stored search section does not validate") from None
+
+
+def user_search(db: Session, user_id: uuid.UUID) -> SearchSection | None:
+    """load_search for read-only views: a section that does not validate reads as none."""
+    try:
+        return load_search(db, user_id)
+    except InvalidSearchError:
         return None
 
 
@@ -490,7 +479,12 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             _finish(sweep, SweepStatus.failed, now, CRASHED)
             db.commit()
             return None
-        search = user_search(db, sweep.user_id)
+        try:
+            search = load_search(db, sweep.user_id)
+            search_filter = SearchFilter.of(search) if search is not None else None
+            error = NO_BOARDS
+        except (InvalidSearchError, re.error):
+            search, search_filter, error = None, None, SEARCH_INVALID
         boards = enabled_boards(search)
         slot = sweep.stats.get("schedule_slot")
         stats = Stats(
@@ -500,15 +494,20 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             schedule_slot=slot if isinstance(slot, str) else None,
         )
         sweep.stats = stats.as_json()
-        if search is None or not boards:
-            _finish(sweep, SweepStatus.failed, now, NO_BOARDS)
+        if search is None or search_filter is None or not boards:
+            if error == SEARCH_INVALID:
+                logger.warning(
+                    "sweep failed: the stored search section does not validate",
+                    extra={"sweep_id": str(sweep.id), "user_id": str(sweep.user_id)},
+                )
+            _finish(sweep, SweepStatus.failed, now, error)
             db.commit()
             return None
         plan = Plan(
             sweep_id=sweep.id,
             user_id=sweep.user_id,
             boards=boards,
-            filter=SearchFilter.of(search),
+            filter=search_filter,
             rules=never_apply_rules(search),
             skills=service.user_skills(db, sweep.user_id),
             known=Known(db, sweep.user_id),
@@ -580,15 +579,15 @@ async def run_sweep(
 
     try:
         async with asyncio.timeout(timeout_s):
-            gate = asyncio.Semaphore(concurrency)
-            # Fetched boards wait here for the store step; bounded, so at most a few boards'
-            # postings are in memory at once whatever the number of boards.
-            done: asyncio.Queue[tuple[Board, ats.BoardResult | ats.BoardError]] = asyncio.Queue(
-                maxsize=concurrency
-            )
+            # One slot per board in memory (module docstring, step 2): taken before the fetch,
+            # given back by the loop below once the board is stored. The queue never holds more
+            # than `concurrency` boards, and a fetched board never waits holding a second copy.
+            slots = asyncio.Semaphore(concurrency)
+            done: asyncio.Queue[tuple[Board, ats.BoardResult | ats.BoardError]] = asyncio.Queue()
 
             async def fetch(board: Board) -> None:
-                async with gate:
+                await slots.acquire()
+                try:
                     stats.current_board = board.company
                     await progress()
                     try:
@@ -597,7 +596,10 @@ async def run_sweep(
                         )
                     except ats.BoardError as exc:
                         outcome = exc
-                    await done.put((board, outcome))
+                except BaseException:
+                    slots.release()
+                    raise
+                done.put_nowait((board, outcome))
 
             async def beat() -> None:
                 while True:
@@ -625,6 +627,7 @@ async def run_sweep(
                             stats.boards_failed.append(_failure(board, "store_failed"))
                     stats.boards_done += 1
                     del outcome
+                    slots.release()
                     await progress()
             finally:
                 for task in tasks:
@@ -730,6 +733,20 @@ def reap_stale(
     return reaped
 
 
+INVALID_LOG_EVERY = timedelta(hours=1)
+# user id -> when its invalid section was last logged by scheduled_due (this process only).
+_invalid_logged: dict[uuid.UUID, datetime] = {}
+
+
+def _log_due(user_id: uuid.UUID, now: datetime) -> bool:
+    """Whether the invalid-section warning of this user is due again (at most hourly)."""
+    last = _invalid_logged.get(user_id)
+    if last is not None and timedelta(0) <= now - last < INVALID_LOG_EVERY:
+        return False
+    _invalid_logged[user_id] = now
+    return True
+
+
 @dataclass(frozen=True)
 class DueSweep:
     user_id: uuid.UUID
@@ -758,7 +775,10 @@ def scheduled_due(
     """Every (user, slot) the tick at `now` must start (module docstring), oldest slot first:
     active users whose schedule is enabled, with an enabled board, for slots in the window
     that have no sweep yet. A disabled schedule, a section that does not validate, an inactive
-    user or a user without boards never appears."""
+    user or a user without boards never appears; a section that does not validate while its
+    stored schedule is on is logged (the user id, never the contents) at most once per user per
+    INVALID_LOG_EVERY in this process, since the user expects sweeps that cannot run until the
+    Search tab is saved again."""
     rows = db.execute(
         sa.select(Profile.user_id, Profile.sections)
         .join(User, User.id == Profile.user_id)
@@ -773,6 +793,17 @@ def scheduled_due(
         try:
             search = SearchSection.model_validate(raw)
         except ValueError:
+            stored = raw.get("sweep_schedule")
+            if (
+                isinstance(stored, dict)
+                and stored.get("enabled") is True
+                and _log_due(user_id, now)
+            ):
+                logger.warning(
+                    "scheduled sweep skipped: the stored search section does not validate, "
+                    "the user must save the Search tab again",
+                    extra={"user_id": str(user_id)},
+                )
             continue
         if not search.sweep_schedule.enabled or not enabled_boards(search):
             continue

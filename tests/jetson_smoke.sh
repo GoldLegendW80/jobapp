@@ -104,6 +104,10 @@ fi
 ok "nothing answers on the LAN at $ip:$PORT"
 
 step "production settings"
+# Issue #18: the .env syntax, by ops/env_check.sh streamed to bash on the Jetson (no value read here).
+r "bash -s -- $RDIR/.env .env" <"$(dirname "$0")/../ops/env_check.sh" ||
+  fail ".env has invalid lines (above): docker compose would refuse it"
+ok ".env syntax: KEY=VALUE, comments and blank lines only"
 [[ "$(r "stat -c %a $RDIR/.env")" == "600" ]] || fail ".env mode"
 [[ "$(renv APP_ENV)" == "production" ]] || fail "APP_ENV is not production"
 [[ "$(rc exec -T api printenv APP_ENV | tr -d '\r')" == "production" ]] || fail "api APP_ENV"
@@ -177,6 +181,11 @@ dns="${dns%.}"
 [[ "$backend" == "Running" ]] || fail "tailscale BackendState is '${backend:-none}' (NeedsLogin: a fresh TS_AUTHKEY is needed in .env)"
 [[ "$dns" =~ \.ts\.net$ ]] || fail "tailscale has no ts.net name: '${dns:-none}'"
 ok "logged in (BackendState Running) as $dns"
+# Issue #18: logged in, so a TS_AUTHKEY still in .env serves nothing (warned, not failed: the
+# stack works, and the file is Harald's to edit). grep runs on the Jetson, no value comes back.
+if r "grep -Eq '^[[:space:]]*TS_AUTHKEY=[\"'\'']?[^[:space:]#\"'\'']' $RDIR/.env"; then
+  printf '   WARNING: TS_AUTHKEY is still set in %s/.env although tailscale is logged in: delete that line\n' "$RDIR" >&2
+fi
 serve="$(rc exec -T tailscale tailscale serve status --json | tr -d '\r' | tr -d ' \n')"
 [[ "$serve" == *"\"AllowFunnel\":{\"$dns:443\":true}"* ]] ||
   fail "Funnel is not on for $dns:443 (is the funnel node attribute in the tailnet policy?): $serve"

@@ -64,6 +64,8 @@
 # Secrets: the Jetson's .env is generated once into .env.jetson (git-ignored, mode 600) with
 # random POSTGRES_PASSWORD, SECRET_KEY and CREDENTIALS_KEY, and copied to the Jetson only when the remote .env is
 # missing or with --env. rsync never deletes the remote .env, and nothing here touches volumes.
+# Both .env files are syntax checked by ops/env_check.sh before anything changes (preflight), and
+# a TS_AUTHKEY left in either once the node is logged in is warned about at the end of a deploy.
 # Remote command strings are built here on purpose, with every value quoted by printf %q.
 # shellcheck disable=SC2029
 set -euo pipefail
@@ -224,7 +226,7 @@ take_lock() {
   echo $$ >"$LOCK_DIR/pid"
 }
 
-preflight() {
+preflight() { # preflight [force_env 0|1]
   step "preflight: $HOST:$RDIR"
   command -v rsync >/dev/null || die "rsync is not installed on this machine"
   require_remote
@@ -269,6 +271,45 @@ awk "/^MemAvailable:/ {print \$2}" /proc/meminfo')"
       info "tree clean at $(git -C "$ROOT" rev-parse --short HEAD)"
     fi
   fi
+  check_env_files "${1:-0}"
+}
+
+# --- .env syntax and the leftover auth key (issue #18) --------------------------------------
+# check_env_files <force_env 0|1>: ops/env_check.sh on .env.jetson, then on the Jetson's .env
+# (the script streamed to `bash -s` over ssh: the file never leaves the Jetson, and no value is
+# ever printed), before anything is synced, built or restarted. With --env the remote file is
+# about to be replaced by .env.jetson, so only .env.jetson counts.
+check_env_files() {
+  if [[ -f "$LOCAL_ENV" ]]; then
+    bash "$ROOT/ops/env_check.sh" "$LOCAL_ENV" .env.jetson ||
+      die ".env.jetson has invalid lines (above): fix them before deploying"
+    info ".env.jetson: syntax ok"
+  fi
+  remote "test -f $RDIR_Q/.env" || return 0
+  if (($1 == 1)); then
+    info "$HOST:$RDIR/.env: replaced by .env.jetson (--env), not checked"
+    return 0
+  fi
+  remote "bash -s -- $RDIR_Q/.env $(printf '%q' "$HOST:$RDIR/.env")" <"$ROOT/ops/env_check.sh" ||
+    die "$HOST:$RDIR/.env has invalid lines (above): fix them there (./deploy.sh ssh) or replace the file with ./deploy.sh --env"
+  info "$HOST:$RDIR/.env: syntax ok"
+}
+
+# A TS_AUTHKEY line with a value, quoted or not (an empty TS_AUTHKEY= is fine).
+AUTHKEY_RE="^[[:space:]]*TS_AUTHKEY=[\"']?[^[:space:]#\"']"
+
+# warn_leftover_authkey: once the node is logged in (the caller has its URL), a TS_AUTHKEY still
+# in .env.jetson or in the Jetson's .env is a live secret for nothing: the login lives in the
+# tsstate volume, and the api and the worker load the whole .env (env_file), so they hold the key.
+# Warned, never removed here: the files are Harald's.
+warn_leftover_authkey() {
+  local where=()
+  if [[ -f "$LOCAL_ENV" ]] && grep -Eq "$AUTHKEY_RE" "$LOCAL_ENV"; then where+=(.env.jetson); fi
+  # grep on the Jetson: the file's contents never cross the ssh connection.
+  if remote "grep -Eq $(printf '%q' "$AUTHKEY_RE") $RDIR_Q/.env 2>/dev/null"; then where+=("$HOST:$RDIR/.env"); fi
+  ((${#where[@]} > 0)) || return 0
+  warn "TS_AUTHKEY is still set in ${where[*]} although tailscale is logged in: delete that line" \
+    "(the login is kept in the tsstate volume; the api and the worker read every key of .env)"
 }
 
 generate_env() {
@@ -341,6 +382,8 @@ warn_missing_credentials_key() {
 push_env() { # push_env <force 0|1>
   step "environment"
   ensure_local_env
+  # A .env.jetson copied from the Jetson just now was not there for the preflight check.
+  bash "$ROOT/ops/env_check.sh" "$LOCAL_ENV" .env.jetson || die ".env.jetson has invalid lines (above)"
   chmod 600 "$LOCAL_ENV"
   local remote_has=0
   remote "test -f $RDIR_Q/.env" && remote_has=1
@@ -559,7 +602,7 @@ cmd_deploy() {
   local t0=$SECONDS
   take_lock
   ssh_master
-  preflight
+  preflight "$force_env"
   remote_lock
   local start=$SECONDS
   sync_tree
@@ -573,6 +616,7 @@ cmd_deploy() {
   step "public URL"
   local url
   url="$(public_url)"
+  warn_leftover_authkey
   PDIR="$(mktemp -d)"
   if wait_public "$url"; then
     info "$url answers through Tailscale Funnel"

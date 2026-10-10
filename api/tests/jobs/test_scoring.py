@@ -238,7 +238,9 @@ def test_result_lists_are_fresh() -> None:
 # 200 ms on a developer machine. CI's shared runner, with coverage tracing and 4 pytest-xdist
 # workers on its cores, measured 226 to 332 ms for the same work, so CI=1 widens the bound to 1 s,
 # as tests/jobs/test_perf.py does: still far below what catastrophic regex backtracking costs.
-SCORE_BUDGET_S = 1.0 if os.environ.get("CI") else 0.2
+# SCORE_BUDGET_S sets it explicitly: CI also runs this test alone, without coverage or other
+# workers, at 0.3 s (issue #16), so a slowdown the 1 s bound would hide still turns CI red.
+SCORE_BUDGET_S = float(os.environ.get("SCORE_BUDGET_S") or (1.0 if os.environ.get("CI") else 0.2))
 
 
 def test_long_text_is_bounded_and_fast() -> None:

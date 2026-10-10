@@ -144,11 +144,16 @@ def _sweep_id(value: str) -> uuid.UUID:
 
 def _start(
     sessions: sessionmaker[Session], user_id: uuid.UUID, now: datetime
-) -> SweepOut | uuid.UUID | None:
-    """The new sweep; the running sweep's id when there is one; None without enabled boards."""
+) -> SweepOut | uuid.UUID | str:
+    """The new sweep; the running sweep's id when there is one; the reason it cannot start (a
+    message for a 422) without enabled boards or with a search section that no longer validates."""
     with sessions() as db:
-        if not sweep.enabled_boards(sweep.user_search(db, user_id)):
-            return None
+        try:
+            search = sweep.load_search(db, user_id)
+        except sweep.InvalidSearchError:
+            return sweep.SEARCH_INVALID
+        if not sweep.enabled_boards(search):
+            return sweep.NO_BOARDS
         try:
             row = sweep.start(db, user_id, SweepTrigger.manual, now)
             out = sweep_out(row)
@@ -169,7 +174,10 @@ def _start(
     responses={
         **_401,
         409: {"model": SweepConflictOut, "description": "A sweep is already running"},
-        422: {"model": ErrorOut, "description": "No enabled board in the search section"},
+        422: {
+            "model": ErrorOut,
+            "description": "No enabled board, or a search section to save again",
+        },
         503: {"model": ErrorOut, "description": "The queue is unavailable"},
     },
     dependencies=[Depends(_no_store)],
@@ -180,8 +188,8 @@ async def start_sweep(user: CurrentUser, request: Request) -> Any:
     sessions = sessions_of(request)
     now = deps.clock(request)
     started = await run_in_threadpool(_start, sessions, user.id, now)
-    if started is None:
-        raise HTTPException(status_code=422, detail=sweep.NO_BOARDS)
+    if isinstance(started, str):
+        raise HTTPException(status_code=422, detail=started)
     if isinstance(started, uuid.UUID):
         body = SweepConflictOut(detail=RUNNING, sweep_id=started).model_dump(mode="json")
         return JSONResponse(status_code=409, content=body, headers=NO_STORE)

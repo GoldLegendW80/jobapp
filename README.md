@@ -103,8 +103,17 @@ it was stopped; newest 10 kept, separate from the nightly ones), `compose up --w
 and the public URL in the run's summary. If `up` or a migration fails, the previous files
 (`compose.yml`, the Caddyfile and the rest of the tree, `.env` never touched) and the `:previous`
 images are put back and started again; a migration runs in one transaction and rolls back, and for data the
-log names the predeploy dump to restore with `ops/db.sh restore-live`. A started deploy is never
-cancelled. `gh workflow run deploy.yml -f ref=<branch or sha>` deploys a branch by hand to test it
+log names the predeploy dump to restore with `ops/db.sh restore-live`. Any other failure between
+the sync and the migrations (the backup included) puts the previous files and `:latest` tags back
+without restarting anything. A smoke that fails after the migrations does not roll back, on
+purpose: the run is red, `.deployed-commit` keeps the previous commit, and going back is a human
+decision (the previous code may not run on the migrated schema). When the api is not running at
+deploy time, the log warns that `jobapp-api:previous` is older than the saved tree. Before any of
+this, `ops/env_check.sh` checks the syntax of `~/jobapp/.env` (`KEY=VALUE` with a shell variable
+name, comments and blank lines only; a value with spaces or quotes in quotes, closed on its line),
+naming each bad line by its number and never printing it; `./deploy.sh` runs the same check on
+`.env.jetson` and on the Jetson's `.env` in its preflight, and `tests/jetson_smoke.sh` runs it
+too. A started deploy is never cancelled. `gh workflow run deploy.yml -f ref=<branch or sha>` deploys a branch by hand to test it
 before the merge (the next merge redeploys `main`); the workflow itself always comes from `main`.
 Each ref has its own concurrency group: GitHub keeps one pending run per group and replaces an
 older pending one, so a branch dispatch never displaces a pending `main` deploy.
@@ -164,7 +173,9 @@ answers**. A new key is needed only if `tsstate` is deleted or the node is remov
 tailnet. Without a key and without a saved login the container never turns healthy (its logs say
 `To authenticate, visit: ...`, then `failed to auth tailscale`), so a deploy fails loudly. The api
 reads the same `.env`, so the key is in its environment until it is removed: another reason to
-remove it. Funnel needs the `funnel` node attribute in the tailnet policy (granted to
+remove it. `./deploy.sh` warns at its end, once the node is logged in, when `TS_AUTHKEY` still has
+a value in `.env.jetson` or in the Jetson's `.env` (it never edits either file), and
+`tests/jetson_smoke.sh` warns the same way; the key was removed from the Jetson on 2026-10-10. Funnel needs the `funnel` node attribute in the tailnet policy (granted to
 `autogroup:member`) and HTTPS certificates enabled in the tailnet, both set on 2026-10-10.
 
 **Headers.** `tailscale/serve.json` (its folder mounted read only, `TS_SERVE_CONFIG`) terminates TLS for

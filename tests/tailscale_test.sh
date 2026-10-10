@@ -108,7 +108,20 @@ assert "tsstate" in cfg["volumes"], cfg["volumes"]
 assert int(ts["mem_limit"]) == 128 * 1024**2, ts["mem_limit"]
 assert ts["restart"] == "unless-stopped", ts["restart"]
 test = " ".join(ts["healthcheck"]["test"])
-assert "tailscale status --json" in test and '"BackendState": "Running"' in test, test
+assert "tailscale status --json" in test, test
+# The healthcheck's grep on status JSON spaced as tailscale prints it and compact (issue #18):
+# Running passes whatever the whitespace around the colon, any other state fails.
+import subprocess
+grep = test.split("|", 1)[1].strip()
+for sample, want in (
+    ('{\n  "BackendState": "Running",\n  "Self": {}\n}', 0),
+    ('{"BackendState":"Running","Self":{}}', 0),
+    ('{"BackendState" :\t "Running"}', 0),
+    ('{\n  "BackendState": "NeedsLogin",\n}', 1),
+    ('{"BackendState":"Starting"}', 1),
+):
+    rc = subprocess.run(["sh", "-c", grep], input=sample, text=True).returncode
+    assert rc == want, (sample, rc)
 assert ts["depends_on"]["caddy"]["condition"] == "service_healthy", ts["depends_on"]
 for name, svc in services.items():
     assert not svc.get("privileged"), f"{name} is privileged"

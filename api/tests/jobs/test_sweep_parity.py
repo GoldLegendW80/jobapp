@@ -106,41 +106,36 @@ def test_converted_terms_match_the_live_boards_json() -> None:
 
 
 # --- stored lists that do not compile -----------------------------------------------------------
+# No fallback (issue #11): the profile refuses a list that does not compile, so the matcher never
+# drops broken terms. A list that still fails reaches the claim, which fails the sweep
+# (tests/jobs/test_sweep.py, test_a_list_that_stops_compiling_fails_the_sweep_closed).
 
 
-def test_a_list_that_does_not_compile_keeps_its_good_terms(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    from app.jobs.sweep import AnyOf, term_matcher
+def test_a_list_that_does_not_compile_raises_instead_of_dropping_terms() -> None:
+    import re
 
-    terms = ["(?P<x>agent)", "(?P<x>llm)", "("]
-    matcher = term_matcher(terms, True, "title_include")
-    assert isinstance(matcher, AnyOf)
-    assert matcher.search("LLM engineer") is not None
-    assert matcher.search("Agent builder") is not None
-    assert matcher.search("Accountant") is None
-    [record] = [r for r in caplog.records if "does not compile" in r.getMessage()]
-    assert (record.list, record.terms, record.kept) == ("title_include", 3, 2)
-    assert "agent" not in record.getMessage()
-
-
-def test_a_list_with_no_good_term_matches_nothing() -> None:
     from app.jobs.sweep import term_matcher
 
-    broken = term_matcher(["(", "[a-"], True, "location")
-    assert broken is not None
-    assert broken.search("Paris") is None
-    assert term_matcher([], True, "location") is None  # empty: no restriction
+    with pytest.raises(re.error):
+        term_matcher(["(?P<x>agent)", "(?P<x>llm)"], True)
+    with pytest.raises(re.error):
+        term_matcher(["security", "("], True)  # an exclude list is never weakened
 
 
-def test_a_broken_include_list_keeps_no_posting() -> None:
+def test_an_empty_list_is_no_restriction_and_a_valid_one_compiles() -> None:
     from app.jobs.sweep import term_matcher
 
-    filt = SearchFilter(
-        include=term_matcher(["("], True, "title_include"),
-        exclude=None,
-        location=None,
-        contract_types=frozenset(),
-        days=30,
-    )
-    assert filt.terms_reason("AI Engineer", "Paris", "2026-10-08", None, "2026-09-01") == "title"
+    assert term_matcher([], True) is None
+    pattern = term_matcher(["agent", "llm"], False)
+    assert pattern is not None
+    assert pattern.search("LLM engineer") is not None
+    assert pattern.search("Accountant") is None
+
+
+def test_the_profile_refuses_the_lists_the_matcher_would_not_compile() -> None:
+    """What makes the fallback dead: the same lists never validate."""
+    for terms in (["(?P<x>agent)", "(?P<x>llm)"], ["("], ["[a-"]):
+        broken = {"terms": terms, "advanced_regex": True}
+        data = {**EXPORT["sections"]["search"], "title_exclude": broken}
+        with pytest.raises(ValueError, match="title_exclude"):
+            SearchSection.model_validate(data)
