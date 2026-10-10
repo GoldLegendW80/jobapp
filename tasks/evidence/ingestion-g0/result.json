@@ -1,0 +1,6433 @@
+{
+ "sdk": "0.2.163",
+ "bundled_cli": "2.1.286",
+ "platform": "darwin arm64",
+ "python": "3.14.8",
+ "pillow": "12.3.0",
+ "stub": "tests/anthropic_stub.py",
+ "cases": [
+  {
+   "case": "text_small",
+   "describes": "control: a 2,000 character text result",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.5,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "text",
+        "chars": 2000,
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       }
+      ],
+      "echoed_content_json_chars": 2030,
+      "echoed_tool_use_result_json_chars": 2030
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "text_small",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "text_small",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 4189,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "text",
+         "chars": 2000,
+         "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "png_1568",
+   "describes": "one 1568 px PNG",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 16694
+       }
+      ],
+      "echoed_content_json_chars": 16696,
+      "echoed_tool_use_result_json_chars": 16696
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "png_1568",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "png_1568",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 18855,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/png",
+         "base64_chars": 16608,
+         "same_bytes_as_tool_returned": "png_1568#0",
+         "bytes": 12456,
+         "format": "PNG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_100k",
+   "describes": "one 1568 px JPEG of about 100 kB, SDK default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       }
+      ],
+      "echoed_content_json_chars": 133185,
+      "echoed_tool_use_result_json_chars": 133185
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_100k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_100k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 135344,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#0",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k",
+   "describes": "one 1568 px JPEG of about 200 kB, SDK default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 267404,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#0",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_300k",
+   "describes": "one 1568 px JPEG of about 300 kB, SDK default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 404359
+       }
+      ],
+      "echoed_content_json_chars": 404361,
+      "echoed_tool_use_result_json_chars": 404361
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_300k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_300k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 406520,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 404272,
+         "same_bytes_as_tool_returned": "jpeg_300k#0",
+         "bytes": 303202,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_380k",
+   "describes": "one 1568 px JPEG of about 380 kB, SDK default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 512931
+       }
+      ],
+      "echoed_content_json_chars": 512933,
+      "echoed_tool_use_result_json_chars": 512933
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_380k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_380k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 515092,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 512844,
+         "same_bytes_as_tool_returned": "jpeg_380k#0",
+         "bytes": 384631,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_450k",
+   "describes": "one 1568 px JPEG of about 450 kB, SDK default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": "CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 bytes...",
+   "result": {},
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_450k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_450k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 601156,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598908,
+         "same_bytes_as_tool_returned": "jpeg_450k#0",
+         "bytes": 449179,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_600k",
+   "describes": "one 1568 px JPEG of about 600 kB, SDK default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": "CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 bytes...",
+   "result": {},
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_600k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_600k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 596204,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 593956,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 445465,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_800k",
+   "describes": "one 1568 px JPEG of about 800 kB, SDK default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 455303
+       }
+      ],
+      "echoed_content_json_chars": 455305,
+      "echoed_tool_use_result_json_chars": 455305
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_800k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_800k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 457464,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 455216,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 341412,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_1000k",
+   "describes": "one 1568 px JPEG of about 1000 kB, SDK default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": "CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 bytes...",
+   "result": {},
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_1000k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_1000k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 600888,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598640,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 448979,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_3000k",
+   "describes": "one 1568 px JPEG of about 3000 kB, SDK default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": "CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 bytes...",
+   "result": {},
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_3000k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_3000k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 655372,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 653124,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 489843,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_300k_bigbuf",
+   "describes": "one 1568 px JPEG of about 300 kB, max_buffer_size 64 MiB",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 404359
+       }
+      ],
+      "echoed_content_json_chars": 404361,
+      "echoed_tool_use_result_json_chars": 404361
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_300k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_300k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 406520,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 404272,
+         "same_bytes_as_tool_returned": "jpeg_300k#0",
+         "bytes": 303202,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_380k_bigbuf",
+   "describes": "one 1568 px JPEG of about 380 kB, max_buffer_size 64 MiB",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 512931
+       }
+      ],
+      "echoed_content_json_chars": 512933,
+      "echoed_tool_use_result_json_chars": 512933
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_380k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_380k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 515092,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 512844,
+         "same_bytes_as_tool_returned": "jpeg_380k#0",
+         "bytes": 384631,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_450k_bigbuf",
+   "describes": "one 1568 px JPEG of about 450 kB, max_buffer_size 64 MiB",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 598995
+       }
+      ],
+      "echoed_content_json_chars": 598997,
+      "echoed_tool_use_result_json_chars": 598997
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_450k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_450k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 601156,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598908,
+         "same_bytes_as_tool_returned": "jpeg_450k#0",
+         "bytes": 449179,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_600k_bigbuf",
+   "describes": "one 1568 px JPEG of about 600 kB, max_buffer_size 64 MiB",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 594043
+       }
+      ],
+      "echoed_content_json_chars": 594045,
+      "echoed_tool_use_result_json_chars": 594045
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_600k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_600k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 596204,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 593956,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 445465,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_800k_bigbuf",
+   "describes": "one 1568 px JPEG of about 800 kB, max_buffer_size 64 MiB",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 455303
+       }
+      ],
+      "echoed_content_json_chars": 455305,
+      "echoed_tool_use_result_json_chars": 455305
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_800k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_800k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 457464,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 455216,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 341412,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_1000k_bigbuf",
+   "describes": "one 1568 px JPEG of about 1000 kB, max_buffer_size 64 MiB",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 598727
+       }
+      ],
+      "echoed_content_json_chars": 598729,
+      "echoed_tool_use_result_json_chars": 598729
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_1000k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_1000k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 600888,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598640,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 448979,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_3000k_bigbuf",
+   "describes": "one 1568 px JPEG of about 3000 kB, max_buffer_size 64 MiB",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.4,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 653211
+       }
+      ],
+      "echoed_content_json_chars": 653213,
+      "echoed_tool_use_result_json_chars": 653213
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_3000k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_3000k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 655372,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 653124,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 489843,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_6m_bigbuf",
+   "describes": "one 2000 px JPEG of about 6 MB (over the API's 5 MB per image), 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.4,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 548715
+       }
+      ],
+      "echoed_content_json_chars": 548717,
+      "echoed_tool_use_result_json_chars": 548717
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_6m_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_6m_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 550876,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 548628,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 411471,
+         "format": "JPEG",
+         "size": [
+          2000,
+          2000
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_4000px",
+   "describes": "one 4000 px JPEG of about 1.5 MB, 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 189411
+       }
+      ],
+      "echoed_content_json_chars": 189413,
+      "echoed_tool_use_result_json_chars": 189413
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_4000px",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_4000px",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 191572,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 189324,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 141991,
+         "format": "JPEG",
+         "size": [
+          2000,
+          2000
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "three_jpeg_100k_one_result",
+   "describes": "three 100 kB JPEGs and a text block in one tool result, default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "text",
+        "chars": 11,
+        "head": "three pages"
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       }
+      ],
+      "echoed_content_json_chars": 399596,
+      "echoed_tool_use_result_json_chars": 399596
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "three_jpeg_100k_one_result",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "three_jpeg_100k_one_result",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 401755,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "text",
+         "chars": 11,
+         "head": "three pages"
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#2",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#2",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#2",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "three_jpeg_200k_one_result",
+   "describes": "three 200 kB JPEGs and a text block in one tool result, default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 6.3,
+   "error": "CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 bytes...",
+   "result": {},
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "three_jpeg_200k_one_result",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "three_jpeg_200k_one_result",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 797935,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "text",
+         "chars": 11,
+         "head": "three pages"
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#2",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#2",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#2",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "three_jpeg_200k_one_result_bigbuf",
+   "describes": "three 200 kB JPEGs and a text block in one tool result, 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "text",
+        "chars": 11,
+        "head": "three pages"
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 795776,
+      "echoed_tool_use_result_json_chars": 795776
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "three_jpeg_200k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "three_jpeg_200k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 797935,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "text",
+         "chars": 11,
+         "head": "three pages"
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#2",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#2",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#2",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "five_calls_jpeg_200k",
+   "describes": "five tool calls in a row, one 200 kB JPEG each, default buffer",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 6
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    },
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    },
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    },
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    },
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "five_calls_jpeg_200k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "five_calls_jpeg_200k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 267404,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#0",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "case": "five_calls_jpeg_200k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 8,
+     "body_json_chars": 532990,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#1",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#1",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "case": "five_calls_jpeg_200k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 11,
+     "body_json_chars": 798576,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#2",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#2",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#2",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "case": "five_calls_jpeg_200k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 14,
+     "body_json_chars": 1064162,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#3",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#3",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#3",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#3",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "case": "five_calls_jpeg_200k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 17,
+     "body_json_chars": 1329896,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#4",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#4",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#4",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#4",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#4",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "three_calls_jpeg_1000k_bigbuf",
+   "describes": "three tool calls in a row, one 1 MB JPEG each, 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.5,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 4
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 598727
+       }
+      ],
+      "echoed_content_json_chars": 598729,
+      "echoed_tool_use_result_json_chars": 598729
+     }
+    },
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 598727
+       }
+      ],
+      "echoed_content_json_chars": 598729,
+      "echoed_tool_use_result_json_chars": 598729
+     }
+    },
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 598727
+       }
+      ],
+      "echoed_content_json_chars": 598729,
+      "echoed_tool_use_result_json_chars": 598729
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "three_calls_jpeg_1000k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "three_calls_jpeg_1000k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 600888,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598640,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 448979,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "case": "three_calls_jpeg_1000k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 8,
+     "body_json_chars": 1199958,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598640,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 448979,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598640,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 448979,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "case": "three_calls_jpeg_1000k_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 11,
+     "body_json_chars": 1799028,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598640,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 448979,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598640,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 448979,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      },
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 598640,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 448979,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_100",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=100",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "100"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 4671
+       },
+       {
+        "type": "text",
+        "chars": 312,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 100 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be"
+       }
+      ],
+      "echoed_content_json_chars": 5019,
+      "echoed_tool_use_result_json_chars": 5019
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_100",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_100",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 7178,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 4584,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 3438,
+         "format": "JPEG",
+         "size": [
+          400,
+          400
+         ]
+        },
+        {
+         "type": "text",
+         "chars": 312,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 100 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_1000",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1000",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1000"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 4671
+       },
+       {
+        "type": "text",
+        "chars": 313,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 1000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may b"
+       }
+      ],
+      "echoed_content_json_chars": 5020,
+      "echoed_tool_use_result_json_chars": 5020
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_1000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_1000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 7179,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 4584,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 3438,
+         "format": "JPEG",
+         "size": [
+          400,
+          400
+         ]
+        },
+        {
+         "type": "text",
+         "chars": 313,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 1000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_1500",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1500",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1500"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 4671
+       },
+       {
+        "type": "text",
+        "chars": 313,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 1500 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may b"
+       }
+      ],
+      "echoed_content_json_chars": 5020,
+      "echoed_tool_use_result_json_chars": 5020
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_1500",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_1500",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 7179,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 4584,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 3438,
+         "format": "JPEG",
+         "size": [
+          400,
+          400
+         ]
+        },
+        {
+         "type": "text",
+         "chars": 313,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 1500 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_1600",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1600",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1600"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_1600",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_1600",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 267404,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#0",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_1700",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1700",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1700"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_1700",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_1700",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 267404,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#0",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_1800",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1800",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1800"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_1800",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_1800",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 267404,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#0",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_1900",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1900",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1900"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_1900",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_1900",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 267404,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#0",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_2000",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=2000",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "2000"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_2000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_2000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 267404,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#0",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_3000",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=3000",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "3000"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_3000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_3000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 267404,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#0",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_200k_limit_6000",
+   "describes": "one 1568 px 200 kB JPEG with MAX_MCP_OUTPUT_TOKENS=6000",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "6000"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 265243
+       }
+      ],
+      "echoed_content_json_chars": 265245,
+      "echoed_tool_use_result_json_chars": 265245
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_200k_limit_6000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_200k_limit_6000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 267404,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 265156,
+         "same_bytes_as_tool_returned": "jpeg_200k#0",
+         "bytes": 198865,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_784px_limit_300",
+   "describes": "one 784 px 60 kB JPEG with MAX_MCP_OUTPUT_TOKENS=300",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "300"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 4699
+       },
+       {
+        "type": "text",
+        "chars": 312,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 300 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be"
+       }
+      ],
+      "echoed_content_json_chars": 5047,
+      "echoed_tool_use_result_json_chars": 5047
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_784px_limit_300",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_784px_limit_300",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 7206,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 4612,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 3459,
+         "format": "JPEG",
+         "size": [
+          400,
+          400
+         ]
+        },
+        {
+         "type": "text",
+         "chars": 312,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 300 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_784px_limit_900",
+   "describes": "one 784 px 60 kB JPEG with MAX_MCP_OUTPUT_TOKENS=900",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "900"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 3379
+       },
+       {
+        "type": "text",
+        "chars": 312,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 900 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be"
+       }
+      ],
+      "echoed_content_json_chars": 3727,
+      "echoed_tool_use_result_json_chars": 3727
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_784px_limit_900",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_784px_limit_900",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 5886,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 3292,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 2469,
+         "format": "JPEG",
+         "size": [
+          196,
+          196
+         ]
+        },
+        {
+         "type": "text",
+         "chars": 312,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 900 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_784px_limit_1500",
+   "describes": "one 784 px 60 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1500",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1500"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 3379
+       },
+       {
+        "type": "text",
+        "chars": 313,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 1500 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may b"
+       }
+      ],
+      "echoed_content_json_chars": 3728,
+      "echoed_tool_use_result_json_chars": 3728
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_784px_limit_1500",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_784px_limit_1500",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 5887,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 3292,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 2469,
+         "format": "JPEG",
+         "size": [
+          196,
+          196
+         ]
+        },
+        {
+         "type": "text",
+         "chars": 313,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 1500 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_784px_limit_1600",
+   "describes": "one 784 px 60 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1600",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1600"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 79639
+       }
+      ],
+      "echoed_content_json_chars": 79641,
+      "echoed_tool_use_result_json_chars": 79641
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_784px_limit_1600",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_784px_limit_1600",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 81800,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 79552,
+         "same_bytes_as_tool_returned": "jpeg_784px#0",
+         "bytes": 59662,
+         "format": "JPEG",
+         "size": [
+          784,
+          784
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_784px_limit_1700",
+   "describes": "one 784 px 60 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1700",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1700"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 79639
+       }
+      ],
+      "echoed_content_json_chars": 79641,
+      "echoed_tool_use_result_json_chars": 79641
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_784px_limit_1700",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_784px_limit_1700",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 81800,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 79552,
+         "same_bytes_as_tool_returned": "jpeg_784px#0",
+         "bytes": 59662,
+         "format": "JPEG",
+         "size": [
+          784,
+          784
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_784px_limit_1800",
+   "describes": "one 784 px 60 kB JPEG with MAX_MCP_OUTPUT_TOKENS=1800",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1800"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 79639
+       }
+      ],
+      "echoed_content_json_chars": 79641,
+      "echoed_tool_use_result_json_chars": 79641
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_784px_limit_1800",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_784px_limit_1800",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 81800,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 79552,
+         "same_bytes_as_tool_returned": "jpeg_784px#0",
+         "bytes": 59662,
+         "format": "JPEG",
+         "size": [
+          784,
+          784
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_784px_limit_2000",
+   "describes": "one 784 px 60 kB JPEG with MAX_MCP_OUTPUT_TOKENS=2000",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "2000"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 79639
+       }
+      ],
+      "echoed_content_json_chars": 79641,
+      "echoed_tool_use_result_json_chars": 79641
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_784px_limit_2000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_784px_limit_2000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 81800,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 79552,
+         "same_bytes_as_tool_returned": "jpeg_784px#0",
+         "bytes": 59662,
+         "format": "JPEG",
+         "size": [
+          784,
+          784
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "jpeg_1000k_limit_1000_bigbuf",
+   "describes": "one 1 MB JPEG with MAX_MCP_OUTPUT_TOKENS=1000, 64 MiB buffer",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1000"
+   },
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 4691
+       },
+       {
+        "type": "text",
+        "chars": 313,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 1000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may b"
+       }
+      ],
+      "echoed_content_json_chars": 5040,
+      "echoed_tool_use_result_json_chars": 5040
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "jpeg_1000k_limit_1000_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "jpeg_1000k_limit_1000_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 7199,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 4604,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 3452,
+         "format": "JPEG",
+         "size": [
+          400,
+          400
+         ]
+        },
+        {
+         "type": "text",
+         "chars": 313,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 1000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "eight_jpeg_100k_one_result_bigbuf",
+   "describes": "eight 100 kB JPEGs in one tool result, default limit, 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       }
+      ],
+      "echoed_content_json_chars": 1065480,
+      "echoed_tool_use_result_json_chars": 1065480
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "eight_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "eight_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 1067639,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#7",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#7",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#7",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#7",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#7",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#7",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#7",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#7",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "12_jpeg_100k_one_result_bigbuf",
+   "describes": "12 JPEGs of 100 kB in one tool result, default limit, 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       }
+      ],
+      "echoed_content_json_chars": 1598220,
+      "echoed_tool_use_result_json_chars": 1598220
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "12_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "12_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 1600379,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#11",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "14_jpeg_100k_one_result_bigbuf",
+   "describes": "14 JPEGs of 100 kB in one tool result, default limit, 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       }
+      ],
+      "echoed_content_json_chars": 1864590,
+      "echoed_tool_use_result_json_chars": 1864590
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "14_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "14_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 1866749,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#13",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "15_jpeg_100k_one_result_bigbuf",
+   "describes": "15 JPEGs of 100 kB in one tool result, default limit, 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       }
+      ],
+      "echoed_content_json_chars": 1997775,
+      "echoed_tool_use_result_json_chars": 1997775
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "15_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "15_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 1999934,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#14",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "16_jpeg_100k_one_result_bigbuf",
+   "describes": "16 JPEGs of 100 kB in one tool result, default limit, 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 4671
+       },
+       {
+        "type": "text",
+        "chars": 314,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 25000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may "
+       }
+      ],
+      "echoed_content_json_chars": 2002796,
+      "echoed_tool_use_result_json_chars": 2002796
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "16_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "16_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 2004955,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#15",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 4584,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 3438,
+         "format": "JPEG",
+         "size": [
+          400,
+          400
+         ]
+        },
+        {
+         "type": "text",
+         "chars": 314,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 25000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "20_jpeg_100k_one_result_bigbuf",
+   "describes": "20 JPEGs of 100 kB in one tool result, default limit, 64 MiB buffer",
+   "env": {},
+   "max_buffer_size": 67108864,
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 133183
+       },
+       {
+        "type": "image",
+        "keys": [
+         "source",
+         "type"
+        ],
+        "json_chars": 4671
+       },
+       {
+        "type": "text",
+        "chars": 314,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 25000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may "
+       }
+      ],
+      "echoed_content_json_chars": 2002796,
+      "echoed_tool_use_result_json_chars": 2002796
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "20_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "20_jpeg_100k_one_result_bigbuf",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 2004955,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 133096,
+         "same_bytes_as_tool_returned": "jpeg_100k#19",
+         "bytes": 99821,
+         "format": "JPEG",
+         "size": [
+          1568,
+          1568
+         ]
+        },
+        {
+         "type": "image",
+         "source_type": "base64",
+         "media_type": "image/jpeg",
+         "base64_chars": 4584,
+         "same_bytes_as_tool_returned": null,
+         "bytes": 3438,
+         "format": "JPEG",
+         "size": [
+          400,
+          400
+         ]
+        },
+        {
+         "type": "text",
+         "chars": 314,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 25000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "text_30k",
+   "describes": "a 30,000 character text result (the read_document cap)",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "text",
+        "chars": 30000,
+        "head": "mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot "
+       }
+      ],
+      "echoed_content_json_chars": 30030,
+      "echoed_tool_use_result_json_chars": 30030
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "text_30k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "text_30k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 32189,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "text",
+         "chars": 30000,
+         "head": "mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot "
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "text_49k",
+   "describes": "a 49,000 character text result",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "text",
+        "chars": 49000,
+        "head": "mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot "
+       }
+      ],
+      "echoed_content_json_chars": 49030,
+      "echoed_tool_use_result_json_chars": 49030
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "text_49k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "text_49k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 51189,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "text",
+         "chars": 49000,
+         "head": "mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot "
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  },
+  {
+   "case": "text_120k",
+   "describes": "a 120,000 character text result, default limit",
+   "env": {},
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.2,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "str",
+        "chars": 1691,
+        "head": "Error: result (120,000 characters across 1 line) exceeds maximum allowed tokens. Output has been saved to /var/folders/7w/05_t27m941z_0nx0r35kky100000gn/T/g0-spike-pz7_hozx/config/projects/-private-var-folders-7w-05-t27m941z-0nx0r35kky100000gn-T-g0-spike-pz7-hozx-work/13b8b3de-0a2e-406c-94bb-0ce0e65"
+       }
+      ],
+      "echoed_content_json_chars": 1702,
+      "echoed_tool_use_result_json_chars": 1702
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "text_120k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "text_120k",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 3861,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "str",
+         "chars": 1691,
+         "head": "Error: result (120,000 characters across 1 line) exceeds maximum allowed tokens. Output has been saved to /var/folders/7w/05_t27m941z_0nx0r35kky100000gn/T/g0-spike-pz7_hozx/config/projects/-private-var-folders-7w-05-t27m941z-0nx0r35kky100000gn-T-g0-spike-pz7-hozx-work/13b8b3de-0a2e-406c-94bb-0ce0e65c8548/tool-results/mcp-app-view_image-1791639319071.txt.\nFormat: Plain text\nUse offset and limit par"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [
+    "config/projects/-private-var-folders-7w-05-t27m941z-0nx0r35kky100000gn-T-g0-spike-pz7-hozx-work/13b8b3de-0a2e-406c-94bb-0ce0e65c8548/tool-results/mcp-app-view_image-1791639319071.txt (120000 bytes)"
+   ],
+   "stderr_lines": 0
+  },
+  {
+   "case": "text_30k_limit_1000",
+   "describes": "a 30,000 character text result with MAX_MCP_OUTPUT_TOKENS=1000",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1000"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "str",
+        "chars": 1690,
+        "head": "Error: result (30,000 characters across 1 line) exceeds maximum allowed tokens. Output has been saved to /var/folders/7w/05_t27m941z_0nx0r35kky100000gn/T/g0-spike-l8jh60u2/config/projects/-private-var-folders-7w-05-t27m941z-0nx0r35kky100000gn-T-g0-spike-l8jh60u2-work/12e1fb65-e4ec-44de-bf24-108a4eaf"
+       }
+      ],
+      "echoed_content_json_chars": 1701,
+      "echoed_tool_use_result_json_chars": 1701
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "text_30k_limit_1000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "text_30k_limit_1000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 3860,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "str",
+         "chars": 1690,
+         "head": "Error: result (30,000 characters across 1 line) exceeds maximum allowed tokens. Output has been saved to /var/folders/7w/05_t27m941z_0nx0r35kky100000gn/T/g0-spike-l8jh60u2/config/projects/-private-var-folders-7w-05-t27m941z-0nx0r35kky100000gn-T-g0-spike-l8jh60u2-work/12e1fb65-e4ec-44de-bf24-108a4eaf1ac4/tool-results/mcp-app-view_image-1791639319327.txt.\nFormat: Plain text\nUse offset and limit para"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [
+    "config/projects/-private-var-folders-7w-05-t27m941z-0nx0r35kky100000gn-T-g0-spike-l8jh60u2-work/12e1fb65-e4ec-44de-bf24-108a4eaf1ac4/tool-results/mcp-app-view_image-1791639319327.txt (30000 bytes)"
+   ],
+   "stderr_lines": 0
+  },
+  {
+   "case": "text_and_image_limit_1000",
+   "describes": "30,000 characters of text plus one 200 kB JPEG, MAX_MCP_OUTPUT_TOKENS=1000",
+   "env": {
+    "MAX_MCP_OUTPUT_TOKENS": "1000"
+   },
+   "max_buffer_size": "SDK default, 1048576",
+   "seconds": 0.3,
+   "error": null,
+   "result": {
+    "subtype": "success",
+    "is_error": false,
+    "num_turns": 2
+   },
+   "sdk_side": [
+    {
+     "tool_use": "mcp__app__view_image"
+    },
+    {
+     "tool_result": {
+      "is_error": false,
+      "content": [
+       {
+        "type": "text",
+        "chars": 4000,
+        "head": "mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot "
+       },
+       {
+        "type": "text",
+        "chars": 313,
+        "head": "\n\n[OUTPUT TRUNCATED - exceeded 1000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may b"
+       }
+      ],
+      "echoed_content_json_chars": 4377,
+      "echoed_tool_use_result_json_chars": 4377
+     }
+    }
+   ],
+   "requests_to_the_stub": [
+    {
+     "case": "text_and_image_limit_1000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 2,
+     "body_json_chars": 1818,
+     "tool_results": []
+    },
+    {
+     "case": "text_and_image_limit_1000",
+     "model": "claude-opus-5-5",
+     "tools_offered": [
+      "mcp__app__view_image"
+     ],
+     "messages": 5,
+     "body_json_chars": 6536,
+     "tool_results": [
+      {
+       "is_error": false,
+       "content": [
+        {
+         "type": "text",
+         "chars": 4000,
+         "head": "mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot "
+        },
+        {
+         "type": "text",
+         "chars": 313,
+         "head": "\n\n[OUTPUT TRUNCATED - exceeded 1000 token limit]\n\nThe tool output was truncated. If this MCP server provides pagination or filtering tools, use them to retrieve specific portions of the data. If pagination is not available, inform the user that you are working with truncated output and results may be incomplete."
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "scratch_files_over_20kB_at_the_end": [],
+   "stderr_lines": 0
+  }
+ ]
+}
