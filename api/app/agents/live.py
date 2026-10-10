@@ -50,8 +50,10 @@ Which agents are live, and when the api reads. An agent definition can turn its 
 no partial messages and creates no `LiveText`, and the run stream creates no `LiveFeed`, so
 nothing of such a run is ever written to Redis or read from it. A feed reads Redis only while
 its run is running (`LiveFeed.active`, told by the stream at each read of the log): never for a
-run still queued or already ended. While no block is being written it reads every IDLE_POLL_S,
-and every POLL_S once one is.
+run still queued or already ended. While the run is running it reads every POLL_S, block or no
+block. A slower cadence until a block appears was built in issue #80 and given up: the first
+characters of every block would show up to half a second late, to save a few GETs a second on
+a Redis that serves one box.
 """
 
 import asyncio
@@ -78,9 +80,6 @@ STORE_TIMEOUT_S = 1.0
 TTL_S = 20 * 60
 # After a failed read the feed leaves Redis alone for this long.
 READ_BACKOFF_S = 5.0
-# While its run is running and no block is being written, the feed reads this often: as often
-# as the stream reads the log (app.sse.replay, interval_s).
-IDLE_POLL_S = 0.5
 # After a failed write the worker leaves Redis alone for this long, doubling at each failure in
 # a row up to the maximum; a success starts over.
 WRITE_BACKOFF_S = 5.0
@@ -475,8 +474,7 @@ class LiveFeed:
     """One connection's view of a run's live text: what `app.sse.replay` polls between its reads
     of the stored steps (module docstring). `stored(kinds)` is told every stored step the
     connection sends, so the feed knows which blocks are already complete, and `active(running)`
-    whether the run is running: the store is read only then. `idle_s` is how often it is read
-    while no block is being written (0: at every poll)."""
+    whether the run is running: the store is read only then."""
 
     def __init__(
         self,
@@ -487,7 +485,6 @@ class LiveFeed:
         backoff_s: float = READ_BACKOFF_S,
         timeout_s: float = STORE_TIMEOUT_S,
         running: bool = True,
-        idle_s: float = 0.0,
     ) -> None:
         self._store = store
         self._run_id = run_id
@@ -495,8 +492,6 @@ class LiveFeed:
         self._backoff_s = backoff_s
         self._timeout_s = timeout_s
         self._running = running
-        self._idle_s = idle_s
-        self._idle_until = 0.0
         self.reads = 0  # times the store was read (tests, never logged)
         self._block: int | None = None
         self._bytes = 0
@@ -514,15 +509,12 @@ class LiveFeed:
     def active(self, running: bool) -> None:
         """Whether the run is running, as the stream just read it. A run that is queued has no
         block yet and one that has ended has none any more: the store is not read for them."""
-        if running and not self._running:
-            self._idle_until = 0.0  # it just started: look at once
         self._running = running
 
     async def poll(self, last: int) -> sse.Transient:
         if not self._running:
             return sse.Transient()
-        now = self._clock()
-        if now < self._quiet_until or now < self._idle_until:
+        if self._clock() < self._quiet_until:
             return sse.Transient()
         self.reads += 1
         try:
@@ -538,7 +530,6 @@ class LiveFeed:
         if chunk is None:
             # The block that was live is over: its stored step is there, or about to be.
             ended, self._present = self._present, False
-            self._idle_until = self._clock() + self._idle_s
             return sse.Transient(read_now=ended)
         self._present = True
         if chunk.after < self._text_seq:

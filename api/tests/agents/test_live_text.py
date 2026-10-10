@@ -700,27 +700,19 @@ def test_two_tabs_and_a_slow_client_see_the_same_answer() -> None:
     assert slow_events < len(pieces_of(text, 3)) / 20
 
 
-# --- the same guarantee with idle polling (issue #80) -------------------------------------------
+# --- the same guarantee with a feed that reads only while the run is running (issue #80) --------
 
 
-class IdleWorld(World):
-    """The world as the run stream sees it since issue #80: a feed that starts idle, is told at
-    every read of the log whether the run is running, and reads the store only then, every
-    `idle_s` while no block is being written. The clock jumps by a random step at each look, so
-    the feed skips some polls and not others."""
+class GatedWorld(World):
+    """The world as the run stream sees it since issue #80: a feed that starts idle and is told
+    at every read of the log whether the run is running, and reads the store only then."""
 
-    def __init__(self, changes: list[tuple[Any, ...]], seed: int = 0) -> None:
+    def __init__(self, changes: list[tuple[Any, ...]]) -> None:
         super().__init__(changes)
-        self.rng = random.Random(seed)  # noqa: S311, a test's dice
-        self.now = 100.0
         self.feeds: list[live.LiveFeed] = []
 
-    def clock(self) -> float:
-        self.now += self.rng.choice([0.0, 0.0, 0.1, 0.2, 0.3, 0.6])
-        return self.now
-
     def feed(self) -> live.LiveFeed:
-        made = live.LiveFeed(self.store, RUN, clock=self.clock, running=False, idle_s=0.5)
+        made = live.LiveFeed(self.store, RUN, running=False)
         self.feeds.append(made)
         return made
 
@@ -735,18 +727,20 @@ class IdleWorld(World):
 
 @pytest.mark.parametrize("clear_first", [True, False])
 @pytest.mark.parametrize("gap", [0, 2, 50])
-@pytest.mark.parametrize("seed", range(5))
-def test_idle_polling_reconnect_at_every_event_ends_with_the_full_text_once(
-    clear_first: bool, gap: int, seed: int
+def test_gated_reconnect_at_every_event_ends_with_the_full_text_once(
+    clear_first: bool, gap: int
 ) -> None:
     first, second = "Let me read: " + UNICODE, UNICODE * 3
     changes = answer_world(first, second, 7, clear_first=clear_first, ending="done")
     whole = Browser()
-    finish(IdleWorld(changes, seed), whole, [], 0)
+    finish(GatedWorld(changes), whole, [], 0)
+    total = len(whole.steps) + len(whole.shown)
     assert whole.texts() == [first, second]
-    for cut in range(1, len(whole.steps) + len(whole.shown) + 2):
+    assert len(whole.shown) > 10, "the answer must be seen partial before it is complete"
+    assert any(text != second and second.startswith(text) for _, text in whole.shown)
+    for cut in range(1, total + 1):
         browser = Browser()
-        world = IdleWorld(changes, seed * 1000 + cut)
+        world = GatedWorld(changes)
         finish(world, browser, [cut], gap)
         assert [step["seq"] for step in browser.steps] == list(range(1, len(world.steps) + 1)), cut
         assert browser.texts() == [first, second], cut
@@ -756,23 +750,8 @@ def test_idle_polling_reconnect_at_every_event_ends_with_the_full_text_once(
             assert world.truth[block].startswith(text), cut
 
 
-def test_idle_polling_still_shows_the_answer_partial() -> None:
-    """With a clock that moves a little at each look the idle cadence delays the first
-    characters of a block, it does not hide the block: partial states are still seen."""
-    seen = 0
-    for seed in range(20):
-        second = UNICODE * 30
-        changes = answer_world("first", second, 3, clear_first=False, ending="done")
-        world, browser = IdleWorld(changes, seed), Browser()
-        world.rng = random.Random(seed)  # noqa: S311
-        finish(world, browser, [], 0)
-        assert browser.texts() == ["first", second]
-        seen += sum(1 for _, text in browser.shown if text and text != second)
-    assert seen > 100
-
-
 @pytest.mark.parametrize("seed", range(40))
-def test_idle_polling_reconnecting_many_times_at_random_moments(seed: int) -> None:
+def test_gated_reconnecting_many_times_at_random_moments(seed: int) -> None:
     rng = random.Random(seed)  # noqa: S311, a test's dice
     first = "".join(rng.choice("ab é日\U0001f600\u0301") for _ in range(rng.randint(0, 40)))
     second = "".join(rng.choice("xyz \n&<>é日\U0001f469\u200d") for _ in range(rng.randint(1, 300)))
@@ -783,7 +762,7 @@ def test_idle_polling_reconnecting_many_times_at_random_moments(seed: int) -> No
         clear_first=rng.random() < 0.5,
         ending="done",
     )
-    world, browser = IdleWorld(changes, seed), Browser()
+    world, browser = GatedWorld(changes), Browser()
     cuts = [rng.randint(1, 6) for _ in range(rng.randint(1, 60))]
     finish(world, browser, cuts, rng.choice([0, 1, 3]))
     assert [step["seq"] for step in browser.steps] == list(range(1, len(world.steps) + 1))
@@ -792,77 +771,40 @@ def test_idle_polling_reconnecting_many_times_at_random_moments(seed: int) -> No
 
 
 @pytest.mark.parametrize("ending", ["cancelled", "failed"])
-def test_idle_polling_a_run_stopped_mid_answer_leaves_no_live_text(ending: str) -> None:
+def test_gated_a_run_stopped_mid_answer_leaves_no_live_text_whatever_the_cut(ending: str) -> None:
     changes = answer_world("first", UNICODE * 2, 5, clear_first=True, ending=ending)
-    for seed in range(60):
-        world, browser = IdleWorld(changes, seed), Browser()
-        finish(world, browser, [1 + seed % 9], 1)
-        assert browser.texts() == ["first"], seed
-        assert browser.live is None, seed
-        assert browser.ended, seed
-        # Nothing was read for the run before it was running, nor once it had ended.
-        assert all(not feed._running for feed in world.feeds[-1:]), seed
+    whole = Browser()
+    finish(GatedWorld(changes), whole, [], 0)
+    assert any(block == 2 and text for block, text in whole.shown)  # it was being shown
+    for cut in range(1, len(whole.steps) + len(whole.shown) + 1):
+        browser, world = Browser(), GatedWorld(changes)
+        finish(world, browser, [cut], 1)
+        assert browser.texts() == ["first"], cut  # the cut block is stored nowhere
+        assert browser.live is None, cut
+        assert browser.ended, cut
+        assert not world.feeds[-1]._running, cut  # the last feed was told the run had ended
 
 
 def test_a_feed_reads_the_store_only_while_the_run_is_running() -> None:
     store = RecordingStore()
-    now = [100.0]
-    feed = live.LiveFeed(store, RUN, clock=lambda: now[0], running=False, idle_s=0.5)
+    feed = live.LiveFeed(store, RUN, running=False)
     asyncio.run(store.open(RUN, 1, 0, None))
     asyncio.run(store.append(RUN, 1, "stale"))
     for _ in range(50):  # queued: a buffer left by an earlier life of the key is never read
         assert poll(feed, 0) == ([], False)
-        now[0] += 0.15
     assert feed.reads == 0
     feed.active(True)
     assert poll(feed, 0) == ([{"block": 1, "after": 0, "offset": 0, "text": "stale"}], False)
-    assert feed.reads == 1
+    assert poll(feed, 0) == ([], False)
+    assert feed.reads == 2  # running: every poll reads, block or no block
     feed.active(False)  # ended
     asyncio.run(store.append(RUN, 1, " more"))
     for _ in range(50):
         assert poll(feed, 0) == ([], False)
-        now[0] += 0.15
-    assert feed.reads == 1
-
-
-def test_a_feed_reads_slowly_until_a_block_is_being_written() -> None:
-    store = RecordingStore()
-    now = [100.0]
-    feed = live.LiveFeed(store, RUN, clock=lambda: now[0], running=False, idle_s=0.5)
+    assert feed.reads == 2
+    # Running again (a status read in between was stale): it continues where it was.
     feed.active(True)
-    # Running, no block yet: one read every 0.5 s whatever the number of polls.
-    for _ in range(40):  # 6 seconds of polls 150 ms apart
-        assert poll(feed, 0) == ([], False)
-        now[0] += 0.15
-    assert feed.reads == 10  # at 0 s, then at the first poll after each half second
-    # A block appears: it is found within the idle cadence, then read at every poll.
-    asyncio.run(store.open(RUN, 1, 0, None))
-    asyncio.run(store.append(RUN, 1, "a"))
-    now[0] += 0.5
-    assert poll(feed, 0) == ([{"block": 1, "after": 0, "offset": 0, "text": "a"}], False)
-    before = feed.reads
-    for letter in "bcdef":
-        asyncio.run(store.append(RUN, 1, letter))
-        now[0] += 0.15
-        assert poll(feed, 0)[0][0]["text"] == letter
-    assert feed.reads == before + 5
-    # The block ends: the log is read at once, and the cadence is slow again.
-    asyncio.run(store.clear(RUN, 1))
-    now[0] += 0.15
-    assert poll(feed, 0) == ([], True)
-    before = feed.reads
-    for _ in range(3):
-        now[0] += 0.15
-        assert poll(feed, 0) == ([], False)
-    assert feed.reads == before  # 0.45 s: not yet
-    now[0] += 0.1
-    assert poll(feed, 0) == ([], False)
-    assert feed.reads == before + 1
-    # A run that starts running is looked at at once, not after the idle wait.
-    feed.active(False)
-    feed.active(True)
-    asyncio.run(store.open(RUN, 2, 0, None))
-    assert poll(feed, 0) == ([{"block": 2, "after": 0, "offset": 0, "text": ""}], False)
+    assert poll(feed, 0) == ([{"block": 1, "after": 0, "offset": 5, "text": " more"}], False)
 
 
 def test_a_feed_made_without_options_reads_at_every_poll_as_before() -> None:

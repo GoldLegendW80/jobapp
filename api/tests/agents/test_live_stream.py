@@ -657,9 +657,7 @@ def listen(stage: Stage, run_id: uuid.UUID, seconds: float) -> list[Parsed]:
 
 def test_the_stream_reads_redis_only_while_the_run_is_running(stage: Stage, redis_url: str) -> None:
     """Queued, running without a block, running with one, ended: what the stream asks Redis in
-    each state, counted by Redis. The stage polls its transient source every 20 ms; the log
-    is read every half second here, as in production, and so is an idle feed."""
-    stage.app.state.sse_settings = {**stage.app.state.sse_settings, "interval_s": 0.5}
+    each state, counted by Redis. The stage polls its transient source every 20 ms."""
     run_id = stage.run()
     key = live.RedisLiveStore.meta_key(run_id)
     # Queued: a buffer under the run's key (left by anything) is not even looked at.
@@ -669,14 +667,15 @@ def test_the_stream_reads_redis_only_while_the_run_is_running(stage: Stage, redi
     assert [name for name, _, _ in found] == ["step"]
     assert queued.commands == []
     flush_redis(redis_url)
-    # Running, no block being written: about two reads a second, where it was fifty.
+    # Running, no block being written yet: read at the stream's cadence, so that the first
+    # characters of a block are not late.
     with stage.factory() as db, db.begin():
         runs.claim(db, run_id, now())
     with Watch(redis_url, key) as idle:
-        found = listen(stage, run_id, 1.6)
+        found = listen(stage, run_id, 1.2)
     assert "partial" not in [name for name, _, _ in found]
-    assert 2 <= len(idle.named("get")) <= 6
-    # Running, a block being written: read at the stream's own cadence again.
+    assert len(idle.named("get")) >= 15
+    # Running, a block being written.
     write_stale(redis_url, run_id, after=1, text="being written")
     with Watch(redis_url, key) as writing:
         found = listen(stage, run_id, 1.2)

@@ -439,12 +439,10 @@ async def stream_run(
     # The answer being written (issue #33): None when live text is turned off, for the server
     # (AGENTS_LIVE_TEXT) or for this run's agent (AgentDefinition.live_text): Redis is then
     # never read for this stream. The feed starts idle and reads only while the run is running
-    # (`_page` tells it); while no block is being written it reads as often as the log is read
-    # (IDLE_POLL_S is that interval; a stream given another one keeps the two equal).
+    # (`_page` tells it).
     store: live.LiveStore | None = getattr(request.app.state, "live_store", None)
-    idle_s = float(settings.get("interval_s", live.IDLE_POLL_S))
     feed = (
-        live.LiveFeed(store, parsed, running=False, idle_s=idle_s)
+        live.LiveFeed(store, parsed, running=False)
         if store is not None and definitions.live_text(agent)
         else None
     )
