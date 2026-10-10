@@ -14,7 +14,9 @@ is what the runner passes as `allowed_tools`; the PreToolUse gate (app/agents/ru
 every other name.
 
 Tools:
-- get_job(job_id): one of the user's jobs, read only (A2), with its posting text (A3).
+- get_job(job_id): one of the user's jobs, read only (A2), with its posting text (A3). For an
+  agent whose definition binds it to its job (`bind_job`, the A4 chat), only the run's own job:
+  any other id answers "not found" like another user's job.
 - get_profile_section(section): one section of the user's profile, read only. Of identity only
   the headline, city, country and languages are shown (an allow list, so no contact detail);
   the search's board list and schedule are left out: an assessment needs none of them.
@@ -80,6 +82,8 @@ class Scope:
     run_id: uuid.UUID | None = None
     job_id: uuid.UUID | None = None
     clock: Callable[[], datetime] = _now
+    # get_job reads the run's own job only (A4 chat: the thread's job).
+    job_only: bool = False
 
 
 def _clip(text: str | None, limit: int) -> tuple[str, bool]:
@@ -91,6 +95,8 @@ def _job_payload(scope: Scope, raw: object) -> str | None:
     try:
         job_id = uuid.UUID(str(raw))
     except ValueError:
+        return None
+    if scope.job_only and job_id != scope.job_id:
         return None
     with scope.sessions() as db:
         job = db.execute(
@@ -328,6 +334,7 @@ def build(
     run_id: uuid.UUID | None = None,
     job_id: uuid.UUID | None = None,
     clock: Callable[[], datetime] = _now,
+    job_only: bool = False,
 ) -> AppTools:
     """A server holding exactly `names`, bound to the user (and to the run and its job for the
     write tools). Unknown names fail loudly (a definition naming a tool that does not exist is a
@@ -335,7 +342,14 @@ def build(
     unknown = [name for name in names if name not in FACTORIES]
     if unknown:
         raise ValueError(f"unknown app tools: {', '.join(unknown)}")
-    scope = Scope(sessions=sessions, user_id=user_id, run_id=run_id, job_id=job_id, clock=clock)
+    scope = Scope(
+        sessions=sessions,
+        user_id=user_id,
+        run_id=run_id,
+        job_id=job_id,
+        clock=clock,
+        job_only=job_only,
+    )
     tools = [FACTORIES[name](scope) for name in names]
     server = create_sdk_mcp_server(name=SERVER, version="1.0.0", tools=tools)
     return AppTools(server=server, by_name={full_name(t.name): t for t in tools})

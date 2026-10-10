@@ -72,7 +72,7 @@ from claude_agent_sdk import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import credentials, definitions, runs
+from app.agents import chat, credentials, definitions, runs
 from app.agents import tools as app_tools
 from app.agents.backend import Backend, BackendFactory, BackendRequest
 from app.agents.crypto import DecryptError, Keyring
@@ -159,6 +159,7 @@ _SECRET_ARG = ("secret", "token", "password", "api_key", "apikey", "authorizatio
 NO_CREDENTIAL = "No model credential is saved. Add one on the Account page."
 UNREADABLE = "The saved credential cannot be read with this server's key. Paste it again."
 UNKNOWN_AGENT = "This agent no longer exists."
+THREAD_GONE = "This conversation no longer exists."
 TIME_LIMIT = "The run took longer than its limit of {minutes} and was stopped."
 TURN_LIMIT = "The run reached its limit of {turns} turns."
 NO_RESULT = "The agent stopped without a result."
@@ -354,6 +355,9 @@ class Recorder:
     run_id: uuid.UUID
     seq: int
     secret: str | None = field(default=None, repr=False)
+    # Called in the transaction that records a successful end (A4: the chat answer is stored
+    # with the run's final status, so a client that sees "done" finds the answer).
+    on_done: Callable[[Session, runs.Outcome], None] | None = field(default=None, repr=False)
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def _write(self, seq: int, kind: str, data: dict[str, Any]) -> None:
@@ -378,6 +382,8 @@ class Recorder:
             if outcome.error:
                 data["error"] = outcome.error
             runs.append_event(db, self.run_id, self.seq, "status", data, self.context.clock())
+            if self.on_done is not None and outcome.status is RunStatus.done:
+                self.on_done(db, outcome)
             db.commit()
             return True
 
@@ -641,6 +647,19 @@ class _Secret:
     verified: bool
 
 
+def _chat_prompt(context: RunContext, run: Any) -> chat.ChatPrompt | None:
+    with context.sessions() as db:
+        return chat.prompt_for_run(db, run)
+
+
+def _chat_reply(context: RunContext, run_id: uuid.UUID) -> Callable[[Session, runs.Outcome], None]:
+    def record(db: Session, outcome: runs.Outcome) -> None:
+        text = str((outcome.output or {}).get("text", ""))
+        chat.record_reply(db, run_id, text, context.clock())
+
+    return record
+
+
 def _reveal(context: RunContext, user_id: uuid.UUID) -> _Secret | str:
     """The decrypted credential, or the error message to fail the run with."""
     if context.keyring is None:
@@ -690,6 +709,23 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
         except definitions.UnknownAgentError:
             outcome = runs.Outcome(status=RunStatus.failed, error=UNKNOWN_AGENT)
             return RunStatus.failed
+        data = dict(run.input or {})
+        variables = {"message": str(data.get("message", "")), "job_id": str(run.job_id or "")}
+        if definition.chat:
+            # A4: the prompt is rebuilt from the thread's messages; no SDK session is resumed.
+            built = await asyncio.to_thread(_chat_prompt, context, run)
+            if built is None:
+                outcome = runs.Outcome(
+                    status=RunStatus.failed, error=THREAD_GONE, model=definition.model
+                )
+                return RunStatus.failed
+            prompt = built.text
+            variables.update(
+                message=built.current, history=str(built.included), omitted=str(built.omitted)
+            )
+            recorder.on_done = _chat_reply(context, run_id)
+        else:
+            prompt = definition.prompt(data, run.job_id)
         found = await asyncio.to_thread(_reveal, context, run.user_id)
         if isinstance(found, str):
             outcome = runs.Outcome(status=RunStatus.failed, error=found, model=definition.model)
@@ -711,6 +747,7 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             run_id=run_id,
             job_id=run.job_id,
             clock=context.clock,
+            job_only=definition.bind_job,
         )
         stderr_lines: deque[str] = deque(maxlen=50)
         options = build_options(
@@ -721,18 +758,14 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             make_gate(frozenset(tools.allowed_names), denied),
             stderr=stderr_lines.append,
         )
-        data = dict(run.input or {})
         request = BackendRequest(
-            prompt=definition.prompt(data, run.job_id),
+            prompt=prompt,
             options=options,
             tools=tools,
             gate=options.hooks["PreToolUse"][0].hooks[0],  # type: ignore[index]
             # Fake backend only: the input's recorded stream, else the one named after the agent.
             script=data.get("script") or definition.name,
-            variables={
-                "message": str(data.get("message", "")),
-                "job_id": str(run.job_id or ""),
-            },
+            variables=variables,
         )
         backend = context.backend_factory()
         try:
@@ -754,7 +787,7 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             )
             return RunStatus.failed
         finally:
-            del options, request
+            del options, request, prompt
         outcome = outcome_of(state, definition, stopped)
         if (
             outcome.status is RunStatus.done

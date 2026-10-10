@@ -1,12 +1,12 @@
 """Tables of the agents module. A1: model_credentials, one row per user at most. A2: agent_runs
-and agent_events. A3: proposals.
+and agent_events. A3: proposals. A4: agent_threads and agent_messages.
 
 The secret is stored only encrypted (`crypto.py`: AES-GCM, bound to the user id and the kind),
 with the version of the key that wrote it and its last four characters for display. It is
 deferred, so loading a row for GET never pulls the ciphertext along.
-Migrations: alembic/versions/0006_model_credentials.py, 0007_agent_runs.py and
-0008_proposals.py, which must stay in step with this file (`alembic check` in the tests
-compares them).
+Migrations: alembic/versions/0006_model_credentials.py, 0007_agent_runs.py,
+0008_proposals.py and 0009_agent_threads.py, which must stay in step with this file
+(`alembic check` in the tests compares them).
 """
 
 import enum
@@ -263,5 +263,96 @@ class Proposal(Base):
     edited_value: Mapped[Any | None] = mapped_column(pg.JSONB)
     reason: Mapped[str | None] = mapped_column(sa.Text)
     created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+    )
+
+
+# --- A4: chat threads and their messages ----------------------------------------------------------
+
+
+class MessageRole(enum.StrEnum):
+    user = "user"
+    assistant = "assistant"
+
+
+MESSAGE_ROLE_ENUM = sa.Enum(
+    MessageRole,
+    name="agent_message_role",
+    values_callable=lambda members: [m.value for m in members],
+)
+
+THREAD_TITLE_MAX = 200
+
+
+class AgentThread(Base):
+    """One conversation of a user with an agent, about one job (SPEC-agents.md, Data model). There
+    is no SDK session id: every message starts a fresh run whose prompt is rebuilt from
+    agent_messages (tasks/agents/todo.md, Chat continuity). One thread per job and user (partial
+    unique index); job_id stays nullable for later chats that are not about a job. Deleting the
+    job or the user deletes its threads."""
+
+    __tablename__ = "agent_threads"
+    __table_args__ = (
+        sa.CheckConstraint(
+            f"char_length(title) >= 1 AND char_length(title) <= {THREAD_TITLE_MAX}",
+            name="title_length",
+        ),
+        sa.Index("ix_agent_threads_user_id_updated_at", "user_id", sa.text("updated_at DESC")),
+        sa.Index(
+            "uq_agent_threads_user_id_job_id",
+            "user_id",
+            "job_id",
+            unique=True,
+            postgresql_where=sa.text("job_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=sa.text("gen_random_uuid()"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("jobs.id", ondelete="CASCADE")
+    )
+    title: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+    )
+
+
+class AgentMessage(Base):
+    """One message of a thread: the user's text, or the agent's final answer. `content` is
+    {"text": ...}. `run_id` is the run the user message started, or the run that wrote the answer;
+    set to NULL if that run is ever deleted. Ordered by id (bigserial)."""
+
+    __tablename__ = "agent_messages"
+    __table_args__ = (
+        sa.CheckConstraint("jsonb_typeof(content) = 'object'", name="content_is_object"),
+        sa.Index("ix_agent_messages_thread_id_id", "thread_id", "id"),
+        sa.Index("ix_agent_messages_run_id", "run_id"),
+    )
+
+    id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
+    thread_id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True),
+        sa.ForeignKey("agent_threads.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role: Mapped[MessageRole] = mapped_column(MESSAGE_ROLE_ENUM, nullable=False)
+    content: Mapped[dict[str, Any]] = mapped_column(
+        pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("agent_runs.id", ondelete="SET NULL")
+    )
+    at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )

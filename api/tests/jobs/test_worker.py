@@ -4,6 +4,7 @@ cron enqueueing each due slot once (frozen clock), job ids deduplicating, stale 
 start, a stop interrupting a running sweep cleanly, and a Redis that is down."""
 
 import asyncio
+import gc
 import os
 import time
 import uuid
@@ -57,14 +58,21 @@ def redis_url() -> Iterator[str]:
     server.remove()
 
 
-@pytest.fixture
-def settings(migrated_url: str, redis_url: str, fake_ats: FakeAts) -> Iterator[Settings]:
+def flush_redis(url: str) -> None:
+    """Empty this worker's Redis database. The client closes its connections on every path
+    (async with), so no socket outlives the call: a leaked one surfaces later as a
+    ResourceWarning, an error in whichever test the garbage collector happens to run under."""
+
     async def flush() -> None:
-        r = aioredis.from_url(redis_url)
-        await r.flushdb()
-        await r.aclose()
+        async with aioredis.from_url(url) as client:
+            await client.flushdb()
 
     asyncio.run(flush())
+
+
+@pytest.fixture
+def settings(migrated_url: str, redis_url: str, fake_ats: FakeAts) -> Iterator[Settings]:
+    flush_redis(redis_url)
     return make_settings(
         migrated_url,
         redis_url=redis_url,
@@ -135,6 +143,12 @@ def test_a_queued_sweep_runs_and_the_worker_reports_healthy(
     api_queue = queues.Queue(settings.redis_url.get_secret_value())
 
     async def scenario(workers: list[Worker]) -> None:
+        try:
+            await play(workers)
+        finally:
+            await api_queue.close()
+
+    async def play(workers: list[Worker]) -> None:
         assert [w.queue_name for w in workers] == [queues.SWEEPS, queues.AGENTS]
         assert await api_queue.enqueue(
             "run_sweep", str(sweep_id), queue=queues.SWEEPS, job_id=queues.sweep_job_id(sweep_id)
@@ -148,7 +162,6 @@ def test_a_queued_sweep_runs_and_the_worker_reports_healthy(
         while await worker.check(settings) != 0:
             assert time.monotonic() < deadline, "no health record"
             await asyncio.sleep(0.5)
-        await api_queue.close()
 
     serve_until(settings, context(settings, fake_ats), scenario)
     with factory() as db:
@@ -187,6 +200,34 @@ def test_stop_interrupts_a_running_sweep_cleanly(
         row = db.get(Sweep, sweep_id)
         assert row is not None
         assert (row.status, row.error) == (SweepStatus.failed, sweep.INTERRUPTED)
+
+
+def test_stop_while_a_job_is_being_picked_up_closes_every_worker(
+    settings: Settings, fake_ats: FakeAts
+) -> None:
+    """A stop that cancels a job outside its function (arq's run_job still reading the job from
+    Redis, the CI failure of 2026-10-10) used to make arq's Worker.close() raise CancelledError
+    from its gather: serve() failed, and the next workers' Redis pools were never closed."""
+    workers_seen: list[Worker] = []
+
+    async def scenario(workers: list[Worker]) -> None:
+        workers_seen.extend(workers)
+        # What arq's poll leaves in `tasks` while run_job awaits Redis: a task whose cancellation
+        # no job handler catches.
+        for index, item in enumerate(workers):
+            item.tasks[f"picking-{index}"] = asyncio.get_running_loop().create_task(
+                asyncio.sleep(60)
+            )
+
+    serve_until(settings, context(settings, fake_ats), scenario)
+    assert len(workers_seen) == 2
+    for item in workers_seen:
+        assert item._pool is None  # closed, health key deleted
+        assert all(task.done() for task in item.tasks.values())
+    # A pool left open would surface here as an unclosed socket ResourceWarning (an error under
+    # the suite's filterwarnings), not in some later test.
+    workers_seen.clear()
+    gc.collect()
 
 
 def test_stale_sweeps_are_reaped_when_the_worker_starts(
@@ -325,10 +366,12 @@ def test_queue_down_is_reported_fast() -> None:
 def test_messages_are_json_not_pickle(settings: Settings) -> None:
     async def go() -> bytes:
         q = queues.Queue(settings.redis_url.get_secret_value())
-        await q.enqueue("run_sweep", "abc", queue=queues.SWEEPS, job_id="sweep:abc")
-        pool = await q.pool()
-        raw = await pool.get("arq:job:sweep:abc")
-        await q.close()
+        try:
+            await q.enqueue("run_sweep", "abc", queue=queues.SWEEPS, job_id="sweep:abc")
+            pool = await q.pool()
+            raw: bytes = await pool.get("arq:job:sweep:abc")
+        finally:
+            await q.close()
         return raw
 
     raw = asyncio.run(go())

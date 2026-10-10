@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import redis.asyncio as aioredis
 from arq.worker import Worker
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
@@ -27,19 +26,14 @@ from tests.agents.conftest import ALICE, API_KEY
 from tests.agents.run_helpers import Backends, add_user, new_run, now, run_row, save_credential
 from tests.conftest import make_settings
 from tests.identity.api_helpers import Api, make_user
-from tests.jobs.test_worker import redis_url, serve_until, wait_for
+from tests.jobs.test_worker import flush_redis, redis_url, serve_until, wait_for
 
 __all__ = ["redis_url"]
 
 
 @pytest.fixture
 def settings(migrated_url: str, redis_url: str, key: str, tmp_path: Path) -> Iterator[Settings]:
-    async def flush() -> None:
-        r = aioredis.from_url(redis_url)
-        await r.flushdb()
-        await r.aclose()
-
-    asyncio.run(flush())
+    flush_redis(redis_url)
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     return make_settings(

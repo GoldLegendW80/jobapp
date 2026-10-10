@@ -53,6 +53,8 @@ export const handlers = [
   // No agent run and no proposal yet (job detail's Agent assessment section).
   http.get("*/api/agents/runs", () => HttpResponse.json({ items: [] })),
   http.get("*/api/proposals", () => HttpResponse.json({ items: [] })),
+  // No chat thread yet (job detail's Chat panel).
+  http.get("*/api/agents/threads", () => HttpResponse.json({ items: [] })),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),
   ),

@@ -1,6 +1,7 @@
 """/api/agents: the agents a user may start, and their runs (SPEC-agents.md, API).
 
-- GET /api/agents: the agents available here (test agents only outside production).
+- GET /api/agents: the agents available here (test agents only outside production), without the
+  chat agents, which start from a thread only (app/agents/chat_router.py; 422 here).
 - POST /api/agents/runs {agent, job_id?, input}: 202 with the queued run. 422 when the agent is
   unknown here, the input does not fit it (the message names the field) or the agent needs a
   job and none is named (triage); 404 when job_id is
@@ -120,6 +121,7 @@ NOT_CONFIGURED = "Agents cannot run on this server yet: its CREDENTIALS_KEY is n
 TOO_MANY = f"You already have {runs.ACTIVE_PER_USER} runs queued or running. Wait for one to end."
 ENDED = "This run has already ended."
 NEEDS_JOB = "job_id: this agent works on a job; name one."
+CHAT_AGENT = "agent: a chat agent answers in a thread; send a message to the thread instead."
 # Recorded streams are for the fake backend: refused in production, never stored there.
 NO_SCRIPT = "input.script: recorded streams exist only outside production."
 
@@ -207,6 +209,8 @@ def list_agents(user: CurrentUser, request: Request) -> AgentList:
                 needs_job=agent.needs_job,
             )
             for agent in definitions.available(env).values()
+            # A chat agent starts from its thread (app/agents/chat_router.py), not from here.
+            if not agent.chat
         ]
     )
 
@@ -269,6 +273,8 @@ async def start_run(body: RunIn, user: CurrentUser, request: Request) -> RunOut:
         agent = definitions.get(body.agent, request.app.state.settings.app_env)
     except definitions.UnknownAgentError:
         raise HTTPException(status_code=422, detail=UNKNOWN_AGENT) from None
+    if agent.chat:
+        raise HTTPException(status_code=422, detail=CHAT_AGENT)
     if len(json.dumps(body.input, ensure_ascii=False).encode()) > INPUT_MAX_BYTES:
         raise HTTPException(status_code=422, detail=TOO_BIG)
     try:
