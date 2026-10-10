@@ -156,3 +156,70 @@ class ProposalConflictOut(BaseModel):
     reason: Literal["not_pending", "target_gone", "stale"]
     status: ProposalStatus | None = None
     updated_at: datetime | None = None
+
+
+# --- A4: chat threads -----------------------------------------------------------------------------
+
+MESSAGE_MAX = 8000
+
+
+class ThreadIn(BaseModel):
+    """POST /api/agents/threads: the caller's thread on this job (created when there is none)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    job_id: uuid.UUID
+
+
+class ThreadOut(BaseModel):
+    id: uuid.UUID
+    job_id: uuid.UUID | None
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ThreadList(BaseModel):
+    items: list[ThreadOut]
+
+
+class MessageIn(BaseModel):
+    """POST /api/agents/threads/{id}/messages."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=MESSAGE_MAX)
+
+
+class MessageOut(BaseModel):
+    id: int
+    role: Literal["user", "assistant"]
+    text: str
+    run_id: uuid.UUID | None
+    # The state of the run this message started (user messages) or came from (answers): a user
+    # message whose run failed or was cancelled has no answer, and `error` says why.
+    run_status: RunStatus | None = None
+    error: str | None = None
+    at: datetime
+
+
+class ThreadDetail(ThreadOut):
+    messages: list[MessageOut]
+    # Older messages exist than the ones listed (the list holds the newest).
+    messages_truncated: bool
+    # The run answering the newest message, while it is queued or running.
+    active_run_id: uuid.UUID | None
+
+
+class SentOut(BaseModel):
+    """202 of POST /api/agents/threads/{id}/messages: the stored message and the queued run."""
+
+    message: MessageOut
+    run: RunOut
+
+
+class ThreadBusyOut(BaseModel):
+    """409 of POST /api/agents/threads/{id}/messages while the previous answer is pending."""
+
+    detail: str
+    active_run_id: uuid.UUID | None = None
