@@ -2136,3 +2136,58 @@ def test_a_month_whose_year_stands_after_the_excerpt_is_not_cited_with_it() -> N
             assert rule_of(result) is Rule.MONTH_NOT_IN_SOURCE, (cut, value)
     whole = "Stage de fin d'études de juin à août 2019"
     assert rule_of(check_item("date", "2019-06", ranged, [whole])) is None
+
+
+def test_a_document_that_unfolds_to_several_times_its_size_is_not_read() -> None:
+    """U+FDFA is one character that NFKC writes in eighteen: 500,000 of them would cost nine
+    million characters of memory, three times over. Such a text is left unread."""
+    hostile = "ﷺ" * 2000 + " Betclic depuis janvier 2023, GenAI Engineer à Bordeaux"
+    document = prepare(hostile)
+    assert not document.readable
+    assert document.text == ""
+    assert len(document.origin) == 0
+    excerpt = "Betclic depuis janvier 2023, GenAI Engineer"
+    refused = Refusal(
+        "excerpts[0]", Rule.DOCUMENT_UNREADABLE, citations.REASONS[Rule.DOCUMENT_UNREADABLE]
+    )
+    assert check_item("text", "Betclic", document, [excerpt]) == refused
+    assert check_item("text", "Betclic", hostile, [excerpt]) == refused
+    assert rule_of(find(document, excerpt)) is Rule.DOCUMENT_UNREADABLE
+    # a few such characters in a real text change nothing
+    real = "ﷺ Betclic depuis janvier 2023, GenAI Engineer à Bordeaux ﬁn \u2026"
+    assert prepare(real).readable
+    assert rule_of(check_item("date", "2023-01", real, [excerpt])) is None
+    # and the public normalisation itself never stops short
+    assert len(normalise("ﷺ" * 2000).text) == 2000 * 18
+
+
+def test_a_value_too_long_to_check_is_refused() -> None:
+    limit = citations.VALUE_CHARS_MAX
+    refused = Refusal("value", Rule.VALUE_TOO_LARGE, citations.REASONS[Rule.VALUE_TOO_LARGE])
+    assert isinstance(check_item("text", "a" * limit, LONG, [LONG]), Accepted)
+    assert check_item("text", "a" * (limit + 1), LONG, [LONG]) == refused
+    for field in ("term", "enum", "name", "email", "url", "phone", "date"):
+        assert check_item(field, "a" * (limit + 1), LONG, [LONG]) == refused
+    # all the parts of a value together
+    half = "a" * (limit // 2)
+    assert isinstance(check_item("text", [half, half], LONG, [LONG]), Accepted)
+    assert check_item("text", [half, half, "a"], LONG, [LONG]) == refused
+    assert (
+        check_item(
+            {"title": "text", "body": "text"}, {"title": half, "body": half + "a"}, LONG, [LONG]
+        )
+        == refused
+    )
+
+
+def test_a_value_that_unfolds_is_refused_whole_never_checked_in_part() -> None:
+    """A number hidden behind characters that unfold must not slip past rule N."""
+    value = "ﷺ" * 1000 + " 99999 utilisateurs"
+    for field in ("text", "name", "term", "enum"):
+        result = check_item(field, value, LONG, [LONG])
+        assert result == Refusal(
+            "value", Rule.VALUE_TOO_LARGE, citations.REASONS[Rule.VALUE_TOO_LARGE]
+        )
+    assert rule_of(check_item("text", "ﷺ 99999 utilisateurs", LONG, [LONG])) is (
+        Rule.NUMBER_NOT_IN_SOURCE
+    )

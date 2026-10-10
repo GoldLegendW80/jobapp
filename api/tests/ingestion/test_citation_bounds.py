@@ -179,17 +179,20 @@ def test_the_cost_grows_linearly_with_the_document() -> None:
 
 
 def test_the_memory_of_a_prepared_document_is_bounded(large: str) -> None:
-    """N, S and their two maps: a few bytes per character, nothing kept per occurrence."""
-    tracemalloc.start()
-    try:
-        document = prepare(large)
-        current, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-    size = len(large) + len(document.text)
-    assert peak < 48 * size, f"{peak / size:.1f} bytes per character at the peak"
-    assert current < 24 * size, f"{current / size:.1f} bytes per character kept"
-    assert document.origin.itemsize == document.skeleton_index.itemsize == 4
+    """N, S and their two maps: a few bytes per character, nothing kept per occurrence and no
+    string made per character, in French as in Chinese (8.7 MB at the peak for the first)."""
+    chinese = "阿里巴巴集团担任高级软件工程师\uff0c负责搜索平台的开发工作\u3002" * (LARGE // 28)
+    for text in (large, chinese):
+        tracemalloc.start()
+        try:
+            document = prepare(text)
+            current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert document.readable
+        assert peak < 32 * len(text), f"{peak / len(text):.1f} bytes per character at the peak"
+        assert current < 20 * len(text), f"{current / len(text):.1f} bytes per character kept"
+        assert document.origin.itemsize == document.skeleton_index.itemsize == 4
 
 
 # --- crafted documents ---------------------------------------------------------------------------
@@ -492,3 +495,40 @@ def test_the_readers_end_on_the_inputs_made_to_defeat_them(label: str) -> None:
     citations.readings(text)
     elapsed = time.process_time() - started
     assert elapsed < CHECK_BUDGET_S, f"{label}: {elapsed:.3f} s"
+
+
+# --- memory of a text that unfolds ---------------------------------------------------------------
+
+
+def test_a_text_that_unfolds_is_left_unread_before_it_costs_its_memory() -> None:
+    """500,000 times U+FDFA is nine million characters once normalised, with two maps of four
+    bytes each: about a hundred megabytes for one hostile document. `prepare` stops at four
+    times the length of the text."""
+    text = "ﷺ" * LARGE
+    tracemalloc.start()
+    try:
+        started = time.process_time()
+        document = prepare(text)
+        elapsed = time.process_time() - started
+        current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert not document.readable
+    assert (document.text, document.skeleton) == ("", "")
+    assert peak < 64 * len(text), f"{peak / len(text):.1f} bytes per character at the peak"
+    assert current < 1_000_000, f"{current} bytes kept"
+    assert elapsed < PREPARE_BUDGET_S, f"{elapsed:.3f} s"
+    assert find(document, "x" * 30) == Refusal(
+        "", Rule.DOCUMENT_UNREADABLE, citations.REASONS[Rule.DOCUMENT_UNREADABLE]
+    )
+
+
+def test_a_value_is_bounded_before_it_is_read() -> None:
+    document = prepare(SOURCE)
+    for value in ("ﷺ" * 200_000, "a" * 5_000_000, ["a" * 200_000] * 20):
+        started = time.process_time()
+        result = check_item("text", value, document, [SOURCE])
+        elapsed = time.process_time() - started
+        assert isinstance(result, Refusal)
+        assert result.rule is Rule.VALUE_TOO_LARGE
+        assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"

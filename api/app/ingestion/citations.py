@@ -37,7 +37,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
-from itertools import pairwise
+from itertools import pairwise, repeat
 from typing import Any, NamedTuple
 
 __all__ = [
@@ -54,6 +54,7 @@ __all__ = [
     "SKELETON_MIN",
     "SPAN_MAX",
     "SPAN_SOURCE_MAX",
+    "VALUE_CHARS_MAX",
     "VALUE_LEAVES_MAX",
     "Accepted",
     "Citation",
@@ -95,6 +96,9 @@ OCCURRENCES_MAX = 64  # occurrences of an excerpt looked at for one that cuts no
 SPAN_MAX = 2_000  # characters of a cited span in N(document), tokens extended
 SPAN_SOURCE_MAX = 8_000  # characters of the document under a cited span
 VALUE_LEAVES_MAX = 2_000  # scalars of one value
+VALUE_CHARS_MAX = 250_000  # characters of text in one value, all its parts together
+UNFOLD_MAX = 4  # N of a text is at most that many times its length, plus UNFOLD_SLACK
+UNFOLD_SLACK = 1_000
 CLUSTER_MAX = 32  # characters of one cluster: a longer run of combining marks is cut there
 SHORT_NAME = 4  # a name whose skeleton is shorter keeps its capitals
 PHONE_DIGITS_MIN = 6
@@ -120,6 +124,7 @@ class FieldType(StrEnum):
 class Rule(StrEnum):
     """The machine readable code of a refusal."""
 
+    DOCUMENT_UNREADABLE = "document_unreadable"
     NO_CITATION = "no_citation"
     TOO_MANY_CITATIONS = "too_many_citations"
     EXCERPT_NOT_TEXT = "excerpt_not_text"
@@ -149,6 +154,7 @@ class Rule(StrEnum):
 # One sentence per rule, shown to the agent and to the user. Constants: a reason never quotes
 # the document, the excerpt or the value.
 REASONS: Mapping[Rule, str] = {
+    Rule.DOCUMENT_UNREADABLE: "the document cannot be cited: its text is not readable text",
     Rule.NO_CITATION: "no excerpt: every item cites at least one excerpt of the document",
     Rule.TOO_MANY_CITATIONS: f"too many excerpts: an item cites at most {EXCERPTS_MAX}",
     Rule.EXCERPT_NOT_TEXT: "an excerpt is text",
@@ -160,7 +166,7 @@ REASONS: Mapping[Rule, str] = {
     Rule.SPAN_TOO_LONG: "the excerpt covers too long a passage of the document, quote less",
     Rule.SETTING: "not proposable by the agent",
     Rule.UNKNOWN_FIELD: "the value holds a field that cannot be checked",
-    Rule.VALUE_TOO_LARGE: "the value holds too many parts to check",
+    Rule.VALUE_TOO_LARGE: "the value is too large to check",
     Rule.VALUE_NOT_TEXT: "the value must be text",
     Rule.VALUE_EMPTY: "the value is empty",
     Rule.ADDRESS_NOT_IN_SOURCE: "the address is not written in an excerpt",
@@ -223,6 +229,7 @@ _FOLDS = str.maketrans(
 _LINE_SEPARATORS = "\n\u2028\u2029"
 # Printable ASCII but the space and the grave accent: N of such a run is the run in lower case.
 _PLAIN = re.compile(r"[!-_a-~]+")
+_PARTS = re.compile(r"[ \n]|[^ \n]+")
 
 
 class Normalised(NamedTuple):
@@ -295,7 +302,7 @@ def _fold(cluster: str, casefold: bool) -> str:
 
 
 def normalise(text: str, *, casefold: bool = True) -> Normalised:
-    """N(text), cluster by cluster (a character with the combining marks that follow it):
+    """N(text), cluster by cluster (a character with the marks that follow it):
 
     1. apostrophes, quotes and dashes fold to their ASCII form, before NFKC can consume them;
     2. invisible characters go: format characters and variation selectors;
@@ -305,15 +312,28 @@ def normalise(text: str, *, casefold: bool = True) -> Normalised:
     5. whitespace: a run that holds a control character or a line separator, or that is three
        characters long or more, becomes one line feed, a break. Any other run becomes one space.
        None at the ends.
+
+    One pass, O(length). N is as long as the text or shorter, but for the few characters that
+    NFKC unfolds (a ligature into its letters, U+FDFA into eighteen).
     """
+    return _normalise(text, casefold, None)[0]
+
+
+def _normalise(text: str, casefold: bool, limit: int | None) -> tuple[Normalised, bool]:
+    """`normalise`, and whether it went to the end: it stops as soon as N passes `limit`
+    characters."""
     pieces: list[str] = []
     origin = array("I")
-    cache: dict[str, str] = {}
+    # N of each cluster met, cut into its whitespace characters and what stands between them:
+    # the same strings are appended again and again, never one new string per character.
+    cache: dict[str, list[str]] = {}
     pending = 0  # whitespace characters since the last character kept
     hard = False  # that run holds a break
     pending_at = 0
     position, length = 0, len(text)
     while position < length:
+        if limit is not None and len(origin) > limit:
+            return Normalised("", array("I")), False
         plain = _PLAIN.match(text, position)
         if plain is not None:
             end = plain.end()
@@ -334,23 +354,26 @@ def normalise(text: str, *, casefold: bool = True) -> Normalised:
         cluster = text[position:end]
         folded = cache.get(cluster)
         if folded is None:
-            folded = cache[cluster] = _fold(cluster, casefold)
-        for char in folded:
-            if char in " \n":
+            folded = cache[cluster] = _PARTS.findall(_fold(cluster, casefold))
+        for part in folded:
+            if part in (" ", "\n"):
                 if not pending:
                     pending_at = position
                 pending += 1
-                hard = hard or char == "\n"
+                hard = hard or part == "\n"
                 continue
             if pending:
                 if pieces:
                     pieces.append("\n" if hard or pending >= 3 else " ")
                     origin.append(pending_at)
                 pending, hard = 0, False
-            pieces.append(char)
-            origin.append(position)
+            pieces.append(part)
+            if len(part) == 1:
+                origin.append(position)
+            else:
+                origin.extend(repeat(position, len(part)))
         position = end
-    return Normalised("".join(pieces), origin)
+    return Normalised("".join(pieces), origin), True
 
 
 _KEPT = re.compile(r"[^ \n-]+")
@@ -376,11 +399,18 @@ class Document:
     origin: array[int]
     skeleton: str
     skeleton_index: array[int]
+    readable: bool = True
 
 
 def prepare(text: str) -> Document:
-    """The document ready to be searched. One pass, O(length); keep it for the step."""
-    norm = normalise(text)
+    """The document ready to be searched. One pass, O(length); keep it for the step.
+
+    Its memory is bounded too: a text whose N passes UNFOLD_MAX times its length is not prose
+    (500,000 times U+FDFA would unfold to nine million characters) and is left unread, so every
+    citation into it is refused with `document_unreadable`."""
+    norm, whole = _normalise(text, True, UNFOLD_MAX * len(text) + UNFOLD_SLACK)
+    if not whole:
+        return Document(text, "", array("I"), "", array("I"), readable=False)
     bones = skeleton(norm.text)
     return Document(text, norm.text, norm.origin, bones.text, bones.index)
 
@@ -508,6 +538,8 @@ def find(document: str | Document, excerpt: str) -> Span | Refusal:
     occurrence is taken and widened to the boundaries of the tokens it cuts. O(length of the
     document) for the search, constant work per occurrence."""
     prepared = prepare(document) if isinstance(document, str) else document
+    if not prepared.readable:
+        return _refuse(Rule.DOCUMENT_UNREADABLE)
     if not isinstance(excerpt, str):
         return _refuse(Rule.EXCERPT_NOT_TEXT)
     if len(excerpt) > EXCERPT_SOURCE_MAX:
@@ -1380,7 +1412,9 @@ class _Evidence:
         normalised text of the value when it was read."""
         if field_type is FieldType.SETTING:
             return Rule.SETTING, ""
-        if value is None or field_type in (FieldType.TERM, FieldType.ENUM):
+        if value is None:
+            return None, ""
+        if field_type in (FieldType.TERM, FieldType.ENUM) and not isinstance(value, str):
             return None, ""
         if field_type is FieldType.TEXT:
             if isinstance(value, bool):
@@ -1393,9 +1427,14 @@ class _Evidence:
         if not isinstance(value, str):
             other = Rule.DATE_FORMAT if field_type is FieldType.DATE else Rule.VALUE_NOT_TEXT
             return other, ""
+        normalised, whole = _normalise(value, True, UNFOLD_MAX * len(value) + UNFOLD_SLACK)
+        if not whole:
+            return Rule.VALUE_TOO_LARGE, ""
+        norm = normalised.text
+        if field_type in (FieldType.TERM, FieldType.ENUM):
+            return None, norm
         if field_type is FieldType.DATE:
-            return _date(value, self.dates()), ""
-        norm = normalise(value).text
+            return _date(value, self.dates()), norm
         if field_type is FieldType.PHONE:
             return _phone(norm, self.phones()), norm
         if field_type is FieldType.EMAIL:
@@ -1456,6 +1495,7 @@ def _leaves(
     setting: str | None = None
     unknown: str | None = None
     too_large = False
+    characters = 0
     stack: list[tuple[str, str, object]] = [("", "value", value)]
     while stack:
         path, index, node = stack.pop()
@@ -1488,11 +1528,13 @@ def _leaves(
             break
         else:
             leaves.append(_Leaf(index, types[path], node))
+            if isinstance(node, str):
+                characters += len(node)
     if setting is not None:
         return _refuse(Rule.SETTING, setting)
     if unknown is not None:
         return _refuse(Rule.UNKNOWN_FIELD, unknown)
-    if too_large:
+    if too_large or characters > VALUE_CHARS_MAX:
         return _refuse(Rule.VALUE_TOO_LARGE, "value")
     return leaves
 
@@ -1533,7 +1575,6 @@ def check_item(
         rule, norm = evidence.check(leaf.field_type, leaf.value)
         if rule is not None:
             return _refuse(rule, leaf.index)
-        if not flagged and isinstance(leaf.value, str):
-            flagged = looks_like_instruction(norm or normalise(leaf.value).text)
+        flagged = flagged or looks_like_instruction(norm)
     citations = tuple(Citation(span.source_start, span.source_end, span.source()) for span in spans)
     return Accepted(citations, (LOOKS_LIKE_INSTRUCTION,) if flagged else ())
