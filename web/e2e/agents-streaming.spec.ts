@@ -86,6 +86,28 @@ const messages = () => chat().getByTestId("chat-message");
 const liveReply = () => chat().getByTestId("chat-live-reply");
 const liveText = () => chat().getByTestId("chat-live-text");
 
+/**
+ * Type a message and send it once the chat can send. The composer is enabled before that, and
+ * Enter then does nothing and the draft stays: while the conversation loads, where only the
+ * disabled Send button says so, and while the previous answer is still being settled, where
+ * the hint under the composer says so too.
+ */
+async function ask(text: string) {
+  await composer().fill(text);
+  await expect(chat().getByRole("button", { name: "Send" })).toBeEnabled();
+  await composer().press("Enter");
+}
+
+// A second question long enough for its answer, which repeats it, to be written for more than
+// ten seconds (job_chat: four characters every 0.15 s): time to scroll up, watch the answer
+// grow, scroll down and watch it grow again, each a second or so, whatever the runner's speed.
+const SECOND = [
+  "Second question, to scroll away from.",
+  "It is a long one on purpose: the answer repeats it, so the answer is written for many seconds",
+  "and there is time to scroll up, watch it grow, scroll down and watch it grow again.",
+  "Nothing in it matters beyond its length, which is a few hundred characters.",
+].join(" ");
+
 async function startRun(script: string, message: string): Promise<string> {
   const started = await page.request.post("/api/agents/runs", {
     headers: CSRF,
@@ -333,8 +355,7 @@ test("the chat answer grows in its bubble and the stored answer takes its place"
   await expect(chat()).toBeVisible();
   await expect(composer()).toBeEnabled();
   const seen = await watch(page, "[data-testid=chat-live-text]", "__chat");
-  await composer().fill(QUESTION);
-  await composer().press("Enter");
+  await ask(QUESTION);
   await expect(messages().first()).toContainText(QUESTION);
   await expect(liveReply()).toBeVisible();
   const final = `You asked: ${QUESTION}\nI read the posting again. This conversation held 0 earlier messages when you wrote, 0 left out.`;
@@ -396,8 +417,17 @@ test("the list stays where the reader scrolled it while the answer grows", async
       gap: node.scrollHeight - node.scrollTop - node.clientHeight,
       overflow: node.scrollHeight - node.clientHeight,
     }));
-  await composer().fill("Second question, to scroll away from.");
-  await composer().press("Enter");
+  // The answer to this question as far as it is written, 0 before it begins. The agent first
+  // writes a sentence of thirty characters, calls a tool for three seconds, and only then
+  // writes the answer: the text on screen is the answer once it begins with "You asked".
+  // (Measured from that first sentence, a growth of 20 characters came about five seconds
+  // later, the whole window of a poll: the wait passed or failed on a few milliseconds.)
+  const written = async () => {
+    const text = (await liveText().textContent()) ?? "";
+    return text.startsWith("You asked") ? text.length : 0;
+  };
+  const whole = `You asked: ${SECOND}\nI read the posting again.`.length;
+  await ask(SECOND);
   await expect(messages()).toHaveCount(3);
   // Sending brought the list to its bottom.
   await expect.poll(async () => (await metrics()).gap).toBeLessThan(2);
@@ -406,22 +436,30 @@ test("the list stays where the reader scrolled it while the answer grows", async
   await list.evaluate((node) => {
     node.scrollTop = 0;
   });
-  await expect(liveReply()).toHaveAttribute("data-writing", "true", {
+  await expect(liveText()).toContainText("You asked: Second", {
     timeout: 20_000,
   });
-  const before = (await liveText().textContent())?.length ?? 0;
+  await expect(liveReply()).toHaveAttribute("data-writing", "true");
+  const before = await written();
+  const low = (await metrics()).overflow;
+  // Most of the answer is still to come: the waits below need a few lines of it.
+  expect(before).toBeLessThan(whole / 2);
+  await expect.poll(written).toBeGreaterThan(before + 20);
+  // The list itself got taller (a line was added), and the view stayed where it was.
   await expect
-    .poll(async () => (await liveText().textContent())?.length ?? 0)
-    .toBeGreaterThan(before + 20);
+    .poll(async () => (await metrics()).overflow)
+    .toBeGreaterThan(low);
   expect((await metrics()).top).toBe(0); // the growing text did not pull the view down
   // Back at the bottom: the list follows the text again.
   await list.evaluate((node) => {
     node.scrollTop = node.scrollHeight;
   });
-  const mid = (await liveText().textContent())?.length ?? 0;
+  const mid = await written();
+  const high = (await metrics()).overflow;
+  await expect.poll(written).toBeGreaterThan(mid + 12);
   await expect
-    .poll(async () => (await liveText().textContent())?.length ?? 0)
-    .toBeGreaterThan(mid + 12);
+    .poll(async () => (await metrics()).overflow)
+    .toBeGreaterThan(high);
   expect((await metrics()).gap).toBeLessThan(2);
   await expect(liveReply()).toHaveCount(0, { timeout: 30_000 });
   await expect(messages()).toHaveCount(4);
@@ -431,8 +469,7 @@ test("the list stays where the reader scrolled it while the answer grows", async
 
 test("the spinner stands still under prefers-reduced-motion", async () => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await composer().fill("Third question.");
-  await composer().press("Enter");
+  await ask("Third question.");
   await expect(liveReply()).toBeVisible();
   const spinner = liveReply().locator("svg").last();
   await expect

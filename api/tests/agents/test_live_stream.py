@@ -10,11 +10,13 @@ import threading
 import time
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+import redis as syncredis
 import redis.asyncio as aioredis
 import uvicorn
 from arq.worker import Worker
@@ -24,7 +26,7 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app import queue as queues
 from app import worker
-from app.agents import fake_backend, live, runs
+from app.agents import definitions, fake_backend, live, runs
 from app.agents.crypto import Keyring
 from app.agents.models import RunStatus
 from app.config import Settings
@@ -521,3 +523,169 @@ def test_redis_store_appends_reads_by_offset_and_clears(redis_url: str) -> None:
             assert await reader.read(run_id, None, 0) is None
 
     asyncio.run(go())
+
+
+# --- what Redis is asked, seen by Redis itself (issue #80) --------------------------------------
+
+
+class Watch:
+    """Every command the real Redis receives that names `needle`, in order, as Redis reports
+    them (MONITOR). A run's live keys hold its id, so `needle` is the run's id: the list is
+    everything, writes and reads, that any process asked Redis about that run's live text."""
+
+    def __init__(self, url: str, needle: str) -> None:
+        self.url = url
+        self.needle = needle
+        self.stop = f"stop-{uuid.uuid4()}"
+        self.commands: list[str] = []
+        self.listening = threading.Event()
+        self.thread = threading.Thread(target=self._listen, daemon=True)
+
+    def _listen(self) -> None:
+        client = syncredis.Redis.from_url(self.url)
+        try:
+            with client.monitor() as monitor:
+                self.listening.set()
+                for seen in monitor.listen():
+                    command = str(seen["command"])
+                    if self.stop in command:
+                        return
+                    if self.needle in command:
+                        self.commands.append(command)
+        finally:
+            client.close()
+
+    def __enter__(self) -> "Watch":
+        self.thread.start()
+        assert self.listening.wait(10), "MONITOR did not start"
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        client = syncredis.Redis.from_url(self.url)
+        try:
+            client.echo(self.stop)
+        finally:
+            client.close()
+        self.thread.join(timeout=10)
+        assert not self.thread.is_alive()
+
+    def named(self, verb: str) -> list[str]:
+        return [c for c in self.commands if c.upper().startswith(verb.upper() + " ")]
+
+
+def test_the_watch_sees_reads_and_writes(redis_url: str) -> None:
+    """The instrument itself: a write and a read of a live key are both reported."""
+    run_id = uuid.uuid4()
+
+    async def touch() -> None:
+        async with aioredis.from_url(redis_url) as client:
+            store = live.RedisLiveStore(lambda: client)
+            await store.open(run_id, 1, 0, None)
+            await store.append(run_id, 1, "x")
+            await store.read(run_id, None, 0)
+            await store.clear(run_id, 1)
+
+    with Watch(redis_url, str(run_id)) as watch:
+        asyncio.run(touch())
+    assert watch.named("set")
+    assert watch.named("append")
+    assert watch.named("get")
+    assert watch.named("getrange")
+    assert watch.named("del")
+
+
+@pytest.mark.parametrize("live_text", [True, False], ids=["live", "live text off"])
+def test_an_agent_with_live_text_off_never_touches_redis_for_its_run(
+    live_text: bool,
+    stage: Stage,
+    streams: Path,
+    settings: Settings,
+    redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A whole run through the real worker and the real stream. With `live_text=False` on the
+    agent's definition Redis never receives a command naming the run's live keys: no write by
+    the worker (not even a clear), no read by the stream. The same run with the default
+    definition is the control: there the keys are written and read."""
+    monkeypatch.setitem(definitions.AGENTS, "echo", replace(definitions.ECHO, live_text=live_text))
+    run_id = stage.run()
+    browser = Browser()
+    raw: list[Parsed] = []
+
+    async def scenario(workers: list[Worker]) -> None:
+        await enqueue(workers, run_id)
+        raw.extend(await asyncio.to_thread(stage.read, run_id, browser))
+
+    with Watch(redis_url, str(run_id)) as watch:
+        # The arq job of the run is named after it too: only the live keys are looked at.
+        serve_until(settings, worker_context(settings), scenario)
+    touched = [c for c in watch.commands if live.KEY in c]
+    assert_whole(browser, run_id, stage.factory)  # the answer arrived either way
+    assert run_row(stage.factory, run_id).output == {"text": ANSWER}
+    names = [name for name, _, _ in raw]
+    if live_text:
+        assert "partial" in names
+        assert any(c.upper().startswith("APPEND ") for c in touched)
+        assert any(c.upper().startswith("GET ") for c in touched)
+    else:
+        assert touched == []
+        assert "partial" not in names
+        assert browser.shown == []
+    assert redis_keys(redis_url) == []
+
+
+def listen(stage: Stage, run_id: uuid.UUID, seconds: float) -> list[Parsed]:
+    """Stay on the run's stream until it ends or has been silent for `seconds`."""
+    seen: list[Parsed] = []
+    url = f"{stage.base}/api/agents/runs/{run_id}/stream"
+    headers = {"Cookie": f"{COOKIE_NAME}={stage.token}"}
+    timeout = httpx.Timeout(10, read=seconds)
+    try:
+        with httpx.stream("GET", url, headers=headers, timeout=timeout) as response:
+            assert response.status_code == 200
+            block: list[str] = []
+            for line in response.iter_lines():
+                if line:
+                    block.append(line)
+                    continue
+                seen.extend(parse(["\n".join(block).encode()]))
+                block = []
+    except httpx.ReadTimeout:
+        pass
+    return seen
+
+
+def test_the_stream_reads_redis_only_while_the_run_is_running(stage: Stage, redis_url: str) -> None:
+    """Queued, running without a block, running with one, ended: what the stream asks Redis in
+    each state, counted by Redis. The stage polls its transient source every 20 ms."""
+    run_id = stage.run()
+    key = live.RedisLiveStore.meta_key(run_id)
+    # Queued: a buffer under the run's key (left by anything) is not even looked at.
+    write_stale(redis_url, run_id, after=0, text="not for a queued run")
+    with Watch(redis_url, key) as queued:
+        found = listen(stage, run_id, 1.2)
+    assert [name for name, _, _ in found] == ["step"]
+    assert queued.commands == []
+    flush_redis(redis_url)
+    # Running, no block being written yet: read at the stream's cadence, so that the first
+    # characters of a block are not late.
+    with stage.factory() as db, db.begin():
+        runs.claim(db, run_id, now())
+    with Watch(redis_url, key) as idle:
+        found = listen(stage, run_id, 1.2)
+    assert "partial" not in [name for name, _, _ in found]
+    assert len(idle.named("get")) >= 15
+    # Running, a block being written.
+    write_stale(redis_url, run_id, after=1, text="being written")
+    with Watch(redis_url, key) as writing:
+        found = listen(stage, run_id, 1.2)
+    assert [data["text"] for name, _, data in found if name == "partial"] == ["being written"]
+    assert len(writing.named("get")) >= 15
+    # Ended: the stream closes without a look at Redis.
+    with stage.factory() as db, db.begin():
+        runs.finish(db, run_id, runs.Outcome(status=RunStatus.done), now())
+        runs.append_event(db, run_id, 2, "status", {"status": "done"}, now())
+    with Watch(redis_url, key) as ended:
+        found = listen(stage, run_id, 1.2)
+    assert [name for name, _, _ in found][-1] == "end"
+    assert ended.commands == []

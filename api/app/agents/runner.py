@@ -23,8 +23,10 @@
    (`ClaudeSDKClient.interrupt()`), given INTERRUPT_GRACE_S to end, then cancelled;
 7. records the outcome (done, failed or cancelled, tokens, cost, the final text) and deletes the
    scratch directory and the live text, on every path: success, failure, cancel, worker
-   shutdown. A run that does not end `done` stores no answer: text that was only live is gone
-   (the log keeps the `text` event of a cut block when Claude Code reports one).
+   shutdown. An agent whose definition turns live text off (`live_text=False`) is never asked
+   for partial messages and publishes nothing. A run that does not end `done` stores no
+   answer: text that was only live is gone (the log keeps the `text` event of a cut block
+   when Claude Code reports one).
 
 The credential goes to Claude Code only through the environment of that one process
 (`options.env`: ANTHROPIC_API_KEY for an API key, CLAUDE_CODE_OAUTH_TOKEN for a subscription
@@ -195,6 +197,10 @@ class RunContext:
     # Claude Code is not asked for partial messages.
     live_store: live.LiveStore | None = None
     live_flush_s: float = live.FLUSH_S
+    # How long one attempt on the live store may take, and how long it is left alone after a
+    # failed one (app/agents/live.py: a Redis that does not answer must not slow the run).
+    live_timeout_s: float = live.STORE_TIMEOUT_S
+    live_backoff_s: float = live.WRITE_BACKOFF_S
 
     def definition(self, name: str) -> definitions.AgentDefinition:
         if self.agents is not None and name in self.agents:
@@ -206,7 +212,16 @@ class RunContext:
 
 
 def scrub(value: Any, secret: str | None) -> Any:
-    """`value` with every occurrence of the secret replaced, recursively."""
+    """`value` with every occurrence of the secret replaced, recursively: strings, the items of
+    lists and tuples, and both the keys and the values of dicts.
+
+    What this guarantees, and what it does not. The credential is replaced wherever it stands
+    whole, character for character, inside one string. Each string is looked at on its own: a
+    credential cut in two by the model (the end of one text block and the beginning of the
+    next, two tool arguments, two events) or rewritten by it (spaces, another case, an
+    encoding) is not recognised, and nothing joins stored values to look again. That is why a
+    value is always scrubbed whole and only then shortened (`shorten`): shortening first can
+    cut a credential in two, and the part that is kept would be stored as it is."""
     if not secret:
         return value
     if isinstance(value, str):
@@ -214,7 +229,10 @@ def scrub(value: Any, secret: str | None) -> Any:
     if isinstance(value, list | tuple):
         return [scrub(item, secret) for item in value]
     if isinstance(value, dict):
-        return {key: scrub(item, secret) for key, item in value.items()}
+        return {
+            (scrub(key, secret) if isinstance(key, str) else key): scrub(item, secret)
+            for key, item in value.items()
+        }
     return value
 
 
@@ -222,10 +240,21 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + f"... [{len(text) - limit} more]"
 
 
-def summarize_args(args: Any) -> dict[str, Any]:
-    """A short, secret-free view of a tool call's arguments for the timeline."""
+def shorten(text: str, limit: int, secret: str | None) -> str:
+    """`text` as it may be stored when only its first `limit` characters are kept: the
+    credential is replaced in the whole text first, and only then is the text cut (`scrub`
+    says why the order matters). The one way a text derived from the model or from a tool is
+    shortened in this module."""
+    return _clip(str(scrub(text, secret)), limit)
+
+
+def summarize_args(args: Any, secret: str | None = None) -> dict[str, Any]:
+    """A short, secret-free view of a tool call's arguments for the timeline. The credential is
+    replaced in the arguments as the model gave them (names and values, at any depth) before
+    anything is encoded or shortened, and again in each encoded value before it is cut."""
+    args = scrub(args, secret)
     if not isinstance(args, dict):
-        return {"value": _clip(json.dumps(args, default=str), ARG_VALUE_MAX)}
+        return {"value": shorten(json.dumps(args, default=str), ARG_VALUE_MAX, secret)}
     out: dict[str, Any] = {}
     used = 0
     for key, value in args.items():
@@ -234,7 +263,7 @@ def summarize_args(args: Any) -> dict[str, Any]:
             out[name] = REDACTED
             continue
         shown = value if isinstance(value, str) else json.dumps(value, default=str)
-        shown = _clip(shown, ARG_VALUE_MAX)
+        shown = shorten(shown, ARG_VALUE_MAX, secret)
         used += len(shown)
         if used > ARGS_MAX:
             out["..."] = "more arguments not shown"
@@ -412,11 +441,15 @@ class Recorder:
             return True
 
     async def finish(self, outcome: runs.Outcome) -> bool:
+        # The answer is scrubbed whole, then shortened (never the other way round, `scrub`).
+        output = scrub(outcome.output, self.secret)
+        if isinstance(output, dict) and isinstance(output.get("text"), str):
+            output = {**output, "text": _clip(output["text"], TEXT_MAX)}
         clean = runs.Outcome(
             status=outcome.status,
             error=scrub(outcome.error, self.secret),
-            output=scrub(outcome.output, self.secret),
-            model=outcome.model,
+            output=output,
+            model=scrub(outcome.model, self.secret),
             input_tokens=outcome.input_tokens,
             output_tokens=outcome.output_tokens,
             cost_usd=outcome.cost_usd,
@@ -444,8 +477,11 @@ class _State:
 
 async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
     if isinstance(message, StreamEvent):
-        # Partial messages: only the text deltas of a text block are read (live.LiveText.feed).
-        if state.live_text is not None:
+        # Partial messages: only the text deltas of a text block are read (live.LiveText.feed),
+        # and only those of the run's own session: an event of a sub agent (it names the tool
+        # call it runs under) is never published. The SDK documents the field as always None,
+        # and no agent here may start a sub agent: this holds if either ever changes.
+        if state.live_text is not None and message.parent_tool_use_id is None:
             state.live_text.feed(message.event)
     elif isinstance(message, AssistantMessage):
         state.model = message.model or state.model
@@ -453,7 +489,8 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
             if isinstance(block, TextBlock):
                 if block.text:
                     state.last_text = block.text
-                    await recorder.emit("text", {"text": _clip(block.text, TEXT_MAX)})
+                    stored = shorten(block.text, TEXT_MAX, recorder.secret)
+                    await recorder.emit("text", {"text": stored})
                 if state.live_text is not None:
                     # The complete text is stored: it replaces the live one.
                     await state.live_text.close_block()
@@ -462,7 +499,11 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
             elif isinstance(block, ToolUseBlock):
                 await recorder.emit(
                     "tool_call",
-                    {"id": block.id, "name": block.name, "input": summarize_args(block.input)},
+                    {
+                        "id": block.id,
+                        "name": block.name,
+                        "input": summarize_args(block.input, recorder.secret),
+                    },
                 )
         if message.error:
             await recorder.emit("api_error", {"error": str(message.error)})
@@ -475,7 +516,9 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
                         {
                             "id": block.tool_use_id,
                             "is_error": bool(block.is_error),
-                            "content": _clip(result_text(block.content), TOOL_RESULT_MAX),
+                            "content": shorten(
+                                result_text(block.content), TOOL_RESULT_MAX, recorder.secret
+                            ),
                         },
                     )
     elif isinstance(message, ResultMessage):
@@ -577,7 +620,8 @@ def outcome_of(
             message = FAILED.format(reason=result.subtype)
         return runs.Outcome(status=RunStatus.failed, error=message, **usage)
     text = result.result if result.result is not None else state.last_text
-    return runs.Outcome(status=RunStatus.done, output={"text": _clip(text, TEXT_MAX)}, **usage)
+    # Whole: Recorder.finish replaces the credential in it, then shortens it to TEXT_MAX.
+    return runs.Outcome(status=RunStatus.done, output={"text": text}, **usage)
 
 
 def error_of(exc: BaseException) -> str:
@@ -789,7 +833,9 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
 
         async def denied(name: str) -> None:
             state.denied += 1
-            logger.warning("agent tool denied", extra={**log, "tool": name})
+            # The name is the model's: scrubbed, then shortened, like everything stored.
+            shown = shorten(name, ARG_VALUE_MAX, recorder.secret)
+            logger.warning("agent tool denied", extra={**log, "tool": shown})
             await recorder.emit("tool_denied", {"name": name})
 
         tools = app_tools.build(
@@ -800,8 +846,12 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             job_id=run.job_id,
             clock=context.clock,
             job_only=definition.bind_job,
+            # What the model writes into a proposal is stored too: same scrub as the events.
+            redact=lambda value: scrub(value, recorder.secret),
         )
         stderr_lines: deque[str] = deque(maxlen=50)
+        # Live text needs a store (AGENTS_LIVE_TEXT, Redis) and an agent that allows it.
+        live_store = context.live_store if definition.live_text else None
         options = build_options(
             definition,
             tools,
@@ -809,17 +859,19 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             scratch / "work",
             make_gate(frozenset(tools.allowed_names), denied),
             stderr=stderr_lines.append,
-            partial_messages=context.live_store is not None,
+            partial_messages=live_store is not None,
         )
-        if context.live_store is not None:
+        if live_store is not None:
             state.live_text = live.LiveText(
-                context.live_store,
+                live_store,
                 run_id,
                 recorder.last_seq,
                 secret=secret.value,
                 redacted=REDACTED,
                 cap=TEXT_MAX,
                 flush_s=context.live_flush_s,
+                timeout_s=context.live_timeout_s,
+                backoff_s=context.live_backoff_s,
             )
             pump = asyncio.create_task(state.live_text.pump())
         request = BackendRequest(
@@ -870,7 +922,10 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
         return RunStatus.failed
     finally:
         if pump is not None:
+            # Cancelled and awaited: the pump may be in the middle of a write, and the clear
+            # below must come after it, not next to it.
             pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
         if scratch is not None:
             await asyncio.to_thread(shutil.rmtree, scratch, True)
         if outcome is not None:

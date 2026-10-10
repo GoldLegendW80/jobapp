@@ -26,7 +26,7 @@ fail() { printf '   FAIL: %s\n' "$*" >&2; exit 1; }
 
 cleanup() {
   docker compose -p "$SCRATCH_PROJECT" -f compose.yml down -v --remove-orphans >/dev/null 2>&1 || true
-  docker rm -f "$ECHO_NAME" >/dev/null 2>&1 || true
+  docker rm -f -v "$ECHO_NAME" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -274,7 +274,7 @@ ok "api sees /api prefix, X-Request-ID, X-Forwarded-For (spoof replaced), -Proto
 [[ "$(curl_c /api/echo -X POST -H 'Transfer-Encoding: chunked' --data-binary @<(big 5000000))" == "200" ]] \
   && grep -q '"body_bytes": 5000000' "$CURL_DIR/b" || fail "chunked 5 MB body not delivered whole"
 ok "chunked bodies: 5 MB delivered whole, 12 MB cut with 413"
-docker rm -f "$ECHO_NAME" >/dev/null
+docker rm -f -v "$ECHO_NAME" >/dev/null
 
 step "caddy: api stopped gives 502 at once, database down passes the 503 through"
 start=$SECONDS

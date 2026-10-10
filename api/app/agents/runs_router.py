@@ -43,7 +43,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app import sse
 from app.agents import credentials, definitions, live, runs
-from app.agents.models import FINAL_STATUSES, AgentRun
+from app.agents.models import FINAL_STATUSES, AgentRun, RunStatus
 from app.agents.schemas import (
     AgentList,
     AgentOut,
@@ -384,7 +384,8 @@ def _page(
     """The run's events after `after`, and whether the run has ended. The status is read before
     the events: the final status is committed with the run's last event, so a run read as ended
     has all its events visible to the read that follows. `feed` (the connection's live text) is
-    told which steps are about to be sent."""
+    told whether the run is running (it reads Redis only then) and which steps are about to
+    be sent."""
     with sessions() as db:
         run = runs.get_run(db, user_id, run_id)
         if run is None:
@@ -392,6 +393,7 @@ def _page(
         ended = run.status in FINAL_STATUSES
         rows = runs.events_after(db, run_id, after, STREAM_PAGE)
         if feed is not None:
+            feed.active(run.status is RunStatus.running)
             feed.stored([(row.seq, row.kind) for row in rows])
         events = [
             sse.Event(
@@ -423,18 +425,27 @@ async def stream_run(
     """Server-sent events of one run: its stored events, then the new ones, then `end`."""
     sessions, parsed = sessions_of(request), _run_id(run_id)
 
-    def exists() -> bool:
+    def agent_of() -> str | None:
         with sessions() as db:
-            return runs.get_run(db, user.id, parsed) is not None
+            found = runs.get_run(db, user.id, parsed)
+            return found.agent if found is not None else None
 
-    if not await run_in_threadpool(exists):
+    agent = await run_in_threadpool(agent_of)
+    if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
     slots = slots_of(request)
     start = sse.last_event_id(last_event_id, after)
     settings = {"max_s": STREAM_MAX_S, **getattr(request.app.state, "sse_settings", {})}
-    # The answer being written (issue #33): None when live text is turned off.
+    # The answer being written (issue #33): None when live text is turned off, for the server
+    # (AGENTS_LIVE_TEXT) or for this run's agent (AgentDefinition.live_text): Redis is then
+    # never read for this stream. The feed starts idle and reads only while the run is running
+    # (`_page` tells it).
     store: live.LiveStore | None = getattr(request.app.state, "live_store", None)
-    feed = live.LiveFeed(store, parsed) if store is not None else None
+    feed = (
+        live.LiveFeed(store, parsed, running=False)
+        if store is not None and definitions.live_text(agent)
+        else None
+    )
     if feed is not None:
         settings = {"transient_interval_s": live.POLL_S, **settings}
 

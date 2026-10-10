@@ -1,0 +1,56 @@
+# Spike G0, summary of result.json. sdk 0.2.163, bundled cli 2.1.286, darwin arm64, python 3.14.8, stub tests/anthropic_stub.py
+# columns: case | SDK side outcome | what the tool_result of the last request to the stub holds | files over 20 kB left in the scratch directory at the end
+text_small | ok, turns 2 | text 2000 chars: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' | none
+png_1568 | ok, turns 2 | image image/png 12456 bytes [1568, 1568] unchanged | none
+jpeg_100k | ok, turns 2 | image image/jpeg 99821 bytes [1568, 1568] unchanged | none
+jpeg_200k | ok, turns 2 | image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+jpeg_300k | ok, turns 2 | image image/jpeg 303202 bytes [1568, 1568] unchanged | none
+jpeg_380k | ok, turns 2 | image image/jpeg 384631 bytes [1568, 1568] unchanged | none
+jpeg_450k | FAILED CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 | image image/jpeg 449179 bytes [1568, 1568] unchanged | none
+jpeg_600k | FAILED CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 | image image/jpeg 445465 bytes [1568, 1568] CHANGED by the CLI | none
+jpeg_800k | ok, turns 2 | image image/jpeg 341412 bytes [1568, 1568] CHANGED by the CLI | none
+jpeg_1000k | FAILED CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 | image image/jpeg 448979 bytes [1568, 1568] CHANGED by the CLI | none
+jpeg_3000k | FAILED CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 | image image/jpeg 489843 bytes [1568, 1568] CHANGED by the CLI | none
+jpeg_300k_bigbuf | ok, turns 2 | image image/jpeg 303202 bytes [1568, 1568] unchanged | none
+jpeg_380k_bigbuf | ok, turns 2 | image image/jpeg 384631 bytes [1568, 1568] unchanged | none
+jpeg_450k_bigbuf | ok, turns 2 | image image/jpeg 449179 bytes [1568, 1568] unchanged | none
+jpeg_600k_bigbuf | ok, turns 2 | image image/jpeg 445465 bytes [1568, 1568] CHANGED by the CLI | none
+jpeg_800k_bigbuf | ok, turns 2 | image image/jpeg 341412 bytes [1568, 1568] CHANGED by the CLI | none
+jpeg_1000k_bigbuf | ok, turns 2 | image image/jpeg 448979 bytes [1568, 1568] CHANGED by the CLI | none
+jpeg_3000k_bigbuf | ok, turns 2 | image image/jpeg 489843 bytes [1568, 1568] CHANGED by the CLI | none
+jpeg_6m_bigbuf | ok, turns 2 | image image/jpeg 411471 bytes [2000, 2000] CHANGED by the CLI | none
+jpeg_4000px | ok, turns 2 | image image/jpeg 141991 bytes [2000, 2000] CHANGED by the CLI | none
+three_jpeg_100k_one_result | ok, turns 2 | text 11 chars: 'three pages' + image image/jpeg 99821 bytes [1568, 1568] unchanged + ... 4 blocks in all, last: image image/jpeg 99821 bytes [1568, 1568] unchanged | none
+three_jpeg_200k_one_result | FAILED CLIJSONDecodeError: Failed to decode JSON: JSON message exceeded maximum buffer size of 1048576 | text 11 chars: 'three pages' + image image/jpeg 198865 bytes [1568, 1568] unchanged + ... 4 blocks in all, last: image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+three_jpeg_200k_one_result_bigbuf | ok, turns 2 | text 11 chars: 'three pages' + image image/jpeg 198865 bytes [1568, 1568] unchanged + ... 4 blocks in all, last: image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+five_calls_jpeg_200k | ok, turns 6 | image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+three_calls_jpeg_1000k_bigbuf | ok, turns 4 | image image/jpeg 448979 bytes [1568, 1568] CHANGED by the CLI | none
+jpeg_200k_limit_100 | ok, turns 2 | image image/jpeg 3438 bytes [400, 400] CHANGED by the CLI + text 312 chars: '\n\n[OUTPUT TRUNCATED - exceeded 100 token limit]\n\nThe tool output was t' | none
+jpeg_200k_limit_1000 | ok, turns 2 | image image/jpeg 3438 bytes [400, 400] CHANGED by the CLI + text 313 chars: '\n\n[OUTPUT TRUNCATED - exceeded 1000 token limit]\n\nThe tool output was ' | none
+jpeg_200k_limit_1500 | ok, turns 2 | image image/jpeg 3438 bytes [400, 400] CHANGED by the CLI + text 313 chars: '\n\n[OUTPUT TRUNCATED - exceeded 1500 token limit]\n\nThe tool output was ' | none
+jpeg_200k_limit_1600 | ok, turns 2 | image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+jpeg_200k_limit_1700 | ok, turns 2 | image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+jpeg_200k_limit_1800 | ok, turns 2 | image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+jpeg_200k_limit_1900 | ok, turns 2 | image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+jpeg_200k_limit_2000 | ok, turns 2 | image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+jpeg_200k_limit_3000 | ok, turns 2 | image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+jpeg_200k_limit_6000 | ok, turns 2 | image image/jpeg 198865 bytes [1568, 1568] unchanged | none
+jpeg_784px_limit_300 | ok, turns 2 | image image/jpeg 3459 bytes [400, 400] CHANGED by the CLI + text 312 chars: '\n\n[OUTPUT TRUNCATED - exceeded 300 token limit]\n\nThe tool output was t' | none
+jpeg_784px_limit_900 | ok, turns 2 | image image/jpeg 2469 bytes [196, 196] CHANGED by the CLI + text 312 chars: '\n\n[OUTPUT TRUNCATED - exceeded 900 token limit]\n\nThe tool output was t' | none
+jpeg_784px_limit_1500 | ok, turns 2 | image image/jpeg 2469 bytes [196, 196] CHANGED by the CLI + text 313 chars: '\n\n[OUTPUT TRUNCATED - exceeded 1500 token limit]\n\nThe tool output was ' | none
+jpeg_784px_limit_1600 | ok, turns 2 | image image/jpeg 59662 bytes [784, 784] unchanged | none
+jpeg_784px_limit_1700 | ok, turns 2 | image image/jpeg 59662 bytes [784, 784] unchanged | none
+jpeg_784px_limit_1800 | ok, turns 2 | image image/jpeg 59662 bytes [784, 784] unchanged | none
+jpeg_784px_limit_2000 | ok, turns 2 | image image/jpeg 59662 bytes [784, 784] unchanged | none
+jpeg_1000k_limit_1000_bigbuf | ok, turns 2 | image image/jpeg 3452 bytes [400, 400] CHANGED by the CLI + text 313 chars: '\n\n[OUTPUT TRUNCATED - exceeded 1000 token limit]\n\nThe tool output was ' | none
+eight_jpeg_100k_one_result_bigbuf | ok, turns 2 | image image/jpeg 99821 bytes [1568, 1568] unchanged + image image/jpeg 99821 bytes [1568, 1568] unchanged + ... 8 blocks in all, last: image image/jpeg 99821 bytes [1568, 1568] unchanged | none
+12_jpeg_100k_one_result_bigbuf | ok, turns 2 | image image/jpeg 99821 bytes [1568, 1568] unchanged + image image/jpeg 99821 bytes [1568, 1568] unchanged + ... 12 blocks in all, last: image image/jpeg 99821 bytes [1568, 1568] unchanged | none
+14_jpeg_100k_one_result_bigbuf | ok, turns 2 | image image/jpeg 99821 bytes [1568, 1568] unchanged + image image/jpeg 99821 bytes [1568, 1568] unchanged + ... 14 blocks in all, last: image image/jpeg 99821 bytes [1568, 1568] unchanged | none
+15_jpeg_100k_one_result_bigbuf | ok, turns 2 | image image/jpeg 99821 bytes [1568, 1568] unchanged + image image/jpeg 99821 bytes [1568, 1568] unchanged + ... 15 blocks in all, last: image image/jpeg 99821 bytes [1568, 1568] unchanged | none
+16_jpeg_100k_one_result_bigbuf | ok, turns 2 | image image/jpeg 99821 bytes [1568, 1568] unchanged + image image/jpeg 99821 bytes [1568, 1568] unchanged + ... 17 blocks in all, last: text 314 chars: '\n\n[OUTPUT TRUNCATED - exceeded 25000 token limit]\n\nThe tool output was' | none
+20_jpeg_100k_one_result_bigbuf | ok, turns 2 | image image/jpeg 99821 bytes [1568, 1568] unchanged + image image/jpeg 99821 bytes [1568, 1568] unchanged + ... 17 blocks in all, last: text 314 chars: '\n\n[OUTPUT TRUNCATED - exceeded 25000 token limit]\n\nThe tool output was' | none
+text_30k | ok, turns 2 | text 30000 chars: 'mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mo' | none
+text_49k | ok, turns 2 | text 49000 chars: 'mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mo' | none
+text_120k | ok, turns 2 | str 1691 chars: 'Error: result (120,000 characters across 1 line) exceeds maximum allow' | mcp-app-view_image-1791639319071.txt (120000 bytes)
+text_30k_limit_1000 | ok, turns 2 | str 1690 chars: 'Error: result (30,000 characters across 1 line) exceeds maximum allowe' | mcp-app-view_image-1791639319327.txt (30000 bytes)
+text_and_image_limit_1000 | ok, turns 2 | text 4000 chars: 'mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mot mo' + text 313 chars: '\n\n[OUTPUT TRUNCATED - exceeded 1000 token limit]\n\nThe tool output was ' | none

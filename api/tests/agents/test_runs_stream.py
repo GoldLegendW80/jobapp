@@ -166,22 +166,67 @@ def test_isolation_and_authentication(
 
 
 def test_run_deleted_mid_stream_ends_with_gone(
+    api: Api, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run is deleted between two reads of its log, by the stream's own first read once it
+    has the first step: the stream is open for certain and the delete falls before the next
+    read whatever the load. (A delete on a timer raced the opening of the stream: on a slow
+    runner the run was gone before the request reached the ownership check, a 404 and no
+    event, or before the first read, a `gone` alone. Both are right answers to another case,
+    each with its test below.)"""
+    from app.agents import runs_router
+
+    run_id = new_run(factory, user_id(api, alice))
+    read = runs_router._page
+    deleted: list[int] = []
+
+    def read_then_delete(*args: Any) -> Any:
+        page = read(*args)
+        if page is not None and page.events and not deleted:
+            with factory() as db, db.begin():
+                gone = db.scalars(
+                    sa.delete(AgentRun).where(AgentRun.id == run_id).returning(AgentRun.id)
+                ).all()
+                deleted.append(len(gone))
+        return page
+
+    monkeypatch.setattr(runs_router, "_page", read_then_delete)
+    response, found = stream(api, alice, run_id)
+    assert response.status_code == 200
+    assert deleted == [1]
+    assert [name for name, _, _ in found] == ["step", "gone"]
+    assert found[0][1] == 1  # the step read before the delete still went out
+
+
+def test_run_deleted_before_the_stream_opens_is_404_without_an_event(
     api: Api, alice: str, factory: sessionmaker[Session]
 ) -> None:
     run_id = new_run(factory, user_id(api, alice))
+    with factory() as db, db.begin():
+        db.execute(sa.delete(AgentRun).where(AgentRun.id == run_id))
+    response, found = stream(api, alice, run_id)
+    assert response.status_code == 404
+    assert found == []
 
-    def delete_later() -> None:
-        time.sleep(0.3)
+
+def test_run_deleted_between_the_ownership_check_and_the_first_read_is_gone(
+    api: Api, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The stream has answered 200 by then, so the client learns it from the first event."""
+    from app.agents import runs_router
+
+    run_id = new_run(factory, user_id(api, alice))
+    read = runs_router._page
+
+    def delete_then_read(*args: Any) -> Any:
         with factory() as db, db.begin():
             db.execute(sa.delete(AgentRun).where(AgentRun.id == run_id))
+        return read(*args)
 
-    thread = threading.Thread(target=delete_later)
-    thread.start()
-    try:
-        found = stream(api, alice, run_id)[1]
-    finally:
-        thread.join()
-    assert [name for name, _, _ in found] == ["step", "gone"]
+    monkeypatch.setattr(runs_router, "_page", delete_then_read)
+    response, found = stream(api, alice, run_id)
+    assert response.status_code == 200
+    assert [name for name, _, _ in found] == ["gone"]
 
 
 def test_stream_slots_per_user() -> None:

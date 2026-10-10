@@ -5,6 +5,12 @@ CPU detection is turned off (issue #19). Turned off, AES runs in portable code, 
 must never reach the Jetson: not through compose.yml (the only file a deploy uses), the image,
 the .env template or the deploy scripts. The two Mac files must keep it, on the two services
 that import `cryptography`, or every local stack dies on start.
+
+CI runs on the Mac too since issue #83, in Linux arm64 runners inside Docker Desktop: there the
+variable comes from the runner image (ops/ci-runner/Dockerfile), for the processes of a job and,
+through CI_COMPOSE_OVERLAY=compose.mac.yml, for its scratch stacks. The workflow file itself
+still never names it, so the same file runs unchanged on GitHub's machines, and the Jetson's own
+runner (ops/runner) never has it.
 """
 
 import os
@@ -32,6 +38,9 @@ PRODUCTION_FILES = [
     "ops/env_check.sh",
     ".github/workflows/deploy.yml",
     ".github/workflows/ci.yml",
+    "ops/runner/Dockerfile",
+    "ops/runner/entrypoint.sh",
+    "ops/runner/job-guard.sh",
     ".github/scripts/ci_env.sh",
     "tests/ats-stub.compose.yml",
     "tests/anthropic-stub.compose.yml",
@@ -87,6 +96,16 @@ def test_the_mac_files_set_it_for_the_api_and_the_worker_only(name: str) -> None
         if NAME in environment_of(definition)
     }
     assert setting == {"api": "0", "worker": "0"}
+
+
+def test_the_mac_ci_runner_image_sets_it_and_names_the_mac_overlay() -> None:
+    """Issue #83: a job on a Mac runner imports `cryptography` (pytest) and starts stacks."""
+    lines = code_lines(ROOT / "ops/ci-runner/Dockerfile")
+    assert f"ENV {NAME}=0 \\" in lines
+    assert "    CI_COMPOSE_OVERLAY=compose.mac.yml" in lines
+    workflow = "\n".join(code_lines(ROOT / ".github/workflows/ci.yml"))
+    assert '-f "$CI_COMPOSE_OVERLAY"' in workflow
+    assert "compose.mac.yml" not in workflow, "the overlay is the runner's choice, not ci.yml's"
 
 
 def test_environment_of_reads_both_compose_forms() -> None:

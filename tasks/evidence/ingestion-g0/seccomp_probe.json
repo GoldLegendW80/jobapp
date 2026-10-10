@@ -1,0 +1,22 @@
+{
+ "machine": "aarch64",
+ "kernel": "6.10.14-linuxkit",
+ "python": "3.12.15",
+ "uid": 10002,
+ "seccomp_mode": 2,
+ "denied": {
+  "socket": "EPERM",
+  "socket_unix": "EPERM",
+  "socketpair": "EPERM",
+  "kill_parent": "EPERM",
+  "kill_self": "EPERM",
+  "execve": "EPERM",
+  "ptrace": "EPERM"
+ },
+ "still_works": {
+  "import": true,
+  "pipe": true,
+  "open_read": true
+ },
+ "verdict": "feasible"
+}

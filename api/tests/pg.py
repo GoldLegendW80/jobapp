@@ -72,7 +72,7 @@ class Postgres:
         docker("unpause", self.name)
 
     def remove(self) -> None:
-        subprocess.run(["docker", "rm", "-f", self.name], capture_output=True, check=False)
+        subprocess.run(["docker", "rm", "-f", "-v", self.name], capture_output=True, check=False)
 
 
 def _host_port(name: str, timeout: float = 10) -> int:
