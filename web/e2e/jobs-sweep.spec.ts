@@ -33,6 +33,8 @@ import {
  *   docker compose -p jobapp-j5e2e -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8125 E2E_COMPOSE_PROJECT=jobapp-j5e2e \
  *     pnpm --dir web exec playwright test jobs-sweep.spec.ts
+ * CI runs it on the scratch stack of tests/ats-stub.compose.yml (the worker reads the same fake
+ * ATS for "fake-" orgs) with E2E_SKIP_REAL_SWEEP=1: every journey except the real sweep.
  * E2E_REAL_ONLY=1 (the Jetson, tests/e2e_jobs_sweep_jetson.sh): only the real sweep, for an e2e
  * account; nothing of Harald's is read or touched. The stats of the real sweep are written to
  * tasks/evidence/<evidence>/real-sweep.json.
@@ -509,6 +511,11 @@ test("5,000 postings: the worker stays far under its 1536 MiB", async () => {
 });
 
 test("a real sweep of two real boards", async () => {
+  // CI (.github/workflows/ci.yml): the fake boards only, never a real ATS.
+  test.skip(
+    Boolean(process.env.E2E_SKIP_REAL_SWEEP),
+    "E2E_SKIP_REAL_SWEEP: no real ATS from CI",
+  );
   test.setTimeout(300_000);
   await saveSection(
     page.request,
