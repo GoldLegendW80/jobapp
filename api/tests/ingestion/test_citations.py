@@ -2108,3 +2108,31 @@ def test_the_spans_are_read_once_for_all_the_parts_of_a_value() -> None:
     result = check_item("date", ["2023-01", "2024-01"], source, [source])
     assert isinstance(result, Refusal)
     assert (result.index, result.rule) == ("value[1]", Rule.MONTH_NOT_IN_SOURCE)
+
+
+def test_a_month_whose_year_stands_after_the_excerpt_is_not_cited_with_it() -> None:
+    """The year must be in the same span as its month: an excerpt that stops at the month does
+    not give it the year, even when another excerpt holds that year."""
+    source = (
+        "Stage de fin d'études en juin 2019 chez Thales à Bordeaux.\n\n"
+        "Promotion 2019 de l'école d'ingénieurs, mention bien."
+    )
+    month_only = "Stage de fin d'études en juin"
+    year_elsewhere = "Promotion 2019 de l'école d'ingénieurs"
+    assert isinstance(find(source, month_only), Span)
+    excerpts = [month_only, year_elsewhere]
+    assert rule_of(check_item("date", "2019-06", source, excerpts)) is Rule.MONTH_NOT_IN_SOURCE
+    assert rule_of(check_item("date", "2019", source, excerpts)) is None
+    assert rule_of(check_item("date", "2019-06", source, [month_only + " 2019"])) is None
+    # and the same for a month that takes its year from the end of a range
+    ranged = (
+        "Stage de fin d'études de juin à août 2019 chez Thales à Bordeaux.\n\n"
+        "Promotion 2019 de l'école d'ingénieurs, mention bien."
+    )
+    for cut in ("Stage de fin d'études de juin à août", "Stage de fin d'études de juin à"):
+        assert isinstance(find(ranged, cut), Span)
+        for value in ("2019-06", "2019-08"):
+            result = check_item("date", value, ranged, [cut, year_elsewhere])
+            assert rule_of(result) is Rule.MONTH_NOT_IN_SOURCE, (cut, value)
+    whole = "Stage de fin d'études de juin à août 2019"
+    assert rule_of(check_item("date", "2019-06", ranged, [whole])) is None
