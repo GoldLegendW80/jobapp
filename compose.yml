@@ -94,8 +94,10 @@ services:
         condition: service_healthy
     # Healthy once logged in and connected (BackendState Running). Without a saved login and
     # without a valid key it stays NeedsLogin and never turns healthy, so a deploy fails loudly.
+    # Any spacing around the colon is accepted (issue #18): a tailscale release that prints the
+    # JSON compact must not turn a connected node unhealthy.
     healthcheck:
-      test: ["CMD-SHELL", "tailscale status --json --peers=false | grep -q '\"BackendState\": \"Running\"'"]
+      test: ["CMD-SHELL", "tailscale status --json --peers=false | grep -Eq '\"BackendState\"[[:space:]]*:[[:space:]]*\"Running\"'"]
       interval: 15s
       timeout: 5s
       start_period: 30s
