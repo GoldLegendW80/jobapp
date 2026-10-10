@@ -35,9 +35,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app --no-create-home --shell /usr/sbin/nologin app \
     && chown app:app /app
+# CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK: see the worker stage (the dev worker runs on this image).
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK=1
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
@@ -50,10 +52,16 @@ RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app --no-create-home --shell /usr/sbin/nologin app
 # HOME: /app is read-only for uid 10001; each agent run gets its own HOME and Claude Code config
 # directory inside its scratch directory (app/agents/runner.py), /tmp is a tmpfs (compose.yml).
+# CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK: before each run the SDK would start `claude -v` with the
+# worker's own, unfiltered environment (no env= in SubprocessCLITransport._check_claude_version,
+# 0.2.163). The CLI is pinned by the wheel, so the probe checks it against itself; skipped, the
+# only Claude Code process is the run's, started with the blanked environment (app/worker.py also
+# sets it, and drops secrets from its own environment).
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    HOME=/tmp
+    HOME=/tmp \
+    CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK=1
 WORKDIR /app
 COPY --from=builder-worker --chown=root:root /app/.venv /app/.venv
 COPY --chown=root:root alembic.ini ./

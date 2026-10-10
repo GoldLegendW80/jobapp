@@ -23,8 +23,12 @@
 The credential goes to Claude Code only through the environment of that one process
 (`options.env`: ANTHROPIC_API_KEY for an API key, CLAUDE_CODE_OAUTH_TOKEN for a subscription
 token). The SDK merges `options.env` over the worker's own environment, so every inherited
-variable outside ENV_KEEP (DATABASE_URL, CREDENTIALS_KEY, SECRET_KEY, REDIS_URL...) is overridden
-with an empty value: the CLI process never sees the worker's secrets. The secret is never
+variable outside ENV_KEEP is overridden with an empty value. The SDK's other process, its
+`claude -v` version probe, is started without env= and would inherit the worker's environment
+as is: the worker turns it off (CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK, in the image and in
+app/worker.py) and drops DATABASE_URL, CREDENTIALS_KEY, SECRET_KEY and the other secrets from
+its own environment once its settings are read. So no Claude Code process sees them.
+The credential is never
 written to disk, never logged, and scrubbed from every event and error stored. The first run
 that succeeds with a subscription token marks it verified (credentials.set_verified_if_unchanged:
 only if it was not replaced meanwhile).
@@ -85,26 +89,44 @@ ARG_VALUE_MAX = 200
 ARGS_MAX = 1_000
 REDACTED = "[redacted]"
 
-# Every built-in Claude Code tool, denied by name on top of `tools=[]` (which already leaves the
-# model none): shell, files, web, subagents, skills, planning and user prompts.
+# Built-in Claude Code tools, denied by name on top of `tools=[]` (which already leaves the model
+# none) and of the PreToolUse gate (which denies anything outside the allow list): shell, files,
+# web, subagents and tasks, schedules, worktrees, skills, planning and user prompts. Best effort,
+# defense in depth only: CLI releases add built-ins, and a name the CLI does not know is ignored
+# (the real CLI 2.1.286 ran with this list).
 FORBIDDEN_TOOLS = (
     "Agent",
     "AskUserQuestion",
     "Bash",
     "BashOutput",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
     "Edit",
+    "EnterPlanMode",
+    "EnterWorktree",
     "ExitPlanMode",
+    "ExitWorktree",
     "Glob",
     "Grep",
     "KillShell",
     "LS",
+    "LSP",
     "Monitor",
     "MultiEdit",
     "NotebookEdit",
+    "NotebookRead",
     "Read",
+    "SendMessage",
     "Skill",
     "SlashCommand",
     "Task",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "TaskUpdate",
     "TodoWrite",
     "ToolSearch",
     "WebFetch",
@@ -528,8 +550,12 @@ def error_of(exc: BaseException) -> str:
 async def _drive(
     backend: Backend, request: BackendRequest, state: _State, recorder: Recorder
 ) -> None:
-    async for message in backend.stream(request):
-        await _handle(message, state, recorder)
+    # aclosing: when this task is cancelled mid step, the stream's own `finally` (which stops the
+    # Claude Code process) runs here and now, before the scratch directory is removed, not later
+    # from the async generator finalizer.
+    async with contextlib.aclosing(backend.stream(request)) as messages:
+        async for message in messages:
+            await _handle(message, state, recorder)
 
 
 async def _watch_cancel(context: RunContext, run_id: uuid.UUID) -> None:
