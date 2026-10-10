@@ -123,6 +123,9 @@ case "$1 ${2:-}" in
   "ps "*)
     if [[ "$*" == *"--filter network=n1"* ]]; then
       echo svc1
+    elif [[ "$*" == *"name=jobapp-ci-try"* ]]; then
+      # What a trial left behind, when the test says so.
+      printf '%s\n' ${FAKE_TRY_CONTAINERS:-}
     elif [[ "$*" == *"label=jobapp.ci=runner"* ]]; then
       printf '%s\n' ${FAKE_RUNNERS:-}
     else
@@ -157,6 +160,11 @@ case "$1 ${2:-}" in
     # because the test says so: FAKE_RUNNERS names it, FAKE_IMAGE says which image it runs and
     # FAKE_STOPPED that it was stopped by hand.
     name="${!#}"
+    if [[ "$name" == jobapp-ci-try* ]]; then
+      # A trial container: running only when the test says so.
+      if [[ "${FAKE_TRY_RUNNING:-}" == 1 ]]; then echo true; else echo false; fi
+      exit 0
+    fi
     if grep -q "^create --name $name " "$FAKE_LOG"; then
       running=false
       if grep -q "^start $name\$" "$FAKE_LOG"; then running=true; fi
@@ -182,6 +190,13 @@ case "$1 ${2:-}" in
     esac
     ;;
   "volume inspect") exit 1 ;;
+  "volume ls")
+    if [[ "$*" == *"name=jobapp-ci-try"* ]]; then printf '%s\n' ${FAKE_TRY_VOLUMES:-}; fi
+    ;;
+  "volume rm")
+    # A volume a container still uses cannot be removed.
+    if [[ " ${FAKE_VOLUME_BUSY:-} " == *" ${!#} "* ]]; then exit 1; fi
+    ;;
   "volume prune") echo "Total reclaimed space: 0B" ;;
 esac
 exit 0
@@ -474,11 +489,47 @@ log_has "volume rm jobapp-ci-docker-2"
 log_has "volume rm jobapp-ci"
 log_has "image rm jobapp-ci-runner:$version"
 log_has "image rm jobapp-ci-runner:2.300.0"
-if grep -E '^(rm|volume rm|image rm|stop) ' "$WORK/docker.log" | grep -vE '^(stop -t 30 jobapp-ci-[0-9]+|rm -f jobapp-ci-[0-9]+|volume rm jobapp-ci(-docker-[0-9]+)?|image rm jobapp-ci-runner:[0-9.]+)$' | grep -q .; then
+if grep -E '^(rm|volume rm|image rm|stop) ' "$WORK/docker.log" | grep -vE '^(stop -t 30 jobapp-ci-[0-9]+|rm -f jobapp-ci-[0-9]+|rm -v jobapp-ci-try[a-z0-9-]*|volume rm jobapp-ci(-docker-[0-9]+|-try[a-z0-9-]*)?|image rm jobapp-ci-runner:[0-9.]+)$' | grep -q .; then
   fail "uninstall removed something that is not a CI runner object: $(grep -E '^(rm|volume rm|image rm) ' "$WORK/docker.log")"
 fi
 if grep -q 'prune' "$WORK/docker.log"; then fail "uninstall prunes"; fi
 ok "update and a second install recreate a container only when it is not on the built image and its runner is idle, one at a time (stop, remove, create, start, wait for Listening for Jobs), and wait otherwise; the replaced image is pruned after the last one; a runner that does not listen, GitHub not answering, a runner GitHub no longer lists and a disk under 10 GB each stop the command with nothing touched; a stopped runner stays stopped; a lower count is refused; prune refused while a job runs; start and status hear the listeners; stop stops each runner; uninstall: removal token on stdin only, only jobapp-ci-<n>, their volumes and every tag of the image, never a prune"
+
+step "trials: try removes its volumes, status shows what a trial left, prune and uninstall remove it"
+LEFT_VOLUMES="jobapp-ci-try jobapp-ci-try-docker jobapp-ci-try-docker2 myjobapp-ci-try-x"
+run 0 fake FAKE_TRY_VOLUMES="jobapp-ci-try jobapp-ci-try-docker" -- ops/ci-runners.sh try
+log_has "run --rm --name jobapp-ci-try --label jobapp.ci=try --privileged --cpuset-cpus 9-11 --memory 4g --memory-swap 4g -e CI_RUNNER_INDEX=99 -v jobapp-ci-try:/ci -v jobapp-ci-try-docker:/var/lib/docker -v $WORK/rd/disk:/host-disk:ro jobapp-ci-runner:$version exec bash"
+log_has "volume rm jobapp-ci-try"
+log_has "volume rm jobapp-ci-try-docker"
+[[ "$(grep -n '^volume rm jobapp-ci-try$' "$WORK/docker.log" | cut -d: -f1)" -gt "$(grep -n '^run --rm --name jobapp-ci-try ' "$WORK/docker.log" | cut -d: -f1)" ]] ||
+  fail "the trial volumes are not removed after the trial"
+if grep -q 'registration-token\|RUNNER_URL\|RUNNER_NAME\|restart' "$WORK/docker.log"; then fail "a trial registers a runner or restarts by itself"; fi
+run 0 fake -- ops/ci-runners.sh try tests/deploy_test.sh --verbose
+log_has "jobapp-ci-runner:$version exec tests/deploy_test.sh --verbose"
+run 1 fake FAKE_TRY_CONTAINERS="jobapp-ci-try" -- ops/ci-runners.sh try
+out_has "a trial container exists already"
+log_lacks "run --rm"
+run 1 fake FAKE_FREE_KB=9437184 -- ops/ci-runners.sh try
+out_has "only 9 GB free on this Mac"
+log_lacks "run --rm"
+ok "try: a privileged container on the last CPUs with the runner's memory limit, two scratch volumes removed when it ends, no registration, no restart policy; refused beside another trial and on a short disk"
+run 0 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_TRY_CONTAINERS="jobapp-ci-try" FAKE_TRY_VOLUMES="$LEFT_VOLUMES" -- ops/ci-runners.sh status
+out_has "left by a trial"
+out_has "container jobapp-ci-try"
+out_has "volume jobapp-ci-try-docker2"
+if grep -q 'myjobapp' "$WORK/out"; then fail "status counts a volume that is not a trial's"; fi
+if grep -qE '^(rm|volume rm) ' "$WORK/docker.log"; then fail "status removed something"; fi
+run 0 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_TRY_CONTAINERS="jobapp-ci-try" FAKE_TRY_VOLUMES="$LEFT_VOLUMES" -- ops/ci-runners.sh prune
+log_has "rm -v jobapp-ci-try"
+log_has "volume rm jobapp-ci-try-docker2"
+log_lacks "myjobapp"
+run 0 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_TRY_CONTAINERS="jobapp-ci-try" FAKE_TRY_RUNNING=1 FAKE_TRY_VOLUMES="jobapp-ci-try jobapp-ci-try-docker" FAKE_VOLUME_BUSY="jobapp-ci-try jobapp-ci-try-docker" -- ops/ci-runners.sh prune
+out_has "trial container jobapp-ci-try is running: left"
+out_has "trial volume jobapp-ci-try-docker is still used by a container: left"
+log_lacks "rm -v jobapp-ci-try"
+run 0 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_TRY_VOLUMES="jobapp-ci-try jobapp-ci-try-docker" -- ops/ci-runners.sh uninstall
+out_has "trial volume jobapp-ci-try-docker removed"
+ok "status names a trial's container and volumes and removes nothing; prune and uninstall remove them, but not a running trial, not a volume in use, not a name that only looks alike"
 
 step "ops/ci-rerun.sh: a fresh run of an open pull request, only from GitHub's fresh merge commit"
 mkdir -p "$WORK/bin2"

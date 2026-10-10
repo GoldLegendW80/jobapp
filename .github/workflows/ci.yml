@@ -6,8 +6,9 @@
 #
 # Layout (issue #91): three jobs of about the same length, one per runner, and a gate.
 #   api       ruff, the whole pytest suite in one run with the 95 percent floor, the docker
-#             marked tests, the scoring timing test; then the shell unit (shellcheck, tests/*.sh)
-#   checks    pre-commit, eslint, tsc, build, then the e2e group apps on its scratch stack
+#             marked tests, the scoring timing test
+#   checks    pre-commit, the shell unit (shellcheck, tests/*.sh), eslint, tsc, build, then the
+#             e2e group apps on its scratch stack
 #   journeys  Vitest, then the e2e groups identity and sweep, each on a scratch stack of its own
 #   gate      fails unless the three succeeded and computed the same plan
 # Why three: a job costs about 25 s before its first test (set up, checkout, tools, install) and
@@ -78,20 +79,20 @@ env:
   # Processes per test run: the 3 CPUs of a Mac runner. GitHub's machines have 2 to 4.
   PYTEST_WORKERS: "3"
   VITEST_WORKERS: "3"
-  # The service containers of the api job, given to the pytest steps alone as TEST_DATABASE_URL
-  # and REDIS_URL: the shell unit shares that job and must not see a database.
+  # The service containers of the api job, given to its pytest steps as TEST_DATABASE_URL and
+  # REDIS_URL.
   API_TEST_DATABASE_URL: postgresql+psycopg://jobapp:ci-only-not-a-secret@127.0.0.1:5432/jobapp_test
   API_TEST_REDIS_URL: redis://127.0.0.1:6379/0
 
 jobs:
   # ------------------------------------------------------------------------------------- api
-  # The whole api suite in one pytest run on the runner's 3 CPUs. Not sharded any more: two
-  # shards took 101 s and 146 s of tests on two runners plus a third job to combine their
-  # coverage, and the other two jobs of this layout are the long ones, so one run is as fast for
-  # the whole and needs no hand-over: every test is collected once by construction (`tests`,
-  # split only by the docker marker below) and the floor is read from this run's own data.
+  # The whole api suite in one pytest run on the runner's 3 CPUs, and nothing else in this job:
+  # it is the one unit that fills its CPUs for the whole time. Not sharded any more: two shards
+  # took 101 s and 146 s of tests on two runners plus a third job to combine their coverage; one
+  # run needs no hand-over, every test is collected once by construction (`tests`, split only
+  # by the docker marker below) and the floor is read from this run's own data.
   api:
-    name: api (ruff, pytest, coverage 95, docker tests), shell
+    name: api (ruff, pytest, coverage 95, docker tests)
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 30
     services:
@@ -126,7 +127,7 @@ jobs:
         id: plan
         run: python3 .github/scripts/ci_plan.py
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        if: steps.plan.outputs.api == 'true' || steps.plan.outputs.shell == 'true'
+        if: steps.plan.outputs.api == 'true'
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: ${{ runner.environment == 'github-hosted' }}
@@ -228,6 +229,70 @@ jobs:
             python3 .github/scripts/junit_summary.py "api (docker)" "${{ runner.temp }}/junit-api-docker.xml" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Every step the plan needs has run
+        if: ${{ !cancelled() }}
+        env:
+          CI_LANE: api
+          CI_PLAN: ${{ steps.plan.outputs.plan }}
+          CI_JOB_STATUS: ${{ job.status }}
+          CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 .github/scripts/ci_plan.py verify
+
+  # ---------------------------------------------------------------------------------- checks
+  # pre-commit on every run, then the shell unit and the web checks (the fast, CPU bound checks
+  # in front), then the e2e group apps (the longest group) against a scratch Compose stack; the worker runs with TEST_FAST_TIMERS
+  # (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts is in one group or in the exclusion
+  # list of .github/scripts/e2e_groups.py, which fails the shell unit and pre-commit otherwise.
+  # Which job holds which unit follows the measured lengths (README, What a CI run does): with
+  # three jobs running at once the api tests take about 250 s of their runner, so the shell unit
+  # (50 s) sits here and not behind them.
+  # Images: built with buildx bake. On a Mac runner from the layer cache of the runner's own
+  # Docker daemon (measured in run 38072303967: 22 s on a runner that never built them, under
+  # 2 s after; nothing is shared between runners because there is nothing left to gain). On
+  # GitHub's machines from the GitHub Actions layer cache, which only the journeys job writes.
+  checks:
+    name: pre-commit, shell, web checks (eslint, tsc, build), e2e apps
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
+    timeout-minutes: 30
+    env:
+      # The scratch stack of the e2e groups: one at a time in a job, the same project and port.
+      PROJECT: jobapp-ci
+      E2E_CADDY_URL: http://127.0.0.1:8080
+      E2E_COMPOSE_PROJECT: jobapp-ci
+      E2E_EVIDENCE: ci
+      PLAYWRIGHT_HTML_OPEN: never
+    outputs:
+      plan: ${{ steps.plan.outputs.plan }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Plan (the units this run needs, .github/scripts/ci_plan.py)
+        id: plan
+        run: python3 .github/scripts/ci_plan.py
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
+          cache-dependency-glob: api/uv.lock
+
+      # --- every run: pre-commit -----------------------------------------------------------
+      # On a Mac runner pre-commit's environments stay on the runner (PRE_COMMIT_HOME).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.environment == 'github-hosted'
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+      # ruff runs in the api unit, eslint in the web unit, shellcheck in the shell unit. On a
+      # run narrowed to documentation those units are skipped, and so are these three hooks:
+      # the files they read did not change.
+      - name: pre-commit run --all-files
+        id: precommit
+        env:
+          SKIP: ruff-check,ruff-format,eslint,shellcheck
+        run: uvx --from pre-commit==4.6.2 pre-commit run --all-files --show-diff-on-failure
+
       # --- unit: shell ---------------------------------------------------------------------
       # Every step on its own: one failing script does not hide the others.
       - name: Shellcheck (pinned image, as tests/deploy_test.sh and pre-commit)
@@ -283,67 +348,6 @@ jobs:
         id: tailscale_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/tailscale_test.sh
-
-      - name: Every step the plan needs has run
-        if: ${{ !cancelled() }}
-        env:
-          CI_LANE: api
-          CI_PLAN: ${{ steps.plan.outputs.plan }}
-          CI_JOB_STATUS: ${{ job.status }}
-          CI_STEPS: ${{ toJSON(steps) }}
-        run: python3 .github/scripts/ci_plan.py verify
-
-  # ---------------------------------------------------------------------------------- checks
-  # pre-commit on every run, then the web checks, then the e2e group apps (the longest group)
-  # against a scratch Compose stack; the worker runs with TEST_FAST_TIMERS
-  # (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts is in one group or in the exclusion
-  # list of .github/scripts/e2e_groups.py, which fails the shell unit and pre-commit otherwise.
-  # Images: built with buildx bake. On a Mac runner from the layer cache of the runner's own
-  # Docker daemon (measured in run 38072303967: 22 s on a runner that never built them, under
-  # 2 s after; nothing is shared between runners because there is nothing left to gain). On
-  # GitHub's machines from the GitHub Actions layer cache, which only the journeys job writes.
-  checks:
-    name: pre-commit, web checks (eslint, tsc, build), e2e apps
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
-    timeout-minutes: 30
-    env:
-      # The scratch stack of the e2e groups: one at a time in a job, the same project and port.
-      PROJECT: jobapp-ci
-      E2E_CADDY_URL: http://127.0.0.1:8080
-      E2E_COMPOSE_PROJECT: jobapp-ci
-      E2E_EVIDENCE: ci
-      PLAYWRIGHT_HTML_OPEN: never
-    outputs:
-      plan: ${{ steps.plan.outputs.plan }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 2
-      - name: Plan (the units this run needs, .github/scripts/ci_plan.py)
-        id: plan
-        run: python3 .github/scripts/ci_plan.py
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: ${{ env.UV_VERSION }}
-          enable-cache: ${{ runner.environment == 'github-hosted' }}
-          cache-dependency-glob: api/uv.lock
-
-      # --- every run: pre-commit -----------------------------------------------------------
-      # On a Mac runner pre-commit's environments stay on the runner (PRE_COMMIT_HOME).
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: runner.environment == 'github-hosted'
-        with:
-          path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
-      # ruff runs in the api unit, eslint in the web unit, shellcheck in the shell unit. On a
-      # run narrowed to documentation those units are skipped, and so are these three hooks:
-      # the files they read did not change.
-      - name: pre-commit run --all-files
-        id: precommit
-        env:
-          SKIP: ruff-check,ruff-format,eslint,shellcheck
-        run: uvx --from pre-commit==4.6.2 pre-commit run --all-files --show-diff-on-failure
 
       # --- unit: web (checks) and what e2e shares with it -----------------------------------
       # The pnpm version comes from packageManager in web/package.json.

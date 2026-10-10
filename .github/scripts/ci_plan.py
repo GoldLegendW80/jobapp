@@ -71,6 +71,8 @@ RULES: tuple[tuple[str, frozenset[str], str], ...] = (
 LANES: dict[str, dict[str, tuple[str, ...]]] = {
     "api": {
         "api": ("ruff", "pytest", "coverage", "docker_tests", "scoring"),
+    },
+    "checks": {
         "shell": (
             "shellcheck",
             "env_check_test",
@@ -81,8 +83,6 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
             "ci_runners_test",
             "tailscale_test",
         ),
-    },
-    "checks": {
         "web": ("lint", "typecheck", "build"),
         "e2e": ("e2e_apps",),
     },

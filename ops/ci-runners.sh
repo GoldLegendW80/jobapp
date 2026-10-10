@@ -14,7 +14,11 @@
 #                                       images are kept, a runner stopped with `stop` stays
 #                                       stopped. Safe to run again and while jobs queue
 #   ops/ci-runners.sh prune             empty the shared tool caches and every runner's Docker
-#                                       daemon (refused while a job runs)
+#                                       daemon (refused while a job runs); remove what a trial
+#                                       left behind
+#   ops/ci-runners.sh try [command...]  a container shaped like a runner but registered nowhere,
+#                                       to run a CI step by hand (bash when no command is given);
+#                                       its two scratch volumes are removed when it ends
 #   ops/ci-runners.sh uninstall         unregister every runner, remove containers, volumes, image
 #
 # What it creates, all in Docker Desktop but one empty folder, and nothing in the repository:
@@ -25,6 +29,9 @@
 #   volumes     jobapp-ci                              runner directories, work folders, caches
 #               jobapp-ci-docker-1 .. -<count>         /var/lib/docker of each instance
 #   GitHub      runners mac-ci-1 .. mac-ci-<count>, labels self-hosted, Linux, ARM64, mac-ci
+#   trials      the container jobapp-ci-try and the volumes jobapp-ci-try, jobapp-ci-try-docker,
+#               only while `try` runs; status shows any that were left, prune and uninstall
+#               remove them
 #   folder      ~/actions-runners/jobapp-ci/disk       empty, mounted read only at /host-disk so
 #                                                      the job-started hook can read the Mac's
 #                                                      free disk space (CI_RUNNER_DIR moves it)
@@ -58,6 +65,8 @@ SHARED_VOLUME="jobapp-ci"
 PROBE_DIR="${CI_RUNNER_DIR:-$HOME/actions-runners/jobapp-ci}/disk"
 DEFAULT_COUNT=3
 MAX_COUNT=3
+TRY_CONTAINER="jobapp-ci-try"
+TRY_VOLUMES=(jobapp-ci-try jobapp-ci-try-docker)
 
 die() {
   printf 'ci-runners: %s\n' "$*" >&2
@@ -367,6 +376,12 @@ cmd_status() {
     info "$(container "$n"): $line, $heard; GitHub: $state (id, status, busy)"
     [[ "$line" == running* && "$state" == *" online "* && "$heard" == listening* ]] || ok=1
   done
+  local left
+  left="$(try_leftovers)"
+  if [[ -n "$left" ]]; then
+    step "left by a trial (ops/ci-runners.sh prune removes what is not running)"
+    while IFS= read -r line; do info "$line"; done <<<"$left"
+  fi
   ((seen)) || {
     info "none installed"
     return 1
@@ -407,8 +422,65 @@ cmd_start() {
   wait_online "${indexes[@]}"
 }
 
+# --- trials ---------------------------------------------------------------------------------
+# A trial is a container of the runner image with a Docker daemon of its own and two scratch
+# volumes, registered nowhere. `try` removes the volumes when it ends; a trial started another
+# way (an older README gave the docker command) or killed half way leaves them behind, several
+# GB that belong to nothing: status names them, prune and uninstall remove them.
+
+# The trial containers and volumes that exist, one per line: "container <name>" or
+# "volume <name>". Names that start with jobapp-ci-try, nothing else.
+try_leftovers() {
+  docker ps -a --filter "name=$TRY_CONTAINER" --format '{{.Names}}' | sed -n 's/^\(jobapp-ci-try[A-Za-z0-9_.-]*\)$/container \1/p'
+  docker volume ls -q --filter "name=$TRY_CONTAINER" | sed -n 's/^\(jobapp-ci-try[A-Za-z0-9_.-]*\)$/volume \1/p'
+}
+
+# Remove what a trial left: its container unless it is running, its volumes unless a container
+# still uses them.
+remove_try_leftovers() {
+  local kind name
+  while read -r kind name; do
+    [[ -n "$name" ]] || continue
+    if [[ "$kind" == container ]]; then
+      if [[ "$(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null)" == true ]]; then
+        info "trial container $name is running: left (docker rm -f $name ends it)"
+      else
+        docker rm -v "$name" >/dev/null 2>&1 && info "trial container $name removed"
+      fi
+    elif docker volume rm "$name" >/dev/null 2>&1; then
+      info "trial volume $name removed"
+    else
+      info "trial volume $name is still used by a container: left"
+    fi
+  done < <(try_leftovers)
+}
+
+cmd_try() {
+  local total first status=0 tty=()
+  docker image inspect "$(image)" >/dev/null 2>&1 || die "no image $(image) yet: ops/ci-runners.sh install builds it"
+  [[ -z "$(try_leftovers | sed -n 's/^container //p')" ]] ||
+    die "a trial container exists already: end it (docker rm -f $TRY_CONTAINER) or run ops/ci-runners.sh prune"
+  # A trial pulls and builds what a job does, a few GB: not on a disk where no job would start.
+  disk_check 10
+  mkdir -p "$PROBE_DIR"
+  # The last CPUs of Docker, away from the runners' sets when there is room.
+  total="$(docker info --format '{{.NCPU}}')"
+  first=$((total - CPUS))
+  ((first >= 0)) || first=0
+  if [[ -t 0 && -t 1 ]]; then tty=(-it); fi
+  info "a trial container shaped like a runner (CPUs $first-$((total - 1)), memory $MEMORY), registered nowhere;"
+  info "it and its volumes ${TRY_VOLUMES[*]} are removed when the command ends"
+  docker run --rm ${tty[@]+"${tty[@]}"} --name "$TRY_CONTAINER" --label jobapp.ci=try --privileged \
+    --cpuset-cpus "$first-$((total - 1))" --memory "$MEMORY" --memory-swap "$MEMORY" \
+    -e CI_RUNNER_INDEX=99 -v "${TRY_VOLUMES[0]}:/ci" -v "${TRY_VOLUMES[1]}:/var/lib/docker" \
+    -v "$PROBE_DIR:/host-disk:ro" "$(image)" exec "${@:-bash}" || status=$?
+  remove_try_leftovers
+  return "$status"
+}
+
 cmd_prune() {
   local n
+  remove_try_leftovers
   any_busy && die "a job is running on a Mac runner: try again when it is done"
   for n in $(existing); do
     docker exec "$(container "$n")" bash -c 'docker system prune -af --volumes >/dev/null; docker builder prune -af >/dev/null; du -sm /var/lib/docker | cut -f1' |
@@ -461,7 +533,7 @@ cmd_uninstall() {
   else
     info "volume $SHARED_VOLUME, the runner images and the empty folder $PROBE_DIR removed"
   fi
-  info "not touched: the volumes jobapp-ci-try and jobapp-ci-try-docker of a step tried by hand (README)"
+  remove_try_leftovers
 }
 
 main() {
@@ -478,7 +550,11 @@ main() {
       checks
       "cmd_$cmd"
       ;;
-    *) die "usage: ops/ci-runners.sh install [count] | status | stop | start | update | prune | uninstall" ;;
+    try)
+      checks
+      cmd_try "$@"
+      ;;
+    *) die "usage: ops/ci-runners.sh install [count] | status | stop | start | update | prune | try [command...] | uninstall" ;;
   esac
 }
 
