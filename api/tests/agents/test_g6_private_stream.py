@@ -23,7 +23,6 @@ from app.agents.models import RunStatus
 from app.config import Settings
 from tests.agents.g6_helpers import (
     ALL_TOOLS,
-    MARKER,
     Streams,
     agent,
     assistant,
@@ -42,6 +41,10 @@ from tests.jobs.test_worker import flush_redis, redis_url, serve_until
 
 __all__ = ["g6_tools", "redis_url", "streams"]
 
+# MONITOR reports the commands of the whole Redis server, the databases of the other pytest
+# workers included: the marker of this module is its own, made when the module is imported, so
+# that a test running elsewhere at the same time never writes it.
+MARKER = f"PRIVATE-DOCUMENT-{uuid.uuid4().hex[:12]}"
 DOCUMENT = f"Camille Durand, engineer. {MARKER}. Started in 2021."
 PROPOSED = f"Value copied from the document: {MARKER}"
 SPOKEN = f"The document says: {MARKER}. " * 12
@@ -152,7 +155,7 @@ def test_redis_is_never_told_anything_of_a_private_run(
         ],
         # Pieces long enough to hold the marker whole: a public run then writes it to Redis
         # in one command, which is what the second watch looks for.
-        partial={"chars": 80, "sleep": 0.05},
+        partial={"chars": 200, "sleep": 0.05},
     )
     run_id = new_run(stage.factory, stage.user, {}, agent="g6_private")
     raw, browser, named, leaked = play(stage, settings, redis_url, run_id)

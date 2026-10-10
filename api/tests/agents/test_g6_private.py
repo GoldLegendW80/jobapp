@@ -301,13 +301,13 @@ def test_the_time_limit_passes_while_a_tool_call_is_in_flight(
     streams.add("g6_private", IN_FLIGHT)
     run_id = new_run(factory, alice_id, {}, agent="g6_private")
     rc = run_context(
-        settings, factory, keyring, replace(PRIVATE, wall_time_s=0.3), interrupt_grace_s=0.2
+        settings, factory, keyring, replace(PRIVATE, wall_time_s=1.5), interrupt_grace_s=0.2
     )
     with caplog.at_level(logging.DEBUG):
         assert execute(rc, run_id) is RunStatus.failed
     assert SLOW_STARTED.is_set()
     row = run_row(factory, run_id)
-    assert row.error == "The run took longer than its limit of 0.3 seconds and was stopped."
+    assert row.error == "The run took longer than its limit of 1.5 seconds and was stopped."
     assert row.output == {
         "turns": 0,
         "text_blocks": 1,

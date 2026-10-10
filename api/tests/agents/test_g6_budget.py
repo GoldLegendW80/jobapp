@@ -498,7 +498,7 @@ def test_a_run_with_a_budget_says_what_it_used_however_it_ends(
 
     steps = [*SLOW_LOOP[:3], {"raise": "process"}] if ending == "it dies" else SLOW_LOOP
     streams.add("g6_budget", steps)
-    found = replace(BUDGETED, wall_time_s=0.4) if ending == "time limit" else BUDGETED
+    found = replace(BUDGETED, wall_time_s=2.0) if ending == "time limit" else BUDGETED
     data = {} if budget is None else {"token_budget": budget}
     run_id = new_run(factory, alice_id, data, agent="g6_budget")
     rc = run_context(settings, factory, keyring, found, backends=Backends(speed=1.0))
@@ -526,7 +526,7 @@ def test_a_run_with_a_budget_says_what_it_used_however_it_ends(
         "the worker stops": (RunStatus.failed, runs.STOPPED),
         "time limit": (
             RunStatus.failed,
-            "The run took longer than its limit of 0.4 seconds and was stopped.",
+            "The run took longer than its limit of 2 seconds and was stopped.",
         ),
         "it dies": (RunStatus.failed, "The Claude Code process failed (exit code 1)."),
     }[ending]
