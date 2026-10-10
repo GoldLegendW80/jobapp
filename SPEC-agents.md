@@ -16,7 +16,7 @@ User stories:
 
 - **Claude Agent SDK (Python)** in the `worker` container (the one J5 adds for sweeps; this module adds the agent queue to it). The SDK is the Claude Code harness: it needs the Claude Code CLI available in the image (Node runtime); the image stays arm64.
 - **Facts to verify against the official Agent SDK docs before coding** (code.claude.com/docs/en/agent-sdk; never guess the API): the options object and its fields (system prompt, allowed tools, permission mode, MCP servers, subagent definitions, model, max turns, working directory, session resume), streaming message types, how usage and cost are reported, and how authentication is read (an Anthropic API key, or a Claude subscription OAuth token produced by `claude setup-token`). The plan records the verified answers.
-- **Tools:** no shell, no filesystem outside a per-run scratch directory, no web by default. Each agent gets an explicit allow list of tools, mostly in-process app tools exposed as an MCP server inside the worker (for example `get_job`, `get_profile_section`, `propose_note`, `propose_status`), which read and write through the same service layer and user scoping as the API. Write tools only create **proposals**; nothing changes user data until the user accepts.
+- **Tools:** no shell, no filesystem outside a per-run scratch directory, no web by default. Each agent gets an explicit allow list of tools, mostly in-process app tools exposed as an MCP server inside the worker (for example `get_job`, `get_profile_section`, `propose_note`, `propose_status`), which read and write through the same service layer and user scoping as the API. Write tools only create **proposals**; nothing changes user data until the user accepts. One named exception, defined in SPEC-mail: automatic mail-to-job links and status changes from mail are recorded as proposals created already `accepted` (`decided_by = system`) with an undo.
 - **Models:** `claude-opus-5-5` for every agent by default, configurable per agent definition in code. Thinking is adaptive; effort set per agent.
 - **Isolation:** one run = one SDK session in a fresh scratch directory, user id bound into every tool call server side (the model never chooses whose data it touches), technical limits per run (max turns, wall time) to stop runaway loops, no spending cap (decision below), cancellation from the UI.
 - **Concurrency:** at most 2 agent runs at a time on the Jetson (RAM), per-user queue order, the worker keeps within its 1536m budget.
@@ -39,10 +39,10 @@ agent_runs(id uuid, user_id, agent text, job_id null, status enum(queued, runnin
            input jsonb, output jsonb, error text, model text, input_tokens int, output_tokens int,
            cost_usd numeric null, started_at, finished_at, created_at)
 agent_events(id bigserial, run_id fk, seq int, at, kind text, data jsonb)   -- streamed steps, kept for replay
-agent_threads(id uuid, user_id, job_id null, title, sdk_session_id text null, created_at, updated_at)
+agent_threads(id uuid, user_id, job_id null, title, created_at, updated_at)   -- each message rebuilds the conversation from agent_messages (no SDK session kept on disk)
 agent_messages(id bigserial, thread_id fk, role enum(user, assistant), content jsonb, run_id null, at)
 proposals(id uuid, user_id, run_id, target text, target_id uuid null, kind text, payload jsonb,
-          status enum(pending, accepted, rejected, superseded, invalid), decided_at)
+          status enum(pending, accepted, rejected, superseded, invalid, undone), decided_by enum(user, system) default user, decided_at)
 ```
 
 ## API
