@@ -969,3 +969,4 @@ tests/reboot_check.sh 2>&1 | tee tasks/evidence/task9/reboot.log   # asks for th
 It reboots the Jetson, waits for ssh with a new boot id, waits for the five services to be healthy,
 runs `./deploy.sh smoke` and prints the new URL and the seconds since boot; it passes when the
 stack is healthy within 120 seconds of boot.
+Measurement probe for issue #91: this line is never merged.
