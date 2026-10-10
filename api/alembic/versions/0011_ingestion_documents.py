@@ -14,6 +14,11 @@ Expand only: new types and new tables, which the release before this one never r
 (CONTRIBUTING.md, Migrations). Deleting a user in that release cascades here through the
 foreign keys, with no code involved.
 
+The check constraints are named with `op.f()`: the name written here is the final one, the one
+the convention of app/models_base.py gives the model's constraint. Without it Alembic applies
+the convention a second time (`ck_<table>_ck_<table>_<name>`, as the tables of 0002 to 0009 have
+it, cut and hashed when it passes 63 characters).
+
 Written by hand to match app/ingestion/models.py (the tests run `alembic check` against it).
 Every statement is plain DDL so `alembic upgrade head --sql` works without a database.
 
@@ -107,31 +112,34 @@ def upgrade() -> None:
         sa.UniqueConstraint("user_id", "sha256", name="uq_ingestion_documents_user_id_sha256"),
         sa.CheckConstraint(
             f"char_length(name) >= 1 AND char_length(name) <= {NAME_MAX_CHARS}",
-            name="ck_ingestion_documents_name_length",
+            name=op.f("ck_ingestion_documents_name_length"),
         ),
         sa.CheckConstraint(
-            f"size >= 1 AND size <= {FILE_MAX_BYTES}", name="ck_ingestion_documents_size_range"
+            f"size >= 1 AND size <= {FILE_MAX_BYTES}",
+            name=op.f("ck_ingestion_documents_size_range"),
         ),
         sa.CheckConstraint(
-            "octet_length(sha256) = 32", name="ck_ingestion_documents_sha256_length"
+            "octet_length(sha256) = 32", name=op.f("ck_ingestion_documents_sha256_length")
         ),
         sa.CheckConstraint(
             f"bytes IS NULL OR octet_length(bytes) <= {FILE_MAX_BYTES}",
-            name="ck_ingestion_documents_bytes_size",
+            name=op.f("ck_ingestion_documents_bytes_size"),
         ),
         sa.CheckConstraint(
             f"text IS NULL OR char_length(text) <= {TEXT_MAX_CHARS}",
-            name="ck_ingestion_documents_text_length",
+            name=op.f("ck_ingestion_documents_text_length"),
         ),
         sa.CheckConstraint(
             "(pages IS NULL OR pages >= 0) AND (pages_text IS NULL OR pages_text >= 0) "
             "AND (pages_image IS NULL OR pages_image >= 0)",
-            name="ck_ingestion_documents_pages_not_negative",
+            name=op.f("ck_ingestion_documents_pages_not_negative"),
         ),
         sa.CheckConstraint(
-            "parser_version >= 1", name="ck_ingestion_documents_parser_version_positive"
+            "parser_version >= 1", name=op.f("ck_ingestion_documents_parser_version_positive")
         ),
-        sa.CheckConstraint("attempts >= 0", name="ck_ingestion_documents_attempts_not_negative"),
+        sa.CheckConstraint(
+            "attempts >= 0", name=op.f("ck_ingestion_documents_attempts_not_negative")
+        ),
     )
 
     op.create_table(
@@ -157,19 +165,19 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "document_id", "position", name="uq_ingestion_images_document_id_position"
         ),
-        sa.CheckConstraint("position >= 0", name="ck_ingestion_images_position_not_negative"),
+        sa.CheckConstraint("position >= 0", name=op.f("ck_ingestion_images_position_not_negative")),
         sa.CheckConstraint(
             f"octet_length(jpeg) >= 1 AND octet_length(jpeg) <= {IMAGE_MAX_BYTES}",
-            name="ck_ingestion_images_jpeg_size",
+            name=op.f("ck_ingestion_images_jpeg_size"),
         ),
         sa.CheckConstraint(
             f"width >= 1 AND width <= {IMAGE_MAX_SIDE} "
             f"AND height >= 1 AND height <= {IMAGE_MAX_SIDE}",
-            name="ck_ingestion_images_side_range",
+            name=op.f("ck_ingestion_images_side_range"),
         ),
         sa.CheckConstraint(
             f"text IS NULL OR char_length(text) <= {IMAGE_TEXT_MAX_CHARS}",
-            name="ck_ingestion_images_text_length",
+            name=op.f("ck_ingestion_images_text_length"),
         ),
     )
     op.create_index("ix_ingestion_images_user_id", "ingestion_images", ["user_id"])
@@ -186,7 +194,9 @@ def upgrade() -> None:
             name="fk_ingestion_consents_user_id_users",
             ondelete="CASCADE",
         ),
-        sa.CheckConstraint("text_version >= 1", name="ck_ingestion_consents_text_version_positive"),
+        sa.CheckConstraint(
+            "text_version >= 1", name=op.f("ck_ingestion_consents_text_version_positive")
+        ),
     )
 
 

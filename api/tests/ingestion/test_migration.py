@@ -145,7 +145,7 @@ def test_upgrade_creates_the_three_tables_with_every_column_of_the_plan(
     assert "pending" in documents["text_status"]["default"]
     assert documents["truncated"]["default"] == "false"
     assert documents["secret_warning"]["default"] == "false"
-    assert documents["attempts"]["default"] == "0"
+    assert documents["attempts"]["default"] == "'0'::smallint"
     assert documents["created_at"]["type"].timezone is True
     assert documents["secret_confirmed_at"]["type"].timezone is True
     assert "now()" in documents["created_at"]["default"]
