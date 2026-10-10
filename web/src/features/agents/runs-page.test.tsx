@@ -504,7 +504,7 @@ describe("/runs/:id, the run panel", () => {
   });
 
   /**
-   * Issue #33: a run on a subscription is not billed, so its amount is an estimate; with an API
+   * Issue #33: on a subscription the amount is an estimate, not a bill (issue #80); with an API
    * key it is the cost; a run with no recorded kind is worded neutrally.
    */
   describe("the amount, by the kind of credential the run used", () => {
@@ -550,21 +550,21 @@ describe("/runs/:id, the run panel", () => {
       expect(
         within(steps).getByText("43,100 in, 1,116 out, $0.193"),
       ).toBeInTheDocument();
-      expect(panel).not.toHaveTextContent(/estimate|not billed/i);
+      expect(panel).not.toHaveTextContent(/estimate|not billed|not a bill/i);
     });
 
-    it("is an estimate at API prices, not billed, with a subscription", async () => {
+    it("is an estimate at API prices, not a bill, with a subscription", async () => {
       const { panel, steps, metrics } = await openRun(
         done({ credential_kind: "claude_subscription" }),
       );
       expect(metrics).toHaveTextContent("Estimate at API prices$0.193");
       expect(within(metrics).queryByText("Cost")).not.toBeInTheDocument();
       expect(within(panel).getByTestId("cost-note")).toHaveTextContent(
-        "This run used your Claude subscription. It is not billed per run, and it counts toward your plan's usage limits. The estimate is what the same tokens cost at API prices.",
+        "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
       );
       expect(
         within(steps).getByText(
-          "43,100 in, 1,116 out, $0.193 estimated at API prices, not billed",
+          "43,100 in, 1,116 out, $0.193 estimated at API prices, not a bill",
         ),
       ).toBeInTheDocument();
       expect(panel.textContent).not.toMatch(/[–—]| - /);
@@ -585,7 +585,9 @@ describe("/runs/:id, the run panel", () => {
         expect(
           within(steps).getByText("43,100 in, 1,116 out, $0.193 at API prices"),
         ).toBeInTheDocument();
-        expect(metrics).not.toHaveTextContent(/estimate|not billed/i);
+        expect(metrics).not.toHaveTextContent(
+          /estimate|not billed|not a bill/i,
+        );
       },
     );
 
@@ -597,7 +599,7 @@ describe("/runs/:id, the run panel", () => {
     it.each([
       [
         "claude_subscription",
-        "43,100 in, 1,116 out, $0.193 estimated at API prices, not billed",
+        "43,100 in, 1,116 out, $0.193 estimated at API prices, not a bill",
       ],
       ["anthropic_api_key", "43,100 in, 1,116 out, $0.193"],
     ])(
@@ -647,7 +649,7 @@ describe("/runs/:id, the run panel", () => {
         const steps = await within(panel).findByRole("list", { name: "Steps" });
         expect(
           await within(steps).findByText(
-            "43,100 in, 1,116 out, $0.193 estimated at API prices, not billed",
+            "43,100 in, 1,116 out, $0.193 estimated at API prices, not a bill",
           ),
         ).toBeInTheDocument();
         view.unmount();
@@ -664,7 +666,7 @@ describe("/runs/:id, the run panel", () => {
       expect(note.id).not.toBe("");
       expect(amount).toHaveAttribute("aria-describedby", note.id);
       expect(amount).toHaveAccessibleDescription(
-        "This run used your Claude subscription. It is not billed per run, and it counts toward your plan's usage limits. The estimate is what the same tokens cost at API prices.",
+        "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
       );
       // The other values are described by nothing.
       for (const other of metrics.querySelectorAll("dd")) {
@@ -716,7 +718,7 @@ describe("/runs/:id, the run panel", () => {
         .map((node) => node.textContent);
       expect(costs).toEqual([
         "$0.193",
-        "$0.193Estimate, not billed",
+        "$0.193Estimate, not a bill",
         "$0.193At API prices",
         "None yet",
       ]);

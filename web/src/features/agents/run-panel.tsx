@@ -436,7 +436,7 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
   }
   const shownStatus = status ?? run.status;
   const stopping = run.cancel_requested && active;
-  // What the amount is, when it is not a plain cost: a subscription is not billed per run.
+  // What the amount is, when it is not a plain cost: on a subscription, an estimate.
   const note = run.cost_usd !== null ? costNote(run.credential_kind) : null;
   return (
     <Card data-testid="run-panel" data-status={shownStatus}>

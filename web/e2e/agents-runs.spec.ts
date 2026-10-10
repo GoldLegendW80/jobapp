@@ -232,7 +232,7 @@ test("the runs page lists every run with its status, tokens and cost", async () 
   expect(errors.filter((line) => !cut.test(line))).toEqual([]);
 });
 
-test("a run on a subscription shows an estimate that is not billed, a run on an API key its cost", async () => {
+test("a run on a subscription shows an estimate that is not a bill, a run on an API key its cost", async () => {
   // The run that ended with an API key: its amount is a cost, in its panel and in the list.
   await page.goto(`/runs/${firstRun}`);
   const metrics = () => panel().locator("dl").first();
@@ -255,10 +255,10 @@ test("a run on a subscription shows an estimate that is not billed, a run on an 
   await expect(metrics()).toContainText("Estimate at API prices$0.0123");
   await expect(metrics()).not.toContainText("Cost");
   await expect(panel().getByTestId("cost-note")).toHaveText(
-    "This run used your Claude subscription. It is not billed per run, and it counts toward your plan's usage limits. The estimate is what the same tokens cost at API prices.",
+    "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
   );
   await expect(steps().locator("li[data-kind=usage]")).toContainText(
-    "$0.0123 estimated at API prices, not billed",
+    "$0.0123 estimated at API prices, not a bill",
   );
   // Issue #80: the note is the description of the amount for assistive technology.
   await expect(
@@ -289,12 +289,17 @@ test("a run on a subscription shows an estimate that is not billed, a run on an 
   const list = page.getByRole("list", { name: "Runs" });
   await expect(list.getByRole("link")).toHaveCount(4);
   const costs = list.getByTestId("run-cost");
-  await expect(costs.first()).toHaveText("$0.0123Estimate, not billed");
-  await expect(costs.filter({ hasText: "Estimate, not billed" })).toHaveCount(
+  await expect(costs.first()).toHaveText("$0.0123Estimate, not a bill");
+  await expect(costs.filter({ hasText: "Estimate, not a bill" })).toHaveCount(
     1,
   );
-  await expect(
-    page.getByText(/On a Claude subscription the amount is an estimate/),
-  ).toContainText("each run counts toward your plan's usage limits");
+  const intro = page.getByText(
+    /On a Claude subscription the amount is an estimate/,
+  );
+  await expect(intro).toBeVisible();
+  await expect(intro).toContainText(
+    "not a bill: each run counts toward your plan's usage limits, and what you pay is set by your plan.",
+  );
+  await expect(page.locator("body")).not.toContainText(/not billed/i);
   await costShots(page, "cost-list");
 });

@@ -269,31 +269,39 @@ def test_chat_prompt_says_whom_you_means_in_a_stored_note() -> None:
 
 # The third person as the triage prompt's Voice rule names it, the other forms of its two
 # pronouns, "the profile" where the prompt asks for "your profile", and the name of the user of
-# these tests. Whole words, any case.
+# these tests. Whole words; any case, except the name.
 VOICE_NAMED = ("the candidate", "the user", "he", "she")
 VOICE_FORMS = ("him", "his", "her", "hers", "himself", "herself", "the profile")
 VOICE_NAME = ("Ada Example", "Ada", "Example")
 THIRD_PERSON = re.compile(
-    r"\b(" + "|".join(map(re.escape, (*VOICE_NAMED, *VOICE_FORMS, *VOICE_NAME))) + r")\b", re.I
+    r"\b(" + "|".join(map(re.escape, (*VOICE_NAMED, *VOICE_FORMS))) + r")\b", re.I
 )
+# The name as it is written, capitals included: "for example" is not the user's surname.
+USER_NAME = re.compile(r"\b(" + "|".join(map(re.escape, VOICE_NAME)) + r")\b")
+
+
+def third_person(text: str) -> str | None:
+    """The first word of `text` that speaks of the user in the third person, or None."""
+    found = THIRD_PERSON.search(text) or USER_NAME.search(text)
+    return found.group(0) if found else None
 
 
 @pytest.mark.parametrize(
     "name", ["triage", "triage_invalid", "triage_never_apply", "triage_injection"]
 )
 def test_recorded_triage_texts_speak_to_the_user(name: str) -> None:
-    """The recorded streams show the voice the prompt asks for, in exactly the three texts the
-    prompt names (issue #80): the note of propose_note, the reason of propose_status and the
-    final summary. They never speak of the user in the third person.
+    """The recorded streams show the voice the prompt asks for in everything the user reads:
+    the three texts the prompt names (the note of propose_note, the reason of propose_status,
+    the final summary), each found where it is written (issue #80), and the text the agent
+    says between its tool calls, which the user reads live and in the timeline. None of them
+    speaks of the user in the third person.
 
     The words are those of the prompt's Voice rule: "the candidate", "the user", "he", "she"
     and the user's name (the profile of these tests is Ada Example's), with the other forms of
     the two pronouns, and "the profile" where the prompt asks for "your profile". "They" is
-    not in the list: the rule rules it out for the user only, and a text cannot be asked whom
-    its "they" means (one recorded note says "they were ignored" of a posting's instructions).
-    """
-    import re
-
+    not in the list, and never was: the rule rules it out for the user only, and a text cannot
+    be asked whom its "they" means (one recorded note says "they were ignored" of a posting's
+    instructions)."""
     from app.agents import fake_backend
 
     prompt = definitions.get("triage", "production").system_prompt
@@ -301,11 +309,11 @@ def test_recorded_triage_texts_speak_to_the_user(name: str) -> None:
     for word in VOICE_NAMED:
         assert f'"{word}"' in rule, word
     assert IDENTITY["full_name"] == VOICE_NAME[0]
-    third_person = THIRD_PERSON
 
     notes: list[str] = []
     reasons: list[str] = []
     summaries: list[str] = []
+    said: list[str] = []  # the assistant's own text blocks
     for step in fake_backend.load_script(name):
         message = step.get("message", {})
         if message.get("type") == "result":
@@ -313,6 +321,8 @@ def test_recorded_triage_texts_speak_to_the_user(name: str) -> None:
         if message.get("type") != "assistant":
             continue
         for block in message["message"]["content"]:
+            if block.get("type") == "text":
+                said.append(block["text"])
             if block.get("type") != "tool_use":
                 continue
             if block["name"] == "mcp__app__propose_note":
@@ -322,10 +332,11 @@ def test_recorded_triage_texts_speak_to_the_user(name: str) -> None:
     assert len(summaries) == 1  # one final summary per run
     assert notes  # every recorded triage proposes a note
     assert reasons or name == "triage_injection"  # which proposes no status
-    for text in (*notes, *reasons, *summaries):
+    assert len(said) >= 2  # it says what it does before and after its tool calls
+    for text in (*notes, *reasons, *summaries, *said):
         assert isinstance(text, str)
         assert text.strip()
-        assert not third_person.search(text), text
+        assert third_person(text) is None, text
     # And where a text speaks of the user at all, it says "you" or "your".
     second_person = re.compile(r"\b(you|your)\b", re.I)
     if name != "triage_injection":
@@ -334,8 +345,7 @@ def test_recorded_triage_texts_speak_to_the_user(name: str) -> None:
 
 def test_the_voice_check_of_the_recorded_streams_catches_the_third_person() -> None:
     """The check itself: the wordings the real runs used before issue #33 are caught, and the
-    second person and a "they" about the company are not."""
-    third_person = THIRD_PERSON
+    second person, a "they" about the company and the word "example" are not."""
     for bad in (
         "He needs no permit.",
         "Fits his location list.",
@@ -344,16 +354,20 @@ def test_the_voice_check_of_the_recorded_streams_catches_the_third_person() -> N
         "Ada has run agents in production.",
         "Not in the profile.",
         "Her years are short.",
+        "I will read the posting, then the candidate's facts.",
+        "A fit for Ada Example.",
+        "Example has three years.",
     ):
-        assert third_person.search(bad), bad
+        assert third_person(bad) is not None, bad
     for good in (
         "You need no permit.",
         "Fits your location list.",
         "They ask for five years, your profile shows three and a half.",
         "The posting asks for a PhD, which is not in your profile.",
+        "For example the years asked, an example of a gap. Example: Paris.".lower(),
         "Check there before applying.",  # "there" holds "he": whole words only
     ):
-        assert not third_person.search(good), good
+        assert third_person(good) is None, good
 
 
 # --- the tools one by one ------------------------------------------------------------------------
