@@ -66,6 +66,16 @@ grep -q '^    CI_COMPOSE_OVERLAY=compose.mac.yml$' ops/ci-runner/Dockerfile || f
 if grep -v '^ *#' ops/runner/Dockerfile ops/runner/entrypoint.sh | grep -qi 'armcap\|CI_COMPOSE_OVERLAY'; then
   fail "the Jetson runner (ops/runner) names a Mac only setting"
 fi
+# Issue #83, the leak that filled the Mac's disk: throwaway Postgres, Redis and caddy containers
+# removed without their anonymous volumes. Every removal in the test helpers takes -v.
+if grep -n '"rm", "-f"' api/tests/pg.py api/tests/redis_server.py | grep -v '"rm", "-f", "-v"'; then
+  fail "a test helper removes a container without its volumes (docker rm -f -v)"
+fi
+if grep -n 'docker rm ' tests/tailscale_test.sh tests/compose_smoke.sh tests/e2e_jetson.sh tests/e2e_jobs_jetson.sh tests/e2e_jobs_sweep_jetson.sh | grep -v -- ' -v '; then
+  fail "a test script removes a container without its volumes (docker rm -v)"
+fi
+grep -q 'down -v --remove-orphans' .github/workflows/ci.yml || fail "the e2e teardown does not remove its volumes"
+ok "test helpers and scripts remove containers with their anonymous volumes; the e2e teardown is down -v"
 ok "the Mac's OpenSSL workaround comes from the Mac runner image only, through CI_COMPOSE_OVERLAY; ci.yml and the Jetson runner never name it"
 
 step "runner image: pinned, verified, hooks baked in"
@@ -150,6 +160,7 @@ FAKE
 cat >"$WORK/bin/df" <<'FAKE'
 #!/usr/bin/env bash
 # `df -Pk $HOME`: the free space the test asks for, 100 GB otherwise.
+[[ "${FAKE_DF_FAIL:-}" == 1 ]] && exit 1
 echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
 echo "/dev/disk 480000000 1 ${FAKE_FREE_KB:-104857600} 1% /"
 FAKE
@@ -164,7 +175,7 @@ fake() { # fake <VAR=value...> -- <cmd...>: the command with the fakes first on 
   : >"$WORK/docker.log"
   : >"$WORK/stdin.log"
   env PATH="$WORK/bin:$PATH" FAKE_LOG="$WORK/docker.log" FAKE_STDIN="$WORK/stdin.log" \
-    FAKE_TOKEN="$CANARY" ${envs[@]+"${envs[@]}"} "$@"
+    FAKE_TOKEN="$CANARY" CI_RUNNER_DIR="$WORK/rd" ${envs[@]+"${envs[@]}"} "$@"
 }
 
 step "job-started hook: this repository's ci.yml only, then a clean Docker daemon"
@@ -186,6 +197,20 @@ started 1 someone/fork "someone/fork/.github/workflows/ci.yml@refs/heads/main"
 out_has "refused: repository"
 started 1 "" ""
 ok "allowed: ci.yml of this repository from a pull request and from main, leftovers removed first; refused: deploy.yml, another workflow, a look-alike name, another repository, no context"
+ci_ref="GoldLegendW80/jobapp/.github/workflows/ci.yml@refs/heads/main"
+run 0 fake -- env GITHUB_REPOSITORY=GoldLegendW80/jobapp GITHUB_WORKFLOW_REF="$ci_ref" ops/ci-runner/job-started.sh
+out_has "100 GB free on the disk"
+# 9 GB free: under the 10 GB a job needs. 300 MB is what the Mac had left on 2026-10-10.
+run 1 fake FAKE_FREE_KB=9437184 -- env GITHUB_REPOSITORY=GoldLegendW80/jobapp GITHUB_WORKFLOW_REF="$ci_ref" ops/ci-runner/job-started.sh
+out_has "refused: only 9 GB free on the disk"
+out_has "CI needs 10 GB"
+run 1 fake FAKE_FREE_KB=307200 -- env GITHUB_REPOSITORY=GoldLegendW80/jobapp GITHUB_WORKFLOW_REF="$ci_ref" ops/ci-runner/job-started.sh
+out_has "refused: only 0 GB free"
+run 0 fake FAKE_FREE_KB=9437184 -- env CI_MIN_FREE_GB=5 GITHUB_REPOSITORY=GoldLegendW80/jobapp GITHUB_WORKFLOW_REF="$ci_ref" ops/ci-runner/job-started.sh
+run 1 fake FAKE_DF_FAIL=1 -- env GITHUB_REPOSITORY=GoldLegendW80/jobapp GITHUB_WORKFLOW_REF="$ci_ref" ops/ci-runner/job-started.sh
+out_has "could not read the free disk space"
+grep -q -- '-v "$PROBE_DIR:/host-disk:ro"' ops/ci-runners.sh || fail "the runners do not get the read only disk probe"
+ok "disk guard: a job starts with 10 GB free or more, is refused with the figure under it (CI_MIN_FREE_GB) and when the space cannot be read"
 
 step "ci-clean.sh: what it removes, what it leaves, its disk bound"
 run 0 fake FAKE_CONTAINERS="svc1 c2 c3" FAKE_RUNNER_NET=1 FAKE_NETS=1 -- ops/ci-runner/ci-clean.sh job
@@ -214,11 +239,16 @@ run 0 fake FAKE_DOCKER_DOWN=1 -- ops/ci-runner/ci-clean.sh job
 out_has "nothing cleaned"
 run 0 fake FAKE_DOCKER_DOWN=1 -- env GITHUB_WORKSPACE="$WORK/none" ops/ci-runner/job-completed.sh
 ok "a daemon that does not answer never fails the job"
-mkdir -p "$WORK/ws/web/test-results" "$WORK/ws/web/playwright-report" "$WORK/ws/web/src" "$WORK/ws/tasks/evidence/ci"
-run 0 fake -- env GITHUB_WORKSPACE="$WORK/ws" ops/ci-runner/job-completed.sh
-[[ ! -e "$WORK/ws/web/test-results" && ! -e "$WORK/ws/web/playwright-report" && ! -e "$WORK/ws/tasks/evidence/ci" && -d "$WORK/ws/web/src" ]] ||
-  fail "job-completed.sh did not remove exactly the Playwright output"
-ok "job-completed hook: Playwright reports, traces and CI evidence removed from the checkout, nothing else"
+ws="$WORK/runner-1/_work/jobapp/jobapp"
+mkdir -p "$ws/web/test-results" "$ws/web/node_modules/x" "$ws/api/.venv" "$ws/.git" "$WORK/runner-1/_work/_tool/node" "$WORK/elsewhere/keep"
+touch "$ws/.env"
+run 0 fake -- env GITHUB_WORKSPACE="$ws" ops/ci-runner/job-completed.sh
+[[ -d "$ws" && -z "$(ls -A "$ws")" ]] || fail "job-completed.sh did not empty the work folder: $(ls -A "$ws")"
+[[ -d "$WORK/runner-1/_work/_tool/node" ]] || fail "job-completed.sh removed the tool cache"
+run 0 fake -- env GITHUB_WORKSPACE="$WORK/elsewhere" ops/ci-runner/job-completed.sh
+[[ -d "$WORK/elsewhere/keep" ]] || fail "job-completed.sh emptied a folder that is not a runner's work folder"
+run 0 fake -- env GITHUB_WORKSPACE="" ops/ci-runner/job-completed.sh
+ok "job-completed hook: the job's work folder is emptied (checkout, node_modules, virtualenv, Playwright output, .env), the tool cache and any folder outside _work are left"
 
 step "ops/ci-runners.sh: arguments"
 run 1 ops/ci-runners.sh
@@ -266,7 +296,8 @@ log_has "-e RUNNER_URL=https://github.com/GoldLegendW80/jobapp"
 if grep '^run ' "$WORK/docker.log" | grep -q 'docker\.sock\|/Users\|/home/\|\$HOME'; then
   fail "a runner container gets the host's Docker socket or a host folder"
 fi
-[[ "$(grep '^run ' "$WORK/docker.log" | grep -o -- '-v [^ ]*' | sort -u | tr '\n' ' ')" == "-v jobapp-ci-docker-1:/var/lib/docker -v jobapp-ci-docker-2:/var/lib/docker -v jobapp-ci:/ci " ]] ||
+[[ -d "$WORK/rd/disk" && -z "$(ls -A "$WORK/rd/disk")" ]] || fail "the disk probe folder is missing or not empty"
+[[ "$(grep '^run ' "$WORK/docker.log" | grep -o -- '-v [^ ]*' | sort -u | tr '\n' ' ')" == "-v $WORK/rd/disk:/host-disk:ro -v jobapp-ci-docker-1:/var/lib/docker -v jobapp-ci-docker-2:/var/lib/docker -v jobapp-ci:/ci " ]] ||
   fail "unexpected mounts: $(grep '^run ' "$WORK/docker.log" | grep -o -- '-v [^ ]*' | sort -u | tr '\n' ' ')"
 # Every -e the containers get, by name.
 allowed="CI_RUNNER_INDEX RUNNER_URL RUNNER_NAME RUNNER_LABELS"
@@ -274,7 +305,7 @@ while IFS= read -r name; do
   [[ " $allowed " == *" $name "* ]] || fail "the containers get an unexpected variable: $name"
 done < <(grep -o -- '-e [A-Za-z_]*=' "$WORK/docker.log" | sed 's/^-e //; s/=$//' | sort -u)
 out_has "online on GitHub: 2 runner(s)"
-ok "2 runners: token on stdin only; labels mac-ci; privileged, restart unless-stopped, own CPUs, memory and Docker volume; no host socket, no host folder, only $allowed"
+ok "2 runners: token on stdin only; labels mac-ci; privileged, restart unless-stopped, own CPUs, memory and Docker volume; no host socket, no host folder but the empty read only disk probe, only $allowed"
 run 0 fake -- ops/ci-runners.sh install
 [[ "$(grep -c '^run -d ' "$WORK/docker.log")" == 2 ]] || fail "the default is not 2 runners"
 if grep '^run -d ' "$WORK/docker.log" | grep -vq -- '--cpuset-cpus [03]-[25] --memory 4g --memory-swap 4g'; then

@@ -201,7 +201,8 @@ Compose project and ports, so parallel jobs cannot collide, and nothing a job st
 prunes is in the Mac's own Docker daemon, where Harald's containers and the agents' scratch
 stacks live. A native runner would run job code as Harald's macOS user, next to his keys.
 
-**Where things live.** Nothing in the repository and nothing in the home folder: the image
+**Where things live.** Nothing in the repository, and in the home folder only the empty folder
+`~/actions-runners/jobapp-ci/disk` (Disk budget, below): the image
 `jobapp-ci-runner:<version>`, the containers `jobapp-ci-1` and `jobapp-ci-2` (restart
 unless-stopped), the volume `jobapp-ci` (each runner's directory, registration and work folder,
 plus the caches the runners share: uv, the pnpm store, Playwright's Chromium, pre-commit) and one
@@ -211,15 +212,14 @@ refuses more).
 
 **Budget.** The Mac is shared: Harald works on it, and agents run scratch stacks and test suites
 in the same Docker Desktop (12 CPUs, about 18 GB). On 2026-10-10 three runner trials on top of
-four agents took the load average to 82 and the Mac went down, so CI has a fixed share and
+four agents took the load average to 82 while the disk filled, and the Mac went down, so CI has a fixed share and
 cannot take more:
 
 | | per runner | two runners | left to everything else |
 |---|---|---|---|
 | CPUs | 3, pinned (runner 1: CPUs 0-2, runner 2: 3-5) | 6 of 12 | CPUs 6-11 never used by CI |
 | Memory | 4 GB, swap included | 8 GB of about 18 | about 10 GB |
-| Docker data (images, layer cache) | 4 GB, then emptied | 8 GB | |
-| Image and shared tool caches | | a few GB | |
+| Disk | see the disk budget below | about 10 GB, 13 GB at most | |
 
 A runner takes one job at a time, so two runners are the bound on what runs at once, whatever
 the number of pushes: the other jobs queue, and a newer push to the same branch cancels the older
@@ -227,15 +227,42 @@ run. Inside a job the worker counts are written out in `ci.yml` (`PYTEST_WORKERS
 `VITEST_WORKERS`, 3 each, never "all cores"; Playwright runs one worker), and the e2e job has
 `max-parallel: 2`, so at most two stacks of a run are up together even with a third runner. A
 full run therefore takes longer than on GitHub's machines, where eleven jobs ran at once; that is
-the price of leaving the Mac usable. Disk: after every job a hook removes the job's containers,
-networks and volumes, dangling images, build cache beyond 1 GB, and Playwright's reports and
-traces; a runner whose Docker data passes 4 GB is emptied and starts cold. The shared tool caches
-only grow when a lock file changes; `ops/ci-runners.sh status` shows their size and `prune`
-empties them. All of it sits in Docker Desktop's disk image, which grows on the Mac's own disk:
+the price of leaving the Mac usable.
+
+**Disk budget.** Disk is the scarcest resource of this Mac, and a full disk does not fail one
+job: it corrupts Docker Desktop's store for every container (2026-10-10: a trial of three e2e
+groups at once on a disk with 22 GB free, next to 21.8 GB of dangling volumes left by test runs,
+filled it). Everything of CI sits in Docker Desktop's disk image, which grows on the Mac's own
+disk:
+
+| | size | bound |
+|---|---|---|
+| Runner image, stored once | 1.9 GB | fixed |
+| Docker data of a runner (images, layer cache) | 2.4 GB measured after the three e2e groups | 4 GB (`CI_DOCKER_MAX_MB`), then emptied; build cache alone 1 GB (`CI_BUILD_CACHE_KEEP`) |
+| Runner directory (runner, its Node versions, setup tools) | under 1 GB per runner | fixed |
+| Shared tool caches (uv, pnpm store, Chromium, pre-commit) | 1.4 GB measured | grow only when a lock file changes; `prune` empties them |
+| Work folder of a job | emptied after every job | 0 between jobs |
+
+About 10 GB in steady state for two runners, 13 GB at the bounds. Three things enforce it.
 `install` refuses a Mac with less free space than 4 GB per runner plus 6
-(`CI_RUNNER_MIN_FREE_GB`). That check exists because a trial on 2026-10-10, three e2e groups at
-once on a disk with 22 GB free, filled the disk and gave every container of the Mac input/output
-errors.
+(`CI_RUNNER_MIN_FREE_GB`). Before every job, the job-started hook reads the Mac's free space
+and fails the job with the figure when it is under 10 GB (`CI_MIN_FREE_GB`): the hook sees the
+Mac's disk through `~/actions-runners/jobapp-ci/disk`, an empty folder mounted read only, the
+only thing of the Mac a runner sees. After every job, the job-completed hook removes the job's
+containers with their volumes, its networks, every unused volume, dangling images and build
+cache beyond 1 GB, and empties the work folder (checkout, `node_modules`, virtualenv,
+Playwright's reports and traces, which are uploaded as artifacts by then, kept 14 days by
+GitHub). Runs do not add up: the caches are keyed by content, so a second run of the same
+commit adds nothing (2,404 MB of Docker data after the first e2e group, 2,407 MB after the
+third).
+
+The leak behind the dangling volumes: the Postgres, Redis and caddy images declare anonymous
+volumes, and the test helpers removed their throwaway containers without them. Fixed at the
+source: `api/tests/pg.py` and `api/tests/redis_server.py` (every local `pytest` run without
+`TEST_DATABASE_URL`, and the docker-marked tests), `tests/tailscale_test.sh`,
+`tests/compose_smoke.sh` and the three `tests/e2e_*jetson.sh` now remove with `-v`, and
+`tests/ci_runners_test.sh` fails if one stops doing so. On a scratch stack, `docker compose down`
+without `-v` keeps its named volumes on purpose; finish with `down -v`.
 
 **When the Mac is off, asleep or Docker Desktop is closed.** The runners are offline and CI
 waits: jobs stay queued (GitHub keeps a queued job for 24 hours, then fails it) and start when

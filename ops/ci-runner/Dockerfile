@@ -31,14 +31,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8
 
 # What the jobs use from GitHub's image besides the setup actions: git, python3 (the scripts of
-# .github/scripts, with yaml), curl, jq, openssl, rsync, ssh, archive tools, a compiler for the
-# rare wheel without an arm64 build, sudo (playwright install --with-deps calls it), and the
-# libraries and fonts Playwright's Chromium needs, so that --with-deps finds them installed.
+# .github/scripts, with yaml), curl, jq, openssl, rsync, ssh, archive tools, sudo (playwright
+# install --with-deps calls it), and the libraries and fonts Playwright's Chromium needs, so that
+# --with-deps finds them installed once in the image instead of once per runner. No compiler:
+# every dependency of api/uv.lock has an arm64 wheel (a job that needs one can apt-get it).
+# Size: about 2 GB, of which the runner and its two bundled Node versions, the Docker Engine
+# with buildx and compose, and Chromium's libraries and fonts are nearly all; it is stored once
+# for all runners.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates curl git jq openssl python3 python3-venv python3-yaml rsync tini sudo \
-       iproute2 iptables kmod procps psmisc util-linux file less \
-       openssh-client unzip zip xz-utils zstd bzip2 gnupg build-essential pkg-config \
+       iproute2 iptables kmod procps util-linux \
+       openssh-client unzip zip xz-utils zstd bzip2 \
        libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 \
        libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 \
        libxcb1 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxkbcommon0 libxrandr2 xvfb \

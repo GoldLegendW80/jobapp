@@ -34,7 +34,7 @@ class Redis:
             time.sleep(0.2)
 
     def remove(self) -> None:
-        docker("rm", "-f", self.name)
+        docker("rm", "-f", "-v", self.name)
 
 
 def start_redis() -> Redis:
@@ -46,7 +46,7 @@ def start_redis() -> Redis:
         if lines:
             break
         if time.monotonic() > deadline:
-            docker("rm", "-f", name)
+            docker("rm", "-f", "-v", name)
             raise RuntimeError("redis container publishes no port")
         time.sleep(0.2)
     server = Redis(name=name, port=int(lines[0].rsplit(":", 1)[1]))

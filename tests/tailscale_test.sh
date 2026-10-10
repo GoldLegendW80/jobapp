@@ -48,7 +48,7 @@ cleanup() {
   if [[ -f "$WORK/scratch/compose.yml" ]]; then
     (cd "$WORK/scratch" && docker compose -p "$PROJECT" --profile tunnel down -v --remove-orphans >/dev/null 2>&1) || true
   fi
-  docker rm -f "$TAG-caddy" "$TAG-echo" >/dev/null 2>&1 || true
+  docker rm -f -v "$TAG-caddy" "$TAG-echo" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
   rm -rf "$WORK"
 }

@@ -12,7 +12,7 @@
 #                                       daemon (refused while a job runs)
 #   ops/ci-runners.sh uninstall         unregister every runner, remove containers, volumes, image
 #
-# What it creates, all in Docker Desktop and nothing in the repository or the home folder:
+# What it creates, all in Docker Desktop but one empty folder, and nothing in the repository:
 #   image       jobapp-ci-runner:<runner version>      (ops/ci-runner/Dockerfile)
 #   containers  jobapp-ci-1 .. jobapp-ci-<count>       restart unless-stopped, --privileged (they
 #                                                      run a Docker daemon of their own), a CPU set
@@ -20,6 +20,9 @@
 #   volumes     jobapp-ci                              runner directories, work folders, caches
 #               jobapp-ci-docker-1 .. -<count>         /var/lib/docker of each instance
 #   GitHub      runners mac-ci-1 .. mac-ci-<count>, labels self-hosted, Linux, ARM64, mac-ci
+#   folder      ~/actions-runners/jobapp-ci/disk       empty, mounted read only at /host-disk so
+#                                                      the job-started hook can read the Mac's
+#                                                      free disk space (CI_RUNNER_DIR moves it)
 # Everything carries the label jobapp.ci=runner. Only objects with these names are ever removed.
 #
 # The registration and removal tokens go from `gh api` straight into the container's stdin
@@ -46,6 +49,7 @@ MEMORY="${CI_RUNNER_MEMORY:-4g}"
 CPUS="${CI_RUNNER_CPUS:-3}"
 LABEL="jobapp.ci=runner"
 SHARED_VOLUME="jobapp-ci"
+PROBE_DIR="${CI_RUNNER_DIR:-$HOME/actions-runners/jobapp-ci}/disk"
 DEFAULT_COUNT=2
 MAX_COUNT=3
 
@@ -150,6 +154,7 @@ start_container() {
     --cpuset-cpus "$first-$last" --memory "$MEMORY" --memory-swap "$MEMORY" \
     --log-opt max-size=10m --log-opt max-file=3 \
     -v "$(docker_volume "$n"):/var/lib/docker" \
+    -v "$PROBE_DIR:/host-disk:ro" \
     "${OPTS[@]}" "$(image)" run >/dev/null || die "$(container "$n") did not start"
   info "$(container "$n"): CPUs $first-$last, memory $MEMORY"
 }
@@ -183,6 +188,7 @@ cmd_install() {
   disk_check "$count"
   build_image
   docker volume create --label "$LABEL" "$SHARED_VOLUME" >/dev/null
+  mkdir -p "$PROBE_DIR"
   step "registration on $REPO (labels self-hosted, Linux, ARM64, mac-ci)"
   for n in $(seq 1 "$count"); do
     docker volume create --label "$LABEL" "$(docker_volume "$n")" >/dev/null
@@ -212,6 +218,7 @@ autostart_note() {
 
 cmd_update() {
   local n count indexes=()
+  mkdir -p "$PROBE_DIR"
   while IFS= read -r n; do indexes+=("$n"); done < <(existing)
   count="${#indexes[@]}"
   ((count > 0)) || die "no runner installed: ops/ci-runners.sh install"
@@ -238,7 +245,7 @@ cmd_status() {
     return 1
   }
   autostart_note
-  step "memory and disk"
+  step "memory and disk (the Mac has $(df -Pk "$HOME" | awk 'NR==2 {print int($4 / 1048576)}') GB free; a job is refused under 10)"
   local names=()
   for n in $(existing); do names+=("$(container "$n")"); done
   docker stats --no-stream --format '   {{.Name}}: {{.MemUsage}}, CPU {{.CPUPerc}}' "${names[@]}" 2>/dev/null || true
@@ -310,7 +317,8 @@ cmd_uninstall() {
   done
   docker volume rm "$SHARED_VOLUME" >/dev/null 2>&1 || true
   docker image rm "$(image)" >/dev/null 2>&1 || true
-  info "volume $SHARED_VOLUME and image $(image) removed"
+  rmdir "$PROBE_DIR" "$(dirname "$PROBE_DIR")" 2>/dev/null || true
+  info "volume $SHARED_VOLUME, image $(image) and the empty folder $PROBE_DIR removed"
 }
 
 main() {
