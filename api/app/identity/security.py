@@ -16,7 +16,7 @@ import unicodedata
 from functools import cache
 from pathlib import Path
 
-from argon2 import PasswordHasher
+from argon2 import PasswordHasher, profiles
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 
 PASSWORD_MIN_LENGTH = 10
@@ -26,7 +26,13 @@ TOKEN_LENGTH = 43  # len(base64url(32 bytes)) without padding
 COMMON_PASSWORDS_FILE = Path(__file__).with_name("common_passwords.txt")
 
 _TOKEN_RE = re.compile(rf"[A-Za-z0-9_-]{{{TOKEN_LENGTH}}}")
-_hasher = PasswordHasher()
+# The production cost, pinned: argon2id, RFC 9106 low-memory profile (t=3, m=64 MiB, p=4), the
+# argon2-cffi default, named here so an upgrade of the library cannot change it unseen. Nothing
+# reads a setting for it. The test suite swaps `_hasher` for a cheap one in-process
+# (tests/conftest.py), and tests/identity/test_security.py checks that a fresh interpreter still
+# gets exactly these parameters.
+PASSWORD_HASH_PARAMETERS = profiles.RFC_9106_LOW_MEMORY
+_hasher = PasswordHasher.from_parameters(PASSWORD_HASH_PARAMETERS)
 
 
 class PasswordRuleError(ValueError):

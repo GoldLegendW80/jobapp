@@ -167,6 +167,11 @@ export function PlacesPanel({
           <p className="mt-0.5 text-xs text-muted-foreground">
             {`${plural(data.unplaced_total, "posting")} without a place on the map. Their locations name no city or country the map knows.`}
           </p>
+          {data.unplaced_locations > data.unplaced.length ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {`The ${data.unplaced.length} most frequent of ${data.unplaced_locations} locations.`}
+            </p>
+          ) : null}
           <ul
             aria-label="Unplaced locations"
             className="mt-2 flex max-h-40 flex-col gap-0.5 overflow-auto text-sm"

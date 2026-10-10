@@ -6,12 +6,22 @@ Answer:
     {"places": [{"name", "kind": "city"|"country", "lat", "lon", "count",
                  "counts_by_status": {status: n, ...}, "job_ids": [...], "job_ids_truncated"}],
      "jobs": {id: {"title", "company", "location", "status", "fit"}},
-     "unplaced": [{"location", "count"}], "total", "placed", "unplaced_total"}
+     "unplaced": [{"location", "count"}], "unplaced_locations", "total", "placed",
+     "unplaced_total"}
 
-Places come most postings first (ties by name); `job_ids` follow the engine's side panel order
-(pipeline order, then best fit) and stop at JOB_IDS_MAX; `jobs` describes every id listed. A job
-naming two cities counts in both pins, and once in `placed`. Unplaced locations come with their
-counts, most first; an absent location is "".
+A job naming two cities counts in both pins, and once in `placed`; `jobs` describes every id
+listed. An absent location is "". The answer is bounded whatever the number of postings: at
+most JOB_IDS_MAX ids per place and UNPLACED_MAX unplaced locations, while `count`,
+`unplaced_locations` (distinct unplaced texts) and `unplaced_total` (unplaced postings) always
+give the full numbers.
+
+Order, ties included, so the answer is the same on every call:
+- places: most postings first; equal counts by name, in code point order ("Berlin" before
+  "Paris", "Zürich" after "Zug").
+- job_ids of a place: the engine's side panel order, pipeline status first, then best fit
+  (unscored last), then title, then id.
+- unplaced: most postings first; equal counts by the location text, in code point order (so ""
+  first, and "Remote" before "remote"). The cap keeps the head of that order.
 """
 
 import uuid
@@ -49,13 +59,20 @@ class UnplacedOut(BaseModel):
     count: int
 
 
+# Unplaced location texts listed at most; with thousands of free-text locations the list would
+# otherwise grow with the data. The panel shows the most frequent, which are the ones worth adding
+# to the gazetteer.
+UNPLACED_MAX = 200
+
+
 class PlacesOut(BaseModel):
     places: list[PlaceOut]
     jobs: dict[uuid.UUID, MapJobOut]
-    unplaced: list[UnplacedOut]
+    unplaced: list[UnplacedOut]  # at most UNPLACED_MAX, most postings first
+    unplaced_locations: int  # distinct unplaced location texts, listed or not
     total: int  # postings matching the filters
     placed: int  # of which naming at least one place
-    unplaced_total: int
+    unplaced_total: int  # postings naming no place
 
 
 def places_map(db: Session, user_id: uuid.UUID, filters: JobFilters) -> PlacesOut:
@@ -100,7 +117,8 @@ def places_map(db: Session, user_id: uuid.UUID, filters: JobFilters) -> PlacesOu
     return PlacesOut(
         places=places,
         jobs=listed,
-        unplaced=[UnplacedOut(location=loc, count=n) for loc, n in summary.unplaced],
+        unplaced=[UnplacedOut(location=loc, count=n) for loc, n in summary.unplaced[:UNPLACED_MAX]],
+        unplaced_locations=len(summary.unplaced),
         total=summary.total,
         placed=summary.placed,
         unplaced_total=summary.total - summary.placed,

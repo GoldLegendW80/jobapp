@@ -36,6 +36,10 @@ to `index.html` for client routes, and proxies `/api/*` to `api:8000` with the p
 
 `docker compose exec api pytest` needs a test database: the smoke script creates `jobapp_test` in the
 compose `db` and runs `pytest -m "not docker"` with `TEST_DATABASE_URL` pointing at it.
+`pytest -n 4` (pytest-xdist) runs four workers, each on a database of its own created next to
+`TEST_DATABASE_URL`'s and dropped at the end; keep the `docker`-marked tests serial (`-m docker`
+without `-n`). The suite hashes passwords with a cheap argon2 cost in-process; tests marked
+`production_argon2` and a fresh-interpreter check keep the production cost honest.
 Migrations live in `api/alembic/versions/`; models register on `app.models_base.Base` and are imported
 in `api/app/models.py` so `alembic revision --autogenerate` sees them.
 
@@ -85,14 +89,20 @@ Postgres and Redis, coverage at least 95 percent), web (eslint, tsc, Vitest, bui
 Playwright journeys with throwaway accounts and a synthetic jobs import, never Harald's data) and
 pre-commit. When CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
 Jetson's self-hosted runner, under the Jetson's deploy lock (`flock` on
-`~/jobapp-backups/.deploy.lock`, which `./deploy.sh` takes too, so the two never overlap): rsync of
-that commit into `~/jobapp` (same `.rsyncignore`, `.env` kept), images built first (a failed build
-leaves the running stack untouched; the running images are tagged `:previous` beforehand), a
+`~/jobapp-backups/.deploy.lock`, which `./deploy.sh` takes too, so the two never overlap; the Jetson
+lets go of the Mac's hold after `DEPLOY_LOCK_MAX_S`, an hour by default, so a Mac that sleeps mid
+deploy cannot block GitHub's deploys for hours): rsync of
+that commit into `~/jobapp` (same `.rsyncignore`, `.env` kept; the tree it replaces is copied to
+`~/jobapp-backups/previous-tree` first), images built first (a failed build leaves the running
+stack untouched and puts those files back; beforehand, `ops/previous.sh tag-running` tags as
+`:previous` the image each running api and caddy container was started from, read with
+`docker inspect`, so `:previous` is always an image that ran), a
 backup into `~/jobapp-backups/deploys/` whenever the database volume exists (db started first if
 it was stopped; newest 10 kept, separate from the nightly ones), `compose up --wait`, migrations,
 `tests/jetson_smoke.sh` in quick mode, `~/jobapp/.deployed-commit` written once the smoke passed,
-and the public URL in the run's summary. If `up` or a migration fails, the `:previous` images are
-put back and started again; a migration runs in one transaction and rolls back, and for data the
+and the public URL in the run's summary. If `up` or a migration fails, the previous files
+(`compose.yml`, the Caddyfile and the rest of the tree, `.env` never touched) and the `:previous`
+images are put back and started again; a migration runs in one transaction and rolls back, and for data the
 log names the predeploy dump to restore with `ops/db.sh restore-live`. A started deploy is never
 cancelled. `gh workflow run deploy.yml -f ref=<branch or sha>` deploys a branch by hand to test it
 before the merge (the next merge redeploys `main`); the workflow itself always comes from `main`.

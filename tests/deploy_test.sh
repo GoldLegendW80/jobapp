@@ -45,7 +45,7 @@ run() {
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
 
 step "shellcheck"
-SCRIPTS=(deploy.sh ops/db.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
+SCRIPTS=(deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
   tests/crash_check.sh tests/reboot_check.sh)
 docker run --rm -v "$ROOT:/mnt:ro" -w /mnt "$SHELLCHECK_IMAGE" "${SCRIPTS[@]}" || fail "shellcheck"
 ok "${SCRIPTS[*]} clean"
@@ -688,5 +688,93 @@ out_has "starting api and worker again after a failure"
 calls_are "stop api worker" "drop while stopped: api worker" "restore while stopped: api worker" \
   "alembic" "start api worker"
 ok "any other failure after the stop starts api and worker again on exit"
+
+step "deploy lock: the Jetson releases it after DEPLOY_LOCK_MAX_S even if the Mac never closes it"
+# lock_script is the remote shell remote_lock sends; it is taken from deploy.sh itself.
+eval "$(sed -n '/^lock_script() {/,/^}/p' deploy.sh)"
+script_text="$(lock_script jobapp-backups 3600)"
+[[ "$script_text" == *"timeout 3600 cat >/dev/null"* ]] || fail "no remote timeout in the lock script: $script_text"
+# shellcheck disable=SC2016 # the literal text of deploy.sh, not an expansion
+grep -qF 'remote "$(lock_script "$bdir" "$max")"' deploy.sh || fail "remote_lock does not send lock_script"
+if command -v flock >/dev/null && command -v timeout >/dev/null; then
+  lockdir="$WORK/lockhome"
+  mkdir -p "$lockdir"
+  # The holder's stdin never closes (a sleeping Mac): only the 2 second cap can end it.
+  (cd "$lockdir" && sleep 30 | bash -c "$(lock_script backups 2)") >"$WORK/holder" 2>&1 &
+  holder=$!
+  for _ in $(seq 1 50); do
+    grep -q '^locked' "$WORK/holder" && break
+    sleep 0.1
+  done
+  grep -q '^locked' "$WORK/holder" || fail "the holder never took the lock: $(cat "$WORK/holder")"
+  flock -n "$lockdir/backups/.deploy.lock" true && fail "the lock was free while held"
+  start=$SECONDS
+  flock -w 10 "$lockdir/backups/.deploy.lock" true || fail "the lock was still held after 10s"
+  ((SECONDS - start <= 5)) || fail "the lock took $((SECONDS - start))s to go"
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+  ok "the remote lock command holds flock, then lets go after its cap with stdin still open"
+else
+  ok "the remote lock command runs timeout <DEPLOY_LOCK_MAX_S> cat (no flock here: the release itself is checked in CI)"
+fi
+
+step "ops/previous.sh: :previous from the running containers, the deployed tree saved and restored"
+mkdir -p "$WORK/bin4"
+cat >"$WORK/bin4/docker" <<'FAKE'
+#!/usr/bin/env bash
+echo "docker $*" >>"$FAKE_CALLS"
+case "$*" in
+  "compose -f compose.yml --profile tunnel ps -q --status running api") echo "${FAKE_API_ID:-}" ;;
+  "compose -f compose.yml --profile tunnel ps -q --status running caddy") echo "${FAKE_CADDY_ID:-}" ;;
+  "inspect -f {{.Image}} c0ffee") echo "sha256:1111" ;;
+  "inspect -f {{.Image}} beef") echo "sha256:2222" ;;
+esac
+exit 0
+FAKE
+chmod +x "$WORK/bin4/docker"
+prev() { env PATH="$WORK/bin4:$PATH" FAKE_CALLS="$WORK/calls4" "$@"; }
+: >"$WORK/calls4"
+run 0 prev FAKE_API_ID=c0ffee FAKE_CADDY_ID=beef ops/previous.sh tag-running
+grep -qx "docker tag sha256:1111 jobapp-api:previous" "$WORK/calls4" || fail "api not tagged from its container: $(cat "$WORK/calls4")"
+grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "caddy not tagged from its container"
+grep -q "jobapp-.*:latest" "$WORK/calls4" && fail ":latest was read: $(cat "$WORK/calls4")"
+: >"$WORK/calls4"
+run 0 prev FAKE_API_ID= FAKE_CADDY_ID=beef ops/previous.sh tag-running
+out_has "api: no running container, jobapp-api:previous left as it was"
+grep -q "jobapp-api:previous" "$WORK/calls4" && fail "a stopped api was still tagged: $(cat "$WORK/calls4")"
+grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "caddy not tagged"
+ok "tag-running tags the image id of each running container (never :latest); a stopped service keeps its :previous"
+
+app="$WORK/app"
+saved="$WORK/backups/previous-tree"
+mkdir -p "$app/caddy"
+cp .rsyncignore "$app/"
+printf 'old compose\n' >"$app/compose.yml"
+printf 'old caddy\n' >"$app/caddy/Caddyfile"
+printf 'gone later\n' >"$app/removed-by-new.txt"
+printf 'SECRET=1\n' >"$app/.env"
+printf 'abc123\n' >"$app/.deployed-commit"
+run 0 ops/previous.sh save-tree "$app" "$saved"
+[[ ! -e "$saved/.env" && ! -e "$saved/.deployed-commit" ]] || fail "secrets or the commit marker were copied"
+# The new deploy: files changed, one removed, one added; the secrets left alone.
+printf 'new compose\n' >"$app/compose.yml"
+printf 'new caddy\n' >"$app/caddy/Caddyfile"
+rm "$app/removed-by-new.txt"
+printf 'new\n' >"$app/added-by-new.txt"
+run 0 ops/previous.sh restore-tree "$saved" "$app"
+[[ "$(cat "$app/compose.yml")" == "old compose" && "$(cat "$app/caddy/Caddyfile")" == "old caddy" ]] ||
+  fail "compose.yml or the Caddyfile were not restored"
+[[ -f "$app/removed-by-new.txt" && ! -e "$app/added-by-new.txt" ]] || fail "the tree is not the previous one"
+[[ "$(cat "$app/.env")" == "SECRET=1" && "$(cat "$app/.deployed-commit")" == "abc123" ]] ||
+  fail ".env or .deployed-commit changed"
+run 0 ops/previous.sh save-tree "$WORK/never-deployed" "$saved"
+out_has "nothing deployed"
+[[ ! -e "$saved" ]] || fail "a stale previous tree survived a first deploy"
+run 0 ops/previous.sh restore-tree "$saved" "$app"
+out_has "no previous tree"
+[[ "$(cat "$app/compose.yml")" == "old compose" ]] || fail "restore without a copy changed files"
+run 1 ops/previous.sh bogus
+run 1 ops/previous.sh save-tree only-one
+ok "save-tree and restore-tree bring back compose.yml, the Caddyfile and the file list; .env and .deployed-commit untouched; first deploy and bad arguments"
 
 printf '\nAll %d checks passed.\n' "$passed"

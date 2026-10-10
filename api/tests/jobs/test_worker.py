@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 import redis.asyncio as aioredis
@@ -31,17 +32,28 @@ from tests.redis_server import start_redis
 __all__ = ["fake_ats"]
 
 
+def worker_redis_url(url: str) -> str:
+    """Under pytest-xdist, worker gwN uses Redis database N + 1 of that server, so one worker's
+    flushdb never empties another's queues; without xdist, the URL as given."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if not worker:
+        return url
+    index = int(worker.removeprefix("gw")) + 1
+    assert index < 16, "Redis has 16 databases: run at most 15 pytest-xdist workers"
+    return urlsplit(url)._replace(path=f"/{index}").geturl()
+
+
 @pytest.fixture(scope="session")
 def redis_url() -> Iterator[str]:
     # CI gives a Redis service container in REDIS_URL; elsewhere a throwaway container.
     external = os.environ.get("TEST_REDIS_URL") or os.environ.get("REDIS_URL")
     if external:
-        yield external
+        yield worker_redis_url(external)
         return
     if not docker_available():
         pytest.skip("Docker is not available and TEST_REDIS_URL is not set")
     server = start_redis()
-    yield server.url
+    yield worker_redis_url(server.url)
     server.remove()
 
 

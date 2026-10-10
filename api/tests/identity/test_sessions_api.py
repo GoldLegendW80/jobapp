@@ -307,6 +307,8 @@ def test_me_without_cookie(api: Api) -> None:
         "%00" * 15,
         '"quoted value"',
     ],
+    # Fixed ids: random tokens in the id would differ between pytest-xdist workers.
+    ids=["short", "empty", "4000-chars", "unknown", "bad-char", "43-same", "nul", "quoted"],
 )
 def test_me_with_a_bad_or_malformed_cookie(
     api: Api, factory: sessionmaker[Session], token: str
@@ -395,7 +397,9 @@ def test_logout_ends_only_this_session(api: Api, factory: sessionmaker[Session])
     assert left.token_hash == security.hash_token(phone)
 
 
-@pytest.mark.parametrize("token", [None, "garbage", security.new_token()])
+@pytest.mark.parametrize(
+    "token", [None, "garbage", security.new_token()], ids=["none", "garbage", "unknown"]
+)
 def test_logout_without_a_session_is_idempotent(api: Api, token: str | None) -> None:
     for _ in range(2):
         response = api.post("/api/auth/logout", token=token)

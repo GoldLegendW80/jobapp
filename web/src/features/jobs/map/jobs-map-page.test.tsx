@@ -94,6 +94,7 @@ const MAP: PlacesMap = {
     { location: "", count: 1 },
     { location: "東京", count: 1 },
   ],
+  unplaced_locations: 3,
   total: 17,
   placed: 11,
   unplaced_total: 6,
@@ -299,12 +300,50 @@ describe("map page", () => {
     ]);
   });
 
+  it("says when the unplaced list holds only the most frequent locations", async () => {
+    const many = Array.from({ length: 200 }, (_, i) => ({
+      location: `Nowhere ${String(i).padStart(3, "0")}`,
+      count: 1,
+    }));
+    fakePlaces(() =>
+      HttpResponse.json({
+        ...MAP,
+        unplaced: many,
+        unplaced_locations: 1234,
+        unplaced_total: 1500,
+        total: 1511,
+      }),
+    );
+    await openMap();
+    const section = screen.getByRole("region", { name: "Unplaced" });
+    expect(section).toHaveTextContent(
+      "1500 postings without a place on the map.",
+    );
+    expect(section).toHaveTextContent(
+      "The 200 most frequent of 1234 locations.",
+    );
+    expect(
+      within(
+        within(section).getByRole("list", { name: "Unplaced locations" }),
+      ).getAllByRole("listitem"),
+    ).toHaveLength(200);
+  });
+
+  it("does not mention a cap when every unplaced location is listed", async () => {
+    fakePlaces();
+    await openMap();
+    expect(
+      screen.getByRole("region", { name: "Unplaced" }),
+    ).not.toHaveTextContent("most frequent");
+  });
+
   it("has no unplaced section and says so when nothing is placed", async () => {
     fakePlaces(() =>
       HttpResponse.json({
         places: [],
         jobs: {},
         unplaced: [],
+        unplaced_locations: 0,
         total: 0,
         placed: 0,
         unplaced_total: 0,

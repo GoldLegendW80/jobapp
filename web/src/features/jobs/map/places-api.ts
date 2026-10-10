@@ -29,9 +29,12 @@ export type MapJob = z.infer<typeof mapJobSchema>;
 export const placesSchema = z.object({
   places: z.array(placeSchema),
   jobs: z.record(z.string(), mapJobSchema),
+  // The most frequent unplaced locations, at most 200 (api UNPLACED_MAX).
   unplaced: z.array(
     z.object({ location: z.string(), count: z.number().int().nonnegative() }),
   ),
+  // Distinct unplaced locations, listed or not.
+  unplaced_locations: z.number().int().nonnegative(),
   total: z.number().int().nonnegative(),
   placed: z.number().int().nonnegative(),
   unplaced_total: z.number().int().nonnegative(),

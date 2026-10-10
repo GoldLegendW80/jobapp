@@ -56,7 +56,9 @@
 # Settings, first found wins: the shell environment, then .env at the repository root, then
 # the defaults below. DEPLOY_HOST (ssh alias, default jetson), DEPLOY_DIR (default ~/jobapp),
 # BACKUP_DIR (on the Jetson, default ~/jobapp-backups), BACKUP_KEEP (default 14),
-# BACKUP_CRON (schedule of backup-schedule, default "17 3 * * *", the Jetson's local time).
+# BACKUP_CRON (schedule of backup-schedule, default "17 3 * * *", the Jetson's local time),
+# DEPLOY_LOCK_MAX_S (default 3600: the Jetson releases the deploy lock after that long even if
+# this Mac went to sleep holding it).
 #
 # Secrets: the Jetson's .env is generated once into .env.jetson (git-ignored, mode 600) with
 # random POSTGRES_PASSWORD and SECRET_KEY, and copied to the Jetson only when the remote .env is
@@ -161,20 +163,32 @@ require_deployed() {
 }
 
 # --- deploy steps -------------------------------------------------------------------------
+# lock_script <dir> <max seconds>: the remote shell that takes flock on <dir>/.deploy.lock (waiting
+# up to 15 minutes), prints `locked`, then holds it until its stdin closes or <max seconds> pass,
+# whichever comes first. The cap is enforced on the Jetson: a Mac that sleeps mid deploy keeps its
+# ssh session half open for hours (sshd only notices through TCP keepalive), and without the cap
+# that session would block every GitHub deploy until then. A deploy takes minutes, so an hour is
+# far above any real one.
+lock_script() {
+  printf 'mkdir -p %q && exec 9>>%q && { flock -n 9 || { echo busy; flock -w 900 9; }; } && echo locked && { timeout %q cat >/dev/null; true; }' \
+    "$1" "$1/.deploy.lock" "$2"
+}
+
 # remote_lock: hold flock on <BACKUP_DIR>/.deploy.lock on the Jetson for the rest of this run. It
 # is the lock .github/workflows/deploy.yml takes on the self-hosted runner, so a deploy from this
 # Mac and one from GitHub never rsync or compose at the same time. A background ssh holds it while
-# its stdin, a FIFO kept open on fd 8, stays open; cleanup closes fd 8 and the lock goes.
+# its stdin, a FIFO kept open on fd 8, stays open; cleanup closes fd 8 and the lock goes. The
+# Jetson drops it on its own after DEPLOY_LOCK_MAX_S (lock_script).
 remote_lock() {
   step "deploy lock on $HOST"
-  local bdir lock fifo="$CTL_DIR/lock.in" out="$CTL_DIR/lock.out" deadline
+  local bdir max fifo="$CTL_DIR/lock.in" out="$CTL_DIR/lock.out" deadline
   # shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
   bdir="$(setting BACKUP_DIR '~/jobapp-backups')"
   bdir="${bdir#\~/}"
-  lock="$(printf '%q' "$bdir/.deploy.lock")"
+  max="$(setting DEPLOY_LOCK_MAX_S 3600)"
+  [[ "$max" =~ ^[1-9][0-9]*$ ]] || die "DEPLOY_LOCK_MAX_S must be a whole number of seconds, got '$max'"
   mkfifo "$fifo"
-  remote "mkdir -p $(printf '%q' "$bdir") && exec 9>>$lock && { flock -n 9 || { echo busy; flock -w 900 9; }; } &&
-    echo locked && cat >/dev/null" <"$fifo" >"$out" 2>&1 &
+  remote "$(lock_script "$bdir" "$max")" <"$fifo" >"$out" 2>&1 &
   LOCK_PID=$!
   exec 8>"$fifo"
   deadline=$((SECONDS + 960))
@@ -186,7 +200,7 @@ remote_lock() {
   if grep -q '^busy' "$out"; then
     info "waited for another deploy (GitHub or another Mac) to finish"
   fi
-  info "held: $bdir/.deploy.lock"
+  info "held: $bdir/.deploy.lock (released by the Jetson after ${max}s at the latest)"
 }
 TIMES=()
 record() { # record <label> <start SECONDS>: keep and print the duration of one phase

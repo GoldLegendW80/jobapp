@@ -2,12 +2,24 @@ import os
 import socket
 from collections.abc import Iterator
 
+import psycopg
 import pytest
+from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
+from psycopg import sql
+from sqlalchemy.engine import make_url
 
 from app.config import Settings, get_settings
+from app.identity import security
 from app.main import create_app
 from tests.pg import Postgres, docker_available, start_postgres
+
+# argon2id at the lowest cost argon2-cffi accepts that still differs from the "weak" hashes the
+# rehash tests build (t=1, m=8 and t=1, m=8192, both p=1): about 1 ms instead of about 50 ms per
+# hash or verification, which the identity tests do thousands of times. Tests that measure
+# argon2 timing, or the production cost itself, are marked `production_argon2` and keep the real
+# parameters. The application never sees this hasher outside the test process.
+FAST_HASHER = PasswordHasher(time_cost=1, memory_cost=1024, parallelism=1)
 
 ENV_NAMES = (
     "APP_ENV",
@@ -33,10 +45,46 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def fast_argon2(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The cheap hasher for every test but those marked `production_argon2`."""
+    if request.node.get_closest_marker("production_argon2") is None:
+        monkeypatch.setattr(security, "_hasher", FAST_HASHER)
+    # The cached dummy hash carries the cost of the hasher that made it: rebuild it per test.
+    security._dummy_hash.cache_clear()
+    yield
+    security._dummy_hash.cache_clear()
+
+
+def _worker_database(base_url: str, worker: str) -> Iterator[str]:
+    """A database of its own for one pytest-xdist worker, next to TEST_DATABASE_URL's, made
+    fresh and dropped at the end. Migrations, TRUNCATE and advisory locks then never cross
+    workers."""
+    base = make_url(base_url)
+    name = f"{base.database}_{worker}"
+    admin = base.set(drivername="postgresql").render_as_string(hide_password=False)
+    statements = (
+        sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)),
+        sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)),
+    )
+    with psycopg.connect(admin, autocommit=True) as conn:
+        for statement in statements:
+            conn.execute(statement)
+    yield base.set(database=name).render_as_string(hide_password=False)
+    with psycopg.connect(admin, autocommit=True) as conn:
+        conn.execute(statements[0])
+
+
 @pytest.fixture(scope="session")
 def database_url() -> Iterator[str]:
-    """A real Postgres: TEST_DATABASE_URL when set (CI, compose), else a throwaway container."""
+    """A real Postgres: TEST_DATABASE_URL when set (CI, compose), else a throwaway container.
+    Under pytest-xdist each worker gets a database of its own on that server (or its own
+    container)."""
     external = os.environ.get("TEST_DATABASE_URL")
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if external and worker:
+        yield from _worker_database(external, worker)
+        return
     if external:
         yield external
         return
