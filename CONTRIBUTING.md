@@ -21,14 +21,14 @@ in the job folder that holds this repository (it is not part of the repository).
 4. CI (`.github/workflows/ci.yml`) runs on the pull request, on the self-hosted runners of
    Harald's Mac (`[self-hosted, mac-ci]`, three of them with 3 CPUs and 4 GB each; all of them
    wait while the Mac is asleep or Docker Desktop is closed; README, CI runners on the Mac), in
-   three jobs, one per runner, and a gate:
+   three jobs, one per runner:
    `api` (ruff, the whole pytest suite against Postgres and Redis, the coverage floor of 95
    percent, the docker marked tests), `checks` (pre-commit, shellcheck, the `tests/*.sh`
-   scripts and the guards, eslint, tsc, build, then the e2e group apps), `journeys` (Vitest, then
-   the e2e groups identity and sweep; every e2e group against its own scratch Compose stack) and
-   `CI gate`, which is the one result to read: it must be green. A pull request that touches
-   documentation only (`tasks/`, `docs/`, the Markdown files at the root) runs pre-commit and
-   the gate, nothing else (the shell tests too when it touches `README.md`, which they check);
+   scripts and the guards, then the e2e group apps) and `journeys` (eslint, tsc, build, Vitest,
+   then the e2e groups identity and sweep; every e2e group against its own scratch Compose
+   stack). The run must be green: all three jobs, none of which can be skipped. A pull request
+   that touches documentation only (`tasks/`, `docs/`, the Markdown files at the root) runs
+   pre-commit alone (the shell tests too when it touches `README.md`, which they check);
    one that touches `web/` only skips the api tests; anything else runs
    everything, and so does every push to `main` (README, What a CI run does). A new
    `web/e2e/*.spec.ts` joins one of the e2e groups in the workflow, or the exclusion list of

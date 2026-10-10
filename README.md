@@ -110,15 +110,15 @@ http://127.0.0.1:18080. `DEPLOY_HOST` and `DEPLOY_DIR` override the target. Ever
 
 Every change goes through a branch and a pull request ([CONTRIBUTING.md](CONTRIBUTING.md)). CI
 (`.github/workflows/ci.yml`) runs on each pull request and push to `main`, in three jobs of about
-the same length and a gate (What a CI run does, below): `api` (ruff, the whole pytest suite
-against Postgres and Redis in one run, the 95 percent coverage floor on that run's data, the
-docker marked tests), `checks` (pre-commit, shellcheck and the shell test scripts, eslint, tsc,
-build, then the e2e group apps) and `journeys` (Vitest, then the e2e groups identity and
-sweep); each e2e group runs on a Compose stack of its own built on its runner, the Playwright
-journeys with throwaway accounts and a synthetic jobs import, never Harald's data. `gate` fails
-unless the three succeeded. A pull request that changes documentation only runs pre-commit and
-the gate (and the shell tests when it touches this README, which they check); every push to
-`main` runs everything. Since 2026-10-10 the jobs run on self-hosted
+the same length (What a CI run does, below): `api` (ruff, the whole pytest suite against
+Postgres and Redis in one run, the 95 percent coverage floor on that run's data, the docker
+marked tests), `checks` (pre-commit, shellcheck and the shell test scripts, then the e2e group
+apps) and `journeys` (eslint, tsc, build, Vitest, then the e2e groups identity and sweep); each
+e2e group runs on a Compose stack of its own built on its runner, the Playwright journeys with
+throwaway accounts and a synthetic jobs import, never Harald's data. The run is green when the
+three jobs are. A pull request that changes documentation only runs pre-commit alone (and the
+shell tests when it touches this README, which they check); every push to `main` runs
+everything. Since 2026-10-10 the jobs run on self-hosted
 runners on Harald's Mac (CI runners on the Mac, below), because the free minutes of GitHub's own
 machines were used up; the Jetson's runner keeps the deploys and nothing uses paid minutes. When
 CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
@@ -238,11 +238,12 @@ file and images), so dispatch only reviewed branches. Anyone with write access t
 
 ### What a CI run does
 
-Three jobs and a gate (issue #91). The split follows what was measured on the Mac's runners on
-2026-10-10 with the eleven jobs CI had until then, on two runners: 18.1, 19.1 and 22.8 minutes
-of runner time in three runs (the last with a first download of Chromium that stalled for
-220 s), and 13.3 minutes from push to result for a run that had the runners to itself
-(38072303967). Three findings shaped the new layout.
+Three jobs (issue #91), and the run is green when the three are. The split follows what was
+measured on the Mac's runners on 2026-10-10 with the eleven jobs CI had until then, on two
+runners: 18.1 to 20.0 minutes of runner time in four runs (22.8 in a fifth, with a first
+download of Chromium that stalled for 220 s), and 13.3 and 14.3 minutes from push to result
+for the two runs that had the runners to themselves (38072303967, 38076641000). Three findings
+shaped the new layout.
 
 - **A job costs about 25 s before its first test**: set up 3 s, checkout 4 s, pnpm and node 5 to
   14 s, service containers 10 s, the hooks and post steps 5 s. Eleven jobs paid it eleven times,
@@ -254,18 +255,25 @@ of runner time in three runs (the last with a first download of Chromium that st
   CPUs, the api tests 2.1 to 3. So the fast, CPU bound checks sit in front of the e2e groups in
   two of the jobs, and the api suite has the third to itself.
 
-| job | what runs, in this order | the same steps in the old jobs | by hand in a trial runner, the other two runners busy |
+| job | what runs, in this order | the same steps in the old jobs | in the first run of this layout (38078877905) |
 |---|---|---|---|
-| `api` | ruff; the whole pytest suite in one run on 3 workers; the coverage floor (95 percent of that run's data); the docker marked tests; the scoring timing test | pytest 101 s and 146 s in two shards, docker tests 18 s | pytest 254 s (2,830 passed), coverage 98 percent |
-| `checks` | pre-commit; shellcheck and every `tests/*.sh` of CI, the e2e groups guard, the plan's own test; eslint, tsc, build; then the e2e group apps on its scratch stack | pre-commit 8 s, shell 46 s, web checks 29 s, apps 173 s of journeys | web checks 41 s, apps 179 s, stack up in 5 s, down in 1 s |
-| `journeys` | Vitest in one run; the e2e group identity, then the e2e group sweep, each on a scratch stack of its own | Vitest 34 s and 25 s in two shards, identity 114 s, sweep 68 s | Vitest 65 s (1,278 passed), identity 118 s, sweep 79 s, each stack up in 5 s, down in 1 s |
-| `gate` | no test: fails unless the three jobs succeeded and computed the same plan | | |
+| `api` | ruff; the whole pytest suite in one run on 3 workers; the coverage floor (95 percent of that run's data); the docker marked tests; the scoring timing test | pytest 101 s and 146 s in two shards, docker tests 18 s, service containers 10 s | 255 s: pytest 216 s, docker tests 18 s, service containers 4 s |
+| `checks` | pre-commit; shellcheck and every `tests/*.sh` of CI, the e2e groups guard, the plan's own test; then the e2e group apps on its scratch stack | pre-commit 8 s, shell 46 s, apps 173 s of journeys, stack up in 12 s and down in 11 s | 320 s with the web checks still in it (34 s): pre-commit 8 s, shell 62 s, apps 182 s, stack up and migrated in 6 s, down in 1 s |
+| `journeys` | eslint, tsc, build; Vitest in one run; the e2e group identity, then the e2e group sweep, each on a scratch stack of its own | web checks 29 s, Vitest 34 s and 25 s in two shards, identity 114 s, sweep 68 s | 262 s without the web checks: Vitest 62 s, identity 112 s, sweep 48 s, each stack up in 5 s |
 
-The last column is the layout's own steps run by hand on 2026-10-10 in an unregistered container
-shaped like a runner while both real runners were busy with other runs, which is the load three
-jobs at once make: each job then comes to about five minutes. Which job holds which unit follows
-from those lengths (the shell unit sits in `checks` because the api tests fill their job), and
-moving a unit is a cut and paste of its steps and one line of `LANES` in `ci_plan.py`.
+That first run took 13.9 minutes of runner time where the eleven jobs took 18 to 20. Which job
+holds which unit follows from its lengths: the api tests fill their job, the shell unit sits in
+`checks`, and the web checks moved from `checks` to `journeys` after it (255, about 286 and
+about 296 s). Moving a unit is a cut and paste of its steps and one line of `LANES` in
+`ci_plan.py`.
+
+There is no fourth job that sums the three up. The first version had one, a gate that needed
+the three and checked their results: created when they ended, it queued behind every job other
+runs had queued meanwhile and waited 8 minutes for a runner to do 7 seconds of work, so the run
+that was done after 9.7 minutes reported after 17.9. Nothing is lost without it: no job has a
+condition or waits for another, so none can be skipped (`ci_plan_test.py` and
+`tests/ci_runners_test.sh` fail if one gets either), a failed job fails the run, and each job
+checks its own steps against the plan (below).
 
 What changed inside the jobs, each with its measured effect:
 
@@ -285,10 +293,10 @@ What changed inside the jobs, each with its measured effect:
   busy: what is left is mostly the next item.
 - **Scratch stacks start and stop faster.** `up --wait` waited for the first health probe of
   each service, one interval after its start (5 to 15 s); the CI overlay
-  (`tests/ats-stub.compose.yml`) probes every second while a service starts (on the Mac, for
-  the four services that need no build: 6.5 s before, 2.2 to 3.4 s after). `down` waited for
-  containers to stop that are thrown away with their volumes, 11 s per stack in CI:
-  `--timeout 0` (0.5 s for those four services on the Mac).
+  (`tests/ats-stub.compose.yml`) probes every second while a service starts: on the runners a
+  stack was up in 11 to 13 s before and is up in 5 s now. `down` waited for containers to stop
+  that are thrown away with their volumes, 11 s per stack: with `--timeout 0`, 1 s. The same
+  probing on the service containers of the api job: 10 s before, 4 s now.
 - **Images are built in each runner's own Docker daemon, not once per run.** Measured: 22 s on
   a runner that never built them, under 2 s after. Sharing them through a registry or a saved
   archive would cost more than the 2 s it replaces.
@@ -308,7 +316,7 @@ in that script, first match wins:
 
 | the pull request touches only | units | why the rest may be skipped |
 |---|---|---|
-| `tasks/`, `docs/`, the Markdown files at the root but this README, the pull request template | none: pre-commit and the gate | nothing executable reads them (a test fails when something starts to) |
+| `tasks/`, `docs/`, the Markdown files at the root but this README, the pull request template | none: pre-commit alone | nothing executable reads them (a test fails when something starts to) |
 | `README.md` | `shell` | `tests/deploy_test.sh` checks that the recovery statements it tests are the ones written here |
 | `tasks/evidence/agents-a5/` | `shell` | `tests/agents_real_run_test.sh` compares against it |
 | `web/` | `web`, `shell`, `e2e` | no api file reads a file of `web/` (a test fails when one starts to) |

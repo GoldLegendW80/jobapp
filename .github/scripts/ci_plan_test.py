@@ -8,8 +8,8 @@ Three kinds of checks:
 - the reasons that let a rule skip a unit, checked on this repository: no api file reads a file
   of web/, and nothing executable reads the documentation the rules call documentation;
 - .github/workflows/ci.yml itself: every job computes the plan first and verifies it last, every
-  step named in LANES exists and runs under its unit, no job can be skipped, the gate needs
-  them all, and the gate's own script decides as it says.
+  step named in LANES exists and runs under its unit, and no job can be skipped (none has a
+  condition or waits for another), which is what lets the run's own result stand for all.
 """
 
 from __future__ import annotations
@@ -478,9 +478,9 @@ class VerifyTest(unittest.TestCase):
         self.assertIn("precommit", problems[0])
 
     def test_a_step_that_ran_outside_the_plan_fails_the_job(self) -> None:
-        steps = lane_steps("checks", "none")
+        steps = lane_steps("journeys", "none")
         steps["lint"] = {"outcome": "success"}
-        problems = ci_plan.verify_problems("checks", "none", steps, "success")
+        problems = ci_plan.verify_problems("journeys", "none", steps, "success")
         self.assertEqual(
             problems, ["the plan leaves web out and its step 'lint' is success"]
         )
@@ -708,23 +708,20 @@ class WorkflowTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.jobs = read_jobs(WORKFLOW.read_text(encoding="utf-8"))
 
-    def test_the_jobs_are_the_lanes_and_the_gate(self) -> None:
+    def test_the_jobs_are_the_lanes(self) -> None:
         lanes = set(ci_plan.LANES) | set(ci_plan.ALWAYS)
-        self.assertEqual(set(self.jobs), lanes | {"gate"})
+        self.assertEqual(set(self.jobs), lanes)
 
     def test_no_lane_can_be_skipped(self) -> None:
-        for name in set(self.jobs) - {"gate"}:
+        for name in self.jobs:
             keys = self.jobs[name]["keys"]
             self.assertNotIn(
                 "if", keys, f"{name}: a job condition could skip the whole job"
             )
             self.assertNotIn("needs", keys, f"{name}: a job that waits can be skipped")
-            self.assertIn(
-                "plan: ${{ steps.plan.outputs.plan }}", keys.get("outputs", ""), name
-            )
 
     def test_every_lane_plans_first_and_verifies_last(self) -> None:
-        for name in set(self.jobs) - {"gate"}:
+        for name in self.jobs:
             steps = self.jobs[name]["steps"]
             self.assertIn("actions/checkout@", steps[0].get("uses", ""), name)
             self.assertIn("fetch-depth: 2", steps[0].get("with", ""), name)
@@ -776,73 +773,6 @@ class WorkflowTest(unittest.TestCase):
     def test_every_unit_has_steps_somewhere(self) -> None:
         placed = {unit for units in ci_plan.LANES.values() for unit in units}
         self.assertEqual(placed, set(ci_plan.UNITS))
-
-    def test_the_gate_needs_every_lane_and_always_runs(self) -> None:
-        gate = self.jobs["gate"]["keys"]
-        needed = set(re.findall(r"[\w-]+", gate.get("needs", "")))
-        self.assertEqual(needed, set(self.jobs) - {"gate"})
-        self.assertEqual(gate.get("if"), "always()")
-
-    def gate_script(self) -> str:
-        text = WORKFLOW.read_text(encoding="utf-8")
-        found = re.search(r"python3 - <<'GATE'\n(.*?)\n\s*GATE\n", text, re.DOTALL)
-        self.assertIsNotNone(found, "the gate's script was not found in ci.yml")
-        lines = found.group(1).splitlines()  # type: ignore[union-attr]
-        indent = min(len(line) - len(line.lstrip()) for line in lines if line.strip())
-        return "\n".join(line[indent:] for line in lines)
-
-    def run_gate(self, needs: dict[str, object]) -> subprocess.CompletedProcess[str]:
-        env = {**CLEAN_ENV, "NEEDS": json.dumps(needs)}
-        env.pop("GITHUB_STEP_SUMMARY", None)
-        return subprocess.run(
-            [sys.executable, "-c", self.gate_script()],
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-        )
-
-    def test_the_gate_script_decides_as_it_says(self) -> None:
-        def needs(**results: tuple[str, str]) -> dict[str, object]:
-            return {
-                name: {"result": result, "outputs": {"plan": plan}}
-                for name, (result, plan) in results.items()
-            }
-
-        full = "api,web,shell,e2e"
-        good = needs(
-            api=("success", full), checks=("success", full), journeys=("success", full)
-        )
-        self.assertEqual(self.run_gate(good).returncode, 0)
-        docs = needs(
-            api=("success", "none"),
-            checks=("success", "none"),
-            journeys=("success", "none"),
-        )
-        self.assertEqual(self.run_gate(docs).returncode, 0)
-        for result in ["failure", "cancelled", "skipped"]:
-            bad = needs(
-                api=(result, full), checks=("success", full), journeys=("success", full)
-            )
-            done = self.run_gate(bad)
-            self.assertEqual(done.returncode, 1, result)
-            self.assertIn(f"job api ended with '{result}'", done.stdout)
-        split = needs(
-            api=("success", full),
-            checks=("success", "none"),
-            journeys=("success", full),
-        )
-        done = self.run_gate(split)
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("different plans", done.stdout)
-        blank = needs(
-            api=("success", ""), checks=("success", full), journeys=("success", full)
-        )
-        self.assertEqual(self.run_gate(blank).returncode, 1)
-        missing = needs(api=("success", full), checks=("success", full))
-        done = self.run_gate(missing)
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("the gate needs", done.stdout)
 
 
 class HookSafetyTest(unittest.TestCase):

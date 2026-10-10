@@ -42,7 +42,7 @@ step "where the jobs run: ci.yml on the Mac runners only, deploy.yml on the Jets
 RUNS_ON='    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"'"'["self-hosted", "mac-ci"]'"'"') }}'
 jobs_total="$(grep -c '^    runs-on:' .github/workflows/ci.yml)"
 jobs_mac="$(grep -cxF -- "$RUNS_ON" .github/workflows/ci.yml)"
-[[ "$jobs_total" -ge 4 && "$jobs_total" == "$jobs_mac" ]] ||
+[[ "$jobs_total" -ge 3 && "$jobs_total" == "$jobs_mac" ]] ||
   fail "ci.yml: $jobs_mac of $jobs_total jobs use the CI_RUNS_ON expression with the [self-hosted, mac-ci] default"
 ok "ci.yml: all $jobs_total jobs run on vars.CI_RUNS_ON, default [self-hosted, mac-ci] (never self-hosted alone)"
 [[ "$(grep -c '^    runs-on:' .github/workflows/deploy.yml)" == 1 ]] || fail "deploy.yml has more than one runs-on"
@@ -60,13 +60,16 @@ for gate in 'coverage report --fail-under=95' 'pytest tests -m "not docker"' 'py
   'tests/ci_runners_test.sh' 'tests/tailscale_test.sh' 'koalaman/shellcheck:v0.11.0' \
   'pre-commit run --all-files' 'playwright test -c e2e/identity-all.config.ts' \
   'playwright test jobs-sweep.spec.ts' 'agents-streaming.spec.ts' \
-  'needs: [api, checks, journeys]' 'cancel-in-progress: true' '-n "$PYTEST_WORKERS"' \
+  'cancel-in-progress: true' '-n "$PYTEST_WORKERS"' \
   '--maxWorkers="$VITEST_WORKERS"'; do
   grep -qF -- "$gate" .github/workflows/ci.yml || fail "ci.yml lost: $gate"
 done
 if grep -v '^ *#' .github/workflows/ci.yml | grep -q -- '-n auto'; then fail "ci.yml lets pytest take every core"; fi
 if grep -v '^ *#' .github/workflows/ci.yml | grep -q 'continue-on-error'; then fail "ci.yml lets a step fail"; fi
-ok "ci.yml keeps the coverage floor, the whole pytest suite and its docker and timing tests, the web checks, vitest, the three e2e groups and their guard, the shell tests, pre-commit, the plan's own test and verification, the gate, cancel in progress; worker counts written out"
+# The run's result stands for every job only while no job can be skipped: none waits for another
+# and none has a condition of its own (step conditions are indented deeper).
+if grep -qE '^    (needs|if):' .github/workflows/ci.yml; then fail "a job of ci.yml waits for another or has a condition: it could be skipped"; fi
+ok "ci.yml keeps the coverage floor, the whole pytest suite and its docker and timing tests, the web checks, vitest, the three e2e groups and their guard, the shell tests, pre-commit, the plan's own test and verification, cancel in progress; no job that could be skipped; worker counts written out"
 if grep -v '^ *#' .github/workflows/ci.yml | grep -qi 'armcap'; then fail "ci.yml names the Mac's OpenSSL variable"; fi
 grep -q 'CI_COMPOSE_OVERLAY' .github/workflows/ci.yml || fail "ci.yml does not read the runner's CI_COMPOSE_OVERLAY"
 grep -q '^ENV OPENSSL_armcap=0 \\$' ops/ci-runner/Dockerfile || fail "ops/ci-runner/Dockerfile does not set OPENSSL_armcap=0"

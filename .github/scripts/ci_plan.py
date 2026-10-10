@@ -24,8 +24,8 @@ that keep those reasons true (no api file reads a file of web/, for instance).
 
 Every job of ci.yml computes this plan for itself in its first step (no job waits for another),
 gives it to its steps as outputs, and ends with `verify`, which fails the job when a step that
-the plan needed did not run. The gate job then fails unless every job succeeded and all of them
-computed the same plan.
+the plan needed did not run or one that it left out did. No job has a condition of its own, so
+none is ever skipped, and the run is green when every job is.
 """
 
 from __future__ import annotations
@@ -88,11 +88,10 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
             "ci_runners_test",
             "tailscale_test",
         ),
-        "web": ("lint", "typecheck", "build"),
         "e2e": ("e2e_apps",),
     },
     "journeys": {
-        "web": ("vitest",),
+        "web": ("lint", "typecheck", "build", "vitest"),
         "e2e": ("e2e_identity", "e2e_sweep"),
     },
 }
