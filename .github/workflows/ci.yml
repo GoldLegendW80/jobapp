@@ -206,6 +206,9 @@ jobs:
           umask 077
           .github/scripts/ci_env.sh 8080 > .env
           ! grep -q change-me .env
+          # Agents A2: the worker replays recorded streams instead of calling a model (refused
+          # when APP_ENV is production; this stack is development).
+          echo "AGENTS_FAKE_BACKEND=true" >> .env
       # tests/ats-stub.compose.yml: the board check asks a stub (tests/ats_stub.py), never the
       # real Ashby, Greenhouse or Lever, so their availability cannot turn this job red.
       - name: Build and start the stack
@@ -247,6 +250,14 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/sweep
           PLAYWRIGHT_HTML_OPEN: never
         run: pnpm exec playwright test jobs-sweep.spec.ts --workers=1 --reporter=list,html
+      # Agents A2: a test run streaming live, reload and network loss resuming the stream, cancel,
+      # forbidden tools refused, the runs list; the fake backend, no model call.
+      - name: Agent run journeys on the fake backend
+        working-directory: web
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/agents
+          PLAYWRIGHT_HTML_OPEN: never
+        run: pnpm exec playwright test agents-runs.spec.ts --workers=1 --reporter=list,html
       - name: Stack logs
         if: failure()
         run: |

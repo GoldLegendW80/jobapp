@@ -9,7 +9,7 @@ import { UserMenu } from "./user-menu";
 
 const navLink = ({ isActive }: { isActive: boolean }) =>
   cn(
-    "rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
+    "shrink-0 rounded-md px-2 py-2 text-sm font-medium text-muted-foreground sm:px-3 transition-colors hover:bg-accent hover:text-accent-foreground",
     isActive && "bg-accent text-accent-foreground",
   );
 
@@ -34,12 +34,18 @@ export function AppShell() {
           >
             {APP_NAME}
           </Link>
-          <nav aria-label="Main" className="flex items-center gap-1">
+          <nav
+            aria-label="Main"
+            className="flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1"
+          >
             <NavLink to="/jobs" className={navLink}>
               Jobs
             </NavLink>
             <NavLink to="/profile" className={navLink}>
               Profile
+            </NavLink>
+            <NavLink to="/runs" className={navLink}>
+              Runs
             </NavLink>
             {user.role === "admin" ? (
               <NavLink to="/admin/users" className={navLink}>

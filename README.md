@@ -504,10 +504,14 @@ curl -s -b cookies http://localhost/api/agents                                  
 curl -s -X POST -H 'X-Requested-With: jobapp' -H 'Content-Type: application/json' -b cookies \
   -d '{"agent":"echo","input":{"message":"hi"}}' http://localhost/api/agents/runs                 # 202, queued
 curl -s -b cookies http://localhost/api/agents/runs/<id>                                          # status, events, tokens, cost
+curl -s -N -b cookies -H 'Last-Event-ID: 12' http://localhost/api/agents/runs/<id>/stream         # live steps after step 12
 curl -s -X POST -H 'X-Requested-With: jobapp' -b cookies http://localhost/api/agents/runs/<id>/cancel
 ```
 
-`echo` is a test agent, refused when `APP_ENV=production`. `AGENTS_FAKE_BACKEND=true` (test
+The `/runs` page lists the runs; `/runs/<id>` is the live run panel (steps, tool calls,
+tokens, cost, Cancel), which resumes its stream after a reload or a network loss without losing
+or repeating a step (`app/sse.py` `replay`, keyed by the step's seq). `echo` is a test agent,
+refused when `APP_ENV=production`; outside production `/runs` offers a test run with it. `AGENTS_FAKE_BACKEND=true` (test
 stacks and CI only, refused in production) replaces the model with recorded message streams
 (`api/app/agents/fake_streams/`); `tests/compose.a2-e2e.yml` with `AGENTS_FAKE_BACKEND=false` runs
 the real SDK and CLI against the Anthropic stub (`tests/anthropic_stub.py`), still with no model

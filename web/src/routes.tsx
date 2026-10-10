@@ -3,6 +3,7 @@ import { Navigate, Outlet, type RouteObject } from "react-router";
 import { Toaster } from "@/components/ui/sonner";
 import { AccountPage } from "@/features/account/account-page";
 import { AdminUsersPage } from "@/features/admin/users-page";
+import { RunPage, RunsPage } from "@/features/agents/runs-page";
 import { AuthProvider } from "@/features/auth/auth-provider";
 import { PublicOnly, RequireAdmin, RequireAuth } from "@/features/auth/guards";
 import { LinkPage } from "@/features/auth/link-page";
@@ -51,6 +52,8 @@ export const routes: RouteObject[] = [
           { path: "jobs/:id", element: <JobDetailPage /> },
           { path: "account", element: <AccountPage /> },
           { path: "profile", element: <ProfilePage /> },
+          { path: "runs", element: <RunsPage /> },
+          { path: "runs/:id", element: <RunPage /> },
           {
             path: "admin/users",
             element: (
