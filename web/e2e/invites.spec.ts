@@ -23,7 +23,7 @@ const shots = makeShots("identity-i4", "invites");
  * Invites from the admin area, against the real stack through Caddy: no mocks.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
- *   HTTP_PORT=8094 docker compose -p jobapp-i4 -f compose.yml up -d --build --wait
+ *   HTTP_PORT=8094 docker compose -p jobapp-i4 -f compose.yml -f compose.mac.yml up -d --build --wait
  *   docker compose -p jobapp-i4 -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8094 E2E_COMPOSE_PROJECT=jobapp-i4 \
  *     pnpm --dir web exec playwright test invites.spec.ts

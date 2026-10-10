@@ -26,7 +26,7 @@ const shots = makeShots("agents-a1", "model-access");
  * Anthropic. The subscription token makes no outbound call at all.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
- *   HTTP_PORT=8097 docker compose -p jobapp-a1 -f compose.yml -f tests/anthropic-stub.compose.yml \
+ *   HTTP_PORT=8097 docker compose -p jobapp-a1 -f compose.yml -f compose.mac.yml -f tests/anthropic-stub.compose.yml \
  *     up -d --build --wait
  *   docker compose -p jobapp-a1 -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8097 E2E_COMPOSE_PROJECT=jobapp-a1 E2E_MODEL_STUB=1 \

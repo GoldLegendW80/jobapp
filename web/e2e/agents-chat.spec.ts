@@ -22,7 +22,7 @@ const shots = makeShots("agents-a4", "chat");
  * the answer stream, reload and find the conversation (and the panel) again, send a second
  * message whose prompt holds the first exchange, delete the conversation.
  *
- *   HTTP_PORT=8128 docker compose -p jobapp-a4 -f compose.yml -f tests/compose.a2-e2e.yml \
+ *   HTTP_PORT=8128 docker compose -p jobapp-a4 -f compose.yml -f compose.mac.yml -f tests/compose.a2-e2e.yml \
  *     up -d --build --wait
  *   docker compose -p jobapp-a4 -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8128 E2E_COMPOSE_PROJECT=jobapp-a4 \
@@ -114,6 +114,11 @@ test("a message streams its answer live, then the stored answer replaces it", as
   await composer().press("Enter");
   await expect(messages().first()).toContainText(FIRST);
   await expect(live()).toBeVisible();
+  // The whole conversation is on screen: the message and the answer being written.
+  await expect(messages()).toHaveCount(1);
+  await expect(panel().getByText("Older messages are not shown.")).toHaveCount(
+    0,
+  );
   await expect(panel().getByRole("button", { name: "Send" })).toBeDisabled();
   // The recorded stream: the agent reads the posting, says so, then answers.
   await expect(live()).toContainText(

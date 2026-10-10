@@ -403,6 +403,46 @@ def test_thread_detail_lists_the_newest_messages(
     assert detail["messages_truncated"] is True
 
 
+def test_thread_detail_is_one_snapshot_when_a_send_commits_meanwhile(
+    api: Api, ready: tuple[str, uuid.UUID, str], factory: sessionmaker[Session], monkeypatch: Any
+) -> None:
+    """A message sent while the thread is being read (the web does both at once on the first
+    message) never gives a torn answer, a pending run without the message it answers: the read
+    is the thread as it was before the send."""
+    alice, _, thread = ready
+    user = user_id(api, alice)
+    original = chat.active_run
+    sent: list[uuid.UUID] = []
+    calls = 0
+
+    def active_run_after_a_send(db: Session, thread_id: uuid.UUID) -> AgentRun | None:
+        # The first call is the detail route's, after it read the messages: a send commits
+        # here, from another session (chat.send calls active_run too, which is the second).
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            with factory() as other:
+                row = chat.get_thread(other, user, uuid.UUID(thread), lock=True)
+                assert row is not None
+                _, run = chat.send(other, user, row, "Sent during the read", now())
+                sent.append(run.id)
+                other.commit()
+        return original(db, thread_id)
+
+    monkeypatch.setattr(chat, "active_run", active_run_after_a_send)
+    detail = api.get(f"{THREADS}/{thread}", token=alice).json()
+    monkeypatch.setattr(chat, "active_run", original)
+    assert len(sent) == 1
+    assert detail["messages"] == []
+    assert detail["messages_truncated"] is False
+    assert detail["active_run_id"] is None
+    # The next read holds all of it.
+    after = api.get(f"{THREADS}/{thread}", token=alice).json()
+    assert [m["text"] for m in after["messages"]] == ["Sent during the read"]
+    assert after["messages_truncated"] is False
+    assert after["active_run_id"] == str(sent[0])
+
+
 def test_chat_agent_is_not_started_through_runs(
     api: Api, ready: tuple[str, uuid.UUID, str], recorded: RecordingQueue
 ) -> None:

@@ -28,7 +28,7 @@ import {
  *
  * Local scratch stack (tests/compose.j5-e2e.yml adds the fake ATS server the worker reaches for
  * "fake-" orgs):
- *   HTTP_PORT=8125 docker compose -p jobapp-j5e2e -f compose.yml -f tests/compose.j5-e2e.yml \
+ *   HTTP_PORT=8125 docker compose -p jobapp-j5e2e -f compose.yml -f compose.mac.yml -f tests/compose.j5-e2e.yml \
  *     up -d --build --wait
  *   docker compose -p jobapp-j5e2e -f compose.yml exec -T api alembic upgrade head
  *   E2E_CADDY_URL=http://127.0.0.1:8125 E2E_COMPOSE_PROJECT=jobapp-j5e2e \

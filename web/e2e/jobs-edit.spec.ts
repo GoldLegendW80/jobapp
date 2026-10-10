@@ -33,7 +33,7 @@ const shots = makeShots("jobs-j4");
  *   and imported with the CLIs in the api container, as `./deploy.sh profile import` and
  *   `./deploy.sh jobs import` do. A rescore of all must then leave every fit identical (the
  *   engine's fits are reproduced, the hand set ones are kept).
- *     HTTP_PORT=8114 docker compose -p jobapp-j4 -f compose.yml up -d --build --wait
+ *     HTTP_PORT=8114 docker compose -p jobapp-j4 -f compose.yml -f compose.mac.yml up -d --build --wait
  *     docker compose -p jobapp-j4 -f compose.yml exec -T api alembic upgrade head
  *     E2E_CADDY_URL=http://127.0.0.1:8114 E2E_COMPOSE_PROJECT=jobapp-j4 \
  *       pnpm --dir web exec playwright test jobs-edit.spec.ts

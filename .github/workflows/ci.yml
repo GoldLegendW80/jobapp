@@ -272,7 +272,8 @@ jobs:
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
           deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
           tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
-          tests/reboot_check.sh tests/e2e_jetson.sh tests/tailscale_test.sh
+          tests/reboot_check.sh tests/e2e_jetson.sh tests/tailscale_test.sh tests/agents_real_run_jetson.sh
+          tests/agents_real_run_test.sh
           ops/env_check.sh tests/env_check_test.sh
       # Issue #18: the .env syntax check and where it runs (deploy.sh, deploy.yml, the smoke).
       - name: tests/env_check_test.sh
@@ -285,6 +286,10 @@ jobs:
       # deploy.sh against fake ssh and docker: no Jetson, nothing remote.
       - name: tests/deploy_test.sh
         run: tests/deploy_test.sh
+      # The operator script of A5 against a fake ssh: a dry run leaves the committed evidence
+      # untouched, a real run never overwrites it, only the owner's subscription gets a run.
+      - name: tests/agents_real_run_test.sh
+        run: tests/agents_real_run_test.sh
       # tailscale (Funnel): compose config and caddy's :8080 trust rules. No key, no tailnet; the
       # live no-key start is skipped here (CI is set, and the image is pinned to arm64).
       - name: tests/tailscale_test.sh

@@ -8,17 +8,16 @@ dependencies = [
     "anthropic==1.11.0",
     "argon2-cffi==25.1.0",
     "arq==0.28.0",
-    # Not 47 or later for now: their bundled OpenSSL dies with SIGILL (SME code paths) in Docker
-    # on Apple M4 Macs, so every local stack would crash at import. 46.0.7 runs there, on the
-    # Jetson's Cortex-A78AE and on CI's x86 runners (agents A1).
-    # Known advisories of 46.0.7: GHSA-537c-gmf6-5ccf (bundled OpenSSL, fixed in 48.0.1),
-    # CVE-2026-69247 (PKCS#7 padding oracle, fixed in 50.0.0), CVE-2026-69248 and CVE-2026-69249
-    # (X.509 path validation, fixed in 49.0.0). None reaches this app: it uses only the AESGCM
-    # AEAD primitive (app/agents/crypto.py), never PKCS#7 or CMS, X.509, OCSP, QUIC or AES-OCB,
-    # and TLS goes through Python's ssl module, not this package's OpenSSL.
-    # RULE while pinned here: AESGCM only. Anything else from cryptography first needs the move
-    # to >= 50.0.0 (issue #19: OPENSSL_armcap=0 in compose.dev.yml for the M4 Mac).
-    "cryptography==46.0.7",
+    # Only the AESGCM AEAD primitive is used (app/agents/crypto.py): model credentials at rest.
+    # Before any upgrade, tests/agents/test_crypto_compat.py must still read the ciphertexts that
+    # 46.0.7 wrote (the format of the rows stored on the Jetson).
+    # Wheels (cp311-abi3, manylinux_2_34 for aarch64 and x86_64) bundle OpenSSL 4.0.3: no Rust
+    # build in the images. Since 47.0.0 that OpenSSL dies with SIGILL at import inside Docker on
+    # Apple silicon with SME (the M4 Mac; reproduced with 50.0.2 on 2026-10-10), so the api and
+    # worker get OPENSSL_armcap=0 there, from compose.dev.yml or compose.mac.yml, and never from
+    # compose.yml: the Jetson (Cortex-A78AE, no SVE or SME) keeps hardware AES (README,
+    # "Apple silicon"; tests/test_openssl_armcap.py guards it).
+    "cryptography==50.0.2",
     "email-validator==2.3.0",
     "fastapi==0.142.4",
     "httpx==0.28.1",

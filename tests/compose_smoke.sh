@@ -319,7 +319,9 @@ for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB"; do
 done
 ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB"
 
-SCRATCH=(docker compose -p "$SCRATCH_PROJECT" -f compose.yml)
+# compose.mac.yml: OPENSSL_armcap=0 for api and worker, or the runtime image dies with SIGILL at
+# import inside Docker on an M4 (README, Apple silicon). This script only ever runs on the Mac.
+SCRATCH=(docker compose -p "$SCRATCH_PROJECT" -f compose.yml -f compose.mac.yml)
 psql_scratch() { "${SCRATCH[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -tAc "$1"; }
 
 step "production stack alone on $SCRATCH_PROJECT: runtime image healthy, migrations, only caddy published"
