@@ -149,11 +149,12 @@ class AcceptIn(BaseModel):
 
 class ProposalConflictOut(BaseModel):
     """409 of accept and reject. reason: not_pending (decided already: `status` says how),
-    target_gone (the job was deleted: the proposal is now invalid), stale (the job changed since
+    target_gone (the job was deleted: the proposal is now invalid), status_changed (the job's
+    status moved since the proposal was made: now invalid), stale (the job changed since
     the user loaded it: `updated_at` is its current version)."""
 
     detail: str
-    reason: Literal["not_pending", "target_gone", "stale"]
+    reason: Literal["not_pending", "target_gone", "status_changed", "stale"]
     status: ProposalStatus | None = None
     updated_at: datetime | None = None
 

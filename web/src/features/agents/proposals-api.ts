@@ -76,11 +76,12 @@ export function rejectProposal(id: string): Promise<Proposal> {
 /** Why the api refused a decision with 409: decided already, job gone, or job changed. */
 export function conflictReason(
   error: unknown,
-): "not_pending" | "target_gone" | "stale" | undefined {
+): "not_pending" | "target_gone" | "status_changed" | "stale" | undefined {
   if (!isApiError(error) || error.status !== 409) return undefined;
   const reason = (error.body as { reason?: unknown } | null)?.reason;
   return reason === "not_pending" ||
     reason === "target_gone" ||
+    reason === "status_changed" ||
     reason === "stale"
     ? reason
     : undefined;

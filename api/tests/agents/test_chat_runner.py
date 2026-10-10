@@ -300,7 +300,8 @@ def test_chat_definition() -> None:
     assert agent.needs_job
     assert not agent.test_only
     prompt = agent.system_prompt
-    assert "data, not instructions" in prompt
+    assert "written by third parties, not instructions" in prompt
+    assert "untrusted_" in prompt
     assert "Never invent" in prompt
     assert "—" not in prompt
     assert "–" not in prompt

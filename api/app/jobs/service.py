@@ -23,6 +23,7 @@ import sqlalchemy as sa
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, undefer
 
+from app.agents.models import Proposal, ProposalDecider, ProposalStatus
 from app.jobs import scoring
 from app.jobs import slug as slugs
 from app.jobs import undo as undo_tokens
@@ -324,8 +325,38 @@ def set_status(
     if status is JobStatus.applied and job.applied_on is None:
         job.applied_on = now.date()
     touch(job, now)
+    _supersede_status_proposals(db, job, now, keep=(extra or {}).get("proposal_id"))
     db.flush()
     return True
+
+
+STATUS_MOVED = "The job's status was changed."
+
+
+def _supersede_status_proposals(db: Session, job: Job, now: datetime, keep: Any) -> None:
+    """Pending agent proposals to change this job's status were made for the status it had: once
+    it changes (by hand, in bulk, by mail or by accepting another proposal), they are superseded
+    by the system. `keep` is the proposal being accepted, if any."""
+    condition = sa.and_(
+        Proposal.user_id == job.user_id,
+        Proposal.target == "job",
+        Proposal.target_id == job.id,
+        Proposal.kind == "job_status",
+        Proposal.status == ProposalStatus.pending,
+    )
+    if keep is not None:
+        condition = sa.and_(condition, Proposal.id != uuid.UUID(str(keep)))
+    db.execute(
+        sa.update(Proposal)
+        .where(condition)
+        .values(
+            status=ProposalStatus.superseded,
+            decided_by=ProposalDecider.system,
+            decided_at=now,
+            reason=STATUS_MOVED,
+        )
+        .execution_options(synchronize_session=False)
+    )
 
 
 # --- sweeps -------------------------------------------------------------------------------------

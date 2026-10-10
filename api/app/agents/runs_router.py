@@ -122,6 +122,8 @@ TOO_MANY = f"You already have {runs.ACTIVE_PER_USER} runs queued or running. Wai
 ENDED = "This run has already ended."
 NEEDS_JOB = "job_id: this agent works on a job; name one."
 CHAT_AGENT = "agent: a chat agent answers in a thread; send a message to the thread instead."
+# Recorded streams are for the fake backend: refused in production, never stored there.
+NO_SCRIPT = "input.script: recorded streams exist only outside production."
 
 _401 = {401: {"model": ErrorOut, "description": "Not signed in"}}
 _404 = {404: {"model": ErrorOut, "description": "No such run (or not yours)"}}
@@ -281,6 +283,8 @@ async def start_run(body: RunIn, user: CurrentUser, request: Request) -> RunOut:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     if agent.needs_job and body.job_id is None:
         raise HTTPException(status_code=422, detail=NEEDS_JOB)
+    if "script" in data and request.app.state.settings.app_env == "production":
+        raise HTTPException(status_code=422, detail=NO_SCRIPT)
     if request.app.state.credentials_keyring is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=NOT_CONFIGURED)
     sessions = sessions_of(request)

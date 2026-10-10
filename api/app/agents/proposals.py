@@ -5,6 +5,9 @@ Runtime: "write tools only create proposals").
     pending --reject--> rejected         (the user)
     pending --newer proposal--> superseded   (the system: same kind, same target)
     pending --accept, target gone--> invalid (the system)
+    pending --accept, job status moved since (unedited status proposal)--> invalid (the system)
+    pending status proposal --job status changed by any other path--> superseded (the system,
+                                 app/jobs/service.py set_status)
     accepted --undo--> undone            (mail's undo, SPEC-mail; not used by A3)
 
 Kinds of A3, both on target "job":
@@ -51,6 +54,7 @@ VIA = "agent"
 
 SUPERSEDED = "Replaced by a newer proposal."
 JOB_GONE = "The job no longer exists."
+STATUS_CHANGED = "The job's status changed since this was proposed."
 UNKNOWN_KIND = "This kind of proposal cannot be applied."
 
 
@@ -100,6 +104,11 @@ class TargetGoneError(Exception):
     def __init__(self, proposal: Proposal) -> None:
         super().__init__("target gone")
         self.proposal = proposal
+
+
+class StatusChangedError(TargetGoneError):
+    """A status proposal made for another status than the job has now (it moved since): the
+    proposal was marked invalid (the caller commits that)."""
 
 
 def clean_note(value: Any) -> str:
@@ -210,6 +219,10 @@ def create(
     if status not in (ProposalStatus.pending, ProposalStatus.accepted):
         raise ValueError(f"a proposal is created pending or accepted, not {status}")
     if target_id is not None:
+        # One writer at a time per (user, target, kind): two runs proposing at once on the same
+        # job cannot both find no pending row and both stay pending. Released at commit.
+        key = f"proposals:{user_id}:{target}:{target_id}:{kind}"
+        db.execute(sa.select(sa.func.pg_advisory_xact_lock(sa.func.hashtextextended(key, 0))))
         older = db.scalars(
             proposals_of(user_id)
             .where(
@@ -272,7 +285,9 @@ def accept(
     value does not fit the kind (checked before anything is read or locked) or the kind is
     unknown; TargetGoneError when the job is gone, after marking the proposal invalid (the
     caller commits that); jobs_service.StaleJobError when `expected_updated_at` is not the job's
-    version (the caller rolls back)."""
+    version (the caller rolls back); StatusChangedError (a TargetGoneError) when an unedited
+    status proposal was made from another status than the job has now, after marking it
+    invalid (the caller commits that). An edited status is the user's own choice: applied."""
     proposal = get(db, user_id, proposal_id, lock=True)
     if proposal is None:
         return None
@@ -299,6 +314,16 @@ def accept(
         raise TargetGoneError(proposal)
     if expected_updated_at is not None and job.updated_at != expected_updated_at:
         raise jobs_service.StaleJobError(job)
+    proposed_from = proposal.payload.get("from")
+    if (
+        kind is ProposalKind.job_status
+        and not edited
+        and proposed_from is not None
+        and proposed_from != job.status.value
+    ):
+        _decide(proposal, ProposalStatus.invalid, ProposalDecider.system, now, STATUS_CHANGED)
+        db.flush()
+        raise StatusChangedError(proposal)
     _apply_to_job(db, proposal, job, value, now)
     _decide(proposal, ProposalStatus.accepted, ProposalDecider.user, now)
     if edited:

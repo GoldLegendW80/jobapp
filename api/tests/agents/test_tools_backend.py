@@ -35,9 +35,9 @@ def test_get_job_is_bound_to_the_runs_user(factory: sessionmaker[Session]) -> No
     payload = json.loads(found["content"][0]["text"])
     assert payload["company"] == "Acme"
     assert payload["status"] == "found"
-    assert payload["description"].startswith("Ünïcode")
+    assert payload["untrusted_description"].startswith("Ünïcode")
     assert payload["description_truncated"]
-    assert len(payload["description"]) == app_tools.DESCRIPTION_MAX
+    assert len(payload["untrusted_description"]) == app_tools.DESCRIPTION_MAX
     assert "user_id" not in payload
     for wrong in (str(bobs), str(uuid.uuid4()), "not-a-uuid", "", None, 42):
         answer = call(tools, "mcp__app__get_job", {"job_id": wrong})
