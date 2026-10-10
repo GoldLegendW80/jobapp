@@ -27,10 +27,18 @@ env:
   FORCE_COLOR: "1"
 
 jobs:
+  # api tests in two shards on two runners (a private repo's runner has 2 vCPUs), each with
+  # pytest-xdist; coverage is combined and checked (at least 95 percent) in api-coverage.
   api:
-    name: api (ruff, pytest, coverage)
+    name: api (${{ matrix.shard.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - { name: jobs, paths: "tests/jobs" }
+          - { name: rest, paths: "tests --ignore=tests/jobs" }
     services:
       postgres:
         image: postgres:16.15-alpine
@@ -54,6 +62,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql+psycopg://jobapp:ci-only-not-a-secret@127.0.0.1:5432/jobapp_test
       REDIS_URL: redis://127.0.0.1:6379/0
+      COVERAGE_FILE: .coverage.${{ matrix.shard.name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,37 +74,45 @@ jobs:
           cache-dependency-glob: api/uv.lock
       - name: Install dependencies
         run: uv sync --frozen
-      - name: Ruff lint
-        run: uv run --frozen ruff check --output-format=github .
-      - name: Ruff format
-        run: uv run --frozen ruff format --check .
-      # The docker-marked tests (database stopped, restarted, paused) start their own throwaway
-      # Postgres containers, so they run in the next step, on the runner's Docker daemon, not
-      # against the shared service container.
-      # pytest-xdist: PYTEST_WORKERS processes, each on a database of its own created next to
-      # TEST_DATABASE_URL's (tests/conftest.py), so migrations and TRUNCATE never cross. argon2 runs
-      # at a cheap cost in-process (tests/conftest.py fast_argon2); the production cost is checked
-      # by tests/identity/test_security.py. Issue #9: this step took 10 to 25 minutes before.
-      - name: Pytest with coverage (at least 95 percent), in parallel
-        env:
-          PYTEST_WORKERS: "4"
+      - name: Ruff lint and format
+        if: matrix.shard.name == 'rest'
+        run: |
+          uv run --frozen ruff check --output-format=github .
+          uv run --frozen ruff format --check .
+      # pytest-xdist: each worker on a database of its own created next to TEST_DATABASE_URL's
+      # (tests/conftest.py); argon2 runs at a cheap cost in-process (tests/conftest.py
+      # fast_argon2). The docker-marked tests run serially in the rest shard below.
+      - name: Pytest (${{ matrix.shard.name }}), in parallel, coverage data only
         run: |
           start=$SECONDS
-          uv run --frozen pytest -m "not docker" -p no:cacheprovider -n "$PYTEST_WORKERS" \
-            --cov --cov-report=term --cov-fail-under=95 --durations=15 \
+          # shellcheck disable=SC2086 # the paths of the shard split on purpose
+          uv run --frozen pytest ${{ matrix.shard.paths }} -m "not docker" -p no:cacheprovider \
+            -n auto --cov --cov-report= --durations=10 \
             --junitxml=${{ runner.temp }}/junit-api.xml
-          echo "pytest (not docker, $PYTEST_WORKERS workers): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
+          echo "pytest ${{ matrix.shard.name }} (not docker, -n auto): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
+      - name: Upload coverage data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ matrix.shard.name }}
+          path: api/.coverage.${{ matrix.shard.name }}
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error
       # Serial, without -n: these stop, restart and pause Postgres containers of their own.
       - name: Pytest, docker-marked (own Postgres containers stopped, restarted, paused)
+        if: matrix.shard.name == 'rest'
         timeout-minutes: 10
+        env:
+          COVERAGE_FILE: .coverage.docker
         run: |
           start=$SECONDS
           uv run --frozen pytest -m docker -p no:cacheprovider \
             --junitxml=${{ runner.temp }}/junit-api-docker.xml
           echo "pytest (docker-marked, serial): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
       # Issue #16: the scorer's speed bound without coverage tracing or other workers sharing the
-      # cores, so it can be tight (0.3 s of CPU, the best of 3) where the step above allows 1 s.
+      # cores, so it can be tight (0.3 s of CPU, the best of 3).
       - name: Pytest, scoring timing alone (no coverage, 0.3 s)
+        if: matrix.shard.name == 'jobs'
         env:
           SCORE_BUDGET_S: "0.3"
         run: >-
@@ -105,15 +122,48 @@ jobs:
         if: always()
         run: |
           if [[ -f "$RUNNER_TEMP/api-timings.txt" ]]; then
-            { echo "### api timings"; echo; sed 's/^/- /' "$RUNNER_TEMP/api-timings.txt"; echo; } >> "$GITHUB_STEP_SUMMARY"
+            { echo "### api ${{ matrix.shard.name }} timings"; echo; sed 's/^/- /' "$RUNNER_TEMP/api-timings.txt"; echo; } >> "$GITHUB_STEP_SUMMARY"
           fi
-          python3 ../.github/scripts/junit_summary.py api "${{ runner.temp }}/junit-api.xml" >> "$GITHUB_STEP_SUMMARY"
-          python3 ../.github/scripts/junit_summary.py "api (docker)" "${{ runner.temp }}/junit-api-docker.xml" >> "$GITHUB_STEP_SUMMARY"
+          python3 ../.github/scripts/junit_summary.py "api ${{ matrix.shard.name }}" "${{ runner.temp }}/junit-api.xml" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f "${{ runner.temp }}/junit-api-docker.xml" ]]; then
+            python3 ../.github/scripts/junit_summary.py "api (docker)" "${{ runner.temp }}/junit-api-docker.xml" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  api-coverage:
+    name: api coverage (combined, at least 95 percent)
+    needs: api
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Download coverage data
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+          path: api
+      - name: Combine and check
+        run: |
+          uv run --frozen coverage combine .coverage.jobs .coverage.rest
+          uv run --frozen coverage report --fail-under=95 | tail -n 3
+          { echo "### api coverage"; echo; uv run --frozen coverage report --format=total | sed 's/^/- total: /;s/$/ percent/'; } >> "$GITHUB_STEP_SUMMARY"
 
   web:
-    name: web (eslint, tsc, vitest, build)
+    name: web checks (eslint, tsc, build)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: web
@@ -136,13 +186,39 @@ jobs:
         run: pnpm lint
       - name: Typecheck
         run: pnpm typecheck
-      - name: Vitest
-        run: pnpm exec vitest run --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
       - name: Build
         run: pnpm build
+
+  web-tests:
+    name: web vitest (shard ${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Vitest
+        run: pnpm exec vitest run --shard=${{ matrix.shard }}/2 --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
       - name: Test summary
         if: always()
-        run: python3 ../.github/scripts/junit_summary.py web "${{ runner.temp }}/junit-web.xml" >> "$GITHUB_STEP_SUMMARY"
+        run: python3 ../.github/scripts/junit_summary.py "web shard ${{ matrix.shard }}" "${{ runner.temp }}/junit-web.xml" >> "$GITHUB_STEP_SUMMARY"
 
   shell:
     name: shell (shellcheck, deploy.sh tests)
@@ -175,15 +251,23 @@ jobs:
       - name: tests/tailscale_test.sh
         run: tests/tailscale_test.sh
 
+  # Browser journeys in three groups on three runners, each against its own scratch Compose stack.
+  # The images are built once per change and reused through the GitHub Actions cache (buildx
+  # bake); the worker runs with TEST_FAST_TIMERS (tests/ats-stub.compose.yml).
   e2e:
-    name: e2e (Playwright on a scratch Compose stack)
+    name: e2e (${{ matrix.group }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [identity, sweep, apps]
     env:
       PROJECT: jobapp-ci
       E2E_CADDY_URL: http://127.0.0.1:8080
       E2E_COMPOSE_PROJECT: jobapp-ci
       E2E_EVIDENCE: ci
+      PLAYWRIGHT_HTML_OPEN: never
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -209,12 +293,27 @@ jobs:
           # Agents A2: the worker replays recorded streams instead of calling a model (refused
           # when APP_ENV is production; this stack is development).
           echo "AGENTS_FAKE_BACKEND=true" >> .env
-      # tests/ats-stub.compose.yml: the board check asks a stub (tests/ats_stub.py), never the
-      # real Ashby, Greenhouse or Lever, so their availability cannot turn this job red.
-      - name: Build and start the stack
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the images (buildx bake, GitHub Actions layer cache)
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        with:
+          source: .
+          files: compose.yml
+          targets: api,worker,caddy
+          load: true
+          set: |
+            api.cache-from=type=gha,scope=e2e-api
+            api.cache-to=type=gha,scope=e2e-api,mode=max
+            worker.cache-from=type=gha,scope=e2e-worker
+            worker.cache-to=type=gha,scope=e2e-worker,mode=max
+            caddy.cache-from=type=gha,scope=e2e-caddy
+            caddy.cache-to=type=gha,scope=e2e-caddy,mode=max
+      # tests/ats-stub.compose.yml: the board check asks a stub (tests/ats_stub.py) and the worker
+      # api/tests/jobs/fake_ats.py, never the real Ashby, Greenhouse or Lever.
+      - name: Start the stack
         run: >-
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml
-          up -d --build --wait --wait-timeout 300
+          up -d --no-build --wait --wait-timeout 300
       - name: Migrations
         run: docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
       - name: Install web dependencies and Chromium
@@ -222,58 +321,38 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm exec playwright install --with-deps chromium
-      - name: Synthetic job folder (made-up rows, never Harald's data)
-        run: python3 .github/scripts/synthetic_jobs.py "$RUNNER_TEMP/synthetic/data"
       - name: Identity, invites, users, account, profile and throttle journeys
+        if: matrix.group == 'identity'
         working-directory: web
         env:
           E2E_ADMIN_EMAIL: e2e-admin@example.org
           E2E_PASSWORD_THROTTLE: "1"
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/identity
-          PLAYWRIGHT_HTML_OPEN: never
         run: pnpm exec playwright test -c e2e/identity-all.config.ts --reporter=list,html
-      - name: Jobs journeys on the synthetic import, and the map
-        working-directory: web
-        env:
-          E2E_JOBS_DATA: ${{ runner.temp }}/synthetic/data
-          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/jobs
-          PLAYWRIGHT_HTML_OPEN: never
-        run: pnpm exec playwright test jobs.spec.ts jobs-map.spec.ts --workers=1 --reporter=list,html
       # Issue #11: Find jobs with live progress, the summary and failed boards, the history, the
       # schedule firing on the worker's tick, a 5,000 posting sweep under the worker's memory
-      # limit. The worker reads api/tests/jobs/fake_ats.py for every org (a real one is a 404)
-      # (tests/ats-stub.compose.yml); the spec's one real sweep is skipped here.
+      # limit; the spec's one real sweep is skipped here.
       - name: Sweep journeys against the fake ATS
+        if: matrix.group == 'sweep'
         working-directory: web
         env:
           E2E_SKIP_REAL_SWEEP: "1"
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/sweep
-          PLAYWRIGHT_HTML_OPEN: never
         run: pnpm exec playwright test jobs-sweep.spec.ts --workers=1 --reporter=list,html
-      # Agents A2: a test run streaming live, reload and network loss resuming the stream, cancel,
-      # forbidden tools refused, the runs list; the fake backend, no model call.
-      - name: Agent run journeys on the fake backend
+      - name: Synthetic job folder (made-up rows, never Harald's data)
+        if: matrix.group == 'apps'
+        run: python3 .github/scripts/synthetic_jobs.py "$RUNNER_TEMP/synthetic/data"
+      # Jobs on the synthetic import and the map; agents A2 to A4 on the fake backend (a run
+      # streaming, reload and network loss, cancel, forbidden tools, triage proposals, job chat).
+      - name: Jobs, map and agent journeys
+        if: matrix.group == 'apps'
         working-directory: web
         env:
-          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/agents
-          PLAYWRIGHT_HTML_OPEN: never
-        run: pnpm exec playwright test agents-runs.spec.ts --workers=1 --reporter=list,html
-      # Agents A3: Assess with agent on a job, the triage run streaming, its proposals accepted,
-      # rejected, edited then accepted; the recorded triage stream, no model call.
-      - name: Job triage journeys on the fake backend
-        working-directory: web
-        env:
-          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/triage
-          PLAYWRIGHT_HTML_OPEN: never
-        run: pnpm exec playwright test agents-triage.spec.ts --workers=1 --reporter=list,html
-      # Agents A4: chat on a job, the answer streaming, the conversation after a reload, a second
-      # message whose prompt holds the first exchange, deleting it; the recorded chat stream.
-      - name: Job chat journeys on the fake backend
-        working-directory: web
-        env:
-          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/chat
-          PLAYWRIGHT_HTML_OPEN: never
-        run: pnpm exec playwright test agents-chat.spec.ts --workers=1 --reporter=list,html
+          E2E_JOBS_DATA: ${{ runner.temp }}/synthetic/data
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/apps
+        run: >-
+          pnpm exec playwright test jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts
+          agents-triage.spec.ts agents-chat.spec.ts --workers=1 --reporter=list,html
       - name: Stack logs
         if: failure()
         run: |
@@ -283,7 +362,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          name: e2e-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             web/playwright-report/
             web/test-results/

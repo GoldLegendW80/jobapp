@@ -20,6 +20,9 @@ services:
   worker:
     environment:
       ATS_BASE_URL: http://fakeats:8099
+      # Schedule tick every minute, 2 s board timeout, one attempt (tests only; refused in
+      # production): the sweep journeys do not wait through production timers.
+      TEST_FAST_TIMERS: "true"
     depends_on:
       fakeats:
         condition: service_healthy
