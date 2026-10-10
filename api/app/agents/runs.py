@@ -255,6 +255,11 @@ def fail_queued(db: Session, run_id: uuid.UUID, error: str, now: datetime) -> bo
 
 
 def _fail_where(db: Session, condition: sa.ColumnElement[bool], error: str, now: datetime) -> int:
+    # The reapers break the one-writer rule on purpose: they write a run's last event with
+    # next_seq. reap_orphans runs before any runner of this process; reap_stale only touches runs
+    # past every limit, whose runner, if one still lived, would collide on (run_id, seq). The
+    # unique constraint then fails that write instead of mixing up the log, and finish() leaves a
+    # run that is no longer running alone.
     ids = db.scalars(
         sa.update(AgentRun)
         .where(condition)

@@ -35,6 +35,8 @@ cancelled agent run likewise (runner.execute), its scratch directory removed.
 import argparse
 import asyncio
 import logging
+import os
+import re
 import signal
 import sys
 import uuid
@@ -327,6 +329,7 @@ async def serve(
     on_ready: Callable[[list[Worker]], Awaitable[None]] | None = None,
 ) -> None:
     """Run one Worker per queue until `stop` is set (SIGTERM or SIGINT when not given)."""
+    skip_sdk_version_probe()
     ctx = ctx if ctx is not None else make_context(settings)
     ctx.setdefault("body_gate", asyncio.Semaphore(BODIES_IN_FLIGHT))
     stop = stop or asyncio.Event()
@@ -397,6 +400,29 @@ async def check(settings: Settings, specs: Sequence[QueueSpec] | None = None) ->
     return 0
 
 
+# Environment variables whose names say they hold a secret (DATABASE_URL, REDIS_URL,
+# SECRET_KEY, CREDENTIALS_KEY, POSTGRES_PASSWORD, TS_AUTHKEY...).
+_SECRET_NAME = re.compile(r"KEY|SECRET|TOKEN|PASSWORD|PASSWD|AUTH|DSN|DATABASE_URL|REDIS_URL")
+
+
+def skip_sdk_version_probe() -> None:
+    """Before each run the Claude Agent SDK starts `claude -v` without env= (0.2.163,
+    SubprocessCLITransport._check_claude_version), so that process would inherit this
+    process's environment. The CLI is pinned by the wheel: skip the probe (the image sets it
+    too)."""
+    os.environ.setdefault("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK", "1")
+
+
+def drop_secrets_from_environ() -> list[str]:
+    """Remove the secrets from this process's environment once the settings hold them, so no
+    child process (whatever the SDK spawns, now or in a later version) can inherit them. Returns
+    the names removed (for the log; never the values)."""
+    names = sorted(name for name in os.environ if _SECRET_NAME.search(name.upper()))
+    for name in names:
+        del os.environ[name]
+    return names
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.worker", description=__doc__)
     parser.add_argument("--check", action="store_true", help="healthcheck: exit 0 when healthy")
@@ -405,6 +431,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         return asyncio.run(check(settings))
     configure_logging(settings.log_level)
+    skip_sdk_version_probe()
+    dropped = drop_secrets_from_environ()
+    logger.info("secrets dropped from the environment", extra={"names": dropped})
     asyncio.run(serve(settings))
     return 0
 

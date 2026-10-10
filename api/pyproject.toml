@@ -32,6 +32,10 @@ dependencies = [
 
 [dependency-groups]
 agents = [
+    # On upgrade recheck: app/agents/fake_backend.py imports the private
+    # claude_agent_sdk._internal.message_parser.parse_message, and app/worker.py turns off the
+    # `claude -v` probe that SubprocessCLITransport starts without env= (SDK facts in
+    # tasks/agents/todo.md).
     "claude-agent-sdk==0.2.163",
 ]
 dev = [
