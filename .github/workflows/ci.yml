@@ -5,8 +5,10 @@
 # stack built on the runner, and the pre-commit hooks not covered elsewhere.
 # A green run on main is what .github/workflows/deploy.yml waits for.
 #
-# Exit codes: every run step uses `bash --noprofile --norc -eo pipefail` (defaults.run.shell
-# below; without it GitHub runs `bash -e`, where `gate | tail` ends with the status of tail).
+# Exit codes: every run step uses `bash --noprofile --norc -eo pipefail`, through `shell: bash`
+# in defaults.run (without it GitHub runs `bash -e`, where `gate | tail` ends with the status of
+# tail). A job that sets its own defaults.run (a working-directory) must repeat `shell: bash`
+# there: seen in run 38047794828, such a job did not inherit the workflow level shell.
 # A command that gates anything is still never piped, and never negated with `!` (bash -e does
 # not stop on a negated command): it runs on its own line or under an explicit `if`.
 #
@@ -68,6 +70,7 @@ jobs:
           --health-retries 20
     defaults:
       run:
+        shell: bash
         working-directory: api
     env:
       TEST_DATABASE_URL: postgresql+psycopg://jobapp:ci-only-not-a-secret@127.0.0.1:5432/jobapp_test
@@ -150,6 +153,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
+        shell: bash
         working-directory: api
     steps:
       - name: Both api shards succeeded
@@ -194,6 +198,7 @@ jobs:
     timeout-minutes: 15
     defaults:
       run:
+        shell: bash
         working-directory: web
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -227,6 +232,7 @@ jobs:
         shard: [1, 2]
     defaults:
       run:
+        shell: bash
         working-directory: web
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -284,50 +290,27 @@ jobs:
       - name: tests/tailscale_test.sh
         run: tests/tailscale_test.sh
 
-  # The images of the e2e stack, built once and written to the GitHub Actions layer cache
-  # (buildx bake); the three e2e groups below only read that cache.
-  e2e-images:
-    name: e2e images (build, write the layer cache)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # compose.yml cannot be read without the variables of .env; none of it enters an image.
-      - name: Environment (random secrets, never committed)
-        run: |
-          umask 077
-          .github/scripts/ci_env.sh 8080 > .env
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build the images into the layer cache
-        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
-        with:
-          source: .
-          files: compose.yml
-          targets: api,worker,caddy
-          set: |
-            *.output=type=cacheonly
-            api.cache-from=type=gha,scope=e2e-api
-            api.cache-to=type=gha,scope=e2e-api,mode=max
-            worker.cache-from=type=gha,scope=e2e-worker
-            worker.cache-to=type=gha,scope=e2e-worker,mode=max
-            caddy.cache-from=type=gha,scope=e2e-caddy
-            caddy.cache-to=type=gha,scope=e2e-caddy,mode=max
-
-  # Browser journeys in three groups on three runners, each against its own scratch Compose stack
-  # made of the images cached by e2e-images; the worker runs with TEST_FAST_TIMERS
-  # (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts is in one group or in the exclusion
-  # list of .github/scripts/e2e_groups.py, which fails the shell job otherwise.
+  # Browser journeys in three groups on three runners, each against its own scratch Compose stack;
+  # the worker runs with TEST_FAST_TIMERS (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts
+  # is in one group or in the exclusion list of .github/scripts/e2e_groups.py, which fails the
+  # shell job otherwise.
+  # Images: every group builds them with buildx bake from the GitHub Actions layer cache, and
+  # only one group (cache_write) writes that cache, so the three runners do not export the same
+  # mode=max layers three times. On a cold cache (a Dockerfile, a lock file or a base image
+  # changed) the three still build in parallel. A single build job in front of the groups was
+  # measured on 2026-10-10: it puts about 30 s (the job and its hand-over) before every group on
+  # a warm cache, and on a cold one the groups still wait for the build, so it is never faster.
   e2e:
     name: e2e (${{ matrix.group }})
-    needs: e2e-images
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         group: [identity, sweep, apps]
+        include:
+          - group: identity
+            cache_write: true
     env:
       PROJECT: jobapp-ci
       E2E_CADDY_URL: http://127.0.0.1:8080
@@ -363,7 +346,8 @@ jobs:
           # when APP_ENV is production; this stack is development).
           echo "AGENTS_FAKE_BACKEND=true" >> .env
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Load the images from the layer cache (buildx bake, read only)
+      # The cache-to lines are empty, and ignored, in the groups that do not write the cache.
+      - name: Build the images (buildx bake, GitHub Actions layer cache)
         uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         with:
           source: .
@@ -374,6 +358,9 @@ jobs:
             api.cache-from=type=gha,scope=e2e-api
             worker.cache-from=type=gha,scope=e2e-worker
             caddy.cache-from=type=gha,scope=e2e-caddy
+            ${{ matrix.cache_write && 'api.cache-to=type=gha,scope=e2e-api,mode=max' || '' }}
+            ${{ matrix.cache_write && 'worker.cache-to=type=gha,scope=e2e-worker,mode=max' || '' }}
+            ${{ matrix.cache_write && 'caddy.cache-to=type=gha,scope=e2e-caddy,mode=max' || '' }}
       # tests/ats-stub.compose.yml: the board check asks a stub (tests/ats_stub.py) and the worker
       # api/tests/jobs/fake_ats.py, never the real Ashby, Greenhouse or Lever.
       - name: Start the stack
