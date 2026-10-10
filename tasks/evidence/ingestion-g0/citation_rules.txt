@@ -1,0 +1,79 @@
+# Citation rules of tasks/ingestion/todo.md, executed (citation_rules.py)
+# number | field | value | verdict | expected | reason
+1 | text | Works in the GenAI team of Betclic | accept | accept | step 1 folds U+2019
+2 | text | Développeur full-stack | accept | accept | the skeleton drops hyphens and whitespace on both sides
+3 | text | Développeur fullstack | accept | accept | all rules hold
+4 | date | 2021 | accept | accept | U+2013 folded; a hyphen never joins two numbers
+5 | date | 2021-01 | refuse | refuse | rule D: month not in the source, propose the year alone
+6 | date | 2023-01 | accept | accept | all rules hold
+7 | date | 2023-01 | accept | accept | all rules hold
+8 | date | 2023-01 | accept | accept | three part date whose middle number is over 12: the month comes first
+9 | date | 2022-02 | refuse | refuse | excerpt not found
+10 | date | 2022-02 | accept | accept | all rules hold
+11 | email | hthautin@gmail.com | accept | accept | all rules hold
+12 | email | harald@evil.example | refuse | refuse | rule V: the value is not written in an excerpt
+13 | url | https://linkedin.com/in/harald-thorvald-hautin | accept | accept | scheme and www. removed on both sides, the final / is punctuation
+14 | phone | +33 7 89 36 56 92 | accept | accept | all rules hold
+15 | phone | 07 89 36 56 92 | refuse | refuse | rule P: the digits are not a phone number of an excerpt
+16 | text | 10 000 utilisateurs actifs | accept | accept | NFKC turns U+202F into a space; reading b gives 10000 on both sides
+17 | text | 10k active users | refuse | refuse | rule N: 10 is not a number of the source
+18 | text | 3.5 years of software engineering | accept | accept | all rules hold
+19 | text | 3 years of Python | refuse | refuse | rule N: 3 is not a number of the source
+20 | name | Hôtel 35 | accept | accept | all rules hold
+21 | text | Built it in 2023 | refuse | refuse | rule N: 2023 is not a number of the source
+22 | text | Certification ISO 27001 | accept | accept | NFKC unfolds the ligature
+23 | name | University of Bordeaux | accept | accept | step 2 strips the soft hyphen
+24 | name | Français | accept | accept | all rules hold
+25 | name | French | refuse | refuse | rule V: the value is not written in an excerpt
+26 | text | Docker | accept | accept | the document is under 20 characters: the excerpt is all of it
+27 | text | Kubernetes | refuse | refuse | excerpt under 20 characters
+28 | text | Une phrase | refuse | refuse | excerpt not found
+29 | date | 2019 | accept | accept | reading e: no grouped or decimal reading, so 2019 and 2021
+30 | email | admin@evil.example | accept, flagged | accept, flagged | looks_like_instruction: the quote is real and verbatim; the excerpt reads like an instruction
+31 | text | 5 years of experience | refuse | refuse | rule N: 5 is not a number of the source: the span is extended to the whole number 3,5
+32 | date | 2023-01 | refuse | refuse | rule D: month not in the source, propose the year alone: the span is extended to 11/2023
+33 | date | 2023-11 | accept | accept | the same excerpt supports what the document says
+34 | email | martin@mail.fr | refuse | refuse | rule V: the value is not written in an excerpt
+35 | email | jeanluc.martin@mail.fr | refuse | refuse | rule V: the value is not written in an excerpt
+36 | email | jean-luc.martin@mail.fr | accept | accept | all rules hold
+37 | url | mysite.fr | refuse | refuse | rule V: the value is not written in an excerpt
+38 | url | https://my-site.fr/ | accept | accept | all rules hold
+39 | text | GenAI team | accept | accept | U+00B4 folded before NFKC could split it
+40 | text | Brain in production | accept | accept | U+2033 folded to a double quote before NFKC
+41 | date | 2023-01 | accept | accept | rule D reads runs of digits: 01 and 2023
+42 | date | 2023 | accept | accept | all rules hold
+43 | text | Software engineer since 2023 | accept | accept | a fraction of four digits is not a decimal: reading e
+44 | date | 2023-05 | accept | accept | all rules hold
+45 | date | 2023-05 | accept | accept | dotted dates are day first
+46 | date | 2023-04 | refuse | refuse | rule D: month not in the source, propose the year alone: two numbers up to 12 with a slash: ambiguous
+47 | date | 2023 | accept | accept | all rules hold
+48 | date | 2021-09 | refuse | refuse | rule D: two digit year, not read
+49 | date | 2021 | refuse | refuse | rule D: two digit year, not read
+50 | date | 2023-01 | refuse | refuse | rule D: two digit year, not read
+51 | date | 2019 | accept | accept | all rules hold
+52 | date | 2020 | refuse | refuse | rule D: two digit year, not read
+53 | date | 2021-09 | accept | accept | the month sits next to a two digit year and another excerpt gives 2021
+54 | date | 2010-11 | refuse | refuse | rule D: month not in the source, propose the year alone: 11 is the year after 2010: read as a school year
+55 | date | 2010 | accept | accept | all rules hold
+56 | date | 2019-06 | accept | accept | a range sharing its year
+57 | date | 2019-08 | accept | accept | all rules hold
+58 | date | 2023-01 | accept | accept | all rules hold
+59 | date | 2022-07 | accept | accept | all rules hold
+60 | date | 2023-12 | accept | accept | all rules hold
+61 | date | 2023-03 | refuse | refuse | rule D: month not in the source, propose the year alone: a month word is a whole word: Omar is not mar
+62 | date | 2023 | accept | accept | all rules hold
+63 | date | 2023-05 | refuse | refuse | rule D: month not in the source, propose the year alone: a full month name takes no full stop
+64 | date | 2021-09 | accept | accept | all rules hold
+65 | name | Thales | refuse | refuse | rule V: the value is not written in an excerpt: whole tokens: Thales is not Thalesgroup
+66 | name | Thalesgroup Services | accept | accept | all rules hold
+67 | phone | 89 36 56 | refuse | refuse | rule P: the digits are not a phone number of an excerpt: the digits must be the whole phone number
+68 | text | Python | accept | accept | all rules hold
+69 | text | Python | refuse | refuse | excerpt must be the whole document
+70 | setting | 25 | refuse | refuse | not proposable by the agent: a setting is not proposable
+71 | term | python3 | accept | accept | a search term is not a claim: rule N does not apply
+72 | url | https://harald.dev/projets | refuse | refuse | rule V: the value is not written in an excerpt: the address goes on after the value
+73 | email | hthautin@gmail.com | accept | accept | all rules hold
+74 | text | 1234.56 euros | accept | accept | all rules hold
+75 | text | 150 people in 2021 | accept | accept | reading e: 2021 and 150
+76 | text | Fait ajouté | accept, flagged | accept, flagged | looks_like_instruction
+# 76 examples, 76 as the table states, 0 not
