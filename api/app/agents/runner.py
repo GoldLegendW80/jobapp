@@ -699,8 +699,10 @@ def _chat_lock(run_id: uuid.UUID) -> Callable[[Session], None]:
     return lock
 
 
-def _reveal(context: RunContext, user_id: uuid.UUID) -> _Secret | str:
-    """The decrypted credential, or the error message to fail the run with."""
+def _reveal(context: RunContext, user_id: uuid.UUID, run_id: uuid.UUID) -> _Secret | str:
+    """The decrypted credential, or the error message to fail the run with. The kind of the
+    credential (not the secret) is written on the run, in the same transaction: the run keeps
+    what it used even if the user replaces the credential later."""
     if context.keyring is None:
         return UNREADABLE
     with context.sessions() as db:
@@ -712,8 +714,9 @@ def _reveal(context: RunContext, user_id: uuid.UUID) -> _Secret | str:
         if revealed is None:
             db.rollback()
             return NO_CREDENTIAL
-        db.commit()  # keeps a re-encryption with the current key
         row = revealed.row
+        runs.record_credential_kind(db, run_id, row.kind)
+        db.commit()  # also keeps a re-encryption with the current key
         return _Secret(row.kind, revealed.secret, row.updated_at, row.verified_at is not None)
 
 
@@ -767,7 +770,7 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             recorder.on_done = _chat_reply(context, run_id)
         else:
             prompt = definition.prompt(data, run.job_id)
-        found = await asyncio.to_thread(_reveal, context, run.user_id)
+        found = await asyncio.to_thread(_reveal, context, run.user_id, run_id)
         if isinstance(found, str):
             outcome = runs.Outcome(status=RunStatus.failed, error=found, model=definition.model)
             return RunStatus.failed

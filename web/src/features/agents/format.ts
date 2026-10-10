@@ -1,5 +1,13 @@
-/** Display helpers of the agent runs: status labels, money, tokens and durations. */
-import type { RunStatus } from "./runs-api";
+/**
+ * Display helpers of the agent runs: status labels, money, tokens and durations.
+ *
+ * Money (issue #33): the SDK reports an amount for every run, at API prices. With an Anthropic
+ * API key that amount is what the run cost. With a Claude subscription nothing is billed per
+ * run, so the same amount is an estimate, and is labelled as one. A run whose credential kind
+ * was not recorded (older runs, runs that failed before reading their credential) gets a
+ * neutral wording: the amount at API prices, without saying it was or was not billed.
+ */
+import type { CredentialKind, RunStatus } from "./runs-api";
 
 export const STATUS_LABEL: Record<RunStatus, string> = {
   queued: "Queued",
@@ -19,6 +27,45 @@ const COUNT = new Intl.NumberFormat("en-US");
 
 export function formatCost(value: number | null | undefined): string {
   return value === null || value === undefined ? "None yet" : USD.format(value);
+}
+
+type Kind = CredentialKind | null | undefined;
+
+/** The heading over the amount: "Cost", or what it is when it is not one. */
+export function costLabel(kind: Kind): string {
+  if (kind === "anthropic_api_key") return "Cost";
+  if (kind === "claude_subscription") return "Estimate at API prices";
+  return "Amount at API prices";
+}
+
+/** A short qualifier to put next to a bare amount, or null when it is a plain cost. */
+export function costQualifier(kind: Kind): string | null {
+  if (kind === "anthropic_api_key") return null;
+  if (kind === "claude_subscription") return "Estimate, not billed";
+  return "At API prices";
+}
+
+/** One sentence saying what the amount is, or null when it is a plain cost. */
+export function costNote(kind: Kind): string | null {
+  if (kind === "anthropic_api_key") return null;
+  if (kind === "claude_subscription") {
+    return "This run used your Claude subscription, which is not billed per run. The estimate is what the same tokens cost at API prices.";
+  }
+  return "The kind of credential this run used was not recorded, so whether this amount was billed is not known.";
+}
+
+/** The amount inside a sentence: "$0.19", "$0.19 estimated at API prices, not billed". */
+export function describeCost(
+  value: number | null | undefined,
+  kind: Kind,
+): string {
+  const amount = formatCost(value);
+  if (value === null || value === undefined) return amount;
+  if (kind === "anthropic_api_key") return amount;
+  if (kind === "claude_subscription") {
+    return `${amount} estimated at API prices, not billed`;
+  }
+  return `${amount} at API prices`;
 }
 
 export function formatTokens(

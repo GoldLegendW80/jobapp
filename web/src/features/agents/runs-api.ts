@@ -31,6 +31,13 @@ export const FINAL_STATUSES: ReadonlySet<RunStatus> = new Set([
   "cancelled",
 ]);
 
+export const credentialKinds = [
+  "claude_subscription",
+  "anthropic_api_key",
+] as const;
+/** The kind of model credential a run used; it says whether its amount was billed. */
+export type CredentialKind = (typeof credentialKinds)[number];
+
 export const runSchema = z.object({
   id: z.string().min(1),
   agent: z.string(),
@@ -43,6 +50,8 @@ export const runSchema = z.object({
   input_tokens: z.number().int().nullable(),
   output_tokens: z.number().int().nullable(),
   cost_usd: z.number().nullable(),
+  /** Null or absent when it was not recorded: older runs, runs that never read a credential. */
+  credential_kind: z.enum(credentialKinds).nullable().optional(),
   cancel_requested: z.boolean(),
   created_at: z.string(),
   started_at: z.string().nullable(),

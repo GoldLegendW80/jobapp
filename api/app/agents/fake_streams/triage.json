@@ -136,14 +136,14 @@
      "content": [
       {
        "type": "text",
-       "text": "The posting matches the profile well; one gap on years."
+       "text": "The posting matches your profile well; one gap on years."
       },
       {
        "type": "tool_use",
        "id": "toolu_triage_05",
        "name": "mcp__app__propose_note",
        "input": {
-        "text": "Strong fit: the posting asks for agent orchestration, LLM evaluation and tool integration, all proven in the profile's facts.\nMatches: agents in production, evaluation, MCP tools.\nGaps: five years asked, the profile shows about three and a half.\nCheck before applying: on site days in Paris and the start date."
+        "text": "Strong fit: the posting asks for agent orchestration, LLM evaluation and tool integration, all proven in your profile's facts.\nMatches: agents in production, evaluation, MCP tools.\nGaps: five years asked, your profile shows about three and a half.\nCheck before applying: on site days in Paris and the start date."
        }
       },
       {

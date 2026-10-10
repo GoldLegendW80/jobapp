@@ -44,6 +44,9 @@ import { cn } from "@/lib/utils";
 import type { LiveText } from "./live-text";
 import {
   STATUS_LABEL,
+  costLabel,
+  costNote,
+  describeCost,
   elapsed,
   formatCost,
   formatDuration,
@@ -54,6 +57,7 @@ import {
   runKey,
   runsKey,
   type Connection,
+  type CredentialKind,
   type RunStatus,
   type RunStep,
 } from "./runs-api";
@@ -128,7 +132,10 @@ interface StepView {
   tone?: "error" | "warning" | "muted";
 }
 
-function describeStep(step: RunStep): StepView | null {
+function describeStep(
+  step: RunStep,
+  kind: CredentialKind | null | undefined,
+): StepView | null {
   const data = step.data;
   switch (step.kind) {
     case "status": {
@@ -220,7 +227,7 @@ function describeStep(step: RunStep): StepView | null {
             Number(data.cache_creation_input_tokens ?? 0) +
             Number(data.cache_read_input_tokens ?? 0),
           Number(data.output_tokens ?? 0),
-        )}, ${formatCost(typeof data.cost_usd === "number" ? data.cost_usd : null)}`,
+        )}, ${describeCost(typeof data.cost_usd === "number" ? data.cost_usd : null, kind)}`,
         tone: "muted",
       };
     case "api_error":
@@ -265,16 +272,18 @@ interface TimelineItem {
 function Timeline({
   steps,
   live,
+  kind,
 }: {
   steps: RunStep[];
   live: LiveText | null;
+  kind: CredentialKind | null | undefined;
 }) {
   if (steps.length === 0) {
     return <p className="text-sm text-muted-foreground">No step yet.</p>;
   }
   const views: TimelineItem[] = [];
   for (const step of steps) {
-    const view = describeStep(step);
+    const view = describeStep(step, kind);
     if (view !== null) {
       views.push({ key: String(step.seq), kind: step.kind, view, live: false });
     }
@@ -463,10 +472,21 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
             label="Tokens"
             value={formatTokens(run.input_tokens, run.output_tokens)}
           />
-          <Metric label="Cost" value={formatCost(run.cost_usd)} />
+          <Metric
+            label={
+              run.cost_usd === null ? "Cost" : costLabel(run.credential_kind)
+            }
+            value={formatCost(run.cost_usd)}
+          />
           <Metric label="Duration" value={formatDuration(elapsed(run, now))} />
         </dl>
-        <Timeline steps={steps} live={live} />
+        {/* What the amount is, when it is not a plain cost: a subscription is not billed per run. */}
+        {run.cost_usd !== null && costNote(run.credential_kind) ? (
+          <p data-testid="cost-note" className="text-sm text-muted-foreground">
+            {costNote(run.credential_kind)}
+          </p>
+        ) : null}
+        <Timeline steps={steps} live={live} kind={run.credential_kind} />
       </CardContent>
     </Card>
   );
