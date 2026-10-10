@@ -125,7 +125,6 @@ class RulesTest(unittest.TestCase):
 
     def test_documentation_alone_needs_no_unit(self) -> None:
         docs = [
-            "README.md",
             "CONTRIBUTING.md",
             "CAPABILITY-MAP.md",
             "SPEC-platform.md",
@@ -190,6 +189,13 @@ class RulesTest(unittest.TestCase):
         ]:
             self.assertEqual(self.units(path), expected, path)
         self.assertEqual(self.units("web/src/App.tsx", "README.md"), expected)
+
+    def test_the_readme_runs_the_shell_unit_alone(self) -> None:
+        # tests/deploy_test.sh checks statements of the README.
+        self.assertEqual(self.units("README.md"), frozenset({"shell"}))
+        self.assertEqual(
+            self.units("README.md", "SPEC-platform.md"), frozenset({"shell"})
+        )
 
     def test_the_evidence_a_shell_test_reads_runs_the_shell_unit(self) -> None:
         self.assertEqual(
@@ -300,10 +306,18 @@ class DecideTest(unittest.TestCase):
         return root
 
     def test_a_documentation_pull_request_runs_pre_commit_alone(self) -> None:
-        root = self.repo({"README.md": "new\n", "tasks/evidence/x/shot.png": "png"})
+        root = self.repo({"tasks/todo.md": "new\n", "tasks/evidence/x/shot.png": "png"})
         units, sentence, _ = ci_plan.decide("pull_request", root)
         self.assertEqual(units, frozenset())
         self.assertIn("documentation only", sentence)
+
+    def test_a_readme_pull_request_runs_the_shell_unit(self) -> None:
+        root = self.repo({"README.md": "new\n", "tasks/todo.md": "new\n"})
+        units, sentence, notes = ci_plan.decide("pull_request", root)
+        self.assertEqual(units, frozenset({"shell"}))
+        self.assertIn("shell", sentence)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("README.md: shell", notes[0])
 
     def test_what_main_gained_meanwhile_does_not_count(self) -> None:
         # main added ops/other.sh after the branch forked: not part of this pull request.
@@ -330,20 +344,20 @@ class DecideTest(unittest.TestCase):
         self.assertEqual(ci_plan.decide("pull_request", root)[0], EVERYTHING)
 
     def test_a_push_and_a_manual_run_run_everything_whatever_changed(self) -> None:
-        root = self.repo({"README.md": "new\n"})
+        root = self.repo({"tasks/todo.md": "new\n"})
         for event in ["push", "workflow_dispatch", "schedule", ""]:
             units, sentence, _ = ci_plan.decide(event, root)
             self.assertEqual(units, EVERYTHING, event)
             self.assertIn("every unit runs", sentence)
 
     def test_a_checkout_that_is_no_merge_commit_runs_everything(self) -> None:
-        root = self.repo({"README.md": "new\n"})
+        root = self.repo({"tasks/todo.md": "new\n"})
         git(root, "checkout", "-q", "feature")
         self.assertIsNone(ci_plan.changed_paths(root))
         self.assertEqual(ci_plan.decide("pull_request", root)[0], EVERYTHING)
 
     def test_a_shallow_checkout_without_the_parents_runs_everything(self) -> None:
-        root = self.repo({"README.md": "new\n"})
+        root = self.repo({"tasks/todo.md": "new\n"})
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         shallow = Path(tmp.name) / "clone"
@@ -527,6 +541,16 @@ class VerifyTest(unittest.TestCase):
             self.assertEqual(self.run_verify(**broken).returncode, 1, broken)
 
 
+# A mention that is no read, each with its reason. Anything else the scan below finds must
+# be covered by the rule of the file it names.
+MENTIONS_ONLY = {
+    (
+        "api/tests/test_migration_rules.py",
+        "CONTRIBUTING.md",
+    ): "named in a failure message",
+}
+
+
 class ReasonsTest(unittest.TestCase):
     """What lets a rule skip a unit, checked on this repository."""
 
@@ -584,35 +608,64 @@ class ReasonsTest(unittest.TestCase):
         return lines
 
     def test_nothing_executable_reads_the_documentation(self) -> None:
-        """The documentation rules skip every unit. A test or a script of a unit that reads one
-        of those files would make that wrong: give the file a rule of its own first."""
+        """A documentation rule may skip a unit only if nothing of that unit reads the file. So
+        every place where a test or a script of a unit names a documentation file is looked up:
+        the rule of that file must run that unit (tests/deploy_test.sh reads README.md, and the
+        README's rule runs the shell unit), or the mention is listed above with its reason.
+        A folder named without a file (docs/, tasks/) can only be listed."""
         offending = []
+
+        def judge(path: Path, unit: str, text: str) -> None:
+            for found in self.DOCS.finditer(text):
+                named = found.group(0)
+                where = str(path.relative_to(ROOT))
+                if (where, named) in MENTIONS_ONLY:
+                    continue
+                target = "docs/HANDOFF.md" if named == "HANDOFF.md" else named
+                if target.endswith(".md") and unit in ci_plan.units_for(target)[0]:
+                    continue
+                offending.append(
+                    f"{where} ({unit} unit) names {named}, whose rule does not run {unit}: "
+                    f"{text.strip()[:70]!r}"
+                )
+
         for path in sorted((ROOT / "api").rglob("*.py")):
             if ".venv" in path.parts:
                 continue
             for text in self.strings(path):
-                if self.DOCS.search(text):
-                    offending.append(f"{path.relative_to(ROOT)}: {text[:60]!r}")
-        files = [
-            *sorted((ROOT / "web/src").rglob("*.ts")),
-            *sorted((ROOT / "web/src").rglob("*.tsx")),
-            *sorted((ROOT / "web/e2e").rglob("*.ts")),
-            *sorted(ROOT.glob("web/*.ts")),
-            *sorted(ROOT.glob("tests/*.sh")),
-            *sorted(ROOT.glob("tests/*.py")),
-            *sorted(ROOT.glob(".github/scripts/*.sh")),
-        ]
-        for path in files:
-            for line in self.code_lines(path):
-                if self.DOCS.search(line):
-                    offending.append(f"{path.relative_to(ROOT)}: {line.strip()[:80]}")
+                judge(path, "api", text)
+        by_unit = {
+            "web": [
+                *sorted((ROOT / "web/src").rglob("*.ts")),
+                *sorted((ROOT / "web/src").rglob("*.tsx")),
+                *sorted(ROOT.glob("web/*.ts")),
+            ],
+            "e2e": sorted((ROOT / "web/e2e").rglob("*.ts")),
+            "shell": [
+                *sorted(ROOT.glob("tests/*.sh")),
+                *sorted(ROOT.glob("tests/*.py")),
+                *sorted(ROOT.glob(".github/scripts/*.sh")),
+            ],
+        }
+        for unit, files in by_unit.items():
+            for path in files:
+                for line in self.code_lines(path):
+                    judge(path, unit, line)
         for path in sorted(ROOT.glob(".github/scripts/*.py")):
             if path.name.startswith("ci_plan"):
                 continue  # the rules themselves and this test name the documentation
             for text in self.strings(path):
-                if self.DOCS.search(text):
-                    offending.append(f"{path.relative_to(ROOT)}: {text[:60]!r}")
+                judge(path, "shell", text)
         self.assertEqual(offending, [])
+        for where, _named in MENTIONS_ONLY:
+            self.assertTrue(
+                (ROOT / where).is_file(), f"MENTIONS_ONLY lists {where}, which is gone"
+            )
+
+    def test_the_readme_rule_matches_what_the_shell_test_reads(self) -> None:
+        text = (ROOT / "tests/deploy_test.sh").read_text(encoding="utf-8")
+        self.assertIn("README.md", text)
+        self.assertEqual(ci_plan.units_for("README.md")[0], frozenset({"shell"}))
 
     def test_the_evidence_rule_matches_what_the_shell_test_reads(self) -> None:
         text = (ROOT / "tests/agents_real_run_test.sh").read_text(encoding="utf-8")

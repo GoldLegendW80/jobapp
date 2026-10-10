@@ -117,7 +117,8 @@ build, then the e2e group apps) and `journeys` (Vitest, then the e2e groups iden
 sweep); each e2e group runs on a Compose stack of its own built on its runner, the Playwright
 journeys with throwaway accounts and a synthetic jobs import, never Harald's data. `gate` fails
 unless the three succeeded. A pull request that changes documentation only runs pre-commit and
-the gate; every push to `main` runs everything. Since 2026-10-10 the jobs run on self-hosted
+the gate (and the shell tests when it touches this README, which they check); every push to
+`main` runs everything. Since 2026-10-10 the jobs run on self-hosted
 runners on Harald's Mac (CI runners on the Mac, below), because the free minutes of GitHub's own
 machines were used up; the Jetson's runner keeps the deploys and nothing uses paid minutes. When
 CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
@@ -307,7 +308,8 @@ in that script, first match wins:
 
 | the pull request touches only | units | why the rest may be skipped |
 |---|---|---|
-| `tasks/`, `docs/`, the Markdown files at the root, the pull request template | none: pre-commit and the gate | nothing executable reads them (a test fails when something starts to) |
+| `tasks/`, `docs/`, the Markdown files at the root but this README, the pull request template | none: pre-commit and the gate | nothing executable reads them (a test fails when something starts to) |
+| `README.md` | `shell` | `tests/deploy_test.sh` checks that the recovery statements it tests are the ones written here |
 | `tasks/evidence/agents-a5/` | `shell` | `tests/agents_real_run_test.sh` compares against it |
 | `web/` | `web`, `shell`, `e2e` | no api file reads a file of `web/` (a test fails when one starts to) |
 | anything else, or a mix with anything else | all four | a path no rule names runs everything |
@@ -316,7 +318,8 @@ A push to `main`, a manual run and any run where the changed files cannot be rea
 run everything: a green run on `main` is what deploys. Each job ends with `ci_plan.py verify`,
 which fails it when a step the plan needed was skipped, or one it left out ran, so a wrong
 condition in the workflow cannot pass for a test that did not run; `ci_plan_test.py` checks the
-rules, their reasons on this repository, and that every check step of `ci.yml` follows the plan.
+rules, their reasons on this repository (it found the README check above the day it was
+written), and that every check step of `ci.yml` follows the plan.
 Within a job a failed check does not stop the checks after it: each unit reports for itself, and
 the job fails if any step failed.
 

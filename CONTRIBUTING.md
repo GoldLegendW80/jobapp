@@ -28,7 +28,8 @@ in the job folder that holds this repository (it is not part of the repository).
    the e2e groups identity and sweep; every e2e group against its own scratch Compose stack) and
    `CI gate`, which is the one result to read: it must be green. A pull request that touches
    documentation only (`tasks/`, `docs/`, the Markdown files at the root) runs pre-commit and
-   the gate, nothing else; one that touches `web/` only skips the api tests; anything else runs
+   the gate, nothing else (the shell tests too when it touches `README.md`, which they check);
+   one that touches `web/` only skips the api tests; anything else runs
    everything, and so does every push to `main` (README, What a CI run does). A new
    `web/e2e/*.spec.ts` joins one of the e2e groups in the workflow, or the exclusion list of
    `.github/scripts/e2e_groups.py` with its reason; CI fails otherwise. A new check in `ci.yml`

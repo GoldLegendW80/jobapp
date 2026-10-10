@@ -54,7 +54,12 @@ RULES: tuple[tuple[str, frozenset[str], str], ...] = (
     # test or a script of the units starts to.
     ("tasks/*", NONE, "task notes and evidence"),
     ("docs/*", NONE, "documentation"),
-    ("README.md", NONE, "documentation"),
+    # tests/deploy_test.sh checks that the README still gives the recovery statements it tests.
+    (
+        "README.md",
+        frozenset({"shell"}),
+        "statements of the README are checked by a shell test",
+    ),
     ("CONTRIBUTING.md", NONE, "documentation"),
     ("CAPABILITY-MAP.md", NONE, "documentation"),
     ("SPEC-*.md", NONE, "documentation"),
