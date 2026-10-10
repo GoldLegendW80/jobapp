@@ -258,6 +258,14 @@ jobs:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/agents
           PLAYWRIGHT_HTML_OPEN: never
         run: pnpm exec playwright test agents-runs.spec.ts --workers=1 --reporter=list,html
+      # Agents A3: Assess with agent on a job, the triage run streaming, its proposals accepted,
+      # rejected, edited then accepted; the recorded triage stream, no model call.
+      - name: Job triage journeys on the fake backend
+        working-directory: web
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/triage
+          PLAYWRIGHT_HTML_OPEN: never
+        run: pnpm exec playwright test agents-triage.spec.ts --workers=1 --reporter=list,html
       - name: Stack logs
         if: failure()
         run: |
