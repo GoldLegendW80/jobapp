@@ -159,6 +159,8 @@ const EXPECTED: Array<[number, RegExp]> = [
   [401, /\/api\/auth\/(me|login)/],
   [404, /\/api\/auth\/invites\//],
   [409, /\/api\/admin\/invites/],
+  // The account page asks for the model credential; none saved is a 404 (agents A1).
+  [404, /\/api\/me\/model-credential$/],
 ];
 
 /** Console errors, except the browser's own lines for answers the journey expects. */
