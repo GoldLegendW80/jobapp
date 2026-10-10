@@ -5,8 +5,9 @@
 - POST /api/proposals/{id}/accept {edited_value?, updated_at?}: apply it (app/agents/proposals.py)
   and answer the accepted proposal. 422 when edited_value does not fit the kind; 409 when it is
   no longer pending (reason not_pending, with its status), when its job is gone (target_gone: it
-  is now invalid) or when updated_at is not the job's current version (stale, with that
-  version).
+  is now invalid), when an unedited status proposal was made from another status than the job
+  has now (status_changed: now invalid) or when updated_at is not the job's current version
+  (stale, with that version).
 - POST /api/proposals/{id}/reject: mark it rejected; 409 not_pending when already decided.
 
 Another user's proposal answers 404 like one that does not exist. The user always comes from the
@@ -40,6 +41,10 @@ NO_STORE = {"Cache-Control": "no-store"}
 NOT_FOUND = "Proposal not found."
 DECIDED = "This proposal was already decided: it is {status}."
 GONE = "The job of this proposal no longer exists. The proposal is now invalid."
+MOVED = (
+    "The job's status changed since this was proposed. The proposal is now invalid: "
+    "assess the job again."
+)
 STALE = "This job changed since you loaded it. Reload it and try again."
 
 _401 = {401: {"model": ErrorOut, "description": "Not signed in"}}
@@ -115,6 +120,13 @@ def accept(proposal_id: str, body: AcceptIn, user: CurrentUser, request: Request
         raise RequestValidationError(
             [{"type": "value_error", "loc": ("body", "edited_value"), "msg": str(exc)}]
         ) from None
+    except proposals.StatusChangedError:
+        db.commit()  # keeps the proposal marked invalid
+        return _conflict(
+            ProposalConflictOut(
+                detail=MOVED, reason="status_changed", status=ProposalStatus.invalid
+            )
+        )
     except proposals.TargetGoneError:
         db.commit()  # keeps the proposal marked invalid
         return _conflict(
