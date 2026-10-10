@@ -96,7 +96,7 @@ def database_url() -> Iterator[str]:
         return
     if not docker_available():
         pytest.skip("Docker is not available and TEST_DATABASE_URL is not set")
-    pg = start_postgres()
+    pg = start_postgres(durable=False)
     yield pg.url()
     pg.remove()
 
