@@ -1,6 +1,6 @@
-"""Bodies of /api/me/model-credential (A1) and /api/agents (A2). The secret comes in as a
-SecretStr (its repr and any validation error never show it) and never goes out: answers carry
-kind, last4 and dates only."""
+"""Bodies of /api/me/model-credential (A1), /api/agents (A2) and /api/proposals (A3). The secret
+comes in as a SecretStr (its repr and any validation error never show it) and never goes out:
+answers carry kind, last4 and dates only."""
 
 import uuid
 from datetime import datetime
@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
-from app.agents.models import CredentialKind, RunStatus
+from app.agents.models import CredentialKind, ProposalDecider, ProposalStatus, RunStatus
 
 # Generous bound for the body itself; the format check (credentials.clean_secret) is stricter.
 SECRET_BODY_MAX = 4096
@@ -51,6 +51,14 @@ class RunIn(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
 
 
+class RunJobOut(BaseModel):
+    """The job a run worked on, for the run lists' link (A3)."""
+
+    id: uuid.UUID
+    company: str
+    title: str
+
+
 class RunOut(BaseModel):
     id: uuid.UUID
     agent: str
@@ -68,6 +76,8 @@ class RunOut(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     duration_s: float | None
+    # Null when the run has no job or its job was deleted.
+    job: RunJobOut | None = None
 
 
 class RunList(BaseModel):
@@ -94,7 +104,55 @@ class AgentOut(BaseModel):
     max_turns: int
     wall_time_s: float
     test_only: bool
+    # The agent works on one job: a run of it must name job_id.
+    needs_job: bool = False
 
 
 class AgentList(BaseModel):
     items: list[AgentOut]
+
+
+# --- A3: proposals ----------------------------------------------------------------------------
+
+
+class ProposalOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    run_id: uuid.UUID | None
+    target: str
+    target_id: uuid.UUID | None
+    kind: str
+    payload: dict[str, Any]
+    status: ProposalStatus
+    decided_by: ProposalDecider | None
+    decided_at: datetime | None
+    edited_value: Any | None
+    reason: str | None
+    created_at: datetime
+
+
+class ProposalList(BaseModel):
+    items: list[ProposalOut]
+
+
+class AcceptIn(BaseModel):
+    """POST /api/proposals/{id}/accept. `edited_value`, when sent, is applied instead of the
+    proposal's own value (a note's text, a status) and validated like it. `updated_at`, when
+    sent, is the version of the target job the user saw: a job changed since is a 409."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    edited_value: Any = None
+    updated_at: datetime | None = None
+
+
+class ProposalConflictOut(BaseModel):
+    """409 of accept and reject. reason: not_pending (decided already: `status` says how),
+    target_gone (the job was deleted: the proposal is now invalid), stale (the job changed since
+    the user loaded it: `updated_at` is its current version)."""
+
+    detail: str
+    reason: Literal["not_pending", "target_gone", "stale"]
+    status: ProposalStatus | None = None
+    updated_at: datetime | None = None

@@ -7,7 +7,12 @@ only (no spending cap, SPEC-agents.md Decisions): `max_turns` is passed to the S
 is enforced by the runner, which stops the run when it is exceeded.
 
 A2 ships one agent, `echo`, for tests and the dev run panel only (`test_only`: refused when
-APP_ENV is production). A3 adds the job triage agent.
+APP_ENV is production). A3 adds the job triage agent, `triage` (needs a job).
+
+Language (A3 decision): the triage agent answers in English whatever the posting's language. The
+profile has no field for a preferred answer language (its `languages` are the ones the candidate
+speaks, not a UI preference), the app's interface is English, and notes in one language read
+better next to each other. A profile setting can change this later.
 """
 
 import uuid
@@ -43,6 +48,10 @@ class AgentDefinition:
     effort: str | None = None
     # Only outside production: test agents and the dev run panel.
     test_only: bool = False
+    # Works on one job: a run must name job_id (the api answers 422 otherwise).
+    needs_job: bool = False
+    # The first message when the input carries none.
+    default_message: str = ""
 
     def validate_input(self, raw: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -55,7 +64,7 @@ class AgentDefinition:
 
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         """The first user message of the run. Built from the run's own input, never logged."""
-        text = str(data.get("message", ""))
+        text = str(data.get("message") or self.default_message)
         if job_id is not None:
             text += f"\n\nJob id: {job_id}"
         return text
@@ -86,7 +95,63 @@ ECHO = AgentDefinition(
     test_only=True,
 )
 
-AGENTS: dict[str, AgentDefinition] = {ECHO.name: ECHO}
+
+class TriageInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Fake backend only, as EchoInput.script: the recorded stream to replay (default "triage").
+    script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
+
+
+TRIAGE_PROMPT = """You are the job triage agent of a job search app. You assess one job posting \
+for one candidate, the user, against the user's own profile, and you propose changes; you never \
+change anything yourself. Your tools only create proposals that the user accepts or rejects.
+
+Work in this order:
+1. Call get_job with the job id given in the message. It returns the posting, the app's computed \
+fit (0 to 100, from a keyword model), the competencies the posting names and the gaps the \
+profile only partly covers or lacks.
+2. Call get_profile_section for "facts" (verified facts about the candidate), "skills" (what the \
+candidate has, has adjacent to and lacks, and years of experience) and "search" (what the \
+candidate looks for, and the never_apply rules). Read "experience" or "answers" only when the \
+posting needs them (dates, languages, work authorization, location).
+3. Check the never_apply rules first. When the posting matches one (for example the rule "never \
+cybersecurity roles" and a posting about a security product or a security team), call \
+propose_status with status skipped and a reason that quotes the rule, then propose_note with \
+one line naming the rule, then stop.
+4. Otherwise weigh the posting: what it requires, what the profile proves, and the real gaps \
+(years, hard requirements, languages, location, contract type). The computed fit is a hint, not \
+a verdict: say where you agree with it and where you differ, and why.
+5. Call propose_note once with the assessment: at most six short lines of plain text, no \
+headings: a verdict (strong, possible or weak fit), the strongest matches, the gaps, and what \
+to check before applying.
+6. Call propose_status at most once, and only when the posting clearly calls for it: \
+shortlisted for a strong fit on a job that is still found, skipped for a weak fit or a \
+never_apply match, closed when the posting says it is closed or filled. Otherwise propose no \
+status. If a tool refuses a proposal, read its reason and do not retry the same value.
+7. End with a summary of at most two sentences for the user.
+
+Rules:
+- Every claim about the candidate comes from the profile sections you read. Never invent \
+experience, years, skills, numbers, employers or facts; when the profile does not say, write \
+"not in the profile". Quote the posting rather than guess.
+- Write in English, whatever the language of the posting.
+- Be concise. Do not use dashes as separators: use commas, colons or new sentences.
+"""
+
+TRIAGE = AgentDefinition(
+    name="triage",
+    description="Assesses a posting against your profile and proposes a note and a status.",
+    system_prompt=TRIAGE_PROMPT,
+    tools=("get_job", "get_profile_section", "propose_note", "propose_status"),
+    input_model=TriageInput,
+    max_turns=12,
+    effort="medium",
+    needs_job=True,
+    default_message="Assess this job posting for me.",
+)
+
+AGENTS: dict[str, AgentDefinition] = {ECHO.name: ECHO, TRIAGE.name: TRIAGE}
 
 
 def available(app_env: str) -> dict[str, AgentDefinition]:

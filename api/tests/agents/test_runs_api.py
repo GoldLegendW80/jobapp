@@ -89,9 +89,13 @@ def test_agents_list(api: Api, alice: str) -> None:
     response = api.get("/api/agents", token=alice)
     assert response.status_code == 200
     items = response.json()["items"]
-    assert [item["name"] for item in items] == ["echo"]
+    assert [item["name"] for item in items] == ["echo", "triage"]
     assert items[0]["model"] == "claude-opus-5-5"
     assert items[0]["test_only"] is True
+    assert items[0]["needs_job"] is False
+    assert items[1]["model"] == "claude-opus-5-5"
+    assert items[1]["test_only"] is False
+    assert items[1]["needs_job"] is True
 
 
 def test_start_queues_and_enqueues(
@@ -223,7 +227,8 @@ def test_test_agents_are_refused_in_production(
 
         make_user(app.state.sessionmaker, email=ALICE, name="Alice")
         token = api.login_token(ALICE)
-        assert api.get("/api/agents", token=token).json() == {"items": []}
+        names = [item["name"] for item in api.get("/api/agents", token=token).json()["items"]]
+        assert names == ["triage"]
         save_key(api, token)
         response = start(api, token)
         assert response.status_code == 422

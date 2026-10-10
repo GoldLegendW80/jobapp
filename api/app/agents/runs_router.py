@@ -2,11 +2,13 @@
 
 - GET /api/agents: the agents available here (test agents only outside production).
 - POST /api/agents/runs {agent, job_id?, input}: 202 with the queued run. 422 when the agent is
-  unknown here or the input does not fit it (the message names the field); 404 when job_id is
+  unknown here, the input does not fit it (the message names the field) or the agent needs a
+  job and none is named (triage); 404 when job_id is
   not one of the caller's jobs; 409 without a saved model credential; 429 when the caller already
   has runs.ACTIVE_PER_USER queued or running; 503 when the server has no CREDENTIALS_KEY or the
   queue (Redis) is down (the run is then failed at once, never left queued).
-- GET /api/agents/runs?limit=&before=: the caller's runs, newest first.
+- GET /api/agents/runs?limit=&before=&job_id=&agent=: the caller's runs, newest first, each with
+  its job's company and title (A3, for the job link).
 - GET /api/agents/runs/{id}: one run with its events (at most EVENTS_MAX; the stream replays all).
 - GET /api/agents/runs/{id}/stream: server-sent events (app/sse.py `replay`): one `step` event
   per stored event, `id` = its seq, data {seq, at, kind, data}, from after the Last-Event-ID
@@ -25,10 +27,11 @@ logs an input or an output.
 import json
 import uuid
 import weakref
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from datetime import datetime
 from typing import Annotated, Any
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
@@ -38,11 +41,21 @@ from app import queue as queues
 from app import sse
 from app.agents import credentials, definitions, runs
 from app.agents.models import FINAL_STATUSES, AgentRun
-from app.agents.schemas import AgentList, AgentOut, EventOut, RunDetail, RunIn, RunList, RunOut
+from app.agents.schemas import (
+    AgentList,
+    AgentOut,
+    EventOut,
+    RunDetail,
+    RunIn,
+    RunJobOut,
+    RunList,
+    RunOut,
+)
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
 from app.jobs import service as jobs_service
+from app.jobs.models import Job
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 CurrentUser = Annotated[User, Depends(deps.current_user)]
@@ -106,6 +119,7 @@ NO_CREDENTIAL = "No model credential is saved. Add one on the Account page first
 NOT_CONFIGURED = "Agents cannot run on this server yet: its CREDENTIALS_KEY is not set."
 TOO_MANY = f"You already have {runs.ACTIVE_PER_USER} runs queued or running. Wait for one to end."
 ENDED = "This run has already ended."
+NEEDS_JOB = "job_id: this agent works on a job; name one."
 
 _401 = {401: {"model": ErrorOut, "description": "Not signed in"}}
 _404 = {404: {"model": ErrorOut, "description": "No such run (or not yours)"}}
@@ -120,7 +134,7 @@ def sessions_of(request: Request) -> sessionmaker[Session]:
     return found
 
 
-def run_out(row: AgentRun) -> RunOut:
+def run_out(row: AgentRun, job: RunJobOut | None = None) -> RunOut:
     duration = None
     if row.started_at is not None and row.finished_at is not None:
         duration = round((row.finished_at - row.started_at).total_seconds(), 3)
@@ -141,7 +155,29 @@ def run_out(row: AgentRun) -> RunOut:
         started_at=row.started_at,
         finished_at=row.finished_at,
         duration_s=duration,
+        job=job,
     )
+
+
+def job_labels(
+    db: Session, user_id: uuid.UUID, rows: Sequence[AgentRun]
+) -> dict[uuid.UUID, RunJobOut]:
+    """The company and title of the runs' jobs (the caller's jobs only), in one query."""
+    ids = {row.job_id for row in rows if row.job_id is not None}
+    if not ids:
+        return {}
+    found = db.execute(
+        sa.select(Job.id, Job.company, Job.title).where(Job.user_id == user_id, Job.id.in_(ids))
+    ).all()
+    return {
+        job_id: RunJobOut(id=job_id, company=company, title=title)
+        for job_id, company, title in found
+    }
+
+
+def runs_out(db: Session, user_id: uuid.UUID, rows: Sequence[AgentRun]) -> list[RunOut]:
+    labels = job_labels(db, user_id, rows)
+    return [run_out(row, labels.get(row.job_id) if row.job_id else None) for row in rows]
 
 
 def _run_id(value: str) -> uuid.UUID:
@@ -166,6 +202,7 @@ def list_agents(user: CurrentUser, request: Request) -> AgentList:
                 max_turns=agent.max_turns,
                 wall_time_s=agent.wall_time_s,
                 test_only=agent.test_only,
+                needs_job=agent.needs_job,
             )
             for agent in definitions.available(env).values()
         ]
@@ -186,8 +223,10 @@ def _create(
     with sessions() as db:
         if credentials.get(db, user_id) is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=NO_CREDENTIAL)
-        if job_id is not None and jobs_service.get_job(db, user_id, job_id) is None:
+        job = jobs_service.get_job(db, user_id, job_id) if job_id is not None else None
+        if job_id is not None and job is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=JOB_NOT_FOUND)
+        label = RunJobOut(id=job.id, company=job.company, title=job.title) if job else None
         try:
             row = runs.create_run(db, user_id, agent.name, job_id, data, agent.model, now)
         except runs.ActiveRunsError:
@@ -197,7 +236,7 @@ def _create(
                 detail=TOO_MANY,
                 headers={"Retry-After": "30"},
             ) from None
-        out = run_out(row)
+        out = run_out(row, label)
         db.commit()
     return out
 
@@ -234,6 +273,8 @@ async def start_run(body: RunIn, user: CurrentUser, request: Request) -> RunOut:
         data = agent.validate_input(body.input)
     except definitions.InvalidInputError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    if agent.needs_job and body.job_id is None:
+        raise HTTPException(status_code=422, detail=NEEDS_JOB)
     if request.app.state.credentials_keyring is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=NOT_CONFIGURED)
     sessions = sessions_of(request)
@@ -259,10 +300,16 @@ async def start_run(body: RunIn, user: CurrentUser, request: Request) -> RunOut:
 
 
 def _list(
-    sessions: sessionmaker[Session], user_id: uuid.UUID, limit: int, before: datetime | None
+    sessions: sessionmaker[Session],
+    user_id: uuid.UUID,
+    limit: int,
+    before: datetime | None,
+    job_id: uuid.UUID | None,
+    agent: str | None,
 ) -> RunList:
     with sessions() as db:
-        return RunList(items=[run_out(row) for row in runs.list_runs(db, user_id, limit, before)])
+        rows = runs.list_runs(db, user_id, limit, before, job_id=job_id, agent=agent)
+        return RunList(items=runs_out(db, user_id, rows))
 
 
 @router.get("/runs", response_model=RunList, responses=_401, dependencies=[Depends(_no_store)])
@@ -271,9 +318,14 @@ async def list_runs(
     request: Request,
     limit: Annotated[int, Query(ge=1, le=LIST_MAX)] = LIST_DEFAULT,
     before: datetime | None = None,
+    job_id: uuid.UUID | None = None,
+    agent: Annotated[str | None, Query(max_length=64)] = None,
 ) -> RunList:
-    """The caller's runs, newest first; `before` (a created_at) pages back."""
-    return await run_in_threadpool(_list, sessions_of(request), user.id, limit, before)
+    """The caller's runs, newest first; `before` (a created_at) pages back; `job_id` and
+    `agent` keep the runs on that job, of that agent."""
+    return await run_in_threadpool(
+        _list, sessions_of(request), user.id, limit, before, job_id, agent
+    )
 
 
 def _detail(
@@ -285,7 +337,7 @@ def _detail(
             return None
         events = runs.events_after(db, run_id, 0, EVENTS_MAX + 1)
         return RunDetail(
-            **run_out(row).model_dump(),
+            **runs_out(db, user_id, [row])[0].model_dump(),
             events=[
                 EventOut(seq=e.seq, at=e.at, kind=e.kind, data=e.data) for e in events[:EVENTS_MAX]
             ],

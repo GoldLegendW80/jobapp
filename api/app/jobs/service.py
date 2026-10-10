@@ -301,15 +301,24 @@ def apply_score(
 
 
 def set_status(
-    db: Session, job: Job, status: JobStatus, now: datetime, *, via: str | None = None
+    db: Session,
+    job: Job,
+    status: JobStatus,
+    now: datetime,
+    *,
+    via: str | None = None,
+    extra: dict[str, Any] | None = None,
 ) -> bool:
     """Move a job to `status` with a `status` event. Moving to applied fills `applied_on` the
-    first time only. Returns False (and records nothing) when the status is unchanged."""
+    first time only. Returns False (and records nothing) when the status is unchanged. `extra`
+    joins the event's data (an accepted agent proposal records its id)."""
     if job.status == status:
         return False
-    data = {"from": job.status.value, "to": status.value}
+    data: dict[str, Any] = {"from": job.status.value, "to": status.value}
     if via:
         data["via"] = via
+    if extra:
+        data.update(extra)
     add_event(db, job, JobEventKind.status, data, now)
     job.status = status
     if status is JobStatus.applied and job.applied_on is None:
@@ -835,11 +844,20 @@ def _jsonable(value: Any) -> Any:
     return value.value if isinstance(value, enum.Enum) else value
 
 
-def set_notes(db: Session, job: Job, notes: str, now: datetime, *, via: str | None = None) -> bool:
+def set_notes(
+    db: Session,
+    job: Job,
+    notes: str,
+    now: datetime,
+    *,
+    via: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> bool:
     """Replace the notes with a `note` event {from, to}. Edits typed within NOTE_COALESCE of the
     previous note edit of the same job (autosave while typing) extend that event instead of
     adding one each: it keeps its `from` and takes the new `to`, and disappears when the text is
-    back to where it started. Bulk appends (`via`) always get their own event."""
+    back to where it started. Bulk appends and accepted proposals (`via`) always get their own
+    event, with `extra` in its data."""
     if job.notes == notes:
         return False
     last = None
@@ -865,6 +883,8 @@ def set_notes(db: Session, job: Job, notes: str, now: datetime, *, via: str | No
         data: dict[str, Any] = {"from": job.notes, "to": notes}
         if via:
             data["via"] = via
+        if extra:
+            data.update(extra)
         add_event(db, job, JobEventKind.note, data, now)
     job.notes = notes
     touch(job, now)

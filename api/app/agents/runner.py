@@ -704,7 +704,14 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             logger.warning("agent tool denied", extra={**log, "tool": name})
             await recorder.emit("tool_denied", {"name": name})
 
-        tools = app_tools.build(context.sessions, run.user_id, definition.tools)
+        tools = app_tools.build(
+            context.sessions,
+            run.user_id,
+            definition.tools,
+            run_id=run_id,
+            job_id=run.job_id,
+            clock=context.clock,
+        )
         stderr_lines: deque[str] = deque(maxlen=50)
         options = build_options(
             definition,
@@ -720,7 +727,8 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             options=options,
             tools=tools,
             gate=options.hooks["PreToolUse"][0].hooks[0],  # type: ignore[index]
-            script=data.get("script"),
+            # Fake backend only: the input's recorded stream, else the one named after the agent.
+            script=data.get("script") or definition.name,
             variables={
                 "message": str(data.get("message", "")),
                 "job_id": str(run.job_id or ""),
