@@ -16,7 +16,7 @@
 # and `jobs import` and `profile import` (argument checks; conversion on the Mac of a synthetic job
 # folder, the document streamed to the CLI in the api container; a bad source never sent).
 # Issue #81: ops/migrate.sh against a fake docker (a one off container of the new image, the no-op
-# at head, a failing migration, a timeout, a concurrent run, a first install, masked credentials),
+# at head, a failing migration, a timeout, a kill, a concurrent run, a first install, masked credentials),
 # the order of cmd_deploy (build, migrate, compose up), and the deploy step of deploy.yml cut out of
 # the workflow and run against the same fakes (backup, then migrate, then up; a failing migration
 # stops with the stack untouched; a failed start rolls back without a downgrade).
@@ -905,7 +905,8 @@ ok "save-tree and restore-tree bring back compose.yml, the Caddyfile and the fil
 step "issue #81: a fake docker and a fake timeout for ops/migrate.sh and the deploy step of deploy.yml"
 # One stateful fake for both: every call goes to $FAKE_DIR/calls, in order, and FAKE_* variables
 # choose what the Jetson answers (pending migrations, a failing one, a db that is down, an `up`
-# that does not become healthy). The fake timeout records its limit and runs the command.
+# that does not become healthy). The fake timeout records its limit and runs the command, or plays
+# a limit that was reached (124) or a container that was killed (137).
 MIG="$WORK/migrate"
 mkdir -p "$MIG/bin" "$MIG/app"
 printf 'name: fake\n' >"$MIG/app/compose.yml"
@@ -956,6 +957,10 @@ cat >"$MIG/bin/timeout" <<'FAKE'
 echo "timeout $1 $2 $3" >>"$FAKE_DIR/calls"
 shift 3
 [[ -z "${FAKE_TIMEOUT:-}" ]] || exit 124
+if [[ -n "${FAKE_KILLED:-}" ]]; then
+  sleep "${FAKE_KILL_AFTER:-0}"
+  exit 137
+fi
 exec "$@"
 FAKE
 cat >"$MIG/bin/flock" <<'FAKE'
@@ -1021,10 +1026,37 @@ out_has "migration sessions ended in Postgres: 1"
 lock_id="$(sed -n 's/^MIGRATION_LOCK_ID = //p' api/alembic/env.py | tr -d '_')"
 [[ -n "$lock_id" ]] || fail "no MIGRATION_LOCK_ID in api/alembic/env.py"
 grep -qx "MIGRATION_LOCK_ID=$lock_id" ops/migrate.sh || fail "ops/migrate.sh does not hold the advisory lock id of alembic/env.py ($lock_id)"
-grep -q "exec -T db sh -c psql .*pg_terminate_backend(pid) from pg_locks where locktype = 'advisory' .* = $lock_id " "$MIG/calls" ||
-  fail "the sessions on the migration's advisory lock were not ended: $(cat "$MIG/calls")"
+# The sessions it ends: on the migration's advisory lock (single key form, objsubid 1), in the
+# current database only (pg_locks is cluster wide), never its own. The whole clause, as sent.
+SESSIONS_WHERE="from pg_locks where locktype = 'advisory' and objsubid = 1 and ((classid::bigint << 32) | objid::bigint) = $lock_id and database = (select oid from pg_database where datname = current_database()) and pid <> pg_backend_pid()"
+grep -q "exec -T db sh -c psql .* sh select count(\*) from (select pg_terminate_backend(pid) from pg_locks " "$MIG/calls" ||
+  fail "the sessions on the migration's advisory lock were not ended in the db container: $(cat "$MIG/calls")"
+sent="$(grep -o "from pg_locks where .* pid <> pg_backend_pid()" "$MIG/calls")"
+[[ "$sent" == "$SESSIONS_WHERE" ]] || fail "the sessions ended are not those of the current database on the migration's lock: $sent"
 untouched "$MIG/calls"
-ok "a migration over MIGRATE_TIMEOUT_S: stopped, its container removed, the sessions on the migration's advisory lock (the id of alembic/env.py) ended in Postgres, exit 1, the stack untouched"
+ok "a migration over MIGRATE_TIMEOUT_S: stopped, its container removed, the sessions of the current database on the migration's advisory lock (the id of alembic/env.py) ended in Postgres, exit 1, the stack untouched"
+# Exit 137 is a SIGKILL. Before the limit it did not come from timeout: said as a kill, possibly
+# out of memory. At the limit (timeout had to send KILL after its grace) it is a timeout.
+mig 1 FAKE_KILLED=1
+out_has "the migration container was killed after [0-9]*s, before the 300s limit (exit 137): possibly out of memory"
+out_has "This is not a timeout"
+out_has "nothing was restarted"
+grep -q "did not finish within" "$WORK/out" && fail "a container killed before the limit was reported as a timeout"
+out_has "migration sessions ended in Postgres: 1"
+grep -qx "docker rm -f jobapp-migrate" "$MIG/calls" || fail "the container was not removed after a kill"
+untouched "$MIG/calls"
+mig 1 FAKE_KILLED=1 FAKE_KILL_AFTER=1 MIGRATE_TIMEOUT_S=1
+out_has "did not finish within 1s and were stopped"
+grep -q "was killed after" "$WORK/out" && fail "a kill by timeout at the limit was reported as out of memory"
+out_has "migration sessions ended in Postgres: 1"
+ok "exit 137 before the limit: reported as killed, possibly out of memory, not as a timeout, its session ended and the stack untouched; exit 137 at the limit: a timeout"
+# The README's recovery block gives a human the same statement, and no longer says that removing
+# the container ends the transaction.
+readme_where="$(tr '\n' ' ' <README.md | tr -s ' ' | grep -o "from pg_locks where [^;]* pid <> pg_backend_pid()" || true)"
+[[ "$readme_where" == "$SESSIONS_WHERE" ]] || fail "the README's recovery statement is not the one ops/migrate.sh runs: $readme_where"
+grep -q "remove it (ends its transaction)" README.md && fail "the README still says docker rm ends the transaction"
+grep -q "this alone does not end its transaction" README.md || fail "the README does not say that docker rm alone leaves the session"
+ok "README recovery: docker rm alone does not end the transaction, and the statement to end the session is the one ops/migrate.sh runs"
 for state in running restarting created; do
   mig 1 FAKE_MIGRATE_STATE="$state"
   out_has "another migration is in progress (container jobapp-migrate is $state): nothing was run"

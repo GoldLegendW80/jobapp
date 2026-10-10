@@ -17,10 +17,13 @@
 #                         Postgres rolls it back and the schema is what it was
 #   a timeout             the container is killed after MIGRATE_TIMEOUT_S. Postgres only notices
 #                         a client that went away when the running statement ends, and would
-#                         keep the migration's locks until then, so the sessions that hold or
-#                         wait for the migration's advisory lock are terminated: the open
-#                         transaction rolls back at once
-#   another run           a migration container that is still running is never killed: this run
+#                         keep the migration's locks until then, so the sessions of this database
+#                         that hold or wait for the migration's advisory lock are terminated:
+#                         the open transaction rolls back at once
+#   a kill                exit 137 before the limit is not a timeout: the container was killed,
+#                         possibly for memory (the api's mem_limit). Said as such, and its
+#                         session is ended in Postgres the same way
+#   another run          a migration container that is still running is never killed: this run
 #                         stops. Two upgrades that do meet queue on the advisory lock taken in
 #                         alembic/env.py (pg_advisory_xact_lock), they never race
 # It never downgrades. At head it is a no-op that costs one container start.
@@ -101,17 +104,27 @@ rc=0
 timeout -k 20 "$TIMEOUT_S" $COMPOSE run --rm --no-deps -T --name "$NAME" api \
   sh -c 'alembic upgrade head && alembic current' </dev/null 2>&1 | mask | tee "$OUT" || rc="${PIPESTATUS[0]}"
 
+elapsed=$((SECONDS - start))
 if ((rc == 124 || rc == 137)); then
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  # The client is gone, the session may not be: end it, so its locks go and nothing can commit.
+  # The client is gone, the session may not be: Postgres notices a vanished client only when its
+  # statement ends. End the sessions of THIS database that hold or wait for the migration's
+  # advisory lock (pg_locks is cluster wide, hence the database clause), so their locks go and
+  # nothing can commit. README, Continuous delivery, gives the same statement for a human.
   # shellcheck disable=SC2016 # $POSTGRES_* and $1 expand in the db container
   ended="$(dc exec -T db sh -c 'psql -X -q -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "$1"' sh \
-    "select count(*) from (select pg_terminate_backend(pid) from pg_locks where locktype = 'advisory' and objsubid = 1 and ((classid::bigint << 32) | objid::bigint) = $MIGRATION_LOCK_ID and pid <> pg_backend_pid()) ended" \
+    "select count(*) from (select pg_terminate_backend(pid) from pg_locks where locktype = 'advisory' and objsubid = 1 and ((classid::bigint << 32) | objid::bigint) = $MIGRATION_LOCK_ID and database = (select oid from pg_database where datname = current_database()) and pid <> pg_backend_pid()) ended" \
     2>/dev/null | tr -d '\r' || true)"
   if [[ "$ended" =~ ^[0-9]+$ ]]; then
     info "migration sessions ended in Postgres: $ended"
   else
     printf 'migrate.sh: WARNING: could not check Postgres for a leftover migration session; it ends with its statement. To see it: select pid, state, query_start from pg_stat_activity where state <> %s\n' "'idle'" >&2
+  fi
+  # 137 is a SIGKILL. timeout sends one only 20 s after the limit, so a 137 before the limit did
+  # not come from it: the kernel killed the container for memory (the mem_limit of the api
+  # service applies to it), or someone killed it.
+  if ((rc == 137 && elapsed < TIMEOUT_S)); then
+    die "the migration container was killed after ${elapsed}s, before the ${TIMEOUT_S}s limit (exit 137): possibly out of memory (the mem_limit of the api service applies to it; docker events and dmesg on the host tell), or killed by hand. This is not a timeout. The open transaction is rolled back, the schema is what it was, and nothing was restarted"
   fi
   die "the migrations did not finish within ${TIMEOUT_S}s and were stopped: the open transaction is rolled back, the schema is what it was, and nothing was restarted. A migration that waits on a lock held by the running release is the usual cause; MIGRATE_TIMEOUT_S raises the limit"
 fi

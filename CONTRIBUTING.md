@@ -98,5 +98,6 @@ pre-commit run --all-files
 (cd api && uv run --native-tls pytest -m "not docker")    # with TEST_DATABASE_URL, or Docker for a throwaway database
 pnpm --dir web lint && pnpm --dir web typecheck && pnpm --dir web test && pnpm --dir web build
 tests/deploy_test.sh                                     # when deploy.sh, ops/ or tests/*.sh change
+tests/migrate_test.sh                                    # by hand, not in CI: when ops/migrate.sh or api/alembic/env.py change (real Docker, four api builds, no other scratch stack up)
 tests/ci_runners_test.sh                                 # when ops/ci-runners.sh, ops/ci-runner/ or the workflows change
 ```
