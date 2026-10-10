@@ -50,6 +50,7 @@ let jobUrl = "";
 const section = () => page.getByRole("region", { name: "Agent assessment" });
 const panel = () => section().getByTestId("run-panel");
 const badge = () => panel().locator("[data-slot=badge]");
+const steps = () => panel().getByRole("list", { name: "Steps" });
 const proposals = () => section().getByRole("list", { name: "Proposals" });
 const pending = (kind: string) =>
   proposals().locator(`[data-testid=proposal][data-kind=${kind}]`, {
@@ -117,17 +118,17 @@ test("Assess with agent streams the run live, then lists its proposals", async (
     section().getByRole("button", { name: "Assessing" }),
   ).toBeDisabled();
   await expect(badge()).toHaveText(/Queued|Running/);
-  await expect(panel().getByText("Started on claude-opus-5-5")).toBeVisible({
+  await expect(steps().getByText("Started on claude-opus-5-5")).toBeVisible({
     timeout: 15_000,
   });
-  await expect(panel().getByText("Tool call: get_job")).toBeVisible({
+  await expect(steps().getByText("Tool call: get_job")).toBeVisible({
     timeout: 15_000,
   });
   await section().scrollIntoViewIfNeeded();
   await shots(page, "streaming", false);
   await expect(badge()).toHaveText("Done", { timeout: 30_000 });
-  await expect(panel().getByText("Tool call: propose_note")).toBeVisible();
-  await expect(panel().getByText("Tool call: propose_status")).toBeVisible();
+  await expect(steps().getByText("Tool call: propose_note")).toBeVisible();
+  await expect(steps().getByText("Tool call: propose_status")).toBeVisible();
   await expect(pending("job_note")).toContainText(NOTE_START, {
     timeout: 10_000,
   });
