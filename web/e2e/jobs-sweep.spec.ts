@@ -389,7 +389,8 @@ test("Schedule: off by default, turned on, fires at its time, turned off", async
     "Automatic search is off.",
   );
   await dialog.getByRole("checkbox", { name: "Search automatically" }).check();
-  // The next 5 minute tick of the worker after this time fires it.
+  // The worker's next tick after this time fires it (every minute with TEST_FAST_TIMERS, as in
+  // CI and tests/ats-stub.compose.yml; every 5 minutes otherwise).
   const time = parisClock(1);
   await dialog.getByLabel("Time 1", { exact: true }).fill(time);
   await dialog.getByRole("button", { name: "Add a time" }).click();

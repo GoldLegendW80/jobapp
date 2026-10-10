@@ -83,9 +83,11 @@ http://127.0.0.1:18080. `DEPLOY_HOST` and `DEPLOY_DIR` override the target. Ever
 ## Continuous delivery
 
 Every change goes through a branch and a pull request ([CONTRIBUTING.md](CONTRIBUTING.md)). CI
-(`.github/workflows/ci.yml`) runs on each pull request and push to `main`: api (ruff, pytest against
-Postgres and Redis, coverage at least 95 percent), web (eslint, tsc, Vitest, build), shell
-(shellcheck, `tests/deploy_test.sh`), e2e (the Compose stack built on GitHub's runner, the
+(`.github/workflows/ci.yml`) runs on each pull request and push to `main`, in parallel jobs: api in
+two shards (ruff, pytest against Postgres and Redis), api coverage (both shards combined, at least
+95 percent, checked in that job), web checks (eslint, tsc, build), web Vitest in two shards, shell
+(shellcheck, `tests/deploy_test.sh`, the guard that every e2e spec is in a group), e2e in three
+groups (identity, sweep, apps; each on its own Compose stack built on GitHub's runner, the
 Playwright journeys with throwaway accounts and a synthetic jobs import, never Harald's data) and
 pre-commit. When CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
 Jetson's self-hosted runner, under the Jetson's deploy lock (`flock` on

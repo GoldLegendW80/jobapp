@@ -68,6 +68,13 @@ MAX_SWEEPS = 2
 # ats.MAX_BODY (25 MB) and their decoded JSON, the worst case stays far under the 1536m limit.
 BODIES_IN_FLIGHT = 4
 SCHEDULE_MINUTES = set(range(0, 60, 5))  # schedule.TICK
+# TEST_FAST_TIMERS (tests only, refused in production): every minute, and a short board timeout
+# with a single attempt. The slots are idempotent, so a faster tick never fires one twice.
+# A stack running with it (the CI e2e one) therefore proves neither the retry and backoff path
+# nor the five minute tick: the unit tests of tests/jobs do. If a large board starts timing out
+# on a slow runner, raise FAST_ATS_TIMEOUT_S first.
+FAST_SCHEDULE_MINUTES = set(range(60))
+FAST_ATS_TIMEOUT_S = 2.0
 HEALTH_INTERVAL_S = 10
 SWEEP_JOB_TIMEOUT_S = sweep.SWEEP_TIMEOUT_S + 60
 MAX_AGENT_RUNS = 2
@@ -99,11 +106,17 @@ def ats_client(ctx: dict[str, Any]) -> ats.AtsClient:
         client: ats.AtsClient = factory()
         return client
     settings: Settings = ctx["settings"]
+    fast: dict[str, Any] = (
+        {"timeout_s": FAST_ATS_TIMEOUT_S, "attempts": 1, "backoff_s": 0.1}
+        if settings.test_fast_timers
+        else {}
+    )
     return ats.AtsClient(
         tz=sweep.SWEEP_TZ,
         stub_base_url=settings.ats_base_url,
         stub_org_prefix=settings.ats_base_url_org_prefix,
         body_gate=ctx.get("body_gate"),
+        **fast,
     )
 
 
@@ -237,7 +250,7 @@ class QueueSpec:
     on_start: Callable[[dict[str, Any]], Awaitable[Any]] | None = None
 
 
-def sweeps_queue() -> QueueSpec:
+def sweeps_queue(fast: bool = False) -> QueueSpec:
     return QueueSpec(
         name=queue.SWEEPS,
         functions=[
@@ -249,7 +262,7 @@ def sweeps_queue() -> QueueSpec:
             cron(
                 scheduled_sweeps,
                 name="cron:scheduled_sweeps",
-                minute=SCHEDULE_MINUTES,
+                minute=FAST_SCHEDULE_MINUTES if fast else SCHEDULE_MINUTES,
                 second=0,
                 timeout=240,
             ),
@@ -278,9 +291,10 @@ def agents_queue() -> QueueSpec:
     )
 
 
-def queues() -> list[QueueSpec]:
-    """Every queue this worker consumes."""
-    return [sweeps_queue(), agents_queue()]
+def queues(settings: Settings | None = None) -> list[QueueSpec]:
+    """Every queue this worker consumes (TEST_FAST_TIMERS shortens the schedule tick)."""
+    fast = bool(settings is not None and settings.test_fast_timers)
+    return [sweeps_queue(fast=fast), agents_queue()]
 
 
 def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> Worker:
@@ -362,7 +376,7 @@ async def serve(
             installed.append(signum)
         except (NotImplementedError, RuntimeError):  # pragma: no cover, not the main thread
             pass
-    specs = specs or queues()
+    specs = specs or queues(settings)
     try:
         for spec in specs:
             if spec.on_start is None:
@@ -413,7 +427,7 @@ async def check(settings: Settings, specs: Sequence[QueueSpec] | None = None) ->
         async with asyncio.timeout(5):
             pool = await create_pool(queue.redis_settings(settings.redis_url.get_secret_value()))
             try:
-                for spec in specs or queues():
+                for spec in specs or queues(settings):
                     if not await pool.exists(spec.name + ":health-check"):
                         print(f"{spec.name}: no recent health record", file=sys.stderr)
                         return 1

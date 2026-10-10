@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # fake board and real boards side by side). Both refused in production.
     ats_base_url: str | None = None
     ats_base_url_org_prefix: str | None = None
+    # Tests only (CI e2e): the worker's schedule tick every minute instead of every 5, and the
+    # ATS client's timeout short with a single attempt, so the browser journeys do not sit
+    # through production waits. Refused in production.
+    test_fast_timers: bool = False
     # Queue between the api and the worker (jobs J5): arq on Redis.
     redis_url: SecretStr = SecretStr("redis://redis:6379/0")
     # Encryption of the users' model credentials (agents A1, app/agents/crypto.py): 32 random
@@ -138,6 +142,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ATS_BASE_URL points the board check at a test stub and must not be set "
                 "in production"
+            )
+        if self.app_env == "production" and self.test_fast_timers:
+            raise ValueError(
+                "TEST_FAST_TIMERS shortens the schedule tick and the board timeouts for tests and "
+                "must not be set in production"
             )
         if self.app_env == "production" and self.model_api_base_url is not None:
             raise ValueError(
