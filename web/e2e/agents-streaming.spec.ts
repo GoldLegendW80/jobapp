@@ -87,9 +87,10 @@ const liveReply = () => chat().getByTestId("chat-live-reply");
 const liveText = () => chat().getByTestId("chat-live-text");
 
 /**
- * Type a message and send it once the chat can send. The composer is enabled before that: while
- * the conversation loads, or the previous answer is still being settled, Enter does nothing and
- * the draft stays, and only the Send button says so.
+ * Type a message and send it once the chat can send. The composer is enabled before that, and
+ * Enter then does nothing and the draft stays: while the conversation loads, where only the
+ * disabled Send button says so, and while the previous answer is still being settled, where
+ * the hint under the composer says so too.
  */
 async function ask(text: string) {
   await composer().fill(text);
@@ -436,20 +437,29 @@ test("the list stays where the reader scrolled it while the answer grows", async
     node.scrollTop = 0;
   });
   await expect(liveText()).toContainText("You asked: Second", {
-    timeout: 30_000,
+    timeout: 20_000,
   });
   await expect(liveReply()).toHaveAttribute("data-writing", "true");
   const before = await written();
-  // Most of the answer is still to come: the two waits below need 32 characters of it.
+  const low = (await metrics()).overflow;
+  // Most of the answer is still to come: the waits below need a few lines of it.
   expect(before).toBeLessThan(whole / 2);
   await expect.poll(written).toBeGreaterThan(before + 20);
+  // The list itself got taller (a line was added), and the view stayed where it was.
+  await expect
+    .poll(async () => (await metrics()).overflow)
+    .toBeGreaterThan(low);
   expect((await metrics()).top).toBe(0); // the growing text did not pull the view down
   // Back at the bottom: the list follows the text again.
   await list.evaluate((node) => {
     node.scrollTop = node.scrollHeight;
   });
   const mid = await written();
+  const high = (await metrics()).overflow;
   await expect.poll(written).toBeGreaterThan(mid + 12);
+  await expect
+    .poll(async () => (await metrics()).overflow)
+    .toBeGreaterThan(high);
   expect((await metrics()).gap).toBeLessThan(2);
   await expect(liveReply()).toHaveCount(0, { timeout: 30_000 });
   await expect(messages()).toHaveCount(4);
