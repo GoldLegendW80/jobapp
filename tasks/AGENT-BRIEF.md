@@ -9,6 +9,7 @@ You implement exactly one task of `tasks/todo.md` or of your module's `tasks/<mo
 ## Environment
 - Repo: `/Users/harald-thorvaldhautin/Desktop/job/app`, git, default branch `main` (protected by convention: changes arrive only through PRs), remote `GoldLegendW80/jobapp` (private, HTTPS with a repo-local gh credential helper). CI: `.github/workflows/ci.yml`; deploy: `.github/workflows/deploy.yml` on the Jetson's self-hosted runner. Never touch files outside `app/` except reading `../engine`, `../profile` and `../data` when the task ports them.
 - Mac: arm64, Docker Desktop running, uv, pnpm, node 22, pre-commit, gitleaks, Playwright (Python via `uv run --native-tls --with playwright`, CLI via `npx -y @playwright/cli@latest`).
+- The Mac is an M4: a stack started from `compose.yml` alone needs `-f compose.mac.yml` on its `up` (`OPENSSL_armcap=0`), or the api and the worker die with SIGILL, exit status 132 (README, Apple silicon). Never put that variable in `compose.yml`.
 - `uv` needs `--native-tls` on this network (the old `--system-certs` flag does not exist in uv 0.9).
 - Jetson: `ssh jetson` (Ubuntu 22.04, arm64, 7.4G RAM, Docker 29, Compose v5). Ask the orchestrator before running anything with sudo there.
 
