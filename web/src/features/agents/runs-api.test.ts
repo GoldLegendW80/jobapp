@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { server } from "@/test/server";
 
-import { FakeEventSource } from "./fake-event-source";
+import { FakeEventSource } from "@/test/fake-event-source";
 import {
   followRun,
   followTiming,

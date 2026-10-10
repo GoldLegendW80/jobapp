@@ -22,7 +22,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -251,54 +251,65 @@ function Timeline({ steps }: { steps: RunStep[] }) {
   if (steps.length === 0) {
     return <p className="text-sm text-muted-foreground">No step yet.</p>;
   }
+  const views = steps
+    .map((step) => ({ step, view: describeStep(step) }))
+    .filter(
+      (item): item is { step: RunStep; view: StepView } => item.view !== null,
+    );
+  const latest = views.at(-1)?.view.title ?? "";
   return (
-    <ol aria-label="Steps" aria-live="polite" className="flex flex-col">
-      {steps.map((step) => {
-        const view = describeStep(step);
-        if (!view) return null;
-        const Icon = view.icon;
-        return (
-          <li
-            key={step.seq}
-            data-kind={step.kind}
-            className="relative flex gap-3 pb-4 last:pb-0"
-          >
-            <span
-              aria-hidden="true"
-              className="absolute top-6 bottom-0 left-[11px] w-px bg-border last:hidden"
-            />
-            <Icon
-              aria-hidden="true"
-              className={cn(
-                "mt-0.5 size-6 shrink-0 rounded-full border bg-background p-1",
-                view.tone === "error" && "border-destructive text-destructive",
-                view.tone === "warning" &&
-                  "border-amber-600 text-amber-700 dark:text-amber-400",
-                view.tone === "muted" && "text-muted-foreground",
-              )}
-            />
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <p
+    <>
+      {/* Screen readers hear the newest step's title only, not every answer in full. */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {latest}
+      </p>
+      <ol aria-label="Steps" className="flex flex-col">
+        {views.map(({ step, view }) => {
+          const Icon = view.icon;
+          return (
+            <li
+              key={step.seq}
+              data-kind={step.kind}
+              className="group relative flex gap-3 pb-4 last:pb-0"
+            >
+              <span
+                aria-hidden="true"
+                className="absolute top-6 bottom-0 left-[11px] w-px bg-border group-last:hidden"
+              />
+              <Icon
+                aria-hidden="true"
                 className={cn(
-                  "text-sm font-medium",
-                  view.tone === "error" && "text-destructive",
+                  "mt-0.5 size-6 shrink-0 rounded-full border bg-background p-1",
+                  view.tone === "error" &&
+                    "border-destructive text-destructive",
+                  view.tone === "warning" &&
+                    "border-amber-600 text-amber-700 dark:text-amber-400",
                   view.tone === "muted" && "text-muted-foreground",
                 )}
-              >
-                {view.title}
-              </p>
-              {typeof view.body === "string" ? (
-                <p className="text-sm break-words text-muted-foreground">
-                  {view.body}
+              />
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <p
+                  className={cn(
+                    "text-sm font-medium",
+                    view.tone === "error" && "text-destructive",
+                    view.tone === "muted" && "text-muted-foreground",
+                  )}
+                >
+                  {view.title}
                 </p>
-              ) : (
-                view.body
-              )}
-            </div>
-          </li>
-        );
-      })}
-    </ol>
+                {typeof view.body === "string" ? (
+                  <p className="text-sm break-words text-muted-foreground">
+                    {view.body}
+                  </p>
+                ) : (
+                  view.body
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </>
   );
 }
 
@@ -308,6 +319,8 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
   const run = detail.data;
   const active = status === "queued" || status === "running";
   const now = useNow(active);
+  const titleRef = useRef<HTMLSpanElement>(null);
+  const cancelFocused = useRef(false);
   const cancel = useMutation({
     mutationFn: () => cancelRun(runId),
     onSuccess: (updated) => {
@@ -323,6 +336,17 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
     },
   });
 
+  // The Cancel button goes away when the run ends: if it had the focus, give it to the title
+  // (which now says the run's status) instead of letting it fall back to the page.
+  useEffect(() => {
+    if (active || !cancelFocused.current) return;
+    cancelFocused.current = false;
+    const lost =
+      document.activeElement === null ||
+      document.activeElement === document.body;
+    if (lost) titleRef.current?.focus();
+  }, [active]);
+
   if (detail.isPending) {
     return (
       <Card aria-busy="true">
@@ -333,7 +357,8 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
       </Card>
     );
   }
-  if (detail.isError || gone || !run) {
+  // Only when there is nothing to show: a failed refresh keeps the panel and its timeline.
+  if (gone || !run) {
     return (
       <Alert variant="destructive">
         <CircleAlert aria-hidden="true" />
@@ -350,12 +375,24 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
   return (
     <Card data-testid="run-panel" data-status={shownStatus}>
       <CardHeader>
-        <CardTitle className="flex flex-wrap items-center gap-2">
-          <span>{title ?? `Agent ${run.agent}`}</span>
-          <StatusBadge status={shownStatus} />
+        <CardTitle>
+          <span
+            ref={titleRef}
+            tabIndex={-1}
+            data-testid="run-title"
+            className="flex flex-wrap items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <span>{title ?? `Agent ${run.agent}`}</span>
+            <StatusBadge status={shownStatus} />
+          </span>
         </CardTitle>
-        <CardDescription>
+        <CardDescription className="flex flex-wrap items-center gap-3">
           <ConnectionState state={connection} />
+          {detail.isRefetchError ? (
+            <span className="text-xs text-amber-700 dark:text-amber-400">
+              Could not refresh the totals; they update with the next step.
+            </span>
+          ) : null}
         </CardDescription>
         {active ? (
           <CardAction>
@@ -364,6 +401,12 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
               size="sm"
               onClick={() => {
                 cancel.mutate();
+              }}
+              onFocus={() => {
+                cancelFocused.current = true;
+              }}
+              onBlur={() => {
+                cancelFocused.current = false;
               }}
               disabled={cancel.isPending || stopping}
               aria-busy={cancel.isPending}

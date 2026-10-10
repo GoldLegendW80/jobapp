@@ -46,7 +46,13 @@ export function useRunStream(id: string) {
     };
     return followRun(id, {
       onStep: (step) => {
-        update((old) => ({ ...old, steps: [...old.steps, step] }));
+        // followRun already drops repeats; this guard also holds if a follow ever restarts
+        // from the beginning for the same run (an effect run again).
+        update((old) =>
+          step.seq <= (old.steps.at(-1)?.seq ?? 0)
+            ? old
+            : { ...old, steps: [...old.steps, step] },
+        );
         if (step.kind === "status" || step.kind === "usage") {
           void client.invalidateQueries({ queryKey: runKey(id) });
         }

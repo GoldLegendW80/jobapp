@@ -7,7 +7,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-import { FakeEventSource } from "./fake-event-source";
+import { FakeEventSource } from "@/test/fake-event-source";
 import type { Agent, Run } from "./runs-api";
 
 const ID = "22222222-2222-4222-8222-222222222222";
@@ -333,5 +333,82 @@ describe("/runs/:id, the run panel", () => {
     expect(await within(panel).findByText("Reconnecting")).toBeInTheDocument();
     source.open();
     expect(await within(panel).findByText("Live")).toBeInTheDocument();
+  });
+
+  it("keeps the panel and its steps when a refresh fails", async () => {
+    agentsApi();
+    renderApp(`/runs/${ID}`);
+    const panel = await screen.findByTestId("run-panel");
+    const source = FakeEventSource.last!;
+    source.open();
+    source.emit("step", step(1, "status", { status: "running" }));
+    source.emit("step", step(2, "text", { text: "Working on it." }));
+    expect(
+      await within(panel).findByText("Working on it."),
+    ).toBeInTheDocument();
+    // The api goes away: the cancel fails, and so does the refresh that follows.
+    server.use(
+      http.post(`*/api/agents/runs/${ID}/cancel`, () => HttpResponse.error()),
+      http.get(`*/api/agents/runs/${ID}`, () =>
+        HttpResponse.json({ detail: "down" }, { status: 502 }),
+      ),
+    );
+    const user = userEvent.setup();
+    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    expect(
+      await within(panel).findByText(/Could not refresh the totals/),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("run-panel")).toBe(panel);
+    expect(within(panel).getByText("Working on it.")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Cancel" })).toBeEnabled();
+    expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
+  });
+
+  it("moves the focus to the title when Cancel goes away, and announces only the newest step", async () => {
+    const state = agentsApi({ detail: run({ status: "queued" }) });
+    renderApp(`/runs/${ID}`);
+    const panel = await screen.findByTestId("run-panel");
+    const source = FakeEventSource.last!;
+    source.open();
+    source.emit("step", step(1, "status", { status: "queued" }));
+    source.emit(
+      "step",
+      step(2, "text", { text: "A long answer that is not read out in full." }),
+    );
+    const announcer = await within(panel).findByText("Answer", {
+      selector: "[role=status][aria-live=polite]",
+    });
+    expect(announcer).toHaveClass("sr-only");
+    expect(
+      within(panel).getByRole("list", { name: "Steps" }),
+    ).not.toHaveAttribute("aria-live");
+
+    const user = userEvent.setup();
+    const button = within(panel).getByRole("button", { name: "Cancel" });
+    await user.click(button);
+    expect(button).toHaveFocus();
+    await waitFor(() => {
+      expect(state.cancels).toBe(1);
+    });
+    state.detail = run({ status: "cancelled", cancel_requested: true });
+    source.emit("step", step(3, "status", { status: "cancelled" }));
+    await waitFor(() => {
+      expect(
+        within(panel).queryByRole("button", { name: /Cancel|Stopping/ }),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("run-title")).toHaveFocus();
+    expect(announcer).toHaveTextContent("Cancelled");
+  });
+
+  it("never lists a step twice", async () => {
+    agentsApi();
+    renderApp(`/runs/${ID}`);
+    const panel = await screen.findByTestId("run-panel");
+    const source = FakeEventSource.last!;
+    source.emit("step", step(1, "text", { text: "once" }));
+    source.emit("step", step(1, "text", { text: "once" }));
+    const steps = await within(panel).findByRole("list", { name: "Steps" });
+    expect(within(steps).getAllByRole("listitem")).toHaveLength(1);
   });
 });
