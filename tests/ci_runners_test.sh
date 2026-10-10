@@ -87,6 +87,9 @@ grep -q 'echo "${RUNNER_SHA256}  runner.tar.gz" | sha256sum -c -' ops/ci-runner/
 grep -q "actions/runner/releases/download/v\${RUNNER_VERSION}/actions-runner-linux-arm64-\${RUNNER_VERSION}.tar.gz" ops/ci-runner/Dockerfile ||
   fail "the runner does not come from GitHub's release"
 grep -q '^FROM ubuntu:24.04@sha256:[0-9a-f]\{64\}$' ops/ci-runner/Dockerfile || fail "the base image is not pinned by digest"
+# Run 38066771735: pnpm/action-setup's pnpm needs libatomic.so.1.
+grep -q ' libatomic1 ' ops/ci-runner/Dockerfile || fail "the image lacks libatomic1 (pnpm/action-setup)"
+grep -q 'rm -f .runner .credentials .credentials_rsaparams' ops/ci-runner/entrypoint.sh || fail "configure does not clear a stale registration"
 grep -q '^ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/ci-job-started.sh \\$' ops/ci-runner/Dockerfile || fail "job-started hook not set in the image"
 grep -q '^    ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/bin/ci-job-completed.sh$' ops/ci-runner/Dockerfile || fail "job-completed hook not set in the image"
 for f in job-started job-completed ci-clean; do
@@ -128,12 +131,29 @@ case "$1 ${2:-}" in
     exit 0
     ;;
   "run "*)
-    if [[ "$*" == *"--entrypoint test"* ]]; then exit 1; fi
+    if [[ "$*" == *"--entrypoint test"* ]]; then [[ "${FAKE_REGISTERED:-}" == 1 ]] && exit 0 || exit 1; fi
     # configure and remove: the token arrives on stdin, and only there.
     if [[ "$*" == *" configure" || "$*" == *" remove" ]]; then cat >>"$FAKE_STDIN"; fi
     ;;
-  "image inspect") exit 0 ;;
-  "inspect "*) echo "running, restarts 0" ;;
+  "image inspect")
+    [[ "$*" == *"{{.Id}}"* ]] && echo "sha256:new"
+    exit 0
+    ;;
+  "image ls") printf '%s\n' jobapp-ci-runner:2.338.0 jobapp-ci-runner:2.300.0 ;;
+  "inspect "*)
+    if [[ "$*" == *"{{.State.Running}} {{.Image}}"* ]]; then
+      # A container exists once started in this test, or when the test says so; on the new image
+      # only when the test says so.
+      if grep -q "^run -d --name ${!#} " "$FAKE_LOG" || [[ -n "${FAKE_IMAGE:-}" ]]; then
+        echo "true sha256:${FAKE_IMAGE:-new}"
+      else
+        exit 1
+      fi
+    else
+      echo "running, restarts 0"
+    fi
+    ;;
+  "volume inspect") exit 1 ;;
   "volume prune") echo "Total reclaimed space: 0B" ;;
 esac
 exit 0
@@ -147,7 +167,9 @@ case "$*" in
   *"actions/runners --paginate"*"select(.name"*)
     # Listed and online once a container was started for it; gone once unregistered.
     if grep -q ' remove$' "$FAKE_LOG"; then exit 0; fi
-    if grep -q '^run -d ' "$FAKE_LOG" || [[ "${FAKE_LISTED:-}" == 1 ]]; then echo "7 online false"; fi
+    if grep -q '^run -d ' "$FAKE_LOG" || [[ "${FAKE_LISTED:-}" == 1 ]]; then
+      if [[ "${FAKE_BUSY:-}" == 1 ]]; then echo "7 online true"; else echo "7 online false"; fi
+    fi
     ;;
 esac
 exit 0
@@ -321,9 +343,28 @@ out_has "come back by themselves after a reboot"
 ok "the default is 2 runners, CPUs 0-2 and 3-5, 4g each with no swap beyond; install says whether Docker Desktop starts at login and never writes its settings"
 
 step "update, stop and prune wait for jobs; uninstall removes only what install made"
-run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_BUSY=1 -- ops/ci-runners.sh update
-out_has "a job is running"
+# update: a container on an older image is recreated, but only once its runner is idle.
+run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_BUSY=1 FAKE_IMAGE=old -- env CI_UPDATE_WAIT_S=0 ops/ci-runners.sh update
+out_has "mac-ci-1 is still running a job after 0s: nothing was changed on it"
 log_lacks "run -d"
+log_lacks "rm -f jobapp-ci"
+run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=old -- ops/ci-runners.sh update
+[[ "$(grep -c '^run -d ' "$WORK/docker.log")" == 2 ]] || fail "update did not recreate both idle runners"
+log_has "image prune -f --filter label=jobapp.ci=runner"
+# Run again, or after an install: containers already on the built image are left alone, busy or not.
+run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_BUSY=1 FAKE_IMAGE=new -- ops/ci-runners.sh update
+out_has "jobapp-ci-2: already running"
+log_lacks "run -d"
+log_lacks "rm -f jobapp-ci"
+run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_REGISTERED=1 FAKE_BUSY=1 FAKE_IMAGE=new -- ops/ci-runners.sh install
+log_lacks "run -d"
+log_lacks "rm -f jobapp-ci"
+run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_REGISTERED=1 FAKE_BUSY=1 FAKE_IMAGE=old -- env CI_UPDATE_WAIT_S=0 ops/ci-runners.sh install
+out_has "still running a job"
+log_lacks "run -d"
+run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2 jobapp-ci-3" FAKE_LISTED=1 -- ops/ci-runners.sh install 2
+out_has "3 runners exist and 2 were asked for"
+log_lacks "build"
 run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_BUSY=1 -- ops/ci-runners.sh prune
 log_lacks "prune"
 run 1 fake -- ops/ci-runners.sh update
@@ -338,10 +379,11 @@ log_has "volume rm jobapp-ci-docker-1"
 log_has "volume rm jobapp-ci-docker-2"
 log_has "volume rm jobapp-ci"
 log_has "image rm jobapp-ci-runner:$version"
+log_has "image rm jobapp-ci-runner:2.300.0"
 if grep -E '^(rm|volume rm|image rm|stop) ' "$WORK/docker.log" | grep -vE '^(rm -f jobapp-ci-[0-9]+|volume rm jobapp-ci(-docker-[0-9]+)?|image rm jobapp-ci-runner:[0-9.]+)$' | grep -q .; then
   fail "uninstall removed something that is not a CI runner object: $(grep -E '^(rm|volume rm|image rm) ' "$WORK/docker.log")"
 fi
 if grep -q 'prune' "$WORK/docker.log"; then fail "uninstall prunes"; fi
-ok "update and prune refused while a job runs; stop stops each runner; uninstall: removal token on stdin only, only jobapp-ci-<n>, their volumes and the image, never a prune"
+ok "update and a second install recreate a container only when it is not on the built image and its runner is idle, and wait otherwise; a lower count is refused; prune refused while a job runs; stop stops each runner; uninstall: removal token on stdin only, only jobapp-ci-<n>, their volumes and every tag of the image, never a prune"
 
 printf '\nci_runners_test: %s checks passed\n' "$passed"

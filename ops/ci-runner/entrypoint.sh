@@ -95,6 +95,9 @@ case "$cmd" in
     prepare_dirs
     token="$(read_token)"
     cd "$RUNNER_HOME"
+    # configure is only called for a runner GitHub does not list: files of an older registration
+    # (GitHub drops a runner that stayed offline for 14 days) would make config.sh refuse.
+    rm -f .runner .credentials .credentials_rsaparams
     # --no-default-labels is not used: GitHub's own self-hosted, Linux and ARM64 stay.
     ACTIONS_RUNNER_INPUT_TOKEN="$token" as_runner ./config.sh --unattended --replace \
       --url "$RUNNER_URL" --name "$RUNNER_NAME" --labels "$RUNNER_LABELS" --work _work

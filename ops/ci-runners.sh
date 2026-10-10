@@ -7,7 +7,10 @@
 #   ops/ci-runners.sh status            containers, GitHub's view, memory, disk used
 #   ops/ci-runners.sh stop | start      stop or start every runner container (registration kept)
 #   ops/ci-runners.sh update            rebuild the image from ops/ci-runner and recreate the
-#                                       containers; registrations, caches and images are kept
+#                                       containers that do not run it yet, one at a time, each
+#                                       when its runner is idle (it waits for a running job, up
+#                                       to CI_UPDATE_WAIT_S, an hour); registrations, caches and
+#                                       images are kept. Safe to run again and while jobs queue
 #   ops/ci-runners.sh prune             empty the shared tool caches and every runner's Docker
 #                                       daemon (refused while a job runs)
 #   ops/ci-runners.sh uninstall         unregister every runner, remove containers, volumes, image
@@ -35,7 +38,7 @@
 # trials on top of four agents took the load average to 82 and the Mac went down. So CI gets a
 # fixed share and no more: each runner is pinned to 3 CPUs of its own (runner n to CPUs
 # 3(n-1) .. 3n-1) and limited to 4 GB, swap included. Two runners: CPUs 0-5 and 8 GB at most,
-# half the CPUs and under half the memory; CPUs 6-11 are never used by CI.
+# half of Docker's CPUs and under half the memory.
 #
 # Settings (environment): CI_RUNNER_REPO (GoldLegendW80/jobapp), CI_RUNNER_MEMORY (4g, per
 # runner), CI_RUNNER_CPUS (CPUs per runner, 3), CI_RUNNER_MIN_FREE_GB (free space of the Mac's
@@ -114,9 +117,44 @@ base_opts() {
 }
 
 build_image() {
-  step "image $(image)"
-  docker build -q --label "$LABEL" -t "$(image)" "$CONTEXT" >/dev/null || die "docker build failed"
+  step "image $(image) (a first build takes a few minutes, a rebuild seconds)"
+  docker build --label "$LABEL" -t "$(image)" "$CONTEXT" || die "docker build failed"
+  # The build it replaces, now untagged: only dangling images that carry this label.
+  docker image prune -f --filter "label=$LABEL" >/dev/null 2>&1 || true
   info "built from ops/ci-runner (linux/arm64, actions runner $(runner_version))"
+}
+
+# current <n>: the container of runner n is running the image just built.
+current() {
+  local have want
+  have="$(docker inspect -f '{{.State.Running}} {{.Image}}' "$(container "$1")" 2>/dev/null || true)"
+  want="$(docker image inspect -f '{{.Id}}' "$(image)" 2>/dev/null || true)"
+  [[ -n "$want" && "$have" == "true $want" ]]
+}
+
+# wait_idle <n>: until GitHub says runner n runs no job. A container is only ever recreated on
+# an idle runner; a job that GitHub hands over in the very second of the recreation is lost and
+# shows as failed (gh run rerun <id> --failed).
+wait_idle() {
+  local n="$1" limit="${CI_UPDATE_WAIT_S:-3600}" told=0 deadline
+  deadline=$((SECONDS + limit))
+  while [[ "$(github_state "$n")" == *" true" ]]; do
+    ((SECONDS < deadline)) || die "$(runner_name "$n") is still running a job after ${limit}s: nothing was changed on it, run the command again later"
+    ((told)) || info "$(runner_name "$n") is running a job: waiting for it to end before recreating $(container "$n")"
+    told=1
+    sleep 5
+  done
+}
+
+# refresh <n>: leave a container that already runs the built image, recreate any other when idle.
+refresh() {
+  local n="$1"
+  if current "$n"; then
+    info "$(container "$n"): already running $(image), left as it is"
+    return 0
+  fi
+  wait_idle "$n"
+  start_container "$n"
 }
 
 is_registered() { # the local registration file and GitHub's record both exist
@@ -133,10 +171,11 @@ register() {
     return 0
   fi
   docker rm -f "$(container "$n")" >/dev/null 2>&1 || true
-  # The token: from gh into the container's stdin, nowhere else.
+  # The token: from gh into the container's stdin, nowhere else. configure first clears a
+  # registration GitHub no longer knows (it drops a runner that stayed offline for 14 days).
   gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token |
     docker run --rm -i "${OPTS[@]}" "$(image)" configure >/dev/null ||
-    die "registration of $(runner_name "$n") failed (gh needs admin rights on $REPO)"
+    die "registration of $(runner_name "$n") failed: gh needs admin rights on $REPO to create the token, or config.sh refused (run it again to see: docker logs shows nothing for a removed container)"
   info "$(runner_name "$n"): registered"
 }
 
@@ -185,6 +224,10 @@ cmd_install() {
   total="$(docker info --format '{{.NCPU}}')"
   ((count * CPUS <= total)) ||
     die "runner $count would need CPUs $(((count - 1) * CPUS))-$((count * CPUS - 1)) and Docker has $total: fewer runners or CI_RUNNER_CPUS"
+  local highest
+  highest="$(existing | tail -n 1)"
+  [[ -z "$highest" ]] || ((count >= highest)) ||
+    die "$highest runners exist and $count were asked for: ops/ci-runners.sh uninstall first, then install $count"
   disk_check "$count"
   build_image
   docker volume create --label "$LABEL" "$SHARED_VOLUME" >/dev/null
@@ -196,7 +239,7 @@ cmd_install() {
     indexes+=("$n")
   done
   step "containers (restart unless-stopped)"
-  for n in "${indexes[@]}"; do start_container "$n"; done
+  for n in "${indexes[@]}"; do refresh "$n"; done
   wait_online "${indexes[@]}"
   info "online on GitHub: $count runner(s)"
   autostart_note
@@ -222,11 +265,12 @@ cmd_update() {
   while IFS= read -r n; do indexes+=("$n"); done < <(existing)
   count="${#indexes[@]}"
   ((count > 0)) || die "no runner installed: ops/ci-runners.sh install"
-  any_busy && die "a job is running on a Mac runner: try again when it is done"
   build_image
-  step "containers recreated from $(image)"
-  for n in "${indexes[@]}"; do start_container "$n"; done
-  wait_online "${indexes[@]}"
+  step "containers on $(image), one at a time, each when its runner is idle"
+  for n in "${indexes[@]}"; do
+    refresh "$n"
+    wait_online "$n"
+  done
   info "online on GitHub: $count runner(s)"
 }
 
@@ -316,9 +360,22 @@ cmd_uninstall() {
     info "$(runner_name "$n"): unregistered, container and $(docker_volume "$n") removed"
   done
   docker volume rm "$SHARED_VOLUME" >/dev/null 2>&1 || true
-  docker image rm "$(image)" >/dev/null 2>&1 || true
+  # Every tag of the runner image, an older pinned version included.
+  local tag left=""
+  for tag in $(docker image ls --format '{{.Repository}}:{{.Tag}}' jobapp-ci-runner 2>/dev/null); do
+    docker image rm "$tag" >/dev/null 2>&1 || left+=" image:$tag"
+  done
   rmdir "$PROBE_DIR" "$(dirname "$PROBE_DIR")" 2>/dev/null || true
-  info "volume $SHARED_VOLUME, image $(image) and the empty folder $PROBE_DIR removed"
+  rmdir "$(dirname "$(dirname "$PROBE_DIR")")" 2>/dev/null || true # ~/actions-runners, if empty
+  for n in "$SHARED_VOLUME" $(docker volume ls -q --filter name=jobapp-ci-docker- 2>/dev/null); do
+    if docker volume inspect "$n" >/dev/null 2>&1; then left+=" volume:$n"; fi
+  done
+  if [[ -n "$left" ]]; then
+    info "WARNING: could not remove:$left (in use? docker ps -a, then remove by hand)"
+  else
+    info "volume $SHARED_VOLUME, the runner images and the empty folder $PROBE_DIR removed"
+  fi
+  info "not touched: the volumes jobapp-ci-try and jobapp-ci-try-docker of a step tried by hand (README)"
 }
 
 main() {

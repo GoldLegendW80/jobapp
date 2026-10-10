@@ -185,7 +185,7 @@ ops/ci-runners.sh install [count]   # build the image, register and start the ru
 ops/ci-runners.sh status            # containers, GitHub's view (online, busy), memory, disk used
 ops/ci-runners.sh stop              # stop them; queued jobs wait
 ops/ci-runners.sh start             # start them again
-ops/ci-runners.sh update            # rebuild the image from ops/ci-runner, recreate the containers (registration and caches kept)
+ops/ci-runners.sh update            # rebuild the image from ops/ci-runner, recreate each container when its runner is idle (registration and caches kept)
 ops/ci-runners.sh prune             # empty the tool caches and every runner's Docker daemon
 ops/ci-runners.sh uninstall         # unregister, remove containers, volumes and image
 ```
@@ -217,7 +217,7 @@ cannot take more:
 
 | | per runner | two runners | left to everything else |
 |---|---|---|---|
-| CPUs | 3, pinned (runner 1: CPUs 0-2, runner 2: 3-5) | 6 of 12 | CPUs 6-11 never used by CI |
+| CPUs | 3, pinned (runner 1: CPUs 0-2, runner 2: 3-5) | 6 of Docker's 12 | six cores' worth of load at most (macOS places Docker's virtual CPUs on the cores it likes) |
 | Memory | 4 GB, swap included | 8 GB of about 18 | about 10 GB |
 | Disk | see the disk budget below | about 10 GB, 13 GB at most | |
 
@@ -291,25 +291,54 @@ gh variable delete CI_RUNS_ON                          # back on the Mac
 
 `CI_RUNS_ON` is the JSON of a `runs-on` value; unset, it is `["self-hosted", "mac-ci"]`. The
 steps that differ test `runner.environment`: on GitHub's machines the caches go to GitHub's cache
-service as before, on the Mac they stay on the runner.
+service as before, on the Mac they stay on the runner. The worker counts (`PYTEST_WORKERS`,
+`VITEST_WORKERS`) and `max-parallel: 2` of the e2e groups apply there too: correct, a little
+slower than `main` was on those machines.
 
-**Updating.** The runner updates itself when GitHub publishes a release (the update lands in the
-`jobapp-ci` volume and survives restarts). To move the pinned version, the Docker Engine or the
-packages of the image: edit `ops/ci-runner/Dockerfile` (version and the SHA-256 from the release
-notes of `actions/runner`), then `ops/ci-runners.sh update`.
+**Updating.** `ops/ci-runners.sh update`, run from a checkout that holds the wanted
+`ops/ci-runner/`, rebuilds the image and recreates the containers that do not run it yet, one at
+a time, each when its runner is idle: it waits for a running job to end (up to an hour,
+`CI_UPDATE_WAIT_S`), so it is safe while jobs are queued, and running it again changes nothing.
+A job that GitHub hands to a runner in the very second its container is recreated is lost and
+shows as failed: `gh run rerun <id> --failed`. `update` changes the Docker Engine, the packages
+and the hooks of the image. It does not move the runner itself: its binaries live in the
+`jobapp-ci` volume, seeded once from the image, and update themselves when GitHub publishes a
+release. `RUNNER_VERSION` and its SHA-256 in the Dockerfile therefore only set what a new
+runner starts from; to start again from the pinned version, `uninstall` then `install`.
+`install` on an existing set follows the same rule (idle runners only, containers already on the
+image left alone) and refuses a lower count than what exists.
 
-**Security.** The runners are registered to this private repository only, and a job-started hook
-baked into the image (`ops/ci-runner/job-started.sh`) refuses every job that is not this
-repository's `ci.yml`. A container gets no variable of the shell that installs it (no token, no
-key, no `.env`), no folder of the Mac and not the Mac's Docker socket; the registration token
-goes from `gh api` into the container's stdin and is stored nowhere. Jobs use throwaway secrets
-(`.github/scripts/ci_env.sh`) and synthetic data, never the Jetson's database or Harald's files.
-This keeps accidents and collisions out; it is not a wall against hostile code: the containers
-are privileged (they run a Docker daemon), and a privileged container can reach the Docker
-Desktop virtual machine and what Docker Desktop shares with it. Whoever can push a branch to this
-repository can run code on the Mac, so the repository stays private and fork pull requests stay
-off. The caches are shared by all runs, so a branch can leave a poisoned cache entry for the
-next run: `ops/ci-runners.sh prune` empties them.
+**Security.** Read this as guard rails against mistakes, not as a boundary against hostile code.
+
+What the setup does: the runners are registered to this private repository only, and a
+job-started hook in the image (`ops/ci-runner/job-started.sh`) refuses every job that is not
+this repository's `ci.yml`. A container gets no variable of the shell that installs it (no
+token, no key, no `.env`) and not the Mac's Docker socket; the only thing of the Mac it sees is
+the empty probe folder, read only. The registration token goes from `gh api` into the
+container's stdin and is stored nowhere. Jobs use throwaway secrets (`.github/scripts/ci_env.sh`)
+and synthetic data, never the Jetson's database or Harald's files. `ci.yml` uses no repository
+secret and its token can only read the repository.
+
+What it does not do: `--privileged` is not a wall. A job is root in a privileged container (it
+has passwordless sudo and a Docker daemon), so code pushed to any branch of this repository can,
+on purpose, read the runners' long lived credentials (they sit in the `jobapp-ci` volume, which
+both runners share), rewrite the hooks or the runner's files so that later jobs skip them, reach
+Docker Desktop's virtual machine with every other container and volume in it, and through Docker
+Desktop's file sharing reach `/Users`, so Harald's home folder. It can also leave a poisoned
+entry in the shared caches for the next run (`ops/ci-runners.sh prune` empties them).
+
+This is acceptable today for one reason: the repository is private, its only collaborator is its
+owner, and the same agents already run code as his macOS user. It stops being acceptable, and the
+runners must be uninstalled or moved first, as soon as any of these is true:
+
+- the repository becomes public, or fork pull requests are allowed to run workflows;
+- a second collaborator, or a bot that opens pull requests (Dependabot, Renovate), is added;
+- a workflow that targets `mac-ci` gets a `pull_request_target`, `workflow_run`, `issue_comment`
+  or `issues` trigger;
+- a repository secret is given to `ci.yml`.
+
+The upgrade then is a virtual machine of its own for CI (Lima or Colima), or ephemeral runners
+with a fresh volume per job.
 
 **Apple silicon.** The runners sit in the same Linux guest as every other container of this Mac,
 so they need `OPENSSL_armcap=0` too (Development on the Mac, above). The runner image sets it
@@ -322,6 +351,9 @@ To try a CI step by hand in the runner's exact environment, without registering 
 docker run --rm -it --privileged -e CI_RUNNER_INDEX=99 -v jobapp-ci-try:/ci \
   -v jobapp-ci-try-docker:/var/lib/docker jobapp-ci-runner:2.338.0 exec bash
 ```
+
+`uninstall` does not know these two volumes; remove them when done:
+`docker volume rm jobapp-ci-try jobapp-ci-try-docker`.
 
 ## Public URL
 

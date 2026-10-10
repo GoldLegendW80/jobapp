@@ -33,7 +33,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # What the jobs use from GitHub's image besides the setup actions: git, python3 (the scripts of
 # .github/scripts, with yaml), curl, jq, openssl, rsync, ssh, archive tools, sudo (playwright
 # install --with-deps calls it), and the libraries and fonts Playwright's Chromium needs, so that
-# --with-deps finds them installed once in the image instead of once per runner. No compiler:
+# --with-deps finds them installed once in the image instead of once per runner. libatomic1:
+# the pnpm that pnpm/action-setup installs (@pnpm/exe) links to it; it used to come with the
+# compiler, and the first real run failed on it (run 38066771735). No compiler:
 # every dependency of api/uv.lock has an arm64 wheel (a job that needs one can apt-get it).
 # Size: about 2 GB, of which the runner and its two bundled Node versions, the Docker Engine
 # with buildx and compose, and Chromium's libraries and fonts are nearly all; it is stored once
@@ -41,7 +43,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates curl git jq openssl python3 python3-venv python3-yaml rsync tini sudo \
-       iproute2 iptables kmod procps util-linux \
+       iproute2 iptables kmod procps util-linux libatomic1 \
        openssh-client unzip zip xz-utils zstd bzip2 \
        libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 \
        libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 \
@@ -89,8 +91,9 @@ RUN groupadd --gid 1001 runner \
 # address pools away from 172.17.0.0/16, which is the network this container itself sits on.
 COPY daemon.json /etc/docker/daemon.json
 COPY --chmod=755 entrypoint.sh /usr/local/bin/ci-runner-entrypoint
-# The hooks live in the image, outside the runner directory and outside any checkout, so no
-# commit can switch them off. The runner only takes hook paths ending in .sh.
+# The hooks live in the image, outside the runner directory and outside any checkout, so a
+# commit cannot switch them off by accident. A job has sudo here, so one that means to can:
+# guard rails, not a boundary (README, Security). The runner only takes hook paths ending in .sh.
 COPY --chmod=755 job-started.sh /usr/local/bin/ci-job-started.sh
 COPY --chmod=755 job-completed.sh /usr/local/bin/ci-job-completed.sh
 COPY --chmod=755 ci-clean.sh /usr/local/bin/ci-clean.sh

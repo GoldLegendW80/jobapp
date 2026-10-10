@@ -84,6 +84,10 @@ markers = [
 [tool.coverage.run]
 source = ["app"]
 branch = true
+# Paths relative to api/ in the data file: the two shards and the job that combines them run in
+# different folders on the Mac's CI runners (/ci/runner-<n>/_work/...), and an absolute path of
+# one runner is "No source for code" on the other (issue #83, run 38066771735).
+relative_files = true
 
 [tool.coverage.report]
 show_missing = true
