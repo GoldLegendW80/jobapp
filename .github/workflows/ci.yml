@@ -12,8 +12,25 @@
 # A command that gates anything is still never piped, and never negated with `!` (bash -e does
 # not stop on a negated command): it runs on its own line or under an explicit `if`.
 #
-# Actions are pinned by full commit SHA (the tag in the comment). Runs on GitHub's x86 runners:
-# tests only, the arm64 images are built on the Jetson by the deploy workflow.
+# Actions are pinned by full commit SHA (the tag in the comment). Tests only: the images that
+# ship are built on the Jetson by the deploy workflow.
+#
+# Where it runs (issue #83): on the self-hosted runners of the owner's Mac, labels
+# [self-hosted, mac-ci] (ops/ci-runners.sh, ops/ci-runner/: Linux arm64 containers in Docker
+# Desktop, each with a Docker daemon of its own, so a job sees what it saw on a GitHub machine:
+# `services:`, its own 127.0.0.1, its own container names and ports). Never [self-hosted] alone:
+# the Jetson's deploy runner carries that label too.
+# Load: the Mac is shared with its owner and with agents, so CI has a fixed budget there. Two
+# runners, each pinned to 3 CPUs and 4 GB (ops/ci-runners.sh), are the limit on what runs at
+# once, whatever the number of pushes: a runner takes one job, the rest queue. Worker counts are
+# written out (PYTEST_WORKERS, VITEST_WORKERS below), never "all cores", and at most two e2e
+# stacks of a run are up together (max-parallel in the e2e job).
+# Escape hatch, back to GitHub's machines without editing this file:
+#   gh variable set CI_RUNS_ON --body '"ubuntu-latest"'      and back: gh variable delete CI_RUNS_ON
+# CI_RUNS_ON is the JSON of a runs-on value. Steps that differ test runner.environment
+# ('github-hosted' or 'self-hosted'): caches go to GitHub's cache service there, and stay on the
+# runner's disk here (uv, pnpm, Playwright and pre-commit through the runner's environment, image
+# layers in the runner's own Docker daemon).
 name: CI
 
 on:
@@ -37,13 +54,16 @@ env:
   UV_VERSION: "0.9.28"
   NODE_VERSION: "22.23.3"
   FORCE_COLOR: "1"
+  # Processes per test job: the 3 CPUs of a Mac runner. GitHub's machines have 2 to 4.
+  PYTEST_WORKERS: "3"
+  VITEST_WORKERS: "3"
 
 jobs:
-  # api tests in two shards on two runners (a private repo's runner has 2 vCPUs), each with
-  # pytest-xdist; coverage is combined and checked (at least 95 percent) in api-coverage.
+  # api tests in two shards on two runners, each with pytest-xdist (-n $PYTEST_WORKERS);
+  # coverage is combined and checked (at least 95 percent) in api-coverage.
   api:
     name: api (${{ matrix.shard.name }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -83,7 +103,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
-          enable-cache: true
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: api/uv.lock
       - name: Install dependencies
         run: uv sync --frozen
@@ -100,9 +120,9 @@ jobs:
           start=$SECONDS
           # shellcheck disable=SC2086 # the paths of the shard split on purpose
           uv run --frozen pytest ${{ matrix.shard.paths }} -m "not docker" -p no:cacheprovider \
-            -n auto --cov --cov-report= --cov-fail-under=0 --durations=10 \
+            -n "$PYTEST_WORKERS" --cov --cov-report= --cov-fail-under=0 --durations=10 \
             --junitxml=${{ runner.temp }}/junit-api.xml
-          echo "pytest ${{ matrix.shard.name }} (not docker, -n auto): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
+          echo "pytest ${{ matrix.shard.name }} (not docker, -n $PYTEST_WORKERS): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
       - name: Upload coverage data
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -149,7 +169,7 @@ jobs:
     name: api coverage (combined, at least 95 percent)
     needs: api
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 10
     defaults:
       run:
@@ -168,7 +188,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
-          enable-cache: true
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: api/uv.lock
       - name: Install dependencies
         run: uv sync --frozen
@@ -194,7 +214,7 @@ jobs:
 
   web:
     name: web checks (eslint, tsc, build)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 15
     defaults:
       run:
@@ -211,7 +231,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -224,7 +244,7 @@ jobs:
 
   web-tests:
     name: web vitest (shard ${{ matrix.shard }}/2)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -244,19 +264,19 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Vitest
-        run: pnpm exec vitest run --shard=${{ matrix.shard }}/2 --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
+        run: pnpm exec vitest run --shard=${{ matrix.shard }}/2 --maxWorkers="$VITEST_WORKERS" --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
       - name: Test summary
         if: always()
         run: python3 ../.github/scripts/junit_summary.py "web shard ${{ matrix.shard }}" "${{ runner.temp }}/junit-web.xml" >> "$GITHUB_STEP_SUMMARY"
 
   shell:
     name: shell (shellcheck, deploy.sh tests)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -265,12 +285,14 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
-          enable-cache: true
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: api/uv.lock
       - name: Shellcheck (pinned image, as tests/deploy_test.sh and pre-commit)
         run: >-
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
           deploy.sh ops/db.sh ops/previous.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
+          ops/ci-runners.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh
+          ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh
           tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
           tests/reboot_check.sh tests/e2e_jetson.sh tests/tailscale_test.sh tests/agents_real_run_jetson.sh
           tests/agents_real_run_test.sh
@@ -290,12 +312,17 @@ jobs:
       # untouched, a real run never overwrites it, only the owner's subscription gets a run.
       - name: tests/agents_real_run_test.sh
         run: tests/agents_real_run_test.sh
+      # Issue #83: the Mac CI runners (ops/ci-runners.sh and the hooks of ops/ci-runner) against
+      # fake docker and gh, and where ci.yml and deploy.yml send their jobs.
+      - name: tests/ci_runners_test.sh
+        run: tests/ci_runners_test.sh
       # tailscale (Funnel): compose config and caddy's :8080 trust rules. No key, no tailnet; the
       # live no-key start is skipped here (CI is set, and the image is pinned to arm64).
       - name: tests/tailscale_test.sh
         run: tests/tailscale_test.sh
 
-  # Browser journeys in three groups on three runners, each against its own scratch Compose stack;
+  # Browser journeys in three groups on three runners, each against its own scratch Compose stack
+  # (on the Mac in the runner's own Docker daemon: the same project name and port in each);
   # the worker runs with TEST_FAST_TIMERS (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts
   # is in one group or in the exclusion list of .github/scripts/e2e_groups.py, which fails the
   # shell job otherwise.
@@ -307,10 +334,12 @@ jobs:
   # a warm cache, and on a cold one the groups still wait for the build, so it is never faster.
   e2e:
     name: e2e (${{ matrix.group }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # At most two stacks of one run at a time, also if a third runner is added.
+      max-parallel: 2
       matrix:
         group: [identity, sweep, apps]
         include:
@@ -329,7 +358,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
-          enable-cache: true
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: api/uv.lock
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
@@ -337,7 +366,7 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: web/pnpm-lock.yaml
       - name: Environment of the scratch stack (random secrets, never committed)
         run: |
@@ -350,9 +379,18 @@ jobs:
           # Agents A2: the worker replays recorded streams instead of calling a model (refused
           # when APP_ENV is production; this stack is development).
           echo "AGENTS_FAKE_BACKEND=true" >> .env
+      # On a Mac runner: the default builder of the runner's own Docker daemon, whose layer cache
+      # stays on the runner's disk between jobs (bounded by the job-completed hook,
+      # ops/ci-runner/ci-clean.sh). Nothing is uploaded or downloaded, and the runners do not
+      # share it: each warms its own on its first e2e job.
+      - name: Build the images (buildx bake, the runner's own layer cache)
+        if: runner.environment != 'github-hosted'
+        run: docker buildx bake --progress=plain -f compose.yml --load api worker caddy
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        if: runner.environment == 'github-hosted'
       # The cache-to lines are empty, and ignored, in the groups that do not write the cache.
       - name: Build the images (buildx bake, GitHub Actions layer cache)
+        if: runner.environment == 'github-hosted'
         uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         with:
           source: .
@@ -368,10 +406,19 @@ jobs:
             ${{ matrix.cache_write && 'caddy.cache-to=type=gha,scope=e2e-caddy,mode=max' || '' }}
       # tests/ats-stub.compose.yml: the board check asks a stub (tests/ats_stub.py) and the worker
       # api/tests/jobs/fake_ats.py, never the real Ashby, Greenhouse or Lever.
+      # CI_COMPOSE_OVERLAY comes from the runner's own environment, never from this file: the
+      # Mac runners set it to compose.mac.yml (ops/ci-runner/Dockerfile), GitHub's machines and
+      # the Jetson do not have it. Only `up` needs the overlay (compose.mac.yml).
       - name: Start the stack
-        run: >-
-          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml
-          up -d --no-build --wait --wait-timeout 300
+        run: |
+          overlay=()
+          if [[ -n "${CI_COMPOSE_OVERLAY:-}" ]]; then
+            [[ -f "$CI_COMPOSE_OVERLAY" ]] || { echo "::error::the runner's CI_COMPOSE_OVERLAY names no file: $CI_COMPOSE_OVERLAY"; exit 1; }
+            overlay=(-f "$CI_COMPOSE_OVERLAY")
+            echo "compose overlay of this runner: $CI_COMPOSE_OVERLAY"
+          fi
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
+            up -d --no-build --wait --wait-timeout 300
       - name: Migrations
         run: docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
       - name: Install web dependencies and Chromium
@@ -436,7 +483,7 @@ jobs:
 
   precommit:
     name: pre-commit (file fixers, gitleaks, prettier)
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -445,7 +492,9 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: ${{ env.UV_VERSION }}
+      # On a Mac runner pre-commit's environments stay on the runner (PRE_COMMIT_HOME).
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: runner.environment == 'github-hosted'
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
