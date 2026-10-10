@@ -6,6 +6,7 @@ import {
   costQualifier,
   describeCost,
   formatCost,
+  kindOfUsage,
 } from "./format";
 
 /**
@@ -21,14 +22,14 @@ describe("the amount of a run, by the kind of credential it used", () => {
     expect(describeCost(0.193, "anthropic_api_key")).toBe("$0.193");
   });
 
-  it("is an estimate at API prices, not billed, with a Claude subscription", () => {
+  it("is an estimate at API prices, not a bill, with a Claude subscription", () => {
     expect(costLabel("claude_subscription")).toBe("Estimate at API prices");
-    expect(costQualifier("claude_subscription")).toBe("Estimate, not billed");
+    expect(costQualifier("claude_subscription")).toBe("Estimate, not a bill");
     expect(costNote("claude_subscription")).toBe(
-      "This run used your Claude subscription, which is not billed per run. The estimate is what the same tokens cost at API prices.",
+      "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
     );
     expect(describeCost(0.193, "claude_subscription")).toBe(
-      "$0.193 estimated at API prices, not billed",
+      "$0.193 estimated at API prices, not a bill",
     );
   });
 
@@ -47,7 +48,7 @@ describe("the amount of a run, by the kind of credential it used", () => {
         costQualifier(kind) ?? "",
         describeCost(0.193, kind),
       ]) {
-        expect(text).not.toMatch(/\bcost\b|not billed|estimate/i);
+        expect(text).not.toMatch(/\bcost\b|not billed|not a bill|estimate/i);
       }
     },
   );
@@ -60,6 +61,53 @@ describe("the amount of a run, by the kind of credential it used", () => {
     ] as const) {
       expect(describeCost(null, kind)).toBe(formatCost(null));
       expect(describeCost(undefined, kind)).toBe("None yet");
+    }
+  });
+
+  it("says that a subscription run counts toward the plan's usage limits", () => {
+    expect(costNote("claude_subscription")).toContain(
+      "counts toward your plan's usage limits",
+    );
+    expect(costNote("claude_subscription")).toContain(
+      "What you pay is set by your plan, not by this amount",
+    );
+    expect(costNote(null)).not.toContain("usage limits");
+  });
+
+  it("never says that a subscription run is not billed, in the long form or the short ones", () => {
+    // The app knows the kind of credential, not the plan: a plan with paid extra usage turned
+    // on may charge for a run. The amount is an estimate, "not a bill", in every form.
+    const forms = [
+      costLabel("claude_subscription"),
+      costQualifier("claude_subscription") ?? "",
+      costNote("claude_subscription") ?? "",
+      describeCost(0.193, "claude_subscription"),
+    ];
+    for (const text of forms) {
+      expect(text).not.toMatch(/not billed|nothing is billed|free/i);
+      expect(text).toMatch(/estimate/i);
+    }
+    expect(costQualifier("claude_subscription")).toBe("Estimate, not a bill");
+    expect(describeCost(0.193, "claude_subscription")).toBe(
+      "$0.193 estimated at API prices, not a bill",
+    );
+  });
+
+  it("reads the credential kind a usage step carries, and nothing else", () => {
+    expect(kindOfUsage({ credential_kind: "claude_subscription" })).toBe(
+      "claude_subscription",
+    );
+    expect(kindOfUsage({ credential_kind: "anthropic_api_key" })).toBe(
+      "anthropic_api_key",
+    );
+    for (const data of [
+      {},
+      { credential_kind: null },
+      { credential_kind: "something_new" },
+      { credential_kind: 3 },
+      { credential_kind: ["claude_subscription"] },
+    ]) {
+      expect(kindOfUsage(data)).toBeUndefined();
     }
   });
 

@@ -24,7 +24,7 @@ import {
   Wrench,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -47,6 +47,7 @@ import {
   costLabel,
   costNote,
   describeCost,
+  kindOfUsage,
   elapsed,
   formatCost,
   formatDuration,
@@ -112,11 +113,25 @@ function ConnectionState({ state }: { state: Connection }) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: ReactNode }) {
+function Metric({
+  label,
+  value,
+  describedBy,
+}: {
+  label: string;
+  value: ReactNode;
+  /** The id of a sentence that says what the value is (the cost note). */
+  describedBy?: string;
+}) {
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="truncate text-sm font-medium tabular-nums">{value}</dd>
+      <dd
+        aria-describedby={describedBy}
+        className="truncate text-sm font-medium tabular-nums"
+      >
+        {value}
+      </dd>
     </div>
   );
 }
@@ -227,7 +242,11 @@ function describeStep(
             Number(data.cache_creation_input_tokens ?? 0) +
             Number(data.cache_read_input_tokens ?? 0),
           Number(data.output_tokens ?? 0),
-        )}, ${describeCost(typeof data.cost_usd === "number" ? data.cost_usd : null, kind)}`,
+        )}, ${describeCost(
+          typeof data.cost_usd === "number" ? data.cost_usd : null,
+          // The step says which kind of credential the run used; older steps do not.
+          kindOfUsage(data) ?? kind,
+        )}`,
         tone: "muted",
       };
     case "api_error":
@@ -361,6 +380,7 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
   const client = useQueryClient();
   const { detail, steps, live, status, connection, gone } = useRunStream(runId);
   const run = detail.data;
+  const noteId = useId();
   const active = status === "queued" || status === "running";
   const now = useNow(active);
   const titleRef = useRef<HTMLSpanElement>(null);
@@ -416,6 +436,8 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
   }
   const shownStatus = status ?? run.status;
   const stopping = run.cancel_requested && active;
+  // What the amount is, when it is not a plain cost: on a subscription, an estimate.
+  const note = run.cost_usd !== null ? costNote(run.credential_kind) : null;
   return (
     <Card data-testid="run-panel" data-status={shownStatus}>
       <CardHeader>
@@ -477,13 +499,18 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
               run.cost_usd === null ? "Cost" : costLabel(run.credential_kind)
             }
             value={formatCost(run.cost_usd)}
+            describedBy={note ? noteId : undefined}
           />
           <Metric label="Duration" value={formatDuration(elapsed(run, now))} />
         </dl>
-        {/* What the amount is, when it is not a plain cost: a subscription is not billed per run. */}
-        {run.cost_usd !== null && costNote(run.credential_kind) ? (
-          <p data-testid="cost-note" className="text-sm text-muted-foreground">
-            {costNote(run.credential_kind)}
+        {/* Tied to the amount for assistive technology (aria-describedby on its dd). */}
+        {note ? (
+          <p
+            id={noteId}
+            data-testid="cost-note"
+            className="text-sm text-muted-foreground"
+          >
+            {note}
           </p>
         ) : null}
         <Timeline steps={steps} live={live} kind={run.credential_kind} />

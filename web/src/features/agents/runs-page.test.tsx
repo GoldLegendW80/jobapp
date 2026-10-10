@@ -504,7 +504,7 @@ describe("/runs/:id, the run panel", () => {
   });
 
   /**
-   * Issue #33: a run on a subscription is not billed, so its amount is an estimate; with an API
+   * Issue #33: on a subscription the amount is an estimate, not a bill (issue #80); with an API
    * key it is the cost; a run with no recorded kind is worded neutrally.
    */
   describe("the amount, by the kind of credential the run used", () => {
@@ -550,21 +550,21 @@ describe("/runs/:id, the run panel", () => {
       expect(
         within(steps).getByText("43,100 in, 1,116 out, $0.193"),
       ).toBeInTheDocument();
-      expect(panel).not.toHaveTextContent(/estimate|not billed/i);
+      expect(panel).not.toHaveTextContent(/estimate|not billed|not a bill/i);
     });
 
-    it("is an estimate at API prices, not billed, with a subscription", async () => {
+    it("is an estimate at API prices, not a bill, with a subscription", async () => {
       const { panel, steps, metrics } = await openRun(
         done({ credential_kind: "claude_subscription" }),
       );
       expect(metrics).toHaveTextContent("Estimate at API prices$0.193");
       expect(within(metrics).queryByText("Cost")).not.toBeInTheDocument();
       expect(within(panel).getByTestId("cost-note")).toHaveTextContent(
-        "This run used your Claude subscription, which is not billed per run. The estimate is what the same tokens cost at API prices.",
+        "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
       );
       expect(
         within(steps).getByText(
-          "43,100 in, 1,116 out, $0.193 estimated at API prices, not billed",
+          "43,100 in, 1,116 out, $0.193 estimated at API prices, not a bill",
         ),
       ).toBeInTheDocument();
       expect(panel.textContent).not.toMatch(/[–—]| - /);
@@ -585,9 +585,104 @@ describe("/runs/:id, the run panel", () => {
         expect(
           within(steps).getByText("43,100 in, 1,116 out, $0.193 at API prices"),
         ).toBeInTheDocument();
-        expect(metrics).not.toHaveTextContent(/estimate|not billed/i);
+        expect(metrics).not.toHaveTextContent(
+          /estimate|not billed|not a bill/i,
+        );
       },
     );
+
+    /**
+     * Issue #80: the usage step says which kind of credential the run used, so its line is
+     * worded right the moment it arrives. The detail still holds no kind then (it was read
+     * while the run was queued), and the line used to say "at API prices" until the refetch.
+     */
+    it.each([
+      [
+        "claude_subscription",
+        "43,100 in, 1,116 out, $0.193 estimated at API prices, not a bill",
+      ],
+      ["anthropic_api_key", "43,100 in, 1,116 out, $0.193"],
+    ])(
+      "words the usage step by the kind it carries (%s), before the detail knows it",
+      async (kind, line) => {
+        agentsApi({
+          detail: run({ status: "running", credential_kind: null }),
+        });
+        renderApp(`/runs/${ID}`);
+        const panel = await screen.findByTestId("run-panel");
+        const source = FakeEventSource.last!;
+        source.open();
+        source.emit("step", step(1, "status", { status: "running" }));
+        source.emit(
+          "step",
+          step(3, "usage", {
+            input_tokens: 43100,
+            output_tokens: 1116,
+            cost_usd: 0.193,
+            credential_kind: kind,
+          }),
+        );
+        const steps = await within(panel).findByRole("list", { name: "Steps" });
+        // The very first wording of the line is the right one: no neutral wording in between.
+        const item = await within(steps).findByText(/43,100 in/);
+        expect(item).toHaveTextContent(line);
+        expect(item.textContent).toBe(line);
+      },
+    );
+
+    it("keeps the run's own kind for a usage step that carries none or one it does not know", async () => {
+      for (const carried of [{}, { credential_kind: "something_new" }]) {
+        agentsApi({ detail: done({ credential_kind: "claude_subscription" }) });
+        const view = renderApp(`/runs/${ID}`);
+        const panel = await screen.findByTestId("run-panel");
+        const source = FakeEventSource.last!;
+        source.open();
+        source.emit(
+          "step",
+          step(3, "usage", {
+            input_tokens: 43100,
+            output_tokens: 1116,
+            cost_usd: 0.193,
+            ...carried,
+          }),
+        );
+        const steps = await within(panel).findByRole("list", { name: "Steps" });
+        expect(
+          await within(steps).findByText(
+            "43,100 in, 1,116 out, $0.193 estimated at API prices, not a bill",
+          ),
+        ).toBeInTheDocument();
+        view.unmount();
+      }
+    });
+
+    it("ties the note to the amount for assistive technology", async () => {
+      const { panel, metrics } = await openRun(
+        done({ credential_kind: "claude_subscription" }),
+      );
+      const amount = within(metrics).getByText("$0.193");
+      const note = within(panel).getByTestId("cost-note");
+      expect(amount.tagName).toBe("DD");
+      expect(note.id).not.toBe("");
+      expect(amount).toHaveAttribute("aria-describedby", note.id);
+      expect(amount).toHaveAccessibleDescription(
+        "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
+      );
+      // The other values are described by nothing.
+      for (const other of metrics.querySelectorAll("dd")) {
+        if (other !== amount)
+          expect(other).not.toHaveAttribute("aria-describedby");
+      }
+    });
+
+    it("describes the amount by nothing when it is a plain cost", async () => {
+      const { metrics } = await openRun(
+        done({ credential_kind: "anthropic_api_key" }),
+      );
+      expect(within(metrics).getByText("$0.193")).not.toHaveAttribute(
+        "aria-describedby",
+      );
+    });
 
     it("says only that there is no amount yet while the run has none", async () => {
       agentsApi({
@@ -623,7 +718,7 @@ describe("/runs/:id, the run panel", () => {
         .map((node) => node.textContent);
       expect(costs).toEqual([
         "$0.193",
-        "$0.193Estimate, not billed",
+        "$0.193Estimate, not a bill",
         "$0.193At API prices",
         "None yet",
       ]);

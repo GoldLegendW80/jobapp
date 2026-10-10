@@ -20,6 +20,7 @@ from tests.agents.conftest import API_KEY, OAUTH, OTHER_KEY
 from tests.agents.run_helpers import (
     add_user,
     context,
+    events,
     execute,
     new_run,
     now,
@@ -71,6 +72,65 @@ def test_a_run_with_a_subscription_token_records_that_kind(
     assert row.credential_kind is CredentialKind.claude_subscription
     # The SDK reports an amount on a subscription too: it is stored as it always was.
     assert float(row.cost_usd or 0) == pytest.approx(0.0123)
+
+
+@pytest.mark.parametrize(
+    ("kind", "secret"),
+    [
+        (CredentialKind.anthropic_api_key, API_KEY),
+        (CredentialKind.claude_subscription, OAUTH),
+    ],
+)
+def test_the_usage_event_carries_the_kind_with_the_amount(
+    kind: CredentialKind,
+    secret: str,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+) -> None:
+    """Issue #80: the browser words the amount by the kind of credential. The usage step now
+    holds both, so its line is right the moment it arrives: the detail read while the run was
+    queued knows no kind yet, and the label flickered until it was read again."""
+    user = add_user(factory, "alice@example.org")
+    save_credential(factory, keyring, user, secret, kind)
+    run_id = new_run(factory, user)
+    assert execute(context(settings, factory, keyring), run_id) is RunStatus.done
+    [usage] = [data for name, data in events(factory, run_id) if name == "usage"]
+    assert usage["credential_kind"] == kind.value
+    assert usage["credential_kind"] == run_row(factory, run_id).credential_kind.value
+    assert usage["cost_usd"] == pytest.approx(0.0123)
+    # The kind only: nothing of the secret, in this event or any other.
+    assert secret not in str(events(factory, run_id))
+    assert secret[-4:] not in str(usage)
+
+
+def test_a_usage_event_without_a_credential_says_so() -> None:
+    """The handler alone, as a backend other than the runner's own would drive it: with no
+    kind known the event holds None, which the browser reads as "not recorded"."""
+    import asyncio
+
+    from claude_agent_sdk import ResultMessage
+
+    from app.agents import runner
+
+    written: list[tuple[str, dict[str, object]]] = []
+
+    class Kept(runner.Recorder):
+        def _write(self, seq: int, kind: str, data: dict[str, object]) -> None:
+            written.append((kind, data))
+
+    message = ResultMessage(
+        subtype="success",
+        duration_ms=1,
+        duration_api_ms=1,
+        is_error=False,
+        num_turns=1,
+        session_id="s",
+        total_cost_usd=0.5,
+    )
+    recorder = Kept(context=None, run_id=uuid.uuid4(), seq=1)  # type: ignore[arg-type]
+    asyncio.run(runner._handle(message, runner._State(), recorder))
+    assert written == [("usage", {**runner.usage_of(message), "credential_kind": None})]
 
 
 def test_the_run_keeps_the_kind_it_used_when_the_credential_changes_later(
