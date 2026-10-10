@@ -27,7 +27,8 @@
 # token or key of the Mac's environment reaches a job.
 #
 # Settings (environment): CI_RUNNER_REPO (GoldLegendW80/jobapp), CI_RUNNER_MEMORY (5g, per
-# runner), CI_RUNNER_CPUS (CPUs per runner, default: Docker's CPUs divided by the count).
+# runner), CI_RUNNER_CPUS (CPUs per runner, default: Docker's CPUs divided by the count),
+# CI_RUNNER_MIN_FREE_GB (free space of the Mac's disk below which install refuses, default 40).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -57,6 +58,18 @@ checks() {
   command -v gh >/dev/null || die "gh is needed for the runner tokens"
   docker info >/dev/null 2>&1 || die "Docker Desktop is not running"
   [[ -n "$(runner_version)" ]] || die "ops/ci-runner/Dockerfile pins no RUNNER_VERSION"
+}
+
+# Docker Desktop keeps everything in one disk image in the home folder, which grows with what the
+# runners pull, build and cache (several GB per runner) and takes the Mac's free space. On
+# 2026-10-10 a trial of three e2e groups at once filled a disk that had 22 GB free, and every
+# container of the Mac got input/output errors. So: no install on a Mac that is short of room.
+disk_check() {
+  local need="${CI_RUNNER_MIN_FREE_GB:-40}" free
+  [[ "$need" =~ ^[0-9]+$ ]] || die "CI_RUNNER_MIN_FREE_GB must be a number"
+  free="$(df -Pk "$HOME" | awk 'NR==2 {print int($4 / 1048576)}')"
+  [[ "$free" =~ ^[0-9]+$ ]] || die "could not read the free space of $HOME"
+  ((free >= need)) || die "only ${free} GB free on this Mac: the runners need room for images and caches (at least ${need} GB free, CI_RUNNER_MIN_FREE_GB). Free some space first, for instance Docker's unused volumes and images"
 }
 
 # The indexes of the runner containers that exist, in order.
@@ -151,6 +164,7 @@ cmd_install() {
     ((count > 0)) || count=$DEFAULT_COUNT
   fi
   [[ "$count" =~ ^[1-9][0-9]?$ ]] || die "count must be a number from 1 to 99"
+  disk_check
   build_image
   docker volume create --label "$LABEL" "$SHARED_VOLUME" >/dev/null
   step "registration on $REPO (labels self-hosted, Linux, ARM64, mac-ci)"

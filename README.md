@@ -216,7 +216,11 @@ of 3.5 GB summed, Chromium and an image build on top) and Docker Desktop has 12 
 every job a hook removes the job's containers, networks and volumes, dangling images and build
 cache beyond 2 GB, and Playwright's reports and traces; a runner whose Docker data passes 6 GB is
 emptied and starts cold. The shared tool caches only grow when a lock file changes;
-`ops/ci-runners.sh status` shows their size and `prune` empties them.
+`ops/ci-runners.sh status` shows their size and `prune` empties them. All of it sits in Docker
+Desktop's disk image, which grows on the Mac's own disk: `install` refuses a Mac with less than
+40 GB free (`CI_RUNNER_MIN_FREE_GB`). That check exists because a trial on 2026-10-10, three e2e
+groups at once on a disk with 22 GB free, filled the disk and gave every container of the Mac
+input/output errors until space was freed and Docker Desktop restarted.
 
 **When the Mac is off, asleep or Docker Desktop is closed.** The runners are offline and CI
 waits: jobs stay queued (GitHub keeps a queued job for 24 hours, then fails it) and start when

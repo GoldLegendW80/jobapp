@@ -145,7 +145,13 @@ cat >"$WORK/bin/sudo" <<'FAKE'
 # `sudo -n du -sm /var/lib/docker`: the size the test asks for.
 printf '%s\t/var/lib/docker\n' "${FAKE_DOCKER_MB:-100}"
 FAKE
-chmod +x "$WORK/bin/docker" "$WORK/bin/gh" "$WORK/bin/sudo"
+cat >"$WORK/bin/df" <<'FAKE'
+#!/usr/bin/env bash
+# `df -Pk $HOME`: the free space the test asks for, 100 GB otherwise.
+echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+echo "/dev/disk 480000000 1 ${FAKE_FREE_KB:-104857600} 1% /"
+FAKE
+chmod +x "$WORK/bin/docker" "$WORK/bin/gh" "$WORK/bin/sudo" "$WORK/bin/df"
 fake() { # fake <VAR=value...> -- <cmd...>: the command with the fakes first on PATH
   local envs=()
   while [[ "$1" != -- ]]; do
@@ -225,6 +231,13 @@ out_has "CI_RUNNER_REPO must be owner/name"
 run 1 fake FAKE_DOCKER_DOWN=1 -- ops/ci-runners.sh status
 out_has "Docker Desktop is not running"
 ok "no command, unknown command, extra arguments, a bad count, a bad repository and a stopped Docker refused"
+# 22 GB free is what the Mac had on 2026-10-10, when a trial filled its disk.
+run 1 fake FAKE_FREE_KB=23068672 -- ops/ci-runners.sh install 4
+out_has "only 22 GB free on this Mac"
+log_lacks "build"
+log_lacks "run "
+run 0 fake FAKE_FREE_KB=23068672 -- env CI_RUNNER_MIN_FREE_GB=10 ops/ci-runners.sh install 1
+ok "install refuses a Mac with less than 40 GB free before it builds or starts anything (CI_RUNNER_MIN_FREE_GB)"
 
 step "install against a fake docker and a fake gh: the token never shows, nothing of the shell leaks"
 run 0 fake -- env GH_TOKEN=leak-gh ANTHROPIC_API_KEY=leak-anthropic CLAUDE_CODE_X=leak-claude ops/ci-runners.sh install 2
