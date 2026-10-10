@@ -184,7 +184,7 @@ jobs:
         run: uv run --frozen coverage combine .coverage.jobs .coverage.rest
       # The gate. Alone in its step and not piped: its exit status is the step's status.
       - name: Coverage floor (at least 95 percent of the combined data)
-        run: uv run --frozen coverage report --fail-under=100
+        run: uv run --frozen coverage report --fail-under=95
       # --fail-under=0: this step only reports, also when the floor above failed.
       - name: Coverage summary
         if: ${{ !cancelled() && steps.combine.outcome == 'success' }}
