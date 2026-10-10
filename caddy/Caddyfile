@@ -1,10 +1,14 @@
 # Single entry point of the stack: static React build at /, FastAPI at /api.
 # Plain HTTP, two listeners serving the same site (snippet `app`):
 #   :80    published on the host loopback (HTTP_BIND:HTTP_PORT). Trusts no proxy: the client is
-#          the TCP peer, and any X-Forwarded-For or Cf-Connecting-Ip it sends is ignored.
-#   :8080  never published, reached only over the Compose network by cloudflared (quick tunnel,
-#          TLS ends at Cloudflare). Trusts private peers, so the real visitor address comes from
-#          Cf-Connecting-Ip, which the Cloudflare edge always overwrites.
+#          the TCP peer, and any X-Forwarded-For it sends is ignored.
+#   :8080  never published, reached only over the Compose network by the tailscale container
+#          (Tailscale Funnel, TLS ends there). Trusts private peers, so the real visitor address
+#          comes from X-Forwarded-For, which Funnel always sets to the one address it accepted
+#          the connection from, replacing whatever the visitor sent (tailscale serve's reverse
+#          proxy: Header.Set, and Go's ReverseProxy drops inbound X-Forwarded-* first). No other
+#          header is trusted: Cf-Connecting-Ip, X-Real-Ip and the like pass through Funnel
+#          untouched, so a visitor could forge them.
 # Built into the caddy image by the `caddy` target of web/Dockerfile, which runs caddy validate
 # and caddy fmt on it.
 {
@@ -20,11 +24,13 @@
 		output stdout
 		format json
 	}
-	# Tunnel listener only. Every container of the Compose network is a private peer; cloudflared is
-	# the only one that connects here.
+	# Tunnel listener only. Every container of the Compose network is a private peer; tailscale is
+	# the only one that connects here. Strict: X-Forwarded-For is read right to left and the first
+	# untrusted address wins, so even a list could not put a visitor's value first.
 	servers :8080 {
 		trusted_proxies static private_ranges
-		client_ip_headers Cf-Connecting-Ip X-Forwarded-For
+		trusted_proxies_strict
+		client_ip_headers X-Forwarded-For
 	}
 }
 
@@ -85,7 +91,8 @@
 
 	# The api keeps its /api prefix. X-Forwarded-Proto and -Host are set by reverse_proxy, and
 	# X-Forwarded-For is exactly one address, the client ip resolved above (the TCP peer on :80,
-	# Cf-Connecting-Ip on :8080), so a value sent by the visitor never reaches the api.
+	# Funnel's X-Forwarded-For on :8080), so a value sent by the visitor never reaches the api.
+	# On :8080 X-Forwarded-Proto is Funnel's https (the api then sets Secure cookies).
 	# A stopped api fails the dial at once and becomes 502.
 	@api path /api /api/*
 	handle @api {
