@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { JobAssessment } from "@/features/agents/job-assessment";
+import { JobChat } from "@/features/agents/job-chat";
 import { NotFoundPage } from "@/features/shell/not-found-page";
 import { describeError, isApiError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
@@ -161,7 +162,10 @@ function JobDetailView({ job }: { job: JobDetail }) {
             <p className="text-sm font-medium text-muted-foreground break-words">
               {job.company}
             </p>
-            <EditDetailsButton job={job} save={save} />
+            <div className="flex shrink-0 items-center gap-2">
+              <JobChat job={job} />
+              <EditDetailsButton job={job} save={save} />
+            </div>
           </div>
           <h1
             id="job-title"
