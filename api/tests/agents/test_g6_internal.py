@@ -149,6 +149,26 @@ def test_no_other_route_lets_a_client_name_an_agent(app: FastAPI) -> None:
     assert chat.AGENT is definitions.JOB_CHAT
 
 
+def test_a_client_cannot_give_a_run_of_a_product_agent_a_token_budget(
+    api: Api, alice: str, recorded: RecordingQueue, factory: sessionmaker[Session]
+) -> None:
+    """The runner reads `token_budget` from any run's input. A client cannot put it there: the
+    input models of the agents it may start refuse the key, as every key they do not know."""
+    save_key(api, alice)
+    job = add_job(factory, user_id(api, alice))
+    for body in (
+        {"agent": "echo", "input": {"message": "x", "token_budget": 0}},
+        {"agent": "echo", "input": {"message": "x", "token_budget": 10**9}},
+        {"agent": "triage", "job_id": str(job), "input": {"token_budget": 0}},
+    ):
+        response = api.post(RUNS, token=alice, json=body)
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"].startswith("input.token_budget: Extra inputs")
+    assert recorded.jobs == []
+    for model in (definitions.EchoInput, definitions.TriageInput, definitions.ChatInput):
+        assert model.model_config["extra"] == "forbid"
+
+
 def test_in_production_it_is_refused_the_same(
     migrated_url: str, key: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
