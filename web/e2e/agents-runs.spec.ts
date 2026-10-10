@@ -15,6 +15,7 @@ import {
 } from "./stack";
 
 const shots = makeShots("agents-a2", "runs");
+const costShots = makeShots("agents-33-streaming", "cost");
 
 /**
  * The agent run panel and /runs (agents A2) against the real stack through Caddy, with the
@@ -229,4 +230,58 @@ test("the runs page lists every run with its status, tokens and cost", async () 
   const cut =
     /net::ERR_[A-Z_]+ @ .*\/api\/agents\/runs\/[0-9a-f-]+\/stream\?after=\d+$/;
   expect(errors.filter((line) => !cut.test(line))).toEqual([]);
+});
+
+test("a run on a subscription shows an estimate that is not billed, a run on an API key its cost", async () => {
+  // The run that ended with an API key: its amount is a cost, in its panel and in the list.
+  await page.goto(`/runs/${firstRun}`);
+  const metrics = () => panel().locator("dl").first();
+  await expect(metrics()).toContainText("Cost$0.25");
+  await expect(panel().getByTestId("cost-note")).toHaveCount(0);
+  await expect(steps().locator("li[data-kind=usage]")).toContainText(
+    /out, \$0\.25$/,
+  );
+  await costShots(page, "cost-api-key");
+
+  // The same user now saves a subscription token (made up; the fake backend sends it nowhere).
+  const token = `sk-ant-oat01-e2egood${tail()}${tail()}Sub1`;
+  const saved = await page.request.put("/api/me/model-credential", {
+    headers: { "X-Requested-With": "jobapp" },
+    data: { kind: "claude_subscription", secret: token },
+  });
+  expect(saved.status()).toBe(200);
+  const id = await startTestRun("echo", "what does a subscription run cost");
+  await expect(badge()).toHaveText("Done", { timeout: 30_000 });
+  await expect(metrics()).toContainText("Estimate at API prices$0.0123");
+  await expect(metrics()).not.toContainText("Cost");
+  await expect(panel().getByTestId("cost-note")).toHaveText(
+    "This run used your Claude subscription, which is not billed per run. The estimate is what the same tokens cost at API prices.",
+  );
+  await expect(steps().locator("li[data-kind=usage]")).toContainText(
+    "$0.0123 estimated at API prices, not billed",
+  );
+  await expect(page.locator("body")).not.toContainText(/[–—]| - /);
+  await costShots(page, "cost-subscription");
+  // The api says which kind each run used, and the earlier run kept its own.
+  const kinds = await Promise.all(
+    [id, firstRun].map(async (run) => {
+      const detail = await page.request.get(`/api/agents/runs/${run}`);
+      return ((await detail.json()) as { credential_kind: string })
+        .credential_kind;
+    }),
+  );
+  expect(kinds).toEqual(["claude_subscription", "anthropic_api_key"]);
+
+  await page.goto("/runs");
+  const list = page.getByRole("list", { name: "Runs" });
+  await expect(list.getByRole("link")).toHaveCount(4);
+  const costs = list.getByTestId("run-cost");
+  await expect(costs.first()).toHaveText("$0.0123Estimate, not billed");
+  await expect(costs.filter({ hasText: "Estimate, not billed" })).toHaveCount(
+    1,
+  );
+  await expect(
+    page.getByText(/On a Claude subscription the amount is an estimate/),
+  ).toBeVisible();
+  await costShots(page, "cost-list");
 });

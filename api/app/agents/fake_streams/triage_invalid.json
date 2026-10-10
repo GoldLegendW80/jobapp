@@ -218,7 +218,7 @@
        "name": "mcp__app__propose_status",
        "input": {
         "status": "skipped",
-        "reason": "The posting requires a PhD, which is not in the profile."
+        "reason": "The posting requires a PhD, which is not in your profile."
        }
       },
       {
@@ -226,7 +226,7 @@
        "id": "toolu_triage_08",
        "name": "mcp__app__propose_note",
        "input": {
-        "text": "Weak fit: the posting requires a PhD, not in the profile."
+        "text": "Weak fit: the posting requires a PhD, not in your profile."
        }
       }
      ],

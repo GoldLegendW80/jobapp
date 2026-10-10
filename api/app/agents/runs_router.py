@@ -156,6 +156,7 @@ def run_out(row: AgentRun, job: RunJobOut | None = None) -> RunOut:
         input_tokens=row.input_tokens,
         output_tokens=row.output_tokens,
         cost_usd=float(row.cost_usd) if row.cost_usd is not None else None,
+        credential_kind=row.credential_kind,
         cancel_requested=row.cancel_requested_at is not None,
         created_at=row.created_at,
         started_at=row.started_at,

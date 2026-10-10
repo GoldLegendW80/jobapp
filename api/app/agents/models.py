@@ -88,7 +88,11 @@ AGENT_NAME_MAX = 64
 class AgentRun(Base):
     """One run of one agent for one user (SPEC-agents.md, Data model). `cancel_requested_at` is
     set by POST /api/agents/runs/{id}/cancel on a running run; the worker sees it and stops the
-    run. Tokens and cost come from the SDK's final ResultMessage."""
+    run. Tokens and cost come from the SDK's final ResultMessage. `credential_kind` is the kind
+    of model credential the run used, written by the worker when it reads the credential (the
+    kind only): `cost_usd` is a cost with an API key and an estimate at API prices, billed to
+    nobody, with a subscription. Null for runs older than the column and for runs that failed
+    before their credential was read."""
 
     __tablename__ = "agent_runs"
     __table_args__ = (
@@ -137,6 +141,7 @@ class AgentRun(Base):
     input_tokens: Mapped[int | None] = mapped_column(sa.Integer)
     output_tokens: Mapped[int | None] = mapped_column(sa.Integer)
     cost_usd: Mapped[Decimal | None] = mapped_column(sa.Numeric(12, 6))
+    credential_kind: Mapped[CredentialKind | None] = mapped_column(CREDENTIAL_KIND_ENUM)
     cancel_requested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
