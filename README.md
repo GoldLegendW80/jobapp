@@ -175,13 +175,13 @@ file and images), so dispatch only reviewed branches. Anyone with write access t
 
 ### CI runners on the Mac
 
-CI runs on four self-hosted runners on the Mac (issue #83), `mac-ci-1` to `mac-ci-4`, labels
+CI runs on two self-hosted runners on the Mac (issue #83), `mac-ci-1` and `mac-ci-2`, labels
 `self-hosted, Linux, ARM64, mac-ci`. Every job of `ci.yml` targets `[self-hosted, mac-ci]`, never
 `self-hosted` alone, so a CI job cannot land on the Jetson's runner, and `deploy.yml` keeps
 `[self-hosted, jetson]`.
 
 ```bash
-ops/ci-runners.sh install [count]   # build the image, register and start the runners (default 4); safe to run again
+ops/ci-runners.sh install [count]   # build the image, register and start the runners (default 2, at most 3); safe to run again
 ops/ci-runners.sh status            # containers, GitHub's view (online, busy), memory, disk used
 ops/ci-runners.sh stop              # stop them; queued jobs wait
 ops/ci-runners.sh start             # start them again
@@ -202,34 +202,58 @@ prunes is in the Mac's own Docker daemon, where Harald's containers and the agen
 stacks live. A native runner would run job code as Harald's macOS user, next to his keys.
 
 **Where things live.** Nothing in the repository and nothing in the home folder: the image
-`jobapp-ci-runner:<version>`, the containers `jobapp-ci-1` to `jobapp-ci-4` (restart
+`jobapp-ci-runner:<version>`, the containers `jobapp-ci-1` and `jobapp-ci-2` (restart
 unless-stopped), the volume `jobapp-ci` (each runner's directory, registration and work folder,
 plus the caches the runners share: uv, the pnpm store, Playwright's Chromium, pre-commit) and one
 volume `jobapp-ci-docker-<n>` per runner (its Docker daemon's images and layer cache). All carry
-the label `jobapp.ci=runner`. To add a runner: `ops/ci-runners.sh install 5`.
+the label `jobapp.ci=runner`. To add a third runner: `ops/ci-runners.sh install 3` (the script
+refuses more).
 
-**Limits.** A runner takes one job at a time, so four runners are the bound on what runs at
-once, whatever the number of pushes; the other jobs queue, and a newer push to the same branch
-cancels the older run. Four because the three e2e groups each start a full stack (memory limits
-of 3.5 GB summed, Chromium and an image build on top) and Docker Desktop has 12 CPUs and about
-18 GB that the agents' own stacks share: each runner gets 3 CPUs and at most 5 GB. Disk: after
-every job a hook removes the job's containers, networks and volumes, dangling images and build
-cache beyond 2 GB, and Playwright's reports and traces; a runner whose Docker data passes 6 GB is
-emptied and starts cold. The shared tool caches only grow when a lock file changes;
-`ops/ci-runners.sh status` shows their size and `prune` empties them. All of it sits in Docker
-Desktop's disk image, which grows on the Mac's own disk: `install` refuses a Mac with less than
-40 GB free (`CI_RUNNER_MIN_FREE_GB`). That check exists because a trial on 2026-10-10, three e2e
-groups at once on a disk with 22 GB free, filled the disk and gave every container of the Mac
-input/output errors until space was freed and Docker Desktop restarted.
+**Budget.** The Mac is shared: Harald works on it, and agents run scratch stacks and test suites
+in the same Docker Desktop (12 CPUs, about 18 GB). On 2026-10-10 three runner trials on top of
+four agents took the load average to 82 and the Mac went down, so CI has a fixed share and
+cannot take more:
+
+| | per runner | two runners | left to everything else |
+|---|---|---|---|
+| CPUs | 3, pinned (runner 1: CPUs 0-2, runner 2: 3-5) | 6 of 12 | CPUs 6-11 never used by CI |
+| Memory | 4 GB, swap included | 8 GB of about 18 | about 10 GB |
+| Docker data (images, layer cache) | 4 GB, then emptied | 8 GB | |
+| Image and shared tool caches | | a few GB | |
+
+A runner takes one job at a time, so two runners are the bound on what runs at once, whatever
+the number of pushes: the other jobs queue, and a newer push to the same branch cancels the older
+run. Inside a job the worker counts are written out in `ci.yml` (`PYTEST_WORKERS` and
+`VITEST_WORKERS`, 3 each, never "all cores"; Playwright runs one worker), and the e2e job has
+`max-parallel: 2`, so at most two stacks of a run are up together even with a third runner. A
+full run therefore takes longer than on GitHub's machines, where eleven jobs ran at once; that is
+the price of leaving the Mac usable. Disk: after every job a hook removes the job's containers,
+networks and volumes, dangling images, build cache beyond 1 GB, and Playwright's reports and
+traces; a runner whose Docker data passes 4 GB is emptied and starts cold. The shared tool caches
+only grow when a lock file changes; `ops/ci-runners.sh status` shows their size and `prune`
+empties them. All of it sits in Docker Desktop's disk image, which grows on the Mac's own disk:
+`install` refuses a Mac with less free space than 4 GB per runner plus 6
+(`CI_RUNNER_MIN_FREE_GB`). That check exists because a trial on 2026-10-10, three e2e groups at
+once on a disk with 22 GB free, filled the disk and gave every container of the Mac input/output
+errors.
 
 **When the Mac is off, asleep or Docker Desktop is closed.** The runners are offline and CI
 waits: jobs stay queued (GitHub keeps a queued job for 24 hours, then fails it) and start when
 the Mac is back. A job that was running when the Mac went to sleep can fail with a lost runner:
 rerun it (`gh run rerun <id> --failed`). Nothing deploys meanwhile, since the deploy waits for a
-green CI on `main`. The containers come back with Docker Desktop, so the runners start at login
-only if Docker Desktop does (Settings, General, "Start Docker Desktop when you sign in to your
-computer"). No power setting was changed; for a long unattended session, `caffeinate -s` in a
-terminal keeps a Mac on mains power awake while it runs.
+green CI on `main`. No power setting was changed; for a long unattended session, `caffeinate -s`
+in a terminal keeps a Mac on mains power awake while it runs.
+
+**After a reboot.** The runner containers have `restart: unless-stopped`: they start with the
+Docker daemon, register as online within a minute and take the queued jobs, with nothing to
+type. The daemon is Docker Desktop, and whether it starts when Harald logs in is its own
+setting, off on 2026-10-10: Docker Desktop, Settings, General, tick "Start Docker Desktop when
+you sign in to your computer". Until that box is ticked, a reboot leaves CI off until Docker
+Desktop is opened by hand. `ops/ci-runners.sh install` and `status` read the setting and say
+which case applies; they never change it. The Mac must also reach the login session: with
+FileVault a reboot stops at the login window until someone signs in. A job cut by the reboot
+is rerun as above; its leftovers are removed when the container starts and again before the next
+job.
 
 **Back to GitHub's machines.** One repository variable, no edit of the workflow:
 

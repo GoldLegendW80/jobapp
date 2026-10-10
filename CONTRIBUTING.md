@@ -19,8 +19,9 @@ in the job folder that holds this repository (it is not part of the repository).
    (`.github/pull_request_template.md`) asks for what, why, the spec and task, tests, evidence and
    risks.
 4. CI (`.github/workflows/ci.yml`) runs on the pull request, on the self-hosted runners of
-   Harald's Mac (`[self-hosted, mac-ci]`, four of them: jobs beyond four queue, and all of them
-   wait while the Mac is asleep or Docker Desktop is closed; README, CI runners on the Mac),
+   Harald's Mac (`[self-hosted, mac-ci]`, two of them with 3 CPUs and 4 GB each: a run's jobs
+   go through them two at a time, and all of them wait while the Mac is asleep or Docker Desktop
+   is closed; README, CI runners on the Mac),
    every job on a runner of its own:
    `api (jobs)` and `api (rest)` (ruff, then pytest against Postgres and Redis in two shards),
    `api coverage` (the coverage of both shards combined, at least 95 percent: this job is where
@@ -48,7 +49,8 @@ A job that never starts ("Waiting for a runner") means the Mac's runners are off
 `ops/ci-runners.sh status` on the Mac, then `ops/ci-runners.sh start`. A job that died with a
 lost runner (the Mac went to sleep) is rerun with `gh run rerun <id> --failed`. A new workflow
 file cannot use the Mac's runners until `ops/ci-runner/job-started.sh` allows it, and no job may
-target `self-hosted` alone: that label is also the Jetson's.
+target `self-hosted` alone: that label is also the Jetson's. Test jobs name their worker count
+(`PYTEST_WORKERS`, `VITEST_WORKERS`) and never ask for every core: the Mac is shared.
 
 ## Enforcement
 

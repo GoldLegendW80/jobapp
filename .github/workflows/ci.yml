@@ -19,8 +19,12 @@
 # [self-hosted, mac-ci] (ops/ci-runners.sh, ops/ci-runner/: Linux arm64 containers in Docker
 # Desktop, each with a Docker daemon of its own, so a job sees what it saw on a GitHub machine:
 # `services:`, its own 127.0.0.1, its own container names and ports). Never [self-hosted] alone:
-# the Jetson's deploy runner carries that label too. The number of runners (4) is the limit on
-# what runs at once, whatever the number of pushes: a runner takes one job, the rest queue.
+# the Jetson's deploy runner carries that label too.
+# Load: the Mac is shared with its owner and with agents, so CI has a fixed budget there. Two
+# runners, each pinned to 3 CPUs and 4 GB (ops/ci-runners.sh), are the limit on what runs at
+# once, whatever the number of pushes: a runner takes one job, the rest queue. Worker counts are
+# written out (PYTEST_WORKERS, VITEST_WORKERS below), never "all cores", and at most two e2e
+# stacks of a run are up together (max-parallel in the e2e job).
 # Escape hatch, back to GitHub's machines without editing this file:
 #   gh variable set CI_RUNS_ON --body '"ubuntu-latest"'      and back: gh variable delete CI_RUNS_ON
 # CI_RUNS_ON is the JSON of a runs-on value. Steps that differ test runner.environment
@@ -50,11 +54,13 @@ env:
   UV_VERSION: "0.9.28"
   NODE_VERSION: "22.23.3"
   FORCE_COLOR: "1"
+  # Processes per test job: the 3 CPUs of a Mac runner. GitHub's machines have 2 to 4.
+  PYTEST_WORKERS: "3"
+  VITEST_WORKERS: "3"
 
 jobs:
-  # api tests in two shards on two runners, each with pytest-xdist (-n auto: the CPUs of the
-  # runner, 3 on a Mac runner, 2 on GitHub's); coverage is combined and checked (at least 95
-  # percent) in api-coverage.
+  # api tests in two shards on two runners, each with pytest-xdist (-n $PYTEST_WORKERS);
+  # coverage is combined and checked (at least 95 percent) in api-coverage.
   api:
     name: api (${{ matrix.shard.name }})
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
@@ -114,9 +120,9 @@ jobs:
           start=$SECONDS
           # shellcheck disable=SC2086 # the paths of the shard split on purpose
           uv run --frozen pytest ${{ matrix.shard.paths }} -m "not docker" -p no:cacheprovider \
-            -n auto --cov --cov-report= --cov-fail-under=0 --durations=10 \
+            -n "$PYTEST_WORKERS" --cov --cov-report= --cov-fail-under=0 --durations=10 \
             --junitxml=${{ runner.temp }}/junit-api.xml
-          echo "pytest ${{ matrix.shard.name }} (not docker, -n auto): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
+          echo "pytest ${{ matrix.shard.name }} (not docker, -n $PYTEST_WORKERS): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
       - name: Upload coverage data
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -263,7 +269,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Vitest
-        run: pnpm exec vitest run --shard=${{ matrix.shard }}/2 --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
+        run: pnpm exec vitest run --shard=${{ matrix.shard }}/2 --maxWorkers="$VITEST_WORKERS" --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
       - name: Test summary
         if: always()
         run: python3 ../.github/scripts/junit_summary.py "web shard ${{ matrix.shard }}" "${{ runner.temp }}/junit-web.xml" >> "$GITHUB_STEP_SUMMARY"
@@ -332,6 +338,8 @@ jobs:
     timeout-minutes: 30
     strategy:
       fail-fast: false
+      # At most two stacks of one run at a time, also if a third runner is added.
+      max-parallel: 2
       matrix:
         group: [identity, sweep, apps]
         include:

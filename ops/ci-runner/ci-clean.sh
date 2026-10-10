@@ -11,15 +11,15 @@
 # what CI jobs of this instance created, so removing all of it touches nobody else's containers,
 # images, networks or volumes. Images and the build cache are kept between jobs (they are the
 # layer cache of the e2e builds) within these bounds:
-#   CI_BUILD_CACHE_KEEP   build cache kept after a job (default 2GB; older layers go first)
+#   CI_BUILD_CACHE_KEEP   build cache kept after a job (default 1GB; older layers go first)
 #   CI_DOCKER_MAX_MB      size of /var/lib/docker above which everything is pruned and the next
-#                         job starts cold (default 6000)
+#                         job starts cold (default 4000)
 # Never fails a job: every command is best effort and the script ends with status 0.
 set -uo pipefail
 
 mode="${1:-job}"
-keep="${CI_BUILD_CACHE_KEEP:-2GB}"
-max_mb="${CI_DOCKER_MAX_MB:-6000}"
+keep="${CI_BUILD_CACHE_KEEP:-1GB}"
+max_mb="${CI_DOCKER_MAX_MB:-4000}"
 say() { printf 'ci-clean: %s\n' "$*"; }
 
 docker info >/dev/null 2>&1 || {

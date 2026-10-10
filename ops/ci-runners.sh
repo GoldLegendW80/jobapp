@@ -2,7 +2,8 @@
 # The CI runners on the Mac (issue #83; README, Continuous delivery). Run on the Mac, no sudo:
 #
 #   ops/ci-runners.sh install [count]   build the image, register and start `count` runners
-#                                       (default 4, or as many as exist); safe to run again
+#                                       (default 2, or as many as exist; 3 at most on this Mac,
+#                                       see the budget below); safe to run again
 #   ops/ci-runners.sh status            containers, GitHub's view, memory, disk used
 #   ops/ci-runners.sh stop | start      stop or start every runner container (registration kept)
 #   ops/ci-runners.sh update            rebuild the image from ops/ci-runner and recreate the
@@ -26,18 +27,27 @@
 # variable of the calling shell (docker run passes only the -e options written below), so no
 # token or key of the Mac's environment reaches a job.
 #
-# Settings (environment): CI_RUNNER_REPO (GoldLegendW80/jobapp), CI_RUNNER_MEMORY (5g, per
-# runner), CI_RUNNER_CPUS (CPUs per runner, default: Docker's CPUs divided by the count),
-# CI_RUNNER_MIN_FREE_GB (free space of the Mac's disk below which install refuses, default 40).
+# Budget. The Mac is shared with the owner's own work and with agents that run scratch stacks
+# and test suites in the same Docker Desktop (12 CPUs, about 18 GB). On 2026-10-10 three runner
+# trials on top of four agents took the load average to 82 and the Mac went down. So CI gets a
+# fixed share and no more: each runner is pinned to 3 CPUs of its own (runner n to CPUs
+# 3(n-1) .. 3n-1) and limited to 4 GB, swap included. Two runners: CPUs 0-5 and 8 GB at most,
+# half the CPUs and under half the memory; CPUs 6-11 are never used by CI.
+#
+# Settings (environment): CI_RUNNER_REPO (GoldLegendW80/jobapp), CI_RUNNER_MEMORY (4g, per
+# runner), CI_RUNNER_CPUS (CPUs per runner, 3), CI_RUNNER_MIN_FREE_GB (free space of the Mac's
+# disk below which install refuses; default 4 GB per runner plus 6).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONTEXT="$ROOT/ops/ci-runner"
 REPO="${CI_RUNNER_REPO:-GoldLegendW80/jobapp}"
-MEMORY="${CI_RUNNER_MEMORY:-5g}"
+MEMORY="${CI_RUNNER_MEMORY:-4g}"
+CPUS="${CI_RUNNER_CPUS:-3}"
 LABEL="jobapp.ci=runner"
 SHARED_VOLUME="jobapp-ci"
-DEFAULT_COUNT=4
+DEFAULT_COUNT=2
+MAX_COUNT=3
 
 die() {
   printf 'ci-runners: %s\n' "$*" >&2
@@ -61,11 +71,12 @@ checks() {
 }
 
 # Docker Desktop keeps everything in one disk image in the home folder, which grows with what the
-# runners pull, build and cache (several GB per runner) and takes the Mac's free space. On
+# runners pull, build and cache and takes the Mac's free space: at most 4 GB of Docker data per
+# runner (CI_DOCKER_MAX_MB in ci-clean.sh) and a few GB of image and shared caches. On
 # 2026-10-10 a trial of three e2e groups at once filled a disk that had 22 GB free, and every
 # container of the Mac got input/output errors. So: no install on a Mac that is short of room.
-disk_check() {
-  local need="${CI_RUNNER_MIN_FREE_GB:-40}" free
+disk_check() { # disk_check <count>
+  local need="${CI_RUNNER_MIN_FREE_GB:-$(($1 * 4 + 6))}" free
   [[ "$need" =~ ^[0-9]+$ ]] || die "CI_RUNNER_MIN_FREE_GB must be a number"
   free="$(df -Pk "$HOME" | awk 'NR==2 {print int($4 / 1048576)}')"
   [[ "$free" =~ ^[0-9]+$ ]] || die "could not read the free space of $HOME"
@@ -126,14 +137,13 @@ register() {
 }
 
 start_container() {
-  local n="$1" count="$2" total per first last
+  local n="$1" total per first last
   base_opts "$n"
   total="$(docker info --format '{{.NCPU}}')"
-  per="${CI_RUNNER_CPUS:-$((total / count))}"
-  ((per >= 1)) || per=1
-  first=$(((n - 1) * per % total))
+  per="$CPUS"
+  first=$(((n - 1) * per))
   last=$((first + per - 1))
-  ((last < total)) || last=$((total - 1))
+  ((last < total)) || die "runner $n would need CPUs $first-$last and Docker has $total: fewer runners or CI_RUNNER_CPUS"
   docker rm -f "$(container "$n")" >/dev/null 2>&1 || true
   docker run -d --name "$(container "$n")" --hostname "$(runner_name "$n")" \
     --restart unless-stopped --privileged \
@@ -163,8 +173,14 @@ cmd_install() {
     count="$(existing | wc -l | tr -d ' ')"
     ((count > 0)) || count=$DEFAULT_COUNT
   fi
-  [[ "$count" =~ ^[1-9][0-9]?$ ]] || die "count must be a number from 1 to 99"
-  disk_check
+  [[ "$count" =~ ^[1-9][0-9]?$ ]] || die "count must be a number from 1 to $MAX_COUNT"
+  ((count <= MAX_COUNT)) || die "at most $MAX_COUNT runners on this Mac (the budget in the header of this script), asked for $count"
+  [[ "$CPUS" =~ ^[1-9][0-9]?$ ]] || die "CI_RUNNER_CPUS must be a number"
+  local total
+  total="$(docker info --format '{{.NCPU}}')"
+  ((count * CPUS <= total)) ||
+    die "runner $count would need CPUs $(((count - 1) * CPUS))-$((count * CPUS - 1)) and Docker has $total: fewer runners or CI_RUNNER_CPUS"
+  disk_check "$count"
   build_image
   docker volume create --label "$LABEL" "$SHARED_VOLUME" >/dev/null
   step "registration on $REPO (labels self-hosted, Linux, ARM64, mac-ci)"
@@ -174,10 +190,24 @@ cmd_install() {
     indexes+=("$n")
   done
   step "containers (restart unless-stopped)"
-  for n in "${indexes[@]}"; do start_container "$n" "$count"; done
+  for n in "${indexes[@]}"; do start_container "$n"; done
   wait_online "${indexes[@]}"
   info "online on GitHub: $count runner(s)"
-  info "they start with Docker Desktop; see README, Continuous delivery, for login and sleep"
+  autostart_note
+}
+
+# The runner containers restart with the Docker daemon (restart unless-stopped). Whether the
+# daemon itself starts when the owner logs in is Docker Desktop's setting, read here, never
+# written.
+autostart_note() {
+  local settings="$HOME/Library/Group Containers/group.com.docker/settings-store.json"
+  if [[ -f "$settings" ]] && grep -Eq '"AutoStart"[[:space:]]*:[[:space:]]*true' "$settings"; then
+    info "Docker Desktop starts at login: the runners come back by themselves after a reboot"
+  else
+    info "WARNING: Docker Desktop does not start at login, so after a reboot the runners stay off"
+    info "until it is opened. Docker Desktop, Settings, General: tick"
+    info "\"Start Docker Desktop when you sign in to your computer\" (nothing was changed for you)"
+  fi
 }
 
 cmd_update() {
@@ -188,7 +218,7 @@ cmd_update() {
   any_busy && die "a job is running on a Mac runner: try again when it is done"
   build_image
   step "containers recreated from $(image)"
-  for n in "${indexes[@]}"; do start_container "$n" "$count"; done
+  for n in "${indexes[@]}"; do start_container "$n"; done
   wait_online "${indexes[@]}"
   info "online on GitHub: $count runner(s)"
 }
@@ -207,6 +237,7 @@ cmd_status() {
     info "none installed"
     return 1
   }
+  autostart_note
   step "memory and disk"
   local names=()
   for n in $(existing); do names+=("$(container "$n")"); done

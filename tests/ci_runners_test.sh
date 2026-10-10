@@ -53,10 +53,12 @@ ok "deploy.yml: one job, on [self-hosted, jetson], no hosted minutes"
 for gate in 'coverage report --fail-under=95' 'coverage combine .coverage.jobs .coverage.rest' \
   'python3 .github/scripts/e2e_groups.py' 'tests/deploy_test.sh' 'tests/ci_runners_test.sh' \
   'pre-commit run --all-files' 'group: [identity, sweep, apps]' 'pytest -m docker' \
-  'ruff format --check' 'cancel-in-progress: true'; do
+  'ruff format --check' 'cancel-in-progress: true' 'max-parallel: 2' '-n "$PYTEST_WORKERS"' \
+  '--maxWorkers="$VITEST_WORKERS"'; do
   grep -qF -- "$gate" .github/workflows/ci.yml || fail "ci.yml lost: $gate"
 done
-ok "ci.yml keeps the coverage floor, both shards, the e2e groups and their guard, the shell tests, pre-commit, cancel in progress"
+if grep -v '^ *#' .github/workflows/ci.yml | grep -q -- '-n auto'; then fail "ci.yml lets pytest take every core"; fi
+ok "ci.yml keeps the coverage floor, both shards, the e2e groups and their guard, the shell tests, pre-commit, cancel in progress; worker counts written out, two e2e stacks at most"
 if grep -v '^ *#' .github/workflows/ci.yml | grep -qi 'armcap'; then fail "ci.yml names the Mac's OpenSSL variable"; fi
 grep -q 'CI_COMPOSE_OVERLAY' .github/workflows/ci.yml || fail "ci.yml does not read the runner's CI_COMPOSE_OVERLAY"
 grep -q '^ENV OPENSSL_armcap=0 \\$' ops/ci-runner/Dockerfile || fail "ops/ci-runner/Dockerfile does not set OPENSSL_armcap=0"
@@ -192,21 +194,21 @@ log_lacks "rm -f -v svc1"
 log_has "network rm n2"
 log_lacks "network rm n1"
 log_has "image prune -f"
-log_has "builder prune -f --keep-storage 2GB"
+log_has "builder prune -f --keep-storage 1GB"
 log_lacks "prune -af --volumes"
 log_lacks "image prune -af"
-ok "after a job: the job's containers and networks go, the runner's own service containers and github_network stay, images and 2GB of build cache stay"
+ok "after a job: the job's containers and networks go, the runner's own service containers and github_network stay, images and 1GB of build cache stay"
 run 0 fake FAKE_CONTAINERS="svc1 c2" FAKE_RUNNER_NET=1 FAKE_NETS=1 -- ops/ci-runner/ci-clean.sh all
 log_has "rm -f -v svc1 c2"
 log_has "network rm n1 n2"
 ok "before a job: everything goes, a leftover github_network included"
-run 0 fake FAKE_DOCKER_MB=7000 -- ops/ci-runner/ci-clean.sh job
-out_has "over the bound of 6000 MB"
+run 0 fake FAKE_DOCKER_MB=4500 -- ops/ci-runner/ci-clean.sh job
+out_has "over the bound of 4000 MB"
 log_has "image prune -af"
 log_has "builder prune -af"
-run 0 fake FAKE_DOCKER_MB=7000 -- env CI_DOCKER_MAX_MB=8000 CI_BUILD_CACHE_KEEP=1GB ops/ci-runner/ci-clean.sh job
+run 0 fake FAKE_DOCKER_MB=4500 -- env CI_DOCKER_MAX_MB=8000 CI_BUILD_CACHE_KEEP=500MB ops/ci-runner/ci-clean.sh job
 log_lacks "image prune -af"
-log_has "--keep-storage 1GB"
+log_has "--keep-storage 500MB"
 ok "over CI_DOCKER_MAX_MB every image and the build cache are pruned; under it they stay"
 run 0 fake FAKE_DOCKER_DOWN=1 -- ops/ci-runner/ci-clean.sh job
 out_has "nothing cleaned"
@@ -232,12 +234,22 @@ run 1 fake FAKE_DOCKER_DOWN=1 -- ops/ci-runners.sh status
 out_has "Docker Desktop is not running"
 ok "no command, unknown command, extra arguments, a bad count, a bad repository and a stopped Docker refused"
 # 22 GB free is what the Mac had on 2026-10-10, when a trial filled its disk.
-run 1 fake FAKE_FREE_KB=23068672 -- ops/ci-runners.sh install 4
-out_has "only 22 GB free on this Mac"
+run 1 fake -- ops/ci-runners.sh install 4
+out_has "at most 3 runners on this Mac"
+log_lacks "run "
+# 4 GB per runner plus 6: 14 GB for two runners, 18 GB for three.
+run 1 fake FAKE_FREE_KB=13631488 -- ops/ci-runners.sh install 2
+out_has "only 13 GB free on this Mac"
+out_has "at least 14 GB"
 log_lacks "build"
 log_lacks "run "
-run 0 fake FAKE_FREE_KB=23068672 -- env CI_RUNNER_MIN_FREE_GB=10 ops/ci-runners.sh install 1
-ok "install refuses a Mac with less than 40 GB free before it builds or starts anything (CI_RUNNER_MIN_FREE_GB)"
+run 0 fake FAKE_FREE_KB=15728640 -- ops/ci-runners.sh install 2
+run 1 fake FAKE_FREE_KB=15728640 -- ops/ci-runners.sh install 3
+run 0 fake FAKE_FREE_KB=5242880 -- env CI_RUNNER_MIN_FREE_GB=4 ops/ci-runners.sh install 1
+run 1 fake -- env CI_RUNNER_CPUS=5 ops/ci-runners.sh install 3
+out_has "would need CPUs 10-14 and Docker has 12"
+log_lacks "run "
+ok "install refuses more than 3 runners, a disk short of 4 GB per runner plus 6 before it builds or starts anything (CI_RUNNER_MIN_FREE_GB), and CPUs Docker does not have"
 
 step "install against a fake docker and a fake gh: the token never shows, nothing of the shell leaks"
 run 0 fake -- env GH_TOKEN=leak-gh ANTHROPIC_API_KEY=leak-anthropic CLAUDE_CODE_X=leak-claude ops/ci-runners.sh install 2
@@ -246,8 +258,8 @@ if grep -q "$CANARY" "$WORK/docker.log"; then fail "the registration token is in
 [[ "$(grep -c "$CANARY" "$WORK/stdin.log")" == 2 ]] || fail "the token did not reach configure on stdin once per runner"
 if grep -q 'leak-\|GH_TOKEN\|ANTHROPIC\|CLAUDE\|--env-file' "$WORK/docker.log"; then fail "a variable of the calling shell reached docker"; fi
 [[ "$(grep -c '^run -d ' "$WORK/docker.log")" == 2 ]] || fail "expected 2 runner containers"
-log_has "run -d --name jobapp-ci-1 --hostname mac-ci-1 --restart unless-stopped --privileged --cpuset-cpus 0-5 --memory 5g"
-log_has "run -d --name jobapp-ci-2 --hostname mac-ci-2 --restart unless-stopped --privileged --cpuset-cpus 6-11 --memory 5g"
+log_has "run -d --name jobapp-ci-1 --hostname mac-ci-1 --restart unless-stopped --privileged --cpuset-cpus 0-2 --memory 4g --memory-swap 4g"
+log_has "run -d --name jobapp-ci-2 --hostname mac-ci-2 --restart unless-stopped --privileged --cpuset-cpus 3-5 --memory 4g --memory-swap 4g"
 log_has "-v jobapp-ci-docker-2:/var/lib/docker"
 log_has "-e RUNNER_LABELS=mac-ci"
 log_has "-e RUNNER_URL=https://github.com/GoldLegendW80/jobapp"
@@ -264,9 +276,18 @@ done < <(grep -o -- '-e [A-Za-z_]*=' "$WORK/docker.log" | sed 's/^-e //; s/=$//'
 out_has "online on GitHub: 2 runner(s)"
 ok "2 runners: token on stdin only; labels mac-ci; privileged, restart unless-stopped, own CPUs, memory and Docker volume; no host socket, no host folder, only $allowed"
 run 0 fake -- ops/ci-runners.sh install
-log_has "--cpuset-cpus 9-11"
-[[ "$(grep -c '^run -d ' "$WORK/docker.log")" == 4 ]] || fail "the default is not 4 runners"
-ok "the default is 4 runners with 3 CPUs each"
+[[ "$(grep -c '^run -d ' "$WORK/docker.log")" == 2 ]] || fail "the default is not 2 runners"
+if grep '^run -d ' "$WORK/docker.log" | grep -vq -- '--cpuset-cpus [03]-[25] --memory 4g --memory-swap 4g'; then
+  fail "a runner has no CPU set or no memory limit"
+fi
+run 0 fake HOME="$WORK/home-off" -- ops/ci-runners.sh install 1
+out_has "Docker Desktop does not start at login"
+mkdir -p "$WORK/home-on/Library/Group Containers/group.com.docker"
+echo '{"AutoStart": true}' >"$WORK/home-on/Library/Group Containers/group.com.docker/settings-store.json"
+run 0 fake HOME="$WORK/home-on" -- ops/ci-runners.sh install 1
+out_has "come back by themselves after a reboot"
+[[ "$(cat "$WORK/home-on/Library/Group Containers/group.com.docker/settings-store.json")" == '{"AutoStart": true}' ]] || fail "Docker Desktop's settings were written"
+ok "the default is 2 runners, CPUs 0-2 and 3-5, 4g each with no swap beyond; install says whether Docker Desktop starts at login and never writes its settings"
 
 step "update, stop and prune wait for jobs; uninstall removes only what install made"
 run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_BUSY=1 -- ops/ci-runners.sh update
