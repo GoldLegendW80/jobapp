@@ -239,6 +239,10 @@ describe("global 401", () => {
   it("a 401 mid session sends the user to /login and keeps the page in next", async () => {
     const state = fakeSession(admin);
     const { client, location } = renderApp("/");
+    // "/" redirects to /jobs in a router transition: the router's location is /jobs at once, but
+    // the rendered tree (and useLocation in RequireAuth, which builds `next`) can still be "/"
+    // when the health dot already says "API ok". Wait for the jobs page itself to be on screen.
+    await screen.findByRole("heading", { level: 1, name: "Jobs" });
     await screen.findByText("API ok");
     // The session ends elsewhere (expired, disabled, signed out on another device).
     state.user = null;
@@ -298,6 +302,7 @@ describe("global 401", () => {
       }),
     );
     const { location } = renderApp("/");
+    await screen.findByRole("heading", { level: 1, name: "Jobs" });
     await screen.findByText("API ok");
     state.user = null;
     server.use(http.get("*/api/health", () => unauthorized()));
