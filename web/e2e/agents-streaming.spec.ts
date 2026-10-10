@@ -185,10 +185,14 @@ test("the answer grows in the run panel, then the stored step takes its place", 
   expect(LONG.startsWith(early)).toBe(true);
   await expect(badge()).toHaveText("Running");
   await shots(page, "run-writing", false);
-  // Still being written after four screenshots, and further on.
+  // Still being written after four screenshots, and further on (the next piece is at most a
+  // few hundred milliseconds away: wait for it rather than assume the screenshots took longer).
+  await expect
+    .poll(async () => (await body(writing()).textContent())?.length ?? 0)
+    .toBeGreaterThan(early.length);
   const later = (await body(writing()).textContent()) ?? "";
-  expect(later.length).toBeGreaterThan(early.length);
   expect(later.length).toBeLessThan(LONG.length);
+  expect(LONG.startsWith(later)).toBe(true);
   // Screen readers heard the title once, not the text.
   const region = panel().locator("p[role=status][aria-live=polite]");
   await expect(region).toHaveText("Answer");
