@@ -6,7 +6,9 @@ posting board costs."""
 
 import asyncio
 import gc
+import re
 import threading
+import time
 import tracemalloc
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -380,6 +382,106 @@ def test_no_enabled_board_fails_with_a_clear_message(
     assert row.error == sweep.NO_BOARDS
 
 
+BROKEN_LIST = {"terms": ["(?P<x>agent)", "(?P<x>llm)"], "advanced_regex": True}
+
+
+def test_a_search_section_that_no_longer_validates_asks_to_save_it_again(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    fake_ats: FakeAts,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Issue #11: not "No board is enabled" for a section with enabled boards that the profile's
+    checks now refuse (stored before they got stricter)."""
+    set_profile(factory, alice, search(board("fake-ok"), title_exclude=BROKEN_LIST))
+    row = run(factory, new_sweep(factory, alice), fake_ats)
+    assert (row.status, row.error) == (SweepStatus.failed, sweep.SEARCH_INVALID)
+    assert sweep.SEARCH_INVALID != sweep.NO_BOARDS
+    assert "Search tab" in sweep.SEARCH_INVALID
+    assert jobs_of(factory, alice) == []
+    [record] = [r for r in caplog.records if "does not validate" in r.getMessage()]
+    assert record.user_id == str(alice)
+    assert "agent" not in record.getMessage()
+    with factory() as db:
+        assert sweep.user_search(db, alice) is None  # read-only views: as if there were none
+        with pytest.raises(sweep.InvalidSearchError):
+            sweep.load_search(db, alice)
+
+
+def test_a_list_that_stops_compiling_fails_the_sweep_closed(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    fake_ats: FakeAts,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A list that validated but no longer compiles (the regex engine changed meanwhile) keeps
+    nothing: the sweep fails with the re-save message instead of dropping excluded terms."""
+    set_profile(factory, alice, search(board("fake-ok")))
+
+    def broken(terms: list[str], advanced_regex: bool) -> None:
+        raise re.error("changed meanwhile")
+
+    monkeypatch.setattr(sweep.matching, "compile_terms", broken)
+    row = run(factory, new_sweep(factory, alice), fake_ats)
+    assert (row.status, row.error) == (SweepStatus.failed, sweep.SEARCH_INVALID)
+    assert jobs_of(factory, alice) == []
+
+
+def test_fetched_boards_in_memory_never_exceed_the_concurrency(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    fake_ats: FakeAts,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #11: a board holds its slot from its fetch until it is stored, so with a slow store
+    step the fetched boards waiting for it never pile up past `concurrency`."""
+    orgs = ["fake-ok", "fake-ok2", "fake-dup", "fake-unicode", "fake-variant", "fake-security"]
+    boards = [board(org, name, f"Co {name} {org}") for name in ("ashby", "lever") for org in orgs]
+    set_profile(factory, alice, search(*boards))
+    in_memory = 0
+    peak = 0
+    guard = threading.Lock()
+    real_fetch = sweep.ats.AtsClient.fetch_board
+    real_store = sweep._store
+
+    async def counting_fetch(self, ats_name, org):  # type: ignore[no-untyped-def]
+        nonlocal in_memory, peak
+        with guard:
+            in_memory += 1
+            peak = max(peak, in_memory)
+        return await real_fetch(self, ats_name, org)
+
+    def slow_store(*args):  # type: ignore[no-untyped-def]
+        nonlocal in_memory
+        time.sleep(0.05)  # fetches finish faster than boards are stored
+        try:
+            return real_store(*args)
+        finally:
+            with guard:
+                in_memory -= 1
+
+    monkeypatch.setattr(sweep.ats.AtsClient, "fetch_board", counting_fetch)
+    monkeypatch.setattr(sweep, "_store", slow_store)
+    row = run(factory, new_sweep(factory, alice), fake_ats, concurrency=2)
+    assert row.status is SweepStatus.done
+    assert row.stats["boards_done"] == len(boards)
+    assert row.stats["boards_ok"] == len(boards)
+    assert peak == 2, peak
+    assert in_memory == 0
+
+
+def test_a_failed_board_gives_its_slot_back(
+    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+) -> None:
+    """Failed fetches release their slot too: one slot, five boards failing, the sweep ends."""
+    gone = [board(org, name) for name in ("ashby", "lever") for org in ("fake-404", "fake-500")]
+    set_profile(factory, alice, search(*gone, board("fake-ok")))
+    row = run(factory, new_sweep(factory, alice), fake_ats, concurrency=1)
+    assert row.status is SweepStatus.done
+    assert (row.stats["boards_done"], len(row.stats["boards_failed"])) == (5, 4)
+    assert row.stats["new"] == 2
+
+
 def test_a_sweep_picked_twice_is_failed_not_rerun(
     factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
 ) -> None:
@@ -681,6 +783,26 @@ def test_only_enabled_schedules_of_active_users_with_boards_are_due(
     weekdays = {**DAILY, "days": ["monday", "tuesday", "wednesday", "thursday", "friday"]}
     set_profile(factory, alice, search(board("fake-ok"), sweep_schedule=weekdays))
     assert due_users(factory) == []
+
+
+def test_a_scheduled_sweep_of_a_section_that_no_longer_validates_is_logged(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    bob: uuid.UUID,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Issue #11: skipped as before, but with a clear reason in the worker log, and only for a
+    schedule the user turned on."""
+    set_profile(
+        factory, alice, search(board("fake-ok"), title_exclude=BROKEN_LIST, sweep_schedule=DAILY)
+    )
+    set_profile(factory, bob, search(board("fake-ok"), title_exclude=BROKEN_LIST))  # off
+    caplog.set_level("WARNING", logger="app.sweep")
+    assert due_users(factory) == []
+    records = [r for r in caplog.records if "scheduled sweep skipped" in r.getMessage()]
+    assert [r.user_id for r in records] == [str(alice)]
+    assert "Search tab" in records[0].getMessage()
+    assert "agent" not in records[0].getMessage()
 
 
 def test_a_section_without_a_schedule_or_with_the_old_flag_is_off(

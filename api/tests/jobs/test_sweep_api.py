@@ -108,6 +108,19 @@ def test_start_without_an_enabled_board_is_422_and_stores_nothing(
     assert fake_queue.calls == []
 
 
+def test_start_with_a_search_section_that_no_longer_validates_asks_to_save_it_again(
+    api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue
+) -> None:
+    """Issue #11: a distinct 422, not "No board is enabled", and nothing stored or queued."""
+    broken = {"terms": ["(?P<x>agent)", "(?P<x>llm)"], "advanced_regex": True}
+    set_profile(factory, alice.id, search(board("fake-ok"), title_exclude=broken))
+    response = start(api, alice)
+    assert response.status_code == 422
+    assert response.json()["detail"] == sweep.SEARCH_INVALID
+    assert rows(factory, alice.id) == []
+    assert fake_queue.calls == []
+
+
 def test_start_with_the_queue_down_fails_the_sweep_at_once(
     api: Api, factory: sessionmaker[Session], alice: Signed, fake_queue: FakeQueue
 ) -> None:
