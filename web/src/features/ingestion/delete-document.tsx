@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { LoaderCircle } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 
 import {
   AlertDialog,
@@ -30,6 +30,11 @@ interface Props {
   document: IngestionDocument | undefined;
   onClose: () => void;
   onDeleted: (document: IngestionDocument) => void;
+  /**
+   * Where the keyboard focus goes once a document is deleted: the button that opened the
+   * dialog is gone with its row, so the focus would otherwise be lost.
+   */
+  focusAfterDelete?: RefObject<HTMLElement | null>;
 }
 
 /**
@@ -37,7 +42,12 @@ interface Props {
  * by the server (later: a document a run has read) is shown in its own words and the document
  * stays. Task G15 extends what this dialog says.
  */
-export function DeleteDocument({ document, onClose, onDeleted }: Props) {
+export function DeleteDocument({
+  document,
+  onClose,
+  onDeleted,
+  focusAfterDelete,
+}: Props) {
   // The last document asked about stays while the dialog closes, so its text does not vanish
   // before the dialog does.
   const [shown, setShown] = useState(document);
@@ -50,6 +60,7 @@ export function DeleteDocument({ document, onClose, onDeleted }: Props) {
       open={document !== undefined}
       onClose={onClose}
       onDeleted={onDeleted}
+      focusAfterDelete={focusAfterDelete}
     />
   );
 }
@@ -59,15 +70,13 @@ function Ask({
   open,
   onClose,
   onDeleted,
-}: {
-  document: IngestionDocument;
-  open: boolean;
-  onClose: () => void;
-  onDeleted: (document: IngestionDocument) => void;
-}) {
+  focusAfterDelete,
+}: Omit<Props, "document"> & { document: IngestionDocument; open: boolean }) {
+  const deleted = useRef(false);
   const mutation = useMutation({
     mutationFn: () => deleteDocument(document.id),
     onSuccess: () => {
+      deleted.current = true;
       onDeleted(document);
     },
   });
@@ -83,7 +92,14 @@ function Ask({
         if (!next) close();
       }}
     >
-      <AlertDialogContent>
+      <AlertDialogContent
+        onCloseAutoFocus={(event) => {
+          const target = focusAfterDelete?.current;
+          if (!deleted.current || !target) return;
+          event.preventDefault();
+          target.focus();
+        }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this document?</AlertDialogTitle>
           <AlertDialogDescription asChild>

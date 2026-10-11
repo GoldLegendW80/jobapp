@@ -132,7 +132,7 @@ export function FillPage() {
         data-step={current.id}
       >
         <h2 id="step-heading" className="text-lg font-semibold tracking-tight">
-          <span className="text-muted-foreground">Step {number}: </span>
+          <span className="text-muted-foreground">Step {number}:</span>{" "}
           {current.heading}
         </h2>
         <Panel goTo={goTo} />
@@ -168,14 +168,13 @@ function StepLink({
       </span>
       <span className="flex min-w-0 flex-col">
         <span className="text-sm font-medium">
-          <span className="sr-only">Step {number}: </span>
-          {step.title}
+          <span className="sr-only">Step {number}:</span> {step.title}{" "}
           {step.ready ? null : (
-            <span className="ml-2 rounded-full bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
+            <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-xs font-normal text-muted-foreground">
               Soon
             </span>
           )}
-        </span>
+        </span>{" "}
         <span className="text-xs text-muted-foreground">{step.summary}</span>
       </span>
     </>

@@ -145,9 +145,8 @@ export function StepDocuments() {
           );
           void client.invalidateQueries({ queryKey: documentsKey });
           toast.success("Document deleted.");
-          // Its row is gone, and the focus with it: put it back on the list.
-          listHeading.current?.focus();
         }}
+        focusAfterDelete={listHeading}
       />
     </div>
   );
