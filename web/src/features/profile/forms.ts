@@ -1,10 +1,10 @@
 /**
  * Form values, zod schemas and conversions of the three editable sections (identity, experience,
  * answers). The schemas mirror the api's models (api/app/profile/schemas.py) so most mistakes are
- * caught before a save: lengths, required fields, months written YYYY-MM between 1900 and 2100,
- * end not before start, unique employer keys, languages and countries, full http(s) addresses,
- * emails and phone numbers. The api stays the judge: its 422 lands on the field it names
- * (errors.ts).
+ * caught before a save: lengths, required fields, dates written YYYY or YYYY-MM between 1900 and
+ * 2100 (period.ts), end not certainly before start, unique employer keys, languages and countries,
+ * full http(s) addresses, emails and phone numbers. The api stays the judge: its 422 lands on the
+ * field it names (errors.ts).
  *
  * In a form every text is a string ("" for a value the api stores as null); `to*Form` and
  * `from*Form` convert, trimming and turning "" back into null.
@@ -19,6 +19,7 @@ import {
   type Identity,
   type School,
 } from "./api";
+import { endsBeforeStart, isPeriod } from "./period";
 
 export const LINE_MAX = 200;
 export const TEXT_MAX = 2000;
@@ -40,7 +41,6 @@ const CONTROL_LINE = /[\u0000-\u001f\u007f-\u009f]/;
 // eslint-disable-next-line no-control-regex
 const CONTROL_TEXT = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
 
-export const MONTH_PATTERN = /^(\d{4})-(0[1-9]|1[0-2])$/;
 export const KEY_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const URL_PATTERN = /^https?:\/\/[^\s/?#]+\.[^\s/?#]+(?:[/?#]\S*)?$/i;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -83,22 +83,21 @@ const url = (label: string, required = false) =>
     "Enter a full address starting with http:// or https://.",
   );
 
-/** A month field: "" (when optional) or YYYY-MM between 1900 and 2100. */
-export function isMonth(value: string): boolean {
-  const match = MONTH_PATTERN.exec(value);
-  if (!match) return false;
-  const year = Number(match[1]);
-  return year >= 1900 && year <= 2100;
-}
+export const PERIOD_MESSAGE =
+  "Write the date as YYYY or YYYY-MM, between 1900 and 2100.";
 
-const month = (required: boolean) =>
+/**
+ * A date field: "" (when optional), a month YYYY-MM or a year alone YYYY, between 1900 and 2100.
+ * What was typed is what is saved: a year alone is never completed with a month.
+ */
+const period = (required: boolean) =>
   z
     .string()
-    .refine((v) => !required || v.trim() !== "", "Enter the start month.")
     .refine(
-      (v) => v.trim() === "" || isMonth(v.trim()),
-      "Write the month as YYYY-MM, between 1900 and 2100.",
-    );
+      (v) => !required || v.trim() !== "",
+      "Enter the start, as YYYY or YYYY-MM.",
+    )
+    .refine((v) => v.trim() === "" || isPeriod(v.trim()), PERIOD_MESSAGE);
 
 /** Add an issue on `path` of each item whose `key(item)` repeats an earlier one. */
 export function uniqueBy<T>(
@@ -249,8 +248,8 @@ const employerSchema = z
     autoKey: z.boolean(),
     organisation: text("the organisation", LINE_MAX, { required: true }),
     title: text("the job title", LINE_MAX, { required: true }),
-    start: month(true),
-    end: month(false),
+    start: period(true),
+    end: period(false),
     present: z.boolean(),
     location: text("a location", LINE_MAX),
     contract: contractSchema,
@@ -259,20 +258,22 @@ const employerSchema = z
     if (!value.present && value.end.trim() === "") {
       ctx.addIssue({
         code: "custom",
-        message: "Enter the end month, or tick Present.",
+        message: "Enter the end, or tick Present.",
         path: ["end"],
       });
     }
     endAfterStart(value.start, value.present ? "" : value.end, ctx);
   });
 
+/**
+ * Periods, not text ("2023" sorts before "2023-05" as text), and only what is certain: a start
+ * of 2023-05 with an end of 2023 is in order, the end may be December.
+ */
 function endAfterStart(start: string, end: string, ctx: z.RefinementCtx) {
-  const s = start.trim();
-  const e = end.trim();
-  if (isMonth(s) && isMonth(e) && e < s) {
+  if (endsBeforeStart(start.trim(), end.trim())) {
     ctx.addIssue({
       code: "custom",
-      message: "The end month is before the start month.",
+      message: "The end is before the start.",
       path: ["end"],
     });
   }
@@ -282,8 +283,8 @@ const schoolSchema = z
   .object({
     school: text("the school", LINE_MAX, { required: true }),
     degree: text("the degree", LINE_MAX, { required: true }),
-    start: month(false),
-    end: month(false),
+    start: period(false),
+    end: period(false),
     location: text("a location", LINE_MAX),
     details: text("details", TEXT_MAX, { multiline: true }),
   })

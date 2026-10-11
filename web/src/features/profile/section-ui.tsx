@@ -1,5 +1,5 @@
 /**
- * Building blocks shared by the profile tabs: text and month fields bound to react-hook-form,
+ * Building blocks shared by the profile tabs: text and date fields bound to react-hook-form,
  * the up, down and remove buttons of a list item, the Save bar, and the conflict dialog.
  */
 import {
@@ -34,6 +34,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+
+import { describePeriod, typedPeriod } from "./period";
 
 interface FieldProps<F extends FieldValues> {
   control: Control<F>;
@@ -91,16 +93,52 @@ export function TextField<F extends FieldValues>({
   );
 }
 
-export function MonthField<F extends FieldValues>(
-  props: FieldProps<F> & { disabled?: boolean },
-) {
+/**
+ * The start or the end of an employer or of a school: a month, or a year alone when that is all
+ * the user knows. One text field, the two forms as its placeholder, and under it how the app
+ * reads what is typed ("Read as March 2021", "Read as the year 2021"), which a screen reader says
+ * with the field. What is typed is what is saved: a year alone never gets a month.
+ */
+export function PeriodField<F extends FieldValues>({
+  control,
+  name,
+  label,
+  srSuffix,
+  className,
+  disabled,
+}: FieldProps<F> & { disabled?: boolean }) {
   return (
-    <TextField
-      {...props}
-      placeholder="YYYY-MM"
-      inputMode="numeric"
-      autoComplete="off"
-      maxLength={7}
+    <FormField
+      control={control}
+      name={name}
+      render={({ field }) => {
+        const typed = typeof field.value === "string" ? field.value : "";
+        return (
+          <FormItem className={className}>
+            <FormLabel>
+              <LabelText label={label} srSuffix={srSuffix} />
+            </FormLabel>
+            <FormControl>
+              <Input
+                {...field}
+                value={typed}
+                disabled={disabled}
+                placeholder="YYYY or YYYY-MM"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={7}
+                onChange={(event) => {
+                  field.onChange(typedPeriod(typed, event.target.value));
+                }}
+              />
+            </FormControl>
+            {disabled ? null : (
+              <FormDescription>{describePeriod(typed)}</FormDescription>
+            )}
+            <FormMessage />
+          </FormItem>
+        );
+      }}
     />
   );
 }
