@@ -11,8 +11,10 @@ noticed by the unit tests | YYYY-MM always firm
 noticed by the unit tests | control characters removed
 noticed by the unit tests | no fence around a superscript
 noticed by the unit tests | no version
-noticed by the unit tests | an address ends anywhere
-noticed by the unit tests | an address starts anywhere
+noticed by the unit tests | a URL ends anywhere
+noticed by the unit tests | an email ends anywhere
+noticed by the unit tests | a URL starts anywhere
+noticed by the unit tests | an email starts anywhere
 noticed by the unit tests | the words of a name not kept
 noticed by the unit tests | a name inside tokens
 noticed by the unit tests | short names in any case
@@ -68,4 +70,37 @@ noticed by the unit tests | a chain always split at the hyphen
 noticed by the unit tests | an unreadable document is read
 noticed by the properties | no limit on the clusters remembered
 noticed by the unit tests | superscripts glued to a number never found
-# 69 changes, 69 noticed
+noticed by the unit tests | B1: one number of a run of the value carries the others
+noticed by the unit tests | S4: a decimal with four decimals is cut into pieces
+noticed by the unit tests | B2: a sign of a local part before an address is never looked past
+noticed by the unit tests | B2: a sign that joins is looked past as a quote is
+noticed by the unit tests | B2: an address is compared under the case fold
+noticed by the unit tests | B2: the path of a URL in any case
+noticed by the unit tests | B2: the host of a URL as written
+noticed by the unit tests | B2: an underscore after a domain ends it
+noticed by the unit tests | B2: the colon of a scheme or of a port bounds a URL
+noticed by the unit tests | N4: the user and the password of a URL are an email
+noticed by the unit tests | N7: the scheme of a URL is left out of an email too
+noticed by the unit tests | S5: an address cut by a line at a hyphen is an address
+noticed by the unit tests | S1: four digits glued to a decimal are a year
+noticed by the unit tests | S1: four digits of a phone number are a year
+noticed by the unit tests | S1: a month word takes a year cut out of a number
+noticed by the unit tests | S2: a name goes across a blank line or two columns
+noticed by the unit tests | S2: one word of a value goes across a line break
+noticed by the unit tests | S2: a spaced dash asks the value for nothing
+noticed by the unit tests | S3: a format character that has a glyph is no break
+noticed by the unit tests | N3: punctuation alone is a name
+noticed by the properties | N1: every name makes the skeleton of every span again
+noticed by the unit tests | decision: a range of MM/YY up to 12 is read
+noticed by the unit tests | decision: a range that is not read is refused as a month
+noticed by the unit tests | N6: no hyphen between a month word and its year
+noticed by the unit tests | N6: a spaced slash is read inside a longer date
+noticed by the unit tests | N6: a day and its month take the year of a date with another separator
+noticed by the unit tests | N6: a range that goes backward shares its year
+noticed by the unit tests | N2: a key that is not text is printed
+noticed by the unit tests | N2: a path of the table of types that is not text is read
+noticed by the unit tests | N2: a document that is not text is prepared
+# 101 changes, 101 noticed
+# One run of all the entries, in which "any fraction is a decimal" did not apply (the line it
+# replaces had been rewritten), then that entry corrected and run alone: its line above is from
+# the second run.

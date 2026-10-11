@@ -10,7 +10,8 @@ entries at the end: after a refactoring an entry may no longer apply, and says s
     cd api && uv run python ../tasks/evidence/ingestion-g4/mutations.py \
         > ../tasks/evidence/ingestion-g4/mutations.txt
 
-Exit status 1 when a change is not noticed or does not apply.
+Exit status 1 when a change is not noticed or does not apply. With names of entries as
+arguments, those entries alone are run.
 """
 
 import subprocess
@@ -105,7 +106,11 @@ MUTATIONS = [
         "                True" + N + "                and (size",
     ),
     ("short names in any case", "and (size >= SHORT_NAME or ", "and (True or "),
-    ("any fraction is a decimal", '(len(parts[1]) <= 2 or parts[0] == "0")', "True"),
+    (
+        "any fraction is a decimal",
+        'short = len(fraction) <= 2 or whole == "0"',
+        "short = True",
+    ),
     ("groups of any size", "all(len(part) == 3 for part in parts[1:]):", "True:"),
     (
         "a phone number cut by the span",
@@ -498,6 +503,8 @@ def passes(paths: list[str]) -> bool:
 
 def main() -> int:
     original = MODULE.read_text(encoding="utf-8")
+    only = sys.argv[1:]
+    chosen = [entry for entry in MUTATIONS if not only or entry[0] in only]
     missed = []
     print(
         "# one line of app/ingestion/citations.py broken at a time: which tests notice"
@@ -506,7 +513,7 @@ def main() -> int:
         if not passes(FAST + SLOW):
             print("the tests fail before any change")
             return 1
-        for name, old, new in MUTATIONS:
+        for name, old, new in chosen:
             if original.count(old) != 1:
                 print(f"does not apply            | {name}")
                 missed.append(name)
@@ -521,7 +528,7 @@ def main() -> int:
                 missed.append(name)
     finally:
         MODULE.write_text(original, encoding="utf-8")
-    print(f"# {len(MUTATIONS)} changes, {len(MUTATIONS) - len(missed)} noticed")
+    print(f"# {len(chosen)} changes, {len(chosen) - len(missed)} noticed")
     return 1 if missed else 0
 
 

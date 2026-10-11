@@ -15,8 +15,9 @@ the same input, and its cost is bounded (figures in tasks/ingestion/todo.md, "Me
 - `prepare(document)` is one pass over the text, O(n); the caller keeps the result for the step.
 - `find` is one substring search of the document per excerpt, O(n), then at most OCCURRENCES_MAX
   occurrences are looked at, each in constant time.
-- A cited span holds at most SPAN_MAX characters, so every value rule works on bounded text and
-  costs O(length of the value).
+- A cited span holds at most SPAN_MAX characters and is read once per item, whatever the number
+  of parts of the value, so every value rule works on bounded text and costs O(length of the
+  value).
 - No regular expression here can backtrack: each is an alternation of plain classes, or a chain
   in which the next character decides alone which branch goes on.
 - Memory: a prepared document keeps N, S and two maps of four bytes per character. A text that
