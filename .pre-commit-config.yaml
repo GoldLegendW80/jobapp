@@ -18,7 +18,21 @@ repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.30.1
     hooks:
+      # At a commit: the staged changes (the hook's own entry, gitleaks git --pre-commit --staged).
       - id: gitleaks
+      # In CI nothing is staged, so the hook above reads nothing there: a committed secret
+      # passed `pre-commit run --all-files` (shown on 2026-10-11, review of #93). CI runs this
+      # one instead, by its name and stage, and so can anyone:
+      #   pre-commit run gitleaks-commits --hook-stage manual
+      # The same program at the same version with the same rules, given the commits of the pull
+      # request or of the push to read (.github/scripts/secret_scan.sh). Never at a commit.
+      - id: gitleaks
+        alias: gitleaks-commits
+        name: Detect hardcoded secrets in the commits of a run (CI)
+        entry: .github/scripts/secret_scan.sh
+        stages: [manual]
+        always_run: true
+        pass_filenames: false
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.10
@@ -65,7 +79,7 @@ repos:
         name: CI plan (ci.yml follows ci_plan.py)
         language: system
         entry: python3 .github/scripts/ci_plan_test.py
-        files: ^(\.github/workflows/ci\.yml|\.github/scripts/ci_plan(_test)?\.py)$
+        files: ^(\.github/workflows/ci\.yml|\.github/scripts/ci_plan(_test)?\.py|\.pre-commit-config\.yaml)$
         pass_filenames: false
 
   # deploy.sh and the scripts that test it. tests/compose_smoke.sh predates the hook and still
@@ -74,4 +88,4 @@ repos:
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
-        files: ^(deploy\.sh|ops/(db|previous|migrate|env_check)\.sh|ops/runner/(entrypoint|job-guard)\.sh|ops/ci-(runners|rerun)\.sh|ops/ci-runner/(entrypoint|job-started|job-completed|ci-clean)\.sh|\.github/scripts/ci_env\.sh|tests/(ci_runners_test|deploy_test|migrate_test|env_check_test|jetson_smoke|backup_test|crash_check|reboot_check|e2e_jetson|tailscale_test)\.sh)$
+        files: ^(deploy\.sh|ops/(db|previous|migrate|env_check)\.sh|ops/runner/(entrypoint|job-guard)\.sh|ops/ci-(runners|rerun)\.sh|ops/ci-runner/(entrypoint|job-started|job-completed|ci-clean)\.sh|\.github/scripts/(ci_env|secret_scan)\.sh|tests/(ci_runners_test|secret_scan_test|deploy_test|migrate_test|env_check_test|jetson_smoke|backup_test|crash_check|reboot_check|e2e_jetson|tailscale_test)\.sh)$

@@ -72,7 +72,8 @@ for gate in 'coverage report --fail-under=95' 'pytest tests -m "not docker"' 'py
   'python3 .github/scripts/ci_plan_test.py' 'python3 .github/scripts/ci_plan.py verify' \
   'tests/deploy_test.sh' 'tests/env_check_test.sh' 'tests/agents_real_run_test.sh' \
   'tests/ci_runners_test.sh' 'tests/tailscale_test.sh' 'koalaman/shellcheck:v0.11.0' \
-  'pre-commit run --all-files' 'playwright test -c e2e/identity-all.config.ts' \
+  'pre-commit run --all-files' 'pre-commit run gitleaks-commits --hook-stage manual' \
+  'tests/secret_scan_test.sh' 'playwright test -c e2e/identity-all.config.ts' \
   'playwright test jobs-sweep.spec.ts' 'agents-streaming.spec.ts' \
   'cancel-in-progress: true' '-n "$PYTEST_WORKERS"' \
   '--maxWorkers="$VITEST_WORKERS"'; do
@@ -120,7 +121,7 @@ grep -q '^    ACTIONS_RUNNER_HOOK_JOB_COMPLETED=/usr/local/bin/ci-job-completed.
 for f in job-started job-completed ci-clean; do
   grep -q "^COPY --chmod=755 $f.sh /usr/local/bin/" ops/ci-runner/Dockerfile || fail "the image does not copy $f.sh"
 done
-for f in ops/ci-runners.sh ops/ci-rerun.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh; do
+for f in ops/ci-runners.sh ops/ci-rerun.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh .github/scripts/secret_scan.sh tests/secret_scan_test.sh; do
   [[ -x "$f" ]] || fail "$f is not executable"
 done
 ok "runner $version from GitHub's release, sha256 checked, ubuntu by digest, both hooks set in the image"
@@ -772,7 +773,8 @@ step "no pipe of the CI scripts ends in a reader that leaves early"
 early='\|[[:space:]]*(grep[[:space:]]+(-[A-Za-z]*[qlLm]|--quiet|--max-count|--files-with)|h[e]ad([[:space:]]|$))'
 scripts=(ops/ci-runners.sh ops/ci-rerun.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh
   ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh
-  .github/scripts/ci_env.sh .github/workflows/ci.yml)
+  .github/scripts/ci_env.sh .github/scripts/secret_scan.sh tests/secret_scan_test.sh
+  .github/workflows/ci.yml)
 # The samples are put together from parts, for the same reason.
 quiet='-q'
 reader='head'
@@ -782,6 +784,6 @@ printf 'grep %s y file\nif a | grep y >/dev/null; then :; fi\n%s -c 600 file\n' 
 if code "$WORK/early.sh" | pipe_has -E "$early"; then fail "the pattern finds a reader that reads everything, or one that reads a file"; fi
 found="$(code "${scripts[@]}" | grep -E "$early" || true)"
 [[ -z "$found" ]] || fail "a pipe ends in a reader that leaves early (read the whole stream: grep ... >/dev/null, sed -n 1,3p): $found"
-ok "ops/ci-runners.sh, ops/ci-rerun.sh, the runner image's scripts, this test and ci.yml: no pipe into grep -q or head"
+ok "ops/ci-runners.sh, ops/ci-rerun.sh, the runner image's scripts, the secret scan and its test, this test and ci.yml: no pipe into grep -q or head"
 
 printf '\nci_runners_test: %s checks passed\n' "$passed"

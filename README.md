@@ -258,7 +258,7 @@ shaped the new layout.
 | job | what runs, in this order | the same steps in the old jobs | in the first run of this layout (38078877905) |
 |---|---|---|---|
 | `api` | ruff; the whole pytest suite in one run on 3 workers; the coverage floor (95 percent of that run's data); the docker marked tests; the scoring timing test | pytest 101 s and 146 s in two shards, docker tests 18 s, service containers 10 s | 255 s: pytest 216 s, docker tests 18 s, service containers 4 s |
-| `checks` | pre-commit; shellcheck and every `tests/*.sh` of CI, the e2e groups guard, the plan's own test; then the e2e group apps on its scratch stack | pre-commit 8 s, shell 46 s, apps 173 s of journeys, stack up in 12 s and down in 11 s | 320 s with the web checks still in it (34 s): pre-commit 8 s, shell 62 s, apps 182 s, stack up and migrated in 6 s, down in 1 s |
+| `checks` | pre-commit and the secret scan of the run's commits; shellcheck and every `tests/*.sh` of CI, the e2e groups guard, the plan's own test; then the e2e group apps on its scratch stack | pre-commit 8 s, shell 46 s, apps 173 s of journeys, stack up in 12 s and down in 11 s | 320 s with the web checks still in it (34 s): pre-commit 8 s, shell 62 s, apps 182 s, stack up and migrated in 6 s, down in 1 s |
 | `journeys` | eslint, tsc, build; Vitest in one run; the e2e group identity, then the e2e group sweep, each on a scratch stack of its own | web checks 29 s, Vitest 34 s and 25 s in two shards, identity 114 s, sweep 68 s | 262 s without the web checks: Vitest 62 s, identity 112 s, sweep 48 s, each stack up in 5 s |
 
 That first run took 13.9 minutes of runner time where the eleven jobs took 18 to 20. Which job
@@ -335,8 +335,8 @@ the rules, their reasons on this repository (it found the README check above the
 written), and that the workflow and the plan agree in both directions. From the plan: every
 check listed under a unit in `LANES` exists in its job and runs under that unit's output. From
 the workflow: every step of `ci.yml` has an `id` and is listed in `ci_plan.py` exactly once,
-as a check of a unit (`LANES`), as a step of every run (`ALWAYS`: pre-commit) or as a
-support step (`SUPPORT`: checkout, the plan, tools and installs, the start of a
+as a check of a unit (`LANES`), as a step of every run (`ALWAYS`: pre-commit and the secret
+scan) or as a support step (`SUPPORT`: checkout, the plan, tools and installs, the start of a
 stack, logs, teardown, summaries, uploads), and a support step runs no test command. What that
 does not check: whether a new command that is a check was written as one; a reviewer reads a
 change of `SUPPORT` as a change of the gate.
@@ -350,6 +350,26 @@ when one of them names a documentation path whose rule does not run its unit (al
 names `tasks` or `docs` as a bare word, or looks for `*.md`). It cannot see a path put
 together at run time from variables, and it leaves the folder `tasks/evidence` alone when no
 subfolder is named, because the journeys write their screenshots there.
+
+**The secret scan.** Every run, whatever the plan, reads the commits it brings with gitleaks
+(`.github/scripts/secret_scan.sh`, the step after pre-commit in `checks`): for a pull request
+each of its commits and then the pull request as a whole (its merge commit against `main`), for
+a push to `main` each commit of the push, for a manual run the whole history of the branch. It
+is the gitleaks that `.pre-commit-config.yaml` pins, started through pre-commit
+(`pre-commit run gitleaks-commits --hook-stage manual`, which works locally too), with the
+same rules and the same allowlist as at a commit: the default rules, a `gitleaks:allow` comment
+on a line, and `.gitleaks.toml` or `.gitleaksignore` should the repository ever get one. Until
+2026-10-11 CI had no secret scan in effect: the gitleaks hook reads the staged changes, a
+checkout has none, and `pre-commit run --all-files` passed with "0 commits scanned" whatever
+had been committed (shown in a throwaway clone with the example secret of gitleaks' own
+README; `tests/secret_scan_test.sh` keeps showing it, and plants that example as a pull
+request, as a push, in a commit that a later one reverts and in a merge inside the branch:
+the scan must fail each time). One scan of the whole history on that day, every branch on
+GitHub included, found nothing. The job that scans fetches the whole history
+(`fetch-depth: 0`); the script refuses a shallow checkout, where it would read a history with
+holes. When it fails on a real secret: revoke the secret where it is valid first, whatever
+happens to the commit afterwards. When it fails on a false alarm: a `gitleaks:allow` comment
+on the line, in the same pull request.
 
 **A fresh run for an open pull request** after `main` moved: `ops/ci-rerun.sh <number>`. CI
 tests a pull request at its merge commit with the base, which GitHub recomputes lazily, so

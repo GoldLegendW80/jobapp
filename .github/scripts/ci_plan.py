@@ -11,7 +11,7 @@ The units of .github/workflows/ci.yml:
     shell   shellcheck and the test scripts of tests/
     e2e     the three Playwright groups on their scratch stacks
 
-pre-commit is no unit: it runs on every run, whatever changed.
+pre-commit and the secret scan are no unit: they run on every run, whatever changed.
 
 Only a pull request against main is ever narrowed. A push to main, a manual run and anything
 this script cannot read for certain run every unit: a green run on main is what deploys. So does
@@ -91,6 +91,7 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
             "deploy_test",
             "agents_real_run_test",
             "ci_runners_test",
+            "secret_scan_test",
             "tailscale_test",
         ),
         "e2e": ("e2e_apps",),
@@ -100,8 +101,9 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
         "e2e": ("e2e_identity", "e2e_sweep"),
     },
 }
-# Steps that run on every run, whatever the plan: pre-commit.
-ALWAYS: dict[str, tuple[str, ...]] = {"checks": ("precommit",)}
+# Steps that run on every run, whatever the plan: pre-commit, and the secret scan of the
+# commits the run brings (documentation can hold a secret as well as code can).
+ALWAYS: dict[str, tuple[str, ...]] = {"checks": ("precommit", "secrets")}
 # Every other step of a job, by id: what the checks need around them, never a check. The three
 # tables together are the whole of ci.yml: ci_plan_test.py fails on a step that has no id or is
 # in none of them, so a check added later cannot stay outside `verify`, and on a step listed

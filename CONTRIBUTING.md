@@ -23,7 +23,8 @@ in the job folder that holds this repository (it is not part of the repository).
    wait while the Mac is asleep or Docker Desktop is closed; README, CI runners on the Mac), in
    three jobs, one per runner:
    `api` (ruff, the whole pytest suite against Postgres and Redis, the coverage floor of 95
-   percent, the docker marked tests), `checks` (pre-commit, shellcheck, the `tests/*.sh`
+   percent, the docker marked tests), `checks` (pre-commit, the secret scan of every commit
+   the pull request brings, shellcheck, the `tests/*.sh`
    scripts and the guards, then the e2e group apps) and `journeys` (eslint, tsc, build, Vitest,
    then the e2e groups identity and sweep; every e2e group against its own scratch Compose
    stack). The run must be green: all three jobs, none of which can be skipped. A pull request
@@ -133,10 +134,12 @@ kept by convention and by the orchestrator, which merges only what step 6 above 
 
 ```bash
 pre-commit run --all-files
+pre-commit run gitleaks-commits --hook-stage manual      # the secret scan of CI: the whole history of the branch (at a commit the hook reads the staged changes only)
 (cd api && uv run --native-tls pytest -m "not docker")    # with TEST_DATABASE_URL, or Docker for a throwaway database
 pnpm --dir web lint && pnpm --dir web typecheck && pnpm --dir web test && pnpm --dir web build
 tests/deploy_test.sh                                     # when deploy.sh, ops/ or tests/*.sh change
 tests/migrate_test.sh                                    # by hand, not in CI: when ops/migrate.sh or api/alembic/env.py change (real Docker, four api builds, no other scratch stack up)
 tests/ci_runners_test.sh                                 # when ops/ci-runners.sh, ops/ci-rerun.sh, ops/ci-runner/ or the workflows change
-python3 .github/scripts/ci_plan_test.py                  # when ci.yml or the path rules of ci_plan.py change
+python3 .github/scripts/ci_plan_test.py                  # when ci.yml, .pre-commit-config.yaml or the path rules of ci_plan.py change
+tests/secret_scan_test.sh                                # when .github/scripts/secret_scan.sh or the gitleaks hooks change
 ```

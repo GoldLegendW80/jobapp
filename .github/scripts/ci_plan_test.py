@@ -929,7 +929,10 @@ class WorkflowTest(unittest.TestCase):
         for name in self.jobs:
             steps = self.jobs[name]["steps"]
             self.assertIn("actions/checkout@", steps[0].get("uses", ""), name)
-            self.assertIn("fetch-depth: 2", steps[0].get("with", ""), name)
+            # The merge commit and its parents for the plan; the whole history in the job that
+            # runs the secret scan, which reads every commit of the run.
+            depth = "fetch-depth: 0" if name == "checks" else "fetch-depth: 2"
+            self.assertIn(depth, steps[0].get("with", ""), name)
             self.assertEqual(steps[1].get("id"), "plan", name)
             self.assertEqual(
                 steps[1].get("run"), "python3 .github/scripts/ci_plan.py", name
@@ -1090,6 +1093,60 @@ class WorkflowTest(unittest.TestCase):
                 "  workflow_dispatch:",
             ],
         )
+
+    def test_the_secret_scan_reads_commits_with_the_pinned_gitleaks(self) -> None:
+        """The gitleaks hook of pre-commit reads staged changes, and a checkout has none: run
+        with --all-files in CI it passed whatever was committed. So CI runs the second hook
+        of the same pinned repository, by name, which reads the commits of the run, in the job
+        whose checkout has the whole history; and the first is skipped there, not left to
+        report a pass that means nothing."""
+        steps = steps_by_id(self.jobs["checks"])
+        scan = steps["secrets"]
+        self.assertRegex(
+            scan["run"],
+            r"^uvx --from pre-commit==[\d.]+ pre-commit run gitleaks-commits "
+            r"--hook-stage manual$",
+        )
+        self.assertEqual(scan.get("if"), "${{ !cancelled() }}")
+        self.assertIn("CI_PUSH_BEFORE: ${{ github.event.before }}", scan.get("env", ""))
+        self.assertIn("fetch-depth: 0", steps["checkout"].get("with", ""))
+        self.assertIn("gitleaks", steps["precommit"]["env"])
+        # Both commands name the same pre-commit.
+        versions = set(
+            re.findall(r"uvx --from (pre-commit==[\d.]+)", WORKFLOW.read_text("utf-8"))
+        )
+        self.assertEqual(len(versions), 1, versions)
+        config = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
+        blocks = [
+            block
+            for block in config.split("  - repo: ")
+            if block.startswith("https://")
+        ]
+        gitleaks = [block for block in blocks if "gitleaks/gitleaks" in block]
+        self.assertEqual(
+            len(gitleaks), 1, "one pinned gitleaks, for the commit and for CI"
+        )
+        block = "\n".join(
+            line
+            for line in gitleaks[0].splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertEqual(len(re.findall(r"^\s+rev: v[\d.]+$", block, re.MULTILINE)), 1)
+        self.assertEqual(block.count("- id: gitleaks"), 2)
+        for line in [
+            "alias: gitleaks-commits",
+            "entry: .github/scripts/secret_scan.sh",
+            "stages: [manual]",
+            "always_run: true",
+            "pass_filenames: false",
+        ]:
+            self.assertIn(f"        {line}\n", block + "\n", line)
+        script = ROOT / ".github/scripts/secret_scan.sh"
+        self.assertTrue(os.access(script, os.X_OK), "secret_scan.sh is not executable")
+        text = script.read_text(encoding="utf-8")
+        self.assertIn("gitleaks git ", text)
+        self.assertNotIn("--staged", text.split("set -euo pipefail", 1)[1])
+        self.assertNotIn("--pre-commit", text.split("set -euo pipefail", 1)[1])
 
     def test_only_the_last_teardown_of_a_job_is_forgiven(self) -> None:
         """Two stacks follow each other in one job under one project name and port. The second

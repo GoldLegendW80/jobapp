@@ -7,8 +7,8 @@
 # Layout (issue #91): three jobs of about the same length, one per runner.
 #   api       ruff, the whole pytest suite in one run with the 95 percent floor, the docker
 #             marked tests, the scoring timing test
-#   checks    pre-commit, the shell unit (shellcheck, tests/*.sh), then the e2e group apps on
-#             its scratch stack
+#   checks    pre-commit and the secret scan of the run's commits, the shell unit (shellcheck,
+#             tests/*.sh), then the e2e group apps on its scratch stack
 #   journeys  eslint, tsc, build, Vitest, then the e2e groups identity and sweep, each on a
 #             scratch stack of its own
 # The run is green when the three are: no job has a condition or waits for another, so none can
@@ -301,11 +301,13 @@ jobs:
       E2E_EVIDENCE: ci
       PLAYWRIGHT_HTML_OPEN: never
     steps:
+      # fetch-depth 0, in this job alone: the secret scan below reads every commit of the pull
+      # request or of the push, and a shallow checkout would hand it a history with holes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         id: checkout
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Plan (the units this run needs, .github/scripts/ci_plan.py)
         id: plan
         run: python3 .github/scripts/ci_plan.py
@@ -326,12 +328,25 @@ jobs:
           key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
       # ruff runs in the api unit, eslint in the web unit, shellcheck in the shell unit. On a
       # run narrowed to documentation those units are skipped, and so are these three hooks:
-      # the files they read did not change.
+      # the files they read did not change. gitleaks is skipped here because its hook reads
+      # the staged changes, of which a checkout has none: it passed whatever was committed.
+      # The secret scan is the next step.
       - name: pre-commit run --all-files
         id: precommit
         env:
-          SKIP: ruff-check,ruff-format,eslint,shellcheck
+          SKIP: ruff-check,ruff-format,eslint,shellcheck,gitleaks
         run: uvx --from pre-commit==4.6.2 pre-commit run --all-files --show-diff-on-failure
+      # Every run, whatever the plan and whatever pre-commit said: the gitleaks that
+      # .pre-commit-config.yaml pins, with its rules, on each commit of the pull request and on
+      # the pull request as a whole; on main, on the commits of the push
+      # (.github/scripts/secret_scan.sh; tests/secret_scan_test.sh plants a secret and expects
+      # this command to fail).
+      - name: Secret scan of the commits of this run (gitleaks)
+        id: secrets
+        if: ${{ !cancelled() }}
+        env:
+          CI_PUSH_BEFORE: ${{ github.event.before }}
+        run: uvx --from pre-commit==4.6.2 pre-commit run gitleaks-commits --hook-stage manual
 
       # --- unit: shell ---------------------------------------------------------------------
       # Every step on its own: one failing script does not hide the others.
@@ -341,6 +356,7 @@ jobs:
         run: >-
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
           deploy.sh ops/db.sh ops/previous.sh ops/migrate.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
+          .github/scripts/secret_scan.sh tests/secret_scan_test.sh
           ops/ci-runners.sh ops/ci-rerun.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh
           ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh
           tests/deploy_test.sh tests/migrate_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
@@ -382,6 +398,13 @@ jobs:
         id: ci_runners_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/ci_runners_test.sh
+      # The secret scan above, on throwaway repositories: the example secret of gitleaks' own
+      # documentation is committed, as a pull request and as a push, and the command of that
+      # step must fail; a clean history and an allowed line must pass.
+      - name: tests/secret_scan_test.sh
+        id: secret_scan_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
+        run: tests/secret_scan_test.sh
       # tailscale (Funnel): compose config and caddy's :8080 trust rules. No key, no tailnet; the
       # live no-key start is skipped here (CI is set, and the image is pinned to arm64).
       - name: tests/tailscale_test.sh
