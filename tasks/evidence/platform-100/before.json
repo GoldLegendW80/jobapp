@@ -1,0 +1,85 @@
+{
+  "label": "before",
+  "base_url": "http://127.0.0.1:8173",
+  "params": {
+    "connections": 30,
+    "declared": 9500000,
+    "send_bytes": 9000000,
+    "hold_s": 8.0
+  },
+  "idle_rss_before": {
+    "api_mib": 115.3,
+    "caddy_mib": 16.1
+  },
+  "idle_rss_after": {
+    "api_mib": 376.0,
+    "caddy_mib": 26.6
+  },
+  "legit_login": {
+    "ok": true,
+    "status": 401,
+    "ms": 177.0
+  },
+  "scenarios": [
+    {
+      "scenario": "declared",
+      "path": "/api/auth/login",
+      "connections": 30,
+      "held_s": 12.2,
+      "still_open_after": 30,
+      "api_peak_mib": 375.2,
+      "caddy_peak_mib": 20.7,
+      "note": ""
+    },
+    {
+      "scenario": "declared",
+      "path": "/api/auth/invites/placeholder-token-000000000000000000000000000000000000000/accept",
+      "connections": 30,
+      "held_s": 13.1,
+      "still_open_after": 30,
+      "api_peak_mib": 376.8,
+      "caddy_peak_mib": 26.0,
+      "note": ""
+    },
+    {
+      "scenario": "declared",
+      "path": "/api/auth/logout",
+      "connections": 20,
+      "held_s": 16.2,
+      "still_open_after": 20,
+      "api_peak_mib": 378.1,
+      "caddy_peak_mib": 30.2,
+      "note": ""
+    },
+    {
+      "scenario": "chunked",
+      "path": "/api/auth/login",
+      "connections": 30,
+      "held_s": 13.1,
+      "still_open_after": 30,
+      "api_peak_mib": 376.0,
+      "caddy_peak_mib": 26.6,
+      "note": ""
+    },
+    {
+      "scenario": "slowheader",
+      "path": "/api/auth/login",
+      "connections": 30,
+      "held_s": 12.1,
+      "still_open_after": 30,
+      "api_peak_mib": 376.0,
+      "caddy_peak_mib": 26.6,
+      "note": ""
+    },
+    {
+      "scenario": "idle",
+      "path": "/api/auth/login",
+      "connections": 30,
+      "held_s": 12.1,
+      "still_open_after": 30,
+      "api_peak_mib": 376.0,
+      "caddy_peak_mib": 26.6,
+      "note": ""
+    }
+  ]
+}
