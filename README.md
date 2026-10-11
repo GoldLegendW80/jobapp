@@ -673,6 +673,37 @@ rules and a start without a key, locally and without joining the tailnet.
 The service sits in the Compose profile `tunnel`, which `deploy.sh` enables on the Jetson. Neither
 the dev stack nor a plain `docker compose -f compose.yml up` on the Mac joins the tailnet.
 
+### Request limits (issue #100)
+
+The app is on the internet through Funnel, so a caller with no session must not be able to make
+the api hold memory with large or slow request bodies. FastAPI reads a JSON body before a route's
+dependencies run, so even a route that answers 401 reads the body first. The limits are set in
+three layers, each able to stand without the others.
+
+- **Caddy** (`caddy/Caddyfile`). The public routes under `/api/auth/` take at most **64 KiB** (a
+  sign in or an invite acceptance is a few hundred bytes); every other route keeps **10 MiB** (the
+  jobs import and, in pull request #98, the document upload raise it for themselves). A declared
+  `Content-Length` over the limit is answered 413 by Caddy itself, with no body read and nothing
+  proxied; a body streamed past the limit is cut. Timeouts against slow clients: `read_header`
+  **10s**, `read_body_idle` **15s** with a 1024 bytes/second minimum rate (so a trickle that never
+  fully stalls is still cut), `idle` **60s**. Writes keep their defaults (`write_idle` 1m, no rate),
+  so a long lived event stream, whose heartbeat is well inside a minute, is never cut.
+- **api** (`app/body_limit.py`, an ASGI middleware before the body is parsed). Public routes
+  64 KiB, other JSON routes **1 MiB**; the routes that read their own raw body with their own limit
+  (the profile photo and import, the jobs import, the ingestion upload and paste of #98) pass
+  through untouched, so nothing is read twice. Over the limit is 413 (a declared length before a
+  byte is read, a streamed body cut at the limit); a body that stalls past a generous idle window
+  is 408. This is the second line, for when a request reaches the api without the proxy in front.
+- **uvicorn** (`api/Dockerfile`). `--limit-concurrency 256` bounds how many requests pile up at
+  once on the 512 MiB api container, `--timeout-keep-alive 5` keeps idle connections short, and
+  h11's 64 KiB header limit bounds a slow or oversized header.
+
+Residual risk, stated honestly for a small private app: an attacker with many client addresses can
+still open many connections, each now holding at most 64 KiB (public) and cut within about 15s, so
+the memory and connection cost is bounded but not zero. Caddy on the free, open-source build has no
+per-client connection or request-rate cap without a third-party module, so this is left to the
+layers above; a rate limit on sign in by email and address already exists in the identity module.
+
 **Bringing the Cloudflare quick tunnel back** (it was the public entry point until 2026-10-10:
 free, no account, but a random `*.trycloudflare.com` URL on every start): restore the
 `cloudflared` service of compose.yml (`cloudflare/cloudflared` running `tunnel --no-autoupdate
