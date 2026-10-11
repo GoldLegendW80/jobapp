@@ -101,7 +101,8 @@ class Scope:
     # (the runner's scrub of the run's credential).
     redact: Callable[[Any], Any] = _as_is
     # What the run works on, as its definition's `bind` hook answered when the run started
-    # (read only; None for an agent without that hook). Set by the runner, never by the model.
+    # (None for an agent without that hook). Set by the runner, never by the model, and read
+    # only at every depth: a mapping in it cannot be written to, and a list arrives as a tuple.
     binding: Mapping[str, Any] | None = None
 
 

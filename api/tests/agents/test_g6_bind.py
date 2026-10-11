@@ -271,6 +271,63 @@ def test_what_the_hook_answers_cannot_be_changed_afterwards(
     assert dict(empty) == {}
 
 
+def test_the_binding_is_read_only_at_every_depth(
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    streams: Streams,
+    g6_tools: None,
+) -> None:
+    """Review of PR #95: a mapping that is read only one level deep leaves the list inside it
+    open, and "no tool can change what another reads" would not hold for the positions of a
+    transcription step. What the hook answers is frozen all the way down: the tools get tuples
+    for lists and read only views for mappings."""
+    doc = uuid.uuid4()
+    answered: dict[str, Any] = {
+        "document_id": doc,
+        "positions": [3, 4, 5],
+        "range": {"start": 0, "end": 100, "pages": [{"n": 1, "marks": {"a", "b"}}]},
+        "part": 2,
+        "note": None,
+    }
+    bound = agent("g6_bound", bind=lambda db, run: answered)
+    streams.add("g6_bound", READ_THEN_WRITE)
+    run_id = new_run(factory, alice_id, {}, agent="g6_bound")
+    assert execute(run_context(settings, factory, keyring, bound), run_id) is RunStatus.done
+    seen = WRITTEN[0][1]  # the very object the tools were given
+    assert seen["positions"] == (3, 4, 5)
+    assert seen["document_id"] == doc
+    assert (seen["part"], seen["note"]) == (2, None)
+    assert seen["range"]["pages"][0]["marks"] == frozenset({"a", "b"})
+    for change in (
+        lambda: seen["positions"].append(6),
+        lambda: seen["positions"].__setitem__(0, 9),
+        lambda: seen["range"].__setitem__("end", 10**6),
+        lambda: seen["range"]["pages"][0].__setitem__("n", 2),
+        lambda: seen["range"]["pages"][0]["marks"].add("c"),
+        lambda: seen.__setitem__("part", 3),
+        lambda: seen.pop("part"),
+    ):
+        with pytest.raises((TypeError, AttributeError)):
+            change()
+    # Nor does the hook's own object reach in: the tools hold a copy at every depth.
+    answered["positions"].append(99)
+    answered["range"]["pages"][0]["n"] = 7
+    assert seen["positions"] == (3, 4, 5)
+    assert seen["range"]["pages"][0]["n"] == 1
+
+
+def test_frozen() -> None:
+    assert runner.frozen("text") == "text"
+    assert runner.frozen(3) == 3
+    assert runner.frozen(None) is None
+    assert runner.frozen([1, [2, {"a": [3]}]])[1][1]["a"] == (3,)
+    assert runner.frozen((1, [2])) == (1, (2,))
+    assert runner.frozen({1, 2}) == frozenset({1, 2})
+    assert type(runner.frozen({"a": 1})).__name__ == "mappingproxy"
+
+
 def test_a_run_bound_to_an_empty_answer_still_runs(
     settings: Settings,
     factory: sessionmaker[Session],

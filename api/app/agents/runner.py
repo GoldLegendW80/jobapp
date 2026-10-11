@@ -1161,13 +1161,31 @@ def _reveal(
         return _Secret(row.kind, revealed.secret, row.updated_at, row.verified_at is not None)
 
 
+def frozen(value: Any) -> Any:
+    """A read only copy of `value`, at every depth: a mapping becomes a read only view of a
+    copy, a list or a tuple a tuple, a set a frozenset, each with its items frozen the same
+    way. Anything else is kept as it is: text, numbers, ids, dates, None, which nothing can
+    change in place (a hook that answers with another kind of object answers for it)."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: frozen(item) for key, item in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(frozen(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return frozenset(frozen(item) for item in value)
+    return value
+
+
 def _bind(context: RunContext, bind: definitions.Bind, run: Any) -> Mapping[str, Any] | None:
     """What the run is bound to, as its definition's hook reads it now, in a transaction of
     its own that ends here (the hook reads; nothing it changed would be kept). A read only
-    copy: the tools share it and none can change what another reads."""
+    copy, at every depth (`frozen`): the tools share it and none can change what another
+    reads, a list of positions inside it no more than the mapping itself."""
     with context.sessions() as db:
         found = bind(db, run)
-        return None if found is None else MappingProxyType(dict(found))
+        if found is None:
+            return None
+        made: Mapping[str, Any] = frozen(dict(found))
+        return made
 
 
 # Log lines of a private run that wait until the failure they are about is no longer being
