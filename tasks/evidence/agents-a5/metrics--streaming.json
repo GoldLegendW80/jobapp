@@ -1,0 +1,87 @@
+{
+  "at": "2026-10-10T19:52:51Z",
+  "host": "jetson",
+  "deployed_commit": "86391192488b5d1f641b9398ba05bb75b22b0608",
+  "job_id": "280af3db-5fae-4219-9300-cd65035fdbd4",
+  "runs": [
+    {
+      "agent": "job_chat",
+      "error": null,
+      "model": "claude-opus-5-5",
+      "usage": {
+        "cost_usd": 0.1437546,
+        "num_turns": 3,
+        "duration_ms": 8668,
+        "input_tokens": 4,
+        "output_tokens": 734,
+        "credential_kind": "claude_subscription",
+        "cache_read_input_tokens": 3293,
+        "cache_creation_input_tokens": 16050
+      },
+      "events": 13,
+      "job_id": "280af3db-5fae-4219-9300-cd65035fdbd4",
+      "run_id": "e3dc8580-0f24-4954-a1cd-38ccff69aa29",
+      "status": "done",
+      "cost_usd": 0.143755,
+      "messages": [
+        {
+          "md5": "f7ec62f512f089c38dc6d3e2a8e75e1f",
+          "role": "user",
+          "chars": 73,
+          "prompt_escapes": false
+        },
+        {
+          "md5": "61f0a3d2139f076e3c76bed710c44d4b",
+          "role": "assistant",
+          "chars": 1006,
+          "prompt_escapes": false
+        }
+      ],
+      "queued_s": 1.666,
+      "proposals": [],
+      "created_at": "2026-10-10T19:52:31.155079+00:00",
+      "duration_s": 10.115,
+      "init_tools": [
+        "mcp__app__get_job",
+        "mcp__app__get_profile_section"
+      ],
+      "started_at": "2026-10-10T19:52:32.821456+00:00",
+      "tool_calls": {
+        "mcp__app__get_job": 1,
+        "mcp__app__get_profile_section": 1
+      },
+      "event_kinds": {
+        "init": 1,
+        "text": 1,
+        "usage": 1,
+        "status": 3,
+        "thinking": 2,
+        "tool_call": 2,
+        "rate_limit": 1,
+        "tool_result": 2
+      },
+      "finished_at": "2026-10-10T19:52:42.936217+00:00",
+      "tools_denied": 0,
+      "output_tokens": 734,
+      "output_text_chars": 1006,
+      "input_tokens_total": 19347,
+      "tool_results_error": 0,
+      "event_seconds_distinct": 6,
+      "thinking_events_with_content": 0,
+      "memory": {
+        "samples": 27,
+        "interval_s": 1,
+        "worker_idle_mib": 116.3,
+        "worker_min_mib": 116.3,
+        "worker_peak_mib": 242.0,
+        "worker_limit_mib": 1536,
+        "api_peak_mib": 222.8,
+        "host_available_min_mib": 5222,
+        "host_available_max_mib": 5399,
+        "claude_processes_max": 1,
+        "claude_rss_sum_peak_mib": 211.3,
+        "claude_rss_one_peak_mib": 211.3
+      }
+    }
+  ]
+}
