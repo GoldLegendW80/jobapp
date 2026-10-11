@@ -19,10 +19,16 @@
 #   web          name kept free: the React build ships inside the caddy image
 #   browser      headed Chromium, Xvfb, noVNC (browser module)
 #
+# Networks: every service is on `default`, except `parser`, which is on `parsing` alone, an
+# internal network (no gateway, no route out) that it shares with the worker and nobody else.
+#
 # Memory budget, 5G for the whole stack on the 7.4G Jetson (each service sets mem_limit):
-#   api 512m, db 768m, redis 256m, caddy 128m, tailscale 128m, worker 1536m  this file: 3328m
+#   api 512m, db 768m, redis 256m, caddy 128m, tailscale 128m, worker 1536m, parser 640m
+#                                              this file: 3968m
 #   browser 1536m                              reserved for the browser module
-#   total 4864m, leaving about 250m of headroom inside the 5G budget
+#   total 5504m with the browser module: over the 5G budget by about 380m. The parser's 640m is
+#   a starting figure (ingestion G2a); G2b and G8 set it from the peaks they measure, and the
+#   browser module decides its own limit against what is left when it is built.
 
 name: jobapp
 
@@ -171,7 +177,60 @@ services:
     # A running sweep is failed as "interrupted" on SIGTERM; give it time to write that.
     stop_grace_period: 20s
     mem_limit: 1536m
+    # `parsing`: the only way to the parser. The worker sends it a document and writes the
+    # result to the database itself (app/ingestion/parser_client.py).
+    networks:
+      - default
+      - parsing
   # --- end of worker --------------------------------------------------------------------------
+
+  # --- parser (ingestion G2a; decision of the owner of 2026-10-10) ----------------------------
+  # Every parser of an uploaded document (PDF, DOCX, archive, image) runs here and nowhere else:
+  # parsers of hostile files are where exploits live, and the worker holds decrypted model
+  # credentials during agent runs. So this service has nothing to steal and nowhere to go:
+  # - the worker's image (no second image, no build of its own: the worker's build makes the
+  #   tag, forward and on a rollback), started on app/ingestion/sandbox/server.py, which
+  #   imports nothing of the application;
+  # - its own uid, 10002 (the api and the worker are 10001), and its own PID namespace: no
+  #   process, no /proc entry and no scratch directory of an agent run exists for it;
+  # - no env_file: no CREDENTIALS_KEY, no SECRET_KEY, no database or Redis address, no model
+  #   credential. Its environment is PARSER_PORT and what the image sets;
+  # - `parsing` alone, an internal network: it cannot open a connection to db, redis, the api
+  #   or the internet, cannot resolve an outside name, and only the worker can reach it;
+  # - no capability, no new privilege, a read only root, no volume, no tmpfs, and `ipc: none`,
+  #   which takes away /dev/shm, the one place Docker leaves writable in a read only container;
+  # - at most 32 processes and threads, 640m of memory.
+  # Inside it each document is parsed by a child process of its own under resource limits and a
+  # seccomp deny list (app/ingestion/sandbox/main.py). The healthcheck starts such a child and
+  # is healthy only when that child reports the filter refusing every denied call and every
+  # limit at its value: without the filter the service is unhealthy and a deploy rolls back.
+  # Never give it an env_file, a volume, a second network or a published port.
+  parser:
+    <<: *restart
+    image: jobapp-worker:latest
+    pull_policy: never  # built above by the worker, never pulled
+    command: ["python", "-I", "/app/app/ingestion/sandbox/server.py"]
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    ipc: none
+    pids_limit: 32
+    environment:
+      PARSER_PORT: "7070"
+    networks:
+      - parsing
+    healthcheck:
+      test: ["CMD", "python", "-I", "/app/app/ingestion/sandbox/server.py", "--check"]
+      interval: 15s
+      timeout: 8s
+      start_period: 10s
+      retries: 3
+    mem_limit: 640m
+    expose:
+      - "7070"
+  # --- end of parser --------------------------------------------------------------------------
 
   db:
     <<: *restart
@@ -218,6 +277,12 @@ services:
     mem_limit: 256m
     expose:
       - "6379"
+
+networks:
+  # The worker and the parser, and nothing else. internal: no gateway, so no route to another
+  # network or to the internet, and Docker's resolver answers for this network's names only.
+  parsing:
+    internal: true
 
 volumes:
   pgdata:
