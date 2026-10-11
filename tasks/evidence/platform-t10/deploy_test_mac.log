@@ -1,0 +1,190 @@
+
+== shellcheck
+   ok: deploy.sh ops/db.sh ops/previous.sh ops/migrate.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh tests/reboot_check.sh tests/tailscale_test.sh tests/migrate_test.sh clean
+   ok: executable, env bash, set -euo pipefail
+
+== dispatcher
+   ok: --help prints usage
+   ok: unknown subcommand exits 2 with the usage
+   ok: --help documents backup, restore and backup-schedule
+
+== backup and restore options, refused before any network call
+   ok: unknown options, extra or missing files, --keep with --into-live, --yes alone, --drop-scratch with a file
+   ok: --into-live without a terminal and without --yes is refused before anything
+   ok: BACKUP_KEEP 0, -1, abc, 1.5, 07, 10000 and '7 days' refused by backup and by backup-schedule install; BACKUP_DIR inside the deploy directory, with a space, or / refused
+   ok: backup-schedule needs one of install, remove, status; BACKUP_CRON must be five plain fields (no injection)
+   ok: backup, backups, restore and backup-schedule fail fast on an unreachable host
+   ok: url takes no argument, smoke refuses an unknown option, both before any network call
+   ok: admin create: wrong or missing action, extra arguments, no @, leading dash, over 320 characters, whitespace or control characters refused before any network call; a good email reaches the ssh check
+   ok: --help documents admin create
+   ok: admin unlock: no email, two emails, --ip without a value, unknown option, leading dash, whitespace, over 320 characters and a non address --ip refused before any network call; a good email with an IPv4 or IPv6 --ip, in either order, reaches the ssh check
+   ok: --help documents admin unlock
+   ok: jobs import and profile import: wrong action, extra arguments and bad emails refused before any network call; --help documents both
+   ok: jobs mark-overrides: missing email, unknown option, extra argument refused before any network call; --help documents it
+   ok: unknown deploy option refused before any network call
+   ok: logs needs exactly one service
+   ok: DEPLOY_DIR=/ refused
+
+== runner: arguments and settings refused before any network call
+   ok: runner: no action, unknown action, extra arguments, bad repo, name and folder refused before ssh
+   ok: runner status: an unreachable host fails with the ssh message
+
+== runner image: the job guard is baked in and refuses every job but deploy.yml from main
+   ok: hook set in the image; allowed: deploy.yml@main on workflow_run and workflow_dispatch; refused: push, pull_request, another branch, another workflow, a fork, no context
+
+== runner install and remove against a fake Jetson and a fake gh: the token never shows
+   ok: configure and remove get the token on stdin only; it is on no command line and in no output
+
+== unreachable host fails fast with a clear message
+   ok: nonexistent-host.invalid: exit 1 in 0s
+   ok: 192.0.2.1: exit 1 in 5s
+   ok: logs, ps, url and smoke fail the same way
+
+== .rsyncignore: what ships and what --delete keeps
+   ok: remote .env kept byte for byte through --delete
+   ok: stale remote file deleted
+   ok: code and unicode file names shipped
+   ok: never shipped: .env.jetson, node_modules, .venv, __pycache__, .git, evidence, dist, .claude, .DS_Store, backups/, *.dump
+   ok: .env.jetson, backups/ and any *.dump are git-ignored
+
+== url against a fake Jetson (fake ssh on PATH)
+   ok: stdout is https://<Self.DNSName> alone, trailing dot dropped, one line, so $(./deploy.sh url) works
+   ok: the name comes from tailscale status --json --peers=false in the tailscale container (CertDomains and users ignored)
+   ok: a node renamed by a name clash (jobapp-1): URL printed, warning on stderr
+   ok: not logged in (no key, expired key): exit 1 at once, says to set TS_AUTHKEY, shows the login link
+   ok: device approval pending: exit 1 with the reason
+   ok: connected without a ts.net name (MagicDNS off, or a foreign name): exit 1, nothing on stdout
+   ok: still starting, or no status from the CLI: waits, then exit 1 after the timeout, stdout empty
+   ok: tailscale container stopped or missing: exit 1 with a clear message, stdout empty
+
+== admin create against the fake Jetson
+   ok: admin create runs the CLI in the api container with --base-url set to the Funnel URL, the full link on stdout
+   ok: quotes, $ and parentheses in the email reach the CLI quoted, never run by the remote shell
+   ok: no public URL: exit 1 before the CLI runs
+   ok: the CLI's exit code (2, invalid email) is passed through
+
+== admin unlock against the fake Jetson
+   ok: admin unlock runs psql in the db container with the email and address as quoted arguments bound as psql variables, failures in the 15 minute window only, and prints the count
+   ok: without --ip the address is passed empty and only the email's rows go
+   ok: an answer that is not a count fails with exit 1
+
+== jobs import and profile import against the fake Jetson
+   ok: jobs import converts JOBAPP_SOURCE_DIR/data on the Mac, then streams the document to app.jobs.cli import in the api container
+   ok: the temporary document is removed afterwards
+   ok: the import CLI's exit code is passed through
+   ok: jobs mark-overrides runs app.jobs.cli mark-overrides in the api container, dry run unless --apply, exit code passed through
+   ok: a missing or unconvertible source fails before any remote call (jobs and profile)
+
+== restore --into-live confirmation, against a fake Jetson
+   ok: a wrong answer (lowercase) refuses after the verification, restore-live never runs
+   ok: an empty answer refuses too
+   ok: the exact phrase runs restore-live on the path verify resolved (latest pinned), then the health check
+   ok: --yes skips the prompt without a terminal; BACKUP_DIR reaches ops/db.sh, and no BACKUP_KEEP when none is set on the Mac (T10: the Jetson's .env, then the default of ops/db.sh, decide)
+   ok: backup passes a BACKUP_KEEP set on the Mac (an explicit value wins), and fails when ops/db.sh reports no file
+
+== ops/db.sh restore-live stops the api and the worker, and starts both on every path
+   ok: restore-live: api and worker stopped through drop and restore, started healthy after the migrations
+   ok: a failed restore rolls back with both still stopped, then starts api and worker
+   ok: any other failure after the stop starts api and worker again on exit
+
+== T10, retention: ops/db.sh backup with a clock, an rm and locks the test controls
+   ok: fakes ready: a run is at a time the test chooses, and every rm is recorded
+
+== T10, retention: 7 by default, by count and by the date in the name; an explicit value wins for both
+   ok: no BACKUP_KEEP anywhere: 7. Nine dumps of three days leave the newest 7, the new one among them
+   ok: a week of nightly dumps, each a few seconds later than the last: the one of 7 nights ago goes, 7 stay
+   ok: age is counted in UTC calendar days between two names: the dump of 7 days ago at 23:59:59 goes (6 days and 1 hour on a clock), the one of 6 days ago at 00:00:00 stays; the count rule had nothing to delete
+   ok: the name wins over the mtime: a dump whose name says 9 days ago goes although it was written today, one named yesterday stays although its mtime says September
+   ok: the day arithmetic across the end of February (2028 a leap year, 2027 and 2100 not), the new year and a 31 day month
+   ok: an explicit BACKUP_KEEP=14 wins for both rules: 14 dumps and 14 days (13 stays, 14 goes), with the warning that users are promised 7; the same folder at the default keeps nothing past 6 days
+   ok: the BACKUP_KEEP of the deployed .env is read at each run (quoted, spaced or with a carriage return too), the environment of the run wins over it, an empty line means the default
+   ok: BACKUP_KEEP 0, -1, abc, 1.5, 07, 10000 and '7 days' are refused, from the environment and from .env: no dump, nothing deleted, exit 1
+
+== T10, retention by age in every folder the server keeps dumps in
+   ok: the nightly run: a predeploy dump 8 days old goes and one 6 days old stays, a pre-restore dump 9 days old goes, an uploaded dump 9 days old goes; rm only ever got whole dump names in the three folders
+   ok: the count rule is for the folder of the run: nine predeploy dumps of yesterday all stay through the nightly run
+   ok: the deploy's own backup (BACKUP_DIR is the predeploy folder): both rules there, newest 7 and nothing 7 days old, and no other folder touched
+
+== T10, safety: the newest verified dump of the whole tree stays, and no folder has an exception
+   ok: every folder holds only dumps past the limit: all go, the last predeploy dump and the last upload included, and the one dump left on the server is the one this run wrote and verified
+   ok: a week without a deploy: the only predeploy dump, taken 7 days ago in the afternoon, goes with the nightly dump of that day, so nothing a user deleted since is left in it
+   ok: a deploy after a long pause: its backup deletes every older predeploy dump and keeps its own; the folder of the nightly run is not its to rotate
+   ok: a clock set back: the dump this run wrote is the oldest name of nine and still stays (the count rule takes the next one); the dumps named ahead of it are kept and said
+   ok: a clock a year ahead: every other dump goes and the run's own verified dump stays, so no run ends with nothing to restore; once the clock is right that dump is ahead by its name, kept and said at every run
+   ok: a dump that cannot be written (pg_dump fails, writes nothing, no disk, db unhealthy, lock held) or verified (the list, the full read): exit 1, no partial file, and not one old dump deleted, by count or by age
+   ok: a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes them all
+   ok: prune alone never deletes by age (three dumps of 10 to 30 days stay), only by count, and only in its own folder
+   ok: a restore never deletes: restore-live of a 20 day old dump writes its pre-restore dump and keeps every old one, the dump being restored included; restore, verify and list change nothing
+   ok: deploys/ is left alone while a predeploy backup or a restore holds its lock: exit 0, the folder of the run still rotated
+   ok: a lock of deploys/ that cannot be taken at all is the same: nothing is deleted there without it, and the backup still ends well
+   ok: no flock on this machine: the held lock of deploys/ is checked with the real flock in CI
+
+== T10, safety: only whole dump names, directly in the folder, never through a link
+   ok: left alone and reported, run after run: no timestamp, a date that does not exist, another suffix or prefix, an upper case tag, a partial file, a name with a line break, a folder and a symbolic link named like old dumps (the file it points to untouched), a deploys/ that is a link
+   ok: retention lists the same files and the same link, so status shows what sits outside the rotation
+   ok: ops/db.sh: no recursive rm, no find -delete, no xargs; one rm deletes dumps, by one full path
+
+== T10, ops/db.sh retention: what must hold for the 7 days, shown so that it can be checked
+   ok: a healthy server: 7 from the default, the newest and the oldest dump of each folder by their names, what is left alone; no lock taken, nothing changed, no warning
+   ok: what breaks the 7 days is said: no verified backup for 3 days, a dump past the limit, a scratch database left by restore --keep (or a database that could not be asked), a BACKUP_KEEP above 7
+   ok: every backup says so too, in backup.log night after night: the scratch database while it exists; a database that does not answer that question does not fail the backup
+
+== T10, the nightly schedule against a fake Jetson: the line, the retention of its runs, no reinstall for a change
+   ok: the line installed before T10 carries BACKUP_KEEP=14: status says so, with the warning, and its run still keeps a dump of 10 days
+   ok: install, twice: one line, without a BACKUP_KEEP, the 14 gone, the foreign line kept; install shows the retention its runs apply (7), and the README shows this very line
+   ok: the installed line, run like cron (sh, HOME and a bare PATH): a verified dump, the dumps of 9 and 11 days ago deleted, the retention in backup.log
+   ok: a retention changed in the Jetson's .env is what the next nightly run applies and what status shows: no reinstall, the crontab untouched
+   ok: a BACKUP_KEEP set on the Mac at install is written into the line and wins over the Jetson's .env, and status says which one applies
+   ok: remove, twice: only the jobapp line goes; status says not installed and what a backup run by hand would keep
+   ok: status against a Jetson not deployed since T10 says the retention is not reported and to deploy first, instead of guessing
+
+== T10, the defaults written down: one number, 7, and no other left
+   ok: ops/db.sh holds the only default (7); deploy.sh, the deploy workflow and .env.example name no number of their own
+
+== deploy lock: the Jetson releases it after DEPLOY_LOCK_MAX_S even if the Mac never closes it
+   ok: the remote lock command runs timeout <DEPLOY_LOCK_MAX_S> cat (no flock here: the release itself is checked in CI)
+
+== generate_env: a new .env.jetson gets a CREDENTIALS_KEY, an existing one is never rewritten
+   ok: new .env.jetson: random 32 byte CREDENTIALS_KEY, mode 600; an existing file is never rewritten, only warned about when it lacks the key
+
+== ops/previous.sh: :previous from the running containers, the deployed tree saved and restored
+   ok: tag-running tags the image id of each running container, worker included (never :latest); a stopped service keeps its :previous
+   ok: deploy.sh and deploy.yml build api, worker and caddy; the rollback restores jobapp-worker too
+   ok: save-tree and restore-tree bring back compose.yml, the Caddyfile and the file list; .env and .deployed-commit untouched; first deploy and bad arguments
+
+== issue #81: a fake docker and a fake timeout for ops/migrate.sh and the deploy step of deploy.yml
+   ok: fakes ready
+
+== ops/migrate.sh: one off container of the new image, no-op at head, stops safely on every failure
+   ok: at head: one container of the api service (--rm, --no-deps, no port, named), nothing to apply, the running db left alone, exit 0
+   ok: pending migrations: alembic's lines in the log, the count and the revision reached; nothing restarted
+   ok: a failing migration: exit 1 with alembic's error and what to do, the stack untouched, the container removed
+   ok: a migration over MIGRATE_TIMEOUT_S: stopped, its container removed, the sessions of the current database on the migration's advisory lock (the id of alembic/env.py) ended in Postgres, exit 1, the stack untouched
+   ok: exit 137 before the limit: reported as killed, possibly out of memory, not as a timeout, its session ended and the stack untouched; exit 137 at the limit: a timeout
+   ok: README recovery: docker rm alone does not end the transaction, and the statement to end the session is the one ops/migrate.sh runs
+   ok: a migration container that is running, restarting or created: this run stops, and never removes or kills it
+   ok: a leftover container that exited is removed, then the migration runs
+   ok: first install or a stopped db: db alone is started first, then every migration applies
+   ok: a db that does not start: exit 1 before any migration
+   ok: credentials in anything shaped like a URL are masked on the way to the log
+   ok: a bad MIGRATE_TIMEOUT_S or container name, any argument (there is no downgrade), or no compose.yml and .env: refused before docker
+   ok: COMPOSE and MIGRATE_CONTAINER choose the project and the name (scratch stacks on the Mac)
+
+== deploy.sh: the migrations run after the build and before the new code starts
+   ok: cmd_deploy: build api, worker, caddy, then ops/migrate.sh, then compose up --wait, then health
+   ok: a failing migration stops ./deploy.sh before compose up: exit 1, nothing restarted, the message says what to do
+   ok: a stack that does not start after the migrations: exit 1, the schema is kept, no downgrade
+   ok: MIGRATE_TIMEOUT_S is checked before it is sent to the Jetson
+   ok: no migration in the started api container, and no downgrade command, in deploy.sh, ops/ or deploy.yml
+
+== deploy.yml: the deploy step itself, run against the fakes
+   ok: a pending migration: :previous tagged, images built, the predeploy backup, the migration in the one off container, then compose up, then the smoke
+   ok: T10: the predeploy backup names no retention of its own, so ops/db.sh applies the one of every backup (the Jetson's .env, then 7) in the predeploy folder
+   ok: a database already at head: a no-op, the deploy goes on
+   ok: a failing migration: exit 1 before compose up, nothing stopped or restarted, the previous files and :latest tags back, .deployed-commit kept
+   ok: a migration that times out: the same stop, the stack untouched
+   ok: the migration applies, then compose up fails: the previous files and images are started again on the migrated schema, alembic is not run again, nothing downgrades, exit 1
+   ok: a smoke that fails once the new stack is up: red, no rollback, .deployed-commit kept (issue #16, unchanged)
+   ok: first install on an empty database: db started alone, every migration applied, then the stack
+
+All 130 checks passed.

@@ -1,0 +1,61 @@
+
+== ops/db.sh restore-live stops the api and the worker, and starts both on every path
+   ok: restore-live: api and worker stopped through drop and restore, started healthy after the migrations
+   ok: a failed restore rolls back with both still stopped, then starts api and worker
+   ok: any other failure after the stop starts api and worker again on exit
+
+== T10, retention: ops/db.sh backup with a clock, an rm and locks the test controls
+   ok: fakes ready: a run is at a time the test chooses, and every rm is recorded
+
+== T10, retention: 7 by default, by count and by the date in the name; an explicit value wins for both
+   ok: no BACKUP_KEEP anywhere: 7. Nine dumps of three days leave the newest 7, the new one among them
+   ok: a week of nightly dumps, each a few seconds later than the last: the one of 7 nights ago goes, 7 stay
+   ok: age is counted in UTC calendar days between two names: the dump of 7 days ago at 23:59:59 goes (6 days and 1 hour on a clock), the one of 6 days ago at 00:00:00 stays; the count rule had nothing to delete
+   ok: the name wins over the mtime: a dump whose name says 9 days ago goes although it was written today, one named yesterday stays although its mtime says September
+   ok: the day arithmetic across the end of February (2028 a leap year, 2027 and 2100 not), the new year and a 31 day month
+   ok: an explicit BACKUP_KEEP=14 wins for both rules: 14 dumps and 14 days (13 stays, 14 goes), with the warning that users are promised 7; the same folder at the default keeps nothing past 6 days
+   ok: the BACKUP_KEEP of the deployed .env is read at each run (quoted, spaced or with a carriage return too), the environment of the run wins over it, an empty line means the default
+   ok: BACKUP_KEEP 0, -1, abc, 1.5, 07, 10000 and '7 days' are refused, from the environment and from .env: no dump, nothing deleted, exit 1
+
+== T10, retention by age in every folder the server keeps dumps in
+   ok: the nightly run: a predeploy dump 8 days old goes and one 6 days old stays, a pre-restore dump 9 days old goes, an uploaded dump 9 days old goes; rm only ever got whole dump names in the three folders
+   ok: the count rule is for the folder of the run: nine predeploy dumps of yesterday all stay through the nightly run
+   ok: the deploy's own backup (BACKUP_DIR is the predeploy folder): both rules there, newest 7 and nothing 7 days old, and no other folder touched
+
+== T10, safety: the newest verified dump of the whole tree stays, and no folder has an exception
+   ok: every folder holds only dumps past the limit: all go, the last predeploy dump and the last upload included, and the one dump left on the server is the one this run wrote and verified
+   ok: a week without a deploy: the only predeploy dump, taken 7 days ago in the afternoon, goes with the nightly dump of that day, so nothing a user deleted since is left in it
+   ok: a deploy after a long pause: its backup deletes every older predeploy dump and keeps its own; the folder of the nightly run is not its to rotate
+   ok: a clock set back: the dump this run wrote is the oldest name of nine and still stays (the count rule takes the next one); the dumps named ahead of it are kept and said
+   ok: a clock a year ahead: every other dump goes and the run's own verified dump stays, so no run ends with nothing to restore; once the clock is right that dump is ahead by its name, kept and said at every run
+   ok: a dump that cannot be written (pg_dump fails, writes nothing, no disk, db unhealthy, lock held) or verified (the list, the full read): exit 1, no partial file, and not one old dump deleted, by count or by age
+   ok: a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes them all
+   ok: prune alone never deletes by age (three dumps of 10 to 30 days stay), only by count, and only in its own folder
+   ok: a restore never deletes: restore-live of a 20 day old dump writes its pre-restore dump and keeps every old one, the dump being restored included; restore, verify and list change nothing
+   ok: deploys/ is left alone while a predeploy backup or a restore holds its lock: exit 0, the folder of the run still rotated
+   ok: a lock of deploys/ that cannot be taken at all is the same: nothing is deleted there without it, and the backup still ends well
+   ok: with the real flock: held by another process, deploys/ is skipped; released, the next run deletes what is too old there
+
+== T10, safety: only whole dump names, directly in the folder, never through a link
+   ok: left alone and reported, run after run: no timestamp, a date that does not exist, another suffix or prefix, an upper case tag, a partial file, a name with a line break, a folder and a symbolic link named like old dumps (the file it points to untouched), a deploys/ that is a link
+   ok: retention lists the same files and the same link, so status shows what sits outside the rotation
+   ok: ops/db.sh: no recursive rm, no find -delete, no xargs; one rm deletes dumps, by one full path
+
+== T10, ops/db.sh retention: what must hold for the 7 days, shown so that it can be checked
+   ok: a healthy server: 7 from the default, the newest and the oldest dump of each folder by their names, what is left alone; no lock taken, nothing changed, no warning
+   ok: what breaks the 7 days is said: no verified backup for 3 days, a dump past the limit, a scratch database left by restore --keep (or a database that could not be asked), a BACKUP_KEEP above 7
+   ok: every backup says so too, in backup.log night after night: the scratch database while it exists; a database that does not answer that question does not fail the backup
+
+== T10, the nightly schedule against a fake Jetson: the line, the retention of its runs, no reinstall for a change
+   ok: the line installed before T10 carries BACKUP_KEEP=14: status says so, with the warning, and its run still keeps a dump of 10 days
+   ok: install, twice: one line, without a BACKUP_KEEP, the 14 gone, the foreign line kept; install shows the retention its runs apply (7), and the README shows this very line
+   ok: the installed line, run like cron (sh, HOME and a bare PATH): a verified dump, the dumps of 9 and 11 days ago deleted, the retention in backup.log
+   ok: a retention changed in the Jetson's .env is what the next nightly run applies and what status shows: no reinstall, the crontab untouched
+   ok: a BACKUP_KEEP set on the Mac at install is written into the line and wins over the Jetson's .env, and status says which one applies
+   ok: remove, twice: only the jobapp line goes; status says not installed and what a backup run by hand would keep
+   ok: status against a Jetson not deployed since T10 says the retention is not reported and to deploy first, instead of guessing
+
+== T10, the defaults written down: one number, 7, and no other left
+   ok: ops/db.sh holds the only default (7); deploy.sh, the deploy workflow and .env.example name no number of their own
+
+All 41 checks of the T10 part passed on Linux aarch64, bash 5.2.21(1)-release.

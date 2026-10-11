@@ -1152,6 +1152,15 @@ only deploys "$(d 9 predeploy-aaaaaaaaaaaa)" "$(d 8 predeploy-bbbbbbbbbbbb)"
 only incoming
 out_has "skipped $ROT/backups/deploys: a backup or a restore holds its lock"
 ok "deploys/ is left alone while a predeploy backup or a restore holds its lock: exit 0, the folder of the run still rotated"
+rot_new
+seed "$(d 9)" "deploys/$(d 9 predeploy-aaaaaaaaaaaa)"
+mkdir "$ROT/backups/deploys/.lock" # a lock that cannot even be opened
+rot 0 "$NOW"
+only . "$(d 0)"
+only deploys "$(d 9 predeploy-aaaaaaaaaaaa)"
+out_has "skipped $ROT/backups/deploys: a backup or a restore holds its lock"
+out_has "^backup=$ROT/backups/$(d 0)$"
+ok "a lock of deploys/ that cannot be taken at all is the same: nothing is deleted there without it, and the backup still ends well"
 if command -v flock >/dev/null; then
   # The same with the real flock: this script holds the lock of deploys/ (descriptor 7) during
   # the run, as a predeploy backup or a restore from that folder would.
@@ -1210,6 +1219,10 @@ out_has "left alone: $ROT/backups/deploys is a symbolic link or a file, not a fo
 grep -q "not a dump of this script: \(backup\.log\|\.lock\|previous-tree\|incoming\)" "$WORK/out" && fail "the script reports its own files: $(cat "$WORK/out")"
 [[ "$(grep -c "^rm -f -- " "$ROT/order")" == 2 ]] || fail "more than the two old dumps reached rm: $(cat "$ROT/order")"
 ok "left alone and reported, run after run: no timestamp, a date that does not exist, another suffix or prefix, an upper case tag, a partial file, a name with a line break, a folder and a symbolic link named like old dumps (the file it points to untouched), a deploys/ that is a link"
+rot 0 "$NOW" -- retention
+out_has "left alone: $ROT/backups/deploys is a symbolic link or a file, not a folder of dumps"
+grep -qF "left alone in $ROT/backups, not a dump of this script: jobapp-latest.dump" "$WORK/out" || fail "retention does not list what is left alone: $(cat "$WORK/out")"
+ok "retention lists the same files and the same link, so status shows what sits outside the rotation"
 grep -nE '(^|[^[:alnum:]_])rm[[:space:]]+-[[:alnum:]]*[rR]' ops/db.sh && fail "ops/db.sh has a recursive rm"
 grep -nE -- '(^|[^-])-(delete|exec)([^[:alnum:]_-]|$)|xargs' ops/db.sh && fail "ops/db.sh deletes through find or xargs"
 # shellcheck disable=SC2016 # the literal text of ops/db.sh

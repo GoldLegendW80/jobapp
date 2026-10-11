@@ -816,7 +816,9 @@ day, until you delete it.
 or a file on the Mac (uploaded to `~/jobapp-backups/incoming/` first). By default it restores into
 the scratch database `jobapp_restore_check`, prints the row count of every table and drops it
 (`--keep` leaves it, `./deploy.sh restore --drop-scratch` drops it later). A missing, empty,
-foreign, truncated or damaged file is refused before any database is touched.
+foreign, truncated or damaged file is refused before any database is touched. An uploaded dump
+stays in `incoming/` under the retention below, like any dump: once its name is 7 days old the
+next nightly run deletes it, and restoring the local file again uploads it again.
 
 `./deploy.sh restore <file> --into-live` replaces the live database. It verifies the file, asks you
 to type `RESTORE jobapp` (`--yes` skips the question, for scripts; without a terminal and without
@@ -865,9 +867,9 @@ can check a folder by reading its names. So with 7, a dump taken at any hour of 
 deleted by the nightly run of day D + 7, and the Jetson holds seven nightly dumps. A dump taken
 later in the UTC day than the nightly run lives less than 7 days. One taken earlier, between
 midnight UTC and the end of that run, lives 7 days plus the time that separated it from the end
-of the run: a few seconds for the nightly dump itself, and up to 1 hour 17 minutes in summer or
-2 hours 17 minutes in winter for a dump taken just after midnight UTC (the default schedule,
-03:17 in Paris, is 01:17 or 02:17 UTC). For a user: a document deleted on day D is in no dump of
+of the run: the seconds a run takes for the nightly dump itself, and up to about 1 hour 17
+minutes in summer or 2 hours 17 minutes in winter for a dump taken just after midnight UTC (the
+default schedule, 03:17 in Paris, is 01:17 or 02:17 UTC). For a user: a document deleted on day D is in no dump of
 the Jetson once the run of day D + 7 has ended. That is within 7 days of the deletion, except
 for a document deleted in those small hours just after a dump taken in them, which stays 7 days
 and at most those two hours or so. `BACKUP_KEEP=6` removes the residue at the price of one night

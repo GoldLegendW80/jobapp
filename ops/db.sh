@@ -475,8 +475,10 @@ cmd_retention() {
   info "retention: BACKUP_KEEP=$KEEP ($KEEP_FROM). After each verified backup the newest $KEEP dumps of $BACKUP_DIR stay, and a dump whose name is $KEEP days old or more is deleted, there, in deploys/ and in incoming/"
   promise_note
   for dir in "$BACKUP_DIR" "$BACKUP_DIR/deploys" "$BACKUP_DIR/incoming"; do
-    if [[ -L "$dir" ]]; then
-      info "left alone: $dir is a symbolic link, not a folder of dumps"
+    # As rotate does: $BACKUP_DIR is the folder the operator named, the two others are folders
+    # of dumps only when they are real folders.
+    if [[ "$dir" != "$BACKUP_DIR" ]] && [[ -L "$dir" || (-e "$dir" && ! -d "$dir") ]]; then
+      info "left alone: $dir is a symbolic link or a file, not a folder of dumps"
       continue
     fi
     [[ -d "$dir" ]] || continue

@@ -28,8 +28,8 @@
 #   ./deploy.sh restore --drop-scratch   drop the scratch database left by --keep
 #   ./deploy.sh backup-schedule install|remove|status
 #                                  nightly backup in the Jetson user's crontab (no sudo); status
-#                                  shows the line, the retention its runs apply and the oldest
-#                                  dump of each folder
+#                                  shows the line, the retention its runs apply, the newest and
+#                                  the oldest dump of each folder and what is left alone there
 #   ./deploy.sh admin create <email>
 #                                  print a one-time admin setup link on the public URL (a 1 hour
 #                                  password reset link when that admin exists); runs
@@ -1214,7 +1214,7 @@ cmd_backup_schedule() {
       if [[ -n "$line" ]]; then
         info "installed: $line"
       else
-        info "not installed (./deploy.sh backup-schedule install); a backup run by hand would apply:"
+        info "not installed (./deploy.sh backup-schedule install); a backup run on $HOST would apply:"
       fi
       schedule_retention "$line"
       local logf="$BDIR/backup.log" # relative paths resolve in the remote home, where ssh starts
