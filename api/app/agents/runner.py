@@ -42,6 +42,81 @@ that succeeds with a subscription token marks it verified (credentials.set_verif
 only if it was not replaced meanwhile).
 
 Logs carry ids, statuses, counts, tokens and cost, never a prompt, a tool argument or a result.
+
+What a definition can ask of a run (ingestion G6; none of it applies to an agent that does not
+ask for it, and the agents of definitions.py ask for none):
+
+- **A bound run** (`AgentDefinition.bind`). Before the credential is read and before any tool
+  exists, the hook says what the run works on, in a transaction of its own. Its answer is the
+  tools' `Scope.binding`, read only: no tool takes an id of that thing, so the model cannot
+  point the run elsewhere. When the hook answers None the thing is gone, and the run fails with
+  BINDING_GONE without a model call.
+- **A private run** (`private_io`). A `tool_call` event holds the tool's name and the size of
+  its arguments, a `tool_result` event its error state and the size of the answer, never a
+  value; a tool name the model made up is not stored either (only the agent's own tools and
+  Claude Code's built-in names are names this code knows). The run's `output` holds counts
+  (`_State.counts`), never the answer. Nothing of the run is live, whatever `live_text` and
+  AGENTS_LIVE_TEXT say: no partial message is asked for and Redis is never written. What a
+  failure of such a run raised is logged by its type alone. The `text` events are stored as
+  for any run (the model's own words, scrubbed and shortened the same way): whoever owns the
+  documents deletes them with the document.
+- **A final hook** (`on_final`). Called once this runner has committed the run's final status
+  and let go of everything of the run (no transaction open, no lock held, the scratch
+  directory and the credential gone), so the hook can take any lock from the top of its own
+  lock order. Called for done, cancelled and every failure recorded here; not for a run ended
+  elsewhere (cancelled while queued, failed by a reaper or at the enqueue) and not when the
+  run's job is cancelled under it: the worker is stopping, or the queue's job timeout has
+  passed (arq ends such a job the same way, and the two cannot be told apart here). A missed
+  hook is never called again: whoever chains runs also looks on a timer, and that timer is
+  the guarantee. The hook has FINAL_HOOK_TIMEOUT_S and holds one of the worker's agent slots
+  meanwhile; what it raises is logged and changes nothing of the run.
+- **A model per kind of credential** (`model_by_credential`). Chosen when the credential is
+  revealed and written on the run in that same transaction, next to `credential_kind`.
+- **A token budget** (`token_budget` in the run's input, read for every agent; the input models
+  of the agents of definitions.py refuse the key, so only a module that creates its runs
+  itself can set one). Absent: no limit. A whole number above zero: the run may spend that many
+  tokens (input, cache writes, cache reads and output together). Anything else written there
+  (zero, a negative number, null, text) allows no call: the run fails with TOKEN_LIMIT before
+  Claude Code is started.
+
+  The count. What each assistant message reports, once per API message id (`Budget`), taken
+  the moment the message comes off the stream, by a reader of its own (`_drive_counting`):
+  never behind the event writes of the messages before it, because Claude Code does not wait
+  for those and can be several requests ahead of a runner that writes slowly. A run without a
+  budget keeps the one loop it always had.
+
+  The stop, once the count has reached the budget. It does not depend on any hook:
+  - a message that holds a tool call, whatever the tool, means another request: the run is
+    interrupted at once (`Budget.stop`), like a cancelled one;
+  - where Claude Code asks the gate (the tools it offers, which are the agent's own), the gate
+    answers the call with a stop as well (`continue: false`): the tool does not run and the
+    CLI ends the turn itself, in order;
+  - a request that left with no tool call before it (the pinned CLI goes on by itself after
+    an answer the API ended with `max_tokens`) is seen when its first message arrives, and the
+    run is interrupted there;
+  - a run whose last message used the budget up and asked for nothing more is simply done:
+    nothing was cut, and its caller sees what it spent.
+  The gate fails closed: when it cannot tell that the message of a call is counted, it stops
+  the run, which then fails with INTERNAL, not with TOKEN_LIMIT.
+
+  What it holds (tasks/ingestion/todo.md, Measurements, G6; measured on the pinned CLI). A run
+  passes its budget by one request, or two. One, the request whose usage reached the budget,
+  which cannot be prevented (its usage is known when its first message arrives), when the
+  model then calls a tool of the agent: the CLI waits for the gate, so no request follows.
+  Two in two cases. The model calls a tool the CLI does not offer: only the interrupt holds
+  the next request back, nothing orders the two, and in 3 of 80 runs against an instant stub
+  that request had left. It is cut at once and the CLI drops it, so the run's record does
+  not hold it. Or the turn goes on with no tool call: the second request is answered and
+  recorded (a third that had left when the interrupt lands was never seen, and is not
+  excluded). On top comes the output of the run so far: an assistant message reports its
+  input in full and its output as of the start of the answer, so output is only counted when
+  the result message arrives.
+
+  What is recorded. A stopped run ends failed with TOKEN_LIMIT, a constant its caller can
+  compare. A run with a budget always says what it used: the result message's figures when it
+  reports any (kept the moment it arrives, even if the run is cut while its events are still
+  being written), else the runner's own count. While it runs, that count is written on the run
+  with each of its events, so a run no runner ends (the worker killed, a reaper) keeps it.
 """
 
 import asyncio
@@ -54,11 +129,12 @@ import tempfile
 import time
 import uuid
 from collections import deque
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from claude_agent_sdk import (
@@ -85,6 +161,30 @@ from app.agents import chat, credentials, definitions, live, runs
 from app.agents import tools as app_tools
 from app.agents.backend import Backend, BackendFactory, BackendRequest
 from app.agents.crypto import DecryptError, Keyring
+
+# The messages stored on a run (they reach the user) and what a caller may conclude from one
+# live in a module the api can import too; they are this module's names as before.
+from app.agents.failures import (
+    API_ERROR,
+    BINDING_GONE,
+    BUSY,
+    FAILED,
+    INTERNAL,
+    NO_CLI,
+    NO_CREDENTIAL,
+    NO_RESULT,
+    NO_START,
+    PROCESS,
+    REFUSED,
+    THREAD_GONE,
+    TIME_LIMIT,
+    TOKEN_LIMIT,
+    TURN_LIMIT,
+    UNKNOWN_AGENT,
+    UNREADABLE,
+)
+from app.agents.failures import is_box_failure as is_box_failure
+from app.agents.failures import is_provider_failure as is_provider_failure
 from app.agents.models import CredentialKind, RunStatus
 from app.config import Settings
 
@@ -92,11 +192,23 @@ logger = logging.getLogger("app.agents.runner")
 
 CANCEL_POLL_S = 0.5
 INTERRUPT_GRACE_S = 10.0
+# How long a definition's on_final hook may take before the runner moves on.
+FINAL_HOOK_TIMEOUT_S = 30.0
+# How long the gate waits for the assistant message of a tool call to be counted against the
+# run's token budget before it decides with what is counted so far (`Budget.counted`).
+GATE_WAIT_S = 5.0
 TEXT_MAX = 20_000
 TOOL_RESULT_MAX = 2_000
 ARG_VALUE_MAX = 200
 ARGS_MAX = 1_000
 REDACTED = "[redacted]"
+# In place of a tool name the model made up, in the events and the log of a private run.
+NOT_STORED = "[not stored]"
+# The key of a run's input that holds its token budget, and what Claude Code is told when the
+# gate stops a run on it, or because it could not tell whether the budget was reached.
+BUDGET_KEY = "token_budget"
+BUDGET_STOP = "The run reached its token budget."
+BUDGET_UNSURE = "The run's token count could not be confirmed."
 
 # Built-in Claude Code tools, denied by name on top of `tools=[]` (which already leaves the model
 # none) and of the PreToolUse gate (which denies anything outside the allow list): shell, files,
@@ -164,23 +276,6 @@ ENV_KEEP = frozenset(
 # Argument names whose values are never stored in a tool call event.
 _SECRET_ARG = ("secret", "token", "password", "api_key", "apikey", "authorization", "cookie")
 
-# Messages stored on the run (they reach the user).
-NO_CREDENTIAL = "No model credential is saved. Add one on the Account page."
-UNREADABLE = "The saved credential cannot be read with this server's key. Paste it again."
-UNKNOWN_AGENT = "This agent no longer exists."
-THREAD_GONE = "This conversation no longer exists."
-TIME_LIMIT = "The run took longer than its limit of {minutes} and was stopped."
-TURN_LIMIT = "The run reached its limit of {turns} turns."
-NO_RESULT = "The agent stopped without a result."
-REFUSED = "Anthropic refused the credential: it is wrong, revoked or has no access."
-BUSY = "Anthropic is busy or rate limiting this credential. Try again later."
-API_ERROR = "The model API failed (HTTP {status})."
-FAILED = "The agent failed ({reason})."
-NO_CLI = "Claude Code is not installed in the worker."
-NO_START = "Claude Code could not start."
-PROCESS = "The Claude Code process failed (exit code {code})."
-INTERNAL = "The run failed on an internal error."
-
 
 @dataclass
 class RunContext:
@@ -201,6 +296,11 @@ class RunContext:
     # failed one (app/agents/live.py: a Redis that does not answer must not slow the run).
     live_timeout_s: float = live.STORE_TIMEOUT_S
     live_backoff_s: float = live.WRITE_BACKOFF_S
+    # Handed to a definition's on_final hook as `FinalRun.services`: what the worker has that a
+    # hook may need and this runner does not (its queue). Empty until the worker fills it.
+    services: Mapping[str, Any] = field(default_factory=dict)
+    final_hook_timeout_s: float = FINAL_HOOK_TIMEOUT_S
+    gate_wait_s: float = GATE_WAIT_S
 
     def definition(self, name: str) -> definitions.AgentDefinition:
         if self.agents is not None and name in self.agents:
@@ -289,6 +389,148 @@ def result_text(content: Any) -> str:
     return str(content)
 
 
+def size_of(args: Any) -> int:
+    """How large a tool call's arguments are: the characters of their compact JSON (of their
+    text, for something JSON cannot write: a size is never a reason to fail a run). What a
+    private run stores of them."""
+    try:
+        return len(json.dumps(args, ensure_ascii=False, default=str, separators=(",", ":")))
+    except (TypeError, ValueError):
+        return len(str(args))
+
+
+def result_size(content: Any) -> tuple[int, int]:
+    """How large a tool result is: the characters of its text, and how many of its content
+    blocks are something else (an image). What a private run stores of it."""
+    if content is None:
+        return 0, 0
+    if isinstance(content, str):
+        return len(content), 0
+    if isinstance(content, list):
+        chars = other = 0
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                chars += len(str(block.get("text", "")))
+            else:
+                other += 1
+        return chars, other
+    return len(str(content)), 0
+
+
+def token_budget(data: Mapping[str, Any]) -> int | None:
+    """The token budget a run's input gives it. None when the input names none: no limit. A
+    whole number above zero is the budget. Anything else written under the key (zero, a
+    negative number, null, a fraction, text, true) is read as zero, and a budget of zero allows
+    no call at all: whoever computes budgets by subtraction must never get an unlimited run out
+    of a wrong one."""
+    if BUDGET_KEY not in data:
+        return None
+    value = data[BUDGET_KEY]
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return 0
+
+
+class Budget:
+    """What a run has used of its token budget, counted from the usage Claude Code reports on
+    each assistant message, the moment the message comes off the stream (`_drive`): never
+    behind the event writes of the messages before it (module docstring, A token budget).
+
+    One count per API message: Claude Code prints one assistant message per content block, each
+    with the usage of the whole API message and its id, so the figures of an id are counted
+    once (the largest seen of each side). A message without an id cannot be recognised when it
+    comes again, so each one counts on its own: too much rather than too little.
+
+    `stop` is set, and the run then interrupted, as soon as the count has reached the budget
+    and the turn is seen to go on: the message holds a tool call, whatever the tool (Claude
+    Code answers a call to a tool it does not offer by itself, without asking the gate, and
+    sends its next request at once), or a new API message arrives when nothing was left to
+    spend. `refused` is set when the gate stopped a tool call on a used up budget, `unsure`
+    when it stopped one because it could not tell that the call's message was counted."""
+
+    def __init__(self, limit: int, wait_s: float = GATE_WAIT_S) -> None:
+        self.limit = limit
+        self.stop = asyncio.Event()
+        self.refused = False
+        self.unsure = False
+        self._wait_s = wait_s
+        self._by_message: dict[str, tuple[int, int]] = {}
+        self._calls: set[str] = set()
+        self._arrived = asyncio.Event()
+
+    @property
+    def requests(self) -> int:
+        """API messages counted so far."""
+        return len(self._by_message)
+
+    @property
+    def input_tokens(self) -> int:
+        return sum(side for side, _ in self._by_message.values())
+
+    @property
+    def output_tokens(self) -> int:
+        return sum(out for _, out in self._by_message.values())
+
+    @property
+    def spent(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    @property
+    def used_up(self) -> bool:
+        """No further call is allowed: what was spent has reached the budget."""
+        return self.spent >= self.limit
+
+    def count(self, message: AssistantMessage) -> None:
+        """Count an assistant message, and stop the run when nothing is left and the turn goes
+        on. Never waits, on the database or on anything else: it is called as the message
+        comes off the stream, and the gate may be asked about a tool call of this message at
+        any moment."""
+        key = message.message_id
+        if key is None or key not in self._by_message:
+            if self.used_up:
+                # A request left although nothing was left to spend: stop the run now.
+                self.stop.set()
+            if key is None:
+                key = f"no id {len(self._by_message)}"
+        usage = message.usage or {}
+        side = (
+            _int(usage.get("input_tokens"))
+            + _int(usage.get("cache_creation_input_tokens"))
+            + _int(usage.get("cache_read_input_tokens"))
+        )
+        out = _int(usage.get("output_tokens"))
+        before = self._by_message.get(key, (0, 0))
+        self._by_message[key] = (max(before[0], side), max(before[1], out))
+        calls = [block.id for block in message.content if isinstance(block, ToolUseBlock)]
+        self._calls.update(calls)
+        if calls and self.used_up:
+            # A tool call means another request, and nothing is left to pay for it. Not left to
+            # the gate alone: the gate is only asked about the tools Claude Code offers.
+            self.stop.set()
+        self._arrived.set()
+
+    async def counted(self, tool_use_id: str | None) -> bool:
+        """Whether the assistant message that made this tool call has been counted, waiting
+        for it up to `wait_s`. The SDK hands a hook request to a task of its own as soon as it
+        has read it, while the message printed just before it may still sit in the SDK's
+        buffer: without the wait the gate could decide before the usage that uses the budget
+        up is counted. The message is counted when it comes off the stream, so the wait covers
+        that buffer alone, never the database. False when the wait ends without the message,
+        or when the hook names no call at all: the gate then stops the run (never seen in the
+        measurements, where the message always came first and the hook always named its
+        call)."""
+        if tool_use_id is None:
+            return False
+        try:
+            async with asyncio.timeout(self._wait_s):
+                while tool_use_id not in self._calls:
+                    self._arrived.clear()
+                    await self._arrived.wait()
+        except TimeoutError:
+            return False
+        return True
+
+
 def build_env(
     kind: CredentialKind, secret: str, scratch: Path, base_url: str | None = None
 ) -> dict[str, str]:
@@ -326,14 +568,51 @@ def build_env(
 Gate = Callable[[dict[str, Any], str | None, Any], Awaitable[dict[str, Any]]]
 
 
-def make_gate(allowed: frozenset[str], on_denied: Callable[[str], Awaitable[None]]) -> Gate:
+def make_gate(
+    allowed: frozenset[str],
+    on_denied: Callable[[str], Awaitable[None]],
+    budget: Budget | None = None,
+) -> Gate:
     """The PreToolUse hook: any tool outside the allow list is denied by this code, whatever
-    the options or the model say (hooks run first, and a hook deny holds in every mode)."""
+    the options or the model say (hooks run first, and a hook deny holds in every mode).
+
+    For a run with a token budget it is also one of the two places where the run stops (the
+    other is `Budget.count`, which interrupts the run and needs no hook). Once the budget is
+    used up, a tool call the gate is asked about is answered with a stop (`continue: false`, a
+    documented hook answer). The tool does not run and Claude Code ends the turn itself, in
+    order, with no further request (measured on the pinned CLI: the result's terminal reason is
+    `hook_stopped`). Claude Code only asks about the tools it offers, which here are the
+    agent's own: a call to any other name it answers by itself. A hook that merely never
+    answered would not hold: when the wait for it ends without an answer (the client is
+    closed), Claude Code goes on as if nothing had been asked (measured too).
+
+    The gate fails closed: when it cannot tell that the message of the call is counted (the
+    wait of `Budget.counted` ended, or the hook named no call), it stops the run as well,
+    instead of letting the call through on a count that may be behind."""
+
+    def stop(reason: str) -> dict[str, Any]:
+        return {
+            "continue_": False,
+            "stopReason": reason,
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            },
+        }
 
     async def gate(
         input_data: dict[str, Any], tool_use_id: str | None, context: Any
     ) -> dict[str, Any]:
         name = str(input_data.get("tool_name", ""))
+        if budget is not None:
+            if not await budget.counted(tool_use_id):
+                budget.unsure = True
+                budget.stop.set()
+                return stop(BUDGET_UNSURE)
+            if budget.used_up:
+                budget.refused = True
+                return stop(BUDGET_STOP)
         if name in allowed:
             return {}
         await on_denied(name)
@@ -356,7 +635,10 @@ def build_options(
     gate: Gate,
     stderr: Callable[[str], None] | None = None,
     partial_messages: bool = False,
+    model: str | None = None,
 ) -> ClaudeAgentOptions:
+    """`model` is the one chosen for the run's credential (AgentDefinition.model_for); the
+    definition's own when none is given."""
     return ClaudeAgentOptions(
         system_prompt=definition.system_prompt,
         tools=[],
@@ -366,7 +648,7 @@ def build_options(
         mcp_servers={app_tools.SERVER: tools.server},
         strict_mcp_config=True,
         setting_sources=[],
-        model=definition.model,
+        model=model or definition.model,
         max_turns=definition.max_turns,
         effort=definition.effort,  # type: ignore[arg-type]
         thinking={"type": "adaptive"},
@@ -404,15 +686,57 @@ class Recorder:
     # Called first in that transaction, before the run row is updated, to take the locks that
     # come before the run in the lock order (A4, issue #27: the chat thread, see chat.py).
     lock_first: Callable[[Session], None] | None = field(default=None, repr=False)
+    # A private run (AgentDefinition.private_io): tool events hold names and sizes, never a
+    # value, and only the tool names this code knows are stored.
+    private: bool = False
+    known_tools: frozenset[str] = frozenset(FORBIDDEN_TOOLS)
+    # A run with a token budget: what it has counted so far goes on the run row with each of
+    # its events (runs.record_tokens), so that a run which never records its own end (the
+    # worker is killed, a reaper fails the run) still says what it had used by then.
+    budget: Budget | None = field(default=None, repr=False)
+    _noted: tuple[int, int] = (0, 0)
+    _owed: tuple[int, int] | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def last_seq(self) -> int:
         """The seq of the newest event of this run (written, or being written)."""
         return self.seq - 1
 
+    def tool_name(self, name: str) -> str:
+        """A tool's name as it may be stored and logged. The name is the model's: in a private
+        run only a name this code knows is kept (the agent's own tools, Claude Code's built-in
+        ones); any other could be a piece of what the run read."""
+        return name if not self.private or name in self.known_tools else NOT_STORED
+
+    def tool_call(self, block: ToolUseBlock) -> dict[str, Any]:
+        """The `tool_call` event of a tool use block."""
+        if self.private:
+            return {
+                "id": block.id,
+                "name": self.tool_name(block.name),
+                "input_size": size_of(block.input),
+            }
+        return {
+            "id": block.id,
+            "name": block.name,
+            "input": summarize_args(block.input, self.secret),
+        }
+
+    def tool_result(self, block: ToolResultBlock) -> dict[str, Any]:
+        """The `tool_result` event of a tool result block."""
+        data: dict[str, Any] = {"id": block.tool_use_id, "is_error": bool(block.is_error)}
+        if self.private:
+            data["size"], data["blocks"] = result_size(block.content)
+        else:
+            data["content"] = shorten(result_text(block.content), TOOL_RESULT_MAX, self.secret)
+        return data
+
     def _write(self, seq: int, kind: str, data: dict[str, Any]) -> None:
         with self.context.sessions() as db:
             runs.append_event(db, self.run_id, seq, kind, data, self.context.clock())
+            owed = self._owed
+            if owed is not None:
+                runs.record_tokens(db, self.run_id, *owed)
             db.commit()
 
     async def emit(self, kind: str, data: dict[str, Any]) -> None:
@@ -421,7 +745,14 @@ class Recorder:
             # Taken before the write: a cancelled await leaves the write running in its thread,
             # and the next event must not reuse its seq.
             seq, self.seq = self.seq, self.seq + 1
+            if self.budget is not None:
+                # Read here, in the loop, where the count moves; written with the event. It
+                # is behind the count by the events still to write, never ahead of it.
+                counted = (self.budget.input_tokens, self.budget.output_tokens)
+                self._owed = counted if counted != self._noted else None
             await asyncio.to_thread(self._write, seq, kind, clean)
+            if self._owed is not None:
+                self._noted, self._owed = self._owed, None
 
     def _finish(self, outcome: runs.Outcome) -> bool:
         with self.context.sessions() as db:
@@ -473,6 +804,24 @@ class _State:
     live_text: live.LiveText | None = None
     # The kind of credential the run uses (never the secret), for the `usage` event.
     credential_kind: str | None = None
+    # The run's token budget and what it has used of it; None: no limit, nothing counted.
+    budget: Budget | None = None
+    # What the run did, in numbers: the output of a private run.
+    text_blocks: int = 0
+    text_chars: int = 0
+    tool_calls: int = 0
+    tool_errors: int = 0
+
+    def counts(self) -> dict[str, int]:
+        """The run in numbers only: what a private run stores as its output."""
+        return {
+            "turns": _int(self.result.num_turns) if self.result is not None else 0,
+            "text_blocks": self.text_blocks,
+            "text_chars": self.text_chars,
+            "tool_calls": self.tool_calls,
+            "tool_errors": self.tool_errors,
+            "tools_denied": self.denied,
+        }
 
 
 async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
@@ -484,11 +833,15 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
         if state.live_text is not None and message.parent_tool_use_id is None:
             state.live_text.feed(message.event)
     elif isinstance(message, AssistantMessage):
+        # (A run with a token budget has counted this message already, when it came off the
+        # stream: `_drive`. Nothing is counted here, behind the event writes.)
         state.model = message.model or state.model
         for block in message.content:
             if isinstance(block, TextBlock):
                 if block.text:
                     state.last_text = block.text
+                    state.text_blocks += 1
+                    state.text_chars += len(block.text)
                     stored = shorten(block.text, TEXT_MAX, recorder.secret)
                     await recorder.emit("text", {"text": stored})
                 if state.live_text is not None:
@@ -497,30 +850,16 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
             elif isinstance(block, ThinkingBlock):
                 await recorder.emit("thinking", {})
             elif isinstance(block, ToolUseBlock):
-                await recorder.emit(
-                    "tool_call",
-                    {
-                        "id": block.id,
-                        "name": block.name,
-                        "input": summarize_args(block.input, recorder.secret),
-                    },
-                )
+                state.tool_calls += 1
+                await recorder.emit("tool_call", recorder.tool_call(block))
         if message.error:
             await recorder.emit("api_error", {"error": str(message.error)})
     elif isinstance(message, UserMessage):
         if isinstance(message.content, list):
             for block in message.content:
                 if isinstance(block, ToolResultBlock):
-                    await recorder.emit(
-                        "tool_result",
-                        {
-                            "id": block.tool_use_id,
-                            "is_error": bool(block.is_error),
-                            "content": shorten(
-                                result_text(block.content), TOOL_RESULT_MAX, recorder.secret
-                            ),
-                        },
-                    )
+                    state.tool_errors += bool(block.is_error)
+                    await recorder.emit("tool_result", recorder.tool_result(block))
     elif isinstance(message, ResultMessage):
         state.result = message
         # The kind goes with the amount: the browser words the amount by kind (a cost, or an
@@ -588,12 +927,17 @@ def _minutes(seconds: float) -> str:
 
 
 def outcome_of(
-    state: _State, definition: definitions.AgentDefinition, stopped: str | None
+    state: _State,
+    definition: definitions.AgentDefinition,
+    stopped: str | None,
+    model: str | None = None,
 ) -> runs.Outcome:
+    """How the run ended. `stopped` is what `_run_stream` returned; `model` the one chosen for
+    the run's credential (the definition's own when none is given)."""
     result = state.result
     input_tokens, output_tokens = _tokens(result)
     usage = {
-        "model": state.model or definition.model,
+        "model": state.model or model or definition.model,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "cost_usd": _cost(result.total_cost_usd) if result is not None else None,
@@ -603,6 +947,21 @@ def outcome_of(
     if stopped == "timeout":
         message = TIME_LIMIT.format(minutes=_minutes(definition.wall_time_s))
         return runs.Outcome(status=RunStatus.failed, error=message, **usage)
+    budget = state.budget
+    if budget is not None and budget.unsure:
+        # The gate stopped a call because it could not tell that the count was complete. Not
+        # the budget's end (nothing says it was reached): the runner's own failure.
+        return runs.Outcome(status=RunStatus.failed, error=INTERNAL, **usage)
+    if budget is not None and (
+        # The gate stopped a tool call: Claude Code then ends the turn with a result that says
+        # "success" (terminal reason hook_stopped), and the run is not finished for all that.
+        budget.refused
+        # Interrupted because nothing was left and the turn went on. When the request that
+        # followed turned out to be the run's last (a clean result came before the interrupt
+        # landed), nothing was cut.
+        or (stopped == "budget" and (result is None or result.is_error))
+    ):
+        return runs.Outcome(status=RunStatus.failed, error=TOKEN_LIMIT, **usage)
     if result is None:
         return runs.Outcome(status=RunStatus.failed, error=NO_RESULT, **usage)
     if result.subtype == "error_max_turns":
@@ -643,8 +1002,54 @@ async def _drive(
     # Claude Code process) runs here and now, before the scratch directory is removed, not later
     # from the async generator finalizer.
     async with contextlib.aclosing(backend.stream(request)) as messages:
-        async for message in messages:
+        if state.budget is None:
+            async for message in messages:
+                await _handle(message, state, recorder)
+        else:
+            await _drive_counting(messages, state.budget, state, recorder)
+
+
+async def _drive_counting(messages: Any, budget: Budget, state: _State, recorder: Recorder) -> None:
+    """The loop of a run with a token budget: the count ahead, the events behind.
+
+    Claude Code does not wait for this runner. It prints a message and goes on, and it makes
+    its next request as soon as it has the answers it needs, which for a call to a tool it does
+    not offer is at once. A loop that counts a message when it gets to it, after the event
+    writes of the messages before (one commit each), is behind by as many requests as the
+    database is slow, and so is everything that reads the count: the gate, the stop, the
+    figures recorded on a run that is cut (review of PR #95, measured on the pinned CLI).
+
+    So a reader of its own takes each message off the stream the moment it is there, counts an
+    assistant message against the budget (`Budget.count`, which stops the run when nothing is
+    left and never waits), keeps the result message, and hands the messages on in order; the
+    events are written behind it, at the pace of the database. A run without a budget keeps the
+    one loop it always had."""
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    end = object()
+
+    async def read() -> None:
+        try:
+            async for message in messages:
+                if isinstance(message, AssistantMessage):
+                    budget.count(message)
+                elif isinstance(message, ResultMessage):
+                    # What the run used in all: kept even when the run is cut while its
+                    # events are still being written.
+                    state.result = message
+                queue.put_nowait(message)
+        finally:
+            queue.put_nowait(end)
+
+    reader = asyncio.create_task(read())
+    try:
+        while (message := await queue.get()) is not end:
             await _handle(message, state, recorder)
+        await reader  # raises what the stream raised
+    finally:
+        if not reader.done():
+            reader.cancel()
+        # Awaited inside the caller's `aclosing`: the stream's `finally` runs in the reader.
+        await asyncio.gather(reader, return_exceptions=True)
 
 
 async def _watch_cancel(context: RunContext, run_id: uuid.UUID) -> None:
@@ -685,29 +1090,34 @@ async def _run_stream(
     state: _State,
     recorder: Recorder,
 ) -> str | None:
-    """Run the stream to its end, or stop it. Returns None (ran to its end), "cancelled" or
+    """Run the stream to its end, or stop it. Returns None (ran to its end), "cancelled",
+    "budget" (the run's token budget is used up and the turn was going on: `Budget.stop`) or
     "timeout". Exceptions of the stream propagate."""
     consumer = asyncio.create_task(_drive(backend, request, state, recorder))
     watcher = asyncio.create_task(_watch_cancel(context, run_id))
+    tasks: list[asyncio.Task[Any]] = [watcher, consumer]
+    limiter: asyncio.Task[Any] | None = None
+    if state.budget is not None:
+        limiter = asyncio.create_task(state.budget.stop.wait())
+        tasks.append(limiter)
     try:
         done, _ = await asyncio.wait(
-            {consumer, watcher},
-            timeout=definition.wall_time_s,
-            return_when=asyncio.FIRST_COMPLETED,
+            tasks, timeout=definition.wall_time_s, return_when=asyncio.FIRST_COMPLETED
         )
         if consumer in done:
             consumer.result()  # raises what the stream raised
             return None
-        stopped = "cancelled" if watcher in done else "timeout"
+        # The user's cancel first, then the budget, then the clock.
+        stopped = "cancelled" if watcher in done else "budget" if limiter in done else "timeout"
         with contextlib.suppress(Exception):
             await asyncio.wait_for(backend.interrupt(), timeout=5)
         await _stop(consumer, context.interrupt_grace_s)
         return stopped
     finally:
-        for task in (watcher, consumer):
+        for task in tasks:
             if not task.done():
                 task.cancel()
-        await asyncio.gather(watcher, consumer, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _claim(context: RunContext, run_id: uuid.UUID) -> tuple[Any, int] | None:
@@ -750,10 +1160,17 @@ def _chat_lock(run_id: uuid.UUID) -> Callable[[Session], None]:
     return lock
 
 
-def _reveal(context: RunContext, user_id: uuid.UUID, run_id: uuid.UUID) -> _Secret | str:
+def _reveal(
+    context: RunContext,
+    user_id: uuid.UUID,
+    run_id: uuid.UUID,
+    definition: definitions.AgentDefinition,
+) -> _Secret | str:
     """The decrypted credential, or the error message to fail the run with. The kind of the
     credential (not the secret) is written on the run, in the same transaction: the run keeps
-    what it used even if the user replaces the credential later."""
+    what it used even if the user replaces the credential later. For an agent that names a
+    model per kind of credential, the model of that kind is written with it: the run was
+    created with the model of whatever credential the user had then, or of none."""
     if context.keyring is None:
         return UNREADABLE
     with context.sessions() as db:
@@ -766,9 +1183,109 @@ def _reveal(context: RunContext, user_id: uuid.UUID, run_id: uuid.UUID) -> _Secr
             db.rollback()
             return NO_CREDENTIAL
         row = revealed.row
-        runs.record_credential_kind(db, run_id, row.kind)
+        chosen = definition.model_for(row.kind) if definition.model_by_credential else None
+        runs.record_credential_kind(db, run_id, row.kind, chosen)
         db.commit()  # also keeps a re-encryption with the current key
         return _Secret(row.kind, revealed.secret, row.updated_at, row.verified_at is not None)
+
+
+def frozen(value: Any) -> Any:
+    """A read only copy of `value`, at every depth: a mapping becomes a read only view of a
+    copy, a list or a tuple a tuple, a set a frozenset, each with its items frozen the same
+    way. Anything else is kept as it is: text, numbers, ids, dates, None, which nothing can
+    change in place (a hook that answers with another kind of object answers for it)."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: frozen(item) for key, item in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(frozen(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return frozenset(frozen(item) for item in value)
+    return value
+
+
+def _bind(context: RunContext, bind: definitions.Bind, run: Any) -> Mapping[str, Any] | None:
+    """What the run is bound to, as its definition's hook reads it now, in a transaction of
+    its own that ends here (the hook reads; nothing it changed would be kept). A read only
+    copy, at every depth (`frozen`): the tools share it and none can change what another
+    reads, a list of positions inside it no more than the mapping itself."""
+    with context.sessions() as db:
+        found = bind(db, run)
+        if found is None:
+            return None
+        made: Mapping[str, Any] = frozen(dict(found))
+        return made
+
+
+# Log lines of a private run that wait until the failure they are about is no longer being
+# handled: (level, message, extra).
+_Later = list[tuple[int, str, dict[str, Any]]]
+
+
+def _log_failure(what: str, log: dict[str, Any], exc: BaseException, later: _Later | None) -> None:
+    """An unexpected failure. For a public run (`later` is None): logged here and now, with
+    its traceback. For a private run: its type alone, since an exception's message can quote
+    what the run read, and not from here but through `_log_later`, once the exception is no
+    longer being handled. While it is, anything that goes wrong inside the logging itself (a
+    handler that cannot write) is reported by Python together with the exception being
+    handled, message included: seen in the test suite, where it printed a test's document."""
+    if later is None:
+        logger.error(what, extra=log, exc_info=exc)
+    else:
+        later.append((logging.ERROR, what, {**log, "error": type(exc).__name__}))
+
+
+def _log_later(later: _Later) -> None:
+    """Write the lines `_log_failure` kept back. Called outside every `except` block."""
+    while later:
+        level, what, extra = later.pop(0)
+        logger.log(level, what, extra=extra)
+
+
+async def _final(
+    context: RunContext,
+    hook: definitions.OnFinal,
+    private: bool,
+    run: Any,
+    status: RunStatus,
+    log: dict[str, Any],
+) -> None:
+    """Call a definition's on_final hook (module docstring, A final hook). The run's end is
+    committed and nothing of the run is held; whatever the hook does or raises, the run stays
+    as it was recorded."""
+    final = definitions.FinalRun(
+        run_id=run.id,
+        user_id=run.user_id,
+        agent=run.agent,
+        status=status,
+        sessions=context.sessions,
+        clock=context.clock,
+        settings=context.settings,
+        services=context.services,
+    )
+    later: _Later = []
+    try:
+        async with asyncio.timeout(context.final_hook_timeout_s):
+            await hook(final)
+    except Exception as exc:
+        _log_failure("agent final hook failed", log, exc, later if private else None)
+    _log_later(later)
+
+
+def _complete(
+    outcome: runs.Outcome, state: _State, definition: definitions.AgentDefinition | None
+) -> runs.Outcome:
+    """The outcome as it is recorded, whatever path made it. A run with a token budget always
+    says what it used: the result message's figures when it reports any, else the runner's own
+    count (a run cut before its result, or whose result carries none). A private run's output
+    is its counts, never its answer."""
+    budget = state.budget
+    if budget is not None and not (outcome.input_tokens or 0) + (outcome.output_tokens or 0):
+        outcome = replace(
+            outcome, input_tokens=budget.input_tokens, output_tokens=budget.output_tokens
+        )
+    if definition is not None and definition.private_io:
+        outcome = replace(outcome, output=state.counts())
+    return outcome
 
 
 def _mark_verified(context: RunContext, user_id: uuid.UUID, secret: _Secret) -> None:
@@ -797,12 +1314,20 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
     outcome: runs.Outcome | None = None
     secret: _Secret | None = None
     pump: asyncio.Task[None] | None = None
+    definition: definitions.AgentDefinition | None = None
+    recorded = False
+    stopping = False
+    # What a private run has to say about its failures, written once they are handled.
+    later: _Later = []
     try:
         try:
             definition = context.definition(run.agent)
         except definitions.UnknownAgentError:
             outcome = runs.Outcome(status=RunStatus.failed, error=UNKNOWN_AGENT)
             return RunStatus.failed
+        recorder.private = definition.private_io
+        # The definition's model until the credential says which one the run uses.
+        model = definition.model
         data = dict(run.input or {})
         variables = {"message": str(data.get("message", "")), "job_id": str(run.job_id or "")}
         if definition.chat:
@@ -821,19 +1346,36 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             recorder.on_done = _chat_reply(context, run_id)
         else:
             prompt = definition.prompt(data, run.job_id)
-        found = await asyncio.to_thread(_reveal, context, run.user_id, run_id)
+        binding: Mapping[str, Any] | None = None
+        if definition.bind is not None:
+            # What the run works on, decided here, in code, before a tool or a model call.
+            binding = await asyncio.to_thread(_bind, context, definition.bind, run)
+            if binding is None:
+                outcome = runs.Outcome(status=RunStatus.failed, error=BINDING_GONE, model=model)
+                return RunStatus.failed
+        found = await asyncio.to_thread(_reveal, context, run.user_id, run_id, definition)
         if isinstance(found, str):
-            outcome = runs.Outcome(status=RunStatus.failed, error=found, model=definition.model)
+            outcome = runs.Outcome(status=RunStatus.failed, error=found, model=model)
             return RunStatus.failed
         secret = found
         recorder.secret = secret.value
         state.credential_kind = secret.kind.value
+        model = definition.model_for(secret.kind)
+        limit = token_budget(data)
+        if limit is not None:
+            if limit <= 0:
+                # No call is allowed: the run ends here, before Claude Code is started.
+                outcome = runs.Outcome(status=RunStatus.failed, error=TOKEN_LIMIT, model=model)
+                return RunStatus.failed
+            state.budget = recorder.budget = Budget(limit, context.gate_wait_s)
         scratch = await asyncio.to_thread(make_scratch, context.settings, run_id)
-        logger.info("agent run started", extra={**log, "model": definition.model})
+        logger.info("agent run started", extra={**log, "model": model})
 
         async def denied(name: str) -> None:
             state.denied += 1
-            # The name is the model's: scrubbed, then shortened, like everything stored.
+            # The name is the model's: scrubbed, then shortened, like everything stored (and
+            # replaced in a private run, where it could quote what the run read).
+            name = recorder.tool_name(name)
             shown = shorten(name, ARG_VALUE_MAX, recorder.secret)
             logger.warning("agent tool denied", extra={**log, "tool": shown})
             await recorder.emit("tool_denied", {"name": name})
@@ -848,18 +1390,22 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             job_only=definition.bind_job,
             # What the model writes into a proposal is stored too: same scrub as the events.
             redact=lambda value: scrub(value, recorder.secret),
+            binding=binding,
         )
+        recorder.known_tools = frozenset(tools.allowed_names) | frozenset(FORBIDDEN_TOOLS)
         stderr_lines: deque[str] = deque(maxlen=50)
-        # Live text needs a store (AGENTS_LIVE_TEXT, Redis) and an agent that allows it.
-        live_store = context.live_store if definition.live_text else None
+        # Live text needs a store (AGENTS_LIVE_TEXT, Redis) and an agent that allows it: never
+        # one that reads private documents.
+        live_store = context.live_store if definition.live else None
         options = build_options(
             definition,
             tools,
             build_env(secret.kind, secret.value, scratch, context.settings.model_api_base_url),
             scratch / "work",
-            make_gate(frozenset(tools.allowed_names), denied),
+            make_gate(frozenset(tools.allowed_names), denied, state.budget),
             stderr=stderr_lines.append,
             partial_messages=live_store is not None,
+            model=model,
         )
         if live_store is not None:
             state.live_text = live.LiveText(
@@ -889,14 +1435,15 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
                 context, run_id, definition, backend, request, state, recorder
             )
         except Exception as exc:
-            logger.warning(
-                "agent run error",
-                extra={**log, "error": type(exc).__name__, "stderr_lines": len(stderr_lines)},
-            )
+            what = {**log, "error": type(exc).__name__, "stderr_lines": len(stderr_lines)}
+            if recorder.private:
+                later.append((logging.WARNING, "agent run error", what))
+            else:
+                logger.warning("agent run error", extra=what)
             outcome = runs.Outcome(
                 status=RunStatus.failed,
                 error=error_of(exc),
-                model=state.model or definition.model,
+                model=state.model or model,
                 input_tokens=_tokens(state.result)[0],
                 output_tokens=_tokens(state.result)[1],
                 cost_usd=_cost(state.result.total_cost_usd) if state.result else None,
@@ -904,7 +1451,9 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             return RunStatus.failed
         finally:
             del options, request, prompt
-        outcome = outcome_of(state, definition, stopped)
+        outcome = outcome_of(state, definition, stopped, model)
+        if state.budget is not None and state.budget.unsure:
+            logger.error("agent run stopped: its token count could not be confirmed", extra=log)
         if (
             outcome.status is RunStatus.done
             and secret.kind is CredentialKind.claude_subscription
@@ -914,13 +1463,15 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
         return outcome.status
     except asyncio.CancelledError:
         # The worker is stopping (SIGTERM): the run cannot finish, say so, then let go.
+        stopping = True
         outcome = runs.Outcome(status=RunStatus.failed, error=runs.STOPPED, model=state.model)
         raise
-    except Exception:
-        logger.exception("agent run crashed", extra=log)
+    except Exception as exc:
+        _log_failure("agent run crashed", log, exc, later if recorder.private else None)
         outcome = runs.Outcome(status=RunStatus.failed, error=INTERNAL, model=state.model)
         return RunStatus.failed
     finally:
+        _log_later(later)
         if pump is not None:
             # Cancelled and awaited: the pump may be in the middle of a write, and the clear
             # below must come after it, not next to it.
@@ -929,11 +1480,16 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
         if scratch is not None:
             await asyncio.to_thread(shutil.rmtree, scratch, True)
         if outcome is not None:
+            # What a run with a budget used, and the counts of a private run, on every path.
+            outcome = _complete(outcome, state, definition)
             try:
                 recorded = await asyncio.shield(recorder.finish(outcome))
-            except Exception:
+            except Exception as exc:
                 recorded = False
-                logger.exception("agent run end not recorded", extra=log)
+                _log_failure(
+                    "agent run end not recorded", log, exc, later if recorder.private else None
+                )
+            _log_later(later)
             logger.info(
                 "agent run finished",
                 extra={
@@ -957,3 +1513,15 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             with contextlib.suppress(Exception):
                 await asyncio.shield(state.live_text.aclose())
         secret = None
+        if (
+            outcome is not None
+            and recorded
+            and not stopping
+            and definition is not None
+            and definition.on_final is not None
+        ):
+            # Last: the end is committed and nothing of the run is held any more. Not for an
+            # end someone else recorded, and not while the worker is stopping.
+            await _final(
+                context, definition.on_final, definition.private_io, run, outcome.status, log
+            )

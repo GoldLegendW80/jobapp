@@ -26,12 +26,19 @@ Tools:
   a refused proposal is an error result that says why, and nothing is stored. What the model
   wrote (the note, the reason) goes through the run's `redact` before it is checked and stored:
   the runner passes its scrub, so the run's credential never lands in a proposal either.
+
+Tools of other modules (ingestion G6): `register(name, factory)` adds a tool to the ones a
+definition may name, from a file of that module, imported by the worker. A factory gets the
+run's `Scope` like the ones here. A run bound in code to what it works on
+(`AgentDefinition.bind`) finds it in `Scope.binding`, read only: such a tool takes no id of the
+thing it reads or writes, as the write tools above take no job id.
 """
 
 import asyncio
 import json
+import re
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -93,6 +100,10 @@ class Scope:
     # Applied to the arguments of a write tool before anything of them is checked or stored
     # (the runner's scrub of the run's credential).
     redact: Callable[[Any], Any] = _as_is
+    # What the run works on, as its definition's `bind` hook answered when the run started
+    # (None for an agent without that hook). Set by the runner, never by the model, and read
+    # only at every depth: a mapping in it cannot be written to, and a list arrives as a tuple.
+    binding: Mapping[str, Any] | None = None
 
 
 def _clip(text: str | None, limit: int) -> tuple[str, bool]:
@@ -315,12 +326,30 @@ def _propose_status(scope: Scope) -> SdkMcpTool[Any]:
     return propose_status
 
 
-FACTORIES: dict[str, Callable[[Scope], SdkMcpTool[Any]]] = {
+Factory = Callable[[Scope], SdkMcpTool[Any]]
+
+FACTORIES: dict[str, Factory] = {
     "get_job": _get_job,
     "get_profile_section": _get_profile_section,
     "propose_note": _propose_note,
     "propose_status": _propose_status,
 }
+
+# What Claude Code accepts as the name of an MCP tool, in lower case as every tool here.
+TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
+
+
+def register(name: str, factory: Factory) -> None:
+    """Add a tool of another module to the ones a definition may name (module docstring). The
+    same factory again is fine (a module imported twice); another one under a taken name fails
+    loudly, and so does a name Claude Code would not accept."""
+    if not TOOL_NAME.fullmatch(name):
+        raise ValueError(f"not a tool name: {name!r}")
+    existing = FACTORIES.get(name)
+    if existing is not None and existing is not factory:
+        raise ValueError(f"an app tool named {name} is already registered")
+    FACTORIES[name] = factory
+
 
 Handler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
@@ -348,10 +377,13 @@ def build(
     clock: Callable[[], datetime] = _now,
     job_only: bool = False,
     redact: Callable[[Any], Any] = _as_is,
+    binding: Mapping[str, Any] | None = None,
 ) -> AppTools:
     """A server holding exactly `names`, bound to the user (and to the run and its job for the
-    write tools). Unknown names fail loudly (a definition naming a tool that does not exist is a
-    bug)."""
+    write tools, and to `binding` for the tools that read it). Unknown names fail loudly (a
+    definition naming a tool that does not exist is a bug), and so does a factory whose tool
+    carries another name than the one it is registered under: the allow list is built from the
+    tools' own names."""
     unknown = [name for name in names if name not in FACTORIES]
     if unknown:
         raise ValueError(f"unknown app tools: {', '.join(unknown)}")
@@ -363,7 +395,11 @@ def build(
         clock=clock,
         job_only=job_only,
         redact=redact,
+        binding=binding,
     )
     tools = [FACTORIES[name](scope) for name in names]
+    misnamed = [name for name, made in zip(names, tools, strict=True) if made.name != name]
+    if misnamed:
+        raise ValueError(f"app tools registered under another name: {', '.join(misnamed)}")
     server = create_sdk_mcp_server(name=SERVER, version="1.0.0", tools=tools)
     return AppTools(server=server, by_name={full_name(t.name): t for t in tools})
