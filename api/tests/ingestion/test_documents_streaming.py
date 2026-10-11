@@ -356,6 +356,8 @@ def test_a_third_upload_gives_up_with_503_when_both_slots_stay_busy(
     assert third.status == 503
     assert third.json() == {"detail": documents_router.BUSY}
     assert third.headers["retry-after"] == "5"
+    # The connection is kept: through Caddy a close would turn this refusal into a 502.
+    assert "connection" not in third.headers
     assert third.taken == 0  # its body was never read
     assert rows(factory) == []
     assert at_rest(app)
@@ -408,7 +410,8 @@ def test_one_account_holds_one_slot_at_most_and_the_others_still_upload(
     assert second.status == 429
     assert second.json() == {"detail": documents_router.OWN_BUSY}
     assert second.headers["retry-after"] == "5"
-    assert second.headers["connection"] == "close"
+    # The connection is kept: through Caddy a close would turn this refusal into a 502.
+    assert "connection" not in second.headers
     assert second.headers["cache-control"] == "no-store"
     assert second.taken == 0  # its body was never read
     assert his.status == 201
@@ -818,12 +821,14 @@ def test_two_idle_connections_of_one_account_do_not_stop_another_users_upload(
             assert time.monotonic() < deadline, "her first upload never took a slot"
             time.sleep(0.02)
         two.sendall(opening)
-        # Her second connection is answered without its body being read, and closed.
+        # Her second connection is answered without its body being read. It is not closed on
+        # her: through Caddy, which would still be sending the body, a close would turn the
+        # refusal into a 502 without its sentence.
         status, headers, answer = read_answer(two)
         assert status == 429
         assert headers["retry-after"] == "5"
+        assert "connection" not in headers
         assert b"Another upload of yours is still on its way" in answer
-        assert closed_by_server(two)
         # Her first connection still holds its slot, and Bob's file goes through at once.
         assert slots_free(app) == 1
         with httpx.Client(base_url=f"http://127.0.0.1:{served}", timeout=10) as client:

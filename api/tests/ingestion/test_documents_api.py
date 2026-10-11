@@ -352,6 +352,10 @@ def test_a_paste_body_over_two_mebibytes_is_refused_while_it_is_read(
     assert "content-length" not in streamed.request.headers
     assert streamed.status_code == 413
     assert streamed.json() == {"detail": documents.PASTE_TOO_LONG}
+    # Caddy lets 10 MiB through on this route and may still be sending it: the connection is
+    # kept, or Caddy would answer 502 in place of this sentence (the journey checks it).
+    assert "connection" not in declared.headers
+    assert "connection" not in streamed.headers
     assert rows(factory) == []
 
 
@@ -1174,6 +1178,7 @@ def test_both_upload_slots_busy_is_503_with_retry_after(
     assert response.status_code == 503
     assert response.json() == {"detail": documents_router.BUSY}
     assert response.headers["retry-after"] == "5"
+    assert "connection" not in response.headers
     assert response.headers["cache-control"] == "no-store"
     assert rows(factory) == []
 

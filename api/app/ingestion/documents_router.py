@@ -37,6 +37,14 @@ a body of some size, one of them 20 MiB:
   or a slot), or when it is not complete after its total time. So a client that sends nothing
   useful holds its turn and its slot for IDLE_TIMEOUT_S, never for the ten minutes a slow but
   honest upload may take.
+- Which refusals close the connection. Closing a connection on which bytes are still arriving
+  resets it, and Caddy, busy sending the body, then answers 502 in place of the refusal: the
+  user reads neither the sentence nor Retry-After (seen in the journey with a 10 MiB paste).
+  So the refusals given while a body that Caddy lets through may still be on its way keep the
+  connection: 429, 503 and the 413 of a paste (2 MiB here, 10 MiB at Caddy). What is left of
+  such a body is dropped by the server as it arrives, in no buffer, holding no turn and no slot,
+  and Caddy bounds it. The refusals that end a body which will never be whole (408, 400) close
+  it, and so does the 413 of a file, which Caddy refuses itself before the api can.
 What this does not prevent: two accounts acting together can each hold one slot for as long as
 each keeps sending at that pace, which is the whole of the two slots. An account is invited by
 the owner, and what it sends counts against its 100 MB.
@@ -303,7 +311,8 @@ async def _admitted(request: Request, user: User, size: int, slot: bool) -> Asyn
     gate = _gate(request.app)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + SLOT_WAIT_S
-    retry = {**CLOSE, "Retry-After": str(RETRY_AFTER_S)}
+    # No `Connection: close`: the body may still be arriving (module docstring).
+    retry = {"Retry-After": str(RETRY_AFTER_S)}
     if not await gate.take_turn(user.id, SLOT_WAIT_S):
         _refuse(user, status.HTTP_429_TOO_MANY_REQUESTS, OWN_BUSY, "upload-own-busy", size, **retry)
     try:
@@ -504,7 +513,8 @@ async def paste_document(request: Request, user: CurrentUser, response: Response
     size = _declared(request)
     too_large = (PASTE_BODY_TOO_LARGE, "paste-too-long")
     if size > PASTE_BODY_MAX_BYTES:
-        _refuse(user, status.HTTP_413_CONTENT_TOO_LARGE, *too_large, size, **CLOSE)
+        # The connection stays: Caddy lets 10 MiB through on this route (module docstring).
+        _refuse(user, status.HTTP_413_CONTENT_TOO_LARGE, *too_large, size)
     async with _admitted(request, user, size, slot=False):
         try:
             raw, _ = await _read_body(request, PASTE_BODY_MAX_BYTES, PASTE_TIMEOUT_S, too_large)
@@ -519,7 +529,8 @@ async def paste_document(request: Request, user: CurrentUser, response: Response
                 deps.clock(request),
             )
         except _NotTakenError as exc:
-            _refuse(user, exc.code, exc.detail, exc.rule, exc.size, **CLOSE)
+            too_long = exc.code == status.HTTP_413_CONTENT_TOO_LARGE
+            _refuse(user, exc.code, exc.detail, exc.rule, exc.size, **({} if too_long else CLOSE))
         except documents.DocumentError as exc:
             _refused(exc, user, size)
     return _stored(stored, response)

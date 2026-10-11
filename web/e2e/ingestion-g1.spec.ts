@@ -276,7 +276,15 @@ function curl(
     input: body,
     encoding: "utf8",
     maxBuffer: 16 * MIB,
+    // curl gives up by itself after 120 s (--max-time). This bound is for a curl that never
+    // gets that far: the journey then fails here, with the request named, instead of hanging.
+    timeout: 150_000,
+    killSignal: "SIGKILL",
   });
+  if (result.error)
+    throw new Error(
+      `curl ${extra.join(" ")} ${target}: ${result.error.message}`,
+    );
   return parse(result.stdout);
 }
 
@@ -318,6 +326,9 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 let cookie: string;
+// The second user, from the test that creates them to the end of the journey.
+let secondUser: BrowserContext | undefined;
+let secondCookie = "";
 
 test.beforeAll(async ({ browser }) => {
   context = await newContext(browser);
@@ -329,6 +340,7 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
+  await secondUser?.close();
   await context.close();
   clearAttempts([EMAIL, OTHER_EMAIL]);
 });
@@ -635,52 +647,6 @@ test("a refused type, a file that is too large and a duplicate each say why", as
   ).toBeFocused();
 });
 
-test("an upload stopped on its way leaves nothing, and the next file goes through", async () => {
-  const before = (await listed(context)).map((item) => item.name);
-  // A slow link, so the file is still leaving when it is stopped: 200 KiB a second, through
-  // Caddy like everything else.
-  const devtools = await context.newCDPSession(page);
-  await devtools.send("Network.enable");
-  const uploadSpeed = (bytesPerSecond: number) =>
-    devtools.send("Network.emulateNetworkConditions", {
-      offline: false,
-      latency: 0,
-      downloadThroughput: -1,
-      uploadThroughput: bytesPerSecond,
-    });
-  await uploadSpeed(200 * 1024);
-  try {
-    await add(page, file(STOPPED, bigPdf(8 * MIB), "application/pdf"));
-    const sending = queue(page)
-      .getByRole("listitem")
-      .filter({ hasText: STOPPED });
-    await expect(sending.getByRole("progressbar")).toBeVisible();
-    await sending.getByRole("button", { name: `Cancel ${STOPPED}` }).click();
-  } finally {
-    await uploadSpeed(-1);
-    await devtools.detach();
-  }
-  await expect(queue(page)).toHaveCount(0);
-  await expect(
-    page.getByRole("status").filter({ hasText: `Stopped sending ${STOPPED}.` }),
-  ).toHaveCount(1);
-  await expect(
-    page.getByRole("button", { name: "Choose files" }),
-  ).toBeFocused();
-
-  // The api let go of it: the same user's next file goes through at once. Were the stopped
-  // body still held, this one would wait for its turn and then be refused.
-  await add(
-    page,
-    file("after the stop.md", "# Notes\n\nAdded after a stop.\n"),
-  );
-  await expect(row(page, "after the stop.md")).toContainText("Ready", {
-    timeout: 10_000,
-  });
-  const names = (await listed(context)).map((item) => item.name);
-  expect([...names].sort()).toEqual([...before, "after the stop.md"].sort());
-});
-
 test("deleting asks first, says what it means, and the document is gone for good", async () => {
   const before = await listed(context);
   const target = before.find((item) => item.name === "cover letter.txt");
@@ -740,10 +706,12 @@ test("a second user sees nothing and cannot reach the first user's documents", a
   const id = dossier?.id ?? "";
 
   const other = await newContext(browser);
+  secondUser = other;
   const otherPage = await other.newPage();
   try {
     await otherPage.goto(cliLink(OTHER_EMAIL));
     await setPassword(otherPage, PASSWORD, OTHER_NAME);
+    secondCookie = await sessionCookie(other);
     await otherPage.goto("/profile/fill");
     await expect(
       otherPage.getByText("No document yet. Add a file or paste a text above."),
@@ -779,7 +747,7 @@ test("a second user sees nothing and cannot reach the first user's documents", a
     );
     expect((await listed(other)).map((item) => item.name)).toEqual(["mine.md"]);
   } finally {
-    await other.close();
+    await otherPage.close();
   }
   // Nothing of the first user moved.
   expect(await listed(context)).toEqual(mine);
@@ -804,6 +772,85 @@ test("a second user sees nothing and cannot reach the first user's documents", a
   } finally {
     await anonymous.close();
   }
+});
+
+test("one account sends one file at a time, and an upload stopped on its way leaves nothing", async () => {
+  test.setTimeout(180_000);
+  const before = (await listed(context)).map((item) => item.name);
+  // A slow link, so the file is still leaving for the rest of this test: 200 KiB a second,
+  // through Caddy like everything else.
+  const devtools = await context.newCDPSession(page);
+  await devtools.send("Network.enable");
+  const uploadSpeed = (bytesPerSecond: number) =>
+    devtools.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: bytesPerSecond,
+    });
+  await uploadSpeed(200 * 1024);
+  try {
+    await add(page, file(STOPPED, bigPdf(12 * MIB), "application/pdf"));
+    const sending = queue(page)
+      .getByRole("listitem")
+      .filter({ hasText: STOPPED });
+    // Bytes have left: the api has the request, and the account's turn is taken.
+    await expect(sending.getByRole("progressbar")).toHaveAttribute(
+      "aria-valuenow",
+      /^[1-9]/,
+    );
+
+    // While it is on its way, the same account sends a second file from elsewhere. It waits
+    // for its turn without being read, then is refused: one account never takes both places.
+    // The refusal comes through Caddy with its sentence, although its body was still leaving.
+    const started = Date.now();
+    const second = curlAsync(UPLOAD, cookie, bigPdf(12 * MIB));
+    // Another user is held up by neither: their file goes through at once.
+    const theirs = await secondUser?.request.post(UPLOAD, {
+      headers: {
+        "X-Requested-With": "jobapp",
+        "X-Filename": "UTF-8''meanwhile.md",
+      },
+      data: Buffer.from(
+        "# Meanwhile\n\nSent while another account was busy.\n",
+      ),
+    });
+    expect(theirs?.status()).toBe(201);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    const refused = await second;
+    expect(refused.status).toBe(429);
+    expect(refused.type).toContain("application/json");
+    expect(JSON.parse(refused.body)).toEqual({
+      detail:
+        "Another upload of yours is still on its way. Wait for it to finish, then add this one.",
+    });
+    expect(Date.now() - started).toBeGreaterThan(15_000);
+
+    // The first file is still on its way: the user stops it.
+    await sending.getByRole("button", { name: `Cancel ${STOPPED}` }).click();
+  } finally {
+    await uploadSpeed(-1);
+    await devtools.detach();
+  }
+  await expect(queue(page)).toHaveCount(0);
+  await expect(
+    page.getByRole("status").filter({ hasText: `Stopped sending ${STOPPED}.` }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Choose files" }),
+  ).toBeFocused();
+
+  // The api let go of it: the same user's next file goes through at once. Were the stopped
+  // body still held, this one would wait for its turn and then be refused.
+  await add(
+    page,
+    file("after the stop.md", "# Notes\n\nAdded after a stop.\n"),
+  );
+  await expect(row(page, "after the stop.md")).toContainText("Ready", {
+    timeout: 10_000,
+  });
+  const names = (await listed(context)).map((item) => item.name);
+  expect([...names].sort()).toEqual([...before, "after the stop.md"].sort());
 });
 
 test("the largest file allowed goes through the page and through Caddy", async () => {
@@ -885,7 +932,7 @@ test("20 MiB is accepted on the upload route only: every other route keeps 10 Mi
   }
 });
 
-test("two uploads of 20 MiB at once stay far inside the api's memory limit", async () => {
+test("two uploads of 20 MiB at once, by two users, stay far inside the api's memory limit", async () => {
   test.skip(!project, "needs the Compose project (E2E_COMPOSE_PROJECT)");
   test.setTimeout(300_000);
   const read = (service: string, name: string) =>
@@ -932,10 +979,12 @@ test("two uploads of 20 MiB at once stay far inside the api's memory limit", asy
     .poll(() => samples.length, { timeout: 30_000 })
     .toBeGreaterThan(5);
 
+  // Two users: one account sends one file at a time, so two of its own would never overlap.
+  expect(secondCookie).not.toBe("");
   const started = Date.now();
   const answers = await Promise.all([
     curlAsync(UPLOAD, cookie, bigPdf(FILE_MAX)),
-    curlAsync(UPLOAD, cookie, bigPdf(FILE_MAX)),
+    curlAsync(UPLOAD, secondCookie, bigPdf(FILE_MAX)),
   ]);
   const seconds = (Date.now() - started) / 1000;
   await sampled;
@@ -946,7 +995,7 @@ test("two uploads of 20 MiB at once stay far inside the api's memory limit", asy
   const events = read("api", "memory.events");
   const measured = {
     date: new Date().toISOString(),
-    what: "api container, two uploads of 20 MiB at once through Caddy",
+    what: "api container, two uploads of 20 MiB at once by two users, through Caddy",
     limit_bytes: limit,
     before_bytes: before,
     highest_sample_bytes: highest,
@@ -976,11 +1025,13 @@ test("two uploads of 20 MiB at once stay far inside the api's memory limit", asy
   expect(peak).toBeLessThan(0.75 * limit);
   expect(highest - before).toBeLessThan(4 * FILE_MAX);
 
-  for (const answer of answers) {
+  const owners = [context, secondUser];
+  for (const [index, answer] of answers.entries()) {
     const id = (JSON.parse(answer.body) as { id: string }).id;
-    await context.request.delete(`${UPLOAD}/${id}`, {
+    const removed = await owners[index]?.request.delete(`${UPLOAD}/${id}`, {
       headers: { "X-Requested-With": "jobapp" },
     });
+    expect(removed?.status()).toBe(204);
   }
 });
 
