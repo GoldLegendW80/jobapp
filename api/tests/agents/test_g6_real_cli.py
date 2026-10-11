@@ -26,7 +26,10 @@ What it holds, on the pinned SDK and CLI:
 import contextlib
 import json
 import os
+import select
+import socket
 import threading
+import time
 import uuid
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -70,12 +73,22 @@ TOOL = "mcp__app__g6_write"
 
 
 class Api:
-    """What the stub was asked, in order."""
+    """What the stub was asked, in order, and how it answers."""
 
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
         self.lock = threading.Lock()
-        self.tool = TOOL  # the tool every answer asks for
+        # The tool every answer asks for; None: the answers hold a text only.
+        self.tool: str | None = TOOL
+        # How long a request takes before its answer starts (a model takes seconds).
+        self.delay_s = 0.0
+        # The stop reason of an answer without a tool call, while the loop lasts.
+        self.stop_reason = "end_turn"
+
+    @property
+    def answered(self) -> int:
+        """Requests the stub answered: the client was still there when the answer was due."""
+        return sum(1 for request in self.requests if request["answered"])
 
 
 def handler_for(api: Api) -> type[BaseHTTPRequestHandler]:
@@ -98,6 +111,16 @@ def handler_for(api: Api) -> type[BaseHTTPRequestHandler]:
             self.send_response(404)
             self.end_headers()
 
+        def _gone(self) -> bool:
+            """Whether the client closed the connection while the request was in flight."""
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            if not readable:
+                return False
+            try:
+                return self.connection.recv(1, socket.MSG_PEEK) == b""
+            except OSError:
+                return True
+
         def do_POST(self) -> None:
             length = int(self.headers.get("content-length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -111,14 +134,22 @@ def handler_for(api: Api) -> type[BaseHTTPRequestHandler]:
                 for block in message["content"]
                 if isinstance(block, dict) and block.get("type") == "tool_result"
             )
+            entry = {"n": 0, "model": body.get("model"), "results": answered, "answered": False}
             with api.lock:
-                index = len(api.requests) + 1
-                api.requests.append({"n": index, "model": body.get("model"), "results": answered})
+                index = entry["n"] = len(api.requests) + 1
+                api.requests.append(entry)
+            if api.delay_s:
+                time.sleep(api.delay_s)
+            if self._gone():
+                return  # the CLI cut this request while it was in flight: never answered
+            entry["answered"] = True
             blocks: list[dict[str, Any]] = [{"type": "text", "text": f"Step {answered + 1}."}]
-            again = answered < LOOP
+            again = api.tool is not None and answered < LOOP
             if again:
                 call = {"type": "tool_use", "id": f"toolu_{index:02d}_{uuid.uuid4().hex[:6]}"}
                 blocks.append({**call, "name": api.tool, "input": {"text": f"item {index}"}})
+            said = sum(1 for m in body.get("messages") or [] if m.get("role") == "assistant")
+            ending = "tool_use" if again else api.stop_reason if said < LOOP else "end_turn"
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -159,7 +190,7 @@ def handler_for(api: Api) -> type[BaseHTTPRequestHandler]:
                         {"type": "content_block_delta", "index": position, "delta": change},
                     )
                     event("content_block_stop", {"type": "content_block_stop", "index": position})
-                stop = {"stop_reason": "tool_use" if again else "end_turn", "stop_sequence": None}
+                stop = {"stop_reason": ending, "stop_sequence": None}
                 event(
                     "message_delta",
                     {"type": "message_delta", "delta": stop, "usage": {"output_tokens": OUTPUT}},
@@ -256,11 +287,15 @@ def test_no_request_leaves_after_the_one_that_reached_the_budget(
     api: tuple[Api, str],
     g6_tools: None,
 ) -> None:
-    """The overshoot on the real CLI, TRIALS runs in a row. A request is counted 1,501 by the
-    runner; a budget of 4,000 is reached by the third. In each run the stub received three
-    requests and never a fourth, two tools ran, and the run failed with TOKEN_LIMIT."""
+    """The overshoot on the real CLI where the gate is asked (the model calls a tool of the
+    agent), TRIALS runs in a row. A request is counted 1,501 by the runner; a budget of 4,000 is
+    reached by the third. In each run the stub received three requests and never a fourth, two
+    tools ran, and the run failed with TOKEN_LIMIT. The call of the third request is stopped
+    twice over: the gate answers it with a stop, and the run is interrupted when the call
+    arrives; whichever the CLI acts on first words the last tool result."""
     rc = run_context(settings, factory, keyring, LOOPING, backends=SdkBackend)
     seen = []
+    stopped_by = []
     for _ in range(TRIALS):
         before, written = len(api[0].requests), len(WRITTEN)
         run_id = new_run(factory, alice_id, {"token_budget": 4000}, agent="g6_real")
@@ -270,10 +305,150 @@ def test_no_request_leaves_after_the_one_that_reached_the_budget(
         seen.append((made, len(WRITTEN) - written, row.error, row.input_tokens, row.output_tokens))
         last = [data for kind, data in events(factory, run_id) if kind == "tool_result"][-1]
         assert last["is_error"] is True
-        assert "The run reached its token budget." in last["content"]
+        stopped_by.append("gate" if runner.BUDGET_STOP in last["content"] else "interrupt")
     print(f"\nrequests, tools run, error, input, output per run: {seen}")
+    print(f"the call of the reaching request was answered by: {stopped_by}")
     # Three requests, two tools, and the result's cumulative figures (output in full).
     assert seen == [(3, 2, runner.TOKEN_LIMIT, 3 * INPUT_SIDE, 3 * OUTPUT)] * TRIALS
+
+
+def slow_writes(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
+    if not seconds:
+        return
+    write = runner.Recorder._write
+
+    def slow(self: runner.Recorder, seq: int, kind: str, data: dict[str, Any]) -> None:
+        time.sleep(seconds)
+        write(self, seq, kind, data)
+
+    monkeypatch.setattr(runner.Recorder, "_write", slow)
+
+
+# The cases of the review of PR #95: the tool the model calls, seconds a request takes, seconds
+# added to every event write, the gate's wait. Budget 4,000, reached by the third request of a
+# loop of nine. As first built the runs marked "all nine" made every request of the loop.
+REVIEW_CASES = {
+    "own tool, instant requests": (TOOL, 0.0, 0.0, 5.0),
+    "own tool, requests 0.3 s, writes 0.4 s, gate wait 0.2 s": (TOOL, 0.3, 0.4, 0.2),
+    "Bash, requests 1 s": ("Bash", 1.0, 0.0, 5.0),
+    "invented tool, requests 1 s": ("mcp__app__made_up", 1.0, 0.0, 5.0),
+    "Bash, requests 0.3 s, writes 0.4 s (all nine)": ("Bash", 0.3, 0.4, 5.0),
+    "Bash, instant requests (all nine)": ("Bash", 0.0, 0.0, 5.0),
+    "invented tool, instant requests (all nine)": ("mcp__app__made_up", 0.0, 0.0, 5.0),
+}
+REPEATS = 5
+
+
+@pytest.mark.parametrize("case", list(REVIEW_CASES))
+def test_the_cases_of_the_review(
+    case: str,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    api: tuple[Api, str],
+    g6_tools: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """What a run does past its budget on the real CLI, whatever the model calls and however
+    slow the event writes are, REPEATS runs per case. A tool of the agent: three requests, the
+    reaching one is the last. A tool the CLI does not offer (a built-in name, an invented one):
+    the CLI answers the call itself and would send its fourth request, which only the interrupt
+    holds back. Measured, the interrupt came first in every run (three requests); nothing
+    orders the two, so the test allows the fourth, cut before any answer when a request takes
+    time, and never a fifth."""
+    tool, request_s, write_s, gate_wait_s = REVIEW_CASES[case]
+    api[0].tool = tool
+    api[0].delay_s = request_s
+    slow_writes(monkeypatch, write_s)
+    rc = run_context(
+        settings, factory, keyring, LOOPING, backends=SdkBackend, gate_wait_s=gate_wait_s
+    )
+    seen = []
+    for _ in range(REPEATS):
+        before = len(api[0].requests)
+        answered = api[0].answered
+        run_id = new_run(factory, alice_id, {"token_budget": 4000}, agent="g6_real")
+        status = execute(rc, run_id)
+        time.sleep(0.3)  # a request sent just before the end would have arrived by now
+        row = run_row(factory, run_id)
+        seen.append(
+            (
+                len(api[0].requests) - before,
+                api[0].answered - answered,
+                status.value if status else None,
+                row.error,
+                row.input_tokens,
+                row.output_tokens,
+            )
+        )
+    print(f"\n{case}: requests sent, answered, status, error, input, output: {seen}")
+    for sent, answered_now, status_now, error, tokens_in, tokens_out in seen:
+        assert (status_now, error) == ("failed", runner.TOKEN_LIMIT)
+        if tool == TOOL:
+            assert (sent, answered_now) == (3, 3)
+            assert (tokens_in, tokens_out) == (3 * INPUT_SIDE, 3 * OUTPUT)
+        else:
+            assert sent <= 4  # the reaching request, and at most one more
+            if request_s:
+                assert answered_now == 3  # which was cut before any answer
+                assert (tokens_in, tokens_out) == (3 * INPUT_SIDE, 3 * OUTPUT)
+        # The run records what the answered requests used, whatever cut it.
+        assert tokens_in == answered_now * INPUT_SIDE
+
+
+@pytest.mark.parametrize("request_s", [0.0, 0.3], ids=["instant requests", "requests 0.3 s"])
+def test_a_turn_that_goes_on_with_no_tool_call_passes_its_budget_by_two_requests(
+    request_s: float,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    api: tuple[Api, str],
+    g6_tools: None,
+) -> None:
+    """The pinned CLI does go on by itself: after an answer the API ended with `max_tokens` it
+    sends a new request, with no tool call in between, up to four requests in a row (the
+    first run below has no budget and counts them). Nothing in the message that reached the
+    budget says so, and no gate is asked. The runner sees the turn go on when the next
+    request's first message arrives, and interrupts there. With a budget the first request
+    reaches: that request and one more, the second, which had its answer; a third may have
+    left, and is cut when a request takes time."""
+    api[0].tool = None
+    api[0].stop_reason = "max_tokens"
+    api[0].delay_s = request_s
+    rc = run_context(settings, factory, keyring, LOOPING, backends=SdkBackend)
+    if not request_s:
+        free = new_run(factory, alice_id, {}, agent="g6_real")
+        execute(rc, free)
+        made = len(api[0].requests)
+        print(f"\nwithout a budget, answers ended with max_tokens: {made} requests by itself")
+        assert made == 4  # the CLI went on with no tool call, three times
+    seen = []
+    for _ in range(REPEATS):
+        before, answered = len(api[0].requests), api[0].answered
+        run_id = new_run(factory, alice_id, {"token_budget": 1500}, agent="g6_real")
+        status = execute(rc, run_id)
+        time.sleep(0.3)
+        row = run_row(factory, run_id)
+        seen.append(
+            (
+                len(api[0].requests) - before,
+                api[0].answered - answered,
+                status.value if status else None,
+                row.error,
+                row.input_tokens,
+                row.output_tokens,
+            )
+        )
+    print(f"\nafter max_tokens: requests sent, answered, status, error, input, output: {seen}")
+    for sent, answered_now, status_now, error, tokens_in, _ in seen:
+        assert (status_now, error) == ("failed", runner.TOKEN_LIMIT)
+        # The reaching request (the first) and one more; with instant requests the one after
+        # may be answered before the interrupt lands. Never the four the CLI makes by itself.
+        assert 2 <= answered_now <= (2 if request_s else 3)
+        assert sent <= 3
+        assert tokens_in == answered_now * INPUT_SIDE
 
 
 @pytest.mark.parametrize("interrupted", [True, False], ids=["as built", "the control"])
