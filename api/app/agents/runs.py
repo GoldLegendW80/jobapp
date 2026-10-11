@@ -233,6 +233,19 @@ def record_credential_kind(
     )
 
 
+def record_tokens(db: Session, run_id: uuid.UUID, input_tokens: int, output_tokens: int) -> None:
+    """What a running run has counted so far (a run with a token budget, ingestion G6), written
+    with its events while it runs. `finish` replaces it with the final figures. A run that never
+    gets to its end (the worker is killed, a reaper fails the run) keeps these: whoever adds up
+    what a chain of runs spent does not lose the run that was cut. The caller commits."""
+    db.execute(
+        sa.update(AgentRun)
+        .where(AgentRun.id == run_id, AgentRun.status == RunStatus.running)
+        .values(input_tokens=input_tokens, output_tokens=output_tokens)
+        .execution_options(synchronize_session=False)
+    )
+
+
 @dataclass(frozen=True)
 class Outcome:
     status: RunStatus

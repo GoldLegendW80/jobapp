@@ -662,6 +662,12 @@ class Recorder:
     # value, and only the tool names this code knows are stored.
     private: bool = False
     known_tools: frozenset[str] = frozenset(FORBIDDEN_TOOLS)
+    # A run with a token budget: what it has counted so far goes on the run row with each of
+    # its events (runs.record_tokens), so that a run which never records its own end (the
+    # worker is killed, a reaper fails the run) still says what it had used by then.
+    budget: Budget | None = field(default=None, repr=False)
+    _noted: tuple[int, int] = (0, 0)
+    _owed: tuple[int, int] | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def last_seq(self) -> int:
@@ -700,6 +706,9 @@ class Recorder:
     def _write(self, seq: int, kind: str, data: dict[str, Any]) -> None:
         with self.context.sessions() as db:
             runs.append_event(db, self.run_id, seq, kind, data, self.context.clock())
+            owed = self._owed
+            if owed is not None:
+                runs.record_tokens(db, self.run_id, *owed)
             db.commit()
 
     async def emit(self, kind: str, data: dict[str, Any]) -> None:
@@ -708,7 +717,14 @@ class Recorder:
             # Taken before the write: a cancelled await leaves the write running in its thread,
             # and the next event must not reuse its seq.
             seq, self.seq = self.seq, self.seq + 1
+            if self.budget is not None:
+                # Read here, in the loop, where the count moves; written with the event. It
+                # is behind the count by the events still to write, never ahead of it.
+                counted = (self.budget.input_tokens, self.budget.output_tokens)
+                self._owed = counted if counted != self._noted else None
             await asyncio.to_thread(self._write, seq, kind, clean)
+            if self._owed is not None:
+                self._noted, self._owed = self._owed, None
 
     def _finish(self, outcome: runs.Outcome) -> bool:
         with self.context.sessions() as db:
@@ -1305,7 +1321,7 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
                 # No call is allowed: the run ends here, before Claude Code is started.
                 outcome = runs.Outcome(status=RunStatus.failed, error=TOKEN_LIMIT, model=model)
                 return RunStatus.failed
-            state.budget = Budget(limit, context.gate_wait_s)
+            state.budget = recorder.budget = Budget(limit, context.gate_wait_s)
         scratch = await asyncio.to_thread(make_scratch, context.settings, run_id)
         logger.info("agent run started", extra={**log, "model": model})
 

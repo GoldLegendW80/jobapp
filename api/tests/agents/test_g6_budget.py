@@ -635,6 +635,75 @@ def test_a_run_with_a_budget_says_what_it_used_however_it_ends(
         assert recorded == (0, 0)  # the interrupted result's own figures, as before
 
 
+@pytest.mark.parametrize("budget", [10**6, None], ids=["with a budget", "without"])
+def test_a_run_a_reaper_failed_keeps_what_it_had_counted(
+    budget: int | None,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    streams: Streams,
+    g6_tools: None,
+) -> None:
+    """The one end no runner records: the worker is killed in the middle of a run and a reaper
+    fails it later. A run with a budget writes what it has counted on its row with each of its
+    events, so the row holds the two requests it had made when it was reaped, and whoever adds
+    up a chain of runs sees them. A run without a budget has no figure while it runs, as
+    before."""
+    streams.add("g6_budget", SLOW_LOOP)
+    data = {} if budget is None else {"token_budget": budget}
+    run_id = new_run(factory, alice_id, data, agent="g6_budget")
+    rc = run_context(settings, factory, keyring, BUDGETED, backends=Backends(speed=1.0))
+    while_running: list[tuple[Any, Any, Any]] = []
+
+    async def go() -> None:
+        task = asyncio.create_task(runner.execute(rc, run_id))
+        while kinds(factory, run_id).count("tool_result") < 2:  # noqa: ASYNC110
+            await asyncio.sleep(0.02)
+        row = run_row(factory, run_id)
+        while_running.append((row.status, row.input_tokens, row.output_tokens))
+        with factory() as db:
+            assert runs.reap_orphans(db, now()) == 1
+            db.commit()
+        task.cancel()  # the process that was running it is gone
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(go())
+    row = run_row(factory, run_id)
+    assert (row.status, row.error) == (RunStatus.failed, runs.INTERRUPTED)  # the reaper's end
+    counted = (2 * INPUT_SIDE, 2 * OUTPUT) if budget is not None else (None, None)
+    assert while_running == [(RunStatus.running, *counted)]
+    assert (row.input_tokens, row.output_tokens) == counted
+
+
+def test_record_tokens_only_touches_a_running_run(
+    factory: sessionmaker[Session], alice_id: uuid.UUID
+) -> None:
+    run_id = new_run(factory, alice_id, {}, agent="g6_budget")
+    with factory() as db, db.begin():
+        runs.record_tokens(db, run_id, 10, 2)  # still queued: nothing is written
+    assert (run_row(factory, run_id).input_tokens, run_row(factory, run_id).output_tokens) == (
+        None,
+        None,
+    )
+    with factory() as db, db.begin():
+        runs.claim(db, run_id, now())
+        runs.record_tokens(db, run_id, 10, 2)
+    assert (run_row(factory, run_id).input_tokens, run_row(factory, run_id).output_tokens) == (
+        10,
+        2,
+    )
+    with factory() as db, db.begin():
+        done = runs.Outcome(status=RunStatus.done, input_tokens=900, output_tokens=40)
+        assert runs.finish(db, run_id, done, now())
+        runs.record_tokens(db, run_id, 1, 1)  # the run has ended: its final figures stay
+    assert (run_row(factory, run_id).input_tokens, run_row(factory, run_id).output_tokens) == (
+        900,
+        40,
+    )
+
+
 def test_complete_keeps_figures_that_are_there_and_fills_in_the_ones_that_are_not() -> None:
     state = runner._State()
     plain = runs.Outcome(status=RunStatus.failed, error="x")
