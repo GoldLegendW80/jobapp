@@ -22,6 +22,7 @@ api = identity.api
 
 ALICE = "alice@example.org"
 BOB = "bob@example.org"
+CAROL = "carol@example.org"
 
 
 def signed_in(factory: sessionmaker[Session], api: Api, email: str) -> str:
@@ -38,6 +39,11 @@ def alice(factory: sessionmaker[Session], api: Api) -> str:
 @pytest.fixture
 def bob(factory: sessionmaker[Session], api: Api) -> str:
     return signed_in(factory, api, BOB)
+
+
+@pytest.fixture
+def carol(factory: sessionmaker[Session], api: Api) -> str:
+    return signed_in(factory, api, CAROL)
 
 
 @pytest.fixture(autouse=True)

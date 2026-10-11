@@ -96,6 +96,84 @@ def test_the_generic_rule_needs_a_keyword_an_assignment_and_a_random_value() -> 
         assert scan(line) == [], line
 
 
+VALUE = "q7Zk2Lm9Xw4Rt8Vb1Nc6"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # The four lines of a made up technical CV that the review saw flagged.
+        "API: REST/GraphQL/gRPC-web2, OpenAPI3.1",
+        "Authentication: OAuth2/OIDC/JWT-RS256, Keycloak",
+        "REST API, FastAPI/Flask/Django4.2, PostgreSQL16",
+        "Author: Camille_Durand-2023",
+        # The keyword only as the start or the end of a longer word.
+        f"Authentication: {VALUE}",
+        f"AUTHOR: {VALUE}",
+        f"Keycloak: {VALUE}",
+        f"Keystone: {VALUE}",
+        f"keyboard: {VALUE}",
+        f"tokenizer: {VALUE}",
+        f"Secretary: {VALUE}",
+        f"Accessibility: {VALUE}",
+        f"APIs: {VALUE}",
+        f"OAuth: {VALUE}",
+        f"FastAPI: {VALUE}",
+        f"monkey: {VALUE}",
+        f"Turkey = {VALUE}",
+        # A comma is not an assignment.
+        f"key, {VALUE}",
+        f"Skills: API, {VALUE}",
+        # A list of tools separated by slashes or plus signs is not one value.
+        "token: Python3/TypeScript5/Go1.22",
+        "Key: C++20/Rust1.75+LLVM17",
+        "Stack (key): Next.js14/React18/Node22",
+        # Ordinary lines of a CV or a dossier.
+        "Key skills: Python 3.12, TypeScript 5, PostgreSQL 16",
+        "Secret clearance: none. Token of appreciation: Employee of the Year 2023.",
+        "Access: remote first since 2021, on site two days a month",
+        "Key achievement: cut the release time from 3 days to 45 minutes",
+        "Built the password reset flow and the API token rotation (2022 to 2024)",
+    ],
+)
+def test_an_ordinary_line_of_a_technical_cv_is_not_a_secret(line: str) -> None:
+    assert scan(line) == [], line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        f"password={VALUE}",
+        f"Password: {VALUE}",
+        f"PASSWORD = {VALUE}",
+        f"db_password={VALUE}",
+        f"DB_PASSWORD={VALUE}",
+        f"dbPassword: '{VALUE}'",
+        f'"clientSecret": "{VALUE}"',
+        f"client-secret: {VALUE}",
+        f"apiKey = {VALUE}",
+        f"apikey={VALUE}",
+        f"APIKEY={VALUE}",
+        f"API_KEY={VALUE}",
+        f"X-Api-Key: {VALUE}",
+        f"access_token => {VALUE}",
+        f"accessToken := {VALUE}",
+        f"AUTH_TOKEN?={VALUE}",
+        f"credentials: {VALUE}_x",
+        f"tokens: {VALUE}",
+        f"Passwords: {VALUE}",
+        f"API_KEYS={VALUE}",
+        f"Authorization: {VALUE}",
+        f"authorization = {VALUE}",
+        f"my.secret.key = {VALUE}",
+        f"export OPENAI_API_KEY={VALUE}",
+        f"token:{VALUE}",
+    ],
+)
+def test_a_value_assigned_to_a_secret_name_is_still_caught(line: str) -> None:
+    assert scan(line) == [GENERIC_RULE], line
+
+
 def test_entropy() -> None:
     assert entropy("") == 0.0
     assert entropy("aaaa") == 0.0

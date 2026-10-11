@@ -3,9 +3,9 @@ ingestion_consents, as the DDL of SPEC-ingestion.md (Documents) writes them.
 
 They hold every column a later task stores into, so no later task adds a migration for them:
 G2b, G7 and G8 write `text`, `note`, `truncated`, the page counts, `parser_version`, the failure
-columns and `attempts`; G8 writes `ingestion_images`; G14 writes `ingestion_images.text` and
-assembles the document's text; G16 writes `ingestion_consents`. Task G1 itself writes a document
-at upload and deletes it.
+columns, `attempts` and `pending_since`; G8 writes `ingestion_images`; G14 writes
+`ingestion_images.text`, assembles the document's text and writes `transcribed_pages`; G16
+writes `ingestion_consents`. Task G1 itself writes a document at upload and deletes it.
 
 How a document's content is kept:
 - `raw` (column `bytes`) holds the uploaded file until its text or its images are stored, then
@@ -13,11 +13,19 @@ How a document's content is kept:
 - `text` holds the pages of a PDF in order, joined by a form feed (U+000C); a page waiting for
   its transcription is the empty string between two form feeds.
 - `ingestion_images.position` is the zero based page index of a PDF page, 0 for an uploaded image.
+- `transcribed_pages` lists the page indexes whose text a model wrote from an image. The images
+  are deleted once transcribed, so this is what still says, afterwards, which pages of a
+  mixed PDF to show as "transcribed, check it".
+- `pending_since` is when the document last started to wait for its reader: the upload, a
+  replacement (the row keeps its `created_at`), a new try. It is how a reaper tells a document
+  queued a moment ago from one that was lost. NULL for a document that never waited.
 Both content columns are deferred: listing a user's documents never loads them.
 
 Everything cascades from `users`: a deleted account leaves no document, image or consent behind.
 `unique(user_id, sha256)` is the per user dedupe; two users may hold the same file, and neither
-can learn it from the other.
+can learn it from the other. An image carries its user as well as its document, and the two
+are tied by one foreign key on `(document_id, user_id)`: an image filed under another user
+than its document's cannot exist, whatever code writes it.
 
 The CHECK constraints are backstops on sizes, set at the product limits where a later task
 cannot want more (the 20 MiB file, the 500,000 characters, the 300,000 byte page image the
@@ -43,6 +51,7 @@ SHA256_BYTES = 32
 IMAGE_MAX_BYTES = 300_000  # one page image, the most one tool result carries (plan, G0)
 IMAGE_MAX_SIDE = 2000  # the model's client resizes anything larger; G8 normalises to 1568
 IMAGE_TEXT_MAX_CHARS = 20_000  # the transcription of one image (G14)
+PAGES_MAX = 200  # pages of one PDF that are read at all, so that many page indexes at most
 
 
 class TextSource(enum.StrEnum):
@@ -84,6 +93,8 @@ class IngestionDocument(Base):
     __tablename__ = "ingestion_documents"
     __table_args__ = (
         sa.UniqueConstraint("user_id", "sha256", name="uq_ingestion_documents_user_id_sha256"),
+        # What the foreign key of ingestion_images points at: a document together with its user.
+        sa.UniqueConstraint("id", "user_id", name="uq_ingestion_documents_id_user_id"),
         sa.CheckConstraint(
             f"char_length(name) >= 1 AND char_length(name) <= {NAME_MAX_CHARS}", name="name_length"
         ),
@@ -99,6 +110,10 @@ class IngestionDocument(Base):
             "(pages IS NULL OR pages >= 0) AND (pages_text IS NULL OR pages_text >= 0) "
             "AND (pages_image IS NULL OR pages_image >= 0)",
             name="pages_not_negative",
+        ),
+        sa.CheckConstraint(
+            f"transcribed_pages IS NULL OR cardinality(transcribed_pages) <= {PAGES_MAX}",
+            name="transcribed_pages_count",
         ),
         sa.CheckConstraint("parser_version >= 1", name="parser_version_positive"),
         sa.CheckConstraint("attempts >= 0", name="attempts_not_negative"),
@@ -131,6 +146,7 @@ class IngestionDocument(Base):
     pages: Mapped[int | None] = mapped_column(sa.Integer)
     pages_text: Mapped[int | None] = mapped_column(sa.Integer)
     pages_image: Mapped[int | None] = mapped_column(sa.Integer)
+    transcribed_pages: Mapped[list[int] | None] = mapped_column(pg.ARRAY(sa.Integer))
     parser_version: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False)
     failed_reason: Mapped[str | None] = mapped_column(sa.Text)
     failed_kind: Mapped[FailedKind | None] = mapped_column(FAILED_KIND_ENUM)
@@ -140,6 +156,7 @@ class IngestionDocument(Base):
         sa.Boolean, nullable=False, server_default=sa.text("false")
     )
     secret_confirmed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    pending_since: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )
@@ -152,6 +169,12 @@ class IngestionImage(Base):
     __table_args__ = (
         sa.UniqueConstraint(
             "document_id", "position", name="uq_ingestion_images_document_id_position"
+        ),
+        sa.ForeignKeyConstraint(
+            ["document_id", "user_id"],
+            ["ingestion_documents.id", "ingestion_documents.user_id"],
+            name="fk_ingestion_images_document_id_ingestion_documents",
+            ondelete="CASCADE",
         ),
         sa.CheckConstraint("position >= 0", name="position_not_negative"),
         sa.CheckConstraint(
@@ -171,11 +194,7 @@ class IngestionImage(Base):
 
     # bigserial
     id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
-    document_id: Mapped[uuid.UUID] = mapped_column(
-        pg.UUID(as_uuid=True),
-        sa.ForeignKey("ingestion_documents.id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    document_id: Mapped[uuid.UUID] = mapped_column(pg.UUID(as_uuid=True), nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(
         pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )

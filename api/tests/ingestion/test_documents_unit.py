@@ -103,10 +103,14 @@ def test_kind_of() -> None:
     assert kind_of("application/zip") is Kind.archive
     assert kind_of("image/png") is Kind.image
     assert kind_of("image/jpeg") is Kind.image
-    # A type a later parser may write for a DOCX it has opened.
-    docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    assert kind_of(docx) is Kind.archive
+    # Types a later parser writes: a ZIP it found to be a DOCX, the CSV files of an export.
+    assert kind_of(documents.DOCX_MIME) is Kind.archive
+    assert kind_of("text/csv") is Kind.text
+    # A type nobody declared is never taken for one that has a reader.
+    for unknown in ("application/x-something-new", "text/html", "image/gif", ""):
+        assert kind_of(unknown) is Kind.other
     assert frozenset({Kind.text}) == documents.READABLE_KINDS
+    assert Kind.other not in documents.READABLE_KINDS
 
 
 # --- decode_text ---------------------------------------------------------------------------

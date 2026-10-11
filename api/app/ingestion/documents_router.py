@@ -7,9 +7,10 @@ secret warning, delete (SPEC-ingestion.md, API; the rules are in documents.py).
   200 when this user already has the same file (`duplicate: true`, nothing written).
   413 over 20 MiB or over the user's 100 MB, 415 for a type that is not read, 422 for an empty
   file, a file without text or a 201st document, 408 when the body stalls, 400 when the client
-  goes away, 503 with Retry-After when both upload slots stay busy.
-- POST /api/ingestion/documents/text {text, name?}: a pasted text, same answers; 413 over
-  100,000 characters.
+  goes away, 429 with Retry-After while another body of the same user is still on its way, 503
+  with Retry-After when both upload slots stay busy.
+- POST /api/ingestion/documents/text {text, name?}: a pasted text, same answers (it takes no
+  upload slot, so never 503); 413 over 100,000 characters.
 - GET /api/ingestion/documents: the caller's documents, newest first, what they take and the
   limits.
 - GET /api/ingestion/documents/{id}/text?offset=&limit=: the stored text, a page at a time;
@@ -19,26 +20,40 @@ secret warning, delete (SPEC-ingestion.md, API; the rules are in documents.py).
 - DELETE /api/ingestion/documents/{id}: 204, the document is gone for good; 409 with the reason
   when a guard refuses (none in this task).
 
-How an upload is read (`_read_body`), since this is the one route that accepts 20 MiB:
+How a body is admitted and read (`_Gate`, `_read_body`), since these are the routes that take
+a body of some size, one of them 20 MiB:
 - A declared Content-Length over the limit is refused before a byte is read.
-- At most UPLOAD_SLOTS uploads are in memory at once in this process: the others wait their
-  turn without their body being read, and give up with 503 after SLOT_WAIT_S.
+- One body per user at a time in this process, a file or a paste: a second one of the same user
+  waits for the first without its body being read, and is answered 429 after SLOT_WAIT_S. This
+  turn is taken before anything else, so one account never holds more than one upload slot.
+- At most UPLOAD_SLOTS files are in memory at once in this process: the others wait without
+  their body being read, and give up with 503 after the same SLOT_WAIT_S in all. A paste is at
+  most 2 MiB and takes no slot.
 - The body is read chunk by chunk into one buffer, hashed as it comes, and counted: the read
   stops with 413 at the first byte past the limit, whatever Content-Length said. No second copy
   is made: documents.py sends the buffer to Postgres in pieces.
-- A body that sends nothing for IDLE_TIMEOUT_S, or is not complete after TOTAL_TIMEOUT_S, ends
-  with 408, and the connection is closed, so a slot is never held for longer than that.
+- A body ends with 408 and a closed connection when it brings less than PROGRESS_BYTES in
+  IDLE_TIMEOUT_S without being complete (silence, or a byte now and then: neither keeps a turn
+  or a slot), or when it is not complete after its total time. So a client that sends nothing
+  useful holds its turn and its slot for IDLE_TIMEOUT_S, never for the ten minutes a slow but
+  honest upload may take.
+What this does not prevent: two accounts acting together can each hold one slot for as long as
+each keeps sending at that pace, which is the whole of the two slots. An account is invited by
+the owner, and what it sends counts against its 100 MB.
 
 Every route needs a session (the app-wide default deny) and takes the user from it, never from
 the request. Another user's document answers the same 404 as one that does not exist, an id that
-is not a UUID too. Every answer is `Cache-Control: no-store`. Nothing is logged but ids, sizes,
-types, statuses and rule names.
+is not a UUID too. Every answer under /api/ingestion is `Cache-Control: no-store`, the 401,
+403, 405 and 422 that are built outside this router included (`no_store` in routers.py, a
+middleware of the app). Nothing is logged but ids, sizes, types, statuses and rule names.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any, NoReturn
 
@@ -68,11 +83,13 @@ logger = logging.getLogger("app.ingestion")
 NO_STORE = {"Cache-Control": "no-store"}
 CLOSE = {"Connection": "close"}
 
-UPLOAD_SLOTS = 2  # uploads held in memory at once, in this process
-SLOT_WAIT_S = 20.0
+UPLOAD_SLOTS = 2  # files held in memory at once, in this process
+SLOT_WAIT_S = 20.0  # how long a body waits for its user's turn and for a slot, in all
 RETRY_AFTER_S = 5
-IDLE_TIMEOUT_S = 30.0  # the longest silence inside a body
-TOTAL_TIMEOUT_S = 600.0  # the whole body: 20 MiB at 280 kbit/s
+IDLE_TIMEOUT_S = 30.0  # the longest a body may go without bringing PROGRESS_BYTES more
+PROGRESS_BYTES = 256 * 1024  # what counts as progress: about 70 kbit/s sustained
+TOTAL_TIMEOUT_S = 600.0  # the whole file: 20 MiB at 280 kbit/s
+PASTE_TIMEOUT_S = 60.0  # the whole JSON of a paste
 # The JSON of a paste: 100,000 characters, each at most 12 bytes when escaped.
 PASTE_BODY_MAX_BYTES = 2 * 1024 * 1024
 PREVIEW_DEFAULT = 20_000
@@ -80,9 +97,12 @@ PREVIEW_MAX = 50_000
 
 NOT_FOUND = "Document not found."
 NO_TEXT_YET = "This document has no text yet."
-STALLED = "The upload stopped arriving. Check your connection and add the file again."
+STALLED = (
+    "The upload stopped arriving, or arrives too slowly. Check your connection and add it again."
+)
 INTERRUPTED = "The upload was interrupted."
 BUSY = "Other uploads are in progress. Try again in a moment."
+OWN_BUSY = "Another upload of yours is still on its way. Wait for it to finish, then add this one."
 PASTE_BODY_TOO_LARGE = documents.PASTE_TOO_LONG
 BAD_JSON = "The request is not valid JSON."
 
@@ -102,8 +122,11 @@ _401 = {401: {"model": ErrorOut, "description": "Not signed in"}}
 _404 = {404: {"model": ErrorOut, "description": "No such document (or not yours)"}}
 _STORE_ERRORS: dict[int | str, dict[str, Any]] = {
     200: {"description": "This user already has the same file: it is returned, nothing written"},
+    400: {"model": ErrorOut, "description": "The client went away while sending"},
+    408: {"model": ErrorOut, "description": "The body stalled or arrived too slowly"},
     413: {"model": ErrorOut, "description": "Over the size limit or the user's quota"},
     422: {"model": ErrorOut, "description": "Empty, no text in it, or the 201st document"},
+    429: {"model": ErrorOut, "description": "Another body of this user is still on its way"},
 }
 
 
@@ -220,16 +243,90 @@ def _stored(stored: documents.Stored, response: Response) -> StoredOut:
     return StoredOut(**_fields(stored.document), duplicate=not stored.created)
 
 
-# --- upload --------------------------------------------------------------------------------
+# --- who may send a body now ---------------------------------------------------------------
 
 
-def _slots(app: FastAPI) -> asyncio.Semaphore:
-    """The upload slots of this process, made on first use (inside the running loop)."""
-    slots: asyncio.Semaphore | None = getattr(app.state, "ingestion_upload_slots", None)
-    if slots is None:
-        slots = asyncio.Semaphore(UPLOAD_SLOTS)
-        app.state.ingestion_upload_slots = slots
-    return slots
+class _Gate:
+    """Admission of request bodies in this process (module docstring): one body at a time per
+    user, and at most UPLOAD_SLOTS files at a time in all."""
+
+    def __init__(self) -> None:
+        self.slots = asyncio.Semaphore(UPLOAD_SLOTS)
+        # Per user: the lock of the turn, and how many requests hold it or wait for it. An
+        # entry leaves with its last request, so the table never grows with the users seen.
+        self._turns: dict[uuid.UUID, tuple[asyncio.Lock, int]] = {}
+
+    @property
+    def users(self) -> int:
+        """Users with a body in flight or waiting (0 when nothing is going on)."""
+        return len(self._turns)
+
+    def _leave(self, user_id: uuid.UUID) -> None:
+        lock, count = self._turns[user_id]
+        if count <= 1:
+            del self._turns[user_id]
+        else:
+            self._turns[user_id] = (lock, count - 1)
+
+    async def take_turn(self, user_id: uuid.UUID, wait_s: float) -> bool:
+        """Wait at most `wait_s` for the user's turn. False when it did not come."""
+        lock, count = self._turns.get(user_id, (asyncio.Lock(), 0))
+        self._turns[user_id] = (lock, count + 1)
+        try:
+            await asyncio.wait_for(lock.acquire(), wait_s)
+        except BaseException as exc:  # the wait ran out, or the request was cancelled
+            self._leave(user_id)
+            if isinstance(exc, TimeoutError):
+                return False
+            raise
+        return True
+
+    def give_turn(self, user_id: uuid.UUID) -> None:
+        self._turns[user_id][0].release()
+        self._leave(user_id)
+
+
+def _gate(app: FastAPI) -> _Gate:
+    """The gate of this process, made on first use (inside the running loop)."""
+    gate: _Gate | None = getattr(app.state, "ingestion_gate", None)
+    if gate is None:
+        gate = _Gate()
+        app.state.ingestion_gate = gate
+    return gate
+
+
+@contextlib.asynccontextmanager
+async def _admitted(request: Request, user: User, size: int, slot: bool) -> AsyncIterator[None]:
+    """Hold the user's turn, and one upload slot when `slot`, while the body is read and
+    stored. Both waits share SLOT_WAIT_S; the body is not read while waiting. Answers 429 when
+    the user's own turn does not come, 503 when no slot does."""
+    gate = _gate(request.app)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + SLOT_WAIT_S
+    retry = {**CLOSE, "Retry-After": str(RETRY_AFTER_S)}
+    if not await gate.take_turn(user.id, SLOT_WAIT_S):
+        _refuse(user, status.HTTP_429_TOO_MANY_REQUESTS, OWN_BUSY, "upload-own-busy", size, **retry)
+    try:
+        if slot:
+            try:
+                await asyncio.wait_for(gate.slots.acquire(), max(0.0, deadline - loop.time()))
+            except TimeoutError:
+                _refuse(
+                    user, status.HTTP_503_SERVICE_UNAVAILABLE, BUSY, "upload-busy", size, **retry
+                )
+        try:
+            yield
+        finally:
+            if slot:
+                gate.slots.release()
+    finally:
+        gate.give_turn(user.id)
+
+
+def _declared(request: Request) -> int:
+    """The Content-Length the client declared, 0 when it declared none or not a number."""
+    declared = request.headers.get("content-length", "")
+    return int(declared) if declared.isascii() and declared.isdigit() else 0
 
 
 class _NotTakenError(Exception):
@@ -244,28 +341,36 @@ class _NotTakenError(Exception):
         self.size = size
 
 
-async def _read_body(request: Request) -> tuple[bytearray, bytes]:
+async def _read_body(
+    request: Request, limit: int, total_s: float, too_large: tuple[str, str]
+) -> tuple[bytearray, bytes]:
     """The body in one buffer and its SHA-256 (module docstring: counted, hashed and timed
-    while it is read). Raises _NotTakenError."""
+    while it is read). `too_large` is the sentence and the rule of a body over `limit`.
+    Raises _NotTakenError."""
     buffer = bytearray()
     digest = hashlib.sha256()
     chunks = request.stream().__aiter__()
+    loop = asyncio.get_running_loop()
+    # The last moment the body had brought PROGRESS_BYTES more, and its size then.
+    progress_at, progress_size = loop.time(), 0
     try:
-        async with asyncio.timeout(TOTAL_TIMEOUT_S):
+        async with asyncio.timeout(total_s):
             while True:
+                left = progress_at + IDLE_TIMEOUT_S - loop.time()
+                if left <= 0:
+                    raise TimeoutError
                 try:
-                    chunk = await asyncio.wait_for(anext(chunks), IDLE_TIMEOUT_S)
+                    chunk = await asyncio.wait_for(anext(chunks), left)
                 except StopAsyncIteration:
                     break
-                if len(buffer) + len(chunk) > FILE_MAX_BYTES:
+                if len(buffer) + len(chunk) > limit:
                     raise _NotTakenError(
-                        status.HTTP_413_CONTENT_TOO_LARGE,
-                        documents.TOO_LARGE,
-                        "file-too-large",
-                        len(buffer) + len(chunk),
+                        status.HTTP_413_CONTENT_TOO_LARGE, *too_large, len(buffer) + len(chunk)
                     )
                 buffer += chunk
                 digest.update(chunk)
+                if len(buffer) - progress_size >= PROGRESS_BYTES:
+                    progress_at, progress_size = loop.time(), len(buffer)
     except TimeoutError:
         raise _NotTakenError(
             status.HTTP_408_REQUEST_TIMEOUT, STALLED, "upload-stalled", len(buffer)
@@ -275,6 +380,9 @@ async def _read_body(request: Request) -> tuple[bytearray, bytes]:
             status.HTTP_400_BAD_REQUEST, INTERRUPTED, "upload-interrupted", len(buffer)
         ) from None
     return buffer, digest.digest()
+
+
+# --- upload --------------------------------------------------------------------------------
 
 
 def _store_file(
@@ -299,8 +407,6 @@ def _store_file(
     responses={
         **_401,
         **_STORE_ERRORS,
-        400: {"model": ErrorOut, "description": "The client went away during the upload"},
-        408: {"model": ErrorOut, "description": "The body stalled"},
         415: {"model": ErrorOut, "description": "A type of file that is not read"},
         503: {"model": ErrorOut, "description": "Both upload slots are busy"},
     },
@@ -316,8 +422,7 @@ def _store_file(
 )
 async def upload_document(request: Request, user: CurrentUser, response: Response) -> StoredOut:
     """Add a file to the caller's documents."""
-    declared = request.headers.get("content-length")
-    size = int(declared) if declared is not None and declared.isdigit() else 0
+    size = _declared(request)
     if size > FILE_MAX_BYTES:
         _refuse(
             user,
@@ -327,58 +432,59 @@ async def upload_document(request: Request, user: CurrentUser, response: Respons
             size,
             **CLOSE,
         )
-    slots = _slots(request.app)
-    try:
-        await asyncio.wait_for(slots.acquire(), SLOT_WAIT_S)
-    except TimeoutError:
-        _refuse(
-            user,
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            BUSY,
-            "upload-busy",
-            size,
-            **CLOSE,
-            **{"Retry-After": str(RETRY_AFTER_S)},
-        )
-    try:
-        body, digest = await _read_body(request)
-        size = len(body)
-        name = documents.decode_filename(request.headers.get("x-filename"))
-        stored = await run_in_threadpool(
-            _store_file,
-            request.app.state.sessionmaker,
-            user.id,
-            name,
-            body,
-            digest,
-            deps.clock(request),
-        )
-    except _NotTakenError as exc:
-        # The rest of a body that was refused is not read: the connection ends with the answer.
-        _refuse(user, exc.code, exc.detail, exc.rule, exc.size, **CLOSE)
-    except documents.DocumentError as exc:
-        _refused(exc, user, size)
-    finally:
-        slots.release()
+    async with _admitted(request, user, size, slot=True):
+        try:
+            body, digest = await _read_body(
+                request, FILE_MAX_BYTES, TOTAL_TIMEOUT_S, (documents.TOO_LARGE, "file-too-large")
+            )
+            size = len(body)
+            name = documents.decode_filename(request.headers.get("x-filename"))
+            stored = await run_in_threadpool(
+                _store_file,
+                request.app.state.sessionmaker,
+                user.id,
+                name,
+                body,
+                digest,
+                deps.clock(request),
+            )
+        except _NotTakenError as exc:
+            # The rest of a body that was refused is not read: the connection ends with the
+            # answer.
+            _refuse(user, exc.code, exc.detail, exc.rule, exc.size, **CLOSE)
+        except documents.DocumentError as exc:
+            _refused(exc, user, size)
     return _stored(stored, response)
 
 
 # --- paste ---------------------------------------------------------------------------------
 
 
-async def _paste_body(request: Request) -> bytes:
-    """The JSON of a paste, refused as soon as it is known to be over PASTE_BODY_MAX_BYTES."""
-    declared = request.headers.get("content-length")
-    if declared is not None and declared.isdigit() and int(declared) > PASTE_BODY_MAX_BYTES:
-        raise _error(status.HTTP_413_CONTENT_TOO_LARGE, PASTE_BODY_TOO_LARGE)
-    chunks: list[bytes] = []
-    size = 0
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > PASTE_BODY_MAX_BYTES:
-            raise _error(status.HTTP_413_CONTENT_TOO_LARGE, PASTE_BODY_TOO_LARGE)
-        chunks.append(chunk)
-    return b"".join(chunks)
+def _paste(raw: bytes | bytearray) -> PasteIn:
+    """The body of a paste. Raises the 422 of a body that is not what the route takes."""
+    try:
+        return PasteIn.model_validate_json(raw)
+    except ValidationError as exc:
+        errors = exc.errors(include_input=False, include_url=False)
+        if errors and errors[0].get("type") == "json_invalid":
+            raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, BAD_JSON) from None
+        raise RequestValidationError(
+            [{**error, "loc": ("body", *error.get("loc", ()))} for error in errors]
+        ) from None
+
+
+def _store_paste(
+    sessions: sessionmaker[Session],
+    user_id: uuid.UUID,
+    name: str | None,
+    text: str,
+    now: datetime,
+) -> documents.Stored:
+    """On the threadpool: one session, one transaction."""
+    with sessions() as db:
+        stored = documents.store_paste(db, user_id, name, text, now)
+        db.commit()
+        return stored
 
 
 @router.post(
@@ -393,29 +499,29 @@ async def _paste_body(request: Request) -> bytes:
         }
     },
 )
-def paste_document(
-    raw: Annotated[bytes, Depends(_paste_body)],
-    user: CurrentUser,
-    request: Request,
-    response: Response,
-    db: Db,
-) -> StoredOut:
+async def paste_document(request: Request, user: CurrentUser, response: Response) -> StoredOut:
     """Add a pasted text to the caller's documents."""
-    try:
-        body = PasteIn.model_validate_json(raw)
-    except ValidationError as exc:
-        errors = exc.errors(include_input=False, include_url=False)
-        if errors and errors[0].get("type") == "json_invalid":
-            raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, BAD_JSON) from None
-        raise RequestValidationError(
-            [{**error, "loc": ("body", *error.get("loc", ()))} for error in errors]
-        ) from None
-    try:
-        stored = documents.store_paste(db, user.id, body.name, body.text, deps.clock(request))
-    except documents.DocumentError as exc:
-        db.rollback()
-        _refused(exc, user, len(raw))
-    db.commit()
+    size = _declared(request)
+    too_large = (PASTE_BODY_TOO_LARGE, "paste-too-long")
+    if size > PASTE_BODY_MAX_BYTES:
+        _refuse(user, status.HTTP_413_CONTENT_TOO_LARGE, *too_large, size, **CLOSE)
+    async with _admitted(request, user, size, slot=False):
+        try:
+            raw, _ = await _read_body(request, PASTE_BODY_MAX_BYTES, PASTE_TIMEOUT_S, too_large)
+            size = len(raw)
+            body = _paste(raw)
+            stored = await run_in_threadpool(
+                _store_paste,
+                request.app.state.sessionmaker,
+                user.id,
+                body.name,
+                body.text,
+                deps.clock(request),
+            )
+        except _NotTakenError as exc:
+            _refuse(user, exc.code, exc.detail, exc.rule, exc.size, **CLOSE)
+        except documents.DocumentError as exc:
+            _refused(exc, user, size)
     return _stored(stored, response)
 
 

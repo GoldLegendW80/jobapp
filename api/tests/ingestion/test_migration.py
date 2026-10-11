@@ -36,12 +36,14 @@ DOCUMENT_COLUMNS = {
     "pages": ("INTEGER", True),
     "pages_text": ("INTEGER", True),
     "pages_image": ("INTEGER", True),
+    "transcribed_pages": ("ARRAY", True),
     "parser_version": ("SMALLINT", False),
     "failed_reason": ("TEXT", True),
     "failed_kind": ("ENUM", True),
     "attempts": ("SMALLINT", False),
     "secret_warning": ("BOOLEAN", False),
     "secret_confirmed_at": ("TIMESTAMP", True),
+    "pending_since": ("TIMESTAMP", True),
     "created_at": ("TIMESTAMP", False),
 }
 IMAGE_COLUMNS = {
@@ -161,22 +163,32 @@ def test_upgrade_creates_the_three_tables_with_every_column_of_the_plan(
 def test_keys_cascades_and_indexes(at_head: sa.Engine) -> None:
     inspector = sa.inspect(at_head)
 
-    def foreign(table: str) -> dict[str, tuple[str, str]]:
+    def foreign(table: str) -> dict[tuple[str, ...], tuple[str, tuple[str, ...], str]]:
         return {
-            fk["constrained_columns"][0]: (fk["referred_table"], fk["options"]["ondelete"])
+            tuple(fk["constrained_columns"]): (
+                fk["referred_table"],
+                tuple(fk["referred_columns"]),
+                fk["options"]["ondelete"],
+            )
             for fk in inspector.get_foreign_keys(table)
         }
 
-    assert foreign("ingestion_documents") == {"user_id": ("users", "CASCADE")}
+    assert foreign("ingestion_documents") == {("user_id",): ("users", ("id",), "CASCADE")}
+    # An image points at its document together with the document's user, in one key.
     assert foreign("ingestion_images") == {
-        "document_id": ("ingestion_documents", "CASCADE"),
-        "user_id": ("users", "CASCADE"),
+        ("document_id", "user_id"): ("ingestion_documents", ("id", "user_id"), "CASCADE"),
+        ("user_id",): ("users", ("id",), "CASCADE"),
     }
-    assert foreign("ingestion_consents") == {"user_id": ("users", "CASCADE")}
+    assert foreign("ingestion_consents") == {("user_id",): ("users", ("id",), "CASCADE")}
 
-    (unique,) = inspector.get_unique_constraints("ingestion_documents")
-    assert unique["name"] == "uq_ingestion_documents_user_id_sha256"
-    assert unique["column_names"] == ["user_id", "sha256"]
+    uniques = {
+        unique["name"]: unique["column_names"]
+        for unique in inspector.get_unique_constraints("ingestion_documents")
+    }
+    assert uniques == {
+        "uq_ingestion_documents_user_id_sha256": ["user_id", "sha256"],
+        "uq_ingestion_documents_id_user_id": ["id", "user_id"],
+    }
     (unique,) = inspector.get_unique_constraints("ingestion_images")
     assert unique["name"] == "uq_ingestion_images_document_id_position"
     assert unique["column_names"] == ["document_id", "position"]
@@ -196,6 +208,7 @@ def test_keys_cascades_and_indexes(at_head: sa.Engine) -> None:
             "ck_ingestion_documents_text_length",
             "ck_ingestion_documents_pages_not_negative",
             "ck_ingestion_documents_parser_version_positive",
+            "ck_ingestion_documents_transcribed_pages_count",
             "ck_ingestion_documents_attempts_not_negative",
         },
         "ingestion_images": {
@@ -261,6 +274,14 @@ def test_a_new_document_starts_pending_with_the_defaults(at_head: sa.Engine) -> 
         "UPDATE ingestion_images SET text = repeat('x', 20001)",
         "UPDATE ingestion_images SET document_id = gen_random_uuid()",
         "UPDATE ingestion_images SET user_id = gen_random_uuid()",
+        # an image under another user than its document's, even one that exists
+        "UPDATE ingestion_images SET user_id = (SELECT id FROM users WHERE email = 'c@d.co')",
+        "INSERT INTO ingestion_images (document_id, user_id, position, jpeg, width, height) "
+        "SELECT d.id, u.id, 7, '\\xffd8ff'::bytea, 10, 10 FROM ingestion_documents d, users u "
+        "WHERE u.email = 'c@d.co'",
+        "UPDATE ingestion_documents SET user_id = (SELECT id FROM users WHERE email = 'c@d.co')",
+        "UPDATE ingestion_documents SET transcribed_pages = "
+        "(SELECT array_agg(n) FROM generate_series(0, 200) AS n)",
         # one image per page
         "INSERT INTO ingestion_images (document_id, user_id, position, jpeg, width, height) "
         "SELECT document_id, user_id, position, jpeg, width, height FROM ingestion_images",
@@ -274,6 +295,7 @@ def test_a_new_document_starts_pending_with_the_defaults(at_head: sa.Engine) -> 
 def test_the_constraints_hold(at_head: sa.Engine, statement: str) -> None:
     with at_head.begin() as conn:
         user = add_user(conn, "a@b.co")
+        add_user(conn, "c@d.co")
         document = add_document(conn, user)
         conn.execute(sa.text(IMAGE), {"d": document, "u": user, "p": 0})
         conn.execute(
@@ -319,8 +341,10 @@ def test_what_later_tasks_store_fits(at_head: sa.Engine) -> None:
             sa.text(
                 "UPDATE ingestion_documents SET name = :name, text = :text, note = :note, "
                 "truncated = true, pages = 200, pages_text = 170, pages_image = 30, "
+                "transcribed_pages = (SELECT array_agg(n) FROM generate_series(0, 199) AS n), "
                 "parser_version = 32767, attempts = 2, text_source = 'transcribed', "
                 "text_status = 'awaiting_transcription', bytes = NULL, "
+                "pending_since = now() - interval '3 hours', "
                 "secret_warning = true, secret_confirmed_at = now() WHERE id = :d"
             ),
             {**{k: values[k] for k in ("name", "text", "note")}, "d": document},

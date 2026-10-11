@@ -18,13 +18,21 @@ archive or an image is kept and waits. G2b adds `Kind.pdf` when it queues the pa
 Storing (`store_file`, `store_paste`), in one transaction that the caller commits:
 1. The same file already there for this user (`unique(user_id, sha256)`): it is returned and
    nothing is written, unless the row is replaceable (it failed, or an older parser left it
-   `done` with a note): then the new upload takes the row over, same id, back to the start.
+   `done` with a note): then the new upload takes the row over, same id, back to the start. A
+   replacement empties the old text and page images as a deletion does, so it asks the delete
+   guards first: a row a guard protects is returned as it is.
+   For a new file the document count and the quota are checked here a first time, before a
+   byte goes to Postgres: a user at the limit costs the database nothing. The check that
+   decides is the one of step 3.
 2. The bytes of a binary kind travel to Postgres in pieces (`_stage`): a binary COPY into a
    temporary table, 128 KiB at a time, each piece gone before the next is handed over, then one
    UPDATE moves them into the row on the server. The api process therefore holds an upload once,
    in the buffer the route filled. Measured in the api image on 2026-10-11, three files of
    20 MiB on one connection: sent this way the process grows by 0 MiB; sent as a statement
    parameter it grows by 40 MiB, which libpq then keeps for as long as the connection lives.
+   An upload refused after this step (step 3 says no) rolls back: the staged bytes are then
+   dead rows of that connection's temporary table, at most one file, invisible to every query
+   and never in a dump, until the connection's next upload truncates the table or it closes.
 3. Under the user's advisory lock: the dedupe again, the document count, the quota (bytes, text
    and page images currently stored), then the row. Two uploads of one file at once give one row
    and two successes; two uploads that together pass the quota give one success and one 413.
@@ -89,14 +97,20 @@ TEXT_MIME = "text/plain"
 class Kind(enum.StrEnum):
     text = "text"
     pdf = "pdf"
-    archive = "archive"  # a ZIP: a DOCX or a LinkedIn export
+    archive = "archive"  # a ZIP, or what a parser found it to be: a DOCX
     image = "image"
+    other = "other"  # a type this module does not know: shown as a file, never readable
 
 
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# Every type a document may carry. A task that stores another one adds it here (G7: the CSV
+# files of a LinkedIn export are text/csv, a ZIP found to be a DOCX is DOCX_MIME).
 KIND_OF_MIME: dict[str, Kind] = {
     TEXT_MIME: Kind.text,
+    "text/csv": Kind.text,
     "application/pdf": Kind.pdf,
     "application/zip": Kind.archive,
+    DOCX_MIME: Kind.archive,
     "image/png": Kind.image,
     "image/jpeg": Kind.image,
 }
@@ -235,8 +249,9 @@ def sniff(head: bytes) -> str | None:
 
 
 def kind_of(mime: str) -> Kind:
-    """The kind of a stored document; a type a later parser writes (a DOCX) is an archive."""
-    return KIND_OF_MIME.get(mime, Kind.archive)
+    """The kind of a stored document. A type that is not in KIND_OF_MIME is `other`, never
+    taken for one that has a reader."""
+    return KIND_OF_MIME.get(mime, Kind.other)
 
 
 # --- text ----------------------------------------------------------------------------------
@@ -455,6 +470,14 @@ def usage(db: Session, user_id: uuid.UUID) -> Usage:
     return Usage(bytes=int(stored) + int(images), documents=int(count))
 
 
+def _check_room(used: Usage, cost: int, new: bool) -> None:
+    """Raises DocumentError when `cost` more bytes, or one more document, do not fit."""
+    if new and used.documents >= USER_MAX_DOCUMENTS:
+        raise DocumentError(422, TOO_MANY, "too-many-documents")
+    if used.bytes + cost > USER_MAX_BYTES:
+        raise DocumentError(413, QUOTA, "quota")
+
+
 def _store(
     db: Session,
     user_id: uuid.UUID,
@@ -476,6 +499,8 @@ def _store(
     if existing is not None and not replaceable(existing):
         _log("document duplicate", existing)
         return Stored(existing, created=False)
+    if existing is None:
+        _check_room(usage(db, user_id), cost, new=True)
     if body is not None:
         _stage(db, body)
     _lock_user(db, user_id)
@@ -485,6 +510,9 @@ def _store(
         return Stored(document, created=False)
     replaced = document is not None
     if document is not None:
+        if any(guard(db, document) for guard in _delete_guards):
+            _log("document replacement refused", document)
+            return Stored(document, created=False)
         # The row starts over: what the failed or partial read left goes first, so the quota
         # below counts the user's other documents only.
         db.execute(sa.delete(IngestionImage).where(IngestionImage.document_id == document.id))
@@ -493,11 +521,7 @@ def _store(
             .where(IngestionDocument.id == document.id)
             .values(raw=None, text=None)
         )
-    used = usage(db, user_id)
-    if not replaced and used.documents >= USER_MAX_DOCUMENTS:
-        raise DocumentError(422, TOO_MANY, "too-many-documents")
-    if used.bytes + cost > USER_MAX_BYTES:
-        raise DocumentError(413, QUOTA, "quota")
+    _check_room(usage(db, user_id), cost, new=not replaced)
     if document is None:
         document = IngestionDocument(user_id=user_id, sha256=digest, created_at=now)
         db.add(document)
@@ -509,6 +533,9 @@ def _store(
     document.truncated = content is not None and content.truncated
     document.note = TRUNCATED_NOTE if document.truncated else None
     document.pages = document.pages_text = document.pages_image = None
+    document.transcribed_pages = None
+    # A replaced row keeps its created_at: this is what says since when it waits this time.
+    document.pending_since = now if content is None else None
     document.parser_version = PARSER_VERSION
     document.failed_reason = document.failed_kind = None
     document.attempts = 0
@@ -679,7 +706,10 @@ _delete_guards: list[DeleteGuard] = []
 
 
 def register_delete_guard(guard: DeleteGuard) -> None:
-    """Called once at import by a later task's own module (G10's delete_guard.py)."""
+    """Called once at import by a later task's own module (G10's delete_guard.py), which the
+    api must import (from its router file), not the worker alone. A guard runs under the
+    document's row lock: it may read, and must take no lock that comes before a document row
+    in the lock order. It is asked before a deletion and before a replacement."""
     if guard not in _delete_guards:
         _delete_guards.append(guard)
 

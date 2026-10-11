@@ -27,6 +27,7 @@ from app.identity import service as identity_service
 from app.identity import throttle as identity_throttle
 from app.identity.admin_router import router as admin_router
 from app.identity.router import router as auth_router
+from app.ingestion.routers import no_store as ingestion_no_store
 from app.ingestion.routers import routers as ingestion_routers
 from app.jobs.router import router as jobs_router
 from app.jobs.sweep_router import router as sweeps_router
@@ -134,6 +135,8 @@ def create_app(
     # Middleware added last runs first: request_log, then CSRF, then the cookie writer.
     app.middleware("http")(identity_deps.session_cookie_middleware)
     app.middleware("http")(identity_deps.csrf_middleware)
+    # Around the two above, so the 401 and the 403 of an ingestion route are never cached.
+    app.middleware("http")(ingestion_no_store)
 
     @app.middleware("http")
     async def request_log(

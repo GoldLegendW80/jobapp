@@ -3,12 +3,14 @@
 The first half of the DDL of SPEC-ingestion.md (Documents); the other half (runs, steps, items)
 is migration 0012, task G9. These three tables hold every column a later task stores into, so
 none of G2b, G7, G8, G14 and G16 adds a migration: `note`, `truncated`, `pages`, `pages_text`,
-`pages_image`, `parser_version`, `failed_reason`, `failed_kind` and `attempts` on documents,
-`user_id` and `text` on images, and the consent table that only G16 writes.
+`pages_image`, `transcribed_pages`, `parser_version`, `failed_reason`, `failed_kind`, `attempts`
+and `pending_since` on documents, `user_id` and `text` on images, and the consent table that
+only G16 writes.
 
 All three cascade from users (a deleted account leaves nothing behind) and images cascade from
-their document. `unique(user_id, sha256)` is the per user dedupe. The CHECK constraints are
-backstops on sizes (app/ingestion/models.py says which limit each one is).
+their document, through one foreign key on `(document_id, user_id)`, so an image can only be
+filed under the user of its document. `unique(user_id, sha256)` is the per user dedupe. The
+CHECK constraints are backstops on sizes (app/ingestion/models.py says which limit each one is).
 
 Expand only: new types and new tables, which the release before this one never reads or writes
 (CONTRIBUTING.md, Migrations). Deleting a user in that release cascades here through the
@@ -48,6 +50,7 @@ NAME_MAX_CHARS = 200
 IMAGE_MAX_BYTES = 300_000
 IMAGE_MAX_SIDE = 2000
 IMAGE_TEXT_MAX_CHARS = 20_000
+PAGES_MAX = 200
 
 
 def _tz() -> sa.DateTime:
@@ -91,6 +94,7 @@ def upgrade() -> None:
         sa.Column("pages", sa.Integer(), nullable=True),
         sa.Column("pages_text", sa.Integer(), nullable=True),
         sa.Column("pages_image", sa.Integer(), nullable=True),
+        sa.Column("transcribed_pages", pg.ARRAY(sa.Integer()), nullable=True),
         sa.Column("parser_version", sa.SmallInteger(), nullable=False),
         sa.Column("failed_reason", sa.Text(), nullable=True),
         sa.Column(
@@ -101,6 +105,7 @@ def upgrade() -> None:
         sa.Column("attempts", sa.SmallInteger(), nullable=False, server_default="0"),
         sa.Column("secret_warning", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("secret_confirmed_at", _tz(), nullable=True),
+        sa.Column("pending_since", _tz(), nullable=True),
         sa.Column("created_at", _tz(), nullable=False, server_default=sa.text("now()")),
         sa.PrimaryKeyConstraint("id", name="pk_ingestion_documents"),
         sa.ForeignKeyConstraint(
@@ -110,6 +115,7 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.UniqueConstraint("user_id", "sha256", name="uq_ingestion_documents_user_id_sha256"),
+        sa.UniqueConstraint("id", "user_id", name="uq_ingestion_documents_id_user_id"),
         sa.CheckConstraint(
             f"char_length(name) >= 1 AND char_length(name) <= {NAME_MAX_CHARS}",
             name=op.f("ck_ingestion_documents_name_length"),
@@ -135,6 +141,10 @@ def upgrade() -> None:
             name=op.f("ck_ingestion_documents_pages_not_negative"),
         ),
         sa.CheckConstraint(
+            f"transcribed_pages IS NULL OR cardinality(transcribed_pages) <= {PAGES_MAX}",
+            name=op.f("ck_ingestion_documents_transcribed_pages_count"),
+        ),
+        sa.CheckConstraint(
             "parser_version >= 1", name=op.f("ck_ingestion_documents_parser_version_positive")
         ),
         sa.CheckConstraint(
@@ -154,8 +164,8 @@ def upgrade() -> None:
         sa.Column("text", sa.Text(), nullable=True),
         sa.PrimaryKeyConstraint("id", name="pk_ingestion_images"),
         sa.ForeignKeyConstraint(
-            ["document_id"],
-            ["ingestion_documents.id"],
+            ["document_id", "user_id"],
+            ["ingestion_documents.id", "ingestion_documents.user_id"],
             name="fk_ingestion_images_document_id_ingestion_documents",
             ondelete="CASCADE",
         ),

@@ -62,11 +62,27 @@ _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
 )
 
-# keyword, at most 20 more word characters, an assignment, then the value (10 to 150 characters).
+# The generic rule: a keyword, at most 20 more word characters, an assignment, then a value of
+# 10 to 150 characters that looks random. Written so that an ordinary line of a technical CV
+# does not match ("Authentication: OAuth2/OIDC/JWT-RS256", "REST API, FastAPI/Flask/Django4.2",
+# "Author: Camille_Durand-2023"):
+# - the keyword is a whole word (a plural too) or a whole part of a name: `password`,
+#   `db_password`, `dbPassword`, `DB_PASSWORD`, `credentials`, never the start of a longer word
+#   (Authentication, Author, Keycloak, tokenizer) nor its end (OAuth, FastAPI, monkey);
+# - a comma is not an assignment;
+# - the value takes no slash and no plus, as gitleaks' own: a list of tools is not one value.
+_LOWER = "access|authorization|auth|apikey|api|credential|creds|key|passw(?:or)?d|secret|token"
+_TITLE = "Access|Authorization|Auth|Apikey|Api|Credential|Creds|Key|Passw(?:or)?d|Secret|Token"
+_UPPER = "ACCESS|AUTHORIZATION|AUTH|APIKEY|API|CREDENTIAL|CREDS|KEY|PASSW(?:OR)?D|SECRET|TOKEN"
+_KEYWORD = (
+    "(?:"
+    rf"(?<![A-Za-z])(?:{_LOWER})s?(?![a-z])"  # password, api_key, apiKey, tokens
+    rf"|(?<![A-Z])(?:{_TITLE})s?(?![a-z])"  # Password, dbPassword, never OAuth or Author
+    rf"|(?<![A-Za-z])(?:{_UPPER})S?(?![A-Za-z])"  # DB_PASSWORD, API_KEY, never FastAPI
+    ")"
+)
 _GENERIC = re.compile(
-    r"(?i)(?:access|auth|api|credential|creds|key|passw(?:or)?d|secret|token)[\w.-]{0,20}"
-    r"[ \t\"']{0,3}(?:=|:|:=|=>|\|\|:|<=|,)[ \t\"'`]{0,5}"
-    r"([\w.=+/-]{10,150})"
+    _KEYWORD + r"[\w.-]{0,20}[ \t\"']{0,3}(?:=>|:=|\?=|=|:)[ \t\"'`]{0,5}([\w.=-]{10,150})"
 )
 GENERIC_RULE = "generic-password-or-key"
 

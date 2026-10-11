@@ -40,12 +40,16 @@ ingestion_documents(id uuid, user_id fk users on delete cascade, name text, mime
                     text_status enum(pending, awaiting_transcription, done, failed),
                     note text null, truncated bool default false,
                     pages int null, pages_text int null, pages_image int null,
+                    transcribed_pages int[] null,
                     parser_version smallint,
                     failed_reason text null, failed_kind enum(file, server) null, attempts smallint,
                     secret_warning bool default false, secret_confirmed_at null,
-                    created_at, unique(user_id, sha256))
-ingestion_images(id, document_id fk cascade, user_id fk cascade, position int, jpeg bytea,
-                 width int, height int, text text null, unique(document_id, position))
+                    pending_since null,
+                    created_at, unique(user_id, sha256), unique(id, user_id))
+ingestion_images(id, document_id, user_id fk cascade, position int, jpeg bytea,
+                 width int, height int, text text null, unique(document_id, position),
+                 foreign key (document_id, user_id) references ingestion_documents (id, user_id)
+                 on delete cascade)
 ingestion_consents(user_id pk fk cascade, text_version int, accepted_at)
 
 ingestion_runs(id uuid, user_id fk cascade, document_ids uuid[], base_revision int,
@@ -67,7 +71,7 @@ ingestion_items(id, user_id fk cascade, document_id fk cascade, step_id fk casca
                 unique(step_id, section, key, value_hash))
 ```
 
-The first three tables are one migration (task G1), the last three another (task G9); each holds every column a later task stores into, so no other ingestion task adds a migration. **Pages:** `ingestion_documents.text` holds the pages of a PDF in order, joined with a form feed (U+000C); a page that waits for its transcription is the empty string between two form feeds; `ingestion_images.position` is the zero based page index of a PDF page, and 0 for an uploaded image. `note` says what was not read on a document that is not failed ("pages 31 to 44 were not read"), and `pages_text` and `pages_image` are shown per document.
+The first three tables are one migration (task G1), the last three another (task G9); each holds every column a later task stores into, so no other ingestion task adds a migration. **Pages:** `ingestion_documents.text` holds the pages of a PDF in order, joined with a form feed (U+000C); a page that waits for its transcription is the empty string between two form feeds; `ingestion_images.position` is the zero based page index of a PDF page, and 0 for an uploaded image. `note` says what was not read on a document that is not failed ("pages 31 to 44 were not read"), and `pages_text` and `pages_image` are shown per document. `transcribed_pages` keeps the page indexes whose text came from a transcription, since the images themselves are deleted once transcribed. `pending_since` is when the document last started to wait for its reader (upload, replacement, a new try): a replaced row keeps its `created_at`. An image is tied to the user of its document by the foreign key on `(document_id, user_id)`.
 
 As planned against the merged runner (tasks/ingestion/todo.md): the runner executes one SDK session per `agent_runs` row with fixed limits and has no sub-runs, so an ingestion run is a chain of steps, each an ordinary agent run, and the merge is code. Steps store checked candidates in `ingestion_items`; the merge turns them into proposals.
 

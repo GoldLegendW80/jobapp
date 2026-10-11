@@ -58,8 +58,19 @@ BLOCK = 64 * 1024
 
 def slots_free(app: FastAPI) -> int:
     """Upload slots not held right now (2 when no upload is in progress)."""
-    slots = getattr(app.state, "ingestion_upload_slots", None)
-    return documents_router.UPLOAD_SLOTS if slots is None else slots._value
+    gate = getattr(app.state, "ingestion_gate", None)
+    return documents_router.UPLOAD_SLOTS if gate is None else gate.slots._value
+
+
+def users_in_flight(app: FastAPI) -> int:
+    """Users with a body on its way or waiting for their turn (0 when nothing is going on)."""
+    gate = getattr(app.state, "ingestion_gate", None)
+    return 0 if gate is None else gate.users
+
+
+def at_rest(app: FastAPI) -> bool:
+    """Every slot free and nobody's turn held: what each test must leave behind."""
+    return slots_free(app) == documents_router.UPLOAD_SLOTS and users_in_flight(app) == 0
 
 
 async def blocks(
@@ -278,7 +289,12 @@ def run_together(*posts: Any) -> list[Answer]:
 
 
 def test_a_third_upload_waits_for_a_slot_and_its_body_is_not_read_meanwhile(
-    app: FastAPI, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+    app: FastAPI,
+    alice: str,
+    bob: str,
+    carol: str,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(documents_router, "SLOT_WAIT_S", 5.0)
     released: dict[str, float] = {}
@@ -299,21 +315,23 @@ def test_a_third_upload_waits_for_a_slot_and_its_body_is_not_read_meanwhile(
 
     async def late() -> Answer:
         await both_slots_taken(app)
-        return await post_stream(app, alice, third)
+        return await post_stream(app, carol, third)
 
     first, second, last = run_together(
-        post_stream(app, alice, slow(b"one")), post_stream(app, alice, slow(b"two")), late()
+        post_stream(app, alice, slow(b"one")), post_stream(app, bob, slow(b"two")), late()
     )
     assert (first.status, second.status, last.status) == (201, 201, 201)
     # The third body was asked for only once a slot was free.
     assert third_started["at"] >= min(released.values())
     assert len(rows(factory)) == 3
-    assert slots_free(app) == 2
+    assert at_rest(app)
 
 
 def test_a_third_upload_gives_up_with_503_when_both_slots_stay_busy(
     app: FastAPI,
     alice: str,
+    bob: str,
+    carol: str,
     factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -328,11 +346,11 @@ def test_a_third_upload_gives_up_with_503_when_both_slots_stay_busy(
 
     async def late() -> Answer:
         await both_slots_taken(app)
-        return await post_stream(app, alice, lambda: chunks(b"a text that never gets a slot"))
+        return await post_stream(app, carol, lambda: chunks(b"a text that never gets a slot"))
 
     with caplog.at_level("INFO", logger="app.ingestion"):
         first, second, third = run_together(
-            post_stream(app, alice, stalls), post_stream(app, alice, stalls), late()
+            post_stream(app, alice, stalls), post_stream(app, bob, stalls), late()
         )
     assert (first.status, second.status) == (408, 408)
     assert third.status == 503
@@ -340,9 +358,236 @@ def test_a_third_upload_gives_up_with_503_when_both_slots_stay_busy(
     assert third.headers["retry-after"] == "5"
     assert third.taken == 0  # its body was never read
     assert rows(factory) == []
-    assert slots_free(app) == 2
+    assert at_rest(app)
     rules = Counter(vars(r)["rule"] for r in caplog.records if r.getMessage() == "document refused")
     assert rules == {"upload-stalled": 2, "upload-busy": 1}
+
+
+# --- one body per user at a time -----------------------------------------------------------
+
+
+async def stalled() -> AsyncIterator[dict[str, Any]]:
+    """A body that starts as a PDF and then says nothing more."""
+    yield {"type": "http.request", "body": PDF_MAGIC, "more_body": True}
+
+
+async def turn_taken(app: FastAPI, users: int = 1) -> None:
+    """Wait until that many users hold their turn."""
+    while users_in_flight(app) < users:  # noqa: ASYNC110, the gate offers no event to wait on
+        await asyncio.sleep(0.01)
+
+
+def test_one_account_holds_one_slot_at_most_and_the_others_still_upload(
+    app: FastAPI,
+    alice: str,
+    bob: str,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The denial the review found: one account opens two connections and stalls both. Now the
+    second waits for the account's own turn, without its body being read, and is refused; the
+    second slot stays free for everyone else."""
+    monkeypatch.setattr(documents_router, "SLOT_WAIT_S", 0.3)
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 3.0)
+
+    async def second_of_alice() -> Answer:
+        await turn_taken(app)
+        return await post_stream(app, alice, stalled)
+
+    async def bob_meanwhile() -> Answer:
+        await turn_taken(app)
+        assert slots_free(app) == 1  # she holds one slot, not two
+        return await post_stream(app, bob, lambda: chunks(pdf(500)), named("bob.pdf"))
+
+    with caplog.at_level("INFO", logger="app.ingestion"):
+        first, second, his = run_together(
+            post_stream(app, alice, stalled), second_of_alice(), bob_meanwhile()
+        )
+    assert first.status == 408  # her first upload stalls and ends at the idle limit
+    assert second.status == 429
+    assert second.json() == {"detail": documents_router.OWN_BUSY}
+    assert second.headers["retry-after"] == "5"
+    assert second.headers["connection"] == "close"
+    assert second.headers["cache-control"] == "no-store"
+    assert second.taken == 0  # its body was never read
+    assert his.status == 201
+    assert [doc.name for doc in rows(factory)] == ["bob.pdf"]
+    assert at_rest(app)
+    rules = Counter(vars(r)["rule"] for r in caplog.records if r.getMessage() == "document refused")
+    assert rules == {"upload-stalled": 1, "upload-own-busy": 1}
+
+
+def test_a_second_upload_of_the_same_user_waits_its_turn_and_is_stored(
+    app: FastAPI, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two tabs of one user: the second file is not refused, it goes after the first."""
+    monkeypatch.setattr(documents_router, "SLOT_WAIT_S", 5.0)
+    moments: dict[str, float] = {}
+
+    async def first_body() -> AsyncIterator[dict[str, Any]]:
+        yield {"type": "http.request", "body": PDF_MAGIC + b"first", "more_body": True}
+        await asyncio.sleep(0.3)
+        moments["first done"] = time.monotonic()
+        yield {"type": "http.request", "body": b"", "more_body": False}
+
+    async def second_body() -> AsyncIterator[dict[str, Any]]:
+        moments["second read"] = time.monotonic()
+        yield {"type": "http.request", "body": PDF_MAGIC + b"second", "more_body": False}
+
+    async def second() -> Answer:
+        await turn_taken(app)
+        return await post_stream(app, alice, second_body)
+
+    answers = run_together(post_stream(app, alice, first_body), second())
+    assert [answer.status for answer in answers] == [201, 201]
+    assert moments["second read"] >= moments["first done"]
+    assert len(rows(factory)) == 2
+    assert at_rest(app)
+
+
+def test_a_byte_now_and_then_does_not_keep_a_slot(
+    app: FastAPI, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One byte every 50 ms is never silent for the idle limit, and still brings nothing: the
+    limit is on progress, not on silence."""
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 0.3)
+
+    async def drip() -> AsyncIterator[dict[str, Any]]:
+        yield {"type": "http.request", "body": PDF_MAGIC, "more_body": True}
+        while True:
+            await asyncio.sleep(0.05)
+            yield {"type": "http.request", "body": b"x", "more_body": True}
+
+    start = time.monotonic()
+    answer = stream_post(app, alice, drip)
+    assert answer.status == 408
+    assert answer.json() == {"detail": documents_router.STALLED}
+    assert 0.3 <= time.monotonic() - start < 3
+    assert 2 <= answer.taken <= 12
+    assert rows(factory) == []
+    assert at_rest(app)
+
+
+def test_a_slow_body_that_keeps_bringing_enough_goes_on_past_the_idle_limit(
+    app: FastAPI, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(documents_router, "PROGRESS_BYTES", 16)
+    parts = [PDF_MAGIC + b"0123456", *[bytes([65 + n]) * 16 for n in range(8)]]
+    start = time.monotonic()
+    answer = stream_post(app, alice, lambda: chunks(*parts, pause=0.1))
+    assert answer.status == 201
+    assert time.monotonic() - start >= 0.8  # well past the idle limit, and never refused
+    assert rows(factory)[0].raw == b"".join(parts)
+
+
+def test_a_content_length_that_only_looks_like_a_number_is_ignored(
+    app: FastAPI, alice: str
+) -> None:
+    """A superscript two is a digit for str.isdigit and no number for int: it must not be a 500."""
+    answer = stream_post(app, alice, lambda: chunks(b"some text"), {"Content-Length": "\u00b2"})
+    assert answer.status == 201
+    pasted = stream_post(
+        app,
+        alice,
+        lambda: chunks(b'{"text": "pasted"}'),
+        {"Content-Length": "\u00b2"},
+        path=f"{URL}/text",
+    )
+    assert pasted.status == 201
+
+
+# --- a paste is bounded too ----------------------------------------------------------------
+
+
+def test_a_paste_that_goes_silent_ends_with_408_and_frees_the_turn(
+    app: FastAPI,
+    alice: str,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 0.2)
+
+    async def half() -> AsyncIterator[dict[str, Any]]:
+        yield {"type": "http.request", "body": b'{"text": "never fin', "more_body": True}
+
+    with caplog.at_level("INFO", logger="app.ingestion"):
+        answer = stream_post(app, alice, half, path=f"{URL}/text")
+    assert answer.status == 408
+    assert answer.json() == {"detail": documents_router.STALLED}
+    assert answer.headers["connection"] == "close"
+    assert rows(factory) == []
+    assert at_rest(app)
+    (refused,) = [vars(r) for r in caplog.records if r.getMessage() == "document refused"]
+    assert (refused["rule"], refused["size"]) == ("upload-stalled", 19)
+
+
+def test_a_paste_is_not_complete_within_its_time_ends_with_408(
+    app: FastAPI, alice: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(documents_router, "PASTE_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(documents_router, "PROGRESS_BYTES", 1)
+
+    async def drip() -> AsyncIterator[dict[str, Any]]:
+        yield {"type": "http.request", "body": b'{"text": "', "more_body": True}
+        while True:
+            await asyncio.sleep(0.05)
+            yield {"type": "http.request", "body": b"a", "more_body": True}
+
+    start = time.monotonic()
+    answer = stream_post(app, alice, drip, path=f"{URL}/text")
+    assert answer.status == 408
+    assert 0.3 <= time.monotonic() - start < 3
+
+
+def test_a_paste_takes_the_users_turn_but_no_upload_slot(
+    app: FastAPI,
+    alice: str,
+    bob: str,
+    carol: str,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(documents_router, "SLOT_WAIT_S", 0.3)
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 3.0)
+
+    def paste_of(token: str, text: str) -> Any:
+        body = f'{{"text": "{text}"}}'.encode()
+        return post_stream(app, token, lambda: chunks(body), path=f"{URL}/text")
+
+    async def after_the_slots() -> list[Answer]:
+        await both_slots_taken(app)
+        # Both slots are held by two stalled files. Carol's paste needs none of them; Alice's
+        # own paste waits for her turn, which her stalled file holds, and is refused.
+        return [await paste_of(carol, "carol pastes"), await paste_of(alice, "alice pastes")]
+
+    first, second, pastes = run_together(
+        post_stream(app, alice, stalled), post_stream(app, bob, stalled), after_the_slots()
+    )
+    assert (first.status, second.status) == (408, 408)
+    assert [answer.status for answer in pastes] == [201, 429]
+    assert pastes[1].json() == {"detail": documents_router.OWN_BUSY}
+    assert pastes[1].taken == 0
+    assert [doc.text for doc in rows(factory)] == ["carol pastes"]
+    assert at_rest(app)
+
+
+def test_a_cancelled_wait_for_the_turn_leaves_the_gate_clean(app: FastAPI, alice: str) -> None:
+    """A request cancelled while it waits (the server shutting down) holds nothing afterwards."""
+
+    async def scenario() -> None:
+        holder = asyncio.create_task(post_stream(app, alice, stalled))
+        await turn_taken(app)
+        waiter = asyncio.create_task(post_stream(app, alice, stalled))
+        await asyncio.sleep(0.1)
+        waiter.cancel()
+        holder.cancel()
+        await asyncio.gather(waiter, holder, return_exceptions=True)
+
+    asyncio.run(scenario())
+    assert at_rest(app)
 
 
 # --- a real server on a socket -------------------------------------------------------------
@@ -537,15 +782,54 @@ def test_a_client_that_closes_mid_body_leaves_nothing_and_frees_its_slot(
 ) -> None:
     with socket.create_connection(("127.0.0.1", served), timeout=10) as sock:
         sock.sendall(head(alice, "Content-Length: 100000") + PDF_MAGIC + b"half")
-        time.sleep(0.2)  # the server has started reading
-    deadline = time.monotonic() + 5
-    while slots_free(app) < 2:
+        deadline = time.monotonic() + 10
+        while slots_free(app) == 2:  # until the server holds a slot for this body
+            assert time.monotonic() < deadline, "the upload never took a slot"
+            time.sleep(0.02)
+    deadline = time.monotonic() + 10
+    while not at_rest(app):
         assert time.monotonic() < deadline, "the slot of the vanished client was never freed"
         time.sleep(0.02)
     assert rows(factory) == []
     with httpx.Client(base_url=f"http://127.0.0.1:{served}") as client:
         response = client.post(URL, content=pdf(), headers=sent_by(alice, "after.pdf"))
     assert response.status_code == 201
+
+
+def test_two_idle_connections_of_one_account_do_not_stop_another_users_upload(
+    served: int,
+    app: FastAPI,
+    alice: str,
+    bob: str,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The review's scenario on a real socket: Alice opens two connections that send a few bytes
+    and then nothing. Before, Bob's upload answered 503 for as long as she liked."""
+    monkeypatch.setattr(documents_router, "SLOT_WAIT_S", 0.5)
+    opening = head(alice, "Content-Length: 100000") + PDF_MAGIC
+    with (
+        socket.create_connection(("127.0.0.1", served), timeout=10) as one,
+        socket.create_connection(("127.0.0.1", served), timeout=10) as two,
+    ):
+        one.sendall(opening)
+        deadline = time.monotonic() + 10
+        while slots_free(app) == 2:
+            assert time.monotonic() < deadline, "her first upload never took a slot"
+            time.sleep(0.02)
+        two.sendall(opening)
+        # Her second connection is answered without its body being read, and closed.
+        status, headers, answer = read_answer(two)
+        assert status == 429
+        assert headers["retry-after"] == "5"
+        assert b"Another upload of yours is still on its way" in answer
+        assert closed_by_server(two)
+        # Her first connection still holds its slot, and Bob's file goes through at once.
+        assert slots_free(app) == 1
+        with httpx.Client(base_url=f"http://127.0.0.1:{served}", timeout=10) as client:
+            response = client.post(URL, content=pdf(), headers=sent_by(bob, "bob.pdf"))
+        assert response.status_code == 201
+    assert [doc.name for doc in rows(factory)] == ["bob.pdf"]
 
 
 def test_an_anonymous_upload_is_answered_401_without_its_body(served: int) -> None:

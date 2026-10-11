@@ -4,6 +4,7 @@ the secret warning, deletion, and what never reaches a log."""
 
 import asyncio
 import codecs
+import hashlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -505,9 +506,11 @@ def test_two_users_may_hold_the_same_file_and_neither_learns_it(
 
 
 def test_an_upload_that_matches_a_failed_document_takes_its_row_over(
-    api: Api, alice: str, factory: sessionmaker[Session]
+    api: Api, alice: str, factory: sessionmaker[Session], clock: Clock
 ) -> None:
     first = uploaded(api, alice, pdf(), "cv.pdf")
+    assert row(factory, first["id"]).pending_since == clock.now
+    clock.advance(hours=2)
     set_columns(
         factory,
         first["id"],
@@ -520,6 +523,7 @@ def test_an_upload_that_matches_a_failed_document_takes_its_row_over(
         pages=3,
         pages_text=1,
         pages_image=2,
+        transcribed_pages=[1, 2],
         secret_warning=True,
     )
     add_image(factory, first["id"])
@@ -531,6 +535,10 @@ def test_an_upload_that_matches_a_failed_document_takes_its_row_over(
     assert (body["pages"], body["pages_text"], body["pages_image"]) == (None, None, None)
     assert body["created_at"] == first["created_at"]
     stored = row(factory, first["id"])
+    # The row keeps the day it was first added; since when it waits this time is told apart.
+    assert stored.pending_since == clock.now
+    assert stored.pending_since > stored.created_at
+    assert stored.transcribed_pages is None
     assert stored.raw == pdf()
     assert (stored.attempts, stored.failed_kind, stored.secret_warning) == (0, None, False)
     assert count(factory, IngestionImage) == 0
@@ -1029,12 +1037,33 @@ def test_one_user_never_sees_reads_confirms_or_deletes_anothers_document(
             # confirms that the document is there.
             assert answer.status_code == reference.status_code == 404
             assert answer.json() == reference.json() == {"detail": documents_router.NOT_FOUND}
-            assert answer.headers["cache-control"] == reference.headers["cache-control"]
+            assert answer.content == reference.content
+            # Every header, the request's own id aside: no length, no cache rule, no extra
+            # header tells the two apart.
+            assert header_set(answer) == header_set(reference)
+            assert answer.headers["cache-control"] == "no-store"
             assert "private" not in answer.text
     stored = row(factory, hers["id"])
     assert stored.secret_confirmed_at is None  # his confirm did nothing
     assert len(rows(factory)) == 2  # his delete did nothing
     assert text_of(api, alice, hers["id"]).json()["text"] == text
+
+
+def header_set(response: Any) -> dict[str, str]:
+    """Every header of an answer but the id of its own request."""
+    return {
+        name: value for name, value in response.headers.items() if name.lower() != "x-request-id"
+    }
+
+
+def test_a_malformed_id_answers_exactly_as_an_unknown_one(api: Api, alice: str) -> None:
+    uploaded(api, alice, b"some text")
+    unknown = str(uuid.uuid4())
+    for call in (text_of, confirm, delete):
+        malformed, reference = call(api, alice, "not-a-uuid"), call(api, alice, unknown)
+        assert malformed.status_code == reference.status_code == 404
+        assert malformed.content == reference.content
+        assert header_set(malformed) == header_set(reference)
 
 
 @pytest.mark.parametrize(
@@ -1138,7 +1167,9 @@ def test_both_upload_slots_busy_is_503_with_retry_after(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(documents_router, "SLOT_WAIT_S", 0.05)
-    app.state.ingestion_upload_slots = asyncio.Semaphore(0)
+    gate = documents_router._Gate()
+    gate.slots = asyncio.Semaphore(0)
+    app.state.ingestion_gate = gate
     response = upload(api, alice, b"some text")
     assert response.status_code == 503
     assert response.json() == {"detail": documents_router.BUSY}
@@ -1210,3 +1241,183 @@ def test_nothing_of_a_document_reaches_a_log(
         ("file-too-large", 413),
         ("paste-too-long", 413),
     ]
+
+
+# --- after the review of pull request #98 --------------------------------------------------
+
+
+def test_a_text_document_never_waited(api: Api, alice: str, factory: sessionmaker[Session]) -> None:
+    body = uploaded(api, alice, b"complete at once")
+    assert row(factory, body["id"]).pending_since is None
+    pasted = paste(api, alice, "pasted, complete at once").json()
+    assert row(factory, pasted["id"]).pending_since is None
+
+
+def test_a_user_at_the_limit_costs_the_database_nothing(
+    api: Api, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The quota and the count are checked before the bytes travel to Postgres: a refused
+    upload stages nothing."""
+    staged: list[int] = []
+    real = documents._stage
+
+    def counting(db: Session, body: bytes | bytearray) -> None:
+        staged.append(len(body))
+        real(db, body)
+
+    monkeypatch.setattr(documents, "_stage", counting)
+    monkeypatch.setattr(documents, "USER_MAX_BYTES", 3000)
+    uploaded(api, alice, pdf(2500), "a.pdf")
+    assert staged == [2500]
+    assert upload(api, alice, pdf(1000, fill=b"\x01"), "b.pdf").status_code == 413
+    assert staged == [2500]
+    monkeypatch.setattr(documents, "USER_MAX_BYTES", 10**9)
+    monkeypatch.setattr(documents, "USER_MAX_DOCUMENTS", 1)
+    assert upload(api, alice, pdf(1000, fill=b"\x02"), "c.pdf").status_code == 422
+    assert staged == [2500]
+    assert len(rows(factory)) == 1
+
+
+def test_the_check_under_the_lock_still_decides(
+    api: Api, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first check is a courtesy to the database. A file that passes it and no longer fits
+    when its turn comes (another upload of the user landed in between) is refused all the same."""
+    monkeypatch.setattr(documents, "USER_MAX_BYTES", 3000)
+    owner = user_id(factory, ALICE)
+    real = documents._stage
+
+    def another_lands_meanwhile(db: Session, body: bytes | bytearray) -> None:
+        monkeypatch.setattr(documents, "_stage", real)
+        real(db, body)
+        with factory() as other:
+            data = pdf(2000, fill=b"\x05")
+            documents.store_file(
+                other, owner, "other.pdf", data, hashlib.sha256(data).digest(), datetime.now(UTC)
+            )
+            other.commit()
+
+    monkeypatch.setattr(documents, "_stage", another_lands_meanwhile)
+    assert upload(api, alice, pdf(2000, fill=b"\x06"), "mine.pdf").status_code == 413
+    assert [doc.name for doc in rows(factory)] == ["other.pdf"]
+
+
+def test_a_replacement_asks_the_delete_guards(
+    api: Api, alice: str, factory: sessionmaker[Session], caplog: pytest.LogCaptureFixture
+) -> None:
+    """A replacement empties the old text and page images as a deletion does: what refuses the
+    one refuses the other, and the row is returned as it is."""
+    first = uploaded(api, alice, pdf(), "scan.pdf")
+    set_columns(
+        factory,
+        first["id"],
+        text_status=TextStatus.failed,
+        failed_reason="why",
+        text="what a run has read",
+        raw=None,
+    )
+    add_image(factory, first["id"])
+    asked: list[uuid.UUID] = []
+
+    def guard(db: Session, document: IngestionDocument) -> str | None:
+        asked.append(document.id)
+        return "This document was read by a run and cannot be deleted yet."
+
+    documents.register_delete_guard(guard)
+    with caplog.at_level("INFO", logger="app.ingestion"):
+        again = upload(api, alice, pdf(), "scan again.pdf")
+    assert (again.status_code, again.json()["duplicate"]) == (200, True)
+    assert (again.json()["id"], again.json()["name"]) == (first["id"], "scan.pdf")
+    assert [str(document_id) for document_id in asked] == [first["id"]]
+    stored = row(factory, first["id"])
+    assert (stored.text_status, stored.text, stored.raw) == (
+        TextStatus.failed,
+        "what a run has read",
+        None,
+    )
+    assert count(factory, IngestionImage) == 1
+    assert "document replacement refused" in [record.getMessage() for record in caplog.records]
+    # Without the guard's objection the same upload takes the row over.
+    documents._delete_guards.clear()
+    assert upload(api, alice, pdf(), "scan again.pdf").status_code == 201
+
+
+def test_a_type_this_module_does_not_know_is_never_taken_for_an_archive(
+    api: Api, alice: str, factory: sessionmaker[Session]
+) -> None:
+    body = uploaded(api, alice, pdf(), "sheet.xlsx")
+    set_columns(factory, body["id"], mime="application/x-something-new")
+    (item,) = listing(api, alice)["items"]
+    assert (item["kind"], item["readable"]) == ("other", False)
+    set_columns(factory, body["id"], mime="text/csv", text_status=TextStatus.done, text="a,b")
+    (item,) = listing(api, alice)["items"]
+    assert (item["kind"], item["readable"]) == ("text", True)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "status"),
+    [
+        ("GET", "", 401),
+        ("POST", "", 401),
+        ("POST", "/text", 401),
+        ("GET", "/{id}/text", 401),
+        ("DELETE", "/{id}", 401),
+        ("POST", "/{id}/confirm", 401),
+    ],
+)
+def test_an_answer_without_a_session_is_never_cached(
+    api: Api, method: str, path: str, status: int
+) -> None:
+    response = api.request(method, URL + path.replace("{id}", str(uuid.uuid4())))
+    assert response.status_code == status
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_every_answer_built_outside_the_router_is_no_store_too(api: Api, alice: str) -> None:
+    body = uploaded(api, alice, b"some text")
+    answers = {
+        "csrf refused": api.post(URL, token=alice, content=b"x", csrf=False),
+        "method not allowed": api.request("PUT", URL, token=alice),
+        "bad offset": text_of(api, alice, body["id"], offset=-1),
+        "unknown key in a paste": api.post(f"{URL}/text", token=alice, json={"text": "a", "x": 1}),
+        "not json": api.post(f"{URL}/text", token=alice, content=b"not json"),
+        "unknown route": api.get("/api/ingestion/nothing", token=alice),
+    }
+    assert {name: answer.status_code for name, answer in answers.items()} == {
+        "csrf refused": 403,
+        "method not allowed": 405,
+        "bad offset": 422,
+        "unknown key in a paste": 422,
+        "not json": 422,
+        "unknown route": 404,
+    }
+    for name, answer in answers.items():
+        assert answer.headers["cache-control"] == "no-store", name
+
+
+@pytest.mark.parametrize(
+    ("path", "set_by_the_rule"),
+    [
+        ("/api/ingestion", True),
+        ("/api/ingestion/documents", True),
+        ("/api/ingestion/runs/1", True),
+        ("/api/ingestionx", False),
+        ("/api/jobs", False),
+        ("/", False),
+    ],
+)
+def test_the_no_store_rule_covers_the_ingestion_prefix_and_nothing_else(
+    path: str, set_by_the_rule: bool
+) -> None:
+    from starlette.requests import Request
+    from starlette.responses import Response
+
+    from app.ingestion.routers import no_store
+
+    async def call_next(_: Request) -> Response:
+        return Response("x", headers={"Cache-Control": "public, max-age=60"})
+
+    scope = {"type": "http", "method": "GET", "path": path, "headers": [], "query_string": b""}
+    response = asyncio.run(no_store(Request(scope), call_next))
+    expected = "no-store" if set_by_the_rule else "public, max-age=60"
+    assert response.headers["cache-control"] == expected
