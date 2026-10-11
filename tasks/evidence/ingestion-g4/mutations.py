@@ -4,7 +4,7 @@ Not product code and not a test of CI: evidence that the tests of api/tests/inge
 notice a rule that stops holding. Each entry replaces one piece of app/ingestion/citations.py
 by a wrong one (no context around a span, a chain read backward, floats, an address that ends
 anywhere), runs the tests, and puts the file back. It matches the text of the module as it was
-on 2026-10-11 after the first review of pull request #97, whose findings each have their
+on 2026-10-11 after the two reviews of pull request #97, whose findings each have their
 entries at the end: after a refactoring an entry may no longer apply, and says so.
 
     cd api && uv run python ../tasks/evidence/ingestion-g4/mutations.py \
@@ -107,9 +107,9 @@ MUTATIONS = [
     ),
     ("short names in any case", "and (size >= SHORT_NAME or ", "and (True or "),
     (
-        "any fraction is a decimal",
-        'short = len(fraction) <= 2 or whole == "0"',
-        "short = True",
+        "three digits after four are a second number",
+        "        if not _two_numbers(whole, fraction, separators[0]):",
+        "        if len(fraction) != 3 and not _two_numbers(whole, fraction, separators[0]):",
     ),
     ("groups of any size", "all(len(part) == 3 for part in parts[1:]):", "True:"),
     (
@@ -340,9 +340,9 @@ MUTATIONS = [
         "not readings(run.text) & self._readings",
     ),
     (
-        "S4: a decimal with four decimals is cut into pieces",
-        "        if short or (len(fraction) >= 4 and not _two_numbers(whole, fraction, separators[0])):",
-        "        if short:",
+        "S4: a decimal with four decimals or more is cut into pieces",
+        "        if not _two_numbers(whole, fraction, separators[0]):",
+        "        if len(fraction) <= 2 and not _two_numbers(whole, fraction, separators[0]):",
     ),
     (
         "B2: a sign of a local part before an address is never looked past",
@@ -376,7 +376,7 @@ MUTATIONS = [
     ),
     (
         "B2: the colon of a scheme or of a port bounds a URL",
-        '        return not (text.startswith("//", at) or _port(text, at))',
+        '        return not (text.startswith("//", at) or _port(text, at) or _user_info(text, at - 1))',
         "        return True",
     ),
     (
@@ -396,8 +396,8 @@ MUTATIONS = [
     ),
     (
         "S1: four digits glued to a decimal are a year",
-        "                if end > at + 1 and not self._dotted_date(at, end):",
-        "                if False:",
+        "            if end > at + 1 and not self._dotted_date(at, end):",
+        "            if False:",
     ),
     (
         "S1: four digits of a phone number are a year",
@@ -456,8 +456,8 @@ MUTATIONS = [
     ),
     (
         "N6: a spaced slash is read inside a longer date",
-        "            and not goes_on" + N,
-        "",
+        '        if not parts or goes_on or self._is(end, "/") or not self._year(parts[-1]):',
+        '        if not parts or self._is(end, "/") or not self._year(parts[-1]):',
     ),
     (
         "N6: a day and its month take the year of a date with another separator",
@@ -483,6 +483,103 @@ MUTATIONS = [
         "N2: a document that is not text is prepared",
         "    return document if isinstance(document, Document) else None",
         "    return document",
+    ),
+    # --- the second review of pull request #97
+    (
+        "R1: four decimals after a month are its year, whatever they are",
+        "    if not _plain_year(fraction):" + N + "        return False" + N,
+        "    if len(fraction) != 4:" + N + "        return False" + N,
+    ),
+    (
+        "R1: any two numbers of four digits are two years",
+        "    return _plain_year(whole) or (",
+        "    return len(whole) == 4 or (",
+    ),
+    (
+        "R1: a month in one digit before a full stop and its year",
+        """len(whole) == 2 and "01" <= whole <= "12")""",
+        """len(whole) <= 2 and 1 <= int(whole) <= 12)""",
+    ),
+    (
+        "R2: four digits of a number glued by hyphens are a year",
+        "                    if size == 3 or size >= 5:",
+        "                    if False:",
+    ),
+    (
+        "R2: four digits next to five glued by a hyphen are a year",
+        "                    if size == 3 or size >= 5:",
+        "                    if size == 3:",
+    ),
+    (
+        "R2: a ratio written with one digit and a full stop gives a year",
+        " or sizes == [1, 4]:",
+        ":",
+    ),
+    (
+        "R2: a month in one digit with a full stop is read in a range",
+        ' and separator != ".":  # "9/2021 to present"',
+        ':  # "9/2021 to present"',
+    ),
+    (
+        "the cells of a row lose their years",
+        """ or (len(sizes) >= 3 and signs == {","})""",
+        "",
+    ),
+    (
+        "two numbers with a comma are the cells of a row",
+        """(len(sizes) >= 3 and signs == {","})""",
+        """(len(sizes) >= 2 and signs == {","})""",
+    ),
+    (
+        "a date with spaced slashes: a number of three digits is a day",
+        "        return parts if all(len(tokens[one].text) <= 2 for one in (at, *parts[:-1])) else []",
+        "        return parts",
+    ),
+    (
+        "the password of a URL starts a URL",
+        " or _user_info(text, at - 1))",
+        ")",
+    ),
+    (
+        "six digits after a colon start a URL",
+        "    if end == at:"
+        + N
+        + "        return False"
+        + N
+        + "    rest = text[end : end + 2]",
+        "    if end == at or end - at > 5:"
+        + N
+        + "        return False"
+        + N
+        + "    rest = text[end : end + 2]",
+    ),
+    (
+        "an email never starts right after another",
+        "    if _after_an_address(text, at):" + N + "        return True" + N,
+        "",
+    ),
+    (
+        "an email starts after any word and a sign that no domain holds",
+        '    return low < domain < at and low > 0 and text[low - 1] == "@"',
+        "    return low < domain < at",
+    ),
+    (
+        "an email starts right after the full stop of another",
+        "{|}~" + '"' + N + "_DOMAIN_MAX = 255",
+        "{|}~." + '"' + N + "_DOMAIN_MAX = 255",
+    ),
+    (
+        "a hyphen before an address is a dash",
+        "    if document.source[document.origin[at - 1]] not in _DASHES:"
+        + N
+        + "        return False"
+        + N,
+        "",
+    ),
+    (
+        "a dash glued to a word bounds an address",
+        "    return at == 1 or not _address_char(text[at - 2], joins)",
+        "    return True",
     ),
 ]
 
