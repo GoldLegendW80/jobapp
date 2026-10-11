@@ -792,6 +792,40 @@ stacks and CI only, refused in production) replaces the model with recorded mess
 the real SDK and CLI against the Anthropic stub (`tests/anthropic_stub.py`), still with no model
 call.
 
+## Documents for the profile
+
+"Fill my profile with an agent" on the Profile page opens `/profile/fill` (SPEC-ingestion.md,
+ingestion G1): three steps, of which the second, Documents, is built; the two others are listed as
+"Soon" until their tasks land. A user adds files (dropped or chosen, sent one at a time with their
+progress) or pastes a text, and sees each document with its type, size and state, the text kept
+from it, and a Delete that asks first. Documents live in Postgres (`ingestion_documents`), are
+visible to their owner alone, and deleting one is a hard delete.
+
+- **Type:** decided from the first bytes of the file, never from its name or a declared type.
+  Text (UTF-8, or UTF-16 with a BOM) is read at once and its bytes are not kept. A PDF, a ZIP
+  (a DOCX or a LinkedIn export), a PNG or a JPEG is kept as it is with the state "Waiting": the
+  parsers arrive with later tasks (`READABLE_KINDS` in `api/app/ingestion/documents.py`). Legacy
+  Office, RTF, OpenDocument, HEIC, GIF, WebP and programs are refused with 415 and one sentence.
+- **Limits:** 20 MiB per file, 100,000 characters per paste, 500,000 characters of text kept per
+  document, 100 MB and 200 documents per user. The same file twice is one document (per user).
+- **The upload route:** `POST /api/ingestion/documents` takes the file as the raw body, its name
+  in `X-Filename` (RFC 5987), and is the one route on which Caddy accepts 20 MiB; every other
+  route keeps 10 MiB (`caddy/Caddyfile`). The api reads the body into one buffer, counted and
+  hashed as it arrives, at most two uploads at a time, and sends it to Postgres in pieces.
+- **Secrets:** a text that matches the shape of a password or an access key
+  (`api/app/ingestion/secrets.py`) is flagged; the user checks it, keeps it or deletes it.
+- **Logs:** ids, sizes, types and rule names only. Caddy drops `X-Filename` from its access log.
+
+```bash
+curl -s -X POST -H 'X-Requested-With: jobapp' -H "X-Filename: UTF-8''cv.pdf" -b cookies \
+  --data-binary @cv.pdf http://localhost/api/ingestion/documents                                  # 201, or 200 when already there
+curl -s -X POST -H 'X-Requested-With: jobapp' -H 'Content-Type: application/json' -b cookies \
+  -d '{"text":"About me"}' http://localhost/api/ingestion/documents/text                          # a pasted text
+curl -s -b cookies http://localhost/api/ingestion/documents                                       # the list, what it takes, the limits
+curl -s -b cookies 'http://localhost/api/ingestion/documents/<id>/text?offset=0&limit=20000'      # the text kept
+curl -s -X DELETE -H 'X-Requested-With: jobapp' -b cookies http://localhost/api/ingestion/documents/<id>
+```
+
 ## Backups and restores
 
 `./deploy.sh backup` runs `pg_dump -Fc` inside the `db` container and streams it to

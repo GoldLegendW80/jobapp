@@ -174,6 +174,18 @@ def test_only_the_beginning_of_a_long_text_is_kept_and_the_rest_is_still_checked
     assert decode_text(b"a" * 900 + b"\xff" + b"a" * 99) is None
 
 
+def test_a_slice_that_ends_inside_a_character_past_the_cap_is_not_more_text_yet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Past the cap, a slice holding only the first byte of a character decodes to nothing: it
+    says nothing about there being more text. The character itself, one slice later, does."""
+    monkeypatch.setattr(documents, "_SLICE", 1)
+    monkeypatch.setattr(documents, "_RAW_MAX_CHARS", 2)
+    assert decode_text(b"ab") == ("ab", False)
+    assert decode_text(b"ab\xc3\xa9") == ("ab", True)
+    assert decode_text(b"ab\xc3") is None  # and a character never finished is not text
+
+
 def test_the_raw_cap_leaves_room_for_the_cut() -> None:
     assert documents._RAW_MAX_CHARS >= 2 * TEXT_MAX_CHARS
 

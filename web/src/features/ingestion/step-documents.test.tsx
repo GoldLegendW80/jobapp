@@ -249,10 +249,13 @@ describe("documents: adding files", () => {
     await user.upload(input, text("same words", "copy.txt"));
     expect(
       await within(queue()).findByText(
-        "copy.txt is already in your documents, as first.txt.",
+        "The same file is already in your documents, as first.txt.",
       ),
     ).toBeVisible();
     expect(within(queue()).getByText("Already there")).toBeVisible();
+    expect(announced()).toContain(
+      "copy.txt is already in your documents, as first.txt.",
+    );
     expect(rows()).toHaveLength(1);
   });
 

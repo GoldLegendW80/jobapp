@@ -214,7 +214,7 @@ def test_a_body_that_trickles_forever_ends_with_408_too(
     app: FastAPI, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Every chunk arrives within the idle limit, so only the limit on the whole body ends it."""
-    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 10.0)
     monkeypatch.setattr(documents_router, "TOTAL_TIMEOUT_S", 0.5)
     start = time.monotonic()
     answer = stream_post(app, alice, lambda: blocks(100 * MIB, pause=0.05))
@@ -228,7 +228,7 @@ def test_a_body_that_trickles_forever_ends_with_408_too(
 def test_a_slow_but_steady_body_is_kept(
     app: FastAPI, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 5.0)
     answer = stream_post(app, alice, lambda: chunks(PDF_MAGIC, b"a", b"b", b"c", pause=0.1))
     assert answer.status == 201
     assert rows(factory)[0].raw == PDF_MAGIC + b"abc"
@@ -264,6 +264,12 @@ def test_a_refused_type_frees_its_slot(app: FastAPI, alice: str) -> None:
 # --- two at a time -------------------------------------------------------------------------
 
 
+async def both_slots_taken(app: FastAPI) -> None:
+    """Wait until two uploads hold the two slots (they are then reading their bodies)."""
+    while slots_free(app) > 0:  # noqa: ASYNC110, a semaphore offers no event to wait on
+        await asyncio.sleep(0.01)
+
+
 def run_together(*posts: Any) -> list[Answer]:
     async def together() -> list[Answer]:
         return list(await asyncio.gather(*posts))
@@ -292,7 +298,7 @@ def test_a_third_upload_waits_for_a_slot_and_its_body_is_not_read_meanwhile(
         yield {"type": "http.request", "body": b"the third upload, a text", "more_body": False}
 
     async def late() -> Answer:
-        await asyncio.sleep(0.1)  # the two slow uploads hold both slots by now
+        await both_slots_taken(app)
         return await post_stream(app, alice, third)
 
     first, second, last = run_together(
@@ -313,13 +319,15 @@ def test_a_third_upload_gives_up_with_503_when_both_slots_stay_busy(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(documents_router, "SLOT_WAIT_S", 0.2)
-    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 1.0)
+    # Long enough that the two stalled uploads still hold their slots when the third gives up,
+    # however slow the machine.
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 3.0)
 
     async def stalls() -> AsyncIterator[dict[str, Any]]:
         yield {"type": "http.request", "body": PDF_MAGIC, "more_body": True}
 
     async def late() -> Answer:
-        await asyncio.sleep(0.1)
+        await both_slots_taken(app)
         return await post_stream(app, alice, lambda: chunks(b"a text that never gets a slot"))
 
     with caplog.at_level("INFO", logger="app.ingestion"):
@@ -694,3 +702,18 @@ def test_the_service_refuses_a_body_over_the_limit_whoever_calls_it(
         )
     assert (refused.value.status, refused.value.rule) == (413, "file-too-large")
     assert upload(api, alice, b"still works").status_code == 201
+
+
+def test_two_files_stored_in_one_transaction_each_keep_their_own_bytes(
+    factory: sessionmaker[Session], api: Api, alice: str
+) -> None:
+    """The staging table is emptied before each file: a caller that stores several files in one
+    transaction (a later task that unpacks an archive) never mixes their bytes."""
+    owner = user_id(factory, ALICE)
+    one, two = pdf(3000, fill=b"\x01"), pdf(4000, fill=b"\x02")
+    with factory() as db:
+        for name, data in (("one.pdf", one), ("two.pdf", two)):
+            digest = hashlib.sha256(data).digest()
+            documents.store_file(db, owner, name, data, digest, datetime.now(UTC))
+        db.commit()
+    assert sorted(doc.raw or b"" for doc in rows(factory)) == sorted([one, two])

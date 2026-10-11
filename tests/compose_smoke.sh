@@ -255,7 +255,8 @@ csrf=(-H 'X-Requested-With: jobapp')
 [[ "$(curl_c "$up" -X POST "${csrf[@]}" --data-binary @<(big 20971520))" == "401" ]] || fail "20 MiB did not reach the api on $up"
 [[ "$(curl_c "$up" -X POST "${csrf[@]}" --data-binary @<(big 20971521))" == "413" ]] || fail "20 MiB + 1 not refused on $up"
 [[ "$(curl_c "$up" -X POST "${csrf[@]}" --data-binary @<(big 10485761))" == "401" ]] || fail "10 MiB + 1 did not reach the api on $up"
-for other in "$up/text" "$up/" "/API/INGESTION/DOCUMENTS" "$up/00000000-0000-4000-8000-000000000000/confirm" /api/ingestion/other; do
+for other in "$up/text" "$up/" "/API/INGESTION/DOCUMENTS" /api/ingestion//documents /api/ingestion/./documents \
+  "$up/00000000-0000-4000-8000-000000000000/confirm" /api/ingestion/other; do
   [[ "$(curl_c "$other" -X POST "${csrf[@]}" --data-binary @<(big 10485761))" == "413" ]] || fail "10 MiB + 1 not refused on POST $other"
 done
 for method in PUT PATCH DELETE; do

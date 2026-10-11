@@ -170,7 +170,11 @@ export class UploadQueue {
             this.#patch(id, {
               state: "duplicate",
               progress: 1,
-              message: sentence,
+              // The row already shows the file's name: only what it is called there.
+              message:
+                document.name === file.name
+                  ? "The same file is already in your documents."
+                  : `The same file is already in your documents, as ${document.name}.`,
             });
           else this.#drop(id);
           this.#announcement = sentence;

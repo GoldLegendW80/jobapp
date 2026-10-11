@@ -211,6 +211,7 @@ interface Answer {
 function curlArgs(target: string, cookie: string, extra: string[]): string[] {
   return [
     "-s",
+    "--path-as-is",
     "--max-time",
     "120",
     "-o",
@@ -580,7 +581,7 @@ test("a refused type, a file that is too large and a duplicate each say why", as
     .getByRole("listitem")
     .filter({ hasText: "dossier copy.md" });
   await expect(copy).toContainText(
-    "dossier copy.md is already in your documents, as dossier.md.",
+    "The same file is already in your documents, as dossier.md.",
   );
   page.off("request", listener);
   expect(sent).toHaveLength(2); // the GIF and the copy; the large file never left
@@ -764,6 +765,10 @@ test("20 MiB is accepted on the upload route only: every other route keeps 10 Mi
     [UPLOAD, ["-X", "PUT"]],
     [UPLOAD, ["-X", "PATCH"]],
     [UPLOAD.toUpperCase(), []],
+    // Spellings a proxy could clean into the route, and the api answers 404.
+    ["/api/ingestion//documents", []],
+    ["/api/ingestion/./documents", []],
+    ["/api//ingestion/documents", []],
     [`${UPLOAD}/00000000-0000-4000-8000-000000000000/confirm`, []],
     ["/api/ingestion/other", []],
     ["/api/profile/photo", ["-X", "PUT"]],

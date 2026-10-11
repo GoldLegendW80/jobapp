@@ -20,9 +20,11 @@ Storing (`store_file`, `store_paste`), in one transaction that the caller commit
    nothing is written, unless the row is replaceable (it failed, or an older parser left it
    `done` with a note): then the new upload takes the row over, same id, back to the start.
 2. The bytes of a binary kind travel to Postgres in pieces (`_stage`): a binary COPY into a
-   temporary table, 128 KiB at a time, then one UPDATE moves them into the row on the server. The
-   api process therefore holds an upload once, in the buffer the route filled, and never a
-   second copy as a statement parameter.
+   temporary table, 128 KiB at a time, each piece gone before the next is handed over, then one
+   UPDATE moves them into the row on the server. The api process therefore holds an upload once,
+   in the buffer the route filled. Measured in the api image on 2026-10-11, three files of
+   20 MiB on one connection: sent this way the process grows by 0 MiB; sent as a statement
+   parameter it grows by 40 MiB, which libpq then keeps for as long as the connection lives.
 3. Under the user's advisory lock: the dedupe again, the document count, the quota (bytes, text
    and page images currently stored), then the row. Two uploads of one file at once give one row
    and two successes; two uploads that together pass the quota give one success and one 413.
@@ -52,6 +54,9 @@ from hashlib import sha256
 from urllib.parse import unquote_to_bytes
 
 import sqlalchemy as sa
+from psycopg.abc import Buffer
+from psycopg.copy import LibpqWriter
+from psycopg.generators import copy_to
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -347,21 +352,36 @@ _STAGE = sa.table("ingestion_upload", sa.column("data", sa.LargeBinary))
 _STAGE_DDL = sa.text(
     "CREATE TEMP TABLE IF NOT EXISTS ingestion_upload (data bytea NOT NULL) ON COMMIT DELETE ROWS"
 )
+_STAGE_EMPTY = sa.text("TRUNCATE ingestion_upload")
 _STAGE_COPY = "COPY ingestion_upload (data) FROM STDIN (FORMAT BINARY)"
 # PostgreSQL binary COPY: the signature, no flags, no header extension; then one tuple of one
 # field (its count, the field's length, its bytes); then the trailer.
 _COPY_HEADER = b"PGCOPY\n\xff\r\n\x00" + struct.pack("!ii", 0, 0)
 _COPY_TRAILER = struct.pack("!h", -1)
+_COPY_PIECE = 128 * 1024
+
+
+class _SteadyWriter(LibpqWriter):
+    """Hands COPY data to libpq a piece at a time and waits until each piece has left for the
+    server. psycopg's own writer waits like this on macOS only: elsewhere libpq may queue
+    whatever the server has not read yet in its send buffer, which grows towards the size of
+    the file when the server is slow and is never given back while the connection lives."""
+
+    def write(self, data: Buffer) -> None:
+        for start in range(0, len(data), _COPY_PIECE):
+            piece = data[start : start + _COPY_PIECE]
+            self.connection.wait(copy_to(self._pgconn, piece, flush=True))
 
 
 def _stage(db: Session, body: bytes | bytearray) -> None:
-    """Send `body` to a temporary table of this transaction, in pieces. psycopg hands a block
-    over 128 KiB to libpq 128 KiB at a time and waits for each to leave, so nothing on the
-    client grows with the file. The rows vanish at commit or rollback."""
+    """Send `body` to a temporary table of this transaction, in pieces, so nothing on the client
+    grows with the file. The table then holds this body alone (whatever an earlier statement of
+    the same transaction staged goes first), and it is empty again at commit or rollback."""
     db.execute(_STAGE_DDL)
+    db.execute(_STAGE_EMPTY)
     cursor = db.connection().connection.cursor()
     try:
-        with cursor.copy(_STAGE_COPY) as copy:
+        with cursor.copy(_STAGE_COPY, writer=_SteadyWriter(cursor)) as copy:
             copy.write(_COPY_HEADER + struct.pack("!hi", 1, len(body)))
             copy.write(memoryview(body))
             copy.write(_COPY_TRAILER)

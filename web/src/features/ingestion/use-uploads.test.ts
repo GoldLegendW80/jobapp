@@ -116,7 +116,7 @@ describe("UploadQueue", () => {
       expect.objectContaining({
         name: "copy.md",
         state: "duplicate",
-        message: "copy.md is already in your documents, as original.md.",
+        message: "The same file is already in your documents, as original.md.",
       }),
     ]);
     expect(last().announcement).toBe(
