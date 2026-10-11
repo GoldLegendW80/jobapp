@@ -1149,7 +1149,8 @@ def test_rule_v_for_an_email(value: str, holds: bool) -> None:
         ("http://example.org/in/camille-durand", True),
         ("www.example.org/in/camille-durand", True),
         ("example.org/in/camille-durand", True),
-        ("EXAMPLE.ORG/in/Camille-Durand", True),
+        ("EXAMPLE.ORG/in/camille-durand", True),  # the host in any case
+        ("example.org/in/Camille-Durand", False),  # the path as written
         ("https://my-site.example/", True),
         ("my-site.example", True),
         ("www.my-site.example", True),
@@ -1253,7 +1254,7 @@ def test_an_address_in_a_text_written_without_spaces() -> None:
         (
             "email",
             "camille.durand@example.org",
-            "Contact : camille.durand@example.org.uk ou par courrier",
+            "Contact : camille.durand@example.org.example ou par courrier",
             "Contact : camille.durand@example.org",
         ),
         (

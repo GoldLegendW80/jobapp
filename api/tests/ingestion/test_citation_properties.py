@@ -702,28 +702,48 @@ def test_a_two_digit_year_is_never_read_on_its_own(seed: int) -> None:
 
 
 # --- 4. addresses --------------------------------------------------------------------------------
+# Generated from the grammars of an address, never from the lists of the module: the first
+# review of pull request #97 found that a generator which draws from the module's own characters
+# cannot see the ones it forgot ("o'brien", "r&d", a URL in the query of another).
 
-LOCALS = ("camille", "durand", "jean", "luc", "martin", "c", "contact", "rh", "x1", "a2b")
+LETTERS = "abcdefghijklmnopqrstuvwxyz"
+DIGITS = "0123456789"
+# RFC 5322, atext: what a local part holds besides letters and digits, and full stops between.
+ATEXT_SIGNS = "!#$%&'*+/=?^_`{|}~-"
+# RFC 3986: unreserved marks, the percent of an escape, and the delimiters that join the parts
+# of a URL (path, query, fragment, user).
+URL_JOINS = "-._~%/?#=&@+"
+# RFC 3986 again: the delimiters that a text also writes around an address.
+URL_AROUND = "(),;:!'*[]$"
 HOSTS = ("example.org", "mail.example", "my-site.example", "sub.example.org", "a-b.c.example")
-OPENINGS = ("", " ", "(", "<", "[", '"', ": ", ", ", "; ", "\n", "mailto:", "= ", "\u00ab ", "|")
-CLOSINGS = ("", " ", ")", ">", "]", '"', ", ", "; ", ". ", ".", "\n", " \u00bb", "|", "? ", "!")
+# What no address holds: a text writes these around one.
+OPENINGS = ("", " ", "(", "<", "[", '"', ": ", ", ", "; ", "\n", "mailto:", "\u00ab ", ",", ";")
+CLOSINGS = ("", " ", ")", ">", "]", '"', ", ", "; ", ". ", ".", "\n", " \u00bb", ",", ";", "? ")
 PADDING = "Pour toute question sur ce dossier"
 
 
 def some_email(rng: random.Random) -> str:
-    parts = [rng.choice(LOCALS) for _ in range(rng.randint(1, 3))]
-    local = parts[0]
-    for part in parts[1:]:
-        local += rng.choice((".", "-", "_", "+", "")) + part
-    return f"{local}@{rng.choice(HOSTS)}"
+    """Atoms of letters and digits joined by full stops, some with a sign of the grammar inside,
+    an @ and a domain of labels."""
+    atoms = []
+    for _ in range(rng.randint(1, 3)):
+        size = rng.randint(1, 6)
+        atom = [rng.choice(LETTERS + DIGITS) for _ in range(size)]
+        if size >= 3 and rng.random() < 0.6:
+            atom[rng.randrange(1, size - 1)] = rng.choice(ATEXT_SIGNS)
+        atoms.append("".join(atom))
+    return f"{'.'.join(atoms)}@{rng.choice(HOSTS)}"
 
 
 def some_url(rng: random.Random) -> str:
-    path = "".join(
-        "/" + rng.choice(("in", "camille-durand", "projets", "brain", "cv_2023", "a.b", "x"))
-        for _ in range(rng.randint(0, 3))
-    )
-    return f"{rng.choice(HOSTS)}{path}"
+    """A host, sometimes a port, a path of segments that hold the marks of the grammar, sometimes
+    a query and a fragment. No scheme: the caller writes one or not."""
+    segments = ("in", "camille-durand", "projets", "Brain", "cv_2023", "a.b", "~cd", "a%20b", "x+y")
+    port = rng.choice(("", "", "", ":8080"))
+    path = "".join("/" + rng.choice(segments) for _ in range(rng.randint(0, 3)))
+    query = rng.choice(("", "", "?id=42", "?id=42&lang=fr", "?q=Brain"))
+    fragment = rng.choice(("", "", "#top"))
+    return f"{rng.choice(HOSTS)}{port}{path}{query if path else ''}{fragment if path else ''}"
 
 
 def framed(rng: random.Random, address: str) -> str:
@@ -737,8 +757,8 @@ def parts_of(address: str) -> set[str]:
     out = {address[:cut] for cut in range(1, len(address))}
     out |= {address[cut:] for cut in range(1, len(address))}
     for at, char in enumerate(address):
-        if char in ".-_+":
-            out.add(address[:at] + address[at + 1 :])  # a separator forgotten
+        if not char.isalnum():
+            out.add(address[:at] + address[at + 1 :])  # a sign forgotten
             out.add(address[:at] + " " + address[at + 1 :])
         if char.isalpha():
             out.add(address[:at] + ("z" if char != "z" else "y") + address[at + 1 :])
@@ -766,17 +786,61 @@ def test_an_email_is_accepted_as_written_and_no_part_of_it(seed: int) -> None:
 
 @seeded
 def test_an_email_inside_a_longer_address_is_refused(seed: int) -> None:
+    """Whatever the grammar lets stand before the local part or after the domain makes a longer
+    address: the shorter one is not written."""
     rng = generator(8000 + seed)
     for _ in range(10):
         email = some_email(rng)
-        before = rng.choice(("x", "9", "é", ".", "_", "-", "+", "%", "@", "/", "x.", "a-"))
+        letter = rng.choice(LETTERS + DIGITS + "é")
+        before = rng.choice((letter, letter + rng.choice(ATEXT_SIGNS + "."), letter + "''", "@"))
         after = rng.choice(
-            ("x", "9", "é", "_", "-", "+", "%", "@", ".fr", "/x", ".x", "..x", "./x")
+            (letter, "-" + letter, "_" + letter, "." + letter, ".." + letter, "@" + letter)
         )
         for longer in (before + email, email + after, before + email + after):
             source = f"{PADDING} {longer} {sentence(rng, 3, 5)}"
             result = check_item("email", email, source, [source])
             assert refused(result, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, email, result)
+        # a sign that joins the atoms of a local part never opens an address in a text
+        for sign in "._%+-/":
+            source = f"{PADDING} {sign}{email} {sentence(rng, 3, 5)}"
+            result = check_item("email", email, source, [source])
+            assert refused(result, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, email, result)
+
+
+@seeded
+def test_what_a_text_writes_around_an_email_is_not_part_of_it(seed: int) -> None:
+    """A quote, the asterisks or the backticks of Markdown before an address, with nothing of an
+    address before them, and whatever is not of a domain after it: the address is whole."""
+    rng = generator(8500 + seed)
+    for _ in range(8):
+        email = some_email(rng)
+        opening, closing = rng.choice(
+            (("'", "'"), ("`", "`"), ("**", "**"), ("*", "*"), ("|", "|"), ("{", "}"), ("", ""))
+        )
+        # a domain holds none of these: whatever follows, the address ended before it
+        after = rng.choice(("", "?subject=Bonjour", "/x", "!", "%20", "+x", "=", "~", "&", "/"))
+        source = f"{PADDING} {opening}{email}{closing}{after} {plain_words(rng, 3, 5)}"
+        result = check_item("email", email, source, [source])
+        assert isinstance(result, Accepted), (seed, source, email, result)
+
+
+@seeded
+def test_an_email_is_compared_in_lower_case_never_case_folded(seed: int) -> None:
+    rng = generator(8700 + seed)
+    for _ in range(6):
+        name = "".join(rng.choice(LETTERS) for _ in range(rng.randint(2, 5)))
+        sharp, double = f"{name}ß{name}", f"{name}ss{name}"
+        host = rng.choice(HOSTS)
+        for written, proposed in ((sharp, double), (double, sharp)):
+            source = framed(rng, f"{written}@{host}")
+            wrong = check_item("email", f"{proposed}@{host}", source, [source])
+            assert refused(wrong, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, proposed, wrong)
+            for honest in (f"{written}@{host}", f"{written.capitalize()}@{host.upper()}"):
+                right = check_item("email", honest, source, [source])
+                assert isinstance(right, Accepted), (seed, source, honest, right)
+        source = framed(rng, f"https://www.{sharp}.example/{name}")
+        wrong = check_item("url", f"https://www.{double}.example/{name}", source, [source])
+        assert refused(wrong, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, wrong)
 
 
 @seeded
@@ -785,13 +849,22 @@ def test_a_url_is_accepted_as_written_and_no_part_of_it(seed: int) -> None:
     for _ in range(6):
         url = some_url(rng)
         scheme = rng.choice(("", "https://", "http://", "www.", "https://www.", "HTTPS://"))
-        slash = rng.choice(("", "/"))
+        slash = rng.choice(("", "/")) if "?" not in url and "#" not in url else ""
         source = framed(rng, f"{scheme}{url}{slash}")
-        for honest in (url, f"https://{url}", f"http://www.{url}/", f"www.{url}", url.upper()):
+        host, sign, rest = url.partition("/")
+        shouted = f"{host.upper()}{sign}{rest}"
+        for honest in (url, f"https://{url}", f"http://www.{url}/", f"www.{url}", shouted):
+            if honest.endswith("/") and ("?" in url or "#" in url):
+                continue  # a slash after a query is another query
             result = check_item("url", honest, source, [source])
             assert isinstance(result, Accepted), (seed, source, honest, result)
+        if any(char.isalpha() for char in rest):
+            # the path and the query are compared as written
+            for other in (f"{host}{sign}{rest.swapcase()}", url.upper()):
+                result = check_item("url", other, source, [source])
+                assert refused(result, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, other, result)
         for part in parts_of(url):
-            if part.rstrip("/") == url or part in (f"{url}/",):
+            if part.rstrip("/") == url:
                 continue
             result = check_item("url", part, source, [source])
             assert isinstance(result, Refusal), (seed, source, part)
@@ -799,32 +872,84 @@ def test_a_url_is_accepted_as_written_and_no_part_of_it(seed: int) -> None:
 
 
 @seeded
-def test_a_url_that_goes_on_is_refused(seed: int) -> None:
+def test_a_url_that_goes_on_or_started_earlier_is_refused(seed: int) -> None:
+    """Whatever joins the parts of a URL, before the value or after it, makes a longer URL."""
     rng = generator(10_000 + seed)
     for _ in range(10):
         url = some_url(rng)
+        letter = rng.choice(LETTERS + DIGITS)
         after = rng.choice(
             (
-                "/x",
-                "/brain",
-                ".html",
-                "?id=4",
-                "#top",
-                ":8080",
-                "&a=1",
-                "=1",
-                "-x",
-                "_x",
-                "x",
-                "2",
-                *("%20", "+x", "@x", "/~x", "/?x", "//x", ".", "?", "#")[:6],
+                *("/x", "/Brain", ".html", "?id=4", "#top", "&a=1", "=1", "-x", "_x", "x", "2"),
+                *("%20", "+x", "@x", "/~x", "/?x", "//x", ":8080" if ":" not in url else "/y"),
             )
         )
-        before = rng.choice(("x", "x.", "blog.", "a-", "x/", "x@", "awww.", "xhttps://", "ftp://"))
+        before = rng.choice(
+            (
+                *(letter, f"{letter}.", "blog.", f"{letter}-", f"{letter}/", f"{letter}@"),
+                *("awww.", "xhttps://", "ftp://"),
+                *(f"https://{letter}.example/?u=", f"https://{letter}.example/~"),
+                *URL_JOINS,
+            )
+        )
         for longer in (url + after, before + url):
             source = f"{PADDING} {longer} {sentence(rng, 3, 5)}"
             result = check_item("url", url, source, [source])
             assert refused(result, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, url, result)
+        # the same URL after its own scheme, in the query of another URL
+        source = f"{PADDING} https://redirect.example/?u=https://{url} {sentence(rng, 3, 5)}"
+        result = check_item("url", f"https://{url}", source, [source])
+        assert refused(result, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, url, result)
+        # a colon bounds a URL, except the colon of its scheme and the colon of its port
+        source = f"{PADDING} Site:https://{url} {sentence(rng, 3, 5)}"
+        pieces = [f"//{url}"] + ([url.partition(":")[2]] if ":" in url else [])
+        for piece in pieces:
+            result = check_item("url", piece, source, [source])
+            assert refused(result, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, piece, result)
+        result = check_item("url", url, f"{PADDING} Site:{url} ici", [f"{PADDING} Site:{url} ici"])
+        assert isinstance(result, Accepted), (seed, url, result)
+
+
+@seeded
+def test_what_a_text_writes_around_a_url_is_not_part_of_it(seed: int) -> None:
+    """The delimiters of RFC 3986 that a text also uses as punctuation bound a URL: the cells
+    of a CSV line, a label and its colon, parentheses, brackets."""
+    rng = generator(10_500 + seed)
+    for _ in range(8):
+        url = some_url(rng)
+        opening = rng.choice((*URL_AROUND, "[PERSONAL:", "Durand,", "(voir ", "Site : "))
+        closing = rng.choice((")", ",", ";", "]", "!", "'", "*", ", Bordeaux", ""))
+        source = f"{PADDING} {opening}https://{url}{closing} {plain_words(rng, 3, 5)}"
+        result = check_item("url", f"https://{url}", source, [source])
+        assert isinstance(result, Accepted), (seed, source, url, result)
+
+
+@seeded
+def test_an_address_cut_by_a_line_at_a_hyphen_is_not_repaired_and_no_piece_is_it(seed: int) -> None:
+    rng = generator(10_700 + seed)
+    for _ in range(6):
+        host = rng.choice(HOSTS)
+        first = "".join(rng.choice(LETTERS) for _ in range(rng.randint(2, 6)))
+        second = "z" + "".join(rng.choice(LETTERS) for _ in range(rng.randint(1, 5))) + "q"
+        source = f"{PADDING} {first}-\n{second}@{host} {plain_words(rng, 3, 5)}"
+        for value in (f"{second}@{host}", f"{first}-{second}@{host}", f"{first}{second}@{host}"):
+            result = check_item("email", value, source, [source])
+            assert refused(result, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, value, result)
+        source = f"{PADDING} https://{host}/{first}-\n{second} {plain_words(rng, 3, 5)}"
+        for value in (
+            f"https://{host}/{first}-",
+            f"https://{host}/{first}",
+            second,
+            f"https://{host}/{first}-{second}",
+            f"https://{host}/{first}{second}",
+        ):
+            result = check_item("url", value, source, [source])
+            assert refused(result, Rule.ADDRESS_NOT_IN_SOURCE), (seed, source, value, result)
+        # a dash that stands alone at the end of a line cuts nothing
+        email = some_email(rng)
+        source = f"{PADDING} -\n{email} {plain_words(rng, 3, 5)}"
+        result = check_item("email", email, source, [source])
+        assert isinstance(result, Accepted), (seed, source, email, result)
 
 
 # --- 5. phone numbers ----------------------------------------------------------------------------

@@ -1282,60 +1282,181 @@ def looks_like_instruction(norm: str) -> bool:
 
 # --- rule V: addresses and names ------------------------------------------------------------------
 
+# What an address may hold comes from its grammar, not from a list of the characters met so far.
+#
+# An email is a local part, an @ and a domain. The local part (RFC 5322, atext, and the full
+# stops between its atoms; RFC 6531 adds the letters of every script) holds letters, digits and
+# the signs below. A domain (RFC 1035, RFC 5890) holds letters, digits, hyphens and the full
+# stops between its labels, nothing else: a question mark or a slash after it is not it. The
+# underscore is read as one more character of a domain, since host names carry it in practice:
+# "camille@my" is not an address of a text that writes "camille@my_host.example".
+_LOCAL_SIGNS = "!#$%&'*+/=?^_`{|}~-."
+# Of these signs, a text also writes some around an address: a quote, the asterisks or the
+# backticks of Markdown, the equals sign of "email=". Such a sign is part of the address only
+# when something of the address stands before it ("o'brien", "r&d"). The others never open an
+# address in a text: found right before a value, they say that the address started earlier.
+_LOCAL_JOINS = "._%+-/"
+# A URL (RFC 3986) holds letters, digits, the unreserved marks, the percent of an escape and
+# the delimiters that join its parts: path, query, fragment, user. One of them right before a
+# value says that the URL started earlier ("?u=example.org/cv", "/~camille/cv.html").
+_URL_JOINS = "-._~%/?#=&@+"
+# The other delimiters of RFC 3986 (: , ; ! $ ' ( ) * [ ]) are what a text writes around an
+# address ("(example.org)", "a,b" in a CSV line, "[PERSONAL:http://...]"): they bound it.
+# After a URL, a run of these goes on with it only when more of the address follows the run:
+_URL_GOES_ON = "./?#:=&~"
+_URL_AFTER = "_%+-@"
 _URL_HEAD = re.compile(r"(?:https?://(?:www\.)?|www\.)")
 _URL_PREFIXES = ("https://www.", "http://www.", "https://", "http://", "www.")
-_ADDRESS_BEFORE = "._%+-@/"
-_ADDRESS_AFTER = "_%+-@"
-_ADDRESS_GOES_ON = "./?#:=&~"
-_GOES_ON_MAX = 64
+_SIGNS_MAX = 64  # signs in a row looked at around an address: past that, no telling
 
 
-def _address_char(char: str, others: str) -> bool:
+def _address_char(char: str, signs: str) -> bool:
     """Whether `char` can be part of an address: a letter of a script written with spaces, a
-    digit, a mark, or one of `others`."""
-    return (char.isalnum() and not _unspaced(char)) or char in others or _mark(char)
+    digit, a mark, or one of `signs`."""
+    return (char.isalnum() and not _unspaced(char)) or char in signs or _mark(char)
 
 
-def _address_starts(text: str, at: int, url: bool) -> bool:
-    """Whether an address can start at `at`: nothing of an address stands before it. For a
-    URL, "http://", "https://" and "www." may, where an address starts."""
-    if at == 0 or not _address_char(text[at - 1], _ADDRESS_BEFORE):
+def _email_starts(text: str, at: int) -> bool:
+    """Whether the local part of an email of the document starts at `at`: nothing of a local
+    part stands before it, or only signs that a text writes around an address."""
+    low = at
+    floor = max(0, at - _SIGNS_MAX)
+    while low > floor and text[low - 1] in _LOCAL_SIGNS and text[low - 1] not in _LOCAL_JOINS:
+        low -= 1
+    if low == 0:
         return True
-    if url:
-        for prefix in _URL_PREFIXES:
-            head = at - len(prefix)
-            if head >= 0 and text.startswith(prefix, head):
-                return head == 0 or not _address_char(text[head - 1], _ADDRESS_BEFORE)
-    return False
+    before = text[low - 1]
+    if before == "@" or before in _LOCAL_SIGNS:
+        return False  # a sign that joins, or more signs than can be told from an address
+    if before == ":":
+        return not _user_info(text, low - 1)
+    return not _address_char(before, "")
 
 
-def _address_ends(text: str, end: int) -> bool:
-    """Whether an address can end at `end`. A full stop, a slash or a sign of a query there is
-    punctuation only when what follows is not more of the address."""
+def _user_info(text: str, colon: int) -> bool:
+    """Whether the colon at `colon` is the one of "https://user:password@host": the word before
+    it starts right after two slashes. The colon of "mailto:" and of a label bounds an email."""
+    low = colon
+    floor = max(0, colon - _SIGNS_MAX)
+    while low > floor and _address_char(text[low - 1], "-._~%"):
+        low -= 1
+    return low >= 2 and text.startswith("//", low - 2)
+
+
+def _email_ends(text: str, end: int) -> bool:
+    """Whether the domain of an email of the document ends at `end`: a full stop there is the
+    end of a sentence unless a letter, a digit or a hyphen follows it."""
     rest = end
-    stop = min(len(text), end + _GOES_ON_MAX)
-    while rest < stop and text[rest] in _ADDRESS_GOES_ON:
+    stop = min(len(text), end + _SIGNS_MAX)
+    while rest < stop and text[rest] == ".":
         rest += 1
     if rest == len(text):
         return True
-    return rest < stop and not _address_char(text[rest], _ADDRESS_AFTER)
+    return rest < stop and text[rest] != "@" and not _address_char(text[rest], "-_")
 
 
-def _address(norm: str, spans: Sequence[Span], url: bool) -> Rule | None:
+def _email_shape(wanted: str) -> bool:
+    """Whether a normalised value has the shape of an email: a local part, an @, a domain."""
+    local, sign, domain = wanted.rpartition("@")
+    return (
+        bool(sign and local and domain)
+        and all(_address_char(char, _LOCAL_SIGNS) for char in local)
+        and all(_address_char(char, "-._") for char in domain)
+    )
+
+
+def _url_starts(text: str, at: int) -> bool:
+    """Whether a URL of the document starts at `at`: nothing that joins the parts of a URL
+    stands before it. "http://", "https://" and "www." may, where a URL starts."""
+    if at == 0:
+        return True
+    if text[at - 1] == ":":
+        # A colon bounds a URL ("Site:example.org") unless it is the colon of the URL: the one
+        # of a scheme, before two slashes, or the one of a port, before its digits.
+        return not (text.startswith("//", at) or _port(text, at))
+    if not _address_char(text[at - 1], _URL_JOINS):
+        return True
+    for prefix in _URL_PREFIXES:
+        head = at - len(prefix)
+        if head >= 0 and text.startswith(prefix, head):
+            return head == 0 or not _address_char(text[head - 1], _URL_JOINS)
+    return False
+
+
+def _port(text: str, at: int) -> bool:
+    """Whether the digits at `at` are a port, not the first label of a host ("3dprint.example",
+    "123.example"): at most five of them, then nothing that goes on with a label."""
+    end = at
+    while end < len(text) and end - at < 6 and text[end].isdigit():
+        end += 1
+    if not 0 < end - at < 6:
+        return False
+    rest = text[end : end + 2]
+    return not (rest[:1].isalpha() or rest[:1] == "-" or (rest[:1] == "." and rest[1:].isalnum()))
+
+
+def _cut_by_a_line(text: str, at: int, end: int) -> bool:
+    """Whether the address at `at` is a piece of one that a line cut at a hyphen: it stops on a
+    hyphen right before a break, or it starts right after a break that follows a hyphen glued to
+    a word. Such an address is not repaired, and no piece of it is the address."""
+    if text[end - 1] == "-" and text.startswith("\n", end):
+        return True
+    return at >= 3 and text[at - 2 : at] == "-\n" and _address_char(text[at - 3], "")
+
+
+def _url_ends(text: str, end: int) -> bool:
+    """Whether a URL of the document ends at `end`. A full stop, a slash or a sign of a query
+    there is punctuation only when what follows is not more of the address."""
+    rest = end
+    stop = min(len(text), end + _SIGNS_MAX)
+    while rest < stop and text[rest] in _URL_GOES_ON:
+        rest += 1
+    if rest == len(text):
+        return True
+    return rest < stop and not _address_char(text[rest], _URL_AFTER)
+
+
+def _same_address(written: str, proposed: str, url: bool) -> bool:
+    """Whether the address the document writes is the one proposed, both normalised without the
+    case fold: an email in lower case (as `normalize_email` of the identity module compares
+    them, since a case fold would merge "straße" and "strasse"), the host of a URL in lower
+    case and its path and query as written."""
+    if not url:
+        return written.lower() == proposed.lower()
+    cut = min((at for at in map(written.find, "/?#") if at >= 0), default=len(written))
+    return written[:cut].lower() == proposed[:cut].lower() and written[cut:] == proposed[cut:]
+
+
+def _address(value: str, norm: str, spans: Sequence[Span], url: bool) -> Rule | None:
+    """Rule V for an email or a URL. The value is looked for in the case folded text, then the
+    place found must be a whole address of the document by the grammar of an address, read in
+    the document and not in the span alone, and the same address once the fold is taken back."""
     wanted = norm
+    head = _URL_HEAD.match(wanted) if url else None
+    if head is not None:
+        wanted = wanted[head.end() :]
     if url:
-        head = _URL_HEAD.match(wanted)
-        wanted = (wanted[head.end() :] if head else wanted).rstrip("/")
+        wanted = wanted.rstrip("/")
     if not wanted:
         return Rule.VALUE_EMPTY
+    if " " in wanted or "\n" in wanted or not (url or _email_shape(wanted)):
+        return Rule.ADDRESS_NOT_IN_SOURCE
+    proposed = normalise(value, casefold=False).text
+    proposed = proposed[head.end() if head is not None else 0 :]
+    if url:
+        proposed = proposed.rstrip("/")
+    starts, ends = (_url_starts, _url_ends) if url else (_email_starts, _email_ends)
     for span in spans:
         text = span.document.text
         at = text.find(wanted, span.start, span.end)
         for _ in range(OCCURRENCES_MAX):
             if at < 0:
                 break
-            if _address_starts(text, at, url) and _address_ends(text, at + len(wanted)):
-                return None
+            end = at + len(wanted)
+            if not _cut_by_a_line(text, at, end) and starts(text, at) and ends(text, end):
+                written = normalise(span.source(at - span.start, end - span.start), casefold=False)
+                if _same_address(written.text, proposed, url):
+                    return None
             at = text.find(wanted, at + 1, span.end)
     return Rule.ADDRESS_NOT_IN_SOURCE
 
@@ -1415,11 +1536,13 @@ def _phone(norm: str, phones: frozenset[str]) -> Rule | None:
 
 
 def rule_address(value: str, spans: Sequence[Span], *, url: bool = False) -> Rule | None:
-    """Rule V for an email or a URL: N(value) is written in a span, hyphens and spaces kept,
-    and bounded on both sides in the document, so a part of an address never passes, even when
-    the excerpt starts or stops inside it. For a URL the scheme, "www." and the final slash of
-    the value are left out."""
-    return _address(normalise(value).text, spans, url)
+    """Rule V for an email or a URL: the value is a whole address of a span, hyphens kept. What
+    an address holds is its grammar's: the local part and the domain of an email, the parts of
+    a URL and the signs that join them, read in the document and not in the span alone, so a
+    part of an address never passes, even when the excerpt starts or stops inside it. An email
+    is compared in lower case, never case folded; the host of a URL in lower case, its path
+    and query as written. For a URL the scheme, "www." and the final slash are left out."""
+    return _address(value, normalise(value).text, spans, url)
 
 
 def rule_name(value: str, spans: Sequence[Span]) -> Rule | None:
@@ -1542,9 +1665,9 @@ class _Evidence:
         if field_type is FieldType.PHONE:
             return _phone(norm, self.phones()), norm
         if field_type is FieldType.EMAIL:
-            return _address(norm, self.spans, url=False), norm
+            return _address(value, norm, self.spans, url=False), norm
         if field_type is FieldType.URL:
-            return _address(norm, self.spans, url=True), norm
+            return _address(value, norm, self.spans, url=True), norm
         if field_type is FieldType.NAME:
             return _name(value, norm, self.spans) or self.numbers(normalised, value), norm
         return self.numbers(normalised, value), norm

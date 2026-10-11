@@ -114,7 +114,7 @@ def test_every_rule_of_a_refusal_has_an_example_or_a_unit_test() -> None:
 # --- a fictitious identity -----------------------------------------------------------------------
 
 ADDRESS = re.compile(r"[\w.+-]+@[\w.-]+\.[a-z]+")
-HOST = re.compile(r"(?:https?://|www\.)([\w.-]+)")
+HOST = re.compile(r"(?:https?://|www\.)(?:[\w.~%-]+(?::[\w.~%-]*)?@)?([\w.-]+)")
 # RFC 2606 and RFC 6761: names nobody can register.
 RESERVED = ("example.org", "example.com", "example.net", ".example")
 # ARCEP keeps 06 39 98 00 00 to 06 39 98 99 99 for fiction.
