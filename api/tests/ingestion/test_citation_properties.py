@@ -522,6 +522,10 @@ def month_forms(year: int, month: int, day: int) -> list[str]:
         f"{month:02d}/{year}",
         f"{month:02d}.{year}",
         f"{month:02d}-{year}",
+        f"{month:02d} / {year}",
+        f"{EN_SHORT[month - 1]}-{year}",
+        f"{fr}-{year}",
+        f"du 02/{month:02d} au 28/{month:02d}/{year}",
         f"{year}-{month:02d}-{day:02d}",
         f"{year}/{month:02d}/{day:02d}",
         f"{day:02d}.{month:02d}.{year}",
@@ -569,8 +573,10 @@ def year_only_forms(year: int, month: int, day: int) -> list[str]:
         f"{other:02d}-{month:02d}-{year}",
         f"{year}.{month:02d}",
         f"{year} - {month:02d}",
-        f"{month:02d} / {year}",
+        f"{month:02d} /{year}",
         f"{month:02d}/ {year}",
+        f"{en} - {year}",
+        f"{en}- {year}",
         f"T{month:02d}/{year}",
         f"{en} {day}, , {year}",
         f"{en} and {year}",
@@ -690,7 +696,10 @@ def test_a_two_digit_year_is_never_read_on_its_own(seed: int) -> None:
             assert refused(alone, Rule.TWO_DIGIT_YEAR), (seed, source, alone)
             assert refused(check_item("date", f"{year}", source, [short]), Rule.TWO_DIGIT_YEAR)
             both = check_item("date", f"{year}-{month:02d}", source, [full, short])
-            assert isinstance(both, Accepted), (seed, source, both)
+            if start_year % 100 > 12:
+                assert isinstance(both, Accepted), (seed, source, both)
+            else:  # up to 12 the two numbers may be a day and its month: never read
+                assert refused(both, Rule.TWO_DIGIT_YEAR), (seed, source, both)
             for other in range(1, 13):
                 if other in (start_month, end_month):
                     continue

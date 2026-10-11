@@ -1022,6 +1022,110 @@ def test_two_digit_years_are_kept_apart() -> None:
         assert dates_of(n(text)).short == set(), text
 
 
+def test_a_range_of_two_digit_years_is_read_only_when_both_are_over_twelve() -> None:
+    """Decision of the orchestrator after the first review of pull request #97: up to 12 the
+    second number may be a month, and the range a range of days, or two scores."""
+    for text in (
+        "10/10 à 12/12",
+        "05/10 au 08/10",
+        "03/12 au 10/12",
+        "09/11 à 03/12",
+        "09/12 à 03/13",
+        "09/11 to present",
+    ):
+        facts = dates_of(n(text))
+        assert facts.short == set(), text
+        assert facts.unread, text
+        assert facts.pairs == set(), text
+    assert dates_of(n("09/11 à 03/12")).unread == {(11, 9), (12, 3)}
+    assert dates_of(n("09/12 à 03/13")).unread == {(12, 9), (13, 3)}
+    assert dates_of(n("09/11 to present")).unread == {(11, 9)}
+    for text, short in (("09/13 à 03/14", {(13, 9), (14, 3)}), ("09/13 to present", {(13, 9)})):
+        facts = dates_of(n(text))
+        assert (facts.short, facts.unread) == (short, set()), text
+    # a date written in full beside it is read as before
+    facts = dates_of(n("05/10 - 03/2011"))
+    assert (facts.pairs, facts.short, facts.unread) == ({(2011, 3)}, set(), {(10, 5)})
+    assert dates_of(n("10/10")).unread == set()
+    whole = DateFacts(unread=frozenset({(11, 9)})) | DateFacts(years=frozenset({2011}))
+    assert (whole.years, whole.unread) == ({2011}, {(11, 9)})
+
+
+@pytest.mark.parametrize(
+    ("value", "excerpts", "rule"),
+    [
+        ("2011-09", ("Mission de 09/11 à 03/12 chez Elsan",), Rule.TWO_DIGIT_YEAR),
+        ("2011", ("Mission de 09/11 à 03/12 chez Elsan",), Rule.TWO_DIGIT_YEAR),
+        (
+            "2011-09",
+            ("Mission de 09/11 à 03/12 chez Elsan", "Elsan, de 2011 à 2012"),
+            Rule.TWO_DIGIT_YEAR,
+        ),
+        (
+            "2011-10",
+            ("Mission de 09/11 à 03/12 chez Elsan", "Elsan, de 2011 à 2012"),
+            Rule.MONTH_NOT_IN_SOURCE,
+        ),
+        ("2011", ("Mission de 09/11 à 03/12 chez Elsan", "Elsan, de 2011 à 2012"), None),
+        ("2013", ("Mission de 09/11 à 03/12 chez Elsan",), Rule.YEAR_NOT_IN_SOURCE),
+    ],
+)
+def test_a_range_that_may_be_days_and_months_is_refused_as_a_two_digit_year(
+    value: str, excerpts: tuple[str, ...], rule: Rule | None
+) -> None:
+    source = "Elsan, de 2011 à 2012, développeur.\n\nMission de 09/11 à 03/12 chez Elsan, Bordeaux"
+    assert rule_of(check_item("date", value, source, list(excerpts))) is rule
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # a hyphen between a month word and its year, as a spreadsheet writes it
+        ("Jan-2019 to Mar-2021", {(2019, 1), (2021, 3)}),
+        ("janv.-2019, stage", {(2019, 1)}),
+        ("Décembre-2020 chez Elsan", {(2020, 12)}),
+        ("Jan - 2019", set()),
+        ("Jan- 2019", set()),
+        ("Jan -2019", set()),
+        ("Jan-20190", set()),
+        # spaces around the slash of a month and its year
+        ("09 / 2019 - 06 / 2021", {(2019, 9), (2021, 6)}),
+        ("9 / 2019 - 6 / 2021", {(2019, 9), (2021, 6)}),
+        ("Depuis 09 / 2019", {(2019, 9)}),
+        ("9 / 2019", set()),
+        ("13 / 2019", set()),
+        ("03 / 04 / 2023", set()),
+        ("03/ 04 / 2023", set()),
+        ("03/-04 / 2023", set()),
+        ("09 / 2019 / 12", set()),
+        ("09 /2019", set()),
+        ("09/ 2019", set()),
+        ("109 / 2019", set()),
+        # a day and its month before a whole date, in a range
+        ("Stage du 15/06 au 20/08/2019", {(2019, 6), (2019, 8)}),
+        ("Stage du 05/06 au 20/08/2019", {(2019, 6), (2019, 8)}),
+        ("Stage du 15.06 au 20.08.2019", {(2019, 6), (2019, 8)}),
+        ("Stage du 05.06 au 07.08.2019", {(2019, 6), (2019, 8)}),
+        ("Stage du 15/06 - 20/08/2019", {(2019, 6), (2019, 8)}),
+        ("From 06/15 to 08/20/2019", {(2019, 6), (2019, 8)}),
+        ("Stage du 15/06 au 20/06/2019", {(2019, 6)}),
+        ("Stage du 15/06 au 20.08.2019", {(2019, 8)}),  # another separator
+        ("Stage du 15/06 au 05/08/2019", set()),  # the whole date itself is not certain
+        ("Stage du 15/12 au 20/02/2019", {(2019, 2)}),  # December is of the year before
+        ("Stage du 25/08 au 20/08/2019", {(2019, 8)}),  # not forward
+        ("Stage du 15/13 au 20/08/2019", {(2019, 8)}),
+        ("Stage du 32/06 au 20/08/2019", {(2019, 8)}),
+        ("Stage du 15/06 et 20/08/2019", {(2019, 8)}),  # a list is not a range
+        ("Stage du 15/06, puis 20/08/2019", {(2019, 8)}),
+        ("Stage du 115/06 au 20/08/2019", {(2019, 8)}),
+    ],
+)
+def test_honest_forms_that_the_first_review_found_refused(
+    text: str, expected: set[tuple[int, int]]
+) -> None:
+    assert pairs(text) == expected
+
+
 def test_a_break_between_a_month_and_its_year_is_told_apart() -> None:
     assert dates_of(n("Janvier   2023")).apart == {(2023, 1)}
     assert dates_of(n("juin\n2019")).apart == {(2019, 6)}

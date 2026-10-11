@@ -832,13 +832,16 @@ class DateFacts:
     """What cited text says about dates. `years` are the runs of exactly four digits, `pairs`
     the (year, month) whose month stands next to its year, `short` the (two digit year, month)
     never read as a year on their own, `implied` the years written by their last two digits
-    after a full year ("2019-20"), and `apart` the (year, month) that a break alone separates."""
+    after a full year ("2019-20"), `apart` the (year, month) that a break alone separates, and
+    `unread` the (two digit year, month) of a range that may as well be days and months or
+    scores ("05/10 au 08/10"): never read, even beside the four digit year."""
 
     years: frozenset[int] = frozenset()
     pairs: frozenset[tuple[int, int]] = frozenset()
     short: frozenset[tuple[int, int]] = frozenset()
     implied: frozenset[int] = frozenset()
     apart: frozenset[tuple[int, int]] = frozenset()
+    unread: frozenset[tuple[int, int]] = frozenset()
 
     def __or__(self, other: DateFacts) -> DateFacts:
         return DateFacts(
@@ -847,6 +850,7 @@ class DateFacts:
             self.short | other.short,
             self.implied | other.implied,
             self.apart | other.apart,
+            self.unread | other.unread,
         )
 
 
@@ -898,6 +902,10 @@ class _DateReader:
         self.short: set[tuple[int, int]] = set()
         self.implied: set[int] = set()
         self.apart: set[tuple[int, int]] = set()
+        self.unread: set[tuple[int, int]] = set()
+        # A whole date read with certainty, by the index of its first token: year, month, day,
+        # whether the day is written first, and its separator.
+        self.whole: dict[int, tuple[int, int, int, bool, str]] = {}
         self.cut = self._cut_out()
 
     def facts(self) -> DateFacts:
@@ -912,6 +920,7 @@ class _DateReader:
             frozenset(self.short),
             frozenset(self.implied),
             frozenset(self.apart),
+            frozenset(self.unread),
         )
 
     # -- the pieces of a written date
@@ -1049,6 +1058,8 @@ class _DateReader:
             return index
 
         at = skip(at)
+        if self._is(at, "-") and tokens[at].glued and self._year(at + 1) and tokens[at + 1].glued:
+            return at + 1  # "Jan-2019", as a spreadsheet writes it
         day_at = skip(at + 1) if self._is(at, "the") else at
         day = self._day(day_at)
         if day:
@@ -1130,6 +1141,7 @@ class _DateReader:
         the span. A chain that the span cuts, or that is glued to a word, is not read."""
         tokens = self.tokens
         atoms: list[_Atom] = []
+        halves: list[tuple[int, int, str]] = []  # two numbers of two digits at most
         at = 0
         while at < len(tokens):
             if tokens[at].kind != "d":
@@ -1148,11 +1160,53 @@ class _DateReader:
                 separators.append(tokens[end].text)
                 parts.append(end + 1)
                 end += 2
+            if end == at + 1 and self._spaced_slash(at):
+                separators.append("/")  # "09 / 2019"
+                parts.append(at + 2)
+                end = at + 3
             after_word = tokens[at].glued and at > 0 and tokens[at - 1].kind == "w"
             if at >= self.first and end <= self.limit and not after_word:
                 atoms.extend(self._chain(parts, separators))
+                if len(parts) == 2 and max(len(tokens[part].text) for part in parts) <= 2:
+                    halves.append((at, end, separators[0]))
             at = end
         self._ranges(atoms)
+        for start, end, separator in halves:
+            self._shares_the_year(start, end, separator)
+
+    def _spaced_slash(self, at: int) -> bool:
+        """Whether a month and its year stand at `at` around a slash with a space on each side,
+        "09 / 2019", and nothing says that they are the end or the start of a longer date."""
+        tokens = self.tokens
+        # "03 / 04 / 2023" is a day, a month and a year, also when the span starts at "04".
+        goes_on = at > 0 and (
+            tokens[at - 1].text == "/"
+            or (tokens[at].glued and tokens[at - 1].text in _DATE_SEPARATORS)
+        )
+        return (
+            at + 2 < len(tokens)
+            and tokens[at + 1].text == "/"
+            and not tokens[at + 1].glued
+            and not tokens[at + 2].glued
+            and len(tokens[at].text) <= 2
+            and self._year(at + 2)
+            and not goes_on
+            and not self._is(at + 3, "/")
+        )
+
+    def _shares_the_year(self, start: int, end: int, separator: str) -> None:
+        """A day and its month before a whole date, in a range that goes forward: "du 15/06 au
+        20/08/2019" starts in June 2019. The whole date says which of the two numbers is the
+        day, so it must be one that is read with certainty."""
+        step = self._connector(end, lists=False)
+        whole = self.whole.get(end + step) if step else None
+        if whole is None or whole[4] != separator:
+            return
+        year, month, day, day_first, _ = whole
+        numbers = (int(self.tokens[start].text), int(self.tokens[end - 1].text))
+        its_day, its_month = numbers if day_first else numbers[::-1]
+        if 1 <= its_day <= 31 and 1 <= its_month <= 12 and (its_month, its_day) < (month, day):
+            self.pairs.add((year, its_month))
 
     def _chain(self, parts: list[int], separators: list[str]) -> list[_Atom]:
         """The dates of one chain. One kind of separator: one date. Two kinds, one of them a
@@ -1211,10 +1265,13 @@ class _DateReader:
             first, second, year = numbers
             if 12 < first <= 31 and 1 <= second <= 12:
                 self.pairs.add((year, second))  # the day first
+                self.whole[start] = (year, second, first, True, separator)
             elif 12 < second <= 31 and 1 <= first <= 12 and separator != ".":
                 self.pairs.add((year, first))  # the month first
+                self.whole[start] = (year, first, second, False, separator)
             elif 1 <= first <= 12 and 1 <= second <= 12 and (separator == "." or first == second):
                 self.pairs.add((year, second))  # dotted dates are day first
+                self.whole[start] = (year, second, first, True, separator)
             # else two numbers up to 12 with a slash or a hyphen: no telling, no month
         return None
 
@@ -1228,19 +1285,22 @@ class _DateReader:
                 continue
             if _school_year(first) and _school_year(second):
                 continue  # "2009-10 à 2010-11" are two school years
-            self._inside_range(first)
-            self._inside_range(second)
+            years = _years_only(first) and _years_only(second)
+            self._inside_range(first, years)
+            self._inside_range(second, years)
         for atom in atoms:
             step = self._connector(atom.end, lists=False)
             present = self._present(atom.end + step) if step else 0
             if present and atom.end + step + present <= self.limit:
-                self._inside_range(atom)
+                self._inside_range(atom, _years_only(atom))
 
-    def _inside_range(self, atom: _Atom) -> None:
-        if atom.kind == "short":
+    def _inside_range(self, atom: _Atom, years: bool) -> None:
+        if atom.kind != "short":
+            self.pairs.add((atom.year, atom.month))
+        elif years:
             self.short.add((atom.year, atom.month))
         else:
-            self.pairs.add((atom.year, atom.month))
+            self.unread.add((atom.year, atom.month))
 
 
 def _split(parts: list[int], separators: list[str], at: str) -> list[tuple[list[int], str]]:
@@ -1254,6 +1314,13 @@ def _split(parts: list[int], separators: list[str], at: str) -> list[tuple[list[
         else:
             groups[-1].append(part)
     return [(group, inside) for group in groups]
+
+
+def _years_only(atom: _Atom) -> bool:
+    """Whether the second number of `MM/YY` can only be a year: over 12 it is not a month, so
+    the two numbers are not a day and its month ("du 05/10 au 08/10") nor a score out of ten or
+    twelve. Decision of the orchestrator after the first review of pull request #97."""
+    return atom.kind != "short" or atom.year > 12
 
 
 def _later(first: _Atom, second: _Atom) -> bool:
@@ -1651,7 +1718,9 @@ def _date(value: str, facts: DateFacts) -> Rule | None:
         return Rule.DATE_FORMAT
     year = int(written.group(1))
     if year not in facts.years:
-        short = year in facts.implied or any(two == year % 100 for two, _ in facts.short)
+        short = year in facts.implied or any(
+            two == year % 100 for two, _ in facts.short | facts.unread
+        )
         return Rule.TWO_DIGIT_YEAR if short else Rule.YEAR_NOT_IN_SOURCE
     if written.group(2) is None:
         return None
@@ -1661,6 +1730,8 @@ def _date(value: str, facts: DateFacts) -> Rule | None:
         return None
     if (year, month) in facts.apart:
         return Rule.MONTH_APART_FROM_YEAR
+    if (year % 100, month) in facts.unread:
+        return Rule.TWO_DIGIT_YEAR  # "09/11 à 03/12" may be days and months: the user types it
     return Rule.MONTH_NOT_IN_SOURCE
 
 
