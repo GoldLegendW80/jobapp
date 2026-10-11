@@ -14,8 +14,9 @@
    ok: the name wins over the mtime: a dump whose name says 9 days ago goes although it was written today, one named yesterday stays although its mtime says September
    ok: the day arithmetic across the end of February (2028 a leap year, 2027 and 2100 not), the new year and a 31 day month
    ok: an explicit BACKUP_KEEP=14 wins for both rules: 14 dumps and 14 days (13 stays, 14 goes), with the warning that users are promised 7; the same folder at the default keeps nothing past 6 days
-   ok: the BACKUP_KEEP of the deployed .env is read at each run (quoted, spaced or with a carriage return too), the environment of the run wins over it, an empty line means the default
+   ok: the BACKUP_KEEP of the deployed .env is read at each run (quoted, spaced, with a carriage return, or written with export as compose accepts it: never ignored without a word), the environment of the run wins over it, an empty line means the default
    ok: BACKUP_KEEP 0, -1, abc, 1.5, 07, 10000 and '7 days' are refused, from the environment and from .env: no dump, nothing deleted, exit 1
+   ok: an invalid BACKUP_KEEP in .env: verify, list, restore and restore-live say it and do their work (the pre-restore dump is written, nothing is deleted); backup, prune and retention are refused before anything
 
 == T10, retention by age in every folder the server keeps dumps in
    ok: the nightly run: a predeploy dump 8 days old goes and one 6 days old stays, a pre-restore dump 9 days old goes, an uploaded dump 9 days old goes; rm only ever got whole dump names in the three folders
@@ -23,27 +24,46 @@
    ok: the deploy's own backup (BACKUP_DIR is the predeploy folder): both rules there, newest 7 and nothing 7 days old, and no other folder touched
 
 == T10, safety: the newest verified dump of the whole tree stays, and no folder has an exception
-   ok: every folder holds only dumps past the limit: all go, the last predeploy dump and the last upload included, and the one dump left on the server is the one this run wrote and verified
+   ok: deploys/ and incoming/ hold only dumps past the limit: all go, the last predeploy dump and the last upload included; no folder keeps its newest for its own sake
    ok: a week without a deploy: the only predeploy dump, taken 7 days ago in the afternoon, goes with the nightly dump of that day, so nothing a user deleted since is left in it
-   ok: a deploy after a long pause: its backup deletes every older predeploy dump and keeps its own; the folder of the nightly run is not its to rotate
+   ok: every other dump of the three folders is past the limit: five go and the newest of them, wherever it is, stays for this run, with the reason; the next run, a day later, deletes it. One night more, in that case only
+   ok: at the same time in three names, the one in the folder of the run is the one spared
+   ok: a deploy after a long pause: its backup deletes the older predeploy dumps but the newest of them, which the next deploy (or the next nightly run) deletes; the folder of the nightly run is not its to rotate
+   ok: BACKUP_KEEP=1 therefore keeps two: the run's dump and the one before it
    ok: a clock set back: the dump this run wrote is the oldest name of nine and still stays (the count rule takes the next one); the dumps named ahead of it are kept and said
-   ok: a clock a year ahead: every other dump goes and the run's own verified dump stays, so no run ends with nothing to restore; once the clock is right that dump is ahead by its name, kept and said at every run
+   ok: a clock a year ahead: every other dump looks a year old and goes, but the newest real one and the run's own stay, so the clock alone never leaves one dump; once the clock is right the dump of that run is ahead by its name, kept and said at every run
    ok: a dump that cannot be written (pg_dump fails, writes nothing, no disk, db unhealthy, lock held) or verified (the list, the full read): exit 1, no partial file, and not one old dump deleted, by count or by age
-   ok: a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes them all
+   ok: the new dump is flushed to the disk under its partial name, then the folder with the dump renamed and every old dump still in it, and only then is the first old dump deleted
+   ok: a flush that fails ends the run with exit 1 and deletes nothing: before the name, the partial file is removed; after it, the dump stays and so does every old one
+   ok: a sync that takes no path (coreutils before 8.24) flushes every disk instead, twice, still before the first deletion
+   ok: a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes eight, keeping the newest of them one night more; the night after, that one goes
    ok: prune alone never deletes by age (three dumps of 10 to 30 days stay), only by count, and only in its own folder
    ok: a restore never deletes: restore-live of a 20 day old dump writes its pre-restore dump and keeps every old one, the dump being restored included; restore, verify and list change nothing
    ok: deploys/ is left alone while a predeploy backup or a restore holds its lock: exit 0, the folder of the run still rotated
-   ok: a lock of deploys/ that cannot be taken at all is the same: nothing is deleted there without it, and the backup still ends well
-   ok: with the real flock: held by another process, deploys/ is skipped; released, the next run deletes what is too old there
+   ok: a lock file of deploys/ that cannot be opened is said as what it is, not as held: nothing is deleted there, the rest of the run is done, the dump is reported, and the run ends with exit 1 so that it is seen
+   ok: the run's own lock file that cannot be opened: no dump, nothing deleted, exit 1 with the reason instead of bash's raw error
+   ok: with the real flock and the real sync: held by another process, deploys/ is skipped; released, the next run deletes what is too old there; both runs flushed their dump and its folder through coreutils' own sync
+
+== T10, safety: a dump less than half the size of the last one accepted deletes nothing
+   ok: yesterday's dump is 100 bytes and today's 16: exit 0, the dump kept and reported, a warning with both sizes, and not one of the four dumps past the limit deleted, in any folder
+   ok: the night after, as small: still measured against the 100 bytes of the last accepted dump, not against yesterday's 16, so still nothing deleted; retention, so status, shows the hold with both sizes
+   ok: a dump of half that size (50 of 100, not less than half) lifts the hold by itself, and that run deletes what was waiting
+   ok: a database meant to shrink: one run with BACKUP_ACCEPT_SHRINK=1 lifts the hold and deletes what was waiting, and the run after it, without the variable, is measured against that accepted dump
+   ok: exactly half passes, a first dump passes, any other value of BACKUP_ACCEPT_SHRINK is refused before the dump, and a mark that names no dump of the folder holds nothing
+   ok: the same in the deploy's own folder: the predeploy backup ends well, so the deploy goes on, and deletes nothing there; the nightly run, whose own dump passes its check, still deletes by age in deploys/, and status shows the hold of that folder
 
 == T10, safety: only whole dump names, directly in the folder, never through a link
    ok: left alone and reported, run after run: no timestamp, a date that does not exist, another suffix or prefix, an upper case tag, a partial file, a name with a line break, a folder and a symbolic link named like old dumps (the file it points to untouched), a deploys/ that is a link
    ok: retention lists the same files and the same link, so status shows what sits outside the rotation
+   ok: the deploy's own command line with a deploys/ that is a link: the dump is written through it, and of the ten dumps in the folder it points to, two past the age limit and two more beyond the newest 7, none goes; that folder's mode is untouched, and the run says why
+   ok: prune and retention through the link, and the folder of the nightly run when it is a link: the same, nothing deleted in it or in its incoming/, and said
    ok: ops/db.sh: no recursive rm, no find -delete, no xargs; one rm deletes dumps, by one full path
 
 == T10, ops/db.sh retention: what must hold for the 7 days, shown so that it can be checked
-   ok: a healthy server: 7 from the default, the newest and the oldest dump of each folder by their names, what is left alone; no lock taken, nothing changed, no warning
+   ok: a healthy server shaped like the Jetson (both lock files, backup.log, previous-tree and its .rsyncignore): 7 from the default, the newest and the oldest dump of each folder, and not one line with WARNING, PAST, left alone or scratch database; no lock taken, nothing changed
+   ok: retention needs no lock (it answers while a backup holds it), and a stray file in incoming/ is the one line that then appears
    ok: what breaks the 7 days is said: no verified backup for 3 days, a dump past the limit, a scratch database left by restore --keep (or a database that could not be asked), a BACKUP_KEEP above 7
+   ok: a dump named ahead of today is counted apart and named, never given a negative age, and the warning about days without a verified backup still fires
    ok: every backup says so too, in backup.log night after night: the scratch database while it exists; a database that does not answer that question does not fail the backup
 
 == T10, the nightly schedule against a fake Jetson: the line, the retention of its runs, no reinstall for a change
@@ -58,4 +78,4 @@
 == T10, the defaults written down: one number, 7, and no other left
    ok: ops/db.sh holds the only default (7); deploy.sh, the deploy workflow and .env.example name no number of their own
 
-All 41 checks of the T10 part passed on Linux aarch64, bash 5.2.21(1)-release.
+All 59 checks of the T10 part passed on Linux aarch64, bash 5.1.16(1)-release.

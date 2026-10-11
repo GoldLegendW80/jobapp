@@ -18,6 +18,11 @@
 # `backup-schedule status` reporting the one its runs apply, the disk space check, file modes.
 # The T10 checks need the release with T10 deployed (status asks the ops/db.sh on the Jetson) and
 # no BACKUP_KEEP in the .env of this repository or of the Jetson: they assert the default, 7.
+# Not across the nightly backup's hour, and not during a deploy: a dump taken while the seed is
+# in the live database is much larger than the next one, which would then hold the rotation of
+# the real folder (the size check of ops/db.sh) until BACKUP_ACCEPT_SHRINK=1 is given once.
+# Killed half way, it leaves whole dumps of the live database in ~/jobapp-backups-test*, which no
+# retention sees: run it again to its end, or remove those two folders.
 set -euo pipefail
 unset BACKUP_KEEP
 

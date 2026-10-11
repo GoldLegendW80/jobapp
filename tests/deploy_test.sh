@@ -1309,7 +1309,9 @@ no_delete "$before"
 ok "the run's own lock file that cannot be opened: no dump, nothing deleted, exit 1 with the reason instead of bash's raw error"
 if command -v flock >/dev/null; then
   # The same with the real flock: this script holds the lock of deploys/ (descriptor 7) during
-  # the run, as a predeploy backup or a restore from that folder would.
+  # the run, as a predeploy backup or a restore from that folder would. No fake sync either in
+  # this folder of fakes: the sync of this machine's coreutils is given the partial file, then
+  # the folder, and the run only ends well if it takes both.
   rot_new
   mkdir -p "$ROT/realbin"
   cp "$DBT/bin/docker" "$DBT/bin/stat" "$DBT/bin/date" "$DBT/bin/rm" "$ROT/realbin/"
@@ -1323,7 +1325,7 @@ if command -v flock >/dev/null; then
   out_has "skipped $ROT/backups/deploys: a backup or a restore holds its lock"
   rot 0 "$(ago 0 011800)" DB_SH_TEST_BIN="$ROT/realbin"
   only deploys
-  ok "with the real flock: held by another process, deploys/ is skipped; released, the next run deletes what is too old there"
+  ok "with the real flock and the real sync: held by another process, deploys/ is skipped; released, the next run deletes what is too old there; both runs flushed their dump and its folder through coreutils' own sync"
 else
   ok "no flock on this machine: the held lock of deploys/ is checked with the real flock in CI"
 fi
