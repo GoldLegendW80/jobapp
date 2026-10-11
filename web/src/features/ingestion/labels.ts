@@ -11,6 +11,8 @@ export function kindLabel(document: IngestionDocument): string {
       return "Word or ZIP";
     case "image":
       return "Image";
+    case "other":
+      return "File";
   }
 }
 
@@ -31,12 +33,34 @@ export interface StatusView {
   detail?: string;
 }
 
-const NOT_READ_YET: Record<IngestionDocument["kind"], string> = {
+const NOT_READ_YET: Record<
+  Exclude<IngestionDocument["kind"], "other">,
+  string
+> = {
   text: "text files",
   pdf: "PDF files",
   archive: "Word files and archives",
   image: "images",
 };
+
+/** How often the list is asked again while a parser is at work on one of its documents. */
+export const WATCH_MS = 3000;
+
+/**
+ * True while a parser is at work on the document: it is pending and its kind has a reader. A
+ * file kept for a reader that does not exist yet is pending too, but nothing will change until
+ * a later version: it is not watched.
+ */
+export function isBeingRead(document: IngestionDocument): boolean {
+  return document.status === "pending" && document.readable;
+}
+
+/** How often to ask the list again: every WATCH_MS while a document is being read, else never. */
+export function watchInterval(
+  documents: readonly IngestionDocument[] | undefined,
+): number | false {
+  return documents?.some(isBeingRead) ? WATCH_MS : false;
+}
 
 /**
  * What to tell the user about a document's state. A file kept for a reader that does not exist
@@ -50,13 +74,17 @@ export function statusView(document: IngestionDocument): StatusView {
         ? { label: "To check", tone: "waiting" }
         : { label: "Ready", tone: "done" };
     case "pending":
-      return document.readable
-        ? { label: "Being read", tone: "working" }
-        : {
-            label: "Waiting",
-            tone: "waiting",
-            detail: `This version cannot read ${NOT_READ_YET[document.kind]} yet. Your file is kept, and it will be read as soon as it can.`,
-          };
+      if (isBeingRead(document))
+        return { label: "Being read", tone: "working" };
+      return {
+        label: "Waiting",
+        tone: "waiting",
+        detail:
+          document.kind === "other"
+            ? // No reader is planned for a type the api does not know: no promise.
+              "This version cannot read this type of file. Your file is kept."
+            : `This version cannot read ${NOT_READ_YET[document.kind]} yet. Your file is kept, and it will be read as soon as it can.`,
+      };
     case "awaiting_transcription":
       return {
         label: "Waiting for the agent",

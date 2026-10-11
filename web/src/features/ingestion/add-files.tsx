@@ -1,5 +1,5 @@
 import { Upload, X } from "lucide-react";
-import { useId, useRef, useState, type DragEvent } from "react";
+import { useEffect, useId, useRef, useState, type DragEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -48,9 +48,38 @@ export function AddFiles({
   uploads: Uploads;
 }) {
   const input = useRef<HTMLInputElement>(null);
+  const choose = useRef<HTMLButtonElement>(null);
+  const list = useRef<HTMLUListElement>(null);
   const [over, setOver] = useState(false);
   const titleId = useId();
   const hintId = useId();
+
+  // Cancel and Dismiss remove the row that holds the keyboard focus. Once the row is gone the
+  // focus goes to the row that took its place, or to "Choose files" when none is left.
+  const leaving = useRef<{ id: number; next: number | undefined }>();
+  const { items } = uploads;
+  useEffect(() => {
+    const gone = leaving.current;
+    if (!gone || items.some((item) => item.id === gone.id)) return;
+    leaving.current = undefined;
+    // Only when the focus went with the row: the user may have moved on in the meantime.
+    const active = document.activeElement;
+    if (active && active !== document.body && active.isConnected) return;
+    const buttons = (selector: string) =>
+      list.current?.querySelector<HTMLElement>(selector) ?? null;
+    const target =
+      (gone.next === undefined
+        ? null
+        : buttons(`[data-upload="${gone.next}"] button`)) ??
+      buttons("button") ??
+      choose.current;
+    target?.focus();
+  }, [items]);
+  const remove = (id: number) => {
+    const index = items.findIndex((item) => item.id === id);
+    leaving.current = { id, next: (items[index + 1] ?? items[index - 1])?.id };
+    uploads.remove(id);
+  };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -103,6 +132,7 @@ export function AddFiles({
           }}
         />
         <Button
+          ref={choose}
           type="button"
           variant="outline"
           aria-describedby={hintId}
@@ -111,14 +141,18 @@ export function AddFiles({
           Choose files
         </Button>
       </div>
-      {uploads.items.length > 0 ? (
-        <ul aria-label="Files being added" className="flex flex-col gap-2">
-          {uploads.items.map((item) => (
+      {items.length > 0 ? (
+        <ul
+          ref={list}
+          aria-label="Files being added"
+          className="flex flex-col gap-2"
+        >
+          {items.map((item) => (
             <UploadRow
               key={item.id}
               item={item}
               onRemove={() => {
-                uploads.remove(item.id);
+                remove(item.id);
               }}
             />
           ))}
@@ -152,11 +186,12 @@ function UploadRow({
           : "Not added";
   return (
     <li
+      data-upload={item.id}
       data-state={item.state}
       className="flex flex-col gap-1.5 rounded-md border px-3 py-2 text-sm"
     >
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate font-medium">{item.name}</span>
+        <bdi className="min-w-0 flex-1 truncate font-medium">{item.name}</bdi>
         {moving ? (
           <span className="shrink-0 text-xs text-muted-foreground">
             {sizeLabel(item.size)}
@@ -195,9 +230,8 @@ function UploadRow({
           />
         </div>
       ) : item.state === "failed" ? (
-        <p role="alert" className="text-destructive">
-          {item.message}
-        </p>
+        // No role="alert": the live region below already says it, once.
+        <p className="text-destructive">{item.message}</p>
       ) : (
         <p className="text-muted-foreground">{item.message}</p>
       )}

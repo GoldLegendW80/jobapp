@@ -14,6 +14,7 @@ import {
   filenameHeader,
   getDocumentText,
   listDocuments,
+  loadFailureSentence,
   megabytes,
   pasteDocument,
   uploadDocument,
@@ -104,6 +105,28 @@ describe("failureSentence", () => {
     );
   });
 
+  it("shows the server's words only where they were written for the user", () => {
+    const answered = (status: number, detail: string) =>
+      failureSentence(new ApiError("http", "x", { status, body: { detail } }));
+    for (const status of [400, 404, 408, 409, 413, 415, 422, 429, 503])
+      expect(answered(status, "A sentence for the user.")).toBe(
+        "A sentence for the user.",
+      );
+    // The api's catch all, the CSRF refusal, a proxy: never shown.
+    expect(answered(500, "internal server error")).toBe(
+      "The server could not take it. Try again in a moment.",
+    );
+    expect(answered(403, "missing X-Requested-With header")).toBe(
+      "The server could not take it. Try again in a moment.",
+    );
+    expect(answered(502, "bad gateway")).toBe(
+      "The server could not take it. Try again in a moment.",
+    );
+    expect(answered(401, "not authenticated")).toBe(
+      "Your session has ended. Sign in again.",
+    );
+  });
+
   it("has a sentence for every other failure, none with the status code", () => {
     const cases: Array<[unknown, string]> = [
       [
@@ -131,6 +154,52 @@ describe("failureSentence", () => {
     for (const [error, sentence] of cases) {
       expect(failureSentence(error)).toBe(sentence);
       expect(sentence).not.toMatch(/\d{3}| - |\u2014|\u2013/);
+    }
+  });
+});
+
+describe("loadFailureSentence", () => {
+  it("never shows the server's words, its status, or the word API", () => {
+    const cases: Array<[unknown, string]> = [
+      [
+        new ApiError("http", "x", {
+          status: 500,
+          body: { detail: "internal server error" },
+        }),
+        "The server could not answer. Try again in a moment.",
+      ],
+      [
+        new ApiError("http", "x", {
+          status: 503,
+          body: { detail: "database unavailable" },
+        }),
+        "The server could not answer. Try again in a moment.",
+      ],
+      [
+        new ApiError("http", "x", { status: 401, body: { detail: "nope" } }),
+        "Your session has ended. Sign in again.",
+      ],
+      [
+        new ApiError("network", "x"),
+        "The server could not be reached. Check your connection and try again.",
+      ],
+      [
+        new ApiError("aborted", "x"),
+        "The server could not be reached. Check your connection and try again.",
+      ],
+      [
+        new ApiError("timeout", "x"),
+        "The server took too long to answer. Try again.",
+      ],
+      [
+        new ApiError("parse", "x"),
+        "The server sent an answer this page cannot read. Reload the page.",
+      ],
+      [new Error("anything"), "Something unexpected went wrong. Try again."],
+    ];
+    for (const [error, sentence] of cases) {
+      expect(loadFailureSentence(error)).toBe(sentence);
+      expect(sentence).not.toMatch(/\d{3}|API| - |\u2014|\u2013/);
     }
   });
 });

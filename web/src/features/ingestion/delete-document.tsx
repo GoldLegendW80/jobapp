@@ -19,11 +19,15 @@ import {
 } from "./documents-api";
 
 /**
- * What deleting does, in the words decided by the owner (tasks/ingestion/todo.md, decision 3):
- * the server keeps 7 nightly backups, so a deleted document leaves them within 7 days.
+ * What deleting does, said without a number of days because none is true yet: the server
+ * still keeps 14 nightly dumps, and its predeploy dumps by count, whatever their age.
+ *
+ * G15: the owner's sentence (tasks/ingestion/todo.md, decision 3) is "Gone from the app now,
+ * and from the server's backups within 7 days." Put it here only once T10 (backups kept 7
+ * days) is deployed and verified on the server, the predeploy dumps included.
  */
 export const DELETE_PROMISE =
-  "Gone from the app now, and from the server's backups within 7 days.";
+  "Gone from the app now. The server's backups still hold a copy for a while, until newer backups replace them.";
 
 interface Props {
   /** The document to delete; the dialog is open while it is set. */
@@ -105,9 +109,9 @@ function Ask({
           <AlertDialogDescription asChild>
             <div className="flex flex-col gap-2 text-sm text-muted-foreground">
               <p className="break-words">
-                <span className="font-medium text-foreground">
+                <bdi className="font-medium text-foreground">
                   {document.name}
-                </span>{" "}
+                </bdi>{" "}
                 will be deleted for good, with its text.
               </p>
               <p>{DELETE_PROMISE}</p>

@@ -108,7 +108,9 @@ function DocumentRow({
       <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
         <KindIcon document={document} />
         <div className="min-w-0 flex-1 basis-40">
-          <p className="font-medium break-words">{document.name}</p>
+          <p className="font-medium break-words">
+            <bdi>{document.name}</bdi>
+          </p>
           <p className="text-xs text-muted-foreground">
             {kindLabel(document)}, {sizeLabel(document.size)}, added{" "}
             <time

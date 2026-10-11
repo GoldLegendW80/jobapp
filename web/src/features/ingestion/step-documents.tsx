@@ -1,11 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, Lock, RotateCw } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { describeError } from "@/lib/api";
 
 import { AddFiles } from "./add-files";
 import { DeleteDocument } from "./delete-document";
@@ -15,22 +14,22 @@ import {
   DEFAULT_LIMITS,
   documentsKey,
   listDocuments,
+  loadFailureSentence,
   megabytes,
   type DocumentList as Documents,
   type IngestionDocument,
   type StoredDocument,
 } from "./documents-api";
-import { sizeLabel } from "./labels";
+import { sizeLabel, watchInterval } from "./labels";
 import { PasteBox } from "./paste-box";
 import { useUploads } from "./use-uploads";
 
-/** How often the list is asked again while a document is being read by a parser. */
-const WATCH_MS = 3000;
-
-/** True while a parser is at work on one of the documents: the list then refreshes by itself. */
-const beingRead = (list: Documents | undefined) =>
-  list?.items.some((item) => item.status === "pending" && item.readable) ??
-  false;
+/**
+ * After an upload is stopped the list is asked again at once, and once more after this long:
+ * when every byte had left before the stop, the server is still storing the file at the first
+ * look.
+ */
+export const CANCEL_RECHECK_MS = 3000;
 
 /**
  * Step 2, "Documents": add files or paste a text, then see what the app keeps: each document
@@ -41,8 +40,8 @@ export function StepDocuments() {
   const query = useQuery({
     queryKey: documentsKey,
     queryFn: ({ signal }) => listDocuments(signal),
-    refetchInterval: (current) =>
-      beingRead(current.state.data) ? WATCH_MS : false,
+    // By itself only while a parser is at work on one of the documents (labels.ts).
+    refetchInterval: (current) => watchInterval(current.state.data?.items),
   });
   const [previewing, setPreviewing] = useState<IngestionDocument>();
   const [deleting, setDeleting] = useState<IngestionDocument>();
@@ -59,7 +58,23 @@ export function StepDocuments() {
     },
     [client],
   );
-  const uploads = useUploads(onStored);
+  const recheck = useRef<number>();
+  const onCancelled = useCallback(() => {
+    const look = () =>
+      void client.invalidateQueries({ queryKey: documentsKey });
+    look();
+    window.clearTimeout(recheck.current);
+    recheck.current = window.setTimeout(look, CANCEL_RECHECK_MS);
+  }, [client]);
+  useEffect(
+    () => () => {
+      window.clearTimeout(recheck.current);
+    },
+    [],
+  );
+  const uploads = useUploads(
+    useMemo(() => ({ onStored, onCancelled }), [onStored, onCancelled]),
+  );
   const limits = query.data?.limits ?? DEFAULT_LIMITS;
 
   return (
@@ -67,9 +82,9 @@ export function StepDocuments() {
       <p className="flex items-start gap-2 text-sm text-muted-foreground">
         <Lock aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
         <span>
-          Your documents stay on this server and only you can see them. Nothing
-          is sent to an AI model until you start a run, and the app asks you
-          first.
+          Your documents stay on this server, and no other user of this app can
+          see them. Nothing is sent to an AI model until you start a run, and
+          the app asks you first.
         </span>
       </p>
       <AddFiles limits={limits} uploads={uploads} />
@@ -102,7 +117,9 @@ export function StepDocuments() {
           <div className="flex flex-col items-start gap-3">
             <Alert variant="destructive">
               <AlertTitle>Your documents could not be loaded</AlertTitle>
-              <AlertDescription>{describeError(query.error)}</AlertDescription>
+              <AlertDescription>
+                {loadFailureSentence(query.error)}
+              </AlertDescription>
             </Alert>
             <Button
               variant="outline"

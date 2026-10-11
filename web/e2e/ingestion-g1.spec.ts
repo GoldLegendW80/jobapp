@@ -19,19 +19,41 @@ import {
 
 const takeShots = makeShots("ingestion-g1", "ingestion-g1");
 
-/** Screenshots once every toast is gone, so none covers the page. */
+/**
+ * Screenshots once every toast is gone, so none covers the page. A full page is taken from its
+ * top with the header in the flow: a sticky header is painted where the page was scrolled to,
+ * across whatever is there.
+ */
 async function shots(page: Page, name: string, fullPage = true) {
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, {
     timeout: 15_000,
   });
-  await takeShots(page, name, fullPage);
+  if (!fullPage) {
+    await takeShots(page, name, false);
+    return;
+  }
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    const style = document.createElement("style");
+    style.id = "e2e-header-in-flow";
+    style.textContent = "header.sticky { position: static !important; }";
+    document.head.append(style);
+  });
+  try {
+    await takeShots(page, name, true);
+  } finally {
+    await page.evaluate(() => {
+      document.getElementById("e2e-header-in-flow")?.remove();
+    });
+  }
 }
 
 /**
  * Task G1 of the ingestion module against the real stack through Caddy, no mocks: the
  * /profile/fill page, adding a text file, a PDF and an image, pasting a text, the list and its
- * states, the preview, a refused type, a file that is too large, a duplicate, the secret
- * warning, deleting with the dialog, a second user who sees nothing; then what the page cannot
+ * states, the preview, a refused type, a file that is too large, a duplicate, an upload stopped
+ * on its way, the secret warning, deleting with the dialog, a second user who sees nothing; then
+ * what the page cannot
  * show: the 20 MiB limit on the upload route alone, the api's memory with two uploads at once,
  * and logs that hold nothing of a document. Every document is made up (a fictitious person).
  *
@@ -57,7 +79,8 @@ const MIB = 1024 * 1024;
 const FILE_MAX = 20 * MIB;
 const UPLOAD = "/api/ingestion/documents";
 const DELETE_PROMISE =
-  "Gone from the app now, and from the server's backups within 7 days.";
+  "Gone from the app now. The server's backups still hold a copy for a while, until newer backups replace them.";
+const STOPPED = "stopped on its way.pdf";
 // Words that must never reach a log, unique to this run.
 const MARKER_NAME = `zq-name-${run}`;
 const MARKER_TEXT = `zq-text-${run}`;
@@ -347,7 +370,7 @@ test("a new user follows Fill my profile with an agent from the profile", async 
 
   await expect(
     page.getByText(
-      "Nothing is sent to an AI model until you start a run, and the app asks you first.",
+      "Your documents stay on this server, and no other user of this app can see them. Nothing is sent to an AI model until you start a run, and the app asks you first.",
     ),
   ).toBeVisible();
   await expect(
@@ -564,18 +587,23 @@ test("a refused type, a file that is too large and a duplicate each say why", as
   const refused = queue(page)
     .getByRole("listitem")
     .filter({ hasText: "animation.gif" });
-  await expect(refused.getByRole("alert")).toHaveText(
+  await expect(refused).toContainText(
     "GIF images cannot be read. Convert the image to PNG or JPEG and add it again.",
   );
+  // Said once to a screen reader: by the polite region, with no alert beside it.
+  await expect(
+    page.getByRole("status").filter({
+      hasText: "animation.gif was not added. GIF images cannot be read.",
+    }),
+  ).toHaveCount(1);
+  await expect(page.getByRole("alert")).toHaveCount(0);
 
   // One byte over the limit: refused in the page, never sent.
   await add(page, file("too large.pdf", bigPdf(FILE_MAX + 1)));
   const large = queue(page)
     .getByRole("listitem")
     .filter({ hasText: "too large.pdf" });
-  await expect(large.getByRole("alert")).toHaveText(
-    "The file is larger than 20 MB.",
-  );
+  await expect(large).toContainText("The file is larger than 20 MB.");
 
   // The same bytes under another name: one document, and the page says which.
   await add(page, file("dossier copy.md", DOSSIER));
@@ -591,10 +619,66 @@ test("a refused type, a file that is too large and a duplicate each say why", as
   await expect(documents(page).getByRole("listitem")).toHaveCount(before);
   await shots(page, "04-refused-and-duplicate");
 
-  await page.getByRole("button", { name: "Dismiss animation.gif" }).click();
-  await page.getByRole("button", { name: "Dismiss too large.pdf" }).click();
-  await page.getByRole("button", { name: "Dismiss dossier copy.md" }).click();
+  // Dismissed by keyboard: the focus follows to the next notice, then to the button that
+  // adds files, and is never lost with the row.
+  const dismiss = (name: string) =>
+    page.getByRole("button", { name: `Dismiss ${name}` });
+  await dismiss("animation.gif").focus();
+  await page.keyboard.press("Enter");
+  await expect(dismiss("too large.pdf")).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(dismiss("dossier copy.md")).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(queue(page)).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Choose files" }),
+  ).toBeFocused();
+});
+
+test("an upload stopped on its way leaves nothing, and the next file goes through", async () => {
+  const before = (await listed(context)).map((item) => item.name);
+  // A slow link, so the file is still leaving when it is stopped: 200 KiB a second, through
+  // Caddy like everything else.
+  const devtools = await context.newCDPSession(page);
+  await devtools.send("Network.enable");
+  const uploadSpeed = (bytesPerSecond: number) =>
+    devtools.send("Network.emulateNetworkConditions", {
+      offline: false,
+      latency: 0,
+      downloadThroughput: -1,
+      uploadThroughput: bytesPerSecond,
+    });
+  await uploadSpeed(200 * 1024);
+  try {
+    await add(page, file(STOPPED, bigPdf(8 * MIB), "application/pdf"));
+    const sending = queue(page)
+      .getByRole("listitem")
+      .filter({ hasText: STOPPED });
+    await expect(sending.getByRole("progressbar")).toBeVisible();
+    await sending.getByRole("button", { name: `Cancel ${STOPPED}` }).click();
+  } finally {
+    await uploadSpeed(-1);
+    await devtools.detach();
+  }
+  await expect(queue(page)).toHaveCount(0);
+  await expect(
+    page.getByRole("status").filter({ hasText: `Stopped sending ${STOPPED}.` }),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Choose files" }),
+  ).toBeFocused();
+
+  // The api let go of it: the same user's next file goes through at once. Were the stopped
+  // body still held, this one would wait for its turn and then be refused.
+  await add(
+    page,
+    file("after the stop.md", "# Notes\n\nAdded after a stop.\n"),
+  );
+  await expect(row(page, "after the stop.md")).toContainText("Ready", {
+    timeout: 10_000,
+  });
+  const names = (await listed(context)).map((item) => item.name);
+  expect([...names].sort()).toEqual([...before, "after the stop.md"].sort());
 });
 
 test("deleting asks first, says what it means, and the document is gone for good", async () => {
@@ -921,10 +1005,17 @@ test("no log holds a name or a word of a document", async () => {
     headers: { "X-Requested-With": "jobapp" },
   });
 
+  // The upload stopped on its way was never kept, long after the page looked again.
+  expect((await listed(context)).map((item) => item.name)).not.toContain(
+    STOPPED,
+  );
+
   const logs = compose("logs", "--no-color", "--no-log-prefix", "api", "caddy");
   // The requests of this journey are there (ids, sizes, rule names)...
   expect(logs).toContain("document stored");
   expect(logs).toContain('"rule": "gif"');
+  // ...the stopped upload among them: the api was still reading it when the browser left.
+  expect(logs).toContain('"rule": "upload-interrupted"');
   expect(logs).toContain("aws-access-key");
   expect(logs).toContain("/api/ingestion/documents");
   // ...and nothing of what the documents are called or say.
@@ -934,6 +1025,7 @@ test("no log holds a name or a word of a document", async () => {
     KEY_LIKE,
     "dossier.md",
     "dossier%20copy",
+    "stopped%20on",
     "cover%20letter",
     "Robin%20Example",
     "Acme Robotics",

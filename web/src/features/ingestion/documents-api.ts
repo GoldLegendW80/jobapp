@@ -13,7 +13,14 @@ import {
   type UploadOptions,
 } from "@/lib/api";
 
-export const DOCUMENT_KINDS = ["text", "pdf", "archive", "image"] as const;
+export const DOCUMENT_KINDS = [
+  "text",
+  "pdf",
+  "archive",
+  "image",
+  // a type the api does not know: shown as a file, never read
+  "other",
+] as const;
 export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
 
 export const DOCUMENT_STATUSES = [
@@ -195,27 +202,62 @@ export function countCharacters(text: string): number {
 }
 
 /**
+ * The statuses these routes answer with a sentence written for the user
+ * (api/app/ingestion/documents_router.py). The body of any other answer (a 500, a 403, the
+ * page of a proxy) was not written for the user and is never shown.
+ */
+const SPOKEN_STATUSES: ReadonlySet<number> = new Set([
+  400, 404, 408, 409, 413, 415, 422, 429, 503,
+]);
+const SIGNED_OUT = "Your session has ended. Sign in again.";
+const UNEXPECTED = "Something unexpected went wrong. Try again.";
+const TOO_SLOW = "The server took too long to answer. Try again.";
+const UNREADABLE =
+  "The server sent an answer this page cannot read. Reload the page.";
+
+/**
  * One sentence for a failed upload, paste, confirmation or deletion: the server's own when it
- * sent one (413, 415, 422, 408, 409, 503), else ours. `fileBytes` is the size limit to name
+ * wrote one for the user (SPOKEN_STATUSES), else ours. `fileBytes` is the size limit to name
  * when a proxy refused the body before the api saw it.
  */
 export function failureSentence(
   error: unknown,
   fileBytes: number = DEFAULT_LIMITS.file_bytes,
 ): string {
-  const detail = errorDetail(error);
-  if (detail) return detail;
-  if (!isApiError(error)) return "Something unexpected went wrong. Try again.";
+  if (!isApiError(error)) return UNEXPECTED;
   if (error.kind === "http") {
-    if (error.status === 413)
+    const status = error.status ?? 0;
+    const detail = SPOKEN_STATUSES.has(status) ? errorDetail(error) : undefined;
+    if (detail) return detail;
+    if (status === 413)
       return `The file is larger than ${megabytes(fileBytes)} MB.`;
+    if (status === 401) return SIGNED_OUT;
     return "The server could not take it. Try again in a moment.";
   }
-  if (error.kind === "timeout")
-    return "The server took too long to answer. Try again.";
-  if (error.kind === "parse")
-    return "The server sent an answer this page cannot read. Reload the page.";
+  if (error.kind === "timeout") return TOO_SLOW;
+  if (error.kind === "parse") return UNREADABLE;
   return "It did not go through. Check your connection and try again.";
+}
+
+/**
+ * One sentence for a list that could not be loaded. Nothing the server says about it is for
+ * the user to act on, so its words and its status are not shown.
+ */
+export function loadFailureSentence(error: unknown): string {
+  if (!isApiError(error)) return UNEXPECTED;
+  switch (error.kind) {
+    case "http":
+      return error.status === 401
+        ? SIGNED_OUT
+        : "The server could not answer. Try again in a moment.";
+    case "timeout":
+      return TOO_SLOW;
+    case "parse":
+      return UNREADABLE;
+    case "network":
+    case "aborted":
+      return "The server could not be reached. Check your connection and try again.";
+  }
 }
 
 /** Whole mebibytes, shown as "MB" (20 MiB is "20 MB" everywhere in the app). */

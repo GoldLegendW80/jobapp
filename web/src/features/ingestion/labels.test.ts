@@ -4,11 +4,14 @@ import { fakeDocument } from "@/test/ingestion";
 
 import {
   hasText,
+  isBeingRead,
   kindLabel,
   needsConfirmation,
   pagesLabel,
   sizeLabel,
   statusView,
+  WATCH_MS,
+  watchInterval,
 } from "./labels";
 
 describe("kindLabel", () => {
@@ -18,6 +21,36 @@ describe("kindLabel", () => {
     expect(kindLabel(fakeDocument({ kind: "pdf" }))).toBe("PDF");
     expect(kindLabel(fakeDocument({ kind: "archive" }))).toBe("Word or ZIP");
     expect(kindLabel(fakeDocument({ kind: "image" }))).toBe("Image");
+    expect(kindLabel(fakeDocument({ kind: "other" }))).toBe("File");
+  });
+});
+
+describe("watchInterval", () => {
+  const waiting = fakeDocument({
+    kind: "pdf",
+    status: "pending",
+    readable: false,
+  });
+  const beingRead = fakeDocument({ kind: "pdf", status: "pending" });
+
+  it("asks the list again every 3 seconds while a parser is at work", () => {
+    expect(WATCH_MS).toBe(3000);
+    expect(isBeingRead(beingRead)).toBe(true);
+    expect(watchInterval([fakeDocument(), beingRead])).toBe(3000);
+    expect(watchInterval([waiting, beingRead])).toBe(3000);
+  });
+
+  it("never asks again for a list where nothing will move by itself", () => {
+    expect(watchInterval(undefined)).toBe(false);
+    expect(watchInterval([])).toBe(false);
+    // Kept for a reader that does not exist yet: pending, but nothing reads it.
+    expect(isBeingRead(waiting)).toBe(false);
+    expect(watchInterval([waiting])).toBe(false);
+    const settled = (["done", "awaiting_transcription", "failed"] as const).map(
+      (status) => fakeDocument({ status }),
+    );
+    expect(settled.map(isBeingRead)).toEqual([false, false, false]);
+    expect(watchInterval([...settled, waiting])).toBe(false);
   });
 });
 
@@ -74,6 +107,18 @@ describe("statusView", () => {
     expect(view("archive").detail).toContain("Word files and archives");
     expect(view("image").detail).toContain("images");
     expect(view("text").detail).toContain("text files");
+  });
+
+  it("promises nothing for a type the api does not know", () => {
+    expect(
+      statusView(
+        fakeDocument({ kind: "other", status: "pending", readable: false }),
+      ),
+    ).toEqual({
+      label: "Waiting",
+      tone: "waiting",
+      detail: "This version cannot read this type of file. Your file is kept.",
+    });
   });
 
   it("pages kept as images wait for the agent", () => {

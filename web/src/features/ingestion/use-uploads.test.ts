@@ -58,13 +58,14 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 function queue() {
   const states: UploadsState[] = [];
   const kept: StoredDocument[] = [];
-  const created = new UploadQueue(
-    (state) => states.push(state),
-    (document) => kept.push(document),
-  );
+  const cancelled = vi.fn();
+  const created = new UploadQueue((state) => states.push(state), {
+    onStored: (document) => kept.push(document),
+    onCancelled: cancelled,
+  });
   const last = () => states.at(-1) ?? { items: [], announcement: "" };
   const view = () => last().items.map((item) => `${item.name}: ${item.state}`);
-  return { created, states, kept, last, view };
+  return { created, states, kept, cancelled, last, view };
 }
 
 describe("UploadQueue", () => {
@@ -201,7 +202,7 @@ describe("UploadQueue", () => {
   });
 
   it("cancels a file that waits without touching the one on its way", async () => {
-    const { created, view, last } = queue();
+    const { created, view, last, cancelled } = queue();
     created.add([file("a.md"), file("b.md"), file("c.md")], LIMIT);
     const waiting = last().items[1]?.id ?? -1;
     created.remove(waiting);
@@ -209,30 +210,39 @@ describe("UploadQueue", () => {
     calls[0]?.resolve(stored());
     await settle();
     expect(calls.map((call) => call.file.name)).toEqual(["a.md", "c.md"]);
+    // Nothing of it had left: there is nothing to look for on the server.
+    expect(cancelled).not.toHaveBeenCalled();
   });
 
-  it("cancels the file on its way and starts the next", async () => {
-    const { created, view, last, kept } = queue();
+  it("cancels the file on its way, tells the page, and starts the next", async () => {
+    const { created, view, last, kept, cancelled, states } = queue();
     created.add([file("a.md"), file("b.md")], LIMIT);
+    // Every byte had left: the server may keep the file although the page stopped waiting.
+    calls[0]?.progress(1);
     created.remove(last().items[0]?.id ?? -1);
     expect(calls[0]?.signal.aborted).toBe(true);
     await settle();
     expect(view()).toEqual(["b.md: uploading"]);
     expect(kept).toEqual([]);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+    expect(states.map((state) => state.announcement)).toContain(
+      "Stopped sending a.md.",
+    );
   });
 
   it("dismisses a notice", async () => {
-    const { created, last } = queue();
+    const { created, last, cancelled } = queue();
     created.add([file("empty.txt", 0)], LIMIT);
     created.remove(last().items[0]?.id ?? -1);
     expect(last().items).toEqual([]);
     created.remove(12345); // nothing by that id: nothing happens
     await settle();
     expect(last().items).toEqual([]);
+    expect(cancelled).not.toHaveBeenCalled();
   });
 
   it("stops everything when the page goes away, and says nothing more", async () => {
-    const { created, states, kept } = queue();
+    const { created, states, kept, cancelled } = queue();
     created.add([file("a.md"), file("b.md")], LIMIT);
     const before = states.length;
     created.stop();
@@ -243,6 +253,8 @@ describe("UploadQueue", () => {
     created.add([file("late.md")], LIMIT);
     expect(calls).toHaveLength(1);
     expect(kept).toEqual([]);
+    // Nobody is left to look at the list.
+    expect(cancelled).not.toHaveBeenCalled();
   });
 
   it("does not report a file whose answer arrives after the page went away", async () => {

@@ -38,6 +38,17 @@ export interface Uploads extends UploadsState {
   remove: (id: number) => void;
 }
 
+/** What the page is told about: every file kept, and every upload stopped on its way. */
+export interface UploadEvents {
+  /** The server kept the file, or already had it. */
+  onStored: (stored: StoredDocument) => void;
+  /**
+   * An upload on its way was stopped. Its bytes may all have arrived before the stop did, in
+   * which case the server keeps the file: the page looks at the list again.
+   */
+  onCancelled: () => void;
+}
+
 const SECRET_HINT =
   " It looks like it holds a password or a key: check it in the list below.";
 
@@ -55,7 +66,7 @@ export function storedSentence(name: string, stored: StoredDocument): string {
 /**
  * The files being added, outside React: sent one at a time, each with its progress, so two
  * large uploads never compete on a slow link and the server never holds more than it must.
- * `onChange` receives every new state, `onStored` every file the server kept or already had.
+ * `onChange` receives every new state, `events` what the page has to know (UploadEvents).
  */
 export class UploadQueue {
   #items: UploadItem[] = [];
@@ -65,14 +76,11 @@ export class UploadQueue {
   #nextId = 1;
   #stopped = false;
   readonly #onChange: (state: UploadsState) => void;
-  readonly #onStored: (stored: StoredDocument) => void;
+  readonly #events: UploadEvents;
 
-  constructor(
-    onChange: (state: UploadsState) => void,
-    onStored: (stored: StoredDocument) => void,
-  ) {
+  constructor(onChange: (state: UploadsState) => void, events: UploadEvents) {
     this.#onChange = onChange;
-    this.#onStored = onStored;
+    this.#events = events;
   }
 
   add(files: File[], fileBytes: number): void {
@@ -178,11 +186,15 @@ export class UploadQueue {
             });
           else this.#drop(id);
           this.#announcement = sentence;
-          if (!this.#stopped) this.#onStored(document);
+          if (!this.#stopped) this.#events.onStored(document);
         },
         (error: unknown) => {
           if (isApiError(error) && error.kind === "aborted") {
             this.#drop(id);
+            if (this.#stopped) return;
+            // True whether or not the last bytes had left: nothing is claimed about the file.
+            this.#announcement = `Stopped sending ${file.name}.`;
+            this.#events.onCancelled();
             return;
           }
           const message = failureSentence(error);
@@ -199,21 +211,24 @@ export class UploadQueue {
 }
 
 /** The upload queue of a page: its state, and the three things the page can ask of it. */
-export function useUploads(
-  onStored: (stored: StoredDocument) => void,
-): Uploads {
+export function useUploads(events: UploadEvents): Uploads {
   const [state, setState] = useState<UploadsState>({
     items: [],
     announcement: "",
   });
-  const stored = useRef(onStored);
+  const latest = useRef(events);
   useEffect(() => {
-    stored.current = onStored;
-  }, [onStored]);
+    latest.current = events;
+  }, [events]);
   const queue = useRef<UploadQueue>();
   useEffect(() => {
-    const created = new UploadQueue(setState, (document) => {
-      stored.current(document);
+    const created = new UploadQueue(setState, {
+      onStored: (document) => {
+        latest.current.onStored(document);
+      },
+      onCancelled: () => {
+        latest.current.onCancelled();
+      },
     });
     queue.current = created;
     return () => {

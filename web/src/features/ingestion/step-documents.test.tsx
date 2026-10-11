@@ -11,6 +11,7 @@ import { server } from "@/test/server";
 
 import { DELETE_PROMISE } from "./delete-document";
 import type { IngestionDocument } from "./documents-api";
+import { WATCH_MS } from "./labels";
 
 afterEach(() => {
   toast.dismiss();
@@ -58,6 +59,65 @@ describe("documents: the list", () => {
     ).toBeVisible();
     expect(screen.queryByText(/used$/)).toBeNull();
   });
+
+  it("says exactly who can see the documents", async () => {
+    await open();
+    expect(
+      screen.getByText(
+        /^Your documents stay on this server, and no other user of this app can see them\./,
+      ),
+    ).toBeVisible();
+    // The person who runs the server can read its database: "only you" would be false.
+    expect(screen.queryByText(/only you/i)).toBeNull();
+  });
+
+  it(
+    "asks again by itself while a document is being read, and only then",
+    async () => {
+      fakeSession(member);
+      const state = fakeDocuments([
+        fakeDocument({ name: "being.pdf", kind: "pdf", status: "pending" }),
+        // Kept for a reader that does not exist yet: pending too, and never watched.
+        fakeDocument({
+          name: "scan.png",
+          kind: "image",
+          status: "pending",
+          readable: false,
+        }),
+      ]);
+      let asked = 0;
+      server.use(
+        // Counts, then lets the fake api answer.
+        http.get("*/api/ingestion/documents", () => {
+          asked += 1;
+        }),
+      );
+      renderApp("/profile/fill");
+      await listed("being.pdf");
+      expect(row("being.pdf").getByText("Being read")).toBeVisible();
+      const first = asked;
+      expect(first).toBeGreaterThan(0);
+
+      // The parser finishes: nobody touches the page, and the list shows it.
+      state.items = state.items.map((item) =>
+        item.name === "being.pdf" ? { ...item, status: "done" } : item,
+      );
+      await waitFor(
+        () => {
+          expect(row("being.pdf").getByText("Ready")).toBeVisible();
+        },
+        { timeout: WATCH_MS + 2000 },
+      );
+      const second = asked;
+      expect(second).toBeGreaterThan(first);
+
+      // Nothing is being read any more: the file that waits does not keep the list asking.
+      expect(row("scan.png").getByText("Waiting")).toBeVisible();
+      await new Promise((resolve) => setTimeout(resolve, WATCH_MS + 500));
+      expect(asked).toBe(second);
+    },
+    3 * WATCH_MS + 5000,
+  );
 
   it("shows each document with its type, size, age and state", async () => {
     await open([
@@ -156,6 +216,11 @@ describe("documents: the list", () => {
     expect(
       await screen.findByText("Your documents could not be loaded"),
     ).toBeVisible();
+    // A sentence of ours: neither the server's words nor its status are for the user.
+    expect(
+      screen.getByText("The server could not answer. Try again in a moment."),
+    ).toBeVisible();
+    expect(screen.queryByText(/database down|The API|503/)).toBeNull();
     fail = false;
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("kept.md")).toBeVisible();
@@ -209,12 +274,17 @@ describe("documents: adding files", () => {
   it("shows the server's sentence for a type that is not read, until dismissed", async () => {
     const { user, input } = await open();
     await user.upload(input, new File(["GIF89a made up"], "anim.gif"));
-    const notice = await within(queue()).findByRole("alert");
-    expect(notice).toHaveTextContent(
-      "GIF images cannot be read. Convert the image to PNG or JPEG and add it again.",
-    );
+    expect(
+      await within(queue()).findByText(
+        "GIF images cannot be read. Convert the image to PNG or JPEG and add it again.",
+      ),
+    ).toBeVisible();
     expect(within(queue()).getByText("Not added")).toBeVisible();
-    expect(announced()).toContain("anim.gif was not added.");
+    // Said once to a screen reader: by the polite region, and by no alert beside it.
+    expect(announced()).toContain(
+      "anim.gif was not added. GIF images cannot be read.",
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("list", { name: "Your documents" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Dismiss anim.gif" }));
     expect(
@@ -227,19 +297,36 @@ describe("documents: adding files", () => {
     const big = new File(["x"], "huge.pdf");
     Object.defineProperty(big, "size", { value: LIMITS.file_bytes + 1 });
     await user.upload(input, big);
-    expect(await within(queue()).findByRole("alert")).toHaveTextContent(
-      "The file is larger than 20 MB.",
-    );
+    expect(
+      await within(queue()).findByText("The file is larger than 20 MB."),
+    ).toBeVisible();
     expect(state.uploads).toHaveLength(0);
   });
 
   it("refuses an empty file here", async () => {
     const { user, state, input } = await open();
     await user.upload(input, new File([], "empty.txt"));
-    expect(await within(queue()).findByRole("alert")).toHaveTextContent(
-      "The file is empty.",
-    );
+    expect(
+      await within(queue()).findByText("The file is empty."),
+    ).toBeVisible();
     expect(state.uploads).toHaveLength(0);
+  });
+
+  it("never shows the words of a server error", async () => {
+    const { user, input } = await open();
+    server.use(
+      http.post("*/api/ingestion/documents", () =>
+        HttpResponse.json({ detail: "internal server error" }, { status: 500 }),
+      ),
+    );
+    await user.upload(input, text("some words", "notes.md"));
+    expect(
+      await within(queue()).findByText(
+        "The server could not take it. Try again in a moment.",
+      ),
+    ).toBeVisible();
+    expect(screen.queryByText(/internal server error/i)).toBeNull();
+    expect(announced()).not.toMatch(/internal server error/i);
   });
 
   it("says when the same file was already there, and adds no second row", async () => {
@@ -263,7 +350,7 @@ describe("documents: adding files", () => {
     const { user, state, input } = await open();
     const gif = () => new File(["GIF89a made up"], "anim.gif");
     await user.upload(input, gif());
-    await within(queue()).findByRole("alert");
+    await within(queue()).findByText("Not added");
     await user.upload(input, gif());
     await waitFor(() => {
       expect(state.uploads).toHaveLength(2);
@@ -376,11 +463,65 @@ describe("documents: adding files", () => {
         ],
       },
     });
-    expect(await within(queue()).findByRole("alert")).toHaveTextContent(
-      "A folder cannot be added. Open it and add the files inside.",
-    );
+    expect(
+      await within(queue()).findByText(
+        "A folder cannot be added. Open it and add the files inside.",
+      ),
+    ).toBeVisible();
     await listed("beside.md");
     expect(state.uploads).toHaveLength(1);
+  });
+
+  it("keeps the keyboard focus when a notice is dismissed", async () => {
+    const { user, input } = await open();
+    await user.upload(input, [
+      new File([], "one.txt"),
+      new File([], "two.txt"),
+      new File([], "three.txt"),
+    ]);
+    const dismiss = (name: string) =>
+      screen.getByRole("button", { name: `Dismiss ${name}` });
+    // The row that takes the place of the one dismissed: the next one.
+    dismiss("one.txt").focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(dismiss("two.txt")).toHaveFocus();
+    });
+    // The last row has no next one: the one before it.
+    dismiss("three.txt").focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(dismiss("two.txt")).toHaveFocus();
+    });
+    // No row is left: the button that adds files.
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Choose files" }),
+      ).toHaveFocus();
+    });
+    expect(
+      screen.queryByRole("list", { name: "Files being added" }),
+    ).toBeNull();
+  });
+
+  it("does not take the focus back from where the user went meanwhile", async () => {
+    const { user, input } = await open();
+    await user.upload(input, [
+      new File([], "one.txt"),
+      new File([], "two.txt"),
+    ]);
+    const box = screen.getByLabelText("Or paste a text");
+    const one = screen.getByRole("button", { name: "Dismiss one.txt" });
+    // A click that leaves the focus elsewhere, as a pointer does in some browsers.
+    box.focus();
+    fireEvent.click(one);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Dismiss one.txt" }),
+      ).toBeNull();
+    });
+    expect(box).toHaveFocus();
   });
 
   it("opens the system's file picker from the button, by keyboard too", async () => {
@@ -713,9 +854,12 @@ describe("documents: deleting", () => {
     expect(
       dialog.getByText(/will be deleted for good, with its text/),
     ).toBeVisible();
+    // True today: no number of days is promised while the server keeps its backups longer
+    // than the 7 days the plan aims for (delete-document.tsx says when the sentence changes).
     expect(DELETE_PROMISE).toBe(
-      "Gone from the app now, and from the server's backups within 7 days.",
+      "Gone from the app now. The server's backups still hold a copy for a while, until newer backups replace them.",
     );
+    expect(DELETE_PROMISE).not.toMatch(/\d/);
     expect(dialog.getByText(DELETE_PROMISE)).toBeVisible();
     expect(state.deleted).toEqual([]);
   });

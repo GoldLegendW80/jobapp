@@ -69,7 +69,9 @@ function Preview({ document }: { document: IngestionDocument }) {
   return (
     <>
       <DialogHeader>
-        <DialogTitle className="pr-6 break-words">{document.name}</DialogTitle>
+        <DialogTitle className="pr-6 break-words">
+          <bdi>{document.name}</bdi>
+        </DialogTitle>
         <DialogDescription>
           The text kept from this document, as an agent will read it.
         </DialogDescription>

@@ -798,8 +798,10 @@ call.
 ingestion G1): three steps, of which the second, Documents, is built; the two others are listed as
 "Soon" until their tasks land. A user adds files (dropped or chosen, sent one at a time with their
 progress) or pastes a text, and sees each document with its type, size and state, the text kept
-from it, and a Delete that asks first. Documents live in Postgres (`ingestion_documents`), are
-visible to their owner alone, and deleting one is a hard delete.
+from it, and a Delete that asks first. Documents live in Postgres (`ingestion_documents`), no
+other user of the app can see them (whoever runs the server can read its database and its
+backups), and deleting one is a hard delete: gone from the app at once, and from the backups when
+newer ones have replaced those that hold it.
 
 - **Type:** decided from the first bytes of the file, never from its name or a declared type.
   Text (UTF-8, or UTF-16 with a BOM) is read at once and its bytes are not kept. A PDF, a ZIP
@@ -811,7 +813,12 @@ visible to their owner alone, and deleting one is a hard delete.
 - **The upload route:** `POST /api/ingestion/documents` takes the file as the raw body, its name
   in `X-Filename` (RFC 5987), and is the one route on which Caddy accepts 20 MiB; every other
   route keeps 10 MiB (`caddy/Caddyfile`). The api reads the body into one buffer, counted and
-  hashed as it arrives, at most two uploads at a time, and sends it to Postgres in pieces.
+  hashed as it arrives, and sends it to Postgres in pieces.
+- **Who may send:** one body per user at a time (a file or a paste; a second one waits 20 s, then
+  429), and two files at a time for the whole api process (then 503), so one account holds one
+  of the two places at most. A body has to keep arriving: 256 KiB every 30 s and 10 minutes in
+  all for a file, 60 s in all for a paste, else 408. The quota is checked before the bytes go to
+  Postgres, and again under the user's lock.
 - **Secrets:** a text that matches the shape of a password or an access key
   (`api/app/ingestion/secrets.py`) is flagged; the user checks it, keeps it or deletes it.
 - **Logs:** ids, sizes, types and rule names only. Caddy drops `X-Filename` from its access log.
