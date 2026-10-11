@@ -24,13 +24,46 @@
 		output stdout
 		format json
 	}
+	# Connection timeouts against slow clients (issue #100). These are the Caddy defaults made
+	# shorter: a caller with no session that opens a connection and then sends its headers or its
+	# body one slow byte at a time, or a trickle, no longer ties up a connection and the api
+	# behind it for a minute at a time.
+	#   read_header 10s   headers must arrive within 10s, else the connection is dropped (default
+	#                     1m). A real client sends them in milliseconds.
+	#   read_body_idle 15s 1024   a request body that brings nothing for 15s, OR that never
+	#                     sustains 1024 bytes/second averaged from the start, is aborted (default
+	#                     1m and no rate, so a trickle of one byte now and then was never cut).
+	#                     The deadline resets on real progress and the rate allowance grows with
+	#                     the bytes sent, so an honest upload of several MiB on a slow line is
+	#                     unaffected (its allowance runs to many minutes); only a stall or a near
+	#                     zero trickle is cut.
+	#   idle 60s          an idle keep-alive connection waiting for its next request is closed
+	#                     after 60s (default 5m). An event stream is an active response, not an
+	#                     idle connection, so it is never cut by this (tested).
+	# Writes keep their defaults: write_idle stays 1m, no write rate, so a long lived event
+	# stream (a heartbeat well inside a minute) is never cut. These must be set per server: a
+	# `servers` block with an address replaces the global one rather than merging, so the same
+	# timeouts appear in the :8080 block below. The published :80 listener takes them from here.
+	servers {
+		timeouts {
+			read_header 10s
+			read_body_idle 15s 1024
+			idle 60s
+		}
+	}
 	# Tunnel listener only. Every container of the Compose network is a private peer; tailscale is
 	# the only one that connects here. Strict: X-Forwarded-For is read right to left and the first
-	# untrusted address wins, so even a list could not put a visitor's value first.
+	# untrusted address wins, so even a list could not put a visitor's value first. The timeouts
+	# above are repeated here because this block replaces the global `servers` one for :8080.
 	servers :8080 {
 		trusted_proxies static private_ranges
 		trusted_proxies_strict
 		client_ip_headers X-Forwarded-For
+		timeouts {
+			read_header 10s
+			read_body_idle 15s 1024
+			idle 60s
+		}
 	}
 }
 
@@ -64,14 +97,36 @@
 
 	encode zstd gzip
 
-	# Largest request body accepted anywhere, 10 MiB; raise it per route if uploads need more.
-	# A declared Content-Length above it is refused with 413 before anything is proxied; a chunked
-	# body is cut at the limit while it streams, and the read fails with 413.
-	request_body {
+	# --- request body limits by route class (issue #100) ----------------------------------------
+	# The only routes a caller with no session can reach are the public ones under /api/auth/
+	# (sign in, sign out, invite or reset link check and accept); their bodies are a few hundred
+	# bytes. Capping them small at the edge stops a caller with no session from making the api
+	# buffer a large body: fifty stalled 9 MiB logins were enough to reach the api's 512 MiB
+	# limit before this. Every other route keeps the default, 10 MiB (raise it per route if an
+	# upload needs more, as the document upload does, below or in a later change).
+	#
+	# Each request matches exactly one request_body (and one error), chosen by a mutually
+	# exclusive expression, so a body is capped once. The match is on the raw decoded path with
+	# startsWith, not the `path` matcher, which lowercases and cleans the path first: here that is
+	# safe because an over-match only tightens the public 64 KiB limit and never loosens the
+	# default. A declared Content-Length above the limit is refused with 413 before anything is
+	# proxied; a chunked body is cut at the limit while it streams, and the read fails with 413.
+	# This block is kept together to ease the merge with the document upload limit of pull
+	# request #98, which adds a 20 MiB exception on POST /api/ingestion/documents as a further,
+	# mutually exclusive tier between the two here.
+	@public_body expression `{http.request.uri.path}.startsWith("/api/auth/")`
+	@default_body expression `!({http.request.uri.path}.startsWith("/api/auth/"))`
+	request_body @public_body {
+		max_size 64KiB
+	}
+	request_body @default_body {
 		max_size 10MiB
 	}
-	@body_too_large expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 10485760`
-	error @body_too_large 413
+	@public_too_large expression `{http.request.uri.path}.startsWith("/api/auth/") && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 65536`
+	@default_too_large expression `!({http.request.uri.path}.startsWith("/api/auth/")) && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 10485760`
+	error @public_too_large 413
+	error @default_too_large 413
+	# --- end request body limits -----------------------------------------------------------------
 
 	import security_headers
 

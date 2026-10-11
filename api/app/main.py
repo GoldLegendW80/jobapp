@@ -20,6 +20,7 @@ from app.agents.crypto import Keyring
 from app.agents.live import RedisLiveStore
 from app.agents.ratelimit import RateLimiter
 from app.agents.verify import Verifier
+from app.body_limit import LimitRequestBodyMiddleware
 from app.config import Settings, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity import deps as identity_deps
@@ -130,7 +131,11 @@ def create_app(
     app.state.credential_saves = RateLimiter(agents_router.SAVE_LIMIT, agents_router.WINDOW_S)
     app.state.credential_checks = RateLimiter(agents_router.VERIFY_LIMIT, agents_router.WINDOW_S)
 
-    # Middleware added last runs first: request_log, then CSRF, then the cookie writer.
+    # Middleware added last runs first: request_log, then CSRF, then the cookie writer, then the
+    # body-size limit closest to the router. The body limit is added first so it is the innermost
+    # user middleware: it wraps the request body read that the router does (before any dependency
+    # runs, issue #100), yet its 413 still passes out through request_log and is logged.
+    app.add_middleware(LimitRequestBodyMiddleware)
     app.middleware("http")(identity_deps.session_cookie_middleware)
     app.middleware("http")(identity_deps.csrf_middleware)
 

@@ -87,4 +87,11 @@ USER app:app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"]
-CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# --limit-concurrency bounds how many requests the api handles at once, 503 beyond it, so a flood
+# of connections cannot pile up unbounded on the 512 MiB Jetson; 256 leaves wide room for a few
+# users with several tabs and long lived event streams while still capping a flood (issue #100).
+# --timeout-keep-alive 5 keeps an idle keep-alive connection short (uvicorn's default, made
+# explicit). h11's default request-line and header limits (64 KiB) bound a slow or oversized
+# header. The request body is bounded per route class by LimitRequestBodyMiddleware and, at the
+# edge, by caddy/Caddyfile.
+CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*", "--limit-concurrency", "256", "--timeout-keep-alive", "5"]
