@@ -180,7 +180,10 @@ def parse_header(line: bytes) -> tuple[str, int, str]:
     if size > MAX_SIZE:
         raise RefusedError("too_large")
     # Written again by this process: the child reads what the server wrote, in ASCII.
-    return kind, size, json.dumps(options, separators=(",", ":"))
+    try:
+        return kind, size, json.dumps(options, separators=(",", ":"))
+    except (ValueError, RecursionError):  # nesting the encoder does not follow
+        raise RefusedError("bad_request") from None
 
 
 def header_line(code: str, length: int = 0) -> bytes:
@@ -501,18 +504,19 @@ def check(port: int, timeout_s: float = 5.0) -> list[str]:
 # --- the process --------------------------------------------------------------------------------
 
 
-def lock_down_server() -> None:
+def lock_down_server(libc=None, res=resource, uid: int | None = None) -> None:
     """What the server does to itself before it listens: no core file, and non dumpable, so
     that a child (same uid, same PID namespace) can neither attach to it nor read its
     /proc/<pid>/environ or its memory. The children are started by fork and exec as before:
     the attribute concerns who may look at this process, not what it may do."""
-    if os.getuid() == 0:
+    if (os.getuid() if uid is None else uid) == 0:
         raise SystemExit("the parser must not run as root: RLIMIT_NPROC would not hold")
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    libc = ctypes.CDLL(None, use_errno=True)
-    word = ctypes.c_ulong
-    libc.prctl.argtypes = (ctypes.c_int, word, word, word, word)
-    libc.prctl.restype = ctypes.c_int
+    res.setrlimit(res.RLIMIT_CORE, (0, 0))
+    if libc is None:  # pragma: no cover, Linux: the service itself, run in the container
+        libc = ctypes.CDLL(None, use_errno=True)
+        word = ctypes.c_ulong
+        libc.prctl.argtypes = (ctypes.c_int, word, word, word, word)
+        libc.prctl.restype = ctypes.c_int
     if libc.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
         raise SystemExit("PR_SET_DUMPABLE failed: the parser does not start dumpable")
 
