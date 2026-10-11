@@ -4,7 +4,8 @@ Not product code and not a test of CI: evidence that the tests of api/tests/inge
 notice a rule that stops holding. Each entry replaces one piece of app/ingestion/citations.py
 by a wrong one (no context around a span, a chain read backward, floats, an address that ends
 anywhere), runs the tests, and puts the file back. It matches the text of the module as it was
-on 2026-10-11: after a refactoring an entry may no longer apply, and says so.
+on 2026-10-11 after the first review of pull request #97, whose findings each have their
+entries at the end: after a refactoring an entry may no longer apply, and says so.
 
     cd api && uv run python ../tasks/evidence/ingestion-g4/mutations.py \
         > ../tasks/evidence/ingestion-g4/mutations.txt
@@ -68,20 +69,30 @@ MUTATIONS = [
         "yield _Run(run.group(), False, form)",
     ),
     (
-        "an address ends anywhere",
-        "    return rest < stop and not _address_char(text[rest], _ADDRESS_AFTER)",
+        "a URL ends anywhere",
+        "    return rest < stop and not _address_char(text[rest], _URL_AFTER)",
         "    return True",
     ),
     (
-        "an address starts anywhere",
-        "    if at == 0 or not _address_char(text[at - 1], _ADDRESS_BEFORE):"
+        "an email ends anywhere",
+        '    return rest < stop and text[rest] != "@" and not _address_char(text[rest], "-_")',
+        "    return True",
+    ),
+    (
+        "a URL starts anywhere",
+        "    if not _address_char(text[at - 1], _URL_JOINS):"
         + N
         + "        return True",
         "    if True:" + N + "        return True",
     ),
     (
+        "an email starts anywhere",
+        '    return not _address_char(before, "")',
+        "    return True",
+    ),
+    (
         "the words of a name not kept",
-        "                and _words_kept(text, bones, at, wanted)" + N,
+        "                and _words_kept(read, at, wanted, norm)" + N,
         "",
     ),
     (
@@ -172,8 +183,8 @@ MUTATIONS = [
     ),
     (
         "a version in the value is a number",
-        "                run.version or not readings(run.text) & self._readings",
-        "                not readings(run.text) & self._readings",
+        "                run.version or not readings(run.text) <= self._readings",
+        "                not readings(run.text) <= self._readings",
     ),
     (
         "a version in the source is a number",
@@ -182,7 +193,11 @@ MUTATIONS = [
         + "                        found |= readings(run.text)",
         "                    found |= readings(run.text)",
     ),
-    ("format characters kept", '        category == "Cf"' + N, "        False" + N),
+    (
+        "format characters kept",
+        '        (category == "Cf" and char not in _FORMAT_SIGNS)' + N,
+        "        False" + N,
+    ),
     (
         "no fold before NFKC",
         "    for char in cluster.translate(_FOLDS):",
@@ -230,8 +245,8 @@ MUTATIONS = [
     ),
     (
         "the scheme of a URL anywhere",
-        "                return head == 0 or not _address_char(text[head - 1], _ADDRESS_BEFORE)",
-        "                return True",
+        "            return head == 0 or not _address_char(text[head - 1], _URL_JOINS)",
+        "            return True",
     ),
     (
         "a date value of any shape",
@@ -240,8 +255,8 @@ MUTATIONS = [
     ),
     (
         "years of any size",
-        'if token.kind == "d" and len(token.text) == 4}',
-        'if token.kind == "d" and len(token.text) >= 4}',
+        'tokens[at].kind == "d" and len(tokens[at].text) == size',
+        'tokens[at].kind == "d" and len(tokens[at].text) >= size',
     ),
     (
         "a day of any size",
@@ -313,12 +328,166 @@ MUTATIONS = [
         "    glued = source[low:first] + source[last + 1 : high]",
         '    glued = ""',
     ),
+    # --- the first review of pull request #97
+    (
+        "B1: one number of a run of the value carries the others",
+        "not readings(run.text) <= self._readings",
+        "not readings(run.text) & self._readings",
+    ),
+    (
+        "S4: a decimal with four decimals is cut into pieces",
+        "        if short or (len(fraction) >= 4 and not _two_numbers(whole, fraction, separators[0])):",
+        "        if short:",
+    ),
+    (
+        "B2: a sign of a local part before an address is never looked past",
+        "    while low > floor and text[low - 1] in _LOCAL_SIGNS and text[low - 1] not in _LOCAL_JOINS:",
+        "    while False:",
+    ),
+    (
+        "B2: a sign that joins is looked past as a quote is",
+        " and text[low - 1] not in _LOCAL_JOINS:",
+        ":",
+    ),
+    (
+        "B2: an address is compared under the case fold",
+        "        return written.lower() == proposed.lower()",
+        "        return written.casefold() == proposed.casefold()",
+    ),
+    (
+        "B2: the path of a URL in any case",
+        "    return written[:cut].lower() == proposed[:cut].lower() and written[cut:] == proposed[cut:]",
+        "    return written.lower() == proposed.lower()",
+    ),
+    (
+        "B2: the host of a URL as written",
+        "    return written[:cut].lower() == proposed[:cut].lower() and written[cut:] == proposed[cut:]",
+        "    return written == proposed",
+    ),
+    (
+        "B2: an underscore after a domain ends it",
+        'not _address_char(text[rest], "-_")',
+        'not _address_char(text[rest], "-")',
+    ),
+    (
+        "B2: the colon of a scheme or of a port bounds a URL",
+        '        return not (text.startswith("//", at) or _port(text, at))',
+        "        return True",
+    ),
+    (
+        "N4: the user and the password of a URL are an email",
+        "        return not _user_info(text, low - 1)",
+        "        return True",
+    ),
+    (
+        "N7: the scheme of a URL is left out of an email too",
+        "    head = _URL_HEAD.match(wanted) if url else None",
+        "    head = _URL_HEAD.match(wanted)",
+    ),
+    (
+        "S5: an address cut by a line at a hyphen is an address",
+        "            if not _cut_by_a_line(text, at, end) and starts(text, at) and ends(text, end):",
+        "            if starts(text, at) and ends(text, end):",
+    ),
+    (
+        "S1: four digits glued to a decimal are a year",
+        "                if end > at + 1 and not self._dotted_date(at, end):",
+        "                if False:",
+    ),
+    (
+        "S1: four digits of a phone number are a year",
+        "                        if max(beside) >= 3:",
+        "                        if False:",
+    ),
+    (
+        "S1: a month word takes a year cut out of a number",
+        "        return self._digits(at, 4) and at not in self.cut",
+        "        return self._digits(at, 4)",
+    ),
+    (
+        "S2: a name goes across a blank line or two columns",
+        "            if where in read.hard or (glued and where in read.soft and not cut_word):",
+        "            if glued and where in read.soft and not cut_word:",
+    ),
+    (
+        "S2: one word of a value goes across a line break",
+        "            if where in read.hard or (glued and where in read.soft and not cut_word):",
+        "            if where in read.hard:",
+    ),
+    (
+        "S2: a spaced dash asks the value for nothing",
+        """            if glued or ("-" in gap and "-" not in typed):""",
+        "            if glued:",
+    ),
+    (
+        "S3: a format character that has a glyph is no break",
+        '        if category == "Cc" or char in _FORMAT_SIGNS:',
+        '        if category == "Cc":',
+    ),
+    (
+        "N3: punctuation alone is a name",
+        "    if not any(char.isalnum() for char in wanted.text):",
+        "    if not size:",
+    ),
+    (
+        "N1: every name makes the skeleton of every span again",
+        "        if self._reads is None:",
+        "        if True:",
+    ),
+    (
+        "decision: a range of MM/YY up to 12 is read",
+        """    return atom.kind != "short" or atom.year > 12""",
+        "    return True",
+    ),
+    (
+        "decision: a range that is not read is refused as a month",
+        "    if (year % 100, month) in facts.unread:" + N,
+        "    if False:" + N,
+    ),
+    (
+        "N6: no hyphen between a month word and its year",
+        """        if self._is(at, "-") and tokens[at].glued and self._year(at + 1) and tokens[at + 1].glued:""",
+        "        if False:",
+    ),
+    (
+        "N6: a spaced slash is read inside a longer date",
+        "            and not goes_on" + N,
+        "",
+    ),
+    (
+        "N6: a day and its month take the year of a date with another separator",
+        "        if whole is None or whole[4] != separator:",
+        "        if whole is None:",
+    ),
+    (
+        "N6: a range that goes backward shares its year",
+        " and (its_month, its_day) < (month, day):",
+        ":",
+    ),
+    (
+        "N2: a key that is not text is printed",
+        """                below = (f"{path}.{key}" if path else key) if isinstance(key, str) else None""",
+        """                below = f"{path}.{key}" if path else key""",
+    ),
+    (
+        "N2: a path of the table of types that is not text is read",
+        "        if not isinstance(path, str):" + N,
+        "        if False:" + N,
+    ),
+    (
+        "N2: a document that is not text is prepared",
+        "    return document if isinstance(document, Document) else None",
+        "    return document",
+    ),
 ]
 
 
 def passes(paths: list[str]) -> bool:
     done = subprocess.run(
-        [sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", *paths],
+        [
+            *(sys.executable, "-m", "pytest", "-x", "-q", "-n", "2"),
+            *("-p", "no:cacheprovider", *paths),
+        ],
         cwd=API,
         capture_output=True,
         text=True,
