@@ -373,8 +373,8 @@ test("text files are read at once: chosen by keyboard, then dropped", async () =
     file("dossier.md", DOSSIER, "text/markdown"),
     file("skills.json", SKILLS, "application/json"),
   ]);
-  await expect(row(page, "dossier.md")).toContainText("Read");
-  await expect(row(page, "skills.json")).toContainText("Read");
+  await expect(row(page, "dossier.md")).toContainText("Ready");
+  await expect(row(page, "skills.json")).toContainText("Ready");
   await expect(row(page, "dossier.md")).toContainText(/Text, \d+ bytes, added/);
   // The result is announced politely to a screen reader.
   await expect(
@@ -401,7 +401,7 @@ test("text files are read at once: chosen by keyboard, then dropped", async () =
           }),
         );
     }, LETTER);
-  await expect(row(page, "cover letter.txt")).toContainText("Read");
+  await expect(row(page, "cover letter.txt")).toContainText("Ready");
   await expect(documents(page).getByRole("listitem")).toHaveCount(3);
 });
 
@@ -454,7 +454,7 @@ test("a pasted text becomes a document", async () => {
   await addText.click();
   await expect(page.getByText("Text added.", { exact: true })).toBeVisible();
   await expect(box).toHaveValue("");
-  await expect(row(page, "Pasted text")).toContainText("Read");
+  await expect(row(page, "Pasted text")).toContainText("Ready");
   await expect(row(page, "Pasted text")).toContainText(
     /Pasted text, \d+ bytes/,
   );
@@ -472,7 +472,7 @@ test("a pasted text becomes a document", async () => {
 
 test("the preview shows the text kept, a part at a time", async () => {
   await add(page, file("project notes.txt", LONG, "text/plain"));
-  await expect(row(page, "project notes.txt")).toContainText("Read");
+  await expect(row(page, "project notes.txt")).toContainText("Ready");
   await row(page, "dossier.md")
     .getByRole("button", { name: "Preview dossier.md" })
     .click();
@@ -537,13 +537,15 @@ test("a text that looks like it holds a key asks to be checked, kept or deleted"
         "deployment notes.txt added. It looks like it holds a password or a key",
     }),
   ).toHaveCount(1);
+  // Its text is there, but it is not ready for an agent until the user has looked.
+  await expect(notes).toContainText("To check");
   await shots(page, "03-documents");
   await warning.getByRole("button", { name: "It is fine, keep it" }).click();
   await expect(warning).toHaveCount(0);
-  await expect(notes).toContainText("Read");
+  await expect(notes).toContainText("Ready");
   // Kept after a reload.
   await page.reload();
-  await expect(row(page, "deployment notes.txt")).toContainText("Read");
+  await expect(row(page, "deployment notes.txt")).toContainText("Ready");
   await expect(
     page.getByRole("group", { name: /Possible secret/ }),
   ).toHaveCount(0);
@@ -638,7 +640,7 @@ test("deleting asks first, says what it means, and the document is gone for good
   // The list as it was left, after a reload.
   await page.reload();
   await expect(documents(page).getByRole("listitem")).toHaveCount(after.length);
-  await expect(row(page, "dossier.md")).toContainText("Read");
+  await expect(row(page, "dossier.md")).toContainText("Ready");
   await expect(row(page, "CV Robin Example.pdf")).toContainText("Waiting");
   await expect(
     page.getByText(/^\d+ documents, .+ of 100 MB used$/),

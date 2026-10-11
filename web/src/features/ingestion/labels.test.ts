@@ -34,8 +34,26 @@ describe("sizeLabel", () => {
 });
 
 describe("statusView", () => {
-  it("a document that was read is simply read", () => {
-    expect(statusView(fakeDocument())).toEqual({ label: "Read", tone: "done" });
+  it("a document whose text is there is ready", () => {
+    expect(statusView(fakeDocument())).toEqual({
+      label: "Ready",
+      tone: "done",
+    });
+    expect(
+      statusView(
+        fakeDocument({
+          secret_warning: true,
+          secret_confirmed_at: "2026-10-10T10:00:00Z",
+        }),
+      ),
+    ).toEqual({ label: "Ready", tone: "done" });
+  });
+
+  it("a document the user still has to look at is not ready yet", () => {
+    expect(statusView(fakeDocument({ secret_warning: true }))).toEqual({
+      label: "To check",
+      tone: "waiting",
+    });
   });
 
   it("a file a parser is working on is being read", () => {

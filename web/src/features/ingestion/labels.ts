@@ -45,7 +45,10 @@ const NOT_READ_YET: Record<IngestionDocument["kind"], string> = {
 export function statusView(document: IngestionDocument): StatusView {
   switch (document.status) {
     case "done":
-      return { label: "Read", tone: "done" };
+      // Its text is there. An agent may read it, unless the user still has to look at it.
+      return needsConfirmation(document)
+        ? { label: "To check", tone: "waiting" }
+        : { label: "Ready", tone: "done" };
     case "pending":
       return document.readable
         ? { label: "Being read", tone: "working" }

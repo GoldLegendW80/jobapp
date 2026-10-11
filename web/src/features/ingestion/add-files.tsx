@@ -83,8 +83,8 @@ export function AddFiles({
           Drop files here, or choose them
         </h3>
         <p id={hintId} className="max-w-prose text-sm text-muted-foreground">
-          A CV, a cover letter, notes on your projects, a LinkedIn export. PDF,
-          Word, text, Markdown, JSON, CSV, PNG or JPEG, up to{" "}
+          A CV, a cover letter, notes on your projects, your LinkedIn export
+          (the ZIP). PDF, Word, text, Markdown, JSON, CSV, PNG or JPEG, up to{" "}
           {megabytes(limits.file_bytes)} MB each.
         </p>
         <input

@@ -71,7 +71,7 @@ describe("documents: the list", () => {
     expect(rows()).toHaveLength(2);
     expect(row("dossier.md").getByText(/Text, 34 KB, added/)).toBeVisible();
     expect(row("dossier.md").getByText("3 hours ago")).toBeVisible();
-    expect(row("dossier.md").getByText("Read")).toBeVisible();
+    expect(row("dossier.md").getByText("Ready")).toBeVisible();
     expect(
       row("Pasted text").getByText(/Pasted text, 812 bytes/),
     ).toBeVisible();
@@ -167,7 +167,7 @@ describe("documents: adding files", () => {
     const { user, state, input } = await open();
     await user.upload(input, text("# Robin Example\n", "dossier.md"));
     await listed("dossier.md");
-    expect(row("dossier.md").getByText("Read")).toBeVisible();
+    expect(row("dossier.md").getByText("Ready")).toBeVisible();
     expect(state.uploads).toHaveLength(1);
     expect(state.uploads[0]?.filename).toBe("UTF-8''dossier.md");
     // The file left the queue, and the result was announced politely.
@@ -413,7 +413,7 @@ describe("documents: pasting a text", () => {
     expect(state.pastes).toEqual([
       "Robin Example\nApplied AI engineer in Nantes",
     ]);
-    expect(row("Pasted text").getByText("Read")).toBeVisible();
+    expect(row("Pasted text").getByText("Ready")).toBeVisible();
   });
 
   it("counts an emoji as one character, as the server does", async () => {
@@ -527,6 +527,8 @@ describe("documents: the secret warning", () => {
     expect(
       within(warning).getByText(/No agent reads this document until you say/),
     ).toBeVisible();
+    // Not ready for an agent while the user has not looked.
+    expect(row("env notes.txt").getByText("To check")).toBeVisible();
     await user.click(
       within(warning).getByRole("button", { name: "It is fine, keep it" }),
     );
@@ -536,7 +538,7 @@ describe("documents: the secret warning", () => {
       ).toBeNull();
     });
     expect(state.items[0]?.secret_confirmed_at).not.toBeNull();
-    expect(row("env notes.txt").getByText("Read")).toBeVisible();
+    expect(row("env notes.txt").getByText("Ready")).toBeVisible();
   });
 
   it("is gone for a document already confirmed", async () => {
