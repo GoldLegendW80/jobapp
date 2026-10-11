@@ -1014,40 +1014,69 @@ def test_a_bound_private_hooked_run_stopped_on_its_budget(
 
 # --- what a caller may conclude from a failure ----------------------------------------------------
 
-VERDICTS = {
-    "NO_CREDENTIAL": True,
-    "UNREADABLE": True,
-    "REFUSED": True,
-    "BUSY": True,
-    "UNKNOWN_AGENT": False,
-    "THREAD_GONE": False,
-    "BINDING_GONE": False,
-    "TIME_LIMIT": False,
-    "TURN_LIMIT": False,
-    "TOKEN_LIMIT": False,
-    "NO_RESULT": False,
-    "FAILED": False,
-    "NO_CLI": False,
-    "NO_START": False,
-    "PROCESS": False,
-    "INTERNAL": False,
+# Whose failure each message of the runner is: the provider's (the user fixes the credential and
+# resumes), the box's (this worker could not run the agent: a chain pauses after the first one,
+# decided by the orchestrator on 2026-10-11) or the run's own (the chain goes on).
+KINDS = {
+    "NO_CREDENTIAL": "provider",
+    "UNREADABLE": "provider",
+    "REFUSED": "provider",
+    "BUSY": "provider",
+    "NO_CLI": "box",
+    "NO_START": "box",
+    "PROCESS": "box",
+    "INTERNAL": "box",
+    "UNKNOWN_AGENT": "box",
+    "THREAD_GONE": "own",
+    "BINDING_GONE": "own",
+    "TIME_LIMIT": "own",
+    "TURN_LIMIT": "own",
+    "TOKEN_LIMIT": "own",
+    "NO_RESULT": "own",
+    "FAILED": "own",
 }
 
 
-def test_is_provider_failure_on_every_message_of_the_runner() -> None:
+def test_whose_failure_every_message_of_the_runner_is() -> None:
     constants = {
         name: value
         for name, value in vars(failures).items()
         if name.isupper() and isinstance(value, str)
     }
-    # A message added to the module needs its verdict here.
-    assert set(constants) == set(VERDICTS) | {"API_ERROR"}
+    # A message added to the module needs its kind here.
+    assert set(constants) == set(KINDS) | {"API_ERROR"}
     filled = {"minutes": "15 minutes", "turns": 40, "reason": "error_during_execution", "code": 1}
-    for name, expected in VERDICTS.items():
+    for name, kind in KINDS.items():
         message = constants[name].format(**filled)
-        assert runner.is_provider_failure(message) is expected, name
+        assert runner.is_provider_failure(message) is (kind == "provider"), name
+        assert failures.is_box_failure(message) is (kind == "box"), name
         assert getattr(runner, name) is constants[name]  # the runner's names are these objects
     assert runner.is_provider_failure is failures.is_provider_failure
+
+
+def test_is_box_failure() -> None:
+    """The worker could not run the agent, whatever the run was about."""
+    for code in (1, 137, -9, "unknown"):
+        assert failures.is_box_failure(runner.PROCESS.format(code=code)) is True
+    for message in (
+        None,
+        "",
+        runner.PROCESS.format(code="1 and more"),
+        runner.PROCESS + " ",
+        "x" + runner.NO_CLI,
+        runs.QUEUE_DOWN,  # the provider's side of a chain: the user waits and resumes
+        runs.INTERRUPTED,  # a worker restart: the chain runs the step once more by its own rule
+        runs.STOPPED,
+        runs.LOST,
+        runs.STALE,
+    ):
+        assert failures.is_box_failure(message) is False
+    # No status of the API is the box's, and nothing is both the box's and the provider's.
+    for status in (400, 401, 413, 422, 429, 500, 529):
+        message = runner.API_ERROR.format(status=status)
+        assert failures.is_box_failure(message) is False
+    for message in (*failures._BOX, runner.PROCESS.format(code=1)):
+        assert failures.is_provider_failure(message) is False
 
 
 @pytest.mark.parametrize(
@@ -1087,6 +1116,7 @@ def test_the_api_reads_the_messages_without_the_sdk() -> None:
         "import sys\n"
         "from app.agents import definitions, failures, runs\n"
         "assert failures.is_provider_failure(failures.BUSY)\n"
+        "assert failures.is_box_failure(failures.NO_CLI)\n"
         "assert definitions.FinalRun and definitions.register and definitions.startable\n"
         "assert 'claude_agent_sdk' not in sys.modules, 'the SDK was imported'\n"
     )

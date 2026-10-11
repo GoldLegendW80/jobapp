@@ -6,6 +6,17 @@ and `app.agents.runner`, which only the worker can import, takes its messages fr
 A message is either a constant or a template filled with a number or a name from Claude Code
 (a turn count, a duration, an HTTP status, a result subtype, an exit code): never with a text
 of the model, of a tool or of a document.
+
+Three kinds of failure, for a caller that chains runs (the ingestion engine):
+- the **provider's** (`is_provider_failure`): the credential or Anthropic. The user fixes the
+  credential, then resumes;
+- the **box's** (`is_box_failure`): this worker could not run the agent at all. Decided by the
+  orchestrator on 2026-10-11 (review of PR #95): a third kind, neither the provider's nor the
+  run's own. The next run would fail the same way, so a chain pauses after the first one in a
+  state it can resume from, instead of failing every remaining step for a reason that has
+  nothing to do with its document;
+- the run's **own**, everything else: its content, its limits, its budget. Trying the same run
+  again would fail the same way, and the chain goes on with the next.
 """
 
 import re
@@ -41,6 +52,10 @@ INTERNAL = "The run failed on an internal error."
 CONTENT_STATUSES = frozenset({400, 413, 422})
 _API_ERROR = re.compile(re.escape(API_ERROR).replace(re.escape("{status}"), r"(\d{3})"))
 _PROVIDER = frozenset({NO_CREDENTIAL, UNREADABLE, REFUSED, BUSY, runs.QUEUE_DOWN})
+# The worker could not run the agent: Claude Code is missing, did not start or died, the runner
+# itself failed, or this worker does not know the agent (an older worker during a deploy).
+_BOX = frozenset({NO_CLI, NO_START, INTERNAL, UNKNOWN_AGENT})
+_PROCESS = re.compile(re.escape(PROCESS).replace(re.escape("{code}"), r"(-?\d+|unknown)"))
 
 
 def is_provider_failure(error: str | None) -> bool:
@@ -48,12 +63,22 @@ def is_provider_failure(error: str | None) -> bool:
     own content: no credential, one the server cannot read, one Anthropic refused, Anthropic busy
     or rate limiting, the agent queue down, or the model API failing with any status other than
     400, 413 and 422. A caller that chains runs (the ingestion engine) stops and lets the user
-    fix the credential and resume; every other failure is the run's own and trying again would
-    fail the same way. False for a run that did not fail (`error` is None) and for any text this
-    module did not write."""
+    fix the credential and resume. False for a run that did not fail (`error` is None) and for
+    any text this module did not write."""
     if error is None:
         return False
     if error in _PROVIDER:
         return True
     found = _API_ERROR.fullmatch(error)
     return found is not None and int(found.group(1)) not in CONTENT_STATUSES
+
+
+def is_box_failure(error: str | None) -> bool:
+    """Whether a run's stored `error` says this worker could not run the agent, whatever the
+    run was about: Claude Code not installed, not starting, or its process failing; an internal
+    error of the runner; an agent this worker does not know. Never true together with
+    `is_provider_failure`. A failure that is neither is the run's own (module docstring). False
+    for a run that did not fail and for any text this module did not write."""
+    if error is None:
+        return False
+    return error in _BOX or _PROCESS.fullmatch(error) is not None

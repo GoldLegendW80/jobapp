@@ -156,6 +156,7 @@ from app.agents.failures import (
     UNKNOWN_AGENT,
     UNREADABLE,
 )
+from app.agents.failures import is_box_failure as is_box_failure
 from app.agents.failures import is_provider_failure as is_provider_failure
 from app.agents.models import CredentialKind, RunStatus
 from app.config import Settings
