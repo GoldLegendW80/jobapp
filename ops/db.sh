@@ -97,14 +97,18 @@ esac
 
 envval() { sed -n "s/^[[:space:]]*$1=//p" "$APP_DIR/.env" | tail -n 1; }
 
-# BACKUP_KEEP: the environment of this run, then the line of the deployed .env (spaces, a carriage
-# return and one pair of quotes around the value dropped), then the default. An explicit value
-# wins for both rules: 14 keeps 14 dumps and 14 days.
+# BACKUP_KEEP: the environment of this run, then the line of the deployed .env (written as compose
+# reads it, so with `export ` before the name too; spaces, a carriage return and one pair of
+# quotes around the value dropped), then the default. An explicit value wins for both rules: 14
+# keeps 14 dumps and 14 days. A value that is not a number from 1 to 9999 is refused by the
+# commands that use it, before they do anything (backup, prune, retention); the commands that
+# delete nothing (list, verify, restore, restore-live, drop-scratch) say it and go on, so that a
+# typo in .env never stands between the owner and a restore.
 if [[ -n "${BACKUP_KEEP:-}" ]]; then
   KEEP="$BACKUP_KEEP"
   KEEP_FROM="set in the environment of this run"
 else
-  KEEP="$(envval BACKUP_KEEP)"
+  KEEP="$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?BACKUP_KEEP=//p' "$APP_DIR/.env" | tail -n 1)"
   KEEP="${KEEP%$'\r'}"
   KEEP="${KEEP#"${KEEP%%[![:space:]]*}"}"
   KEEP="${KEEP%"${KEEP##*[![:space:]]}"}"
@@ -125,7 +129,8 @@ else
     KEEP_FROM="the default of ops/db.sh"
   fi
 fi
-[[ "$KEEP" =~ ^[1-9][0-9]{0,3}$ ]] || die "BACKUP_KEEP must be a whole number from 1 to 9999, got '$KEEP' ($KEEP_FROM)"
+KEEP_ERROR=""
+[[ "$KEEP" =~ ^[1-9][0-9]{0,3}$ ]] || KEEP_ERROR="BACKUP_KEEP must be a whole number from 1 to 9999, got '$KEEP' ($KEEP_FROM)"
 
 PGUSER_="$(envval POSTGRES_USER)"
 PGDB="$(envval POSTGRES_DB)"
@@ -589,7 +594,11 @@ cmd_list() {
     n=$((n + 1))
   done < <(find "$BACKUP_DIR" -maxdepth 2 -type f -name '*.dump' | sort)
   info "$n dump(s) in $BACKUP_DIR (directory mode $(stat -c %a "$BACKUP_DIR"))"
-  info "retention: BACKUP_KEEP=$KEEP ($KEEP_FROM): after each verified backup the newest $KEEP stay and a dump $KEEP days old or more goes"
+  if [[ -n "$KEEP_ERROR" ]]; then
+    info "retention: none while this stands: $KEEP_ERROR"
+  else
+    info "retention: BACKUP_KEEP=$KEEP ($KEEP_FROM): after each verified backup the newest $KEEP stay and a dump $KEEP days old or more goes"
+  fi
 }
 
 cmd_verify() {
@@ -670,6 +679,14 @@ cmd_restore_live() {
 
 cmd="${1:-}"
 [[ $# -eq 0 ]] || shift
+# An invalid BACKUP_KEEP (above): refused here, before anything, by the commands that use it.
+case "$cmd" in
+  backup | prune | retention) [[ -z "$KEEP_ERROR" ]] || die "$KEEP_ERROR" ;;
+  list | verify | restore | restore-live | drop-scratch)
+    [[ -z "$KEEP_ERROR" ]] ||
+      printf 'db.sh: WARNING: %s. %s deletes nothing and goes on; every backup is refused until this is put right\n' "$KEEP_ERROR" "$cmd" >&2
+    ;;
+esac
 case "$cmd" in
   backup) cmd_backup "$@" ;;
   list) cmd_list ;;

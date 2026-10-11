@@ -969,12 +969,14 @@ seed "$(d 4)" "$(d 3)" "$(d 2)" "$(d 1)"
 rot 0 "$NOW" BACKUP_KEEP=5
 only . "$(d 4)" "$(d 3)" "$(d 2)" "$(d 1)" "$(d 0)"
 out_has "BACKUP_KEEP=5, set in the environment of this run"
-for line in 'BACKUP_KEEP="3"' "BACKUP_KEEP='3'" $'BACKUP_KEEP=3\r' 'BACKUP_KEEP= 3 ' '  BACKUP_KEEP=3'; do
+for line in 'BACKUP_KEEP="3"' "BACKUP_KEEP='3'" $'BACKUP_KEEP=3\r' 'BACKUP_KEEP= 3 ' '  BACKUP_KEEP=3' \
+  'export BACKUP_KEEP=3' $'export\tBACKUP_KEEP=3'; do
   rot_new
   printf '%s\n' "$line" >>"$ROT/app/.env"
   seed "$(d 4)" "$(d 3)" "$(d 2)" "$(d 1)"
   rot 0 "$NOW"
   only . "$(d 2)" "$(d 1)" "$(d 0)"
+  out_has "BACKUP_KEEP=3, set in $ROT/app/.env"
 done
 rot_new
 printf 'BACKUP_KEEP=\n' >>"$ROT/app/.env"
@@ -982,7 +984,7 @@ seed "$(d 8)" "$(d 6)"
 rot 0 "$NOW"
 only . "$(d 6)" "$(d 0)"
 out_has "BACKUP_KEEP=7, the default of ops/db.sh"
-ok "the BACKUP_KEEP of the deployed .env is read at each run (quoted, spaced or with a carriage return too), the environment of the run wins over it, an empty line means the default"
+ok "the BACKUP_KEEP of the deployed .env is read at each run (quoted, spaced, with a carriage return, or written with export as compose accepts it: never ignored without a word), the environment of the run wins over it, an empty line means the default"
 
 for keep in 0 -1 abc 1.5 07 10000 "7 days"; do
   rot_new
@@ -1001,6 +1003,34 @@ for keep in 0 -1 abc 1.5 07 10000 "7 days"; do
   no_delete "$before"
 done
 ok "BACKUP_KEEP 0, -1, abc, 1.5, 07, 10000 and '7 days' are refused, from the environment and from .env: no dump, nothing deleted, exit 1"
+# The review's N5: the same typo must not stand between the owner and a restore. The commands
+# that delete nothing say it and go on; the ones that use the number are refused.
+rot_new
+seed "$(d 30)" "$(d 20)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)"
+printf 'BACKUP_KEEP=abc\n' >>"$ROT/app/.env"
+KEEP_WARNING="db.sh: WARNING: BACKUP_KEEP must be a whole number from 1 to 9999, got 'abc' (set in $ROT/app/.env)"
+before="$(tree_of)"
+for c in "verify $(d 20)" "list" "restore $ROT/backups/$(d 20)"; do
+  # shellcheck disable=SC2086 # the command and its argument
+  rot 0 "$NOW" -- $c
+  out_has "$KEEP_WARNING. ${c%% *} deletes nothing and goes on"
+  no_delete "$before"
+done
+out_has "restored into the scratch database"
+rot 0 "$NOW" -- list
+out_has "retention: none while this stands: BACKUP_KEEP must be a whole number"
+rot 0 "$NOW" -- restore-live "$(d 20)"
+out_has "$KEEP_WARNING. restore-live deletes nothing and goes on"
+out_has "restored $ROT/backups/$(d 20) into jobapp"
+only . "$(d 30)" "$(d 20)" "$(d 0 pre-restore)"
+before="$(tree_of)"
+for c in backup prune retention; do
+  rot 1 "$NOW" -- "$c"
+  out_has "db.sh: BACKUP_KEEP must be a whole number from 1 to 9999, got 'abc' (set in $ROT/app/.env)"
+  grep -q "WARNING" "$WORK/out" && fail "$c only warned about an invalid BACKUP_KEEP: $(cat "$WORK/out")"
+  no_delete "$before"
+done
+ok "an invalid BACKUP_KEEP in .env: verify, list, restore and restore-live say it and do their work (the pre-restore dump is written, nothing is deleted); backup, prune and retention are refused before anything"
 
 step "T10, retention by age in every folder the server keeps dumps in"
 rot_new
