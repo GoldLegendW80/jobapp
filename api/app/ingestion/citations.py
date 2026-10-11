@@ -608,6 +608,14 @@ def _decimal(whole: str, fraction: str = "") -> str:
     return f"{whole}.{fraction}" if fraction else whole
 
 
+def _two_numbers(whole: str, fraction: str, separator: str) -> bool:
+    """Whether `whole`, a separator and four digits or more are two numbers and not a decimal:
+    a month and its year written with a full stop ("01.2023"), or two years ("2019,2021")."""
+    if len(fraction) != 4:
+        return False
+    return len(whole) == 4 or (separator == "." and len(whole) <= 2 and 1 <= int(whole) <= 12)
+
+
 def readings(run: str) -> frozenset[str]:
     """The numbers a number run may stand for, as canonical decimal strings:
 
@@ -616,7 +624,9 @@ def readings(run: str) -> frozenset[str]:
        group having one to three digits and not starting with 0: the grouped integer
        ("10 000", "10,000" and "10.000" read 10000 and nothing else);
     c. exactly one separator, a full stop or a comma, followed by one or two digits, or by any
-       number of digits when the integer part is 0: the decimal ("3,5", "0,125");
+       number of digits when the integer part is 0: the decimal ("3,5", "0,125"). Followed by
+       four digits or more it is the decimal too ("99.9999" is not 99), unless it reads as a
+       month and its year ("01.2023") or as two years ("2019,2021"), which are pieces;
     d. groups as in b, then one different separator among full stop and comma, then digits:
        the grouped integer with its decimals ("1 234,56");
     e. only when none of b, c and d applies: each piece is a number of its own ("2019 2021").
@@ -630,8 +640,11 @@ def readings(run: str) -> frozenset[str]:
     head = len(parts[0]) <= 3 and not parts[0].startswith("0")
     if head and len(set(separators)) == 1 and all(len(part) == 3 for part in parts[1:]):
         return frozenset({_decimal("".join(parts))})
-    if len(separators) == 1 and separators[0] in ".," and (len(parts[1]) <= 2 or parts[0] == "0"):
-        return frozenset({_decimal(parts[0], parts[1])})
+    if len(separators) == 1 and separators[0] in ".,":
+        whole, fraction = parts
+        short = len(fraction) <= 2 or whole == "0"
+        if short or (len(fraction) >= 4 and not _two_numbers(whole, fraction, separators[0])):
+            return frozenset({_decimal(whole, fraction)})
     if (
         len(separators) >= 2
         and separators[-1] in ".,"
@@ -1431,11 +1444,12 @@ def rule_phone(value: str, spans: Sequence[Span]) -> Rule | None:
 
 
 def rule_numbers(value: str, spans: Sequence[Span]) -> Rule | None:
-    """Rule N: each number run of the value is a number run of a span, or has a reading in
-    common with one. A run that follows "version" or "v", in the value or in the document, is
-    a version and is compared as text: "1.10" is not "1.1". A number with a superscript, a
-    subscript or a fraction glued to it is one written form: ten with a superscript three in a
-    document supports neither 10 nor 3, and a value may hold it only as a span writes it."""
+    """Rule N: each number run of the value is a number run of a span, or every number it reads
+    as is a number of a span (every piece of "2019 2023", not one of them). A run that follows
+    "version" or "v", in the value or in the document, is a version and is compared as text:
+    "1.10" is not "1.1". A number with a superscript, a subscript or a fraction glued to it is
+    one written form: ten with a superscript three in a document supports neither 10 nor 3,
+    and a value may hold it only as a span writes it."""
     return _Evidence(spans).numbers(normalise(value), value)
 
 
@@ -1491,7 +1505,8 @@ class _Evidence:
                 if run.form not in self._forms:
                     return Rule.NUMBER_NOT_IN_SOURCE
             elif run.text not in self._runs and (
-                run.version or not readings(run.text) & self._readings
+                # Every piece of the run, not one of them: "2019 2023" is two numbers.
+                run.version or not readings(run.text) <= self._readings
             ):
                 return Rule.NUMBER_NOT_IN_SOURCE
         return None

@@ -1290,6 +1290,60 @@ EXAMPLES: tuple[Example, ...] = (
         Rule.NUMBER_NOT_IN_SOURCE,
         note="three and a half is not 3",
     ),
+    # --- the review of pull request #97 -----------------------------------------------------------
+    # rule N: every piece of a run of the value, not one of them
+    Example(
+        193,
+        "Promotion 2019, Université de Bordeaux",
+        "text",
+        "Promotion 2019 2023",
+        REFUSE,
+        Rule.NUMBER_NOT_IN_SOURCE,
+        note="every number of a run of the value must be in the source: 2023 is not",
+    ),
+    Example(
+        194,
+        "Habite au 12 rue des Lilas, Bordeaux",
+        "text",
+        "Joignable au 06 39 98 12 34",
+        REFUSE,
+        Rule.NUMBER_NOT_IN_SOURCE,
+        note="a street number does not hold up a phone number",
+    ),
+    Example(
+        195,
+        "Migration vers Angular 14 en production",
+        "text",
+        "Angular 14.2.3",
+        REFUSE,
+        Rule.NUMBER_NOT_IN_SOURCE,
+    ),
+    Example(
+        196,
+        "Promotion 2019-2021, Université de Bordeaux",
+        "text",
+        "Promotion 2019 2021",
+        ACCEPT,
+        note="two numbers of the source written in one run",
+    ),
+    # a decimal with four decimals or more is one number
+    Example(
+        197,
+        "Disponibilité de 99.9999 % sur l\u2019année 2023",
+        "text",
+        "Disponibilité de 99 %",
+        REFUSE,
+        Rule.NUMBER_NOT_IN_SOURCE,
+        note="99.9999 is one number, not 99 and 9999",
+    ),
+    Example(
+        198,
+        "Constante 3.14159 utilisée dans le calcul",
+        "text",
+        "Valeur 14159",
+        REFUSE,
+        Rule.NUMBER_NOT_IN_SOURCE,
+    ),
 )
 
 

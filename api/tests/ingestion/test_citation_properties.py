@@ -349,16 +349,24 @@ def near_misses(whole: int, fraction: str) -> set[str]:
     return {miss for miss in out if miss and miss.strip(".") == miss}
 
 
-def value_of(text: str) -> Decimal | None:
-    """What a number written with at most one full stop means, by the conventions of the plan:
-    a decimal part has one or two digits, or any number of them after a zero; three digits
-    after one to three are a group of thousands. None for anything else: it has no one value."""
+def meanings(text: str) -> frozenset[Decimal]:
+    """The numbers that a number written with at most one full stop means, by the conventions
+    of the plan: a decimal part has one or two digits, or any number of them after a zero;
+    three digits after one to three are a group of thousands; four digits after a month or
+    after four digits are a second number; four digits or more are otherwise decimals. Where
+    it means two numbers, both must be in the source."""
     whole, _, fraction = text.partition(".")
+    if not fraction:
+        return frozenset({Decimal(whole)})
     if len(fraction) <= 2 or whole == "0":
-        return Decimal(text)
-    if len(fraction) == 3 and len(whole) <= 3 and not whole.startswith("0"):
-        return Decimal(whole + fraction)
-    return None
+        return frozenset({Decimal(text)})
+    two = frozenset({Decimal(whole), Decimal(fraction)})
+    if len(fraction) == 3:
+        grouped = len(whole) <= 3 and not whole.startswith("0")
+        return frozenset({Decimal(whole + fraction)}) if grouped else two
+    if len(fraction) == 4 and (len(whole) == 4 or (len(whole) <= 2 and 1 <= int(whole) <= 12)):
+        return two
+    return frozenset({Decimal(text)})
 
 
 @seeded
@@ -366,7 +374,7 @@ def test_a_number_is_supported_only_by_a_number_of_the_same_value(seed: int) -> 
     rng = generator(1000 + seed)
     for _ in range(12):
         numbers = [some_number(rng) for _ in range(rng.randint(1, 3))]
-        present = {value_of(plain(*number)) for number in numbers}
+        present = frozenset().union(*(meanings(plain(*number)) for number in numbers))
         parts = [sentence(rng, 3, 5)]
         for number in numbers:
             parts.append(written(rng, *number))
@@ -378,10 +386,39 @@ def test_a_number_is_supported_only_by_a_number_of_the_same_value(seed: int) -> 
                 result = check_item("text", f"valeur {honest} mesurée", source, [source])
                 assert isinstance(result, Accepted), (seed, source, honest, result)
             for miss in near_misses(whole, fraction):
-                if value_of(miss) is None or value_of(miss) in present:
+                if meanings(miss) <= present:
                     continue
                 result = check_item("text", f"valeur {miss} mesurée", source, [source])
                 assert refused(result, Rule.NUMBER_NOT_IN_SOURCE), (seed, source, miss, result)
+
+
+@seeded
+def test_every_number_of_a_run_of_the_value_is_supported(seed: int) -> None:
+    """A value may write several numbers in one run ("2019 2021", "14.2.3", a phone number in
+    a text). Each of them must be a number of the source: one that is does not carry the
+    others (the first review of pull request #97 found that one did)."""
+    rng = generator(19_000 + seed)
+    for _ in range(12):
+        # two digit numbers over 12: joined, they read as pieces, never as a group or a month
+        present = rng.sample(range(13, 100), 4)
+        absent = rng.choice([number for number in range(13, 100) if number not in present])
+        source = " ".join(f"{sentence(rng, 1, 3)} {number}" for number in present)
+        source = f"{source} {sentence(rng, 2, 4)}"
+        size = rng.randint(2, 4)
+        # a full stop or a comma between two pieces would be a decimal: three pieces or more
+        joiner = rng.choice((" ", "'") if size == 2 else (" ", "'", ".", ","))
+        pieces = [str(number) for number in rng.sample(present, size)]
+        honest = joiner.join(pieces)
+        result = check_item("text", f"valeurs {honest} mesurées", source, [source])
+        assert isinstance(result, Accepted), (seed, source, honest, result)
+        for place in range(size + 1):
+            invented = joiner.join([*pieces[:place], str(absent), *pieces[place:]])
+            result = check_item("text", f"valeurs {invented} mesurées", source, [source])
+            assert refused(result, Rule.NUMBER_NOT_IN_SOURCE), (seed, source, invented, result)
+        for place in range(size):
+            replaced = joiner.join([*pieces[:place], str(absent), *pieces[place + 1 :]])
+            result = check_item("text", f"valeurs {replaced} mesurées", source, [source])
+            assert refused(result, Rule.NUMBER_NOT_IN_SOURCE), (seed, source, replaced, result)
 
 
 @seeded
@@ -901,10 +938,10 @@ def test_no_part_of_a_line_supports_what_the_line_refuses(seed: int) -> None:
     rng = generator(13_000 + seed)
     # a number cut out of a longer one
     whole, fraction = some_number(rng)
-    present = value_of(plain(whole, fraction))
+    present = meanings(plain(whole, fraction))
     source = f"{sentence(rng, 3, 5)} {written(rng, whole, fraction)} {sentence(rng, 3, 5)}"
     for miss in sorted(near_misses(whole, fraction)):
-        if value_of(miss) not in (None, present):
+        if not meanings(miss) <= present:
             assert_refused_from_every_part(rng, "text", f"valeur {miss}", source, seed)
     # a part of an email, a part of a URL
     email = some_email(rng)
