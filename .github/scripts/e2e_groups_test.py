@@ -157,9 +157,9 @@ class ThisRepositoryTest(unittest.TestCase):
         self.assertEqual(e2e_groups.check(self.ROOT), [])
 
     def test_the_real_groups_are_the_known_ones(self) -> None:
-        # The identity chain (9), the sweep (1) and the apps group (6: agents-streaming.spec.ts
-        # joined it with issue #33).
-        self.assertEqual(len(set(e2e_groups.specs_in_ci(self.ROOT))), 16)
+        # The identity chain (10: profile-dates.spec.ts joined it with issue #48), the sweep (1)
+        # and the apps group (6: agents-streaming.spec.ts joined it with issue #33).
+        self.assertEqual(len(set(e2e_groups.specs_in_ci(self.ROOT))), 17)
 
     def test_every_exclusion_has_a_reason(self) -> None:
         for name, reason in e2e_groups.NOT_IN_CI.items():
