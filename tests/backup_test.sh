@@ -12,8 +12,14 @@
 # backup of the live run). Covers: unicode, a 1 MB text, NULLs, empty values, binary bytes, 1000
 # bulk rows, checksums before and after, missing, empty, garbage, truncated, damaged and plain SQL
 # files refused, a refused live restore leaving the api untouched, upload of a local file, the
-# lock against concurrent runs, retention keeping exactly N, the disk space check, file modes.
+# lock against concurrent runs, retention keeping exactly N, retention by age read from the name
+# (T10: copies of a dump under names 9 and 3 days old, in the folder, deploys/ and incoming/; a
+# refused backup deleting none of them), the schedule line without a retention of its own and
+# `backup-schedule status` reporting the one its runs apply, the disk space check, file modes.
+# The T10 checks need the release with T10 deployed (status asks the ops/db.sh on the Jetson) and
+# no BACKUP_KEEP in the .env of this repository or of the Jetson: they assert the default, 7.
 set -euo pipefail
+unset BACKUP_KEEP
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -137,6 +143,9 @@ SUM1="$(sql jobapp_restore_check <<<"$CHECKSUM")"
 ok "row counts printed; checksum identical in jobapp_restore_check ($SUM1)"
 [[ "$(sql "$PGDB" <<<"$CHECKSUM")" == "$SUM0" ]] || fail "the live data changed"
 ok "live database untouched"
+run 0 ./deploy.sh backup
+out_has "left alone: the scratch database jobapp_restore_check exists"
+ok "T10: while restore --keep leaves the scratch database, a whole copy of a dump, every backup says so"
 run 0 ./deploy.sh restore --drop-scratch
 [[ "$(sql postgres <<<"select count(*) from pg_database where datname = 'jobapp_restore_check'")" == 0 ]] ||
   fail "scratch database still there"
@@ -228,6 +237,36 @@ kept="$(dumps_in "$RETDIR")"
 out_has "deleted old backup"
 ok "5 backups with BACKUP_KEEP=3: exactly the newest 3 left"
 
+step "retention by age (T10): the date in a dump's name decides, in the folder, deploys/ and incoming/"
+# Copies of a real dump under names 9 and 3 days before today (UTC, on the Jetson's clock). Their
+# mtime is now: only the name says they are old. No BACKUP_KEEP is given, so the default applies.
+OLD="$(r "date -u -d '9 days ago' +%Y-%m-%dT%H%M%S")"
+RECENT="$(r "date -u -d '3 days ago' +%Y-%m-%dT%H%M%S")"
+[[ "$OLD" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}$ && "$RECENT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}$ ]] ||
+  fail "could not read dates on the Jetson: '$OLD' '$RECENT'"
+last="$(tail -n 1 "$WORK/made")"
+r "cd ~/$RETDIR && mkdir -p deploys incoming &&
+  cp $last jobapp-$OLD.dump && cp $last jobapp-$RECENT.dump &&
+  cp $last deploys/jobapp-$OLD-predeploy-aaaaaaaaaaaa.dump && cp $last deploys/jobapp-$RECENT-predeploy-bbbbbbbbbbbb.dump &&
+  cp $last incoming/jobapp-$OLD.dump && cp $last incoming/notes.dump"
+run 0 env BACKUP_DIR="$RETDIR" ./deploy.sh backup
+NEWEST="$(backup_path)"
+out_has "BACKUP_KEEP=7, the default of ops/db.sh"
+left="$(r "cd ~/$RETDIR && find . -type f -name '*.dump' | sort")"
+grep -q "jobapp-$OLD" <<<"$left" && fail "a dump named 9 days ago is still there: $left"
+for f in "./jobapp-$RECENT.dump" "./deploys/jobapp-$RECENT-predeploy-bbbbbbbbbbbb.dump" "./incoming/notes.dump" "./$(basename "$NEWEST")"; do
+  grep -qxF "$f" <<<"$left" || fail "$f is gone: $left"
+done
+[[ "$(grep -c '^\./jobapp-' <<<"$left")" == 5 ]] || fail "the folder of the run does not hold the 3 of before, the copy of 3 days ago and the new one: $left"
+out_has "deleted old backup jobapp-$OLD.dump ("
+out_has "deleted old backup jobapp-$OLD-predeploy-aaaaaaaaaaaa.dump ("
+out_has "incoming, not a dump of this script: notes.dump"
+ok "default 7: the copies named 9 days ago are deleted in the folder, deploys/ and incoming/ although written just now; those named 3 days ago stay; a file that is not named like a dump is left alone and reported"
+
+run 0 ./deploy.sh backups
+out_has "retention: BACKUP_KEEP=7"
+ok "./deploy.sh backups ends with the retention in force"
+
 step "backup-schedule: install twice, other crontab lines kept, the line runs like cron, remove"
 r "crontab -l 2>/dev/null || true" >"$WORK/crontab.orig"
 CRON_SAVED=1
@@ -239,8 +278,16 @@ ct="$(r 'crontab -l')"
 [[ "$(grep -cF "$MARK" <<<"$ct")" == 1 ]] || fail "not exactly one jobapp line: $ct"
 grep -q '^# jobapp-test: a foreign line' <<<"$ct" || fail "a foreign crontab line was lost: $ct"
 ok "installed twice, one line: $(grep -F "$MARK" <<<"$ct")"
+# T10: the line names no retention, so its runs read the Jetson's .env, then the default of the
+# ops/db.sh deployed there. (A BACKUP_KEEP in the .env of this repository would be written in.)
+grep -F "$MARK" <<<"$ct" | grep -q "BACKUP_KEEP=" &&
+  fail "the installed line carries a BACKUP_KEEP: is one set in the .env of this repository? $ct"
 run 0 ./deploy.sh backup-schedule status
 out_has "installed: 17 3 \* \* \*"
+out_has "the line carries no BACKUP_KEEP"
+grep -q "retention: BACKUP_KEEP=7 (the default of ops/db.sh)" "$WORK/out" ||
+  fail "status does not report 7 from the default of the deployed ops/db.sh (is the release with T10 deployed, and the Jetson's .env without a BACKUP_KEEP?): $(tail -c 900 "$WORK/out")"
+ok "the line carries no BACKUP_KEEP, and status reports what its runs apply: 7, the default of the ops/db.sh deployed on the Jetson"
 # The command part of the line, run the way cron runs it: sh, PATH=/usr/bin:/bin, HOME only.
 n0="$(ndumps "$TDIR")"
 cmd="$(grep -F "$MARK" <<<"$ct" | cut -d' ' -f6-)"
@@ -258,11 +305,16 @@ out_has "not installed"
 ok "remove (twice) deletes only the jobapp line; status says not installed"
 
 step "disk space check"
+# T10: a copy named 9 days ago is there when the backup is refused. A backup that fails deletes
+# nothing, so it must still be there afterwards.
+r "cp $B1 ~/$TDIR/jobapp-$OLD.dump"
 n0="$(ndumps "$TDIR")"
 run 1 env BACKUP_MIN_FREE_MB=100000000 ./deploy.sh backup
 out_has "not enough disk for a backup"
 [[ "$(ndumps "$TDIR")" == "$n0" && -z "$(r "find ~/$TDIR -name '*.partial'")" ]] || fail "a file was written"
-ok "refused before pg_dump when free space is short, nothing written"
+r "test -f ~/$TDIR/jobapp-$OLD.dump" || fail "a refused backup deleted a dump past the limit"
+ok "refused before pg_dump when free space is short, nothing written, and nothing deleted: the dump named 9 days ago is still there"
+r "rm -f ~/$TDIR/jobapp-$OLD.dump"
 
 if [[ "$LIVE" == 1 ]]; then
   step "live restore, end to end"

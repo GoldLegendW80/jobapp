@@ -49,7 +49,10 @@ pnpm --dir web lint && uv run --directory api ruff check .     # lint
                                # (alembic upgrade head in a one off container of the new image), compose up --wait
 ./deploy.sh logs api           # tail logs of one service
 ./deploy.sh url                # print the stable Funnel URL, from tailscale status in the tailscale container
-./deploy.sh backup             # pg_dump -Fc to jetson:~/jobapp-backups/jobapp-YYYY-MM-DDTHHMMSS.dump
+./deploy.sh backup             # pg_dump -Fc to jetson:~/jobapp-backups/jobapp-YYYY-MM-DDTHHMMSS.dump, verified, then the
+                               # retention: BACKUP_KEEP=7, the newest 7 dumps stay and a dump 7 days old or more is
+                               # deleted, so that a document a user deletes leaves the server's backups within 7 days;
+                               # the cost: after 7 days no restore point predates a bad change (Backup retention, below)
 ./deploy.sh restore <file>     # into a scratch database; --into-live replaces the live one
 ```
 
@@ -154,6 +157,18 @@ New code never serves on a schema that lacks its columns: the schema moves first
 - Two deploys never migrate at once: the Jetson's deploy lock (`flock`, shared by the workflow and `./deploy.sh`) and the workflow's concurrency group serialize deploys, `ops/migrate.sh` refuses to start while a `jobapp-migrate` container runs, and `alembic/env.py` takes `pg_advisory_xact_lock` so two upgrades that still meet queue instead of racing.
 - The log holds alembic's own lines and the revision reached, never a value of `.env`: the settings keep the database URL as a secret, and the script masks the credentials of anything shaped like a URL on the way out.
 - Tests: `tests/deploy_test.sh` (CI, fakes) runs `ops/migrate.sh`, `cmd_deploy` and the deploy step cut out of `deploy.yml`, and asserts the order, the stop on a failing or hanging migration with the stack untouched, the no-op, the first install, and a rollback that neither reruns alembic nor downgrades. `tests/migrate_test.sh` (by hand on the Mac, real Docker, never a CI step: it builds the api image four times and the runners' disk and CPU budget is tight; CI only shellchecks it) plays the same paths on a scratch stack with real Postgres and alembic, a killed container and the README's recovery statement included.
+
+## Backup retention (T10, issue #49, decided 2026-10-10)
+
+The owner decided that a document a user deletes is gone from the server's backups within 7 days (SPEC-ingestion.md, Retention). The retention of every dump on the Jetson follows from that. The README (Backups and restores, Retention) is the operator's reference; this is the rule.
+
+- One number, `BACKUP_KEEP`, 7 by default, read by `ops/db.sh` at each run: the environment of the run, then the `BACKUP_KEEP` line of the Jetson's `.env`, then the default. The cron line of `./deploy.sh backup-schedule install` and the deploy workflow name no number of their own, so a change of the default takes a deploy and a change of the value an edit of that `.env`, never a reinstall. An explicit value wins for both rules (14 keeps 14 dumps and 14 days) and, above 7, breaks the promise knowingly: every backup prints a warning.
+- Two rules, applied by `ops/db.sh backup` once the dump of the run is written and verified: the newest `BACKUP_KEEP` dumps of the run's folder stay (count); a dump `BACKUP_KEEP` days old or more is deleted (age) in `~/jobapp-backups`, in `deploys/` (predeploy dumps) and in `incoming/` (dumps uploaded for a restore). This replaces the newest 10 predeploy dumps kept whatever their age.
+- Age is counted in UTC calendar days between the date in the dump's name and the date in the name of the dump just written, never from a modification time. Whole days, because nightly runs a few seconds apart must agree about the dump of 7 nights ago and because a folder can then be checked by reading names. The residue: a dump written between midnight UTC and the end of the nightly run lives 7 days plus those hours (at most 1 hour 17 minutes in summer, 2 hours 17 minutes in winter, with the schedule at 03:17 in Paris); every other dump lives less than 7 days. `BACKUP_KEEP=6` removes it.
+- Safety: nothing is deleted before the new dump is written and verified, and a failing backup deletes nothing and exits non zero; the dump the run wrote, the newest verified dump of the whole tree, is never deleted, and no folder has an exception of its own (the last predeploy dump goes at 7 days); a restore never deletes; `deploys/` is skipped while a backup or a restore holds its lock; only a regular file named exactly `jobapp-YYYY-MM-DDTHHMMSS[-tag].dump` with a date that exists, directly in one of the three folders, is deleted, one full path at a time, never through a symbolic link; everything else there is left alone and reported at every run, as is the scratch database of `restore --keep`.
+- What the 7 days need on the server: the schedule installed and `./deploy.sh backup-schedule status` showing 7; no `BACKUP_KEEP` above 7 in the Jetson's `.env` or in the cron line; the nightly backup succeeding; no file outside the name pattern in the backup folders and no scratch database left. Outside the rotation by nature: dumps pulled to the Mac, copies of the database volume, and a restore, which brings back what was deleted after its dump.
+- The cost: after 7 days no restore point on the Jetson predates a bad change, predeploy dumps included.
+- Tests: `tests/deploy_test.sh` (CI, fakes, a clock the test sets) covers the default, an explicit value, the age rule in the three folders, each safety rule, the report and the schedule against a fake Jetson; `tests/backup_test.sh` (by hand, on the Jetson) plays the age rule with copies of a real dump under old names.
 
 ## Public access: Tailscale Funnel (decided 2026-10-10)
 
