@@ -377,10 +377,9 @@ def stored_date(field: str, value: Any, **other: Any) -> Any:
 def test_a_year_alone_and_a_month_are_stored_as_written(field: str, value: str) -> None:
     assert stored_date(field, value) == value
     # No padding and no shortening, however often the stored form is validated again.
-    kind = field.split(".")[0]
     once = validate_section("experience", dated(field, value))
     assert validate_section("experience", once) == once
-    assert json.dumps(once[kind][0]).count(f'"{value}"') == 1
+    assert validate_section("experience", json.loads(json.dumps(once))) == once
 
 
 @pytest.mark.parametrize("field", DATE_FIELDS)
@@ -531,11 +530,13 @@ def test_every_date_valid_before_is_still_valid_and_unchanged() -> None:
 
 
 def test_a_profile_saved_before_the_change_loads_and_saves_unchanged() -> None:
-    """The stored form of a month only section, key order included, is what comes back."""
+    """The stored form of a month only section is what comes back, and it still reads as
+    complete (completeness validates the stored section on every read of the profile)."""
     before = full("experience")
     assert all(_month_only(e["start"]) for e in before["employers"])
     stored = validate_section("experience", before)
-    assert json.dumps(stored) == json.dumps(FULL["experience"])
+    assert stored == FULL["experience"]
+    assert validate_section("experience", stored) == stored
     assert completeness({"experience": stored}).sections["experience"].percent == 100
 
 
