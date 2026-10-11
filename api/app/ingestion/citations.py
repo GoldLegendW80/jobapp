@@ -632,12 +632,19 @@ def _decimal(whole: str, fraction: str = "") -> str:
     return f"{whole}.{fraction}" if fraction else whole
 
 
+def _plain_year(digits: str) -> bool:
+    """Whether a run of digits is a year a document may give: four digits from 1900 to 2100."""
+    return len(digits) == 4 and "1900" <= digits <= "2100"
+
+
 def _two_numbers(whole: str, fraction: str, separator: str) -> bool:
-    """Whether `whole`, a separator and four digits or more are two numbers and not a decimal:
-    a month and its year written with a full stop ("01.2023"), or two years ("2019,2021")."""
-    if len(fraction) != 4:
+    """Whether `whole`, a full stop or a comma and `fraction` are two numbers and not a decimal:
+    a month in two digits and its year written with a full stop ("01.2023"), or two years
+    ("2019,2021"). A year is from 1900 to 2100, so "12.3456" and "1234.5678" are decimals, and
+    so is "3.2021", which no table writes for a month."""
+    if not _plain_year(fraction):
         return False
-    return len(whole) == 4 or (separator == "." and len(whole) <= 2 and 1 <= int(whole) <= 12)
+    return _plain_year(whole) or (separator == "." and len(whole) == 2 and "01" <= whole <= "12")
 
 
 def readings(run: str) -> frozenset[str]:
@@ -647,10 +654,9 @@ def readings(run: str) -> frozenset[str]:
     b. every separator is the same character and is followed by exactly three digits, the first
        group having one to three digits and not starting with 0: the grouped integer
        ("10 000", "10,000" and "10.000" read 10000 and nothing else);
-    c. exactly one separator, a full stop or a comma, followed by one or two digits, or by any
-       number of digits when the integer part is 0: the decimal ("3,5", "0,125"). Followed by
-       four digits or more it is the decimal too ("99.9999" is not 99), unless it reads as a
-       month and its year ("01.2023") or as two years ("2019,2021"), which are pieces;
+    c. otherwise exactly one separator, a full stop or a comma: the decimal, whatever the number
+       of its decimals ("3,5", "0,125", "99.9999", "1234.567"), unless it reads as a month in
+       two digits and its year ("01.2023") or as two years ("2019,2021"), which are pieces;
     d. groups as in b, then one different separator among full stop and comma, then digits:
        the grouped integer with its decimals ("1 234,56");
     e. only when none of b, c and d applies: each piece is a number of its own ("2019 2021").
@@ -666,8 +672,7 @@ def readings(run: str) -> frozenset[str]:
         return frozenset({_decimal("".join(parts))})
     if len(separators) == 1 and separators[0] in ".,":
         whole, fraction = parts
-        short = len(fraction) <= 2 or whole == "0"
-        if short or (len(fraction) >= 4 and not _two_numbers(whole, fraction, separators[0])):
+        if not _two_numbers(whole, fraction, separators[0]):
             return frozenset({_decimal(whole, fraction)})
     if (
         len(separators) >= 2
@@ -956,26 +961,28 @@ class _DateReader:
         """The numbers that are a part of a longer one, where four digits are not a year.
 
         Glued by full stops or commas ("2021,50", "0.2021"), unless the whole is a dotted date
-        of the table or every number has four digits ("2019,2021"). In a run of three numbers
-        or more with one space between them ("+33 6 3998 2019", an IBAN), next to a number of
-        three digits or more, unless every number of the run is a year from 1900 to 2100
-        ("2019 2020 2021"). One pass over the tokens each."""
+        of the table, every number has four digits ("2019,2021") or they are the cells of a
+        row ("2019,2021,150"). Glued by hyphens or slashes, next to a number of three digits or
+        of five or more ("415-555-2019", "0170/555/2019"; "12-2019" and "2019-2021" are
+        dates). In a run of three numbers or more with one space between them ("+33 6 3998
+        2019", an IBAN), next to a number of three digits or more, unless every number of the
+        run is a year from 1900 to 2100 ("2019 2020 2021"). One pass over the tokens each."""
         tokens = self.tokens
         cut: set[int] = set()
         at = 0
         while at < len(tokens):
-            end = at + 1
-            if tokens[at].kind == "d":
-                while (
-                    end + 1 < len(tokens)
-                    and tokens[end].text in (".", ",")
-                    and tokens[end].glued
-                    and tokens[end + 1].kind == "d"
-                    and tokens[end + 1].glued
-                ):
-                    end += 2
-                if end > at + 1 and not self._dotted_date(at, end):
-                    cut.update(range(at, end, 2))
+            end = self._glued(at, (".", ","))
+            if end > at + 1 and not self._dotted_date(at, end):
+                cut.update(range(at, end, 2))
+            at = end
+        at = 0
+        while at < len(tokens):
+            end = self._glued(at, ("-", "/"))
+            for index in range(at + 2, end, 2):
+                for one, other in ((index - 2, index), (index, index - 2)):
+                    size = len(tokens[other].text)
+                    if size == 3 or size >= 5:
+                        cut.add(one)
             at = end
         at = 0
         while at < len(tokens):
@@ -985,8 +992,7 @@ class _DateReader:
                     end += 1
                 sizes = [len(tokens[index].text) for index in range(at, end)]
                 if len(sizes) >= 3 and not all(
-                    "1900" <= tokens[index].text <= "2100" and len(tokens[index].text) == 4
-                    for index in range(at, end)
+                    _plain_year(tokens[index].text) for index in range(at, end)
                 ):
                     for place, index in enumerate(range(at, end)):
                         beside = sizes[max(0, place - 1) : place] + sizes[place + 1 : place + 2]
@@ -995,21 +1001,40 @@ class _DateReader:
             at = end
         return cut
 
+    def _glued(self, at: int, signs: tuple[str, ...]) -> int:
+        """The index after the chain of numbers that starts at `at`, each glued to the next by
+        one of `signs`; `at + 1` when no number stands at `at` or nothing is glued to it."""
+        tokens = self.tokens
+        end = at + 1
+        while (
+            tokens[end - 1].kind == "d"
+            and end + 1 < len(tokens)
+            and tokens[end].text in signs
+            and tokens[end].glued
+            and tokens[end + 1].kind == "d"
+            and tokens[end + 1].glued
+        ):
+            end += 2
+        return end
+
     def _dotted_date(self, at: int, end: int) -> bool:
         """Whether the numbers glued by full stops or commas from `at` to `end` can hold a year:
-        all of four digits, or `MM.YYYY`, `DD.MM.YYYY`, `YYYY.MM` or `YYYY.MM.DD` with full
-        stops, the month from 1 to 12 and the day from 1 to 31."""
+        all of four digits, the cells of a row (three numbers or more with commas alone, which
+        is no way to write one number), or `MM.YYYY` with its month in two digits,
+        `DD.MM.YYYY`, `YYYY.MM` or `YYYY.MM.DD` with full stops, the month from 1 to 12 and the
+        day from 1 to 31."""
         tokens = self.tokens
         texts = [tokens[index].text for index in range(at, end, 2)]
         sizes = [len(text) for text in texts]
-        if all(size == 4 for size in sizes):
+        signs = {tokens[index].text for index in range(at + 1, end, 2)}
+        if all(size == 4 for size in sizes) or (len(sizes) >= 3 and signs == {","}):
             return True
-        if len(sizes) > 3 or any(tokens[index].text != "." for index in range(at + 1, end, 2)):
+        if len(sizes) > 3 or signs != {"."}:
             return False
         if sizes in ([4, 2], [4, 2, 2]):  # "2012.09" gives its year, as many CVs write a date
             return 1 <= int(texts[1]) <= 12 and 1 <= int(texts[-1]) <= 31
-        if sizes[-1] != 4 or max(sizes[:-1]) > 2:
-            return False
+        if sizes[-1] != 4 or max(sizes[:-1]) > 2 or sizes == [1, 4]:
+            return False  # "1.2021" is a ratio: with a full stop a month has two digits
         if len(sizes) == 3 and not 1 <= int(texts[0]) <= 31:
             return False
         return 1 <= int(texts[-2]) <= 12
@@ -1176,10 +1201,11 @@ class _DateReader:
                 separators.append(tokens[end].text)
                 parts.append(end + 1)
                 end += 2
-            if end == at + 1 and self._spaced_slash(at):
-                separators.append("/")  # "09 / 2019"
-                parts.append(at + 2)
-                end = at + 3
+            if end == at + 1:
+                for part in self._spaced_slashes(at):  # "09 / 2019", "15 / 06 / 2019"
+                    separators.append("/")
+                    parts.append(part)
+                    end = part + 1
             after_word = tokens[at].glued and at > 0 and tokens[at - 1].kind == "w"
             if at >= self.first and end <= self.limit and not after_word:
                 atoms.extend(self._chain(parts, separators))
@@ -1190,25 +1216,32 @@ class _DateReader:
         for start, end, separator in halves:
             self._shares_the_year(start, end, separator)
 
-    def _spaced_slash(self, at: int) -> bool:
-        """Whether a month and its year stand at `at` around a slash with a space on each side,
-        "09 / 2019", and nothing says that they are the end or the start of a longer date."""
+    def _spaced_slashes(self, at: int) -> list[int]:
+        """The numbers that follow the one at `at` around slashes with a space on each side,
+        when the whole is a month and its year or a day, a month and a year: "09 / 2019",
+        "15 / 06 / 2019". None when a slash stands right before the first number or right after
+        the last: they are then the end or the start of a longer chain."""
         tokens = self.tokens
+        parts: list[int] = []
+        end = at + 1
+        while (
+            len(parts) < 2
+            and end + 1 < len(tokens)
+            and tokens[end].text == "/"
+            and not tokens[end].glued
+            and tokens[end + 1].kind == "d"
+            and not tokens[end + 1].glued
+        ):
+            parts.append(end + 1)
+            end += 2
         # "03 / 04 / 2023" is a day, a month and a year, also when the span starts at "04".
         goes_on = at > 0 and (
             tokens[at - 1].text == "/"
             or (tokens[at].glued and tokens[at - 1].text in _DATE_SEPARATORS)
         )
-        return (
-            at + 2 < len(tokens)
-            and tokens[at + 1].text == "/"
-            and not tokens[at + 1].glued
-            and not tokens[at + 2].glued
-            and len(tokens[at].text) <= 2
-            and self._year(at + 2)
-            and not goes_on
-            and not self._is(at + 3, "/")
-        )
+        if not parts or goes_on or self._is(end, "/") or not self._year(parts[-1]):
+            return []
+        return parts if all(len(tokens[one].text) <= 2 for one in (at, *parts[:-1])) else []
 
     def _shares_the_year(self, start: int, end: int, separator: str) -> None:
         """A day and its month before a whole date, in a range that goes forward: "du 15/06 au
@@ -1260,7 +1293,7 @@ class _DateReader:
         numbers = [int(text) for text in texts]
         if sizes == [2, 4] and 1 <= numbers[0] <= 12:  # MM/YYYY, MM.YYYY, MM-YYYY
             return _Atom(start, end, numbers[1], numbers[0], "firm")
-        if sizes == [1, 4] and numbers[0] >= 1:  # a month only inside a range: "9/2021 to present"
+        if sizes == [1, 4] and numbers[0] >= 1 and separator != ".":  # "9/2021 to present"
             return _Atom(start, end, numbers[1], numbers[0], "one_digit")
         if sizes == [4, 2] and separator in ("-", "/"):
             year, second = numbers
@@ -1465,6 +1498,11 @@ _URL_AFTER = "_%+-@"
 _URL_HEAD = re.compile(r"(?:https?://(?:www\.)?|www\.)")
 _URL_PREFIXES = ("https://www.", "http://www.", "https://", "http://", "www.")
 _SIGNS_MAX = 64  # signs in a row looked at around an address: past that, no telling
+# The signs of a local part that no domain holds: one of them after a domain ends the address.
+_NOT_OF_A_DOMAIN = "!#$%&'*+/=?^`{|}~"
+_DOMAIN_MAX = 255  # characters of a domain looked at before such a sign (RFC 1035: 253)
+# Dashes that N folds into a hyphen and that are none: figure dash, en dash, em dash, bar.
+_DASHES = "\u2012\u2013\u2014\u2015"
 
 
 def _address_char(char: str, signs: str) -> bool:
@@ -1476,6 +1514,8 @@ def _address_char(char: str, signs: str) -> bool:
 def _email_starts(text: str, at: int) -> bool:
     """Whether the local part of an email of the document starts at `at`: nothing of a local
     part stands before it, or only signs that a text writes around an address."""
+    if _after_an_address(text, at):
+        return True
     low = at
     floor = max(0, at - _SIGNS_MAX)
     while low > floor and text[low - 1] in _LOCAL_SIGNS and text[low - 1] not in _LOCAL_JOINS:
@@ -1488,6 +1528,33 @@ def _email_starts(text: str, at: int) -> bool:
     if before == ":":
         return not _user_info(text, low - 1)
     return not _address_char(before, "")
+
+
+def _after_an_address(text: str, at: int) -> bool:
+    """Whether another email ends right before `at`, with nothing between the two but signs
+    that no domain holds: "a@x.example|b@y.example", "a@x.example/b@y.example". They are two
+    addresses, since one address holds one "@" and its domain ends at such a sign."""
+    low = at
+    floor = max(0, at - _SIGNS_MAX)
+    while low > floor and text[low - 1] in _NOT_OF_A_DOMAIN:
+        low -= 1
+    domain = low
+    floor = max(0, low - _DOMAIN_MAX)
+    while low > floor and _address_char(text[low - 1], "-._"):
+        low -= 1
+    return low < domain < at and low > 0 and text[low - 1] == "@"
+
+
+def _dash_before(document: Document, at: int, joins: str) -> bool:
+    """Whether a dash that is no hyphen stands right before `at`, with nothing of an address
+    before it: "Contact \u2013camille@example.org". N folds every dash into a hyphen, which an
+    address may hold; the stored text tells them apart, and no address holds an en dash."""
+    text = document.text
+    if at == 0 or text[at - 1] != "-":
+        return False
+    if document.source[document.origin[at - 1]] not in _DASHES:
+        return False
+    return at == 1 or not _address_char(text[at - 2], joins)
 
 
 def _user_info(text: str, colon: int) -> bool:
@@ -1528,9 +1595,10 @@ def _url_starts(text: str, at: int) -> bool:
     if at == 0:
         return True
     if text[at - 1] == ":":
-        # A colon bounds a URL ("Site:example.org") unless it is the colon of the URL: the one
-        # of a scheme, before two slashes, or the one of a port, before its digits.
-        return not (text.startswith("//", at) or _port(text, at))
+        # A colon bounds a URL ("Site:example.org") unless it is a colon of the URL: the one
+        # of a scheme, before two slashes, the one of a port, before its digits, or the one
+        # between a user and a password.
+        return not (text.startswith("//", at) or _port(text, at) or _user_info(text, at - 1))
     if not _address_char(text[at - 1], _URL_JOINS):
         return True
     for prefix in _URL_PREFIXES:
@@ -1541,12 +1609,14 @@ def _url_starts(text: str, at: int) -> bool:
 
 
 def _port(text: str, at: int) -> bool:
-    """Whether the digits at `at` are a port, not the first label of a host ("3dprint.example",
-    "123.example"): at most five of them, then nothing that goes on with a label."""
+    """Whether the digits at `at` are a port or a number of their own, not the first label of a
+    host ("3dprint.example", "123.example"): nothing that goes on with a label follows them.
+    Six digits are no port, and no host either."""
     end = at
-    while end < len(text) and end - at < 6 and text[end].isdigit():
+    stop = min(len(text), at + _SIGNS_MAX)
+    while end < stop and text[end].isdigit():
         end += 1
-    if not 0 < end - at < 6:
+    if end == at:
         return False
     rest = text[end : end + 2]
     return not (rest[:1].isalpha() or rest[:1] == "-" or (rest[:1] == "." and rest[1:].isalnum()))
@@ -1603,6 +1673,7 @@ def _address(value: str, norm: str, spans: Sequence[Span], url: bool) -> Rule | 
     if url:
         proposed = proposed.rstrip("/")
     starts, ends = (_url_starts, _url_ends) if url else (_email_starts, _email_ends)
+    joins = _URL_JOINS if url else _LOCAL_SIGNS + "@"
     for span in spans:
         text = span.document.text
         at = text.find(wanted, span.start, span.end)
@@ -1610,7 +1681,8 @@ def _address(value: str, norm: str, spans: Sequence[Span], url: bool) -> Rule | 
             if at < 0:
                 break
             end = at + len(wanted)
-            if not _cut_by_a_line(text, at, end) and starts(text, at) and ends(text, end):
+            whole = starts(text, at) or _dash_before(span.document, at, joins)
+            if whole and ends(text, end) and not _cut_by_a_line(text, at, end):
                 written = normalise(span.source(at - span.start, end - span.start), casefold=False)
                 if _same_address(written.text, proposed, url):
                     return None

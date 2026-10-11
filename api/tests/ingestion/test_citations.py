@@ -657,7 +657,33 @@ def test_an_excerpt_in_chinese_starts_and_ends_at_any_character() -> None:
         ("1234 567", {"1234", "567"}),
         ("1 23", {"1", "23"}),
         ("1,234,56", {"1", "234", "56"}),
-        ("1.2345", {"1", "2345"}),
+        # one full stop or one comma: a decimal, whatever the number of its decimals (the second
+        # review of pull request #97 found "12.3456" cut into 12 and 3456)
+        ("1.2345", {"1.2345"}),
+        ("12.3456", {"12.3456"}),
+        ("12,3456", {"12.3456"}),
+        ("3.1416", {"3.1416"}),
+        ("1.0842", {"1.0842"}),
+        ("99.9999", {"99.9999"}),
+        ("12.20234", {"12.20234"}),
+        ("1234.567", {"1234.567"}),
+        ("1234,567", {"1234.567"}),
+        ("0123.456", {"123.456"}),
+        ("1234.5678", {"1234.5678"}),
+        # unless it is a month in two digits and its year, or two years, from 1900 to 2100
+        ("12.2023", {"12", "2023"}),
+        ("3.2021", {"3.2021"}),
+        ("13.2023", {"13.2023"}),
+        ("00.2023", {"0.2023"}),
+        ("01,2023", {"1.2023"}),
+        ("01.1899", {"1.1899"}),
+        ("12.2101", {"12.2101"}),
+        ("2019,2021", {"2019", "2021"}),
+        ("2019.2021", {"2019", "2021"}),
+        ("2100.1900", {"2100", "1900"}),
+        ("2019.1899", {"2019.1899"}),
+        ("1899.2019", {"1899.2019"}),
+        ("2101,2019", {"2101.2019"}),
         ("06 39 98 12 34", {"6", "39", "98", "12", "34"}),
         ("3.11.4", {"3", "11", "4"}),
         ("1 000,5 6", {"1", "0", "5", "6"}),
@@ -720,6 +746,21 @@ def test_letters_and_signs_next_to_a_run_are_not_part_of_it() -> None:
         ("Équipe de 12 personnes sur 3 sites en Europe", "12 personnes, 3 sites", True),
         ("Équipe de 12 personnes sur 3 sites en Europe", "123 personnes", False),
         ("Équipe de 12 personnes sur 3 sites en Europe", "Aucune précision", True),
+        # a decimal is one number, in both conventions
+        ("Précision de 12.3456 % sur le jeu de test", "Précision de 12 %", False),
+        ("Précision de 12.3456 % sur le jeu de test", "Valeur 3456", False),
+        ("Précision de 12.3456 % sur le jeu de test", "Précision de 12,3456 %", True),
+        ("Taux de change moyen de 1.0842 sur la période", "Taux de change de 1", False),
+        ("Taux de change moyen de 1.0842 sur la période", "Taux de 1,0842", True),
+        ("Valeur de pi arrondie à 3.1416 dans le calcul", "pi vaut 3", False),
+        ("Distance de 1234.567 km parcourue en 2023", "1234 km", False),
+        ("Distance de 1234.567 km parcourue en 2023", "567 km", False),
+        ("Distance de 1234.567 km parcourue en 2023", "1 234,567 km", True),
+        ("Distance de 1234,567 km parcourue en 2023", "1234 km", False),
+        ("Mesure de 1234.5678 unités sur le banc d'essai", "1234 unités", False),
+        ("Mesure de 1234.5678 unités sur le banc d'essai", "1234,5678 unités", True),
+        ("Ratio de 3.2021 sur l'ensemble du jeu de test", "Année 2021", False),
+        ("Coefficient 12.2023 retenu pour le calcul", "Année 2023", True),  # stated cost
     ],
 )
 def test_rule_n(source: str, value: str, holds: bool) -> None:
@@ -863,7 +904,11 @@ def pairs(text: str) -> set[tuple[int, int]]:
         ("9/2021 à ce jour", {(2021, 9)}),
         ("9/2021 - en cours", {(2021, 9)}),
         ("9/2021 jusqu'à aujourd\u2019hui", {(2021, 9)}),
-        ("9.2021 to 3.2022", {(2021, 9), (2022, 3)}),
+        ("9-2021 to 3-2022", {(2021, 9), (2022, 3)}),
+        # with a full stop one digit and four are a decimal, in a range too: "1.2021 à 3.2022"
+        # are two ratios (stated cost, second review of pull request #97)
+        ("9.2021 to 3.2022", set()),
+        ("09.2021 to 03.2022", {(2021, 9), (2022, 3)}),
     ],
 )
 def test_the_forms_of_a_month_next_to_its_year(text: str, expected: set[tuple[int, int]]) -> None:
@@ -973,7 +1018,25 @@ def test_years_are_runs_of_exactly_four_digits() -> None:
         ("Réf 2021.13.01 et 2021.12.32", set()),
         ("Réf 2021.2.01 du dossier", set()),
         ("Réf 123.2021 du dossier", set()),
-        ("En 01.2023, puis 3.2022", {2023, 2022}),
+        ("En 01.2023, puis 3.2022", {2023}),
+        ("Ratio de 1.2021 sur le jeu", set()),
+        ("Sprint 3.2021 livré à Bordeaux", set()),
+        # glued by hyphens or slashes, next to three digits or to five or more
+        ("Phone: 415-555-2019, San Francisco", set()),
+        ("Phone: (415) 555-2019, San Francisco", set()),
+        ("Tél : 0170/555/2019, Berlin", set()),
+        ("Code postal 94105-2019, San Francisco", set()),
+        ("Réf 100-2019 et 2018/123 du dossier", set()),
+        ("De 2019-2021, puis 12-2019 et 15-06-2019", {2019, 2021}),
+        ("Du 01/2019-06/2020 chez Elsan", {2019, 2020}),
+        ("Le 2019-06-15 et le 15/06/2020", {2019, 2020}),
+        ("Années 2018/2019 et 2020-21", {2018, 2019, 2020}),
+        # the cells of a row
+        ("Lignes 2019,2021,150 du tableau", {2019, 2021}),
+        ("Lignes 150,2019,7,2021 du tableau", {2019, 2021}),
+        ("Lignes 2019,150 du tableau", set()),
+        ("Lignes 2019.2021.150 du tableau", set()),
+        ("Lignes 2019,2021.150 du tableau", set()),
         ("Le 15.05.2023, puis 2012.09 et 2014.06.30", {2023, 2012, 2014}),
         ("Promotions 2019,2021 et 2018.2020", {2019, 2021, 2018, 2020}),
         ("En 2019, 2021 et 2023.", {2019, 2021, 2023}),
@@ -1152,6 +1215,21 @@ def test_a_range_that_may_be_days_and_months_is_refused_as_a_two_digit_year(
         ("Stage du 15/06 et 20/08/2019", {(2019, 8)}),  # a list is not a range
         ("Stage du 15/06, puis 20/08/2019", {(2019, 8)}),
         ("Stage du 115/06 au 20/08/2019", {(2019, 8)}),
+        # a whole date with a space on each side of its slashes (second review)
+        ("Arrivée le 15 / 06 / 2019 dans l'équipe", {(2019, 6)}),
+        ("Arrivée le 06 / 15 / 2019 dans l'équipe", {(2019, 6)}),
+        ("Du 15 / 06 / 2019 au 20 / 08 / 2019", {(2019, 6), (2019, 8)}),
+        ("Du 15 / 06 au 20 / 08 / 2019", {(2019, 8)}),
+        ("Arrivée le 05 / 06 / 2019", set()),  # 5 June or 6 May
+        ("15 / 06 / 2019 / 3", set()),
+        ("15 / 06 /2019", set()),
+        ("15/ 06 / 2019", set()),
+        ("115 / 06 / 2019", set()),
+        ("15 / 2019 / 2020", set()),
+        # with a full stop one digit and four are a decimal: no month, in a range or not
+        ("9.2021 to present", set()),
+        ("9/2021 to present", {(2021, 9)}),
+        ("9-2021 to present", {(2021, 9)}),
     ],
 )
 def test_honest_forms_that_the_first_review_found_refused(
@@ -1459,6 +1537,97 @@ def test_an_email_at_the_very_start_of_a_document_and_after_many_signs() -> None
     for dots, holds in ((63, True), (64, False)):
         source = f"Adresse {email}{'.' * dots} à jour"
         assert (rule_of(check_item("email", email, source, [source])) is None) == holds, dots
+
+
+EMAIL = "jordan@example.org"
+
+
+@pytest.mark.parametrize(
+    ("source", "holds"),
+    [
+        # another address ends right before, at a sign that no domain holds
+        ("Contacts : camille@example.org|jordan@example.org", True),
+        ("Contacts : camille@example.org/jordan@example.org", True),
+        ("Contacts : camille@example.org'|'jordan@example.org", True),
+        ("Contacts : camille@mail.my-site.example|jordan@example.org", True),
+        ("camille@example.org|jordan@example.org sont les contacts", True),
+        ("Contacts : camille@example.org.jordan@example.org", False),
+        ("Contacts : camille@example.org-jordan@example.org", False),
+        ("Contacts : camille@example.org_jordan@example.org", False),
+        ("Contacts : camille@|jordan@example.org du service", False),
+        ("Contacts : @example.org|jordan@example.org du service", True),
+        ("Écrire à mailto:camille@example.org?cc=jordan@example.org", False),
+        ("Écrire à camille.example.org|jordan@example.org", False),
+        ("Contacts : 06 39 98 12 34/jordan@example.org", False),  # stated cost
+        # a dash that is no hyphen, with nothing of an address before it
+        ("Contact \u2013jordan@example.org, Bordeaux centre", True),
+        ("Contact \u2014jordan@example.org, Bordeaux centre", True),
+        ("Contact : \u2013jordan@example.org, Bordeaux centre", True),
+        ("\u2013jordan@example.org, Bordeaux centre ville", True),
+        ("Contact -jordan@example.org, Bordeaux centre", False),  # stated cost: a hyphen
+        ("Contact :\n-jordan@example.org\n-06 39 98 12 34\n-Bordeaux", False),
+        (
+            "Contact \u2011jordan@example.org, Bordeaux centre",
+            False,
+        ),  # a hyphen that does not break
+        ("Contact marie\u2013jordan@example.org, Bordeaux", False),
+        ("Contact marie.\u2013jordan@example.org, Bordeaux", False),
+        ("Contact @\u2013jordan@example.org, Bordeaux", False),
+        # a quoted local part is not read (stated cost)
+        ('Contact : "jordan"@example.org, Bordeaux centre', False),
+    ],
+)
+def test_where_an_email_starts_after_the_second_review(source: str, holds: bool) -> None:
+    result = check_item("email", EMAIL, source, [source])
+    assert (rule_of(result) is None) == holds, result
+
+
+def test_a_quoted_local_part_is_not_read() -> None:
+    source = 'Contact : "camille.durand"@example.org, Bordeaux'
+    result = check_item("email", '"camille.durand"@example.org', source, [source])
+    assert rule_of(result) is Rule.ADDRESS_NOT_IN_SOURCE
+
+
+@pytest.mark.parametrize(
+    ("source", "value", "holds"),
+    [
+        # the user and the password of a URL
+        (
+            "Dépôt : https://camille:secret@git.example.org/cv (privé)",
+            "https://secret@git.example.org/cv",
+            False,
+        ),
+        (
+            "Dépôt : https://camille:secret@git.example.org/cv (privé)",
+            "secret@git.example.org/cv",
+            False,
+        ),
+        (
+            "Dépôt : https://camille:secret@git.example.org/cv (privé)",
+            "https://camille:secret@git.example.org/cv",
+            True,
+        ),
+        ("Dépôt : https://camille:secret@git.example.org/cv (privé)", "git.example.org/cv", False),
+        # digits after a colon are a port or a number, never the start of a host
+        ("Service : host.example:123456/x en interne", "123456/x", False),
+        ("Service : host.example:8080/x en interne", "8080/x", False),
+        ("Service : host.example:" + "1" * 80 + "/x en interne", "1" * 80 + "/x", False),
+        ("Service : host.example:123456/x en interne", "host.example:123456/x", True),
+        ("Site:123456.example/x (à jour)", "123456.example/x", True),
+        ("Site:3dprint.example/cv (à jour)", "3dprint.example/cv", True),
+        ("Site:1-2.example/cv (à jour)", "1-2.example/cv", True),
+        # a dash that is no hyphen before a URL
+        ("Site \u2013example.org/cv en ligne", "example.org/cv", True),
+        # only right before the address itself: glued before its scheme it is refused
+        ("Site \u2013https://example.org/cv en ligne", "https://example.org/cv", False),
+        ("Site -example.org/cv en ligne", "example.org/cv", False),
+        ("Site blog\u2013example.org/cv en ligne", "example.org/cv", False),
+        ("Site blog.\u2013example.org/cv en ligne", "example.org/cv", False),
+    ],
+)
+def test_where_a_url_starts_after_the_second_review(source: str, value: str, holds: bool) -> None:
+    result = check_item("url", value, source, [source])
+    assert (rule_of(result) is None) == holds, result
 
 
 def test_an_address_in_a_text_written_without_spaces() -> None:

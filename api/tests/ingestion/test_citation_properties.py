@@ -307,12 +307,16 @@ def some_number(rng: random.Random) -> tuple[int, str]:
             rng.randint(1_000_000, 99_999_999),
         )
     )
-    if rng.random() < 0.6:
+    if rng.random() < 0.5:
         return whole, ""
-    # one or two decimals, or any number of them after a zero ("0,125")
-    size = rng.randint(1, 4) if whole == 0 else rng.randint(1, 2)
-    fraction = "".join(rng.choice("0123456789") for _ in range(size - 1)) + rng.choice("123456789")
-    return whole, fraction
+    # one to five decimals after any whole part: "3,5", "0,125", "12.3456", "1234.567"
+    while True:
+        size = rng.randint(1, 5)
+        fraction = "".join(rng.choice("0123456789") for _ in range(size - 1))
+        fraction += rng.choice("123456789")
+        # but what the conventions read as two numbers: a month and its year, two years
+        if len(meanings(plain(whole, fraction))) == 1:
+            return whole, fraction
 
 
 def plain(whole: int, fraction: str) -> str:
@@ -351,21 +355,22 @@ def near_misses(whole: int, fraction: str) -> set[str]:
 
 def meanings(text: str) -> frozenset[Decimal]:
     """The numbers that a number written with at most one full stop means, by the conventions
-    of the plan: a decimal part has one or two digits, or any number of them after a zero;
-    three digits after one to three are a group of thousands; four digits after a month or
-    after four digits are a second number; four digits or more are otherwise decimals. Where
-    it means two numbers, both must be in the source."""
+    of the plan: three digits after one to three that do not start with 0 are a group of
+    thousands; a year from 1900 to 2100 after a month in two digits or after another such year
+    is a second number; anything else is one decimal, whatever the number of its decimals.
+    Where it means two numbers, both must be in the source."""
     whole, _, fraction = text.partition(".")
     if not fraction:
         return frozenset({Decimal(whole)})
-    if len(fraction) <= 2 or whole == "0":
-        return frozenset({Decimal(text)})
-    two = frozenset({Decimal(whole), Decimal(fraction)})
-    if len(fraction) == 3:
-        grouped = len(whole) <= 3 and not whole.startswith("0")
-        return frozenset({Decimal(whole + fraction)}) if grouped else two
-    if len(fraction) == 4 and (len(whole) == 4 or (len(whole) <= 2 and 1 <= int(whole) <= 12)):
-        return two
+    if len(fraction) == 3 and len(whole) <= 3 and not whole.startswith("0"):
+        return frozenset({Decimal(whole + fraction)})
+
+    def year(digits: str) -> bool:
+        return len(digits) == 4 and 1900 <= int(digits) <= 2100
+
+    month = len(whole) == 2 and 1 <= int(whole) <= 12
+    if year(fraction) and (year(whole) or month):
+        return frozenset({Decimal(whole), Decimal(fraction)})
     return frozenset({Decimal(text)})
 
 
@@ -544,6 +549,7 @@ def month_forms(year: int, month: int, day: int) -> list[str]:
             f"{month:02d}/{day}/{year}",
             f"{month:02d}-{day}-{year}",
             f"{day}/{month}/{year}",
+            f"{day} / {month:02d} / {year}",
         ]
     return forms
 
@@ -567,7 +573,6 @@ def year_only_forms(year: int, month: int, day: int) -> list[str]:
         f"{fr}x {year}",
         # a month in one digit, outside a range
         f"{month % 9 + 1}/{year}",
-        f"{month % 9 + 1}.{year}",
         f"{low:02d}/{max(month, other):02d}/{year}" if low != max(month, other) else f"{year}",
         f"{month:02d}/{other:02d}/{year}",
         f"{other:02d}-{month:02d}-{year}",
@@ -643,6 +648,56 @@ def test_a_form_that_gives_no_month_supports_the_year_alone(seed: int) -> None:
                 result = check_item("date", f"{year}-{claimed:02d}", cited, [source])
                 assert isinstance(result, Refusal), (seed, source, claimed)
                 assert result.rule in (Rule.MONTH_NOT_IN_SOURCE, Rule.MONTH_APART_FROM_YEAR)
+
+
+@seeded
+def test_a_year_is_never_cut_out_of_a_phone_number_or_a_decimal(seed: int) -> None:
+    """Four digits that end a phone number, a postcode or a decimal are not a year, however
+    the number is written (the second review of pull request #97 found the hyphens and the
+    slashes), and the honest forms that look like them keep their year."""
+    rng = generator(4500 + seed)
+    for _ in range(8):
+        year = rng.randint(1990, 2026)
+        area, exchange = rng.randint(200, 989), rng.randint(200, 989)
+        other = rng.randint(1900, 2100)
+        cut_out = (
+            f"{area}-{exchange}-{year}",
+            f"({area}) {exchange}-{year}",
+            f"0{area}/{exchange}/{year}",
+            f"{area}.{exchange}.{year}",
+            f"+1 {area} {exchange} {year}",
+            f"{rng.randint(10_000, 99_999)}-{year}",
+            f"{year}-{rng.randint(10_000, 99_999)}",
+            f"{year},{rng.randint(10, 99)}",
+            f"{year}.{rng.randint(13, 99)}",
+            f"0.{year}",
+            f"{rng.randint(1, 9)}.{year}",
+            f"{rng.randint(13, 99)}.{year}",
+            f"{exchange} {year} {area}",
+        )
+        for form in cut_out:
+            source = f"Référence {form}, dossier suivi à Bordeaux"
+            result = check_item("date", f"{year}", source, [source])
+            assert refused(result, Rule.YEAR_NOT_IN_SOURCE), (seed, source, result)
+        month, day = rng.randint(1, 12), rng.randint(13, 28)
+        whole = (
+            f"{year}-{other}",
+            f"{year}/{other}",
+            f"{month:02d}-{year}",
+            f"{day}-{month:02d}-{year}",
+            f"{year}-{month:02d}-{day}",
+            f"{month:02d}.{year}",
+            f"{day}.{month:02d}.{year}",
+            f"{year},{other}",
+            f"{year},{other},{exchange}",
+            f"{year} {other}",
+            f"{year} {other} {rng.randint(1900, 2100)}",
+            f"{day} {month:02d} {year}",
+        )
+        for form in whole:
+            source = f"Référence {form}, dossier suivi à Bordeaux"
+            result = check_item("date", f"{year}", source, [source])
+            assert isinstance(result, Accepted), (seed, source, result)
 
 
 CONNECTORS = (" à ", " au ", " to ", " until ", " till ", " through ", " - ", "-", " \u2013 ")
