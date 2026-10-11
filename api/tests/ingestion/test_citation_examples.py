@@ -100,6 +100,7 @@ def test_every_rule_of_a_refusal_has_an_example_or_a_unit_test() -> None:
         Rule.EXCERPT_TOO_SHORT,
         Rule.EXCERPT_NOT_WHOLE_DOCUMENT,
         Rule.SETTING,
+        Rule.VALUE_EMPTY,
         Rule.ADDRESS_NOT_IN_SOURCE,
         Rule.NAME_NOT_IN_SOURCE,
         Rule.YEAR_NOT_IN_SOURCE,

@@ -265,11 +265,19 @@ def _cluster_end(text: str, start: int) -> int:
     return end
 
 
+# Format characters that a reader sees: the Arabic number signs and the end of ayah, the
+# Syriac abbreviation mark, the Arabic pound and piastre marks, the Mongolian vowel separator,
+# the Kaithi number signs. Between two numbers they separate them, as a control character does.
+_FORMAT_SIGNS = frozenset(
+    "\u0600\u0601\u0602\u0603\u0604\u0605\u06dd\u070f\u0890\u0891\u08e2\u180e\U000110bd\U000110cd"
+)
+
+
 def _invisible(char: str, category: str) -> bool:
     """Format characters (soft hyphen, zero width, bidi controls, tags), variation selectors and
     the grapheme joiner: nothing a reader sees."""
     return (
-        category == "Cf"
+        (category == "Cf" and char not in _FORMAT_SIGNS)
         or "\ufe00" <= char <= "\ufe0f"
         or "\U000e0100" <= char <= "\U000e01ef"
         or char == "\u034f"
@@ -281,7 +289,7 @@ def _fold(cluster: str, casefold: bool) -> str:
     kept = []
     for char in cluster.translate(_FOLDS):
         category = unicodedata.category(char)
-        if category == "Cc":
+        if category == "Cc" or char in _FORMAT_SIGNS:
             kept.append("\n")
         elif not _invisible(char, category):
             kept.append(char)
@@ -1531,34 +1539,96 @@ def _bones(text: str, *, casefold: bool = True) -> str:
     return skeleton(normalise(text, casefold=casefold).text).text
 
 
-def _words_kept(text: str, bones: Skeleton, at: int, value: Skeleton) -> bool:
-    """Whether the value splits its words where the document does. Where the document writes one
+_LINE_BREAK = re.compile(r"\r\n|[\n\r\x85\u2028]")
+_FREE, _SOFT, _HARD = 0, 1, 2
+
+
+class _Read(NamedTuple):
+    """A span as rule V reads it for a name, made once per item: its text, the skeleton of that
+    text, and what each break of it is in the stored text."""
+
+    span: Span
+    text: str
+    bones: Skeleton
+    hard: frozenset[int]  # more than one line break: no name goes across
+    soft: frozenset[int]  # one line break: two words of a name, never one word
+
+
+def _break(raw: str) -> int:
+    """What a break of N is in the stored text, for a name. One line break, indented or not,
+    may stand between two words of a name. A blank line, a page break, a tab, a gap of three
+    spaces or more or a sign that N reads as a break may not. A break that the stored text
+    does not write (around a superscript) or that follows a soft hyphen asks for nothing."""
+    rest, lines = _LINE_BREAK.subn("", raw)
+    blanks = 0
+    for char in rest:
+        category = unicodedata.category(char)
+        if char == "\t" or category == "Zs":
+            blanks += 1
+        elif not _invisible(char, category):
+            return _HARD
+    if lines > 1 or (not lines and (blanks >= 3 or "\t" in rest)):
+        return _HARD
+    return _SOFT if lines and "\u00ad" not in rest else _FREE
+
+
+def _read(span: Span) -> _Read:
+    document = span.document
+    source, origin = document.source, document.origin
+    text = span.text
+    kinds: tuple[set[int], set[int], set[int]] = (set(), set(), set())
+    at = text.find("\n")
+    while at >= 0:
+        place = span.start + at  # N has no break at its ends: both neighbours exist
+        raw = source[_cluster_end(source, origin[place - 1]) : origin[place + 1]]
+        kinds[_break(raw)].add(at)
+        at = text.find("\n", at + 1)
+    return _Read(span, text, skeleton(text), frozenset(kinds[_HARD]), frozenset(kinds[_SOFT]))
+
+
+def _words_kept(read: _Read, at: int, value: Skeleton, norm: str) -> bool:
+    """Whether the value splits its words where the document does. Where the document writes a
     space between two characters of the match, the value has a space or a hyphen, and the value
-    has none inside a token of the document. A hyphen or a break in the document asks for
-    nothing, since it may be a word cut at the end of a line: "Therapist" is not written in
-    "the rapist" nor "Dev Tech" in "DevTech", and "University" is in "Uni-" then "versity"."""
+    has none inside a token of the document: "Therapist" is not written in "the rapist" nor
+    "Dev Tech" in "DevTech". A hyphen in the document asks for nothing, since it may be a word
+    cut at the end of a line: "University" is in "Uni-" then "versity". A dash with a space
+    beside it separates two things, and the value must write a hyphen there too. One line
+    break may stand between two words of a name, and inside one word only after a hyphen.
+    Nothing goes across a blank line, a page break or the gap between two columns."""
+    text, bones = read.text, read.bones
     for offset in range(len(value.text) - 1):
         before, after = bones.index[at + offset], bones.index[at + offset + 1]
         glued = value.index[offset + 1] - value.index[offset] == 1
-        if glued and after - before == 2 and text[before + 1] == " ":
-            return False
-        if not glued and after - before == 1 and _inside(text, after):
-            return False
+        if after - before == 1:
+            if not glued and _inside(text, after):
+                return False
+            continue
+        gap = text[before + 1 : after]  # spaces, breaks and hyphens
+        if " " in gap:
+            typed = norm[value.index[offset] + 1 : value.index[offset + 1]]
+            if glued or ("-" in gap and "-" not in typed):
+                return False
+        place = gap.find("\n")
+        while place >= 0:
+            where = before + 1 + place
+            cut_word = gap[place - 1 : place] == "-"
+            if where in read.hard or (glued and where in read.soft and not cut_word):
+                return False
+            place = gap.find("\n", place + 1)
     return True
 
 
-def _name(value: str, norm: str, spans: Sequence[Span]) -> Rule | None:
+def _name(value: str, norm: str, reads: Sequence[_Read]) -> Rule | None:
     wanted = skeleton(norm)
     size = len(wanted.text)
-    if not size:
-        return Rule.VALUE_EMPTY
+    if not any(char.isalnum() for char in wanted.text):
+        return Rule.VALUE_EMPTY  # nothing, or punctuation alone
     if size > SPAN_MAX:
         return Rule.NAME_NOT_IN_SOURCE  # longer than any span
     # A short name is compared with its capitals, as the document writes them at that place.
     exact = _bones(value, casefold=False) if size < SHORT_NAME else ""
-    for span in spans:
-        text = span.text
-        bones = skeleton(text)
+    for read in reads:
+        span, text, bones = read.span, read.text, read.bones
         at = bones.text.find(wanted.text)
         for _ in range(OCCURRENCES_MAX):
             if at < 0:
@@ -1568,7 +1638,7 @@ def _name(value: str, norm: str, spans: Sequence[Span]) -> Rule | None:
                 is_token_boundary(text, start)
                 and is_token_boundary(text, end)
                 and (size >= SHORT_NAME or _bones(span.source(start, end), casefold=False) == exact)
-                and _words_kept(text, bones, at, wanted)
+                and _words_kept(read, at, wanted, norm)
             ):
                 return None
             at = bones.text.find(wanted.text, at + 1)
@@ -1617,7 +1687,8 @@ def rule_name(value: str, spans: Sequence[Span]) -> Rule | None:
     skeleton has fewer than four characters must also be written there with the same capitals.
     Then rule N, since digits in a name are numbers."""
     norm = normalise(value)
-    return _name(value, norm.text, spans) or _Evidence(spans).numbers(norm, value)
+    evidence = _Evidence(spans)
+    return _name(value, norm.text, evidence.reads()) or evidence.numbers(norm, value)
 
 
 def rule_date(value: str, spans: Sequence[Span]) -> Rule | None:
@@ -1653,6 +1724,14 @@ class _Evidence:
         self._runs: frozenset[str] | None = None
         self._forms: frozenset[str] = frozenset()
         self._readings: set[str] = set()
+        self._reads: list[_Read] | None = None
+
+    def reads(self) -> list[_Read]:
+        """The spans as rule V reads them for a name: a value of two thousand names costs each
+        span one skeleton, not two thousand."""
+        if self._reads is None:
+            self._reads = [_read(span) for span in self.spans]
+        return self._reads
 
     def dates(self) -> DateFacts:
         if self._dates is None:
@@ -1735,7 +1814,7 @@ class _Evidence:
         if field_type is FieldType.URL:
             return _address(value, norm, self.spans, url=True), norm
         if field_type is FieldType.NAME:
-            return _name(value, norm, self.spans) or self.numbers(normalised, value), norm
+            return _name(value, norm, self.reads()) or self.numbers(normalised, value), norm
         return self.numbers(normalised, value), norm
 
 

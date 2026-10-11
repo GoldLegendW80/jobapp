@@ -115,6 +115,34 @@ def test_a_control_character_is_a_break_never_a_join(char: str) -> None:
     assert numbers_of(n(f"5{char}100")) == {"5", "100"}
 
 
+@pytest.mark.parametrize(
+    "char",
+    [
+        "\u0600",
+        "\u0601",
+        "\u0602",
+        "\u0603",
+        "\u0604",
+        "\u0605",
+        "\u06dd",
+        "\u070f",
+        "\u0890",
+        "\u0891",
+        "\u08e2",
+        "\u180e",
+        "\U000110bd",
+        "\U000110cd",
+    ],
+)
+def test_a_format_character_that_has_a_glyph_is_a_break_never_a_join(char: str) -> None:
+    """The first review of pull request #97: "5", the end of ayah, "100" read 5100."""
+    assert n(f"5{char}100") == "5\n100"
+    assert numbers_of(n(f"5{char}100")) == {"5", "100"}
+    source = f"Équipe de 5{char}100 % en télétravail complet"
+    result = check_item("text", "5100 personnes", source, [source])
+    assert rule_of(result) is Rule.NUMBER_NOT_IN_SOURCE
+
+
 def test_step_3_nfkc_unfolds_ligatures_and_spaces() -> None:
     assert n("Certiﬁcation") == "certification"
     assert n("oﬀice ﬃ ﬆ") == "office ffi st"
@@ -1394,6 +1422,83 @@ def test_the_address_must_lie_inside_the_span() -> None:
 def test_rule_v_for_a_name(source: str, value: str, holds: bool) -> None:
     result = check_item("name", value, source, [source])
     assert (rule_of(result) is None) == holds, result
+
+
+@pytest.mark.parametrize("value", ["", " ", ",", " - ", "...", "(\u2013)", "\u200b", "\n"])
+def test_a_name_without_a_letter_or_a_digit_is_empty(value: str) -> None:
+    source = "Consultant chez DevTech Solutions, à Bordeaux (2021 \u2013 2023)..."
+    assert rule_of(check_item("name", value, source, [source])) is Rule.VALUE_EMPTY
+    languages = "Développeur C++ chez Elsan, à Bordeaux"
+    assert rule_of(check_item("name", "C++", languages, [languages])) is None
+
+
+THALES = "Ingénieur chez Thales{}Group manager chez Elsan"
+UNIVERSITY = "Master of Science, Uni{}versity of Bordeaux"
+DASH = "Betclic{}GenAI Engineer, Bordeaux, depuis 2021"
+
+
+@pytest.mark.parametrize(
+    ("source", "value", "holds"),
+    [
+        # one line break may stand between two words of a name, indented or not
+        (THALES.format("\n"), "Thales Group", True),
+        (THALES.format("\r\n"), "Thales Group", True),
+        (THALES.format("\r"), "Thales Group", True),
+        (THALES.format("\x85"), "Thales Group", True),
+        (THALES.format("\u2028"), "Thales Group", True),
+        (THALES.format(" \n      "), "Thales Group", True),
+        (THALES.format("\n\t"), "Thales Group", True),
+        (THALES.format("\u200b\n"), "Thales Group", True),
+        (THALES.format("\n"), "Thales-Group", True),
+        (THALES.format("  "), "Thales Group", True),  # two spaces are a space
+        # never inside one word, unless a hyphen cut it there
+        (THALES.format("\n"), "ThalesGroup", False),
+        (UNIVERSITY.format("-\n"), "University of Bordeaux", True),
+        (UNIVERSITY.format("\u00ad\n"), "University of Bordeaux", True),
+        (UNIVERSITY.format("-"), "University of Bordeaux", True),
+        (UNIVERSITY.format("\n"), "University of Bordeaux", False),
+        (UNIVERSITY.format("\n-"), "University of Bordeaux", False),
+        (UNIVERSITY.format("-\n\n"), "University of Bordeaux", False),
+        # nothing goes across a blank line, a page break, a tab or the gap between two columns
+        (THALES.format("\n\n"), "Thales Group", False),
+        (THALES.format("\r\n\r\n"), "Thales Group", False),
+        (THALES.format("\n\n\x0c"), "Thales Group", False),
+        (THALES.format("\x0c"), "Thales Group", False),
+        (THALES.format("\n\x0c"), "Thales Group", False),
+        (THALES.format("\x0b"), "Thales Group", False),
+        (THALES.format("\t"), "Thales Group", False),
+        (THALES.format(" \t"), "Thales Group", False),
+        (THALES.format("   "), "Thales Group", False),
+        (THALES.format("          "), "Thales Group", False),
+        (THALES.format("\u00a0\u00a0\u00a0"), "Thales Group", False),
+        (THALES.format("\u2029"), "Thales Group", False),
+        (THALES.format("\u06dd"), "Thales Group", False),
+        (THALES.format("\u06dd\n"), "Thales Group", False),
+        (THALES.format("\x00"), "Thales Group", False),
+        # a dash with a space beside it separates two things
+        (DASH.format(" - "), "BetclicGenAI", False),
+        (DASH.format(" -"), "BetclicGenAI", False),
+        (DASH.format("- "), "BetclicGenAI", False),
+        (DASH.format(" - "), "Betclic GenAI", False),
+        (DASH.format(" \u2013 "), "Betclic GenAI", False),
+        (DASH.format(" -\n"), "Betclic GenAI", False),
+        (DASH.format(" - "), "Betclic - GenAI", True),
+        (DASH.format(" \u2013 "), "Betclic - GenAI", True),
+        (DASH.format(" - "), "Betclic-GenAI", True),
+        (DASH.format("-"), "BetclicGenAI", True),
+        (DASH.format("-"), "Betclic GenAI", True),
+        # a break that the stored text does not write asks for nothing
+        ("Laboratoire CO\u2082 Tech, Bordeaux, depuis 2021", "CO\u2082 Tech", True),
+        ("Laboratoire CO\u2082Tech, Bordeaux, depuis 2021", "CO\u2082Tech", True),
+    ],
+)
+def test_what_may_stand_inside_a_name(source: str, value: str, holds: bool) -> None:
+    """The first review of pull request #97: a name passed across a blank line, a page break,
+    two columns and a spaced dash."""
+    result = check_item("name", value, source, [source])
+    assert (rule_of(result) is None) == holds, result
+    if not holds:
+        assert rule_of(result) is Rule.NAME_NOT_IN_SOURCE
 
 
 @pytest.mark.parametrize(

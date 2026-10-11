@@ -114,6 +114,20 @@ def fill(unit: str, size: int) -> str:
     return unit * (size // len(unit))
 
 
+def sound(text: str, result: Accepted | Refusal) -> None:
+    """The answer holds together whatever the text: a refusal says its rule in the module's own
+    sentence and names a place by the caller's words, an acceptance cites the text at its own
+    offsets."""
+    if isinstance(result, Refusal):
+        assert result.reason == citations.REASONS[result.rule]
+        assert re.fullmatch(r"(?:value|excerpts\[\d+\])?", result.index), result.index
+        return
+    assert result.citations
+    for citation in result.citations:
+        assert 0 <= citation.start < citation.end <= len(text)
+        assert text[citation.start : citation.end] == citation.excerpt
+
+
 @pytest.fixture(scope="module")
 def large() -> str:
     return cv(LARGE)
@@ -170,8 +184,17 @@ def test_an_item_is_checked_against_500_000_characters_in_bounded_time(large: st
         "phone": "06 39 98 12 34",
         "terms": ["python", "docker"] * 500,
     }
+    # the text holds every part of the value but a phone number that stands alone
     result = check_item(types, value, document, excerpts)
-    assert isinstance(result, Accepted | Refusal)
+    assert result == Refusal(
+        "value.phone", Rule.PHONE_NOT_IN_SOURCE, citations.REASONS[Rule.PHONE_NOT_IN_SOURCE]
+    )
+    held = check_item(types, {**value, "phone": None}, document, excerpts)
+    assert isinstance(held, Accepted)
+    assert [large[citation.start : citation.end] for citation in held.citations] == [
+        citation.excerpt for citation in held.citations
+    ]
+    assert len(held.citations) == citations.EXCERPTS_MAX
     elapsed = cpu(lambda: check_item(types, value, document, excerpts))
     assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"
     # and without the prepared document, the same answer, in the time of one more pass
@@ -274,7 +297,7 @@ def test_a_crafted_document_costs_no_more_than_its_size(unit: str) -> None:
             started = time.process_time()
             result = check_item(field, value, document, excerpts[:3])
             elapsed = time.process_time() - started
-            assert isinstance(result, Accepted | Refusal)
+            sound(text, result)
             assert elapsed < CHECK_BUDGET_S, f"{field}: {elapsed:.3f} s"
 
 
@@ -351,7 +374,10 @@ def test_a_crafted_value_costs_no_more_than_its_size(value: str) -> None:
         started = time.process_time()
         result = check_item(field, value, document, [SOURCE])
         elapsed = time.process_time() - started
-        assert isinstance(result, Accepted | Refusal)
+        sound(SOURCE, result)
+        if field not in ("text", "term"):  # no address, name or phone number of that size
+            assert isinstance(result, Refusal), field
+            assert result.index == "value"
         assert elapsed < CHECK_BUDGET_S, f"{field}: {elapsed:.3f} s"
     for field in ("date", "setting"):
         assert isinstance(check_item(field, value, document, [SOURCE]), Refusal)
@@ -384,14 +410,52 @@ def test_twenty_excerpts_and_two_thousand_parts() -> None:
     assert elapsed < 3 * CHECK_BUDGET_S, f"{elapsed:.3f} s"
 
 
+def test_two_thousand_names_read_each_span_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first review of pull request #97: every span was made into its skeleton again for
+    every name of the value, 3.3 s of CPU for one item whose names the last span holds."""
+    text = cv(20_000, seed=3).replace("\n", " ") + " zèbre quokka okapi wombat narval"
+    document = prepare(text)
+    excerpts = []
+    for position in range(citations.EXCERPTS_MAX - 1):
+        start = text.index(" ", position * 900) + 1
+        excerpts.append(text[start : text.index(" ", start + 560)])
+    excerpts.append(text[-580:])
+    names = ["Zèbre Quokka Okapi"] * citations.VALUE_LEAVES_MAX
+    made = []
+    skeleton = citations.skeleton
+
+    def counted(norm: str) -> citations.Skeleton:
+        made.append(len(norm))
+        return skeleton(norm)
+
+    monkeypatch.setattr(citations, "skeleton", counted)
+    result = check_item("name", names, document, excerpts)
+    assert isinstance(result, Accepted)
+    assert len(result.citations) == citations.EXCERPTS_MAX
+    # one per name, one per excerpt to find it, one per span to read it
+    assert len(made) <= len(names) + 2 * len(excerpts)
+    monkeypatch.undo()
+    elapsed = cpu(lambda: check_item("name", names, document, excerpts), repeat=1)
+    assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"
+    # and a name that no span holds costs no more
+    absent = ["Zèbre Quokka Wombat"] * citations.VALUE_LEAVES_MAX
+    assert check_item("name", absent, document, excerpts) == Refusal(
+        "value[0]", Rule.NAME_NOT_IN_SOURCE, citations.REASONS[Rule.NAME_NOT_IN_SOURCE]
+    )
+
+
 def test_a_name_or_an_address_present_everywhere_in_a_span_is_bounded() -> None:
     """At most OCCURRENCES_MAX places of a span are looked at for one value."""
     letters = "ab " * 600
     document = prepare(letters)
     span = letters[: 3 * 190]
-    for field, value in (("name", "ab " * 150 + "abab"), ("email", "ab"), ("url", "b ab")):
+    for field, value, rule in (
+        ("name", "ab " * 150 + "abab", Rule.NAME_NOT_IN_SOURCE),
+        ("email", "ab", Rule.ADDRESS_NOT_IN_SOURCE),
+        ("url", "b ab", Rule.ADDRESS_NOT_IN_SOURCE),
+    ):
         result = check_item(field, value, document, [span] * citations.EXCERPTS_MAX)
-        assert isinstance(result, Accepted | Refusal)
+        assert result == Refusal("value", rule, citations.REASONS[rule])
         elapsed = cpu(
             lambda field=field, value=value: check_item(
                 field, value, document, [span] * citations.EXCERPTS_MAX
