@@ -3,6 +3,7 @@ database: these validate dictionaries exactly as the API receives them (parsed J
 
 import copy
 import json
+import re
 import unicodedata
 from typing import Any
 
@@ -16,6 +17,10 @@ from app.profile.schemas import (
     SECTIONS,
     check_regex,
     completeness,
+    format_period,
+    parse_period,
+    period_key,
+    period_span,
     validate_section,
 )
 from tests.profile.conftest import FULL, full
@@ -344,6 +349,162 @@ def test_experience_bad_month(month: str) -> None:
     assert "YYYY-MM" in msg
 
 
+# The four dates of the section: a month, or a year alone (P7).
+DATE_FIELDS = ["employers.start", "employers.end", "education.start", "education.end"]
+
+
+def dated(field: str, value: Any, **other: Any) -> dict[str, Any]:
+    """A section whose one employer or one school carries `value` in one date field. The
+    employer starts in 1900 when its end is the field under test, so the order rule is quiet."""
+    kind, name = field.split(".")
+    if kind == "employers":
+        entry = {"key": "a", "organisation": "A", "title": "T", "start": "1900", **other}
+    else:
+        entry = {"school": "S", "degree": "D", **other}
+    entry[name] = value
+    return {kind: [entry]}
+
+
+def stored_date(field: str, value: Any, **other: Any) -> Any:
+    kind, name = field.split(".")
+    return validate_section("experience", dated(field, value, **other))[kind][0][name]
+
+
+@pytest.mark.parametrize("field", DATE_FIELDS)
+@pytest.mark.parametrize(
+    "value", ["2021", "2021-03", "1900", "2100", "1900-01", "2100-12", "2021-01", "2021-12"]
+)
+def test_a_year_alone_and_a_month_are_stored_as_written(field: str, value: str) -> None:
+    assert stored_date(field, value) == value
+    # No padding and no shortening, however often the stored form is validated again.
+    kind = field.split(".")[0]
+    once = validate_section("experience", dated(field, value))
+    assert validate_section("experience", once) == once
+    assert json.dumps(once[kind][0]).count(f'"{value}"') == 1
+
+
+@pytest.mark.parametrize("field", DATE_FIELDS)
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2021-3",  # the month takes two digits
+        "21",  # a two digit year is never read
+        "2021-13",
+        "2021-00",
+        "1899",
+        "2101",
+        "1899-12",
+        "2101-01",
+        "2021/03",
+        "2021.03",
+        "2021-03-01",  # a day
+        "03-2021",
+        "03/2021",
+        "2021-",
+        "-03",
+        "20211",
+        "202",
+        "2021 03",
+        "2021-03-",
+        "March 2021",
+        "2021-Q1",
+        "2021-2023",
+        "present",
+        "+2021",
+        "2021.0",
+        "0x7e5",
+    ],
+)
+def test_a_date_in_any_other_form_is_refused_with_the_rule(field: str, value: str) -> None:
+    kind, name = field.split(".")
+    loc, msg = first("experience", dated(field, value))
+    assert loc == f"{kind}.0.{name}"
+    assert msg == (
+        "Value error, must be a year or a month, written YYYY or YYYY-MM, between 1900 and 2100"
+    )
+
+
+@pytest.mark.parametrize("field", DATE_FIELDS)
+@pytest.mark.parametrize("value", [2021, 2021.0, 202103, True, ["2021"], {"year": 2021}])
+def test_a_date_is_text_never_a_number(field: str, value: Any) -> None:
+    kind, name = field.split(".")
+    loc, msg = first("experience", dated(field, value))
+    assert loc == f"{kind}.0.{name}"
+    assert msg == "Input should be a valid string"
+
+
+@pytest.mark.parametrize("field", DATE_FIELDS[1:])
+@pytest.mark.parametrize("value", ["", "   ", None])
+def test_an_optional_date_left_empty_is_null(field: str, value: Any) -> None:
+    assert stored_date(field, value) is None
+
+
+def test_the_employer_start_is_still_required() -> None:
+    entry = {"key": "a", "organisation": "A", "title": "T"}
+    assert first("experience", {"employers": [entry]}) == ("employers.0.start", "Field required")
+    loc, msg = first("experience", dated("employers.start", ""))
+    assert (loc, msg) == ("employers.0.start", "String should have at least 1 character")
+    loc, msg = first("experience", dated("employers.start", None))
+    assert (loc, msg) == ("employers.0.start", "Input should be a valid string")
+    # An end alone does not stand in for it.
+    assert first("experience", {"employers": [{**entry, "end": "2023"}]})[0] == "employers.0.start"
+
+
+def test_a_date_is_stripped_but_never_rewritten() -> None:
+    assert stored_date("employers.start", "  2021 ") == "2021"
+    assert stored_date("education.end", "\t2021-03\n") == "2021-03"
+
+
+# start, end, accepted. Only what is certain is refused: the last month the end can mean is
+# before the first month the start can mean.
+RANGES = [
+    ("2023-05", "2023", True),  # the end may be December 2023
+    ("2023", "2022-12", False),  # the start is January 2023 at the earliest
+    ("2023", "2023", True),
+    ("2023-06", "2023-05", False),
+    ("2021", "2021-03", True),  # the start may be January 2021
+    ("2021-03", "2021", True),
+    ("2023-12", "2023", True),
+    ("2024-01", "2023", False),
+    ("2023", "2023-01", True),
+    ("2023", "2024", True),
+    ("2024", "2023", False),
+    ("2023-05", "2023-05", True),
+    ("2023-05", "2023-06", True),
+    ("1900", "2100", True),
+    ("2100", "1900", False),
+    ("1999-12", "2000", True),
+    ("2000", "1999-12", False),
+    ("2000-01", "1999", False),
+]
+
+
+@pytest.mark.parametrize("kind", ["employers", "education"])
+@pytest.mark.parametrize(("start", "end", "accepted"), RANGES)
+def test_end_before_start_compares_periods(kind: str, start: str, end: str, accepted: bool) -> None:
+    data = dated(f"{kind}.end", end, start=start)
+    if accepted:
+        entry = validate_section("experience", data)[kind][0]
+        assert (entry["start"], entry["end"]) == (start, end)
+    else:
+        assert first("experience", data) == (
+            f"{kind}.0",
+            "Value error, end must not be before start",
+        )
+
+
+def test_the_order_rule_is_not_a_comparison_of_text() -> None:
+    # As text "2023" is before "2023-05": the month only model compared strings.
+    assert "2023" < "2023-05"
+    assert stored_date("employers.end", "2023", start="2023-05") == "2023"
+
+
+def test_a_date_that_is_not_a_period_is_reported_before_the_order() -> None:
+    loc, msg = first("experience", dated("employers.end", "2021-3", start="2023"))
+    assert loc == "employers.0.end"
+    assert "YYYY or YYYY-MM" in msg
+
+
 def test_experience_end_before_start() -> None:
     data = with_("experience", "employers.1.end", "2022-12")
     loc, msg = first("experience", data)
@@ -351,6 +512,112 @@ def test_experience_end_before_start() -> None:
     assert msg == "Value error, end must not be before start"
     data = with_("experience", "education.0.end", "2022-08")
     assert first("experience", data)[0] == "education.0"
+
+
+def _month_only(value: str) -> bool:
+    """The rule of the model before P7, copied here: a month YYYY-MM, 1900 to 2100."""
+    match = re.fullmatch(r"(\d{4})-(0[1-9]|1[0-2])", value)
+    return bool(match) and 1900 <= int(match.group(1)) <= 2100
+
+
+def test_every_date_valid_before_is_still_valid_and_unchanged() -> None:
+    """No stored value needs a migration: the new rule accepts all the old one did, as it is."""
+    months = [f"{year:04d}-{month:02d}" for year in range(1900, 2101) for month in range(1, 13)]
+    # The old pattern took the digits of other scripts for the year: still accepted, see schemas.
+    months += ["٢٠٢١-03", "２０２１-12"]
+    assert all(_month_only(value) for value in months)
+    for field in DATE_FIELDS:
+        assert [stored_date(field, value) for value in months] == months
+
+
+def test_a_profile_saved_before_the_change_loads_and_saves_unchanged() -> None:
+    """The stored form of a month only section, key order included, is what comes back."""
+    before = full("experience")
+    assert all(_month_only(e["start"]) for e in before["employers"])
+    stored = validate_section("experience", before)
+    assert json.dumps(stored) == json.dumps(FULL["experience"])
+    assert completeness({"experience": stored}).sections["experience"].percent == 100
+
+
+# --- periods: the order, the span and the words -------------------------------------------------
+
+
+def test_period_key_orders_a_year_alone_before_the_months_of_its_year() -> None:
+    values = ["2022", "2021-12", "2021", "2020-12", "2021-01", "2022-01", "2021-06"]
+    assert sorted(values, key=period_key) == [
+        "2020-12",
+        "2021",
+        "2021-01",
+        "2021-06",
+        "2021-12",
+        "2022",
+        "2022-01",
+    ]
+    assert period_key("2021") == (2021, 0)
+    assert period_key("2021-03") == (2021, 3)
+
+
+def test_period_key_is_a_total_order_so_sorting_is_stable_and_defined() -> None:
+    values = [str(year) for year in range(1900, 2101)]
+    values += [f"{year}-{month:02d}" for year in range(1900, 2101) for month in range(1, 13)]
+    assert len({period_key(value) for value in values}) == len(values)
+    # Newest first, the way a list of employers reads: a year alone after its months.
+    newest = sorted(["2021", "2021-03", "2020", "2021-11"], key=period_key, reverse=True)
+    assert newest == ["2021-11", "2021-03", "2021", "2020"]
+
+
+def test_period_span_is_the_first_and_last_month_a_period_can_mean() -> None:
+    assert period_span("2021") == (2021 * 12, 2021 * 12 + 11)
+    assert period_span("2021-01") == (2021 * 12, 2021 * 12)
+    assert period_span("2021-12") == (2021 * 12 + 11, 2021 * 12 + 11)
+    assert period_span("2022-01")[0] == period_span("2021")[1] + 1
+    # A duration that invents nothing reads a start at its last month and an end at its first:
+    # 2021 to 2023 is at least January 2023 minus December 2021, and one same year is zero.
+    assert period_span("2023")[0] - period_span("2021")[1] == 13
+    assert max(0, period_span("2021")[0] - period_span("2021")[1]) == 0
+
+
+def test_format_period_prints_a_year_alone_as_the_year() -> None:
+    assert format_period("2021") == "2021"
+    assert format_period("2021-03") == "March 2021"
+    assert [format_period(f"1999-{month:02d}") for month in range(1, 13)] == [
+        f"{name} 1999" for name in schemas.MONTH_NAMES
+    ]
+    for year in ("1900", "2021", "2100"):
+        assert not any(name in format_period(year) for name in schemas.MONTH_NAMES)
+
+
+@pytest.mark.parametrize("value", ["", "2021-3", "21", "2021-13", "1899", "2101", None, 2021])
+@pytest.mark.parametrize("read", [period_key, period_span, format_period, parse_period])
+def test_period_helpers_refuse_what_is_not_a_period(read: Any, value: Any) -> None:
+    with pytest.raises(ValueError, match="YYYY or YYYY-MM"):
+        read(value)
+
+
+def test_the_json_schema_describes_both_forms() -> None:
+    """What the OpenAPI document shows for the four dates (the import body carries the models)."""
+    defs = schemas.ImportIn.model_json_schema()["$defs"]
+    required = defs["Employer"]["properties"]["start"]
+    assert required["type"] == "string"
+    assert "YYYY-MM" in required["description"]
+    assert "YYYY," in required["description"]
+    assert required["examples"] == ["2021-03", "2021"]
+    assert re.fullmatch(required["pattern"], "2021")
+    assert re.fullmatch(required["pattern"], "2021-03")
+    assert not re.fullmatch(required["pattern"], "2021-3")
+    assert "start" in defs["Employer"]["required"]
+    optional = [
+        defs["Employer"]["properties"]["end"],
+        defs["School"]["properties"]["start"],
+        defs["School"]["properties"]["end"],
+    ]
+    for described in optional:
+        assert {"type": "null"} in described["anyOf"]
+        assert "YYYY-MM" in described["description"]
+        assert None in described["examples"]
+        for value in ("", "2021", "2021-03"):
+            assert re.fullmatch(described["pattern"], value)
+        assert not re.fullmatch(described["pattern"], "21")
 
 
 def test_experience_same_month_and_present() -> None:
