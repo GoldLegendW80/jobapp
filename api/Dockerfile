@@ -91,7 +91,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # of connections cannot pile up unbounded on the 512 MiB Jetson; 256 leaves wide room for a few
 # users with several tabs and long lived event streams while still capping a flood (issue #100).
 # --timeout-keep-alive 5 keeps an idle keep-alive connection short (uvicorn's default, made
-# explicit). h11's default request-line and header limits (64 KiB) bound a slow or oversized
-# header. The request body is bounded per route class by LimitRequestBodyMiddleware and, at the
-# edge, by caddy/Caddyfile.
+# explicit). Request headers are bounded in front, by caddy (16 KiB, its default): the api is
+# reached from caddy only. The request body is bounded per route class by
+# LimitRequestBodyMiddleware and, at the edge, by caddy/Caddyfile.
 CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*", "--limit-concurrency", "256", "--timeout-keep-alive", "5"]

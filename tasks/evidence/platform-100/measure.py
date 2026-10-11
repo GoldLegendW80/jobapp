@@ -165,6 +165,10 @@ OPENERS = {
 class Result:
     scenario: str
     path: str
+    attempted: int
+    # Connections whose request could not be sent whole because the server ended them first.
+    refused: int
+    # Connections that were opened and took everything this scenario sends.
     connections: int
     held_s: float
     still_open_after: int
@@ -186,6 +190,7 @@ def run_scenario(
     count = connections if connections is not None else args.connections
     opener = OPENERS[scenario]
     socks: list[socket.socket] = []
+    refused = 0
     start = time.monotonic()
     with MemSampler(args.api, args.caddy) as mem:
         for _ in range(count):
@@ -199,7 +204,9 @@ def run_scenario(
                 else:
                     socks.append(opener(host, port, path, args.timeout))
             except OSError:
-                break
+                # The server ended the connection before the request was sent whole (a refusal):
+                # counted, and the next connection is still tried.
+                refused += 1
             time.sleep(args.ramp_s)
         # Hold them, trickling nothing, for the dwell. A real client that stalls looks like this.
         time.sleep(args.hold_s)
@@ -225,6 +232,8 @@ def run_scenario(
     return Result(
         scenario=scenario,
         path=path,
+        attempted=count,
+        refused=refused,
         connections=len(socks),
         held_s=round(time.monotonic() - start, 1),
         still_open_after=still_open,
@@ -340,6 +349,30 @@ def main(argv: list[str] | None = None) -> int:
     results.append(run_scenario(args, "chunked", "/api/auth/login"))
     results.append(run_scenario(args, "slowheader", "/api/auth/login"))
     results.append(run_scenario(args, "idle", "/api/auth/login"))
+    # Still WITHOUT a session, on a route that needs one: FastAPI reads the body before the
+    # 401, so this is a buffering surface too. Once with the large body, once with a body just
+    # under the api's default limit, which no size limit refuses.
+    protected = "/api/agents/runs"
+    results.append(
+        run_scenario(
+            args,
+            "declared",
+            protected,
+            declared=args.declared,
+            send_bytes=args.send_bytes,
+        )
+    )
+    results.append(
+        run_scenario(
+            args, "declared", protected, declared=1_000_000, send_bytes=990_000
+        )
+    )
+    # And just under the public limit, on the sign in route.
+    results.append(
+        run_scenario(
+            args, "declared", "/api/auth/login", declared=65_000, send_bytes=64_000
+        )
+    )
 
     time.sleep(2)  # let memory settle before reading the resting level again
     idle_after = idle_rss(args)

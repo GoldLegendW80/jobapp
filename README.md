@@ -695,8 +695,8 @@ three layers, each able to stand without the others.
   byte is read, a streamed body cut at the limit); a body that stalls past a generous idle window
   is 408. This is the second line, for when a request reaches the api without the proxy in front.
 - **uvicorn** (`api/Dockerfile`). `--limit-concurrency 256` bounds how many requests pile up at
-  once on the 512 MiB api container, `--timeout-keep-alive 5` keeps idle connections short, and
-  h11's 64 KiB header limit bounds a slow or oversized header.
+  once on the 512 MiB api container (503 beyond it) and `--timeout-keep-alive 5` keeps idle
+  connections short. Request headers are bounded by Caddy in front (16 KiB, its default).
 
 Residual risk, stated honestly for a small private app: an attacker with many client addresses can
 still open many connections, each now holding at most 64 KiB (public) and cut within about 15s, so
