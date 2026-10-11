@@ -202,8 +202,23 @@ def test_only_rule_names_come_back_never_the_match() -> None:
         "a://" + "b:" * 250_000,
         ("api_key" + "." * 20 + " = ") * 16_000,
         "sk-" + "A" * 499_000,
+        "secret=" + "aB3/" * 125_000,
+        "mot de passe : " * 33_000,
+        ("APIKey" + "-" * 20 + ": ") * 18_000,
     ],
-    ids=["key", "password", "token", "begin", "jwt", "url", "dotted", "sk"],
+    ids=[
+        "key",
+        "password",
+        "token",
+        "begin",
+        "jwt",
+        "url",
+        "dotted",
+        "sk",
+        "base64",
+        "fr",
+        "mixed",
+    ],
 )
 def test_a_hostile_text_of_half_a_million_characters_is_scanned_in_linear_time(
     hostile: str,
@@ -212,3 +227,102 @@ def test_a_hostile_text_of_half_a_million_characters_is_scanned_in_linear_time(
     scan(hostile[:500_000])
     # Generous for a loaded machine; a quadratic pattern would need minutes.
     assert time.perf_counter() - start < 5
+
+
+# --- the second review: base64 values, the labels people write, labels that are also headings --
+
+# 40 base64 characters with a slash and a plus, the form of an AWS secret key. The first is the
+# example of the AWS documentation; both are assembled here, so no scanner reads a leak.
+AWS_EXAMPLE = join("wJalrXUtnFEMI", "/K7MDENG/", "bPxRfiCYEXAMPLEKEY")
+BASE64_VALUE = join("q7Zk2Lm9Xw4R", "/t8Vb1Nc6", "+Hd3Fg5Js0PaQeWrTyU")
+# A password someone chose: words, hyphens and a year.
+WORDS_VALUE = join("Winter-holi", "day-2024x")
+ASSIGN = "="
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # A base64 value with a slash or a plus, after a name that can only be a secret's.
+        join("AWS_SECRET_ACCESS_KEY", ASSIGN, AWS_EXAMPLE),
+        join("aws_secret_access_key = ", AWS_EXAMPLE),
+        join("export API_KEY", ASSIGN, BASE64_VALUE),
+        join("password: ", BASE64_VALUE),
+        join('"clientSecret": "', BASE64_VALUE, '"'),
+        # The labels a French speaker writes, with the space French puts before the colon.
+        f"Mot de passe : {VALUE}",
+        f"mot de passe: {VALUE}",
+        f"MOT DE PASSE = {VALUE}",
+        f"Mot de passe\u00a0: {VALUE}",
+        f"Mot de passe\u202f: {VALUE}",
+        f"mdp={VALUE}",
+        f"MDP : {VALUE}",
+        f"Mdp: {VALUE}",
+        # Short forms and mixed cases.
+        f"pwd:{VALUE}",
+        f"PWD={VALUE}",
+        f"db_pwd = {VALUE}",
+        f"APIKey = {VALUE}",
+        f"ApiKey: {VALUE}",
+        f"API-Key: {VALUE}",
+        # A password is a secret even when it reads as words.
+        f"password: {WORDS_VALUE}",
+        f"Mot de passe : {WORDS_VALUE}",
+        f"DB_PASSWORD={WORDS_VALUE}",
+        # A name of several parts is a variable, not a heading: its value counts as before.
+        f"access_token: {WORDS_VALUE}",
+        f"X-Api-Key: {WORDS_VALUE}",
+    ],
+)
+def test_the_secrets_the_second_review_saw_missed_are_caught(line: str) -> None:
+    assert scan(line) == [GENERIC_RULE], line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        # The five ordinary lines the second review saw flagged: a keyword used as a heading,
+        # then one hyphenated term with a digit. Two are put together here: written whole,
+        # the scanner of this repository (gitleaks) takes them for keys, as this module did.
+        "Auth: OAuth2-PKCE-OIDC-flows",
+        "API: OpenAPI3.1-compliant",
+        join("Token: JWT-RS", "256-rotation"),
+        join("Key: Kubernetes1", ".29-certified (CKA)"),
+        "Tokens: 128k-context-window",
+        # The same heading before words that would be a password after "password".
+        f"Token: {WORDS_VALUE}",
+        # Lists of tools long enough, and varied enough, to pass for base64 by their entropy.
+        "Key: PostgreSQL16/Elasticsearch8/MongoDB7",
+        "API: Python3/TypeScript5/Golang/Rust/Kotlin2/Swift6",
+        "Token: PyTorch2/TensorFlow2/JAX/HuggingFace/LangChain/LlamaIndex",
+        "Auth: React18/Vue3/Angular17/Svelte4/NextJS14/Nuxt3",
+        "Access: C++20/Rust1/LLVM17/CMake3/Conan2/Bazel7/Ninja",
+        # A base64 value after a heading is left alone too: the price of the lines above.
+        join("Key: ", BASE64_VALUE),
+        # A file path after a sure label: slashes, a digit, never the entropy of a key.
+        "password_file: /var/lib/postgresql16/secrets/password",
+        "SECRET_KEY_FILE=/home/robin/projects2024/jobapp/secrets/apikey",
+        "pwd: /home/robin/projects2024/jobapp",
+        # The labels alone, or with an ordinary answer.
+        "Mot de passe : (celui que vous avez choisi)",
+        "Mot de passe oublie : utilisez le lien de la page de connexion",
+        "mdp : voir avec Robin",
+        "APIKey: demander au support",
+        "MDP: value-iteration and policy-gradient methods",
+    ],
+)
+def test_the_ordinary_lines_of_the_second_review_are_not_secrets(line: str) -> None:
+    assert scan(line) == [], line
+
+
+def test_a_base64_value_needs_its_length_and_its_entropy() -> None:
+    assert len(AWS_EXAMPLE) == len(BASE64_VALUE) == 40
+    assert entropy(AWS_EXAMPLE) > secrets.BASE64_ENTROPY
+    # The lists of tools above are as varied as base64: the entropy alone would not tell them.
+    assert entropy("PyTorch2/TensorFlow2/JAX/HuggingFace/LangChain/LlamaIndex") > 4.5
+    # Shorter than BASE64_MIN_CHARS: only the run before the first slash is looked at, as before.
+    short = BASE64_VALUE[: secrets.BASE64_MIN_CHARS - 1]
+    assert scan(join("secret", ASSIGN, short)) == [GENERIC_RULE]  # 12 random characters lead it
+    assert scan(join("secret", ASSIGN, "ab/", short[:20])) == []
+    # Long enough, with slashes and a digit, but as regular as a path.
+    assert scan(join("secret", ASSIGN, "abc1/" * 8)) == []

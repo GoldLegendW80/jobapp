@@ -26,6 +26,13 @@ a body of some size, one of them 20 MiB:
 - One body per user at a time in this process, a file or a paste: a second one of the same user
   waits for the first without its body being read, and is answered 429 after SLOT_WAIT_S. This
   turn is taken before anything else, so one account never holds more than one upload slot.
+  SLOT_WAIT_S is longer than IDLE_TIMEOUT_S on purpose: an upload cut off by a change of
+  network holds its user's turn until its idle limit, and the file the page sends next must
+  still be waiting when that turn comes back, not be refused for an upload nobody is sending.
+- At most WAITING_MAX bodies of one user wait for its turn: one more is answered 429 at once.
+  A waiting connection holds no turn, no slot and no database connection, but it costs the
+  process about 226 KiB for as long as it waits (measured in the second review: 400 of them,
+  89 MiB), so without this bound one account could fill the api's memory with connections.
 - At most UPLOAD_SLOTS files are in memory at once in this process: the others wait without
   their body being read, and give up with 503 after the same SLOT_WAIT_S in all. A paste is at
   most 2 MiB and takes no slot.
@@ -36,7 +43,8 @@ a body of some size, one of them 20 MiB:
   IDLE_TIMEOUT_S without being complete (silence, or a byte now and then: neither keeps a turn
   or a slot), or when it is not complete after its total time. So a client that sends nothing
   useful holds its turn and its slot for IDLE_TIMEOUT_S, never for the ten minutes a slow but
-  honest upload may take.
+  honest upload may take. The floor is 8.5 KiB per second; for a large file the total decides:
+  20 MiB in TOTAL_TIMEOUT_S is 35 KiB per second (280 kbit/s).
 - Which refusals close the connection. Closing a connection on which bytes are still arriving
   resets it, and Caddy, busy sending the body, then answers 502 in place of the refusal: the
   user reads neither the sentence nor Retry-After (seen in the journey with a 10 MiB paste).
@@ -46,8 +54,10 @@ a body of some size, one of them 20 MiB:
   and Caddy bounds it. The refusals that end a body which will never be whole (408, 400) close
   it, and so does the 413 of a file, which Caddy refuses itself before the api can.
 What this does not prevent: two accounts acting together can each hold one slot for as long as
-each keeps sending at that pace, which is the whole of the two slots. An account is invited by
-the owner, and what it sends counts against its 100 MB.
+each keeps sending at that pace, which is the whole of the two slots. A body that ends with 408
+stores nothing and counts for nothing, so the quota does not bound such an account: its one
+slot does, and the owner, who invites every account and reads the user id with the rule
+`upload-stalled` in the log.
 
 Every route needs a session (the app-wide default deny) and takes the user from it, never from
 the request. Another user's document answers the same 404 as one that does not exist, an id that
@@ -92,9 +102,12 @@ NO_STORE = {"Cache-Control": "no-store"}
 CLOSE = {"Connection": "close"}
 
 UPLOAD_SLOTS = 2  # files held in memory at once, in this process
-SLOT_WAIT_S = 20.0  # how long a body waits for its user's turn and for a slot, in all
-RETRY_AFTER_S = 5
 IDLE_TIMEOUT_S = 30.0  # the longest a body may go without bringing PROGRESS_BYTES more
+# How long a body waits, unread, for its user's turn and for a slot, in all. Longer than
+# IDLE_TIMEOUT_S (module docstring): the turn of an upload that died comes back within it.
+SLOT_WAIT_S = 35.0
+WAITING_MAX = 2  # bodies of one user that may wait for its turn; one more is refused at once
+RETRY_AFTER_S = 5
 PROGRESS_BYTES = 256 * 1024  # what counts as progress: about 70 kbit/s sustained
 TOTAL_TIMEOUT_S = 600.0  # the whole file: 20 MiB at 280 kbit/s
 PASTE_TIMEOUT_S = 60.0  # the whole JSON of a paste
@@ -269,6 +282,16 @@ class _Gate:
         """Users with a body in flight or waiting (0 when nothing is going on)."""
         return len(self._turns)
 
+    @property
+    def bodies(self) -> int:
+        """Bodies in flight or waiting for their user's turn, of all users."""
+        return sum(count for _, count in self._turns.values())
+
+    def crowded(self, user_id: uuid.UUID) -> bool:
+        """True when WAITING_MAX bodies of this user already wait behind the one in flight."""
+        entry = self._turns.get(user_id)
+        return entry is not None and entry[1] > WAITING_MAX
+
     def _leave(self, user_id: uuid.UUID) -> None:
         lock, count = self._turns[user_id]
         if count <= 1:
@@ -307,12 +330,17 @@ def _gate(app: FastAPI) -> _Gate:
 async def _admitted(request: Request, user: User, size: int, slot: bool) -> AsyncIterator[None]:
     """Hold the user's turn, and one upload slot when `slot`, while the body is read and
     stored. Both waits share SLOT_WAIT_S; the body is not read while waiting. Answers 429 when
-    the user's own turn does not come, 503 when no slot does."""
+    the user's own turn does not come, or at once when enough of its bodies wait already, and
+    503 when no slot comes."""
     gate = _gate(request.app)
     loop = asyncio.get_running_loop()
     deadline = loop.time() + SLOT_WAIT_S
     # No `Connection: close`: the body may still be arriving (module docstring).
     retry = {"Retry-After": str(RETRY_AFTER_S)}
+    if gate.crowded(user.id):
+        _refuse(
+            user, status.HTTP_429_TOO_MANY_REQUESTS, OWN_BUSY, "upload-own-crowd", size, **retry
+        )
     if not await gate.take_turn(user.id, SLOT_WAIT_S):
         _refuse(user, status.HTTP_429_TOO_MANY_REQUESTS, OWN_BUSY, "upload-own-busy", size, **retry)
     try:

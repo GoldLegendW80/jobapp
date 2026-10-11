@@ -197,7 +197,9 @@ def upgrade() -> None:
         sa.Column("user_id", pg.UUID(as_uuid=True), nullable=False),
         sa.Column("text_version", sa.Integer(), nullable=False),
         sa.Column("accepted_at", _tz(), nullable=False, server_default=sa.text("now()")),
-        sa.PrimaryKeyConstraint("user_id", name="pk_ingestion_consents"),
+        # One row per user and version of the text: a new version never overwrites what was
+        # accepted before. The current consent is the row of the current version.
+        sa.PrimaryKeyConstraint("user_id", "text_version", name="pk_ingestion_consents"),
         sa.ForeignKeyConstraint(
             ["user_id"],
             ["users.id"],

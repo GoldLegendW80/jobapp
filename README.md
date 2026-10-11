@@ -1033,9 +1033,11 @@ newer ones have replaced those that hold it.
   in `X-Filename` (RFC 5987), and is the one route on which Caddy accepts 20 MiB; every other
   route keeps 10 MiB (`caddy/Caddyfile`). The api reads the body into one buffer, counted and
   hashed as it arrives, and sends it to Postgres in pieces.
-- **Who may send:** one body per user at a time (a file or a paste; a second one waits 20 s, then
-  429), and two files at a time for the whole api process (then 503), so one account holds one
-  of the two places at most. A body has to keep arriving: 256 KiB every 30 s and 10 minutes in
+- **Who may send:** one body per user at a time (a file or a paste; a second one waits 35 s, then
+  429; beyond two that wait, 429 at once), and two files at a time for the whole api process
+  (then 503), so one account holds one of the two places at most. The wait is longer than the
+  30 s below, so the file sent after an upload that a change of network cut off is taken, not
+  refused. A body has to keep arriving: 256 KiB every 30 s and 10 minutes in
   all for a file, 60 s in all for a paste, else 408. The quota is checked before the bytes go to
   Postgres, and again under the user's lock.
 - **Secrets:** a text that matches the shape of a password or an access key

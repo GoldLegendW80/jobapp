@@ -16,6 +16,7 @@ import {
   listDocuments,
   loadFailureSentence,
   megabytes,
+  PASTE_TIMEOUT_MS,
   pasteDocument,
   uploadDocument,
 } from "./documents-api";
@@ -78,6 +79,13 @@ describe("megabytes", () => {
   it("shows 20 MiB as 20", () => {
     expect(megabytes(20 * 1024 * 1024)).toBe(20);
     expect(megabytes(DEFAULT_LIMITS.user_bytes)).toBe(100);
+  });
+});
+
+describe("PASTE_TIMEOUT_MS", () => {
+  it("outlasts the 35 s a paste may wait for its user's turn on the server", () => {
+    // SLOT_WAIT_S in api/app/ingestion/documents_router.py: the server answers first.
+    expect(PASTE_TIMEOUT_MS).toBeGreaterThan(35_000);
   });
 });
 

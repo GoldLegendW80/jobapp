@@ -449,6 +449,93 @@ def test_a_second_upload_of_the_same_user_waits_its_turn_and_is_stored(
     assert at_rest(app)
 
 
+def bodies(app: FastAPI) -> int:
+    gate = getattr(app.state, "ingestion_gate", None)
+    return 0 if gate is None else gate.bodies
+
+
+async def bodies_known(app: FastAPI, count: int) -> None:
+    """Wait until that many bodies hold a turn or wait for one."""
+    while bodies(app) < count:  # noqa: ASYNC110, the gate offers no event to wait on
+        await asyncio.sleep(0.01)
+
+
+def test_beyond_two_waiting_bodies_an_account_is_refused_at_once(
+    app: FastAPI,
+    alice: str,
+    bob: str,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A waiting connection costs memory for as long as it waits, so one account may not open
+    them without end: one in flight, two waiting, and the next is answered now."""
+    assert documents_router.WAITING_MAX == 2
+    monkeypatch.setattr(documents_router, "SLOT_WAIT_S", 1.0)
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 2.0)
+    took: dict[str, float] = {}
+
+    async def waits() -> Answer:
+        await turn_taken(app)
+        return await post_stream(app, alice, stalled)
+
+    async def one_too_many() -> Answer:
+        await bodies_known(app, 3)  # hers: one reading, two waiting
+        start = time.monotonic()
+        answer = await post_stream(app, alice, stalled)
+        took["the fourth"] = time.monotonic() - start
+        return answer
+
+    async def bob_meanwhile() -> Answer:
+        await bodies_known(app, 3)
+        return await post_stream(app, bob, lambda: chunks(pdf(500)), named("bob.pdf"))
+
+    with caplog.at_level("INFO", logger="app.ingestion"):
+        first, second, third, fourth, his = run_together(
+            post_stream(app, alice, stalled), waits(), waits(), one_too_many(), bob_meanwhile()
+        )
+    assert first.status == 408
+    # The two that waited were refused when their wait ended, the fourth without waiting.
+    assert (second.status, third.status, fourth.status) == (429, 429, 429)
+    assert took["the fourth"] < 0.5
+    assert fourth.json() == {"detail": documents_router.OWN_BUSY}
+    assert fourth.headers["retry-after"] == "5"
+    assert "connection" not in fourth.headers
+    assert fourth.taken == 0  # its body was never read
+    # Nobody else is held up, and nothing is left behind.
+    assert his.status == 201
+    assert [doc.name for doc in rows(factory)] == ["bob.pdf"]
+    assert at_rest(app)
+    rules = Counter(vars(r)["rule"] for r in caplog.records if r.getMessage() == "document refused")
+    assert rules == {"upload-stalled": 1, "upload-own-busy": 2, "upload-own-crowd": 1}
+
+
+def test_the_wait_for_a_turn_is_longer_than_the_idle_limit() -> None:
+    assert documents_router.SLOT_WAIT_S > documents_router.IDLE_TIMEOUT_S
+
+
+def test_the_file_sent_after_an_upload_that_died_is_taken_not_refused(
+    app: FastAPI, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A phone leaves the wifi in the middle of an upload: the page fails that file and sends
+    the next one, while the api still holds the dead body's turn until its idle limit. The next
+    file waits a little longer than that limit, so it is stored instead of being refused for an
+    upload nobody is sending any more. Same proportion as the real values, 30 s and 35 s."""
+    proportion = documents_router.SLOT_WAIT_S / documents_router.IDLE_TIMEOUT_S
+    monkeypatch.setattr(documents_router, "IDLE_TIMEOUT_S", 1.5)
+    monkeypatch.setattr(documents_router, "SLOT_WAIT_S", 1.5 * proportion)
+
+    async def next_file() -> Answer:
+        await turn_taken(app)
+        return await post_stream(app, alice, lambda: chunks(pdf(300)), named("next.pdf"))
+
+    dead, following = run_together(post_stream(app, alice, stalled), next_file())
+    assert dead.status == 408
+    assert following.status == 201
+    assert [doc.name for doc in rows(factory)] == ["next.pdf"]
+    assert at_rest(app)
+
+
 def test_a_byte_now_and_then_does_not_keep_a_slot(
     app: FastAPI, alice: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -865,9 +952,16 @@ def test_the_same_file_from_many_requests_at_once_is_one_row_and_no_error(
 
     with ThreadPoolExecutor(max_workers=WRITERS) as pool:
         answers = list(pool.map(send, range(WRITERS)))
-    assert Counter(status for status, _, _ in answers) == {201: 1, 200: WRITERS - 1}
-    assert len({document_id for _, document_id, _ in answers}) == 1
-    assert Counter(duplicate for _, _, duplicate in answers) == {False: 1, True: WRITERS - 1}
+    # One account: one body at a time, two more waiting, and what comes beyond that is told
+    # at once to come back. So of eight sent together one creates the row, those that got a
+    # turn find it there, and the others are refused with 429. How many of each depends on
+    # how the eight arrive. (The race in the database itself is the next test.)
+    statuses = Counter(status for status, _, _ in answers)
+    assert statuses[201] == 1, statuses
+    assert set(statuses) <= {201, 200, 429}, statuses
+    taken = [(document_id, duplicate) for status, document_id, duplicate in answers if status < 300]
+    assert len({document_id for document_id, _ in taken}) == 1
+    assert [duplicate for _, duplicate in taken].count(False) == 1
     (stored,) = rows(factory)
     assert stored.raw == data
 

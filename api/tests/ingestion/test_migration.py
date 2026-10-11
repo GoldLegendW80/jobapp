@@ -157,7 +157,11 @@ def test_upgrade_creates_the_three_tables_with_every_column_of_the_plan(
     assert "nextval" in images["id"]["default"]  # bigserial
     consents = {c["name"]: c for c in inspector.get_columns("ingestion_consents")}
     assert consents["accepted_at"]["type"].timezone is True
-    assert inspector.get_pk_constraint("ingestion_consents")["constrained_columns"] == ["user_id"]
+    # One row per user and version of the text: the history of what was accepted is kept.
+    assert inspector.get_pk_constraint("ingestion_consents")["constrained_columns"] == [
+        "user_id",
+        "text_version",
+    ]
 
 
 def test_keys_cascades_and_indexes(at_head: sa.Engine) -> None:
@@ -287,7 +291,8 @@ def test_a_new_document_starts_pending_with_the_defaults(at_head: sa.Engine) -> 
         "SELECT document_id, user_id, position, jpeg, width, height FROM ingestion_images",
         "UPDATE ingestion_consents SET text_version = 0",
         "UPDATE ingestion_consents SET accepted_at = NULL",
-        "INSERT INTO ingestion_consents (user_id, text_version) SELECT user_id, 2 "
+        # the same version accepted twice by one user
+        "INSERT INTO ingestion_consents (user_id, text_version) SELECT user_id, text_version "
         "FROM ingestion_consents",
         "INSERT INTO ingestion_consents (user_id, text_version) VALUES (gen_random_uuid(), 1)",
     ],
@@ -377,6 +382,40 @@ def test_what_later_tasks_store_fits(at_head: sa.Engine) -> None:
             {"d": document},
         )
         assert conn.execute(sa.text("SELECT count(*) FROM ingestion_documents")).scalar_one() == 2
+
+
+def test_a_new_version_of_the_consent_text_keeps_the_earlier_acceptance(
+    at_head: sa.Engine,
+) -> None:
+    consents = (
+        "SELECT text_version, accepted_at FROM ingestion_consents "
+        "WHERE user_id = :u ORDER BY text_version"
+    )
+    with at_head.begin() as conn:
+        user = add_user(conn, "a@b.co")
+        other = add_user(conn, "c@d.co")
+        conn.execute(
+            sa.text(
+                "INSERT INTO ingestion_consents (user_id, text_version, accepted_at) "
+                "VALUES (:u, 1, now() - interval '30 days')"
+            ),
+            {"u": user},
+        )
+        before = conn.execute(sa.text(consents), {"u": user}).all()
+        # The text changes: the user accepts version 2, and another user accepts it too.
+        for who in (user, other):
+            conn.execute(
+                sa.text("INSERT INTO ingestion_consents (user_id, text_version) VALUES (:u, 2)"),
+                {"u": who},
+            )
+        after = conn.execute(sa.text(consents), {"u": user}).all()
+        theirs = conn.execute(sa.text(consents), {"u": other}).all()
+    # Both acceptances of the first user are there, the first one untouched.
+    assert [row[0] for row in after] == [1, 2]
+    assert after[0] == before[0]
+    assert after[0][1] < after[1][1]
+    # The current consent is the row of the current version: the other user has only that one.
+    assert [row[0] for row in theirs] == [2]
 
 
 def test_deleting_a_document_or_a_user_cascades(at_head: sa.Engine) -> None:

@@ -208,7 +208,11 @@ class IngestionImage(Base):
 
 class IngestionConsent(Base):
     """The user accepted version `text_version` of the consent text (decision 6, written by G16):
-    the selected documents are sent to Anthropic through the user's own credential."""
+    the selected documents are sent to Anthropic through the user's own credential.
+
+    One row per user and version of the text: accepting a new version adds a row and the earlier
+    one stays with its date, so what a user had accepted when a run started remains answerable.
+    The current consent of a user is the row of the current version of the text."""
 
     __tablename__ = "ingestion_consents"
     __table_args__ = (sa.CheckConstraint("text_version >= 1", name="text_version_positive"),)
@@ -216,7 +220,7 @@ class IngestionConsent(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
-    text_version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    text_version: Mapped[int] = mapped_column(sa.Integer, primary_key=True)
     accepted_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )

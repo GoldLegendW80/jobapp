@@ -17,15 +17,20 @@ routers: tuple[APIRouter, ...] = (documents_router.router,)
 PREFIX = "/api/ingestion"
 
 
+def private(path: str) -> bool:
+    """True for a path of this module: no answer under it is ever stored."""
+    return path == PREFIX or path.startswith(f"{PREFIX}/")
+
+
 async def no_store(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     """Every answer under /api/ingestion is `Cache-Control: no-store`: documents, their text and
     what is drawn from them are private, and no browser or proxy keeps a copy. A middleware,
     because some answers are built outside the routers: the 401 of the session check, the 403
-    of the CSRF check, a 405, the 422 of request validation."""
+    of the CSRF check, a 405, the 422 of request validation. The 500 of an unhandled error is
+    built outside every middleware: app.main sets the header there, with `private`."""
     response = await call_next(request)
-    path = request.url.path
-    if path == PREFIX or path.startswith(f"{PREFIX}/"):
+    if private(request.url.path):
         response.headers["Cache-Control"] = "no-store"
     return response

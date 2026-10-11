@@ -824,7 +824,10 @@ test("one account sends one file at a time, and an upload stopped on its way lea
       detail:
         "Another upload of yours is still on its way. Wait for it to finish, then add this one.",
     });
-    expect(Date.now() - started).toBeGreaterThan(15_000);
+    // It waited 35 s, longer than the 30 s after which an upload that died gives its turn
+    // back: a file sent after such an upload is taken, and only one behind a live upload is
+    // refused.
+    expect(Date.now() - started).toBeGreaterThan(30_000);
 
     // The first file is still on its way: the user stops it.
     await sending.getByRole("button", { name: `Cancel ${STOPPED}` }).click();

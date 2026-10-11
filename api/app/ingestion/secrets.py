@@ -23,6 +23,11 @@ from collections import Counter
 
 # Shannon entropy floor of the generic rule, as gitleaks' generic-api-key.
 GENERIC_ENTROPY = 3.5
+# A base64 value that holds a slash or a plus (the form of an AWS secret key) counts from this
+# length and this entropy. Measured on made up values: 0.04 percent of random base64 values of
+# 40 characters are under 4.3, 3 percent of those of 32; a file path stays under 4.2.
+BASE64_MIN_CHARS = 30
+BASE64_ENTROPY = 4.3
 
 _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("private-key", re.compile(r"-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----")),
@@ -71,19 +76,51 @@ _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
 #   (Authentication, Author, Keycloak, tokenizer) nor its end (OAuth, FastAPI, monkey);
 # - a comma is not an assignment;
 # - the value takes no slash and no plus, as gitleaks' own: a list of tools is not one value.
-_LOWER = "access|authorization|auth|apikey|api|credential|creds|key|passw(?:or)?d|secret|token"
-_TITLE = "Access|Authorization|Auth|Apikey|Api|Credential|Creds|Key|Passw(?:or)?d|Secret|Token"
-_UPPER = "ACCESS|AUTHORIZATION|AUTH|APIKEY|API|CREDENTIAL|CREDS|KEY|PASSW(?:OR)?D|SECRET|TOKEN"
+#
+# Two things depend on how sure the label is (`_sure`). A label is sure when its keyword can
+# only name a secret (password, pwd, mdp, "mot de passe", secret, credentials, an api key in one
+# word) or when the keyword is part of a longer name, a variable and not the heading of a line
+# (api_key, access_token, X-Api-Key, AUTH_TOKEN). A bare "API:", "Auth:", "Key:", "Token:" or
+# "Access:" is also how a line of a CV starts. So:
+# - after a label that is not sure, a value that reads as words is left alone: one part of it,
+#   between hyphens, dots or underscores, is five or more lower case letters (the heading
+#   "Token" before JWT-RS256-rotation, the heading "Key" before Kubernetes1.29-certified; the
+#   lines themselves are in the tests, and a scanner of this repository takes them for keys);
+#   and so is a value that goes on with a slash or a plus, the first item of a list
+#   ("Key: PostgreSQL16/Elasticsearch8");
+# - a base64 value with a slash or a plus counts only after a sure label, and only when it is
+#   long and random enough (BASE64_MIN_CHARS, BASE64_ENTROPY): "AWS_SECRET_ACCESS_KEY=" and 40
+#   such characters is caught, "Key: PostgreSQL16/Elasticsearch8/MongoDB7" is not. A list of
+#   tools reaches the entropy of base64 (4.6 measured), so the label has to tell them apart.
+# The price: after a bare "Key:" or "Token:", a key that holds a slash or a plus is missed.
+_LOWER = (
+    "access|authorization|auth|apikey|api|credential|creds|key|mdp|passw(?:or)?d|pwd|secret|token"
+)
+_TITLE = (
+    "Access|Authorization|Auth|Apikey|Api|Credential|Creds|Key|Mdp|Passw(?:or)?d|Pwd|Secret|Token"
+)
+_UPPER = (
+    "ACCESS|AUTHORIZATION|AUTH|APIKEY|API|CREDENTIAL|CREDS|KEY|MDP|PASSW(?:OR)?D|PWD|SECRET|TOKEN"
+)
 _KEYWORD = (
-    "(?:"
+    "(?P<keyword>"
     rf"(?<![A-Za-z])(?:{_LOWER})s?(?![a-z])"  # password, api_key, apiKey, tokens
     rf"|(?<![A-Z])(?:{_TITLE})s?(?![a-z])"  # Password, dbPassword, never OAuth or Author
     rf"|(?<![A-Za-z])(?:{_UPPER})S?(?![A-Za-z])"  # DB_PASSWORD, API_KEY, never FastAPI
+    r"|(?<![A-Za-z])(?i:api[_-]?key)s?(?![a-z])"  # APIKey, ApiKey, in any mix of cases
+    r"|(?<![A-Za-z])(?i:mot[ _-]de[ _-]passe)(?![a-z])"  # the label a French speaker writes
     ")"
 )
-_GENERIC = re.compile(
-    _KEYWORD + r"[\w.-]{0,20}[ \t\"']{0,3}(?:=>|:=|\?=|=|:)[ \t\"'`]{0,5}([\w.=-]{10,150})"
+# The keyword, what is left of its name, then the assignment. French puts a space before the
+# colon, often a no-break one: it is taken like a space.
+_LABEL = (
+    _KEYWORD + r"(?P<more>[\w.-]{0,20})"
+    r"[ \t\u00a0\u202f\"']{0,3}(?:=>|:=|\?=|=|:)[ \t\"'`]{0,5}"
 )
+_GENERIC = re.compile(_LABEL + r"(?P<value>[\w.=-]{10,150})")
+_GENERIC_BASE64 = re.compile(_LABEL + rf"(?P<value>[A-Za-z0-9+/]{{{BASE64_MIN_CHARS},150}})")
+_SURE_KEYWORD = re.compile(r"(?i)passw|pwd|mdp|passe|secret|cred|api[_-]?key")
+_WORDS = re.compile(r"(?:^|[-_.])[a-z]{5,}(?:$|[-_.])")
 GENERIC_RULE = "generic-password-or-key"
 
 RULE_NAMES: tuple[str, ...] = (*(name for name, _ in _RULES), GENERIC_RULE)
@@ -102,9 +139,41 @@ def _looks_random(value: str) -> bool:
     return any(c.isdigit() for c in value) and entropy(value) >= GENERIC_ENTROPY
 
 
+def _sure(match: re.Match[str], text: str) -> bool:
+    """The label can only name a secret, or its keyword is part of a longer name (see above)."""
+    if match["more"] or _SURE_KEYWORD.search(match["keyword"]):
+        return True
+    start = match.start("keyword")
+    return start > 0 and (text[start - 1].isalnum() or text[start - 1] in "_.-")
+
+
+def _generic(text: str) -> bool:
+    """True when a value assigned to a secret's name in `text` looks like a secret."""
+    for match in _GENERIC.finditer(text):
+        value = match["value"]
+        if not _looks_random(value):
+            continue
+        if _sure(match, text):
+            return True
+        # After what may be a heading: not the first item of a list, not a run of words.
+        in_a_list = text[match.end() : match.end() + 1] in ("/", "+")
+        if not in_a_list and not _WORDS.search(value):
+            return True
+    for match in _GENERIC_BASE64.finditer(text):
+        value = match["value"]
+        if (
+            ("/" in value or "+" in value)
+            and any(c.isdigit() for c in value)
+            and entropy(value) >= BASE64_ENTROPY
+            and _sure(match, text)
+        ):
+            return True
+    return False
+
+
 def scan(text: str) -> list[str]:
     """The names of the rules `text` matches (empty: nothing looks like a secret)."""
     found = [name for name, pattern in _RULES if pattern.search(text)]
-    if any(_looks_random(match.group(1)) for match in _GENERIC.finditer(text)):
+    if _generic(text):
         found.append(GENERIC_RULE)
     return found

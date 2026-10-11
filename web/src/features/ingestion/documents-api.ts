@@ -97,6 +97,12 @@ export const documentTextKey = (id: string) =>
 const BASE = "/ingestion/documents";
 /** A slow link needs longer than the default for a list that follows a 20 MB upload. */
 const TIMEOUT_MS = 30_000;
+/**
+ * A paste may wait its turn behind an upload of the same user, 35 s at most on the server
+ * (SLOT_WAIT_S in documents_router.py): the page waits a little longer, so it shows the
+ * server's answer, never a timeout of its own while the paste would still be taken.
+ */
+export const PASTE_TIMEOUT_MS = 45_000;
 /** Characters of text asked for at a time by the preview. */
 export const PREVIEW_PAGE = 20_000;
 /** Longest name sent: the server keeps 200 characters. */
@@ -148,7 +154,7 @@ export function pasteDocument(text: string): Promise<StoredDocument> {
   return request(`${BASE}/text`, {
     method: "POST",
     body: { text },
-    timeoutMs: TIMEOUT_MS,
+    timeoutMs: PASTE_TIMEOUT_MS,
     validate: (body) => storedSchema.parse(body),
   });
 }
