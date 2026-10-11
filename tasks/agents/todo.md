@@ -61,4 +61,4 @@ Sources read: code.claude.com/docs/en/agent-sdk (overview, python reference, ses
 **Scope:** S
 
 ## Checkpoint A
-- [ ] All 5 success criteria of SPEC-agents.md verified
+- [x] All 5 success criteria of SPEC-agents.md verified (2026-10-11). On the Jetson, after the deploy of `8639119`: a real chat run through `tests/agents_real_run_jetson.sh` ended done in 8.7 s on `claude-opus-5-5` with 61 live text updates, none dropped and none failed, the worker at 242 MiB of 1536, the owner's jobs and profile unchanged and nothing sensitive in the logs (evidence: `tasks/evidence/agents-a5/run--streaming.log`, `metrics--streaming.json`, `memory--streaming-chat.tsv`); the stored credential decrypts under cryptography 50.0.2; and the owner confirmed in his browser, through the public URL, that the answer streams while it is written and survives a reload in the middle. Two criteria rest on the automated tests alone, since the Jetson has a single user: a second user's API key, and isolation between users. They get a real check when a first friend is invited.
