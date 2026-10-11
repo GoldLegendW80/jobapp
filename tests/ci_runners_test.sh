@@ -74,6 +74,7 @@ for gate in 'coverage report --fail-under=95' 'pytest tests -m "not docker"' 'py
   'tests/ci_runners_test.sh' 'tests/tailscale_test.sh' 'koalaman/shellcheck:v0.11.0' \
   'pre-commit run --all-files' 'pre-commit run gitleaks-commits --hook-stage manual' \
   'tests/secret_scan_test.sh' 'playwright test -c e2e/identity-all.config.ts' \
+  'playwright test -c e2e/ingestion-all.config.ts' \
   'playwright test jobs-sweep.spec.ts' 'agents-streaming.spec.ts' \
   'cancel-in-progress: true' '-n "$PYTEST_WORKERS"' \
   '--maxWorkers="$VITEST_WORKERS"'; do

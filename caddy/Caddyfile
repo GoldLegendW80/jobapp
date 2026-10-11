@@ -52,25 +52,41 @@
 	# Access log, one JSON line per request on stdout. Cookie, Set-Cookie and Authorization are
 	# redacted by default. Invite and reset tokens travel in the path (/invite/<token>,
 	# /reset/<token>, /api/auth/invites/<token>) and, once such a page calls the api, in the
-	# Referer: both are masked so no log line holds a usable link.
+	# Referer: both are masked so no log line holds a usable link. The name of an uploaded
+	# document travels in X-Filename (POST /api/ingestion/documents): removed, no log holds it.
 	log {
 		output stdout
 		format filter {
 			wrap json
 			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+" "${1}[redacted]"
 			request>headers>Referer regexp "(/(?:invites?|reset)/)[^/?#]+" "${1}[redacted]"
+			request>headers>X-Filename delete
 		}
 	}
 
 	encode zstd gzip
 
-	# Largest request body accepted anywhere, 10 MiB; raise it per route if uploads need more.
-	# A declared Content-Length above it is refused with 413 before anything is proxied; a chunked
-	# body is cut at the limit while it streams, and the read fails with 413.
-	request_body {
+	# Largest request body: 10 MiB everywhere, and 20 MiB on one route only, the upload of a
+	# document (POST /api/ingestion/documents, SPEC-ingestion.md), which the api itself counts
+	# while it reads. The route is matched as the api routes it: the method, and the decoded path
+	# compared as a whole string. The path and path_regexp matchers would not do: they ignore
+	# case or clean the path first, so /api/ingestion//documents, which the api answers 404,
+	# would get the larger limit. Here /api/ingestion/documents/text, a trailing slash, a doubled
+	# slash, another case and another method all keep the 10 MiB of every other route.
+	# A declared Content-Length above the limit is refused with 413 before anything is proxied; a
+	# chunked body is cut at the limit while it streams, and the read fails with 413. Both rules
+	# exist once per limit.
+	@document_upload expression `{http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents"`
+	@not_document_upload expression `!({http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents")`
+	request_body @document_upload {
+		max_size 20MiB
+	}
+	request_body @not_document_upload {
 		max_size 10MiB
 	}
-	@body_too_large expression `{http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 10485760`
+	@document_too_large expression `{http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents" && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 20971520`
+	@body_too_large expression `!({http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents") && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 10485760`
+	error @document_too_large 413
 	error @body_too_large 413
 
 	import security_headers
