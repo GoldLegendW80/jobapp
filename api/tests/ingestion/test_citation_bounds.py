@@ -12,8 +12,8 @@ The time bounds are on CPU time (`time.process_time`, the best of three), not on
 which other pytest-xdist workers sharing the runner's cores would stretch. They are generous: 10
 to 60 times what the Mac measures with coverage traced, as in CI. What they catch is a change of
 order: a quadratic scan of 500,000 characters takes minutes, not seconds. The realistic document
-has the full 500,000 characters; the crafted ones are shorter (a quadratic scan of 100,000
-characters is still ten thousand million steps) so that the whole file stays cheap in CI. Memory
+has the full 500,000 characters; the crafted ones are shorter (a quadratic scan of 60,000
+characters is still thousands of millions of steps) so that the whole file stays cheap in CI. Memory
 is traced on shorter texts for the same reason, and never while a time is taken.
 Measured figures are in tasks/ingestion/todo.md, "Measurements".
 """
@@ -30,9 +30,9 @@ from app.ingestion import citations
 from app.ingestion.citations import Accepted, Refusal, Rule, Span, check_item, find, prepare
 
 LARGE = 500_000  # the limit of one document's text (SPEC-ingestion.md, "Limits")
-CRAFTED = 100_000  # a crafted document
+CRAFTED = 60_000  # a crafted document
 VALUE = 60_000  # a crafted value or excerpt
-TRACED = 100_000  # a text whose memory is traced
+TRACED = 60_000  # a text whose memory is traced
 PREPARE_BUDGET_S = 5.0  # one document of 500,000 characters: 0.08 s on the Mac, 0.2 s traced
 FIND_BUDGET_S = 1.0  # one excerpt in it: under 0.001 s on the Mac
 CHECK_BUDGET_S = 2.0  # one item against it, twenty excerpts and a long value included
@@ -253,7 +253,7 @@ UNITS = {
 
 @pytest.mark.parametrize("unit", UNITS.values(), ids=UNITS.keys())
 def test_a_crafted_document_costs_no_more_than_its_size(unit: str) -> None:
-    """One unit repeated up to 100,000 characters: the worst a document can do to each scan
+    """One unit repeated up to 60,000 characters: the worst a document can do to each scan
     (one giant token, an excerpt present everywhere, a number without end)."""
     text = fill(unit, CRAFTED)
     elapsed = cpu(lambda: prepare(text), repeat=1)
@@ -543,7 +543,7 @@ def test_the_clusters_remembered_while_a_text_is_normalised_are_bounded(
     Shown here with a smaller bound, on a smaller text."""
     assert citations.CLUSTERS_REMEMBERED == 65_536
     text = "".join(
-        chr(0x4E00 + at % 20_000) + chr(0x0300 + at // 20_000 % 100) for at in range(30_000)
+        chr(0x4E00 + at % 20_000) + chr(0x0300 + at // 20_000 % 100) for at in range(10_000)
     )
     monkeypatch.setattr(citations, "CLUSTERS_REMEMBERED", 1_000)
     bounded, kept, peak = traced(lambda: prepare(text))

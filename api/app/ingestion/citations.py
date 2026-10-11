@@ -649,10 +649,12 @@ def _compatibility_digit(char: str) -> bool:
     """Whether `char` is not a digit and NFKC writes it with digits and no letter: a
     superscript, a subscript, a fraction, a circled number. The single character for the
     square metre, which NFKC writes with a letter and a digit, is a sign and not one of them."""
-    if char.isdecimal():
-        return False
     unfolded = unicodedata.normalize("NFKC", char)
-    return any(c.isdecimal() for c in unfolded) and not any(c.isalpha() for c in unfolded)
+    return (
+        not char.isdecimal()
+        and any(c.isdecimal() for c in unfolded)
+        and not any(c.isalpha() for c in unfolded)
+    )
 
 
 def _digit_like(char: str) -> bool:
