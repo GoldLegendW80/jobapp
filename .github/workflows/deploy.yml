@@ -191,9 +191,16 @@ jobs:
             # this dump is verified and again at each nightly backup. No BACKUP_KEEP is set
             # here: a number of its own would keep predeploy dumps longer than the 7 days
             # within which a deleted document is promised to leave the server's backups.
-            out="$(BACKUP_DIR="$BACKUPS/deploys" bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}")"
-            echo "$out"
-            dump="$(sed -n 's/^backup=//p' <<<"$out" | tail -n 1)"
+            # Through tee, so that what the script printed is in this log also when it fails after
+            # its dump is written (a dump it cannot delete, a flush that fails); pipefail keeps
+            # its exit status. What it prints holds no secret: paths, dump names, sizes, the
+            # BACKUP_KEEP in force and where it is set, the database's name. (Its errors, with
+            # the first 300 bytes of pg_dump's or pg_restore's own message, already went to this
+            # log on stderr; those commands run over the local socket and are given no password.)
+            out="$(mktemp)"
+            BACKUP_DIR="$BACKUPS/deploys" bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}" | tee "$out"
+            dump="$(sed -n 's/^backup=//p' "$out" | tail -n 1)"
+            rm -f "$out"
             [[ -n "$dump" ]] || { echo "::error::ops/db.sh reported no backup file"; restore_previous; exit 1; }
           else
             echo "no jobapp_pgdata volume: first start, nothing to back up"

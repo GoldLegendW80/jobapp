@@ -2144,6 +2144,13 @@ wf() {
   cat >"$WF/ws/ops/db.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "db.sh $* in $BACKUP_DIR keep=${BACKUP_KEEP:-unset}" >>"$FAKE_DIR/calls"
+echo "   backup: $BACKUP_DIR/jobapp-2026-10-10T120000-predeploy.dump"
+if [[ -n "${FAKE_FAIL_PREDEPLOY:-}" ]]; then
+  # The dump is written, then the rotation stops on a dump it cannot delete (T10, review N10).
+  echo "   deleted old backup jobapp-2026-10-01T120000-predeploy.dump (9 days old, the limit is 7)"
+  echo "db.sh: could not delete $BACKUP_DIR/jobapp-2026-10-02T120000-predeploy.dump" >&2
+  exit 1
+fi
 echo "backup=$BACKUP_DIR/jobapp-2026-10-10T120000-predeploy.dump"
 STUB
   cat >"$WF/ws/tests/jetson_smoke.sh" <<'STUB'
@@ -2184,6 +2191,18 @@ ok "a pending migration: :previous tagged, images built, the predeploy backup, t
 grep -qx "db.sh backup --tag predeploy-0123456789ab in $WF/backups/deploys keep=unset" "$MIG/calls" ||
   fail "the predeploy backup was given a BACKUP_KEEP of its own: $(grep '^db.sh' "$MIG/calls")"
 ok "T10: the predeploy backup names no retention of its own, so ops/db.sh applies the one of every backup (the Jetson's .env, then 7) in the predeploy folder"
+out_has "   backup: $WF/backups/deploys/jobapp-2026-10-10T120000-predeploy.dump"
+
+wf 1 FAKE_PENDING=1 FAKE_FAIL_PREDEPLOY=1
+out_has "   backup: $WF/backups/deploys/jobapp-2026-10-10T120000-predeploy.dump"
+out_has "   deleted old backup jobapp-2026-10-01T120000-predeploy.dump (9 days old, the limit is 7)"
+out_has "db.sh: could not delete $WF/backups/deploys/jobapp-2026-10-02T120000-predeploy.dump"
+out_has "::error::a deploy command failed: restoring the previous files and tags"
+untouched "$MIG/calls"
+[[ "$(wf_count " run --rm ")" == 0 ]] || fail "a migration ran after a predeploy backup that failed"
+[[ "$(cat "$WF/app/compose.yml")" == "name: previous release" ]] || fail "the previous tree was not put back"
+[[ "$(cat "$WF/app/.deployed-commit")" == "previous-commit" ]] || fail ".deployed-commit changed"
+ok "T10: a predeploy backup that fails after its dump is written: what it had printed is in the job log with its error, the deploy stops before the migrations, the previous files are put back"
 
 wf 0
 out_has "already at head, nothing to apply"
