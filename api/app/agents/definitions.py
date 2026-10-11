@@ -66,7 +66,12 @@ class InvalidInputError(ValueError):
 class FinalRun:
     """What an `on_final` hook is told: which run ended and how, and what the hook may use to
     act on it (its own transactions, the clock, the settings, and whatever the worker put in
-    `RunContext.services`). No transaction is open and no lock is held when it is called."""
+    `RunContext.services`). No transaction is open and no lock is held when it is called.
+
+    The hook runs inside the run's own job: until it returns it holds one of the worker's
+    agent slots (two today), for at most the runner's FINAL_HOOK_TIMEOUT_S. That limit gives
+    the hook up, it does not undo it: work the hook handed to a thread goes on to its end and
+    keeps its locks until then. So a hook is short, and does its database work in a thread."""
 
     run_id: uuid.UUID
     user_id: uuid.UUID
@@ -79,7 +84,9 @@ class FinalRun:
 
 
 # What a run is bound to, read in a transaction of its own before the tools are built. None:
-# what the run was to work on is gone, and the run fails before any model call.
+# what the run was to work on is gone, and the run fails before any model call. The answer is
+# plain data (text, numbers, ids, and mappings, lists and sets of them): the runner hands the
+# tools a read only copy of it at every depth, in which a list has become a tuple.
 Bind = Callable[["Session", "AgentRun"], Mapping[str, Any] | None]
 OnFinal = Callable[[FinalRun], Awaitable[None]]
 
@@ -125,9 +132,14 @@ class AgentDefinition:
     private_io: bool = False
     # Called by the runner once the run's final status is committed (`FinalRun`): done,
     # cancelled, and every failure the runner records itself. Not called for a run ended by
-    # someone else (cancelled while queued, failed by a reaper or at the enqueue) nor when the
-    # worker is stopping: whoever chains runs also checks on a timer. What it raises is logged
-    # and changes nothing of the run.
+    # someone else (cancelled while queued, failed by a reaper or at the enqueue), nor when
+    # the run's job is cancelled under it: the worker is stopping, or the queue's job timeout
+    # has passed (arq ends a job that outlives it the same way, and the runner cannot tell the
+    # two apart: the run is recorded as stopped and no hook is called, although the worker
+    # lives). Nothing calls a hook again that was missed, the process dying between the commit
+    # and the call included. So the hook only makes things quicker: whoever chains runs must
+    # also look on a timer, and that timer is the guarantee. What the hook raises is logged and
+    # changes nothing of the run.
     on_final: OnFinal | None = None
     # Another model for runs on a given kind of credential (keys are CredentialKind values);
     # `model` for every kind not named.

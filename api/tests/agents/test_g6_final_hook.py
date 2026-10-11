@@ -538,3 +538,70 @@ def test_through_the_worker_once_per_run_and_never_for_an_orphan(
     )
     assert run_row(factory, good).status is RunStatus.done  # the raising hook changed nothing
     assert replace(hooked, on_final=None).on_final is None
+
+
+def test_not_called_when_the_queues_job_timeout_ends_the_run(
+    worker_settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    streams: Streams,
+    g6_tools: None,
+) -> None:
+    """Review of PR #95: arq ends a job that outlives its timeout by cancelling it, which is
+    exactly what a stopping worker does to it, and the runner cannot tell the two apart. The
+    run is recorded as stopped and its hook is not called, although the worker lives: it goes
+    on to run the next job, whose hook is called. A missed hook is never called again; the
+    timer of whoever chains runs is the guarantee. Here through the real worker and a real arq
+    timeout of one second."""
+    from arq import func
+
+    from app import queue as queues
+    from app import worker
+
+    calls: list[tuple[uuid.UUID, RunStatus]] = []
+
+    async def hook(final: definitions.FinalRun) -> None:
+        calls.append((final.run_id, final.status))
+
+    hooked = agent("g6_hooked", on_final=hook)
+    streams.add("g6_hooked", ANSWER)
+    streams.add("g6_stalls", STALL)
+    too_long = new_run(factory, alice_id, {"script": "g6_stalls"}, agent="g6_hooked")
+    after_it = new_run(factory, alice_id, {}, agent="g6_hooked")
+    ctx = worker_context(worker_settings, speed=1.0)
+    ctx["agent_definitions"] = {hooked.name: hooked}
+    spec = worker.QueueSpec(
+        name=queues.AGENTS,
+        functions=[func(worker.run_agent, name="run_agent", timeout=1, max_tries=1)],
+        max_jobs=2,
+        job_timeout_s=1,
+    )
+
+    async def go() -> None:
+        stop = asyncio.Event()
+        failure: list[BaseException] = []
+
+        async def play(workers: list[Worker]) -> None:
+            try:
+                await enqueue(workers, too_long)
+                await wait_for(lambda: run_row(factory, too_long).status is RunStatus.failed)
+                await enqueue(workers, after_it)
+                await wait_for(lambda: len(calls) == 1)
+            except BaseException as exc:
+                failure.append(exc)
+            finally:
+                stop.set()
+
+        async def ready(workers: list[Worker]) -> None:
+            asyncio.get_running_loop().create_task(play(workers))
+
+        serving = worker.serve(worker_settings, [spec], stop=stop, ctx=ctx, on_ready=ready)
+        await asyncio.wait_for(serving, 60)
+        if failure:
+            raise failure[0]
+
+    asyncio.run(go())
+    row = run_row(factory, too_long)
+    assert (row.status, row.error) == (RunStatus.failed, runs.STOPPED)
+    assert calls == [(after_it, RunStatus.done)]  # the worker lived, and only this hook ran
