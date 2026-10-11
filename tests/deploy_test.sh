@@ -928,7 +928,7 @@ for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do seed "$(d "$n")"; done
 rot 0 "$NOW" BACKUP_KEEP=14
 only . "$(d 0)" "$(d 1)" "$(d 2)" "$(d 3)" "$(d 4)" "$(d 5)" "$(d 6)" "$(d 7)" "$(d 8)" "$(d 9)" "$(d 10)" "$(d 11)" "$(d 12)" "$(d 13)"
 out_has "BACKUP_KEEP=14, set in the environment of this run"
-out_has "WARNING: BACKUP_KEEP=14 keeps dumps up to 14 days, and the app tells its users that a deleted document leaves the server's backups within 7 days"
+out_has "WARNING: BACKUP_KEEP=14 keeps dumps up to 14 days, more than the 7 days within which a deleted document is promised to leave the server's backups"
 rot_new
 seed "$(d 20)" "$(d 14)" "$(d 13)" "$(d 8)"
 rot 0 "$NOW" BACKUP_KEEP=14
@@ -937,7 +937,7 @@ rot_new
 seed "$(d 20)" "$(d 14)" "$(d 13)" "$(d 8)" "$(d 6)"
 rot 0 "$NOW"
 only . "$(d 6)" "$(d 0)"
-ok "an explicit BACKUP_KEEP=14 wins for both rules: 14 dumps and 14 days (13 stays, 14 goes), with the warning that the app says 7; the same folder at the default keeps nothing past 6 days"
+ok "an explicit BACKUP_KEEP=14 wins for both rules: 14 dumps and 14 days (13 stays, 14 goes), with the warning that users are promised 7; the same folder at the default keeps nothing past 6 days"
 
 rot_new
 printf 'BACKUP_KEEP=3\n' >>"$ROT/app/.env"
@@ -1378,7 +1378,7 @@ ok "status against a Jetson not deployed since T10 says the retention is not rep
 
 step "T10, the defaults written down: one number, 7, and no other left"
 grep -q '^DEFAULT_KEEP=7$' ops/db.sh || fail "ops/db.sh does not default to 7"
-grep -q '^PROMISED_DAYS=7$' ops/db.sh || fail "ops/db.sh does not hold the 7 days the app promises"
+grep -q '^PROMISED_DAYS=7$' ops/db.sh || fail "ops/db.sh does not hold the 7 days users are promised"
 grep -q '^BACKUP_KEEP=$' .env.example || fail ".env.example does not document BACKUP_KEEP (empty: 7)"
 # shellcheck disable=SC2016 # a pattern for the literal text of the scripts
 grep -nE 'BACKUP_KEEP:-[0-9]|setting BACKUP_KEEP [0-9]|BACKUP_KEEP=[0-9]+ (bash|"\$HOME)|default 14' deploy.sh ops/db.sh .github/workflows/deploy.yml .env.example &&

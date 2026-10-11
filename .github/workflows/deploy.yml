@@ -189,8 +189,8 @@ jobs:
             # the one of every backup (ops/db.sh, Retention): BACKUP_KEEP of this .env, else 7,
             # so the newest 7 predeploy dumps stay and one 7 days old or more goes, here once
             # this dump is verified and again at each nightly backup. No BACKUP_KEEP is set
-            # here: a number of its own would keep predeploy dumps longer than the 7 days the
-            # app promises for a deleted document.
+            # here: a number of its own would keep predeploy dumps longer than the 7 days
+            # within which a deleted document is promised to leave the server's backups.
             out="$(BACKUP_DIR="$BACKUPS/deploys" bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}")"
             echo "$out"
             dump="$(sed -n 's/^backup=//p' <<<"$out" | tail -n 1)"

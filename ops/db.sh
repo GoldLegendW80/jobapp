@@ -83,9 +83,10 @@ BACKUP_DIR="$(under_home "${BACKUP_DIR:-jobapp-backups}")"
 MIN_FREE_MB="${BACKUP_MIN_FREE_MB:-100}"
 SCRATCH_DB=jobapp_restore_check
 DEFAULT_KEEP=7
-# What the app tells its users: a deleted document leaves the server's backups within this many
-# days (the delete dialog of the ingestion page, SPEC-ingestion.md, Retention). A BACKUP_KEEP
-# above it still wins and makes that sentence false, so every run says it.
+# What users are promised: a deleted document leaves the server's backups within this many days
+# (the owner's decision of 2026-10-10, SPEC-ingestion.md, Retention; the delete dialog of the
+# ingestion page says it). A BACKUP_KEEP above it still wins and breaks that promise, so every
+# run says it.
 PROMISED_DAYS=7
 
 [[ "$MIN_FREE_MB" =~ ^[0-9]+$ ]] || die "BACKUP_MIN_FREE_MB must be a whole number, got '$MIN_FREE_MB'"
@@ -326,9 +327,9 @@ rotate_dir() {
   report_odd "$dir"
 }
 
-promise_note() { # said by every run whose retention is longer than what the app promises
+promise_note() { # said by every run whose retention is longer than what users are promised
   ((KEEP <= PROMISED_DAYS)) ||
-    info "WARNING: BACKUP_KEEP=$KEEP keeps dumps up to $KEEP days, and the app tells its users that a deleted document leaves the server's backups within $PROMISED_DAYS days: with this setting that is not true"
+    info "WARNING: BACKUP_KEEP=$KEEP keeps dumps up to $KEEP days, more than the $PROMISED_DAYS days within which a deleted document is promised to leave the server's backups: with this setting that promise is not kept"
 }
 
 # scratch_note: the scratch database of `restore --keep` is a whole copy of a dump inside

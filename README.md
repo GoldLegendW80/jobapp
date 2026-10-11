@@ -80,13 +80,13 @@ Symptom when the file is forgotten: `docker compose ps` shows `api` and `worker`
 ./deploy.sh url                # the stable public URL, https://jobapp.taild83d16.ts.net, alone on stdout
 ./deploy.sh smoke              # checks on the Jetson, then through the public URL; exit 1 if any fails
 ./deploy.sh smoke --full       # same, plus a database outage and recovery (stops and starts db once)
-./deploy.sh backup [--pull]    # verified pg_dump -Fc to jetson:~/jobapp-backups/, --pull copies it to backups/
+./deploy.sh backup [--pull]    # verified pg_dump -Fc to jetson:~/jobapp-backups/, then the retention (7 days); --pull copies it to backups/
 ./deploy.sh backups            # list the dumps on the Jetson
 ./deploy.sh restore latest     # restore into the scratch database jobapp_restore_check, print row counts
 ./deploy.sh restore <file> --into-live   # replace the live database (type RESTORE jobapp to confirm)
-./deploy.sh backup-schedule install|remove|status   # nightly backup in the Jetson user's crontab
+./deploy.sh backup-schedule install|remove|status   # nightly backup in the Jetson user's crontab; status shows the retention and what is on the Jetson
 ./deploy.sh admin create <email>   # one-time admin setup link on the public URL (a reset link if that admin exists)
-tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore, url, restore prompt, admin create
+tests/deploy_test.sh           # local tests of deploy.sh: shellcheck, dispatcher, unreachable host, .rsyncignore, url, restore prompt, admin create, the backup retention with a fake clock
 tests/migrate_test.sh          # by hand on the Mac, not in CI (real Docker, builds the api image four times): migrate with the new image while the old api serves, failing, hanging and killed migrations, then compose up
 tests/jetson_smoke.sh          # smoke of the deployed stack over ssh (stops and starts db once)
 tests/backup_test.sh           # backup and restore round trip and refusals on the Jetson (BACKUP_TEST_LIVE=1: live restore too)
@@ -128,7 +128,8 @@ stack untouched and puts those files back; beforehand, `ops/previous.sh tag-runn
 `:previous` the image each running api and caddy container was started from, read with
 `docker inspect`, so `:previous` is always an image that ran), a
 backup into `~/jobapp-backups/deploys/` whenever the database volume exists (db started first if
-it was stopped; newest 10 kept, separate from the nightly ones), the migrations (next
+it was stopped; apart from the nightly ones and under the same retention, the newest 7 and none
+7 days old: Backups and restores, Retention), the migrations (next
 paragraph), `compose up --wait`,
 `tests/jetson_smoke.sh` in quick mode, `~/jobapp/.deployed-commit` written once the smoke passed,
 and the public URL in the run's summary. If `up` fails, the previous files
@@ -800,8 +801,7 @@ call.
 catches a truncated or damaged file), then renamed; the directory is mode 700 and every dump mode
 600. Once the dump is verified, and only then, the retention runs: the newest `BACKUP_KEEP` dumps
 stay and a dump `BACKUP_KEEP` days old or more is deleted, 7 by default (Retention, below). A
-backup is
-refused when the free disk would drop under the database size plus `BACKUP_MIN_FREE_MB` (100);
+backup is refused when the free disk would drop under the database size plus `BACKUP_MIN_FREE_MB` (100);
 a disk that fills up during `pg_dump` makes it fail, and the partial file is removed. Every backup
 and restore holds `flock` on `~/jobapp-backups/.lock`, so a second one at the same time is refused
 with a clear message. The backup directory lives outside `~/jobapp`, so `rsync --delete` never
@@ -827,9 +827,10 @@ fails), runs `alembic upgrade head`, starts `api` and checks health. About 15 se
 
 Nightly backups: `./deploy.sh backup-schedule install` adds one line to the crontab of the Jetson
 user (no sudo; idempotent; other lines kept), `remove` takes it out, `status` shows it, the
-retention its runs apply and where that number comes from, the oldest dump of each folder, and
-the end of `~/jobapp-backups/backup.log`. It runs the deployed `~/jobapp/ops/db.sh`, so deploy
-first. The line, at `BACKUP_CRON` (default `17 3 * * *`, the Jetson's local time):
+retention its runs apply and where that number comes from, the newest and the oldest dump of
+each folder, what is left alone there, and the end of `~/jobapp-backups/backup.log`. It runs the
+deployed `~/jobapp/ops/db.sh`, so deploy first. The line, at `BACKUP_CRON` (default
+`17 3 * * *`, the Jetson's local time):
 
 ```
 17 3 * * * JOBAPP_DIR=jobapp BACKUP_DIR=jobapp-backups "$HOME/jobapp/ops/db.sh" backup >>"$HOME/jobapp-backups/backup.log" 2>&1 # jobapp-backup (./deploy.sh backup-schedule)
@@ -843,66 +844,91 @@ section), so a new default arrives with a deploy and a new value with an edit of
 
 ### Retention: 7 days
 
-The app tells its users that a deleted document is gone from the app at once and from the
-server's backups within 7 days (decided on 2026-10-10, SPEC-ingestion.md). `BACKUP_KEEP` is what
-makes that true: one number, 7 by default, for two rules that `ops/db.sh backup` applies once the
-dump of the run is written and verified.
+Decided by the owner on 2026-10-10 (SPEC-ingestion.md, Retention): a document a user deletes is
+gone from the app at once, and from the server's backups within 7 days. `BACKUP_KEEP` is the
+setting that makes the second half true: one number, 7 by default, for two rules that
+`ops/db.sh backup` applies once the dump of its run is written and verified.
 
 - **Count:** the newest `BACKUP_KEEP` dumps of the run's folder stay, the others are deleted.
 - **Age:** a dump `BACKUP_KEEP` days old or more is deleted, in `~/jobapp-backups` (the nightly
   dumps, the ones made by hand, the pre-restore dumps), in `~/jobapp-backups/deploys` (the
   predeploy dumps) and in `~/jobapp-backups/incoming` (dumps uploaded from the Mac for a restore).
-  The backup a deploy takes applies both rules in `deploys/` itself.
+  The backup a deploy takes applies both rules in `deploys/`, and the nightly run applies the age
+  rule there again: predeploy dumps have no retention of their own.
 
-Age is the number of UTC calendar days between the date in the dump's own name and the date in the
-name of the dump the run has just written. It is never the file's modification time: a copied or
-touched file is as old as its name says. With 7, a dump taken at any hour of UTC day D is deleted
-by the nightly run of day D + 7, so the Jetson holds seven nightly dumps and a document deleted on
-day D is in none of its dumps once that run has ended. That is within 7 days of the deletion,
-with one exception stated here rather than rounded away: a document deleted in the small hours,
-between midnight UTC and the nightly run (03:17 in Paris is 01:17 or 02:17 UTC), just after a
-dump taken in those same hours, stays up to that much longer, about two hours. `BACKUP_KEEP=6`
-closes it at the price of one night.
+**How age is counted, and the one residue.** Age is the number of UTC calendar days between the
+date in the dump's own name and the date in the name of the dump the run has just written. It is
+never the file's modification time: a copied or touched file is as old as its name says. Whole
+days rather than seconds, for two reasons: two nightly runs start a few seconds apart, and a rule
+in seconds would keep or delete the dump of 7 nights ago depending on those seconds; and anyone
+can check a folder by reading its names. So with 7, a dump taken at any hour of UTC day D is
+deleted by the nightly run of day D + 7, and the Jetson holds seven nightly dumps. A dump taken
+later in the UTC day than the nightly run lives less than 7 days. One taken earlier, between
+midnight UTC and the end of that run, lives 7 days plus the time that separated it from the end
+of the run: a few seconds for the nightly dump itself, and up to 1 hour 17 minutes in summer or
+2 hours 17 minutes in winter for a dump taken just after midnight UTC (the default schedule,
+03:17 in Paris, is 01:17 or 02:17 UTC). For a user: a document deleted on day D is in no dump of
+the Jetson once the run of day D + 7 has ended. That is within 7 days of the deletion, except
+for a document deleted in those small hours just after a dump taken in them, which stays 7 days
+and at most those two hours or so. `BACKUP_KEEP=6` removes the residue at the price of one night
+of history.
 
-What is never deleted, and when nothing is:
+**What a run deletes, and what it never does.**
 
-- Nothing is deleted before the new dump is written and verified, and a backup that fails deletes
-  nothing and exits non zero. So the 7 days hold while the nightly backup runs and succeeds: a
-  Jetson that is switched off, a database that is down or a full disk delays every deletion until
-  the next backup that works. After ten days off, the first run writes its dump, then deletes
-  the old ones.
-- The dump the run wrote, and the newest dump of `~/jobapp-backups` and of `deploys/`, stay
-  whatever their age. For `deploys/` this matters: after more than 7 days without a deploy, the
-  last predeploy dump is older than the limit and still holds what was deleted since it was
-  taken, until the next deploy. Each nightly run says so in `backup.log` ("kept ... although it
-  is N days old") and `status` marks it as past the limit.
-- A restore never deletes, and `deploys/` is skipped while a predeploy backup or a restore holds
-  its lock. `ops/db.sh prune` applies the count rule alone.
+- Nothing before the new dump is written and verified. A backup that fails (the database down, no
+  disk, `pg_dump` or one of the two verifications failing, another backup holding the lock)
+  deletes nothing and exits non zero. After ten days switched off, the first run writes its
+  dump, then deletes the old ones, never the reverse.
+- Never the dump the run has just written and verified. It is the newest verified dump on the
+  server, so no run ends with nothing to restore. No folder has an exception of its own: the last
+  predeploy dump goes at 7 days like any other, even when no deploy has replaced it, since a
+  newer verified dump exists by then.
+- Never under a restore or another backup. Every backup and restore holds the lock of its folder,
+  the nightly run skips `deploys/` while a predeploy backup or a restore holds that folder's lock
+  (the next run deletes what is too old there), a dump being written is a hidden `.partial` file
+  until it is verified, and a restore never deletes. `ops/db.sh prune` applies the count rule
+  alone.
 - Only a regular file named exactly `jobapp-YYYY-MM-DDTHHMMSS[-tag].dump`, with a date that
-  exists, directly in one of the three folders, is ever deleted, one full path at a time. Anything
-  else there (an upload under another name, a `.partial` left by a killed run, a folder, a
-  symbolic link, which is neither followed nor removed) is left alone and listed at every run:
-  it is outside the retention until someone deletes it by hand.
+  exists, directly in one of the three folders, one full path at a time. Anything else there (an
+  upload under another name, a `.partial` left by a killed run, a folder, a symbolic link, which
+  is neither followed nor removed) is left alone and listed at every run. A dump whose name is
+  ahead of the run's date (a clock that was wrong) is kept until that date has passed, and said.
 
-What the 7 days do not cover: the dumps pulled to the Mac (`backups/`, above); the files left
-alone just listed; the scratch database `jobapp_restore_check` kept by `restore --keep`, a full
-copy of a dump inside Postgres until `./deploy.sh restore --drop-scratch`; and a restore itself,
-which brings back whatever was deleted after its dump was taken.
+**For the 7 days to be true on the Jetson**, all of this must hold. `./deploy.sh backup-schedule
+status` shows each point, and every nightly run writes the same lines to `backup.log`.
 
-What it costs: after 7 days no restore point on the Jetson predates a bad change. Data damaged by
-a migration or a bug more than 7 days ago cannot be recovered from the server's dumps, predeploy
-dumps included (until 2026-10-11 the newest 10 of those stayed whatever their age, and 14 nightly
-ones). A dump pulled to the Mac in time is the only older copy.
+1. The schedule is installed, by a release that has this retention, and `status` says
+   `BACKUP_KEEP=7`. A line installed before 2026-10-11 carries `BACKUP_KEEP=14` and keeps 14
+   days until it is installed again.
+2. No `BACKUP_KEEP` above 7, in the Jetson's `~/jobapp/.env` or in the cron line. `status` names
+   where the number comes from and prints a warning above 7, as every backup does.
+3. The nightly backup succeeds. A run that fails deletes nothing, so every deletion waits for the
+   next run that works: `status` gives the age of the newest and of the oldest dump of each
+   folder, warns after two days without a verified backup, and marks a dump past the limit.
+4. No copy of the data sits under a name the rotation does not delete or in a place it does not
+   look. A file of the backup folders that is not named like a dump, and the scratch database
+   `jobapp_restore_check` left by `restore --keep` (a whole copy of a dump inside Postgres, until
+   `./deploy.sh restore --drop-scratch`), are reported by `status` and by every run, and never
+   deleted by them. A dump copied anywhere else on the Jetson is seen by nothing.
+5. Outside the rotation by nature, so outside the 7 days: the dumps pulled to the Mac
+   (`backups/`), which stay until you delete them; any copy of the database volume
+   `jobapp_pgdata` (an archive, a snapshot, an image of the Jetson's disk); and a restore, which
+   brings back whatever was deleted after its dump was taken.
 
-An explicit `BACKUP_KEEP` wins, for both rules: 14 keeps 14 dumps and 14 days. The app says 7
-days whatever the setting, so a value above 7 makes its sentence false; every backup then prints
-a warning, and so does `status`. Where the number is read, first found wins: the environment of
-the run (a `BACKUP_KEEP` set on the Mac, in the shell or in `.env`, is sent with every
-`./deploy.sh backup` and written into the cron line by `backup-schedule install`), then the
-`BACKUP_KEEP` line of the Jetson's `~/jobapp/.env`, then the default of `ops/db.sh`.
+**What it costs.** After 7 days no restore point on the Jetson predates a bad change: data
+damaged by a migration or a bug more than 7 days ago cannot be recovered from the server's dumps,
+predeploy dumps included (until 2026-10-11 the newest 10 of those stayed whatever their age, and
+14 nightly ones). A dump pulled to the Mac in time is the only older copy.
+
+**An explicit `BACKUP_KEEP` wins, for both rules:** 14 keeps 14 dumps and 14 days. The promise
+is 7 days whatever the setting, so a value above 7 breaks it knowingly, and every backup then
+prints a warning. Where the number is read, first found wins: the environment of the run (a
+`BACKUP_KEEP` set on the Mac, in the shell or in `.env`, is sent with every `./deploy.sh backup`
+and written into the cron line by `backup-schedule install`), then the `BACKUP_KEEP` line of the
+Jetson's `~/jobapp/.env`, then the default of `ops/db.sh`.
 
 ```bash
-./deploy.sh backup-schedule status   # the line, BACKUP_KEEP and its source, the oldest dump of each folder
+./deploy.sh backup-schedule status   # the line, BACKUP_KEEP and its source, the newest and oldest dump of each folder, what is left alone
 ./deploy.sh backups                  # every dump on the Jetson: the date in each name is what the retention reads
 ```
 
