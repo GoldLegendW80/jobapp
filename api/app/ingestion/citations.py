@@ -129,6 +129,7 @@ class FieldType(StrEnum):
 class Rule(StrEnum):
     """The machine readable code of a refusal."""
 
+    DOCUMENT_NOT_TEXT = "document_not_text"
     DOCUMENT_UNREADABLE = "document_unreadable"
     NO_CITATION = "no_citation"
     TOO_MANY_CITATIONS = "too_many_citations"
@@ -159,6 +160,7 @@ class Rule(StrEnum):
 # One sentence per rule, shown to the agent and to the user. Constants: a reason never quotes
 # the document, the excerpt or the value.
 REASONS: Mapping[Rule, str] = {
+    Rule.DOCUMENT_NOT_TEXT: "this document has no text yet: nothing can be cited from it",
     Rule.DOCUMENT_UNREADABLE: "this document cannot be read as text: nothing can be cited from it",
     Rule.NO_CITATION: "no excerpt: every item cites at least one excerpt of the document",
     Rule.TOO_MANY_CITATIONS: f"too many excerpts: an item cites at most {EXCERPTS_MAX}",
@@ -422,12 +424,23 @@ def prepare(text: str) -> Document:
 
     Its memory is bounded too: a text whose N passes UNFOLD_MAX times its length is not prose
     (500,000 times U+FDFA would unfold to nine million characters) and is left unread, so every
-    citation into it is refused with `document_unreadable`."""
+    citation into it is refused with `document_unreadable`. So is what is not text at all (the
+    null text of a document that waits for its transcription): nothing here raises."""
+    if not isinstance(text, str):
+        return Document("", "", array("I"), "", array("I"), readable=False)
     norm, whole = _normalise(text, True, UNFOLD_MAX * len(text) + UNFOLD_SLACK)
     if not whole:
         return Document(text, "", array("I"), "", array("I"), readable=False)
     bones = skeleton(norm.text)
     return Document(text, norm.text, norm.origin, bones.text, bones.index)
+
+
+def _prepared(document: object) -> Document | None:
+    """The document of a call, prepared when it comes as its text, or None when it is neither a
+    text nor a prepared document."""
+    if isinstance(document, str):
+        return prepare(document)
+    return document if isinstance(document, Document) else None
 
 
 # --- tokens ---------------------------------------------------------------------------------------
@@ -552,7 +565,9 @@ def find(document: str | Document, excerpt: str) -> Span | Refusal:
     first that starts and ends on token boundaries is taken; when none does, the first
     occurrence is taken and widened to the boundaries of the tokens it cuts. O(length of the
     document) for the search, constant work per occurrence."""
-    prepared = prepare(document) if isinstance(document, str) else document
+    prepared = _prepared(document)
+    if prepared is None:
+        return _refuse(Rule.DOCUMENT_NOT_TEXT)
     if not prepared.readable:
         return _refuse(Rule.DOCUMENT_UNREADABLE)
     if not isinstance(excerpt, str):
@@ -1926,6 +1941,8 @@ def _leaves(
     )
     types: dict[str, FieldType] = {}
     for path, name in table.items():
+        if not isinstance(path, str):
+            return _refuse(Rule.UNKNOWN_FIELD, "value")
         try:
             types[path] = FieldType(name)
         except ValueError:
@@ -1945,8 +1962,9 @@ def _leaves(
         if isinstance(node, Mapping):
             children: list[tuple[str, str, object]] = []
             for key, child in node.items():
-                below = f"{path}.{key}" if path else key
-                if not isinstance(key, str) or (below not in types and below not in containers):
+                # Its type first: an integer of five thousand digits cannot even be printed.
+                below = (f"{path}.{key}" if path else key) if isinstance(key, str) else None
+                if below is None or (below not in types and below not in containers):
                     unknown = unknown or index
                     continue
                 children.append((below, f"{index}.{key}", child))
@@ -2005,7 +2023,9 @@ def check_item(
         return _refuse(Rule.NO_CITATION, "excerpts")
     if len(excerpts) > EXCERPTS_MAX:
         return _refuse(Rule.TOO_MANY_CITATIONS, "excerpts")
-    prepared = prepare(document) if isinstance(document, str) else document
+    prepared = _prepared(document)
+    if prepared is None:
+        return _refuse(Rule.DOCUMENT_NOT_TEXT)
     spans: list[Span] = []
     for position, excerpt in enumerate(excerpts):
         found = find(prepared, excerpt)

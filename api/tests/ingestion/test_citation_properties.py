@@ -1375,14 +1375,21 @@ def test_nothing_raises_on_hostile_text_and_the_answer_is_the_same_twice(seed: i
                 [hostile(rng, 0, 10), None, 3],
                 {"a": hostile(rng, 0, 10)},
                 {hostile(rng, 0, 5): [hostile(rng, 0, 5)]},
+                {10**5000: hostile(rng, 0, 5), 3: None, None: 3},
+                {"a": {10**5000: "x"}},
                 b"bytes",
             )
         )
-        types: object = rng.choice((field, {"a": field, "b[]": "text"}, {"": field}))
+        types: object = rng.choice(
+            (field, {"a": field, "b[]": "text"}, {"": field}, {1: field}, {10**5000: field}, None)
+        )
         once = check_item(types, value, prepared, excerpts)  # type: ignore[arg-type]
         twice = check_item(types, value, text, excerpts)  # type: ignore[arg-type]
         assert once == twice, (seed, field, value, excerpts)
         assert_sound(text, once, excerpts)
+        for unread in (None, 3, b"bytes"):
+            gone = check_item(types, value, unread, excerpts)  # type: ignore[arg-type]
+            assert isinstance(gone, Refusal)
         for excerpt in excerpts:
             found = find(prepared, excerpt)
             if isinstance(found, Span):

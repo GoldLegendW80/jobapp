@@ -1022,6 +1022,40 @@ def test_two_digit_years_are_kept_apart() -> None:
         assert dates_of(n(text)).short == set(), text
 
 
+@pytest.mark.parametrize("document", [None, 3, 1.5, b"bytes", ["text"], {"text": LONG}, object()])
+def test_a_document_that_is_not_text_is_refused_with_its_own_rule(document: object) -> None:
+    """A document that waits for its transcription has a null text (first review of PR #97)."""
+    refusal = Refusal("", Rule.DOCUMENT_NOT_TEXT, citations.REASONS[Rule.DOCUMENT_NOT_TEXT])
+    assert check_item("text", "x", document, [LONG]) == refusal  # type: ignore[arg-type]
+    assert find(document, LONG) == refusal  # type: ignore[arg-type]
+    unread = prepare(document)  # type: ignore[arg-type]
+    assert (unread.readable, unread.text, unread.source) == (False, "", "")
+    assert rule_of(check_item("text", "x", unread, [LONG])) is Rule.DOCUMENT_UNREADABLE
+    # the shape of the value is still looked at first
+    assert rule_of(check_item("setting", "x", document, [LONG])) is Rule.SETTING  # type: ignore[arg-type]
+
+
+def test_a_key_that_is_not_text_is_an_unknown_field_and_is_never_printed() -> None:
+    huge = 10**5000  # too long to turn into text: formatting it raises
+    unknown = citations.REASONS[Rule.UNKNOWN_FIELD]
+    types = {"a": "text", "b.c": "text"}
+    for key in (huge, 1, None, 1.5, ("a",), b"a", True):
+        assert check_item(types, {key: "x"}, LONG, [LONG]) == Refusal(
+            "value", Rule.UNKNOWN_FIELD, unknown
+        )
+        assert check_item(types, {"b": {key: "x"}}, LONG, [LONG]) == Refusal(
+            "value.b", Rule.UNKNOWN_FIELD, unknown
+        )
+        table = {key: "text"}
+        assert check_item(table, "Python", LONG, [LONG]) == Refusal(  # type: ignore[arg-type]
+            "value", Rule.UNKNOWN_FIELD, unknown
+        )
+    for table in (["text"], {"a": ["text"]}, {"a": None}, 3, None):
+        result = check_item(table, {"a": "Python"}, LONG, [LONG])  # type: ignore[arg-type]
+        assert rule_of(result) is Rule.UNKNOWN_FIELD
+    assert isinstance(check_item(types, {"a": "Python", "b": {"c": huge}}, LONG, [LONG]), Refusal)
+
+
 def test_a_range_of_two_digit_years_is_read_only_when_both_are_over_twelve() -> None:
     """Decision of the orchestrator after the first review of pull request #97: up to 12 the
     second number may be a month, and the range a range of days, or two scores."""
@@ -1124,6 +1158,13 @@ def test_honest_forms_that_the_first_review_found_refused(
     text: str, expected: set[tuple[int, int]]
 ) -> None:
     assert pairs(text) == expected
+
+
+def test_an_abbreviation_takes_only_a_full_stop_that_is_glued_to_it() -> None:
+    assert pairs("Stage, janv. 2023, Thales") == {(2023, 1)}
+    assert pairs("Stage, janv . 2023, Thales") == set()
+    assert pairs("Stage, janv .2023, Thales") == set()
+    assert pairs("Stage, sept. 2021 chez Elsan") == {(2021, 9)}
 
 
 def test_a_break_between_a_month_and_its_year_is_told_apart() -> None:
@@ -1301,6 +1342,10 @@ ADDRESSES = (
         ("jean luc.martin@mail.example", False),
         ("jean-luc.martin@mail.exampl", False),
         ("@example.org", False),
+        # the scheme and "www." are left out of a URL, never of an email
+        ("www.camille.durand@example.org", False),
+        ("https://camille.durand@example.org", False),
+        ("http://www.camille.durand@example.org", False),
         ("", False),
         ("   ", False),
     ],
@@ -1395,6 +1440,25 @@ def test_an_address_is_bounded_on_both_sides(source: str, holds: bool) -> None:
     assert (rule_of(result) is None) == holds, result
     if not holds:
         assert rule_of(result) is Rule.ADDRESS_NOT_IN_SOURCE
+
+
+def test_an_email_at_the_very_start_of_a_document_and_after_many_signs() -> None:
+    email = "camille.durand@example.org"
+    for opening in ("", "'", "**", "`"):
+        source = f"{opening}{email} est mon adresse de contact"
+        assert rule_of(check_item("email", email, source, [source])) is None, opening
+    for opening in (".", "_", "x'", "@"):
+        source = f"{opening}{email} est mon adresse de contact"
+        result = check_item("email", email, source, [source])
+        assert rule_of(result) is Rule.ADDRESS_NOT_IN_SOURCE, opening
+    # sixty four signs in a row are looked at, no more: past that, no telling
+    told = f"Adresse {'*' * 64}{email} à jour"
+    assert rule_of(check_item("email", email, told, [told])) is None
+    untold = f"Adresse {'*' * 65}{email} à jour"
+    assert rule_of(check_item("email", email, untold, [untold])) is Rule.ADDRESS_NOT_IN_SOURCE
+    for dots, holds in ((63, True), (64, False)):
+        source = f"Adresse {email}{'.' * dots} à jour"
+        assert (rule_of(check_item("email", email, source, [source])) is None) == holds, dots
 
 
 def test_an_address_in_a_text_written_without_spaces() -> None:
