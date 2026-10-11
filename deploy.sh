@@ -67,7 +67,9 @@
 # for the count of dumps and for their age in days; no default here: when it is not set on this
 # Mac nothing is sent, and ops/db.sh reads the BACKUP_KEEP of the Jetson's .env, then its own
 # default, 7, at each run; set here it is sent with every backup command and written into the
-# cron line by backup-schedule install),
+# cron line by backup-schedule install), BACKUP_ACCEPT_SHRINK (shell only, 1 for one
+# `./deploy.sh backup`: accepts a dump less than half the size of the last one, which otherwise
+# holds the rotation),
 # BACKUP_CRON (schedule of backup-schedule, default "17 3 * * *", the Jetson's local time),
 # DEPLOY_LOCK_MAX_S (default 3600: the Jetson releases the deploy lock after that long even if
 # this Mac went to sleep holding it), MIGRATE_TIMEOUT_S (default 300: the longest the migrations of
@@ -988,6 +990,8 @@ rdb() { # rdb <args...>: ops/db.sh of this tree, run by bash on the Jetson
   env="JOBAPP_DIR=$RDIR_Q BACKUP_DIR=$(printf '%q' "$BDIR")"
   [[ -z "$BACKUP_KEEP" ]] || env+=" BACKUP_KEEP=$(printf '%q' "$BACKUP_KEEP")"
   [[ -z "${BACKUP_MIN_FREE_MB:-}" ]] || env+=" BACKUP_MIN_FREE_MB=$(printf '%q' "$BACKUP_MIN_FREE_MB")"
+  # From the shell of this run alone, never from a file: it accepts one smaller dump (ops/db.sh).
+  [[ -z "${BACKUP_ACCEPT_SHRINK:-}" ]] || env+=" BACKUP_ACCEPT_SHRINK=$(printf '%q' "$BACKUP_ACCEPT_SHRINK")"
   remote "$env bash -s --$args" <"$ROOT/ops/db.sh"
 }
 

@@ -632,7 +632,7 @@ esac
 exit 0
 FAKE
 chmod +x "$WORK/bin2/ssh"
-fake2() { env -u BACKUP_KEEP PATH="$WORK/bin2:$PATH" FAKE_CALLS="$WORK/calls2" DEPLOY_HOST=fakejetson "$@"; }
+fake2() { env -u BACKUP_KEEP -u BACKUP_ACCEPT_SHRINK PATH="$WORK/bin2:$PATH" FAKE_CALLS="$WORK/calls2" DEPLOY_HOST=fakejetson "$@"; }
 typed() { # typed <answer> <cmd...>: run cmd against the fake in a pseudo terminal, type the answer
   local answer="$1"
   shift
@@ -681,6 +681,11 @@ run 1 fake2 env BACKUP_KEEP=3 ./deploy.sh backup --pull
 grep -q -- "BACKUP_DIR=jobapp-backups BACKUP_KEEP=3 bash -s -- backup" "$WORK/calls2" || fail "BACKUP_KEEP not passed: $(cat "$WORK/calls2")"
 out_has "ops/db.sh reported no backup file"
 ok "backup passes a BACKUP_KEEP set on the Mac (an explicit value wins), and fails when ops/db.sh reports no file"
+grep -q "BACKUP_ACCEPT_SHRINK" "$WORK/calls2" && fail "BACKUP_ACCEPT_SHRINK was sent although it is not set: $(cat "$WORK/calls2")"
+: >"$WORK/calls2"
+run 1 fake2 env BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup
+grep -q -- "BACKUP_DIR=jobapp-backups BACKUP_ACCEPT_SHRINK=1 bash -s -- backup" "$WORK/calls2" || fail "BACKUP_ACCEPT_SHRINK not passed: $(cat "$WORK/calls2")"
+ok "T10: BACKUP_ACCEPT_SHRINK=1 in the shell of one ./deploy.sh backup reaches ops/db.sh, and nothing sends it otherwise"
 
 step "ops/db.sh restore-live stops the api and the worker, and starts both on every path"
 # ops/db.sh itself, run here with a fake docker (and flock, stat) found first: what it asks of
@@ -762,7 +767,9 @@ case "$args" in
     ;;
   *"pg_dump"*)
     echo "pg_dump" >>"$FAKE_DIR/order"
+    # 16 bytes, like the dumps the tests seed; FAKE_DUMP_BYTES makes it bigger (the size check).
     [[ -n "${FAKE_EMPTY_DUMP:-}" ]] || printf 'PGDMP fake dump\n'
+    [[ -z "${FAKE_DUMP_BYTES:-}" ]] || head -c "$((FAKE_DUMP_BYTES - 16))" /dev/zero | tr '\0' x
     if [[ -n "${FAKE_FAIL_DUMP:-}" ]]; then
       echo "pg_dump: error: connection to server failed" >&2
       exit 1
@@ -875,7 +882,7 @@ rot() {
   if (($#)); then shift; fi
   (($#)) || set -- backup
   : >"$ROT/order"
-  run "$want" env -u BACKUP_KEEP FAKE_NOW="$now" FAKE_DIR="$ROT" DB_SH_TEST_BIN="$DBT/bin" TMPDIR="$ROT/tmp" \
+  run "$want" env -u BACKUP_KEEP -u BACKUP_ACCEPT_SHRINK FAKE_NOW="$now" FAKE_DIR="$ROT" DB_SH_TEST_BIN="$DBT/bin" TMPDIR="$ROT/tmp" \
     JOBAPP_DIR="$ROT/app" BACKUP_DIR="$ROT/backups" BACKUP_MIN_FREE_MB=0 ${envs[@]+"${envs[@]}"} bash ops/db.sh "$@"
 }
 holds() { # holds <folder under backups/, or .>: every entry there but the lock and the folders
@@ -1087,16 +1094,16 @@ step "T10, safety: the newest verified dump of the whole tree stays, and no fold
 # days false, since a document deleted after the last deploy stayed in the last predeploy dump
 # until the next deploy. What stays is one dump, the one this run wrote and verified.
 rot_new
-seed "$(d 30)" "$(d 20 pre-restore)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 20 predeploy-bbbbbbbbbbbb)" \
+seed "$(d 30)" "$(d 20 pre-restore)" "$(d 1)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 20 predeploy-bbbbbbbbbbbb)" \
   "incoming/$(d 30)" "incoming/$(d 20)"
 rot 0 "$NOW"
-only . "$(d 0)"
+only . "$(d 1)" "$(d 0)"
 only deploys
 only incoming
-[[ "$(cd "$ROT/backups" && find . -type f -name '*.dump')" == "./$(d 0)" ]] || fail "more than this run's dump is left"
 out_has "deleted old backup $(d 20 predeploy-bbbbbbbbbbbb) (20 days old, the limit is 7)"
 out_has "retention: 0 backup(s) kept in $ROT/backups/deploys"
-ok "every folder holds only dumps past the limit: all go, the last predeploy dump and the last upload included, and the one dump left on the server is the one this run wrote and verified"
+grep -q "although" "$WORK/out" && fail "a dump past the limit was spared although yesterday's is there: $(cat "$WORK/out")"
+ok "deploys/ and incoming/ hold only dumps past the limit: all go, the last predeploy dump and the last upload included; no folder keeps its newest for its own sake"
 
 rot_new
 for n in 1 2 3 4 5 6 7; do seed "$(d "$n")"; done
@@ -1106,12 +1113,45 @@ only . "$(d 0)" "$(d 1)" "$(d 2)" "$(d 3)" "$(d 4)" "$(d 5)" "$(d 6)"
 only deploys
 ok "a week without a deploy: the only predeploy dump, taken 7 days ago in the afternoon, goes with the nightly dump of that day, so nothing a user deleted since is left in it"
 
+# Decision of 2026-10-11 (the review's N4, a): a run never leaves the server with its own dump
+# alone. When every other dump of the tree is past the limit, the newest of them stays for one
+# more run, and the next run, which has this run's dump beside its own, deletes it.
+rot_new
+seed "$(d 30)" "$(d 20 pre-restore)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 20 predeploy-bbbbbbbbbbbb)" \
+  "incoming/$(d 30)" "incoming/$(d 19)"
+rot 0 "$NOW"
+only . "$(d 0)"
+only deploys
+only incoming "$(d 19)"
+out_has "kept $(d 19) in $ROT/backups/incoming although it is 19 days old, the limit is 7: every other dump goes in this run, and a run never leaves the server with its own dump alone. The next run deletes it"
+[[ "$(grep -c "^rm -f -- $ROT/backups/" "$ROT/order")" == 5 ]] || fail "not the five others were deleted: $(cat "$ROT/order")"
+rot 0 "$(ago -1)"
+only . "$(d 0)" "$(d -1)"
+only incoming
+grep -q "although" "$WORK/out" && fail "the spared dump was spared a second time: $(cat "$WORK/out")"
+ok "every other dump of the three folders is past the limit: five go and the newest of them, wherever it is, stays for this run, with the reason; the next run, a day later, deletes it. One night more, in that case only"
+rot_new
+seed "$(d 20)" "deploys/$(d 20 predeploy-aaaaaaaaaaaa)" "incoming/$(d 20)"
+rot 0 "$NOW"
+only . "$(d 20)" "$(d 0)"
+only deploys
+only incoming
+ok "at the same time in three names, the one in the folder of the run is the one spared"
+
 rot_new
 seed "$(d 30)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 9 predeploy-bbbbbbbbbbbb)"
 rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" -- backup --tag predeploy-0123456789ab
-only deploys "$(d 0 predeploy-0123456789ab)"
+only deploys "$(d 9 predeploy-bbbbbbbbbbbb)" "$(d 0 predeploy-0123456789ab)"
 only . "$(d 30)"
-ok "a deploy after a long pause: its backup deletes every older predeploy dump and keeps its own; the folder of the nightly run is not its to rotate"
+rot 0 "$(ago 0 020000)" BACKUP_DIR="$ROT/backups/deploys" -- backup --tag predeploy-123456789abc
+only deploys "$(d 0 predeploy-0123456789ab)" "$(d 0 predeploy-123456789abc 020000)"
+ok "a deploy after a long pause: its backup deletes the older predeploy dumps but the newest of them, which the next deploy (or the next nightly run) deletes; the folder of the nightly run is not its to rotate"
+rot_new
+seed "$(d 2)" "$(d 1)"
+rot 0 "$NOW" BACKUP_KEEP=1
+only . "$(d 1)" "$(d 0)"
+out_has "kept $(d 1) in $ROT/backups although it is 1 days old, the limit is 1"
+ok "BACKUP_KEEP=1 therefore keeps two: the run's dump and the one before it"
 
 rot_new
 for n in 1 2 3 4 5 6 7 8; do seed "$(d "$n")"; done
@@ -1124,11 +1164,14 @@ rot_new
 for n in 1 2 3; do seed "$(d "$n")"; done
 seed "deploys/$(d 1 predeploy-aaaaaaaaaaaa)" "incoming/$(d 1)"
 rot 0 2027-10-11T011700 # the clock a year ahead: everything else looks a year old
-[[ "$(cd "$ROT/backups" && find . -type f -name '*.dump')" == ./jobapp-2027-10-11T011700.dump ]] || fail "not exactly this run's dump is left: $(holds .)"
+only . "$(d 1)" jobapp-2027-10-11T011700.dump
+only deploys
+only incoming
+out_has "kept $(d 1) in $ROT/backups although it is 366 days old, the limit is 7: every other dump goes in this run"
 rot 0 "$NOW" # the clock right again
-only . jobapp-2027-10-11T011700.dump "$(d 0)"
+only . "$(d 1)" jobapp-2027-10-11T011700.dump "$(d 0)"
 out_has "kept jobapp-2027-10-11T011700.dump, whose name is 365 day(s) ahead of this run's (a clock was wrong): by its name it goes in 372 days, sooner by hand"
-ok "a clock a year ahead: every other dump goes and the run's own verified dump stays, so no run ends with nothing to restore; once the clock is right that dump is ahead by its name, kept and said at every run"
+ok "a clock a year ahead: every other dump looks a year old and goes, but the newest real one and the run's own stay, so the clock alone never leaves one dump; once the clock is right the dump of that run is ahead by its name, kept and said at every run"
 
 rot_new
 seed "$(d 30)" "$(d 20)" "$(d 9)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 9 predeploy-bbbbbbbbbbbb)" "incoming/$(d 30)"
@@ -1192,15 +1235,18 @@ before="$(tree_of)"
 rot 1 "$NOW" FAKE_FAIL_DUMP=1
 no_delete "$before"
 rot 0 "$NOW"
-only . "$(d 0)"
+only . "$(d 10)" "$(d 0)"
 only deploys
 verified="$(grep -n '^verify read$' "$ROT/order" | tail -n 1 | cut -d: -f1)"
 first_rm="$(grep -n "^rm -f -- $ROT/backups/" "$ROT/order" | head -n 1 | cut -d: -f1)"
 [[ -n "$verified" && -n "$first_rm" ]] || fail "no verification or no deletion in: $(cat "$ROT/order")"
 ((verified < first_rm)) || fail "a dump was deleted before the new one was verified: $(cat "$ROT/order")"
 [[ "$(sed -n '1p' "$ROT/order")" == pg_dump ]] || fail "the run did not start with the dump: $(cat "$ROT/order")"
-[[ "$(grep -c "^rm -f -- $ROT/backups/" "$ROT/order")" == 9 ]] || fail "not the nine old dumps: $(cat "$ROT/order")"
-ok "a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes them all"
+[[ "$(grep -c "^rm -f -- $ROT/backups/" "$ROT/order")" == 8 ]] || fail "not eight of the nine old dumps: $(cat "$ROT/order")"
+out_has "kept $(d 10) in $ROT/backups although it is 10 days old, the limit is 7: every other dump goes in this run"
+rot 0 "$(ago -1)"
+only . "$(d 0)" "$(d -1)"
+ok "a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes eight, keeping the newest of them one night more; the night after, that one goes"
 
 rot_new
 seed "$(d 30)" "$(d 20)" "$(d 10)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 20 predeploy-bbbbbbbbbbbb)" "incoming/$(d 30)"
@@ -1282,6 +1328,97 @@ else
   ok "no flock on this machine: the held lock of deploys/ is checked with the real flock in CI"
 fi
 
+step "T10, safety: a dump less than half the size of the last one accepted deletes nothing"
+# Decision of 2026-10-11 (the review's N4, b): a database that lost its data still dumps, and the
+# dump still verifies. The fake pg_dump writes 16 bytes, like the dumps seeded so far; `big` seeds
+# a larger one and FAKE_DUMP_BYTES makes the run's own larger.
+big() { # big <path under backups/> <bytes>: a fake dump of that size, written now
+  mkdir -p "$(dirname "$ROT/backups/$1")"
+  {
+    printf 'PGDMP fake dump\n'
+    head -c "$(($2 - 16))" /dev/zero | tr '\0' x
+  } >"$ROT/backups/$1"
+}
+rot_new
+seed "$(d 30)" "$(d 20)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "incoming/$(d 30)"
+big "$(d 1)" 100
+before="$(tree_of)"
+rot 0 "$NOW"
+out_has "WARNING: this dump is 16 bytes, less than half of $(d 1) (100 bytes), the last one accepted in $ROT/backups"
+out_has "this run keeps its dump and deletes NOTHING, in any folder"
+out_has "^backup=$ROT/backups/$(d 0)$"
+[[ "$(tree_of)" == "$(printf '%s\n%s\n%s\n' "$before" "backups/$(d 0)" "backups/.size-hold" | LC_ALL=C sort)" ]] ||
+  fail "more than the new dump and the mark changed: $(tree_of | tr '\n' ' ')"
+[[ "$(cat "$ROT/backups/.size-hold")" == "$(d 1)" ]] || fail "the mark does not name the last accepted dump: $(cat "$ROT/backups/.size-hold")"
+grep -q -e "deleted old backup" -e "although" "$WORK/out" && fail "a held run deleted or spared: $(cat "$WORK/out")"
+grep "^rm " "$ROT/order" | grep -q "backups/" && fail "a held run removed something in the backup folders: $(cat "$ROT/order")"
+ok "yesterday's dump is 100 bytes and today's 16: exit 0, the dump kept and reported, a warning with both sizes, and not one of the four dumps past the limit deleted, in any folder"
+rot 0 "$(ago -1)"
+out_has "WARNING: this dump is 16 bytes, less than half of $(d 1) (100 bytes), the last one accepted in $ROT/backups"
+grep -q "deleted old backup" "$WORK/out" && fail "the second small dump was measured against the first: $(cat "$WORK/out")"
+[[ -f "$ROT/backups/$(d 30)" && -f "$ROT/backups/deploys/$(d 30 predeploy-aaaaaaaaaaaa)" && -f "$ROT/backups/incoming/$(d 30)" ]] || fail "a held run deleted an old dump"
+rot 0 "$(ago -1 120000)" -- retention
+out_has "WARNING: the rotation of $ROT/backups is held: a dump came out less than half the size of $(d 1) (100 bytes), the last one accepted there, and its newest is $(d -1) (16 bytes)"
+grep -q "left alone" "$WORK/out" && fail "the mark is reported as a stray file: $(cat "$WORK/out")"
+ok "the night after, as small: still measured against the 100 bytes of the last accepted dump, not against yesterday's 16, so still nothing deleted; retention, so status, shows the hold with both sizes"
+rot 0 "$(ago -2)" FAKE_DUMP_BYTES=50
+out_has "the size check passes again (50 bytes): the hold on the rotation of $ROT/backups is lifted"
+[[ ! -e "$ROT/backups/.size-hold" ]] || fail "the mark is still there"
+only . "$(d 1)" "$(d 0)" "$(d -1)" "$(d -2)"
+only deploys
+only incoming
+ok "a dump of half that size (50 of 100, not less than half) lifts the hold by itself, and that run deletes what was waiting"
+
+rot_new
+seed "$(d 30)"
+big "$(d 1)" 100
+rot 0 "$NOW"
+[[ -f "$ROT/backups/.size-hold" && -f "$ROT/backups/$(d 30)" ]] || fail "the run was not held: $(cat "$WORK/out")"
+rot 0 "$(ago -1)" BACKUP_ACCEPT_SHRINK=1
+out_has "BACKUP_ACCEPT_SHRINK is set: the size of this dump (16 bytes) is accepted and the hold on the rotation of $ROT/backups is lifted"
+only . "$(d 1)" "$(d 0)" "$(d -1)"
+rot 0 "$(ago -2)"
+grep -q -e WARNING -e "size check" "$WORK/out" && fail "the run after an accepted shrink is held again: $(cat "$WORK/out")"
+[[ ! -e "$ROT/backups/.size-hold" ]] || fail "the mark came back"
+ok "a database meant to shrink: one run with BACKUP_ACCEPT_SHRINK=1 lifts the hold and deletes what was waiting, and the run after it, without the variable, is measured against that accepted dump"
+rot_new
+seed "$(d 1)"
+before="$(tree_of)"
+rot 1 "$NOW" BACKUP_ACCEPT_SHRINK=yes
+out_has "BACKUP_ACCEPT_SHRINK must be 1 or not set, got 'yes'"
+no_delete "$before"
+[[ ! -s "$ROT/order" ]] || fail "a dump was made with an invalid BACKUP_ACCEPT_SHRINK: $(cat "$ROT/order")"
+rot_new
+big "$(d 1)" 32
+seed "$(d 9)"
+rot 0 "$NOW"
+only . "$(d 1)" "$(d 0)"
+grep -q WARNING "$WORK/out" && fail "exactly half is held: $(cat "$WORK/out")"
+rot_new
+rot 0 "$NOW"
+grep -q WARNING "$WORK/out" && fail "a first dump, with nothing to be measured against, is held: $(cat "$WORK/out")"
+rot_new
+seed "$(d 9)" "$(d 1)"
+printf 'not a dump name\n' >"$ROT/backups/.size-hold"
+rot 0 "$NOW"
+only . "$(d 1)" "$(d 0)"
+[[ ! -e "$ROT/backups/.size-hold" ]] || fail "a mark that names no dump of the folder was kept"
+ok "exactly half passes, a first dump passes, any other value of BACKUP_ACCEPT_SHRINK is refused before the dump, and a mark that names no dump of the folder holds nothing"
+
+rot_new
+seed "$(d 30)" "deploys/$(d 9 predeploy-bbbbbbbbbbbb)"
+big "deploys/$(d 1 predeploy-aaaaaaaaaaaa)" 100
+rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" -- backup --tag predeploy-0123456789ab
+out_has "WARNING: this dump is 16 bytes, less than half of $(d 1 predeploy-aaaaaaaaaaaa) (100 bytes), the last one accepted in $ROT/backups/deploys"
+out_has "^backup=$ROT/backups/deploys/$(d 0 predeploy-0123456789ab)$"
+only deploys "$(d 9 predeploy-bbbbbbbbbbbb)" "$(d 1 predeploy-aaaaaaaaaaaa)" "$(d 0 predeploy-0123456789ab)" .size-hold
+rot 0 "$(ago 0 030000)"
+only . "$(d 0 '' 030000)"
+only deploys "$(d 1 predeploy-aaaaaaaaaaaa)" "$(d 0 predeploy-0123456789ab)" .size-hold
+rot 0 "$(ago 0 040000)" -- retention
+out_has "WARNING: the rotation of $ROT/backups/deploys is held"
+ok "the same in the deploy's own folder: the predeploy backup ends well, so the deploy goes on, and deletes nothing there; the nightly run, whose own dump passes its check, still deletes by age in deploys/, and status shows the hold of that folder"
+
 step "T10, safety: only whole dump names, directly in the folder, never through a link"
 rot_new
 odd=(notes.txt jobapp-latest.dump jobapp-2026-13-45T250000.dump jobapp-2026-02-30T000000.dump jobapp-20260901T000000.dump
@@ -1303,7 +1440,7 @@ ln -s "$ROT/outside/precious.dump" "$ROT/backups/jobapp-2026-09-03T000000.dump"
 mkdir "$ROT/outside/elsewhere"
 printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 30 predeploy-aaaaaaaaaaaa)"
 ln -s "$ROT/outside/elsewhere" "$ROT/backups/deploys"
-seed "$(d 9)" "incoming/$(d 9)" "incoming/cv.pdf" "incoming/local-truncated.dump"
+seed "$(d 9)" "$(d 1)" "incoming/$(d 9)" "incoming/cv.pdf" "incoming/local-truncated.dump"
 rot 0 "$NOW"
 for f in "${odd[@]}" "$nl" backup.log jobapp-2026-09-02T000000.dump/inside; do
   [[ -f "$ROT/backups/$f" ]] || fail "'$f' was removed"
@@ -1487,7 +1624,7 @@ esac
 FAKE
 chmod +x "$JH/bin/"*
 jet() { # jet <cmd...>: deploy.sh against the fake Jetson, with no backup setting from this shell
-  env -u BACKUP_KEEP -u BACKUP_DIR -u BACKUP_CRON -u DEPLOY_DIR PATH="$JH/bin:$PATH" FAKE_HOME="$JH/home" \
+  env -u BACKUP_KEEP -u BACKUP_ACCEPT_SHRINK -u BACKUP_DIR -u BACKUP_CRON -u DEPLOY_DIR PATH="$JH/bin:$PATH" FAKE_HOME="$JH/home" \
     DEPLOY_HOST=fakejetson DB_SH_TEST_BIN="$DBT/bin" FAKE_DIR="$JH" FAKE_NOW="$NOW" TMPDIR="$JH/tmp" "$@"
 }
 MARK="# jobapp-backup (./deploy.sh backup-schedule)"

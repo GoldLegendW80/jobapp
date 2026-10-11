@@ -45,9 +45,18 @@
 # there is no exception per folder: the last predeploy dump goes at 7 days like any other, since
 # a newer verified dump exists by then); a file whose name is not exactly
 # jobapp-YYYY-MM-DDTHHMMSS[-tag].dump with a date that exists; anything that is not a regular file
-# (a symbolic link is neither followed nor removed). What is left alone is listed, run after run,
-# and so is the scratch database of `restore --keep` while it exists.
+# (a symbolic link is neither followed nor removed, and a $BACKUP_DIR that is itself a link gets
+# its dump and no deletion at all). What is left alone is listed, run after run, and so is the
+# scratch database of `restore --keep` while it exists.
 # deploys/ is skipped while a backup or a restore holds its lock. Only `backup` deletes by age.
+# Three more guards, since "verified" means that a dump reads to its end, not that it is on the
+# disk or that the database still held its data (decisions of 2026-10-11, after the review):
+#   the new dump and its folder are flushed to the disk before the first deletion (flush);
+#   a run never leaves the server with its own dump alone: when every other dump would go, the
+#   newest of them stays for one more run (spare_one);
+#   a dump less than half the size of the last one accepted in its folder deletes nothing, and
+#   neither do the runs after it, until a dump is that size again or one run is made with
+#   BACKUP_ACCEPT_SHRINK=1 in its environment (size_check).
 set -euo pipefail
 umask 077
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -286,7 +295,7 @@ scan() {
       esac
     else
       case "$name" in
-        .lock | .deploy.lock | backup.log | previous-tree.rsyncignore) ;;
+        .lock | .deploy.lock | backup.log | previous-tree.rsyncignore | "$HOLD_NAME") ;;
         *) ODD+=("$name") ;;
       esac
     fi
@@ -310,16 +319,38 @@ report_odd() { # report_odd <dir>: what scan found there that is not a dump
   done
 }
 
-# rotate_dir <dir> <count rule 0|1> <day of the new dump, or ''> <its name, or ''>
-# The count rule keeps the newest BACKUP_KEEP dumps of <dir>. With a day, a dump BACKUP_KEEP days
-# old or more goes too, the newest of <dir> like the others: the one dump that never goes is the
-# named one, written and verified by this run.
-rotate_dir() {
-  local dir="$1" by_count="$2" ref="$3" fresh="$4" n i name age why kept=0
+# A run first plans, over every folder it looks at, then deletes: what goes is decided on the
+# whole tree, since one rule needs it (the run never leaves its own dump alone, below).
+PLAN_DIR=()   # the deletions planned, folder by folder, oldest first: where,
+PLAN_NAME=()  #   which dump,
+PLAN_WHY=()   #   and why ('' once spared)
+SEEN_DIR=()   # each folder planned,
+SEEN_TOTAL=() #   and how many dumps it holds
+NOTES=()      # lines for the end of the run: what is left alone, what is named ahead
+OTHERS_KEPT=0 # the dumps no rule takes, the run's own not counted
+plan_reset() {
+  PLAN_DIR=()
+  PLAN_NAME=()
+  PLAN_WHY=()
+  SEEN_DIR=()
+  SEEN_TOTAL=()
+  NOTES=()
+  OTHERS_KEPT=0
+}
+
+# plan_dir <dir> <count rule 0|1> <day of the new dump, or ''> <its name, or ''>
+# The count rule takes all but the newest BACKUP_KEEP dumps of <dir>. With a day, a dump
+# BACKUP_KEEP days old or more goes too, the newest of <dir> like the others. The named dump, the
+# one this run wrote and verified, is never planned.
+plan_dir() {
+  local dir="$1" by_count="$2" ref="$3" fresh="$4" n i name age why
   scan "$dir"
   n=${#DUMPS[@]}
+  SEEN_DIR+=("$dir")
+  SEEN_TOTAL+=("$n")
   for ((i = 0; i < n; i++)); do
     name="${DUMPS[$i]}"
+    [[ "$name" != "$fresh" ]] || continue
     why=""
     if ((by_count == 1 && i < n - KEEP)); then why="beyond the newest $KEEP"; fi
     if [[ -n "$ref" ]]; then
@@ -328,20 +359,122 @@ rotate_dir() {
       if ((age >= KEEP)); then why="$age days old, the limit is $KEEP"; fi
       # A name ahead of this run's: the clock was wrong when one of the two was made. Kept, since
       # it is not old by its name, and said, since it will not go before that date has passed.
-      if ((age < 0)) && [[ -z "$why" && "$name" != "$fresh" ]]; then
-        info "kept $name, whose name is $((-age)) day(s) ahead of this run's (a clock was wrong): by its name it goes in $((KEEP - age)) days, sooner by hand"
+      if ((age < 0)) && [[ -z "$why" ]]; then
+        NOTES+=("kept $name, whose name is $((-age)) day(s) ahead of this run's (a clock was wrong): by its name it goes in $((KEEP - age)) days, sooner by hand")
       fi
     fi
-    if [[ "$name" == "$fresh" ]]; then why=""; fi
     if [[ -n "$why" ]]; then
-      remove_dump "$dir" "$name"
-      info "deleted old backup $name ($why)"
+      PLAN_DIR+=("$dir")
+      PLAN_NAME+=("$name")
+      PLAN_WHY+=("$why")
     else
-      kept=$((kept + 1))
+      OTHERS_KEPT=$((OTHERS_KEPT + 1))
     fi
   done
-  info "retention: $kept backup(s) kept in $dir (BACKUP_KEEP=$KEEP, $KEEP_FROM)"
-  report_odd "$dir"
+  for ((i = 0; i < ${#ODD[@]}; i++)); do
+    NOTES+=("left alone in $dir, not a dump of this script: ${ODD[$i]} (outside the retention, delete it by hand)")
+  done
+}
+
+# spare_one: a run never leaves the server with its own dump alone (decision of 2026-10-11, after
+# the review). "Verified" means that the dump reads to its end, not that the database it was
+# taken from still held its data: after a week without a backup, or with a clock ahead, every
+# other dump is past the limit in the same run. When that is so, the newest of them, by the time
+# in its name, stays for one more run. The next run has this run's dump beside its own, and
+# deletes it. The price is one night more than BACKUP_KEEP days for that dump, in that case only.
+spare_one() {
+  local i best=0
+  ((OTHERS_KEPT == 0 && ${#PLAN_NAME[@]} > 0)) || return 0
+  for ((i = 1; i < ${#PLAN_NAME[@]}; i++)); do
+    # the 17 characters of the time; at the same time, the folder looked at first wins
+    if [[ "${PLAN_NAME[$i]:7:17}" > "${PLAN_NAME[$best]:7:17}" ]]; then best=$i; fi
+  done
+  info "kept ${PLAN_NAME[$best]} in ${PLAN_DIR[$best]} although it is ${PLAN_WHY[$best]}: every other dump goes in this run, and a run never leaves the server with its own dump alone. The next run deletes it"
+  PLAN_WHY[best]=""
+}
+
+# plan_run: the deletions, then one line per folder and the notes.
+plan_run() {
+  local i j gone
+  for ((i = 0; i < ${#PLAN_NAME[@]}; i++)); do
+    [[ -n "${PLAN_WHY[$i]}" ]] || continue
+    remove_dump "${PLAN_DIR[$i]}" "${PLAN_NAME[$i]}"
+    info "deleted old backup ${PLAN_NAME[$i]} (${PLAN_WHY[$i]})"
+  done
+  for ((j = 0; j < ${#SEEN_DIR[@]}; j++)); do
+    gone=0
+    for ((i = 0; i < ${#PLAN_NAME[@]}; i++)); do
+      if [[ "${PLAN_DIR[$i]}" == "${SEEN_DIR[$j]}" && -n "${PLAN_WHY[$i]}" ]]; then gone=$((gone + 1)); fi
+    done
+    info "retention: $((SEEN_TOTAL[j] - gone)) backup(s) kept in ${SEEN_DIR[$j]} (BACKUP_KEEP=$KEEP, $KEEP_FROM)"
+  done
+  for ((i = 0; i < ${#NOTES[@]}; i++)); do
+    info "${NOTES[$i]}"
+  done
+}
+
+# size_check <name of the run's dump>: fails when the rotation of $BACKUP_DIR is held (decision
+# of 2026-10-11, after the review). A database that lost its data still dumps, and the dump still
+# verifies. So a dump less than half the size of the last one accepted in its folder deletes
+# nothing: the run keeps it, names both sizes, and leaves a mark, .size-hold, that holds the name
+# of that last accepted dump. While the mark stands, every run of this folder is measured against
+# that dump, not against the small ones that followed, and deletes nothing either. It is lifted by
+# a dump that is at least half that size again, or by one run with BACKUP_ACCEPT_SHRINK=1 when the
+# database was meant to shrink. That variable is read from the environment of the run alone.
+HOLD_NAME=.size-hold
+hold_ref() { # hold_ref <dir>: sets HOLD_REF to the dump the mark of <dir> names, '' without a valid one
+  local hold="$1/$HOLD_NAME"
+  HOLD_REF=""
+  [[ -f "$hold" && ! -L "$hold" ]] || return 0
+  HOLD_REF="$(head -n 1 "$hold")"
+  if ! [[ "$HOLD_REF" =~ $DUMP_RE ]] || [[ ! -f "$1/$HOLD_REF" || -L "$1/$HOLD_REF" ]]; then HOLD_REF=""; fi
+}
+size_check() {
+  local fresh="$1" hold="$BACKUP_DIR/$HOLD_NAME" new ref ref_size i
+  new="$(stat -c %s "$BACKUP_FILE")"
+  if [[ -n "${BACKUP_ACCEPT_SHRINK:-}" ]]; then
+    if [[ -e "$hold" || -L "$hold" ]]; then
+      rm -f "$hold"
+      info "BACKUP_ACCEPT_SHRINK is set: the size of this dump ($new bytes) is accepted and the hold on the rotation of $BACKUP_DIR is lifted"
+    fi
+    return 0
+  fi
+  hold_ref "$BACKUP_DIR"
+  ref="$HOLD_REF"
+  [[ "$ref" != "$fresh" ]] || ref=""
+  if [[ -z "$ref" ]]; then # no mark: the newest dump of the folder that is not this run's
+    scan "$BACKUP_DIR"
+    for ((i = ${#DUMPS[@]} - 1; i >= 0; i--)); do
+      if [[ "${DUMPS[$i]}" != "$fresh" ]]; then
+        ref="${DUMPS[$i]}"
+        break
+      fi
+    done
+  fi
+  if [[ -n "$ref" ]]; then
+    ref_size="$(stat -c %s "$BACKUP_DIR/$ref")"
+    if ((new * 2 < ref_size)); then
+      [[ ! -L "$hold" ]] || rm -f "$hold" # never written through a link
+      printf '%s\n' "$ref" >"$hold"
+      info "WARNING: this dump is $new bytes, less than half of $ref ($ref_size bytes), the last one accepted in $BACKUP_DIR. A database that lost its data dumps like this, so this run keeps its dump and deletes NOTHING, in any folder, and so does every run of this folder until a dump is at least half that size again. If the database was meant to shrink, run one backup with BACKUP_ACCEPT_SHRINK=1"
+      return 1
+    fi
+  fi
+  if [[ -e "$hold" || -L "$hold" ]]; then
+    rm -f "$hold"
+    info "the size check passes again ($new bytes): the hold on the rotation of $BACKUP_DIR is lifted"
+  fi
+  return 0
+}
+
+# hold_note <dir>: said by `retention` while the mark of <dir> stands.
+hold_note() {
+  local dir="$1" n
+  hold_ref "$dir"
+  [[ -n "$HOLD_REF" ]] || return 0
+  scan "$dir"
+  n=${#DUMPS[@]}
+  info "WARNING: the rotation of $dir is held: a dump came out less than half the size of $HOLD_REF ($(stat -c %s "$dir/$HOLD_REF") bytes), the last one accepted there, and its newest is ${DUMPS[$((n - 1))]} ($(stat -c %s "$dir/${DUMPS[$((n - 1))]}") bytes). The backups of that folder delete nothing until a dump is at least half that size again, or until one is run with BACKUP_ACCEPT_SHRINK=1"
 }
 
 promise_note() { # said by every run whose retention is longer than what users are promised
@@ -367,17 +500,18 @@ scratch_note() {
 # is the one thing no rule deletes: the newest verified dump of the whole tree.
 ROTATE_TROUBLE="" # why the rotation is not complete, when it is not: cmd_backup ends non zero on it
 rotate() {
-  local fresh="${BACKUP_FILE##*/}" ref sub dir
+  local fresh="${BACKUP_FILE##*/}" ref sub dir held_deploys=0
   if [[ ! -f "$BACKUP_FILE" || -L "$BACKUP_FILE" ]] || ! dump_day "$fresh"; then
     die "no verified dump from this run to measure ages from, nothing deleted"
   fi
   ref="$DUMP_DAY"
-  if linked_dir; then
+  if linked_dir || ! size_check "$fresh"; then
     scratch_note
     promise_note
     return 0
   fi
-  rotate_dir "$BACKUP_DIR" 1 "$ref" "$fresh"
+  plan_reset
+  plan_dir "$BACKUP_DIR" 1 "$ref" "$fresh"
   for sub in deploys incoming; do
     dir="$BACKUP_DIR/$sub"
     [[ -e "$dir" || -L "$dir" ]] || continue
@@ -390,23 +524,30 @@ rotate() {
       # (The other way round, a deploy that asks for this lock in the instant it is held here is
       # refused like any second backup, and is run again.) A lock file that cannot be opened is
       # another matter: nothing holds it, the age rule would never run there again, so the run
-      # says what it is and ends non zero once the rest is done.
+      # says what it is and ends non zero once the rest is done. Either way the dumps of the
+      # folder stay, and they count as dumps this run leaves on the server.
       if ! { exec 8>>"$dir/.lock"; } 2>/dev/null; then
         ROTATE_TROUBLE="cannot open the lock file $dir/.lock (its mode, or what it is): nothing was deleted in $dir and nothing will be until that is put right"
         info "skipped $dir: $ROTATE_TROUBLE"
-        continue
-      fi
-      if ! flock -n 8; then
+        held_deploys=2
+      elif ! flock -n 8; then
         info "skipped $dir: a backup or a restore holds its lock, the next run deletes what is too old there"
         exec 8>&-
+        held_deploys=2
+      else
+        held_deploys=1 # descriptor 8 holds the lock until the deletions are done
+      fi
+      if ((held_deploys == 2)); then
+        scan "$dir"
+        OTHERS_KEPT=$((OTHERS_KEPT + ${#DUMPS[@]}))
         continue
       fi
-      rotate_dir "$dir" 0 "$ref" ""
-      exec 8>&-
-    else
-      rotate_dir "$dir" 0 "$ref" ""
     fi
+    plan_dir "$dir" 0 "$ref" ""
   done
+  spare_one
+  plan_run
+  ((held_deploys != 1)) || exec 8>&-
   scratch_note
   promise_note
 }
@@ -503,8 +644,10 @@ cmd_backup() {
       *) die "unknown option for backup: $1" ;;
     esac
   done
-  # The order is the safety: a dump that could not be written or verified ends the script in
-  # do_backup, before anything is deleted.
+  [[ -z "${BACKUP_ACCEPT_SHRINK:-}" || "$BACKUP_ACCEPT_SHRINK" == 1 ]] ||
+    die "BACKUP_ACCEPT_SHRINK must be 1 or not set, got '$BACKUP_ACCEPT_SHRINK'"
+  # The order is the safety: a dump that could not be written, verified or flushed to the disk
+  # ends the script in do_backup, before anything is deleted.
   do_backup "$tag"
   rotate
   printf 'backup=%s\n' "$BACKUP_FILE"
@@ -516,7 +659,9 @@ cmd_backup() {
 cmd_prune() {
   take_lock
   if linked_dir; then return 0; fi
-  rotate_dir "$BACKUP_DIR" 1 "" ""
+  plan_reset
+  plan_dir "$BACKUP_DIR" 1 "" ""
+  plan_run
   info "prune applies the count rule alone: only a backup, once its dump is verified, deletes by age"
 }
 
@@ -578,6 +723,7 @@ cmd_retention() {
       fi
     fi
     report_odd "$dir"
+    hold_note "$dir"
   done
   scratch_note
   printf 'keep=%s\n' "$KEEP"
