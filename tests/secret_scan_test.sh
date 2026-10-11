@@ -37,19 +37,29 @@ fail() {
 out_has() { grep -qF -- "$1" "$WORK/out" || fail "output lacks '$1': $(tail -c 1500 "$WORK/out")"; }
 out_lacks() { if grep -qF -- "$1" "$WORK/out"; then fail "output holds '$1'"; fi; }
 
-# The state of this checkout, to compare at the end: nothing here may touch it.
+# The state of this checkout, to compare at the end: nothing here may touch it. Where the files
+# are no git checkout (an extracted archive) there is nothing to compare, and the tests run all
+# the same: they only need the files.
+in_checkout=1
+if ! git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  in_checkout=0
+  printf '   note: %s is no git checkout: the check that these tests leave it as it was is skipped\n' "$ROOT"
+fi
 checkout_state() {
+  ((in_checkout)) || return 0
   git -C "$ROOT" rev-parse HEAD 2>/dev/null || true
   git -C "$ROOT" config --get core.bare 2>/dev/null || true
-  git -C "$ROOT" status --porcelain 2>/dev/null | cksum
+  { git -C "$ROOT" status --porcelain 2>/dev/null || true; } | cksum
 }
 state_before="$(checkout_state)"
 
-# The command of the CI step, read from the workflow: what follows `pre-commit` there.
-ci_args="$(sed -n 's/^        run: uvx --from pre-commit==[0-9.]* pre-commit \(run gitleaks-commits.*\)$/\1/p' "$ROOT/.github/workflows/ci.yml")"
-[[ "$ci_args" == "run gitleaks-commits --hook-stage manual --verbose" ]] ||
-  fail "ci.yml does not run the secret scan as expected (pre-commit run gitleaks-commits --hook-stage manual --verbose): '$ci_args'"
-ci_precommit="$(sed -n 's/^        run: uvx --from \(pre-commit==[0-9.]*\) pre-commit run gitleaks-commits.*$/\1/p' "$ROOT/.github/workflows/ci.yml")"
+# The command of the CI step, read from the workflow, word for word: no SKIP reaches it, and
+# pre-commit is asked for the hook by its name and stage.
+ci_line="$(sed -n 's/^        run: \(env -u SKIP uvx --from pre-commit==[0-9.]* pre-commit run gitleaks-commits.*\)$/\1/p' "$ROOT/.github/workflows/ci.yml")"
+ci_precommit="$(sed -n 's/^        run: env -u SKIP uvx --from \(pre-commit==[0-9.]*\) pre-commit run gitleaks-commits.*$/\1/p' "$ROOT/.github/workflows/ci.yml")"
+ci_args="run gitleaks-commits --hook-stage manual --verbose"
+[[ -n "$ci_precommit" && "$ci_line" == "env -u SKIP uvx --from $ci_precommit pre-commit $ci_args" ]] ||
+  fail "ci.yml does not run the secret scan as expected (env -u SKIP uvx --from pre-commit==<version> pre-commit $ci_args): '$ci_line'"
 if [[ -n "${PRE_COMMIT:-}" ]]; then
   read -r -a precommit <<<"$PRE_COMMIT"
 elif command -v pre-commit >/dev/null; then
@@ -91,12 +101,13 @@ as_pull_request() {
   [[ -z "$(g status --porcelain)" && -z "$(g diff --cached --name-only)" ]] || fail "the checkout is not clean"
 }
 # ci_scan <expected exit> <VAR=value...>: the command of the CI step in $repo, with the
-# variables a run of that kind has; stdout and stderr together in $WORK/out.
+# variables a run of that kind has (given first, as the environment of the step; then the
+# command as ci.yml writes it, `env -u SKIP` included); stdout and stderr together in $WORK/out.
 ci_scan() {
   local want="$1" got=0
   shift
   # shellcheck disable=SC2086
-  (cd "$repo" && env -u GITHUB_EVENT_NAME -u CI_PUSH_BEFORE "$@" "${precommit[@]}" $ci_args) >"$WORK/out" 2>&1 || got=$?
+  (cd "$repo" && env -u GITHUB_EVENT_NAME -u CI_PUSH_BEFORE -u SKIP "$@" env -u SKIP "${precommit[@]}" $ci_args) >"$WORK/out" 2>&1 || got=$?
   [[ "$got" == "$want" ]] || fail "the secret scan exited $got, expected $want ($*): $(tail -c 1500 "$WORK/out")"
 }
 
@@ -150,12 +161,106 @@ ci_scan 1 GITHUB_EVENT_NAME=pull_request
 out_has "by-hand.env"
 out_has "as a whole"
 ok "a secret put in by hand in a merge commit inside the branch, which no commit of its own shows, is found by the reading of the whole"
+ci_scan 1 GITHUB_EVENT_NAME=pull_request SKIP=gitleaks
+out_has "by-hand.env"
+ci_scan 1 GITHUB_EVENT_NAME=pull_request SKIP=ruff-check,ruff-format,eslint,shellcheck,gitleaks
+out_has "by-hand.env"
+# Why ci.yml writes `env -u SKIP`: the hook of the scan has the id gitleaks, as the hook of a
+# commit has, and pre-commit skips by id. Without it the same command passes, with nothing read.
+got=0
+# shellcheck disable=SC2086
+(cd "$repo" && GITHUB_EVENT_NAME=pull_request SKIP=gitleaks "${precommit[@]}" $ci_args) >"$WORK/out" 2>&1 || got=$?
+[[ "$got" == 0 ]] || fail "with SKIP=gitleaks and no env -u SKIP the scan exited $got: if pre-commit no longer skips it, the reason for env -u SKIP has changed"
+out_has "Skipped"
+ok "SKIP in the environment of the step does not reach the scan (env -u SKIP), which pre-commit would skip without a word otherwise"
+
+step "the scan of CI: what a merge commit inside the branch held and the next commit took out"
+# The case of the review, round 2: the secret is typed into a merge commit of the branch and
+# removed by the commit after it. No commit of its own shows it and the tree at the end does
+# not hold it; both commits reach main. As a pull request, as a push, as a manual run.
+new_repo
+before="$(g rev-parse main)"
+g checkout -q -b feature
+commit a.txt "a"
+g checkout -q -b other main
+commit b.txt "b"
+g checkout -q feature
+g merge -q --no-ff --no-commit other >/dev/null 2>&1
+printf '%s\n' "$example" >"$repo/by-hand.env"
+g add -A
+g commit -q -m "merge other into feature, with a line added by hand"
+g rm -q by-hand.env
+g commit -q -m "take the line out again"
+as_pull_request feature
+[[ ! -e "$repo/by-hand.env" ]] || fail "the file should be gone from the tree"
+ci_scan 1 GITHUB_EVENT_NAME=pull_request
+out_has "by-hand.env"
+out_has "sidekiq-secret"
+out_lacks "$value"
+g checkout -q main
+g merge -q --no-ff -m "Merge pull request" feature
+ci_scan 1 GITHUB_EVENT_NAME=push "CI_PUSH_BEFORE=$before"
+out_has "by-hand.env"
+ci_scan 1 GITHUB_EVENT_NAME=workflow_dispatch
+out_has "the whole history of HEAD"
+out_has "by-hand.env"
+ok "a secret typed into a merge commit of the branch and removed by the next commit is found as a pull request, as a push and as a manual run"
+# The same in the place where it happens: a conflict resolved by hand.
+new_repo
+g checkout -q -b feature
+commit shared.txt "the line of feature"
+g checkout -q -b other main
+commit shared.txt "the line of other"
+g checkout -q feature
+if g merge -q --no-ff other >/dev/null 2>&1; then fail "the two branches were meant to conflict"; fi
+printf '%s\n' "the line of feature" "$example" >"$repo/shared.txt"
+g add -A
+g commit -q -m "merge other into feature, the conflict resolved by hand"
+commit shared.txt "the line of feature"
+as_pull_request feature
+if grep -qF "CONTRIBSYS" "$repo/shared.txt"; then fail "the secret should be gone from the tree"; fi
+ci_scan 1 GITHUB_EVENT_NAME=pull_request
+out_has "shared.txt"
+ok "the same when the secret came in with a conflict resolved by hand"
+
+step "the scan of CI: commit messages, and a pull request that changes the scan's own rules"
+new_repo
+g checkout -q -b feature
+printf 'clean\n' >"$repo/notes.txt"
+g add -A
+g commit -q -m "notes" -m "for the record: $example"
+leaking="$(g rev-parse HEAD)"
+commit more.txt "more"
+as_pull_request feature
+ci_scan 1 GITHUB_EVENT_NAME=pull_request
+out_has "the messages of its 2 commits"
+out_has "a finding in the message of commit $leaking"
+out_lacks "$value"
+ok "a secret in a commit message alone, with clean files, is found and its commit named"
 new_repo
 g checkout -q -b feature
 commit allowed.env "$example # gitleaks:allow"
 as_pull_request feature
 ci_scan 0 GITHUB_EVENT_NAME=pull_request
-ok "a line marked gitleaks:allow passes, as it does at a commit: the same rules and the same allowlist"
+out_has "NOTE: this pull request changes what the scan itself goes by"
+out_has "Added lines that hold gitleaks:allow: 1"
+ok "a line marked gitleaks:allow passes, as it does at a commit (the same rules and the same allowlist), and the log says the pull request added one"
+new_repo
+g checkout -q -b feature
+printf '[extend]\nuseDefault = true\n\n[[allowlists]]\ndescription = "everything"\npaths = [%s]\n' "'''.*'''" >"$repo/.gitleaks.toml"
+commit leaked.env "$example"
+as_pull_request feature
+ci_scan 0 GITHUB_EVENT_NAME=pull_request
+out_has "NOTE: this pull request changes what the scan itself goes by"
+out_has ".gitleaks.toml"
+ok "a pull request is judged by the rules of its own tree: one that brings a .gitleaks.toml allowing every path passes, and the log says that it changes the scan's rules"
+new_repo
+g checkout -q -b feature
+commit notes.txt "nothing to hide"
+as_pull_request feature
+ci_scan 0 GITHUB_EVENT_NAME=pull_request
+out_lacks "NOTE:"
+ok "a pull request that touches none of them gets no such line"
 
 step "the scan of CI: a push to main, a manual run"
 new_repo

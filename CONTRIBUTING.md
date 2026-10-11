@@ -50,7 +50,11 @@ in the job folder that holds this repository (it is not part of the repository).
    `.github/scripts/ci_plan.py`, `ci_plan_test.py` or a step condition of `ci.yml` changes
    the gate that judges it (a pull request runs its own copy of all three): the reviewer reads
    it as such, and reads the plan line of the run (`ci_plan: ...`, the first step of each job)
-   against the files of the diff.
+   against the files of the diff. The same goes for what the secret scan goes by, which a
+   pull request also brings itself: `.gitleaks.toml`, `.gitleaksignore`, any added
+   `gitleaks:allow` comment, `.github/scripts/secret_scan.sh` and the gitleaks block of
+   `.pre-commit-config.yaml`. The scan's log names them when a pull request touches one
+   (`secret_scan: NOTE: ...`).
 6. The orchestrator merges with a **merge commit** (`gh pr merge --merge --delete-branch`): the
    branch's commits, one per step of the agent's work, stay readable in the history, and the
    merge commit names the pull request. Squash is not used. **A pull request is mergeable

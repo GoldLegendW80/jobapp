@@ -1103,11 +1103,26 @@ class WorkflowTest(unittest.TestCase):
         steps = steps_by_id(self.jobs["checks"])
         scan = steps["secrets"]
         # --verbose: the log of the step says which commits were read, also when it passes.
+        # env -u SKIP: the hook of the scan has the id gitleaks, as the hook of a commit has,
+        # and pre-commit skips by id: a SKIP that reached this command would turn the scan
+        # into a green step that read nothing.
         self.assertRegex(
             scan["run"],
-            r"^uvx --from pre-commit==[\d.]+ pre-commit run gitleaks-commits "
+            r"^env -u SKIP uvx --from pre-commit==[\d.]+ pre-commit run gitleaks-commits "
             r"--hook-stage manual --verbose$",
         )
+        # And SKIP is set in one place of the workflow, the env of the pre-commit step: not
+        # on the job, not at the top, where it would be the environment of the scan too.
+        code = [
+            line
+            for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        ]
+        self.assertEqual(len([line for line in code if "SKIP:" in line]), 1)
+        self.assertIn("SKIP:", steps["precommit"]["env"])
+        self.assertNotIn("SKIP", scan.get("env", ""))
+        # The pre-commit step prints no diff: one would show the changed lines in clear.
+        self.assertNotIn("--show-diff", "\n".join(code))
         self.assertEqual(scan.get("if"), "${{ !cancelled() }}")
         self.assertIn("CI_PUSH_BEFORE: ${{ github.event.before }}", scan.get("env", ""))
         self.assertIn("fetch-depth: 0", steps["checkout"].get("with", ""))
@@ -1146,6 +1161,9 @@ class WorkflowTest(unittest.TestCase):
         self.assertTrue(os.access(script, os.X_OK), "secret_scan.sh is not executable")
         text = script.read_text(encoding="utf-8")
         self.assertIn("gitleaks git ", text)
+        # The lines typed into a merge commit, and the commit messages, are read too.
+        self.assertIn('--remerge-diff "$range"', text)
+        self.assertIn("gitleaks stdin ", text)
         self.assertNotIn("--staged", text.split("set -euo pipefail", 1)[1])
         self.assertNotIn("--pre-commit", text.split("set -euo pipefail", 1)[1])
 

@@ -380,8 +380,13 @@ subfolder is named, because the journeys write their screenshots there.
 
 **The secret scan.** Every run, whatever the plan, reads the commits it brings with gitleaks
 (`.github/scripts/secret_scan.sh`, the step after pre-commit in `checks`): for a pull request
-each of its commits and then the pull request as a whole (its merge commit against `main`), for
-a push to `main` each commit of the push, for a manual run the whole history of the branch. It
+its commits and then the pull request as a whole (its merge commit against `main`), for
+a push to `main` the commits of the push, for a manual run the whole history of the branch.
+The commits are read three ways: each one on its own, so a secret added by one commit and
+removed by the next is found; each merge commit for the lines somebody typed into it
+(`git log --remerge-diff`, git 2.36 or later, refused loudly on an older one), because plain
+`git log` prints no patch for a merge commit; and the commit messages. Not read, here or at a
+commit: a binary file, for which git prints no patch. It
 is the gitleaks that `.pre-commit-config.yaml` pins, started through pre-commit
 (`pre-commit run gitleaks-commits --hook-stage manual`, which works locally too), with the
 same rules and the same allowlist as at a commit: the default rules, a `gitleaks:allow` comment
@@ -390,13 +395,23 @@ on a line, and `.gitleaks.toml` or `.gitleaksignore` should the repository ever 
 checkout has none, and `pre-commit run --all-files` passed with "0 commits scanned" whatever
 had been committed (shown in a throwaway clone with the example secret of gitleaks' own
 README; `tests/secret_scan_test.sh` keeps showing it, and plants that example as a pull
-request, as a push, in a commit that a later one reverts and in a merge inside the branch:
-the scan must fail each time). One scan of the whole history on that day, every branch on
-GitHub included, found nothing. The job that scans fetches the whole history
+request, as a push, in a commit that a later one reverts, in a merge inside the branch that
+the next commit cleans again, in a commit message: the scan must fail each time). One scan of
+the whole history on that day, every branch on GitHub included, found nothing; the reviewer
+read the merge commits' own lines of every ref the same day, with the same result. The job that scans fetches the whole history
 (`fetch-depth: 0`); the script refuses a shallow checkout, where it would read a history with
 holes. When it fails on a real secret: revoke the secret where it is valid first, whatever
-happens to the commit afterwards. When it fails on a false alarm: a `gitleaks:allow` comment
-on the line, in the same pull request.
+happens to the commit afterwards. The same holds for a secret that was pushed and then removed
+by a forced push: if the next push cancelled its run, no scan ever read it, and it stays on
+GitHub although it never reaches `main`. When it fails on a false alarm: a `gitleaks:allow`
+comment on the line, in the same pull request. That is also the limit of the scan: a pull
+request is judged by the rules of its own tree, so it can bring the allowance that lets its
+own secret through (a comment, a `.gitleaks.toml`, a `.gitleaksignore`). The scan says so in
+its log when a pull request touches any of them, and a reviewer reads them as a change to the
+gate (CONTRIBUTING.md, step 5). Two things keep the step from passing without having read: it
+runs under `env -u SKIP`, since pre-commit would skip it on a `SKIP` that names gitleaks, and
+the pre-commit step before it prints no diff of what a fixer changed, which would show the
+lines in clear in the log.
 
 **A fresh run for an open pull request** after `main` moved: `ops/ci-rerun.sh <number>`. CI
 tests a pull request at its merge commit with the base, which GitHub recomputes lazily, so

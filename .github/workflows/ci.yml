@@ -331,22 +331,29 @@ jobs:
       # the files they read did not change. gitleaks is skipped here because its hook reads
       # the staged changes, of which a checkout has none: it passed whatever was committed.
       # The secret scan is the next step.
+      # No --show-diff-on-failure: it prints the lines a fixer changed, with their context, in
+      # clear in the log of the job, and a file that holds a secret can be one a fixer touches.
+      # The hook's own message names the file; `pre-commit run --all-files` at home shows the diff.
+      # SKIP is set on this step and nowhere else in this file (ci_plan_test.py): in the job's
+      # env it would skip the secret scan too, whose hook has the same id, with a green step.
       - name: pre-commit run --all-files
         id: precommit
         env:
           SKIP: ruff-check,ruff-format,eslint,shellcheck,gitleaks
-        run: uvx --from pre-commit==4.6.2 pre-commit run --all-files --show-diff-on-failure
+        run: uvx --from pre-commit==4.6.2 pre-commit run --all-files
       # Every run, whatever the plan and whatever pre-commit said: the gitleaks that
-      # .pre-commit-config.yaml pins, with its rules, on each commit of the pull request and on
-      # the pull request as a whole; on main, on the commits of the push
-      # (.github/scripts/secret_scan.sh; tests/secret_scan_test.sh plants a secret and expects
-      # this command to fail). --verbose: the log says which commits were read, also on a pass.
+      # .pre-commit-config.yaml pins, with its rules, on the commits of the pull request (each
+      # one, the lines typed into a merge commit, the messages) and on the pull request as a
+      # whole; on main, on the commits of the push (.github/scripts/secret_scan.sh;
+      # tests/secret_scan_test.sh plants a secret and expects this command to fail).
+      # --verbose: the log says which commits were read, also on a pass. env -u SKIP: no SKIP
+      # from anywhere reaches this command.
       - name: Secret scan of the commits of this run (gitleaks)
         id: secrets
         if: ${{ !cancelled() }}
         env:
           CI_PUSH_BEFORE: ${{ github.event.before }}
-        run: uvx --from pre-commit==4.6.2 pre-commit run gitleaks-commits --hook-stage manual --verbose
+        run: env -u SKIP uvx --from pre-commit==4.6.2 pre-commit run gitleaks-commits --hook-stage manual --verbose
 
       # --- unit: shell ---------------------------------------------------------------------
       # Every step on its own: one failing script does not hide the others.
