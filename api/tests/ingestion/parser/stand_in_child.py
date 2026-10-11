@@ -3,6 +3,7 @@ takes the same command line (kind, options as JSON), the bytes on standard input
 `options["act"]` says. No lockdown here: those tests are about the server, and run on any
 system. The real child is tested in the container (test_container.py)."""
 
+import hashlib
 import json
 import os
 import signal
@@ -20,6 +21,14 @@ def main() -> int:
         sys.stdin.buffer.read()
         with open(own[1], "rb") as handle:
             sys.stdout.buffer.write(handle.read())
+        return 0
+    if own[:1] == ["--ping"]:  # the answer of that file, with the bytes received counted and hashed
+        received = sys.stdin.buffer.read()
+        with open(own[1], encoding="utf-8") as handle:
+            answer = json.load(handle)
+        answer["received"] = len(received)
+        answer["sha256"] = hashlib.sha256(received).hexdigest()
+        sys.stdout.buffer.write(json.dumps(answer).encode())
         return 0
     act = options.get("act", "echo")
     if act == "no_read":  # ends without reading its input: the server's write meets a closed pipe

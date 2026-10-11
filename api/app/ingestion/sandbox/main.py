@@ -27,14 +27,16 @@ attribute is reset by execve, so it has to be set by the program that was execut
 1. `cryptography` is made unimportable (pypdf imports it when it is installed, and on an Apple
    silicon Mac its OpenSSL dies with SIGILL: the parser must never need OPENSSL_armcap).
 2. The process refuses to go on as uid 0: RLIMIT_NPROC is not enforced for root.
-3. Resource limits (LIMITS): address space, CPU seconds, no file growth, 16 descriptors, no new
-   process or thread, no core file, no POSIX message queue.
+3. Resource limits (LIMITS): address space, CPU seconds (SIGXCPU at 45 s, SIGKILL at 46 s for
+   a process that ignores it), no file growth, 16 descriptors, no new process or thread, no
+   core file, no POSIX message queue.
 4. `prctl(PR_SET_DUMPABLE, 0)`: no core dump even through a pipe, no ptrace attach, and
    /proc/<pid> of this process closed to the other processes of the same uid.
 5. `prctl(PR_SET_NO_NEW_PRIVS, 1)`, then a seccomp filter that answers EPERM to DENIED: no
    socket, no signal to another process, no other program, no read of another process, no
-   io_uring (a request made through a ring never passes a filter), and none of the calls that
-   create an IPC object which would outlive this process inside the container.
+   io_uring (a request made through a ring never passes a filter), none of the calls that
+   create an IPC object which would outlive this process inside the container, and no
+   namespace of its own.
 6. The state is read back, and two denied calls are tried: a kernel that accepted the filter
    without applying it is caught here.
 
@@ -80,8 +82,8 @@ MAX_ANSWER = 4 * MIB  # server.py kills a child that writes more; the worker rea
 USAGE_EXIT = 64
 SANDBOX_EXIT = 70
 
-# Resource limits, soft and hard alike. `as` starts at 512 MiB for every kind; G2b and G8 set it
-# per kind from the peak they measure.
+# Resource limits, soft and hard alike, but for the CPU. `as` starts at 512 MiB for every kind;
+# G2b and G8 set it per kind from the peak they measure.
 DEFAULT_LIMITS = {
     "as": 512 * MIB,
     "cpu": 45,
@@ -92,6 +94,12 @@ DEFAULT_LIMITS = {
     "msgqueue": 0,
 }
 LIMITS = {kind: dict(DEFAULT_LIMITS) for kind in HANDLERS}
+# The hard CPU limit is one second above the soft one. At the soft limit the kernel sends
+# SIGXCPU, whose default action ends the process, and the server reports `cpu_limit`. The
+# kernel looks at the hard limit first, though: with both at 45 it would send SIGKILL straight
+# away, which nothing tells from a kill for memory. A child that ignores SIGXCPU gets SIGKILL
+# one second later.
+CPU_HARD_EXTRA_S = 1
 
 # What a handler stops at by itself, between two pages, so that it returns the pages it has
 # instead of losing everything to the kill: under the 45 s of RLIMIT_CPU and the 60 s of the
@@ -157,9 +165,16 @@ DENIED = (
     ("msgget", 186, 68),
     ("semget", 190, 64),
     ("mq_open", 180, 240),
+    # a namespace of its own: in a new user namespace a process holds every capability, which
+    # is where kernel exploits start. Docker's default profile refuses it; this does too where
+    # that profile is off (Docker Desktop on the Mac, a privileged CI runner)
+    ("unshare", 97, 272),
+    ("setns", 268, 308),
 )
 DENIED_NAMES = tuple(name for name, _, _ in DENIED)
 
+# pidfd_open is the one probe that succeeds with a descriptor where nothing filters it.
+_RETURNS_DESCRIPTOR = frozenset({434})
 # A key no IPC object of this container has: the probes look one up, they never create one.
 _NO_SUCH_KEY = 0x6A6F6221
 # Directories a process could hope to write in. The root is read only and the service has no
@@ -227,7 +242,8 @@ def load_libc():
 
 def set_limits(limits: dict[str, int], res=resource) -> None:
     for name, value in limits.items():
-        res.setrlimit(getattr(res, "RLIMIT_" + name.upper()), (value, value))
+        hard = value + CPU_HARD_EXTRA_S if name == "cpu" else value
+        res.setrlimit(getattr(res, "RLIMIT_" + name.upper()), (value, hard))
 
 
 def read_limits(limits: dict[str, int], res=resource) -> dict[str, int]:
@@ -255,14 +271,16 @@ def probe(libc, number: int, *args: int) -> str:
     ctypes.set_errno(0)
     result = libc.syscall(ctypes.c_long(number), *(ctypes.c_long(arg) for arg in args))
     if result >= 0:
+        if result > 2 and number in _RETURNS_DESCRIPTOR:
+            os.close(result)  # only where the filter is not there: nothing is left open
         return "ALLOWED"
     return errno.errorcode.get(ctypes.get_errno(), "E?")
 
 
 def probes(pid: int) -> dict[str, tuple[int, ...]]:
     """Harmless arguments for every denied call: an invalid descriptor, a null pointer, signal 0,
-    a lookup of a key that does not exist. Without the filter none of them changes anything
-    (pidfd_open alone would return a descriptor, which dies with the process)."""
+    a lookup of a key that does not exist, no flag. Without the filter none of them changes
+    anything (pidfd_open alone returns a descriptor, which probe closes)."""
     return {
         "socket": (-1, -1, -1),
         "socketpair": (-1, -1, -1, 0),
@@ -287,6 +305,8 @@ def probes(pid: int) -> dict[str, tuple[int, ...]]:
         "msgget": (_NO_SUCH_KEY, 0),
         "semget": (_NO_SUCH_KEY, 0, 0),
         "mq_open": (0, 0, 0, 0),
+        "unshare": (0,),
+        "setns": (-1, 0),
     }
 
 

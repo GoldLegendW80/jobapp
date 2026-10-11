@@ -60,10 +60,12 @@ import logging
 import re
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, NoReturn
+from typing import Any, NoReturn, TypeVar
+
+_Checked = TypeVar("_Checked")
 
 logger = logging.getLogger("app.ingestion.parser_client")
 
@@ -77,6 +79,7 @@ MAX_SIZE = 20 * MIB  # one upload; the parser refuses more, and this client neve
 MAX_ANSWER = 4 * MIB
 TIMEOUT_S = 75.0  # a whole call: the parser kills a child at 60 s
 CONNECT_TIMEOUT_S = 5.0
+CLOSE_TIMEOUT_S = 2.0  # how long the end of the stream may take to follow the body
 PING_TIMEOUT_S = 15.0
 
 # Caps on a result. None is looser than the column that stores it (migration 0011).
@@ -156,6 +159,8 @@ DENIED_NAMES = (
     "msgget",
     "semget",
     "mq_open",
+    "unshare",
+    "setns",
 )
 
 _SURROGATE = re.compile("[\ud800-\udfff]")
@@ -656,10 +661,17 @@ async def _exchange(line: bytes, data: bytes, host: str, port: int) -> bytes:
         length = check_header(answer)
         try:
             body = await reader.readexactly(length)
-            # The body ends at its length, and the stream right after it.
-            extra = await reader.read(1)
         except (asyncio.IncompleteReadError, ConnectionError):
             _bad("truncated")
+        # The body ends at its length, and the stream right after it: the parser closes the
+        # connection once it has answered. A peer that sends more, or that keeps the
+        # connection open, is not the parser this protocol was written with.
+        try:
+            extra = await asyncio.wait_for(reader.read(1), CLOSE_TIMEOUT_S)
+        except ConnectionError:
+            extra = b""
+        except TimeoutError:
+            _bad("not_closed")
         if extra:
             _bad("trailing_bytes")
         return body
@@ -670,15 +682,17 @@ async def _exchange(line: bytes, data: bytes, host: str, port: int) -> bytes:
             await asyncio.wait_for(writer.wait_closed(), 1.0)
 
 
-async def _call(
+async def _call[Checked](
     kind: str,
     data: bytes,
     options: Mapping[str, Any] | None,
     host: str,
     port: int,
     timeout_s: float,
-) -> Any:
-    """One request, its answer decoded. Logs one line: kind, size, outcome, duration."""
+    check: Callable[[Any], Checked],
+) -> Checked:
+    """One request and its answer, decoded and judged by `check`. Logs one line, whatever the
+    end: the kind, the size sent, the outcome as a code, the duration."""
     line = request_line(kind, len(data), options)
     started = time.monotonic()
     outcome = "ok"
@@ -690,8 +704,8 @@ async def _call(
                 body = await _exchange(line, data, host, port)
         except TimeoutError:
             raise ParserTimeoutError("deadline") from None
-        # Off the event loop: a body written to be slow to decode must not stall the worker.
-        return await asyncio.to_thread(loads, body)
+        # Off the event loop: an answer written to be slow to read must not stall the worker.
+        return await asyncio.to_thread(lambda: check(loads(body)))
     except ParserError as error:
         outcome = f"{type(error).__name__}:{error.code}"
         raise
@@ -720,8 +734,9 @@ async def parse(
     otherwise; `error.failure` says whether the file or the server failed."""
     if kind == "ping":
         raise ValueError("ping is not a parse: use ping()")
-    answer = await _call(kind, data, options, host, port, timeout_s)
-    return await asyncio.to_thread(check_parsed, answer, kind)
+    return await _call(
+        kind, data, options, host, port, timeout_s, lambda answer: check_parsed(answer, kind)
+    )
 
 
 async def ping(
@@ -734,10 +749,14 @@ async def ping(
     """A round trip through a sandboxed child. Without bytes it is answered at once, even
     while a job runs; with bytes it waits its turn like a job, and the child answers their
     size and SHA-256."""
-    report = check_ping(await _call("ping", data, None, host, port, timeout_s))
-    if report.received != len(data) or report.sha256 != hashlib.sha256(data).hexdigest():
-        _bad("echo")
-    return report
+
+    def check(answer: Any) -> PingReport:
+        report = check_ping(answer)
+        if report.received != len(data) or report.sha256 != hashlib.sha256(data).hexdigest():
+            _bad("echo")
+        return report
+
+    return await _call("ping", data, None, host, port, timeout_s, check)
 
 
 # --- command line -------------------------------------------------------------------------------

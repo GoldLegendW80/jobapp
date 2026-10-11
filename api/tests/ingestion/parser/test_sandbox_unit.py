@@ -65,7 +65,7 @@ def filter_of(machine: str) -> tuple[bytes, int]:
 def test_every_denied_call_answers_eperm_and_nothing_else_does(machine: str) -> None:
     code, arch = filter_of(machine)
     denied = main.numbers(machine)
-    assert len(denied) == len(main.DENIED) == 23
+    assert len(denied) == len(main.DENIED) == 25
     for name, number in denied.items():
         assert run_filter(code, arch, number) == EPERM, name
     for number in range(600):
@@ -247,7 +247,8 @@ def test_the_lockdown_sets_every_limit_then_the_attributes_then_the_filter() -> 
     assert harden(libc, res) is libc
     assert res.limits == {
         res.RLIMIT_AS: (512 * 1024 * 1024,) * 2,
-        res.RLIMIT_CPU: (45, 45),
+        # SIGXCPU at 45 s; SIGKILL a second later, for a child that ignores it.
+        res.RLIMIT_CPU: (45, 46),
         res.RLIMIT_FSIZE: (0, 0),
         res.RLIMIT_NOFILE: (16, 16),
         res.RLIMIT_NPROC: (0, 0),
@@ -471,3 +472,59 @@ def test_open_descriptors_are_counted_one_by_one() -> None:
         assert sock.fileno() in held
         assert sockets == sockets_before + 1
     assert sock.fileno() not in main.open_descriptors()[0] or sock.fileno() in before
+
+
+# --- on Linux, in a process that is not locked down ---------------------------------------------
+
+linux = pytest.mark.skipif(sys.platform != "linux", reason="reads /proc and calls Linux by number")
+
+
+@linux
+def test_the_report_of_a_process_that_is_not_locked_down_shows_it() -> None:
+    """The control of the healthcheck. The report is built here in the test process, which no
+    filter and no limit holds: the denied calls go through, the limits are not those of the
+    plan, the parent can be read, and the judgement of the service says so. A healthcheck that
+    passed on this would prove nothing."""
+    libc = main.load_libc()
+    machine = __import__("os").uname().machine
+    before, _ = main.open_descriptors()
+    report = main.sandbox_report("ping", libc, machine, main.received_environment())
+    assert main.open_descriptors()[0] == before, "a probe left a descriptor open"
+    assert report["denied"]["kill"] == "ALLOWED"
+    assert report["denied"]["pidfd_open"] in ("ALLOWED", "EPERM")  # Docker's own profile
+    assert report["denied"]["socket"] != "EPERM"
+    assert report["denied"]["execve"] == "EFAULT"
+    assert set(report["denied"]) == set(main.DENIED_NAMES)
+    assert report["limits"] != main.LIMITS["ping"]
+    assert report["dumpable"] == 1
+    assert report["environ"] > 0
+    assert report["parent_hidden"] is False
+    assert report["cryptography_blocked"] is False
+    assert report["kernel"] == __import__("os").uname().release
+    problems = server.sandbox_problems(report)
+    for expected in ("allowed:kill", "allowed:socket", "allowed:execve", "limits", "dumpable"):
+        assert expected in problems
+    assert "environ" in problems
+    assert "parent_hidden" in problems
+
+
+@linux
+def test_a_ping_in_a_process_that_is_not_locked_down_counts_and_hashes_its_bytes() -> None:
+    import hashlib
+
+    libc = main.load_libc()
+    answer = main.ping("ping", b"abc", libc, __import__("os").uname().machine, 0)
+    assert answer["ok"] is True
+    assert answer["kind"] == "ping"
+    assert answer["received"] == 3
+    assert answer["sha256"] == hashlib.sha256(b"abc").hexdigest()
+    assert answer["usage"]["max_rss_kb"] > 1000
+    assert json.loads(main.encode(answer))["sandbox"]["environ"] == 0
+
+
+@linux
+def test_the_fields_of_proc_are_read() -> None:
+    assert main.status_field("Seccomp") in ("0", "2")
+    assert main.status_field("NoSuchField") == ""
+    assert int(main.status_field("CapEff"), 16) >= 0
+    assert main.received_environment() > 0

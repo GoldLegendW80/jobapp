@@ -128,6 +128,8 @@ REQUIRED_DENIED = (
     "msgget",
     "semget",
     "mq_open",
+    "unshare",
+    "setns",
 )
 
 
