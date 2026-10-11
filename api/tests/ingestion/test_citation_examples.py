@@ -20,6 +20,7 @@ from tests.ingestion.citation_examples import (
     FLAGGED,
     PLAN,
     REFUSE,
+    SEED_OUTPUT,
     Example,
     markdown,
     table_of,
@@ -188,7 +189,7 @@ def test_the_table_has_one_row_per_example_and_names_each_rule() -> None:
 def test_the_seed_examples_keep_their_verdicts() -> None:
     """The verdict of the seed script on each of its 108 examples, as its output file states
     them (tasks/evidence/ingestion-g0/citation_rules.txt)."""
-    seed = PLAN.parents[1] / "evidence" / "ingestion-g0" / "citation_rules.txt"
+    seed = SEED_OUTPUT
     if not seed.is_file():
         pytest.skip("the repository root is not mounted here")
     stated = {}

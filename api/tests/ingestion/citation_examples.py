@@ -20,7 +20,11 @@ from typing import NamedTuple
 from app.ingestion import citations
 from app.ingestion.citations import Rule
 
-PLAN = Path(__file__).resolve().parents[3] / "tasks" / "ingestion" / "todo.md"
+# Both paths are written whole: .github/scripts/ci_plan.py gives each a rule that runs the api
+# tests, and its own test fails on a documentation path that an api test reads without one.
+ROOT = Path(__file__).resolve().parents[3]
+PLAN = ROOT / "tasks/ingestion/todo.md"
+SEED_OUTPUT = ROOT / "tasks/evidence/ingestion-g0/citation_rules.txt"
 HEADER = "| # | Source text | Field | Proposed value | Excerpt | Result | Why |"
 
 ACCEPT = "accept"

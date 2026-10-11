@@ -206,6 +206,26 @@ class RulesTest(unittest.TestCase):
             frozenset({"web", "shell", "e2e"}),
         )
 
+    def test_the_plan_and_the_evidence_an_api_test_reads_run_the_api_unit(self) -> None:
+        """api/tests/ingestion/test_citation_examples.py reads both: the table of citation
+        examples printed in the plan, and the verdicts of the script that first ran them."""
+        for path in (
+            "tasks/ingestion/todo.md",
+            "tasks/evidence/ingestion-g0/citation_rules.txt",
+        ):
+            self.assertEqual(self.units(path), frozenset({"api"}), path)
+        self.assertEqual(
+            self.units("tasks/ingestion/todo.md", "SPEC-ingestion.md", "tasks/todo.md"),
+            frozenset({"api"}),
+        )
+        # the other files of that evidence folder, and the other plans, are read by nothing
+        self.assertEqual(
+            self.units(
+                "tasks/evidence/ingestion-g0/citation_rules.py", "tasks/agents/todo.md"
+            ),
+            frozenset(),
+        )
+
     def test_one_unknown_path_among_documentation_runs_everything(self) -> None:
         self.assertEqual(
             self.units("README.md", "tasks/todo.md", "api/app/main.py"), EVERYTHING

@@ -30,7 +30,9 @@ in the job folder that holds this repository (it is not part of the repository).
    stack). The run must be green: all three jobs, none of which can be skipped. A pull request
    that touches documentation only (`tasks/`, `docs/`, `CONTRIBUTING.md`, `CAPABILITY-MAP.md`,
    the `SPEC-*.md` files, the pull request template) runs
-   pre-commit alone (the shell tests too when it touches `README.md`, which they check);
+   pre-commit alone (the shell tests too when it touches `README.md`, which they check, and
+   the api tests when it touches `tasks/ingestion/todo.md`, whose table of citation examples
+   an api test checks);
    one that touches `web/` only skips the api tests; anything else runs
    everything, and so does every push to `main` (README, What a CI run does). Only a pull
    request against `main` is narrowed this way: one against another branch (stacked on an

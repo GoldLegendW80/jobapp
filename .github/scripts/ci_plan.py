@@ -55,6 +55,19 @@ RULES: tuple[tuple[str, frozenset[str], str], ...] = (
         frozenset({"shell"}),
         "evidence read by a shell test",
     ),
+    # api/tests/ingestion/test_citation_examples.py fails when the table of examples printed in
+    # this plan is not the one its data generates, and compares the verdicts of the first 108
+    # with the output of the script that first executed them.
+    (
+        "tasks/ingestion/todo.md",
+        frozenset({"api"}),
+        "its table of citation examples is checked by an api test",
+    ),
+    (
+        "tasks/evidence/ingestion-g0/citation_rules.txt",
+        frozenset({"api"}),
+        "evidence read by an api test",
+    ),
     # Prose, plans and screenshots. Nothing executable reads them: ci_plan_test.py fails when a
     # test or a script of the units starts to.
     ("tasks/*", NONE, "task notes and evidence"),
