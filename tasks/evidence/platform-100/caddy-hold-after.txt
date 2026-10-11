@@ -1,0 +1,3 @@
+stalled-body: closed/answered after 15.0s -> HTTP/1.1 413 Request Entity Too
+slow-header: closed/answered after 10.0s -> HTTP/1.1 400 Bad Request
+idle-keepalive: closed/answered after 10.0s -> peer closed, no response

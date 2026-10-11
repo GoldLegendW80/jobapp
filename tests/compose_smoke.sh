@@ -247,6 +247,48 @@ big() { head -c "$1" /dev/zero; }
 [[ "$(curl_c / -X POST --data-binary @<(big 20000000))" == "413" ]] || fail "20 MB to / not refused"
 [[ "$(curl_c /api/health -X POST --data-binary @<(big 10485760))" == "405" ]] || fail "10 MiB exactly did not reach the api"
 ok "bodies over 10 MiB refused with 413, 10 MiB exactly reaches the api (405 from FastAPI)"
+# --- public route body limit and timeouts (issue #100) ---------------------------------------
+# A caller with no session reaches only the public routes under /api/auth/, whose bodies are a
+# few hundred bytes. Caddy caps them at 64 KiB; every other route keeps 10 MiB (above). The CSRF
+# header lets a small body reach the api; an over-limit body is Caddy's 413 before that.
+csrf=(-H 'X-Requested-With: jobapp' -H 'Content-Type: application/json')
+[[ "$(curl_c /api/auth/login -X POST "${csrf[@]}" --data-binary @<(big 65537))" == "413" ]] \
+  || fail "64 KiB + 1 to a public route not refused"
+[[ "$(curl_c /api/auth/login -X POST "${csrf[@]}" --data-binary @<(big 65536))" != "413" ]] \
+  || fail "64 KiB exactly to a public route was refused by caddy"
+[[ "$(curl_c /api/health -X POST "${csrf[@]}" --data-binary @<(big 200000))" == "405" ]] \
+  || fail "200 KB to a non-auth route did not reach the api"
+ok "public /api/auth/ routes capped at 64 KiB, other routes keep 10 MiB"
+# A connection that stalls is cut by caddy's shortened timeouts, not held for a minute. A stalled
+# body on a public route is answered 413 (its declared length is over 64 KiB) within ~15s
+# (read_body_idle); slow headers are cut within ~10s (read_header). The api never sees the body.
+python3 - "$HTTP_PORT" <<'PY' || fail "caddy did not cut stalled connections within the timeouts"
+import socket, sys, time
+port = int(sys.argv[1])
+def hold(head, send_body):
+    s = socket.create_connection(("127.0.0.1", port), timeout=5); s.settimeout(30)
+    s.sendall(head); s.sendall(send_body)
+    start = time.monotonic()
+    try:
+        data = s.recv(32)
+    except OSError:
+        data = b""
+    finally:
+        s.close()
+    return time.monotonic() - start, data
+t, data = hold(
+    b"POST /api/auth/login HTTP/1.1\r\nHost: x\r\nX-Requested-With: jobapp\r\n"
+    b"Content-Type: application/json\r\nContent-Length: 9000000\r\n\r\n",
+    b'{"email":"a@b.co","password":"' + b"x" * 10,
+)
+assert t < 25, f"stalled body held {t:.1f}s"
+assert b"413" in data, f"stalled body answer: {data!r}"
+t, _ = hold(b"POST /api/auth/login HTTP/1.1\r\nHost: x\r\nX-Partial", b"")
+assert t < 20, f"slow header held {t:.1f}s"
+print("stalled body cut within", round(t, 1), "s; slow header cut too")
+PY
+ok "stalled bodies and slow headers are cut within caddy's shortened timeouts"
+# --- end public route body limit and timeouts ------------------------------------------------
 
 step "caddy: headers and streaming limit, against an echo stand-in for the api"
 "${DEV[@]}" stop api >/dev/null 2>&1
