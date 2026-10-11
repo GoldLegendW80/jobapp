@@ -890,11 +890,11 @@ class _DateReader:
         self.short: set[tuple[int, int]] = set()
         self.implied: set[int] = set()
         self.apart: set[tuple[int, int]] = set()
+        self.cut = self._cut_out()
 
     def facts(self) -> DateFacts:
         tokens = self.tokens
-        cited = tokens[self.first : self.limit]
-        years = {int(token.text) for token in cited if token.kind == "d" and len(token.text) == 4}
+        years = {int(tokens[at].text) for at in range(self.first, self.limit) if self._year(at)}
         for at in range(self.first, self.limit):
             self._month_word(at)
         self._numeric()
@@ -914,6 +914,72 @@ class _DateReader:
     def _digits(self, at: int, size: int) -> bool:
         tokens = self.tokens
         return at < len(tokens) and tokens[at].kind == "d" and len(tokens[at].text) == size
+
+    def _year(self, at: int) -> bool:
+        """Whether the token at `at` is a year: four digits, not cut out of a longer number."""
+        return self._digits(at, 4) and at not in self.cut
+
+    def _cut_out(self) -> set[int]:
+        """The numbers that are a part of a longer one, where four digits are not a year.
+
+        Glued by full stops or commas ("2021,50", "0.2021"), unless the whole is a dotted date
+        of the table or every number has four digits ("2019,2021"). In a run of three numbers
+        or more with one space between them ("+33 6 3998 2019", an IBAN), next to a number of
+        three digits or more, unless every number of the run is a year from 1900 to 2100
+        ("2019 2020 2021"). One pass over the tokens each."""
+        tokens = self.tokens
+        cut: set[int] = set()
+        at = 0
+        while at < len(tokens):
+            end = at + 1
+            if tokens[at].kind == "d":
+                while (
+                    end + 1 < len(tokens)
+                    and tokens[end].text in (".", ",")
+                    and tokens[end].glued
+                    and tokens[end + 1].kind == "d"
+                    and tokens[end + 1].glued
+                ):
+                    end += 2
+                if end > at + 1 and not self._dotted_date(at, end):
+                    cut.update(range(at, end, 2))
+            at = end
+        at = 0
+        while at < len(tokens):
+            end = at + 1
+            if tokens[at].kind == "d":
+                while end < len(tokens) and tokens[end].kind == "d":
+                    end += 1
+                sizes = [len(tokens[index].text) for index in range(at, end)]
+                if len(sizes) >= 3 and not all(
+                    "1900" <= tokens[index].text <= "2100" and len(tokens[index].text) == 4
+                    for index in range(at, end)
+                ):
+                    for place, index in enumerate(range(at, end)):
+                        beside = sizes[max(0, place - 1) : place] + sizes[place + 1 : place + 2]
+                        if max(beside) >= 3:
+                            cut.add(index)
+            at = end
+        return cut
+
+    def _dotted_date(self, at: int, end: int) -> bool:
+        """Whether the numbers glued by full stops or commas from `at` to `end` can hold a year:
+        all of four digits, or `MM.YYYY`, `DD.MM.YYYY`, `YYYY.MM` or `YYYY.MM.DD` with full
+        stops, the month from 1 to 12 and the day from 1 to 31."""
+        tokens = self.tokens
+        texts = [tokens[index].text for index in range(at, end, 2)]
+        sizes = [len(text) for text in texts]
+        if all(size == 4 for size in sizes):
+            return True
+        if len(sizes) > 3 or any(tokens[index].text != "." for index in range(at + 1, end, 2)):
+            return False
+        if sizes in ([4, 2], [4, 2, 2]):  # "2012.09" gives its year, as many CVs write a date
+            return 1 <= int(texts[1]) <= 12 and 1 <= int(texts[-1]) <= 31
+        if sizes[-1] != 4 or max(sizes[:-1]) > 2:
+            return False
+        if len(sizes) == 3 and not 1 <= int(texts[0]) <= 31:
+            return False
+        return 1 <= int(texts[-2]) <= 12
 
     def _month(self, at: int) -> tuple[int, int] | None:
         """The month a word names at `at` and the index after it. Only an abbreviation takes its
@@ -983,7 +1049,7 @@ class _DateReader:
             at = skip(at + 1)
         if self._is(at, "of"):
             at = skip(at + 1)
-        return at if self._digits(at, 4) else -1
+        return at if self._year(at) else -1
 
     # -- month words
 

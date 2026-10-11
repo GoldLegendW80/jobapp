@@ -932,6 +932,43 @@ def test_years_are_runs_of_exactly_four_digits() -> None:
     assert facts.years == {2019, 2023, 2024, 2025, 2027}
 
 
+@pytest.mark.parametrize(
+    ("text", "years"),
+    [
+        ("Total 2021,50 \u20ac de frais", set()),
+        ("Total 2021.50 \u20ac de frais", set()),
+        ("Ratio de 0.2021 sur le jeu", set()),
+        ("Ratio de 13.2021 sur le jeu", set()),
+        ("Réf 1,2021 du dossier", set()),
+        ("Réf 1.2.3.2021 du dossier", set()),
+        ("Réf 99.12.2021 du dossier", set()),
+        ("Réf 2021.13.01 et 2021.12.32", set()),
+        ("Réf 2021.2.01 du dossier", set()),
+        ("Réf 123.2021 du dossier", set()),
+        ("En 01.2023, puis 3.2022", {2023, 2022}),
+        ("Le 15.05.2023, puis 2012.09 et 2014.06.30", {2023, 2012, 2014}),
+        ("Promotions 2019,2021 et 2018.2020", {2019, 2021, 2018, 2020}),
+        ("En 2019, 2021 et 2023.", {2019, 2021, 2023}),
+        ("Mobile : +33 6 3998 2019, Bordeaux", set()),
+        ("IBAN FR76 3000 2019 4012 3456", set()),
+        ("Promotions 2019 2020 2021, Bordeaux", {2019, 2020, 2021}),
+        ("Né le 12 03 1995 à Bordeaux", {1995}),
+        ("Promotion 2019 2021, Bordeaux", {2019, 2021}),
+        ("Réf 3998 2019 du dossier", {3998, 2019}),  # two numbers: no telling, stated
+        ("Promotion 2019 2021 150 élèves", set()),  # stated cost
+        ("Lot 2019 2020 2101 livré", set()),
+    ],
+)
+def test_four_digits_cut_out_of_a_longer_number_are_not_a_year(text: str, years: set[int]) -> None:
+    assert dates_of(n(text)).years == years
+
+
+def test_a_month_word_does_not_take_a_year_cut_out_of_a_number() -> None:
+    facts = dates_of(n("janvier 2021,50 \u20ac de frais"))
+    assert (facts.years, facts.pairs, facts.apart) == (set(), set(), set())
+    assert pairs("janvier 2021, 50 \u20ac de frais") == {(2021, 1)}
+
+
 def test_two_digit_years_are_kept_apart() -> None:
     assert dates_of(n("09/21 à 03/23")).short == {(21, 9), (23, 3)}
     assert dates_of(n("09/21 to present")).short == {(21, 9)}
