@@ -381,8 +381,29 @@ rotate() {
   promise_note
 }
 
+# flush <path>: the data of a file, or the entries of a folder, on the disk before the script goes
+# on. Without it a new dump lives in the page cache for half a minute while the deletions that
+# follow are journaled within seconds, and a power cut in between leaves an empty file under the
+# new name and the old dumps gone. `sync <path>` is fsync, in coreutils 8.24 and later (Ubuntu
+# 22.04 has 8.32); a sync that takes no path flushes every disk instead. A flush that fails ends
+# the run: nothing is deleted on the word of a dump that may not be on the disk.
+SYNC_TAKES_PATHS=""
+flush() {
+  local help
+  if [[ -z "$SYNC_TAKES_PATHS" ]]; then
+    help="$(sync --help 2>/dev/null || true)"
+    if [[ "$help" == *FILE* ]]; then SYNC_TAKES_PATHS=1; else SYNC_TAKES_PATHS=0; fi
+  fi
+  if ((SYNC_TAKES_PATHS == 1)); then
+    sync "$1" || die "could not flush $1 to the disk, nothing deleted"
+  else
+    sync || die "could not flush the disks, nothing deleted"
+  fi
+}
+
 # do_backup [tag]: sets BACKUP_FILE. The dump streams out of the container into a hidden .partial
-# file, is verified, then renamed, so a half-written dump never carries a backup's name.
+# file, is verified, flushed to the disk, renamed, and the folder flushed too: a half-written dump
+# never carries a backup's name, and a named one is on the disk before anything else happens.
 do_backup() {
   local tag="${1:-}" size_b avail_kb need_kb name final
   take_lock
@@ -410,8 +431,10 @@ do_backup() {
   rm -f "$err"
   verify "$PARTIAL"
   chmod 600 "$PARTIAL"
+  flush "$PARTIAL"
   mv -- "$PARTIAL" "$final"
   PARTIAL=""
+  flush "$BACKUP_DIR"
   BACKUP_FILE="$final"
   info "backup: $final"
   info "size: $(human "$(stat -c %s "$final")") ($(stat -c %s "$final") bytes), database $(human "$size_b")"

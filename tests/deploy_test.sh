@@ -700,6 +700,24 @@ cat >"$DBT/bin/stat" <<'SH'
 #!/usr/bin/env bash
 wc -c <"${!#}" | tr -d ' '
 SH
+cat >"$DBT/bin/sync" <<'SH'
+#!/usr/bin/env bash
+# Records each flush in $FAKE_DIR/order, a folder with what it holds at that moment (T10, the
+# review's B1). FAKE_OLD_SYNC: a sync that knows no path. FAKE_FAIL_SYNC=file|dir: that one fails.
+if [[ "${1:-}" == --help ]]; then
+  [[ -n "${FAKE_OLD_SYNC:-}" ]] || echo "Usage: sync [OPTION] [FILE]..."
+  exit 0
+fi
+if [[ $# -eq 0 ]]; then
+  echo "sync" >>"$FAKE_DIR/order"
+elif [[ -d "$1" ]]; then
+  echo "sync dir $1 holding: $(ls -A "$1" | tr '\n' ' ')" >>"$FAKE_DIR/order"
+  [[ "${FAKE_FAIL_SYNC:-}" != dir ]] || exit 1
+else
+  echo "sync file $1" >>"$FAKE_DIR/order"
+  [[ "${FAKE_FAIL_SYNC:-}" != file ]] || exit 1
+fi
+SH
 cat >"$DBT/bin/docker" <<'SH'
 #!/usr/bin/env bash
 # Plays the Jetson's docker for ops/db.sh; logs every call and the stopped services. The dump
@@ -874,7 +892,7 @@ tree_of() { (cd "$ROT" && find backups outside -mindepth 1 | LC_ALL=C sort); } #
 no_delete() { # no_delete <tree before>: the last run removed and added nothing, and said so
   [[ "$(tree_of)" == "$1" ]] || fail "the folders changed: $(diff <(printf '%s\n' "$1") <(tree_of) | tr '\n' ' ')"
   grep -q "deleted old backup" "$WORK/out" && fail "the run says it deleted a backup: $(cat "$WORK/out")"
-  grep -q "backups/.*jobapp-[^/]*\.dump$" "$ROT/order" && fail "a dump reached rm: $(cat "$ROT/order")"
+  grep -q "^rm .*backups/.*jobapp-[^/]*\.dump$" "$ROT/order" && fail "a dump reached rm: $(cat "$ROT/order")"
   return 0
 }
 ok "fakes ready: a run is at a time the test chooses, and every rm is recorded"
@@ -1097,6 +1115,45 @@ for c in "FAKE_FAIL_DUMP=1|pg_dump failed, nothing kept" "FAKE_EMPTY_DUMP=1|empt
   grep -q "^backup=" "$WORK/out" && fail "${c%%|*}: a backup was reported: $(cat "$WORK/out")"
 done
 ok "a dump that cannot be written (pg_dump fails, writes nothing, no disk, db unhealthy, lock held) or verified (the list, the full read): exit 1, no partial file, and not one old dump deleted, by count or by age"
+
+# The review's B1: a verified dump is not yet a dump on the disk. Its data is flushed while it
+# still has its partial name, the folder once it has its real one, and only then is an old dump
+# unlinked: a power cut never finds the old dumps gone and the new one empty.
+rot_new
+seed "$(d 9)" "$(d 8)" "$(d 1)"
+rot 0 "$NOW"
+only . "$(d 1)" "$(d 0)"
+verified="$(grep -n '^verify read$' "$ROT/order" | tail -n 1 | cut -d: -f1)"
+flushed_file="$(grep -n "^sync file $ROT/backups/\.$(d 0)\.partial$" "$ROT/order" | cut -d: -f1)"
+flushed_dir="$(grep -n "^sync dir $ROT/backups holding: " "$ROT/order" | cut -d: -f1)"
+first_rm="$(grep -n "^rm -f -- $ROT/backups/" "$ROT/order" | head -n 1 | cut -d: -f1)"
+[[ -n "$verified" && -n "$flushed_file" && -n "$flushed_dir" && -n "$first_rm" ]] ||
+  fail "a verification, a flush or a deletion is missing: $(cat "$ROT/order")"
+((verified < flushed_file && flushed_file < flushed_dir && flushed_dir < first_rm)) ||
+  fail "the order is not verify, flush the file, flush the folder, delete: $(cat "$ROT/order")"
+held="$(sed -n "${flushed_dir}p" "$ROT/order")"
+[[ "$held" == *" $(d 0) "* && "$held" != *partial* && "$held" == *" $(d 9) "* ]] ||
+  fail "the folder was not flushed with the new dump under its name and the old ones still there: $held"
+ok "the new dump is flushed to the disk under its partial name, then the folder with the dump renamed and every old dump still in it, and only then is the first old dump deleted"
+rot_new
+seed "$(d 30)" "$(d 20)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)"
+before="$(tree_of)"
+rot 1 "$NOW" FAKE_FAIL_SYNC=file
+out_has "could not flush $ROT/backups/.$(d 0).partial to the disk, nothing deleted"
+no_delete "$before"
+rot 1 "$NOW" FAKE_FAIL_SYNC=dir
+out_has "could not flush $ROT/backups to the disk, nothing deleted"
+[[ "$(tree_of)" == "$(printf '%s\n%s\n' "$before" "backups/$(d 0)" | LC_ALL=C sort)" ]] || fail "more than the new dump changed: $(tree_of | tr '\n' ' ')"
+grep -q -e "deleted old backup" -e "^backup=" "$WORK/out" && fail "a run whose flush failed deleted or reported a backup: $(cat "$WORK/out")"
+ok "a flush that fails ends the run with exit 1 and deletes nothing: before the name, the partial file is removed; after it, the dump stays and so does every old one"
+rot_new
+seed "$(d 9)" "$(d 1)"
+rot 0 "$NOW" FAKE_OLD_SYNC=1
+only . "$(d 1)" "$(d 0)"
+[[ "$(grep -c '^sync$' "$ROT/order")" == 2 ]] || fail "an old sync was not run twice without a path: $(cat "$ROT/order")"
+(($(grep -n '^sync$' "$ROT/order" | tail -n 1 | cut -d: -f1) < $(grep -n "^rm -f -- $ROT/backups/" "$ROT/order" | head -n 1 | cut -d: -f1))) ||
+  fail "an old sync ran after the first deletion: $(cat "$ROT/order")"
+ok "a sync that takes no path (coreutils before 8.24) flushes every disk instead, twice, still before the first deletion"
 
 rot_new
 for n in 10 11 12 13 14 15 16; do seed "$(d "$n")"; done
