@@ -6,3 +6,4 @@ alone": every job starts, computes the plan `none`, runs nothing but pre-commit 
 and verifies that every step of a unit was skipped.
 
 The pull request is closed without merging once its run has been read.
+One more line, to get a merge commit with the base as it is after the review fixes.
