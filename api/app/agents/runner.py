@@ -177,9 +177,10 @@ REDACTED = "[redacted]"
 # In place of a tool name the model made up, in the events and the log of a private run.
 NOT_STORED = "[not stored]"
 # The key of a run's input that holds its token budget, and what Claude Code is told when the
-# gate stops a run on it.
+# gate stops a run on it, or because it could not tell whether the budget was reached.
 BUDGET_KEY = "token_budget"
 BUDGET_STOP = "The run reached its token budget."
+BUDGET_UNSURE = "The run's token count could not be confirmed."
 
 # Built-in Claude Code tools, denied by name on top of `tools=[]` (which already leaves the model
 # none) and of the PreToolUse gate (which denies anything outside the allow list): shell, files,
@@ -404,20 +405,26 @@ def token_budget(data: Mapping[str, Any]) -> int | None:
 
 class Budget:
     """What a run has used of its token budget, counted from the usage Claude Code reports on
-    each assistant message (module docstring, A token budget).
+    each assistant message, the moment the message comes off the stream (`_drive`): never
+    behind the event writes of the messages before it (module docstring, A token budget).
 
     One count per API message: Claude Code prints one assistant message per content block, each
     with the usage of the whole API message and its id, so the figures of an id are counted
     once (the largest seen of each side). A message without an id cannot be recognised when it
     comes again, so each one counts on its own: too much rather than too little.
 
-    `stop` is set when a request is seen to have left after the budget was used up; the run is
-    then interrupted. `refused` is set when the gate stopped a tool call."""
+    `stop` is set, and the run then interrupted, as soon as the count has reached the budget
+    and the turn is seen to go on: the message holds a tool call, whatever the tool (Claude
+    Code answers a call to a tool it does not offer by itself, without asking the gate, and
+    sends its next request at once), or a new API message arrives when nothing was left to
+    spend. `refused` is set when the gate stopped a tool call on a used up budget, `unsure`
+    when it stopped one because it could not tell that the call's message was counted."""
 
     def __init__(self, limit: int, wait_s: float = GATE_WAIT_S) -> None:
         self.limit = limit
         self.stop = asyncio.Event()
         self.refused = False
+        self.unsure = False
         self._wait_s = wait_s
         self._by_message: dict[str, tuple[int, int]] = {}
         self._calls: set[str] = set()
@@ -446,8 +453,10 @@ class Budget:
         return self.spent >= self.limit
 
     def count(self, message: AssistantMessage) -> None:
-        """Count an assistant message. Never waits: the gate may be asked about a tool call of
-        this message at any moment, and must find it counted."""
+        """Count an assistant message, and stop the run when nothing is left and the turn goes
+        on. Never waits, on the database or on anything else: it is called as the message
+        comes off the stream, and the gate may be asked about a tool call of this message at
+        any moment."""
         key = message.message_id
         if key is None or key not in self._by_message:
             if self.used_up:
@@ -464,23 +473,34 @@ class Budget:
         out = _int(usage.get("output_tokens"))
         before = self._by_message.get(key, (0, 0))
         self._by_message[key] = (max(before[0], side), max(before[1], out))
-        self._calls.update(block.id for block in message.content if isinstance(block, ToolUseBlock))
+        calls = [block.id for block in message.content if isinstance(block, ToolUseBlock)]
+        self._calls.update(calls)
+        if calls and self.used_up:
+            # A tool call means another request, and nothing is left to pay for it. Not left to
+            # the gate alone: the gate is only asked about the tools Claude Code offers.
+            self.stop.set()
         self._arrived.set()
 
-    async def counted(self, tool_use_id: str | None) -> None:
-        """Returns once the assistant message that made this tool call has been counted. The
-        SDK hands a hook request to its own task as soon as it has read it, while the message
-        printed just before it may still wait in the SDK's buffer for the runner: without this
-        the gate could decide before the usage that uses the budget up is counted. Bounded by
-        `wait_s`, after which the gate decides with what is counted (never seen in the
-        measurements, where the message always came first)."""
+    async def counted(self, tool_use_id: str | None) -> bool:
+        """Whether the assistant message that made this tool call has been counted, waiting
+        for it up to `wait_s`. The SDK hands a hook request to a task of its own as soon as it
+        has read it, while the message printed just before it may still sit in the SDK's
+        buffer: without the wait the gate could decide before the usage that uses the budget
+        up is counted. The message is counted when it comes off the stream, so the wait covers
+        that buffer alone, never the database. False when the wait ends without the message,
+        or when the hook names no call at all: the gate then stops the run (never seen in the
+        measurements, where the message always came first and the hook always named its
+        call)."""
         if tool_use_id is None:
-            return
-        with contextlib.suppress(TimeoutError):
+            return False
+        try:
             async with asyncio.timeout(self._wait_s):
                 while tool_use_id not in self._calls:
                     self._arrived.clear()
                     await self._arrived.wait()
+        except TimeoutError:
+            return False
+        return True
 
 
 def build_env(
@@ -528,31 +548,43 @@ def make_gate(
     """The PreToolUse hook: any tool outside the allow list is denied by this code, whatever
     the options or the model say (hooks run first, and a hook deny holds in every mode).
 
-    For a run with a token budget it is also where the run stops: once the budget is used up,
-    the next tool call, whatever the tool, is answered with a stop (`continue: false`, a
+    For a run with a token budget it is also one of the two places where the run stops (the
+    other is `Budget.count`, which interrupts the run and needs no hook). Once the budget is
+    used up, a tool call the gate is asked about is answered with a stop (`continue: false`, a
     documented hook answer). The tool does not run and Claude Code ends the turn itself, in
     order, with no further request (measured on the pinned CLI: the result's terminal reason is
-    `hook_stopped`). A hook that merely never answered would not hold: when the wait for it
-    ends without an answer (the client is closed), Claude Code goes on as if nothing had been
-    asked (measured too)."""
+    `hook_stopped`). Claude Code only asks about the tools it offers, which here are the
+    agent's own: a call to any other name it answers by itself. A hook that merely never
+    answered would not hold: when the wait for it ends without an answer (the client is
+    closed), Claude Code goes on as if nothing had been asked (measured too).
+
+    The gate fails closed: when it cannot tell that the message of the call is counted (the
+    wait of `Budget.counted` ended, or the hook named no call), it stops the run as well,
+    instead of letting the call through on a count that may be behind."""
+
+    def stop(reason: str) -> dict[str, Any]:
+        return {
+            "continue_": False,
+            "stopReason": reason,
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            },
+        }
 
     async def gate(
         input_data: dict[str, Any], tool_use_id: str | None, context: Any
     ) -> dict[str, Any]:
         name = str(input_data.get("tool_name", ""))
         if budget is not None:
-            await budget.counted(tool_use_id)
+            if not await budget.counted(tool_use_id):
+                budget.unsure = True
+                budget.stop.set()
+                return stop(BUDGET_UNSURE)
             if budget.used_up:
                 budget.refused = True
-                return {
-                    "continue_": False,
-                    "stopReason": BUDGET_STOP,
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "deny",
-                        "permissionDecisionReason": BUDGET_STOP,
-                    },
-                }
+                return stop(BUDGET_STOP)
         if name in allowed:
             return {}
         await on_denied(name)
@@ -757,9 +789,8 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
         if state.live_text is not None and message.parent_tool_use_id is None:
             state.live_text.feed(message.event)
     elif isinstance(message, AssistantMessage):
-        if state.budget is not None:
-            # First, and without waiting: the gate must find this message counted.
-            state.budget.count(message)
+        # (A run with a token budget has counted this message already, when it came off the
+        # stream: `_drive`. Nothing is counted here, behind the event writes.)
         state.model = message.model or state.model
         for block in message.content:
             if isinstance(block, TextBlock):
@@ -873,12 +904,17 @@ def outcome_of(
         message = TIME_LIMIT.format(minutes=_minutes(definition.wall_time_s))
         return runs.Outcome(status=RunStatus.failed, error=message, **usage)
     budget = state.budget
+    if budget is not None and budget.unsure:
+        # The gate stopped a call because it could not tell that the count was complete. Not
+        # the budget's end (nothing says it was reached): the runner's own failure.
+        return runs.Outcome(status=RunStatus.failed, error=INTERNAL, **usage)
     if budget is not None and (
         # The gate stopped a tool call: Claude Code then ends the turn with a result that says
         # "success" (terminal reason hook_stopped), and the run is not finished for all that.
         budget.refused
-        # Interrupted for a request that left with nothing left to spend. When that request
-        # turned out to be the run's last (a clean result came first), nothing was cut.
+        # Interrupted because nothing was left and the turn went on. When the request that
+        # followed turned out to be the run's last (a clean result came before the interrupt
+        # landed), nothing was cut.
         or (stopped == "budget" and (result is None or result.is_error))
     ):
         return runs.Outcome(status=RunStatus.failed, error=TOKEN_LIMIT, **usage)
@@ -922,8 +958,54 @@ async def _drive(
     # Claude Code process) runs here and now, before the scratch directory is removed, not later
     # from the async generator finalizer.
     async with contextlib.aclosing(backend.stream(request)) as messages:
-        async for message in messages:
+        if state.budget is None:
+            async for message in messages:
+                await _handle(message, state, recorder)
+        else:
+            await _drive_counting(messages, state.budget, state, recorder)
+
+
+async def _drive_counting(messages: Any, budget: Budget, state: _State, recorder: Recorder) -> None:
+    """The loop of a run with a token budget: the count ahead, the events behind.
+
+    Claude Code does not wait for this runner. It prints a message and goes on, and it makes
+    its next request as soon as it has the answers it needs, which for a call to a tool it does
+    not offer is at once. A loop that counts a message when it gets to it, after the event
+    writes of the messages before (one commit each), is behind by as many requests as the
+    database is slow, and so is everything that reads the count: the gate, the stop, the
+    figures recorded on a run that is cut (review of PR #95, measured on the pinned CLI).
+
+    So a reader of its own takes each message off the stream the moment it is there, counts an
+    assistant message against the budget (`Budget.count`, which stops the run when nothing is
+    left and never waits), keeps the result message, and hands the messages on in order; the
+    events are written behind it, at the pace of the database. A run without a budget keeps the
+    one loop it always had."""
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    end = object()
+
+    async def read() -> None:
+        try:
+            async for message in messages:
+                if isinstance(message, AssistantMessage):
+                    budget.count(message)
+                elif isinstance(message, ResultMessage):
+                    # What the run used in all: kept even when the run is cut while its
+                    # events are still being written.
+                    state.result = message
+                queue.put_nowait(message)
+        finally:
+            queue.put_nowait(end)
+
+    reader = asyncio.create_task(read())
+    try:
+        while (message := await queue.get()) is not end:
             await _handle(message, state, recorder)
+        await reader  # raises what the stream raised
+    finally:
+        if not reader.done():
+            reader.cancel()
+        # Awaited inside the caller's `aclosing`: the stream's `finally` runs in the reader.
+        await asyncio.gather(reader, return_exceptions=True)
 
 
 async def _watch_cancel(context: RunContext, run_id: uuid.UUID) -> None:
@@ -965,8 +1047,8 @@ async def _run_stream(
     recorder: Recorder,
 ) -> str | None:
     """Run the stream to its end, or stop it. Returns None (ran to its end), "cancelled",
-    "budget" (a request left after the run's token budget was used up) or "timeout".
-    Exceptions of the stream propagate."""
+    "budget" (the run's token budget is used up and the turn was going on: `Budget.stop`) or
+    "timeout". Exceptions of the stream propagate."""
     consumer = asyncio.create_task(_drive(backend, request, state, recorder))
     watcher = asyncio.create_task(_watch_cancel(context, run_id))
     tasks: list[asyncio.Task[Any]] = [watcher, consumer]
@@ -1308,6 +1390,8 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
         finally:
             del options, request, prompt
         outcome = outcome_of(state, definition, stopped, model)
+        if state.budget is not None and state.budget.unsure:
+            logger.error("agent run stopped: its token count could not be confirmed", extra=log)
         if (
             outcome.status is RunStatus.done
             and secret.kind is CredentialKind.claude_subscription

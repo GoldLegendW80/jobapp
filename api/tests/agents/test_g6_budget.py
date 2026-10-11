@@ -1,9 +1,15 @@
 """The token budget of a run (ingestion G6, points 6 and 7; decision 10 of the owner relies on
 it), on the fake backend and a real Postgres. Absent: no limit. Zero, or anything that is not a
 whole number above zero: no call at all. Otherwise the run is stopped once what it spent has
-reached the budget, by the gate at its next tool call, so that no request leaves after the one
-whose usage reached it (the overshoot, asserted here for every budget). A stopped run ends
-failed with TOKEN_LIMIT, a constant, and a run with a budget always records what it used.
+reached the budget and the turn goes on: interrupted as soon as a tool call is seen, and stopped
+by the gate at a tool call the gate is asked about. A stopped run ends failed with TOKEN_LIMIT,
+a constant, and a run with a budget always records what it used.
+
+What this file can and cannot show. The fake backend is pulled by the runner and, by default,
+asks the gate about every tool: here the model calls the agent's own tool, the gate is asked,
+and no request leaves after the one that reached the budget, for every budget. What the real
+CLI adds (requests at their own pace, tools it does not offer answered without the gate) is in
+test_g6_budget_push.py, on a backend that behaves like it, and in test_g6_real_cli.py.
 
 One request of the recorded streams costs PER_REQUEST tokens (g6_helpers.USAGE)."""
 
@@ -37,6 +43,7 @@ from tests.agents.g6_helpers import (
     g6_tools,
     init,
     loop,
+    raw_call,
     result,
     run_context,
     streams,
@@ -245,9 +252,10 @@ def test_no_request_leaves_after_the_one_that_reached_the_budget(
     streams: Streams,
     g6_tools: None,
 ) -> None:
-    """The overshoot, for every budget. The request whose usage reaches the budget cannot be
-    prevented (its usage is known when it arrives); no request follows it. So the run passes
-    its budget by less than one request, and a budget reached exactly is not passed at all."""
+    """The overshoot where the gate is asked (the model calls a tool of the agent), for every
+    budget. The request whose usage reaches the budget cannot be prevented (its usage is known
+    when it arrives); no request follows it. So the run passes its budget by less than one
+    request, and a budget reached exactly is not passed at all."""
     streams.add("g6_budget", loop(TURNS))
     run_id, status, backend = run_loop(
         settings, factory, keyring, alice_id, {"token_budget": budget}
@@ -298,9 +306,10 @@ def test_a_turn_that_goes_on_without_a_tool_call_is_interrupted_at_its_next_requ
     streams: Streams,
     g6_tools: None,
 ) -> None:
-    """The one way a request can follow the one that reached the budget: a turn that goes on by
-    itself, with no tool call for the gate to stop. It is seen when the next request's first
-    message arrives, and the run is interrupted: one request more, never two."""
+    """A turn that goes on by itself, with no tool call to give it away: it is seen when the
+    next request's first message arrives, and the run is interrupted there. On this backend,
+    which waits to be pulled, that is one request more (test_g6_budget_push.py has the same
+    turn at the CLI's own pace)."""
     streams.add(
         "g6_budget",
         [
@@ -322,6 +331,61 @@ def test_a_turn_that_goes_on_without_a_tool_call_is_interrupted_at_its_next_requ
         "First.",
         "Still going.",
     ]
+
+
+@pytest.mark.parametrize("gate", ["offered", "all"])
+@pytest.mark.parametrize("name", ["Bash", "mcp__app__made_up"])
+def test_the_model_calls_a_tool_the_agent_does_not_have(
+    name: str,
+    gate: str,
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    streams: Streams,
+    g6_tools: None,
+) -> None:
+    """The stop does not depend on the gate being asked. With `"gate": "offered"` the fake
+    backend answers such a call itself, as the real CLI does: the gate hears nothing, no
+    `tool_denied` is stored, and the run is interrupted when the call of the reaching request
+    arrives. With the fake's default the gate is asked about every name, which the CLI never
+    does: the two earlier calls are stored as denied and the third is stopped at the gate. The
+    run ends the same either way; only the first is what the CLI does."""
+    steps = [init()]
+    for index in range(1, TURNS + 1):
+        steps += [
+            {"sleep": 2},  # a request takes time: the fake's own are instant
+            assistant(f"m{index}", raw_call(f"t{index}", name, text="x")),
+        ]
+    streams.add("g6_budget", [*steps, assistant("end", text("Finished."))], gate=gate)
+    run_id, status, backend = run_loop(settings, factory, keyring, alice_id, {"token_budget": 2000})
+    assert status is RunStatus.failed
+    assert run_row(factory, run_id).error == runner.TOKEN_LIMIT
+    assert backend.seen_requests == ["m1", "m2", "m3"]
+    evs = events(factory, run_id)
+    denied = [data["name"] for kind, data in evs if kind == "tool_denied"]
+    results = [data["content"] for kind, data in evs if kind == "tool_result"]
+    if gate == "offered":
+        assert denied == []
+        assert results == [
+            f"<tool_use_error>Error: No such tool available: {name}</tool_use_error>"
+        ] * len(results)
+    else:
+        assert denied == [name, name]
+        assert results[-1] == f"PreToolUse:{name} hook error: The run reached its token budget."
+
+
+def test_a_stream_cannot_misspell_its_gate(
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    streams: Streams,
+    g6_tools: None,
+) -> None:
+    streams.add("g6_budget", loop(1), gate="offerd")
+    _, status, _ = run_loop(settings, factory, keyring, alice_id, {})
+    assert status is RunStatus.failed  # the replay refuses the stream, loudly
 
 
 # --- one count per API message --------------------------------------------------------------------
@@ -436,6 +500,37 @@ def test_a_message_without_an_id_counts_on_its_own() -> None:
     assert not budget.stop.is_set()
     budget.count(message)  # a request that left with nothing left to spend
     assert budget.stop.is_set()
+
+
+def test_the_count_stops_the_run_when_nothing_is_left_and_the_turn_goes_on() -> None:
+    """Decided when the message is counted, from the message alone, never from the gate: a
+    tool call means another request, whatever tool is called and whoever answers it."""
+
+    def message(message_id: str, tokens: int, *names: str) -> AssistantMessage:
+        blocks: list[Any] = [TextBlock(text="x")]
+        blocks += [ToolUseBlock(id=f"{message_id}-{name}", name=name, input={}) for name in names]
+        return AssistantMessage(
+            content=blocks, model="m", usage={"input_tokens": tokens}, message_id=message_id
+        )
+
+    # Something is left: a tool call stops nothing.
+    budget = runner.Budget(1000)
+    budget.count(message("a", 999, "Bash"))
+    assert not budget.stop.is_set()
+    # Nothing is left and the message asks for nothing more: the run is ending by itself.
+    budget.count(message("b", 1))
+    assert budget.used_up
+    assert not budget.stop.is_set()
+    # The same API message, its next content block, a tool call: the turn goes on. Stop.
+    budget.count(message("b", 1, "mcp__app__made_up"))
+    assert budget.stop.is_set()
+    # Whatever the tool: the agent's own, a built-in name, one nobody offers.
+    for name in ("mcp__app__g6_write", "Bash", "anything at all"):
+        budget = runner.Budget(1000)
+        budget.count(message("a", 1000, name))
+        assert budget.stop.is_set(), name
+    # The gate has stopped nothing in any of this.
+    assert (budget.refused, budget.unsure) == (False, False)
 
 
 # --- what a run with a budget records -------------------------------------------------------------
@@ -693,23 +788,42 @@ def test_the_gate_waits_for_the_message_of_its_call_to_be_counted() -> None:
     assert answer["continue_"] is False
 
 
-def test_the_gate_decides_with_what_is_counted_when_the_message_never_comes() -> None:
+@pytest.mark.parametrize("tool_use_id", ["never printed", None], ids=["unknown call", "no call"])
+def test_the_gate_fails_closed_when_it_cannot_tell_that_its_call_is_counted(
+    tool_use_id: str | None,
+) -> None:
+    """The wait ends without the message of the call, or the hook names no call at all. The
+    count may be behind: the gate stops the run instead of letting the call through on it,
+    although nothing says the budget is reached. (The first version let the call through.)"""
+
     async def never(name: str) -> None:  # pragma: no cover
         raise AssertionError(name)
 
-    async def go() -> list[dict[str, Any]]:
-        budget = runner.Budget(1000, wait_s=0.05)
+    async def go() -> tuple[dict[str, Any], runner.Budget]:
+        budget = runner.Budget(10**9, wait_s=0.05)
         gate = runner.make_gate(frozenset({"mcp__app__g6_write"}), never, budget)
+        budget.count(calling("t1", 10))  # another call's message: not the one asked about
         call_of = {"tool_name": "mcp__app__g6_write", "tool_input": {}}
-        answers = [await gate(call_of, "unseen", None), await gate(call_of, None, None)]
-        budget.count(calling("t1", 1000))
-        answers.append(await gate(call_of, "unseen", None))
-        return answers
+        return await gate(call_of, tool_use_id, None), budget
 
-    unseen, no_id, used_up = asyncio.run(go())
-    assert unseen == {}  # after the wait: nothing counted says stop
-    assert no_id == {}  # no id to wait for
-    assert used_up["continue_"] is False
+    answer, budget = asyncio.run(go())
+    assert answer == {
+        "continue_": False,
+        "stopReason": "The run's token count could not be confirmed.",
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "The run's token count could not be confirmed.",
+        },
+    }
+    assert (budget.unsure, budget.refused, budget.used_up) == (True, False, False)
+    assert budget.stop.is_set()  # and the run is interrupted as well
+    # Such a run did not reach its budget: it failed on the runner's side.
+    state = runner._State(budget=budget)
+    state.result = finished(terminal_reason="hook_stopped", result="")
+    assert runner.outcome_of(state, BUDGETED, "budget").error == runner.INTERNAL
+    assert runner.outcome_of(state, BUDGETED, None).error == runner.INTERNAL
+    assert runner.outcome_of(state, BUDGETED, "cancelled").status is RunStatus.cancelled
     assert runner.GATE_WAIT_S == 5.0
 
 

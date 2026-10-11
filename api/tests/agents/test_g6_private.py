@@ -194,7 +194,9 @@ def test_a_text_event_is_scrubbed_whole_then_shortened(
     assert run_row(factory, run_id).output["text_chars"] == len(long)  # type: ignore[index]
 
 
+@pytest.mark.parametrize("gate", ["offered", "all"], ids=["as the CLI", "the gate asked"])
 def test_a_tool_name_the_model_made_up_is_not_stored(
+    gate: str,
     settings: Settings,
     factory: sessionmaker[Session],
     keyring: Keyring,
@@ -205,7 +207,14 @@ def test_a_tool_name_the_model_made_up_is_not_stored(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A tool's name is the model's text too. Only the names this code knows are kept: the
-    agent's own tools, and Claude Code's built-in ones."""
+    agent's own tools, and Claude Code's built-in ones.
+
+    Two paths, and only the first is what the real CLI does. "As the CLI": a tool it does not
+    offer is answered by the CLI itself with an error that repeats the name, the gate is never
+    asked and no `tool_denied` exists; the name is in the `tool_call` event and in the text of
+    the result, stored as `[not stored]` and as a size. "The gate asked": the fake backend's
+    default, a tool that exists and is not allowed (the gate's defence in depth); the name
+    would then also be in a `tool_denied` event and in the log, and is replaced there too."""
     streams.add(
         "g6_private",
         [
@@ -219,6 +228,7 @@ def test_a_tool_name_the_model_made_up_is_not_stored(
             ),
             assistant("m2", text("Done.")),
         ],
+        gate=gate,
     )
     run_id = new_run(factory, alice_id, {}, agent="g6_private")
     with caplog.at_level(logging.DEBUG):
@@ -226,11 +236,24 @@ def test_a_tool_name_the_model_made_up_is_not_stored(
     evs = events(factory, run_id)
     names = [data["name"] for kind, data in evs if kind == "tool_call"]
     assert names == [runner.NOT_STORED, "Bash", runner.NOT_STORED, "mcp__app__g6_write"]
+    results = [data for kind, data in evs if kind == "tool_result"]
+    assert all(set(data) == {"id", "is_error", "size", "blocks"} for data in results)
+    assert [data["is_error"] for data in results] == [True, True, True, False]
     denied = [data["name"] for kind, data in evs if kind == "tool_denied"]
-    assert denied == [runner.NOT_STORED, "Bash", runner.NOT_STORED]
     warned = [r for r in caplog.records if r.getMessage() == "agent tool denied"]
-    assert [r.tool for r in warned] == denied  # type: ignore[attr-defined]
-    assert run_row(factory, run_id).output["tools_denied"] == 3  # type: ignore[index]
+    if gate == "offered":
+        assert denied == []
+        assert warned == []
+        assert run_row(factory, run_id).output["tools_denied"] == 0  # type: ignore[index]
+        # The size of the CLI's own error, which holds the made up name.
+        error = (
+            f"<tool_use_error>Error: No such tool available: mcp__app__{MARKER}</tool_use_error>"
+        )
+        assert results[0]["size"] == len(error)
+    else:
+        assert denied == [runner.NOT_STORED, "Bash", runner.NOT_STORED]
+        assert [r.tool for r in warned] == denied  # type: ignore[attr-defined]
+        assert run_row(factory, run_id).output["tools_denied"] == 3  # type: ignore[index]
     assert MARKER not in everything_stored(factory, run_id)
     assert MARKER not in logged(caplog, capsys)
 

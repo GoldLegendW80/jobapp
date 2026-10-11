@@ -30,6 +30,25 @@ with the terminal reason `hook_stopped` and an empty result. No further step is 
 further request leaves. `seen_requests` lists the ids of the API messages replayed, one per
 request the real CLI would have made.
 
+Where this replay is not Claude Code (review of PR #95). A test written on it proves nothing
+about these three points; `tests/agents/push_backend.py` behaves like the CLI on the first two,
+and `tests/agents/test_g6_real_cli.py` (opt-in) runs the CLI itself.
+1. **It is pulled, the CLI pushes.** A step is replayed when the runner asks for the next
+   message, and a request takes no time unless the stream says so (`sleep`). The real CLI makes
+   its next request as soon as it can, whether or not the runner has dealt with the last
+   message: it can be several requests ahead of a runner that writes slowly.
+2. **By default the gate is asked about every tool name.** The real CLI asks its hooks only
+   about the tools it offers, which with `tools=[]` are the run's own app tools. A call to any
+   other name, a built-in one like Bash or one the model made up, it answers by itself
+   ("No such tool available"): the hook never hears of it, so the run stores no `tool_denied`
+   event for it and no gate can stop on it. The default here replays something else, a tool
+   that exists and is not allowed (the gate's defence in depth, which the product's recorded
+   streams and their tests rely on). A stream that says `"gate": "offered"` at its top level is
+   replayed as the CLI behaves: the gate is asked about the run's own tools only, and any other
+   call is answered at once with the CLI's error.
+3. **A result the replay makes up reports no usage** (interrupt, turn limit, hook stop, a
+   stream without its own result step). The real CLI's result is cumulative over the run.
+
 Partial messages (issue #33; facts and the recording in tasks/agents/todo.md). When the options
 ask for them (`include_partial_messages`), the replay also yields the `stream_event` messages
 the CLI prints, in the order recorded from the pinned CLI (2.1.286) against a stub API:
@@ -74,6 +93,8 @@ NAME_PATTERN = r"^[a-z][a-z0-9_]{0,40}$"
 DEFAULT_SCRIPT = "echo"
 PARTIAL_CHARS = 24
 PARTIAL_SLEEP_S = 0.02
+# How the pinned CLI answers, by itself, a call to a tool it does not offer.
+NO_SUCH_TOOL = "<tool_use_error>Error: No such tool available: {name}</tool_use_error>"
 
 
 class UnknownScriptError(LookupError):
@@ -132,6 +153,9 @@ class FakeBackend:
         # The API messages replayed, by id: one per request Claude Code would have made.
         self.seen_requests: list[str] = []
         self._hook_stopped = False
+        # Whether the gate is asked about every tool name (the default) or, as the CLI does,
+        # about the run's own tools only (`"gate": "offered"` in the stream).
+        self._gate_all = True
 
     async def interrupt(self) -> None:
         self._interrupted.set()
@@ -157,6 +181,10 @@ class FakeBackend:
         }
         script = load(request.script or DEFAULT_SCRIPT)
         steps: list[dict[str, Any]] = script["steps"]
+        asked = script.get("gate", "all")
+        if asked not in ("all", "offered"):
+            raise ValueError(f'a stream\'s "gate" is "all" or "offered", not {asked!r}')
+        self._gate_all = asked == "all"
         partial = bool(getattr(options, "include_partial_messages", False))
         recorded = any(_is_stream_event(step) for step in steps)
         pacing = script.get("partial") or {}
@@ -333,6 +361,14 @@ class FakeBackend:
 
     async def _call(self, request: BackendRequest, block: dict[str, Any]) -> dict[str, Any]:
         name, args, call_id = block["name"], block.get("input") or {}, block["id"]
+        if not self._gate_all and name not in request.tools.by_name:
+            # As the CLI: a tool it does not offer is answered by itself, no hook is asked.
+            return {
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": NO_SUCH_TOOL.format(name=name),
+                "is_error": True,
+            }
         verdict = await request.gate(
             {
                 "hook_event_name": "PreToolUse",
