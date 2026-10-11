@@ -112,8 +112,8 @@ Every change goes through a branch and a pull request ([CONTRIBUTING.md](CONTRIB
 (`.github/workflows/ci.yml`) runs on each pull request and push to `main`, in parallel jobs: api in
 two shards (ruff, pytest against Postgres and Redis), api coverage (both shards combined, at least
 95 percent, checked in that job), web checks (eslint, tsc, build), web Vitest in two shards, shell
-(shellcheck, `tests/deploy_test.sh`, the guard that every e2e spec is in a group), e2e in three
-groups (identity, sweep, apps; each on its own Compose stack built on its runner, the
+(shellcheck, `tests/deploy_test.sh`, the guard that every e2e spec is in a group), e2e in four
+groups (identity, sweep, apps, ingestion; each on its own Compose stack built on its runner, the
 Playwright journeys with throwaway accounts and a synthetic jobs import, never Harald's data) and
 pre-commit. Since 2026-10-10 the jobs are written for self-hosted runners on Harald's Mac (CI
 runners on the Mac, below), because the free minutes of GitHub's own machines were used up; the

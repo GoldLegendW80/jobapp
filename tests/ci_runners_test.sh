@@ -52,7 +52,7 @@ ok "deploy.yml: one job, on [self-hosted, jetson], no hosted minutes"
 # The gates of issue #83 that must survive the move: named so that removing one fails here.
 for gate in 'coverage report --fail-under=95' 'coverage combine .coverage.jobs .coverage.rest' \
   'python3 .github/scripts/e2e_groups.py' 'tests/deploy_test.sh' 'tests/ci_runners_test.sh' \
-  'pre-commit run --all-files' 'group: [identity, sweep, apps]' 'pytest -m docker' \
+  'pre-commit run --all-files' 'group: [identity, sweep, apps, ingestion]' 'pytest -m docker' \
   'ruff format --check' 'cancel-in-progress: true' 'max-parallel: 2' '-n "$PYTEST_WORKERS"' \
   '--maxWorkers="$VITEST_WORKERS"'; do
   grep -qF -- "$gate" .github/workflows/ci.yml || fail "ci.yml lost: $gate"

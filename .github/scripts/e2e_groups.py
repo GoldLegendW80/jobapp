@@ -2,12 +2,14 @@
 
     python3 .github/scripts/e2e_groups.py [repo root]
 
-The e2e job of .github/workflows/ci.yml names its spec files one by one (three groups on three
-runners), so a spec added later would run nowhere without anyone noticing. This check reads the
+The e2e job of .github/workflows/ci.yml names its spec files one by one (in groups, each on a
+runner), so a spec added later would run nowhere without anyone noticing. This check reads the
 workflow and fails when a web/e2e/*.spec.ts file is neither
 
-- named in a `playwright test` command of the workflow, or listed in the SPECS of a Playwright
-  config the workflow runs with `-c` (web/e2e/identity-all.config.ts), nor
+- named in a `playwright test` command of the workflow, or covered by a Playwright config the
+  workflow runs with `-c`: listed in its SPECS (web/e2e/identity-all.config.ts), or named with
+  its SPEC_PREFIX (web/e2e/ingestion-all.config.ts runs every ingestion-*.spec.ts, so a task of
+  that module adds a spec without touching the workflow), nor
 - listed in NOT_IN_CI below, with the reason it is not run there.
 
 It also fails on a spec the workflow runs twice, on a spec that is both run and excluded, and on a
@@ -47,6 +49,7 @@ SPEC = re.compile(
 )  # the file name, with or without a folder
 CONFIG = re.compile(r"-c\s+(e2e/[\w./-]+\.config\.ts)\b")
 SPECS_ARRAY = re.compile(r"\bSPECS\s*=\s*\[(.*?)\]", re.DOTALL)
+SPEC_PREFIX = re.compile(r"""\bSPEC_PREFIX\s*=\s*["']([\w-]+)["']""")
 
 
 def uncommented(text: str) -> str:
@@ -57,13 +60,22 @@ def uncommented(text: str) -> str:
 
 
 def config_specs(config: Path) -> list[str]:
-    """The spec files of a chained config: the names of its SPECS array, plus .spec.ts."""
-    found = SPECS_ARRAY.search(config.read_text(encoding="utf-8"))
-    if found is None:
-        raise ValueError(f"{config}: no SPECS array found")
-    return [
-        f"{name}.spec.ts" for name in re.findall(r"[\"']([\w-]+)[\"']", found.group(1))
-    ]
+    """The spec files a config runs: the names of its SPECS array plus .spec.ts, or, for a
+    config that takes every spec of one module, the files next to it whose name starts with its
+    SPEC_PREFIX."""
+    text = config.read_text(encoding="utf-8")
+    found = SPECS_ARRAY.search(text)
+    if found is not None:
+        return [
+            f"{name}.spec.ts"
+            for name in re.findall(r"[\"']([\w-]+)[\"']", found.group(1))
+        ]
+    prefix = SPEC_PREFIX.search(text)
+    if prefix is not None:
+        return sorted(
+            path.name for path in config.parent.glob(f"{prefix.group(1)}*.spec.ts")
+        )
+    raise ValueError(f"{config}: neither a SPECS array nor a SPEC_PREFIX found")
 
 
 def specs_in_ci(root: Path) -> list[str]:

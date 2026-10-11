@@ -321,11 +321,12 @@ jobs:
       - name: tests/tailscale_test.sh
         run: tests/tailscale_test.sh
 
-  # Browser journeys in three groups on three runners, each against its own scratch Compose stack
+  # Browser journeys in four groups, each on a runner against its own scratch Compose stack
   # (on the Mac in the runner's own Docker daemon: the same project name and port in each);
   # the worker runs with TEST_FAST_TIMERS (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts
   # is in one group or in the exclusion list of .github/scripts/e2e_groups.py, which fails the
-  # shell job otherwise.
+  # shell job otherwise. The ingestion group names a config, not its specs: it runs every
+  # web/e2e/ingestion-*.spec.ts, so a task of that module adds a spec without editing this file.
   # Images: every group builds them with buildx bake from the GitHub Actions layer cache, and
   # only one group (cache_write) writes that cache, so the three runners do not export the same
   # mode=max layers three times. On a cold cache (a Dockerfile, a lock file or a base image
@@ -341,7 +342,7 @@ jobs:
       # At most two stacks of one run at a time, also if a third runner is added.
       max-parallel: 2
       matrix:
-        group: [identity, sweep, apps]
+        group: [identity, sweep, apps, ingestion]
         include:
           - group: identity
             cache_write: true
@@ -460,6 +461,15 @@ jobs:
           pnpm exec playwright test jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts
           agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts
           --workers=1 --reporter=list,html
+      # Ingestion: documents (task G1: the page, uploads through Caddy up to 20 MiB, the api's
+      # memory with two uploads at once, logs free of content), then what later tasks add as
+      # web/e2e/ingestion-<task>.spec.ts (web/e2e/ingestion-all.config.ts runs them all).
+      - name: Ingestion journeys
+        if: matrix.group == 'ingestion'
+        working-directory: web
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/ingestion
+        run: pnpm exec playwright test -c e2e/ingestion-all.config.ts --reporter=list,html
       - name: Stack logs
         if: failure()
         run: |
