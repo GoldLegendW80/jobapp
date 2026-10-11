@@ -20,6 +20,11 @@
 # and a draft that is closed and reopened is still a draft. A merged pull request is (its state
 # is closed).
 #
+# Seen once, on 2026-10-11, with a draft pull request against another branch than main (#94):
+# after three pushes to its base GitHub kept reporting the merge commit of the old base for as
+# long as it was asked. The script then gives up after its wait with nothing changed, which is
+# its job; there only a commit on the branch gave a fresh run.
+#
 # Between the close and the reopen the pull request is closed for a moment. If the script is
 # stopped there (Ctrl C, a kill, a closed terminal), it asks GitHub for the state and reopens;
 # when that fails too it says, in capitals, that the pull request is closed, with the command.

@@ -47,8 +47,8 @@ state_before="$(checkout_state)"
 
 # The command of the CI step, read from the workflow: what follows `pre-commit` there.
 ci_args="$(sed -n 's/^        run: uvx --from pre-commit==[0-9.]* pre-commit \(run gitleaks-commits.*\)$/\1/p' "$ROOT/.github/workflows/ci.yml")"
-[[ "$ci_args" == "run gitleaks-commits --hook-stage manual" ]] ||
-  fail "ci.yml does not run the secret scan as expected (pre-commit run gitleaks-commits --hook-stage manual): '$ci_args'"
+[[ "$ci_args" == "run gitleaks-commits --hook-stage manual --verbose" ]] ||
+  fail "ci.yml does not run the secret scan as expected (pre-commit run gitleaks-commits --hook-stage manual --verbose): '$ci_args'"
 ci_precommit="$(sed -n 's/^        run: uvx --from \(pre-commit==[0-9.]*\) pre-commit run gitleaks-commits.*$/\1/p' "$ROOT/.github/workflows/ci.yml")"
 if [[ -n "${PRE_COMMIT:-}" ]]; then
   read -r -a precommit <<<"$PRE_COMMIT"

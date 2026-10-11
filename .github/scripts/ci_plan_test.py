@@ -1102,10 +1102,11 @@ class WorkflowTest(unittest.TestCase):
         report a pass that means nothing."""
         steps = steps_by_id(self.jobs["checks"])
         scan = steps["secrets"]
+        # --verbose: the log of the step says which commits were read, also when it passes.
         self.assertRegex(
             scan["run"],
             r"^uvx --from pre-commit==[\d.]+ pre-commit run gitleaks-commits "
-            r"--hook-stage manual$",
+            r"--hook-stage manual --verbose$",
         )
         self.assertEqual(scan.get("if"), "${{ !cancelled() }}")
         self.assertIn("CI_PUSH_BEFORE: ${{ github.event.before }}", scan.get("env", ""))

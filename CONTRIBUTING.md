@@ -86,7 +86,10 @@ as it is now plus the branch, then closes and reopens the pull request, which st
 request run on that commit; the branch gets no commit, so a review of its head stays valid.
 `gh run rerun` would test the old merge commit with the old workflow, `gh workflow run` the
 branch alone with its own copy of the workflow, and a close and reopen done by hand right after
-`main` moved the stale merge commit (README, What a CI run does). A new workflow
+`main` moved the stale merge commit (README, What a CI run does). When GitHub never reports
+a fresh merge commit (seen once, for a draft against another branch than `main`), the script
+gives up after two minutes with nothing changed, and a commit on the branch is what starts a
+fresh run. A new workflow
 file cannot use the Mac's runners until `ops/ci-runner/job-started.sh` allows it, and no job may
 target `self-hosted` alone: that label is also the Jetson's. Test jobs name their worker count
 (`PYTEST_WORKERS`, `VITEST_WORKERS`) and never ask for every core: the Mac is shared.

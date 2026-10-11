@@ -340,13 +340,13 @@ jobs:
       # .pre-commit-config.yaml pins, with its rules, on each commit of the pull request and on
       # the pull request as a whole; on main, on the commits of the push
       # (.github/scripts/secret_scan.sh; tests/secret_scan_test.sh plants a secret and expects
-      # this command to fail).
+      # this command to fail). --verbose: the log says which commits were read, also on a pass.
       - name: Secret scan of the commits of this run (gitleaks)
         id: secrets
         if: ${{ !cancelled() }}
         env:
           CI_PUSH_BEFORE: ${{ github.event.before }}
-        run: uvx --from pre-commit==4.6.2 pre-commit run gitleaks-commits --hook-stage manual
+        run: uvx --from pre-commit==4.6.2 pre-commit run gitleaks-commits --hook-stage manual --verbose
 
       # --- unit: shell ---------------------------------------------------------------------
       # Every step on its own: one failing script does not hide the others.

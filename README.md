@@ -255,17 +255,44 @@ shaped the new layout.
   CPUs, the api tests 2.1 to 3. So the fast, CPU bound checks sit in front of the e2e groups in
   two of the jobs, and the api suite has the third to itself.
 
-| job | what runs, in this order | the same steps in the old jobs | in the first run of this layout (38078877905) |
+| job | what runs, in this order | the same steps in the old jobs | now (run 38098708076) |
 |---|---|---|---|
-| `api` | ruff; the whole pytest suite in one run on 3 workers; the coverage floor (95 percent of that run's data); the docker marked tests; the scoring timing test | pytest 101 s and 146 s in two shards, docker tests 18 s, service containers 10 s | 255 s: pytest 216 s, docker tests 18 s, service containers 4 s |
-| `checks` | pre-commit and the secret scan of the run's commits; shellcheck and every `tests/*.sh` of CI, the e2e groups guard, the plan's own test; then the e2e group apps on its scratch stack | pre-commit 8 s, shell 46 s, apps 173 s of journeys, stack up in 12 s and down in 11 s | 320 s with the web checks still in it (34 s): pre-commit 8 s, shell 62 s, apps 182 s, stack up and migrated in 6 s, down in 1 s |
-| `journeys` | eslint, tsc, build; Vitest in one run; the e2e group identity, then the e2e group sweep, each on a scratch stack of its own | web checks 29 s, Vitest 34 s and 25 s in two shards, identity 114 s, sweep 68 s | 262 s without the web checks: Vitest 62 s, identity 112 s, sweep 48 s, each stack up in 5 s |
+| `api` | ruff; the whole pytest suite in one run on 3 workers; the coverage floor (95 percent of that run's data); the docker marked tests; the scoring timing test | pytest 101 s and 146 s in two shards, docker tests 18 s, service containers 10 s | 285 s: pytest 242 s, docker tests 18 s, service containers 5 s |
+| `checks` | pre-commit and the secret scan of the run's commits; shellcheck and every `tests/*.sh` of CI, the e2e groups guard, the plan's own test; then the e2e group apps on its scratch stack | pre-commit 8 s, shell 46 s, apps 173 s of journeys, stack up in 12 s and down in 11 s | 301 s: pre-commit 11 s, the secret scan under 1 s, shell 66 s, apps 185 s, stack up and migrated in 8 s, down in 1 s |
+| `journeys` | eslint, tsc, build; Vitest in one run; the e2e group identity, then the e2e group sweep, each on a scratch stack of its own | web checks 29 s, Vitest 34 s and 25 s in two shards, identity 114 s, sweep 68 s | 311 s: web checks 32 s, Vitest 63 s, identity 114 s, sweep 63 s, each stack up in 5 to 6 s |
 
-That first run took 13.9 minutes of runner time where the eleven jobs took 18 to 20. Which job
-holds which unit follows from its lengths: the api tests fill their job, the shell unit sits in
-`checks`, and the web checks moved from `checks` to `journeys` after it (255, about 286 and
-about 296 s). Moving a unit is a cut and paste of its steps and one line of `LANES` in
-`ci_plan.py`.
+Which job holds which unit follows from its lengths: the api tests fill their job, the shell
+unit sits in `checks`, and the web checks moved from `checks` to `journeys` after the first run
+(255, 320 and 262 s there). Moving a unit is a cut and paste of its steps and one line of
+`LANES` in `ci_plan.py`.
+
+**Measured, before and after** (2026-10-10 and 11, two runners online, each run started when no
+other run was queued unless said; runner time is the sum of the jobs):
+
+| case | before: eleven jobs | now: three jobs |
+|---|---|---|
+| a code pull request, everything runs | 13.3 and 14.3 min from start to result; 18.1 to 20.0 min of runner time in four runs | 8.7, 9.4 and 10.0 min; 13.3, 14.1 and 14.9 min of runner time (38080515377 twice, 38098708076). A fourth run took 11.9 and 22.8 min: GitHub's downloads stalled for 9 of them (a checkout of 394 s, a set up of 154 s) |
+| documentation only (`tasks/`) | everything: 19.1 min of runner time (#38, run 38073436439) | 44, 44 and 45 s; 0.9 min of runner time (38080574728, three times) |
+| the README alone | everything | 1.7 min; 1.9 min of runner time (38096293562) |
+| `web/` alone | everything | 5.7 min; 10.8 min of runner time (38096406836) |
+| a push to `main` (now: a manual run on the branch, the same plan) | 14.3 min; 20.0 min of runner time (38076641000) | 9.1, 9.2 and 9.4 min; 13.4, 13.9 and 14.7 min of runner time (38102580794, 38102061062, 38101529093) |
+| a pull request against another branch than `main` | everything | everything, by rule: 9.1 min; 13.8 min of runner time (38103107022, the probe #94 that ran pre-commit alone before the rule: one file under `tasks/`) |
+
+Per job, in seconds, the same steps in their old jobs and in their new one: `api` 336 (api
+(jobs) 129, api (rest) 190, api coverage 17) against 260, 266 and 285; `checks` 299 (pre-commit
+20, shell 57, e2e (apps) 222) against 281, 284 and 301; `journeys` 430 to 510 (web checks 52,
+Vitest 66 and 47, e2e (identity) 170 to 200, e2e (sweep) 92 to 144) against 258, 294 and 311.
+With two runners two jobs start at once and the third waits for the first to end, 258 to 289
+s, which is the whole queue time of a run; with the third runner all three start together and
+a run takes as long as its longest job, about 5 minutes (not measured: the third runner is not
+installed yet). During the full runs the load average of the Mac peaked between 4.0 and 8.0
+with agents at work beside CI (11.6 once, during a 44 s documentation run, so not CI's doing),
+a runner's memory between 2.0 and 3.5 GB, each runner used 0.3 to 1.6 of its 3 CPUs on average
+over a run, and the free disk space did not move by more than 1 GB across any run. One more
+manual run of the eleven jobs, on a branch at `main`'s head with the
+runners to itself, took 20.1 min and 34.6 min of runner time (38081748125): 11 of those minutes
+were two stalled downloads from GitHub, the kind of delay the layout cannot remove and three
+jobs meet three times instead of eleven.
 
 There is no fourth job that sums the three up. The first version had one, a gate that needed
 the three and checked their results: created when they ended, it queued behind every job other
@@ -423,7 +450,7 @@ cannot take more:
 | | per runner | three runners | what was measured |
 |---|---|---|---|
 | CPUs | 3, pinned (runner n: CPUs 3(n-1) to 3n-1) | 9 of Docker's 12 at most (macOS places Docker's virtual CPUs on the cores it likes) | the api tests used 2.1 to 3 CPUs, a Playwright group about 0.6, Vitest 1.2 to 2.3 for under a minute; so a whole run of the three jobs is expected at 4 to 6 cores' worth |
-| Memory | 4 GB, swap included | 12 GB of about 18 at most | in the samples of `docker stats`, every 10 s over the measured runs of the three jobs: up to 3.3 GB on a runner, and the peaks of two runners in one run add up to 5.2 to 5.9 GB; the kernel's own count (`memory.peak` of the runner's container, file cache included) stands at the 4 GB limit on both runners, which was reached 1,641 and 3,092 times in their first 3 hours and about 68 jobs each (`memory.events`, `max`) and answered by giving cache back each time: `oom` 0, `oom_kill` 0. Every job writes these counters to its summary |
+| Memory | 4 GB, swap included | 12 GB of about 18 at most | in the samples of `docker stats`, every 10 s over the measured runs of the three jobs: up to 3.5 GB on a runner, and the peaks of two runners in one run add up to 5.2 to 6.3 GB; the kernel's own count (`memory.peak` of the runner's container, file cache included) stands at the 4 GB limit on both runners, which was reached 1,641 and 3,092 times in their first 3 hours and about 68 jobs each (`memory.events`, `max`) and answered by giving cache back each time: `oom` 0, `oom_kill` 0. Every job writes these counters to its summary |
 | Disk | see the disk budget below | about 14 GB, 20 GB at most | 11.1 GB for two runners after eight full runs |
 
 That leaves Harald's own work and one agent's stack 3 of Docker's CPUs at all times and 6 or
@@ -433,7 +460,7 @@ and a newer push to the same branch cancels the older run. Inside a job the work
 written out in `ci.yml` (`PYTEST_WORKERS` and `VITEST_WORKERS`, 3 each, never "all cores";
 Playwright runs one worker). Why not more: a fourth runner would take the last 3 CPUs for a
 workflow that has three jobs, and 4 CPUs per runner would speed up only the api job, which is not
-the one the run waits for. Why not less memory: the samples reach 3.3 GB of the 4, and the
+the one the run waits for. Why not less memory: the samples reach 3.5 GB of the 4, and the
 limit is a ceiling, not a reservation, so lowering it frees nothing. Why not more: nothing was
 killed at 4 GB, and what fills it is file cache.
 
