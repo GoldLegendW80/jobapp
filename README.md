@@ -311,8 +311,11 @@ What changed inside the jobs, each with its measured effect:
 
 **The plan: what a pull request has to run.** The first step of each job
 (`.github/scripts/ci_plan.py`) reads the files the pull request changes (its merge commit against
-the base) and decides which units run: `api`, `web`, `shell`, `e2e`. The rules are a short list
-in that script, first match wins:
+`main`) and decides which units run: `api`, `web`, `shell`, `e2e`. Only a pull request against
+`main` is narrowed. One against another branch (a stacked pull request) runs everything: its
+files against that branch say nothing about what `main` receives, and changing its base to
+`main` later starts no run, so narrowed checks would stay green on code no run had tested. The
+rules are a short list in that script, first match wins:
 
 | the pull request touches only | units | why the rest may be skipped |
 |---|---|---|
@@ -322,8 +325,9 @@ in that script, first match wins:
 | `web/` | `web`, `shell`, `e2e` | no api file reads a file of `web/` (a test fails when one starts to) |
 | anything else, or a mix with anything else | all four | a path no rule names runs everything |
 
-A push to `main`, a manual run and any run where the changed files cannot be read for certain
-run everything: a green run on `main` is what deploys. Each job ends with `ci_plan.py verify`,
+A push to `main`, a manual run, a pull request whose base is not `main` and any run where the
+changed files cannot be read for certain run everything: a green run on `main` is what deploys.
+Each job ends with `ci_plan.py verify`,
 which fails it when a step the plan needed was skipped, or one it left out ran, so a wrong
 condition in the workflow cannot pass for a test that did not run; `ci_plan_test.py` checks the
 rules, their reasons on this repository (it found the README check above the day it was

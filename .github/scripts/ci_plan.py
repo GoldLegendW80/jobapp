@@ -13,11 +13,14 @@ The units of .github/workflows/ci.yml:
 
 pre-commit is no unit: it runs on every run, whatever changed.
 
-Only a pull request is ever narrowed. A push to main, a manual run and anything this script
-cannot read for certain run every unit: a green run on main is what deploys. A pull request is
-judged on the files of its merge commit against the base branch, each file by the first rule of
-RULES that matches it. A path no rule names runs every unit, so the rules only ever list what is
-known to be safe to skip, and a new folder is tested in full until someone decides otherwise.
+Only a pull request against main is ever narrowed. A push to main, a manual run and anything
+this script cannot read for certain run every unit: a green run on main is what deploys. So does
+a pull request against any other branch (a stacked one): its files against that branch say
+nothing about what main receives when the base is changed to main later, which starts no run,
+and the branch under it may never have had a green run of its own. A pull request against main
+is judged on the files of its merge commit against main, each file by the first rule of RULES
+that matches it. A path no rule names runs every unit, so the rules only ever list what is known
+to be safe to skip, and a new folder is tested in full until someone decides otherwise.
 
 Why each rule may skip what it skips is written next to it, and ci_plan_test.py holds the checks
 that keep those reasons true (no api file reads a file of web/, for instance).
@@ -40,6 +43,8 @@ from pathlib import Path
 UNITS = ("api", "web", "shell", "e2e")
 ALL = frozenset(UNITS)
 NONE: frozenset[str] = frozenset()
+# The one base branch against which a pull request may be narrowed (GITHUB_BASE_REF).
+DEFAULT_BRANCH = "main"
 
 # (pattern, units, why). First match wins. `*` also crosses `/` (fnmatch), so `tasks/*` is the
 # whole folder. A pattern without a slash and without a star names one file at the root.
@@ -109,6 +114,16 @@ def units_for(path: str) -> tuple[frozenset[str], str]:
     return ALL, "no rule names this path"
 
 
+def shown(text: str) -> str:
+    """A name from outside (a file, a branch) as printable text on one line. A file name may
+    hold a newline, and the rest of it would start a log line of its own: `::error::`, or any
+    other workflow command of the runner."""
+    return "".join(
+        char if char.isprintable() else char.encode("unicode_escape").decode("ascii")
+        for char in text
+    )
+
+
 def plan_for(paths: list[str]) -> tuple[frozenset[str], list[str]]:
     """The units a set of changed paths needs, and one line per path that asked for any."""
     needed: set[str] = set()
@@ -116,7 +131,7 @@ def plan_for(paths: list[str]) -> tuple[frozenset[str], list[str]]:
     for path in paths:
         units, why = units_for(path)
         if units:
-            notes.append(f"{path}: {', '.join(sorted(units))} ({why})")
+            notes.append(f"{shown(path)}: {', '.join(sorted(units))} ({why})")
         needed |= units
     return frozenset(needed), notes
 
@@ -155,10 +170,15 @@ def changed_paths(root: Path) -> list[str] | None:
     return [name for name in names.split("\0") if name]
 
 
-def decide(event: str, root: Path) -> tuple[frozenset[str], str, list[str]]:
-    """(units, one sentence saying why, detail lines) for this run."""
+def decide(event: str, base: str, root: Path) -> tuple[frozenset[str], str, list[str]]:
+    """(units, one sentence saying why, detail lines) for this run. `base` is the branch a pull
+    request is to be merged into (GITHUB_BASE_REF, empty for any other event)."""
     if event != "pull_request":
         return ALL, f"event {event or 'unknown'}: every unit runs", []
+    if base != DEFAULT_BRANCH:
+        against = shown(base) or "an unknown base"
+        sentence = f"a pull request against {against}, not against {DEFAULT_BRANCH}"
+        return ALL, f"{sentence}: every unit runs", []
     paths = changed_paths(root)
     if paths is None:
         return ALL, "the changed files could not be read: every unit runs", []
@@ -276,7 +296,11 @@ def main(argv: list[str]) -> int:
     if len(argv) > 1:
         print(__doc__, file=sys.stderr)
         return 2
-    units, sentence, notes = decide(os.environ.get("GITHUB_EVENT_NAME", ""), root)
+    units, sentence, notes = decide(
+        os.environ.get("GITHUB_EVENT_NAME", ""),
+        os.environ.get("GITHUB_BASE_REF", ""),
+        root,
+    )
     write_outputs(units, sentence, notes)
     return 0
 

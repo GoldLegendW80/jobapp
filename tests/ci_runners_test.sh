@@ -35,8 +35,16 @@ run() {
 out_has() { grep -qF -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 600 "$WORK/out")"; }
 log_has() { grep -qF -- "$1" "$WORK/docker.log" || fail "docker was not called with '$1': $(head -c 900 "$WORK/docker.log")"; }
 log_lacks() {
-  if grep -qF -- "$1" "$WORK/docker.log"; then fail "docker was called with '$1': $(grep -F -- "$1" "$WORK/docker.log" | head -n 3)"; fi
+  if grep -qF -- "$1" "$WORK/docker.log"; then fail "docker was called with '$1': $(grep -F -- "$1" "$WORK/docker.log" | sed -n '1,3p')"; fi
 }
+# pipe_has <grep arguments>: does the stream on stdin hold a match? grep reads the stream to its
+# end. Never `... | grep -q` in this file: grep -q leaves at the first match, the command before
+# it is killed by SIGPIPE while it still writes, and under pipefail the pipeline then says 141,
+# which an `if` reads as "no match": the check passes for the very text it looks for. With a file
+# as its argument instead of a pipe, grep -q is fine.
+pipe_has() { grep "$@" >/dev/null; }
+# code <files>: their lines that are not whole line comments.
+code() { grep -v '^ *#' "$@"; }
 
 step "where the jobs run: ci.yml on the Mac runners only, deploy.yml on the Jetson only"
 RUNS_ON='    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"'"'["self-hosted", "mac-ci"]'"'"') }}'
@@ -47,10 +55,16 @@ jobs_mac="$(grep -cxF -- "$RUNS_ON" .github/workflows/ci.yml)"
 ok "ci.yml: all $jobs_total jobs run on vars.CI_RUNS_ON, default [self-hosted, mac-ci] (never self-hosted alone)"
 [[ "$(grep -c '^    runs-on:' .github/workflows/deploy.yml)" == 1 ]] || fail "deploy.yml has more than one runs-on"
 grep -qx '    runs-on: \[self-hosted, jetson\]' .github/workflows/deploy.yml || fail "deploy.yml does not run on [self-hosted, jetson]"
-if grep -v '^ *#' .github/workflows/deploy.yml | grep -q 'ubuntu-latest\|mac-ci'; then fail "deploy.yml names a hosted or a Mac runner"; fi
+if code .github/workflows/deploy.yml | pipe_has 'ubuntu-latest\|mac-ci'; then fail "deploy.yml names a hosted or a Mac runner"; fi
 ok "deploy.yml: one job, on [self-hosted, jetson], no hosted minutes"
 # The gates that must survive every change of layout (issues #83 and #91): named so that
 # removing one fails here. .github/scripts/ci_plan_test.py checks that their steps follow the plan.
+# Looked for in the workflow without its comments: a command that was deleted and is still named
+# in a comment is gone.
+code .github/workflows/ci.yml >"$WORK/ci.code"
+printf '      # pytest -m gone\n      - run: echo kept\n' >"$WORK/sample.yml"
+if code "$WORK/sample.yml" | pipe_has 'pytest -m gone'; then fail "a gate named only in a comment would count"; fi
+code "$WORK/sample.yml" | pipe_has 'echo kept' || fail "the workflow's own lines are not read"
 for gate in 'coverage report --fail-under=95' 'pytest tests -m "not docker"' 'pytest -m docker' \
   'tests/jobs/test_scoring.py::test_long_text_is_bounded_and_fast' 'ruff check' 'ruff format --check' \
   'pnpm lint' 'pnpm typecheck' 'pnpm build' 'vitest run' \
@@ -62,19 +76,19 @@ for gate in 'coverage report --fail-under=95' 'pytest tests -m "not docker"' 'py
   'playwright test jobs-sweep.spec.ts' 'agents-streaming.spec.ts' \
   'cancel-in-progress: true' '-n "$PYTEST_WORKERS"' \
   '--maxWorkers="$VITEST_WORKERS"'; do
-  grep -qF -- "$gate" .github/workflows/ci.yml || fail "ci.yml lost: $gate"
+  grep -qF -- "$gate" "$WORK/ci.code" || fail "ci.yml lost: $gate"
 done
-if grep -v '^ *#' .github/workflows/ci.yml | grep -q -- '-n auto'; then fail "ci.yml lets pytest take every core"; fi
-if grep -v '^ *#' .github/workflows/ci.yml | grep -q 'continue-on-error'; then fail "ci.yml lets a step fail"; fi
+if grep -q -- '-n auto' "$WORK/ci.code"; then fail "ci.yml lets pytest take every core"; fi
+if grep -q 'continue-on-error' "$WORK/ci.code"; then fail "ci.yml lets a step fail"; fi
 # The run's result stands for every job only while no job can be skipped: none waits for another
 # and none has a condition of its own (step conditions are indented deeper).
-if grep -qE '^    (needs|if):' .github/workflows/ci.yml; then fail "a job of ci.yml waits for another or has a condition: it could be skipped"; fi
-ok "ci.yml keeps the coverage floor, the whole pytest suite and its docker and timing tests, the web checks, vitest, the three e2e groups and their guard, the shell tests, pre-commit, the plan's own test and verification, cancel in progress; no job that could be skipped; worker counts written out"
-if grep -v '^ *#' .github/workflows/ci.yml | grep -qi 'armcap'; then fail "ci.yml names the Mac's OpenSSL variable"; fi
-grep -q 'CI_COMPOSE_OVERLAY' .github/workflows/ci.yml || fail "ci.yml does not read the runner's CI_COMPOSE_OVERLAY"
+if grep -qE '^    (needs|if):' "$WORK/ci.code"; then fail "a job of ci.yml waits for another or has a condition: it could be skipped"; fi
+ok "ci.yml keeps the coverage floor, the whole pytest suite and its docker and timing tests, the web checks, vitest, the three e2e groups and their guard, the shell tests, pre-commit, the plan's own test and verification, cancel in progress (each looked for outside the comments); no job that could be skipped; worker counts written out"
+if grep -qi 'armcap' "$WORK/ci.code"; then fail "ci.yml names the Mac's OpenSSL variable"; fi
+grep -q 'CI_COMPOSE_OVERLAY' "$WORK/ci.code" || fail "ci.yml does not read the runner's CI_COMPOSE_OVERLAY"
 grep -q '^ENV OPENSSL_armcap=0 \\$' ops/ci-runner/Dockerfile || fail "ops/ci-runner/Dockerfile does not set OPENSSL_armcap=0"
 grep -q '^    CI_COMPOSE_OVERLAY=compose.mac.yml$' ops/ci-runner/Dockerfile || fail "ops/ci-runner/Dockerfile does not set CI_COMPOSE_OVERLAY"
-if grep -v '^ *#' ops/runner/Dockerfile ops/runner/entrypoint.sh | grep -qi 'armcap\|CI_COMPOSE_OVERLAY'; then
+if code ops/runner/Dockerfile ops/runner/entrypoint.sh | pipe_has -i 'armcap\|CI_COMPOSE_OVERLAY'; then
   fail "the Jetson runner (ops/runner) names a Mac only setting"
 fi
 # Issue #83, the leak that filled the Mac's disk: throwaway Postgres, Redis and caddy containers
@@ -85,7 +99,7 @@ fi
 if grep -n 'docker rm ' tests/tailscale_test.sh tests/compose_smoke.sh tests/e2e_jetson.sh tests/e2e_jobs_jetson.sh tests/e2e_jobs_sweep_jetson.sh | grep -v -- ' -v '; then
   fail "a test script removes a container without its volumes (docker rm -v)"
 fi
-grep -q 'down -v --remove-orphans' .github/workflows/ci.yml || fail "the e2e teardown does not remove its volumes"
+grep -q 'down -v --remove-orphans' "$WORK/ci.code" || fail "the e2e teardown does not remove its volumes"
 ok "test helpers and scripts remove containers with their anonymous volumes; the e2e teardown is down -v"
 ok "the Mac's OpenSSL workaround comes from the Mac runner image only, through CI_COMPOSE_OVERLAY; ci.yml and the Jetson runner never name it"
 
@@ -150,8 +164,19 @@ case "$1 ${2:-}" in
     if [[ "$*" == *" configure" || "$*" == *" remove" ]]; then cat >>"$FAKE_STDIN"; fi
     ;;
   "logs "*)
-    # What a runner's listener prints once it takes jobs, unless the test says it never does.
+    # What a runner's listener prints once it takes jobs, unless the test says it never does,
+    # and then what it prints for every job it ran: a few thousand lines, each written on its
+    # own, as on a runner that has been up for days. A reader that leaves at the first match
+    # kills this writer with SIGPIPE (status 141), which is how `listening` once read every
+    # healthy runner as "not listening" (review of #93).
     [[ "${FAKE_NOT_LISTENING:-}" == 1 ]] || printf '%s\n' "√ Connected to GitHub" "Current runner version: '2.338.0'" "2026-10-10 17:22:25Z: Listening for Jobs"
+    # 1,500 rounds are about 200 kB, more than a pipe holds: the writer is still writing when
+    # a hasty reader has left, on every machine, so the outcome is no race.
+    for i in $(seq 1 "${FAKE_LOG_ROUNDS:-1500}"); do
+      # `|| exit 141`: the same end where SIGPIPE is ignored and the write only fails.
+      echo "2026-10-10 17:3$((i % 10)):00Z: Running job: checks $i" 2>/dev/null || exit 141
+      echo "2026-10-10 17:4$((i % 10)):00Z: Job checks $i completed with result: Succeeded" 2>/dev/null || exit 141
+    done
     ;;
   "image inspect")
     [[ "$*" == *"{{.Id}}"* ]] && echo "sha256:new"
@@ -247,8 +272,10 @@ fake() { # fake <VAR=value...> -- <cmd...>: the command with the fakes first on 
   shift
   : >"$WORK/docker.log"
   : >"$WORK/stdin.log"
+  # CI_LISTEN_WAIT_S: the fake listener speaks at once, so a script that does not hear it fails
+  # here in seconds, not after the five minutes a real listener is given.
   env PATH="$WORK/bin:$PATH" FAKE_LOG="$WORK/docker.log" FAKE_STDIN="$WORK/stdin.log" \
-    FAKE_TOKEN="$CANARY" CI_RUNNER_DIR="$WORK/rd" ${envs[@]+"${envs[@]}"} "$@"
+    FAKE_TOKEN="$CANARY" CI_RUNNER_DIR="$WORK/rd" CI_LISTEN_WAIT_S=4 ${envs[@]+"${envs[@]}"} "$@"
 }
 
 step "job-started hook: this repository's ci.yml only, then a clean Docker daemon"
@@ -370,7 +397,7 @@ order="$(grep -nE '^(create --name|start|logs --since [^ ]+) jobapp-ci-[12]' "$W
 log_has "-v jobapp-ci-docker-2:/var/lib/docker"
 log_has "-e RUNNER_LABELS=mac-ci"
 log_has "-e RUNNER_URL=https://github.com/GoldLegendW80/jobapp"
-if grep -E '^(run|create) ' "$WORK/docker.log" | grep -q 'docker\.sock\|/Users\|/home/\|\$HOME'; then
+if grep -E '^(run|create) ' "$WORK/docker.log" | pipe_has 'docker\.sock\|/Users\|/home/\|\$HOME'; then
   fail "a runner container gets the host's Docker socket or a host folder"
 fi
 [[ -d "$WORK/rd/disk" && -z "$(ls -A "$WORK/rd/disk")" ]] || fail "the disk probe folder is missing or not empty"
@@ -387,7 +414,7 @@ ok "2 runners, one at a time, each heard listening before the next: token on std
 run 0 fake -- ops/ci-runners.sh install
 [[ "$(grep -c '^create --name ' "$WORK/docker.log")" == 3 ]] || fail "the default is not 3 runners"
 log_has "create --name jobapp-ci-3 --hostname mac-ci-3 --restart unless-stopped --privileged --cpuset-cpus 6-8 --memory 4g --memory-swap 4g"
-if grep '^create --name ' "$WORK/docker.log" | grep -vq -- '--cpuset-cpus [036]-[258] --memory 4g --memory-swap 4g'; then
+if grep '^create --name ' "$WORK/docker.log" | pipe_has -v -- '--cpuset-cpus [036]-[258] --memory 4g --memory-swap 4g'; then
   fail "a runner has no CPU set or no memory limit"
 fi
 run 0 fake HOME="$WORK/home-off" -- ops/ci-runners.sh install 1
@@ -407,7 +434,7 @@ step "update, start, stop and prune: idle runners only, known states only, liste
 # update: a container on an older image is recreated, but only once its runner is idle.
 untouched() { # no runner container was stopped, removed, created or started
   if grep -qE '^(stop|rm|create|start) ' "$WORK/docker.log"; then
-    fail "a runner container was touched: $(grep -E '^(stop|rm|create|start) ' "$WORK/docker.log" | head -n 3)"
+    fail "a runner container was touched: $(grep -E '^(stop|rm|create|start) ' "$WORK/docker.log" | sed -n '1,3p')"
   fi
 }
 run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_BUSY=1 FAKE_IMAGE=old -- env CI_UPDATE_WAIT_S=0 ops/ci-runners.sh update
@@ -474,6 +501,26 @@ run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=new -
 out_has "jobapp-ci-2: listening for jobs"
 run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_NOT_LISTENING=1 -- ops/ci-runners.sh status
 out_has "not listening for jobs"
+# A runner that has run jobs: its log goes on for thousands of lines after the listener's line.
+# First that the fake log is such a log: a reader that leaves at the first match ends the
+# pipeline with 141 (the reader is spelled through a variable, so that the check at the end of
+# this file, which forbids such pipes in the CI scripts, does not find this one).
+hasty=(grep -q 'Listening for Jobs')
+status=0
+fake -- docker logs --since 2026-10-10T17:22:00Z jobapp-ci-1 2>&1 | "${hasty[@]}" || status=$?
+[[ "$status" == 141 ]] || fail "the fake log does not go on after the listener's line (a hasty reader got $status, expected 141): the checks below would prove nothing"
+status=0
+fake -- docker logs --since 2026-10-10T17:22:00Z jobapp-ci-1 2>&1 | pipe_has 'Listening for Jobs' || status=$?
+[[ "$status" == 0 ]] || fail "a reader that reads the whole log got $status"
+[[ "$(fake -- docker logs --since x jobapp-ci-1 | wc -l)" -gt 3000 ]] || fail "the fake log is shorter than 3,000 lines"
+# Then the script itself, on that log: status says listening and exits 0, start hears both.
+run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=new -- ops/ci-runners.sh status
+out_has "jobapp-ci-1: running, restarts 0, listening for jobs; GitHub: 7 online false"
+out_has "jobapp-ci-2: running, restarts 0, listening for jobs; GitHub: 7 online false"
+if grep -q "not listening" "$WORK/out"; then fail "status reads a healthy runner with a long log as not listening"; fi
+run 0 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=new -- env CI_LISTEN_WAIT_S=0 ops/ci-runners.sh start
+out_has "jobapp-ci-1: listening for jobs"
+ok "listening: a runner whose log goes on for thousands of lines after \"Listening for Jobs\" is heard by status (exit 0) and by start, where a reader that leaves at the first match gets 141 from the same log"
 run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2 jobapp-ci-3" FAKE_LISTED=1 -- ops/ci-runners.sh install 2
 out_has "3 runners exist and 2 were asked for"
 log_lacks "build"
@@ -492,7 +539,7 @@ log_has "volume rm jobapp-ci-docker-2"
 log_has "volume rm jobapp-ci"
 log_has "image rm jobapp-ci-runner:$version"
 log_has "image rm jobapp-ci-runner:2.300.0"
-if grep -E '^(rm|volume rm|image rm|stop) ' "$WORK/docker.log" | grep -vE '^(stop -t 30 jobapp-ci-[0-9]+|rm -f jobapp-ci-[0-9]+|rm -v jobapp-ci-try[a-z0-9-]*|volume rm jobapp-ci(-docker-[0-9]+|-try[a-z0-9-]*)?|image rm jobapp-ci-runner:[0-9.]+)$' | grep -q .; then
+if grep -E '^(rm|volume rm|image rm|stop) ' "$WORK/docker.log" | pipe_has -vE '^(stop -t 30 jobapp-ci-[0-9]+|rm -f jobapp-ci-[0-9]+|rm -v jobapp-ci-try|volume rm jobapp-ci(-docker-[0-9]+|-try|-try-docker)?|image rm jobapp-ci-runner:[0-9.]+)$'; then
   fail "uninstall removed something that is not a CI runner object: $(grep -E '^(rm|volume rm|image rm) ' "$WORK/docker.log")"
 fi
 if grep -q 'prune' "$WORK/docker.log"; then fail "uninstall prunes"; fi
@@ -618,5 +665,26 @@ rerun 1 -- 7 --force
 rerun 1 --
 out_has "usage: ops/ci-rerun.sh"
 ok "a conflict, a closed pull request and bad arguments change nothing; a reopen that fails is tried three times and then says the pull request is closed"
+
+step "no pipe of the CI scripts ends in a reader that leaves early"
+# Under pipefail a pipe into `grep -q` (or -l, -L, -m) or into head says 141 when the writer is
+# still writing at the first match, whatever was found: `listening` in ops/ci-runners.sh read
+# healthy runners as deaf that way, and an `if` around such a pipe passes for the text it looks
+# for. So the scripts of CI and its workflow have none, comments aside. (The e in the pattern is
+# bracketed so that this line does not match itself.)
+early='\|[[:space:]]*(grep[[:space:]]+(-[A-Za-z]*[qlLm]|--quiet|--max-count|--files-with)|h[e]ad([[:space:]]|$))'
+scripts=(ops/ci-runners.sh ops/ci-rerun.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh
+  ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh
+  .github/scripts/ci_env.sh .github/workflows/ci.yml)
+# The samples are put together from parts, for the same reason.
+quiet='-q'
+reader='head'
+printf 'docker logs x | grep %s y\nexisting | %s -n 1\n# a comment: a | grep %s b\n' "$quiet" "$reader" "$quiet" >"$WORK/early.sh"
+[[ "$(code "$WORK/early.sh" | grep -cE "$early")" == 2 ]] || fail "the pattern does not find a pipe into grep -q and one into head"
+printf 'grep %s y file\nif a | grep y >/dev/null; then :; fi\n%s -c 600 file\n' "$quiet" "$reader" >"$WORK/early.sh"
+if code "$WORK/early.sh" | pipe_has -E "$early"; then fail "the pattern finds a reader that reads everything, or one that reads a file"; fi
+found="$(code "${scripts[@]}" | grep -E "$early" || true)"
+[[ -z "$found" ]] || fail "a pipe ends in a reader that leaves early (read the whole stream: grep ... >/dev/null, sed -n 1,3p): $found"
+ok "ops/ci-runners.sh, ops/ci-rerun.sh, the runner image's scripts, this test and ci.yml: no pipe into grep -q or head"
 
 printf '\nci_runners_test: %s checks passed\n' "$passed"

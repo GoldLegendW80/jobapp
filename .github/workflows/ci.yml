@@ -22,9 +22,10 @@
 # The numbers behind the split are in README, Continuous delivery.
 #
 # Plan: the first step of each job (.github/scripts/ci_plan.py) decides from the files a pull
-# request changes which units run: api, web, shell, e2e. Documentation alone runs pre-commit and
-# nothing else (the README also the shell unit, which checks it); web/ alone skips the api unit;
-# any other path, and every push to main and manual run, runs everything. Each job ends with
+# request against main changes which units run: api, web, shell, e2e. Documentation alone runs
+# pre-commit and nothing else (the README also the shell unit, which checks it); web/ alone
+# skips the api unit; any other path runs everything, and so do every push to main, every manual
+# run and every pull request against another branch than main (GITHUB_BASE_REF). Each job ends with
 # `ci_plan.py verify`, which fails it when a step the plan needed did not run or one it left out
 # did, so a wrong `if:` cannot pass for a skipped test.
 #

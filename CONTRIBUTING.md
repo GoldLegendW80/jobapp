@@ -30,7 +30,9 @@ in the job folder that holds this repository (it is not part of the repository).
    that touches documentation only (`tasks/`, `docs/`, the Markdown files at the root) runs
    pre-commit alone (the shell tests too when it touches `README.md`, which they check);
    one that touches `web/` only skips the api tests; anything else runs
-   everything, and so does every push to `main` (README, What a CI run does). A new
+   everything, and so does every push to `main` (README, What a CI run does). Only a pull
+   request against `main` is narrowed this way: one against another branch (stacked on an
+   unmerged pull request) runs everything, whatever it touches. A new
    `web/e2e/*.spec.ts` joins one of the e2e groups in the workflow, or the exclusion list of
    `.github/scripts/e2e_groups.py` with its reason; CI fails otherwise. A new check in `ci.yml`
    gets an `id`, a condition on its unit's plan output and a line in `LANES` of

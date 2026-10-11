@@ -307,13 +307,13 @@ class DecideTest(unittest.TestCase):
 
     def test_a_documentation_pull_request_runs_pre_commit_alone(self) -> None:
         root = self.repo({"tasks/todo.md": "new\n", "tasks/evidence/x/shot.png": "png"})
-        units, sentence, _ = ci_plan.decide("pull_request", root)
+        units, sentence, _ = ci_plan.decide("pull_request", "main", root)
         self.assertEqual(units, frozenset())
         self.assertIn("documentation only", sentence)
 
     def test_a_readme_pull_request_runs_the_shell_unit(self) -> None:
         root = self.repo({"README.md": "new\n", "tasks/todo.md": "new\n"})
-        units, sentence, notes = ci_plan.decide("pull_request", root)
+        units, sentence, notes = ci_plan.decide("pull_request", "main", root)
         self.assertEqual(units, frozenset({"shell"}))
         self.assertIn("shell", sentence)
         self.assertEqual(len(notes), 1)
@@ -326,35 +326,70 @@ class DecideTest(unittest.TestCase):
 
     def test_a_code_pull_request_runs_everything(self) -> None:
         root = self.repo({"README.md": "new\n", "api/app/main.py": "changed\n"})
-        self.assertEqual(ci_plan.decide("pull_request", root)[0], EVERYTHING)
+        self.assertEqual(ci_plan.decide("pull_request", "main", root)[0], EVERYTHING)
 
     def test_a_web_pull_request_skips_the_api_unit(self) -> None:
         root = self.repo({"web/src/App.tsx": "changed\n"})
         self.assertEqual(
-            ci_plan.decide("pull_request", root)[0], frozenset({"web", "shell", "e2e"})
+            ci_plan.decide("pull_request", "main", root)[0],
+            frozenset({"web", "shell", "e2e"}),
         )
 
     def test_a_deleted_file_counts(self) -> None:
         root = self.repo({"api/app/main.py": None})
-        self.assertEqual(ci_plan.decide("pull_request", root)[0], EVERYTHING)
+        self.assertEqual(ci_plan.decide("pull_request", "main", root)[0], EVERYTHING)
 
     def test_a_file_moved_out_of_the_code_counts_at_its_old_path(self) -> None:
         root = self.repo({}, renames={"api/app/main.py": "docs/main.py.md"})
         self.assertIn("api/app/main.py", ci_plan.changed_paths(root) or [])
-        self.assertEqual(ci_plan.decide("pull_request", root)[0], EVERYTHING)
+        self.assertEqual(ci_plan.decide("pull_request", "main", root)[0], EVERYTHING)
 
     def test_a_push_and_a_manual_run_run_everything_whatever_changed(self) -> None:
         root = self.repo({"tasks/todo.md": "new\n"})
         for event in ["push", "workflow_dispatch", "schedule", ""]:
-            units, sentence, _ = ci_plan.decide(event, root)
-            self.assertEqual(units, EVERYTHING, event)
-            self.assertIn("every unit runs", sentence)
+            for base in ["", "main"]:
+                units, sentence, _ = ci_plan.decide(event, base, root)
+                self.assertEqual(units, EVERYTHING, event)
+                self.assertIn("every unit runs", sentence)
+
+    def test_a_pull_request_against_another_branch_runs_everything(self) -> None:
+        """A stacked pull request: the same merge commit, the same one changed file under
+        tasks/, but the base is not main. Its files against that base say nothing about what
+        main gets when the base is changed to main, which starts no run (review of #93)."""
+        root = self.repo({"tasks/todo.md": "new\n"})
+        self.assertEqual(ci_plan.decide("pull_request", "main", root)[0], frozenset())
+        for base in [
+            "feature",
+            "platform/91-ci-fast",
+            "",
+            "Main",
+            "main ",
+            "refs/heads/main",
+            "main2",
+            "maintenance",
+        ]:
+            units, sentence, notes = ci_plan.decide("pull_request", base, root)
+            self.assertEqual(units, EVERYTHING, repr(base))
+            self.assertIn("not against main: every unit runs", sentence)
+            self.assertEqual(notes, [])
+        self.assertIn("an unknown base", ci_plan.decide("pull_request", "", root)[1])
+
+    def test_a_name_with_a_newline_stays_on_one_line(self) -> None:
+        """A file name is printed in the job's log: one with a newline must not start a line of
+        its own there, where `::error::` and the like are commands to the runner."""
+        name = "tasks/evidence/agents-a5/x\n::error::made up"
+        _, notes = ci_plan.plan_for([name])
+        self.assertEqual(len(notes), 1)
+        self.assertNotIn("\n", notes[0])
+        self.assertIn("x\\n::error::made up: shell", notes[0])
+        sentence = ci_plan.decide("pull_request", "x\n::warning::y", Path("."))[1]
+        self.assertNotIn("\n", sentence)
 
     def test_a_checkout_that_is_no_merge_commit_runs_everything(self) -> None:
         root = self.repo({"tasks/todo.md": "new\n"})
         git(root, "checkout", "-q", "feature")
         self.assertIsNone(ci_plan.changed_paths(root))
-        self.assertEqual(ci_plan.decide("pull_request", root)[0], EVERYTHING)
+        self.assertEqual(ci_plan.decide("pull_request", "main", root)[0], EVERYTHING)
 
     def test_a_shallow_checkout_without_the_parents_runs_everything(self) -> None:
         root = self.repo({"tasks/todo.md": "new\n"})
@@ -367,7 +402,7 @@ class DecideTest(unittest.TestCase):
             capture_output=True,
             env=CLEAN_ENV,
         )
-        self.assertEqual(ci_plan.decide("pull_request", shallow)[0], EVERYTHING)
+        self.assertEqual(ci_plan.decide("pull_request", "main", shallow)[0], EVERYTHING)
         # With the depth the workflow asks for, the same clone can be judged.
         deep = Path(tmp.name) / "clone2"
         subprocess.run(
@@ -376,12 +411,14 @@ class DecideTest(unittest.TestCase):
             capture_output=True,
             env=CLEAN_ENV,
         )
-        self.assertEqual(ci_plan.decide("pull_request", deep)[0], frozenset())
+        self.assertEqual(ci_plan.decide("pull_request", "main", deep)[0], frozenset())
 
     def test_no_git_repository_runs_everything(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        self.assertEqual(ci_plan.decide("pull_request", Path(tmp.name))[0], EVERYTHING)
+        self.assertEqual(
+            ci_plan.decide("pull_request", "main", Path(tmp.name))[0], EVERYTHING
+        )
 
     def test_the_command_writes_the_step_outputs(self) -> None:
         root = self.repo({"web/src/App.tsx": "changed\n"})
@@ -394,6 +431,7 @@ class DecideTest(unittest.TestCase):
         env = {
             **CLEAN_ENV,
             "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_BASE_REF": "main",
             "GITHUB_OUTPUT": str(out),
             "GITHUB_STEP_SUMMARY": str(summary),
         }
@@ -411,12 +449,25 @@ class DecideTest(unittest.TestCase):
         )
         self.assertIn("web,shell,e2e", summary.read_text(encoding="utf-8"))
         # The copied script is itself an unknown path in that repository, hence not committed.
-        env["GITHUB_EVENT_NAME"] = "push"
-        out.write_text("", encoding="utf-8")
-        subprocess.run(
-            [sys.executable, str(script)], capture_output=True, env=env, check=True
-        )
-        self.assertIn("plan=api,web,shell,e2e", out.read_text(encoding="utf-8"))
+        # The same pull request against another base, without a base, and as a push: everything.
+        everything = "plan=api,web,shell,e2e"
+        for change in [
+            {"GITHUB_BASE_REF": "platform/91-ci-fast"},
+            {"GITHUB_BASE_REF": ""},
+            {"GITHUB_BASE_REF": None},
+            {"GITHUB_EVENT_NAME": "push", "GITHUB_BASE_REF": None},
+            {"GITHUB_EVENT_NAME": "push"},
+        ]:
+            changed = {**env, **change}
+            changed = {k: v for k, v in changed.items() if v is not None}
+            out.write_text("", encoding="utf-8")
+            subprocess.run(
+                [sys.executable, str(script)],
+                capture_output=True,
+                env=changed,
+                check=True,
+            )
+            self.assertIn(everything, out.read_text(encoding="utf-8"), change)
 
     def test_an_unknown_argument_is_refused(self) -> None:
         done = subprocess.run(

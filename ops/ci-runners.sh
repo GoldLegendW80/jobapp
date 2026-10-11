@@ -52,7 +52,9 @@
 #
 # Settings (environment): CI_RUNNER_REPO (GoldLegendW80/jobapp), CI_RUNNER_MEMORY (4g, per
 # runner), CI_RUNNER_CPUS (CPUs per runner, 3), CI_RUNNER_MIN_FREE_GB (free space of the Mac's
-# disk below which install refuses; default 4 GB per runner plus 6).
+# disk below which install refuses; default 4 GB per runner plus 6), CI_LISTEN_WAIT_S (how long
+# a started container may take to say "Listening for Jobs", 300: a listener that had to wait
+# out the session of the container it replaced took 161 s on 2026-10-10).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -75,7 +77,7 @@ die() {
 step() { printf '\n== %s\n' "$*"; }
 info() { printf '   %s\n' "$*"; }
 
-runner_version() { sed -n 's/^ARG RUNNER_VERSION=//p' "$CONTEXT/Dockerfile" | head -n 1; }
+runner_version() { awk '/^ARG RUNNER_VERSION=/ { sub(/^ARG RUNNER_VERSION=/, ""); print; exit }' "$CONTEXT/Dockerfile"; }
 image() { printf 'jobapp-ci-runner:%s' "$(runner_version)"; }
 container() { printf 'jobapp-ci-%s' "$1"; }
 docker_volume() { printf 'jobapp-ci-docker-%s' "$1"; }
@@ -108,6 +110,13 @@ existing() {
     sed -n 's/^jobapp-ci-\([0-9][0-9]*\)$/\1/p' | sort -n
 }
 
+# The lowest of them, nothing when there is none.
+first_existing() {
+  local all
+  all="$(existing)"
+  printf '%s\n' "${all%%$'\n'*}"
+}
+
 # github_state <n>: "<id> <status> <busy>" of runner n on GitHub, nothing when GitHub does not
 # list it, and status 1 when GitHub did not answer. A failed call is "unknown": no caller may
 # read it as "idle", "not registered" or "gone" (each handles the status).
@@ -115,7 +124,7 @@ github_state() {
   local out
   out="$(gh api "repos/$REPO/actions/runners" --paginate \
     --jq ".runners[] | select(.name == \"$(runner_name "$1")\") | \"\(.id) \(.status) \(.busy)\"")" || return 1
-  printf '%s\n' "$out" | head -n 1
+  printf '%s\n' "${out%%$'\n'*}"
 }
 
 # known_state <n>: github_state, or stop: nothing is changed on a runner whose state is unknown.
@@ -186,7 +195,7 @@ wait_idle() {
 # replaces still held its session ("A session for this runner already exists") a run queued in
 # between was never assigned (2026-10-10, run 38071312967). So nothing returns before this line.
 wait_listening() {
-  local n="$1" limit="${CI_LISTEN_WAIT_S:-180}" deadline
+  local n="$1" limit="${CI_LISTEN_WAIT_S:-300}" deadline
   deadline=$((SECONDS + limit))
   until listening "$n"; do
     ((SECONDS < deadline)) || die "$(container "$n") did not say \"Listening for Jobs\" within ${limit}s: docker logs $(container "$n")"
@@ -196,10 +205,15 @@ wait_listening() {
 }
 
 # listening <n>: the log of the container since its last start holds the listener's line.
+# grep reads the log to its end, never `grep -q`: that one leaves at the first match, docker is
+# then killed by SIGPIPE while it writes the rest, and under pipefail the pipeline says 141, "not
+# listening", for every runner whose log goes on after the line, which is every runner that has
+# run a job (measured on both live runners on 2026-10-10, 6 tries of 6). The same holds for
+# every pipe in this script: its last command reads all it is given (`| head` is not used).
 listening() {
   local started
   started="$(docker inspect -f '{{.State.StartedAt}}' "$(container "$1")" 2>/dev/null)" || return 1
-  docker logs --since "$started" "$(container "$1")" 2>&1 | grep -q 'Listening for Jobs'
+  docker logs --since "$started" "$(container "$1")" 2>&1 | grep 'Listening for Jobs' >/dev/null
 }
 
 # refresh <n> <install|update>: leave a container that already runs the built image; recreate any
@@ -391,7 +405,7 @@ cmd_status() {
   local names=()
   for n in $(existing); do names+=("$(container "$n")"); done
   docker stats --no-stream --format '   {{.Name}}: {{.MemUsage}}, CPU {{.CPUPerc}}' "${names[@]}" 2>/dev/null || true
-  n="$(existing | head -n 1)"
+  n="$(first_existing)"
   if [[ "$(docker inspect -f '{{.State.Running}}' "$(container "$n")" 2>/dev/null)" == true ]]; then
     docker exec "$(container "$n")" bash -c 'du -sm /ci/cache/* /ci/runner-* 2>/dev/null | sed "s/^/   MB /"' || true
   fi
@@ -486,7 +500,7 @@ cmd_prune() {
     docker exec "$(container "$n")" bash -c 'docker system prune -af --volumes >/dev/null; docker builder prune -af >/dev/null; du -sm /var/lib/docker | cut -f1' |
       sed "s/^/   $(docker_volume "$n"): MB /"
   done
-  n="$(existing | head -n 1)"
+  n="$(first_existing)"
   [[ -n "$n" ]] || die "no runner installed"
   docker exec "$(container "$n")" bash -c 'rm -rf /ci/cache/* && echo "   /ci/cache emptied"'
 }
