@@ -2,25 +2,25 @@
 # milliseconds of CPU for one call, the best of five
 
 characters | prepare | find, present | find, absent | check_item, 3 excerpts
-   125,000 |    19.6 |         0.061 |        0.026 |     0.536
-   250,000 |    40.7 |         0.070 |        0.042 |     0.576
-   500,000 |    82.5 |         0.095 |        0.085 |     0.626
- 1,000,000 |   159.9 |         0.089 |        0.147 |     0.683
+   125,000 |    18.9 |         0.061 |        0.027 |     0.534
+   250,000 |    37.6 |         0.069 |        0.042 |     0.509
+   500,000 |    75.9 |         0.087 |        0.074 |     0.582
+ 1,000,000 |   151.4 |         0.084 |        0.146 |     0.672
 
-prepare, 500,000 against 125,000 characters: 4.2 times (4 when linear)
+prepare, 500,000 against 125,000 characters: 4.0 times (4 when linear)
 
 crafted documents of 500,000 characters | prepare | find (worst of 3 excerpts)
-                            one letter |    16.4 |    0.585
-                           two letters |    16.1 |    0.610
-                    letters and spaces |   199.7 |    0.113
-                               numbers |   201.4 |    0.584
-                         phone numbers |   148.1 |    0.607
-                     combining accents |   163.5 |    0.744
-                     marks without end |    65.3 |    0.651
-                          superscripts |   305.9 |    0.199
-                  ligature of eighteen |   140.6 |    0.000
-                               chinese |   236.1 |    0.179
-                              controls |   188.3 |    0.102
+                            one letter |    15.3 |    0.586
+                           two letters |    15.5 |    0.577
+                    letters and spaces |   194.9 |    0.112
+                               numbers |   194.9 |    0.573
+                         phone numbers |   138.8 |    0.544
+                     combining accents |   149.9 |    0.696
+                     marks without end |    61.3 |    0.644
+                          superscripts |   293.9 |    0.173
+                  ligature of eighteen |   131.6 |    0.001
+                               chinese |   224.1 |    0.148
+                              controls |   182.2 |    0.105
 
 memory of prepare(500,000 characters): peak 8.7 MB, kept 4.8 MB (9.6 bytes per character)
 N holds 500,000 characters, S 429,821
