@@ -2,8 +2,8 @@
 
     python3 .github/scripts/e2e_groups.py [repo root]
 
-The e2e job of .github/workflows/ci.yml names its spec files one by one (three groups on three
-runners), so a spec added later would run nowhere without anyone noticing. This check reads the
+The e2e groups of .github/workflows/ci.yml name their spec files one by one (three groups, in
+the jobs checks and journeys), so a spec added later would run nowhere without anyone noticing. This check reads the
 workflow and fails when a web/e2e/*.spec.ts file is neither
 
 - named in a `playwright test` command of the workflow, or listed in the SPECS of a Playwright
@@ -12,7 +12,7 @@ workflow and fails when a web/e2e/*.spec.ts file is neither
 
 It also fails on a spec the workflow runs twice, on a spec that is both run and excluded, and on a
 name (run or excluded) that has no file any more. Exit status 0 when all is in order, 1 otherwise.
-Run by the shell job of CI and by pre-commit; tested by e2e_groups_test.py.
+Run by the shell unit of CI (job checks) and by pre-commit; tested by e2e_groups_test.py.
 """
 
 from __future__ import annotations

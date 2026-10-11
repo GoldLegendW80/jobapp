@@ -1,9 +1,11 @@
 """/api/agents: the agents a user may start, and their runs (SPEC-agents.md, API).
 
 - GET /api/agents: the agents available here (test agents only outside production), without the
-  chat agents, which start from a thread only (app/agents/chat_router.py; 422 here).
+  chat agents, which start from a thread only (app/agents/chat_router.py; 422 here), and without
+  the internal agents, which only their own module starts (ingestion G6).
 - POST /api/agents/runs {agent, job_id?, input}: 202 with the queued run. 422 when the agent is
-  unknown here, the input does not fit it (the message names the field) or the agent needs a
+  unknown here (an internal agent is, in the same words: this route never starts one), the
+  input does not fit it (the message names the field) or the agent needs a
   job and none is named (triage); 404 when job_id is
   not one of the caller's jobs; 409 without a saved model credential; 429 when the caller already
   has runs.ACTIVE_PER_USER queued or running; 503 when the server has no CREDENTIALS_KEY or the
@@ -211,9 +213,9 @@ def list_agents(user: CurrentUser, request: Request) -> AgentList:
                 test_only=agent.test_only,
                 needs_job=agent.needs_job,
             )
-            for agent in definitions.available(env).values()
-            # A chat agent starts from its thread (app/agents/chat_router.py), not from here.
-            if not agent.chat
+            # Not the chat agents, which start from their thread (app/agents/chat_router.py),
+            # nor the internal ones, which their own module starts.
+            for agent in definitions.listed(env)
         ]
     )
 
@@ -273,7 +275,8 @@ def _fail_queued(sessions: sessionmaker[Session], run_id: uuid.UUID, now: dateti
 async def start_run(body: RunIn, user: CurrentUser, request: Request) -> RunOut:
     """Queue a run of `agent` for the caller. Follow it with GET /api/agents/runs/{id}."""
     try:
-        agent = definitions.get(body.agent, request.app.state.settings.app_env)
+        # An internal agent is unknown here: only its own module starts it (runs.create_run).
+        agent = definitions.startable(body.agent, request.app.state.settings.app_env)
     except definitions.UnknownAgentError:
         raise HTTPException(status_code=422, detail=UNKNOWN_AGENT) from None
     if agent.chat:

@@ -9,17 +9,21 @@ which the settings refuse in production, and this function refuses again when AP
 production, so no configuration mistake can put recorded answers in front of a real user.
 """
 
+import asyncio
 import contextlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
+from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, ResultMessage
 
 from app.agents.tools import AppTools
 from app.config import Settings
 
 Gate = Callable[[dict[str, Any], str | None, Any], Awaitable[dict[str, Any]]]
+# How long the interrupt sent before a turn is cut may take (the pinned CLI acknowledges one
+# in a few milliseconds); after that the process is closed whatever it answered.
+INTERRUPT_BEFORE_CLOSE_S = 2.0
 
 
 class FakeInProductionError(RuntimeError):
@@ -51,7 +55,16 @@ class Backend(Protocol):
 
 
 class SdkBackend:
-    """The real model, through the Claude Agent SDK. One instance per run."""
+    """The real model, through the Claude Agent SDK. One instance per run.
+
+    A stream that is closed before its result message arrived (the worker is stopping, the
+    run is cut after its grace, the runner failed) leaves a turn that may still be going on.
+    Closing the SDK client does not stop that turn: the SDK closes the CLI's input and gives
+    the process five seconds to leave by itself, and meanwhile the CLI goes on, every hook and
+    every app tool now failing, each failure answered by a new request to the model. Measured
+    on the pinned CLI (tasks/ingestion/todo.md, Measurements, G6): closed in the middle of a
+    loop against an instant stub, it sent all six requests the loop still held; interrupted
+    first, none. So the turn is interrupted before the client is closed."""
 
     def __init__(self) -> None:
         self._client: ClaudeSDKClient | None = None
@@ -59,18 +72,26 @@ class SdkBackend:
     async def stream(self, request: BackendRequest) -> AsyncIterator[Any]:
         client = ClaudeSDKClient(options=request.options)
         self._client = client
+        ended = False
         try:
             await client.connect()
             await client.query(request.prompt)
             # receive_response() ends after the ResultMessage (SDK docs). Never `break` out of
             # it: the SDK warns that breaking early can leave its tasks half cleaned up.
             async for message in client.receive_response():
+                ended = ended or isinstance(message, ResultMessage)
                 yield message
         finally:
             self._client = None
-            # disconnect() terminates the CLI process (SubprocessCLITransport.close).
-            with contextlib.suppress(Exception):
-                await client.disconnect()
+            try:
+                if not ended:
+                    # Fails at once when Claude Code never started or is gone already.
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(client.interrupt(), INTERRUPT_BEFORE_CLOSE_S)
+            finally:
+                # disconnect() terminates the CLI process (SubprocessCLITransport.close).
+                with contextlib.suppress(Exception):
+                    await client.disconnect()
 
     async def interrupt(self) -> None:
         client = self._client

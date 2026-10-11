@@ -87,9 +87,17 @@ def _host_port(name: str, timeout: float = 10) -> int:
         time.sleep(0.2)
 
 
-def start_postgres(port: int | None = None) -> Postgres:
+# The settings that make a throwaway server fast: no fsync, no wait for the WAL, no full page
+# images. Its data is deleted with the container, so durability buys nothing, and the TRUNCATE
+# after each test drops from about 87 ms to about 38 ms (issue #91). Never for a server a test
+# stops, pauses or restarts on purpose: those keep the defaults.
+NO_DURABILITY = ("fsync=off", "synchronous_commit=off", "full_page_writes=off")
+
+
+def start_postgres(port: int | None = None, *, durable: bool = True) -> Postgres:
     name = f"jobapp-test-pg-{uuid.uuid4().hex[:8]}"
     publish = f"127.0.0.1:{port}:5432" if port else "127.0.0.1::5432"
+    settings = [arg for setting in (() if durable else NO_DURABILITY) for arg in ("-c", setting)]
     docker(
         "run", "-d", "--name", name,
         "-e", f"POSTGRES_USER={USER}",
@@ -97,6 +105,7 @@ def start_postgres(port: int | None = None) -> Postgres:
         "-e", f"POSTGRES_DB={DATABASE}",
         "-p", publish,
         IMAGE,
+        *settings,
     )  # fmt: skip
     pg = Postgres(name=name, port=_host_port(name))
     try:
