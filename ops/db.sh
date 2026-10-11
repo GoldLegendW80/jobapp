@@ -153,10 +153,20 @@ LOCKED=0
 take_lock() {
   ((LOCKED == 0)) || return 0
   mkdir -p "$BACKUP_DIR"
-  chmod 700 "$BACKUP_DIR"
-  exec 9>"$BACKUP_DIR/.lock"
+  # Not through a symbolic link: the mode of a folder that is somewhere else is not ours to set.
+  [[ -L "$BACKUP_DIR" ]] || chmod 700 "$BACKUP_DIR"
+  { exec 9>"$BACKUP_DIR/.lock"; } 2>/dev/null ||
+    die "cannot open the lock file $BACKUP_DIR/.lock (its mode, or what it is): no backup, nothing deleted"
   flock -n 9 || die "another backup or restore is running on this host (lock $BACKUP_DIR/.lock), try again when it ends"
   LOCKED=1
+}
+
+# linked_dir: true when $BACKUP_DIR itself is a symbolic link. A dump is still written through it
+# (a backup that is refused is worse than one in a linked folder), but nothing is ever deleted
+# through a link, so no rule applies there, and every run and `retention` say it.
+linked_dir() {
+  [[ -L "$BACKUP_DIR" ]] || return 1
+  info "left alone: $BACKUP_DIR is a symbolic link. Nothing is deleted through a link, so no retention applies to what it points to: make it a real folder"
 }
 
 # Files to remove, and the api and the worker to start again if the script stops half way,
@@ -247,8 +257,10 @@ dump_day() {
 }
 
 # scan <dir>: DUMPS gets the dumps of <dir> (regular files with a dump's name), oldest first, and
-# ODD every other entry, except the files this script and the deploy keep there. Names only, one
-# level, never through a symbolic link: a link is not a dump, whatever it is called.
+# ODD every other entry, except what this script and the deploy keep there themselves: the two
+# lock files, backup.log, the folders deploys, incoming and previous-tree, and the
+# previous-tree.rsyncignore that ops/previous.sh writes next to that folder at every deploy.
+# Names only, one level, never through a symbolic link: a link is not a dump, whatever it is called.
 DUMPS=()
 ODD=()
 scan() {
@@ -269,7 +281,7 @@ scan() {
       esac
     else
       case "$name" in
-        .lock | .deploy.lock | backup.log) ;;
+        .lock | .deploy.lock | backup.log | previous-tree.rsyncignore) ;;
         *) ODD+=("$name") ;;
       esac
     fi
@@ -348,12 +360,18 @@ scratch_note() {
 # rotate: after do_backup, and only then. The day everything is measured from is the one in the
 # name of the dump this run wrote, so there is no rotation without a verified dump, and that dump
 # is the one thing no rule deletes: the newest verified dump of the whole tree.
+ROTATE_TROUBLE="" # why the rotation is not complete, when it is not: cmd_backup ends non zero on it
 rotate() {
   local fresh="${BACKUP_FILE##*/}" ref sub dir
   if [[ ! -f "$BACKUP_FILE" || -L "$BACKUP_FILE" ]] || ! dump_day "$fresh"; then
     die "no verified dump from this run to measure ages from, nothing deleted"
   fi
   ref="$DUMP_DAY"
+  if linked_dir; then
+    scratch_note
+    promise_note
+    return 0
+  fi
   rotate_dir "$BACKUP_DIR" 1 "$ref" "$fresh"
   for sub in deploys incoming; do
     dir="$BACKUP_DIR/$sub"
@@ -365,10 +383,17 @@ rotate() {
     if [[ "$sub" == deploys ]]; then
       # A predeploy backup, or a restore run from that folder, holds its lock: never under them.
       # (The other way round, a deploy that asks for this lock in the instant it is held here is
-      # refused like any second backup, and is run again.)
-      if ! exec 8>>"$dir/.lock" || ! flock -n 8; then
+      # refused like any second backup, and is run again.) A lock file that cannot be opened is
+      # another matter: nothing holds it, the age rule would never run there again, so the run
+      # says what it is and ends non zero once the rest is done.
+      if ! { exec 8>>"$dir/.lock"; } 2>/dev/null; then
+        ROTATE_TROUBLE="cannot open the lock file $dir/.lock (its mode, or what it is): nothing was deleted in $dir and nothing will be until that is put right"
+        info "skipped $dir: $ROTATE_TROUBLE"
+        continue
+      fi
+      if ! flock -n 8; then
         info "skipped $dir: a backup or a restore holds its lock, the next run deletes what is too old there"
-        exec 8>&- || true
+        exec 8>&-
         continue
       fi
       rotate_dir "$dir" 0 "$ref" ""
@@ -478,12 +503,14 @@ cmd_backup() {
   do_backup "$tag"
   rotate
   printf 'backup=%s\n' "$BACKUP_FILE"
+  [[ -z "$ROTATE_TROUBLE" ]] || die "the dump is written and kept, but the rotation is not complete: $ROTATE_TROUBLE"
 }
 
 # cmd_prune: the count rule in $BACKUP_DIR, as before T10. No dump was written by this run, so
 # there is no day to measure ages from and nothing is deleted by age.
 cmd_prune() {
   take_lock
+  if linked_dir; then return 0; fi
   rotate_dir "$BACKUP_DIR" 1 "" ""
   info "prune applies the count rule alone: only a backup, once its dump is verified, deletes by age"
 }
@@ -492,14 +519,18 @@ cmd_prune() {
 # where it comes from, the newest and the oldest dump of each folder against today's UTC date,
 # what is left alone, the scratch database. Changes nothing and takes no lock.
 cmd_retention() {
-  local today dir n newest oldest note
+  local today dir n i newest oldest note ahead ahead_name
   dump_day "jobapp-$(date -u +%Y-%m-%dT%H%M%S).dump" || die "cannot read today's date from the clock"
   today="$DUMP_DAY"
   info "retention: BACKUP_KEEP=$KEEP ($KEEP_FROM). After each verified backup the newest $KEEP dumps of $BACKUP_DIR stay, and a dump whose name is $KEEP days old or more is deleted, there, in deploys/ and in incoming/"
   promise_note
+  if linked_dir; then
+    scratch_note
+    printf 'keep=%s\n' "$KEEP"
+    return 0
+  fi
   for dir in "$BACKUP_DIR" "$BACKUP_DIR/deploys" "$BACKUP_DIR/incoming"; do
-    # As rotate does: $BACKUP_DIR is the folder the operator named, the two others are folders
-    # of dumps only when they are real folders.
+    # As rotate does: a folder of dumps is a real folder, never a symbolic link.
     if [[ "$dir" != "$BACKUP_DIR" ]] && [[ -L "$dir" || (-e "$dir" && ! -d "$dir") ]]; then
       info "left alone: $dir is a symbolic link or a file, not a folder of dumps"
       continue
@@ -507,19 +538,37 @@ cmd_retention() {
     [[ -d "$dir" ]] || continue
     scan "$dir"
     n=${#DUMPS[@]}
+    # Ages are taken from the dumps named up to today. One named ahead of today (a clock that was
+    # wrong) is counted and named apart: it has no age yet, and it must not hide a week without a
+    # backup behind a date in the future.
+    newest="" ahead=0 ahead_name=""
+    for ((i = 0; i < n; i++)); do
+      dump_day "${DUMPS[$i]}"
+      if ((DUMP_DAY > today)); then
+        ahead=$((ahead + 1))
+        ahead_name="${DUMPS[$i]}"
+      else
+        newest=$((today - DUMP_DAY))
+      fi
+    done
     if ((n == 0)); then
       info "$dir: no dump"
+    elif [[ -z "$newest" ]]; then
+      info "$dir: $n dump(s), every one named ahead of today (a clock was wrong), the last $ahead_name: none goes before its date has passed, sooner by hand"
     else
       dump_day "${DUMPS[0]}"
       oldest=$((today - DUMP_DAY))
-      dump_day "${DUMPS[$((n - 1))]}"
-      newest=$((today - DUMP_DAY))
       note=""
       ((oldest < KEEP)) || note=", PAST the limit of $KEEP days: the next verified backup deletes it"
-      info "$dir: $n dump(s), the newest $newest day(s) old, the oldest $oldest day(s) old (${DUMPS[0]})$note"
-      # In the folder of the nightly run a newest dump of two days or more means that run failed
-      # or did not happen, and then nothing is deleted anywhere.
-      if [[ "$dir" == "$BACKUP_DIR" ]] && ((newest >= 2)); then
+      ((ahead == 0)) || note="$note; $ahead more named ahead of today (a clock was wrong), the last $ahead_name: it goes once its date has passed, sooner by hand"
+      info "$dir: $((n - ahead)) dump(s), the newest $newest day(s) old, the oldest $oldest day(s) old (${DUMPS[0]})$note"
+    fi
+    # In the folder of the nightly run a newest dump of two days or more, or none dated up to
+    # today, means that run failed or did not happen, and then nothing is deleted anywhere.
+    if [[ "$dir" == "$BACKUP_DIR" ]] && ((n > 0)); then
+      if [[ -z "$newest" ]]; then
+        info "WARNING: no verified backup in $dir dated up to today: nothing is deleted until one succeeds"
+      elif ((newest >= 2)); then
         info "WARNING: no verified backup in $dir for $newest days: nothing is deleted until one succeeds"
       fi
     fi

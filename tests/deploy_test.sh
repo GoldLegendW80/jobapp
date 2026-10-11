@@ -1210,14 +1210,27 @@ only incoming
 out_has "skipped $ROT/backups/deploys: a backup or a restore holds its lock"
 ok "deploys/ is left alone while a predeploy backup or a restore holds its lock: exit 0, the folder of the run still rotated"
 rot_new
-seed "$(d 9)" "deploys/$(d 9 predeploy-aaaaaaaaaaaa)"
-mkdir "$ROT/backups/deploys/.lock" # a lock that cannot even be opened
-rot 0 "$NOW"
+seed "$(d 9)" "deploys/$(d 9 predeploy-aaaaaaaaaaaa)" "incoming/$(d 9)"
+mkdir "$ROT/backups/deploys/.lock" # a lock file that cannot be opened: here it is a folder
+rot 1 "$NOW"
 only . "$(d 0)"
 only deploys "$(d 9 predeploy-aaaaaaaaaaaa)"
-out_has "skipped $ROT/backups/deploys: a backup or a restore holds its lock"
+only incoming
+out_has "skipped $ROT/backups/deploys: cannot open the lock file $ROT/backups/deploys/.lock"
+grep -q "holds its lock" "$WORK/out" && fail "a lock file that cannot be opened is reported as held: $(cat "$WORK/out")"
 out_has "^backup=$ROT/backups/$(d 0)$"
-ok "a lock of deploys/ that cannot be taken at all is the same: nothing is deleted there without it, and the backup still ends well"
+out_has "db.sh: the dump is written and kept, but the rotation is not complete: cannot open the lock file $ROT/backups/deploys/.lock"
+ok "a lock file of deploys/ that cannot be opened is said as what it is, not as held: nothing is deleted there, the rest of the run is done, the dump is reported, and the run ends with exit 1 so that it is seen"
+rot_new
+seed "$(d 30)" "$(d 20)"
+rm -f "$ROT/backups/.lock"
+mkdir "$ROT/backups/.lock"
+before="$(tree_of)"
+rot 1 "$NOW"
+out_has "db.sh: cannot open the lock file $ROT/backups/.lock"
+no_delete "$before"
+[[ ! -s "$ROT/order" ]] || fail "a dump was made without the lock: $(cat "$ROT/order")"
+ok "the run's own lock file that cannot be opened: no dump, nothing deleted, exit 1 with the reason instead of bash's raw error"
 if command -v flock >/dev/null; then
   # The same with the real flock: this script holds the lock of deploys/ (descriptor 7) during
   # the run, as a predeploy backup or a restore from that folder would.
@@ -1250,6 +1263,10 @@ nl=$'jobapp-2026-09-04T000000.dump\njobapp-2026-09-05T000000.dump'
 printf 'a name with a line break\n' >"$ROT/backups/$nl"
 printf 'log\n' >"$ROT/backups/backup.log"
 mkdir "$ROT/backups/jobapp-2026-09-02T000000.dump" "$ROT/backups/previous-tree"
+# What every deploy leaves next to the dumps (deploy.yml, ops/previous.sh save-tree): passed over.
+printf '.env*\n' >"$ROT/backups/previous-tree.rsyncignore"
+printf 'name: previous release\n' >"$ROT/backups/previous-tree/compose.yml"
+: >"$ROT/backups/.deploy.lock"
 printf 'inside a folder\n' >"$ROT/backups/jobapp-2026-09-02T000000.dump/inside"
 printf 'a file outside the backup folder\n' >"$ROT/outside/precious.dump"
 ln -s "$ROT/outside/precious.dump" "$ROT/backups/jobapp-2026-09-03T000000.dump"
@@ -1273,13 +1290,57 @@ done
 grep -qF "left alone in $ROT/backups/incoming, not a dump of this script: local-truncated.dump (outside the retention, delete it by hand)" "$WORK/out" ||
   fail "the odd upload is not reported: $(cat "$WORK/out")"
 out_has "left alone: $ROT/backups/deploys is a symbolic link or a file, not a folder of dumps"
-grep -q "not a dump of this script: \(backup\.log\|\.lock\|previous-tree\|incoming\)" "$WORK/out" && fail "the script reports its own files: $(cat "$WORK/out")"
+grep -q "not a dump of this script: \(backup\.log\|\.lock\|\.deploy\.lock\|previous-tree\|incoming\)" "$WORK/out" &&
+  fail "the script reports files the app keeps there itself (the review's N1: previous-tree.rsyncignore): $(cat "$WORK/out")"
+[[ -f "$ROT/backups/previous-tree.rsyncignore" && -f "$ROT/backups/previous-tree/compose.yml" ]] || fail "the saved tree of the deploy was touched"
 [[ "$(grep -c "^rm -f -- " "$ROT/order")" == 2 ]] || fail "more than the two old dumps reached rm: $(cat "$ROT/order")"
 ok "left alone and reported, run after run: no timestamp, a date that does not exist, another suffix or prefix, an upper case tag, a partial file, a name with a line break, a folder and a symbolic link named like old dumps (the file it points to untouched), a deploys/ that is a link"
 rot 0 "$NOW" -- retention
 out_has "left alone: $ROT/backups/deploys is a symbolic link or a file, not a folder of dumps"
 grep -qF "left alone in $ROT/backups, not a dump of this script: jobapp-latest.dump" "$WORK/out" || fail "retention does not list what is left alone: $(cat "$WORK/out")"
 ok "retention lists the same files and the same link, so status shows what sits outside the rotation"
+
+# The review's B2: the folder of the run can itself be the link, and that is what the deploy's own
+# command line makes of a linked deploys/. The dump is written through it; nothing is deleted
+# through it, by age or by count, and the mode of the folder it points to is not touched.
+real_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+names_in() { (cd "$1" && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' '); }
+rot_new
+mkdir "$ROT/outside/elsewhere"
+chmod 755 "$ROT/outside/elsewhere"
+printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 30 predeploy-aaaaaaaaaaaa)"
+printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 20 predeploy-bbbbbbbbbbbb)"
+for h in 01 02 03 04 05 06 07 08; do
+  printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 1 "predeploy-aaaaaaaaaa$h" "${h}0000")"
+done
+printf 'not a dump\n' >"$ROT/outside/elsewhere/keep.txt"
+ln -s "$ROT/outside/elsewhere" "$ROT/backups/deploys"
+elsewhere="$(cd "$ROT/outside/elsewhere" && find . -mindepth 1 ! -name .lock | LC_ALL=C sort)"
+rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" -- backup --tag predeploy-0123456789ab
+[[ "$(cd "$ROT/outside/elsewhere" && find . -mindepth 1 ! -name .lock | LC_ALL=C sort)" == "$(printf '%s\n%s\n' "$elsewhere" "./$(d 0 predeploy-0123456789ab)" | LC_ALL=C sort)" ]] ||
+  fail "the deploy's backup changed more than its own dump in the folder the link points to: $(names_in "$ROT/outside/elsewhere")"
+[[ "$(real_mode "$ROT/outside/elsewhere")" == 755 ]] || fail "the mode of the folder behind the link was changed: $(real_mode "$ROT/outside/elsewhere")"
+out_has "left alone: $ROT/backups/deploys is a symbolic link. Nothing is deleted through a link"
+out_has "^backup=$ROT/backups/deploys/$(d 0 predeploy-0123456789ab)$"
+grep -q -e "^rm -f -- " "$ROT/order" && fail "a dump was deleted through a link: $(cat "$ROT/order")"
+grep -q "deleted old backup" "$WORK/out" && fail "the run says it deleted through a link: $(cat "$WORK/out")"
+ok "the deploy's own command line with a deploys/ that is a link: the dump is written through it, and of the ten dumps in the folder it points to, two past the age limit and two more beyond the newest 7, none goes; that folder's mode is untouched, and the run says why"
+rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" BACKUP_KEEP=1 -- prune
+out_has "left alone: $ROT/backups/deploys is a symbolic link"
+[[ "$(find "$ROT/outside/elsewhere" -name 'jobapp-*.dump' | wc -l | tr -d ' ')" == 11 ]] || fail "prune deleted through a link"
+rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" -- retention
+out_has "left alone: $ROT/backups/deploys is a symbolic link"
+out_has "^keep=7$"
+rot_new
+seed "$(d 30)" "$(d 20)" "incoming/$(d 30)"
+mv "$ROT/backups" "$ROT/outside/real"
+ln -s "$ROT/outside/real" "$ROT/backups"
+rot 0 "$NOW"
+[[ -f "$ROT/outside/real/$(d 30)" && -f "$ROT/outside/real/$(d 20)" && -f "$ROT/outside/real/incoming/$(d 30)" && -f "$ROT/outside/real/$(d 0)" ]] ||
+  fail "a backup folder that is a link was rotated: $(names_in "$ROT/outside/real")"
+out_has "left alone: $ROT/backups is a symbolic link"
+grep -q -e "^rm -f -- " "$ROT/order" && fail "a dump was deleted through a link: $(cat "$ROT/order")"
+ok "prune and retention through the link, and the folder of the nightly run when it is a link: the same, nothing deleted in it or in its incoming/, and said"
 grep -nE '(^|[^[:alnum:]_])rm[[:space:]]+-[[:alnum:]]*[rR]' ops/db.sh && fail "ops/db.sh has a recursive rm"
 grep -nE -- '(^|[^-])-(delete|exec)([^[:alnum:]_-]|$)|xargs' ops/db.sh && fail "ops/db.sh deletes through find or xargs"
 # shellcheck disable=SC2016 # the literal text of ops/db.sh
@@ -1289,20 +1350,33 @@ ok "ops/db.sh: no recursive rm, no find -delete, no xargs; one rm deletes dumps,
 
 step "T10, ops/db.sh retention: what must hold for the 7 days, shown so that it can be checked"
 rot_new
-seed "$(d 6)" "$(d 0 '' 001000)" "deploys/$(d 3 predeploy-aaaaaaaaaaaa)" "incoming/notes.dump"
-rm -f "$ROT/backups/.lock"
+seed "$(d 6)" "$(d 0 '' 001000)" "deploys/$(d 3 predeploy-aaaaaaaaaaaa)"
+# The folder as the Jetson has it: what the deploys and the nightly run keep there themselves.
+mkdir "$ROT/backups/previous-tree" "$ROT/backups/incoming"
+printf '.env*\n' >"$ROT/backups/previous-tree.rsyncignore"
+printf 'log\n' >"$ROT/backups/backup.log"
+: >"$ROT/backups/.deploy.lock"
+: >"$ROT/backups/deploys/.lock"
 before="$(tree_of)"
 rot 0 "$NOW" -- retention
 out_has "retention: BACKUP_KEEP=7 (the default of ops/db.sh)"
 out_has "$ROT/backups: 2 dump(s), the newest 0 day(s) old, the oldest 6 day(s) old ($(d 6))$"
 out_has "$ROT/backups/deploys: 1 dump(s), the newest 3 day(s) old, the oldest 3 day(s) old ($(d 3 predeploy-aaaaaaaaaaaa))$"
 out_has "$ROT/backups/incoming: no dump"
-out_has "left alone in $ROT/backups/incoming, not a dump of this script: notes.dump"
 out_has "^keep=7$"
-grep -q -e WARNING -e PAST -e "scratch database" "$WORK/out" && fail "a healthy folder is reported as a problem: $(cat "$WORK/out")"
+# The check the pull request gives for the Jetson, word for word: it must be able to pass.
+grep -q -e WARNING -e PAST -e "left alone" -e "scratch database" -e "not checked" "$WORK/out" &&
+  fail "a healthy folder shaped like the Jetson's is reported as a problem: $(cat "$WORK/out")"
 no_delete "$before"
 [[ ! -s "$ROT/order" && ! -e "$ROT/calls" ]] || fail "retention made a dump, stopped a service or deleted: $(cat "$ROT/order" "$ROT/calls" 2>/dev/null)"
-ok "a healthy server: 7 from the default, the newest and the oldest dump of each folder by their names, what is left alone; no lock taken, nothing changed, no warning"
+ok "a healthy server shaped like the Jetson (both lock files, backup.log, previous-tree and its .rsyncignore): 7 from the default, the newest and the oldest dump of each folder, and not one line with WARNING, PAST, left alone or scratch database; no lock taken, nothing changed"
+rot 0 "$NOW" FAKE_BUSY_FD=9 -- retention
+out_has "^keep=7$"
+printf 'a stray copy\n' >"$ROT/backups/incoming/notes.dump"
+rot 0 "$NOW" -- retention
+out_has "left alone in $ROT/backups/incoming, not a dump of this script: notes.dump"
+rm -f "$ROT/backups/incoming/notes.dump"
+ok "retention needs no lock (it answers while a backup holds it), and a stray file in incoming/ is the one line that then appears"
 
 # The same folders three days later, with no backup since (the nightly run failed or the Jetson
 # was off), so a dump is now past the limit, and with a scratch database left by restore --keep.
@@ -1318,6 +1392,21 @@ out_has "retention: BACKUP_KEEP=14 (set in the environment of this run)"
 out_has "WARNING: BACKUP_KEEP=14 keeps dumps up to 14 days"
 out_has "^keep=14$"
 ok "what breaks the 7 days is said: no verified backup for 3 days, a dump past the limit, a scratch database left by restore --keep (or a database that could not be asked), a BACKUP_KEEP above 7"
+# The review's N7: a dump named ahead of today (a clock that was wrong) has no age, and must not
+# hide a week without a backup behind its date.
+rot_new
+seed "$(d 9)" "$(d 3)" jobapp-2027-10-11T011700.dump
+rot 0 "$NOW" -- retention
+out_has "$ROT/backups: 2 dump(s), the newest 3 day(s) old, the oldest 9 day(s) old ($(d 9)), PAST the limit of 7 days: the next verified backup deletes it; 1 more named ahead of today (a clock was wrong), the last jobapp-2027-10-11T011700.dump"
+out_has "WARNING: no verified backup in $ROT/backups for 3 days"
+grep -q -- " -[0-9][0-9]* day" "$WORK/out" && fail "a negative age is printed: $(cat "$WORK/out")"
+rot_new
+seed jobapp-2027-10-11T011700.dump jobapp-2027-10-12T011700.dump
+rot 0 "$NOW" -- retention
+out_has "$ROT/backups: 2 dump(s), every one named ahead of today (a clock was wrong), the last jobapp-2027-10-12T011700.dump"
+out_has "WARNING: no verified backup in $ROT/backups dated up to today"
+grep -q -- " -[0-9][0-9]* day" "$WORK/out" && fail "a negative age is printed: $(cat "$WORK/out")"
+ok "a dump named ahead of today is counted apart and named, never given a negative age, and the warning about days without a verified backup still fires"
 rot_new
 seed "$(d 9)" "$(d 1)"
 rot 0 "$NOW" FAKE_SCRATCH=1
