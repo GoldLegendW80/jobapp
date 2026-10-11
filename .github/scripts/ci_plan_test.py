@@ -545,6 +545,24 @@ class VerifyTest(unittest.TestCase):
                 ci_plan.verify_problems("api", "api,web,shell,e2e", steps, status), []
             )
 
+    def test_any_other_status_is_a_problem_itself(self) -> None:
+        """Only the two words above skip the judgement. An empty or misspelled status (the env
+        line of the step lost, a typo) must not pass for a job that ran nothing."""
+        nothing_ran = {
+            step: {"outcome": "skipped"}
+            for step in lane_steps("api", "api,web,shell,e2e")
+        }
+        for status in ["", "Success", "succes", "skipped", "failed", "canceled", " "]:
+            for steps in [nothing_ran, lane_steps("api", "api,web,shell,e2e"), {}]:
+                problems = ci_plan.verify_problems(
+                    "api", "api,web,shell,e2e", steps, status
+                )
+                self.assertEqual(len(problems), 1, repr(status))
+                self.assertIn("CI_JOB_STATUS", problems[0])
+        self.assertTrue(
+            ci_plan.verify_problems("api", "api,web,shell,e2e", nothing_ran, "success")
+        )
+
     def test_an_unknown_job_or_unit_is_a_problem(self) -> None:
         self.assertTrue(ci_plan.verify_problems("nope", "none", {}, "success"))
         self.assertTrue(ci_plan.verify_problems("api", "api,cake", {}, "success"))
@@ -578,6 +596,19 @@ class VerifyTest(unittest.TestCase):
         for broken in [
             {
                 "CI_LANE": "journeys",
+                "CI_PLAN": plan,
+                "CI_JOB_STATUS": "",
+                "CI_STEPS": json.dumps(bad),
+            },
+            {
+                "CI_LANE": "journeys",
+                "CI_PLAN": plan,
+                "CI_JOB_STATUS": "",
+                "CI_STEPS": good,
+            },
+            {"CI_LANE": "journeys", "CI_PLAN": plan, "CI_STEPS": good},
+            {
+                "CI_LANE": "journeys",
                 "CI_PLAN": "",
                 "CI_JOB_STATUS": "success",
                 "CI_STEPS": good,
@@ -592,14 +623,25 @@ class VerifyTest(unittest.TestCase):
             self.assertEqual(self.run_verify(**broken).returncode, 1, broken)
 
 
-# A mention that is no read, each with its reason. Anything else the scan below finds must
-# be covered by the rule of the file it names.
+# A mention that is no read, each with its reason: (file, what it names as the scan reports
+# it). Anything else the scan below finds must be covered by the rule of the path it names.
 MENTIONS_ONLY = {
+    ("api/tests/test_migration_rules.py", "CONTRIBUTING.md"): "in a failure message",
+    ("deploy.sh", "CONTRIBUTING.md"): "in a failure message",
+    (".github/workflows/deploy.yml", "CONTRIBUTING.md"): "in a warning",
     (
-        "api/tests/test_migration_rules.py",
-        "CONTRIBUTING.md",
-    ): "named in a failure message",
+        ".github/workflows/ci.yml",
+        "tasks/evidence/ci",
+    ): "what a failed journey wrote, uploaded: written by the run, never read",
+    (
+        "tests/e2e_jetson.sh",
+        "tasks/evidence/identity/index.md",
+    ): "written by the script, named in its last message; run by hand, not in CI",
 }
+# The folder itself, named without a subfolder: where journeys and checks write their
+# screenshots and logs, under a subfolder they compute (E2E_EVIDENCE). A named subfolder is
+# judged like any other path: one of them is read by a shell test and has a rule of its own.
+EVIDENCE_ROOT = "tasks/evidence"
 
 
 class ReasonsTest(unittest.TestCase):
@@ -640,78 +682,190 @@ class ReasonsTest(unittest.TestCase):
                     offending.append(f"{path.relative_to(ROOT)}: {text[:60]!r}")
         self.assertEqual(offending, [])
 
-    # A path the rules call documentation, as a test or a script would have to write it.
+    # A path the rules call documentation, as a test or a script would have to write it: a
+    # file by its name, or a path under docs/ or tasks/ with all that follows.
     DOCS = re.compile(
         r"README\.md|CONTRIBUTING\.md|CAPABILITY-MAP\.md|SPEC-[a-z]+\.md|HANDOFF\.md"
-        r"|(?<![\w.-])docs/|(?<![\w./-])tasks/(?!evidence\b)"
+        r"|(?<![\w.-])docs/[\w./-]*|(?<![\w./-])tasks/[\w./-]*"
     )
-    # tasks/evidence is where journeys and checks write their screenshots and logs, and one
-    # folder of it is read by a shell test and has a rule of its own.
+    # The same path written in parts (ROOT / "tasks" / name, join(root, "docs")), or found by a
+    # pattern over the Markdown files: a line of code holding one of these can only be listed.
+    PARTS = re.compile(r"""["'](tasks|docs)["']|\*\.md\b""")
 
-    def code_lines(self, path: Path) -> list[str]:
-        """The lines of a shell or TypeScript file that are not whole-line comments."""
+    def code_lines(self, path: Path, hash_comments: bool = False) -> list[str]:
+        """The lines of a file that are not whole-line comments, without a trailing `// ...`
+        and, in shell, YAML and Dockerfiles, without a trailing ` # ...`."""
         lines = []
         for line in path.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
             if stripped.startswith(("#", "//", "*", "/*")):
                 continue
-            lines.append(re.sub(r"\s//\s.*$", "", line))
+            line = re.sub(r"\s//\s.*$", "", line)
+            if hash_comments:
+                line = re.sub(r"\s#\s.*$", "", line)
+            lines.append(line)
         return lines
+
+    def scanned(self) -> dict[str, list[Path]]:
+        """What is read for mentions, by the unit that runs it. "every" is what every unit
+        runs under: the workflows."""
+
+        def files(*patterns: str) -> list[Path]:
+            found = []
+            for pattern in patterns:
+                found += [
+                    path
+                    for path in sorted(ROOT.glob(pattern))
+                    if path.is_file()
+                    and not {"node_modules", ".venv", "dist"} & set(path.parts)
+                ]
+            return found
+
+        return {
+            "web": files("web/src/**/*.ts", "web/src/**/*.tsx", "web/*.ts"),
+            # The journeys, and what their scratch stack is built from and started with.
+            "e2e": files(
+                "web/e2e/**/*.ts",
+                "*/Dockerfile*",
+                "ops/*/Dockerfile*",
+                "compose*.yml",
+                "tests/*.yml",
+                "caddy/*",
+            ),
+            # The shell tests and what they run: deploy.sh and the scripts of ops/.
+            "shell": files(
+                "tests/*.sh", ".github/scripts/*.sh", "deploy.sh", "ops/**/*.sh"
+            ),
+            "every": files(".github/workflows/*.yml"),
+        }
 
     def test_nothing_executable_reads_the_documentation(self) -> None:
         """A documentation rule may skip a unit only if nothing of that unit reads the file. So
-        every place where a test or a script of a unit names a documentation file is looked up:
-        the rule of that file must run that unit (tests/deploy_test.sh reads README.md, and the
-        README's rule runs the shell unit), or the mention is listed above with its reason.
-        A folder named without a file (docs/, tasks/) can only be listed."""
-        offending = []
+        every place where something executable names a documentation path is looked up: the
+        rule of that path must run the unit the file belongs to (tests/deploy_test.sh reads
+        README.md, and the README's rule runs the shell unit; a workflow belongs to every
+        unit), or the mention is listed in MENTIONS_ONLY with its reason.
 
-        def judge(path: Path, unit: str, text: str) -> None:
-            for found in self.DOCS.finditer(text):
-                named = found.group(0)
-                where = str(path.relative_to(ROOT))
-                if (where, named) in MENTIONS_ONLY:
-                    continue
-                target = "docs/HANDOFF.md" if named == "HANDOFF.md" else named
-                if target.endswith(".md") and unit in ci_plan.units_for(target)[0]:
+        Read: the Python of api/ and of .github/scripts and tests/ (string constants, docstrings
+        aside), the TypeScript of web/src, web/e2e and web/*.ts, the shell of tests/, ops/,
+        .github/scripts and deploy.sh, the Dockerfiles, the Compose files, caddy/ and both
+        workflows (comments aside).
+
+        Not read, so not guarded: a path put together at run time from anything but the bare
+        words "tasks" and "docs" (a variable, an environment variable, a listing of a folder);
+        the folder tasks/evidence named without a subfolder; comments and docstrings; files of
+        other kinds (web/*.json, web/index.html, api/pyproject.toml and alembic.ini,
+        tailscale/, .dockerignore, .rsyncignore); and .pre-commit-config.yaml, whose hooks run
+        on every run whatever the plan."""
+        offending = []
+        listed = set()  # the entries of MENTIONS_ONLY the scan came across
+
+        def judge(path: Path, units: tuple[str, ...], text: str, python: bool) -> None:
+            where = str(path.relative_to(ROOT))
+            if python:  # one string constant: a bare word, or a pattern inside it
+                parts = [text] if text in ("tasks", "docs") else []
+                if "*.md" in text:
+                    parts.append("*.md")
+            else:
+                parts = [
+                    found.group(1) or "*.md" for found in self.PARTS.finditer(text)
+                ]
+            for part in parts:
+                if (where, part) in MENTIONS_ONLY:
+                    listed.add((where, part))
                     continue
                 offending.append(
-                    f"{where} ({unit} unit) names {named}, whose rule does not run {unit}: "
+                    f"{where} holds {part!r}: a documentation path written in parts or "
+                    f"found by a pattern cannot be judged, list it with its reason: "
                     f"{text.strip()[:70]!r}"
                 )
+            for found in self.DOCS.finditer(text):
+                named = found.group(0).rstrip("/.")
+                if (where, named) in MENTIONS_ONLY:
+                    listed.add((where, named))
+                    continue
+                if named == EVIDENCE_ROOT:
+                    continue
+                target = "docs/HANDOFF.md" if named == "HANDOFF.md" else named
+                if "." not in target.rsplit("/", 1)[-1]:
+                    target += (
+                        "/any-file"  # a folder: judged by the rule of what it holds
+                    )
+                needed = ci_plan.units_for(target)[0]
+                missing = [unit for unit in units if unit not in needed]
+                if missing:
+                    offending.append(
+                        f"{where} names {named}, whose rule does not run "
+                        f"{', '.join(missing)}: {text.strip()[:70]!r}"
+                    )
 
+        every = tuple(ci_plan.UNITS)
         for path in sorted((ROOT / "api").rglob("*.py")):
             if ".venv" in path.parts:
                 continue
             for text in self.strings(path):
-                judge(path, "api", text)
-        by_unit = {
-            "web": [
-                *sorted((ROOT / "web/src").rglob("*.ts")),
-                *sorted((ROOT / "web/src").rglob("*.tsx")),
-                *sorted(ROOT.glob("web/*.ts")),
-            ],
-            "e2e": sorted((ROOT / "web/e2e").rglob("*.ts")),
-            "shell": [
-                *sorted(ROOT.glob("tests/*.sh")),
-                *sorted(ROOT.glob("tests/*.py")),
-                *sorted(ROOT.glob(".github/scripts/*.sh")),
-            ],
-        }
-        for unit, files in by_unit.items():
+                judge(path, ("api",), text, python=True)
+        scanned = self.scanned()
+        for unit, files in scanned.items():
+            self.assertTrue(files, f"nothing found to read for {unit}")
             for path in files:
-                for line in self.code_lines(path):
-                    judge(path, unit, line)
-        for path in sorted(ROOT.glob(".github/scripts/*.py")):
+                hashes = path.suffix not in (".ts", ".tsx")
+                for line in self.code_lines(path, hash_comments=hashes):
+                    judge(
+                        path, every if unit == "every" else (unit,), line, python=False
+                    )
+        for path in [
+            *sorted(ROOT.glob(".github/scripts/*.py")),
+            *sorted(ROOT.glob("tests/*.py")),
+        ]:
             if path.name.startswith("ci_plan"):
                 continue  # the rules themselves and this test name the documentation
             for text in self.strings(path):
-                judge(path, "shell", text)
+                judge(path, ("shell",), text, python=True)
         self.assertEqual(offending, [])
-        for where, _named in MENTIONS_ONLY:
-            self.assertTrue(
-                (ROOT / where).is_file(), f"MENTIONS_ONLY lists {where}, which is gone"
-            )
+        # Every entry of the list is still a mention the scan finds: a stale entry would let a
+        # later read of that path in that file through.
+        self.assertEqual(
+            sorted(set(MENTIONS_ONLY) - listed), [], "MENTIONS_ONLY lists what is gone"
+        )
+
+    def test_the_guard_sees_what_it_is_there_for(self) -> None:
+        """The scan on made-up lines: what it must find, and what it must leave."""
+        self.assertEqual(
+            [found.group(0) for found in self.DOCS.finditer('open("docs/HANDOFF.md")')],
+            ["docs/HANDOFF.md"],
+        )
+        line = (
+            'COMMITTED="tasks/evidence/agents-a5"; cmp x tasks/evidence/other/run.json'
+        )
+        self.assertEqual(
+            [found.group(0) for found in self.DOCS.finditer(line)],
+            ["tasks/evidence/agents-a5", "tasks/evidence/other/run.json"],
+        )
+        for line in ['ROOT / "tasks" / name', "join(root, 'docs')", 'glob("*.md")']:
+            self.assertTrue(self.PARTS.search(line), line)
+        for line in ['"tasksfile"', "web/src/tasks.ts", '"mytasks/x"', "x.md5"]:
+            self.assertFalse(self.PARTS.search(line), line)
+            self.assertFalse(self.DOCS.search(line), line)
+        scanned = self.scanned()
+        names = {
+            str(path.relative_to(ROOT)) for paths in scanned.values() for path in paths
+        }
+        for expected in [
+            "deploy.sh",
+            "ops/ci-runners.sh",
+            "ops/ci-runner/job-started.sh",
+            "api/Dockerfile",
+            "web/Dockerfile",
+            "ops/ci-runner/Dockerfile",
+            "compose.yml",
+            "tests/ats-stub.compose.yml",
+            ".github/workflows/ci.yml",
+            ".github/workflows/deploy.yml",
+            "tests/deploy_test.sh",
+            "web/e2e/stack.ts",
+        ]:
+            self.assertIn(expected, names)
 
     def test_the_readme_rule_matches_what_the_shell_test_reads(self) -> None:
         text = (ROOT / "tests/deploy_test.sh").read_text(encoding="utf-8")
@@ -825,6 +979,149 @@ class WorkflowTest(unittest.TestCase):
         placed = {unit for units in ci_plan.LANES.values() for unit in units}
         self.assertEqual(placed, set(ci_plan.UNITS))
 
+    def test_every_step_is_a_check_or_a_listed_support_step(self) -> None:
+        """The other direction: the tests above start from LANES and look each id up in ci.yml;
+        this one starts from ci.yml. Every step has an id, and every id is a check (LANES), a
+        step of every run (ALWAYS) or a support step (SUPPORT), in exactly one of the three. So
+        a check added to the workflow and to no table fails here, and one added to LANES is
+        held to its unit by the tests above and to its outcome by `verify`."""
+        self.assertEqual(set(ci_plan.SUPPORT), set(self.jobs))
+        for lane, job in self.jobs.items():
+            steps = job["steps"]
+            nameless = [
+                step.get("name") or step.get("uses") or step.get("run")
+                for step in steps
+                if "id" not in step
+            ]
+            self.assertEqual(nameless, [], f"{lane}: steps without an id")
+            ids = [step["id"] for step in steps]
+            self.assertEqual(len(ids), len(set(ids)), f"{lane}: an id is used twice")
+            checks = {
+                step for unit in ci_plan.LANES.get(lane, {}).values() for step in unit
+            }
+            always = set(ci_plan.ALWAYS.get(lane, ()))
+            support = set(ci_plan.SUPPORT[lane])
+            self.assertEqual(checks & support, set(), lane)
+            self.assertEqual(always & support, set(), lane)
+            self.assertEqual(checks & always, set(), lane)
+            known = checks | always | support
+            self.assertEqual(
+                sorted(set(ids) - known),
+                [],
+                f"{lane}: steps of ci.yml that are in no table of ci_plan.py (a check goes "
+                "to LANES under its unit, anything else to SUPPORT)",
+            )
+            self.assertEqual(
+                sorted(known - set(ids)),
+                [],
+                f"{lane}: listed in ci_plan.py, not in ci.yml",
+            )
+
+    # What a check runs. A step whose command holds one of these is no support step.
+    CHECK_COMMAND = re.compile(
+        r"\bpytest\b|\bvitest\b|playwright test|\bruff\b|shellcheck|\beslint\b|\btsc\b"
+        r"|pnpm (lint|typecheck|build|test)\b|_test\.(sh|py)\b|e2e_groups\.py"
+        r"|pre-commit run|gitleaks|secret_scan|--fail-under=(?!0\b)"
+    )
+
+    def test_a_support_step_runs_no_test_command(self) -> None:
+        """SUPPORT is a written list: this keeps a check from being filed there, where `verify`
+        would not look at it."""
+        for sample in [
+            "uv run --frozen pytest tests",
+            "pnpm exec vitest run",
+            "pnpm exec playwright test jobs.spec.ts",
+            "tests/deploy_test.sh",
+            "python3 .github/scripts/ci_plan_test.py",
+            "uv run --frozen coverage report --fail-under=95",
+            "pnpm lint",
+        ]:
+            self.assertTrue(self.CHECK_COMMAND.search(sample), sample)
+        for lane, ids in ci_plan.SUPPORT.items():
+            steps = steps_by_id(self.jobs[lane])
+            for step in ids:
+                if step == "verify":
+                    continue  # pinned word for word by the test of the first and last steps
+                command = steps[step].get("run", "")
+                found = self.CHECK_COMMAND.search(command)
+                self.assertIsNone(
+                    found,
+                    f"{lane}: support step {step} runs a check ({found and found.group(0)}): "
+                    "it belongs in LANES",
+                )
+
+    def test_a_job_is_named_by_its_id(self) -> None:
+        """The names of the checks a run reports, and what a ruleset would have to require:
+        three stable words, not a list of contents that changes when a unit moves."""
+        for lane, job in self.jobs.items():
+            self.assertEqual(job["keys"].get("name"), lane)
+
+    def test_the_long_steps_have_a_bound_of_their_own(self) -> None:
+        bounded = {
+            "api": ("pytest", "docker_tests"),
+            "checks": ("e2e_apps",),
+            "journeys": ("vitest", "e2e_identity", "e2e_sweep"),
+        }
+        for lane, ids in bounded.items():
+            steps = steps_by_id(self.jobs[lane])
+            whole = int(self.jobs[lane]["keys"]["timeout-minutes"])
+            for step in ids:
+                minutes = steps[step].get("timeout-minutes", "")
+                self.assertRegex(minutes, r"^\d+$", f"{lane}: {step} has no bound")
+                self.assertLess(int(minutes), whole, step)
+
+    def test_the_triggers_have_no_filter(self) -> None:
+        """A `paths` or `branches` filter on pull_request would skip the whole run for some
+        pull requests, with every check a merge waits for; `types` with `edited` would start
+        and cancel runs on every edit of a title. What narrows a run is the plan, inside it."""
+        lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+        block = []
+        for line in lines[lines.index("on:") + 1 :]:
+            if line and not line.startswith((" ", "#")):
+                break
+            if line.strip() and not line.strip().startswith("#"):
+                block.append(line.rstrip())
+        self.assertEqual(
+            block,
+            [
+                "  pull_request:",
+                "  push:",
+                "    branches: [main]",
+                "  workflow_dispatch:",
+            ],
+        )
+
+    def test_only_the_last_teardown_of_a_job_is_forgiven(self) -> None:
+        """Two stacks follow each other in one job under one project name and port. The second
+        one's fresh database rests on the teardown of the first: that teardown may not end in
+        `|| true`, and the next stack starts only when it succeeded."""
+        seen = 0
+        for lane, job in self.jobs.items():
+            steps = job["steps"]
+            downs = [
+                index
+                for index, step in enumerate(steps)
+                if " down -v " in step.get("run", "")
+            ]
+            for index in downs[:-1]:
+                seen += 1
+                down = steps[index]
+                self.assertNotIn("|| true", down["run"], f"{lane}: {down['id']}")
+                following = next(
+                    step
+                    for step in steps[index + 1 :]
+                    if " up -d " in step.get("run", "")
+                )
+                self.assertIn(
+                    f"steps.{down['id']}.outcome == 'success'",
+                    following.get("if", ""),
+                    f"{lane}: {following['id']} starts whatever {down['id']} left",
+                )
+                self.assertIn(
+                    "com.docker.compose.project=$PROJECT", following["run"], lane
+                )
+        self.assertEqual(seen, 1, "the teardown between identity and sweep")
+
 
 class HookSafetyTest(unittest.TestCase):
     """These tests run as a pre-commit hook, inside the commit they check."""
@@ -902,6 +1199,9 @@ class HookSafetyTest(unittest.TestCase):
         self.assertEqual(git(real, "ls-files", "--stage"), before)
         self.assertEqual(git(real, "status", "--porcelain"), "")
         self.assertEqual(git(real, "branch", "--list"), "* main")
+        # The symptom of 2026-10-10 by its name: a `git init` that reached the hook's
+        # repository rewrote its configuration and left it marked as bare.
+        self.assertEqual(git(real, "config", "--bool", "core.bare"), "false")
 
 
 class ReaderTest(unittest.TestCase):

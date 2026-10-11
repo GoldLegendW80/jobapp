@@ -16,7 +16,15 @@
 # What works: ask GitHub for the pull request until the merge commit it reports is the merge of
 # the base as it is now and the branch's head, then close and reopen. The branch gets no commit,
 # so a review of its head stays valid. A branch that conflicts with the base has no merge commit
-# and no run: this script says so and changes nothing.
+# and no run: this script says so and changes nothing. A draft is not refused: CI runs on drafts,
+# and a draft that is closed and reopened is still a draft. A merged pull request is (its state
+# is closed).
+#
+# Between the close and the reopen the pull request is closed for a moment. If the script is
+# stopped there (Ctrl C, a kill, a closed terminal), it asks GitHub for the state and reopens;
+# when that fails too it says, in capitals, that the pull request is closed, with the command.
+# A project board whose built in workflow moves closed items may move the card on the close and
+# again on the reopen (not checked on this repository's board).
 #
 # Needs gh, signed in with write access. Settings: CI_RUNNER_REPO (GoldLegendW80/jobapp),
 # CI_RERUN_WAIT_S (how long to wait for GitHub's merge commit, default 120), CI_RERUN_POLL_S
@@ -76,7 +84,35 @@ if [[ "$check" == --check ]]; then
 fi
 info "GitHub's merge commit ${merge_sha:0:7} is $base_ref at ${base_sha:0:7} plus the branch: closing and reopening"
 
-gh pr close "$pr" --repo "$REPO" >/dev/null || die "could not close pull request $pr; nothing else was done"
+# closing: 1 from just before the close until the reopen is known to have worked or has been
+# given up with its own loud message. While it is 1, the end of the script, whatever ends it,
+# looks at the pull request and reopens it when it is closed.
+closing=0
+closed_loudly() {
+  printf 'ci-rerun: PULL REQUEST %s IS CLOSED and could not be reopened: gh pr reopen %s --repo %s\n' "$pr" "$pr" "$REPO" >&2
+}
+on_exit() {
+  local now
+  ((closing)) || return 0
+  closing=0
+  now="$(gh api "repos/$REPO/pulls/$pr" --jq .state 2>/dev/null)" || now=unknown
+  [[ "$now" != open ]] || return 0
+  if gh pr reopen "$pr" --repo "$REPO" >/dev/null 2>&1; then
+    printf 'ci-rerun: stopped between the close and the reopen: pull request %s is open again, and a run starts on its merge commit\n' "$pr" >&2
+  else
+    closed_loudly
+  fi
+}
+trap on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+closing=1
+if ! gh pr close "$pr" --repo "$REPO" >/dev/null; then
+  closing=0
+  die "could not close pull request $pr; nothing else was done"
+fi
 reopened=0
 for _ in 1 2 3; do
   if gh pr reopen "$pr" --repo "$REPO" >/dev/null; then
@@ -85,6 +121,10 @@ for _ in 1 2 3; do
   fi
   sleep "$POLL"
 done
-((reopened)) || die "PULL REQUEST $pr IS CLOSED and could not be reopened: gh pr reopen $pr --repo $REPO"
+closing=0
+if ((!reopened)); then
+  closed_loudly
+  exit 1
+fi
 info "reopened: a pull request run of CI starts on the fresh merge commit"
 info "watch it: gh run list --repo $REPO --branch $head_ref --event pull_request --limit 3"

@@ -162,6 +162,18 @@ case "$1 ${2:-}" in
     if [[ "$*" == *"--entrypoint test"* ]]; then [[ "${FAKE_REGISTERED:-}" == 1 ]] && exit 0 || exit 1; fi
     # configure and remove: the token arrives on stdin, and only there.
     if [[ "$*" == *" configure" || "$*" == *" remove" ]]; then cat >>"$FAKE_STDIN"; fi
+    # A trial whose command does not end by itself: it runs until its container is removed
+    # (the file named by FAKE_TRY_BLOCKS is there while it runs), 30 s at most.
+    if [[ -n "${FAKE_TRY_BLOCKS:-}" && "$*" == *"--name jobapp-ci-try "* ]]; then
+      : >"$FAKE_TRY_BLOCKS"
+      for _ in $(seq 1 300); do
+        [[ -e "$FAKE_TRY_BLOCKS" ]] || exit 137
+        sleep 0.1
+      done
+    fi
+    ;;
+  "rm "*)
+    if [[ -n "${FAKE_TRY_BLOCKS:-}" && "${!#}" == jobapp-ci-try ]]; then rm -f "$FAKE_TRY_BLOCKS"; fi
     ;;
   "logs "*)
     # What a runner's listener prints once it takes jobs, unless the test says it never does,
@@ -236,6 +248,13 @@ printf 'gh %s\n' "$*" >>"$FAKE_LOG"
 if [[ "${FAKE_GH_FAIL:-}" == 1 && "$*" == *"actions/runners --paginate"* ]]; then
   echo "gh: HTTP 502" >&2
   exit 1
+fi
+# GitHub answers FAKE_GH_FAIL_AFTER reads of the runners, then no more (this call is in the log).
+if [[ -n "${FAKE_GH_FAIL_AFTER:-}" && "$*" == *"actions/runners --paginate"* ]]; then
+  if (($(grep -c 'actions/runners --paginate' "$FAKE_LOG") > FAKE_GH_FAIL_AFTER)); then
+    echo "gh: HTTP 502" >&2
+    exit 1
+  fi
 fi
 case "$*" in
   *registration-token* | *remove-token*) echo "$FAKE_TOKEN" ;;
@@ -470,7 +489,25 @@ run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_IMAGE=new FAKE_GH_FAIL=1 -- ops/ci-ru
 out_has "unknown, GitHub did not answer"
 run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_IMAGE=new FAKE_GH_FAIL=1 -- ops/ci-runners.sh uninstall
 out_has "GitHub did not answer"
+out_has "nothing was changed"
+untouched
 if grep -q '^volume rm' "$WORK/docker.log"; then fail "uninstall removed volumes without knowing the runner was unregistered"; fi
+# GitHub answers the list and not the question about the runner: still nothing is touched.
+run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_GH_FAIL_AFTER=2 -- ops/ci-runners.sh uninstall
+out_has "GitHub did not answer about mac-ci-2"
+out_has "nothing was changed on it"
+untouched
+# GitHub stops answering once the first container is gone: the message says what was done (it
+# no longer says "nothing was changed"), no volume goes, and the second runner is not touched.
+run 1 fake FAKE_RUNNERS="jobapp-ci-1 jobapp-ci-2" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_GH_FAIL_AFTER=3 -- ops/ci-runners.sh uninstall
+out_has "GitHub stopped answering while mac-ci-1 was being unregistered"
+out_has "its container is removed"
+out_has "its volume jobapp-ci-docker-1 and everything of the runners after it are untouched"
+if grep -q "nothing was changed" "$WORK/out"; then fail "uninstall says nothing was changed after it removed a container"; fi
+log_has "rm -f jobapp-ci-1"
+log_lacks "jobapp-ci-2 "
+log_lacks "rm -f jobapp-ci-2"
+if grep -q '^volume rm' "$WORK/docker.log"; then fail "uninstall removed a volume of a runner it could not see unregistered"; fi
 # A runner GitHub no longer lists is not recreated by update: install registers it again.
 run 1 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_IMAGE=old -- ops/ci-runners.sh update
 out_has "mac-ci-1 is not registered at GitHub any more"
@@ -543,12 +580,15 @@ if grep -E '^(rm|volume rm|image rm|stop) ' "$WORK/docker.log" | pipe_has -vE '^
   fail "uninstall removed something that is not a CI runner object: $(grep -E '^(rm|volume rm|image rm) ' "$WORK/docker.log")"
 fi
 if grep -q 'prune' "$WORK/docker.log"; then fail "uninstall prunes"; fi
-ok "update and a second install recreate a container only when it is not on the built image and its runner is idle, one at a time (stop, remove, create, start, wait for Listening for Jobs), and wait otherwise; the replaced image is pruned after the last one; a runner that does not listen, GitHub not answering, a runner GitHub no longer lists and a disk under 10 GB each stop the command with nothing touched; a stopped runner stays stopped; a lower count is refused; prune refused while a job runs; start and status hear the listeners; stop stops each runner; uninstall: removal token on stdin only, only jobapp-ci-<n>, their volumes and every tag of the image, never a prune"
+ok "update and a second install recreate a container only when it is not on the built image and its runner is idle, one at a time (stop, remove, create, start, wait for Listening for Jobs), and wait otherwise; the replaced image is pruned after the last one; a runner that does not listen, GitHub not answering, a runner GitHub no longer lists and a disk under 10 GB each stop the command with nothing touched; a stopped runner stays stopped; a lower count is refused; prune refused while a job runs; start and status hear the listeners; stop stops each runner; uninstall: GitHub is asked about every runner before the first container is touched, and when it stops answering half way the message says what was removed and what was kept; removal token on stdin only, only jobapp-ci-<n>, their volumes and every tag of the image, never a prune"
 
 step "trials: try removes its volumes, status shows what a trial left, prune and uninstall remove it"
+# Two volumes and a container that only look like a trial's: never listed, never removed.
 LEFT_VOLUMES="jobapp-ci-try jobapp-ci-try-docker jobapp-ci-try-docker2 myjobapp-ci-try-x"
+LEFT_CONTAINERS="jobapp-ci-try jobapp-ci-try2"
 run 0 fake FAKE_TRY_VOLUMES="jobapp-ci-try jobapp-ci-try-docker" -- ops/ci-runners.sh try
 log_has "run --rm --name jobapp-ci-try --label jobapp.ci=try --privileged --cpuset-cpus 9-11 --memory 4g --memory-swap 4g -e CI_RUNNER_INDEX=99 -v jobapp-ci-try:/ci -v jobapp-ci-try-docker:/var/lib/docker -v $WORK/rd/disk:/host-disk:ro jobapp-ci-runner:$version exec bash"
+log_has "rm -f -v jobapp-ci-try"
 log_has "volume rm jobapp-ci-try"
 log_has "volume rm jobapp-ci-try-docker"
 [[ "$(grep -n '^volume rm jobapp-ci-try$' "$WORK/docker.log" | cut -d: -f1)" -gt "$(grep -n '^run --rm --name jobapp-ci-try ' "$WORK/docker.log" | cut -d: -f1)" ]] ||
@@ -563,16 +603,42 @@ run 1 fake FAKE_FREE_KB=9437184 -- ops/ci-runners.sh try
 out_has "only 9 GB free on this Mac"
 log_lacks "run --rm"
 ok "try: a privileged container on the last CPUs with the runner's memory limit, two scratch volumes removed when it ends, no registration, no restart policy; refused beside another trial and on a short disk"
-run 0 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_TRY_CONTAINERS="jobapp-ci-try" FAKE_TRY_VOLUMES="$LEFT_VOLUMES" -- ops/ci-runners.sh status
+# Stopped while its command runs (a kill of the script, not the end of the command): the script
+# removes the container, which ends the command, and then the two volumes.
+: >"$WORK/docker.log"
+rm -f "$WORK/blocked"
+(exec env PATH="$WORK/bin:$PATH" FAKE_LOG="$WORK/docker.log" FAKE_STDIN="$WORK/stdin.log" FAKE_TOKEN="$CANARY" \
+  CI_RUNNER_DIR="$WORK/rd" FAKE_TRY_BLOCKS="$WORK/blocked" FAKE_TRY_VOLUMES="jobapp-ci-try jobapp-ci-try-docker" \
+  ops/ci-runners.sh try sleep 600 >"$WORK/out" 2>&1 </dev/null) &
+trial=$!
+for _ in $(seq 1 100); do
+  [[ -e "$WORK/blocked" ]] && break
+  sleep 0.1
+done
+[[ -e "$WORK/blocked" ]] || fail "the trial did not start: $(head -c 600 "$WORK/out")"
+kill -TERM "$trial"
+status=0
+wait "$trial" || status=$?
+[[ "$status" == 143 ]] || fail "a trial stopped by a signal exited $status, expected 143: $(head -c 600 "$WORK/out")"
+[[ ! -e "$WORK/blocked" ]] || fail "the trial's container was left running"
+log_has "rm -f -v jobapp-ci-try"
+log_has "volume rm jobapp-ci-try"
+log_has "volume rm jobapp-ci-try-docker"
+[[ "$(grep -n '^volume rm jobapp-ci-try$' "$WORK/docker.log" | cut -d: -f1)" -gt "$(grep -n '^rm -f -v jobapp-ci-try$' "$WORK/docker.log" | cut -d: -f1)" ]] ||
+  fail "the trial's volumes are not removed after its container"
+ok "try stopped by a signal: the container is removed at once, then its two volumes, exit 143"
+run 0 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_TRY_CONTAINERS="$LEFT_CONTAINERS" FAKE_TRY_VOLUMES="$LEFT_VOLUMES" -- ops/ci-runners.sh status
 out_has "left by a trial"
 out_has "container jobapp-ci-try"
-out_has "volume jobapp-ci-try-docker2"
-if grep -q 'myjobapp' "$WORK/out"; then fail "status counts a volume that is not a trial's"; fi
+out_has "volume jobapp-ci-try-docker"
+if grep -q 'myjobapp\|docker2\|try2' "$WORK/out"; then fail "status counts a container or a volume that is not a trial's"; fi
 if grep -qE '^(rm|volume rm) ' "$WORK/docker.log"; then fail "status removed something"; fi
-run 0 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_TRY_CONTAINERS="jobapp-ci-try" FAKE_TRY_VOLUMES="$LEFT_VOLUMES" -- ops/ci-runners.sh prune
+run 0 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_TRY_CONTAINERS="$LEFT_CONTAINERS" FAKE_TRY_VOLUMES="$LEFT_VOLUMES" -- ops/ci-runners.sh prune
 log_has "rm -v jobapp-ci-try"
-log_has "volume rm jobapp-ci-try-docker2"
+log_has "volume rm jobapp-ci-try-docker"
 log_lacks "myjobapp"
+log_lacks "docker2"
+log_lacks "try2"
 run 0 fake FAKE_RUNNERS="jobapp-ci-1" FAKE_LISTED=1 FAKE_IMAGE=new FAKE_TRY_CONTAINERS="jobapp-ci-try" FAKE_TRY_RUNNING=1 FAKE_TRY_VOLUMES="jobapp-ci-try jobapp-ci-try-docker" FAKE_VOLUME_BUSY="jobapp-ci-try jobapp-ci-try-docker" -- ops/ci-runners.sh prune
 out_has "trial container jobapp-ci-try is running: left"
 out_has "trial volume jobapp-ci-try-docker is still used by a container: left"
@@ -591,7 +657,16 @@ cat >"$WORK/bin2/gh" <<'FAKE'
 printf 'gh %s\n' "$*" >>"$FAKE_LOG"
 asked="$(cat "$FAKE_STATE" 2>/dev/null || echo 0)"
 case "$*" in
-  *"/pulls/7 --jq .state") echo "${FAKE_PR_STATE:-open}" ;;
+  *"/pulls/7 --jq .state")
+    # Closed from a close until a reopen that worked, unless the test says what it is.
+    if [[ -n "${FAKE_PR_STATE:-}" ]]; then
+      echo "$FAKE_PR_STATE"
+    elif grep -q '^gh pr close 7 ' "$FAKE_LOG" && [[ ! -e "$FAKE_STATE.reopened" ]]; then
+      echo closed
+    else
+      echo open
+    fi
+    ;;
   *"/pulls/7 --jq .base.ref") echo main ;;
   *"/pulls/7 --jq .head.ref") echo feature/x ;;
   *"/pulls/7 --jq .head.sha") echo headsha1111 ;;
@@ -614,8 +689,15 @@ case "$*" in
     ;;
   *"/commits/mergeNEW --jq"*) echo "basesha2222 headsha1111" ;;
   *"/commits/mergeOLD --jq"*) echo "oldbase0000 headsha1111" ;;
-  "pr reopen 7 "*) if [[ "${FAKE_REOPEN_FAIL:-}" == 1 ]]; then exit 1; fi ;;
-  "pr close 7 "*) ;;
+  "pr reopen 7 "*)
+    if [[ "${FAKE_REOPEN_FAIL:-}" == 1 ]]; then exit 1; fi
+    : >"$FAKE_STATE.reopened"
+    ;;
+  "pr close 7 "*)
+    # The script is stopped right after the close: the signal reaches it while it waits for
+    # this call, so it acts on it before its next command, the reopen.
+    if [[ -n "${FAKE_STOP_AFTER_CLOSE:-}" ]]; then kill -s "$FAKE_STOP_AFTER_CLOSE" "$PPID"; fi
+    ;;
   *) echo "fake gh: unexpected call: $*" >&2; exit 1 ;;
 esac
 exit 0
@@ -630,7 +712,7 @@ rerun() { # rerun <exit> <VAR=value...> -- <arguments of ci-rerun.sh>
   done
   shift
   : >"$WORK/docker.log"
-  rm -f "$WORK/asked"
+  rm -f "$WORK/asked" "$WORK/asked.reopened"
   run "$want" env PATH="$WORK/bin2:$PATH" FAKE_LOG="$WORK/docker.log" FAKE_STATE="$WORK/asked" \
     CI_RERUN_POLL_S=0 ${envs[@]+"${envs[@]}"} ops/ci-rerun.sh "$@"
 }
@@ -639,6 +721,7 @@ order="$(grep -n '^gh pr ' "$WORK/docker.log" | sed 's/^[0-9]*:gh pr \([a-z]*\) 
 [[ "$order" == "close,reopen," ]] || fail "expected one close then one reopen, got: $order"
 log_has "pr close 7 --repo GoldLegendW80/jobapp"
 out_has "GitHub's merge commit mergeNE is main at basesha plus the branch"
+[[ "$(grep -c -- '/pulls/7 --jq .state$' "$WORK/docker.log")" == 1 ]] || fail "a run that reopened asks for the state again at its end"
 rerun 0 -- 7 --check
 log_lacks "gh pr "
 out_has "Nothing was changed"
@@ -665,6 +748,20 @@ rerun 1 -- 7 --force
 rerun 1 --
 out_has "usage: ops/ci-rerun.sh"
 ok "a conflict, a closed pull request and bad arguments change nothing; a reopen that fails is tried three times and then says the pull request is closed"
+# Stopped between the close and the reopen: the script reopens on its way out, and says so.
+rerun 143 FAKE_STOP_AFTER_CLOSE=TERM -- 7
+order="$(grep -n '^gh pr ' "$WORK/docker.log" | sed 's/^[0-9]*:gh pr \([a-z]*\) 7 .*/\1/' | tr '\n' ',')"
+[[ "$order" == "close,reopen," ]] || fail "stopped after the close, expected one reopen on the way out, got: $order"
+out_has "stopped between the close and the reopen: pull request 7 is open again"
+[[ -e "$WORK/asked.reopened" ]] || fail "the pull request was left closed"
+# The reopen fails there too: the last line says the pull request is closed, with the command.
+rerun 143 FAKE_STOP_AFTER_CLOSE=TERM FAKE_REOPEN_FAIL=1 -- 7
+out_has "PULL REQUEST 7 IS CLOSED and could not be reopened: gh pr reopen 7 --repo GoldLegendW80/jobapp"
+# Stopped while GitHub says the pull request is open (the close did not happen): nothing to do.
+rerun 143 FAKE_STOP_AFTER_CLOSE=TERM FAKE_PR_STATE=open -- 7
+if grep -q '^gh pr reopen ' "$WORK/docker.log"; then fail "a pull request that is open was reopened"; fi
+if grep -q 'IS CLOSED' "$WORK/out"; then fail "an open pull request is reported as closed"; fi
+ok "stopped between the close and the reopen (a signal): the pull request is reopened on the way out; when that fails the last line says it is closed, with the command; an open one is left alone"
 
 step "no pipe of the CI scripts ends in a reader that leaves early"
 # Under pipefail a pipe into `grep -q` (or -l, -L, -m) or into head says 141 when the writer is

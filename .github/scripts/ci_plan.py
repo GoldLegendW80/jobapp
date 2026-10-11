@@ -102,6 +102,67 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
 }
 # Steps that run on every run, whatever the plan: pre-commit.
 ALWAYS: dict[str, tuple[str, ...]] = {"checks": ("precommit",)}
+# Every other step of a job, by id: what the checks need around them, never a check. The three
+# tables together are the whole of ci.yml: ci_plan_test.py fails on a step that has no id or is
+# in none of them, so a check added later cannot stay outside `verify`, and on a step listed
+# here whose command is a test runner's.
+SUPPORT: dict[str, tuple[str, ...]] = {
+    "api": (
+        "checkout",
+        "plan",
+        "uv",  # tools
+        "pg_nofsync",  # the service container's settings
+        "api_install",  # dependencies
+        "coverage_summary",  # what is written to the run's summary
+        "summary",
+        "memory",
+        "verify",
+    ),
+    "checks": (
+        "checkout",
+        "plan",
+        "uv",
+        "precommit_cache",
+        "pnpm",
+        "node",
+        "web_install",
+        "e2e_env",  # the scratch stack: its .env, images, browser, start, data
+        "images",
+        "buildx",
+        "images_hosted",
+        "e2e_ready",
+        "apps_stack",
+        "apps_data",
+        "apps_logs",  # logs, teardown, upload
+        "apps_down",
+        "upload",
+        "memory",
+        "verify",
+    ),
+    "journeys": (
+        "checkout",
+        "plan",
+        "uv",
+        "pnpm",
+        "node",
+        "web_install",
+        "summary",
+        "e2e_env",
+        "images",
+        "buildx",
+        "images_hosted",
+        "e2e_ready",
+        "identity_stack",
+        "identity_logs",
+        "identity_down",
+        "sweep_stack",
+        "sweep_logs",
+        "sweep_down",
+        "upload",
+        "memory",
+        "verify",
+    ),
+}
 
 
 def units_for(path: str) -> tuple[frozenset[str], str]:
@@ -179,21 +240,21 @@ def decide(event: str, base: str, root: Path) -> tuple[frozenset[str], str, list
         against = shown(base) or "an unknown base"
         sentence = f"a pull request against {against}, not against {DEFAULT_BRANCH}"
         return ALL, f"{sentence}: every unit runs", []
+    # The sentence names the base: the log of a run is then the record of what it was started
+    # against, which the checks of a head commit do not say (CONTRIBUTING.md, the merge rule).
+    scope = f"a pull request against {DEFAULT_BRANCH}"
     paths = changed_paths(root)
     if paths is None:
-        return ALL, "the changed files could not be read: every unit runs", []
+        return ALL, f"{scope}, its files could not be read: every unit runs", []
     if not paths:
-        return ALL, "no changed file found: every unit runs", []
+        return ALL, f"{scope}, no changed file found: every unit runs", []
     units, notes = plan_for(paths)
+    scope = f"{scope}, {len(paths)} changed files"
     if units == ALL:
-        return ALL, f"{len(paths)} changed files, every unit runs", notes
+        return ALL, f"{scope}: every unit runs", notes
     if not units:
-        return (
-            units,
-            f"{len(paths)} changed files, documentation only: pre-commit alone",
-            notes,
-        )
-    return units, f"{len(paths)} changed files: {', '.join(sorted(units))}", notes
+        return units, f"{scope}, documentation only: pre-commit alone", notes
+    return units, f"{scope}: {', '.join(sorted(units))}", notes
 
 
 def encode(units: frozenset[str]) -> str:
@@ -230,14 +291,18 @@ def verify_problems(
     `steps` is the `steps` context of the job: id -> {"outcome": ...}. A step the plan needed
     must have run and succeeded; a step of a unit the plan left out must have been skipped (it
     ran by mistake otherwise: its condition no longer follows the plan). A job that already
-    failed or was cancelled is not judged again."""
+    failed or was cancelled is not judged again, and those two words are the only ones that
+    skip the judgement: an empty or misspelled status is a problem itself, never a pass."""
     if lane not in LANES and lane not in ALWAYS:
         return [f"unknown job '{lane}': add it to LANES in ci_plan.py"]
     names = set(plan.split(",")) - {"none", ""}
     if not names <= set(UNITS):
         return [f"the plan '{plan}' names an unknown unit"]
-    if job_status != "success":
+    if job_status in ("failure", "cancelled"):
         return []
+    if job_status != "success":
+        status = shown(job_status)
+        return [f"CI_JOB_STATUS is '{status}', not success, failure or cancelled"]
     problems = []
 
     def outcome(step: str) -> str:

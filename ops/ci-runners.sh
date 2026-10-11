@@ -438,15 +438,21 @@ cmd_start() {
 
 # --- trials ---------------------------------------------------------------------------------
 # A trial is a container of the runner image with a Docker daemon of its own and two scratch
-# volumes, registered nowhere. `try` removes the volumes when it ends; a trial started another
-# way (an older README gave the docker command) or killed half way leaves them behind, several
-# GB that belong to nothing: status names them, prune and uninstall remove them.
+# volumes, registered nowhere. `try` removes the container and the volumes when its command ends
+# and when the script is stopped (Ctrl C, a closed terminal, a kill). A kill -9, a crash of the
+# Mac or a trial started another way (an older README gave the docker command) leaves them
+# behind, several GB that belong to nothing: status names them, prune and uninstall remove them.
+# With three runners busy a trial is a fourth consumer: it takes Docker's last 3 CPUs and brings
+# CI to 16 of about 18 GB at the limits, the share the budget above leaves to the owner.
 
-# The trial containers and volumes that exist, one per line: "container <name>" or
-# "volume <name>". Names that start with jobapp-ci-try, nothing else.
+# The trial container and volumes that exist, one per line: "container <name>" or
+# "volume <name>". Exactly the three names of the header (TRY_CONTAINER, TRY_VOLUMES): Docker's
+# name filter matches any name that holds the text, so the listing is cut down to those three
+# here, and a volume that only looks alike (jobapp-ci-try-docker2) is nobody's to remove.
 try_leftovers() {
-  docker ps -a --filter "name=$TRY_CONTAINER" --format '{{.Names}}' | sed -n 's/^\(jobapp-ci-try[A-Za-z0-9_.-]*\)$/container \1/p'
-  docker volume ls -q --filter "name=$TRY_CONTAINER" | sed -n 's/^\(jobapp-ci-try[A-Za-z0-9_.-]*\)$/volume \1/p'
+  docker ps -a --filter "name=$TRY_CONTAINER" --format '{{.Names}}' | sed -n "s/^${TRY_CONTAINER}\$/container &/p"
+  docker volume ls -q --filter "name=$TRY_CONTAINER" |
+    sed -n -e "s/^${TRY_VOLUMES[0]}\$/volume &/p" -e "s/^${TRY_VOLUMES[1]}\$/volume &/p"
 }
 
 # Remove what a trial left: its container unless it is running, its volumes unless a container
@@ -469,8 +475,15 @@ remove_try_leftovers() {
   done < <(try_leftovers)
 }
 
+# The end of a trial, however it ends: its container (still running when the script was stopped
+# and not its command), then its volumes.
+try_cleanup() {
+  docker rm -f -v "$TRY_CONTAINER" >/dev/null 2>&1 || true
+  remove_try_leftovers
+}
+
 cmd_try() {
-  local total first status=0 tty=()
+  local total first status=0 opts=()
   docker image inspect "$(image)" >/dev/null 2>&1 || die "no image $(image) yet: ops/ci-runners.sh install builds it"
   [[ -z "$(try_leftovers | sed -n 's/^container //p')" ]] ||
     die "a trial container exists already: end it (docker rm -f $TRY_CONTAINER) or run ops/ci-runners.sh prune"
@@ -481,14 +494,29 @@ cmd_try() {
   total="$(docker info --format '{{.NCPU}}')"
   first=$((total - CPUS))
   ((first >= 0)) || first=0
-  if [[ -t 0 && -t 1 ]]; then tty=(-it); fi
   info "a trial container shaped like a runner (CPUs $first-$((total - 1)), memory $MEMORY), registered nowhere;"
   info "it and its volumes ${TRY_VOLUMES[*]} are removed when the command ends"
-  docker run --rm ${tty[@]+"${tty[@]}"} --name "$TRY_CONTAINER" --label jobapp.ci=try --privileged \
-    --cpuset-cpus "$first-$((total - 1))" --memory "$MEMORY" --memory-swap "$MEMORY" \
-    -e CI_RUNNER_INDEX=99 -v "${TRY_VOLUMES[0]}:/ci" -v "${TRY_VOLUMES[1]}:/var/lib/docker" \
-    -v "$PROBE_DIR:/host-disk:ro" "$(image)" exec "${@:-bash}" || status=$?
-  remove_try_leftovers
+  opts=(--rm --name "$TRY_CONTAINER" --label jobapp.ci=try --privileged
+    --cpuset-cpus "$first-$((total - 1))" --memory "$MEMORY" --memory-swap "$MEMORY"
+    -e CI_RUNNER_INDEX=99 -v "${TRY_VOLUMES[0]}:/ci" -v "${TRY_VOLUMES[1]}:/var/lib/docker"
+    -v "$PROBE_DIR:/host-disk:ro" "$(image)" exec "${@:-bash}")
+  # From here on the script cleans up when it ends for any reason it can notice: the command's
+  # end, Ctrl C, a closed terminal, a kill (a kill -9 leaves the leftovers that status names
+  # and prune removes).
+  trap try_cleanup EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  if [[ -t 0 && -t 1 ]]; then
+    # At a terminal the container needs it, so docker stays in the foreground: bash acts on a
+    # signal once docker has returned, and Ctrl C goes to the container's command.
+    docker run -it "${opts[@]}" || status=$?
+  else
+    # Without a terminal docker runs beside the script, which waits for it: a signal then acts
+    # at once, where a script that waits in the foreground would first let the command finish.
+    docker run "${opts[@]}" &
+    wait "$!" || status=$?
+  fi
   return "$status"
 }
 
@@ -505,13 +533,24 @@ cmd_prune() {
   docker exec "$(container "$n")" bash -c 'rm -rf /ci/cache/* && echo "   /ci/cache emptied"'
 }
 
+# half_way <n>: GitHub stopped answering after the container of runner n was removed. Says what
+# was done and what was not, which "nothing was changed" no longer is.
+half_way() {
+  die "GitHub stopped answering while $(runner_name "$1") was being unregistered (gh api failed): its container is removed, its registration at GitHub may still be there, its volume $(docker_volume "$1") and everything of the runners after it are untouched. Run ops/ci-runners.sh uninstall again"
+}
+
 cmd_uninstall() {
-  local n id indexes=()
+  local n id listed indexes=()
   while IFS= read -r n; do indexes+=("$n"); done < <(existing)
   # Runners GitHub still lists without a container here (a half finished install) count too.
+  # GitHub is asked before anything is touched, once for the list and once for each runner:
+  # when it does not answer, the command stops with every container still there.
+  listed="$(gh api "repos/$REPO/actions/runners" --paginate --jq '.runners[].name')" ||
+    die "GitHub did not answer (gh api failed): which runners are registered is unknown, nothing was changed. Run the command again"
   while IFS= read -r n; do
-    [[ " ${indexes[*]:-} " == *" $n "* ]] || indexes+=("$n")
-  done < <(gh api "repos/$REPO/actions/runners" --paginate --jq '.runners[].name' | sed -n 's/^mac-ci-\([0-9][0-9]*\)$/\1/p')
+    [[ -z "$n" || " ${indexes[*]:-} " == *" $n "* ]] || indexes+=("$n")
+  done < <(printf '%s\n' "$listed" | sed -n 's/^mac-ci-\([0-9][0-9]*\)$/\1/p')
+  for n in ${indexes[@]+"${indexes[@]}"}; do known_state "$n" >/dev/null; done
   step "unregister from $REPO"
   for n in ${indexes[@]+"${indexes[@]}"}; do
     remove_container "$n"
@@ -522,12 +561,12 @@ cmd_uninstall() {
       :
     else
       # No image or no local registration left: delete GitHub's record by id.
-      id="$(known_state "$n")" || exit 1
+      id="$(github_state "$n")" || half_way "$n"
       id="${id%% *}"
-      [[ -z "$id" ]] || gh api -X DELETE "repos/$REPO/actions/runners/$id" || die "could not delete runner $id on GitHub"
+      [[ -z "$id" ]] || gh api -X DELETE "repos/$REPO/actions/runners/$id" || die "could not delete runner $id on GitHub (its container is removed, its volume kept)"
     fi
-    id="$(known_state "$n")" || exit 1
-    [[ -z "$id" ]] || die "$(runner_name "$n") is still listed on GitHub"
+    id="$(github_state "$n")" || half_way "$n"
+    [[ -z "$id" ]] || die "$(runner_name "$n") is still listed on GitHub (its container is removed, its volume kept)"
     docker volume rm "$(docker_volume "$n")" >/dev/null 2>&1 || true
     info "$(runner_name "$n"): unregistered, container and $(docker_volume "$n") removed"
   done

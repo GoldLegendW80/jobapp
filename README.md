@@ -319,7 +319,7 @@ rules are a short list in that script, first match wins:
 
 | the pull request touches only | units | why the rest may be skipped |
 |---|---|---|
-| `tasks/`, `docs/`, the Markdown files at the root but this README, the pull request template | none: pre-commit alone | nothing executable reads them (a test fails when something starts to) |
+| `tasks/`, `docs/`, `CONTRIBUTING.md`, `CAPABILITY-MAP.md`, the `SPEC-*.md` files, the pull request template (a Markdown file at the root that is none of these runs everything) | none: pre-commit alone | nothing executable reads them (a test fails when something starts to) |
 | `README.md` | `shell` | `tests/deploy_test.sh` checks that the recovery statements it tests are the ones written here |
 | `tasks/evidence/agents-a5/` | `shell` | `tests/agents_real_run_test.sh` compares against it |
 | `web/` | `web`, `shell`, `e2e` | no api file reads a file of `web/` (a test fails when one starts to) |
@@ -329,11 +329,27 @@ A push to `main`, a manual run, a pull request whose base is not `main` and any 
 changed files cannot be read for certain run everything: a green run on `main` is what deploys.
 Each job ends with `ci_plan.py verify`,
 which fails it when a step the plan needed was skipped, or one it left out ran, so a wrong
-condition in the workflow cannot pass for a test that did not run; `ci_plan_test.py` checks the
-rules, their reasons on this repository (it found the README check above the day it was
-written), and that every check step of `ci.yml` follows the plan.
+condition in the workflow cannot pass for a test that did not run (and it fails on a job status
+it does not know: only `failure` and `cancelled` skip the judgement). `ci_plan_test.py` checks
+the rules, their reasons on this repository (it found the README check above the day it was
+written), and that the workflow and the plan agree in both directions. From the plan: every
+check listed under a unit in `LANES` exists in its job and runs under that unit's output. From
+the workflow: every step of `ci.yml` has an `id` and is listed in `ci_plan.py` exactly once,
+as a check of a unit (`LANES`), as a step of every run (`ALWAYS`: pre-commit) or as a
+support step (`SUPPORT`: checkout, the plan, tools and installs, the start of a
+stack, logs, teardown, summaries, uploads), and a support step runs no test command. What that
+does not check: whether a new command that is a check was written as one; a reviewer reads a
+change of `SUPPORT` as a change of the gate.
 Within a job a failed check does not stop the checks after it: each unit reports for itself, and
 the job fails if any step failed.
+
+What the documentation rules rest on is itself a scan with limits. It reads the Python of
+`api/`, `tests/` and `.github/scripts`, the TypeScript of `web/`, the shell of `tests/`, `ops/`
+and `deploy.sh`, the Dockerfiles, the Compose files, `caddy/` and both workflows, and fails
+when one of them names a documentation path whose rule does not run its unit (also when it
+names `tasks` or `docs` as a bare word, or looks for `*.md`). It cannot see a path put
+together at run time from variables, and it leaves the folder `tasks/evidence` alone when no
+subfolder is named, because the journeys write their screenshots there.
 
 **A fresh run for an open pull request** after `main` moved: `ops/ci-rerun.sh <number>`. CI
 tests a pull request at its merge commit with the base, which GitHub recomputes lazily, so
@@ -387,7 +403,7 @@ cannot take more:
 | | per runner | three runners | what was measured |
 |---|---|---|---|
 | CPUs | 3, pinned (runner n: CPUs 3(n-1) to 3n-1) | 9 of Docker's 12 at most (macOS places Docker's virtual CPUs on the cores it likes) | the api tests used 2.1 to 3 CPUs, a Playwright group about 0.6, Vitest 1.2 to 2.3 for under a minute; so a whole run of the three jobs is expected at 4 to 6 cores' worth |
-| Memory | 4 GB, swap included | 12 GB of about 18 at most | the api job: 3.6 GB at the peak the kernel recorded, file cache included, 1.9 GB in the samples of `docker stats`; an e2e job: 1.7 GB; no OOM kill; so a whole run is expected at about 7 GB |
+| Memory | 4 GB, swap included | 12 GB of about 18 at most | in the samples of `docker stats`, every 10 s over the measured runs of the three jobs: up to 3.3 GB on a runner, and the peaks of two runners in one run add up to 5.2 to 5.9 GB; the kernel's own count (`memory.peak` of the runner's container, file cache included) stands at the 4 GB limit on both runners, which was reached 1,641 and 3,092 times in their first 3 hours and about 68 jobs each (`memory.events`, `max`) and answered by giving cache back each time: `oom` 0, `oom_kill` 0. Every job writes these counters to its summary |
 | Disk | see the disk budget below | about 14 GB, 20 GB at most | 11.1 GB for two runners after eight full runs |
 
 That leaves Harald's own work and one agent's stack 3 of Docker's CPUs at all times and 6 or
@@ -397,8 +413,9 @@ and a newer push to the same branch cancels the older run. Inside a job the work
 written out in `ci.yml` (`PYTEST_WORKERS` and `VITEST_WORKERS`, 3 each, never "all cores";
 Playwright runs one worker). Why not more: a fourth runner would take the last 3 CPUs for a
 workflow that has three jobs, and 4 CPUs per runner would speed up only the api job, which is not
-the one the run waits for. Why not less memory: 3 GB would do for the tests as measured, and the
-limit is a ceiling, not a reservation, so lowering it frees nothing.
+the one the run waits for. Why not less memory: the samples reach 3.3 GB of the 4, and the
+limit is a ceiling, not a reservation, so lowering it frees nothing. Why not more: nothing was
+killed at 4 GB, and what fills it is file cache.
 
 **Disk budget.** Disk is the scarcest resource of this Mac, and a full disk does not fail one
 job: it corrupts Docker Desktop's store for every container (2026-10-10: a trial of three e2e
@@ -536,9 +553,14 @@ ops/ci-runners.sh try tests/deploy_test.sh    # or one command
 
 It is a privileged container too (it runs a Docker daemon), on Docker's last 3 CPUs with the
 runner's memory limit, and it starts empty: copy the checkout in with `docker cp . jobapp-ci-try:/ci/src`.
-Its two scratch volumes (`jobapp-ci-try`, `jobapp-ci-try-docker`, a few GB once images are
-built) are removed when the command ends. A trial that was killed, or started with a plain
-`docker run`, leaves them behind: `status` names them, `prune` and `uninstall` remove them.
+With three runners busy a trial is a fourth consumer: it takes those last 3 CPUs and brings CI
+to 16 of about 18 GB at the limits, the share the budget leaves to Harald's own work, so run
+one when CI is quiet.
+Its container and its two scratch volumes (`jobapp-ci-try`, `jobapp-ci-try-docker`, a few GB
+once images are built) are removed when the command ends and when the script is stopped
+(Ctrl C, a closed terminal, a kill). A trial ended with `kill -9`, cut by a crash, or started
+with a plain `docker run`, leaves them behind: `status` names them, `prune` and `uninstall`
+remove them, these three names and no look-alike.
 
 ## Public URL
 

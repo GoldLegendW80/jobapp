@@ -29,6 +29,10 @@
 # `ci_plan.py verify`, which fails it when a step the plan needed did not run or one it left out
 # did, so a wrong `if:` cannot pass for a skipped test.
 #
+# Every step has an id and is listed in ci_plan.py: as a check of a unit (LANES), as a step of
+# every run (ALWAYS) or as a support step (SUPPORT). ci_plan_test.py fails on a step that is in
+# none of the three, so a check cannot be added here without `verify` knowing it.
+#
 # Step conditions, one pattern throughout:
 # - the first step of a unit: `!cancelled() && steps.plan.outputs.<unit> == 'true'`, so a unit
 #   runs whatever happened to the units before it in the job;
@@ -97,8 +101,11 @@ jobs:
   # took 101 s and 146 s of tests on two runners plus a third job to combine their coverage; one
   # run needs no hand-over, every test is collected once by construction (`tests`, split only
   # by the docker marker below) and the floor is read from this run's own data.
+  # name: the id and nothing else. A ruleset, a script or a person that asks for the checks of
+  # a run names these three strings; what a job holds is written in the comments and in the
+  # names of its steps, which may change (a unit moved between jobs in the first week).
   api:
-    name: api (ruff, pytest, coverage 95, docker tests)
+    name: api
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 30
     services:
@@ -124,6 +131,7 @@ jobs:
     steps:
       # fetch-depth 2: the merge commit of a pull request and its parents, which the plan diffs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
           persist-credentials: false
           fetch-depth: 2
@@ -131,6 +139,7 @@ jobs:
         id: plan
         run: python3 .github/scripts/ci_plan.py
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        id: uv
         if: steps.plan.outputs.api == 'true'
         with:
           version: ${{ env.UV_VERSION }}
@@ -142,6 +151,7 @@ jobs:
       # fsync the TRUNCATE after each test costs less than half (api/tests/pg.py does the same
       # for the throwaway server of a local run).
       - name: Test Postgres without fsync (throwaway data)
+        id: pg_nofsync
         if: steps.plan.outputs.api == 'true'
         run: >-
           docker exec "${{ job.services.postgres.id }}" psql -U jobapp -d jobapp_test
@@ -171,6 +181,7 @@ jobs:
         id: pytest
         if: ${{ !cancelled() && steps.api_install.outcome == 'success' }}
         working-directory: api
+        timeout-minutes: 15
         env:
           TEST_DATABASE_URL: ${{ env.API_TEST_DATABASE_URL }}
           REDIS_URL: ${{ env.API_TEST_REDIS_URL }}
@@ -189,6 +200,7 @@ jobs:
         run: uv run --frozen coverage report --fail-under=95
       # --fail-under=0: this step only reports, also when the floor above failed.
       - name: Coverage summary
+        id: coverage_summary
         if: ${{ !cancelled() && steps.pytest.outcome == 'success' }}
         working-directory: api
         run: |
@@ -223,6 +235,7 @@ jobs:
           uv run --frozen pytest -p no:cacheprovider
           "tests/jobs/test_scoring.py::test_long_text_is_bounded_and_fast"
       - name: Test summary
+        id: summary
         if: ${{ always() && steps.plan.outputs.api == 'true' }}
         run: |
           if [[ -f "$RUNNER_TEMP/api-timings.txt" ]]; then
@@ -233,7 +246,28 @@ jobs:
             python3 .github/scripts/junit_summary.py "api (docker)" "${{ runner.temp }}/junit-api-docker.xml" >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # The runner's memory as the kernel counted it (the cgroup of the runner's container,
+      # since that container started): its limit, how often the limit was reached ("max":
+      # file cache is given back then, nothing fails) and whether anything was ever killed
+      # ("oom_kill"). Written to the summary of the job; never fails it.
+      - name: Runner memory
+        id: memory
+        if: ${{ always() }}
+        run: |
+          cg=/sys/fs/cgroup
+          if [[ -r "$cg/memory.peak" && -r "$cg/memory.events" && "$(cat "$cg/memory.max")" =~ ^[0-9]+$ ]]; then
+            {
+              echo "### Runner memory (${RUNNER_NAME:-this runner}, since its container started)"
+              echo
+              echo "- limit $(($(cat "$cg/memory.max") / 1048576)) MB, highest use $(($(cat "$cg/memory.peak") / 1048576)) MB, file cache included"
+              echo "- events: $(tr '\n' ' ' <"$cg/memory.events")"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no memory limit readable on this runner"
+          fi
+
       - name: Every step the plan needs has run
+        id: verify
         if: ${{ !cancelled() }}
         env:
           CI_LANE: api
@@ -256,7 +290,7 @@ jobs:
   # 2 s after; nothing is shared between runners because there is nothing left to gain). On
   # GitHub's machines from the GitHub Actions layer cache, which only the journeys job writes.
   checks:
-    name: pre-commit, shell, e2e apps
+    name: checks
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 30
     env:
@@ -268,6 +302,7 @@ jobs:
       PLAYWRIGHT_HTML_OPEN: never
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
           persist-credentials: false
           fetch-depth: 2
@@ -275,6 +310,7 @@ jobs:
         id: plan
         run: python3 .github/scripts/ci_plan.py
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        id: uv
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: ${{ runner.environment == 'github-hosted' }}
@@ -283,6 +319,7 @@ jobs:
       # --- every run: pre-commit -----------------------------------------------------------
       # On a Mac runner pre-commit's environments stay on the runner (PRE_COMMIT_HOME).
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: precommit_cache
         if: runner.environment == 'github-hosted'
         with:
           path: ~/.cache/pre-commit
@@ -356,6 +393,7 @@ jobs:
       # Playwright comes with the web dependencies. The pnpm version comes from packageManager
       # in web/package.json.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        id: pnpm
         if: ${{ !cancelled() && steps.plan.outputs.e2e == 'true' }}
         with:
           package_json_file: web/package.json
@@ -392,6 +430,7 @@ jobs:
         if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment != 'github-hosted' }}
         run: docker buildx bake --progress=plain -f compose.yml --load api worker caddy
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        id: buildx
         if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment == 'github-hosted' }}
       - name: Build the images (buildx bake, GitHub Actions layer cache, read only)
         id: images_hosted
@@ -440,6 +479,7 @@ jobs:
         id: e2e_apps
         if: ${{ !cancelled() && steps.apps_data.outcome == 'success' }}
         working-directory: web
+        timeout-minutes: 12
         env:
           E2E_JOBS_DATA: ${{ runner.temp }}/synthetic/data
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/apps
@@ -448,15 +488,20 @@ jobs:
           agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts
           --workers=1 --reporter=list,html --output=test-results/apps
       - name: Stack logs (apps)
+        id: apps_logs
         if: ${{ failure() && steps.apps_stack.outcome != 'skipped' }}
         run: |
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml ps -a
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color > "$RUNNER_TEMP/compose-apps.log" 2>&1 || true
       # --timeout 0: the stack and its volumes are thrown away, so nothing waits for a clean stop.
+      # `|| true` on the last teardown of a job only: nothing starts after it, and the runner's
+      # job-completed hook empties the daemon anyway.
       - name: Tear down the scratch stack (apps)
+        id: apps_down
         if: ${{ always() && steps.e2e_env.outcome == 'success' }}
         run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
       - name: Upload Playwright report, traces, screenshots and logs
+        id: upload
         if: ${{ failure() && steps.e2e_env.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -469,7 +514,25 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # As in the api job.
+      - name: Runner memory
+        id: memory
+        if: ${{ always() }}
+        run: |
+          cg=/sys/fs/cgroup
+          if [[ -r "$cg/memory.peak" && -r "$cg/memory.events" && "$(cat "$cg/memory.max")" =~ ^[0-9]+$ ]]; then
+            {
+              echo "### Runner memory (${RUNNER_NAME:-this runner}, since its container started)"
+              echo
+              echo "- limit $(($(cat "$cg/memory.max") / 1048576)) MB, highest use $(($(cat "$cg/memory.peak") / 1048576)) MB, file cache included"
+              echo "- events: $(tr '\n' ' ' <"$cg/memory.events")"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no memory limit readable on this runner"
+          fi
+
       - name: Every step the plan needs has run
+        id: verify
         if: ${{ !cancelled() }}
         env:
           CI_LANE: checks
@@ -483,7 +546,7 @@ jobs:
   # one after the other, each on a scratch stack of its own (same project name and port, the first torn down with its volumes
   # before the second starts).
   journeys:
-    name: web (eslint, tsc, build, vitest), e2e identity, e2e sweep
+    name: journeys
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 30
     env:
@@ -495,6 +558,7 @@ jobs:
       PLAYWRIGHT_HTML_OPEN: never
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
           persist-credentials: false
           fetch-depth: 2
@@ -504,12 +568,14 @@ jobs:
       # uv: web/e2e/jobs.spec.ts and the profile journeys convert their fixtures with the api's
       # CLI through `uv run`.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        id: uv
         if: steps.plan.outputs.e2e == 'true'
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: api/uv.lock
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        id: pnpm
         if: steps.plan.outputs.web == 'true' || steps.plan.outputs.e2e == 'true'
         with:
           package_json_file: web/package.json
@@ -548,8 +614,10 @@ jobs:
         id: vitest
         if: ${{ !cancelled() && steps.plan.outputs.web == 'true' && steps.web_install.outcome == 'success' }}
         working-directory: web
+        timeout-minutes: 8
         run: pnpm exec vitest run --maxWorkers="$VITEST_WORKERS" --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
       - name: Test summary
+        id: summary
         if: ${{ always() && steps.vitest.outcome != 'skipped' }}
         run: python3 .github/scripts/junit_summary.py "web" "${{ runner.temp }}/junit-web.xml" >> "$GITHUB_STEP_SUMMARY"
 
@@ -572,6 +640,7 @@ jobs:
         if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment != 'github-hosted' }}
         run: docker buildx bake --progress=plain -f compose.yml --load api worker caddy
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        id: buildx
         if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment == 'github-hosted' }}
       # ignore-error: a failing cache service must not turn the journeys red (issue #35).
       - name: Build the images (buildx bake, GitHub Actions layer cache, written here)
@@ -614,26 +683,39 @@ jobs:
         id: e2e_identity
         if: ${{ !cancelled() && steps.identity_stack.outcome == 'success' }}
         working-directory: web
+        timeout-minutes: 10
         env:
           E2E_ADMIN_EMAIL: e2e-admin@example.org
           E2E_PASSWORD_THROTTLE: "1"
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/identity
         run: pnpm exec playwright test -c e2e/identity-all.config.ts --reporter=list,html --output=test-results/identity
       - name: Stack logs (identity)
+        id: identity_logs
         if: ${{ failure() && steps.identity_stack.outcome != 'skipped' }}
         run: |
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml ps -a
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color > "$RUNNER_TEMP/compose-identity.log" 2>&1 || true
-      # Before the next group starts its own: the same project name and port.
+      # Before the next group starts its own: the same project name and port. No `|| true`
+      # here, unlike the last teardown of a job: the sweep group's fresh database rests on this
+      # one having removed the identity stack and its volumes, so a teardown that fails fails
+      # the job, and the sweep group does not start on what it left.
       - name: Tear down the scratch stack (identity)
+        id: identity_down
         if: ${{ always() && steps.e2e_env.outcome == 'success' }}
-        run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
+        run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0
 
-      # Group sweep, on a fresh stack: its own database and volumes.
+      # Group sweep, on a fresh stack: its own database and volumes. It starts only when the
+      # teardown above succeeded, and looks for itself: no container and no volume of the
+      # project may be left.
       - name: Start the stack and migrate (sweep)
         id: sweep_stack
-        if: ${{ !cancelled() && steps.e2e_ready.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.e2e_ready.outcome == 'success' && steps.identity_down.outcome == 'success' }}
         run: |
+          left="$({ docker ps -aq --filter "label=com.docker.compose.project=$PROJECT"; docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT"; } | tr '\n' ' ')"
+          if [[ -n "$left" ]]; then
+            echo "::error::containers or volumes of the identity stack are still here, the sweep group would not start on a fresh database: $left"
+            exit 1
+          fi
           overlay=()
           if [[ -n "${CI_COMPOSE_OVERLAY:-}" ]]; then
             [[ -f "$CI_COMPOSE_OVERLAY" ]] || { echo "::error::the runner's CI_COMPOSE_OVERLAY names no file: $CI_COMPOSE_OVERLAY"; exit 1; }
@@ -649,19 +731,23 @@ jobs:
         id: e2e_sweep
         if: ${{ !cancelled() && steps.sweep_stack.outcome == 'success' }}
         working-directory: web
+        timeout-minutes: 8
         env:
           E2E_SKIP_REAL_SWEEP: "1"
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/sweep
         run: pnpm exec playwright test jobs-sweep.spec.ts --workers=1 --reporter=list,html --output=test-results/sweep
       - name: Stack logs (sweep)
+        id: sweep_logs
         if: ${{ failure() && steps.sweep_stack.outcome != 'skipped' }}
         run: |
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml ps -a
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color > "$RUNNER_TEMP/compose-sweep.log" 2>&1 || true
       - name: Tear down the scratch stack (sweep)
+        id: sweep_down
         if: ${{ always() && steps.e2e_env.outcome == 'success' }}
         run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
       - name: Upload Playwright report, traces, screenshots and logs
+        id: upload
         if: ${{ failure() && steps.e2e_env.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -675,7 +761,25 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # As in the api job.
+      - name: Runner memory
+        id: memory
+        if: ${{ always() }}
+        run: |
+          cg=/sys/fs/cgroup
+          if [[ -r "$cg/memory.peak" && -r "$cg/memory.events" && "$(cat "$cg/memory.max")" =~ ^[0-9]+$ ]]; then
+            {
+              echo "### Runner memory (${RUNNER_NAME:-this runner}, since its container started)"
+              echo
+              echo "- limit $(($(cat "$cg/memory.max") / 1048576)) MB, highest use $(($(cat "$cg/memory.peak") / 1048576)) MB, file cache included"
+              echo "- events: $(tr '\n' ' ' <"$cg/memory.events")"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no memory limit readable on this runner"
+          fi
+
       - name: Every step the plan needs has run
+        id: verify
         if: ${{ !cancelled() }}
         env:
           CI_LANE: journeys
