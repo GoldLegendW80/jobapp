@@ -9,6 +9,17 @@
 #   other org answers 404 ("board not found"). The spec's real sweep is skipped in CI
 #   (E2E_SKIP_REAL_SWEEP). Local scratch stacks and the Jetson keep their own settings.
 # The api refuses ATS_BASE_URL when APP_ENV is production (app/config.py).
+#
+# Health checks (issue #91): `up --wait` returns when every service is healthy, and Docker runs
+# the first probe of a service one whole interval after its start (5 s for db and redis, 15 s
+# for the api, the worker and caddy in compose.yml), service after service down the depends_on
+# chain. start_interval probes every second during start_period instead, so a scratch stack is
+# up as soon as it really is; after start_period the production intervals apply again. Here
+# only: compose.yml and the Jetson keep their values.
+x-fast-start: &fast-start
+  start_period: 30s
+  start_interval: 1s
+
 services:
   api:
     environment:
@@ -16,6 +27,7 @@ services:
     depends_on:
       atsstub:
         condition: service_healthy
+    healthcheck: *fast-start
 
   worker:
     environment:
@@ -26,6 +38,16 @@ services:
     depends_on:
       fakeats:
         condition: service_healthy
+    healthcheck: *fast-start
+
+  caddy:
+    healthcheck: *fast-start
+
+  db:
+    healthcheck: *fast-start
+
+  redis:
+    healthcheck: *fast-start
 
   fakeats:
     # Standard library only: the same pinned base image as atsstub.
@@ -45,6 +67,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 30s
+      start_interval: 1s
     mem_limit: 256m
     expose:
       - "8099"
@@ -65,6 +89,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 30s
+      start_interval: 1s
     mem_limit: 64m
     expose:
       - "8080"

@@ -1,14 +1,48 @@
 # Continuous integration (SPEC-platform.md, Repository and automation; CONTRIBUTING.md).
 # Every pull request and every push to main: api lint and tests against Postgres and Redis service
-# containers (two shards, coverage combined and held to its floor in api-coverage), web lint,
-# typecheck, Vitest and build, the shell scripts, the browser journeys against a scratch Compose
-# stack built on the runner, and the pre-commit hooks not covered elsewhere.
-# A green run on main is what .github/workflows/deploy.yml waits for.
+# containers with the coverage floor, web lint, typecheck, Vitest and build, the shell scripts,
+# the browser journeys against scratch Compose stacks built on the runner, and the pre-commit
+# hooks not covered elsewhere. A green run on main is what .github/workflows/deploy.yml waits for.
+#
+# Layout (issue #91): three jobs of about the same length, one per runner.
+#   api       ruff, the whole pytest suite in one run with the 95 percent floor, the docker
+#             marked tests, the scoring timing test
+#   checks    pre-commit and the secret scan of the run's commits, the shell unit (shellcheck,
+#             tests/*.sh), then the e2e groups apps and ingestion, each on a scratch stack of
+#             its own
+#   journeys  eslint, tsc, build, Vitest, then the e2e groups identity and sweep, each on a
+#             scratch stack of its own
+# The run is green when the three are: no job has a condition or waits for another, so none can
+# be skipped, and a failed one fails the run. There is no fourth job to sum them up: a job
+# created when the three end queues behind every job other runs queued meanwhile (the gate of
+# run 38078877905 waited 8 minutes for a runner to do 7 seconds of work).
+# Why three: a job costs about 25 s before its first test (set up, checkout, tools, install) and
+# GitHub starts queued jobs in no particular order, so eleven jobs on three runners paid that
+# cost eleven times and let short jobs start before long ones (run 38072303967: 22.8 minutes of
+# runner time, 13.3 of wall time on two runners). Three jobs start together and end together.
+# The numbers behind the split are in README, Continuous delivery.
+#
+# Plan: the first step of each job (.github/scripts/ci_plan.py) decides from the files a pull
+# request against main changes which units run: api, web, shell, e2e. Documentation alone runs
+# pre-commit and nothing else (the README also the shell unit, which checks it); web/ alone
+# skips the api unit; any other path runs everything, and so do every push to main, every manual
+# run and every pull request against another branch than main (GITHUB_BASE_REF). Each job ends with
+# `ci_plan.py verify`, which fails it when a step the plan needed did not run or one it left out
+# did, so a wrong `if:` cannot pass for a skipped test.
+#
+# Every step has an id and is listed in ci_plan.py: as a check of a unit (LANES), as a step of
+# every run (ALWAYS) or as a support step (SUPPORT). ci_plan_test.py fails on a step that is in
+# none of the three, so a check cannot be added here without `verify` knowing it.
+#
+# Step conditions, one pattern throughout:
+# - the first step of a unit: `!cancelled() && steps.plan.outputs.<unit> == 'true'`, so a unit
+#   runs whatever happened to the units before it in the job;
+# - a step that needs an earlier step of its unit names it: `steps.<id>.outcome == 'success'`.
+# A failed step still fails the job: nothing here uses continue-on-error.
 #
 # Exit codes: every run step uses `bash --noprofile --norc -eo pipefail`, through `shell: bash`
 # in defaults.run (without it GitHub runs `bash -e`, where `gate | tail` ends with the status of
-# tail). A job that sets its own defaults.run (a working-directory) must repeat `shell: bash`
-# there: seen in run 38047794828, such a job did not inherit the workflow level shell.
+# tail). A job that sets its own defaults.run must repeat `shell: bash` there (run 38047794828).
 # A command that gates anything is still never piped, and never negated with `!` (bash -e does
 # not stop on a negated command): it runs on its own line or under an explicit `if`.
 #
@@ -20,11 +54,10 @@
 # Desktop, each with a Docker daemon of its own, so a job sees what it saw on a GitHub machine:
 # `services:`, its own 127.0.0.1, its own container names and ports). Never [self-hosted] alone:
 # the Jetson's deploy runner carries that label too.
-# Load: the Mac is shared with its owner and with agents, so CI has a fixed budget there. Two
-# runners, each pinned to 3 CPUs and 4 GB (ops/ci-runners.sh), are the limit on what runs at
-# once, whatever the number of pushes: a runner takes one job, the rest queue. Worker counts are
-# written out (PYTEST_WORKERS, VITEST_WORKERS below), never "all cores", and at most two e2e
-# stacks of a run are up together (max-parallel in the e2e job).
+# Load: the Mac is shared with its owner and with agents, so CI has a fixed budget there: each
+# runner is pinned to 3 CPUs and 4 GB (ops/ci-runners.sh), a runner takes one job, the rest
+# queue. Worker counts are written out (PYTEST_WORKERS, VITEST_WORKERS below), never "all
+# cores". With one, two or three runners the jobs are the same; fewer runners only queue them.
 # Escape hatch, back to GitHub's machines without editing this file:
 #   gh variable set CI_RUNS_ON --body '"ubuntu-latest"'      and back: gh variable delete CI_RUNS_ON
 # CI_RUNS_ON is the JSON of a runs-on value. Steps that differ test runner.environment
@@ -54,24 +87,31 @@ env:
   UV_VERSION: "0.9.28"
   NODE_VERSION: "22.23.3"
   FORCE_COLOR: "1"
-  # Processes per test job: the 3 CPUs of a Mac runner. GitHub's machines have 2 to 4.
+  # Processes per test run: the 3 CPUs of a Mac runner. GitHub's machines have 2 to 4.
   PYTEST_WORKERS: "3"
   VITEST_WORKERS: "3"
+  # The service containers of the api job, given to its pytest steps as TEST_DATABASE_URL and
+  # REDIS_URL.
+  API_TEST_DATABASE_URL: postgresql+psycopg://jobapp:ci-only-not-a-secret@127.0.0.1:5432/jobapp_test
+  API_TEST_REDIS_URL: redis://127.0.0.1:6379/0
 
 jobs:
-  # api tests in two shards on two runners, each with pytest-xdist (-n $PYTEST_WORKERS);
-  # coverage is combined and checked (at least 95 percent) in api-coverage.
+  # ------------------------------------------------------------------------------------- api
+  # The whole api suite in one pytest run on the runner's 3 CPUs, and nothing else in this job:
+  # it is the one unit that fills its CPUs for the whole time. Not sharded any more: two shards
+  # took 101 s and 146 s of tests on two runners plus a third job to combine their coverage; one
+  # run needs no hand-over, every test is collected once by construction (`tests`, split only
+  # by the docker marker below) and the floor is read from this run's own data.
+  # name: the id and nothing else. A ruleset, a script or a person that asks for the checks of
+  # a run names these three strings; what a job holds is written in the comments and in the
+  # names of its steps, which may change (a unit moved between jobs in the first week).
   api:
-    name: api (${{ matrix.shard.name }})
+    name: api
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        shard:
-          - { name: jobs, paths: "tests/jobs" }
-          - { name: rest, paths: "tests --ignore=tests/jobs" }
     services:
+      # --health-start-interval: probed every second while starting, so the job does not wait a
+      # whole 5 s interval for the first answer.
       postgres:
         image: postgres:16.15-alpine
         env:
@@ -82,62 +122,101 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U jobapp -d jobapp_test -h 127.0.0.1"
           --health-interval 5s --health-timeout 5s --health-retries 20
+          --health-start-period 20s --health-start-interval 1s
       redis:
         image: redis:7.4.11-alpine
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s
-          --health-retries 20
-    defaults:
-      run:
-        shell: bash
-        working-directory: api
-    env:
-      TEST_DATABASE_URL: postgresql+psycopg://jobapp:ci-only-not-a-secret@127.0.0.1:5432/jobapp_test
-      REDIS_URL: redis://127.0.0.1:6379/0
-      COVERAGE_FILE: .coverage.${{ matrix.shard.name }}
+          --health-retries 20 --health-start-period 20s --health-start-interval 1s
     steps:
+      # fetch-depth 2: the merge commit of a pull request and its parents, which the plan diffs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
           persist-credentials: false
+          fetch-depth: 2
+      - name: Plan (the units this run needs, .github/scripts/ci_plan.py)
+        id: plan
+        run: python3 .github/scripts/ci_plan.py
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        id: uv
+        if: steps.plan.outputs.api == 'true'
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: api/uv.lock
+
+      # --- unit: api -----------------------------------------------------------------------
+      # The service's data is thrown away with the job, so durability buys nothing: without
+      # fsync the TRUNCATE after each test costs less than half (api/tests/pg.py does the same
+      # for the throwaway server of a local run).
+      - name: Test Postgres without fsync (throwaway data)
+        id: pg_nofsync
+        if: steps.plan.outputs.api == 'true'
+        run: >-
+          docker exec "${{ job.services.postgres.id }}" psql -U jobapp -d jobapp_test
+          -v ON_ERROR_STOP=1
+          -c "ALTER SYSTEM SET fsync = off"
+          -c "ALTER SYSTEM SET synchronous_commit = off"
+          -c "ALTER SYSTEM SET full_page_writes = off"
+          -c "SELECT pg_reload_conf()"
       - name: Install dependencies
+        id: api_install
+        if: steps.plan.outputs.api == 'true'
+        working-directory: api
         run: uv sync --frozen
       - name: Ruff lint and format
-        if: matrix.shard.name == 'rest'
+        id: ruff
+        if: ${{ !cancelled() && steps.api_install.outcome == 'success' }}
+        working-directory: api
         run: |
           uv run --frozen ruff check --output-format=github .
           uv run --frozen ruff format --check .
       # pytest-xdist: each worker on a database of its own created next to TEST_DATABASE_URL's
       # (tests/conftest.py); argon2 runs at a cheap cost in-process (tests/conftest.py
-      # fast_argon2). The docker-marked tests run serially in the rest shard below.
-      - name: Pytest (${{ matrix.shard.name }}), in parallel, coverage data only
+      # fast_argon2). --dist worksteal: an idle worker takes tests from a busy one, so the one
+      # long test (a 5,000 posting sweep, about a minute) does not leave two workers waiting.
+      # The docker-marked tests run serially below.
+      - name: Pytest, the whole suite in parallel, coverage data only
+        id: pytest
+        if: ${{ !cancelled() && steps.api_install.outcome == 'success' }}
+        working-directory: api
+        timeout-minutes: 15
+        env:
+          TEST_DATABASE_URL: ${{ env.API_TEST_DATABASE_URL }}
+          REDIS_URL: ${{ env.API_TEST_REDIS_URL }}
         run: |
           start=$SECONDS
-          # shellcheck disable=SC2086 # the paths of the shard split on purpose
-          uv run --frozen pytest ${{ matrix.shard.paths }} -m "not docker" -p no:cacheprovider \
-            -n "$PYTEST_WORKERS" --cov --cov-report= --cov-fail-under=0 --durations=10 \
-            --junitxml=${{ runner.temp }}/junit-api.xml
-          echo "pytest ${{ matrix.shard.name }} (not docker, -n $PYTEST_WORKERS): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
-      - name: Upload coverage data
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-${{ matrix.shard.name }}
-          path: api/.coverage.${{ matrix.shard.name }}
-          include-hidden-files: true
-          retention-days: 1
-          if-no-files-found: error
-          # "Re-run failed jobs" may run a shard whose upload already succeeded: replace it.
-          overwrite: true
+          uv run --frozen pytest tests -m "not docker" -p no:cacheprovider \
+            -n "$PYTEST_WORKERS" --dist worksteal --cov --cov-report= --cov-fail-under=0 \
+            --durations=25 --junitxml=${{ runner.temp }}/junit-api.xml
+          echo "pytest (not docker, -n $PYTEST_WORKERS): $((SECONDS - start))s wall" | tee -a "$RUNNER_TEMP/api-timings.txt"
+      # The gate. Alone in its step and not piped: its exit status is the step's status. The
+      # data file is the one the run above wrote, its workers combined by pytest-cov.
+      - name: Coverage floor (at least 95 percent of the combined data)
+        id: coverage
+        if: ${{ !cancelled() && steps.pytest.outcome == 'success' }}
+        working-directory: api
+        run: uv run --frozen coverage report --fail-under=95
+      # --fail-under=0: this step only reports, also when the floor above failed.
+      - name: Coverage summary
+        id: coverage_summary
+        if: ${{ !cancelled() && steps.pytest.outcome == 'success' }}
+        working-directory: api
+        run: |
+          total="$(uv run --frozen coverage report --format=total --fail-under=0)"
+          { echo "### api coverage"; echo; echo "- total: ${total} percent (floor: 95)"; } >> "$GITHUB_STEP_SUMMARY"
       # Serial, without -n: these stop, restart and pause Postgres containers of their own. No
-      # --cov: they add nothing to the combined coverage figure (and never did).
+      # --cov: they add nothing to the coverage figure (and never did).
       - name: Pytest, docker-marked (own Postgres containers stopped, restarted, paused)
-        if: matrix.shard.name == 'rest'
+        id: docker_tests
+        if: ${{ !cancelled() && steps.api_install.outcome == 'success' }}
+        working-directory: api
         timeout-minutes: 10
+        env:
+          TEST_DATABASE_URL: ${{ env.API_TEST_DATABASE_URL }}
+          REDIS_URL: ${{ env.API_TEST_REDIS_URL }}
         run: |
           start=$SECONDS
           uv run --frozen pytest -m docker -p no:cacheprovider \
@@ -146,152 +225,147 @@ jobs:
       # Issue #16: the scorer's speed bound without coverage tracing or other workers sharing the
       # cores, so it can be tight (0.3 s of CPU, the best of 3).
       - name: Pytest, scoring timing alone (no coverage, 0.3 s)
-        if: matrix.shard.name == 'jobs'
+        id: scoring
+        if: ${{ !cancelled() && steps.api_install.outcome == 'success' }}
+        working-directory: api
         env:
+          TEST_DATABASE_URL: ${{ env.API_TEST_DATABASE_URL }}
+          REDIS_URL: ${{ env.API_TEST_REDIS_URL }}
           SCORE_BUDGET_S: "0.3"
         run: >-
           uv run --frozen pytest -p no:cacheprovider
           "tests/jobs/test_scoring.py::test_long_text_is_bounded_and_fast"
       - name: Test summary
-        if: always()
+        id: summary
+        if: ${{ always() && steps.plan.outputs.api == 'true' }}
         run: |
           if [[ -f "$RUNNER_TEMP/api-timings.txt" ]]; then
-            { echo "### api ${{ matrix.shard.name }} timings"; echo; sed 's/^/- /' "$RUNNER_TEMP/api-timings.txt"; echo; } >> "$GITHUB_STEP_SUMMARY"
+            { echo "### api timings"; echo; sed 's/^/- /' "$RUNNER_TEMP/api-timings.txt"; echo; } >> "$GITHUB_STEP_SUMMARY"
           fi
-          python3 ../.github/scripts/junit_summary.py "api ${{ matrix.shard.name }}" "${{ runner.temp }}/junit-api.xml" >> "$GITHUB_STEP_SUMMARY"
+          python3 .github/scripts/junit_summary.py "api" "${{ runner.temp }}/junit-api.xml" >> "$GITHUB_STEP_SUMMARY"
           if [[ -f "${{ runner.temp }}/junit-api-docker.xml" ]]; then
-            python3 ../.github/scripts/junit_summary.py "api (docker)" "${{ runner.temp }}/junit-api-docker.xml" >> "$GITHUB_STEP_SUMMARY"
+            python3 .github/scripts/junit_summary.py "api (docker)" "${{ runner.temp }}/junit-api-docker.xml" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-  # Runs whatever the shards did (always()), and fails when one of them did not succeed: a
-  # skipped job would satisfy a required check, a failed one never does.
-  api-coverage:
-    name: api coverage (combined, at least 95 percent)
-    needs: api
-    if: always()
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
-        working-directory: api
-    steps:
-      - name: Both api shards succeeded
-        if: needs.api.result != 'success'
-        working-directory: ${{ github.workspace }}
+      # The runner's memory as the kernel counted it (the cgroup of the runner's container,
+      # since that container started): its limit, how often the limit was reached ("max":
+      # file cache is given back then, nothing fails) and whether anything was ever killed
+      # ("oom_kill"). Written to the summary of the job; never fails it.
+      - name: Runner memory
+        id: memory
+        if: ${{ always() }}
         run: |
-          echo "::error::the api shards ended with '${{ needs.api.result }}': coverage was not checked"
-          exit 1
+          cg=/sys/fs/cgroup
+          if [[ -r "$cg/memory.peak" && -r "$cg/memory.events" && "$(cat "$cg/memory.max")" =~ ^[0-9]+$ ]]; then
+            {
+              echo "### Runner memory (${RUNNER_NAME:-this runner}, since its container started)"
+              echo
+              echo "- limit $(($(cat "$cg/memory.max") / 1048576)) MB, highest use $(($(cat "$cg/memory.peak") / 1048576)) MB, file cache included"
+              echo "- events: $(tr '\n' ' ' <"$cg/memory.events")"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no memory limit readable on this runner"
+          fi
+
+      - name: Every step the plan needs has run
+        id: verify
+        if: ${{ !cancelled() }}
+        env:
+          CI_LANE: api
+          CI_PLAN: ${{ steps.plan.outputs.plan }}
+          CI_JOB_STATUS: ${{ job.status }}
+          CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 .github/scripts/ci_plan.py verify
+
+  # ---------------------------------------------------------------------------------- checks
+  # pre-commit on every run, then the shell unit (the fast checks in front), then the e2e group
+  # apps (the longest group) against a scratch Compose stack; the worker runs with TEST_FAST_TIMERS
+  # (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts is in one group or in the exclusion
+  # list of .github/scripts/e2e_groups.py, which fails the shell unit and pre-commit otherwise.
+  # Which job holds which unit follows the measured lengths (README, What a CI run does; run
+  # 38078877905: api 255 s, this job 320 s with the web checks, journeys 262 s without them):
+  # the api tests fill their job, so the shell unit sits here, and the web checks went to
+  # journeys.
+  # Images: built with buildx bake. On a Mac runner from the layer cache of the runner's own
+  # Docker daemon (measured in run 38072303967: 22 s on a runner that never built them, under
+  # 2 s after; nothing is shared between runners because there is nothing left to gain). On
+  # GitHub's machines from the GitHub Actions layer cache, which only the journeys job writes.
+  checks:
+    name: checks
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
+    timeout-minutes: 30
+    env:
+      # The scratch stack of the e2e groups: one at a time in a job, the same project and port.
+      PROJECT: jobapp-ci
+      E2E_CADDY_URL: http://127.0.0.1:8080
+      E2E_COMPOSE_PROJECT: jobapp-ci
+      E2E_EVIDENCE: ci
+      PLAYWRIGHT_HTML_OPEN: never
+    steps:
+      # fetch-depth 0, in this job alone: the secret scan below reads every commit of the pull
+      # request or of the push, and a shallow checkout would hand it a history with holes.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Plan (the units this run needs, .github/scripts/ci_plan.py)
+        id: plan
+        run: python3 .github/scripts/ci_plan.py
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        id: uv
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: api/uv.lock
-      - name: Install dependencies
-        run: uv sync --frozen
-      - name: Download coverage data
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: coverage-*
-          merge-multiple: true
-          path: api
-      # Both files are named, so a missing shard fails here.
-      - name: Combine the two shards
-        id: combine
-        run: uv run --frozen coverage combine .coverage.jobs .coverage.rest
-      # The gate. Alone in its step and not piped: its exit status is the step's status.
-      - name: Coverage floor (at least 95 percent of the combined data)
-        run: uv run --frozen coverage report --fail-under=95
-      # --fail-under=0: this step only reports, also when the floor above failed.
-      - name: Coverage summary
-        if: ${{ !cancelled() && steps.combine.outcome == 'success' }}
-        run: |
-          total="$(uv run --frozen coverage report --format=total --fail-under=0)"
-          { echo "### api coverage"; echo; echo "- total: ${total} percent (floor: 95)"; } >> "$GITHUB_STEP_SUMMARY"
 
-  web:
-    name: web checks (eslint, tsc, build)
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
-    timeout-minutes: 15
-    defaults:
-      run:
-        shell: bash
-        working-directory: web
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # --- every run: pre-commit -----------------------------------------------------------
+      # On a Mac runner pre-commit's environments stay on the runner (PRE_COMMIT_HOME).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: precommit_cache
+        if: runner.environment == 'github-hosted'
         with:
-          persist-credentials: false
-      # The pnpm version comes from packageManager in web/package.json.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          package_json_file: web/package.json
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
-          cache-dependency-path: web/pnpm-lock.yaml
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Lint
-        run: pnpm lint
-      - name: Typecheck
-        run: pnpm typecheck
-      - name: Build
-        run: pnpm build
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+      # ruff runs in the api unit, eslint in the web unit, shellcheck in the shell unit. On a
+      # run narrowed to documentation those units are skipped, and so are these three hooks:
+      # the files they read did not change. gitleaks is skipped here because its hook reads
+      # the staged changes, of which a checkout has none: it passed whatever was committed.
+      # The secret scan is the next step.
+      # No --show-diff-on-failure: it prints the lines a fixer changed, with their context, in
+      # clear in the log of the job, and a file that holds a secret can be one a fixer touches.
+      # The hook's own message names the file; `pre-commit run --all-files` at home shows the diff.
+      # SKIP is set on this step and nowhere else in this file (ci_plan_test.py): in the job's
+      # env it would skip the secret scan too, whose hook has the same id, with a green step.
+      - name: pre-commit run --all-files
+        id: precommit
+        env:
+          SKIP: ruff-check,ruff-format,eslint,shellcheck,gitleaks
+        run: uvx --from pre-commit==4.6.2 pre-commit run --all-files
+      # Every run, whatever the plan and whatever pre-commit said: the gitleaks that
+      # .pre-commit-config.yaml pins, with its rules, on the commits of the pull request (each
+      # one, the lines typed into a merge commit, the messages) and on the pull request as a
+      # whole; on main, on the commits of the push (.github/scripts/secret_scan.sh;
+      # tests/secret_scan_test.sh plants a secret and expects this command to fail).
+      # --verbose: the log says which commits were read, also on a pass. env -u SKIP: no SKIP
+      # from anywhere reaches this command.
+      - name: Secret scan of the commits of this run (gitleaks)
+        id: secrets
+        if: ${{ !cancelled() }}
+        env:
+          CI_PUSH_BEFORE: ${{ github.event.before }}
+        run: env -u SKIP uvx --from pre-commit==4.6.2 pre-commit run gitleaks-commits --hook-stage manual --verbose
 
-  web-tests:
-    name: web vitest (shard ${{ matrix.shard }}/2)
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2]
-    defaults:
-      run:
-        shell: bash
-        working-directory: web
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          package_json_file: web/package.json
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
-          cache-dependency-path: web/pnpm-lock.yaml
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Vitest
-        run: pnpm exec vitest run --shard=${{ matrix.shard }}/2 --maxWorkers="$VITEST_WORKERS" --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
-      - name: Test summary
-        if: always()
-        run: python3 ../.github/scripts/junit_summary.py "web shard ${{ matrix.shard }}" "${{ runner.temp }}/junit-web.xml" >> "$GITHUB_STEP_SUMMARY"
-
-  shell:
-    name: shell (shellcheck, deploy.sh tests)
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: ${{ env.UV_VERSION }}
-          enable-cache: ${{ runner.environment == 'github-hosted' }}
-          cache-dependency-glob: api/uv.lock
+      # --- unit: shell ---------------------------------------------------------------------
+      # Every step on its own: one failing script does not hide the others.
       - name: Shellcheck (pinned image, as tests/deploy_test.sh and pre-commit)
+        id: shellcheck
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: >-
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
           deploy.sh ops/db.sh ops/previous.sh ops/migrate.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh .github/scripts/ci_env.sh
-          ops/ci-runners.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh
+          .github/scripts/secret_scan.sh tests/secret_scan_test.sh
+          ops/ci-runners.sh ops/ci-rerun.sh ops/ci-runner/entrypoint.sh ops/ci-runner/job-started.sh
           ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh
           tests/deploy_test.sh tests/migrate_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
           tests/reboot_check.sh tests/e2e_jetson.sh tests/tailscale_test.sh tests/agents_real_run_jetson.sh
@@ -299,77 +373,76 @@ jobs:
           ops/env_check.sh tests/env_check_test.sh
       # Issue #18: the .env syntax check and where it runs (deploy.sh, deploy.yml, the smoke).
       - name: tests/env_check_test.sh
+        id: env_check_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/env_check_test.sh
       # Every web/e2e/*.spec.ts is run by one e2e group or is excluded with a written reason.
       - name: e2e spec groups (.github/scripts/e2e_groups.py and its test)
+        id: e2e_groups
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: |
           python3 .github/scripts/e2e_groups_test.py
           python3 .github/scripts/e2e_groups.py
+      # Issue #91: the path rules of the plan, the reasons that let a rule skip a unit, and that
+      # this file's steps follow the plan.
+      - name: CI plan (.github/scripts/ci_plan_test.py)
+        id: ci_plan_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
+        run: python3 .github/scripts/ci_plan_test.py
       # deploy.sh against fake ssh and docker: no Jetson, nothing remote.
       - name: tests/deploy_test.sh
+        id: deploy_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/deploy_test.sh
       # The operator script of A5 against a fake ssh: a dry run leaves the committed evidence
       # untouched, a real run never overwrites it, only the owner's subscription gets a run.
       - name: tests/agents_real_run_test.sh
+        id: agents_real_run_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/agents_real_run_test.sh
       # Issue #83: the Mac CI runners (ops/ci-runners.sh and the hooks of ops/ci-runner) against
       # fake docker and gh, and where ci.yml and deploy.yml send their jobs.
       - name: tests/ci_runners_test.sh
+        id: ci_runners_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/ci_runners_test.sh
+      # The secret scan above, on throwaway repositories: the example secret of gitleaks' own
+      # documentation is committed, as a pull request and as a push, and the command of that
+      # step must fail; a clean history and an allowed line must pass.
+      - name: tests/secret_scan_test.sh
+        id: secret_scan_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
+        run: tests/secret_scan_test.sh
       # tailscale (Funnel): compose config and caddy's :8080 trust rules. No key, no tailnet; the
       # live no-key start is skipped here (CI is set, and the image is pinned to arm64).
       - name: tests/tailscale_test.sh
+        id: tailscale_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/tailscale_test.sh
 
-  # Browser journeys in four groups, each on a runner against its own scratch Compose stack
-  # (on the Mac in the runner's own Docker daemon: the same project name and port in each);
-  # the worker runs with TEST_FAST_TIMERS (tests/ats-stub.compose.yml). Every web/e2e/*.spec.ts
-  # is in one group or in the exclusion list of .github/scripts/e2e_groups.py, which fails the
-  # shell job otherwise. The ingestion group names a config, not its specs: it runs every
-  # web/e2e/ingestion-*.spec.ts, so a task of that module adds a spec without editing this file.
-  # Images: every group builds them with buildx bake from the GitHub Actions layer cache, and
-  # only one group (cache_write) writes that cache, so the three runners do not export the same
-  # mode=max layers three times. On a cold cache (a Dockerfile, a lock file or a base image
-  # changed) the three still build in parallel. A single build job in front of the groups was
-  # measured on 2026-10-10: it puts about 30 s (the job and its hand-over) before every group on
-  # a warm cache, and on a cold one the groups still wait for the build, so it is never faster.
-  e2e:
-    name: e2e (${{ matrix.group }})
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      # At most two stacks of one run at a time, also if a third runner is added.
-      max-parallel: 2
-      matrix:
-        group: [identity, sweep, apps, ingestion]
-        include:
-          - group: identity
-            cache_write: true
-    env:
-      PROJECT: jobapp-ci
-      E2E_CADDY_URL: http://127.0.0.1:8080
-      E2E_COMPOSE_PROJECT: jobapp-ci
-      E2E_EVIDENCE: ci
-      PLAYWRIGHT_HTML_OPEN: never
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: ${{ env.UV_VERSION }}
-          enable-cache: ${{ runner.environment == 'github-hosted' }}
-          cache-dependency-glob: api/uv.lock
+      # --- unit: e2e (groups apps and ingestion) -------------------------------------------
+      # Playwright comes with the web dependencies. The pnpm version comes from packageManager
+      # in web/package.json.
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        id: pnpm
+        if: ${{ !cancelled() && steps.plan.outputs.e2e == 'true' }}
         with:
           package_json_file: web/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        id: node
+        if: ${{ !cancelled() && steps.plan.outputs.e2e == 'true' }}
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
           cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install web dependencies
+        id: web_install
+        if: ${{ !cancelled() && steps.node.outcome == 'success' }}
+        working-directory: web
+        run: pnpm install --frozen-lockfile
       - name: Environment of the scratch stack (random secrets, never committed)
+        id: e2e_env
+        if: ${{ !cancelled() && steps.plan.outputs.e2e == 'true' && steps.web_install.outcome == 'success' }}
         run: |
           umask 077
           .github/scripts/ci_env.sh 8080 > .env
@@ -382,16 +455,17 @@ jobs:
           echo "AGENTS_FAKE_BACKEND=true" >> .env
       # On a Mac runner: the default builder of the runner's own Docker daemon, whose layer cache
       # stays on the runner's disk between jobs (bounded by the job-completed hook,
-      # ops/ci-runner/ci-clean.sh). Nothing is uploaded or downloaded, and the runners do not
-      # share it: each warms its own on its first e2e job.
+      # ops/ci-runner/ci-clean.sh). Nothing is uploaded or downloaded.
       - name: Build the images (buildx bake, the runner's own layer cache)
-        if: runner.environment != 'github-hosted'
+        id: images
+        if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment != 'github-hosted' }}
         run: docker buildx bake --progress=plain -f compose.yml --load api worker caddy
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        if: runner.environment == 'github-hosted'
-      # The cache-to lines are empty, and ignored, in the groups that do not write the cache.
-      - name: Build the images (buildx bake, GitHub Actions layer cache)
-        if: runner.environment == 'github-hosted'
+        id: buildx
+        if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment == 'github-hosted' }}
+      - name: Build the images (buildx bake, GitHub Actions layer cache, read only)
+        id: images_hosted
+        if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment == 'github-hosted' }}
         uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
         with:
           source: .
@@ -402,15 +476,19 @@ jobs:
             api.cache-from=type=gha,scope=e2e-api
             worker.cache-from=type=gha,scope=e2e-worker
             caddy.cache-from=type=gha,scope=e2e-caddy
-            ${{ matrix.cache_write && 'api.cache-to=type=gha,scope=e2e-api,mode=max' || '' }}
-            ${{ matrix.cache_write && 'worker.cache-to=type=gha,scope=e2e-worker,mode=max' || '' }}
-            ${{ matrix.cache_write && 'caddy.cache-to=type=gha,scope=e2e-caddy,mode=max' || '' }}
+      - name: Chromium for Playwright
+        id: e2e_ready
+        if: ${{ !cancelled() && (steps.images.outcome == 'success' || steps.images_hosted.outcome == 'success') }}
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
       # tests/ats-stub.compose.yml: the board check asks a stub (tests/ats_stub.py) and the worker
       # api/tests/jobs/fake_ats.py, never the real Ashby, Greenhouse or Lever.
       # CI_COMPOSE_OVERLAY comes from the runner's own environment, never from this file: the
       # Mac runners set it to compose.mac.yml (ops/ci-runner/Dockerfile), GitHub's machines and
       # the Jetson do not have it. Only `up` needs the overlay (compose.mac.yml).
-      - name: Start the stack
+      - name: Start the stack and migrate (apps)
+        id: apps_stack
+        if: ${{ !cancelled() && steps.e2e_ready.outcome == 'success' }}
         run: |
           overlay=()
           if [[ -n "${CI_COMPOSE_OVERLAY:-}" ]]; then
@@ -420,96 +498,373 @@ jobs:
           fi
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
             up -d --no-build --wait --wait-timeout 300
-      - name: Migrations
-        run: docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
-      - name: Install web dependencies and Chromium
-        working-directory: web
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm exec playwright install --with-deps chromium
-      - name: Identity, invites, users, account, profile and throttle journeys
-        if: matrix.group == 'identity'
-        working-directory: web
-        env:
-          E2E_ADMIN_EMAIL: e2e-admin@example.org
-          E2E_PASSWORD_THROTTLE: "1"
-          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/identity
-        run: pnpm exec playwright test -c e2e/identity-all.config.ts --reporter=list,html
-      # Issue #11: Find jobs with live progress, the summary and failed boards, the history, the
-      # schedule firing on the worker's tick, a 5,000 posting sweep under the worker's memory
-      # limit; the spec's one real sweep is skipped here.
-      - name: Sweep journeys against the fake ATS
-        if: matrix.group == 'sweep'
-        working-directory: web
-        env:
-          E2E_SKIP_REAL_SWEEP: "1"
-          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/sweep
-        run: pnpm exec playwright test jobs-sweep.spec.ts --workers=1 --reporter=list,html
+          docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
       - name: Synthetic job folder (made-up rows, never Harald's data)
-        if: matrix.group == 'apps'
+        id: apps_data
+        if: ${{ !cancelled() && steps.apps_stack.outcome == 'success' }}
         run: python3 .github/scripts/synthetic_jobs.py "$RUNNER_TEMP/synthetic/data"
       # Jobs on the synthetic import and the map; agents A2 to A4 on the fake backend (a run
       # streaming, reload and network loss, cancel, forbidden tools, triage proposals, job chat),
       # and the answer appearing while it is written (issue #33, partial messages replayed).
       - name: Jobs, map and agent journeys
-        if: matrix.group == 'apps'
+        id: e2e_apps
+        if: ${{ !cancelled() && steps.apps_data.outcome == 'success' }}
         working-directory: web
+        timeout-minutes: 12
         env:
           E2E_JOBS_DATA: ${{ runner.temp }}/synthetic/data
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/apps
         run: >-
           pnpm exec playwright test jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts
           agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts
-          --workers=1 --reporter=list,html
-      # Ingestion: documents (task G1: the page, uploads through Caddy up to 20 MiB, the api's
-      # memory with two uploads at once, logs free of content), then what later tasks add as
-      # web/e2e/ingestion-<task>.spec.ts (web/e2e/ingestion-all.config.ts runs them all).
-      - name: Ingestion journeys
-        if: matrix.group == 'ingestion'
-        working-directory: web
-        env:
-          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/ingestion
-        run: pnpm exec playwright test -c e2e/ingestion-all.config.ts --reporter=list,html
-      - name: Stack logs
-        if: failure()
+          --workers=1 --reporter=list,html --output=test-results/apps
+      - name: Stack logs (apps)
+        id: apps_logs
+        if: ${{ failure() && steps.apps_stack.outcome != 'skipped' }}
         run: |
           docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml ps -a
-          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color > "$RUNNER_TEMP/compose.log" 2>&1 || true
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color > "$RUNNER_TEMP/compose-apps.log" 2>&1 || true
+      # --timeout 0: the stack and its volumes are thrown away, so nothing waits for a clean stop.
+      # Before the next group starts its own: the same project name and port. No `|| true` here,
+      # unlike the last teardown of a job: the ingestion group's fresh database rests on this one
+      # having removed the apps stack and its volumes, so a teardown that fails fails the job,
+      # and the ingestion group does not start on what it left.
+      - name: Tear down the scratch stack (apps)
+        id: apps_down
+        if: ${{ always() && steps.e2e_env.outcome == 'success' }}
+        run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0
+
+      # Group ingestion, on a fresh stack: its own database and volumes. It starts only when the
+      # teardown above succeeded, and looks for itself: no container and no volume of the
+      # project may be left.
+      - name: Start the stack and migrate (ingestion)
+        id: ingestion_stack
+        if: ${{ !cancelled() && steps.e2e_ready.outcome == 'success' && steps.apps_down.outcome == 'success' }}
+        run: |
+          left="$({ docker ps -aq --filter "label=com.docker.compose.project=$PROJECT"; docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT"; } | tr '\n' ' ')"
+          if [[ -n "$left" ]]; then
+            echo "::error::containers or volumes of the apps stack are still here, the ingestion group would not start on a fresh database: $left"
+            exit 1
+          fi
+          overlay=()
+          if [[ -n "${CI_COMPOSE_OVERLAY:-}" ]]; then
+            [[ -f "$CI_COMPOSE_OVERLAY" ]] || { echo "::error::the runner's CI_COMPOSE_OVERLAY names no file: $CI_COMPOSE_OVERLAY"; exit 1; }
+            overlay=(-f "$CI_COMPOSE_OVERLAY")
+          fi
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
+            up -d --no-build --wait --wait-timeout 300
+          docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
+      # Ingestion: documents (task G1: the page, uploads through Caddy up to 20 MiB, an upload
+      # stopped on its way, the api's memory with two uploads at once, logs free of content),
+      # then what later tasks add as web/e2e/ingestion-<task>.spec.ts. This step names a config,
+      # not its specs: web/e2e/ingestion-all.config.ts runs every ingestion-*.spec.ts with one
+      # worker, so a task of that module adds a spec without editing this file, and
+      # .github/scripts/e2e_groups.py reads the config's SPEC_PREFIX to know what it covers.
+      - name: Ingestion journeys
+        id: e2e_ingestion
+        if: ${{ !cancelled() && steps.ingestion_stack.outcome == 'success' }}
+        working-directory: web
+        timeout-minutes: 8
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/ingestion
+        run: pnpm exec playwright test -c e2e/ingestion-all.config.ts --reporter=list,html --output=test-results/ingestion
+      - name: Stack logs (ingestion)
+        id: ingestion_logs
+        if: ${{ failure() && steps.ingestion_stack.outcome != 'skipped' }}
+        run: |
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml ps -a
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color > "$RUNNER_TEMP/compose-ingestion.log" 2>&1 || true
+      # `|| true` on the last teardown of a job only: nothing starts after it, and the runner's
+      # job-completed hook empties the daemon anyway.
+      - name: Tear down the scratch stack (ingestion)
+        id: ingestion_down
+        if: ${{ always() && steps.e2e_env.outcome == 'success' }}
+        run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
       - name: Upload Playwright report, traces, screenshots and logs
-        if: failure()
+        id: upload
+        if: ${{ failure() && steps.e2e_env.outcome == 'success' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: e2e-checks-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             web/playwright-report/
             web/test-results/
             tasks/evidence/ci/
-            ${{ runner.temp }}/compose.log
+            ${{ runner.temp }}/compose-apps.log
+            ${{ runner.temp }}/compose-ingestion.log
           retention-days: 14
           if-no-files-found: ignore
-      - name: Tear down the scratch stack
-        if: always()
-        run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans || true
 
-  precommit:
-    name: pre-commit (file fixers, gitleaks, prettier)
+      # As in the api job.
+      - name: Runner memory
+        id: memory
+        if: ${{ always() }}
+        run: |
+          cg=/sys/fs/cgroup
+          if [[ -r "$cg/memory.peak" && -r "$cg/memory.events" && "$(cat "$cg/memory.max")" =~ ^[0-9]+$ ]]; then
+            {
+              echo "### Runner memory (${RUNNER_NAME:-this runner}, since its container started)"
+              echo
+              echo "- limit $(($(cat "$cg/memory.max") / 1048576)) MB, highest use $(($(cat "$cg/memory.peak") / 1048576)) MB, file cache included"
+              echo "- events: $(tr '\n' ' ' <"$cg/memory.events")"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no memory limit readable on this runner"
+          fi
+
+      - name: Every step the plan needs has run
+        id: verify
+        if: ${{ !cancelled() }}
+        env:
+          CI_LANE: checks
+          CI_PLAN: ${{ steps.plan.outputs.plan }}
+          CI_JOB_STATUS: ${{ job.status }}
+          CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 .github/scripts/ci_plan.py verify
+
+  # -------------------------------------------------------------------------------- journeys
+  # The web unit (eslint, tsc, build, Vitest in one run), then the e2e groups identity and sweep
+  # one after the other, each on a scratch stack of its own (same project name and port, the first torn down with its volumes
+  # before the second starts).
+  journeys:
+    name: journeys
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["self-hosted", "mac-ci"]') }}
-    timeout-minutes: 15
+    timeout-minutes: 30
+    env:
+      # The scratch stack of the e2e groups: one at a time in a job, the same project and port.
+      PROJECT: jobapp-ci
+      E2E_CADDY_URL: http://127.0.0.1:8080
+      E2E_COMPOSE_PROJECT: jobapp-ci
+      E2E_EVIDENCE: ci
+      PLAYWRIGHT_HTML_OPEN: never
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        id: checkout
         with:
           persist-credentials: false
+          fetch-depth: 2
+      - name: Plan (the units this run needs, .github/scripts/ci_plan.py)
+        id: plan
+        run: python3 .github/scripts/ci_plan.py
+      # uv: web/e2e/jobs.spec.ts and the profile journeys convert their fixtures with the api's
+      # CLI through `uv run`.
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        id: uv
+        if: steps.plan.outputs.e2e == 'true'
         with:
           version: ${{ env.UV_VERSION }}
-      # On a Mac runner pre-commit's environments stay on the runner (PRE_COMMIT_HOME).
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: runner.environment == 'github-hosted'
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
+          cache-dependency-glob: api/uv.lock
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        id: pnpm
+        if: steps.plan.outputs.web == 'true' || steps.plan.outputs.e2e == 'true'
         with:
-          path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
-      # ruff runs in the api job, eslint in the web job, shellcheck in the shell job.
-      - name: pre-commit run --all-files
+          package_json_file: web/package.json
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        id: node
+        if: steps.plan.outputs.web == 'true' || steps.plan.outputs.e2e == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install web dependencies
+        id: web_install
+        if: steps.node.outcome == 'success'
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      # --- unit: web (eslint, tsc, build, vitest) ----------------------------------------------
+      - name: Lint
+        id: lint
+        if: ${{ !cancelled() && steps.plan.outputs.web == 'true' && steps.web_install.outcome == 'success' }}
+        working-directory: web
+        run: pnpm lint
+      - name: Typecheck
+        id: typecheck
+        if: ${{ !cancelled() && steps.plan.outputs.web == 'true' && steps.web_install.outcome == 'success' }}
+        working-directory: web
+        run: pnpm typecheck
+      - name: Build
+        id: build
+        if: ${{ !cancelled() && steps.plan.outputs.web == 'true' && steps.web_install.outcome == 'success' }}
+        working-directory: web
+        run: pnpm build
+      # Vitest in one run instead of two shards on two runners: the files are spread over the
+      # same three workers either way, and a second job would pay its set up for 25 s of tests.
+      - name: Vitest
+        id: vitest
+        if: ${{ !cancelled() && steps.plan.outputs.web == 'true' && steps.web_install.outcome == 'success' }}
+        working-directory: web
+        timeout-minutes: 8
+        run: pnpm exec vitest run --maxWorkers="$VITEST_WORKERS" --reporter=default --reporter=junit --outputFile=${{ runner.temp }}/junit-web.xml
+      - name: Test summary
+        id: summary
+        if: ${{ always() && steps.vitest.outcome != 'skipped' }}
+        run: python3 .github/scripts/junit_summary.py "web" "${{ runner.temp }}/junit-web.xml" >> "$GITHUB_STEP_SUMMARY"
+
+      # --- unit: e2e (groups identity and sweep) -------------------------------------------
+      - name: Environment of the scratch stacks (random secrets, never committed)
+        id: e2e_env
+        if: ${{ !cancelled() && steps.plan.outputs.e2e == 'true' && steps.web_install.outcome == 'success' }}
+        run: |
+          umask 077
+          .github/scripts/ci_env.sh 8080 > .env
+          if grep -q change-me .env; then
+            echo "::error::a placeholder secret of .env.example was left in .env"
+            exit 1
+          fi
+          # Agents A2: the worker replays recorded streams instead of calling a model (refused
+          # when APP_ENV is production; this stack is development).
+          echo "AGENTS_FAKE_BACKEND=true" >> .env
+      - name: Build the images (buildx bake, the runner's own layer cache)
+        id: images
+        if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment != 'github-hosted' }}
+        run: docker buildx bake --progress=plain -f compose.yml --load api worker caddy
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        id: buildx
+        if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment == 'github-hosted' }}
+      # ignore-error: a failing cache service must not turn the journeys red (issue #35).
+      - name: Build the images (buildx bake, GitHub Actions layer cache, written here)
+        id: images_hosted
+        if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment == 'github-hosted' }}
+        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        with:
+          source: .
+          files: compose.yml
+          targets: api,worker,caddy
+          load: true
+          set: |
+            api.cache-from=type=gha,scope=e2e-api
+            worker.cache-from=type=gha,scope=e2e-worker
+            caddy.cache-from=type=gha,scope=e2e-caddy
+            api.cache-to=type=gha,scope=e2e-api,mode=max,ignore-error=true
+            worker.cache-to=type=gha,scope=e2e-worker,mode=max,ignore-error=true
+            caddy.cache-to=type=gha,scope=e2e-caddy,mode=max,ignore-error=true
+      - name: Chromium for Playwright
+        id: e2e_ready
+        if: ${{ !cancelled() && (steps.images.outcome == 'success' || steps.images_hosted.outcome == 'success') }}
+        working-directory: web
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Group identity. CI_COMPOSE_OVERLAY: see the checks job.
+      - name: Start the stack and migrate (identity)
+        id: identity_stack
+        if: ${{ !cancelled() && steps.e2e_ready.outcome == 'success' }}
+        run: |
+          overlay=()
+          if [[ -n "${CI_COMPOSE_OVERLAY:-}" ]]; then
+            [[ -f "$CI_COMPOSE_OVERLAY" ]] || { echo "::error::the runner's CI_COMPOSE_OVERLAY names no file: $CI_COMPOSE_OVERLAY"; exit 1; }
+            overlay=(-f "$CI_COMPOSE_OVERLAY")
+            echo "compose overlay of this runner: $CI_COMPOSE_OVERLAY"
+          fi
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
+            up -d --no-build --wait --wait-timeout 300
+          docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
+      - name: Identity, invites, users, account, profile and throttle journeys
+        id: e2e_identity
+        if: ${{ !cancelled() && steps.identity_stack.outcome == 'success' }}
+        working-directory: web
+        timeout-minutes: 10
         env:
-          SKIP: ruff-check,ruff-format,eslint,shellcheck
-        run: uvx --from pre-commit==4.6.2 pre-commit run --all-files --show-diff-on-failure
+          E2E_ADMIN_EMAIL: e2e-admin@example.org
+          E2E_PASSWORD_THROTTLE: "1"
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/identity
+        run: pnpm exec playwright test -c e2e/identity-all.config.ts --reporter=list,html --output=test-results/identity
+      - name: Stack logs (identity)
+        id: identity_logs
+        if: ${{ failure() && steps.identity_stack.outcome != 'skipped' }}
+        run: |
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml ps -a
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color > "$RUNNER_TEMP/compose-identity.log" 2>&1 || true
+      # Before the next group starts its own: the same project name and port. No `|| true`
+      # here, unlike the last teardown of a job: the sweep group's fresh database rests on this
+      # one having removed the identity stack and its volumes, so a teardown that fails fails
+      # the job, and the sweep group does not start on what it left.
+      - name: Tear down the scratch stack (identity)
+        id: identity_down
+        if: ${{ always() && steps.e2e_env.outcome == 'success' }}
+        run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0
+
+      # Group sweep, on a fresh stack: its own database and volumes. It starts only when the
+      # teardown above succeeded, and looks for itself: no container and no volume of the
+      # project may be left.
+      - name: Start the stack and migrate (sweep)
+        id: sweep_stack
+        if: ${{ !cancelled() && steps.e2e_ready.outcome == 'success' && steps.identity_down.outcome == 'success' }}
+        run: |
+          left="$({ docker ps -aq --filter "label=com.docker.compose.project=$PROJECT"; docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT"; } | tr '\n' ' ')"
+          if [[ -n "$left" ]]; then
+            echo "::error::containers or volumes of the identity stack are still here, the sweep group would not start on a fresh database: $left"
+            exit 1
+          fi
+          overlay=()
+          if [[ -n "${CI_COMPOSE_OVERLAY:-}" ]]; then
+            [[ -f "$CI_COMPOSE_OVERLAY" ]] || { echo "::error::the runner's CI_COMPOSE_OVERLAY names no file: $CI_COMPOSE_OVERLAY"; exit 1; }
+            overlay=(-f "$CI_COMPOSE_OVERLAY")
+          fi
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml "${overlay[@]}" \
+            up -d --no-build --wait --wait-timeout 300
+          docker compose -p "$PROJECT" -f compose.yml exec -T api alembic upgrade head
+      # Issue #11: Find jobs with live progress, the summary and failed boards, the history, the
+      # schedule firing on the worker's tick, a 5,000 posting sweep under the worker's memory
+      # limit; the spec's one real sweep is skipped here.
+      - name: Sweep journeys against the fake ATS
+        id: e2e_sweep
+        if: ${{ !cancelled() && steps.sweep_stack.outcome == 'success' }}
+        working-directory: web
+        timeout-minutes: 8
+        env:
+          E2E_SKIP_REAL_SWEEP: "1"
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/sweep
+        run: pnpm exec playwright test jobs-sweep.spec.ts --workers=1 --reporter=list,html --output=test-results/sweep
+      - name: Stack logs (sweep)
+        id: sweep_logs
+        if: ${{ failure() && steps.sweep_stack.outcome != 'skipped' }}
+        run: |
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml ps -a
+          docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color > "$RUNNER_TEMP/compose-sweep.log" 2>&1 || true
+      - name: Tear down the scratch stack (sweep)
+        id: sweep_down
+        if: ${{ always() && steps.e2e_env.outcome == 'success' }}
+        run: docker compose -p "$PROJECT" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
+      - name: Upload Playwright report, traces, screenshots and logs
+        id: upload
+        if: ${{ failure() && steps.e2e_env.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-journeys-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            web/playwright-report/
+            web/test-results/
+            tasks/evidence/ci/
+            ${{ runner.temp }}/compose-identity.log
+            ${{ runner.temp }}/compose-sweep.log
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # As in the api job.
+      - name: Runner memory
+        id: memory
+        if: ${{ always() }}
+        run: |
+          cg=/sys/fs/cgroup
+          if [[ -r "$cg/memory.peak" && -r "$cg/memory.events" && "$(cat "$cg/memory.max")" =~ ^[0-9]+$ ]]; then
+            {
+              echo "### Runner memory (${RUNNER_NAME:-this runner}, since its container started)"
+              echo
+              echo "- limit $(($(cat "$cg/memory.max") / 1048576)) MB, highest use $(($(cat "$cg/memory.peak") / 1048576)) MB, file cache included"
+              echo "- events: $(tr '\n' ' ' <"$cg/memory.events")"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no memory limit readable on this runner"
+          fi
+
+      - name: Every step the plan needs has run
+        id: verify
+        if: ${{ !cancelled() }}
+        env:
+          CI_LANE: journeys
+          CI_PLAN: ${{ steps.plan.outputs.plan }}
+          CI_JOB_STATUS: ${{ job.status }}
+          CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 .github/scripts/ci_plan.py verify

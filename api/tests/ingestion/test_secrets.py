@@ -61,7 +61,8 @@ def test_a_value_of_the_rules_shape_is_found(rule: str) -> None:
         "password: (the one you chose)",
         "token = a_placeholder_value",  # no digit: a word, not a key
         "key: aaaaaaaaaaaaaaaa1111",  # a digit but no entropy
-        "See https://example.org/docs/authentication for the secret rotation policy.",
+        # (Not ".../docs/...": the CI plan's guard reads that as a path of this repository.)
+        "See https://example.org/guides/authentication for the secret rotation policy.",
         "https://robin@example.org/profile",  # a user name, no password
         "Contact: mailto:robin@example.org",
         "AKIA is how an AWS key id starts, and AKIAshort is not one.",
