@@ -73,6 +73,8 @@ hook itself. The runner as first built did neither of the two things that make t
   `Bash` or to an invented `mcp__app__` tool is answered by the CLI itself ("No such tool
   available"), the gate never hears of it, and the next request leaves.
 Measured by the reviewer on the runner as first built (budget 4,000, a loop of nine requests):
+- `Bash` or an invented tool, requests of 1 s: 4 requests, one after the reaching one, with
+  its answer (6,000 and 200 recorded);
 - `Bash` or an invented tool, instant requests: 9 requests, the run recorded `done`;
 - `Bash`, requests of 0.3 s, event writes of 0.4 s: 9 requests, failed on its budget, 6,000 and
   4 recorded where 13,500 and 450 were used;
