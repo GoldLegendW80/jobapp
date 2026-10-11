@@ -6,8 +6,9 @@
 #   ops/db.sh backup [--tag NAME]   pg_dump -Fc of the live database to
 #                                   $BACKUP_DIR/jobapp-YYYY-MM-DDTHHMMSS[-NAME].dump (UTC), verified,
 #                                   then the retention below
-#   ops/db.sh retention             what the retention is, where the number comes from and the
-#                                   oldest dump of each folder; changes nothing
+#   ops/db.sh retention             what the retention is and where the number comes from, the
+#                                   newest and the oldest dump of each folder, what is left alone
+#                                   there, the scratch database if it exists; changes nothing
 #   ops/db.sh prune                 the count rule alone, in $BACKUP_DIR; never deletes by age
 #   ops/db.sh list                  the dumps, oldest first, with their sizes
 #   ops/db.sh verify <file>         refuses a missing, empty, foreign, corrupt or truncated dump
@@ -35,12 +36,17 @@
 #          $BACKUP_DIR/incoming (dumps uploaded from the Mac for a restore).
 # The age of a dump is the number of UTC calendar days between the date in its own name and the
 # date in the name of the dump the run has just written. Never an mtime: a copied or touched file
-# is as old as its name says. So with 7, a dump of any hour of day D goes with the backup of day
-# D + 7, and nothing is deleted on a day without a verified backup.
-# Never deleted: the dump the run wrote; the newest dump of $BACKUP_DIR and of deploys/, whatever
-# its age (said in the output when it is past the limit); a file whose name is not exactly
+# is as old as its name says. Whole days, not seconds, so that two nightly runs a few seconds
+# apart never disagree about the dump of 7 nights ago, and so that anyone can check the folder by
+# reading names. With 7, a dump of any hour of UTC day D goes with the backup of day D + 7: one
+# written between midnight UTC and the hour of that backup lives 7 days plus those hours, every
+# other one less than 7 days. Nothing is deleted on a day without a verified backup.
+# Never deleted: the dump the run wrote, which is the newest verified dump of the whole tree (so
+# there is no exception per folder: the last predeploy dump goes at 7 days like any other, since
+# a newer verified dump exists by then); a file whose name is not exactly
 # jobapp-YYYY-MM-DDTHHMMSS[-tag].dump with a date that exists; anything that is not a regular file
-# (a symbolic link is neither followed nor removed). What is left alone is listed, run after run.
+# (a symbolic link is neither followed nor removed). What is left alone is listed, run after run,
+# and so is the scratch database of `restore --keep` while it exists.
 # deploys/ is skipped while a backup or a restore holds its lock. Only `backup` deletes by age.
 set -euo pipefail
 umask 077
@@ -286,12 +292,12 @@ report_odd() { # report_odd <dir>: what scan found there that is not a dump
   done
 }
 
-# rotate_dir <dir> <count rule 0|1> <keep the newest 0|1> <day of the new dump, or ''> <its name, or ''>
+# rotate_dir <dir> <count rule 0|1> <day of the new dump, or ''> <its name, or ''>
 # The count rule keeps the newest BACKUP_KEEP dumps of <dir>. With a day, a dump BACKUP_KEEP days
-# old or more goes too. The named dump (the one this run wrote) never goes, nor the newest of
-# <dir> when asked.
+# old or more goes too, the newest of <dir> like the others: the one dump that never goes is the
+# named one, written and verified by this run.
 rotate_dir() {
-  local dir="$1" by_count="$2" keep_newest="$3" ref="$4" fresh="$5" n i name why kept=0
+  local dir="$1" by_count="$2" ref="$3" fresh="$4" n i name age why kept=0
   scan "$dir"
   n=${#DUMPS[@]}
   for ((i = 0; i < n; i++)); do
@@ -300,14 +306,15 @@ rotate_dir() {
     if ((by_count == 1 && i < n - KEEP)); then why="beyond the newest $KEEP"; fi
     if [[ -n "$ref" ]]; then
       dump_day "$name"
-      if ((ref - DUMP_DAY >= KEEP)); then why="$((ref - DUMP_DAY)) days old, the limit is $KEEP"; fi
+      age=$((ref - DUMP_DAY))
+      if ((age >= KEEP)); then why="$age days old, the limit is $KEEP"; fi
+      # A name ahead of this run's: the clock was wrong when one of the two was made. Kept, since
+      # it is not old by its name, and said, since it will not go before that date has passed.
+      if ((age < 0)) && [[ -z "$why" && "$name" != "$fresh" ]]; then
+        info "kept $name, whose name is $((-age)) day(s) ahead of this run's (a clock was wrong): by its name it goes in $((KEEP - age)) days, sooner by hand"
+      fi
     fi
-    if [[ -n "$why" && "$name" == "$fresh" ]]; then
-      why="" # written and verified by this run
-    elif [[ -n "$why" ]] && ((keep_newest == 1 && i == n - 1)); then
-      info "kept $name although it is $why: the newest dump of $dir is never deleted"
-      why=""
-    fi
+    if [[ "$name" == "$fresh" ]]; then why=""; fi
     if [[ -n "$why" ]]; then
       remove_dump "$dir" "$name"
       info "deleted old backup $name ($why)"
@@ -324,15 +331,29 @@ promise_note() { # said by every run whose retention is longer than what the app
     info "WARNING: BACKUP_KEEP=$KEEP keeps dumps up to $KEEP days, and the app tells its users that a deleted document leaves the server's backups within $PROMISED_DAYS days: with this setting that is not true"
 }
 
+# scratch_note: the scratch database of `restore --keep` is a whole copy of a dump inside
+# Postgres, which no rule here deletes. Said by every backup and by `retention` while it exists;
+# never dropped here. A database that does not answer is said too, never taken for "none".
+scratch_note() {
+  local n=""
+  n="$(psql_ postgres -tA -c "select count(*) from pg_database where datname = '$SCRATCH_DB'" 2>/dev/null)" || n=""
+  case "${n//[[:space:]]/}" in
+    0) ;;
+    1) info "left alone: the scratch database $SCRATCH_DB exists, a whole copy of a dump kept by restore --keep and outside the retention (drop it with ./deploy.sh restore --drop-scratch)" ;;
+    *) info "not checked: whether the scratch database $SCRATCH_DB of restore --keep exists (the db service did not answer)" ;;
+  esac
+}
+
 # rotate: after do_backup, and only then. The day everything is measured from is the one in the
-# name of the dump this run wrote, so there is no rotation without a verified dump.
+# name of the dump this run wrote, so there is no rotation without a verified dump, and that dump
+# is the one thing no rule deletes: the newest verified dump of the whole tree.
 rotate() {
   local fresh="${BACKUP_FILE##*/}" ref sub dir
   if [[ ! -f "$BACKUP_FILE" || -L "$BACKUP_FILE" ]] || ! dump_day "$fresh"; then
     die "no verified dump from this run to measure ages from, nothing deleted"
   fi
   ref="$DUMP_DAY"
-  rotate_dir "$BACKUP_DIR" 1 1 "$ref" "$fresh"
+  rotate_dir "$BACKUP_DIR" 1 "$ref" "$fresh"
   for sub in deploys incoming; do
     dir="$BACKUP_DIR/$sub"
     [[ -e "$dir" || -L "$dir" ]] || continue
@@ -342,18 +363,20 @@ rotate() {
     fi
     if [[ "$sub" == deploys ]]; then
       # A predeploy backup, or a restore run from that folder, holds its lock: never under them.
+      # (The other way round, a deploy that asks for this lock in the instant it is held here is
+      # refused like any second backup, and is run again.)
       if ! exec 8>>"$dir/.lock" || ! flock -n 8; then
         info "skipped $dir: a backup or a restore holds its lock, the next run deletes what is too old there"
         exec 8>&- || true
         continue
       fi
-      rotate_dir "$dir" 0 1 "$ref" ""
+      rotate_dir "$dir" 0 "$ref" ""
       exec 8>&-
     else
-      # Copies of dumps the Mac still has: the age rule alone, the newest one included.
-      rotate_dir "$dir" 0 0 "$ref" ""
+      rotate_dir "$dir" 0 "$ref" ""
     fi
   done
+  scratch_note
   promise_note
 }
 
@@ -437,33 +460,46 @@ cmd_backup() {
 # there is no day to measure ages from and nothing is deleted by age.
 cmd_prune() {
   take_lock
-  rotate_dir "$BACKUP_DIR" 1 1 "" ""
+  rotate_dir "$BACKUP_DIR" 1 "" ""
   info "prune applies the count rule alone: only a backup, once its dump is verified, deletes by age"
 }
 
-# cmd_retention: what a backup run here keeps, and what is there now. Reads the clock, the
-# settings and file names; changes nothing, takes no lock and needs no database.
+# cmd_retention: what a backup run here keeps, and whether the folders show it: the number and
+# where it comes from, the newest and the oldest dump of each folder against today's UTC date,
+# what is left alone, the scratch database. Changes nothing and takes no lock.
 cmd_retention() {
-  local today dir n age past
+  local today dir n newest oldest note
   dump_day "jobapp-$(date -u +%Y-%m-%dT%H%M%S).dump" || die "cannot read today's date from the clock"
   today="$DUMP_DAY"
   info "retention: BACKUP_KEEP=$KEEP ($KEEP_FROM). After each verified backup the newest $KEEP dumps of $BACKUP_DIR stay, and a dump whose name is $KEEP days old or more is deleted, there, in deploys/ and in incoming/"
   promise_note
   for dir in "$BACKUP_DIR" "$BACKUP_DIR/deploys" "$BACKUP_DIR/incoming"; do
-    [[ -d "$dir" && ! -L "$dir" ]] || continue
+    if [[ -L "$dir" ]]; then
+      info "left alone: $dir is a symbolic link, not a folder of dumps"
+      continue
+    fi
+    [[ -d "$dir" ]] || continue
     scan "$dir"
     n=${#DUMPS[@]}
     if ((n == 0)); then
       info "$dir: no dump"
     else
       dump_day "${DUMPS[0]}"
-      age=$((today - DUMP_DAY))
-      past=""
-      ((age < KEEP)) || past=", PAST the limit of $KEEP days: the next verified backup deletes it, unless it is the newest of its folder"
-      info "$dir: $n dump(s), the oldest is $age day(s) old (${DUMPS[0]})$past"
+      oldest=$((today - DUMP_DAY))
+      dump_day "${DUMPS[$((n - 1))]}"
+      newest=$((today - DUMP_DAY))
+      note=""
+      ((oldest < KEEP)) || note=", PAST the limit of $KEEP days: the next verified backup deletes it"
+      info "$dir: $n dump(s), the newest $newest day(s) old, the oldest $oldest day(s) old (${DUMPS[0]})$note"
+      # In the folder of the nightly run a newest dump of two days or more means that run failed
+      # or did not happen, and then nothing is deleted anywhere.
+      if [[ "$dir" == "$BACKUP_DIR" ]] && ((newest >= 2)); then
+        info "WARNING: no verified backup in $dir for $newest days: nothing is deleted until one succeeds"
+      fi
     fi
     report_odd "$dir"
   done
+  scratch_note
   printf 'keep=%s\n' "$KEEP"
 }
 

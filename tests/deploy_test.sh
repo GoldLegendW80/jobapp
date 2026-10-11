@@ -751,6 +751,11 @@ case "$args" in
     fi
     ;;
   *"pg_database_size"*) echo 1000 ;;
+  *"from pg_database where datname = 'jobapp_restore_check'"*)
+    # Is the scratch database of restore --keep there (T10)? FAKE_SCRATCH=1: yes; down: no answer.
+    [[ "${FAKE_SCRATCH:-0}" != down ]] || exit 1
+    echo "${FAKE_SCRATCH:-0}"
+    ;;
   *"drop database"*) echo "drop while stopped: $(cat "$FAKE_DIR/stopped" 2>/dev/null)" >>"$log" ;;
   *"pg_restore -U"*)
     cat >/dev/null
@@ -993,8 +998,10 @@ out_has "deleted old backup $(d 8 predeploy-aaaaaaaaaaaa 140000) (8 days old, th
 out_has "deleted old backup $(d 9 pre-restore) (9 days old, the limit is 7)"
 out_has "retention: 2 backup(s) kept in $ROT/backups/deploys (BACKUP_KEEP=7, the default of ops/db.sh)"
 out_has "retention: 1 backup(s) kept in $ROT/backups/incoming"
-# Every file that reached rm is a dump, by its whole name, directly in one of the three folders;
-# the rest are this run's own temporary files. No option but -f, and -- before the name.
+# Every file that reached rm in the backup folders is a dump, by its whole name, directly in one
+# of the three, with -f and -- before the one path; the others are the run's own mktemp files,
+# outside those folders.
+tmp_re='^rm -f /[^[:space:]]*/tmp\.[A-Za-z0-9]+$'
 while IFS= read -r line; do
   case "$line" in
     "rm -f -- $ROT/backups/"*)
@@ -1002,11 +1009,11 @@ while IFS= read -r line; do
       [[ "$rest" =~ ^((deploys|incoming)/)?jobapp-[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{6}(-[a-z0-9-]+)?\.dump$ ]] ||
         fail "rm was given something that is not a dump: $line"
       ;;
-    "rm -f $ROT/tmp/"*) ;;
-    *) fail "an rm the rotation should not make: $line" ;;
+    *"$ROT/backups"* | *"$ROT/outside"*) fail "an rm in the backup folders that is not the rotation's: $line" ;;
+    *) [[ "$line" =~ $tmp_re ]] || fail "an rm the run should not make: $line" ;;
   esac
 done < <(grep '^rm ' "$ROT/order")
-[[ "$(grep -c "^rm -f -- $ROT/backups/" "$ROT/order")" == 5 ]] || fail "not exactly the 5 old dumps were removed: $(cat "$ROT/order")"
+[[ "$(grep -c "^rm -f -- $ROT/backups/" "$ROT/order")" == 4 ]] || fail "not exactly the 4 old dumps were removed: $(cat "$ROT/order")"
 ok "the nightly run: a predeploy dump 8 days old goes and one 6 days old stays, a pre-restore dump 9 days old goes, an uploaded dump 9 days old goes; rm only ever got whole dump names in the three folders"
 
 rot_new
@@ -1027,20 +1034,53 @@ only incoming "$(d 20)"
 out_has "^backup=$ROT/backups/deploys/$(d 0 predeploy-0123456789ab)$"
 ok "the deploy's own backup (BACKUP_DIR is the predeploy folder): both rules there, newest 7 and nothing 7 days old, and no other folder touched"
 
-step "T10, safety: what is never deleted, and when nothing is"
+step "T10, safety: the newest verified dump of the whole tree stays, and no folder has an exception"
+# The review of 2026-10-11: keeping the newest dump of each folder whatever its age made the 7
+# days false, since a document deleted after the last deploy stayed in the last predeploy dump
+# until the next deploy. What stays is one dump, the one this run wrote and verified.
 rot_new
-seed "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 20 predeploy-bbbbbbbbbbbb)" "incoming/$(d 30)" "incoming/$(d 20)"
+seed "$(d 30)" "$(d 20 pre-restore)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 20 predeploy-bbbbbbbbbbbb)" \
+  "incoming/$(d 30)" "incoming/$(d 20)"
 rot 0 "$NOW"
 only . "$(d 0)"
-only deploys "$(d 20 predeploy-bbbbbbbbbbbb)"
-out_has "kept $(d 20 predeploy-bbbbbbbbbbbb) although it is 20 days old, the limit is 7: the newest dump of $ROT/backups/deploys is never deleted"
+only deploys
 only incoming
-ok "the newest predeploy dump stays whatever its age, and the run says so; uploads are copies of dumps the Mac has, and all go by age"
+[[ "$(cd "$ROT/backups" && find . -type f -name '*.dump')" == "./$(d 0)" ]] || fail "more than this run's dump is left"
+out_has "deleted old backup $(d 20 predeploy-bbbbbbbbbbbb) (20 days old, the limit is 7)"
+out_has "retention: 0 backup(s) kept in $ROT/backups/deploys"
+ok "every folder holds only dumps past the limit: all go, the last predeploy dump and the last upload included, and the one dump left on the server is the one this run wrote and verified"
+
+rot_new
+for n in 1 2 3 4 5 6 7; do seed "$(d "$n")"; done
+seed "deploys/$(d 7 predeploy-aaaaaaaaaaaa 140000)"
+rot 0 "$NOW"
+only . "$(d 0)" "$(d 1)" "$(d 2)" "$(d 3)" "$(d 4)" "$(d 5)" "$(d 6)"
+only deploys
+ok "a week without a deploy: the only predeploy dump, taken 7 days ago in the afternoon, goes with the nightly dump of that day, so nothing a user deleted since is left in it"
+
+rot_new
+seed "$(d 30)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 9 predeploy-bbbbbbbbbbbb)"
+rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" -- backup --tag predeploy-0123456789ab
+only deploys "$(d 0 predeploy-0123456789ab)"
+only . "$(d 30)"
+ok "a deploy after a long pause: its backup deletes every older predeploy dump and keeps its own; the folder of the nightly run is not its to rotate"
+
 rot_new
 for n in 1 2 3 4 5 6 7 8; do seed "$(d "$n")"; done
 rot 0 "$(ago 20)" # the clock says 20 days before the newest names: this run's dump is the oldest by name
 only . "jobapp-$(ago 20).dump" "$(d 1)" "$(d 2)" "$(d 3)" "$(d 4)" "$(d 5)" "$(d 6)" "$(d 7)"
-ok "the dump this run wrote is never deleted: with a clock set back it is the oldest name of nine, and the count rule takes the next one"
+out_has "kept $(d 1), whose name is 19 day(s) ahead of this run's (a clock was wrong): by its name it goes in 26 days, sooner by hand"
+ok "a clock set back: the dump this run wrote is the oldest name of nine and still stays (the count rule takes the next one); the dumps named ahead of it are kept and said"
+
+rot_new
+for n in 1 2 3; do seed "$(d "$n")"; done
+seed "deploys/$(d 1 predeploy-aaaaaaaaaaaa)" "incoming/$(d 1)"
+rot 0 2027-10-11T011700 # the clock a year ahead: everything else looks a year old
+[[ "$(cd "$ROT/backups" && find . -type f -name '*.dump')" == ./jobapp-2027-10-11T011700.dump ]] || fail "not exactly this run's dump is left: $(holds .)"
+rot 0 "$NOW" # the clock right again
+only . jobapp-2027-10-11T011700.dump "$(d 0)"
+out_has "kept jobapp-2027-10-11T011700.dump, whose name is 365 day(s) ahead of this run's (a clock was wrong): by its name it goes in 372 days, sooner by hand"
+ok "a clock a year ahead: every other dump goes and the run's own verified dump stays, so no run ends with nothing to restore; once the clock is right that dump is ahead by its name, kept and said at every run"
 
 rot_new
 seed "$(d 30)" "$(d 20)" "$(d 9)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 9 predeploy-bbbbbbbbbbbb)" "incoming/$(d 30)"
@@ -1066,13 +1106,14 @@ rot 1 "$NOW" FAKE_FAIL_DUMP=1
 no_delete "$before"
 rot 0 "$NOW"
 only . "$(d 0)"
-only deploys "$(d 11 predeploy-bbbbbbbbbbbb)"
+only deploys
 verified="$(grep -n '^verify read$' "$ROT/order" | tail -n 1 | cut -d: -f1)"
 first_rm="$(grep -n "^rm -f -- $ROT/backups/" "$ROT/order" | head -n 1 | cut -d: -f1)"
 [[ -n "$verified" && -n "$first_rm" ]] || fail "no verification or no deletion in: $(cat "$ROT/order")"
 ((verified < first_rm)) || fail "a dump was deleted before the new one was verified: $(cat "$ROT/order")"
 [[ "$(sed -n '1p' "$ROT/order")" == pg_dump ]] || fail "the run did not start with the dump: $(cat "$ROT/order")"
-ok "a Jetson switched off for ten days: a first night whose dump fails deletes none of the seven old dumps; the next writes a dump, verifies it, and only then deletes them"
+[[ "$(grep -c "^rm -f -- $ROT/backups/" "$ROT/order")" == 9 ]] || fail "not the nine old dumps: $(cat "$ROT/order")"
+ok "a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes them all"
 
 rot_new
 seed "$(d 30)" "$(d 20)" "$(d 10)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 20 predeploy-bbbbbbbbbbbb)" "incoming/$(d 30)"
@@ -1126,7 +1167,7 @@ if command -v flock >/dev/null; then
   only deploys "$(d 9 predeploy-aaaaaaaaaaaa)" "$(d 8 predeploy-bbbbbbbbbbbb)"
   out_has "skipped $ROT/backups/deploys: a backup or a restore holds its lock"
   rot 0 "$(ago 0 011800)" DB_SH_TEST_BIN="$ROT/realbin"
-  only deploys "$(d 8 predeploy-bbbbbbbbbbbb)"
+  only deploys
   ok "with the real flock: held by another process, deploys/ is skipped; released, the next run deletes what is too old there"
 else
   ok "no flock on this machine: the held lock of deploys/ is checked with the real flock in CI"
@@ -1170,31 +1211,52 @@ grep -q "not a dump of this script: \(backup\.log\|\.lock\|previous-tree\|incomi
 [[ "$(grep -c "^rm -f -- " "$ROT/order")" == 2 ]] || fail "more than the two old dumps reached rm: $(cat "$ROT/order")"
 ok "left alone and reported, run after run: no timestamp, a date that does not exist, another suffix or prefix, an upper case tag, a partial file, a name with a line break, a folder and a symbolic link named like old dumps (the file it points to untouched), a deploys/ that is a link"
 grep -nE '(^|[^[:alnum:]_])rm[[:space:]]+-[[:alnum:]]*[rR]' ops/db.sh && fail "ops/db.sh has a recursive rm"
-grep -nE -- '-delete|xargs|-exec' ops/db.sh && fail "ops/db.sh deletes through find or xargs"
+grep -nE -- '(^|[^-])-(delete|exec)([^[:alnum:]_-]|$)|xargs' ops/db.sh && fail "ops/db.sh deletes through find or xargs"
 # shellcheck disable=SC2016 # the literal text of ops/db.sh
 [[ "$(grep -c 'rm -f -- ' ops/db.sh)" == 1 && "$(grep -c 'rm -f -- "$dir/$name"' ops/db.sh)" == 1 ]] ||
   fail "a dump is deleted somewhere else than in remove_dump"
 ok "ops/db.sh: no recursive rm, no find -delete, no xargs; one rm deletes dumps, by one full path"
 
-step "T10, ops/db.sh retention: the number, where it comes from, the oldest dump of each folder"
+step "T10, ops/db.sh retention: what must hold for the 7 days, shown so that it can be checked"
 rot_new
-seed "$(d 6)" "$(d 1)" "deploys/$(d 20 predeploy-aaaaaaaaaaaa)" "incoming/notes.dump"
+seed "$(d 6)" "$(d 0 '' 001000)" "deploys/$(d 3 predeploy-aaaaaaaaaaaa)" "incoming/notes.dump"
 rm -f "$ROT/backups/.lock"
 before="$(tree_of)"
 rot 0 "$NOW" -- retention
 out_has "retention: BACKUP_KEEP=7 (the default of ops/db.sh)"
-out_has "$ROT/backups: 2 dump(s), the oldest is 6 day(s) old ($(d 6))$"
-out_has "$ROT/backups/deploys: 1 dump(s), the oldest is 20 day(s) old ($(d 20 predeploy-aaaaaaaaaaaa)), PAST the limit of 7 days"
+out_has "$ROT/backups: 2 dump(s), the newest 0 day(s) old, the oldest 6 day(s) old ($(d 6))$"
+out_has "$ROT/backups/deploys: 1 dump(s), the newest 3 day(s) old, the oldest 3 day(s) old ($(d 3 predeploy-aaaaaaaaaaaa))$"
 out_has "$ROT/backups/incoming: no dump"
 out_has "left alone in $ROT/backups/incoming, not a dump of this script: notes.dump"
 out_has "^keep=7$"
+grep -q -e WARNING -e PAST -e "scratch database" "$WORK/out" && fail "a healthy folder is reported as a problem: $(cat "$WORK/out")"
 no_delete "$before"
-[[ ! -s "$ROT/order" && ! -e "$ROT/calls" ]] || fail "retention called docker or rm: $(cat "$ROT/order" "$ROT/calls" 2>/dev/null)"
+[[ ! -s "$ROT/order" && ! -e "$ROT/calls" ]] || fail "retention made a dump, stopped a service or deleted: $(cat "$ROT/order" "$ROT/calls" 2>/dev/null)"
+ok "a healthy server: 7 from the default, the newest and the oldest dump of each folder by their names, what is left alone; no lock taken, nothing changed, no warning"
+
+# The same folders three days later, with no backup since (the nightly run failed or the Jetson
+# was off), so a dump is now past the limit, and with a scratch database left by restore --keep.
+rot 0 "$(ago -3)" FAKE_SCRATCH=1 -- retention
+out_has "$ROT/backups: 2 dump(s), the newest 3 day(s) old, the oldest 9 day(s) old ($(d 6)), PAST the limit of 7 days: the next verified backup deletes it"
+out_has "WARNING: no verified backup in $ROT/backups for 3 days: nothing is deleted until one succeeds"
+out_has "left alone: the scratch database jobapp_restore_check exists, a whole copy of a dump kept by restore --keep and outside the retention"
+no_delete "$before"
+rot 0 "$NOW" FAKE_SCRATCH=down -- retention
+out_has "not checked: whether the scratch database jobapp_restore_check of restore --keep exists"
 rot 0 "$NOW" BACKUP_KEEP=14 -- retention
 out_has "retention: BACKUP_KEEP=14 (set in the environment of this run)"
-out_has "WARNING: BACKUP_KEEP=14"
+out_has "WARNING: BACKUP_KEEP=14 keeps dumps up to 14 days"
 out_has "^keep=14$"
-ok "retention reads names and settings only: 7 from the default, the oldest dump of each folder and its age, what is past the limit, what is left alone; no lock, no docker, nothing changed"
+ok "what breaks the 7 days is said: no verified backup for 3 days, a dump past the limit, a scratch database left by restore --keep (or a database that could not be asked), a BACKUP_KEEP above 7"
+rot_new
+seed "$(d 9)" "$(d 1)"
+rot 0 "$NOW" FAKE_SCRATCH=1
+only . "$(d 1)" "$(d 0)"
+out_has "left alone: the scratch database jobapp_restore_check exists"
+rot 0 "$(ago 0 011800)" FAKE_SCRATCH=down
+out_has "not checked: whether the scratch database jobapp_restore_check of restore --keep exists"
+out_has "^backup=$ROT/backups/$(d 0 '' 011800)$"
+ok "every backup says so too, in backup.log night after night: the scratch database while it exists; a database that does not answer that question does not fail the backup"
 
 step "T10, the nightly schedule against a fake Jetson: the line, the retention of its runs, no reinstall for a change"
 # This fake ssh runs the remote command for real, with bash, in a folder that plays the Jetson's
@@ -1226,7 +1288,11 @@ case "${1:-}" in
     }
     cat "$FAKE_HOME/.crontab"
     ;;
-  -) cat >"$FAKE_HOME/.crontab" ;;
+  -)
+    # Like the real one: the whole input is read before the table is replaced, so the pipeline
+    # `crontab -l | ... | crontab -` reads the old table to its end.
+    cat >"$FAKE_HOME/.crontab.new" && mv "$FAKE_HOME/.crontab.new" "$FAKE_HOME/.crontab"
+    ;;
   *) exit 2 ;;
 esac
 FAKE
@@ -1280,7 +1346,7 @@ crontab_before="$(cat "$JH/home/.crontab")"
 printf 'BACKUP_KEEP=2\n' >>"$JH/home/jobapp/.env"
 run 0 jet env FAKE_NOW=2026-10-12T120000 ./deploy.sh backup-schedule status
 out_has "retention: BACKUP_KEEP=2 (set in $JH/home/jobapp/.env)"
-out_has "$JH/home/jobapp-backups: 3 dump(s), the oldest is 2 day(s) old ($(d 1)), PAST the limit of 2 days"
+out_has "$JH/home/jobapp-backups: 3 dump(s), the newest 0 day(s) old, the oldest 2 day(s) old ($(d 1)), PAST the limit of 2 days"
 out_has "last lines of jobapp-backups/backup.log"
 cron_run 2026-10-13T011700
 [[ "$(jet_holds)" == "jobapp-2026-10-12T011700.dump jobapp-2026-10-13T011700.dump " ]] || fail "the .env value was not applied: $(jet_holds)"
