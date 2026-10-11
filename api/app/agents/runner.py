@@ -101,13 +101,16 @@ ask for it, and the agents of definitions.py ask for none):
 
   What it holds (tasks/ingestion/todo.md, Measurements, G6; measured on the pinned CLI). A run
   passes its budget by one request, or two. One, the request whose usage reached the budget,
-  which cannot be prevented (its usage is known when its first message arrives), when the turn
-  goes on through a tool call: no request followed it in any measured run, for a tool of the
-  agent and for a tool the CLI does not offer alike. For the second kind only the interrupt
-  holds the next request back, and nothing orders the two, so one more request, cut short, is
-  possible. Two when the turn goes on with no tool call. On top comes the output of the run so
-  far: an assistant message reports its input in full and its output as of the start of the
-  answer, so output is only counted when the result message arrives.
+  which cannot be prevented (its usage is known when its first message arrives), when the
+  model then calls a tool of the agent: the CLI waits for the gate, so no request follows.
+  Two in two cases. The model calls a tool the CLI does not offer: only the interrupt holds
+  the next request back, nothing orders the two, and in 3 of 80 runs against an instant stub
+  that request had left. It is cut at once and the CLI drops it, so the run's record does
+  not hold it. Or the turn goes on with no tool call: the second request is answered and
+  recorded (a third that had left when the interrupt lands was never seen, and is not
+  excluded). On top comes the output of the run so far: an assistant message reports its
+  input in full and its output as of the start of the answer, so output is only counted when
+  the result message arrives.
 
   What is recorded. A stopped run ends failed with TOKEN_LIMIT, a constant its caller can
   compare. A run with a budget always says what it used: the result message's figures when it

@@ -97,26 +97,34 @@ As built now (app/agents/runner.py, "Token budget"):
 
 ## The product's runner, after the fix (the opt-in tests, 15 passed, 2026-10-11)
 The stub reports per request: input side 1,500 (1,000, 200, 300), output 50. Budget 4,000,
-reached by the third request of a loop of nine. Requests sent, requests answered, tokens
-recorded, per run:
+reached by the third request of a loop of nine. The file runs each case 5 times; the series
+below are 40 runs per case (JOBAPP_REAL_CLI_REPEATS=40). "Sent" is what the stub received,
+"answered" what it had finished writing.
 
-what the model calls, and the pace                             runs   sent  answered  recorded
-a tool of the agent, instant requests                           10      3      3      4,500 and 150
-a tool of the agent, instant requests (the review's table)       5      3      3      4,500 and 150
-a tool of the agent, requests 0.3 s, writes 0.4 s, gate 0.2 s    5      3      3      4,500 and 150
-Bash, requests 1 s                                               5      3      3      4,500 and 150
-an invented mcp__app__ tool, requests 1 s                        5      3      3      4,500 and 150
-Bash, requests 0.3 s, writes 0.4 s (was all nine)                5      3      3      4,500 and 150
-Bash, instant requests (was all nine, and done)                  5      3      3      4,500 and 150
-an invented mcp__app__ tool, instant (was all nine)              5      3      3      4,500 and 150
+what the model calls, and the pace                              runs  with a 4th request  recorded
+a tool of the agent, instant requests                            40          0            4,500 and 150
+a tool of the agent, requests 0.3 s, writes 0.4 s, gate 0.2 s    40          0            4,500 and 150
+Bash, requests 0.3 s, writes 0.4 s (was all nine)                40          0            4,500 and 150
+Bash, instant requests (was all nine, and done)                  40          2            4,500 and 150
+an invented mcp__app__ tool, instant (was all nine)              40          1            4,500 and 150
+Bash, requests 1 s                                                5          0            4,500 and 150
+an invented mcp__app__ tool, requests 1 s                         5          0            4,500 and 150
 
-- Every run ended failed with "The run reached its token budget and was stopped.". Where the
-  model called a tool of the agent, two tools ran and the third call was answered by the
-  interrupt in 10 of 10 runs (the gate's stop is the other answer the CLI may act on first).
+- Every run ended failed with "The run reached its token budget and was stopped.", and no run
+  made a fifth request.
+- A tool of the agent: 3 sent, 3 answered in 80 of 80 runs. Two tools ran; the third call was
+  answered by the interrupt in 10 of 10 runs of the first test (the gate's stop is the other
+  answer the CLI may act on first). The CLI waits for the gate, so nothing can leave.
+- A tool the CLI does not offer: the fourth request left in 3 of 80 runs with instant requests
+  (4 sent and 4 answered once, 4 sent and 3 answered twice), in 0 of 40 with requests of 0.3 s.
+  Only the interrupt holds that request back, and nothing orders the two. In the three runs
+  the record was 4,500 and 150 all the same: the CLI drops the request it was cut in, so the
+  record holds one request less than the stub received. This first showed as a failing run
+  of the 5 run file (1 of 5, `Bash`, instant), where a first series of 25 runs had shown none.
 - A turn that goes on with no tool call: the stub ends every answer with `max_tokens` and calls
   nothing. Without a budget the CLI made 4 requests by itself. With a budget of 1,500, reached
-  by the first request: 2 sent, 2 answered, 3,000 and 100 recorded, in 10 of 10 runs (instant
-  requests and requests of 0.3 s).
+  by the first request: 2 sent, 2 answered, 3,000 and 100 recorded, in 80 of 80 runs (40 with
+  instant requests, 40 with requests of 0.3 s). A third request was never sent.
 - A15 through the runner: 9 requests, its own count 13,500 and 9, the run recorded 13,500 and
   450 from the result message.
 - A budget of zero: the stub received nothing.
@@ -131,8 +139,8 @@ an invented mcp__app__ tool, instant (was all nine)              5      3      3
 A test backend that behaves like the CLI on the two points the fake replay does not: it sends
 its messages at its own pace, whether or not the runner has read the ones before, and it asks
 the gate only about a tool the run offers. It is harsher than the CLI on one point, on purpose:
-after a call the gate is not asked about it sends its next request at once, where the real CLI
-was always cut first. Its figures are therefore the worst case:
+after a call the gate is not asked about it sends its next request at once, every time, where
+the real CLI was cut first in 77 of 80 runs. Its figures are therefore the worst case:
 - a tool of the agent: the reaching request, none after it;
 - `Bash` or an invented tool, fast or slow writes: the reaching request and one more that had
   left, cut before its answer;
@@ -142,14 +150,17 @@ was always cut first. Its figures are therefore the worst case:
 
 ## The bound, as stated in tasks/ingestion/todo.md (Measurements, G6)
 A run passes its token budget by one request, or two, plus the output of the step so far.
-- One request, the one whose usage reached the budget, when the turn goes on through a tool
-  call. It cannot be prevented: its usage is known when its first message arrives. 0 requests
-  after it in 40 of 40 runs on the real CLI (15 with a tool of the agent, 25 with `Bash` or an
-  invented tool). For a tool the CLI does not offer only the interrupt holds the next request
-  back and nothing orders the two: the bound to state there is one more request, cut before
-  its answer.
-- Two requests when the turn goes on with no tool call (after `max_tokens`): nothing in the
-  reaching message says so, the runner sees it at the next request's first message. 10 of 10.
+- One request, the one whose usage reached the budget, when the model then calls a tool of
+  the agent. It cannot be prevented: its usage is known when its first message arrives. The
+  CLI waits for the gate, so no request follows: 80 of 80 runs.
+- Two requests, first case: the model calls a tool the CLI does not offer and the next request
+  has left when the interrupt lands. 3 of 80 runs with instant requests, 0 of 40 with requests
+  of 0.3 s. That request is cut at once and is not in the run's record.
+- Two requests, second case: the turn goes on with no tool call (after `max_tokens`). Nothing
+  in the reaching message says so, the runner sees it at the next request's first message:
+  the second request is answered and recorded. 80 of 80 runs. A third request that had left
+  when that interrupt lands is not excluded by anything: never seen on the real CLI, shown by
+  the push backend.
 - The output on top: an assistant message reports `output_tokens` as 1, the real figure comes
   with the result. Inside a step the count is the input side plus 1 per request, so the output
   of the step so far (1,500 to 8,000 tokens for an extraction step by assumption A13, the

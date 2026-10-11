@@ -22,7 +22,8 @@ What it holds, on the pinned SDK and CLI:
 - the cases of the review of PR #95 (REVIEW_CASES): the same when the model calls `Bash` or an
   invented tool, which the CLI answers itself without asking the gate, when requests are
   instant or slow, and when every event write is slower than a request. There the bound is
-  the reaching request and at most one more, cut before its answer; measured, none left;
+  the reaching request and at most one more, cut as it leaves; measured over 40 runs per
+  case, one more left in 3 of 80 (JOBAPP_REAL_CLI_REPEATS sets the number of runs);
 - a turn that goes on with no tool call (answers ended with `max_tokens`) passes its budget by
   two requests, where the CLI alone makes four;
 - the run ends failed with TOKEN_LIMIT and records the result message's figures, output
@@ -44,6 +45,7 @@ import socket
 import threading
 import time
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -349,7 +351,8 @@ REVIEW_CASES = {
     "Bash, instant requests (all nine)": ("Bash", 0.0, 0.0, 5.0),
     "invented tool, instant requests (all nine)": ("mcp__app__made_up", 0.0, 0.0, 5.0),
 }
-REPEATS = 5
+# Runs per case. JOBAPP_REAL_CLI_REPEATS asks for more, to count how often a rare order happens.
+REPEATS = int(os.environ.get("JOBAPP_REAL_CLI_REPEATS", "5"))
 
 
 @pytest.mark.parametrize("case", list(REVIEW_CASES))
@@ -365,11 +368,13 @@ def test_the_cases_of_the_review(
 ) -> None:
     """What a run does past its budget on the real CLI, whatever the model calls and however
     slow the event writes are, REPEATS runs per case. A tool of the agent: three requests, the
-    reaching one is the last. A tool the CLI does not offer (a built-in name, an invented one):
-    the CLI answers the call itself and would send its fourth request, which only the interrupt
-    holds back. Measured, the interrupt came first in every run (three requests); nothing
-    orders the two, so the test allows the fourth, cut before any answer when a request takes
-    time, and never a fifth."""
+    reaching one is the last (the CLI waits for the gate, 0 of 40 runs had a fourth). A tool the
+    CLI does not offer (a built-in name, an invented one): the CLI answers the call itself and
+    sends its fourth request, which only the interrupt holds back, and nothing orders the two.
+    Measured with instant requests, 40 runs each: the fourth request left in 2 runs with `Bash`
+    and in 1 with an invented tool, and never a fifth. So the test allows the fourth, cut before
+    any answer when a request takes time. The CLI drops that request: the run records the three
+    it had taken in, one request less than was sent."""
     tool, request_s, write_s, gate_wait_s = REVIEW_CASES[case]
     api[0].tool = tool
     api[0].delay_s = request_s
@@ -406,8 +411,14 @@ def test_the_cases_of_the_review(
             if request_s:
                 assert answered_now == 3  # which was cut before any answer
                 assert (tokens_in, tokens_out) == (3 * INPUT_SIDE, 3 * OUTPUT)
-        # The run records what the answered requests used, whatever cut it.
-        assert tokens_in == answered_now * INPUT_SIDE
+        # The run records what the CLI had taken in when it was cut: the three requests up to
+        # the reaching one, and the one that left as the interrupt landed only if the CLI had
+        # read its answer (an instant stub has "answered" a request the CLI then drops).
+        assert tokens_in in (3 * INPUT_SIDE, answered_now * INPUT_SIDE)
+    late = sum(1 for sent, *_ in seen if sent > 3)
+    print(f"{case}: a request left after the reaching one in {late} of {len(seen)} runs")
+    tally = Counter((sent, answered_now, tin, tout) for sent, answered_now, _, _, tin, tout in seen)
+    print(f"{case}: runs per (sent, answered, input, output): {dict(tally)}")
 
 
 @pytest.mark.parametrize("request_s", [0.0, 0.3], ids=["instant requests", "requests 0.3 s"])
@@ -425,8 +436,9 @@ def test_a_turn_that_goes_on_with_no_tool_call_passes_its_budget_by_two_requests
     first run below has no budget and counts them). Nothing in the message that reached the
     budget says so, and no gate is asked. The runner sees the turn go on when the next
     request's first message arrives, and interrupts there. With a budget the first request
-    reaches: that request and one more, the second, which had its answer; a third may have
-    left, and is cut when a request takes time."""
+    reaches: that request and one more, the second, which had its answer (80 of 80 runs, 40 at
+    each pace). A third may have left when the interrupt lands, cut when a request takes time:
+    never seen here, and not excluded by anything."""
     api[0].tool = None
     api[0].stop_reason = "max_tokens"
     api[0].delay_s = request_s
