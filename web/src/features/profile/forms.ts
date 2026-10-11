@@ -83,7 +83,7 @@ const url = (label: string, required = false) =>
     "Enter a full address starting with http:// or https://.",
   );
 
-export const PERIOD_MESSAGE =
+const PERIOD_MESSAGE =
   "Write the date as YYYY or YYYY-MM, between 1900 and 2100.";
 
 /**

@@ -175,8 +175,10 @@ OptUrl = Annotated[OptText(URL_MAX), AfterValidator(_url)]
 # scripts for the year, which `int` reads. The web form has always refused those; they stay
 # accepted here because narrowing would make a stored value invalid, a change of its own.
 _PERIOD = re.compile(r"(\d{4})(?:-(0[1-9]|1[0-2]))?")
-# For the JSON schema (OpenAPI), where a pattern is not anchored by itself.
+# For the JSON schema (OpenAPI), where a pattern is not anchored by itself. An optional date
+# also takes the empty string, which is stored as null.
 PERIOD_PATTERN = r"^\d{4}(-(0[1-9]|1[0-2]))?$"
+OPT_PERIOD_PATTERN = r"^(\d{4}(-(0[1-9]|1[0-2]))?)?$"
 PERIOD_RULE = (
     f"must be a year or a month, written YYYY or YYYY-MM, between {PERIOD_MIN_YEAR} and "
     f"{PERIOD_MAX_YEAR}"
@@ -253,7 +255,7 @@ OptPeriod = Annotated[
     Field(
         description=f"{_PERIOD_DOC} Null when there is none (an empty string is stored as null).",
         examples=["2021-03", "2021", None],
-        json_schema_extra={"pattern": f"^({PERIOD_PATTERN[1:-1]})?$"},
+        json_schema_extra={"pattern": OPT_PERIOD_PATTERN},
     ),
 ]
 

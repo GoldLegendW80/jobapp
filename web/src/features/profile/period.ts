@@ -105,9 +105,9 @@ export function describePeriod(typed: string): string {
 /**
  * What a date field holds after a keystroke: a fifth digit typed straight after the year gets the
  * hyphen of YYYY-MM put before it ("20210" becomes "2021-0"), and so do six digits pasted at
- * once, because the number pad of a phone has no hyphen key. Only when text was added at the
- * end, so the hyphen can still be deleted. It writes down what was typed, nothing more: four
- * digits stay a year alone.
+ * once. The field asks a phone for its number pad (inputMode numeric), and the digits only pad
+ * of an iPhone has no hyphen key. Only when text was added at the end, so the hyphen can still
+ * be deleted. It writes down what was typed, nothing more: four digits stay a year alone.
  */
 export function typedPeriod(previous: string, typed: string): string {
   const added = typed.length > previous.length && typed.startsWith(previous);

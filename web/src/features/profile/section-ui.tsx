@@ -106,7 +106,7 @@ export function PeriodField<F extends FieldValues>({
   srSuffix,
   className,
   disabled,
-}: FieldProps<F> & { disabled?: boolean }) {
+}: Omit<FieldProps<F>, "description"> & { disabled?: boolean }) {
   return (
     <FormField
       control={control}
