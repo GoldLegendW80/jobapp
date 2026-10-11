@@ -646,9 +646,13 @@ def readings(run: str) -> frozenset[str]:
 
 @lru_cache(maxsize=4096)
 def _compatibility_digit(char: str) -> bool:
-    """Whether `char` is not a digit and NFKC writes it with one: a superscript, a subscript, a
-    fraction, a circled number, the sign of the square metre."""
-    return not char.isdecimal() and any(c.isdecimal() for c in unicodedata.normalize("NFKC", char))
+    """Whether `char` is not a digit and NFKC writes it with digits and no letter: a
+    superscript, a subscript, a fraction, a circled number. The single character for the
+    square metre, which NFKC writes with a letter and a digit, is a sign and not one of them."""
+    if char.isdecimal():
+        return False
+    unfolded = unicodedata.normalize("NFKC", char)
+    return any(c.isdecimal() for c in unfolded) and not any(c.isalpha() for c in unfolded)
 
 
 def _digit_like(char: str) -> bool:
@@ -656,10 +660,13 @@ def _digit_like(char: str) -> bool:
 
 
 def _written(source: str, first: int, last: int) -> str:
-    """How `source` writes the number at `source[first:last + 1]` when a superscript, a subscript
-    or a fraction is glued to it (ten with a superscript three, three and the sign of a half,
-    the superscript two of a square metre), or "" for a plain number. Such a form is one written
-    thing: ten to the power of three is neither 10 nor 3."""
+    """How `source` writes the number at `source[first:last + 1]` when it is not a plain
+    number, or "". A superscript, a subscript or a fraction glued to a number makes one written
+    form with it (ten with a superscript three, three and the sign of a half): ten to the
+    power of three is neither 10 nor 3. And a digit that comes out of a sign (the superscript
+    two of a square metre) is that sign, never a number."""
+    if not source[first].isdecimal() and not _compatibility_digit(source[first]):
+        return source[first]
     low, high = first, last + 1
     for _ in range(WRITTEN_MAX):
         if low > 0 and _digit_like(source[low - 1]):
@@ -669,9 +676,9 @@ def _written(source: str, first: int, last: int) -> str:
         else:
             break
     glued = source[low:first] + source[last + 1 : high]
-    if _digit_like(source[first]) and not source[first].isdecimal():
+    if not source[first].isdecimal() or any(not char.isdecimal() for char in glued):
         return source[low:high]
-    return source[low:high] if any(not char.isdecimal() for char in glued) else ""
+    return ""
 
 
 class _Run(NamedTuple):

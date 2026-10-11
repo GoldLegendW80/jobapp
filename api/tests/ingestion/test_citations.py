@@ -2292,3 +2292,24 @@ def test_a_footnote_mark_does_not_hide_a_year_from_rule_d() -> None:
     assert rule_of(check_item("date", "2023-01", FOOTNOTE, [FOOTNOTE])) is Rule.MONTH_NOT_IN_SOURCE
     dated = "Arrivée en janvier 2023\u00b9 chez Betclic à Bordeaux"
     assert rule_of(check_item("date", "2023-01", dated, [dated])) is None
+
+
+TOKYO = "Surface de 120\u33a1 au centre de Tokyo, 3 pièces, 45\u33a5 de cave"
+
+
+@pytest.mark.parametrize(
+    ("value", "holds"),
+    [
+        # U+33A1 is one character for the square metre: NFKC writes it "m2". It is a sign, so
+        # the number before it is a plain number, and its own digit is never a number.
+        ("Surface de 120", True),
+        ("Surface de 120\u33a1", True),
+        ("3 pièces et 45\u33a5 de cave", True),
+        ("2 pièces", False),
+        ("120 m2", False),
+        ("1202 de surface", False),
+        ("12 de surface", False),
+    ],
+)
+def test_a_sign_that_holds_a_digit_is_not_a_number(value: str, holds: bool) -> None:
+    assert (rule_of(check_item("text", value, TOKYO, [TOKYO])) is None) == holds
