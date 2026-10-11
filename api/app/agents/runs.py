@@ -214,14 +214,34 @@ def claim(db: Session, run_id: uuid.UUID, now: datetime) -> AgentRun | None:
     return db.get(AgentRun, run_id, populate_existing=True)
 
 
-def record_credential_kind(db: Session, run_id: uuid.UUID, kind: CredentialKind) -> None:
+def record_credential_kind(
+    db: Session, run_id: uuid.UUID, kind: CredentialKind, model: str | None = None
+) -> None:
     """The kind of credential the run is about to use (never the secret): what says later
-    whether its cost was billed (an API key) or is an estimate (a subscription). The caller
-    commits."""
+    whether its cost was billed (an API key) or is an estimate (a subscription). With `model`,
+    also the model chosen for that kind (an agent that names a model per kind of credential,
+    ingestion G6): the run was created before anyone knew which credential it would read. The
+    caller commits."""
+    values: dict[str, Any] = {"credential_kind": kind}
+    if model is not None:
+        values["model"] = model
     db.execute(
         sa.update(AgentRun)
         .where(AgentRun.id == run_id)
-        .values(credential_kind=kind)
+        .values(**values)
+        .execution_options(synchronize_session=False)
+    )
+
+
+def record_tokens(db: Session, run_id: uuid.UUID, input_tokens: int, output_tokens: int) -> None:
+    """What a running run has counted so far (a run with a token budget, ingestion G6), written
+    with its events while it runs. `finish` replaces it with the final figures. A run that never
+    gets to its end (the worker is killed, a reaper fails the run) keeps these: whoever adds up
+    what a chain of runs spent does not lose the run that was cut. The caller commits."""
+    db.execute(
+        sa.update(AgentRun)
+        .where(AgentRun.id == run_id, AgentRun.status == RunStatus.running)
+        .values(input_tokens=input_tokens, output_tokens=output_tokens)
         .execution_options(synchronize_session=False)
     )
 

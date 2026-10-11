@@ -16,17 +16,42 @@ Language (A3 decision): the triage agent answers in English whatever the posting
 profile has no field for a preferred answer language (its `languages` are the ones the candidate
 speaks, not a UI preference), the app's interface is English, and notes in one language read
 better next to each other. A profile setting can change this later.
+
+Agents of other modules (ingestion G6). A module that runs its own agents on this runtime adds
+them with `register(definition)`, from a file of its own, and their tools with
+`app.agents.tools.register` (worker only). Such an agent is usually:
+- `internal`: started by its module only. POST /api/agents/runs answers 422 for it as for an
+  agent that does not exist, and GET /api/agents does not list it (`startable`, `listed`);
+- bound: `bind(db, run)` says, in code and before any tool exists, what the run works on (one
+  part of one document). Its result is the tools' `Scope.binding`; the model never chooses it;
+- `private_io`: what its tools are given and what they answer is never stored, only sizes, and
+  the run's output holds counts. Nothing of it is ever live (`live`);
+- followed: `on_final(final)` is called once the run's end is committed.
+It may also name another model per kind of credential (`model_by_credential`, `model_for`): the
+default stays `model`, which is what every agent defined in this file runs on.
 """
 
+import re
 import uuid
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from app.agents.models import AGENT_NAME_MAX, CredentialKind, RunStatus
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session, sessionmaker
+
+    from app.agents.models import AgentRun
+    from app.config import Settings
 
 DEFAULT_MODEL = "claude-opus-5-5"
 DEFAULT_MAX_TURNS = 8
 DEFAULT_WALL_TIME_S = 600.0  # 10 minutes
+NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 class UnknownAgentError(LookupError):
@@ -35,6 +60,35 @@ class UnknownAgentError(LookupError):
 
 class InvalidInputError(ValueError):
     """The run input does not match the agent's input model. The message names the field."""
+
+
+@dataclass(frozen=True)
+class FinalRun:
+    """What an `on_final` hook is told: which run ended and how, and what the hook may use to
+    act on it (its own transactions, the clock, the settings, and whatever the worker put in
+    `RunContext.services`). No transaction is open and no lock is held when it is called.
+
+    The hook runs inside the run's own job: until it returns it holds one of the worker's
+    agent slots (two today), for at most the runner's FINAL_HOOK_TIMEOUT_S. That limit gives
+    the hook up, it does not undo it: work the hook handed to a thread goes on to its end and
+    keeps its locks until then. So a hook is short, and does its database work in a thread."""
+
+    run_id: uuid.UUID
+    user_id: uuid.UUID
+    agent: str
+    status: RunStatus
+    sessions: "sessionmaker[Session]" = field(repr=False)
+    clock: Callable[[], datetime] = field(repr=False)
+    settings: "Settings" = field(repr=False)
+    services: Mapping[str, Any] = field(default_factory=dict, repr=False)
+
+
+# What a run is bound to, read in a transaction of its own before the tools are built. None:
+# what the run was to work on is gone, and the run fails before any model call. The answer is
+# plain data (text, numbers, ids, and mappings, lists and sets of them): the runner hands the
+# tools a read only copy of it at every depth, in which a list has become a tuple.
+Bind = Callable[["Session", "AgentRun"], Mapping[str, Any] | None]
+OnFinal = Callable[[FinalRun], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -65,6 +119,53 @@ class AgentDefinition:
     # Claude Code for no partial messages and publishes nothing, and the run stream reads
     # nothing. The stored steps are the same either way.
     live_text: bool = True
+    # Started by its own module only (through runs.create_run), never through
+    # POST /api/agents/runs, and absent from GET /api/agents.
+    internal: bool = False
+    # What the run works on, decided in code when the run starts (`Bind` above). The runner
+    # puts the result in the tools' Scope.binding, read only, before it builds them.
+    bind: Bind | None = None
+    # The run reads private documents: its events hold the names of the tools called and the
+    # sizes of what went in and out, never a value; its output holds counts, never the answer;
+    # nothing of it is live, whatever `live_text` and AGENTS_LIVE_TEXT say; and its failures are
+    # logged by type, without a message or a traceback.
+    private_io: bool = False
+    # Called by the runner once the run's final status is committed (`FinalRun`): done,
+    # cancelled, and every failure the runner records itself. Not called for a run ended by
+    # someone else (cancelled while queued, failed by a reaper or at the enqueue), nor when
+    # the run's job is cancelled under it: the worker is stopping, or the queue's job timeout
+    # has passed (arq ends a job that outlives it the same way, and the runner cannot tell the
+    # two apart: the run is recorded as stopped and no hook is called, although the worker
+    # lives). Nothing calls a hook again that was missed, the process dying between the commit
+    # and the call included. So the hook only makes things quicker: whoever chains runs must
+    # also look on a timer, and that timer is the guarantee. What the hook raises is logged and
+    # changes nothing of the run.
+    on_final: OnFinal | None = None
+    # Another model for runs on a given kind of credential (keys are CredentialKind values);
+    # `model` for every kind not named.
+    model_by_credential: Mapping[str, str] | None = field(default=None, hash=False)
+
+    def __post_init__(self) -> None:
+        kinds = {kind.value for kind in CredentialKind}
+        unknown = sorted(str(key) for key in self.model_by_credential or {} if key not in kinds)
+        if unknown:
+            # A misspelt kind would silently leave those runs on the default model.
+            raise ValueError(f"model_by_credential: unknown credential kind {', '.join(unknown)}")
+        if self.private_io and self.chat:
+            # A chat answer is the run's text, which a private run does not keep.
+            raise ValueError("a chat agent cannot be private_io")
+
+    @property
+    def live(self) -> bool:
+        """Whether the answer of a run may be shown while it is written."""
+        return self.live_text and not self.private_io
+
+    def model_for(self, kind: CredentialKind | str | None) -> str:
+        """The model of a run on a credential of that kind (`model` when the kind is not named
+        or not known yet)."""
+        if kind is None or not self.model_by_credential:
+            return self.model
+        return self.model_by_credential.get(str(CredentialKind(kind).value), self.model)
 
     def validate_input(self, raw: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -237,8 +338,25 @@ AGENTS: dict[str, AgentDefinition] = {
 }
 
 
+def register(definition: AgentDefinition) -> AgentDefinition:
+    """Add an agent of another module to the ones this runtime knows (module docstring). Called
+    at import, in every process that must know the agent: the worker to run it, the api to
+    refuse it and to keep its text out of the live stream. The same definition again is fine;
+    another one under a taken name fails loudly, an agent of this file included (and so does
+    a module run a second time that defines its hooks anew: register once, at import)."""
+    name = definition.name
+    if not NAME_PATTERN.fullmatch(name) or len(name) > AGENT_NAME_MAX:
+        raise ValueError(f"not an agent name: {name!r}")
+    existing = AGENTS.get(name)
+    if existing is not None and existing != definition:
+        raise ValueError(f"an agent named {name} is already registered")
+    AGENTS[name] = definition
+    return definition
+
+
 def available(app_env: str) -> dict[str, AgentDefinition]:
-    """The agents a user may start here: every one outside production, else the real ones."""
+    """The agents that exist here: every one outside production, else the real ones. What the
+    worker runs; `startable` and `listed` are what a user may ask for."""
     return {
         name: agent
         for name, agent in AGENTS.items()
@@ -248,9 +366,9 @@ def available(app_env: str) -> dict[str, AgentDefinition]:
 
 def live_text(name: str) -> bool:
     """Whether runs of this agent show their answer live. An agent that no longer exists has
-    nothing live."""
+    nothing live, and neither has an agent that reads private documents."""
     found = AGENTS.get(name)
-    return found is not None and found.live_text
+    return found is not None and found.live
 
 
 def get(name: str, app_env: str) -> AgentDefinition:
@@ -258,3 +376,18 @@ def get(name: str, app_env: str) -> AgentDefinition:
     if found is None:
         raise UnknownAgentError(name)
     return found
+
+
+def startable(name: str, app_env: str) -> AgentDefinition:
+    """The agent a client named in POST /api/agents/runs. An internal agent is unknown to that
+    route, in the same words as an agent that does not exist."""
+    found = get(name, app_env)
+    if found.internal:
+        raise UnknownAgentError(name)
+    return found
+
+
+def listed(app_env: str) -> list[AgentDefinition]:
+    """The agents GET /api/agents shows: the ones a user starts from that route (not the chat
+    agents, which start from a thread, nor the internal ones)."""
+    return [agent for agent in available(app_env).values() if not agent.chat and not agent.internal]

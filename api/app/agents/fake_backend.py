@@ -22,6 +22,33 @@ neither allowed by the gate nor an app tool is answered with an error result, as
 answers a call to a tool it does not offer. Each assistant message with tool calls is one turn;
 past `options.max_turns` the replay ends with an `error_max_turns` result, as the CLI does.
 
+A gate that answers a tool call with a stop (`continue_: False`, how the runner ends a run whose
+token budget is used up, ingestion G6) ends the replay the way the pinned CLI ends the turn
+(recorded against a stub API, tasks/evidence/ingestion-g6/): the tool does not run, its result
+is the error "PreToolUse:<tool> hook error: <reason>", and the result message says `success`
+with the terminal reason `hook_stopped` and an empty result. No further step is replayed: no
+further request leaves. `seen_requests` lists the ids of the API messages replayed, one per
+request the real CLI would have made.
+
+Where this replay is not Claude Code (review of PR #95). A test written on it proves nothing
+about these three points; `tests/agents/push_backend.py` behaves like the CLI on the first two,
+and `tests/agents/test_g6_real_cli.py` (opt-in) runs the CLI itself.
+1. **It is pulled, the CLI pushes.** A step is replayed when the runner asks for the next
+   message, and a request takes no time unless the stream says so (`sleep`). The real CLI makes
+   its next request as soon as it can, whether or not the runner has dealt with the last
+   message: it can be several requests ahead of a runner that writes slowly.
+2. **By default the gate is asked about every tool name.** The real CLI asks its hooks only
+   about the tools it offers, which with `tools=[]` are the run's own app tools. A call to any
+   other name, a built-in one like Bash or one the model made up, it answers by itself
+   ("No such tool available"): the hook never hears of it, so the run stores no `tool_denied`
+   event for it and no gate can stop on it. The default here replays something else, a tool
+   that exists and is not allowed (the gate's defence in depth, which the product's recorded
+   streams and their tests rely on). A stream that says `"gate": "offered"` at its top level is
+   replayed as the CLI behaves: the gate is asked about the run's own tools only, and any other
+   call is answered at once with the CLI's error.
+3. **A result the replay makes up reports no usage** (interrupt, turn limit, hook stop, a
+   stream without its own result step). The real CLI's result is cumulative over the run.
+
 Partial messages (issue #33; facts and the recording in tasks/agents/todo.md). When the options
 ask for them (`include_partial_messages`), the replay also yields the `stream_event` messages
 the CLI prints, in the order recorded from the pinned CLI (2.1.286) against a stub API:
@@ -66,6 +93,8 @@ NAME_PATTERN = r"^[a-z][a-z0-9_]{0,40}$"
 DEFAULT_SCRIPT = "echo"
 PARTIAL_CHARS = 24
 PARTIAL_SLEEP_S = 0.02
+# How the pinned CLI answers, by itself, a call to a tool it does not offer.
+NO_SUCH_TOOL = "<tool_use_error>Error: No such tool available: {name}</tool_use_error>"
 
 
 class UnknownScriptError(LookupError):
@@ -121,6 +150,12 @@ class FakeBackend:
         self.seen_cwd: str | None = None
         self.seen_prompt: str | None = None
         self.seen_options: Any = None
+        # The API messages replayed, by id: one per request Claude Code would have made.
+        self.seen_requests: list[str] = []
+        self._hook_stopped = False
+        # Whether the gate is asked about every tool name (the default) or, as the CLI does,
+        # about the run's own tools only (`"gate": "offered"` in the stream).
+        self._gate_all = True
 
     async def interrupt(self) -> None:
         self._interrupted.set()
@@ -146,6 +181,10 @@ class FakeBackend:
         }
         script = load(request.script or DEFAULT_SCRIPT)
         steps: list[dict[str, Any]] = script["steps"]
+        asked = script.get("gate", "all")
+        if asked not in ("all", "offered"):
+            raise ValueError(f'a stream\'s "gate" is "all" or "offered", not {asked!r}')
+        self._gate_all = asked == "all"
         partial = bool(getattr(options, "include_partial_messages", False))
         recorded = any(_is_stream_event(step) for step in steps)
         pacing = script.get("partial") or {}
@@ -173,6 +212,11 @@ class FakeBackend:
             if _is_stream_event(step) and not partial:
                 continue  # the CLI prints these only when asked
             raw = _fill(step["message"], variables)
+            if raw.get("type") == "assistant":
+                # Several lines with one id are the content blocks of one API message.
+                made = str(raw.get("message", {}).get("id", ""))
+                if not made or self.seen_requests[-1:] != [made]:
+                    self.seen_requests.append(made)
             built = (
                 partial and not recorded and raw.get("type") == "assistant" and "error" not in raw
             )
@@ -214,7 +258,11 @@ class FakeBackend:
             if options.max_turns is not None and turns > options.max_turns:
                 yield self._result(variables, started, turns, "error_max_turns", True)
                 return
-            results = [await self._call(request, block) for block in calls]
+            results = []
+            for block in calls:
+                results.append(await self._call(request, block))
+                if self._hook_stopped:
+                    break  # the gate stopped the run: no other call of the message is made
             yield parse_message(
                 {
                     "type": "user",
@@ -223,6 +271,9 @@ class FakeBackend:
                     "uuid": str(uuid.uuid4()),
                 }
             )
+            if self._hook_stopped:
+                yield self._result(variables, started, turns, "success", False, "hook_stopped")
+                return
             for event in self._closing(variables, raw) if built else ():
                 yield event
         yield self._result(variables, started, turns, "success", False)
@@ -310,6 +361,14 @@ class FakeBackend:
 
     async def _call(self, request: BackendRequest, block: dict[str, Any]) -> dict[str, Any]:
         name, args, call_id = block["name"], block.get("input") or {}, block["id"]
+        if not self._gate_all and name not in request.tools.by_name:
+            # As the CLI: a tool it does not offer is answered by itself, no hook is asked.
+            return {
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": NO_SUCH_TOOL.format(name=name),
+                "is_error": True,
+            }
         verdict = await request.gate(
             {
                 "hook_event_name": "PreToolUse",
@@ -324,6 +383,16 @@ class FakeBackend:
             {"signal": None},
         )
         decision = verdict.get("hookSpecificOutput", {})
+        if verdict.get("continue_") is False:
+            # The hook stops the run (module docstring): the tool does not run.
+            self._hook_stopped = True
+            reason = str(decision.get("permissionDecisionReason") or verdict.get("stopReason"))
+            return {
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": f"PreToolUse:{name} hook error: {reason}",
+                "is_error": True,
+            }
         if decision.get("permissionDecision") == "deny":
             text = str(decision.get("permissionDecisionReason", "Denied by a hook."))
             return {
@@ -364,20 +433,24 @@ class FakeBackend:
         turns: int,
         subtype: str,
         is_error: bool,
+        terminal: str | None = None,
     ) -> Any:
-        return parse_message(
-            {
-                "type": "result",
-                "subtype": subtype,
-                "is_error": is_error,
-                "duration_ms": int((time.monotonic() - started) * 1000),
-                "duration_api_ms": 0,
-                "num_turns": turns + 1,
-                "session_id": variables["session_id"],
-                "total_cost_usd": 0.0,
-                "usage": {"input_tokens": 0, "output_tokens": 0},
-                "terminal_reason": "aborted_streaming"
-                if subtype == "error_during_execution"
-                else ("max_turns" if subtype == "error_max_turns" else "completed"),
-            }
-        )
+        raw: dict[str, Any] = {
+            "type": "result",
+            "subtype": subtype,
+            "is_error": is_error,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "duration_api_ms": 0,
+            "num_turns": turns + 1,
+            "session_id": variables["session_id"],
+            "total_cost_usd": 0.0,
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "terminal_reason": "aborted_streaming"
+            if subtype == "error_during_execution"
+            else ("max_turns" if subtype == "error_max_turns" else "completed"),
+        }
+        if terminal is not None:
+            # A run stopped by a hook, as the pinned CLI reports it: the turn ended on the
+            # tool call, with no answer.
+            raw.update(terminal_reason=terminal, stop_reason="tool_use", result="")
+        return parse_message(raw)
