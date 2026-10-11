@@ -6,12 +6,20 @@
 #
 # Needs Docker, python3, curl and a .env at the repository root (copy .env.example).
 # The persistence check runs on a throwaway project name and only ever deletes that project's
-# volumes; the dev stack's pgdata is never removed.
+# volumes; the dev stack's pgdata is never removed, and nothing here downgrades the dev database:
+# the migration round trip (downgrade base, upgrade head) runs on the throwaway project. It ran
+# on the dev database while the only revision was the empty baseline; with real migrations it
+# would drop every table of the database a developer works in.
+#
+#   COMPOSE_PROJECT_NAME=jobapp-x tests/compose_smoke.sh   the dev stack under another project
+#                                                          name than jobapp (its own volumes)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# The project of the dev stack: compose.yml names it jobapp, COMPOSE_PROJECT_NAME overrides that.
+PROJECT="${COMPOSE_PROJECT_NAME:-jobapp}"
 DEV=(docker compose -f compose.yml -f compose.dev.yml)
 PROD=(docker compose -f compose.yml)
 SCRATCH_PROJECT="jobapp-smoke-$$"
@@ -139,19 +147,16 @@ body="$(curl -s --max-time 5 "$HEALTH_URL")"
 [[ "$body" == '{"status":"ok"}' ]] || fail "unexpected body: $body"
 ok "$body"
 
-step "alembic: upgrade head twice, current, downgrade base, upgrade again"
+step "alembic: one head, upgrade head twice, current is that head"
+# The head is whatever the migrations of this tree say, never a number written here: every module
+# adds revisions. One line "<revision> (head)": two heads would be two lines and fail here.
+head="$("${DEV[@]}" exec -T api alembic heads 2>/dev/null | tr -d '\r')"
+[[ "$head" =~ ^[0-9a-z_]+\ \(head\)$ ]] || fail "alembic heads: ${head:-nothing}"
 "${DEV[@]}" exec -T api alembic upgrade head >/dev/null 2>&1
 "${DEV[@]}" exec -T api alembic upgrade head >/dev/null 2>&1
-current="$("${DEV[@]}" exec -T api alembic current 2>/dev/null)"
-[[ "$current" == "0001 (head)" ]] || fail "alembic current: $current"
-ok "upgrade twice, current is $current"
-"${DEV[@]}" exec -T api alembic downgrade base >/dev/null 2>&1
-current="$("${DEV[@]}" exec -T api alembic current 2>/dev/null)"
-[[ -z "$current" ]] || fail "after downgrade base, current is $current"
-"${DEV[@]}" exec -T api alembic upgrade head >/dev/null 2>&1
-current="$("${DEV[@]}" exec -T api alembic current 2>/dev/null)"
-[[ "$current" == "0001 (head)" ]] || fail "alembic current: $current"
-ok "downgrade base then upgrade head: $current"
+current="$("${DEV[@]}" exec -T api alembic current 2>/dev/null | tr -d '\r')"
+[[ "$current" == "$head" ]] || fail "alembic current: $current, head: $head"
+ok "upgrade twice, current is $current (no downgrade here: this is the dev database)"
 
 step "pytest inside the api container against the compose db ($TEST_DB)"
 if [[ "$(psql_dev "select 1 from pg_database where datname = '$TEST_DB'")" != "1" ]]; then
@@ -315,7 +320,7 @@ stats="$(docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' $("${DEV[@]
 printf '%s\n' "$stats" | sed 's/^/   /'
 for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB"; do
   set -- $pair
-  grep -Eq "jobapp-$1-[0-9]+ .* / $2\$" <<<"$stats" || fail "$1 limit is not $2"
+  grep -Eq "^$PROJECT-$1-[0-9]+ .* / $2\$" <<<"$stats" || fail "$1 limit is not $2"
 done
 ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB"
 
@@ -336,15 +341,25 @@ curl -s --max-time 5 "http://$scratch_caddy/some/route" | grep -q '<div id="root
 ok "prod caddy on $scratch_caddy: /api/health ok, /some/route is the shell"
 [[ -z "$(docker port "$("${SCRATCH[@]}" ps -q api)")$(docker port "$("${SCRATCH[@]}" ps -q db)")" ]] \
   || fail "prod stack publishes a host port"
-"${SCRATCH[@]}" exec -T api alembic upgrade head >/dev/null 2>&1
-[[ "$("${SCRATCH[@]}" exec -T api alembic current 2>/dev/null)" == "0001 (head)" ]] \
-  || fail "alembic in the runtime image"
+scratch_alembic() { "${SCRATCH[@]}" exec -T api alembic "$@" 2>/dev/null | tr -d '\r'; }
+scratch_alembic upgrade head >/dev/null
+[[ "$(scratch_alembic current)" == "$head" ]] || fail "alembic in the runtime image: $(scratch_alembic current), head: $head"
 "${SCRATCH[@]}" exec -T api python -c "import urllib.request as u; print(u.urlopen('http://127.0.0.1:8000/api/health').read().decode())" \
   | grep -q '"status":"ok"' || fail "health inside the runtime image"
 if "${SCRATCH[@]}" exec -T api python -c "import pytest" >/dev/null 2>&1; then
   fail "runtime image ships dev dependencies"
 fi
-ok "runtime image healthy, alembic at 0001, api and db publish nothing, no dev dependencies"
+ok "runtime image healthy, alembic at $head, api and db publish nothing, no dev dependencies"
+
+step "alembic round trip on throwaway project $SCRATCH_PROJECT: downgrade base, upgrade head"
+# Here and only here: this database is deleted with the project at the end of the script.
+scratch_alembic downgrade base >/dev/null || fail "downgrade base"
+current="$(scratch_alembic current)"
+[[ -z "$current" ]] || fail "after downgrade base, current is $current"
+scratch_alembic upgrade head >/dev/null || fail "upgrade head after downgrade base"
+current="$(scratch_alembic current)"
+[[ "$current" == "$head" ]] || fail "alembic current: $current, head: $head"
+ok "downgrade base then upgrade head: $current"
 
 step "volume persistence on throwaway project $SCRATCH_PROJECT"
 psql_scratch "create table smoke (note text); insert into smoke values ('persisted ✓')" >/dev/null
