@@ -5,7 +5,10 @@
 #
 #   ops/db.sh backup [--tag NAME]   pg_dump -Fc of the live database to
 #                                   $BACKUP_DIR/jobapp-YYYY-MM-DDTHHMMSS[-NAME].dump (UTC), verified,
-#                                   then keeps the newest $BACKUP_KEEP dumps and deletes the rest
+#                                   then the retention below
+#   ops/db.sh retention             what the retention is, where the number comes from and the
+#                                   oldest dump of each folder; changes nothing
+#   ops/db.sh prune                 the count rule alone, in $BACKUP_DIR; never deletes by age
 #   ops/db.sh list                  the dumps, oldest first, with their sizes
 #   ops/db.sh verify <file>         refuses a missing, empty, foreign, corrupt or truncated dump
 #   ops/db.sh restore <file> [--keep]
@@ -19,9 +22,26 @@
 #
 # <file>: a path, a name inside $BACKUP_DIR, or `latest`.
 # Settings from the environment: JOBAPP_DIR (deploy directory, default the parent of this script),
-# BACKUP_DIR (default ~/jobapp-backups), BACKUP_KEEP (default 14), BACKUP_MIN_FREE_MB (free disk
+# BACKUP_DIR (default ~/jobapp-backups), BACKUP_KEEP (below), BACKUP_MIN_FREE_MB (free disk
 # that must remain beyond the size of the database, default 100). Relative paths are under $HOME.
 # Every backup and restore holds an flock on $BACKUP_DIR/.lock, so two never overlap.
+#
+# Retention (T10, issue #49). One number, BACKUP_KEEP, read at each run: the environment of the
+# run wins, then the BACKUP_KEEP line of $JOBAPP_DIR/.env, then 7. It sets two rules, applied by
+# `backup` once the dump of that run is written and verified, never before, never on a failure:
+#   count  the newest BACKUP_KEEP dumps of $BACKUP_DIR stay, the others go;
+#   age    a dump whose name is BACKUP_KEEP days old or more goes, in $BACKUP_DIR and, when they
+#          exist, in $BACKUP_DIR/deploys (the predeploy dumps of the deploy workflow) and in
+#          $BACKUP_DIR/incoming (dumps uploaded from the Mac for a restore).
+# The age of a dump is the number of UTC calendar days between the date in its own name and the
+# date in the name of the dump the run has just written. Never an mtime: a copied or touched file
+# is as old as its name says. So with 7, a dump of any hour of day D goes with the backup of day
+# D + 7, and nothing is deleted on a day without a verified backup.
+# Never deleted: the dump the run wrote; the newest dump of $BACKUP_DIR and of deploys/, whatever
+# its age (said in the output when it is past the limit); a file whose name is not exactly
+# jobapp-YYYY-MM-DDTHHMMSS[-tag].dump with a date that exists; anything that is not a regular file
+# (a symbolic link is neither followed nor removed). What is left alone is listed, run after run.
+# deploys/ is skipped while a backup or a restore holds its lock. Only `backup` deletes by age.
 set -euo pipefail
 umask 077
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -54,11 +74,14 @@ else
   die "set JOBAPP_DIR when this script is read from stdin"
 fi
 BACKUP_DIR="$(under_home "${BACKUP_DIR:-jobapp-backups}")"
-KEEP="${BACKUP_KEEP:-14}"
 MIN_FREE_MB="${BACKUP_MIN_FREE_MB:-100}"
 SCRATCH_DB=jobapp_restore_check
+DEFAULT_KEEP=7
+# What the app tells its users: a deleted document leaves the server's backups within this many
+# days (the delete dialog of the ingestion page, SPEC-ingestion.md, Retention). A BACKUP_KEEP
+# above it still wins and makes that sentence false, so every run says it.
+PROMISED_DAYS=7
 
-[[ "$KEEP" =~ ^[1-9][0-9]*$ ]] || die "BACKUP_KEEP must be a whole number of at least 1, got '$KEEP'"
 [[ "$MIN_FREE_MB" =~ ^[0-9]+$ ]] || die "BACKUP_MIN_FREE_MB must be a whole number, got '$MIN_FREE_MB'"
 [[ -f "$APP_DIR/compose.yml" && -f "$APP_DIR/.env" ]] || die "no deployed stack in $APP_DIR (compose.yml and .env)"
 case "$BACKUP_DIR/" in
@@ -66,6 +89,37 @@ case "$BACKUP_DIR/" in
 esac
 
 envval() { sed -n "s/^[[:space:]]*$1=//p" "$APP_DIR/.env" | tail -n 1; }
+
+# BACKUP_KEEP: the environment of this run, then the line of the deployed .env (spaces, a carriage
+# return and one pair of quotes around the value dropped), then the default. An explicit value
+# wins for both rules: 14 keeps 14 dumps and 14 days.
+if [[ -n "${BACKUP_KEEP:-}" ]]; then
+  KEEP="$BACKUP_KEEP"
+  KEEP_FROM="set in the environment of this run"
+else
+  KEEP="$(envval BACKUP_KEEP)"
+  KEEP="${KEEP%$'\r'}"
+  KEEP="${KEEP#"${KEEP%%[![:space:]]*}"}"
+  KEEP="${KEEP%"${KEEP##*[![:space:]]}"}"
+  case "$KEEP" in
+    \"*\")
+      KEEP="${KEEP#\"}"
+      KEEP="${KEEP%\"}"
+      ;;
+    \'*\')
+      KEEP="${KEEP#\'}"
+      KEEP="${KEEP%\'}"
+      ;;
+  esac
+  if [[ -n "$KEEP" ]]; then
+    KEEP_FROM="set in $APP_DIR/.env"
+  else
+    KEEP="$DEFAULT_KEEP"
+    KEEP_FROM="the default of ops/db.sh"
+  fi
+fi
+[[ "$KEEP" =~ ^[1-9][0-9]{0,3}$ ]] || die "BACKUP_KEEP must be a whole number from 1 to 9999, got '$KEEP' ($KEEP_FROM)"
+
 PGUSER_="$(envval POSTGRES_USER)"
 PGDB="$(envval POSTGRES_DB)"
 [[ -n "$PGUSER_" && -n "$PGDB" ]] || die "POSTGRES_USER or POSTGRES_DB missing from $APP_DIR/.env"
@@ -154,17 +208,153 @@ verify() {
   VERIFY_DB="$(sed -n 's/^;[[:space:]]*dbname: //p' <<<"$toc" | head -n 1)"
 }
 
-prune() {
-  local files n i
-  mapfile -t files < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name 'jobapp-*.dump' | sort)
-  n=${#files[@]}
-  if ((n > KEEP)); then
-    for ((i = 0; i < n - KEEP; i++)); do
-      rm -f -- "${files[$i]}"
-      info "deleted old backup $(basename "${files[$i]}")"
-    done
+# --- retention (header: Retention) ----------------------------------------------------------
+# A dump's name, whole: the UTC time do_backup wrote and the tag cmd_backup accepts. Nothing the
+# rotation deletes is named any other way.
+DUMP_RE='^jobapp-([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2})([0-9]{2})([0-9]{2})(-[a-z0-9-]+)?\.dump$'
+
+# dump_day <file name>: sets DUMP_DAY to the day number (days since 1970-01-01) of the UTC date in
+# a dump's name. Fails for any other name, and for a date or a time that does not exist.
+dump_day() {
+  local y m d dim=31 era yoe doy
+  [[ "$1" =~ $DUMP_RE ]] || return 1
+  y=$((10#${BASH_REMATCH[1]}))
+  m=$((10#${BASH_REMATCH[2]}))
+  d=$((10#${BASH_REMATCH[3]}))
+  ((10#${BASH_REMATCH[4]} <= 23 && 10#${BASH_REMATCH[5]} <= 59 && 10#${BASH_REMATCH[6]} <= 60)) || return 1
+  ((y >= 1970 && m >= 1 && m <= 12 && d >= 1)) || return 1
+  case "$m" in
+    4 | 6 | 9 | 11) dim=30 ;;
+    2)
+      dim=28
+      if ((y % 4 == 0 && y % 100 != 0 || y % 400 == 0)); then dim=29; fi
+      ;;
+  esac
+  ((d <= dim)) || return 1
+  # Days from a civil date (the usual era arithmetic, years counted from March).
+  if ((m <= 2)); then y=$((y - 1)); fi
+  era=$((y / 400))
+  yoe=$((y - era * 400))
+  doy=$(((153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1))
+  DUMP_DAY=$((era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468))
+}
+
+# scan <dir>: DUMPS gets the dumps of <dir> (regular files with a dump's name), oldest first, and
+# ODD every other entry, except the files this script and the deploy keep there. Names only, one
+# level, never through a symbolic link: a link is not a dump, whatever it is called.
+DUMPS=()
+ODD=()
+scan() {
+  local dir="$1" p name
+  DUMPS=()
+  ODD=()
+  shopt -s nullglob dotglob
+  for p in "$dir"/*; do # LC_ALL=C: in byte order, which for dump names is oldest first
+    name="${p##*/}"
+    if [[ -L "$p" ]]; then
+      ODD+=("$name (a symbolic link)")
+    elif [[ -f "$p" ]] && dump_day "$name"; then
+      DUMPS+=("$name")
+    elif [[ -d "$p" ]]; then
+      case "$name" in
+        deploys | incoming | previous-tree) ;;
+        *) ODD+=("$name (a directory)") ;;
+      esac
+    else
+      case "$name" in
+        .lock | .deploy.lock | backup.log) ;;
+        *) ODD+=("$name") ;;
+      esac
+    fi
+  done
+  shopt -u nullglob dotglob
+}
+
+# remove_dump <dir> <name>: the one place a dump is deleted. One regular file with a dump's name,
+# directly in <dir>: never a pattern, never a directory, never through a symbolic link.
+remove_dump() {
+  local dir="$1" name="$2"
+  [[ "$name" =~ $DUMP_RE ]] || die "refusing to delete '$name': not a dump's name"
+  [[ -f "$dir/$name" && ! -L "$dir/$name" ]] || die "refusing to delete $dir/$name: not a regular file"
+  rm -f -- "$dir/$name" || die "could not delete $dir/$name"
+}
+
+report_odd() { # report_odd <dir>: what scan found there that is not a dump
+  local i
+  for ((i = 0; i < ${#ODD[@]}; i++)); do
+    info "left alone in $1, not a dump of this script: ${ODD[$i]} (outside the retention, delete it by hand)"
+  done
+}
+
+# rotate_dir <dir> <count rule 0|1> <keep the newest 0|1> <day of the new dump, or ''> <its name, or ''>
+# The count rule keeps the newest BACKUP_KEEP dumps of <dir>. With a day, a dump BACKUP_KEEP days
+# old or more goes too. The named dump (the one this run wrote) never goes, nor the newest of
+# <dir> when asked.
+rotate_dir() {
+  local dir="$1" by_count="$2" keep_newest="$3" ref="$4" fresh="$5" n i name why kept=0
+  scan "$dir"
+  n=${#DUMPS[@]}
+  for ((i = 0; i < n; i++)); do
+    name="${DUMPS[$i]}"
+    why=""
+    if ((by_count == 1 && i < n - KEEP)); then why="beyond the newest $KEEP"; fi
+    if [[ -n "$ref" ]]; then
+      dump_day "$name"
+      if ((ref - DUMP_DAY >= KEEP)); then why="$((ref - DUMP_DAY)) days old, the limit is $KEEP"; fi
+    fi
+    if [[ -n "$why" && "$name" == "$fresh" ]]; then
+      why="" # written and verified by this run
+    elif [[ -n "$why" ]] && ((keep_newest == 1 && i == n - 1)); then
+      info "kept $name although it is $why: the newest dump of $dir is never deleted"
+      why=""
+    fi
+    if [[ -n "$why" ]]; then
+      remove_dump "$dir" "$name"
+      info "deleted old backup $name ($why)"
+    else
+      kept=$((kept + 1))
+    fi
+  done
+  info "retention: $kept backup(s) kept in $dir (BACKUP_KEEP=$KEEP, $KEEP_FROM)"
+  report_odd "$dir"
+}
+
+promise_note() { # said by every run whose retention is longer than what the app promises
+  ((KEEP <= PROMISED_DAYS)) ||
+    info "WARNING: BACKUP_KEEP=$KEEP keeps dumps up to $KEEP days, and the app tells its users that a deleted document leaves the server's backups within $PROMISED_DAYS days: with this setting that is not true"
+}
+
+# rotate: after do_backup, and only then. The day everything is measured from is the one in the
+# name of the dump this run wrote, so there is no rotation without a verified dump.
+rotate() {
+  local fresh="${BACKUP_FILE##*/}" ref sub dir
+  if [[ ! -f "$BACKUP_FILE" || -L "$BACKUP_FILE" ]] || ! dump_day "$fresh"; then
+    die "no verified dump from this run to measure ages from, nothing deleted"
   fi
-  info "retention: $((n > KEEP ? KEEP : n)) backup(s) kept in $BACKUP_DIR (BACKUP_KEEP=$KEEP)"
+  ref="$DUMP_DAY"
+  rotate_dir "$BACKUP_DIR" 1 1 "$ref" "$fresh"
+  for sub in deploys incoming; do
+    dir="$BACKUP_DIR/$sub"
+    [[ -e "$dir" || -L "$dir" ]] || continue
+    if [[ -L "$dir" || ! -d "$dir" ]]; then
+      info "left alone: $dir is a symbolic link or a file, not a folder of dumps"
+      continue
+    fi
+    if [[ "$sub" == deploys ]]; then
+      # A predeploy backup, or a restore run from that folder, holds its lock: never under them.
+      if ! exec 8>>"$dir/.lock" || ! flock -n 8; then
+        info "skipped $dir: a backup or a restore holds its lock, the next run deletes what is too old there"
+        exec 8>&- || true
+        continue
+      fi
+      rotate_dir "$dir" 0 1 "$ref" ""
+      exec 8>&-
+    else
+      # Copies of dumps the Mac still has: the age rule alone, the newest one included.
+      rotate_dir "$dir" 0 0 "$ref" ""
+    fi
+  done
+  promise_note
 }
 
 # do_backup [tag]: sets BACKUP_FILE. The dump streams out of the container into a hidden .partial
@@ -236,9 +426,45 @@ cmd_backup() {
       *) die "unknown option for backup: $1" ;;
     esac
   done
+  # The order is the safety: a dump that could not be written or verified ends the script in
+  # do_backup, before anything is deleted.
   do_backup "$tag"
-  prune
+  rotate
   printf 'backup=%s\n' "$BACKUP_FILE"
+}
+
+# cmd_prune: the count rule in $BACKUP_DIR, as before T10. No dump was written by this run, so
+# there is no day to measure ages from and nothing is deleted by age.
+cmd_prune() {
+  take_lock
+  rotate_dir "$BACKUP_DIR" 1 1 "" ""
+  info "prune applies the count rule alone: only a backup, once its dump is verified, deletes by age"
+}
+
+# cmd_retention: what a backup run here keeps, and what is there now. Reads the clock, the
+# settings and file names; changes nothing, takes no lock and needs no database.
+cmd_retention() {
+  local today dir n age past
+  dump_day "jobapp-$(date -u +%Y-%m-%dT%H%M%S).dump" || die "cannot read today's date from the clock"
+  today="$DUMP_DAY"
+  info "retention: BACKUP_KEEP=$KEEP ($KEEP_FROM). After each verified backup the newest $KEEP dumps of $BACKUP_DIR stay, and a dump whose name is $KEEP days old or more is deleted, there, in deploys/ and in incoming/"
+  promise_note
+  for dir in "$BACKUP_DIR" "$BACKUP_DIR/deploys" "$BACKUP_DIR/incoming"; do
+    [[ -d "$dir" && ! -L "$dir" ]] || continue
+    scan "$dir"
+    n=${#DUMPS[@]}
+    if ((n == 0)); then
+      info "$dir: no dump"
+    else
+      dump_day "${DUMPS[0]}"
+      age=$((today - DUMP_DAY))
+      past=""
+      ((age < KEEP)) || past=", PAST the limit of $KEEP days: the next verified backup deletes it, unless it is the newest of its folder"
+      info "$dir: $n dump(s), the oldest is $age day(s) old (${DUMPS[0]})$past"
+    fi
+    report_odd "$dir"
+  done
+  printf 'keep=%s\n' "$KEEP"
 }
 
 cmd_list() {
@@ -252,6 +478,7 @@ cmd_list() {
     n=$((n + 1))
   done < <(find "$BACKUP_DIR" -maxdepth 2 -type f -name '*.dump' | sort)
   info "$n dump(s) in $BACKUP_DIR (directory mode $(stat -c %a "$BACKUP_DIR"))"
+  info "retention: BACKUP_KEEP=$KEEP ($KEEP_FROM): after each verified backup the newest $KEEP stay and a dump $KEEP days old or more goes"
 }
 
 cmd_verify() {
@@ -339,9 +566,7 @@ case "$cmd" in
   restore) cmd_restore "$@" ;;
   restore-live) cmd_restore_live "$@" ;;
   drop-scratch) cmd_drop_scratch ;;
-  prune)
-    take_lock
-    prune
-    ;;
-  *) die "usage: db.sh backup [--tag NAME] | list | verify <file> | restore <file> [--keep] | restore-live <file> | drop-scratch | prune" ;;
+  prune) cmd_prune ;;
+  retention) cmd_retention ;;
+  *) die "usage: db.sh backup [--tag NAME] | list | verify <file> | restore <file> [--keep] | restore-live <file> | drop-scratch | prune | retention" ;;
 esac

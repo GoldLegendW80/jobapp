@@ -185,8 +185,13 @@ jobs:
           if docker volume inspect jobapp_pgdata >/dev/null 2>&1; then
             # The database exists: back it up even if db is stopped (start it first).
             [[ -n "$($COMPOSE ps -q --status running db)" ]] || $COMPOSE up -d --wait db
-            # Its own folder and retention, so deploy dumps never push the nightly ones out.
-            out="$(BACKUP_DIR="$BACKUPS/deploys" BACKUP_KEEP=10 bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}")"
+            # Its own folder, so deploy dumps never push the nightly ones out. The retention is
+            # the one of every backup (ops/db.sh, Retention): BACKUP_KEEP of this .env, else 7,
+            # so the newest 7 predeploy dumps stay and one 7 days old or more goes, here once
+            # this dump is verified and again at each nightly backup. No BACKUP_KEEP is set
+            # here: a number of its own would keep predeploy dumps longer than the 7 days the
+            # app promises for a deleted document.
+            out="$(BACKUP_DIR="$BACKUPS/deploys" bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}")"
             echo "$out"
             dump="$(sed -n 's/^backup=//p' <<<"$out" | tail -n 1)"
             [[ -n "$dump" ]] || { echo "::error::ops/db.sh reported no backup file"; restore_previous; exit 1; }
