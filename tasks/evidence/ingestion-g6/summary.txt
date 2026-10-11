@@ -5,6 +5,9 @@
 #   budget_probe.py, budget_probe.json   the SDK client alone, six ways of stopping a loop
 #   api/tests/agents/test_g6_real_cli.py the product's runner (runner.execute, SdkBackend) on a
 #                                        real Postgres, opt-in with JOBAPP_REAL_CLI_STUB=1
+# The probe and its tables are of 2026-10-10. The sections from "What the review of PR #95
+# found" on are of 2026-10-11, after the fix of the token budget, and replace the first bound
+# ("one request, never two"), which the review showed to be wrong.
 
 ## The stub
 Every request is answered with a text block and a tool call (a loop of 8 tool calls, then a last
@@ -60,10 +63,60 @@ hold_close         3         6             2      no result, the client was clos
 - hold_close: a hook that only holds, nothing interrupting, the client closed 6 seconds later:
   the same 6 requests leave at the close. A hook that never answers stops nothing by itself.
 
-## The product's runner (the opt-in tests, 6 passed)
-- 10 runs with a budget of 4,000: each made 3 requests and ran 2 tools, ended failed with
-  "The run reached its token budget and was stopped.", and recorded 4,500 input and 150 output
-  (the result message's figures).
+## What the review of PR #95 found (2026-10-11), and what changed
+The probe above only ever let the model call a tool the run offers, and its gate counted in the
+hook itself. The runner as first built did neither of the two things that make that table true:
+- its count sat behind the event writes: a message was counted when the runner got to it, after
+  the database writes of the messages before it. With writes slower than requests the count
+  fell behind the CLI;
+- its stop was the gate, and Claude Code asks a hook only about a tool it offers. A call to
+  `Bash` or to an invented `mcp__app__` tool is answered by the CLI itself ("No such tool
+  available"), the gate never hears of it, and the next request leaves.
+Measured by the reviewer on the runner as first built (budget 4,000, a loop of nine requests):
+- `Bash` or an invented tool, instant requests: 9 requests, the run recorded `done`;
+- `Bash`, requests of 0.3 s, event writes of 0.4 s: 9 requests, failed on its budget, 6,000 and
+  4 recorded where 13,500 and 450 were used;
+- a tool of the agent, the same pace, a gate that waits 0.2 s: 6 requests, 6,000 and 4 recorded
+  where 9,000 and 300 were used.
+The control in tests/agents/test_g6_budget_push.py puts the count back behind the event writes
+and shows the same: every request of the loop leaves.
+
+As built now (app/agents/runner.py, "Token budget"):
+- a run with a budget has a reader of its own on the SDK's stream, which counts every assistant
+  message the moment it arrives and hands it on; the event writes follow behind and the count
+  never waits for them. A run without a budget (triage, chat) keeps the loop it had;
+- the reader asks for the stop itself, without any hook: when a message holding a tool call
+  arrives with nothing left to spend, whatever the tool, and when a new API message arrives
+  while nothing was left already (a turn that went on with no tool call). The run is then
+  interrupted;
+- the gate still answers a call it is asked about with a stop when nothing is left, and it
+  fails closed: a gate that cannot tell, within its wait, that the message of its call is
+  counted stops the run, which ends with the internal error and not with the budget's message.
+
+## The product's runner, after the fix (the opt-in tests, 15 passed, 2026-10-11)
+The stub reports per request: input side 1,500 (1,000, 200, 300), output 50. Budget 4,000,
+reached by the third request of a loop of nine. Requests sent, requests answered, tokens
+recorded, per run:
+
+what the model calls, and the pace                             runs   sent  answered  recorded
+a tool of the agent, instant requests                           10      3      3      4,500 and 150
+a tool of the agent, instant requests (the review's table)       5      3      3      4,500 and 150
+a tool of the agent, requests 0.3 s, writes 0.4 s, gate 0.2 s    5      3      3      4,500 and 150
+Bash, requests 1 s                                               5      3      3      4,500 and 150
+an invented mcp__app__ tool, requests 1 s                        5      3      3      4,500 and 150
+Bash, requests 0.3 s, writes 0.4 s (was all nine)                5      3      3      4,500 and 150
+Bash, instant requests (was all nine, and done)                  5      3      3      4,500 and 150
+an invented mcp__app__ tool, instant (was all nine)              5      3      3      4,500 and 150
+
+- Every run ended failed with "The run reached its token budget and was stopped.". Where the
+  model called a tool of the agent, two tools ran and the third call was answered by the
+  interrupt in 10 of 10 runs (the gate's stop is the other answer the CLI may act on first).
+- A turn that goes on with no tool call: the stub ends every answer with `max_tokens` and calls
+  nothing. Without a budget the CLI made 4 requests by itself. With a budget of 1,500, reached
+  by the first request: 2 sent, 2 answered, 3,000 and 100 recorded, in 10 of 10 runs (instant
+  requests and requests of 0.3 s).
+- A15 through the runner: 9 requests, its own count 13,500 and 9, the run recorded 13,500 and
+  450 from the result message.
 - A budget of zero: the stub received nothing.
 - An agent with a model per kind of credential, on an API key: every request named
   claude-sonnet-5-5, and the tool events of the private run held names and sizes.
@@ -72,10 +125,34 @@ hold_close         3         6             2      no result, the client was clos
   interrupt is taken away (the control). The run recorded 1,500 input and 1 output, its own
   count.
 
+## What CI holds (no CLI there): tests/agents/push_backend.py, test_g6_budget_push.py
+A test backend that behaves like the CLI on the two points the fake replay does not: it sends
+its messages at its own pace, whether or not the runner has read the ones before, and it asks
+the gate only about a tool the run offers. It is harsher than the CLI on one point, on purpose:
+after a call the gate is not asked about it sends its next request at once, where the real CLI
+was always cut first. Its figures are therefore the worst case:
+- a tool of the agent: the reaching request, none after it;
+- `Bash` or an invented tool, fast or slow writes: the reaching request and one more that had
+  left, cut before its answer;
+- a turn that goes on with no tool call: the reaching request, one more with its answer, and
+  one that had left, cut;
+- the control (the count put back behind the event writes): every request of the loop leaves.
+
 ## The bound, as stated in tasks/ingestion/todo.md (Measurements, G6)
-A run passes its budget by the one request whose usage reached it, and by no other: 0 requests
-after it, on the fake backend for every budget and on the real CLI in 10 of 10 runs. The request
-that reaches the budget cannot be prevented, its usage is known when its first message arrives.
-A turn that went on without a tool call would be seen at its next request and interrupted there:
-one more request, never two; no agent of this app continues that way, and the fake backend holds
-the case.
+A run passes its token budget by one request, or two, plus the output of the step so far.
+- One request, the one whose usage reached the budget, when the turn goes on through a tool
+  call. It cannot be prevented: its usage is known when its first message arrives. 0 requests
+  after it in 40 of 40 runs on the real CLI (15 with a tool of the agent, 25 with `Bash` or an
+  invented tool). For a tool the CLI does not offer only the interrupt holds the next request
+  back and nothing orders the two: the bound to state there is one more request, cut before
+  its answer.
+- Two requests when the turn goes on with no tool call (after `max_tokens`): nothing in the
+  reaching message says so, the runner sees it at the next request's first message. 10 of 10.
+- The output on top: an assistant message reports `output_tokens` as 1, the real figure comes
+  with the result. Inside a step the count is the input side plus 1 per request, so the output
+  of the step so far (1,500 to 8,000 tokens for an extraction step by assumption A13, the
+  transcriptions themselves for a transcription step) is not in it.
+- In tokens, for a full part of 100,000 characters (F = 7,000, T = 33,334, at most 8,000
+  written): one request holds at most F + T + 8,000 = 48,334 input tokens, so the run passes
+  its budget by at most 48,334 (one request) or 96,668 (two), plus at most 8,000 of output not
+  yet counted: about 56,000 or 105,000 tokens, against a ceiling of 1,206,686 for that part.

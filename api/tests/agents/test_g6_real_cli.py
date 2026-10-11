@@ -4,14 +4,27 @@ otherwise, and never in CI (it starts the 215 MB CLI once per run).
 
 No model is called and no credential is used: the CLI is pointed (MODEL_API_BASE_URL) at a stub
 of the Messages API in this process, which answers every request with a text block and a tool
-call, as a loop that would never end, and counts the requests it receives. The runner is the
-product's (`runner.execute` with `SdkBackend`), on a real Postgres.
+call, as a loop that would never end, and counts the requests it receives and the ones it
+answered. The stub can call any tool name, take its time, and end its answers with
+`max_tokens`. The runner is the product's (`runner.execute` with `SdkBackend`), on a real
+Postgres.
+
+Run it whenever the SDK pin changes: the interrupt before the close (app/agents/backend.py) and
+the token budget are held against the real CLI by this file alone. CI runs the same cases on
+test backends (test_g6_budget_push.py), which stand for the CLI only as far as this file says.
 
 What it holds, on the pinned SDK and CLI:
 - every assistant message carries the usage of its API message and its id (A15): the runner's
   own count of the input side equals what the stub reported, request for request;
-- a run stopped on its budget made exactly the requests up to the one whose usage reached the
-  budget, and not one more, in every one of TRIALS runs; the tool of that request did not run;
+- a run stopped on its budget while the model calls a tool of the agent made exactly the
+  requests up to the one whose usage reached the budget, in every one of TRIALS runs; the tool
+  of that request did not run;
+- the cases of the review of PR #95 (REVIEW_CASES): the same when the model calls `Bash` or an
+  invented tool, which the CLI answers itself without asking the gate, when requests are
+  instant or slow, and when every event write is slower than a request. There the bound is
+  the reaching request and at most one more, cut before its answer; measured, none left;
+- a turn that goes on with no tool call (answers ended with `max_tokens`) passes its budget by
+  two requests, where the CLI alone makes four;
 - the run ends failed with TOKEN_LIMIT and records the result message's figures, output
   included;
 - an agent that names a model per kind of credential asks the API for that model;

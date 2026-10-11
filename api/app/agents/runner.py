@@ -64,9 +64,12 @@ ask for it, and the agents of definitions.py ask for none):
   and let go of everything of the run (no transaction open, no lock held, the scratch
   directory and the credential gone), so the hook can take any lock from the top of its own
   lock order. Called for done, cancelled and every failure recorded here; not for a run ended
-  elsewhere (cancelled while queued, failed by a reaper or at the enqueue) and not while the
-  worker is stopping. It has FINAL_HOOK_TIMEOUT_S; what it raises is logged and changes
-  nothing of the run.
+  elsewhere (cancelled while queued, failed by a reaper or at the enqueue) and not when the
+  run's job is cancelled under it: the worker is stopping, or the queue's job timeout has
+  passed (arq ends such a job the same way, and the two cannot be told apart here). A missed
+  hook is never called again: whoever chains runs also looks on a timer, and that timer is
+  the guarantee. The hook has FINAL_HOOK_TIMEOUT_S and holds one of the worker's agent slots
+  meanwhile; what it raises is logged and changes nothing of the run.
 - **A model per kind of credential** (`model_by_credential`). Chosen when the credential is
   revealed and written on the run in that same transaction, next to `credential_kind`.
 - **A token budget** (`token_budget` in the run's input, read for every agent; the input models
@@ -74,22 +77,43 @@ ask for it, and the agents of definitions.py ask for none):
   itself can set one). Absent: no limit. A whole number above zero: the run may spend that many
   tokens (input, cache writes, cache reads and output together). Anything else written there
   (zero, a negative number, null, text) allows no call: the run fails with TOKEN_LIMIT before
-  Claude Code is started. The runner counts what each assistant message reports, once per API
-  message id (`Budget`). Once the count has reached the budget:
-  - the PreToolUse gate answers the next tool call with a stop (`continue: false`), so the tool
-    never runs and Claude Code ends the turn itself, with no further request. This is the way a
-    run of these agents goes on, so it is the way it is stopped;
-  - a request that left anyway (a turn that went on without a tool call) is seen when its
-    first message arrives, and the run is interrupted like a cancelled one;
+  Claude Code is started.
+
+  The count. What each assistant message reports, once per API message id (`Budget`), taken
+  the moment the message comes off the stream, by a reader of its own (`_drive_counting`):
+  never behind the event writes of the messages before it, because Claude Code does not wait
+  for those and can be several requests ahead of a runner that writes slowly. A run without a
+  budget keeps the one loop it always had.
+
+  The stop, once the count has reached the budget. It does not depend on any hook:
+  - a message that holds a tool call, whatever the tool, means another request: the run is
+    interrupted at once (`Budget.stop`), like a cancelled one;
+  - where Claude Code asks the gate (the tools it offers, which are the agent's own), the gate
+    answers the call with a stop as well (`continue: false`): the tool does not run and the
+    CLI ends the turn itself, in order;
+  - a request that left with no tool call before it (the pinned CLI goes on by itself after
+    an answer the API ended with `max_tokens`) is seen when its first message arrives, and the
+    run is interrupted there;
   - a run whose last message used the budget up and asked for nothing more is simply done:
     nothing was cut, and its caller sees what it spent.
-  A stopped run ends failed with TOKEN_LIMIT, a constant its caller can compare. A run with a
-  budget always records what it used: the result message's figures when it reports any, else
-  the runner's own count. Measured on the pinned CLI (tasks/ingestion/todo.md, Measurements,
-  G6): no request leaves after the one whose usage reached the budget; that request itself
-  cannot be prevented, its usage is only known once it was made. The count runs behind on the
-  output side: an assistant message reports its input in full and its output as of the start
-  of the answer, so the output of a run is counted when its result message arrives.
+  The gate fails closed: when it cannot tell that the message of a call is counted, it stops
+  the run, which then fails with INTERNAL, not with TOKEN_LIMIT.
+
+  What it holds (tasks/ingestion/todo.md, Measurements, G6; measured on the pinned CLI). A run
+  passes its budget by one request, or two. One, the request whose usage reached the budget,
+  which cannot be prevented (its usage is known when its first message arrives), when the turn
+  goes on through a tool call: no request followed it in any measured run, for a tool of the
+  agent and for a tool the CLI does not offer alike. For the second kind only the interrupt
+  holds the next request back, and nothing orders the two, so one more request, cut short, is
+  possible. Two when the turn goes on with no tool call. On top comes the output of the run so
+  far: an assistant message reports its input in full and its output as of the start of the
+  answer, so output is only counted when the result message arrives.
+
+  What is recorded. A stopped run ends failed with TOKEN_LIMIT, a constant its caller can
+  compare. A run with a budget always says what it used: the result message's figures when it
+  reports any (kept the moment it arrives, even if the run is cut while its events are still
+  being written), else the runner's own count. While it runs, that count is written on the run
+  with each of its events, so a run no runner ends (the worker killed, a reaper) keeps it.
 """
 
 import asyncio
