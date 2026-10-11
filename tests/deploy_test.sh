@@ -686,6 +686,19 @@ grep -q "BACKUP_ACCEPT_SHRINK" "$WORK/calls2" && fail "BACKUP_ACCEPT_SHRINK was 
 run 1 fake2 env BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup
 grep -q -- "BACKUP_DIR=jobapp-backups BACKUP_ACCEPT_SHRINK=1 bash -s -- backup" "$WORK/calls2" || fail "BACKUP_ACCEPT_SHRINK not passed: $(cat "$WORK/calls2")"
 ok "T10: BACKUP_ACCEPT_SHRINK=1 in the shell of one ./deploy.sh backup reaches ops/db.sh, and nothing sends it otherwise"
+# shellcheck disable=SC2088 # literal ~/, as BACKUP_DIR is written in .env: deploy.sh strips it
+for spelled in '~/jobapp-backups/' '~/jobapp-backups/.' 'jobapp-backups//' '~/jobapp-backups/./'; do
+  : >"$WORK/calls2"
+  run 1 fake2 env BACKUP_DIR="$spelled" ./deploy.sh backup
+  grep -q -- "JOBAPP_DIR=jobapp BACKUP_DIR=jobapp-backups bash -s -- backup" "$WORK/calls2" ||
+    fail "BACKUP_DIR=$spelled was not sent as jobapp-backups: $(cat "$WORK/calls2")"
+done
+# shellcheck disable=SC2088 # literal ~/, as above
+for spelled in '~/' '~/.' / // /.; do
+  run 1 nohost env BACKUP_DIR="$spelled" ./deploy.sh backup
+  out_has "BACKUP_DIR must name a directory"
+done
+ok "T10: a slash or a /. after BACKUP_DIR is trimmed before the name is sent (ops/db.sh would not see a symbolic link behind it); the home folder and / are refused however they are spelled"
 
 step "ops/db.sh restore-live stops the api and the worker, and starts both on every path"
 # ops/db.sh itself, run here with a fake docker (and flock, stat) found first: what it asks of
@@ -1474,42 +1487,60 @@ ok "retention lists the same files and the same link, so status shows what sits 
 # through it, by age or by count, and the mode of the folder it points to is not touched.
 real_mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
 names_in() { (cd "$1" && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' '); }
-rot_new
-mkdir "$ROT/outside/elsewhere"
-chmod 755 "$ROT/outside/elsewhere"
-printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 30 predeploy-aaaaaaaaaaaa)"
-printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 20 predeploy-bbbbbbbbbbbb)"
-for h in 01 02 03 04 05 06 07 08; do
-  printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 1 "predeploy-aaaaaaaaaa$h" "${h}0000")"
+# The review's B3: the same with a slash or a /. after the name, in any number. `[[ -L folder/ ]]`
+# is false for a symbolic link, so the name is trimmed once, before anything looks at it.
+for tail in "" / /. // /./ /.//.; do
+  rot_new
+  mkdir "$ROT/outside/elsewhere"
+  chmod 755 "$ROT/outside/elsewhere"
+  printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 30 predeploy-aaaaaaaaaaaa)"
+  printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 20 predeploy-bbbbbbbbbbbb)"
+  for h in 01 02 03 04 05 06 07 08; do
+    printf 'PGDMP fake dump\n' >"$ROT/outside/elsewhere/$(d 1 "predeploy-aaaaaaaaaa$h" "${h}0000")"
+  done
+  printf 'not a dump\n' >"$ROT/outside/elsewhere/keep.txt"
+  ln -s "$ROT/outside/elsewhere" "$ROT/backups/deploys"
+  elsewhere="$(cd "$ROT/outside/elsewhere" && find . -mindepth 1 ! -name .lock | LC_ALL=C sort)"
+  rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys$tail" -- backup --tag predeploy-0123456789ab
+  [[ "$(cd "$ROT/outside/elsewhere" && find . -mindepth 1 ! -name .lock | LC_ALL=C sort)" == "$(printf '%s\n%s\n' "$elsewhere" "./$(d 0 predeploy-0123456789ab)" | LC_ALL=C sort)" ]] ||
+    fail "BACKUP_DIR=deploys$tail: the deploy's backup changed more than its own dump in the folder the link points to: $(names_in "$ROT/outside/elsewhere")"
+  [[ "$(real_mode "$ROT/outside/elsewhere")" == 755 ]] || fail "BACKUP_DIR=deploys$tail: the mode of the folder behind the link was changed: $(real_mode "$ROT/outside/elsewhere")"
+  out_has "left alone: $ROT/backups/deploys is a symbolic link. Nothing is deleted through a link"
+  out_has "^backup=$ROT/backups/deploys/$(d 0 predeploy-0123456789ab)$"
+  grep -q -e "^rm -f -- " "$ROT/order" && fail "BACKUP_DIR=deploys$tail: a dump was deleted through a link: $(cat "$ROT/order")"
+  grep -q "deleted old backup" "$WORK/out" && fail "BACKUP_DIR=deploys$tail: the run says it deleted through a link: $(cat "$WORK/out")"
+  rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys$tail" BACKUP_KEEP=1 -- prune
+  out_has "left alone: $ROT/backups/deploys is a symbolic link"
+  [[ "$(find "$ROT/outside/elsewhere" -name 'jobapp-*.dump' | wc -l | tr -d ' ')" == 11 ]] || fail "BACKUP_DIR=deploys$tail: prune deleted through a link"
+  rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys$tail" -- retention
+  out_has "left alone: $ROT/backups/deploys is a symbolic link"
+  out_has "^keep=7$"
+  [[ "$(real_mode "$ROT/outside/elsewhere")" == 755 ]] || fail "BACKUP_DIR=deploys$tail: prune or retention changed the mode of the folder behind the link"
 done
-printf 'not a dump\n' >"$ROT/outside/elsewhere/keep.txt"
-ln -s "$ROT/outside/elsewhere" "$ROT/backups/deploys"
-elsewhere="$(cd "$ROT/outside/elsewhere" && find . -mindepth 1 ! -name .lock | LC_ALL=C sort)"
-rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" -- backup --tag predeploy-0123456789ab
-[[ "$(cd "$ROT/outside/elsewhere" && find . -mindepth 1 ! -name .lock | LC_ALL=C sort)" == "$(printf '%s\n%s\n' "$elsewhere" "./$(d 0 predeploy-0123456789ab)" | LC_ALL=C sort)" ]] ||
-  fail "the deploy's backup changed more than its own dump in the folder the link points to: $(names_in "$ROT/outside/elsewhere")"
-[[ "$(real_mode "$ROT/outside/elsewhere")" == 755 ]] || fail "the mode of the folder behind the link was changed: $(real_mode "$ROT/outside/elsewhere")"
-out_has "left alone: $ROT/backups/deploys is a symbolic link. Nothing is deleted through a link"
-out_has "^backup=$ROT/backups/deploys/$(d 0 predeploy-0123456789ab)$"
-grep -q -e "^rm -f -- " "$ROT/order" && fail "a dump was deleted through a link: $(cat "$ROT/order")"
-grep -q "deleted old backup" "$WORK/out" && fail "the run says it deleted through a link: $(cat "$WORK/out")"
-ok "the deploy's own command line with a deploys/ that is a link: the dump is written through it, and of the ten dumps in the folder it points to, two past the age limit and two more beyond the newest 7, none goes; that folder's mode is untouched, and the run says why"
-rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" BACKUP_KEEP=1 -- prune
-out_has "left alone: $ROT/backups/deploys is a symbolic link"
-[[ "$(find "$ROT/outside/elsewhere" -name 'jobapp-*.dump' | wc -l | tr -d ' ')" == 11 ]] || fail "prune deleted through a link"
-rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" -- retention
-out_has "left alone: $ROT/backups/deploys is a symbolic link"
-out_has "^keep=7$"
+ok "the deploy's own command line with a deploys/ that is a link, named as it is or with /, /., //, /./ or /.//. after it: the dump is written through it, and of the ten dumps in the folder it points to, two past the age limit and two more beyond the newest 7, none goes, by backup or by prune; that folder's mode is untouched; backup, prune and retention say why, with the name trimmed"
+for tail in "" / /. //; do
+  rot_new
+  seed "$(d 30)" "$(d 20)" "incoming/$(d 30)"
+  mv "$ROT/backups" "$ROT/outside/real"
+  ln -s "$ROT/outside/real" "$ROT/backups"
+  rot 0 "$NOW" BACKUP_DIR="$ROT/backups$tail"
+  [[ -f "$ROT/outside/real/$(d 30)" && -f "$ROT/outside/real/$(d 20)" && -f "$ROT/outside/real/incoming/$(d 30)" && -f "$ROT/outside/real/$(d 0)" ]] ||
+    fail "BACKUP_DIR=backups$tail: a backup folder that is a link was rotated: $(names_in "$ROT/outside/real")"
+  out_has "left alone: $ROT/backups is a symbolic link"
+  grep -q -e "^rm -f -- " "$ROT/order" && fail "BACKUP_DIR=backups$tail: a dump was deleted through a link: $(cat "$ROT/order")"
+done
+ok "the folder of the nightly run when it is a link, with or without a slash or a /. after its name: the same, nothing deleted in it or in its incoming/, and said"
 rot_new
-seed "$(d 30)" "$(d 20)" "incoming/$(d 30)"
-mv "$ROT/backups" "$ROT/outside/real"
-ln -s "$ROT/outside/real" "$ROT/backups"
-rot 0 "$NOW"
-[[ -f "$ROT/outside/real/$(d 30)" && -f "$ROT/outside/real/$(d 20)" && -f "$ROT/outside/real/incoming/$(d 30)" && -f "$ROT/outside/real/$(d 0)" ]] ||
-  fail "a backup folder that is a link was rotated: $(names_in "$ROT/outside/real")"
-out_has "left alone: $ROT/backups is a symbolic link"
-grep -q -e "^rm -f -- " "$ROT/order" && fail "a dump was deleted through a link: $(cat "$ROT/order")"
-ok "prune and retention through the link, and the folder of the nightly run when it is a link: the same, nothing deleted in it or in its incoming/, and said"
+seed "$(d 9)" "$(d 1)" "incoming/$(d 9)"
+rot 0 "$NOW" BACKUP_DIR="$ROT/backups/./"
+only . "$(d 1)" "$(d 0)"
+only incoming
+out_has "^backup=$ROT/backups/$(d 0)$"
+for bad in / // /. "$HOME" "$HOME/" "$HOME/."; do
+  rot 1 "$NOW" "BACKUP_DIR=$bad" -- list
+  out_has "db.sh: BACKUP_DIR must name a folder of its own, not / and not the home folder"
+done
+ok "a real folder named with a slash is rotated as usual, under its trimmed name; / and the home folder, however they are spelled, are refused by every command before it does anything"
 grep -nE '(^|[^[:alnum:]_])rm[[:space:]]+-[[:alnum:]]*[rR]' ops/db.sh && fail "ops/db.sh has a recursive rm"
 grep -nE -- '(^|[^-])-(delete|exec)([^[:alnum:]_-]|$)|xargs' ops/db.sh && fail "ops/db.sh deletes through find or xargs"
 # shellcheck disable=SC2016 # the literal text of ops/db.sh
@@ -1654,7 +1685,9 @@ cron_run "$NOW"
 ok "the line installed before T10 carries BACKUP_KEEP=14: status says so, with the warning, and its run still keeps a dump of 10 days"
 
 run 0 jet ./deploy.sh backup-schedule install
-run 0 jet ./deploy.sh backup-schedule install
+# The second time with a slash after the folder's name: the line is the same, the name trimmed.
+# shellcheck disable=SC2088 # a literal ~/, as BACKUP_DIR is written in .env
+run 0 jet env BACKUP_DIR='~/jobapp-backups/' ./deploy.sh backup-schedule install
 [[ "$(grep -cF "$MARK" "$JH/home/.crontab")" == 1 ]] || fail "not exactly one jobapp line: $(cat "$JH/home/.crontab")"
 grep -qx "# someone else's line, which must survive" "$JH/home/.crontab" || fail "a foreign line was lost: $(cat "$JH/home/.crontab")"
 # shellcheck disable=SC2016 # $HOME is for cron's shell

@@ -89,6 +89,16 @@ else
   die "set JOBAPP_DIR when this script is read from stdin"
 fi
 BACKUP_DIR="$(under_home "${BACKUP_DIR:-jobapp-backups}")"
+# One spelling of the folder, used everywhere below: no slash and no /. at its end. With either,
+# `[[ -L ... ]]` is false for a symbolic link, and a linked folder would pass for a real one in
+# every check that keeps deletions out of it (the review's B3). Then never / or the home folder
+# itself: this script sets the mode of that folder and reads every name in it.
+while [[ "$BACKUP_DIR" != / && ("$BACKUP_DIR" == */ || "$BACKUP_DIR" == */.) ]]; do
+  BACKUP_DIR="${BACKUP_DIR%.}"
+  BACKUP_DIR="${BACKUP_DIR%/}"
+done
+[[ -n "$BACKUP_DIR" && "$BACKUP_DIR" != / && "$BACKUP_DIR" != "${HOME%/}" ]] ||
+  die "BACKUP_DIR must name a folder of its own, not / and not the home folder, got '${BACKUP_DIR:-}'"
 MIN_FREE_MB="${BACKUP_MIN_FREE_MB:-100}"
 SCRATCH_DB=jobapp_restore_check
 DEFAULT_KEEP=7

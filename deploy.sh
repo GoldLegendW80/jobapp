@@ -126,6 +126,23 @@ setting() { # setting <NAME> <default>: environment, then .env, then default
   printf '%s' "${value:-$2}"
 }
 
+# backup_dir: BACKUP_DIR as every command here uses it, sends it and writes it into the cron
+# line: relative to the Jetson's home when it starts with ~/, and without a slash or a /. at its
+# end. ops/db.sh trims them too, since `[[ -L folder/ ]]` is false for a symbolic link and a
+# linked backup folder must never be deleted in (the review's B3); the name is trimmed here as
+# well so that one spelling of it exists, in the lock, in the cron line and in the messages.
+backup_dir() {
+  local d
+  # shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
+  d="$(setting BACKUP_DIR '~/jobapp-backups')"
+  d="${d#\~/}"
+  while [[ "$d" != / && ("$d" == */ || "$d" == */.) ]]; do
+    d="${d%.}"
+    d="${d%/}"
+  done
+  printf '%s' "$d"
+}
+
 HOST="$(setting DEPLOY_HOST jetson)"
 # shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
 RDIR="$(setting DEPLOY_DIR '~/jobapp')"
@@ -199,9 +216,7 @@ lock_script() {
 remote_lock() {
   step "deploy lock on $HOST"
   local bdir max fifo="$CTL_DIR/lock.in" out="$CTL_DIR/lock.out" deadline
-  # shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
-  bdir="$(setting BACKUP_DIR '~/jobapp-backups')"
-  bdir="${bdir#\~/}"
+  bdir="$(backup_dir)"
   max="$(setting DEPLOY_LOCK_MAX_S 3600)"
   [[ "$max" =~ ^[1-9][0-9]*$ ]] || die "DEPLOY_LOCK_MAX_S must be a whole number of seconds, got '$max'"
   mkfifo "$fifo"
@@ -963,9 +978,7 @@ cmd_smoke() {
 # --- backups and restores -----------------------------------------------------------------
 # ops/db.sh does the work on the Jetson; this side parses options, asks the confirmation, moves
 # files between the two machines and runs the health check after a live restore.
-# shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
-BDIR="$(setting BACKUP_DIR '~/jobapp-backups')"
-BDIR="${BDIR#\~/}"
+BDIR="$(backup_dir)"
 # Empty unless set on this Mac (environment or .env): ops/db.sh then decides on the Jetson, from
 # the BACKUP_KEEP of the .env there, then its default of 7 (ops/db.sh, Retention).
 BACKUP_KEEP="$(setting BACKUP_KEEP '')"
@@ -977,7 +990,7 @@ CONFIRM_PHRASE="RESTORE jobapp"
 check_backup_settings() {
   [[ -z "$BACKUP_KEEP" || "$BACKUP_KEEP" =~ ^[1-9][0-9]{0,3}$ ]] ||
     die "BACKUP_KEEP must be a whole number from 1 to 9999, got '$BACKUP_KEEP'"
-  [[ -n "$BDIR" && "$BDIR" != "~" && "$BDIR" != "/" ]] || die "BACKUP_DIR must name a directory"
+  [[ -n "$BDIR" && "$BDIR" != "~" && "$BDIR" != "/" && "$BDIR" != "." ]] || die "BACKUP_DIR must name a directory"
   [[ "$BDIR" =~ ^[A-Za-z0-9._/-]+$ ]] || die "BACKUP_DIR may only hold letters, digits, . _ / and -: '$BDIR'"
   case "$BDIR/" in
     "$RDIR/"*) die "BACKUP_DIR ($BDIR) must not be inside DEPLOY_DIR ($RDIR): rsync --delete would erase it" ;;
