@@ -391,8 +391,8 @@ MUTATIONS = [
     ),
     (
         "S5: an address cut by a line at a hyphen is an address",
-        "            if not _cut_by_a_line(text, at, end) and starts(text, at) and ends(text, end):",
-        "            if starts(text, at) and ends(text, end):",
+        "            if whole and ends(text, end) and not _cut_by_a_line(text, at, end):",
+        "            if whole and ends(text, end):",
     ),
     (
         "S1: four digits glued to a decimal are a year",
@@ -531,9 +531,9 @@ MUTATIONS = [
         """(len(sizes) >= 2 and signs == {","})""",
     ),
     (
-        "a date with spaced slashes: a number of three digits is a day",
-        "        return parts if all(len(tokens[one].text) <= 2 for one in (at, *parts[:-1])) else []",
-        "        return parts",
+        "a date with spaced slashes ends on any number",
+        '        if not parts or goes_on or self._is(end, "/") or not self._year(parts[-1]):',
+        '        if not parts or goes_on or self._is(end, "/"):',
     ),
     (
         "the password of a URL starts a URL",

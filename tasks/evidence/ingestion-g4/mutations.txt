@@ -18,7 +18,7 @@ noticed by the unit tests | an email starts anywhere
 noticed by the unit tests | the words of a name not kept
 noticed by the unit tests | a name inside tokens
 noticed by the unit tests | short names in any case
-noticed by the unit tests | any fraction is a decimal
+noticed by the unit tests | three digits after four are a second number
 noticed by the unit tests | groups of any size
 noticed by the unit tests | a phone number cut by the span
 noticed by the unit tests | no french rule
@@ -71,7 +71,7 @@ noticed by the unit tests | an unreadable document is read
 noticed by the properties | no limit on the clusters remembered
 noticed by the unit tests | superscripts glued to a number never found
 noticed by the unit tests | B1: one number of a run of the value carries the others
-noticed by the unit tests | S4: a decimal with four decimals is cut into pieces
+noticed by the unit tests | S4: a decimal with four decimals or more is cut into pieces
 noticed by the unit tests | B2: a sign of a local part before an address is never looked past
 noticed by the unit tests | B2: a sign that joins is looked past as a quote is
 noticed by the unit tests | B2: an address is compared under the case fold
@@ -100,7 +100,21 @@ noticed by the unit tests | N6: a range that goes backward shares its year
 noticed by the unit tests | N2: a key that is not text is printed
 noticed by the unit tests | N2: a path of the table of types that is not text is read
 noticed by the unit tests | N2: a document that is not text is prepared
-# 101 changes, 101 noticed
-# One run of all the entries, in which "any fraction is a decimal" did not apply (the line it
-# replaces had been rewritten), then that entry corrected and run alone: its line above is from
-# the second run.
+noticed by the unit tests | R1: four decimals after a month are its year, whatever they are
+noticed by the unit tests | R1: any two numbers of four digits are two years
+noticed by the unit tests | R1: a month in one digit before a full stop and its year
+noticed by the unit tests | R2: four digits of a number glued by hyphens are a year
+noticed by the unit tests | R2: four digits next to five glued by a hyphen are a year
+noticed by the unit tests | R2: a ratio written with one digit and a full stop gives a year
+noticed by the unit tests | R2: a month in one digit with a full stop is read in a range
+noticed by the unit tests | the cells of a row lose their years
+noticed by the unit tests | two numbers with a comma are the cells of a row
+noticed by the unit tests | a date with spaced slashes ends on any number
+noticed by the unit tests | the password of a URL starts a URL
+noticed by the unit tests | six digits after a colon start a URL
+noticed by the unit tests | an email never starts right after another
+noticed by the unit tests | an email starts after any word and a sign that no domain holds
+noticed by the unit tests | an email starts right after the full stop of another
+noticed by the unit tests | a hyphen before an address is a dash
+noticed by the unit tests | a dash glued to a word bounds an address
+# 118 changes, 118 noticed

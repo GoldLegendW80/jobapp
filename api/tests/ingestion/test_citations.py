@@ -1081,6 +1081,8 @@ def test_two_digit_years_are_kept_apart() -> None:
         "Jan 23",
         "Jan '2",
         "Jan '234",
+        "09 / 21 à 03 / 23",  # spaced slashes are read before a year in four digits only
+        "09 / 21 to present",
     ):
         assert dates_of(n(text)).short == set(), text
 

@@ -1218,9 +1218,10 @@ class _DateReader:
 
     def _spaced_slashes(self, at: int) -> list[int]:
         """The numbers that follow the one at `at` around slashes with a space on each side,
-        when the whole is a month and its year or a day, a month and a year: "09 / 2019",
-        "15 / 06 / 2019". None when a slash stands right before the first number or right after
-        the last: they are then the end or the start of a longer chain."""
+        one or two of them, the last a year: "09 / 2019", "15 / 06 / 2019". The chain they make
+        is then read like a glued one, which says whether it is a date. None when a slash stands
+        right before the first number or right after the last: they are then the end or the
+        start of a longer chain."""
         tokens = self.tokens
         parts: list[int] = []
         end = at + 1
@@ -1241,7 +1242,7 @@ class _DateReader:
         )
         if not parts or goes_on or self._is(end, "/") or not self._year(parts[-1]):
             return []
-        return parts if all(len(tokens[one].text) <= 2 for one in (at, *parts[:-1])) else []
+        return parts
 
     def _shares_the_year(self, start: int, end: int, separator: str) -> None:
         """A day and its month before a whole date, in a range that goes forward: "du 15/06 au
