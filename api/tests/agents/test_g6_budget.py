@@ -1020,6 +1020,7 @@ def test_a_bound_private_hooked_run_stopped_on_its_budget(
 KINDS = {
     "NO_CREDENTIAL": "provider",
     "UNREADABLE": "provider",
+    "UNUSABLE": "provider",
     "REFUSED": "provider",
     "BUSY": "provider",
     "NO_CLI": "box",

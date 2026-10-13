@@ -126,8 +126,10 @@ def _job_payload(scope: Scope, raw: object) -> str | None:
         ).scalar_one_or_none()
         if job is None:
             return None
-        description, description_cut = _clip(job.description, DESCRIPTION_MAX)
-        posting, posting_cut = _clip(job.posting_text, POSTING_MAX)
+        # Scrubbed whole, then cut, like everything else a run shortens (runner.scrub says
+        # why the order matters). The text is the user's own, so this is for consistency.
+        description, description_cut = _clip(scope.redact(job.description), DESCRIPTION_MAX)
+        posting, posting_cut = _clip(scope.redact(job.posting_text), POSTING_MAX)
         payload = {
             "id": str(job.id),
             "company": job.company,
