@@ -4,8 +4,10 @@
 # - `runtime` (default, last stage): the api. No dev tools, no Claude Agent SDK.
 # - `worker`: the queue worker (python -m app.worker, image jobapp-worker): the same code plus the
 #   `agents` dependency group, the Claude Agent SDK, whose wheel bundles the native Claude Code
-#   CLI it drives (SDK facts in tasks/agents/todo.md: no Node runtime and no npm package needed).
-# - `dev`: every group (dev tools and the SDK) for compose.dev.yml, which bind-mounts the code and
+#   CLI it drives (SDK facts in tasks/agents/todo.md: no Node runtime and no npm package needed),
+#   and the `ingestion` group, the libraries the `parser` service reads documents with (that
+#   service runs this image under another uid; nothing of the group is imported by the worker).
+# - `dev`: every group (dev tools, the SDK, the parser libraries) for compose.dev.yml, which bind-mounts the code and
 #   runs uvicorn --reload.
 
 ARG PYTHON_IMAGE=python:3.12.15-slim-trixie
@@ -21,13 +23,13 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_PROJECT_ENVIRONMENT=/app/.venv
 WORKDIR /app
 COPY pyproject.toml uv.lock .python-version ./
-# The project's default groups are dev and agents (pyproject.toml); the api needs neither.
+# The project's default groups are dev, agents and ingestion (pyproject.toml); the api needs none.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-default-groups --no-install-project
 
 FROM builder AS builder-worker
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-default-groups --group agents --no-install-project
+    uv sync --frozen --no-default-groups --group agents --group ingestion --no-install-project
 
 FROM builder AS dev
 RUN --mount=type=cache,target=/root/.cache/uv \
