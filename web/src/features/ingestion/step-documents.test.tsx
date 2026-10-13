@@ -138,11 +138,13 @@ describe("documents: the list", () => {
     expect(screen.getByText("2 documents, 34 KB of 100 MB used")).toBeVisible();
   });
 
-  it("tells the truth about a file this version cannot read yet", async () => {
+  it("tells the truth about a file this version cannot read", async () => {
+    // Every kind the api keeps has a reader since G8 (an image is read by the agent). What is
+    // left without one is a type the api does not know: no reader is planned, so no promise.
     await open([
       fakeDocument({
         name: "scan.png",
-        kind: "image",
+        kind: "other",
         status: "pending",
         readable: false,
       }),
@@ -151,7 +153,7 @@ describe("documents: the list", () => {
     expect(cv.getByText("Waiting")).toBeVisible();
     expect(
       cv.getByText(
-        "This version cannot read images yet. Your file is kept, and it will be read as soon as it can.",
+        "This version cannot read this type of file. Your file is kept.",
       ),
     ).toBeVisible();
     // No text yet, so nothing to preview; it can still be deleted.

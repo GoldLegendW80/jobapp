@@ -247,7 +247,7 @@ test("a PDF behind a password and one cut short each say why they were not read"
   }
 });
 
-test("a PDF with two scanned pages keeps its text and says what was left", async () => {
+test("a PDF with two scanned pages keeps its text and says its scans wait for the agent", async () => {
   await picker(page).setInputFiles([
     pdf(
       SCANNED,
@@ -261,17 +261,35 @@ test("a PDF with two scanned pages keeps its text and says what was left", async
       ]),
     ),
   ]);
+  // Until G8 this PDF ended "Ready" with a note ("2 pages hold no text and wait for the image
+  // reader."). Since G8 its two scanned pages are rendered to page images, and the document
+  // waits for the agent that will read them: the row says so in plain words, and the three
+  // pages already read as text are kept and shown at once.
   const scanned = row(page, SCANNED);
-  await expect(scanned).toContainText("Ready", { timeout: 60_000 });
-  await expect(scanned).toContainText("3 pages read as text, 2 as images");
+  await expect(scanned).toContainText("Waiting for the agent", {
+    timeout: 60_000,
+  });
   await expect(scanned).toContainText(
-    "2 pages hold no text and wait for the image reader.",
+    "Its scanned pages will be read by the agent at the next run.",
   );
+  await expect(scanned).toContainText("3 pages read as text, 2 as images");
+  await expect(scanned).not.toContainText("wait for the image reader");
+  await expect(scanned).not.toContainText("Ready");
   await scanned.getByRole("button", { name: `Preview ${SCANNED}` }).click();
   const dialog = page.getByRole("dialog", { name: SCANNED });
   const text = dialog.getByRole("region", { name: "Text of the document" });
+  await expect(text).toContainText("Robin Example, page 1 of 5");
   await expect(text).toContainText("Robin Example, page 3 of 5");
+  await expect(text).toContainText("Robin Example, page 5 of 5");
+  // A scan with a page number under it is kept as an image: the image holds that line.
   await expect(text).not.toContainText("Page 4 of 5");
+  await expect(dialog.getByRole("img")).toHaveCount(2);
+  await expect(
+    dialog.getByRole("img", { name: "Page 2, kept as an image" }),
+  ).toBeVisible();
+  await expect(
+    dialog.getByRole("img", { name: "Page 4, kept as an image" }),
+  ).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await shots(page, "04-failed-and-scans");
@@ -300,7 +318,7 @@ test("a PDF with two scanned pages keeps its text and says what was left", async
     [RESTRICTED]: "done 2 0",
     [LOCKED]: "failed null null",
     [CUT]: "failed null null",
-    [SCANNED]: "done 3 2",
+    [SCANNED]: "awaiting_transcription 3 2",
   });
 });
 
