@@ -323,7 +323,9 @@ ok "X-Request-ID kept when sent, a UUID from caddy otherwise"
 big() { head -c "$1" /dev/zero; }
 [[ "$(curl_c /api/health -X POST --data-binary @<(big 10485761))" == "413" ]] || fail "10 MiB + 1 not refused"
 [[ "$(curl_c / -X POST --data-binary @<(big 20000000))" == "413" ]] || fail "20 MB to / not refused"
-[[ "$(curl_c /api/health -X POST --data-binary @<(big 10485760))" == "405" ]] || fail "10 MiB exactly did not reach the api"
+# With the header the api's CSRF check asks of every write: without it the api answers 403 before
+# it looks at the route, and this line read that as a body Caddy had stopped.
+[[ "$(curl_c /api/health -X POST -H 'X-Requested-With: jobapp' --data-binary @<(big 10485760))" == "405" ]] || fail "10 MiB exactly did not reach the api"
 ok "bodies over 10 MiB refused with 413, 10 MiB exactly reaches the api (405 from FastAPI)"
 # The upload of a document is the one route that takes 20 MiB (SPEC-ingestion.md, task G1).
 # No session here: a body that Caddy lets through reaches the api, which answers 401; a body
