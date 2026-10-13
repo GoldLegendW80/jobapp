@@ -16,9 +16,12 @@ PDF, whose upload queues a parse job (jobs.py: the worker sends the file to the 
 and stores the text it gets back), and since G7 the archive: a ZIP that the parser finds to be
 a Word document becomes its text (the row then carries DOCX_MIME), and one it finds to be a
 LinkedIn export becomes one document per CSV it knows (`store_export`: the row of the archive
-is deleted in the same transaction). An image is kept and waits for G8 (`Kind.image`); the
-list tells the user which documents wait for a later version, and the reaper of jobs.py which
-waiting rows to queue.
+is deleted in the same transaction). Since G8 an image has a reader too (`Kind.image`): the
+parser normalises it to one page image, and the document then waits for an agent run to
+transcribe it (`awaiting_transcription`), as a PDF with scanned pages does. The images stored
+before G8 were kept `pending` with their bytes: the reaper of jobs.py queues them on its first
+tick. The list tells the user which documents wait for a later version (a type no reader
+exists for), and the reaper which waiting rows to queue.
 
 Storing (`store_file`, `store_paste`), in one transaction that the caller commits:
 1. The same file already there for this user (`unique(user_id, sha256)`): it is returned and
@@ -92,7 +95,11 @@ USER_MAX_DOCUMENTS = 200
 PASTE_MAX_CHARS = 100_000
 # Raised by a task whose parser reads more than the one before (G8): a `done` document that an
 # older version left with a note is then read again when the user uploads it again.
-PARSER_VERSION = 1
+# 2 since G8: the scanned pages of a PDF are rendered, so a PDF that version 1 left `done`
+# with "pages hold no text and wait for the image reader" is read again on a new upload. That
+# replacement empties the old text as a deletion does and so asks the delete guards first
+# (`_store`): a document whose text a later task protects is returned as it is.
+PARSER_VERSION = 2
 
 UNTITLED = "Untitled"
 PASTED_NAME = "Pasted text"
@@ -122,7 +129,7 @@ KIND_OF_MIME: dict[str, Kind] = {
 }
 
 # The kinds a reader exists for in this version (module docstring).
-READABLE_KINDS: frozenset[Kind] = frozenset({Kind.text, Kind.pdf, Kind.archive})
+READABLE_KINDS: frozenset[Kind] = frozenset({Kind.text, Kind.pdf, Kind.archive, Kind.image})
 
 TOO_LARGE = f"The file is larger than {FILE_MAX_BYTES // (1024 * 1024)} MB."
 EMPTY = "The file is empty."
@@ -765,6 +772,37 @@ def read_text(
     end = offset + len(piece)
     following = end if end < total else None
     return TextPage(text=piece, offset=offset, next_offset=following, total=total)
+
+
+@dataclass(frozen=True)
+class PageImageInfo:
+    position: int
+    width: int
+    height: int
+
+
+def list_images(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> list[PageImageInfo]:
+    """The page images stored for this document of this user, by position: the zero based
+    page index of a PDF page, 0 for an uploaded image. Empty for anyone else's document."""
+    rows = db.execute(
+        sa.select(IngestionImage.position, IngestionImage.width, IngestionImage.height)
+        .where(IngestionImage.document_id == document_id, IngestionImage.user_id == user_id)
+        .order_by(IngestionImage.position)
+    ).all()
+    return [PageImageInfo(position, width, height) for position, width, height in rows]
+
+
+def read_image(
+    db: Session, user_id: uuid.UUID, document_id: uuid.UUID, position: int
+) -> bytes | None:
+    """The stored JPEG of one page image, None when this user has no such image."""
+    return db.execute(
+        sa.select(IngestionImage.jpeg).where(
+            IngestionImage.document_id == document_id,
+            IngestionImage.user_id == user_id,
+            IngestionImage.position == position,
+        )
+    ).scalar_one_or_none()
 
 
 def confirm_secret(

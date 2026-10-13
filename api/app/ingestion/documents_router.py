@@ -95,7 +95,17 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any, NoReturn
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session, sessionmaker
@@ -112,6 +122,7 @@ from app.ingestion import documents, jobs
 from app.ingestion.models import (
     FILE_MAX_BYTES,
     NAME_MAX_CHARS,
+    PAGES_MAX,
     TEXT_MAX_CHARS,
     IngestionDocument,
     TextSource,
@@ -229,11 +240,20 @@ class DocumentList(BaseModel):
     limits: LimitsOut
 
 
+class PageImageOut(BaseModel):
+    position: int  # the zero based page index of a PDF page, 0 for an uploaded image
+    width: int
+    height: int
+
+
 class TextOut(BaseModel):
     text: str
     offset: int
     next_offset: int | None
     total: int
+    # The page images that wait for their transcription, by position (G8): each is served by
+    # GET /{document_id}/images/{position}.
+    images: list[PageImageOut] = []
 
 
 class PasteIn(BaseModel):
@@ -693,8 +713,42 @@ def read_text(
         raise _error(status.HTTP_409_CONFLICT, NO_TEXT_YET) from None
     if page is None:
         raise _error(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+    images = documents.list_images(db, user.id, _id(document_id))
     return TextOut(
-        text=page.text, offset=page.offset, next_offset=page.next_offset, total=page.total
+        text=page.text,
+        offset=page.offset,
+        next_offset=page.next_offset,
+        total=page.total,
+        images=[PageImageOut(**vars(image)) for image in images],
+    )
+
+
+@router.get(
+    "/{document_id}/images/{position}",
+    response_class=Response,
+    responses={**_401, **_404, 200: {"content": {"image/jpeg": {}}}},
+)
+def read_image(
+    document_id: str,
+    position: Annotated[int, Path(ge=0, lt=PAGES_MAX)],
+    user: CurrentUser,
+    db: Db,
+) -> Response:
+    """One stored page image of a document, to its owner: the JPEG the parser made, and
+    nothing a browser could take for anything else. 404 for anyone else and for a position
+    that holds no image."""
+    jpeg = documents.read_image(db, user.id, _id(document_id), position)
+    if jpeg is None:
+        raise _error(status.HTTP_404_NOT_FOUND, NOT_FOUND)
+    return Response(
+        content=bytes(jpeg),
+        media_type="image/jpeg",
+        headers={
+            **NO_STORE,
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": "inline",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
     )
 
 

@@ -116,6 +116,12 @@ LIMITS["pdf_text"]["as"] = 256 * MIB
 # the limit, not the sizing, is what holds against a hostile one.
 LIMITS["docx"]["as"] = 256 * MIB
 LIMITS["linkedin_zip"]["as"] = 256 * MIB
+# The image reader and the renderer (G8). Set from the measurements of the plan (G8,
+# Measurements); until those are written here both keep the 512 MiB every kind starts with.
+IMAGE_AS = 512 * MIB
+PDF_RENDER_AS = 512 * MIB
+LIMITS["image"]["as"] = IMAGE_AS
+LIMITS["pdf_render"]["as"] = PDF_RENDER_AS
 # The hard CPU limit is one second above the soft one. At the soft limit the kernel sends
 # SIGXCPU, whose default action ends the process, and the server reports `cpu_limit`. The
 # kernel looks at the hard limit first, though: with both at 45 it would send SIGKILL straight
