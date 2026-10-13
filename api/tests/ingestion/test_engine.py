@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
-from app.agents import failures, fake_backend
+from app.agents import failures
 from app.agents import runs as agent_runs
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun
@@ -990,7 +990,7 @@ def test_a_stream_named_after_a_documents_hash_is_replayed_when_its_file_exists(
     (step,) = eh.steps_of(factory, run_id)
     name = f"ingest_extract_{bytes(step.sha256).hex()[:12]}_p0"
     (tmp_path / f"{name}.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(fake_backend, "STREAMS", tmp_path)
+    monkeypatch.setattr(engine, "STREAMS", tmp_path)
     fake = settings.model_copy(update={"agents_fake_backend": True})
     assert engine.stream_name(fake, step) == name
     assert agents.ExtractInput.model_fields["script"].metadata  # the name fits its pattern

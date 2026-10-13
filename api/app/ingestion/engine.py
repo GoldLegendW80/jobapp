@@ -44,6 +44,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
@@ -51,7 +52,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
-from app.agents import credentials, definitions, failures, fake_backend
+from app.agents import credentials, definitions, failures
 from app.agents import runs as agent_runs
 from app.agents.models import AgentEvent, AgentRun
 from app.agents.models import RunStatus as AgentStatus
@@ -93,6 +94,8 @@ ENQUEUE_SERVICE = "enqueue_agent_run"
 OVERSHOOT_REQUESTS = 2
 
 Enqueue = Callable[[uuid.UUID], Awaitable[Any]]
+# The recorded streams of the fake backend (app/agents/fake_backend.py), found without importing it.
+STREAMS = Path(definitions.__file__).parent / "fake_streams"
 
 
 class ActiveRunError(Exception):
@@ -559,7 +562,7 @@ def stream_name(settings: Settings, step: IngestionRunStep) -> str | None:
     kind = step.kind.value
     part = int(step.part or 0) if step.kind is plan.StepKind.extract else 0
     name = f"ingest_{kind}_{bytes(step.sha256).hex()[:12]}_p{part}"
-    if (fake_backend.STREAMS / f"{name}.json").is_file():
+    if (STREAMS / f"{name}.json").is_file():
         return name
     return f"ingest_{kind}_default"
 

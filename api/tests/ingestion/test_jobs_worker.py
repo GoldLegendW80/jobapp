@@ -100,12 +100,13 @@ def test_the_ingestion_queue_reads_one_document_at_a_time_and_keeps_no_result() 
     spec = worker.ingestion_queue()
     assert (spec.name, spec.max_jobs) == ("jobapp:ingestion", 1)
     functions = {function.name: function for function in spec.functions}
-    assert set(functions) == {"parse_document", "reap_documents"}
+    # `advance_ingestion_runs` is the tick of the chain (G10, test_engine_worker.py).
+    assert set(functions) == {"parse_document", "reap_documents", "advance_ingestion_runs"}
     for function in functions.values():
         assert function.keep_result_s == 0
         assert function.max_tries == 1
     assert functions["parse_document"].timeout_s == jobs.JOB_TIMEOUT_S
-    (cron,) = spec.cron_jobs
+    (cron,) = [one for one in spec.cron_jobs if one.name == "cron:reap_documents"]
     assert cron.run_at_startup is True
     assert cron.second == set(jobs.REAP_SECONDS)
     assert [queue.name for queue in worker.queues()][-1] == queues.INGESTION
