@@ -1,0 +1,103 @@
+# The stack of test_container.py: the parser service exactly as compose.yml defines it (every
+# hardening key comes from there through `extends`), with the tests' own handler mounted where
+# a parser will be, and what stands around it in production as stand ins.
+#   PARSER_TEST_IMAGE=jobapp-worker:parser-test docker compose -p jobapp-parser-test \
+#     -f api/tests/ingestion/parser/compose.sandbox.yml up -d --wait
+# The image is the worker's, built by the test from api/Dockerfile under a tag of its own.
+#
+#   parser             the service, plus handlers/hostile.py as its pdf_render and docx parsers
+#   parser-cpu         the same again, each for one of the three tests that take a minute (the
+#   parser-kill        CPU limit, the CPU limit on a child that ignores the signal, the wall
+#   parser-wall        clock, at their real values), so that they run side by side and next to
+#                      the others
+#   parser-unfiltered  the same under a seccomp profile that refuses the installation of a
+#                      filter: the kernel without CONFIG_SECCOMP_FILTER, simulated. Unhealthy
+#                      by design, so nothing waits for it
+#   client             stands where the worker stands: on `default` and on `parsing`, uid 10001,
+#                      with the application's own client. The tests drive it through driver.py
+#   peers              stands for db, redis and the api: one process listening on their ports
+#                      under their names, on `default` alone
+#
+# `networks` is the tests' own declaration: `extends` copies a service, never the networks of
+# its file. test_compose_parser.py checks that compose.yml declares `parsing` internal too.
+# POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB must be set to anything: Compose interpolates
+# the whole of compose.yml to read one service of it.
+
+x-probe: &probe
+  # A first probe after one second instead of fifteen (compose.yml keeps its values).
+  interval: 15s
+  timeout: 8s
+  start_period: 30s
+  start_interval: 1s
+  retries: 3
+
+x-parser: &parser
+  extends:
+    file: ../../../../compose.yml
+    service: parser
+  image: ${PARSER_TEST_IMAGE:?the worker image under test}
+  restart: "no"
+  healthcheck: *probe
+  volumes:
+    - ./handlers/hostile.py:/app/app/ingestion/sandbox/pdf_render.py:ro
+    - ./handlers/hostile.py:/app/app/ingestion/sandbox/docx.py:ro
+
+services:
+  parser: *parser
+  parser-cpu: *parser
+  parser-kill: *parser
+  parser-wall: *parser
+
+  parser-unfiltered:
+    <<: *parser
+    # Added to the service's own list (no-new-privileges), which `extends` keeps.
+    security_opt:
+      - seccomp=./no-filter-install.json
+
+  client:
+    image: ${PARSER_TEST_IMAGE:?the worker image under test}
+    pull_policy: never
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    command: ["python", "-I", "-c", "import signal; signal.sigwait({signal.SIGTERM})"]
+    healthcheck:
+      test: ["CMD", "python", "-I", "-c", "pass"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 1s
+      retries: 3
+    volumes:
+      - ./driver.py:/driver/driver.py:ro
+    networks:
+      - default
+      - parsing
+    mem_limit: 256m
+
+  peers:
+    image: ${PARSER_TEST_IMAGE:?the worker image under test}
+    pull_policy: never
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    command: ["python", "-I", "/driver/driver.py", "listen", "5432", "6379", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-I", "/driver/driver.py", "reach", "127.0.0.1", "5432"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      start_interval: 1s
+      retries: 5
+    volumes:
+      - ./driver.py:/driver/driver.py:ro
+    networks:
+      default:
+        aliases: [db, redis, api]
+    mem_limit: 64m
+
+networks:
+  parsing:
+    internal: true

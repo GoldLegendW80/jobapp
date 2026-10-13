@@ -18,5 +18,8 @@ services:
     image: jobapp-worker:a2-e2e
     environment:
       AGENTS_FAKE_BACKEND: ${AGENTS_FAKE_BACKEND:-true}
+  # The parser runs the worker's image, whatever its tag (compose.yml, parser).
+  parser:
+    image: jobapp-worker:a2-e2e
   caddy:
     image: jobapp-caddy:a2-e2e
