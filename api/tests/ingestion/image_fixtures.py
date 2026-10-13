@@ -179,6 +179,24 @@ def blank_png(width: int, height: int, colour: int = 0) -> bytes:
     return png_of(width, height, colour=colour)
 
 
+def cmyk_progressive_jpeg(width: int, height: int, flat: bool = False) -> bytes:
+    """A progressive JPEG of four components: the decoder keeps a fourth plane of
+    coefficients (the review of PR #157, N1: 313 MiB at 25 megapixels against 263 for three).
+    `flat` is the same header over an empty picture, quick to make."""
+    if flat:
+        return saved(Image.new("CMYK", (width, height)), "JPEG", progressive=True)
+    grain = Image.effect_noise((width // 8, height // 8), 40).resize((width, height))
+    image = Image.merge("CMYK", [grain] * 4)
+    return saved(image, "JPEG", quality=30, progressive=True, subsampling=0)
+
+
+def padded(data: bytes, size: int = 20 * MIB) -> bytes:
+    """The same JPEG in a file of `size` bytes, the most an upload may be: application
+    segments of zeros before its first table. The child holds every byte of a file."""
+    segment = b"\xff\xe2\xff\xff" + bytes(65_533)
+    return data[:2] + segment * ((size - len(data)) // len(segment)) + data[2:]
+
+
 def jpeg_declaring(width: int, height: int) -> bytes:
     """A small progressive JPEG whose frame header is rewritten to declare another size."""
     data = bytearray(saved(page(64, 64), "JPEG", progressive=True))
@@ -297,6 +315,11 @@ HOSTILE: list[tuple[str, Callable[[], bytes], str]] = [
     ("a PNG signature and nothing else", lambda: PNG_MAGIC, "unreadable"),
     ("a progressive JPEG of 2,000 scans", lambda: many_scans_jpeg(2000, 5000), "bomb"),
     ("a JPEG of 65 scans", lambda: many_scans_jpeg(65), "bomb"),
+    (
+        "a four component JPEG one row over 18.75 megapixels",
+        lambda: cmyk_progressive_jpeg(5000, 3751, flat=True),
+        "too_many_pixels",
+    ),
     (
         "a JPEG whose scans are hidden behind 3,000 other markers",
         lambda: many_scans_jpeg(20, between=b"\xff\xfe\x00\x02" * 300),

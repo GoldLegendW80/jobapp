@@ -8,7 +8,10 @@ seccomp filter. What only the real thing can show:
   what each one cost is written down for the plan's Measurements;
 - each hostile picture or PDF ends as a code of the closed lists, the service answers the next
   job, and nothing was written anywhere in its container;
-- an input that meets the memory limit ends as a code of the FILE, and the next job is served.
+- an input that meets the memory limit ends as a code of the FILE, and the next job is served:
+  a page whose form holds 64 MB of path operators takes PDFium to the 256 MiB of its child,
+  the child dies (the server's log says `crashed`, once), and the client answers the file's
+  `bomb` (review of PR #157, B2). The reviewer's own files are stopped before any limit.
 
 Marked `docker`. The image is built by the fixture from api/Dockerfile (target `worker`) under
 a tag of its own unless PARSER_TEST_IMAGE names one. `IMAGE_MEASURE_OUT=<file>` writes what
@@ -149,6 +152,19 @@ WORST_IMAGES = [
     ("a PNG 1,250 by 20,000", lambda: images.blank_png(1250, 20_000, colour=6)),
     ("25 megapixels of progressive JPEG", lambda: images.progressive_jpeg(5000, 5000)),
     ("25 megapixels of baseline JPEG", lambda: images.photo_jpeg(5000, 5000)),
+    # The review of PR #157, N1: a fourth plane of coefficients, and the bytes of the file.
+    (
+        "18.75 megapixels of four component progressive JPEG",
+        lambda: images.cmyk_progressive_jpeg(5000, 3750),
+    ),
+    (
+        "18.75 megapixels of four component progressive JPEG in a 20 MiB file",
+        lambda: images.padded(images.cmyk_progressive_jpeg(5000, 3750)),
+    ),
+    (
+        "25 megapixels of progressive JPEG in a 20 MiB file",
+        lambda: images.padded(images.progressive_jpeg(5000, 5000)),
+    ),
 ]
 
 
@@ -176,6 +192,28 @@ def test_a_hostile_image_ends_as_a_code_and_the_service_lives(
     stack: Stack, name: str, make: Any, code: str
 ) -> None:
     assert refusal(stack, "image", make()) == ("file", code)
+    stack.alive()
+
+
+@pytest.mark.parametrize(
+    ("name", "make"), images.HOSTILE_READ, ids=[row[0] for row in images.HOSTILE_READ]
+)
+def test_hostile_metadata_is_not_parsed_and_the_picture_is_read_far_under_the_limit(
+    stack: Stack, name: str, make: Any
+) -> None:
+    """The review of PR #157, B1: 64 KB of EXIF that asked Pillow for 356 MiB."""
+    parsed = read(stack, "image", make(), name=name)
+    (stored,) = parsed.images
+    assert (stored.width, stored.height) == (64, 64)
+    assert MEASURED[name]["max_vm_kb"] * 1024 < main.LIMITS["image"]["as"] * 0.4
+    stack.alive()
+
+
+def test_the_many_scans_jpeg_of_the_review_is_refused_in_no_time(stack: Stack) -> None:
+    """The review of PR #157, B3: 182 KB that took 16 s of CPU in the decoder."""
+    name = "a progressive JPEG of 2,000 scans, 182 KB"
+    assert outcome(stack, "image", images.many_scans_jpeg(2000, 5000), None, name) == "file/bomb"
+    assert MEASURED[name]["wall_ms"] < 3000
     stack.alive()
 
 
@@ -207,6 +245,11 @@ WORST_PAGES = [
     ("a page with a JBIG2 stream of noise", lambda: scans.with_broken_picture("JBIG2Decode"), [0]),
     ("a page with a JPX stream of noise", lambda: scans.with_broken_picture("JPXDecode"), [0]),
     ("a picture that inflates to 75 MiB", lambda: scans.inflating_picture(5000), [0]),
+    (
+        "a page of 4 MiB of path operators, the most its content may be",
+        lambda: scans.content_pdf([scans.deflated_paths(4 * MIB)]),
+        [0],
+    ),
 ]
 
 
@@ -251,10 +294,63 @@ def test_an_input_that_meets_the_memory_limit_is_a_code_and_the_next_job_runs(
 
 
 # What an input over the memory of the child ends as: a result (PDFium gave up on the picture
-# and drew the page without it) or the file's `bomb`. Never a code of the server: the death of
-# the child would cost the user a try and the service a restart of nothing, and it is not what
-# was measured at these limits (2026-10-13).
+# and drew the page without it) or the file's `bomb`. Never a code of the server. These two
+# pictures never meet the limit (PDFium does not hold them: 147 MiB at most); the test below
+# has the file that does.
 MEMORY_OUTCOMES = {"ok", "file/bomb"}
+
+
+def job_lines(stack: Stack) -> list[dict[str, Any]]:
+    """What the parser logged of each job it ran: its kind, how its child ended, its time."""
+    lines = []
+    for line in stack.run("logs", "--no-log-prefix", "parser").splitlines():
+        start = line.find("{")
+        if start < 0:
+            continue
+        try:
+            entry = json.loads(line[start:])
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and {"kind", "code", "ms"} <= set(entry):
+            lines.append(entry)
+    return lines
+
+
+def test_a_page_that_takes_pdfium_to_the_memory_limit_is_the_files_failure_once(
+    stack: Stack,
+) -> None:
+    """The review of PR #157, B2, and the plan's edge case "a PDF that makes PDFium crash".
+
+    The reviewer's file (381 KB, a page of 196 MB of path operators: 3,976 MiB with no limit)
+    is refused by the weighing of the page, in a child that answers by itself. The same
+    operators in a form the page draws are not weighed: PDFium parses them, meets the 256 MiB
+    of the child and ends the process. That death is the file's: the client answers `bomb`,
+    never a code of the server, exactly one child was started for the file, the service
+    lives and reads the next job. No core is left (the last test of this file)."""
+    name = "the review's PDF: 381 KB, a page of 196 MB of path operators"
+    before = len(job_lines(stack))
+    assert outcome(stack, "pdf_render", scans.content_bomb(), {"pages": [0]}, name) == "file/bomb"
+    assert MEASURED[name]["wall_ms"] < 5000
+    (line,) = job_lines(stack)[before:]
+    assert (line["kind"], line["code"]) == ("pdf_render", "ok")  # the child refused it itself
+    stack.alive()
+
+    name = "a form of 64 MB of path operators: PDFium at the memory limit"
+    data = scans.form_bomb()
+    assert len(data) < 200_000
+    before = len(job_lines(stack))
+    started = time.monotonic()
+    assert outcome(stack, "pdf_render", data, {"pages": [0]}, name) == "file/bomb"
+    assert time.monotonic() - started < 60
+    (line,) = job_lines(stack)[before:]  # one child for this file, and it died
+    assert (line["kind"], line["code"]) == ("pdf_render", "crashed")
+    MEASURED[name]["server_code"], MEASURED[name]["server_ms"] = line["code"], line["ms"]
+    stack.alive()
+
+    parsed = read(stack, "pdf_render", scans.scan(1), {"pages": [0]})
+    assert len(parsed.images) == 1
+    (stored,) = read(stack, "image", images.screenshot_png()).images
+    assert (stored.width, stored.height) == (1200, 800)
 
 
 def test_nothing_was_written_anywhere_in_the_container(stack: Stack) -> None:

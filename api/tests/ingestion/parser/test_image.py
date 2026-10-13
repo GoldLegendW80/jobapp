@@ -390,3 +390,23 @@ def test_the_many_scans_file_of_the_review_is_refused_before_any_decoding() -> N
     started = time.process_time()
     assert refusal(data) == "bomb"
     assert time.process_time() - started < 1  # 16 s of CPU when it was decoded
+
+
+# --- four components (review of PR #157, N1) ----------------------------------------------------
+
+
+def test_a_four_component_jpeg_is_held_to_three_quarters_of_the_pixels() -> None:
+    assert image.FOUR_PIXELS_MAX == 18_750_000 == image.PIXELS_MAX * 3 // 4
+    stored, _ = picture(fx.cmyk_progressive_jpeg(5000, 3750, flat=True))
+    assert (stored.width, stored.height) == (1568, 1176)
+    assert refusal(fx.cmyk_progressive_jpeg(5000, 3751, flat=True)) == "too_many_pixels"
+    # Three components, and a PNG of four channels, keep the 25 megapixels.
+    assert image.handle(fx.blank_png(5000, 5000, colour=6), {}, Plenty())["ok"] is True
+
+
+def test_a_padded_jpeg_is_the_same_picture_in_a_20_mib_file() -> None:
+    small = fx.cmyk_jpeg()
+    data = fx.padded(small)
+    assert 20 * fx.MIB - 70_000 < len(data) <= 20 * fx.MIB
+    assert image.jpeg_scans(data) == image.jpeg_scans(small) == 1
+    assert picture(data)[0].jpeg == picture(small)[0].jpeg

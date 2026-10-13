@@ -22,6 +22,9 @@ What is done, in this order:
    and nothing is decoded: a PNG of a few kilobytes may declare 30,000 by 30,000 pixels. A
    decoder allocates what the header declares, never what the data holds, so a header that
    lies costs what it says at most; what Pillow reads of the size is checked the same way.
+   A JPEG of four components (CMYK) is held to FOUR_PIXELS_MAX: a progressive file keeps
+   every coefficient of every component, so four components at 18.75 megapixels cost what
+   three cost at 25, and the limit of the child is set from that (main.py).
 3. The scans of a JPEG are counted from its bytes (`jpeg_scans`), and more than SCANS_MAX is
    a `bomb`: a progressive file is read scan after scan, each one a pass over every block of
    the picture, and nothing in the decoder bounds how many a file holds. 2,000 scans of 42
@@ -68,6 +71,7 @@ import struct
 from PIL import Image, ImageFile, JpegImagePlugin, PngImagePlugin
 
 PIXELS_MAX = 25_000_000  # width times height, as the header declares them
+FOUR_PIXELS_MAX = PIXELS_MAX * 3 // 4  # the same, for a JPEG of four components
 SIDE_MAX = 20_000  # one side; Pillow keeps a pointer per row, and a row of every band
 LONG_SIDE = 1568  # the longest side of what is stored (the model's client resizes above it)
 JPEG_MAX = 300_000  # bytes of one stored image: what one tool result carries (plan, G0)
@@ -398,6 +402,9 @@ def normalise(data: bytes, budget=None) -> Image.Image:
         with _unread():
             opened = Image.open(io.BytesIO(data), formats=[kind])
         guard(*opened.size)  # what the decoder will allocate
+        four = kind == "JPEG" and len(opened.getbands()) > 3
+        if four and opened.width * opened.height > FOUR_PIXELS_MAX:
+            raise Refused("too_many_pixels")
         if kind == "JPEG":
             opened.draft(None, target_size(*opened.size))
         opened.load()  # the first frame only: nothing here ever seeks another

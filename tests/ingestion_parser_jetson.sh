@@ -289,12 +289,14 @@ def png_rgba(width, height):
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", data) + chunk(b"IEND", b"")
 
 
-def jpeg_progressive(width, height):
+def jpeg_progressive(width, height, components=3):
     """A progressive JPEG with no subsampling: the decoder keeps every coefficient of every
-    component for the whole picture (Pillow is in the image of the worker)."""
+    component for the whole picture (Pillow is in the image of the worker). Four components
+    are a CMYK file, which image.py holds to 18.75 megapixels."""
     from PIL import Image
 
-    grain = Image.effect_noise((width // 8, height // 8), 40).resize((width, height)).convert("RGB")
+    grain = Image.effect_noise((width // 8, height // 8), 40).resize((width, height))
+    grain = Image.merge("CMYK", [grain] * 4) if components == 4 else grain.convert("RGB")
     out = io.BytesIO()
     grain.save(out, format="JPEG", quality=30, progressive=True, subsampling=0)
     return out.getvalue()
@@ -353,11 +355,21 @@ def heavy_scans(pages):
     entries = b"/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode"
     return scan_pdf([(out.getvalue(), 4960, 7016, entries) for _ in range(pages)])
 
+def padded(data, size=20 * 1024 * 1024):
+    """The same JPEG in a file of 20 MiB, the most an upload may be: application segments of
+    zeros before its first table. The child holds every byte of a file."""
+    segment = b"\xff\xe2\xff\xff" + bytes(65_533)
+    return data[:2] + segment * ((size - len(data)) // len(segment)) + data[2:]
+
+
 # (label, kind of parser job, the file, its options, rounds): the images and the scanned pages of
 # G8, at the worst inputs the guards let through. The address space of the child is read against
 # the limits of the kinds (320 MiB for image, 256 MiB for pdf_render, main.py of the sandbox).
 PICTURES = (
     ("image, 25 Mpx progressive JPEG", "image", lambda: jpeg_progressive(5000, 5000), None, 3),
+    ("image, 25 Mpx progressive JPEG in a 20 MiB file", "image", lambda: padded(jpeg_progressive(5000, 5000)), None, 3),
+    ("image, 18.75 Mpx four component progressive JPEG", "image", lambda: jpeg_progressive(5000, 3750, 4), None, 3),
+    ("image, the same in a 20 MiB file", "image", lambda: padded(jpeg_progressive(5000, 3750, 4)), None, 3),
     ("image, 25 Mpx RGBA PNG", "image", lambda: png_rgba(5000, 5000), None, 3),
     ("render, picture inflating to 1.7 GiB", "pdf_render", lambda: inflating_pdf(24_000), {"pages": [0]}, 3),
     ("render, 6 pages at 600 dpi", "pdf_render", lambda: heavy_scans(6), {"pages": list(range(6))}, 3),
