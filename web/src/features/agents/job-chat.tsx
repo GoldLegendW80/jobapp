@@ -44,7 +44,7 @@ import {
 } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import type { JobDetail } from "@/features/jobs/api";
-import { describeError, errorDetail } from "@/lib/api";
+import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import { getModelCredential, modelCredentialQueryKey } from "./api";
@@ -300,6 +300,15 @@ function ChatBody({ job }: { job: JobDetail }) {
   const list = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState("");
   const [confirming, setConfirming] = useState(false);
+  // Enter was pressed while nothing could be sent yet (the conversation is loading, or the
+  // previous message is still being answered): the text of the draft at that moment, sent as
+  // soon as it can go. Nothing leaves without an Enter on that exact text: any edit, a cleared
+  // draft, a send or another job drops the hold.
+  const [heldFor, setHeld] = useState<{ job: string; text: string } | null>(
+    null,
+  );
+  // Another job is another conversation: nothing held for the previous one goes out.
+  const held = heldFor?.job === job.id ? heldFor.text : null;
   const [announcement, setAnnouncement] = useState("");
   const announced = useRef<number | null | undefined>(undefined);
   const { follow } = useStickToBottom(list);
@@ -327,6 +336,19 @@ function ChatBody({ job }: { job: JobDetail }) {
       void client.invalidateQueries({ queryKey: threadKey(threadId) });
     void client.invalidateQueries({ queryKey: runsKey, exact: true });
   };
+
+  // The conversation this panel knows was deleted somewhere else (another tab): its read
+  // answers 404. Ask again which conversation the job has, so the panel shows the empty
+  // state, where the next message starts a new one, instead of an error until a reload.
+  const gone = isApiError(thread.error) && thread.error.status === 404;
+  useEffect(() => {
+    if (!gone || threadId === null) return;
+    client.removeQueries({ queryKey: threadKey(threadId) });
+    void client.invalidateQueries({
+      queryKey: jobThreadKey(job.id),
+      exact: true,
+    });
+  }, [gone, threadId, client, job.id]);
 
   // One announcement per new answer (or failure), never the answers already there.
   useEffect(() => {
@@ -358,16 +380,27 @@ function ChatBody({ job }: { job: JobDetail }) {
   }, [follow, messages.length, liveSteps]);
 
   const send = useMutation({
+    onMutate: () => {
+      setHeld(null); // whatever was held is on its way now
+    },
     mutationFn: async (text: string) => {
       let target = found.data ?? null;
       if (target === null) {
         target = await openJobThread(job.id);
+        // A read of the job's conversation may be in flight, started before it existed (a
+        // refetch on focus). Its answer, "none", is older than this one: drop it, or the
+        // panel would show the empty state while the answer runs.
+        await client.cancelQueries({
+          queryKey: jobThreadKey(job.id),
+          exact: true,
+        });
         client.setQueryData(jobThreadKey(job.id), target);
       }
       return { target, sent: await sendMessage(target.id, text) };
     },
     onSuccess: async ({ target, sent }) => {
       setDraft("");
+      setHeld(null);
       follow(true); // the reader just sent: show the message and the answer to come
       const id = target.id;
       // A read of the thread may be in flight, started before the message was stored (on the
@@ -396,6 +429,17 @@ function ChatBody({ job }: { job: JobDetail }) {
     onError: (error) => {
       if (busyRunId(error)) {
         toast.info("The previous message is still being answered.");
+      } else if (isApiError(error) && error.status === 404) {
+        // Deleted somewhere else between the read and the send. The draft is kept, and with
+        // the empty state back nothing is sent again without a new Enter.
+        setHeld(null);
+        toast.info(
+          "This conversation was deleted. Send again to start a new one.",
+        );
+        void client.invalidateQueries({
+          queryKey: jobThreadKey(job.id),
+          exact: true,
+        });
       } else {
         toast.error(
           `The message was not sent. ${errorDetail(error) ?? describeError(error)}`,
@@ -426,11 +470,24 @@ function ChatBody({ job }: { job: JobDetail }) {
   const text = draft.trim();
   const canSend = !busy && !noCredential && !loading && text.length > 0;
 
+  const waiting = busy || loading;
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    if (!canSend) return;
-    send.mutate(text);
+    if (canSend) {
+      send.mutate(text);
+    } else if (waiting && !send.isPending && !noCredential && text.length > 0) {
+      // Never dropped: the composer is enabled in these states, so Enter has to mean
+      // something. The draft stays where it is and is sent when the wait is over. Not while
+      // a send is in flight: that Enter repeats a message already on its way.
+      setHeld({ job: job.id, text });
+    }
   };
+  const sendHeld = held !== null && held === text && canSend;
+  const { mutate: sendNow } = send;
+  useEffect(() => {
+    if (sendHeld) sendNow(text);
+  }, [sendHeld, sendNow, text]);
+  const holding = held !== null && !noCredential;
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (
       event.key === "Enter" &&
@@ -507,6 +564,7 @@ function ChatBody({ job }: { job: JobDetail }) {
           <EmptyState
             onPick={(prompt) => {
               setDraft(prompt);
+              setHeld(null);
               composer.current?.focus();
             }}
           />
@@ -569,6 +627,9 @@ function ChatBody({ job }: { job: JobDetail }) {
             disabled={noCredential}
             onChange={(event) => {
               setDraft(event.target.value);
+              // Clearing cancels, and so does any edit: what is in the composer is no longer
+              // the text Enter was pressed on, so it is sent when its author says so.
+              setHeld(null);
             }}
             onKeyDown={onKeyDown}
           />
@@ -588,9 +649,13 @@ function ChatBody({ job }: { job: JobDetail }) {
           </Button>
         </div>
         <p id={ids.hint} className="text-xs text-muted-foreground">
-          {busy
-            ? "Wait for the answer before sending the next message."
-            : "Enter sends, Shift and Enter adds a line."}
+          {holding
+            ? `Your message will be sent when ${
+                busy ? "the answer is complete" : "the conversation has loaded"
+              }. Edit or clear it to cancel.`
+            : busy
+              ? "Enter sends your message once the answer is complete."
+              : "Enter sends, Shift and Enter adds a line."}
         </p>
       </form>
     </div>

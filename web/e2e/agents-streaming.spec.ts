@@ -88,9 +88,9 @@ const liveText = () => chat().getByTestId("chat-live-text");
 
 /**
  * Type a message and send it once the chat can send. The composer is enabled before that, and
- * Enter then does nothing and the draft stays: while the conversation loads, where only the
- * disabled Send button says so, and while the previous answer is still being settled, where
- * the hint under the composer says so too.
+ * Enter then holds the message, which is sent by itself when the conversation has loaded or
+ * the previous answer is settled (issue #37). Waiting for the Send button keeps this helper
+ * on the plain path: the message goes out at the moment Enter is pressed.
  */
 async function ask(text: string) {
   await composer().fill(text);

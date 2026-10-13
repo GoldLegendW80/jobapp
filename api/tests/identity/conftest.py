@@ -126,6 +126,17 @@ def app(migrated_url: str, clock: Clock) -> FastAPI:
 
 
 @pytest.fixture
+def one_connection(app: FastAPI, migrated_url: str) -> Iterator[sa.Engine]:
+    """The app's sessions on an engine whose pool holds ONE connection, so a request and the
+    check that follows it use the same Postgres connection (the `factory` engine is a NullPool:
+    every session of it is a new connection, and says nothing about the app's pool)."""
+    pooled = sa.create_engine(migrated_url, pool_size=1, max_overflow=0, pool_timeout=10)
+    app.state.sessionmaker = sessionmaker(bind=pooled, autoflush=False, expire_on_commit=False)
+    yield pooled
+    pooled.dispose()
+
+
+@pytest.fixture
 def api(app: FastAPI) -> Iterator[Api]:
     # As in production: uvicorn --proxy-headers trusts the X-Forwarded-Proto caddy sends.
     with TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*")) as client:

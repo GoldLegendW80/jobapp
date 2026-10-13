@@ -137,6 +137,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
+import sqlalchemy as sa
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -199,6 +200,10 @@ FINAL_HOOK_TIMEOUT_S = 30.0
 # How long the gate waits for the assistant message of a tool call to be counted against the
 # run's token budget before it decides with what is counted so far (`Budget.counted`).
 GATE_WAIT_S = 5.0
+# How long the end of a chat run waits for its thread's row (seconds, Postgres `lock_timeout`).
+# The row is held for a moment by a send or a delete of the same thread; a session that holds
+# it for longer than this is stuck, and the worker must not be stuck with it (issue #37).
+THREAD_LOCK_WAIT_S = 10.0
 # How long the end of a run waits for its cancelled live text pump (seconds). The pump ends at
 # once when it is cancelled; the bound is for a store call that does not let itself be stopped,
 # which must not keep the run's final status from being written (issue #90).
@@ -307,6 +312,7 @@ class RunContext:
     services: Mapping[str, Any] = field(default_factory=dict)
     final_hook_timeout_s: float = FINAL_HOOK_TIMEOUT_S
     gate_wait_s: float = GATE_WAIT_S
+    thread_lock_wait_s: float = THREAD_LOCK_WAIT_S
     pump_stop_s: float = PUMP_STOP_S
 
     def definition(self, name: str) -> definitions.AgentDefinition:
@@ -1171,8 +1177,19 @@ def _chat_reply(context: RunContext, run_id: uuid.UUID) -> Callable[[Session, ru
     return record
 
 
-def _chat_lock(run_id: uuid.UUID) -> Callable[[Session], None]:
+def _chat_lock(run_id: uuid.UUID, wait_s: float) -> Callable[[Session], None]:
+    """Lock the thread of a chat run for the transaction that ends the run, waiting `wait_s`
+    at most. The bound is the transaction's own (`SET LOCAL`): it also holds for the run's row
+    that the same transaction locks next, and is gone with the transaction. When it passes,
+    Postgres refuses the lock, the end of the run is not recorded by this worker (logged as
+    "agent run end not recorded") and the run is failed by the reaper like any run whose
+    worker could not finish it: bounded, where the wait used to have no end."""
+
     def lock(db: Session) -> None:
+        db.execute(
+            sa.text("SELECT set_config('lock_timeout', :wait, true)"),
+            {"wait": f"{max(1, round(wait_s * 1000))}ms"},
+        )
         chat.lock_thread_of_run(db, run_id)
 
     return lock
@@ -1376,7 +1393,7 @@ async def _execute(
             variables.update(
                 message=built.current, history=str(built.included), omitted=str(built.omitted)
             )
-            recorder.lock_first = _chat_lock(run_id)
+            recorder.lock_first = _chat_lock(run_id, context.thread_lock_wait_s)
             recorder.on_done = _chat_reply(context, run_id)
         else:
             prompt = definition.prompt(data, run.job_id)
