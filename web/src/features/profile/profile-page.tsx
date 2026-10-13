@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { LoaderCircle, RotateCw } from "lucide-react";
+import { LoaderCircle, RotateCw, Sparkles } from "lucide-react";
 import {
   Fragment,
   useCallback,
@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { useBlocker, useSearchParams } from "react-router";
+import { Link, useBlocker, useSearchParams } from "react-router";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -279,6 +279,14 @@ function Header({
         Everything search and document generation read about you. Each section
         saves on its own.
       </p>
+      <div>
+        <Button asChild variant="outline">
+          <Link to="/profile/fill">
+            <Sparkles aria-hidden="true" />
+            Fill my profile with an agent
+          </Link>
+        </Button>
+      </div>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-baseline justify-between text-sm">
           <span id="completeness-label" className="font-medium">

@@ -8,6 +8,7 @@ import { AuthProvider } from "@/features/auth/auth-provider";
 import { PublicOnly, RequireAdmin, RequireAuth } from "@/features/auth/guards";
 import { LinkPage } from "@/features/auth/link-page";
 import { LoginPage } from "@/features/auth/login-page";
+import { FillPage } from "@/features/ingestion/fill-page";
 import { JobDetailPage } from "@/features/jobs/job-detail-page";
 import { JobsPage } from "@/features/jobs/jobs-page";
 import { JobsMapPage } from "@/features/jobs/map/jobs-map-page";
@@ -52,6 +53,7 @@ export const routes: RouteObject[] = [
           { path: "jobs/:id", element: <JobDetailPage /> },
           { path: "account", element: <AccountPage /> },
           { path: "profile", element: <ProfilePage /> },
+          { path: "profile/fill", element: <FillPage /> },
           { path: "runs", element: <RunsPage /> },
           { path: "runs/:id", element: <RunPage /> },
           {
