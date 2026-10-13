@@ -31,7 +31,13 @@ Two jobs, chosen by `options` (written by the worker, app/ingestion/jobs.py, nev
      drawn is dropped, what was rendered is returned with the note `time_limit` and
      `truncated`, or `too_slow` when that is nothing. PDFium asks between two objects of a
      page: one object that takes for ever (a single stream) is stopped by the limits of the
-     child, as a failure of the server.
+     child, and the worker reads that death as the file's (below).
+   - Before PDFium loads a page, its content streams are weighed (`_Contents`): PDFium turns
+     the whole content of a page into objects when it loads it, about twenty times the bytes,
+     with nothing to pause it. 381 KB of file that inflate to 196 MB of path operators took
+     3,976 MiB and 15.6 s (review of PR #157). A page whose content streams decode to more
+     than CONTENT_MAX, or a job whose loaded pages pass JOB_CONTENT_MAX, is a `bomb`, and
+     PDFium is never given that page. The same is done before a page of the text job.
 
 2. `{"text": true}`: the text of each page, for a file that pdf_text.py answered `encryption`
    for (AES: the parser never loads `cryptography`, and PDFium decrypts by itself). The answer
@@ -46,13 +52,20 @@ What comes back otherwise, `{"ok": false, "failure": "file", "code": ...}`:
     unreadable  not a PDF, damaged, no page, or anything PDFium refused
     protected   it asks for a password (the empty one is tried by PDFium itself)
     encryption  a protection PDFium does not know
-    bomb        the memory of the child was not enough
+    bomb        a page whose content decodes to more than CONTENT_MAX, or the memory of the
+                child was not enough
     too_slow    the budget was spent before the first image
     no_text     (the text job) no page has text: `count` pages, all of them scans
 
-PDFium is C++ behind ctypes: a file that makes it crash, or ask for more memory than the child
-has in a place where it does not check, kills the child. The server then answers `crashed` or
-`memory_limit`, the service lives, and the job fails the document as a failure of the server.
+The weighing is a guard of the plain case, not a proof. It reads the file with pypdf, and
+PDFium may read a damaged file otherwise; it does not open the forms a page draws, its
+patterns or its fonts, which PDFium parses too; and pypdf cannot open what only PDFium
+decrypts. What holds in every case is the limit of the child: PDFium is C++ behind ctypes, and
+when memory is refused to it, or a file makes it crash, the child dies. The server then
+answers `crashed` (or `cpu_limit`, `wall_limit`), the service lives, and the client
+(parser_client.py, FILE_DEATHS) gives that answer the file's code for this kind and for
+`image`: `bomb` or `too_slow`, no second try. A child that parses a user's file and dies of
+it was killed by that file.
 PDFium starts no thread and no process, never executes a script (this build has no V8 and no
 XFA), and writes nothing: the document is opened from memory.
 
@@ -61,6 +74,8 @@ their own process on files they make.
 """
 
 import ctypes
+import io
+import logging
 
 import image as pictures  # sandbox/image.py, beside this file
 import pypdfium2 as pdfium
@@ -74,6 +89,12 @@ PAGE_MAX_POINTS = PAGE_MAX_INCHES * 72
 NARROW = 10  # a page narrower than a tenth of its length is not rendered
 COVER = 0.5  # the share of the page an image must cover for the second trigger
 OBJECTS_MAX = 2_000  # objects of one page looked at for that image
+MIB = 1024 * 1024
+# What the content streams of one page may become once decoded. A scanned page is a few dozen
+# bytes of content, a page of text a few kilobytes, a heavy drawing a megabyte or two.
+CONTENT_MAX = 4 * MIB
+JOB_CONTENT_MAX = 64 * MIB  # and those of every page one job has PDFium load
+CONTENT_STREAMS_MAX = 1_024  # streams of one page's content
 LONG_SIDE = pictures.LONG_SIDE
 _FLAGS = pdfium_c.FPDF_ANNOT
 _WHITE = 0xFFFFFFFF
@@ -142,6 +163,85 @@ def open_document(data: bytes):
     return pdf, total
 
 
+# --- the weight of a page, before PDFium loads it -----------------------------------------------
+
+
+class _Contents:
+    """What the content streams of a page decode to, measured with pypdf under a cap: each
+    stream is decoded up to CONTENT_MAX and no further (pypdf stops its decoders there), and
+    its bytes are let go at once. `weigh` raises _Refused("bomb") for a page over CONTENT_MAX,
+    for a page of more than CONTENT_STREAMS_MAX streams and for a job over JOB_CONTENT_MAX.
+    A file or a page pypdf cannot read is not weighed: PDFium decides, under the limits of
+    the child."""
+
+    def __init__(self, data: bytes) -> None:
+        self.data, self.reader, self.opened, self.total = data, None, False, 0
+        self.limits: dict = {}
+
+    def _open(self):
+        import pdf_text  # brings pypdf, and the limits its decoders run under
+        import pypdf
+
+        # Every logger of pypdf takes its level from this one: no warning is even formatted.
+        logging.getLogger("pypdf").setLevel(logging.CRITICAL + 1)
+        self.pypdf = pypdf
+        self.limits = {
+            name: CONTENT_MAX if name.endswith("maximum_output_length") else value
+            for name, value in pdf_text.LIMITS.items()
+        }
+        self.limits["stream_decoding_work_maximum_length"] = 2 * CONTENT_MAX
+        try:
+            with pypdf.apply_configuration(**self.limits):
+                reader = pypdf.PdfReader(io.BytesIO(self.data), strict=False)
+                len(reader.pages)
+        except MemoryError:
+            raise
+        except Exception:  # AES without `cryptography`, a file only PDFium repairs
+            return None
+        return reader
+
+    def _size(self, index: int) -> int:
+        pypdf = self.pypdf
+        contents = self.reader.pages[index].get("/Contents")
+        contents = contents.get_object() if contents is not None else None
+        if contents is None:
+            return 0
+        streams = list(contents) if isinstance(contents, pypdf.generic.ArrayObject) else [contents]
+        if len(streams) > CONTENT_STREAMS_MAX:
+            raise _Refused("bomb")
+        size = 0
+        for stream in streams:
+            stream = stream.get_object()
+            if not isinstance(stream, pypdf.generic.StreamObject):
+                continue
+            try:
+                size += len(stream.get_data())
+            except pypdf.errors.LimitReachedError:
+                raise _Refused("bomb") from None
+            finally:
+                if getattr(stream, "decoded_self", None) is not None:
+                    stream.decoded_self = None  # pypdf keeps what it decoded: not here
+            if size > CONTENT_MAX:
+                raise _Refused("bomb")
+        return size
+
+    def weigh(self, index: int) -> None:
+        if not self.opened:
+            self.opened, self.reader = True, self._open()
+        if self.reader is None:
+            return
+        try:
+            with self.pypdf.apply_configuration(**self.limits):
+                size = self._size(index)
+        except (MemoryError, _Refused):
+            raise
+        except Exception:  # pypdf cannot say what this page weighs
+            return
+        self.total += size
+        if self.total > JOB_CONTENT_MAX:
+            raise _Refused("bomb")
+
+
 # --- rendering ----------------------------------------------------------------------------------
 
 
@@ -206,7 +306,9 @@ def draw(page, width: float, height: float, budget) -> Image.Image | str:
     return Image.frombuffer("RGB", (columns, rows), pixels, "raw", "BGRX", stride, 1)
 
 
-def render_page(pdf, index: int, checked: bool, budget) -> Image.Image | str:
+def render_page(pdf, index: int, checked: bool, budget, contents=None) -> Image.Image | str:
+    if contents is not None:
+        contents.weigh(index)
     try:
         page = pdf[index]
     except MemoryError:
@@ -224,7 +326,9 @@ def render_page(pdf, index: int, checked: bool, budget) -> Image.Image | str:
         page.close()
 
 
-def render(pdf, total: int, pages: list[int], check: frozenset[int], limit: int, budget) -> dict:
+def render(
+    pdf, total: int, pages: list[int], check: frozenset[int], limit: int, budget, contents=None
+) -> dict:
     images: list[dict] = []
     skipped, stopped = 0, False
     for index in pages:
@@ -233,7 +337,9 @@ def render(pdf, total: int, pages: list[int], check: frozenset[int], limit: int,
         if budget.spent():
             stopped = True
             break
-        made = render_page(pdf, index, index in check, budget) if index < total else _SKIPPED
+        made = (
+            render_page(pdf, index, index in check, budget, contents) if index < total else _SKIPPED
+        )
         if made == _OUT_OF_TIME:
             stopped = True
             break
@@ -293,9 +399,11 @@ def links_of(pdf, page, reader) -> list[str]:
     return found
 
 
-def page_text(pdf, index: int, read, reader) -> str:
+def page_text(pdf, index: int, read, reader, contents=None) -> str:
     """The text of one page as pdf_text.py would keep it, '' for a page that counts as an
     image."""
+    if contents is not None:
+        contents.weigh(index)
     try:
         page = pdf[index]
         try:
@@ -318,7 +426,7 @@ def page_text(pdf, index: int, read, reader) -> str:
     return text + "\n" + reader.LINKS_LABEL + " ".join(links) if links else text
 
 
-def read_text(pdf, total: int, budget) -> dict:
+def read_text(pdf, total: int, budget, contents=None) -> dict:
     import pdf_text as reader  # only this job needs it, and it brings pypdf along
 
     read = reader._Read()
@@ -327,7 +435,7 @@ def read_text(pdf, total: int, budget) -> dict:
         if budget.spent():
             read.stopped = "time_limit"
             break
-        if not read.add(page_text(pdf, index, read, reader)):
+        if not read.add(page_text(pdf, index, read, reader, contents)):
             read.stopped = "text_limit"
             break
     else:
@@ -350,9 +458,10 @@ def handle(data: bytes, options: dict, budget) -> dict:
     try:
         pdf, total = open_document(data)
         try:
+            contents = _Contents(data)
             if text_job:
-                return read_text(pdf, total, budget)
-            return render(pdf, total, pages, check, limit, budget)
+                return read_text(pdf, total, budget, contents)
+            return render(pdf, total, pages, check, limit, budget, contents)
         finally:
             pdf.close()
     except _Refused as refused:

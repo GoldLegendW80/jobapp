@@ -311,3 +311,96 @@ def test_a_memory_error_anywhere_ends_as_the_code_of_the_file(
     with monkeypatch.context() as patch:
         patch.setattr(pdf_render.pictures, "encode", no_memory)
         assert refusal(fx.scan(1), {"pages": [0]}) == ("file", "bomb")
+
+
+# --- the content of a page is weighed before PDFium loads it (review of PR #157, B2) ------------
+
+
+@pytest.fixture
+def loaded(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """The pages PDFium was asked to load."""
+    asked: list[int] = []
+    get_page = pdf_render.pdfium.PdfDocument.get_page
+
+    def counted(self: Any, index: int) -> Any:
+        asked.append(index)
+        return get_page(self, index)
+
+    monkeypatch.setattr(pdf_render.pdfium.PdfDocument, "get_page", counted)
+    return asked
+
+
+def paths(size: int) -> bytes:
+    return fx.content_pdf([fx.deflated_paths(size)])
+
+
+def test_a_page_whose_content_decodes_past_the_cap_is_a_bomb_pdfium_never_loads(
+    loaded: list[int],
+) -> None:
+    assert pdf_render.CONTENT_MAX == 4 * 1024 * 1024
+    assert refusal(paths(8 * fx.MIB), {"pages": [0]}) == ("file", "bomb")
+    assert refusal(paths(pdf_render.CONTENT_MAX + len(fx.PATH)), {"pages": [0]}) == ("file", "bomb")
+    assert refusal(paths(8 * fx.MIB), {"pages": [0], "check": [0]}) == ("file", "bomb")
+    assert refusal(paths(8 * fx.MIB), {"text": True}) == ("file", "bomb")
+    two = fx.content_pdf([fx.deflated_paths(3 * fx.MIB), fx.deflated_paths(3 * fx.MIB)])
+    assert refusal(two, {"pages": [0]}) == ("file", "bomb")
+    assert loaded == []
+
+
+def test_the_pdf_of_the_review_is_refused_in_no_time_and_no_memory(loaded: list[int]) -> None:
+    """381 KB that took 3,976 MiB and 15.6 s of CPU when PDFium loaded the page."""
+    import time
+    import tracemalloc
+
+    data = fx.content_bomb()
+    assert len(data) < 400_000
+    tracemalloc.start()
+    started = time.process_time()
+    try:
+        assert refusal(data, {"pages": [0]}) == ("file", "bomb")
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert time.process_time() - started < 3
+    assert peak < 16 * fx.MIB, peak
+    assert loaded == []
+
+
+def test_a_page_at_the_cap_is_rendered(loaded: list[int]) -> None:
+    parsed = render(paths(pdf_render.CONTENT_MAX), [0])
+    assert [stored.position for stored in parsed.images] == [0]
+    assert loaded == [0]
+
+
+def test_the_streams_of_a_page_are_counted(loaded: list[int]) -> None:
+    one = fx.deflated_paths(len(fx.PATH))
+    most = pdf_render.CONTENT_STREAMS_MAX
+    assert len(render(fx.content_pdf([one] * most), [0]).images) == 1
+    assert refusal(fx.content_pdf([one] * (most + 1)), {"pages": [0]}) == ("file", "bomb")
+    assert loaded == [0]
+
+
+def test_the_pages_one_job_loads_are_weighed_together(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert pdf_render.JOB_CONTENT_MAX == 64 * 1024 * 1024
+    scan = fx.scan(3)
+    assert len(render(scan, [0, 1, 2]).images) == 3
+    contents = pdf_render._Contents(scan)
+    contents.weigh(0)
+    assert 0 < contents.total < 200  # one picture drawn: a few dozen bytes
+    monkeypatch.setattr(pdf_render, "JOB_CONTENT_MAX", contents.total * 2)
+    assert refusal(scan, {"pages": [0, 1, 2]}) == ("file", "bomb")
+    assert len(render(scan, [0, 1]).images) == 2
+
+
+def test_a_file_pypdf_cannot_weigh_is_left_to_pdfium(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard is a guard: what it cannot read it does not refuse (the limit of the child
+    and the client's reading of its death hold there)."""
+    monkeypatch.setattr(pdf_render._Contents, "_open", lambda self: None)
+    assert len(render(fx.scan(2), [0, 1]).images) == 2
+    monkeypatch.undo()
+
+    def broken(self: Any, index: int) -> int:
+        raise ValueError("pypdf could not read this page")
+
+    monkeypatch.setattr(pdf_render._Contents, "_size", broken)
+    assert len(render(fx.scan(2), [0, 1]).images) == 2

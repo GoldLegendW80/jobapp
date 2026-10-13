@@ -537,3 +537,64 @@ def test_nothing_of_an_image_reaches_a_log_or_a_return_value(
     rendered = [record for record in caplog.records if record.getMessage() == "document rendered"]
     assert [(record.pages_image, record.pages_text) for record in rendered] == [(1, 0), (2, 3)]
     assert all(isinstance(record.image_bytes, int) for record in rendered)
+
+
+# --- a file that kills the child that reads it (review of PR #157, B2 and B3) -------------------
+
+
+@pytest.mark.parametrize(
+    ("death", "code"),
+    [
+        (pc.ParserRefusedError("crashed"), "bomb"),
+        (pc.ParserTimeoutError("cpu_limit"), "too_slow"),
+        (pc.ParserTimeoutError("wall_limit"), "too_slow"),
+    ],
+    ids=["PDFium at the memory limit", "the CPU limit", "the wall clock"],
+)
+def test_a_pdf_that_kills_the_renderer_is_failed_as_the_file_and_never_read_again(
+    api: Api,
+    alice: str,
+    factory: sessionmaker[Session],
+    clock: Clock,
+    death: pc.ParserError,
+    code: str,
+) -> None:
+    """The plan's edge case "a PDF that makes PDFium crash": what the server reports of the
+    dead child, read by the client for this kind (parser_client.blame), fails the document
+    with the file's sentence at the first try. One render child was started for it, no image
+    is stored, the bytes are gone and the reaper has nothing to queue: a file that killed its
+    reader is not handed to a second one."""
+    body = uploaded(api, alice, scans.scan(9), "scan.pdf")
+    parser = RealParser(instead={1: pc.blame(jobs.RENDER_KIND, death)})
+    assert run(factory, clock, parser, body["id"]) == jobs.FAILED
+    assert kinds(parser) == ["pdf_text", "pdf_render"]
+    stored = row(factory, body["id"])
+    assert (stored.text_status, stored.raw, stored.text) == (TextStatus.failed, None, None)
+    assert (stored.failed_kind, stored.failed_reason) == (
+        FailedKind.file,
+        jobs.FILE_SENTENCES[code],
+    )
+    assert count(factory, IngestionImage) == 0
+    clock.advance(seconds=jobs.RETRY_AFTER.total_seconds() + 1)
+    assert list(jobs.reap(factory, clock.now).queue) == []
+    assert kinds(parser) == ["pdf_text", "pdf_render"]
+
+
+@pytest.mark.parametrize(
+    "death",
+    [pc.ParserRefusedError("crashed"), pc.ParserTimeoutError("cpu_limit")],
+    ids=["a crash of the decoder", "the CPU limit"],
+)
+def test_an_image_that_kills_its_reader_is_failed_as_the_file_and_never_read_again(
+    api: Api, alice: str, factory: sessionmaker[Session], clock: Clock, death: pc.ParserError
+) -> None:
+    body = uploaded(api, alice, pictures.screenshot_png(), "shot.png")
+    parser = RealParser(instead={0: pc.blame("image", death)})
+    assert run(factory, clock, parser, body["id"]) == jobs.FAILED
+    assert kinds(parser) == ["image"]
+    stored = row(factory, body["id"])
+    assert (stored.text_status, stored.raw) == (TextStatus.failed, None)
+    assert stored.failed_kind is FailedKind.file
+    assert count(factory, IngestionImage) == 0
+    clock.advance(seconds=jobs.RETRY_AFTER.total_seconds() + 1)
+    assert list(jobs.reap(factory, clock.now).queue) == []

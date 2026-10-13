@@ -171,6 +171,18 @@ NOTE_CODES = frozenset(
 )
 NOTE_VALUES = frozenset({"from", "to", "count"})
 _TIMEOUT_CODES = frozenset({"wall_limit", "cpu_limit", "read_timeout"})
+# The kinds whose child hands a user's file to a C library that nothing stops from inside
+# (libjpeg and libpng behind Pillow, PDFium), and what the death of that child means for them.
+# PDFium ends the process when memory is refused to it, and a decoder that spins is ended by
+# the CPU limit: the child died of the file it was reading, and reading it again would kill it
+# again. So for these kinds the three deaths below are the file's failure, with the file's
+# code: never a failure of the server, and so never a second try (review of PR #157, B2 and
+# B3). The server's own log line still says `crashed`, `cpu_limit` or `wall_limit`, and so
+# does the line this client logs. Every other kind, and every other code, is as before.
+FILE_DEATH_KINDS = frozenset({"image", "pdf_render"})
+FILE_DEATHS = MappingProxyType(
+    {"crashed": "bomb", "cpu_limit": "too_slow", "wall_limit": "too_slow"}
+)
 
 # What a ping must show for the sandbox to be in force: the limits of sandbox/main.py and the
 # names of its deny list (tests/ingestion/parser keeps the three files in step).
@@ -260,6 +272,19 @@ class ParserRefusedError(ParserError):
     ) -> None:
         super().__init__(code, values)
         self.failure = failure
+
+
+def blame(kind: str, error: ParserError) -> ParserError:
+    """`error`, or the refusal of the file it stands for: the death of a child of
+    FILE_DEATH_KINDS, as the server's header reports it (FILE_DEATHS)."""
+    if (
+        kind in FILE_DEATH_KINDS
+        and type(error) in (ParserRefusedError, ParserTimeoutError)
+        and error.failure == "server"
+        and error.code in FILE_DEATHS
+    ):
+        return ParserRefusedError(FILE_DEATHS[error.code], failure="file")
+    return error
 
 
 class ParserMalformedError(ParserError):
@@ -875,7 +900,11 @@ async def _call[Checked](
         return await asyncio.to_thread(lambda: check(loads(body)))
     except ParserError as error:
         outcome = f"{type(error).__name__}:{error.code}"
-        raise
+        blamed = blame(kind, error)
+        if blamed is error:
+            raise
+        outcome += f":file/{blamed.code}"  # the log keeps how the child ended
+        raise blamed from None
     finally:
         logger.info(
             "parser call",

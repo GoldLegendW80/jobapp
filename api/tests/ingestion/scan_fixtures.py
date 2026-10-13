@@ -187,3 +187,55 @@ def with_broken_picture(filter_name: str) -> bytes:
 def inflating_picture(side: int = 12_000) -> bytes:
     """A page whose picture is a few kilobytes that inflate to `side` squared times 3 bytes."""
     return scan_pdf([Sheet(flate_picture(side, side))])
+
+
+# --- pages whose content is the bomb (review of PR #157, B2) ------------------------------------
+
+PATH = b"0 0 m 1 1 l S\n"  # one stroked line: 14 bytes of content, one object for PDFium
+
+
+def deflated_paths(size: int) -> bytes:
+    """`size` bytes of PATH (to the line), deflated: about a 500th of it."""
+    packer = zlib.compressobj(9)
+    block = PATH * 4096
+    blocks, rest = divmod(size // len(PATH) * len(PATH), len(block))
+    parts = [packer.compress(block) for _ in range(blocks)]
+    parts.append(packer.compress(block[:rest]) + packer.flush())
+    return b"".join(parts)
+
+
+def content_pdf(streams: Sequence[bytes], *, form: bool = False) -> bytes:
+    """One A4 page whose content is these deflated streams, or, with `form`, a page of seven
+    bytes that draws a form whose content they are (one stream)."""
+    built = pdf.Built()
+    tree = built.reserve()
+    flate = b"/Filter /FlateDecode"
+    resources = b""
+    if form:
+        (inner,) = streams
+        number = built.stream(inner, b"/Type /XObject /Subtype /Form /BBox [0 0 595 842] " + flate)
+        resources = b"/XObject << /Fm0 %d 0 R >>" % number
+        bodies = [built.stream(b"/Fm0 Do")]
+    else:
+        bodies = [built.stream(one, flate) for one in streams]
+    contents = b"[" + b" ".join(b"%d 0 R" % body for body in bodies) + b"]"
+    page = built.add(
+        b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 595 842] /Resources << " % tree
+        + resources
+        + b" >> /Contents "
+        + contents
+        + b" >>"
+    )
+    built.objects[tree] = b"<< /Type /Pages /Count 1 /Kids [%d 0 R] >>" % page
+    return built.write(built.add(b"<< /Type /Catalog /Pages %d 0 R >>" % tree))
+
+
+def content_bomb(inflated: int = 196 * MIB) -> bytes:
+    """The file of the review: 381 KB whose only page holds 196 MB of path operators."""
+    return content_pdf([deflated_paths(inflated)])
+
+
+def form_bomb(inflated: int = 64 * MIB) -> bytes:
+    """The same operators one step further, in a form the page draws: the weighing of the
+    page's own content does not see them, PDFium parses them all the same."""
+    return content_pdf([deflated_paths(inflated)], form=True)
