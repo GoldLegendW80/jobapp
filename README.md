@@ -1060,6 +1060,37 @@ curl -s -b cookies 'http://localhost/api/ingestion/documents/<id>/text?offset=0&
 curl -s -X DELETE -H 'X-Requested-With: jobapp' -b cookies http://localhost/api/ingestion/documents/<id>
 ```
 
+## The estimate of a run and the consent
+
+Before a run reads documents, the app says what it would read and what it may cost, and asks
+for consent the first time (ingestion G16; the page that shows it is G11's).
+
+- **`POST /api/ingestion/runs/estimate {document_ids, reread_document_ids?}`** answers the
+  documents a run would read with their characters and images, the ones it cannot read and why,
+  the steps, the model of the caller's credential (`claude-opus-5-5` on a Claude subscription,
+  `claude-sonnet-5-5` on an Anthropic API key), the token range and the ceiling. No run starts.
+- **The figures are estimates, computed in `api/app/ingestion/estimate.py`** from the sizes of
+  the stored texts, never from their content: a low and a high number of tokens, and a ceiling
+  of twice the high one, where a run pauses and asks before going on. On a subscription tokens
+  are quota and no amount is shown. On an API key three amounts in US dollars are shown, rounded
+  to the cent, with the date of the prices.
+- **Prices are a dated table in `api/app/ingestion/pricing.py`**, not a live feed. To update it,
+  read the provider's pricing page and change `PRICES` and `PRICES_AS_OF` in one commit. A test
+  fails when a model a run can choose has no price.
+- **Consent** is one row of `ingestion_consents` per user and version of the text
+  (`CONSENT_VERSION` and `CONSENT_TEXT` in `api/app/ingestion/estimate_router.py`). `GET
+  /api/ingestion/consent` answers the text and whether the caller accepted it, `POST
+  /api/ingestion/consent {version}` records it. Changing the text means raising the version,
+  and every user is asked again; what was accepted before stays recorded with its date.
+
+```bash
+curl -s -X POST -H 'X-Requested-With: jobapp' -H 'Content-Type: application/json' -b cookies \
+  -d '{"document_ids":["<id>"]}' http://localhost/api/ingestion/runs/estimate   # the estimate
+curl -s -b cookies http://localhost/api/ingestion/consent                        # the text, accepted or not
+curl -s -X POST -H 'X-Requested-With: jobapp' -H 'Content-Type: application/json' -b cookies \
+  -d '{"version":1}' http://localhost/api/ingestion/consent                      # record it
+```
+
 ## The parser service
 
 Every parser of an uploaded document (PDF, DOCX, archive, image) will run in the `parser` service
