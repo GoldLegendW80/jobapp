@@ -231,6 +231,66 @@ def test_the_mark_does_not_survive_a_rollback_or_a_closed_session(
     assert status_of(factory, job_id) is JobStatus.found
 
 
+def test_a_row_locked_in_a_savepoint_that_is_rolled_back_is_refused(
+    factory: sessionmaker[Session], alice: Signed, short_lock: int
+) -> None:
+    """Postgres releases the locks taken inside a rolled back savepoint, so the mark goes too."""
+    job_id = new_job(factory, alice.id)
+    with factory() as db:
+        savepoint = db.begin_nested()
+        job = service.lock_job(db, alice.id, job_id)
+        assert job is not None
+        service.set_status(db, job, JobStatus.shortlisted, NOW)  # accepted while it is held
+        savepoint.rollback()
+        with pytest.raises(service.UnlockedJobError):
+            service.set_status(db, job, JobStatus.applied, NOW)
+        with factory() as other:  # the lock is really free: the refusal matches the database
+            assert service.lock_job(other, alice.id, job_id) is not None
+            other.rollback()
+        db.rollback()
+    assert status_of(factory, job_id) is JobStatus.found
+
+
+def test_a_row_locked_before_a_savepoint_stays_accepted_when_the_savepoint_rolls_back(
+    factory: sessionmaker[Session], alice: Signed, short_lock: int
+) -> None:
+    """The other direction: the savepoint's rollback must not drop a lock it never took."""
+    before = new_job(factory, alice.id, slug="before")
+    inside = new_job(factory, alice.id, slug="inside")
+    with factory() as db:
+        job = service.lock_job(db, alice.id, before)
+        assert job is not None
+        savepoint = db.begin_nested()
+        taken_inside = service.lock_job(db, alice.id, inside)
+        assert taken_inside is not None
+        savepoint.rollback()
+        assert service.set_status(db, job, JobStatus.applied, NOW) is True  # still locked
+        with pytest.raises(service.UnlockedJobError):  # locked inside: released by Postgres
+            service.set_status(db, taken_inside, JobStatus.applied, NOW)
+        with factory() as other, pytest.raises(service.JobBusyError):  # and really still held
+            service.lock_job(other, alice.id, before)
+        db.commit()
+    assert status_of(factory, before) is JobStatus.applied
+    assert status_of(factory, inside) is JobStatus.found
+
+
+def test_a_row_locked_in_a_released_savepoint_is_accepted_until_the_transaction_ends(
+    factory: sessionmaker[Session], alice: Signed
+) -> None:
+    job_id = new_job(factory, alice.id)
+    with factory() as db:
+        with db.begin_nested():
+            with db.begin_nested():
+                job = service.lock_job(db, alice.id, job_id)
+                assert job is not None
+            assert service.set_status(db, job, JobStatus.shortlisted, NOW) is True  # one level up
+        assert service.set_status(db, job, JobStatus.applied, NOW) is True  # in the transaction
+        db.rollback()
+        with pytest.raises(service.UnlockedJobError):
+            service.set_status(db, job, JobStatus.closed, NOW)
+    assert status_of(factory, job_id) is JobStatus.found
+
+
 def test_the_mark_belongs_to_one_session_and_follows_the_row_not_the_object(
     factory: sessionmaker[Session], alice: Signed
 ) -> None:

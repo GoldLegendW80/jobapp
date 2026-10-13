@@ -14,7 +14,7 @@ import enum
 import json
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -908,27 +908,61 @@ def is_lock_timeout(exc: BaseException) -> bool:
     )
 
 
+def _marks(session: Session) -> dict[SessionTransaction, set[uuid.UUID]]:
+    """The ids read under the lock, per transaction of this session: the root transaction and
+    each open savepoint have their own. Kept on the session itself, so two sessions never share
+    it."""
+    marks: dict[SessionTransaction, set[uuid.UUID]] = session.info.setdefault(_LOCKED_KEY, {})
+    return marks
+
+
+def _innermost(session: Session) -> SessionTransaction | None:
+    return session.get_nested_transaction() or session.get_transaction()
+
+
 def _locked_ids(db: Session) -> set[uuid.UUID]:
-    """The ids of the jobs this session read under the lock in its current transaction. Kept on
-    the session itself, so two sessions never share it."""
-    ids: set[uuid.UUID] = db.info.setdefault(_LOCKED_KEY, set())
+    """The ids of the jobs this session read under the lock and still holds: those of its
+    current transaction, of the savepoint it is in and of every enclosing one."""
+    ids: set[uuid.UUID] = set()
+    marks = db.info.get(_LOCKED_KEY, {})
+    transaction = _innermost(db)
+    while transaction is not None:
+        ids |= marks.get(transaction, set())
+        transaction = transaction.parent
     return ids
 
 
-def _forget_locks(session: Session, *_: Any) -> None:
-    session.info.pop(_LOCKED_KEY, None)
+def _mark_locked(db: Session, ids: Iterable[uuid.UUID]) -> None:
+    transaction = _innermost(db)
+    if transaction is not None:  # always the case after the FOR UPDATE that returned them
+        _marks(db).setdefault(transaction, set()).update(ids)
 
 
-def _forget_at_end(session: Session, transaction: SessionTransaction) -> None:
-    if transaction.parent is None:  # the outermost transaction: commit, rollback or close
-        _forget_locks(session)
+def _forget_ended(session: Session, transaction: SessionTransaction) -> None:
+    """A transaction ended: its marks go. The root's end clears every mark of the session. A
+    savepoint that was rolled back lost the locks taken inside it (Postgres releases them), so
+    only its own marks go; those of the enclosing transaction stay, its locks are still held."""
+    if transaction.parent is None:
+        session.info.pop(_LOCKED_KEY, None)
+    else:
+        session.info.get(_LOCKED_KEY, {}).pop(transaction, None)
+
+
+def _release_savepoint(session: Session) -> None:
+    """A savepoint was released (committed into its parent): its locks are the parent's now."""
+    transaction = session.get_nested_transaction()
+    if transaction is not None and transaction.parent is not None:
+        released = session.info.get(_LOCKED_KEY, {}).pop(transaction, None)
+        if released:
+            _marks(session).setdefault(transaction.parent, set()).update(released)
 
 
 # Registered once, for every session: the row locks are gone when the transaction ends (commit
-# or rollback, a savepoint's rollback included: Postgres releases the locks taken inside it), so
-# the mark goes with them and a pooled session starts the next transaction with none.
-sa.event.listen(Session, "after_transaction_end", _forget_at_end)
-sa.event.listen(Session, "after_soft_rollback", _forget_locks)
+# or rollback), so the mark goes with them and a pooled session starts the next transaction with
+# none. A savepoint keeps its own marks: rolled back, they go with the locks Postgres released;
+# released, they pass to the enclosing transaction.
+sa.event.listen(Session, "after_transaction_end", _forget_ended)
+sa.event.listen(Session, "after_commit", _release_savepoint)
 
 
 def _begin_locking(db: Session) -> None:
@@ -951,7 +985,7 @@ def _lock(db: Session, query: sa.Select[tuple[Job]]) -> list[Job]:
         if is_lock_timeout(exc):
             raise JobBusyError(BUSY) from exc
         raise
-    _locked_ids(db).update(job.id for job in jobs)
+    _mark_locked(db, (job.id for job in jobs))
     return jobs
 
 
