@@ -60,6 +60,14 @@ _hasher = PasswordHasher.from_parameters(PASSWORD_HASH_PARAMETERS)
 # the 85 to 144 ms a whole sign in took on a development Mac (tasks/evidence/identity-108),
 # 3 s if the Jetson needs 375 ms per hash with two running together (assumed, not measured
 # there), which is why the wait bound is 3 s. Ten sign ins in the same instant are 5 rounds.
+#
+# All of this is per process: the slots live in this module, so every extra process has its own
+# two. The api must therefore stay ONE uvicorn process: a second worker (`--workers 2`, or
+# WEB_CONCURRENCY=2, which uvicorn reads as that option) would silently double the 128 MiB.
+# tests/identity/test_hash_slots.py refuses either in api/Dockerfile and the compose files.
+# `python -m app.identity.cli` run with `docker compose exec api` is a second process in the
+# same container, with slots of its own. Today it only issues links and computes no hash; the
+# day it does, that is one more 64 MiB plus an interpreter for the time of one hash.
 PASSWORD_HASH_MEMORY_MIB = PASSWORD_HASH_PARAMETERS.memory_cost // 1024
 PASSWORD_HASH_SLOTS = 2
 PASSWORD_HASH_MAX_WAITING = 16

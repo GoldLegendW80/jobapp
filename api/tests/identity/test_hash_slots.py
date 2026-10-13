@@ -2,6 +2,7 @@
 three hashing functions of `security` through it."""
 
 import asyncio
+import json
 import re
 import threading
 import time
@@ -319,3 +320,29 @@ def test_the_production_bounds_fit_the_container() -> None:
     # 173 MiB is the api's measured peak before any sign in (issue #108); what is left after
     # the hashes must still be at least 128 MiB for request bodies in flight.
     assert int(limit.group(1)) - 173 - slots.slots * security.PASSWORD_HASH_MEMORY_MIB >= 128
+
+
+def test_the_api_stays_one_uvicorn_process() -> None:
+    # The slots are per process (security.py): a second uvicorn worker would bring two more, and
+    # four hashes of 64 MiB no longer fit the container. uvicorn starts workers on --workers, or
+    # on WEB_CONCURRENCY in its environment, so neither may appear where the api is started.
+    api_dir = Path(__file__).resolve().parents[2]
+    dockerfile = api_dir / "Dockerfile"
+    if not dockerfile.exists():  # the api image carries no Dockerfile
+        pytest.skip("api/Dockerfile is not next to the tests")
+    commands = [
+        json.loads(line.removeprefix("CMD "))
+        for line in dockerfile.read_text().splitlines()
+        if line.startswith('CMD ["uvicorn"')
+    ]
+    assert commands, "no uvicorn CMD found in api/Dockerfile"
+    for command in commands:
+        assert not any(arg.startswith("--workers") for arg in command), command
+
+    # compose.yml and its overrides may replace the command or set the environment.
+    for path in [dockerfile, *sorted(api_dir.parent.glob("compose*.yml"))]:
+        settings = "\n".join(
+            line for line in path.read_text().splitlines() if not line.lstrip().startswith("#")
+        )
+        assert "--workers" not in settings, path.name
+        assert "WEB_CONCURRENCY" not in settings, path.name

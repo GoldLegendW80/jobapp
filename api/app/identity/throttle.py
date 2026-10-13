@@ -7,7 +7,9 @@ Limits, over a sliding window of WINDOW (15 minutes):
   password should not leave them one typo away from a lockout.
 - IP_LIMIT (20) failed attempts per client address. A success does NOT reset it: one attacker
   who owns a single account could otherwise sign into it every few guesses and spray other
-  addresses forever.
+  addresses forever. "Address" is the IPv4 address, or for IPv6 its /64 (`client_address`): one
+  subscriber owns a whole /64, so counting each IPv6 address apart would give that subscriber
+  an unlimited supply of fresh counters.
 
 How an attempt goes (`reserve`, then the caller verifies the password, then `mark_success`):
 1. Under two transaction advisory locks (the email, then the address, always in that order so
@@ -34,11 +36,14 @@ like a failed sign in, recorded under the account's email and the caller's addre
 reset links need no throttle: the 43 character token is the credential, not the password.
 """
 
+import ipaddress
 import math
 import threading
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql as pg
 from sqlalchemy.orm import Session
 
 from app.identity import service
@@ -50,6 +55,7 @@ IP_LIMIT = 20
 RETENTION = timedelta(days=30)
 PURGE_EVERY = timedelta(hours=1)
 EMAIL_KEY_MAX = 320
+IPV6_PREFIX = 64  # the bits of an IPv6 address the per address limit counts under
 
 # Namespaces of the transaction advisory locks (identity uses 20_002 and 20_005 already).
 _EMAIL_LOCK_NAMESPACE = 20_007
@@ -143,6 +149,52 @@ def _email_conditions(email: str, now: datetime) -> list[sa.ColumnElement[bool]]
     return [LoginAttempt.email == email, LoginAttempt.id > last_success]
 
 
+class ClientAddress(NamedTuple):
+    """A client address as the throttle uses it. `stored` is what the attempt row keeps: the
+    address itself. `key` is what the per address limit counts and locks under: the same
+    address for IPv4, the /64 network (as "2001:db8:1:2::/64") for IPv6."""
+
+    stored: str
+    key: str
+
+
+def client_address(ip: str | None) -> ClientAddress | None:
+    """How the per address limit sees `ip`, or None for anything that is not an address (a
+    test client, a unix socket, a malformed value), exactly where `service.clean_ip` gives None.
+
+    - IPv4: counted by the whole address, as before.
+    - IPv6: counted by its first IPV6_PREFIX (64) bits. A /64 is what one home line or one rented
+      server is given, so every address in it belongs to one subscriber; counted whole, each of
+      its 2**64 addresses would start a fresh count and the limit would never stop that caller.
+      The row still keeps the full address.
+    - IPv4 mapped IPv6 ("::ffff:198.51.100.7"): the IPv4 address, stored and counted as such, so
+      one client seen under both spellings has one count.
+
+    `service.clean_ip` is left as it is: the sessions table keeps the whole address for display.
+    """
+    clean = service.clean_ip(ip)
+    if clean is None:
+        return None
+    address = ipaddress.ip_address(clean)
+    if isinstance(address, ipaddress.IPv4Address):
+        return ClientAddress(clean, clean)
+    if address.ipv4_mapped is not None:
+        mapped = str(address.ipv4_mapped)
+        return ClientAddress(mapped, mapped)
+    # Through its integer: a zone ("fe80::1%eth0") is dropped, Postgres inet refuses one.
+    plain = ipaddress.IPv6Address(int(address))
+    network = ipaddress.IPv6Network((int(plain), IPV6_PREFIX), strict=False)
+    return ClientAddress(str(plain), str(network))
+
+
+def _address_conditions(key: str) -> list[sa.ColumnElement[bool]]:
+    """The attempts counted under the key of a ClientAddress."""
+    if "/" in key:
+        # inet <<= cidr: the stored address lies inside the /64.
+        return [LoginAttempt.ip.bool_op("<<=")(sa.cast(key, pg.CIDR))]
+    return [LoginAttempt.ip == sa.cast(key, LoginAttempt.ip.type)]
+
+
 def reserve(
     session: Session,
     email: str,
@@ -156,27 +208,27 @@ def reserve(
 
     `ip` is the client address as the api sees it; anything that is not an address (a test
     client, a unix socket) is recorded as NULL and escapes the per address limit, never the
-    per email one.
+    per email one. An IPv6 address is counted and locked by its /64 (`client_address`).
     """
-    clean_ip = service.clean_ip(ip)
+    address = client_address(ip)
     session.execute(
         sa.select(sa.func.pg_advisory_xact_lock(_EMAIL_LOCK_NAMESPACE, sa.func.hashtext(email)))
     )
-    if clean_ip is not None:
+    if address is not None:
         session.execute(
-            sa.select(sa.func.pg_advisory_xact_lock(_IP_LOCK_NAMESPACE, sa.func.hashtext(clean_ip)))
-        )
-    waits = [_retry_after(session, _email_conditions(email, now), EMAIL_LIMIT, now)]
-    if clean_ip is not None:
-        waits.append(
-            _retry_after(
-                session, [LoginAttempt.ip == sa.cast(clean_ip, LoginAttempt.ip.type)], IP_LIMIT, now
+            sa.select(
+                sa.func.pg_advisory_xact_lock(_IP_LOCK_NAMESPACE, sa.func.hashtext(address.key))
             )
         )
+    waits = [_retry_after(session, _email_conditions(email, now), EMAIL_LIMIT, now)]
+    if address is not None:
+        waits.append(_retry_after(session, _address_conditions(address.key), IP_LIMIT, now))
     found = [wait for wait in waits if wait is not None]
     if found:
         raise ThrottledError(max(found))
-    attempt = LoginAttempt(email=email, ip=clean_ip, at=now, success=False)
+    attempt = LoginAttempt(
+        email=email, ip=address.stored if address else None, at=now, success=False
+    )
     session.add(attempt)
     session.flush()
     if purger is not None:
@@ -202,11 +254,13 @@ def forget(session: Session, attempt_id: int) -> None:
 def failures_in_window(
     session: Session, now: datetime, *, email: str | None = None, ip: str | None = None
 ) -> int:
-    """Failures counted now against an email key (since its last success) or an address."""
+    """Failures counted now against an email key (since its last success) or an address (for
+    IPv6, its /64, as the limit counts)."""
+    address = client_address(ip)
     if email is not None:
         where = _email_conditions(email, now)
-    elif ip is not None:
-        where = [LoginAttempt.ip == sa.cast(ip, LoginAttempt.ip.type)]
+    elif address is not None:
+        where = _address_conditions(address.key)
     else:
         raise ValueError("give an email or an ip")
     return int(

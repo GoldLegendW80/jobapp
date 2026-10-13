@@ -724,7 +724,9 @@ author, `tasks/evidence/platform-100/`, or by the reviewer of pull request #106 
   answers the rest 503 with `Retry-After: 2`. On the development Mac 120 sign ins at once peaked
   at 782 MiB before and 283 MiB after (`tasks/evidence/identity-108/`). A caller who keeps those
   places taken makes real sign ins answer 503 while the flood lasts; people already signed in are
-  not affected. A signed in user has at most six requests with a body in flight, the next is a
+  slowed, not locked out. From one IPv4 address or one IPv6 /64 the flood ends by itself at 20
+  failures (429 before any slot); a distributed flood can still keep the sign in door answering
+  503 while it lasts (issue #152). A signed in user has at most six requests with a body in flight, the next is a
   429 (`api/app/body_limit.py`).
 - **256 slow connections stop the app answering while they last.** That is the price of the
   uvicorn limit, which keeps memory bounded for callers with no session (a signed in user's
@@ -918,6 +920,9 @@ unknown and disabled accounts included. Before any password is checked:
   `{"detail": "Too many sign in attempts. Try again in N minutes."}` with `Retry-After` in whole
   seconds, counted from the oldest failure still in the window. The window slides: a failure
   stops counting exactly 15 minutes after it happened.
+- "One address" is the whole address for IPv4 and the /64 for IPv6: one subscriber is given a
+  whole /64, so its addresses share one count. `::ffff:a.b.c.d` counts as the IPv4 address. The
+  row keeps the full address.
 - A successful sign in resets the email's count (the person proved they hold the password); it
   does not reset the address's count, so one account someone owns cannot launder guesses on
   others.
@@ -947,7 +952,9 @@ one address with `--ip`, whatever the email); it prints how many rows went:
 ```
 
 Successful attempts and failures older than 15 minutes are kept. The email and the address reach
-psql as bound variables, and Postgres refuses anything that is not an address.
+psql as bound variables, and Postgres refuses anything that is not an address. `--ip` removes the
+rows of that exact address: for IPv6, where the limit counts the whole /64, it does not unlock
+the other addresses of the /64 yet (issue #152).
 
 ## Profile export and import
 

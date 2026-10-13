@@ -18,6 +18,12 @@ It is a thread primitive on purpose (`threading`, not `asyncio`): the holders ar
 threads, and nothing here may be awaited. `hold()` is re-entrant per thread, so a route can take
 its slot once, before it opens a database transaction, and the hashes inside reuse it: the wait
 then happens with no database connection checked out, and one request never needs two slots.
+
+Warning: the re-entrance is remembered per thread. Never use `hold()` from a dependency with
+`yield` or from async code: enter and exit may run on different threads, so the exit would clear
+the flag of a thread that holds nothing while the entering thread keeps a flag for a slot already
+given back, and its next hash would run outside the bound. Use it only as a `with` block inside
+a plain `def` handler or function, entered and left on one thread.
 """
 
 import threading
@@ -100,7 +106,9 @@ class HashSlots:
     @contextmanager
     def hold(self) -> Iterator[None]:
         """Hold one slot for the block. Raises HashBusyError when none comes free in time.
-        Inside a block of the same thread it takes nothing more."""
+        Inside a block of the same thread it takes nothing more. Only as a `with` block in a
+        plain `def`, never from a dependency with `yield` or from async code: enter and exit
+        may then run on different threads (see the module docstring)."""
         if getattr(self._local, "holding", False):
             yield
             return
