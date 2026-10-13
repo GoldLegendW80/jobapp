@@ -83,7 +83,7 @@ class RunIn(estimate_router.EstimateIn):
     # The echo of the estimate the dialog showed (`estimate_router.quote_id_of`): 64
     # hexadecimal characters, so anything else, a lone surrogate included, is a 422 here and
     # never reaches the comparison.
-    quote_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    quote_id: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
 
 
 class StepOut(BaseModel):
