@@ -18,7 +18,8 @@ nothing of it is stored, logged or shown before it has passed here:
   2,000 pixels a side per image; migration 0011), so that a result that passes can be stored;
 - the text holds no U+0000 and no lone surrogate (Postgres refuses both, and the job would
   fail again on every try), and exactly as many form feeds as its page counts say;
-- every image is base64 that decodes to bytes starting with the JPEG magic;
+- every image is base64 that decodes to bytes starting with the JPEG magic, whose frame
+  header declares the very width and height the answer states (`_jpeg_size`);
 - a reason and a note are codes from the closed lists below, with integers beside them: the
   parser never sends a sentence, the application writes them.
 
@@ -501,6 +502,39 @@ def _notes(value: Any) -> tuple[Note, ...]:
     return tuple(notes)
 
 
+_JPEG_SEGMENTS = 64  # segments looked at before the frame header: an encoder writes a few
+# The start of frame markers (SOF0 to SOF15), without the three codes of that range that are
+# tables and not frames (DHT, JPG, DAC).
+_JPEG_FRAMES = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+
+
+def _jpeg_size(jpeg: bytes) -> tuple[int, int]:
+    """The width and the height the frame header of a JPEG declares. Nothing is decoded: the
+    segments are walked by their lengths, a bounded number of them, and a file without a frame
+    header among them is not a JPEG this application stores."""
+    at = 2
+    for _ in range(_JPEG_SEGMENTS):
+        if at + 4 > len(jpeg) or jpeg[at] != 0xFF:
+            break
+        marker = jpeg[at + 1]
+        if marker == 0xFF:  # a fill byte
+            at += 1
+            continue
+        if marker in (0xD9, 0xDA):  # the end, or the pixels: no frame header came before
+            break
+        length = int.from_bytes(jpeg[at + 2 : at + 4], "big")
+        if length < 2:
+            break
+        if marker in _JPEG_FRAMES:
+            if length < 7 or at + 9 > len(jpeg):
+                break
+            height = int.from_bytes(jpeg[at + 5 : at + 7], "big")
+            width = int.from_bytes(jpeg[at + 7 : at + 9], "big")
+            return width, height
+        at += 2 + length
+    _bad("image_not_jpeg")
+
+
 def _images(value: Any) -> tuple[PageImage, ...]:
     if not isinstance(value, list) or len(value) > MAX_IMAGES:
         _bad("images")
@@ -525,6 +559,8 @@ def _images(value: Any) -> tuple[PageImage, ...]:
             _bad("image_size")
         if not jpeg.startswith(JPEG_MAGIC):
             _bad("image_not_jpeg")
+        if _jpeg_size(jpeg) != (width, height):
+            _bad("image_side")  # the sides the answer states are not the picture's own
         images.append(PageImage(position, width, height, jpeg))
     return tuple(images)
 

@@ -34,7 +34,6 @@ from tests.ingestion.helpers import (
     confirm,
     paste,
     pdf,
-    png,
     secret_like,
     set_columns,
     uploaded,
@@ -268,8 +267,10 @@ def test_documents_that_cannot_be_read_are_named_left_out_and_counted(
 ) -> None:
     credential(factory, ALICE)
     good = text_file(api, alice, "a", 30_000, "good.md")
-    # An image has no reader until G8 (a PDF has one since G2b, an archive since G7).
-    waiting = str(uploaded(api, alice, png(), "scan.png")["id"])
+    # Every type an upload accepts has a reader since G8 (the PDF since G2b, the archive since
+    # G7): what cannot be read yet is a row of a type this version has no reader for.
+    waiting = text_file(api, alice, "w", 500, "scan.png")
+    set_columns(factory, waiting, mime="image/tiff", text_status=TextStatus.pending, text=None)
     being_read = text_file(api, alice, "b", 500, "being-read.md")
     set_columns(factory, being_read, text_status=TextStatus.pending)
     failed = text_file(api, alice, "c", 500, "failed.md")

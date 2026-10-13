@@ -23,8 +23,11 @@ JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 60
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 60
 
 
-def jpeg_of(size: int) -> str:
-    return base64.b64encode(b"\xff\xd8\xff" + b"\x00" * (size - 3)).decode()
+def jpeg_of(size: int, width: int = 1568, height: int = 1100) -> str:
+    """A JPEG as the client reads one: the magic, then a frame header that declares these
+    sides, padded to `size` bytes. Nothing decodes it."""
+    head = b"\xff\xd8\xff\xc0\x00\x11\x08" + height.to_bytes(2, "big") + width.to_bytes(2, "big")
+    return base64.b64encode(head + b"\x00" * (size - len(head))).decode()
 
 
 def image(**changes: Any) -> dict:
@@ -92,7 +95,7 @@ def test_the_caps_are_those_of_the_columns_that_store_the_result() -> None:
     )
     malformed({"ok": True, "text": "x" * 500_001}, "text_too_long")
 
-    most = image(width=2000, height=2000, jpeg=jpeg_of(300_000))
+    most = image(width=2000, height=2000, jpeg=jpeg_of(300_000, 2000, 2000))
     assert len(pc.check_parsed({"ok": True, "images": [most]}, "image").images[0].jpeg) == 300_000
     malformed({"ok": True, "images": [image(jpeg=jpeg_of(300_001))]}, "image_size")
     malformed({"ok": True, "images": [image(width=2001)]}, "image_side")
@@ -331,6 +334,17 @@ def test_every_code_is_a_word_and_the_lists_do_not_overlap() -> None:
         ([image(jpeg=base64.b64encode(b"<svg onload=alert(1)>").decode())], "image_not_jpeg"),
         ([image(jpeg=base64.b64encode(b"\xff\xd8").decode())], "image_not_jpeg"),
         ([image(jpeg=base64.b64encode(b"%PDF-1.7 " + JPEG).decode())], "image_not_jpeg"),
+        # The magic and no frame header: no picture, whatever the answer says of its sides.
+        ([image(jpeg=base64.b64encode(JPEG).decode())], "image_not_jpeg"),
+        ([image(jpeg=base64.b64encode(b"\xff\xd8\xff\xd9").decode())], "image_not_jpeg"),
+        (
+            [image(jpeg=base64.b64encode(b"\xff\xd8\xff\xe0\x00\x00" * 40).decode())],
+            "image_not_jpeg",
+        ),
+        # The sides the answer states are not those of the picture.
+        ([image(width=1567)], "image_side"),
+        ([image(height=1568, width=1100)], "image_side"),
+        ([image(jpeg=jpeg_of(64, 2000, 2000))], "image_side"),
     ],
 )
 def test_an_image_that_is_not_a_small_jpeg_at_a_page_refuses_the_answer(

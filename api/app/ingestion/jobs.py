@@ -96,6 +96,7 @@ from app.ingestion.models import (
     FailedKind,
     IngestionDocument,
     IngestionImage,
+    TextSource,
     TextStatus,
 )
 
@@ -549,6 +550,10 @@ def _store_pages(
             return FAILED
         document.text = text
         document.text_status = TextStatus.awaiting_transcription
+        # Whose words the text will be: the model's alone when no page was read as text (an
+        # image, a PDF of scans only), else the parser's, and G14 lists in `transcribed_pages`
+        # the pages of a mixed PDF that a model wrote.
+        document.text_source = TextSource.parsed if parsed.pages_text else TextSource.transcribed
         document.pages = parsed.pages
         document.pages_text = parsed.pages_text
         document.pages_image = len(parsed.images)
@@ -757,7 +762,7 @@ async def _render(parse: Parse, data: bytes, parsed: parser_client.Parsed) -> pa
         ):
             raise parser_client.ParserMalformedError("render_positions")
         images += batch.images
-        total = batch.pages
+        total = max(total, batch.pages)
         for note in batch.notes:
             if note.code == "pages_not_rendered":
                 not_rendered += note.values.get("count", 0)
@@ -775,7 +780,9 @@ async def _render(parse: Parse, data: bytes, parsed: parser_client.Parsed) -> pa
     if not images and not texts:
         raise parser_client.ParserRefusedError("too_slow" if stopped else "no_text", failure="file")
     notes = [note for note in parsed.notes if note.code != "scans_not_read"]
-    if total > len(slots) and not any(note.code == "pages_not_read" for note in notes):
+    # The renderer counted more pages than the text reader said (a PDF of scans only, whose
+    # refusal carries the pages it read and not the pages it has).
+    if total > parsed.pages and not any(note.code == "pages_not_read" for note in notes):
         notes.append(parser_client.Note("pages_not_read", {"from": len(slots) + 1, "to": total}))
     if left:
         not_rendered = min(not_rendered, left)
@@ -793,6 +800,24 @@ async def _render(parse: Parse, data: bytes, parsed: parser_client.Parsed) -> pa
         notes=tuple(notes),
         images=tuple(images),
         usage=parsed.usage,
+    )
+
+
+def _pages_fit(parsed: parser_client.Parsed, kind: Kind) -> bool:
+    """True when the images of `parsed` are what a document of this kind may store. The client
+    checked each image (a JPEG of its stated sides, 300,000 bytes at most); this is the
+    document: an uploaded image is one picture at position 0 and no text, a PDF has at most
+    RENDER_MAX images, each at the index of a page whose slot in the text is empty."""
+    if parsed.text is None or parsed.pages is None:
+        return False
+    positions = [image.position for image in parsed.images]
+    if kind is Kind.image:
+        return positions == [0] and parsed.text == "" and parsed.pages == 1
+    if kind is not Kind.pdf or len(positions) > RENDER_MAX:
+        return False
+    slots = parsed.text.split(parser_client.PAGE_BREAK)
+    return positions == sorted(set(positions)) and all(
+        index < len(slots) and not slots[index] for index in positions
     )
 
 
@@ -845,7 +870,7 @@ async def _parse(ctx: dict[str, Any], document_id: uuid.UUID) -> str:
         return await asyncio.to_thread(_store_export, sessions, claim, parsed, started, now)
     if parsed.images:
         # An image, or a PDF with scanned pages: it waits for its transcription.
-        if parsed.text is None or parsed.pages is None or claim.kind is Kind.archive:
+        if not _pages_fit(parsed, claim.kind):
             return await asyncio.to_thread(
                 _store_failure, sessions, claim, "server", "images_in_answer", started
             )

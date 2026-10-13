@@ -67,11 +67,26 @@ class Parser:
     def __init__(self, *answers: Any) -> None:
         self.answers = list(answers)
         self.calls: list[tuple[str, bytes]] = []
+        self.renders: list[Any] = []
+        self.pictures: Any = None  # set by a test that plays the renderer itself
         self.started = threading.Event()
         self.gate: asyncio.Event | None = None
         self.during: Callable[[], None] | None = None
 
-    async def __call__(self, kind: str, data: bytes) -> pc.Parsed:
+    async def __call__(self, kind: str, data: bytes, options: Any = None) -> pc.Parsed:
+        if kind == jobs.RENDER_KIND and self.pictures is None:
+            # The second trigger (G8) asks the renderer about every short page of a PDF. The
+            # texts of this file are short and none of its PDFs holds a picture: the renderer
+            # declines each page, as the real one does for a page of text.
+            self.renders.append(options)
+            if options.get("text"):
+                # The text of a protected file, asked of PDFium: it knows the protection no
+                # better than the first reader did.
+                raise pc.ParserRefusedError("encryption", failure="file")
+            # A page without text that holds no picture either is not rendered.
+            blank = len(set(options["pages"]) - set(options["check"]))
+            notes = (pc.Note("pages_not_rendered", {"count": blank}),) if blank else ()
+            return pc.Parsed(pages=1, pages_text=0, pages_image=0, notes=notes)
         self.calls.append((kind, data))
         self.started.set()
         if self.during is not None:
@@ -121,9 +136,12 @@ def test_only_a_stored_file_that_waits_for_a_reader_is_queued(
     api: Api, alice: str, jobs_queue: RecordingQueue, factory: sessionmaker[Session], clock: Clock
 ) -> None:
     uploaded(api, alice, b"plain text", "notes.txt")
-    uploaded(api, alice, png(), "shot.png")
     assert upload(api, alice, b"GIF89a....", "a.gif").status_code == 415
     assert jobs_queue.jobs == []
+    # An image has a reader since G8 (tests/ingestion/test_jobs_images.py).
+    shot = uploaded(api, alice, png(), "shot.png")
+    assert [job["args"] for job in jobs_queue.jobs] == [(shot["id"],)]
+    jobs_queue.jobs.clear()
     # An archive has a reader since G7 (tests/ingestion/test_jobs_archive.py).
     export = uploaded(api, alice, archive(), "export.zip")
     assert [job["args"] for job in jobs_queue.jobs] == [(export["id"],)]
@@ -238,7 +256,9 @@ def test_form_feeds_are_kept_and_everything_else_is_cleaned(
     assert stored.text == "one\ntwo[0m\fpage 2\nend\nlast\n.\f\fpage 4\ttab"
     assert stored.text.count("\f") == dirty.count("\f") == 3
     assert "\f" not in documents.clean_text(dirty), "what the text route would have done"
-    assert (stored.pages, stored.pages_text, stored.pages_image) == (9, 3, 1)
+    # The page without text got no image from the renderer of this file (the fake one): it
+    # stays an empty slot, and `pages_image` counts the images stored, not the pages asked.
+    assert (stored.pages, stored.pages_text, stored.pages_image) == (9, 3, 0)
 
 
 @pytest.mark.parametrize(
@@ -261,18 +281,27 @@ def test_form_feeds_are_kept_and_everything_else_is_cleaned(
             [("time_limit", {"from": 5, "to": 12})],
             "This PDF took too long to read to its end. Pages 5 to 12 were not read.",
         ),
-        (
-            [("scans_not_read", {"count": 3})],
-            "3 pages hold no text and wait for the image reader.",
-        ),
-        (
-            [("scans_not_read", {"count": 1})],
-            "1 page holds no text and waits for the image reader.",
-        ),
+        # Since G8 the scanned pages are rendered: the note of the text reader about them
+        # (`scans_not_read`) is dropped by the job, which writes its own about the pages that
+        # got no image.
+        ([("scans_not_read", {"count": 3})], None),
         (
             [("text_limit", {"from": 9, "to": 9}), ("scans_not_read", {"count": 2})],
-            "Only the first 500,000 characters were read. Page 9 was not read. "
-            "2 pages hold no text and wait for the image reader.",
+            "Only the first 500,000 characters were read. Page 9 was not read.",
+        ),
+        (
+            [("scans_over_cap", {"count": 4})],
+            "Only the first 30 scanned pages of a PDF are kept as images. "
+            "4 scanned pages were left out.",
+        ),
+        (
+            [("pages_not_rendered", {"count": 1})],
+            "1 scanned page was left out: a page of that size or in that state cannot become "
+            "an image.",
+        ),
+        (
+            [("render_time_limit", {"count": 2})],
+            "This PDF took too long to turn into images. 2 scanned pages were left out.",
         ),
     ],
 )
@@ -282,7 +311,7 @@ def test_a_note_is_written_in_plain_words(
     factory: sessionmaker[Session],
     clock: Clock,
     notes: list[tuple[str, dict[str, int]]],
-    sentence: str,
+    sentence: str | None,
 ) -> None:
     body = uploaded(api, alice, pdf(), "cv.pdf")
     answer = parsed(truncated=True, notes=tuple(pc.Note(code, values) for code, values in notes))
@@ -291,7 +320,7 @@ def test_a_note_is_written_in_plain_words(
     assert (stored.note, stored.truncated) == (sentence, True)
     assert listing(api, alice)["items"][0]["note"] == sentence
     for dash in ("\u2014", "\u2013", " - "):
-        assert dash not in sentence
+        assert dash not in (sentence or "")
 
 
 def test_every_code_of_the_parser_has_a_sentence_without_a_dash() -> None:
@@ -464,13 +493,11 @@ def test_a_job_for_a_document_that_is_gone_or_not_to_read_does_nothing(
     parser = Parser(parsed())
     assert run(factory, clock, parser, str(uuid.uuid4())) == jobs.GONE
     text = uploaded(api, alice, b"plain text", "notes.txt")
-    image = uploaded(api, alice, png(), "shot.png")
     done = uploaded(api, alice, pdf(), "cv.pdf")
     assert run(factory, clock, parser, done["id"]) == jobs.DONE
-    for document in (text, image, done):
+    for document in (text, done):
         assert run(factory, clock, parser, document["id"]) == jobs.SKIPPED
     assert len(parser.calls) == 1
-    assert row(factory, image["id"]).raw == png()
     assert run(factory, clock, parser, "not-a-uuid") == jobs.ERROR
 
 
@@ -724,12 +751,18 @@ def test_the_reaper_takes_the_kinds_that_have_a_reader_and_no_other(
     long_ago = clock.now - timedelta(days=30)
     old_pdf = stored_before(factory, owner, pdf(900), "application/pdf", long_ago)
     kept = [
-        stored_before(factory, owner, png(), "image/png", long_ago),
-        stored_before(factory, owner, png(300), "image/jpeg", long_ago),
         stored_before(factory, owner, b"other", "application/x-later", long_ago),
+        stored_before(factory, owner, b"another", "image/gif", long_ago),
     ]
-    # The archives have a reader since G7: tests/ingestion/test_jobs_archive.py.
-    assert jobs.readable_mimes() == ["application/pdf", documents.DOCX_MIME, "application/zip"]
+    # The archives have a reader since G7 (tests/ingestion/test_jobs_archive.py), the images
+    # since G8 (tests/ingestion/test_jobs_images.py).
+    assert jobs.readable_mimes() == [
+        "application/pdf",
+        documents.DOCX_MIME,
+        "application/zip",
+        "image/jpeg",
+        "image/png",
+    ]
     parser = Parser(parsed())
     for _ in range(10):
         found = jobs.reap(factory, clock.now)
@@ -860,10 +893,10 @@ def test_the_eleventh_pdf_of_a_minute_is_429_with_the_wait(
     }
     assert len(listing(api, alice)["items"]) == limit, "nothing stored"
     assert len(jobs_queue.jobs) == limit, "nothing queued"
-    # What costs no reading is not counted and not refused: a text, an image kept for later, a
-    # type that is refused for itself.
+    # What costs no reading is not counted and not refused: a text, a type that is refused
+    # for itself. An image is read since G8, so it is counted with the PDFs.
     assert upload(api, alice, b"plain text", "notes.txt").status_code == 201
-    assert upload(api, alice, png(), "shot.png").status_code == 201
+    assert upload(api, alice, png(), "shot.png").status_code == 429
     assert upload(api, alice, b"GIF89a....", "a.gif").status_code == 415
     # Per user: another account is not slowed down.
     assert upload(api, bob, pdf(999), "cv.pdf").status_code == 201
@@ -990,6 +1023,10 @@ def test_the_job_holds_one_document_at_most_and_frees_it_before_it_writes(
     assert isinstance(claim, jobs._Claim)
     assert len(claim.data) == 2 * MIB
     assert (claim.kind, claim.size, claim.attempts) == (documents.Kind.pdf, 2 * MIB, 1)
-    assert {documents.Kind.pdf: "pdf_text", documents.Kind.archive: "docx"} == jobs.PARSER_KIND
+    assert {
+        documents.Kind.pdf: "pdf_text",
+        documents.Kind.archive: "docx",
+        documents.Kind.image: "image",
+    } == jobs.PARSER_KIND
     assert jobs.JOB_TIMEOUT_S > pc.TIMEOUT_S + 30
     assert timedelta(seconds=jobs.JOB_TIMEOUT_S) < jobs.STALE_AFTER
