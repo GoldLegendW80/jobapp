@@ -14,6 +14,7 @@ import { defineConfig, devices } from "@playwright/test";
  *   profile   a made up profile through the CLI, every tab
  *   profile-editors  Facts, Skills and Search editors, the board check against a real ATS
  *   profile-history  empty to 100% in the browser, History diff and restore, export, import
+ *   profile-dates  a year alone as a date: typed, saved, reloaded, made a month, exported, imported
  *   throttle  five wrong passwords, then 429 with a countdown (last: it locks its admin)
  *
  * Each spec deletes its own failed sign in attempts in its afterAll (stack.ts clearAttempts, which
@@ -33,6 +34,7 @@ const SPECS = [
   "profile",
   "profile-editors",
   "profile-history",
+  "profile-dates",
   "throttle",
 ] as const;
 

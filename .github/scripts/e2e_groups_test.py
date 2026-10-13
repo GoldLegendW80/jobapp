@@ -206,13 +206,13 @@ class ThisRepositoryTest(unittest.TestCase):
         self.assertEqual(e2e_groups.check(self.ROOT), [])
 
     def test_the_real_groups_are_the_known_ones(self) -> None:
-        # The identity chain (9), the sweep (1) and the apps group (6: agents-streaming.spec.ts
-        # joined it with issue #33), each named one by one; and the ingestion group, which
-        # takes every ingestion-*.spec.ts through its config, so its count grows with the
-        # module and is not written here.
+        # The identity chain (10: profile-dates.spec.ts joined it with issue #48), the sweep (1)
+        # and the apps group (6: agents-streaming.spec.ts joined it with issue #33), each named
+        # one by one; and the ingestion group, which takes every ingestion-*.spec.ts through
+        # its config, so its count grows with the module and is not written here.
         ran = set(e2e_groups.specs_in_ci(self.ROOT))
         ingestion = {name for name in ran if name.startswith("ingestion-")}
-        self.assertEqual(len(ran - ingestion), 16)
+        self.assertEqual(len(ran - ingestion), 17)
         self.assertIn("ingestion-g1.spec.ts", ingestion)
         on_disk = {p.name for p in (self.ROOT / "web/e2e").glob("ingestion-*.spec.ts")}
         self.assertEqual(ingestion, on_disk)

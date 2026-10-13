@@ -33,7 +33,7 @@ import {
   Group,
   ItemControls,
   LabelText,
-  MonthField,
+  PeriodField,
   SaveBar,
   TextField,
 } from "./section-ui";
@@ -81,7 +81,7 @@ export function ExperienceTab({
           <FormErrorAlert message={formError} />
           <Group
             title="Employers"
-            description="Most recent first. These are locked facts: generated documents copy them exactly."
+            description="Most recent first. These are locked facts: generated documents copy them exactly. Give each date as you know it: a year and a month, or the year alone."
             action={
               <Button
                 type="button"
@@ -118,7 +118,7 @@ export function ExperienceTab({
 
           <Group
             title="Education"
-            description="Schools and degrees, most recent first. Months are optional."
+            description="Schools and degrees, most recent first. Dates are optional, and a year alone is enough."
             action={
               <Button
                 type="button"
@@ -165,13 +165,13 @@ export function ExperienceTab({
                           label="Degree"
                           srSuffix={`at school ${n}`}
                         />
-                        <MonthField
+                        <PeriodField
                           control={control}
                           name={`education.${index}.start`}
                           label="Start"
                           srSuffix={`of school ${n}`}
                         />
-                        <MonthField
+                        <PeriodField
                           control={control}
                           name={`education.${index}.end`}
                           label="End"
@@ -336,14 +336,14 @@ function EmployerFields({
             </FormItem>
           )}
         />
-        <MonthField
+        <PeriodField
           control={control}
           name={`employers.${index}.start`}
           label="Start"
           srSuffix={`of employer ${n}`}
         />
         <div className="grid gap-2">
-          <MonthField
+          <PeriodField
             control={control}
             name={`employers.${index}.end`}
             label="End"

@@ -379,7 +379,12 @@ def delete_photo(user: CurrentUser, request: Request, db: Db) -> Response:
 def save_section(
     section: str, body: SaveSectionIn, user: CurrentUser, request: Request, db: Db
 ) -> Any:
-    """Replace one section. `base_revision` is the revision the client loaded."""
+    """Replace one section. `base_revision` is the revision the client loaded.
+
+    `data` is the section as its model describes it; the six models are the `sections` of the
+    body of POST /api/profile/import. In `experience`, the `start` and `end` of an employer and
+    of a school are text, YYYY-MM or YYYY (a year alone when the month is not known), kept as
+    sent; an `end` that is certainly before its `start` is refused."""
     if section not in SECTIONS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=UNKNOWN_SECTION)
     try:

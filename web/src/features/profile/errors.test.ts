@@ -24,12 +24,13 @@ describe("serverFieldError", () => {
     });
     expect(
       serverFieldError(
-        "data.employers.2.start: must be a month written YYYY-MM between 1900 and 2100",
+        "data.employers.2.start: must be a year or a month, written YYYY or YYYY-MM, between 1900 and 2100",
         experience,
       ),
     ).toEqual({
       name: "employers.2.start",
-      message: "Must be a month written YYYY-MM between 1900 and 2100.",
+      message:
+        "Must be a year or a month, written YYYY or YYYY-MM, between 1900 and 2100.",
     });
     expect(
       serverFieldError("data.languages.1.name: Field required", identity)?.name,
