@@ -49,6 +49,8 @@ export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.org GIT_COMMITTER_NAME
 ORIGIN="$WORK/origin.git"
 REPO="$WORK/repo"
 export TMPDIR="$WORK/tmp"
+# The seconds an interrupted check gives its steps to end on SIGINT before it stops them.
+export LOCAL_CHECK_INT_GRACE=1
 mkdir -p "$TMPDIR"
 git init -q --bare -b main "$ORIGIN"
 git clone -q "$ORIGIN" "$REPO" 2>/dev/null

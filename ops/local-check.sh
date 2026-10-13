@@ -75,6 +75,7 @@ JOBS=""
 MIN_FREE_GB="${LOCAL_CHECK_MIN_FREE_GB:-12}"
 STEP_TIMEOUT="${LOCAL_CHECK_STEP_TIMEOUT:-1200}"
 KEEP_LOGS=10
+INT_GRACE="${LOCAL_CHECK_INT_GRACE:-8}"
 
 usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
 usage_error() {
@@ -121,6 +122,7 @@ while (($#)); do
   esac
 done
 [[ "$MIN_FREE_GB" =~ ^[0-9]+$ ]] || usage_error "LOCAL_CHECK_MIN_FREE_GB must be a number"
+[[ "$INT_GRACE" =~ ^[0-9]+$ ]] || usage_error "LOCAL_CHECK_INT_GRACE must be a number of seconds"
 [[ "$STEP_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || usage_error "LOCAL_CHECK_STEP_TIMEOUT must be a number of seconds"
 
 wanted() { # wanted <api|checks|journeys>: true when that CI job is part of this run
@@ -183,22 +185,37 @@ remove_docker_things() { # remove_docker_things [process id of a killed step ...
   [[ -z "$ids" ]] || docker image rm -f $ids >/dev/null 2>&1 || true
 }
 
+wait_gone() { # wait_gone <seconds> <process ids>: until none of them lives, at most that long
+  local left="$1" pid alive
+  while ((left > 0)); do
+    alive=0
+    for pid in $2; do
+      if kill -0 "$pid" 2>/dev/null; then alive=1; fi
+    done
+    ((alive)) || return 0
+    sleep 1
+    left=$((left - 1))
+  done
+}
+
 cleanup() {
   local rc=$? pids
   trap - EXIT INT TERM
   set +e
   pids="$(descendants $$)"
-  # shellcheck disable=SC2086
-  [[ -z "$pids" ]] || kill -TERM $pids 2>/dev/null
-  # What was stopped gets ten seconds to end, so that nothing makes a container after the removal
-  # below; then it is killed.
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
+  # First SIGINT, for the programs that end in order on it (pytest and its fixtures), and
+  # INT_GRACE seconds for them; then SIGTERM for what is left, ten seconds, and SIGKILL. Nothing
+  # of the check runs any more when its containers are removed below.
+  if [[ -n "$pids" ]]; then
     # shellcheck disable=SC2086
-    if [[ -z "$pids" ]] || ! kill -0 $pids 2>/dev/null; then break; fi
-    sleep 1
-  done
-  # shellcheck disable=SC2086
-  [[ -z "$pids" ]] || kill -KILL $pids 2>/dev/null
+    kill -INT $pids 2>/dev/null
+    wait_gone "$INT_GRACE" "$pids"
+    # shellcheck disable=SC2086
+    kill -TERM $pids 2>/dev/null
+    wait_gone 10 "$pids"
+    # shellcheck disable=SC2086
+    kill -KILL $pids 2>/dev/null
+  fi
   if [[ -n "$WORK" ]]; then
     # shellcheck disable=SC2086
     if docker_up; then remove_docker_things $pids; fi
@@ -318,6 +335,13 @@ not_run() { # not_run <name> <why>: a step that could not start counts as failed
   printf '%-26s FAIL %5ss  (%s)\n' "$1" 0 "$2"
 }
 
+# A step started here is a background job, and bash starts those with SIGINT ignored, which a
+# program inherits. pytest is given the default back: on Ctrl+C the cleanup sends it SIGINT and
+# its fixtures remove the containers they started (their names carry nothing of this check).
+interruptible() {
+  python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+}
+
 free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 
 # --- the steps: api --------------------------------------------------------------------------------
@@ -363,7 +387,7 @@ s_pytest() {
   cd api
   # shellcheck disable=SC1091
   . "$WORK/api.env"
-  uv run --frozen pytest tests -m "not docker" -p no:cacheprovider \
+  interruptible uv run --frozen pytest tests -m "not docker" -p no:cacheprovider \
     -n "$JOBS" --dist worksteal --cov --cov-report= --cov-fail-under=0 --durations=25
 }
 
@@ -377,7 +401,7 @@ s_pytest_docker() {
   cd api
   # shellcheck disable=SC1091
   . "$WORK/api.env"
-  uv run --frozen pytest -m docker -p no:cacheprovider --durations=10
+  interruptible uv run --frozen pytest -m docker -p no:cacheprovider --durations=10
 }
 
 s_scoring() {
@@ -394,8 +418,11 @@ lane_api() {
     return 0
   fi
   run_step ruff s_ruff || true
+  # The docker marked tests next to the suite: they share nothing with it (containers of their
+  # own, no coverage data). The scoring timing test after both, as alone as this lane can be.
+  run_step pytest-docker s_pytest_docker &
   if run_step pytest s_pytest; then run_step coverage s_coverage || true; fi
-  run_step pytest-docker s_pytest_docker || true
+  wait
   run_step scoring s_scoring || true
 }
 
@@ -463,8 +490,11 @@ services:
   parser:
     image: $PREFIX-worker:latest
 EOF
-  # As the CI step, from compose.yml alone (the fake ATS has nothing to build), with the names.
-  docker buildx bake --progress=plain -f compose.yml -f "$WORK/images.yml" --load api worker caddy
+  # As the CI step, from compose.yml alone (bake does not read a second compose file the way
+  # compose does: "undefined network default"). The names of this check are given as tags.
+  docker buildx bake --progress=plain -f compose.yml --load \
+    --set "api.tags=$PREFIX-api:latest" --set "worker.tags=$PREFIX-worker:latest" \
+    --set "caddy.tags=$PREFIX-caddy:latest" api worker caddy
 }
 
 lane_images() {
@@ -650,7 +680,10 @@ else
   export UV_NATIVE_TLS="${UV_NATIVE_TLS:-1}" FORCE_COLOR=0 CI=true
   cores="$(getconf _NPROCESSORS_ONLN)"
   [[ -n "$JOBS" ]] || JOBS=$((cores > 3 ? cores - 2 : 1))
-  WEB_JOBS=$((JOBS > 3 ? JOBS / 2 : 2))
+  # Vitest keeps the 3 workers CI gave it: it is not what the check waits for (the api lane is),
+  # and on 5 workers next to the other lanes a countdown test of the account page, which reads
+  # the real clock, failed once (measured on 2026-10-13).
+  WEB_JOBS="${LOCAL_CHECK_VITEST_WORKERS:-3}"
   STACKS="${LOCAL_CHECK_STACKS:-}"
   if [[ -z "$STACKS" ]]; then
     STACKS=$(($(docker info --format '{{.MemTotal}}') / 4294967296))
