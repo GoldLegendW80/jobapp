@@ -28,8 +28,10 @@ does two things, in this order.
 How it caps: a declared Content-Length over the limit is refused with 413 before a byte of body
 is read; otherwise the body is counted as it streams and, at the first byte past the limit, the
 app is told the body ended, so it reads and buffers no more, and whatever it then answers is
-replaced by the 413. A body that brings nothing for BODY_READ_IDLE_S is ended the same way and
-answered 408. The refusal is sent from here, not raised: of the exceptions that reach FastAPI
+replaced by the 413. A body that brings nothing for BODY_READ_IDLE_S, or is not whole after
+BODY_READ_TOTAL_S, is ended the same way and answered 408.
+
+The refusal is sent from here, not raised: of the exceptions that reach FastAPI
 while it reads a body, only its own HTTPException keeps its status, any other becomes a 400
 (routing.py, "There was an error parsing the body"). What the server then does with the
 connection and with the rest of the body is uvicorn's business and was not examined.
@@ -68,11 +70,14 @@ SELF_LIMITED: frozenset[tuple[str, str]] = frozenset(
 TOO_LARGE = "The request body is too large."
 TOO_SLOW = "The request body stopped arriving."
 
-# A capped body (small JSON) must bring a chunk at least this often, else the read is abandoned
-# with 408. Very generous: an honest body arrives at once, so only a stalled or trickled body is
-# cut. Caddy's read_body_idle (15s) fires first in front; this is the second line for direct
-# access. Read at call time so a test can lower it.
+# The time a capped body (JSON, at most DEFAULT_MAX_BYTES) has to arrive: it must bring a chunk
+# at least every BODY_READ_IDLE_S, and be whole within BODY_READ_TOTAL_S, else the read is
+# abandoned with 408. The second bound is for a body sent a byte now and then, which no idle
+# rule ends. Both are far above an honest body, which arrives at once. Caddy in front ends a
+# request after a minute without a byte; these come first. The routes of SELF_LIMITED keep
+# their own rules. Read at call time so a test can lower them.
 BODY_READ_IDLE_S = 20.0
+BODY_READ_TOTAL_S = 60.0
 
 
 def limit_for(method: str, path: str) -> int | None:
@@ -172,6 +177,8 @@ class LimitRequestBodyMiddleware:
             await _send_error(send, 413, TOO_LARGE)  # refuse before reading a byte of body
             return
 
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + BODY_READ_TOTAL_S
         received = 0
         over_size = False
         over_time = False
@@ -184,8 +191,11 @@ class LimitRequestBodyMiddleware:
                 # The body is read (or already cut): a later receive is the app waiting for a
                 # disconnect, never more body, so it must not carry the idle timeout.
                 return await receive()
+            left = min(BODY_READ_IDLE_S, deadline - loop.time())
             try:
-                message = await asyncio.wait_for(receive(), BODY_READ_IDLE_S)
+                if left <= 0:
+                    raise TimeoutError
+                message = await asyncio.wait_for(receive(), left)
             except TimeoutError:
                 over_time = True
                 body_done = True

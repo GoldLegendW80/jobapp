@@ -212,6 +212,32 @@ def test_a_slow_but_progressing_body_is_not_cut(monkeypatch: pytest.MonkeyPatch)
     assert body_of(sent) == {"read": 6}
 
 
+def test_a_body_sent_a_byte_now_and_then_is_408_after_the_total_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Every byte comes well inside the idle window, so only the total time can end it.
+    monkeypatch.setattr(bl, "BODY_READ_IDLE_S", 5.0)
+    monkeypatch.setattr(bl, "BODY_READ_TOTAL_S", 0.2)
+    sent: list[Message] = []
+    chunks = 0
+
+    async def run() -> None:
+        async def receive() -> Message:
+            nonlocal chunks
+            await asyncio.sleep(0.02)
+            chunks += 1
+            return {"type": "http.request", "body": b"a", "more_body": True}
+
+        async def send(message: Message) -> None:
+            sent.append(message)
+
+        await LimitRequestBodyMiddleware(echo_app)(scope("POST", "/api/auth/login"), receive, send)
+
+    asyncio.run(asyncio.wait_for(run(), 5))
+    assert status_of(sent) == 408
+    assert 1 <= chunks < 100  # it was being read, and it was ended long before the idle time
+
+
 # --- no session, no body -----------------------------------------------------------------------
 
 

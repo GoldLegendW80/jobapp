@@ -261,36 +261,46 @@ csrf=(-H 'X-Requested-With: jobapp' -H 'Content-Type: application/json')
 [[ "$(curl_c /api/jobs/import -X POST "${csrf[@]}" --data-binary @<(big 200000))" == "401" ]] \
   && grep -q 'Sign in to continue' "$CURL_DIR/b" || fail "200 KB to a route outside /api/auth/ did not reach the api"
 ok "public /api/auth/ routes capped at 64 KiB, other routes keep 10 MiB"
-# A connection that stalls is cut by caddy's shortened timeouts, not held for a minute. A stalled
-# body on a public route is answered 413 (its declared length is over 64 KiB) within ~15s
-# (read_body_idle); slow headers are cut within ~10s (read_header). The api never sees the body.
-python3 - "$HTTP_PORT" <<'PY' || fail "caddy did not cut stalled connections within the timeouts"
+# Request headers that never finish are dropped by caddy after read_header (10s), not after its
+# default minute. (A stalled body is left to caddy's default of one minute and, before that, to
+# the api's own rules.)
+python3 - "$HTTP_PORT" <<'PY' || fail "caddy did not drop a request whose headers never finish within 20s"
 import socket, sys, time
-port = int(sys.argv[1])
-def hold(head, send_body):
-    s = socket.create_connection(("127.0.0.1", port), timeout=5); s.settimeout(30)
-    s.sendall(head); s.sendall(send_body)
-    start = time.monotonic()
-    try:
-        data = s.recv(32)
-    except OSError:
-        data = b""
-    finally:
-        s.close()
-    return time.monotonic() - start, data
-t, data = hold(
-    b"POST /api/auth/login HTTP/1.1\r\nHost: x\r\nX-Requested-With: jobapp\r\n"
-    b"Content-Type: application/json\r\nContent-Length: 9000000\r\n\r\n",
-    b'{"email":"a@b.co","password":"' + b"x" * 10,
-)
-assert t < 25, f"stalled body held {t:.1f}s"
-assert b"413" in data, f"stalled body answer: {data!r}"
-t, _ = hold(b"POST /api/auth/login HTTP/1.1\r\nHost: x\r\nX-Partial", b"")
-assert t < 20, f"slow header held {t:.1f}s"
-print("stalled body cut within", round(t, 1), "s; slow header cut too")
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+s.settimeout(30)
+s.sendall(b"POST /api/auth/login HTTP/1.1\r\nHost: x\r\nX-Partial")
+start = time.monotonic()
+try:
+    s.recv(32)
+except OSError:
+    pass
+finally:
+    s.close()
+held = time.monotonic() - start
+assert held < 20, f"held {held:.1f}s"
 PY
-ok "stalled bodies and slow headers are cut within caddy's shortened timeouts"
+ok "unfinished request headers are dropped within caddy's read_header timeout"
 # --- end public route body limit and timeouts ------------------------------------------------
+# The upload of a document is the one route that takes 20 MiB (SPEC-ingestion.md, task G1).
+# No session here: a body that Caddy lets through reaches the api, which answers 401; a body
+# over the limit is Caddy's own 413.
+up=/api/ingestion/documents
+csrf=(-H 'X-Requested-With: jobapp')
+[[ "$(curl_c "$up" -X POST "${csrf[@]}" --data-binary @<(big 20971520))" == "401" ]] || fail "20 MiB did not reach the api on $up"
+[[ "$(curl_c "$up" -X POST "${csrf[@]}" --data-binary @<(big 20971521))" == "413" ]] || fail "20 MiB + 1 not refused on $up"
+[[ "$(curl_c "$up" -X POST "${csrf[@]}" --data-binary @<(big 10485761))" == "401" ]] || fail "10 MiB + 1 did not reach the api on $up"
+for other in "$up/text" "$up/" "/API/INGESTION/DOCUMENTS" /api/ingestion//documents /api/ingestion/./documents \
+  "$up/00000000-0000-4000-8000-000000000000/confirm" /api/ingestion/other; do
+  [[ "$(curl_c "$other" -X POST "${csrf[@]}" --data-binary @<(big 10485761))" == "413" ]] || fail "10 MiB + 1 not refused on POST $other"
+done
+for method in PUT PATCH DELETE; do
+  [[ "$(curl_c "$up" -X "$method" "${csrf[@]}" --data-binary @<(big 10485761))" == "413" ]] || fail "10 MiB + 1 not refused on $method $up"
+done
+ok "20 MiB on POST $up only: its other spellings, its other methods and every other route keep 10 MiB"
+curl_c "$up" -X POST "${csrf[@]}" -H "X-Filename: UTF-8''smoke-private-name.txt" --data-binary 'x' >/dev/null
+sleep 1
+"${DEV[@]}" logs --no-color caddy 2>/dev/null | grep -qi 'smoke-private-name\|x-filename' && fail "caddy logs the name of an uploaded document"
+ok "the name of an uploaded document (X-Filename) is in no caddy log line"
 
 step "caddy: headers and streaming limit, against an echo stand-in for the api"
 "${DEV[@]}" stop api >/dev/null 2>&1
@@ -318,6 +328,13 @@ ok "api sees /api prefix, X-Request-ID, X-Forwarded-For (spoof replaced), -Proto
 [[ "$(curl_c /api/echo -X POST -H 'Transfer-Encoding: chunked' --data-binary @<(big 5000000))" == "200" ]] \
   && grep -q '"body_bytes": 5000000' "$CURL_DIR/b" || fail "chunked 5 MB body not delivered whole"
 ok "chunked bodies: 5 MB delivered whole, 12 MB cut with 413"
+[[ "$(curl_c /api/ingestion/documents -X POST -H 'Transfer-Encoding: chunked' --data-binary @<(big 12000000))" == "200" ]] \
+  && grep -q '"body_bytes": 12000000' "$CURL_DIR/b" || fail "chunked 12 MB body not delivered whole on the upload route"
+[[ "$(curl_c /api/ingestion/documents -X POST -H 'Transfer-Encoding: chunked' --data-binary @<(big 21000000))" == "413" ]] \
+  || fail "chunked body over 20 MiB not cut on the upload route"
+[[ "$(curl_c /api/ingestion/documents/text -X POST -H 'Transfer-Encoding: chunked' --data-binary @<(big 12000000))" == "413" ]] \
+  || fail "chunked 12 MB body not cut on another ingestion route"
+ok "chunked bodies on the upload route: 12 MB delivered whole, 21 MB cut with 413; 12 MB cut on its neighbour"
 docker rm -f -v "$ECHO_NAME" >/dev/null
 
 step "caddy: api stopped gives 502 at once, database down passes the 503 through"

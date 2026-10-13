@@ -24,30 +24,28 @@
 		output stdout
 		format json
 	}
-	# Connection timeouts against slow clients (issue #100). These are the Caddy defaults made
-	# shorter: a caller with no session that opens a connection and then sends its headers or its
-	# body one slow byte at a time, or a trickle, no longer ties up a connection and the api
-	# behind it for a minute at a time.
-	#   read_header 10s   headers must arrive within 10s, else the connection is dropped (default
-	#                     1m). A real client sends them in milliseconds.
-	#   read_body_idle 15s 1024   a request body that brings nothing for 15s, OR that never
-	#                     sustains 1024 bytes/second averaged from the start, is aborted (default
-	#                     1m and no rate, so a trickle of one byte now and then was never cut).
-	#                     The deadline resets on real progress and the rate allowance grows with
-	#                     the bytes sent, so an honest upload of several MiB on a slow line is
-	#                     unaffected (its allowance runs to many minutes); only a stall or a near
-	#                     zero trickle is cut.
-	#   idle 60s          an idle keep-alive connection waiting for its next request is closed
-	#                     after 60s (default 5m). An event stream is an active response, not an
-	#                     idle connection, so it is never cut by this (tested).
-	# Writes keep their defaults: write_idle stays 1m, no write rate, so a long lived event
-	# stream (a heartbeat well inside a minute) is never cut. These must be set per server: a
-	# `servers` block with an address replaces the global one rather than merging, so the same
-	# timeouts appear in the :8080 block below. The published :80 listener takes them from here.
+	# Connection timeouts against slow clients (issue #100), where Caddy's defaults are long:
+	#   read_header 10s   request headers must arrive within 10s, else the connection is dropped
+	#                     (default 1m). A real client sends them in milliseconds.
+	#   idle 60s          a keep-alive connection waiting for its next request is closed after
+	#                     60s (default 5m). An event stream is a response being written, not an
+	#                     idle connection.
+	# Left at Caddy's defaults on purpose:
+	#   read_body_idle    1m without a byte of request body ends the request. Not shortened: the
+	#                     document upload and the paste answer a stalled body themselves, after
+	#                     30s and 60s (SPEC-ingestion.md), and their sentence must reach the user
+	#                     first. Not given a minimum rate either: with a rate Caddy replaces the
+	#                     idle window by a budget counted from the start (the time plus one second
+	#                     per that many bytes), so a body that sends much and then stalls would
+	#                     stay far longer than a minute. The small bodies of the public routes
+	#                     are timed by the api (api/app/body_limit.py).
+	#   write_idle        1m, no rate: an event stream writes a heartbeat every 15s.
+	# These are set per server: a `servers` block with an address replaces the global one, it
+	# does not merge with it (seen in the adapted config), so the same timeouts are repeated in
+	# the :8080 block below. The published :80 listener takes them from here.
 	servers {
 		timeouts {
 			read_header 10s
-			read_body_idle 15s 1024
 			idle 60s
 		}
 	}
@@ -61,7 +59,6 @@
 		client_ip_headers X-Forwarded-For
 		timeouts {
 			read_header 10s
-			read_body_idle 15s 1024
 			idle 60s
 		}
 	}
@@ -85,46 +82,56 @@
 	# Access log, one JSON line per request on stdout. Cookie, Set-Cookie and Authorization are
 	# redacted by default. Invite and reset tokens travel in the path (/invite/<token>,
 	# /reset/<token>, /api/auth/invites/<token>) and, once such a page calls the api, in the
-	# Referer: both are masked so no log line holds a usable link.
+	# Referer: both are masked so no log line holds a usable link. The name of an uploaded
+	# document travels in X-Filename (POST /api/ingestion/documents): removed, no log holds it.
 	log {
 		output stdout
 		format filter {
 			wrap json
 			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+" "${1}[redacted]"
 			request>headers>Referer regexp "(/(?:invites?|reset)/)[^/?#]+" "${1}[redacted]"
+			request>headers>X-Filename delete
 		}
 	}
 
 	encode zstd gzip
 
-	# --- request body limits by route class (issue #100) ----------------------------------------
-	# The only routes a caller with no session can reach are the public ones under /api/auth/
-	# (sign in, sign out, invite or reset link check and accept); their bodies are a few hundred
-	# bytes. Capping them small at the edge stops a caller with no session from making the api
-	# buffer a large body: fifty stalled 9 MiB logins were enough to reach the api's 512 MiB
-	# limit before this. Every other route keeps the default, 10 MiB (raise it per route if an
-	# upload needs more, as the document upload does, below or in a later change).
-	#
-	# Each request matches exactly one request_body (and one error), chosen by a mutually
-	# exclusive expression, so a body is capped once. The match is on the raw decoded path with
-	# startsWith, not the `path` matcher, which lowercases and cleans the path first: here that is
-	# safe because an over-match only tightens the public 64 KiB limit and never loosens the
-	# default. A declared Content-Length above the limit is refused with 413 before anything is
-	# proxied; a chunked body is cut at the limit while it streams, and the read fails with 413.
-	# This block is kept together to ease the merge with the document upload limit of pull
-	# request #98, which adds a 20 MiB exception on POST /api/ingestion/documents as a further,
-	# mutually exclusive tier between the two here.
+	# --- request body limits by route class (issues #100 and ingestion G1) ----------------------
+	# Three classes, each request in exactly one, so a body is capped once:
+	#   public    the routes under /api/auth/ (sign in, sign out, invite or reset link check and
+	#             accept, the account routes): 64 KiB. They are the only routes that read a body
+	#             from a caller with no session, and such a body is a few hundred bytes. Before
+	#             this limit, fifty stalled 9 MiB sign ins reached the api's 512 MiB (issue #100).
+	#   upload    the upload of a document (POST /api/ingestion/documents, SPEC-ingestion.md),
+	#             which the api itself counts while it reads: 20 MiB.
+	#   default   everything else: 10 MiB.
+	# How each is matched. The upload is matched as the api routes it: the method, and the decoded
+	# path compared as a whole string. The path and path_regexp matchers would not do: they ignore
+	# case or clean the path first, so /api/ingestion//documents, which the api answers 404, would
+	# get the larger limit. So /api/ingestion/documents/text, a trailing slash, a doubled slash,
+	# another case and another method all keep 10 MiB. The public class is a prefix of the same
+	# decoded path: it is the smallest limit, so matching too much only tightens. The two cannot
+	# both hold, and the default is neither.
+	# A declared Content-Length above the limit is refused with 413 before anything is proxied; a
+	# chunked body is cut at the limit while it streams, and the read fails with 413. Both rules
+	# exist once per class.
 	@public_body expression `{http.request.uri.path}.startsWith("/api/auth/")`
-	@default_body expression `!({http.request.uri.path}.startsWith("/api/auth/"))`
+	@document_upload expression `{http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents"`
+	@default_body expression `!({http.request.uri.path}.startsWith("/api/auth/")) && !({http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents")`
 	request_body @public_body {
 		max_size 64KiB
+	}
+	request_body @document_upload {
+		max_size 20MiB
 	}
 	request_body @default_body {
 		max_size 10MiB
 	}
 	@public_too_large expression `{http.request.uri.path}.startsWith("/api/auth/") && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 65536`
-	@default_too_large expression `!({http.request.uri.path}.startsWith("/api/auth/")) && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 10485760`
+	@document_too_large expression `{http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents" && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 20971520`
+	@default_too_large expression `!({http.request.uri.path}.startsWith("/api/auth/")) && !({http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents") && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 10485760`
 	error @public_too_large 413
+	error @document_too_large 413
 	error @default_too_large 413
 	# --- end request body limits -----------------------------------------------------------------
 

@@ -127,6 +127,55 @@ class CheckTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             repo.problems()
 
+    def prefixed(self, specs: list[str]) -> Repo:
+        """A repository whose workflow also runs a config that takes every module-*.spec.ts."""
+        workflow = (
+            WORKFLOW
+            + "      - run: pnpm exec playwright test -c e2e/module-all.config.ts\n"
+        )
+        repo = self.repo(workflow=workflow, specs=[*ON_DISK, *specs])
+        (repo.root / "web/e2e/module-all.config.ts").write_text(
+            'const SPEC_PREFIX = "module-";\nexport default {};\n', encoding="utf-8"
+        )
+        return repo
+
+    def test_a_config_with_a_prefix_covers_every_spec_named_with_it(self) -> None:
+        repo = self.prefixed(["module-a", "module-b2"])
+        self.assertEqual(repo.problems(), [])
+        self.assertEqual(
+            [name for name in e2e_groups.specs_in_ci(repo.root) if "module" in name],
+            ["module-a.spec.ts", "module-b2.spec.ts"],
+        )
+
+    def test_a_spec_added_under_the_prefix_needs_no_change_to_the_workflow(
+        self,
+    ) -> None:
+        repo = self.prefixed(["module-a"])
+        (repo.root / "web/e2e/module-new-task.spec.ts").write_text("", encoding="utf-8")
+        self.assertEqual(repo.problems(), [])
+
+    def test_a_prefix_covers_nothing_else(self) -> None:
+        # "module-" covers neither "my-module-a" nor "modules", and a config file is no spec.
+        problems = self.prefixed(["module-a", "my-module-a", "modules"]).problems()
+        self.assertEqual(len(problems), 2)
+        self.assertIn("modules.spec.ts is in no e2e group", problems[0])
+        self.assertIn("my-module-a.spec.ts is in no e2e group", problems[1])
+
+    def test_a_prefixed_spec_also_named_in_a_command_runs_twice(self) -> None:
+        repo = self.prefixed(["module-a"])
+        workflow = repo.root / ".github/workflows/ci.yml"
+        workflow.write_text(
+            workflow.read_text(encoding="utf-8")
+            + "      - run: pnpm exec playwright test module-a.spec.ts\n",
+            encoding="utf-8",
+        )
+        problems = repo.problems()
+        self.assertEqual(len(problems), 1)
+        self.assertIn("module-a.spec.ts is run 2 times", problems[0])
+
+    def test_a_prefix_with_no_spec_covers_nothing(self) -> None:
+        self.assertEqual(self.prefixed([]).problems(), [])
+
     def test_command_line_exit_status_and_message(self) -> None:
         good = self.repo(specs=[n for n in ON_DISK if n != "manual"])
         # The real NOT_IN_CI applies on the command line: its entries have no file here.
@@ -158,8 +207,15 @@ class ThisRepositoryTest(unittest.TestCase):
 
     def test_the_real_groups_are_the_known_ones(self) -> None:
         # The identity chain (9), the sweep (1) and the apps group (6: agents-streaming.spec.ts
-        # joined it with issue #33).
-        self.assertEqual(len(set(e2e_groups.specs_in_ci(self.ROOT))), 16)
+        # joined it with issue #33), each named one by one; and the ingestion group, which
+        # takes every ingestion-*.spec.ts through its config, so its count grows with the
+        # module and is not written here.
+        ran = set(e2e_groups.specs_in_ci(self.ROOT))
+        ingestion = {name for name in ran if name.startswith("ingestion-")}
+        self.assertEqual(len(ran - ingestion), 16)
+        self.assertIn("ingestion-g1.spec.ts", ingestion)
+        on_disk = {p.name for p in (self.ROOT / "web/e2e").glob("ingestion-*.spec.ts")}
+        self.assertEqual(ingestion, on_disk)
 
     def test_every_exclusion_has_a_reason(self) -> None:
         for name, reason in e2e_groups.NOT_IN_CI.items():

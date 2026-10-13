@@ -90,6 +90,28 @@ def test_unhandled_error_is_500_json() -> None:
     assert "kaboom" not in response.text
 
 
+def test_an_unhandled_error_under_the_ingestion_routes_is_never_stored() -> None:
+    """The 500 is built outside every middleware, the ingestion module's no-store included."""
+    app = create_app(make_settings(UNREACHABLE))
+    app.dependency_overrides[default_deny] = lambda: None
+
+    @app.get("/api/ingestion/boom")
+    def private_boom() -> None:
+        raise RuntimeError("kaboom")
+
+    @app.get("/api/boom")
+    def boom() -> None:
+        raise RuntimeError("kaboom")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        private = client.get("/api/ingestion/boom")
+        other = client.get("/api/boom")
+    assert (private.status_code, other.status_code) == (500, 500)
+    assert private.json() == {"detail": "internal server error"}
+    assert private.headers["cache-control"] == "no-store"
+    assert "cache-control" not in other.headers
+
+
 def test_logs_are_one_json_object_per_line(capsys: pytest.CaptureFixture[str]) -> None:
     with TestClient(create_app(make_settings(UNREACHABLE))) as client:
         client.get("/nope", headers={"X-Request-ID": "trace-1"})

@@ -28,6 +28,9 @@ from app.identity import service as identity_service
 from app.identity import throttle as identity_throttle
 from app.identity.admin_router import router as admin_router
 from app.identity.router import router as auth_router
+from app.ingestion.routers import no_store as ingestion_no_store
+from app.ingestion.routers import private as ingestion_private
+from app.ingestion.routers import routers as ingestion_routers
 from app.jobs.router import router as jobs_router
 from app.jobs.sweep_router import router as sweeps_router
 from app.logging_config import configure_logging
@@ -147,6 +150,8 @@ def create_app(
     )
     app.middleware("http")(identity_deps.session_cookie_middleware)
     app.middleware("http")(identity_deps.csrf_middleware)
+    # Around the two above, so the 401 and the 403 of an ingestion route are never cached.
+    app.middleware("http")(ingestion_no_store)
 
     @app.middleware("http")
     async def request_log(
@@ -178,7 +183,11 @@ def create_app(
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("unhandled error", extra={"path": request.url.path})
-        return JSONResponse(status_code=500, content={"detail": "internal server error"})
+        # Built outside every middleware: the no-store of the ingestion routes is set here.
+        headers = {"Cache-Control": "no-store"} if ingestion_private(request.url.path) else None
+        return JSONResponse(
+            status_code=500, content={"detail": "internal server error"}, headers=headers
+        )
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
@@ -196,5 +205,7 @@ def create_app(
     app.include_router(agent_runs_router.router)
     app.include_router(proposals_router.router)
     app.include_router(chat_router.router)
+    for ingestion_router in ingestion_routers:
+        app.include_router(ingestion_router)
     identity_deps.assert_default_deny(app)
     return app

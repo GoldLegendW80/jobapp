@@ -1,0 +1,14 @@
+{
+  "date": "2026-10-11T11:19:19.048Z",
+  "what": "api container, two uploads of 20 MiB at once by two users, through Caddy",
+  "limit_bytes": 536870912,
+  "before_bytes": 153112576,
+  "highest_sample_bytes": 215523328,
+  "rise_bytes": 62410752,
+  "peak_since_start_bytes": 217755648,
+  "samples": 120,
+  "seconds_for_both": 0.702,
+  "oom_kill": "0",
+  "db_peak_bytes": 500129792,
+  "db_limit_bytes": 805306368
+}

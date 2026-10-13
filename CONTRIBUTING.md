@@ -25,7 +25,8 @@ in the job folder that holds this repository (it is not part of the repository).
    `api` (ruff, the whole pytest suite against Postgres and Redis, the coverage floor of 95
    percent, the docker marked tests), `checks` (pre-commit, the secret scan of every commit
    the pull request brings, shellcheck, the `tests/*.sh`
-   scripts and the guards, then the e2e group apps) and `journeys` (eslint, tsc, build, Vitest,
+   scripts and the guards, then the e2e groups apps and ingestion) and `journeys` (eslint, tsc,
+   build, Vitest,
    then the e2e groups identity and sweep; every e2e group against its own scratch Compose
    stack). The run must be green: all three jobs, none of which can be skipped. A pull request
    that touches documentation only (`tasks/`, `docs/`, `CONTRIBUTING.md`, `CAPABILITY-MAP.md`,
@@ -36,7 +37,9 @@ in the job folder that holds this repository (it is not part of the repository).
    request against `main` is narrowed this way: one against another branch (stacked on an
    unmerged pull request) runs everything, whatever it touches. A new
    `web/e2e/*.spec.ts` joins one of the e2e groups in the workflow, or the exclusion list of
-   `.github/scripts/e2e_groups.py` with its reason; CI fails otherwise. Every step of `ci.yml`
+   `.github/scripts/e2e_groups.py` with its reason; CI fails otherwise. A spec of the ingestion
+   module is named `ingestion-<task>.spec.ts` and joins its group by that name alone
+   (`web/e2e/ingestion-all.config.ts` runs them all). Every step of `ci.yml`
    has an `id` and is listed in `.github/scripts/ci_plan.py`: a new check under its unit in
    `LANES`, with a condition on that unit's plan output, anything else in `SUPPORT`.
    `ci_plan_test.py` fails on a step that is in no list, on a check that does not follow its
