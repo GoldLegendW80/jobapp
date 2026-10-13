@@ -22,6 +22,13 @@ request in flight is cut and never answered, a pending hook is cancelled); a hoo
 `continue_: False` ends the turn with a `success` result whose terminal reason is
 `hook_stopped`.
 
+`lasting` sets how long chosen requests stay in flight ({request number: seconds}, the first
+request is 1) instead of `request_s`, and a request in flight is answered only when that time
+has passed, unless the run is interrupted first. A real request lasts seconds and the runner
+needs milliseconds to interrupt it; a timer of a few milliseconds is not that, and on a loaded
+machine it can run out before the runner's interrupt lands. A test that asserts "this request
+was cut" makes it last long, so its outcome does not depend on the speed of the machine.
+
 Options for the cases the real CLI is not known to produce but the runner must survive:
 `hook_id` asks the gate under another call id than the one the message carries (the gate's
 wait then ends without its message), `hook_first` asks the gate before the message of the call
@@ -74,11 +81,13 @@ class PushBackend:
         turns: list[Turn],
         *,
         request_s: float = 0.005,
+        lasting: dict[int, float] | None = None,
         hook_id: str | None = None,
         hook_first: bool = False,
     ) -> None:
         self.turns = turns
         self.request_s = request_s
+        self.lasting = lasting or {}
         self.hook_id = hook_id
         self.hook_first = hook_first
         self.sent: list[float] = []
@@ -131,7 +140,7 @@ class PushBackend:
             for index, turn in enumerate(self.turns, 1):
                 # The request leaves now, whatever the runner is doing.
                 self.sent.append(time.monotonic())
-                if await self._cut(self.request_s):
+                if await self._cut(self.lasting.get(index, self.request_s)):
                     put(self._result("error_during_execution", True, "aborted_streaming"))
                     return
                 self.answered += 1

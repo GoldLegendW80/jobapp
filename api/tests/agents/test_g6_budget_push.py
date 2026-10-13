@@ -43,6 +43,10 @@ BUILT_IN = "Bash"
 INVENTED = "mcp__app__made_up"
 TURNS = 8  # eight requests that call a tool, a ninth that answers
 BUDGET = 2500
+# How long the request that leaves right after the one that reached the budget stays in flight.
+# A real request lasts seconds, the runner's interrupt lands in milliseconds: the request is cut.
+# With a timer of a few milliseconds this was a race against the machine (see the first test).
+IN_FLIGHT_S = 5.0
 REACHING = 3
 assert (REACHING - 1) * COUNTED < BUDGET <= REACHING * COUNTED
 
@@ -106,10 +110,25 @@ def test_the_run_is_stopped_at_the_request_that_reached_its_budget_or_the_next(
     """Whatever the model calls and however slow the event writes are. A tool of the agent: the
     gate is asked and stops the turn, no request follows the one that reached the budget. Any
     other name: the backend answers the call itself, as the CLI does, and its next request has
-    left when the interrupt lands, which cuts it; never a third."""
+    left when the interrupt lands, which cuts it; never a third.
+
+    What the runner promises is that it interrupts as soon as it has counted the reaching
+    message, without waiting on anything (module docstring of app/agents/runner.py): at most
+    the one request that had already left is out when it does. Whether that request is cut or
+    answered is a race between the interrupt and the request's own duration, which nothing
+    orders. The real CLI's request lasts seconds, so it is cut; with a timer of 5 ms, as the
+    backend first did, a loaded machine made the timer run out before the interrupt's few
+    event loop turns (the count, the wake of the watcher, the interrupt call) and a fourth
+    request was answered (`assert 4 == 3`, full check of 2026-10-13), the runner having done
+    all it promises. So the request that leaves after the reaching one stays in flight until
+    cut (`lasting`), and what is asserted no longer depends on the machine's speed: it is cut,
+    never answered, and none leaves after it. The requests before it stay fast, the budget is
+    reached by the third."""
     tool, request_s, write_s = CASES[case]
     slow_writes(monkeypatch, write_s)
-    backend = PushBackend(looping(tool, TURNS), request_s=request_s)
+    backend = PushBackend(
+        looping(tool, TURNS), request_s=request_s, lasting={REACHING + 1: IN_FLIGHT_S}
+    )
     run_id = new_run(factory, alice_id, {"token_budget": BUDGET}, agent="g6_push")
     rc = run_context(settings, factory, keyring, STEP, backends=backend)
     assert execute(rc, run_id) is RunStatus.failed
@@ -165,7 +184,9 @@ def test_a_run_cut_while_its_events_are_still_being_written_records_what_it_used
     message were taken when they came off the stream, so the figures on the run are whole even
     though its log is not."""
     slow_writes(monkeypatch, 0.3)
-    backend = PushBackend(looping(BUILT_IN, TURNS), request_s=0.01)
+    backend = PushBackend(
+        looping(BUILT_IN, TURNS), request_s=0.01, lasting={REACHING + 1: IN_FLIGHT_S}
+    )
     run_id = new_run(factory, alice_id, {"token_budget": BUDGET}, agent="g6_push")
     rc = run_context(settings, factory, keyring, STEP, backends=backend, interrupt_grace_s=0.2)
     assert execute(rc, run_id) is RunStatus.failed
@@ -204,9 +225,11 @@ def test_a_turn_that_goes_on_without_any_tool_call(
     """An answer the API cut or paused, after which Claude Code would send a new request by
     itself. Nothing in the reaching message says the turn will go on: only the next request
     does, when its first message arrives. So that request is answered, and the one after it,
-    which this backend sends at once, is cut by the interrupt: the worst this path can do."""
+    which this backend sends at once, is cut by the interrupt: the worst this path can do. The
+    fifth request stays in flight until cut, as in the first test of this file: its being cut
+    is the real CLI's behaviour (a request lasts seconds), not a race with a 5 ms timer."""
     parts = [Turn(f"Part {n}.", goes_on=True) for n in range(1, TURNS + 1)]
-    backend = PushBackend([*parts, Turn("The end.")])
+    backend = PushBackend([*parts, Turn("The end.")], lasting={REACHING + 2: IN_FLIGHT_S})
     run_id = new_run(factory, alice_id, {"token_budget": BUDGET}, agent="g6_push")
     rc = run_context(settings, factory, keyring, STEP, backends=backend)
     assert execute(rc, run_id) is RunStatus.failed

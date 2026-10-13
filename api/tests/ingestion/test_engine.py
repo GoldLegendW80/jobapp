@@ -1737,7 +1737,10 @@ def test_the_overshoot_of_a_step_cut_at_the_ceiling_is_within_what_the_run_annou
     at its own pace as Claude Code does (tests/agents/push_backend.py) and calls a tool the gate
     never hears of: the worst case G6 measured. The requests that left after the one that
     reached the budget are counted and compared with what `GET /api/ingestion/runs/{id}` says
-    a run can pass its ceiling by; the tokens it reports are those of the answered requests."""
+    a run can pass its ceiling by; the tokens it reports are those of the answered requests.
+    The request after the reaching one lasts 5 s (`lasting`) until the run cuts it, as a real
+    request lasts seconds: with a 5 ms timer it was a race against the interrupt on a loaded
+    machine and could be answered."""
     user = user_id(factory, CAROL)
     save_credential(factory, keyring, user)
     run_id = eh.start(factory, user, eh.documents(factory, user, 2))
@@ -1752,7 +1755,9 @@ def test_the_overshoot_of_a_step_cut_at_the_ceiling_is_within_what_the_run_annou
     (first,) = queue
     assert eh.running(factory, run_id).token_budget == ceiling  # the remainder, not the backstop
     reaching = -(-ceiling // COUNTED)  # the request whose count reaches the budget
-    backend = PushBackend(looping("Bash", reaching + 6), request_s=0.005)
+    backend = PushBackend(
+        looping("Bash", reaching + 6), request_s=0.005, lasting={reaching + 1: 5.0}
+    )
     context = run_context(
         settings,
         factory,
