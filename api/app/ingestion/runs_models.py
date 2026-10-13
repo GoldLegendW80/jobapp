@@ -16,9 +16,17 @@ What the rows are:
   when the document is read whole) or over a group of images (`kind = transcribe`:
   `image_positions`). `document_id` is no foreign key and `sha256` is copied: the step stays, with
   its status and tokens, when its document is deleted. `identity_hash` is `identity_hash()` below.
+  `sha256` is the hash of the file, which a document keeps for as long as its row lives, whatever
+  happens to its text. `text_sha256` is the hash of the stored text the step was planned on
+  (`text_sha256()` below), and it is what ties the step to a text: the same file uploaded again
+  over a row that may be replaced, or a later reading of it, changes the text and neither the id
+  nor the hash of the row. An extraction step reads and writes only while the text its document
+  stores is the one it carries, and a step that carries none is never bound.
 - An item is one checked candidate for the profile, stored by the tool of the step that read it:
   the cleaned value of the section model, its hash, and the citations the checker gave
-  (`[{start, end, excerpt}]`, offsets in the document's stored text). It is the only table of this
+  (`[{start, end, excerpt}]`, offsets in the text its step was planned on: it is an item of the
+  stored text only while that text is still the one stored, `tools.of_stored_text()`). It is the
+  only table of this
   half that holds words of a document, and it goes with its document: `(document_id, user_id)`
   references the document together with its user and cascades, so an item filed under another
   user than its document's cannot exist, whatever code writes it.
@@ -44,6 +52,7 @@ from sqlalchemy.dialects import postgresql as pg
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.ingestion import plan
+from app.ingestion.models import IngestionDocument
 from app.models_base import Base
 
 SHA256_BYTES = 32
@@ -96,6 +105,19 @@ def identity_hash(identity: plan.Identity) -> str:
         identity.model,
     ]
     return hashlib.sha256(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
+
+
+def text_sha256(text: str) -> bytes:
+    """What `ingestion_run_steps.text_sha256` holds: the SHA-256 of a document's stored text, in
+    UTF-8. Whoever creates an extraction step computes it on the very text the step's part was
+    cut from. The same value as `stored_text_sha256()` computes in the database."""
+    return hashlib.sha256(text.encode("utf-8")).digest()
+
+
+def stored_text_sha256() -> sa.ColumnElement[bytes]:
+    """The same hash, of the text `ingestion_documents` stores now, computed by Postgres (the
+    text does not leave the database). NULL for a document without text."""
+    return sa.func.sha256(sa.func.convert_to(IngestionDocument.text, "UTF8"))
 
 
 class IngestionRun(Base):
@@ -174,6 +196,10 @@ class IngestionRunStep(Base):
         sa.CheckConstraint(
             f"char_length(identity_hash) = {HASH_HEX_CHARS}", name="identity_hash_length"
         ),
+        sa.CheckConstraint(
+            f"text_sha256 IS NULL OR octet_length(text_sha256) = {SHA256_BYTES}",
+            name="text_sha256_length",
+        ),
         # An extraction step reads a part, whole (no range) or between two offsets in order; a
         # transcription step reads images.
         sa.CheckConstraint(
@@ -214,6 +240,9 @@ class IngestionRunStep(Base):
     range_end: Mapped[int | None] = mapped_column(sa.Integer)
     image_positions: Mapped[list[int] | None] = mapped_column(pg.ARRAY(sa.Integer))
     identity_hash: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # The stored text the step was planned on (`text_sha256()`). Null until that text exists (a
+    # part predicted before its pages are transcribed), and a step without it is never bound.
+    text_sha256: Mapped[bytes | None] = mapped_column(pg.BYTEA)
     status: Mapped[StepStatus] = mapped_column(
         STEP_STATUS_ENUM, nullable=False, server_default=StepStatus.planned.value
     )

@@ -12,9 +12,11 @@ document: the item's foreign key on `(document_id, user_id)` references the docu
 with its user, so an item can only be filed under the user of its document, and a deleted
 document takes its items with it. A step keeps the id and the hash of its document without a
 foreign key (the step row stays when the document goes), and its `agent_run_id` is set to null
-should that agent run ever be deleted. `uq_ingestion_runs_user_id_active` is the rule "at most
-one active run per user". The CHECK constraints are backstops (app/ingestion/runs_models.py says
-what each one is).
+should that agent run ever be deleted. `text_sha256` is the hash of the stored text the step was
+planned on: a document keeps its id and the hash of its file when its text is replaced, so this
+column is what tells that the text under a step is no longer the one it was cut from.
+`uq_ingestion_runs_user_id_active` is the rule "at most one active run per user". The CHECK
+constraints are backstops (app/ingestion/runs_models.py says what each one is).
 
 Expand only: new types and new tables, which the release before this one never reads or writes
 (CONTRIBUTING.md, Migrations). Deleting a user, a document or an agent run in that release
@@ -152,6 +154,7 @@ def upgrade() -> None:
         sa.Column("range_end", sa.Integer(), nullable=True),
         sa.Column("image_positions", pg.ARRAY(sa.Integer()), nullable=True),
         sa.Column("identity_hash", sa.Text(), nullable=False),
+        sa.Column("text_sha256", pg.BYTEA(), nullable=True),
         sa.Column(
             "status",
             pg.ENUM(*STEP_STATUSES, name="ingestion_step_status", create_type=False),
@@ -191,6 +194,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             f"char_length(identity_hash) = {HASH_HEX_CHARS}",
             name=op.f("ck_ingestion_run_steps_identity_hash_length"),
+        ),
+        sa.CheckConstraint(
+            f"text_sha256 IS NULL OR octet_length(text_sha256) = {SHA256_BYTES}",
+            name=op.f("ck_ingestion_run_steps_text_sha256_length"),
         ),
         sa.CheckConstraint(
             "(kind = 'extract' AND part IS NOT NULL AND part >= 0 "

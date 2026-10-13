@@ -3,6 +3,7 @@
 refuses, the retry budget and the counters, the bind hook, and that a tool bound to one user's
 step reads and writes nothing else, whatever its arguments say."""
 
+import hashlib
 import logging
 import uuid
 from collections.abc import Iterator
@@ -17,9 +18,15 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import definitions, runs
 from app.agents import tools as app_tools
 from app.agents.models import AgentRun, CredentialKind
-from app.ingestion import agents, citations, item_proposals, items, tools
+from app.ingestion import agents, citations, documents, item_proposals, items, tools
 from app.ingestion.models import IngestionDocument
-from app.ingestion.runs_models import StepStatus
+from app.ingestion.runs_models import (
+    IngestionItem,
+    IngestionRunStep,
+    StepStatus,
+    stored_text_sha256,
+    text_sha256,
+)
 from tests.agents.run_helpers import add_user, now
 from tests.ingestion.extract_helpers import (
     MARKER,
@@ -33,6 +40,7 @@ from tests.ingestion.extract_helpers import (
     delete_document,
     fixture,
     item,
+    items_of_stored_text,
     raw_answer,
     set_step,
     stored_items,
@@ -713,6 +721,133 @@ def test_the_document_deleted_during_the_step_tools_answer_not_found_and_nothing
     assert binding_of(factory, clean) is None
 
 
+def upload_again(factory: sessionmaker[Session], step: Step, body: bytes) -> str:
+    """The same file uploaded again, through the application's own path. Returns the text the row
+    holds afterwards: the row, its id and its hash are the ones it had."""
+    digest = hashlib.sha256(body).digest()
+    with factory() as db, db.begin():
+        stored = documents.store_file(db, step.user_id, "document.txt", body, digest, now())
+        assert stored.created
+        assert stored.document.id == step.document_id
+    with factory() as db:
+        held = db.execute(
+            sa.select(IngestionDocument.sha256, IngestionDocument.text).where(
+                IngestionDocument.id == step.document_id
+            )
+        ).one()
+    assert bytes(held[0]) == digest
+    return str(held[1])
+
+
+@pytest.mark.parametrize("same_length", [True, False], ids=["same_length", "another_length"])
+def test_the_text_replaced_under_the_same_id_and_hash_ends_the_step_and_nothing_more_is_stored(
+    factory: sessionmaker[Session],
+    alice_id: uuid.UUID,
+    same_length: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The file as the parser of the next release reads it. The row holds what the parser of
+    # today read of it, with a note: `documents.replaceable` once that release runs, so the same
+    # upload takes the row over.
+    new = CLEAN.replace("camille.durand@example.org", "mallory.durand@example.org")
+    if not same_length:
+        new += "\nOne more line, which the older parser had not read."
+    body = new.encode("utf-8")
+    document = add_document(factory, alice_id, CLEAN, digest=hashlib.sha256(body).digest())
+    with factory() as db, db.begin():
+        db.execute(
+            sa.update(IngestionDocument)
+            .where(IngestionDocument.id == document)
+            .values(note=documents.TRUNCATED_NOTE)
+        )
+    monkeypatch.setattr(documents, "PARSER_VERSION", documents.PARSER_VERSION + 1)
+    step = add_step(factory, alice_id, document)
+    step_tools = tools_for(factory, step)
+    fact = item("blocks", {"title": "Ingestion pipeline", "body": FACT_LINE}, FACT_LINE)
+    # One item stored first: the text is now prepared and kept by the write tool.
+    assert call(step_tools, PROPOSE, section="facts", items=[fact])[0]["stored"] == 1
+    other = add_document(factory, alice_id, CLEAN + "\nEnd.")
+    untouched = add_step(factory, alice_id, other, after=step)  # the same run, another document
+    assert call(tools_for(factory, untouched), PROPOSE, section="facts", items=[fact])[0] == {
+        "stored": 1,
+        "already_stored": 0,
+        "refused": [],
+    }
+    assert [row.id for row in items_of_stored_text(factory, step)] == [
+        row.id for row in stored_items(factory, step)
+    ]
+
+    stored_text = upload_again(factory, step, body)
+    assert stored_text != CLEAN
+    assert "camille.durand" not in stored_text
+    assert (len(stored_text) == len(CLEAN)) is same_length
+
+    # The old address, cited by its old line: the step was planned on a text that is gone.
+    assert call(step_tools, PROPOSE, section="identity", items=[EMAIL]) == (tools.NOT_FOUND, True)
+    assert call(step_tools, PROPOSE, section="facts", items=[fact]) == (tools.NOT_FOUND, True)
+    assert call(step_tools, READ, offset=0) == (tools.NOT_FOUND, True)
+    assert binding_of(factory, step) is None
+    with factory() as db, db.begin():  # a retry: a new agent run of the same step
+        again = runs.create_run(
+            db,
+            alice_id,
+            agents.EXTRACT_NAME,
+            None,
+            {"step_id": str(step.step_id)},
+            definitions.DEFAULT_MODEL,
+            now(),
+        )
+        db.flush()
+        db.execute(
+            sa.update(IngestionRunStep)
+            .where(IngestionRunStep.id == step.step_id)
+            .values(agent_run_id=again.id)
+        )
+        assert agents.bind_step(db, again) is None
+    # Nothing more was stored, the step row stays as it was, and the item stored before the
+    # replacement is still a row but no longer an item of the stored text.
+    assert len(stored_items(factory, step)) == 1
+    assert counters(factory, step) == (1, 0, 0)
+    assert items_of_stored_text(factory, step) == []
+    # The delete the chain runs before it merges takes that row and no other.
+    with factory() as db, db.begin():
+        gone = db.execute(
+            sa.delete(IngestionItem)
+            .where(IngestionItem.user_id == alice_id, sa.not_(tools.of_stored_text()))
+            .returning(IngestionItem.step_id)
+        ).scalars()
+        assert list(gone) == [step.step_id]
+    assert len(items_of_stored_text(factory, untouched)) == 1
+    assert all_items(factory) == 1
+
+
+def test_the_hash_of_a_text_is_the_same_in_python_and_in_postgres(
+    factory: sessionmaker[Session], alice_id: uuid.UUID
+) -> None:
+    texts = (
+        "plain",
+        "Zoé, naïve, \u00e9 and e\u0301",
+        "page one\x0c\x0cpage three",
+        "\U0001f600" * 3,
+    )
+    for text in texts:
+        document = add_document(factory, alice_id, text)
+        with factory() as db:
+            held = db.execute(
+                sa.select(stored_text_sha256()).where(IngestionDocument.id == document)
+            ).scalar_one()
+        assert bytes(held) == text_sha256(text)
+        assert len(bytes(held)) == 32
+    with factory() as db:  # no text, no hash
+        waiting = add_document(factory, alice_id, None)
+        assert (
+            db.execute(
+                sa.select(stored_text_sha256()).where(IngestionDocument.id == waiting)
+            ).scalar_one()
+            is None
+        )
+
+
 def test_the_bind_hook_answers_none_when_there_is_nothing_to_read(
     factory: sessionmaker[Session], alice_id: uuid.UUID, bob_id: uuid.UUID
 ) -> None:
@@ -741,7 +876,15 @@ def test_the_bind_hook_answers_none_when_there_is_nothing_to_read(
         assert agents.bind_step(db, run_with(bob_id, {"step_id": "nope"})) is None
         assert agents.bind_step(db, run_with(bob_id, {})) is None
 
-    # The document replaced under the step (another hash), without text, then deleted.
+    # A step that carries no text hash (a part predicted before its text exists) is never bound.
+    bare = add_step(factory, alice_id, ranged.document_id, after=beyond)
+    assert binding_of(factory, bare) is not None
+    set_step(factory, bare, text_sha256=None)
+    assert binding_of(factory, bare) is None
+    assert call(tools_for(factory, bare, binding=found), READ, offset=0) == (tools.NOT_FOUND, True)
+    # A step that carries the hash of another file (no path of the application writes that; a
+    # replaced text keeps the hash of its file and is the test above), a document without text,
+    # then a document deleted.
     with factory() as db, db.begin():
         db.execute(sa.update(IngestionDocument).values(sha256=b"z" * 32))
     assert binding_of(factory, ranged) is None

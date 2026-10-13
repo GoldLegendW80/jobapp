@@ -20,6 +20,15 @@ It takes the document row `FOR KEY SHARE`, then the step row `FOR UPDATE` (the m
 order: 4 then 5), and never the run row. A deletion of the document waits for a call in flight,
 and the call after it finds no document.
 
+A step is tied to a text, not to a file. A document keeps its row, its id and the hash of its
+file when its text changes (the same file uploaded again over a row that may be replaced, a
+later reading of it), so the step carries the hash of the text it was planned on
+(`ingestion_run_steps.text_sha256`) and every call of both tools compares it with the hash of
+the text stored now. When they differ the answer is NOT_FOUND, for the rest of the step: nothing
+is read, nothing is checked and nothing is stored against a text the step was not cut from. The
+items the step stored before stay rows, cite the text that is gone, and are left out by
+`of_stored_text()`, the condition every reader of `ingestion_items` applies.
+
 A failing item is refused and never stored. The answer names its index, the rule it broke and
 where (`at`), with the rule's constant sentence. The retry budget is in code: once
 REFUSALS_PER_STEP refusals are counted on the step, or at the KEY_REFUSALS_MAXth refusal of one
@@ -57,7 +66,14 @@ from app.agents import tools as app_tools
 from app.agents.tools import Scope, text_result
 from app.ingestion import citations, items, plan
 from app.ingestion.models import IngestionDocument
-from app.ingestion.runs_models import IngestionItem, IngestionRun, IngestionRunStep, StepStatus
+from app.ingestion.runs_models import (
+    IngestionItem,
+    IngestionRun,
+    IngestionRunStep,
+    StepStatus,
+    stored_text_sha256,
+    text_sha256,
+)
 
 logger = logging.getLogger("app.ingestion.tools")
 
@@ -135,13 +151,18 @@ def _is_whole(value: object) -> bool:
 
 def _locate(
     db: Session, scope: Scope, at: Bound, *, lock: bool
-) -> tuple[IngestionRunStep, int] | None:
-    """The step of this run and the length of its document's text, or None when either is no
-    longer there for this user: the document deleted, replaced or without text, the step not
-    this agent run's, not an extraction step or not running. With `lock`, the document row is
-    taken `FOR KEY SHARE` and then the step row `FOR UPDATE`, in that order."""
+) -> tuple[IngestionRunStep, int, bytes] | None:
+    """The step of this run, the length of its document's text and the hash of that text, or
+    None when either is no longer there for this user: the document deleted or without text, its
+    text no longer the one the step was planned on (the same file uploaded again over the row,
+    or read again: the row keeps its id and the hash of its file, so only the hash of the text
+    tells), the step not this agent run's, not an extraction step, not running or without a
+    text hash. With `lock`, the document row is taken `FOR KEY SHARE` and then the step row
+    `FOR UPDATE`, in that order."""
     document = sa.select(
-        IngestionDocument.sha256, sa.func.char_length(IngestionDocument.text)
+        IngestionDocument.sha256,
+        sa.func.char_length(IngestionDocument.text),
+        stored_text_sha256(),
     ).where(IngestionDocument.id == at.document_id, IngestionDocument.user_id == scope.user_id)
     step = (
         sa.select(IngestionRunStep)
@@ -162,9 +183,12 @@ def _locate(
     if held is None or held[1] is None:
         return None
     found = db.execute(step).scalar_one_or_none()
-    if found is None or bytes(found.sha256) != bytes(held[0]):
+    if found is None or found.text_sha256 is None:
         return None
-    return found, int(held[1])
+    planned_on = bytes(found.text_sha256)
+    if bytes(found.sha256) != bytes(held[0]) or planned_on != bytes(held[2]):
+        return None
+    return found, int(held[1]), planned_on
 
 
 # --- read_document --------------------------------------------------------------------------------
@@ -201,6 +225,8 @@ def _read(scope: Scope, args: Mapping[str, Any]) -> tuple[str, bool]:
                 ).where(
                     IngestionDocument.id == at.document_id,
                     IngestionDocument.user_id == scope.user_id,
+                    # This statement sees what was committed since the one above.
+                    stored_text_sha256() == found[2],
                 )
             ).scalar_one_or_none()
             if piece is None:
@@ -263,24 +289,35 @@ class _Refused:
 @dataclass
 class _StepState:
     """What the write tool keeps for one agent run: the document prepared once for every check
-    of the step, and the refusals counted per section and key."""
+    of the step, under the hash of its text, and the refusals counted per section and key."""
 
     document: citations.Document | None = None
+    planned_on: bytes | None = None
     key_refusals: dict[str, int] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    def prepared(self, db: Session, scope: Scope, at: Bound, total: int) -> citations.Document:
-        """The whole stored text of the document, normalised once and kept (the caller holds the
-        document row). Read again when the stored text is no longer the one that was prepared."""
-        if self.document is None or len(self.document.source) != total:
+    def prepared(
+        self, db: Session, scope: Scope, at: Bound, planned_on: bytes
+    ) -> citations.Document | None:
+        """The whole text the step was planned on, normalised once and kept under its hash. None
+        when the text read is not that one: `FOR KEY SHARE` on the document row does not hold a
+        change of its text back, so what is read here is hashed again before it is used."""
+        if self.document is None or self.planned_on != planned_on:
+            self.forget()
             text = db.execute(
                 sa.select(IngestionDocument.text).where(
                     IngestionDocument.id == at.document_id,
                     IngestionDocument.user_id == scope.user_id,
                 )
-            ).scalar_one()
-            self.document = citations.prepare(text)
+            ).scalar_one_or_none()
+            if text is None or text_sha256(text) != planned_on:
+                return None
+            self.document, self.planned_on = citations.prepare(text), planned_on
         return self.document
+
+    def forget(self) -> None:
+        """Nothing of a text that is gone is kept."""
+        self.document = self.planned_on = None
 
 
 def _safe_path(path: object) -> str:
@@ -398,10 +435,12 @@ def _propose(scope: Scope, state: _StepState, raw: object) -> tuple[str, bool]:
     with scope.sessions() as db, db.begin():
         found = _locate(db, scope, at, lock=True)
         if found is None:
-            state.document = None  # nothing of a document that is gone is kept
+            state.forget()
             return NOT_FOUND, True
-        step, total = found
-        document = state.prepared(db, scope, at, total)
+        step, _, planned_on = found
+        document = state.prepared(db, scope, at, planned_on)
+        if document is None:
+            return NOT_FOUND, True
         if not document.readable:
             logger.warning("ingestion document unreadable", extra=log)
         in_run = _items_of_run(db, step.ingestion_run_id)
@@ -530,6 +569,22 @@ def _log_failure(name: str, scope: Scope, failure: str) -> None:
 
 
 # --- for the merge (G12) --------------------------------------------------------------------------
+
+
+def of_stored_text() -> sa.ColumnElement[bool]:
+    """A condition on `ingestion_items`: true for an item whose step was planned on the text its
+    document stores now. An item read without it may cite a text that was replaced since: its
+    offsets and its excerpt are then those of a text that is no longer stored."""
+    return (
+        sa.exists()
+        .where(
+            IngestionRunStep.id == IngestionItem.step_id,
+            IngestionDocument.id == IngestionItem.document_id,
+            IngestionDocument.user_id == IngestionItem.user_id,
+            IngestionRunStep.text_sha256 == stored_text_sha256(),
+        )
+        .correlate(IngestionItem)
+    )
 
 
 def as_item(row: IngestionItem) -> items.Item:

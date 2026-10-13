@@ -23,7 +23,14 @@ from app.agents.models import AgentRun
 from app.config import Settings
 from app.ingestion import agents, plan
 from app.ingestion.models import IngestionDocument, TextSource, TextStatus
-from app.ingestion.runs_models import IngestionItem, IngestionRun, IngestionRunStep, StepStatus
+from app.ingestion.runs_models import (
+    IngestionItem,
+    IngestionRun,
+    IngestionRunStep,
+    StepStatus,
+    text_sha256,
+)
+from app.ingestion.tools import of_stored_text
 from tests.agents.conftest import new_key
 from tests.agents.run_helpers import now
 from tests.conftest import make_settings
@@ -113,9 +120,11 @@ def add_step(
     """An ingestion run with one extraction step that is running, and the step's agent run, as
     the engine of G10 will create them. `after`: one more step of that step's ingestion run."""
     with factory() as db, db.begin():
-        sha256 = db.execute(
-            sa.select(IngestionDocument.sha256).where(IngestionDocument.id == document_id)
-        ).scalar_one()
+        sha256, planned_on = db.execute(
+            sa.select(IngestionDocument.sha256, IngestionDocument.text).where(
+                IngestionDocument.id == document_id
+            )
+        ).one()
         if after is None:
             run = IngestionRun(
                 user_id=user_id,
@@ -148,6 +157,7 @@ def add_step(
             range_start=start,
             range_end=end,
             identity_hash="a" * 64,
+            text_sha256=None if planned_on is None else text_sha256(planned_on),
             status=StepStatus.running,
             token_budget=budget,
         )
@@ -225,6 +235,18 @@ def stored_items(factory: sessionmaker[Session], step: Step) -> list[IngestionIt
             db.execute(
                 sa.select(IngestionItem)
                 .where(IngestionItem.step_id == step.step_id)
+                .order_by(IngestionItem.id)
+            ).scalars()
+        )
+
+
+def items_of_stored_text(factory: sessionmaker[Session], step: Step) -> list[IngestionItem]:
+    """The step's items that the merge may read: those of the text its document stores now."""
+    with factory() as db:
+        return list(
+            db.execute(
+                sa.select(IngestionItem)
+                .where(IngestionItem.step_id == step.step_id, of_stored_text())
                 .order_by(IngestionItem.id)
             ).scalars()
         )

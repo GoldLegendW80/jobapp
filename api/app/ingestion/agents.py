@@ -37,7 +37,12 @@ from app.agents import definitions
 from app.agents.models import AgentRun, CredentialKind
 from app.ingestion import plan, tools
 from app.ingestion.models import IngestionDocument
-from app.ingestion.runs_models import IngestionRun, IngestionRunStep, StepStatus
+from app.ingestion.runs_models import (
+    IngestionRun,
+    IngestionRunStep,
+    StepStatus,
+    stored_text_sha256,
+)
 
 logger = logging.getLogger("app.ingestion.agents")
 
@@ -70,8 +75,11 @@ def bind_step(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
     end}`, plain text and numbers, where `start` and `end` are the character offsets of the part
     in the document's stored text. None when there is nothing to read, and the run then fails
     before any model call: the step is not this run's (not an extraction step, not `running`, of
-    another agent run or another user), or its document is gone, was replaced, or has no text.
-    Reads only, takes no lock."""
+    another agent run or another user), or its document is
+    gone, has no text, or stores another text than the one the step was planned on
+    (`text_sha256`: a replaced text keeps the row and the hash of its file, so only the hash of
+    the text tells). A step that carries no text hash is never bound. Reads only, takes no
+    lock."""
     try:
         step_id = uuid.UUID(str(run.input.get("step_id")))
     except ValueError:
@@ -87,16 +95,17 @@ def bind_step(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
             IngestionRun.user_id == run.user_id,
         )
     ).scalar_one_or_none()
-    if step is None:
+    if step is None or step.text_sha256 is None:
         return None
     total = db.execute(
         sa.select(sa.func.char_length(IngestionDocument.text)).where(
             IngestionDocument.id == step.document_id,
             IngestionDocument.user_id == run.user_id,
             IngestionDocument.sha256 == step.sha256,
+            stored_text_sha256() == bytes(step.text_sha256),
         )
     ).scalar_one_or_none()
-    if total is None:  # no such document for this user, or no text
+    if total is None:  # no such document for this user, no text, or not the text planned on
         return None
     start = min(step.range_start or 0, total)
     end = total if step.range_end is None else min(step.range_end, total)
