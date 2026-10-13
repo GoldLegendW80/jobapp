@@ -14,7 +14,9 @@
 #   ./deploy.sh smoke [--full]     checks on the Jetson, then through the public URL; --full also
 #                                  stops and starts db once (tests/jetson_smoke.sh)
 #   ./deploy.sh backup [--pull]    pg_dump -Fc to jetson:~/jobapp-backups/jobapp-<UTC time>.dump,
-#                                  verified, newest BACKUP_KEEP kept; --pull copies it to backups/
+#                                  verified, then the retention (BACKUP_KEEP, 7: the newest 7
+#                                  dumps stay, a dump 7 days old or more goes); --pull copies it
+#                                  to backups/, which no retention ever touches
 #   ./deploy.sh backups            list the dumps on the Jetson
 #   ./deploy.sh restore <file> [--keep]
 #                                  restore into the scratch database jobapp_restore_check and print
@@ -25,7 +27,9 @@
 #                                  health
 #   ./deploy.sh restore --drop-scratch   drop the scratch database left by --keep
 #   ./deploy.sh backup-schedule install|remove|status
-#                                  nightly backup in the Jetson user's crontab (no sudo)
+#                                  nightly backup in the Jetson user's crontab (no sudo); status
+#                                  shows the line, the retention its runs apply, the newest and
+#                                  the oldest dump of each folder and what is left alone there
 #   ./deploy.sh admin create <email>
 #                                  print a one-time admin setup link on the public URL (a 1 hour
 #                                  password reset link when that admin exists); runs
@@ -59,7 +63,13 @@
 #
 # Settings, first found wins: the shell environment, then .env at the repository root, then
 # the defaults below. DEPLOY_HOST (ssh alias, default jetson), DEPLOY_DIR (default ~/jobapp),
-# BACKUP_DIR (on the Jetson, default ~/jobapp-backups), BACKUP_KEEP (default 14),
+# BACKUP_DIR (on the Jetson, default ~/jobapp-backups), BACKUP_KEEP (the retention, one number
+# for the count of dumps and for their age in days; no default here: when it is not set on this
+# Mac nothing is sent, and ops/db.sh reads the BACKUP_KEEP of the Jetson's .env, then its own
+# default, 7, at each run; set here it is sent with every backup command and written into the
+# cron line by backup-schedule install), BACKUP_ACCEPT_SHRINK (shell only, 1 for one
+# `./deploy.sh backup`: accepts a dump less than half the size of the last one, which otherwise
+# holds the rotation),
 # BACKUP_CRON (schedule of backup-schedule, default "17 3 * * *", the Jetson's local time),
 # DEPLOY_LOCK_MAX_S (default 3600: the Jetson releases the deploy lock after that long even if
 # this Mac went to sleep holding it), MIGRATE_TIMEOUT_S (default 300: the longest the migrations of
@@ -114,6 +124,23 @@ setting() { # setting <NAME> <default>: environment, then .env, then default
   local value="${!1:-}"
   [[ -n "$value" ]] || value="$(envval "$ROOT/.env" "$1")"
   printf '%s' "${value:-$2}"
+}
+
+# backup_dir: BACKUP_DIR as every command here uses it, sends it and writes it into the cron
+# line: relative to the Jetson's home when it starts with ~/, and without a slash or a /. at its
+# end. ops/db.sh trims them too, since `[[ -L folder/ ]]` is false for a symbolic link and a
+# linked backup folder must never be deleted in (the review's B3); the name is trimmed here as
+# well so that one spelling of it exists, in the lock, in the cron line and in the messages.
+backup_dir() {
+  local d
+  # shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
+  d="$(setting BACKUP_DIR '~/jobapp-backups')"
+  d="${d#\~/}"
+  while [[ "$d" != / && ("$d" == */ || "$d" == */.) ]]; do
+    d="${d%.}"
+    d="${d%/}"
+  done
+  printf '%s' "$d"
 }
 
 HOST="$(setting DEPLOY_HOST jetson)"
@@ -189,9 +216,7 @@ lock_script() {
 remote_lock() {
   step "deploy lock on $HOST"
   local bdir max fifo="$CTL_DIR/lock.in" out="$CTL_DIR/lock.out" deadline
-  # shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
-  bdir="$(setting BACKUP_DIR '~/jobapp-backups')"
-  bdir="${bdir#\~/}"
+  bdir="$(backup_dir)"
   max="$(setting DEPLOY_LOCK_MAX_S 3600)"
   [[ "$max" =~ ^[1-9][0-9]*$ ]] || die "DEPLOY_LOCK_MAX_S must be a whole number of seconds, got '$max'"
   mkfifo "$fifo"
@@ -953,18 +978,19 @@ cmd_smoke() {
 # --- backups and restores -----------------------------------------------------------------
 # ops/db.sh does the work on the Jetson; this side parses options, asks the confirmation, moves
 # files between the two machines and runs the health check after a live restore.
-# shellcheck disable=SC2088 # a literal ~/ that is stripped just below, not expanded locally
-BDIR="$(setting BACKUP_DIR '~/jobapp-backups')"
-BDIR="${BDIR#\~/}"
-BACKUP_KEEP="$(setting BACKUP_KEEP 14)"
+BDIR="$(backup_dir)"
+# Empty unless set on this Mac (environment or .env): ops/db.sh then decides on the Jetson, from
+# the BACKUP_KEEP of the .env there, then its default of 7 (ops/db.sh, Retention).
+BACKUP_KEEP="$(setting BACKUP_KEEP '')"
 BACKUP_CRON="$(setting BACKUP_CRON '17 3 * * *')"
 LOCAL_BACKUPS="$ROOT/backups"
 CRON_MARK="# jobapp-backup (./deploy.sh backup-schedule)"
 CONFIRM_PHRASE="RESTORE jobapp"
 
 check_backup_settings() {
-  [[ "$BACKUP_KEEP" =~ ^[1-9][0-9]*$ ]] || die "BACKUP_KEEP must be a whole number of at least 1, got '$BACKUP_KEEP'"
-  [[ -n "$BDIR" && "$BDIR" != "~" && "$BDIR" != "/" ]] || die "BACKUP_DIR must name a directory"
+  [[ -z "$BACKUP_KEEP" || "$BACKUP_KEEP" =~ ^[1-9][0-9]{0,3}$ ]] ||
+    die "BACKUP_KEEP must be a whole number from 1 to 9999, got '$BACKUP_KEEP'"
+  [[ -n "$BDIR" && "$BDIR" != "~" && "$BDIR" != "/" && "$BDIR" != "." ]] || die "BACKUP_DIR must name a directory"
   [[ "$BDIR" =~ ^[A-Za-z0-9._/-]+$ ]] || die "BACKUP_DIR may only hold letters, digits, . _ / and -: '$BDIR'"
   case "$BDIR/" in
     "$RDIR/"*) die "BACKUP_DIR ($BDIR) must not be inside DEPLOY_DIR ($RDIR): rsync --delete would erase it" ;;
@@ -974,8 +1000,11 @@ check_backup_settings() {
 rdb() { # rdb <args...>: ops/db.sh of this tree, run by bash on the Jetson
   local args env
   args="$(printf ' %q' "$@")"
-  env="JOBAPP_DIR=$RDIR_Q BACKUP_DIR=$(printf '%q' "$BDIR") BACKUP_KEEP=$(printf '%q' "$BACKUP_KEEP")"
+  env="JOBAPP_DIR=$RDIR_Q BACKUP_DIR=$(printf '%q' "$BDIR")"
+  [[ -z "$BACKUP_KEEP" ]] || env+=" BACKUP_KEEP=$(printf '%q' "$BACKUP_KEEP")"
   [[ -z "${BACKUP_MIN_FREE_MB:-}" ]] || env+=" BACKUP_MIN_FREE_MB=$(printf '%q' "$BACKUP_MIN_FREE_MB")"
+  # From the shell of this run alone, never from a file: it accepts one smaller dump (ops/db.sh).
+  [[ -z "${BACKUP_ACCEPT_SHRINK:-}" ]] || env+=" BACKUP_ACCEPT_SHRINK=$(printf '%q' "$BACKUP_ACCEPT_SHRINK")"
   remote "$env bash -s --$args" <"$ROOT/ops/db.sh"
 }
 
@@ -1130,15 +1159,60 @@ cmd_restore() {
   info "run ./deploy.sh smoke for the full checks"
 }
 
-cron_line() { # the crontab line, every path absolute through $HOME (cron's sh expands it)
+# cron_line: the crontab line, every path absolute through $HOME (cron's sh expands it). It names
+# no BACKUP_KEEP unless one is set on this Mac: each run then reads the retention from the
+# Jetson's .env, then from the default of the ops/db.sh deployed there, so changing the retention
+# takes a deploy or an edit of that .env, not a reinstall. A BACKUP_KEEP set here is written into
+# the line and wins over both until the line is installed again without it.
+cron_line() {
   local logdir
   case "$BDIR" in
     /*) logdir="$BDIR" ;;
     *) logdir="\$HOME/$BDIR" ;;
   esac
   # shellcheck disable=SC2016 # $HOME is for cron's shell on the Jetson
-  printf '%s JOBAPP_DIR=%s BACKUP_DIR=%s BACKUP_KEEP=%s "$HOME/%s/ops/db.sh" backup >>"%s/backup.log" 2>&1 %s' \
-    "$BACKUP_CRON" "$RDIR" "$BDIR" "$BACKUP_KEEP" "$RDIR" "$logdir" "$CRON_MARK"
+  printf '%s JOBAPP_DIR=%s BACKUP_DIR=%s%s "$HOME/%s/ops/db.sh" backup >>"%s/backup.log" 2>&1 %s' \
+    "$BACKUP_CRON" "$RDIR" "$BDIR" "${BACKUP_KEEP:+ BACKUP_KEEP=$BACKUP_KEEP}" "$RDIR" "$logdir" "$CRON_MARK"
+}
+
+# schedule_retention <installed cron line, or ''>: what the nightly run keeps. Asked of the
+# ops/db.sh deployed on the Jetson, the copy cron runs (not the one of this tree), with the
+# BACKUP_KEEP the line carries when it carries one.
+schedule_retention() {
+  local line="$1" pinned="" env out
+  if [[ "$line" =~ (^|[[:space:]])BACKUP_KEEP=([^[:space:]]+) ]]; then
+    pinned="${BASH_REMATCH[2]}"
+  fi
+  env="JOBAPP_DIR=$RDIR_Q BACKUP_DIR=$(printf '%q' "$BDIR")"
+  if [[ -n "$pinned" ]]; then
+    env+=" BACKUP_KEEP=$(printf '%q' "$pinned")"
+    info "the line carries BACKUP_KEEP=$pinned, which wins over $RDIR/.env on $HOST and over the default of ops/db.sh until the line is installed again without it"
+  elif [[ -n "$line" ]]; then
+    info "the line carries no BACKUP_KEEP: each run reads it from $RDIR/.env on $HOST, then from the default of the ops/db.sh deployed there"
+  fi
+  local rc=0 dir
+  out="$(remote "$env bash $RDIR_Q/ops/db.sh retention" 2>&1)" || rc=$?
+  # 3: the report is whole, and a rotation is held or its mark cannot be read (ops/db.sh).
+  if ((rc == 0 || rc == 3)); then
+    printf '%s\n' "$out" | grep -v -e '^keep=' -e '^held=' || true
+  else
+    info "retention: not reported. The ops/db.sh deployed on $HOST is older than this command, or it failed:"
+    printf '%s\n' "$out" | sed 's/^/     /'
+    info "deploy, then run ./deploy.sh backup-schedule status again"
+  fi
+  SCHEDULE_HELD=""
+  if ((rc == 3)); then
+    SCHEDULE_HELD="a rotation is held on $HOST, or its mark cannot be read (above)"
+    while IFS= read -r dir; do
+      dir="${dir#held=}"
+      # The one command that lifts it, when the database was meant to shrink.
+      if [[ "${dir##*/}" == deploys ]]; then
+        info "to lift the hold of $dir: BACKUP_DIR=$BDIR/deploys BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup"
+      else
+        info "to lift the hold of $dir: BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup"
+      fi
+    done < <(printf '%s\n' "$out" | grep '^held=' || true)
+  fi
 }
 
 cmd_backup_schedule() {
@@ -1149,7 +1223,7 @@ cmd_backup_schedule() {
   [[ "$BACKUP_CRON" =~ ^[0-9*/,-]+(\ [0-9*/,-]+){4}$ ]] ||
     die "BACKUP_CRON must be five cron fields of digits, * / , and -, got '$BACKUP_CRON'"
   backup_remote
-  local mark_q line_q
+  local mark_q line_q line
   mark_q="$(printf '%q' "$CRON_MARK")"
   case "$action" in
     install)
@@ -1160,22 +1234,29 @@ cmd_backup_schedule() {
         { crontab -l 2>/dev/null | grep -vF $mark_q; printf '%s\n' $line_q; } | crontab -" ||
         die "crontab update failed"
       info "installed in the crontab of $(remote whoami)@$HOST (replacing any previous jobapp line):"
-      remote "crontab -l | grep -F $mark_q" | sed 's/^/   /'
+      line="$(remote "crontab -l | grep -F $mark_q")" || die "the line is not in the crontab of $HOST after installing it"
+      printf '%s\n' "$line" | sed 's/^/   /'
+      schedule_retention "$line"
       ;;
     remove)
       remote "crontab -l 2>/dev/null | grep -vF $mark_q | crontab -" || die "crontab update failed"
       info "no jobapp backup line left in the crontab of $HOST; other lines kept"
       ;;
     status)
-      local line
       line="$(remote "crontab -l 2>/dev/null | grep -F $mark_q" || true)"
       if [[ -n "$line" ]]; then
         info "installed: $line"
       else
-        info "not installed (./deploy.sh backup-schedule install)"
+        info "not installed (./deploy.sh backup-schedule install); a backup run on $HOST would apply:"
       fi
+      schedule_retention "$line"
       local logf="$BDIR/backup.log" # relative paths resolve in the remote home, where ssh starts
-      remote "test -f $(printf '%q' "$logf") && { echo '   last lines of $logf:'; tail -n 5 $(printf '%q' "$logf") | sed 's/^/     /'; } || true"
+      # Everything above this point is the state now. The log is the past: its last lines are
+      # those of the last run, which may have been made under another retention (a WARNING about
+      # 14 from the night before a reinstall, for instance), so they are told apart.
+      remote "test -f $(printf '%q' "$logf") && { echo '   last lines of $logf (the last run, as it was then; the state now is above):'; tail -n 5 $(printf '%q' "$logf") | sed 's/^/     | /'; } || true"
+      # A hold must be seen (the review's N12): the status of this command says it.
+      [[ -z "$SCHEDULE_HELD" ]] || die "$SCHEDULE_HELD: its backups delete nothing until it is lifted"
       ;;
   esac
 }
