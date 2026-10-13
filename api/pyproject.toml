@@ -55,6 +55,14 @@ ingestion = [
     # with its parser, which refuses a DTD, an entity and an external reference (G7,
     # sandbox/docx.py). 0.7.1 is the last release (2021); no advisory is open against it.
     "defusedxml==0.7.1",
+    # PDFium behind ctypes (G8, sandbox/pdf_render.py): renders the pages of a PDF that are
+    # scans and reads the text layer of AES protected files. Checked on PyPI and on OSV on
+    # 2026-10-13: 5.14.0 (2026-10-04) is still the latest release, licence "BSD-3-Clause,
+    # Apache-2.0, dependency licenses", no dependency, a py3-none wheel for
+    # manylinux_2_17_aarch64 (3,719,672 bytes: the Jetson) and for macosx_13_0_arm64, no
+    # advisory on either. The wheel bundles PDFium itself: after a PDFium security release,
+    # take the pypdfium2 release that carries it (README, "Updating pypdfium2").
+    "pypdfium2==5.14.0",
 ]
 dev = [
     "pytest==9.1.1",
