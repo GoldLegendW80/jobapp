@@ -116,9 +116,16 @@ CHILD_SERVER_CODES = frozenset(
 )
 # Why a file cannot be read. The tasks that add a parser add their codes here, and the sentence
 # each one becomes for the user where they store the result.
-FILE_CODES = frozenset({"unreadable", "protected", "no_text", "bomb", "too_many_pixels"})
+# G2b (sandbox/pdf_text.py, sentences in app/ingestion/jobs.py): `encryption` is a PDF protected
+# with AES, which the parser cannot open without `cryptography`; `too_slow` one whose first page
+# was not read when the time budget ended.
+FILE_CODES = frozenset(
+    {"unreadable", "protected", "encryption", "no_text", "bomb", "too_slow", "too_many_pixels"}
+)
 # What was not read, on a document that was. Each comes with integers named in NOTE_VALUES.
-NOTE_CODES = frozenset({"pages_not_read", "time_limit", "scans_not_read"})
+# `pages_not_read` is the page cap, `text_limit` the character cap (G2b), `time_limit` the time
+# budget: each names the pages left out (from, to); `scans_not_read` counts the image pages.
+NOTE_CODES = frozenset({"pages_not_read", "text_limit", "time_limit", "scans_not_read"})
 NOTE_VALUES = frozenset({"from", "to", "count"})
 _TIMEOUT_CODES = frozenset({"wall_limit", "cpu_limit", "read_timeout"})
 
