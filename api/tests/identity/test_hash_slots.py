@@ -250,6 +250,8 @@ def test_every_hashing_function_runs_inside_a_slot(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(security, "_hasher", hasher)
     monkeypatch.setattr(security, "password_slots", slots)
     security._dummy_hash.cache_clear()
+    security.hash_dummy("the dummy hash is made on first use: here, before the count")
+    assert hasher.gauge.entered == 2
     barrier = threading.Barrier(200)
 
     def work(i: int) -> None:
@@ -264,7 +266,7 @@ def test_every_hashing_function_runs_inside_a_slot(monkeypatch: pytest.MonkeyPat
     with ThreadPoolExecutor(max_workers=200) as pool:
         list(pool.map(work, range(200)))
 
-    assert hasher.gauge.entered == 201  # 200 calls and the dummy hash, made once
+    assert hasher.gauge.entered == 2 + 200
     assert hasher.gauge.peak == 2
     assert slots.peak == 2
     assert (slots.held, slots.waiting, slots.refused) == (0, 0, 0)
