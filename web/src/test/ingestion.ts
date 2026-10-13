@@ -11,6 +11,7 @@ import type {
   IngestionDocument,
   Limits,
 } from "@/features/ingestion/documents-api";
+import type { Prompt } from "@/features/ingestion/prompt-api";
 
 import { server } from "./server";
 
@@ -210,4 +211,31 @@ export function fakeDocuments(
     }),
   );
   return state;
+}
+
+/** What GET /api/ingestion/prompt answers in tests: two short texts, told apart by their first line. */
+export const PROMPT: Prompt = {
+  version: 1,
+  sha256: "ab".repeat(32),
+  output_folder: "~/jobapp-dossier",
+  claude_code:
+    "You are Claude Code, running in a terminal on my own computer.\n\nMy name: «Zoë Ångström»\n\nWrite exactly one file: `~/jobapp-dossier/dossier.md`.\n",
+  codex:
+    "You are Codex, running in a terminal on my own computer.\n\nMy name: «Zoë Ångström»\n\nWrite exactly one file: `~/jobapp-dossier/dossier.md`.\n",
+};
+
+/** Install the handler of the prompt; the answer says how many times it was asked, and where. */
+export function fakePrompt(prompt: Prompt = PROMPT): {
+  count: number;
+  paths: string[];
+} {
+  const calls = { count: 0, paths: [] as string[] };
+  server.use(
+    http.get("*/api/ingestion/prompt", ({ request }) => {
+      calls.count += 1;
+      calls.paths.push(new URL(request.url).pathname);
+      return HttpResponse.json(prompt);
+    }),
+  );
+  return calls;
 }

@@ -24,13 +24,52 @@
 		output stdout
 		format json
 	}
+	# Connection timeouts against slow clients (issue #100), where Caddy's defaults are long:
+	#   read_header 10s   request headers must arrive within 10s, else the connection is dropped
+	#                     (default 1m). A real client sends them in milliseconds.
+	#   idle 60s          a keep-alive connection waiting for its next request is closed after
+	#                     60s (default 5m). An event stream is a response being written, not an
+	#                     idle connection.
+	# Left at Caddy's defaults on purpose:
+	#   read_body_idle    1m. Not shortened: the document upload and the paste answer a stalled
+	#                     body themselves, after 30s and 60s (SPEC-ingestion.md), and their
+	#                     sentence must reach the user first. Not given a minimum rate either:
+	#                     with a rate Caddy replaces the idle window by a budget counted from the
+	#                     start (the time plus one second per that many bytes), so a body that
+	#                     sends much and then stalls would stay far longer than a minute.
+	#                     What this minute does NOT do (measured in the review of pull request
+	#                     #106, a lone Caddy in front of an upstream that waits): it ended a
+	#                     silent body, with 504 at 60s, only when a large part of the declared
+	#                     length was still missing (9,000,000 and 300,000 bytes declared); with
+	#                     60,000 or 1,000 declared, Caddy did nothing for the 130s and 240s the
+	#                     client stayed. So for the small bodies of the public class nothing at
+	#                     Caddy ends a silent or trickling body: the api's own times release the
+	#                     api (api/app/body_limit.py), and the client's connection to Caddy
+	#                     stays for as long as the client likes. A hard ceiling (`read_body`)
+	#                     could bound that; it also bounds uploads and must be tried against an
+	#                     event stream first, so it is not set here.
+	#   write_idle        1m, no rate: an event stream writes a heartbeat every 15s.
+	# These are set per server: a `servers` block with an address replaces the global one, it
+	# does not merge with it (seen in the adapted config), so the same timeouts are repeated in
+	# the :8080 block below. The published :80 listener takes them from here.
+	servers {
+		timeouts {
+			read_header 10s
+			idle 60s
+		}
+	}
 	# Tunnel listener only. Every container of the Compose network is a private peer; tailscale is
 	# the only one that connects here. Strict: X-Forwarded-For is read right to left and the first
-	# untrusted address wins, so even a list could not put a visitor's value first.
+	# untrusted address wins, so even a list could not put a visitor's value first. The timeouts
+	# above are repeated here because this block replaces the global `servers` one for :8080.
 	servers :8080 {
 		trusted_proxies static private_ranges
 		trusted_proxies_strict
 		client_ip_headers X-Forwarded-For
+		timeouts {
+			read_header 10s
+			idle 60s
+		}
 	}
 }
 
@@ -66,28 +105,44 @@
 
 	encode zstd gzip
 
-	# Largest request body: 10 MiB everywhere, and 20 MiB on one route only, the upload of a
-	# document (POST /api/ingestion/documents, SPEC-ingestion.md), which the api itself counts
-	# while it reads. The route is matched as the api routes it: the method, and the decoded path
-	# compared as a whole string. The path and path_regexp matchers would not do: they ignore
-	# case or clean the path first, so /api/ingestion//documents, which the api answers 404,
-	# would get the larger limit. Here /api/ingestion/documents/text, a trailing slash, a doubled
-	# slash, another case and another method all keep the 10 MiB of every other route.
+	# --- request body limits by route class (issues #100 and ingestion G1) ----------------------
+	# Three classes, each request in exactly one, so a body is capped once:
+	#   public    the routes under /api/auth/ (sign in, sign out, invite or reset link check and
+	#             accept, the account routes): 64 KiB. They are the only routes that read a body
+	#             from a caller with no session, and such a body is a few hundred bytes. Before
+	#             this limit, fifty stalled 9 MiB sign ins reached the api's 512 MiB (issue #100).
+	#   upload    the upload of a document (POST /api/ingestion/documents, SPEC-ingestion.md),
+	#             which the api itself counts while it reads: 20 MiB.
+	#   default   everything else: 10 MiB.
+	# How each is matched. The upload is matched as the api routes it: the method, and the decoded
+	# path compared as a whole string. The path and path_regexp matchers would not do: they ignore
+	# case or clean the path first, so /api/ingestion//documents, which the api answers 404, would
+	# get the larger limit. So /api/ingestion/documents/text, a trailing slash, a doubled slash,
+	# another case and another method all keep 10 MiB. The public class is a prefix of the same
+	# decoded path: it is the smallest limit, so matching too much only tightens. The two cannot
+	# both hold, and the default is neither.
 	# A declared Content-Length above the limit is refused with 413 before anything is proxied; a
 	# chunked body is cut at the limit while it streams, and the read fails with 413. Both rules
-	# exist once per limit.
+	# exist once per class.
+	@public_body expression `{http.request.uri.path}.startsWith("/api/auth/")`
 	@document_upload expression `{http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents"`
-	@not_document_upload expression `!({http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents")`
+	@default_body expression `!({http.request.uri.path}.startsWith("/api/auth/")) && !({http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents")`
+	request_body @public_body {
+		max_size 64KiB
+	}
 	request_body @document_upload {
 		max_size 20MiB
 	}
-	request_body @not_document_upload {
+	request_body @default_body {
 		max_size 10MiB
 	}
+	@public_too_large expression `{http.request.uri.path}.startsWith("/api/auth/") && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 65536`
 	@document_too_large expression `{http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents" && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 20971520`
-	@body_too_large expression `!({http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents") && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 10485760`
+	@default_too_large expression `!({http.request.uri.path}.startsWith("/api/auth/")) && !({http.request.method} == "POST" && {http.request.uri.path} == "/api/ingestion/documents") && {http.request.header.Content-Length} != "" && int({http.request.header.Content-Length}) > 10485760`
+	error @public_too_large 413
 	error @document_too_large 413
-	error @body_too_large 413
+	error @default_too_large 413
+	# --- end request body limits -----------------------------------------------------------------
 
 	import security_headers
 

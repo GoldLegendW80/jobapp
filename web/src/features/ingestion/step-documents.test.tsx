@@ -21,7 +21,7 @@ async function open(initial: IngestionDocument[] = []) {
   fakeSession(member);
   const state = fakeDocuments(initial);
   const user = userEvent.setup({ applyAccept: false });
-  renderApp("/profile/fill");
+  renderApp("/profile/fill?step=documents");
   await screen.findByRole("heading", { level: 3, name: "Your documents" });
   await waitFor(() => {
     expect(screen.queryByText("Loading your documents")).toBeNull();
@@ -92,7 +92,7 @@ describe("documents: the list", () => {
           asked += 1;
         }),
       );
-      renderApp("/profile/fill");
+      renderApp("/profile/fill?step=documents");
       await listed("being.pdf");
       expect(row("being.pdf").getByText("Being read")).toBeVisible();
       const first = asked;
@@ -212,7 +212,7 @@ describe("documents: the list", () => {
       ),
     );
     const user = userEvent.setup();
-    renderApp("/profile/fill");
+    renderApp("/profile/fill?step=documents");
     expect(
       await screen.findByText("Your documents could not be loaded"),
     ).toBeVisible();

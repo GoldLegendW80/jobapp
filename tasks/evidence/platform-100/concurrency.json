@@ -1,0 +1,38 @@
+{
+  "sign_ins_at_once": {
+    "sign_ins": 4,
+    "statuses": [
+      401,
+      401,
+      401,
+      401
+    ],
+    "seconds": 0.17,
+    "api_rest_mib": 116.4,
+    "api_sampled_peak_mib": 118.1,
+    "api_cgroup_peak_mib_before": 173.3,
+    "api_cgroup_peak_mib_after": 377.7
+  },
+  "held_connections": {
+    "attempted": 260,
+    "held": 260,
+    "refused_while_sending": 0,
+    "rest_mib": {
+      "api": 118.1,
+      "caddy": 16.8
+    },
+    "peak_mib": {
+      "api": 159.8,
+      "caddy": 52.0
+    },
+    "api_cgroup_peak_mib": 377.7,
+    "while_held": {
+      "sign_in": 503,
+      "health": 503
+    },
+    "after_release": {
+      "sign_in": 401,
+      "health": 200
+    }
+  }
+}

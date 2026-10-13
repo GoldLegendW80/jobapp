@@ -143,12 +143,15 @@ class ProposalList(BaseModel):
 class AcceptIn(BaseModel):
     """POST /api/proposals/{id}/accept. `edited_value`, when sent, is applied instead of the
     proposal's own value (a note's text, a status) and validated like it. `updated_at`, when
-    sent, is the version of the target job the user saw: a job changed since is a 409."""
+    sent, is the version of the target job the user saw: a job changed since is a 409.
+    `profile_revision`, for a profile item, is the profile revision the user saw: it lets an
+    item be applied although the profile changed at its key since it was proposed."""
 
     model_config = ConfigDict(extra="forbid")
 
     edited_value: Any = None
     updated_at: datetime | None = None
+    profile_revision: int | None = None
 
 
 class ProposalConflictOut(BaseModel):
@@ -161,6 +164,19 @@ class ProposalConflictOut(BaseModel):
     reason: Literal["not_pending", "target_gone", "status_changed", "stale"]
     status: ProposalStatus | None = None
     updated_at: datetime | None = None
+
+
+class ItemConflictOut(BaseModel):
+    """409 of accept for a profile item. reason: invalid (the stored value no longer fits its
+    section: the proposal is now invalid, `detail` says why), profile_conflict (the section as
+    it is cannot take the item: still pending), stale (the profile changed at the item's key
+    since it was proposed: still pending, `profile_revision` is the current revision, to send
+    back once the user has seen the current value)."""
+
+    detail: str
+    reason: Literal["invalid", "profile_conflict", "stale"]
+    status: ProposalStatus | None = None
+    profile_revision: int | None = None
 
 
 # --- A4: chat threads -----------------------------------------------------------------------------

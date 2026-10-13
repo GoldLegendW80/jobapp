@@ -365,14 +365,19 @@ test("a new user follows Fill my profile with an agent from the profile", async 
   ).toBeVisible();
   await expect(page).toHaveTitle("Fill my profile \u00b7 jobapp");
 
-  // Three steps; the two that later tasks build are listed as Soon and are not controls.
+  // Three steps; the one that a later task builds is listed as Soon and is not a control.
   const steps = page.getByRole("navigation", { name: "Steps" });
   await expect(steps.getByRole("listitem")).toHaveText([
-    /Prepare\s*Soon/,
+    /Prepare(?!\s*Soon)/,
     /Documents/,
     /Review\s*Soon/,
   ]);
-  await expect(steps.getByRole("button")).toHaveCount(1);
+  await expect(steps.getByRole("button")).toHaveCount(2);
+  // The page opens on step 1, the prompt (task G3, ingestion-g3.spec.ts): on to the documents.
+  await expect(
+    steps.getByRole("button", { name: /Step 1: Prepare/ }),
+  ).toHaveAttribute("aria-current", "step");
+  await steps.getByRole("button", { name: /Step 2: Documents/ }).click();
   await expect(
     steps.getByRole("button", { name: /Step 2: Documents/ }),
   ).toHaveAttribute("aria-current", "step");
@@ -712,7 +717,7 @@ test("a second user sees nothing and cannot reach the first user's documents", a
     await otherPage.goto(cliLink(OTHER_EMAIL));
     await setPassword(otherPage, PASSWORD, OTHER_NAME);
     secondCookie = await sessionCookie(other);
-    await otherPage.goto("/profile/fill");
+    await otherPage.goto("/profile/fill?step=documents");
     await expect(
       otherPage.getByText("No document yet. Add a file or paste a text above."),
     ).toBeVisible();
@@ -933,6 +938,33 @@ test("20 MiB is accepted on the upload route only: every other route keeps 10 Mi
     });
     expect(removed.status()).toBe(204);
   }
+});
+
+test("the sign in routes take 64 KiB through Caddy, and a body with no session is the api's 401", () => {
+  // Issue #100, through the real proxy and with no cookie at all. The routes under /api/auth/
+  // are the only ones that read a body from a caller with no session, and Caddy gives them
+  // their own small class.
+  const nobody = "";
+  const publicMax = 64 * 1024;
+  const login = "/api/auth/login";
+  // One byte over, declared: Caddy's own refusal, before the api sees anything.
+  expect(
+    fromCaddy(curl(login, nobody, Buffer.alloc(publicMax + 1, 0x61))),
+  ).toBe(true);
+  // Without a Content-Length it is cut at the same limit.
+  expect(
+    curl(login, nobody, Buffer.alloc(publicMax + 1, 0x61), CHUNKED).status,
+  ).toBe(413);
+  // 64 KiB exactly reaches the api: the answer is the api's JSON (the body is no sign in).
+  const atLimit = curl(login, nobody, Buffer.alloc(publicMax, 0x61));
+  expect(atLimit.status).not.toBe(413);
+  expect(atLimit.type).toContain("application/json");
+  // A route that is not public: 200 KB passes Caddy (10 MiB there), and the api answers 401
+  // without reading it: no session, no body.
+  const gated = curl("/api/jobs/import", nobody, Buffer.alloc(200_000, 0x61));
+  expect(gated.status).toBe(401);
+  expect(gated.type).toContain("application/json");
+  expect(gated.body).toContain("Sign in to continue");
 });
 
 test("two uploads of 20 MiB at once, by two users, stay far inside the api's memory limit", async () => {

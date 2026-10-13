@@ -8,6 +8,12 @@
   is now invalid), when an unedited status proposal was made from another status than the job
   has now (status_changed: now invalid) or when updated_at is not the job's current version
   (stale, with that version).
+  For a profile item (`kind=profile_item`, target "profile") the body is {edited_value?,
+  profile_revision?}: 422 when edited_value does not fit its section model (the location
+  names the field) or when the item holds several values and none was chosen; 409 invalid
+  (the stored value no longer fits: now invalid), profile_conflict (the section cannot take
+  it: still pending) or stale (the profile changed at that key since: still pending, with
+  the current `profile_revision` to send back).
 - POST /api/proposals/{id}/reject: mark it rejected; 409 not_pending when already decided.
 
 Another user's proposal answers 404 like one that does not exist. The user always comes from the
@@ -24,7 +30,13 @@ from sqlalchemy.orm import Session
 
 from app.agents import proposals
 from app.agents.models import Proposal, ProposalStatus
-from app.agents.schemas import AcceptIn, ProposalConflictOut, ProposalList, ProposalOut
+from app.agents.schemas import (
+    AcceptIn,
+    ItemConflictOut,
+    ProposalConflictOut,
+    ProposalList,
+    ProposalOut,
+)
 from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
@@ -46,10 +58,21 @@ MOVED = (
     "assess the job again."
 )
 STALE = "This job changed since you loaded it. Reload it and try again."
+ITEM_CONFLICT = "The profile cannot take this as it is: {reason}."
+ITEM_STALE = (
+    "The profile changed here since this was proposed. Compare the two values and accept again."
+)
 
 _401 = {401: {"model": ErrorOut, "description": "Not signed in"}}
 _404 = {404: {"model": ErrorOut, "description": "No such proposal (or not yours)"}}
 _409 = {409: {"model": ProposalConflictOut, "description": "Decided already, job gone or stale"}}
+_409_ACCEPT = {
+    409: {
+        "model": ProposalConflictOut | ItemConflictOut,
+        "description": "Decided already, job gone or stale; for a profile item: invalid, "
+        "profile conflict or stale",
+    }
+}
 
 
 def _no_store(response: Response) -> None:
@@ -63,7 +86,7 @@ def _id(value: str) -> uuid.UUID:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND) from None
 
 
-def _conflict(out: ProposalConflictOut) -> JSONResponse:
+def _conflict(out: ProposalConflictOut | ItemConflictOut) -> JSONResponse:
     return JSONResponse(status_code=409, content=out.model_dump(mode="json"), headers=NO_STORE)
 
 
@@ -102,12 +125,19 @@ def list_proposals(
 @router.post(
     "/{proposal_id}/accept",
     response_model=ProposalOut,
-    responses={**_401, **_404, **_409, 422: {"model": ErrorOut, "description": "Invalid value"}},
+    responses={
+        **_401,
+        **_404,
+        **_409_ACCEPT,
+        422: {"model": ErrorOut, "description": "Invalid value"},
+    },
     dependencies=[Depends(_no_store)],
 )
 def accept(proposal_id: str, body: AcceptIn, user: CurrentUser, request: Request, db: Db) -> Any:
     target = _id(proposal_id)
     kwargs: dict[str, Any] = {"expected_updated_at": body.updated_at}
+    if body.profile_revision is not None:
+        kwargs["profile_revision"] = body.profile_revision
     if "edited_value" in body.model_fields_set:  # sent, even as null (then refused as invalid)
         kwargs["edited_value"] = body.edited_value
     try:
@@ -115,6 +145,11 @@ def accept(proposal_id: str, body: AcceptIn, user: CurrentUser, request: Request
     except proposals.NotPendingError as exc:
         db.rollback()
         return _not_pending(exc.proposal)
+    except proposals.EditedValueError as exc:
+        db.rollback()
+        raise RequestValidationError(
+            [{"type": "value_error", "loc": ("body", "edited_value", *exc.loc), "msg": str(exc)}]
+        ) from None
     except proposals.InvalidValueError as exc:
         db.rollback()
         raise RequestValidationError(
@@ -131,6 +166,26 @@ def accept(proposal_id: str, body: AcceptIn, user: CurrentUser, request: Request
         db.commit()  # keeps the proposal marked invalid
         return _conflict(
             ProposalConflictOut(detail=GONE, reason="target_gone", status=ProposalStatus.invalid)
+        )
+    except proposals.ItemInvalidError as exc:
+        why = exc.proposal.reason or ""
+        db.commit()  # keeps the proposal marked invalid
+        return _conflict(
+            ItemConflictOut(detail=why, reason="invalid", status=ProposalStatus.invalid)
+        )
+    except proposals.ProfileConflictError as exc:
+        db.rollback()
+        return _conflict(
+            ItemConflictOut(
+                detail=ITEM_CONFLICT.format(reason=exc.message.rstrip(".")),
+                reason="profile_conflict",
+            )
+        )
+    except proposals.StaleItemError as exc:
+        revision = exc.revision
+        db.rollback()
+        return _conflict(
+            ItemConflictOut(detail=ITEM_STALE, reason="stale", profile_revision=revision)
         )
     except jobs_service.StaleJobError as exc:
         current = exc.job.updated_at
