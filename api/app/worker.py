@@ -138,6 +138,24 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
         await sweep.run_sweep(sessions_of(ctx), uuid.UUID(sweep_id), client, clock_of(ctx))
 
 
+async def in_thread[T](ctx: dict[str, Any], call: Callable[..., T], *args: Any) -> T:
+    """asyncio.to_thread for the work of a job, known to the stop.
+
+    A job that is cancelled stops waiting for its thread, and the thread goes on: it holds a
+    session, so a connection of the pool. serve() used to dispose of the engine under it, and
+    the connection then came back to a pool nobody closes any more: it stayed open until the
+    garbage collector found it (issue #104). The work is shielded from the cancellation of
+    the job and kept in ctx["threads"], which serve() waits for before it disposes of the
+    engine. Without that set (a job called outside serve()) this is asyncio.to_thread."""
+    threads: set[asyncio.Future[Any]] | None = ctx.get("threads")
+    if threads is None:
+        return await asyncio.to_thread(call, *args)
+    work = asyncio.ensure_future(asyncio.to_thread(call, *args))
+    threads.add(work)
+    work.add_done_callback(threads.discard)
+    return await asyncio.shield(work)
+
+
 def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
     with sessions() as db:
         count = sweep.reap_stale(db, now)
@@ -146,7 +164,7 @@ def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
 
 
 async def reap_sweeps(ctx: dict[str, Any]) -> int:
-    count = await asyncio.to_thread(_reap, sessions_of(ctx), clock_of(ctx)())
+    count = await in_thread(ctx, _reap, sessions_of(ctx), clock_of(ctx)())
     if count:
         logger.warning("stale sweeps failed", extra={"count": count})
     return count
@@ -175,7 +193,7 @@ def _start_scheduled(
 
 async def scheduled_sweeps(ctx: dict[str, Any]) -> int:
     sessions, clock = sessions_of(ctx), clock_of(ctx)
-    started = await asyncio.to_thread(_start_scheduled, sessions, clock())
+    started = await in_thread(ctx, _start_scheduled, sessions, clock())
     redis: ArqRedis = ctx["redis"]
     for sweep_id, item in started:
         try:
@@ -187,7 +205,7 @@ async def scheduled_sweeps(ctx: dict[str, Any]) -> int:
             )
         except Exception:
             logger.exception("scheduled sweep not queued", extra={"sweep_id": str(sweep_id)})
-            await asyncio.to_thread(sweep.fail_sweep, sessions, sweep_id, sweep.QUEUE_DOWN, clock())
+            await in_thread(ctx, sweep.fail_sweep, sessions, sweep_id, sweep.QUEUE_DOWN, clock())
     if started:
         logger.info("scheduled sweeps queued", extra={"count": len(started)})
     return len(started)
@@ -240,7 +258,7 @@ def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: b
 
 
 async def reap_agent_runs(ctx: dict[str, Any], at_start: bool = False) -> int:
-    count = await asyncio.to_thread(_reap_agent_runs, sessions_of(ctx), clock_of(ctx)(), at_start)
+    count = await in_thread(ctx, _reap_agent_runs, sessions_of(ctx), clock_of(ctx)(), at_start)
     if count:
         logger.warning("agent runs failed by the reaper", extra={"count": count, "start": at_start})
     return count
@@ -467,6 +485,8 @@ async def serve(
     skip_sdk_version_probe()
     ctx = ctx if ctx is not None else make_context(settings)
     ctx.setdefault("body_gate", asyncio.Semaphore(BODIES_IN_FLIGHT))
+    # One set for every Worker: arq hands each job a copy of this dict, with the same set in it.
+    threads: set[asyncio.Future[Any]] = ctx.setdefault("threads", set())
     stop = stop or asyncio.Event()
     loop = asyncio.get_running_loop()
     installed = []
@@ -516,9 +536,15 @@ async def serve(
     finally:
         for signum in installed:
             loop.remove_signal_handler(signum)
-        if "engine" in ctx:
-            ctx["engine"].dispose()
-        logger.info("worker stopped")
+        try:
+            # The jobs are cancelled, their threads are not (in_thread): each still holds a
+            # connection until its session ends. The process waited for them anyway, when
+            # asyncio.run() closes the executor, but after the engine was disposed of.
+            await asyncio.gather(*list(threads), return_exceptions=True)
+        finally:
+            if "engine" in ctx:
+                ctx["engine"].dispose()
+            logger.info("worker stopped")
 
 
 async def check(settings: Settings, specs: Sequence[QueueSpec] | None = None) -> int:

@@ -6,6 +6,7 @@ start, a stop interrupting a running sweep cleanly, and a Redis that is down."""
 import asyncio
 import gc
 import os
+import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
@@ -35,6 +36,9 @@ __all__ = ["fake_ats"]
 
 # How long the write of a job's end is held open for a stop to land in it.
 END_WRITE_PAUSE_S = 0.3
+# How long a thread goes on holding its connection once the Workers are being closed: the
+# engine used to be disposed of within it.
+THREAD_PAUSE_S = 0.3
 
 
 def worker_redis_url(url: str) -> str:
@@ -283,6 +287,60 @@ def test_stop_while_a_job_writes_its_end_waits_for_the_write(
     assert asyncio.run(left_in_redis()) == (0, 1, None)
     # A write left behind would surface here as an unclosed socket ResourceWarning.
     gc.collect()
+
+
+def test_stop_while_a_job_works_in_a_thread_waits_for_the_thread_before_the_engine_goes(
+    settings: Settings, fake_ats: FakeAts, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A job that is cancelled stops waiting for its thread (asyncio.to_thread), and the thread
+    goes on with its session. serve() used to dispose of the engine while that thread still
+    held a connection: it came back to a pool already disposed of, which nobody closes, and was
+    found open by the garbage collector during a later test (the `BaseConnection.__del__`
+    warning of issue #104, from the reap_sweeps cron of second 30). The pause below does not
+    bound anything of the fixed code, which waits for the thread however long it takes: it
+    only gives the code without the fix the time to dispose of the engine too early."""
+    ctx = context(settings, fake_ats)
+    engine = ctx["engine"]
+    made: list[Any] = []
+    sa.event.listen(engine, "connect", lambda connection, _record: made.append(connection))
+    holding, closing = threading.Event(), threading.Event()
+    order: list[str] = []
+    checked_out: list[int] = []
+    close = Worker.close
+    dispose = engine.dispose
+
+    def held(db: Session, _now: datetime) -> int:
+        db.execute(sa.text("SELECT 1"))  # from here the thread holds a connection of the pool
+        holding.set()
+        closing.wait(30)  # the stop has cancelled the job, and closes the Workers
+        time.sleep(THREAD_PAUSE_S)
+        order.append("the thread ends")
+        return 0
+
+    async def closing_close(self: Worker) -> None:
+        closing.set()
+        await close(self)
+
+    def watched_dispose(*args: Any, **kwargs: Any) -> None:
+        order.append("the engine is disposed of")
+        checked_out.append(engine.pool.checkedout())  # type: ignore[attr-defined]
+        dispose(*args, **kwargs)
+
+    async def scenario(workers: list[Worker]) -> None:
+        # Not before: the start of the worker reaps too, and waits for it.
+        monkeypatch.setattr(sweep, "reap_stale", held)
+        monkeypatch.setattr(Worker, "close", closing_close)
+        monkeypatch.setattr(engine, "dispose", watched_dispose)
+        await workers[0].pool.enqueue_job("reap_sweeps", _queue_name=queues.SWEEPS)
+        await wait_for(holding.is_set)
+
+    serve_until(settings, ctx, scenario)
+    assert order[-2:] == ["the thread ends", "the engine is disposed of"]
+    # Nothing was checked out of the pool when it was disposed of, and no connection the
+    # engine ever made is left open.
+    assert checked_out == [0]
+    assert made
+    assert [connection.closed for connection in made] == [True] * len(made)
 
 
 def test_stale_sweeps_are_reaped_when_the_worker_starts(
