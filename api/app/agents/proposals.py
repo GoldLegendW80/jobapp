@@ -28,6 +28,12 @@ it proposes): it judges a posting, nothing more, so it moves a job that is not y
 skipped or closed. It never proposes applied, interview or rejected (facts about the world it
 cannot know), and never the status the job already has.
 
+Kind of the ingestion module, on target "profile" (no target id, no run):
+- `profile_item`: one fact for the profile. `create`, `accept` and `undo` hand such a proposal
+  to app/ingestion/item_proposals.py, which says what its payload holds and what stale,
+  conflict and invalid mean there. The dispatch reads `proposal.target` before the kind, so
+  the job kinds above are untouched. `reject` and the list need no dispatch.
+
 Every function takes the caller's user id and touches that user's rows only. The caller owns the
 transaction.
 """
@@ -46,8 +52,11 @@ from app.agents.models import Proposal, ProposalDecider, ProposalStatus
 from app.jobs import service as jobs_service
 from app.jobs.models import Job, JobStatus
 from app.jobs.schemas import TEXT_MAX as NOTES_MAX
+from app.profile.models import Profile
 
 TARGET_JOB = "job"
+TARGET_PROFILE = "profile"
+KIND_PROFILE_ITEM = "profile_item"
 NOTE_MAX = 4000
 REASON_MAX = 1000
 VIA = "agent"
@@ -109,6 +118,60 @@ class TargetGoneError(Exception):
 class StatusChangedError(TargetGoneError):
     """A status proposal made for another status than the job has now (it moved since): the
     proposal was marked invalid (the caller commits that)."""
+
+
+class EditedValueError(InvalidValueError):
+    """An edited value of a profile item that its section model refuses. `loc` is the path of
+    the field inside the value (field names and positions, never the value)."""
+
+    def __init__(self, message: str, loc: tuple[str | int, ...] = ()) -> None:
+        super().__init__(message)
+        self.loc = loc
+
+
+class NotStoredError(Exception):
+    """`create` did not store a profile item. `reason` is `equal_to_profile` (the profile already
+    holds it) or `rejected_before` (the user rejected this value at this key)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class ItemInvalidError(Exception):
+    """A profile item whose stored value no longer fits its section model: the proposal was
+    marked invalid, with the reason (the caller commits that)."""
+
+    def __init__(self, proposal: Proposal) -> None:
+        super().__init__("item invalid")
+        self.proposal = proposal
+
+
+class ProfileConflictError(Exception):
+    """The profile section as it is now cannot take the item: nothing was applied and the
+    proposal stays pending. `message` is the section model's sentence, never a value."""
+
+    def __init__(self, proposal: Proposal, message: str) -> None:
+        super().__init__("profile conflict")
+        self.proposal = proposal
+        self.message = message
+
+
+class StaleItemError(Exception):
+    """The profile changed at the item's key since it was proposed and the caller did not show
+    the current revision: nothing was applied. `revision` is the profile's current revision."""
+
+    def __init__(self, proposal: Proposal, revision: int) -> None:
+        super().__init__("stale item")
+        self.proposal = proposal
+        self.revision = revision
+
+
+def _profile_items() -> Any:
+    """app.ingestion.item_proposals, imported when first needed (that module imports this one)."""
+    from app.ingestion import item_proposals
+
+    return item_proposals
 
 
 def clean_note(value: Any) -> str:
@@ -212,12 +275,38 @@ def create(
     run_id: uuid.UUID | None,
     now: datetime,
     status: ProposalStatus = ProposalStatus.pending,
+    derived: bool = False,
 ) -> Proposal:
     """A new proposal. Pending ones of the same kind for the same target are superseded by it
     (one suggestion of each kind stands at a time). `status=accepted` records a change the system
-    already applied (SPEC-mail's exception), decided by the system. The caller commits."""
+    already applied (SPEC-mail's exception), decided by the system. The caller commits.
+
+    For the target "profile" the payload is a profile item `{section, key, action, value,
+    citations, ...}` (item_proposals.propose_payload): an older pending item at the same key with
+    another value is superseded, the same value already pending gets the citations joined and is
+    the proposal returned, and NotStoredError says the item was dropped because the profile holds
+    it or the user rejected it before. InvalidValueError when the item is refused. `derived`
+    says the caller computed the value itself (the merge, for `skills.years_experience`): it is
+    an argument of the calling code and is never read from the payload, which a model wrote."""
     if status not in (ProposalStatus.pending, ProposalStatus.accepted):
         raise ValueError(f"a proposal is created pending or accepted, not {status}")
+    if derived and target != TARGET_PROFILE:
+        raise ValueError("only a profile item is derived")
+    if target == TARGET_PROFILE:
+        if (
+            kind != KIND_PROFILE_ITEM
+            or target_id is not None
+            or run_id is not None
+            or status is not ProposalStatus.pending
+        ):
+            raise ValueError("a proposal for the profile is a pending profile_item, without ids")
+        profile_items = _profile_items()
+        origin = profile_items.items.Origin.derived if derived else profile_items.items.Origin.agent
+        outcome = profile_items.propose_payload(db, user_id, payload, now, origin=origin)
+        if outcome.proposal is None:
+            raise NotStoredError(outcome.status)
+        stored: Proposal = outcome.proposal
+        return stored
     if target_id is not None:
         # One writer at a time per (user, target, kind): two runs proposing at once on the same
         # job cannot both find no pending row and both stay pending. Released at commit.
@@ -277,7 +366,8 @@ def accept(
     *,
     edited_value: Any = _MISSING,
     expected_updated_at: datetime | None = None,
-) -> tuple[Proposal, Job] | None:
+    profile_revision: int | None = None,
+) -> tuple[Proposal, Job | Profile] | None:
     """Apply a pending proposal and mark it accepted by the user. None when it is not one of the
     user's proposals.
 
@@ -292,12 +382,27 @@ def accept(
     Lock order (issue #25): the job first, then the proposal, as PATCH, bulk and undo do (they
     lock the job, then supersede its pending status proposals). The proposal is read without a
     lock to find its job, then read again under lock once the job is held: whatever decided it
-    in between (a status change superseding it, a reject) wins, and nothing is applied."""
+    in between (a status change superseding it, a reject) wins, and nothing is applied.
+
+    A proposal whose target is the profile is handed to item_proposals.accept, which returns the
+    proposal with the profile and raises NotPendingError, InvalidValueError (EditedValueError),
+    ItemInvalidError, ProfileConflictError and StaleItemError; `profile_revision` is the profile
+    revision the user was looking at, and is read for such a proposal only."""
     proposal = get(db, user_id, proposal_id)
     if proposal is None:
         return None
     if proposal.status is not ProposalStatus.pending:
         raise NotPendingError(proposal)
+    if proposal.target == TARGET_PROFILE:  # the dispatch on the target, before the kind is read
+        applied: tuple[Proposal, Profile] | None = _profile_items().accept(
+            db,
+            user_id,
+            proposal_id,
+            now,
+            edited_value=edited_value,
+            profile_revision=profile_revision,
+        )
+        return applied
     try:
         kind = ProposalKind(proposal.kind)
     except ValueError:
@@ -355,3 +460,21 @@ def reject(
     _decide(proposal, ProposalStatus.rejected, ProposalDecider.user, now)
     db.flush()
     return proposal
+
+
+def undo(
+    db: Session, user_id: uuid.UUID, proposal_id: uuid.UUID, now: datetime
+) -> tuple[Proposal, Profile] | None:
+    """Take back an accepted profile item: the profile returns to what it held at the item's key
+    before the accept, as one revision, and the proposal becomes `undone`. None when it is not
+    one of the user's proposals. Raises InvalidValueError for another target (the job kinds have
+    no undo here: a status change is undone through the jobs service) and
+    item_proposals.UndoError when the item is not accepted, cannot be restored exactly, or the
+    profile changed at that key since (nothing is changed then)."""
+    proposal = get(db, user_id, proposal_id)
+    if proposal is None:
+        return None
+    if proposal.target != TARGET_PROFILE:
+        raise InvalidValueError(UNKNOWN_KIND)
+    undone: tuple[Proposal, Profile] | None = _profile_items().undo(db, user_id, proposal_id, now)
+    return undone
