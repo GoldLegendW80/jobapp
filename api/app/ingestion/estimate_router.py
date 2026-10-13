@@ -21,7 +21,12 @@ caller accepted a text this version no longer shows.
 
 **For the tasks that call this module** (the contract is in the plan, block G16): `quote` is the
 one function that turns a selection into a plan and an estimate, for the dialog here and for
-the start of a run in G10, so the ceiling the user saw is the ceiling the run gets.
+the start of a run in G10. It reads the state of the moment, so two calls can differ: the
+credential replaced by one of the other kind, a transcription finished, a deploy. What makes
+the ceiling the user saw the ceiling the run gets is the echo: the answer carries `quote_id`,
+the dialog sends it back with the start, and the start calls `check_echo(fresh, quote_id)`,
+which raises `EstimateChangedError` (409 `estimate_changed`, with the estimate of now) unless
+the fresh quote is the one that was shown.
 `has_consented` is what the start checks. `register_finished_provider` is where G10 registers
 the query that finds the finished step identities: until then nothing is reused.
 
@@ -31,7 +36,10 @@ document is logged or put in an error but its id: no name, no text. A document's
 only when it is longer than one part, to cut it where the run will, and never leaves `quote`.
 """
 
+import hashlib
+import json
 import logging
+import secrets
 import uuid
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
@@ -214,6 +222,13 @@ class Quote:
     plan: plan.Plan
     estimate: estimate.RunEstimate
     costs: pricing.Costs | None
+    selection: tuple[uuid.UUID, ...] = ()  # the ids asked for, each once, in the order given
+    reread: tuple[uuid.UUID, ...] = ()  # the ones to read again, sorted
+
+    @property
+    def quote_id(self) -> str:
+        """What the dialog echoes with the start of a run (`quote_id_of`, `check_echo`)."""
+        return quote_id_of(self)
 
     @property
     def blockers(self) -> tuple[str, ...]:
@@ -365,7 +380,85 @@ def quote(
         plan=planned,
         estimate=figures,
         costs=pricing.costs(figures, model) if pricing.priced(kind) else None,
+        selection=tuple(ids),
+        reread=tuple(sorted(reread)),
     )
+
+
+# --- the echo: the estimate the user saw is the estimate the run starts from
+
+QUOTE_ID_FORMAT = 1  # raise it when what `quote_id_of` covers changes
+ESTIMATE_CHANGED_CODE = "estimate_changed"
+ESTIMATE_CHANGED = (
+    "The estimate has changed since it was shown. Read the new figures and start again."
+)
+
+
+def quote_id_of(found: Quote) -> str:
+    """A fingerprint of everything the start dialog shows and the run would take from `found`:
+    the selection in its order, the documents to read again, what would be read and what would
+    not, the kind of credential and the model, `L`, `H` and `C`, the three amounts with the date
+    of their prices (or their absence), and the version of the consent text.
+
+    It is stateless: nothing is stored, the same state gives the same id, and any difference in
+    what is listed above gives another. It is 64 hexadecimal characters, holds no name and no
+    text, and is no secret and no permission: the start computes it again from the state of
+    that moment and compares (`check_echo`). A deploy that changes a constant, a price or this
+    format changes the id too, which is the point."""
+    kind = found.credential_kind
+    costs = found.costs
+    shown = {
+        "format": QUOTE_ID_FORMAT,
+        "selection": [str(one) for one in found.selection],
+        "reread": [str(one) for one in found.reread],
+        "documents": [
+            [str(one.id), one.characters, one.images, one.steps, one.reused_steps]
+            for one in found.documents
+        ],
+        "unreadable": [[str(one.id), one.code] for one in found.unreadable],
+        "credential_kind": kind.value if kind is not None else None,
+        "model": found.model,
+        "tokens": [found.estimate.low, found.estimate.high, found.estimate.ceiling],
+        "cost": None
+        if costs is None
+        else [
+            pricing.CURRENCY,
+            str(costs.low),
+            str(costs.high),
+            str(costs.ceiling),
+            pricing.PRICES_AS_OF.isoformat(),
+        ],
+        "consent_version": CONSENT_VERSION,
+    }
+    canonical = json.dumps(shown, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class EstimateChangedError(Exception):
+    """The selection no longer gives the estimate the dialog showed. `quote` is the estimate of
+    now: the start answers 409 with it (`EstimateChangedOut`) and creates no run."""
+
+    code = ESTIMATE_CHANGED_CODE
+    message = ESTIMATE_CHANGED
+
+    def __init__(self, fresh: Quote) -> None:
+        super().__init__(ESTIMATE_CHANGED)
+        self.quote = fresh
+
+
+def check_echo(fresh: Quote, echoed: object) -> None:
+    """What the start of a run calls (G10), with the quote it has just computed inside the
+    transaction that creates the run and the `quote_id` the dialog sent back. It returns when
+    they are the same estimate and raises `EstimateChangedError` otherwise: the credential was
+    replaced by one of the other kind, a transcription or another run finished, a document
+    changed, the consent text has a new version, a deploy changed a figure, or the request
+    carries another selection than the one that was shown. An echo that is missing or is not
+    an id never passes. The run stores the `C` and the `H` of `fresh`, which are then the
+    figures the user saw."""
+    if not isinstance(echoed, str) or not secrets.compare_digest(
+        echoed.encode("utf-8"), fresh.quote_id.encode("ascii")
+    ):
+        raise EstimateChangedError(fresh)
 
 
 def _with_cuts(
@@ -434,12 +527,20 @@ class TokensOut(BaseModel):
 
 
 class CostOut(BaseModel):
-    """Estimates in a currency, as text with two decimals, for an API key only."""
+    """Estimates in a currency, as text with two decimals, for an API key only. None of the
+    three is a bound on what a run can cost."""
 
     currency: str
-    low: str
-    high: str
-    ceiling: str
+    low: str = Field(description="The low token estimate at list prices, cache reads included.")
+    high: str = Field(description="The high token estimate at list prices, without any cache.")
+    ceiling: str = Field(
+        description=(
+            "The token ceiling priced as if every token were an input token. It is the price of "
+            "the ceiling in the plan's terms, not the most a run can cost: the ceiling counts "
+            "output tokens and cache writes too, and those cost more than input tokens. Never "
+            "show it as a maximum."
+        )
+    )
     prices_as_of: str
     note: str
 
@@ -480,6 +581,20 @@ class EstimateOut(BaseModel):
     consent: ConsentStateOut
     can_start: bool
     blockers: list[BlockerOut]
+    quote_id: str = Field(
+        description=(
+            "Send it back unchanged with the start of the run. The start answers 409 "
+            "`estimate_changed` with the estimate of that moment when it no longer matches."
+        )
+    )
+
+
+class EstimateChangedOut(BaseModel):
+    """The body of the 409 a start answers when the estimate is no longer the one shown (G10)."""
+
+    detail: str = ESTIMATE_CHANGED
+    code: str = ESTIMATE_CHANGED_CODE
+    estimate: EstimateOut
 
 
 class ConsentOut(BaseModel):
@@ -537,7 +652,7 @@ def estimate_run(body: EstimateIn, user: CurrentUser, db: Db) -> EstimateOut:
         logger.info("ingestion_estimate_refused", extra={"user_id": str(user.id), "rule": exc.code})
         raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.message) from None
     figures = found.estimate
-    logger.info(
+    logger.info(  # counts and the user id only: the quote id is left out, like every figure shown
         "ingestion_estimate",
         extra={
             "user_id": str(user.id),
@@ -551,6 +666,13 @@ def estimate_run(body: EstimateIn, user: CurrentUser, db: Db) -> EstimateOut:
             "credential_kind": found.credential_kind.value if found.credential_kind else None,
         },
     )
+    return answer(db, user.id, found)
+
+
+def answer(db: Session, user_id: uuid.UUID, found: Quote) -> EstimateOut:
+    """The body of the estimate route for a quote. G10 builds the `estimate` of its 409
+    `estimate_changed` with the same call, so the dialog reads one shape in both places."""
+    figures = found.estimate
     subscription = found.credential_kind is CredentialKind.claude_subscription
     return EstimateOut(
         documents=[ReadOut(**vars(one)) for one in found.documents],
@@ -576,9 +698,10 @@ def estimate_run(body: EstimateIn, user: CurrentUser, db: Db) -> EstimateOut:
             step_minutes=plan.STEP_MINUTES,
             run_minutes=plan.RUN_MINUTES,
         ),
-        consent=ConsentStateOut(version=CONSENT_VERSION, accepted=has_consented(db, user.id)),
+        consent=ConsentStateOut(version=CONSENT_VERSION, accepted=has_consented(db, user_id)),
         can_start=found.can_start,
         blockers=[BlockerOut(code=code, reason=BLOCKERS[code]) for code in found.blockers],
+        quote_id=found.quote_id,
     )
 
 

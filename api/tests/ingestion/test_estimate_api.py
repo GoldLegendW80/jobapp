@@ -6,10 +6,13 @@ reaches a log."""
 
 import logging
 import math
+import re
 import secrets
 import uuid
 from collections.abc import Collection, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
+from fractions import Fraction
 from threading import Barrier
 from typing import Any
 
@@ -651,3 +654,226 @@ def test_nothing_of_a_document_reaches_the_log_or_an_error(
     counted = next(record for record in events if record.getMessage() == "ingestion_estimate")
     assert counted.__dict__["steps"] == 2
     assert counted.__dict__["documents"] == 1
+
+
+# --- the edge of a part, through the route (review of PR #112, N1)
+
+
+def test_at_the_edge_of_a_part_the_estimate_follows_where_the_text_breaks(
+    api: Api, factory: sessionmaker[Session], alice: str
+) -> None:
+    """The route cuts the real text, so one character past a full part is not "two half parts":
+    with no break at all it is a full part and a part of one character, which count higher
+    than the full part alone; with a paragraph end at 60,000 it is parts of 60,000 and 40,001,
+    which count lower. `test_estimate.py` pins the equal parts of a text that is not there
+    yet, which is another case."""
+    credential(factory, ALICE)
+    full = str(uploaded(api, alice, ("d" * 100_000).encode(), "full.md")["id"])
+    unbroken = str(uploaded(api, alice, ("c" * 100_001).encode(), "unbroken.md")["id"])
+    broken_text = "a" * 59_998 + "\n\n" + "b" * 40_001
+    assert len(broken_text) == 100_001
+    broken = str(uploaded(api, alice, broken_text.encode(), "broken.md")["id"])
+
+    one = answer(api, alice, [full])
+    assert (one["steps"], one["tokens"]["high"]) == (1, 603_343)
+
+    two = answer(api, alice, [unbroken])
+    assert (two["documents"][0]["characters"], two["steps"]) == (100_001, 2)
+    # 100,000 characters (603,343) and one character (78,010), by hand.
+    assert two["tokens"]["high"] == 603_343 + 78_010 == 681_353
+    assert two["tokens"]["high"] > one["tokens"]["high"]
+
+    cut = answer(api, alice, [broken])
+    assert (cut["documents"][0]["characters"], cut["steps"]) == (100_001, 2)
+    # 60,000 characters are T = 20,000 and R = 2: 84,000 + 20,000 * 23 / 2 + 8,000 = 322,000.
+    # 40,001 are T = 13,334 and R = 2: 84,000 + 13,334 * 23 / 2 + 8,000 = 245,341.
+    parts = estimate.extraction(60_000).high + estimate.extraction(40_001).high
+    assert cut["tokens"]["high"] == math.ceil(parts) == 322_000 + 245_341 == 567_341
+    assert cut["tokens"]["high"] < one["tokens"]["high"]
+
+
+# --- the echo: the estimate shown is the estimate the run starts from (review of PR #112, B3)
+
+
+def fresh_quote(
+    factory: sessionmaker[Session], email: str, ids: Sequence[str], reread: Sequence[str] = ()
+) -> estimate_router.Quote:
+    """What the start of a run computes (G10): the quote of the state of now."""
+    with factory() as db:
+        return estimate_router.quote(db, user_id(factory, email), ids, reread)
+
+
+def refused(found: estimate_router.Quote, echoed: object) -> estimate_router.EstimateChangedError:
+    with pytest.raises(estimate_router.EstimateChangedError) as caught:
+        estimate_router.check_echo(found, echoed)
+    assert caught.value.quote is found  # the estimate of now, for the 409
+    return caught.value
+
+
+def test_a_credential_of_the_other_kind_changes_the_estimate_so_the_start_must_compare(
+    api: Api, factory: sessionmaker[Session], alice: str
+) -> None:
+    """`quote` reads the state of the moment. The dialog asks once and the start asks again
+    later, so the start must compare what it computes with what the dialog showed: G10 calls
+    `check_echo(fresh, quote_id)` and answers 409 `estimate_changed` when it raises. Here the
+    tokens do not move by one, so the ceiling alone would not tell the two apart, while the
+    model changes and an amount of money appears that the user never saw."""
+    ids = dossier(api, alice)
+    credential(factory, ALICE, CredentialKind.claude_subscription)
+    shown = answer(api, alice, ids)
+    assert (shown["model"], shown["cost"], shown["cost_note"]) == (OPUS, None, pricing.QUOTA_NOTE)
+    estimate_router.check_echo(fresh_quote(factory, ALICE, ids), shown["quote_id"])  # unchanged
+
+    credential(factory, ALICE)  # in another tab, the subscription is replaced by an API key
+    now = answer(api, alice, ids)
+    assert (now["model"], now["cost_note"]) == (SONNET, None)
+    assert (now["cost"]["low"], now["cost"]["high"], now["cost"]["ceiling"]) == (
+        "0.24",
+        "1.89",
+        "3.40",
+    )
+    assert now["tokens"] == shown["tokens"]
+    assert now["consent"] == shown["consent"]
+    assert now["quote_id"] != shown["quote_id"]
+
+    fresh = fresh_quote(factory, ALICE, ids)
+    error = refused(fresh, shown["quote_id"])
+    assert (error.code, error.message) == ("estimate_changed", estimate_router.ESTIMATE_CHANGED)
+    # The 409 carries the estimate of now in the shape of the estimate route.
+    with factory() as db:
+        fresh_answer = estimate_router.answer(db, user_id(factory, ALICE), error.quote)
+    body = estimate_router.EstimateChangedOut(estimate=fresh_answer).model_dump(mode="json")
+    assert body == {
+        "detail": estimate_router.ESTIMATE_CHANGED,
+        "code": "estimate_changed",
+        "estimate": now,
+    }
+    estimate_router.check_echo(fresh, now["quote_id"])  # the user read it and clicked again
+
+
+def test_an_api_key_replaced_by_a_subscription_changes_the_estimate_too(
+    api: Api, factory: sessionmaker[Session], alice: str
+) -> None:
+    ids = dossier(api, alice)
+    credential(factory, ALICE)
+    shown = answer(api, alice, ids)
+    assert (shown["model"], shown["cost"]["ceiling"]) == (SONNET, "3.40")
+    credential(factory, ALICE, CredentialKind.claude_subscription)
+    now = answer(api, alice, ids)
+    assert (now["model"], now["cost"], now["cost_note"]) == (OPUS, None, pricing.QUOTA_NOTE)
+    assert now["tokens"] == shown["tokens"]
+    assert now["quote_id"] != shown["quote_id"]
+    refused(fresh_quote(factory, ALICE, ids), shown["quote_id"])
+
+
+def test_the_quote_id_is_stable_and_follows_the_selection(
+    api: Api, factory: sessionmaker[Session], alice: str
+) -> None:
+    ids = dossier(api, alice)
+    credential(factory, ALICE)
+    shown = answer(api, alice, ids)
+    assert re.fullmatch(r"[0-9a-f]{64}", shown["quote_id"])
+    # Nothing is stored: the same state and the same selection give the same id.
+    assert answer(api, alice, ids)["quote_id"] == shown["quote_id"]
+    assert answer(api, alice, [ids[0], *ids])["quote_id"] == shown["quote_id"]  # each id once
+    assert fresh_quote(factory, ALICE, ids).quote_id == shown["quote_id"]
+
+    fewer = answer(api, alice, ids[:2])
+    backwards = answer(api, alice, ids[::-1])
+    again = answer(api, alice, ids, reread_document_ids=[ids[1]])
+    # Another order, or a document to read again, shows the same tokens and is another quote.
+    assert backwards["tokens"] == again["tokens"] == shown["tokens"]
+    assert fewer["tokens"]["ceiling"] < shown["tokens"]["ceiling"]
+    different = {fewer["quote_id"], backwards["quote_id"], again["quote_id"]}
+    assert len(different | {shown["quote_id"]}) == 4
+
+    # A start that carries another selection than the one shown is refused.
+    refused(fresh_quote(factory, ALICE, ids[:2]), shown["quote_id"])
+    refused(fresh_quote(factory, ALICE, ids[::-1]), shown["quote_id"])
+    refused(fresh_quote(factory, ALICE, ids, [ids[1]]), shown["quote_id"])
+    estimate_router.check_echo(fresh_quote(factory, ALICE, ids, [ids[1]]), again["quote_id"])
+
+
+def test_two_users_with_the_same_files_do_not_share_a_quote_id(
+    api: Api, factory: sessionmaker[Session], alice: str, bob: str
+) -> None:
+    credential(factory, ALICE)
+    credential(factory, BOB)
+    hers = answer(api, alice, dossier(api, alice))
+    his = answer(api, bob, dossier(api, bob))
+    assert hers["tokens"] == his["tokens"]
+    assert hers["quote_id"] != his["quote_id"]
+
+
+def test_whatever_changes_what_was_shown_changes_the_quote_id(
+    api: Api, factory: sessionmaker[Session], alice: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ids = dossier(api, alice)
+    credential(factory, ALICE)
+    shown = answer(api, alice, ids)
+
+    def first_document_finished(
+        db: Session, owner: uuid.UUID, selected: Sequence[plan.Document], model: str
+    ) -> Collection[plan.Identity]:
+        return {step.identity for step in plan.build(selected[:1], model=model).steps}
+
+    # A deploy changes a price: the same tokens and the same model, other amounts.
+    with monkeypatch.context() as deploy:
+        dearer = pricing.Price(Fraction(3), Fraction(15), Fraction(3, 20))
+        deploy.setitem(pricing.PRICES, SONNET, dearer)
+        now = answer(api, alice, ids)
+        assert (now["tokens"], now["model"]) == (shown["tokens"], shown["model"])
+        assert now["cost"]["ceiling"] == "5.11"  # 1,702,024 tokens at 3 USD per million
+        assert now["quote_id"] != shown["quote_id"]
+        refused(fresh_quote(factory, ALICE, ids), shown["quote_id"])
+    # The prices are read again on another day, with the same figures.
+    with monkeypatch.context() as deploy:
+        deploy.setattr(pricing, "PRICES_AS_OF", date(2027, 1, 1))
+        now = answer(api, alice, ids)
+        assert now["cost"]["ceiling"] == shown["cost"]["ceiling"]
+        assert now["quote_id"] != shown["quote_id"]
+    # The consent text has a new version.
+    with monkeypatch.context() as deploy:
+        deploy.setitem(estimate_router.CONSENT_TEXTS, 2, "Synthetic words of a second version.")
+        deploy.setattr(estimate_router, "CONSENT_VERSION", 2)
+        now = answer(api, alice, ids)
+        assert now["consent"]["version"] == 2
+        assert now["quote_id"] != shown["quote_id"]
+        refused(fresh_quote(factory, ALICE, ids), shown["quote_id"])
+    # Another run finishes a step in between: the figures only go down, and the user reads the
+    # new ones before the run starts all the same.
+    with monkeypatch.context() as meanwhile:
+        meanwhile.setattr(estimate_router, "_finished_provider", first_document_finished)
+        now = answer(api, alice, ids)
+        assert now["reused_steps"] == 1
+        assert now["tokens"]["ceiling"] < shown["tokens"]["ceiling"]
+        assert now["quote_id"] != shown["quote_id"]
+        refused(fresh_quote(factory, ALICE, ids), shown["quote_id"])
+    # A document can no longer be read.
+    set_columns(factory, ids[2], text_status=TextStatus.failed)
+    now = answer(api, alice, ids)
+    assert [one["code"] for one in now["unreadable"]] == ["failed"]
+    assert now["quote_id"] != shown["quote_id"]
+    refused(fresh_quote(factory, ALICE, ids), shown["quote_id"])
+
+
+def test_an_echo_that_is_missing_or_is_not_the_id_never_passes(
+    api: Api, factory: sessionmaker[Session], alice: str
+) -> None:
+    ids = dossier(api, alice)
+    credential(factory, ALICE)
+    shown = answer(api, alice, ids)["quote_id"]
+    fresh = fresh_quote(factory, ALICE, ids)
+    estimate_router.check_echo(fresh, shown)
+    not_the_id = [None, "", "0" * 64, shown[:-1], shown + "0", shown.upper(), " " + shown]
+    not_the_id += [123, True, shown.encode(), [shown], {"quote_id": shown}, "é" * 64]
+    for echoed in not_the_id:
+        refused(fresh, echoed)
+
+
+def test_a_quote_with_nothing_to_start_still_has_an_id(api: Api, alice: str) -> None:
+    """Without a credential the estimate answers and cannot start: the id is there all the
+    same, and it is not the id of the same selection once a credential exists."""
+    body = answer(api, alice, dossier(api, alice))
+    assert body["can_start"] is False
+    assert re.fullmatch(r"[0-9a-f]{64}", body["quote_id"])

@@ -1069,11 +1069,15 @@ for consent the first time (ingestion G16; the page that shows it is G11's).
   documents a run would read with their characters and images, the ones it cannot read and why,
   the steps, the model of the caller's credential (`claude-opus-5-5` on a Claude subscription,
   `claude-sonnet-5-5` on an Anthropic API key), the token range and the ceiling. No run starts.
+  The answer carries a `quote_id`, a fingerprint of everything it shows. The start of a run
+  sends it back and is refused with the estimate of that moment when it no longer matches
+  (`estimate_router.check_echo`), so a run never starts on figures the user did not see.
 - **The figures are estimates, computed in `api/app/ingestion/estimate.py`** from the sizes of
   the stored texts, never from their content: a low and a high number of tokens, and a ceiling
   of twice the high one, where a run pauses and asks before going on. On a subscription tokens
   are quota and no amount is shown. On an API key three amounts in US dollars are shown, rounded
-  to the cent, with the date of the prices.
+  to the cent, with the date of the prices. The third, named `ceiling`, is the token ceiling
+  priced as input tokens. It is not the most a run can cost, because output tokens cost more.
 - **Prices are a dated table in `api/app/ingestion/pricing.py`**, not a live feed. To update it,
   read the provider's pricing page (`PRICES_URL`) and change `PRICES` and `PRICES_AS_OF` in one
   commit, with the same figures in `api/tests/ingestion/test_pricing.py`, which asserts every
