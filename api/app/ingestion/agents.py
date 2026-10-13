@@ -40,6 +40,7 @@ from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import (
     IngestionRun,
     IngestionRunStep,
+    RunStatus,
     StepStatus,
     stored_text_sha256,
 )
@@ -75,7 +76,7 @@ def bind_step(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
     end}`, plain text and numbers, where `start` and `end` are the character offsets of the part
     in the document's stored text. None when there is nothing to read, and the run then fails
     before any model call: the step is not this run's (not an extraction step, not `running`, of
-    another agent run or another user), or its document is
+    another agent run or another user), its ingestion run is not `running`, or its document is
     gone, has no text, or stores another text than the one the step was planned on
     (`text_sha256`: a replaced text keeps the row and the hash of its file, so only the hash of
     the text tells). A step that carries no text hash is never bound. Reads only, takes no
@@ -93,6 +94,7 @@ def bind_step(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
             IngestionRunStep.kind == plan.StepKind.extract,
             IngestionRunStep.status == StepStatus.running,
             IngestionRun.user_id == run.user_id,
+            IngestionRun.status == RunStatus.running,
         )
     ).scalar_one_or_none()
     if step is None or step.text_sha256 is None:

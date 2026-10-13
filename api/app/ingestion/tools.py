@@ -70,6 +70,7 @@ from app.ingestion.runs_models import (
     IngestionItem,
     IngestionRun,
     IngestionRunStep,
+    RunStatus,
     StepStatus,
     stored_text_sha256,
     text_sha256,
@@ -157,8 +158,9 @@ def _locate(
     text no longer the one the step was planned on (the same file uploaded again over the row,
     or read again: the row keeps its id and the hash of its file, so only the hash of the text
     tells), the step not this agent run's, not an extraction step, not running or without a
-    text hash. With `lock`, the document row is taken `FOR KEY SHARE` and then the step row
-    `FOR UPDATE`, in that order."""
+    text hash, its ingestion run not running. With `lock`, the document row is taken
+    `FOR KEY SHARE` and then the step row `FOR UPDATE`, in that order. The run row is read, never
+    locked: the step row is the fence, the run's status a second look."""
     document = sa.select(
         IngestionDocument.sha256,
         sa.func.char_length(IngestionDocument.text),
@@ -174,6 +176,7 @@ def _locate(
             IngestionRunStep.kind == plan.StepKind.extract,
             IngestionRunStep.status == StepStatus.running,
             IngestionRun.user_id == scope.user_id,
+            IngestionRun.status == RunStatus.running,
         )
     )
     if lock:

@@ -22,7 +22,9 @@ from app.ingestion import agents, citations, documents, item_proposals, items, t
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import (
     IngestionItem,
+    IngestionRun,
     IngestionRunStep,
+    RunStatus,
     StepStatus,
     stored_text_sha256,
     text_sha256,
@@ -457,6 +459,19 @@ def test_a_proposed_skills_years_experience_search_sweep_schedule_and_penalty_ar
             "already_stored": 0,
             "refused": [refusal(0, "setting", "key", sentence)],
         }
+    # The photo is no key an agent may name, under either of its names, and a board is never
+    # switched on by a document.
+    for name, value in (("photo", "data:image/png;base64,AAAA"), ("photo_b64", "AAAA")):
+        answer, _ = call(
+            step_tools, PROPOSE, section="identity", items=[item(name, value, FACT_LINE)]
+        )
+        assert (answer["stored"], [one["rule"] for one in answer["refused"]]) == (
+            0,
+            ["unknown_key"],
+        )
+    board = item("boards", {"ats": "ashby", "org": "example", "enabled": True}, FACT_LINE)
+    answer, _ = call(step_tools, PROPOSE, section="search", items=[board])
+    assert answer["refused"] == [refusal(0, "setting", "value.enabled", sentence)]
     assert all_items(factory) == 0
 
 
@@ -719,6 +734,71 @@ def test_the_document_deleted_during_the_step_tools_answer_not_found_and_nothing
     assert all_items(factory) == 0  # what the step had stored went with the document
     assert counters(factory, clean) == (1, 0, 0)  # the step row stays, as it was
     assert binding_of(factory, clean) is None
+
+
+def test_a_step_whose_ingestion_run_is_no_longer_running_finds_nothing(
+    factory: sessionmaker[Session], clean: Step
+) -> None:
+    step_tools = tools_for(factory, clean)
+
+    def set_run(status: RunStatus) -> None:
+        with factory() as db, db.begin():
+            db.execute(
+                sa.update(IngestionRun)
+                .where(IngestionRun.id == clean.ingestion_run_id)
+                .values(status=status)
+            )
+
+    # The step row still says `running`: only the run's own status has changed.
+    for status in (RunStatus.paused, RunStatus.cancelled, RunStatus.failed, RunStatus.done):
+        set_run(status)
+        assert call(step_tools, READ, offset=0) == (tools.NOT_FOUND, True)
+        assert call(step_tools, PROPOSE, section="identity", items=[EMAIL]) == (
+            tools.NOT_FOUND,
+            True,
+        )
+        assert binding_of(factory, clean) is None
+    assert all_items(factory) == 0
+    assert counters(factory, clean) == (0, 0, 0)
+    set_run(RunStatus.running)
+    assert call(step_tools, PROPOSE, section="identity", items=[EMAIL])[0]["stored"] == 1
+
+
+def test_a_document_whose_text_cannot_be_read_as_text_refuses_every_item_and_counts_them(
+    factory: sessionmaker[Session], alice_id: uuid.UUID, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A text that unfolds past what the checker reads: a document can be made that way on purpose.
+    text = NAME_LINES + "\n" + "\ufdfa" * 400
+    assert citations.prepare(text).readable is False  # how G10 and G11 tell it
+    step = add_step(factory, alice_id, add_document(factory, alice_id, text))
+    step_tools = tools_for(factory, step)
+    caplog.set_level(logging.DEBUG, logger="app")
+    read, error = call(step_tools, READ, offset=0)
+    assert error is False
+    assert read["untrusted_text"] == text  # the part is still read
+    name = item("full_name", "Camille Durand", "Camille Durand")
+    answer, error = call(step_tools, PROPOSE, section="identity", items=[EMAIL, name])
+    assert error is False
+    assert (answer["stored"], answer["already_stored"]) == (0, 0)
+    sentence = citations.REASONS[citations.Rule.DOCUMENT_UNREADABLE]
+    assert [(one["index"], one["rule"], one["reason"]) for one in answer["refused"]] == [
+        (0, "document_unreadable", sentence),
+        (1, "document_unreadable", sentence),
+    ]
+    assert all_items(factory) == 0
+    assert counters(factory, step) == (0, 2, 0)  # counted toward the step's twenty
+    warnings = [
+        record
+        for record in records_of_ingestion(caplog)
+        if record.getMessage() == "ingestion document unreadable"
+    ]
+    assert len(warnings) == 1  # once per call
+    assert warnings[0].levelno == logging.WARNING
+    assert warnings[0].step_id == str(step.step_id)  # type: ignore[attr-defined]
+    for record in caplog.records:
+        logged = repr(record.__dict__).lower()
+        for private in ("camille", "durand", "example.org", "\ufdfa"):
+            assert private not in logged
 
 
 def upload_again(factory: sessionmaker[Session], step: Step, body: bytes) -> str:
