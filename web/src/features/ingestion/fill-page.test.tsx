@@ -1,11 +1,15 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
+import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
 import { fakeDocuments, fakePrompt } from "@/test/ingestion";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
+import { server } from "@/test/server";
 
 import { ProposalList } from "./proposal-list";
 import { RunProgress } from "./run-progress";
@@ -173,12 +177,21 @@ describe("the steps built by later tasks", () => {
   });
 
   it("the review step lays out the start, the progress and the proposals", () => {
-    const { container } = render(<StepReview />);
+    // The list of proposals asks which run finished last: none has.
+    server.use(
+      http.get("*/api/ingestion/runs", () =>
+        HttpResponse.json({ runs: [], active_run_id: null }),
+      ),
+    );
+    const client = new QueryClient();
+    const withClient = (ui: ReactElement) =>
+      render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+    const { container } = withClient(<StepReview />);
     expect(screen.getByText(/the app will show what is sent/)).toBeVisible();
     // Nothing runs and nothing is proposed yet: the two other parts take no room.
     expect(container.firstElementChild?.childElementCount).toBe(1);
     expect(render(<RunProgress />).container).toBeEmptyDOMElement();
-    expect(render(<ProposalList />).container).toBeEmptyDOMElement();
+    expect(withClient(<ProposalList />).container).toBeEmptyDOMElement();
     expect(render(<RunStart />).container).not.toBeEmptyDOMElement();
   });
 });
