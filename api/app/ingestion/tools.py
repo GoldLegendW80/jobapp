@@ -75,11 +75,14 @@ from app.ingestion.runs_models import (
     stored_text_sha256,
     text_sha256,
 )
+from app.ingestion.runs_models import (
+    of_stored_text as of_stored_text,  # its readers know it under this module's name too
+)
+from app.ingestion.tool_names import PROPOSE as PROPOSE
+from app.ingestion.tool_names import READ_DOCUMENT as READ_DOCUMENT
 
 logger = logging.getLogger("app.ingestion.tools")
 
-READ_DOCUMENT = "read_document"
-PROPOSE = "propose_profile_changes"
 
 READ_MAX_CHARS = 30_000  # one tool result stays inline up to 49,000 characters (plan, G0)
 READ_MAX_BYTES = 40_000  # and this many UTF-8 bytes (assumption A6)
@@ -572,22 +575,6 @@ def _log_failure(name: str, scope: Scope, failure: str) -> None:
 
 
 # --- for the merge (G12) --------------------------------------------------------------------------
-
-
-def of_stored_text() -> sa.ColumnElement[bool]:
-    """A condition on `ingestion_items`: true for an item whose step was planned on the text its
-    document stores now. An item read without it may cite a text that was replaced since: its
-    offsets and its excerpt are then those of a text that is no longer stored."""
-    return (
-        sa.exists()
-        .where(
-            IngestionRunStep.id == IngestionItem.step_id,
-            IngestionDocument.id == IngestionItem.document_id,
-            IngestionDocument.user_id == IngestionItem.user_id,
-            IngestionRunStep.text_sha256 == stored_text_sha256(),
-        )
-        .correlate(IngestionItem)
-    )
 
 
 def as_item(row: IngestionItem) -> items.Item:

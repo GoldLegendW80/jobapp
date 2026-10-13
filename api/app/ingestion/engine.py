@@ -57,7 +57,7 @@ from app.agents import runs as agent_runs
 from app.agents.models import AgentEvent, AgentRun
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
-from app.ingestion import agents, estimate, estimate_router, merge, plan, reuse, tools
+from app.ingestion import agents, estimate, estimate_router, merge, plan, reuse
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import (
     IngestionItem,
@@ -66,6 +66,7 @@ from app.ingestion.runs_models import (
     RunStatus,
     StepStatus,
     identity_hash,
+    of_stored_text,
     stored_text_sha256,
     text_sha256,
 )
@@ -631,7 +632,7 @@ def _close(
             IngestionItem.step_id.in_(
                 sa.select(IngestionRunStep.id).where(IngestionRunStep.ingestion_run_id == run.id)
             ),
-            sa.not_(tools.of_stored_text()),
+            sa.not_(of_stored_text()),
         )
         .execution_options(synchronize_session=False)
     )

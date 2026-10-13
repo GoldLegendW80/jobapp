@@ -322,3 +322,19 @@ class IngestionItem(Base):
     flags: Mapped[list[str]] = mapped_column(
         pg.ARRAY(sa.Text), nullable=False, default=list, server_default=sa.text("'{}'::text[]")
     )
+
+
+def of_stored_text() -> sa.ColumnElement[bool]:
+    """A condition on `ingestion_items`: true for an item whose step was planned on the text its
+    document stores now. An item read without it may cite a text that was replaced since: its
+    offsets and its excerpt are then those of a text that is no longer stored."""
+    return (
+        sa.exists()
+        .where(
+            IngestionRunStep.id == IngestionItem.step_id,
+            IngestionDocument.id == IngestionItem.document_id,
+            IngestionDocument.user_id == IngestionItem.user_id,
+            IngestionRunStep.text_sha256 == stored_text_sha256(),
+        )
+        .correlate(IngestionItem)
+    )

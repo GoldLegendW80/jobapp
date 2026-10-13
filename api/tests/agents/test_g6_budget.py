@@ -1128,3 +1128,30 @@ def test_the_api_reads_the_messages_without_the_sdk() -> None:
         cwd=Path(__file__).resolve().parents[2],
     )
     assert done.returncode == 0, done.stderr
+
+
+def test_the_api_starts_without_the_sdk() -> None:
+    """The api registers the ingestion agents and chains their runs (ingestion G10), and its
+    image holds no Claude Agent SDK: the whole app imports with the SDK absent, knows the
+    extraction agent by its definition and never loads a module that builds a tool."""
+    code = (
+        "import sys\n"
+        "sys.modules['claude_agent_sdk'] = None  # as in the api image: the import fails\n"
+        "import app.main\n"
+        "from app.agents import definitions\n"
+        "from app.ingestion import agents, engine, tool_names\n"
+        "assert definitions.AGENTS[agents.EXTRACT_NAME].tools == "
+        "(tool_names.READ_DOCUMENT, tool_names.PROPOSE)\n"
+        "assert engine.on_final\n"
+        "loaded = [name for name in ('app.ingestion.tools', 'app.agents.tools', "
+        "'app.agents.runner') if name in sys.modules]\n"
+        "assert loaded == [], loaded\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+    assert done.returncode == 0, done.stderr

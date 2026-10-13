@@ -1,0 +1,164 @@
+{
+  "description": "G10 journey, tests/ingestion/fixtures/g10_second.txt: a slow step (two seconds before each message, so a journey can cancel it while it runs) that reads the part and proposes one fact.",
+  "steps": [
+    {
+      "message": {
+        "type": "system",
+        "subtype": "init",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000001",
+        "cwd": "/tmp/run",
+        "model": "{model}",
+        "permissionMode": "dontAsk",
+        "tools": [
+          "mcp__app__read_document",
+          "mcp__app__propose_profile_changes"
+        ],
+        "mcp_servers": [
+          {
+            "name": "app",
+            "status": "connected"
+          }
+        ],
+        "apiKeySource": "ANTHROPIC_API_KEY",
+        "claude_code_version": "2.1.286"
+      }
+    },
+    {
+      "sleep": 2.0
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000101",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_g10_001",
+          "type": "message",
+          "role": "assistant",
+          "model": "{model}",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_g10_001",
+              "name": "mcp__app__read_document",
+              "input": {
+                "offset": 0
+              }
+            }
+          ],
+          "stop_reason": "tool_use",
+          "usage": {
+            "input_tokens": 700,
+            "output_tokens": 40,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 100
+          }
+        }
+      }
+    },
+    {
+      "sleep": 2.0
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000102",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_g10_002",
+          "type": "message",
+          "role": "assistant",
+          "model": "{model}",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_g10_002",
+              "name": "mcp__app__propose_profile_changes",
+              "input": {
+                "section": "facts",
+                "items": [
+                  {
+                    "key": "blocks",
+                    "action": "add",
+                    "value": {
+                      "title": "Booking tool",
+                      "body": "Wrote the made up booking tool of a community garden."
+                    },
+                    "citations": [
+                      {
+                        "excerpt": "Wrote the made up booking tool of a community garden."
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "stop_reason": "tool_use",
+          "usage": {
+            "input_tokens": 700,
+            "output_tokens": 40,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 100
+          }
+        }
+      }
+    },
+    {
+      "sleep": 2.0
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000103",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_g10_003",
+          "type": "message",
+          "role": "assistant",
+          "model": "{model}",
+          "content": [
+            {
+              "type": "text",
+              "text": "Proposed 1 item."
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 700,
+            "output_tokens": 40,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 100
+          }
+        }
+      }
+    },
+    {
+      "message": {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "duration_ms": 1800,
+        "duration_api_ms": 1500,
+        "num_turns": 3,
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-0000000009ff",
+        "result": "Proposed 1 item.",
+        "stop_reason": "end_turn",
+        "total_cost_usd": 0.02,
+        "usage": {
+          "input_tokens": 2100,
+          "output_tokens": 120,
+          "cache_creation_input_tokens": 300,
+          "cache_read_input_tokens": 300
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed"
+      }
+    }
+  ]
+}

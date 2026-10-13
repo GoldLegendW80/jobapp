@@ -46,7 +46,6 @@ from app.ingestion import (
     estimate_router,
     plan,
     reuse,
-    tools,
 )
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import (
@@ -55,6 +54,7 @@ from app.ingestion.runs_models import (
     IngestionRunStep,
     RunStatus,
     StepStatus,
+    of_stored_text,
 )
 
 logger = logging.getLogger("app.ingestion")
@@ -266,7 +266,7 @@ def run_out(db: Session, run: IngestionRun) -> RunOut:
             db.scalar(
                 sa.select(sa.func.count())
                 .select_from(IngestionItem)
-                .where(IngestionItem.step_id.in_(sources), tools.of_stored_text())
+                .where(IngestionItem.step_id.in_(sources), of_stored_text())
             )
             or 0
         )
