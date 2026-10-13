@@ -129,7 +129,7 @@ Ingestion uses the `proposals` table of SPEC-agents as built in A3 (migration 00
 | POST /api/ingestion/documents (raw body; filename in `X-Filename` as RFC 5987 UTF-8, sanitised to a safe display name), POST /api/ingestion/documents/text (pasted text) ; GET ; DELETE /{id} ; POST /{id}/confirm | manage documents |
 | GET /api/ingestion/documents/{id}/text?offset=&limit= ; GET /api/ingestion/documents/{id}/images/{position} | extracted text preview, paginated; a stored page image, while it exists |
 | POST /api/ingestion/runs/estimate `{document_ids}` ; GET /api/ingestion/consent ; POST /api/ingestion/consent `{version}` | what a run would read, the token range and ceiling, the cost range for an API key; read and record the consent |
-| POST /api/ingestion/runs `{document_ids, reread_document_ids?}` ; GET /api/ingestion/runs/{id} ; POST /api/ingestion/runs/{id}/cancel ; POST /api/ingestion/runs/{id}/resume ; POST /api/ingestion/runs/{id}/continue | start, follow, stop, resume an extraction, and raise its token ceiling after a pause on it |
+| POST /api/ingestion/runs `{document_ids, reread_document_ids?, quote_id}` (`quote_id` is the one the estimate answered: 409 `estimate_changed` with the fresh estimate when it no longer matches) ; GET /api/ingestion/runs/{id} ; POST /api/ingestion/runs/{id}/cancel ; POST /api/ingestion/runs/{id}/resume ; POST /api/ingestion/runs/{id}/continue | start, follow, stop, resume an extraction, and raise its token ceiling after a pause on it |
 | GET /api/ingestion/runs/{id}/proposals ; POST /api/proposals/{id}/accept `{edited_value?}` ; POST /api/proposals/{id}/reject ; POST /api/ingestion/runs/{id}/accept-section ; POST /api/ingestion/runs/{id}/reject-section | review |
 
 ## Frontend
