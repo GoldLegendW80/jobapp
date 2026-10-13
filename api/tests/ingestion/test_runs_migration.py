@@ -35,6 +35,7 @@ RUN_COLUMNS = {
     "status": ("ENUM", False),
     "partial": ("BOOLEAN", False),
     "paused_reason": ("TEXT", True),
+    "paused_at": ("TIMESTAMP", True),
     "waiting": ("TEXT", True),
     "deadline_at": ("TIMESTAMP", False),
     "cancel_requested_at": ("TIMESTAMP", True),

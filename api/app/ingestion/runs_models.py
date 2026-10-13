@@ -167,6 +167,9 @@ class IngestionRun(Base):
         sa.Boolean, nullable=False, server_default=sa.text("false")
     )
     paused_reason: Mapped[str | None] = mapped_column(sa.Text)
+    # When the current pause began, null when the run is not paused. A stored fact: the 24 hours
+    # of a pause and the move of `deadline_at` at a Resume or a Continue are counted from it.
+    paused_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     # Why a running chain is not moving ("slots"), null when it is.
     waiting: Mapped[str | None] = mapped_column(sa.Text)
     deadline_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)

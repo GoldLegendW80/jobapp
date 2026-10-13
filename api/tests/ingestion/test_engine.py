@@ -356,6 +356,64 @@ def test_a_paused_run_24_hours_old_is_merged_and_closed_partial(
     assert eh.statuses(factory, run_id) == ["done", "cancelled", "cancelled"]
 
 
+@pytest.mark.parametrize("ending", ["continue", "wait"])
+def test_a_ceiling_pause_right_after_a_resume_is_a_pause_of_its_own(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings, ending: str
+) -> None:
+    """The probe of the review of PR #148 (B2): the provider fails a step that spent most of
+    what remained, the user resumes ten hours later and the chain pauses at once on its
+    ceiling. That second pause follows no agent run, no Continue and no creation: derived from
+    those, its start was the first pause's, the run was closed 14 hours after the Resume and the
+    deadline moved by the first pause twice."""
+    run_id = started(factory, alice, settings, count=1)
+    run = eh.run_of(factory, run_id)
+    low = math.ceil(estimate.extraction(len(eh.text_of(0))).low)
+    start, deadline = now(), run.deadline_at
+    eh.end_agent(
+        factory,
+        eh.running(factory, run_id).agent_run_id,
+        AgentStatus.failed,
+        failures.BUSY,
+        tokens=run.token_ceiling - low + 1,
+        at=start,
+    )
+    eh.advance(factory, run_id, settings, at=start)
+    first = eh.run_of(factory, run_id)
+    assert (first.status, first.paused_reason, first.paused_at) == (
+        RunStatus.paused,
+        failures.BUSY,
+        start,
+    )
+
+    resumed = start + timedelta(hours=10)
+    with factory() as db, db.begin():
+        engine.resume(db, alice, run_id, resumed)
+    agents_before = len(eh.agent_runs_of(factory, alice))
+    eh.advance(factory, run_id, settings, at=resumed)
+    second = eh.run_of(factory, run_id)
+    assert (second.status, second.paused_reason) == (RunStatus.paused, engine.TOKEN_CEILING)
+    assert len(eh.agent_runs_of(factory, alice)) == agents_before
+    assert second.paused_at == resumed
+    assert second.deadline_at == deadline + timedelta(hours=10)
+
+    # 24 hours and one minute after the first pause, 14 hours into this one: still waiting.
+    eh.advance(factory, run_id, settings, at=start + timedelta(hours=24, minutes=1))
+    assert eh.run_of(factory, run_id).status is RunStatus.paused
+    eh.advance(factory, run_id, settings, at=resumed + timedelta(hours=23, minutes=59))
+    assert eh.run_of(factory, run_id).status is RunStatus.paused
+    if ending == "wait":
+        eh.advance(factory, run_id, settings, at=resumed + timedelta(hours=24, minutes=1))
+        closed = eh.run_of(factory, run_id)
+        assert (closed.status, closed.paused_at) == (RunStatus.failed, None)
+        return
+    with factory() as db, db.begin():
+        engine.continue_(db, alice, run_id, start + timedelta(hours=34))
+    going = eh.run_of(factory, run_id)
+    # Paused 10 hours, then 24: the clock stopped for 34 hours, counted once.
+    assert (going.status, going.paused_at) == (RunStatus.running, None)
+    assert going.deadline_at == deadline + timedelta(hours=34)
+
+
 @pytest.mark.parametrize("error", REAPED)
 def test_the_worker_restarted_mid_step(
     factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings, error: str

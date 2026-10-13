@@ -366,14 +366,14 @@ def _after(
             run.cancel_requested_at = now
         return StepStatus.cancelled
     if error == failures.TOKEN_LIMIT and _on_the_remainder(step):
-        _pause(run, TOKEN_CEILING)  # interrupted by the ceiling: it keeps its items, runs again
+        _pause(run, TOKEN_CEILING, now)  # cut by the ceiling: it keeps its items, runs again
         return StepStatus.planned
     if failures.is_provider_failure(error) or (
         # The API never answered (a closed port): the CLI retried in silence up to the time
         # limit. Not the document's fault, and the next step would spend 15 minutes the same way.
         error is not None and error.startswith(_TIME_LIMIT) and spent == 0
     ):
-        _pause(run, error or QUEUE_DOWN)
+        _pause(run, error or QUEUE_DOWN, now)
         return StepStatus.planned
     box = failures.is_box_failure(error)
     if box or error in REAPED:
@@ -381,7 +381,7 @@ def _after(
             return StepStatus.failed  # a second such failure is the step's own
         step.attempt = ATTEMPTS
         if box:
-            _pause(run, error or failures.INTERNAL)
+            _pause(run, error or failures.INTERNAL, now)
         return StepStatus.planned
     return StepStatus.failed  # the step's own content: the chain goes on
 
@@ -446,8 +446,11 @@ def continue_adds(db: Session, run: IngestionRun, steps: Sequence[IngestionRunSt
     return max(run.estimate_high, need)
 
 
-def _pause(run: IngestionRun, reason: str) -> None:
+def _pause(run: IngestionRun, reason: str, now: datetime) -> None:
+    """The run pauses now. `paused_at` is the start of this pause and of no other: the 24 hours
+    and the move of the deadline are counted from it."""
     run.status = RunStatus.paused
+    run.paused_at = now
     run.paused_reason = reason
     run.waiting = None
 
@@ -464,7 +467,7 @@ def _next(
         _close(db, run, steps, RunStatus.cancelled, now)
         return Moved(run.status)
     if run.status is RunStatus.paused:
-        if now - paused_since(db, run) >= PAUSE_MAX:
+        if now - _paused_at(run) >= PAUSE_MAX:
             _merge(db, run, steps, now)
         return Moved(run.status)
     if now >= run.deadline_at:
@@ -479,7 +482,7 @@ def _next(
     if budget is None or budget < _floor(db, step):
         # Under the step's low estimate, or not above the budget that already cut it: no agent
         # run, no token. Continue raises the ceiling by what this step needs (`continue_adds`).
-        _pause(run, TOKEN_CEILING)
+        _pause(run, TOKEN_CEILING, now)
         return Moved(run.status)
     if agent_runs.count_active(db, run.user_id) >= agent_runs.ACTIVE_PER_USER:
         run.waiting = WAITING_SLOTS
@@ -611,21 +614,10 @@ def stream_name(settings: Settings, step: IngestionRunStep) -> str | None:
 # --- the end of a run -------------------------------------------------------------------------
 
 
-def paused_since(db: Session, run: IngestionRun) -> datetime:
-    """When the run's pause began, to the minute: the latest of its creation, its last Continue
-    and the end of the last agent run of its steps. Every pause follows one of the three."""
-    marks = [run.created_at]
-    marks.extend(
-        datetime.fromisoformat(entry["at"]) for entry in run.ceiling_history if "at" in entry
-    )
-    ended = db.scalar(
-        sa.select(sa.func.max(AgentRun.finished_at))
-        .join(IngestionRunStep, IngestionRunStep.agent_run_id == AgentRun.id)
-        .where(IngestionRunStep.ingestion_run_id == run.id)
-    )
-    if ended is not None:
-        marks.append(ended)
-    return max(marks)
+def _paused_at(run: IngestionRun) -> datetime:
+    """When the current pause began: the fact `_pause` stored. A paused row without it was not
+    written by this engine; its creation is the earliest it can have paused."""
+    return run.paused_at or run.created_at
 
 
 def _delete_events(db: Session, agent_run_ids: Sequence[uuid.UUID]) -> None:
@@ -681,6 +673,7 @@ def _close(
     )
     run.status = status
     run.waiting = None
+    run.paused_at = None
     run.finished_at = now
     logger.info(
         "ingestion_run_closed",
@@ -713,8 +706,9 @@ def request_cancel(
     return run
 
 
-def _restart(db: Session, run: IngestionRun, now: datetime) -> None:
-    run.deadline_at = run.deadline_at + (now - paused_since(db, run))  # a pause stops the clock
+def _restart(run: IngestionRun, now: datetime) -> None:
+    run.deadline_at = run.deadline_at + (now - _paused_at(run))  # a pause stops the clock
+    run.paused_at = None
     run.status = RunStatus.running
     run.paused_reason = None
     run.waiting = None
@@ -730,7 +724,7 @@ def resume(
         return None
     if run.status is not RunStatus.paused or run.paused_reason == TOKEN_CEILING:
         raise WrongStateError
-    _restart(db, run, now)
+    _restart(run, now)
     return run
 
 
@@ -747,7 +741,7 @@ def continue_(
     if run.status is not RunStatus.paused or run.paused_reason != TOKEN_CEILING:
         raise WrongStateError
     raised = run.token_ceiling + continue_adds(db, run, _steps(db, run.id))
-    _restart(db, run, now)
+    _restart(run, now)
     run.ceiling_history = [
         *run.ceiling_history,
         {
@@ -773,7 +767,7 @@ def queue_failed(db: Session, run_id: uuid.UUID, agent_run_id: uuid.UUID, now: d
     if not agent_runs.fail_queued(db, agent_run_id, agent_runs.QUEUE_DOWN, now):
         return  # it was taken after all, or ended: `advance` reads what became of it
     current.status = StepStatus.planned
-    _pause(run, QUEUE_DOWN)
+    _pause(run, QUEUE_DOWN, now)
 
 
 # --- callers: the routes, the hook and the cron ------------------------------------------------
