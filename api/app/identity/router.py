@@ -7,8 +7,10 @@ the event loop. Each handler owns one transaction and commits it itself.
 
 Every failure of a link answers the same 404 body, and every failed sign in the same 401 body,
 whatever the reason. Sign in and the current password of a password change are throttled
-(`throttle`): over the limit they answer 429 with Retry-After before any argon2 work. Nothing
-here logs a password, a token or a cookie.
+(`throttle`): over the limit they answer 429 with Retry-After before any argon2 work. The
+argon2 work itself runs in a bounded number of slots (`security.password_slots`, issue #108):
+a request that finds none free within the wait bound answers 503 with Retry-After, and its
+reserved attempt is forgotten. Nothing here logs a password, a token or a cookie.
 """
 
 from typing import Annotated
@@ -48,6 +50,9 @@ _404 = {404: {"model": ErrorOut, "description": "The link is not valid"}}
 _422 = {422: {"model": ErrorOut, "description": "The input breaks a rule"}}
 _429 = {429: {"model": ErrorOut, "description": "Too many failed attempts; see Retry-After"}}
 
+_503 = {503: {"model": ErrorOut, "description": "Busy checking passwords; see Retry-After"}}
+
+SERVER_BUSY = "The server is busy. Try again in a moment."
 LOGIN_THROTTLED = "Too many sign in attempts."
 PASSWORD_THROTTLED = "Too many attempts with a wrong current password."  # noqa: S105, a message
 
@@ -58,6 +63,23 @@ def _too_many(exc: throttle.ThrottledError, what: str) -> HTTPException:
         detail=f"{what} {throttle.wait_phrase(exc.retry_after)}",
         headers={"Retry-After": str(exc.retry_after)},
     )
+
+
+def _busy(exc: security.HashBusyError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=SERVER_BUSY,
+        headers={"Retry-After": str(exc.retry_after)},
+    )
+
+
+def _busy_attempt(db: Session, attempt: int, exc: security.HashBusyError) -> HTTPException:
+    """No slot to verify the password of a reserved attempt: the attempt is forgotten (it
+    tested nothing) and the answer is the 503."""
+    db.rollback()
+    throttle.forget(db, attempt)
+    db.commit()
+    return _busy(exc)
 
 
 def _reserve_attempt(request: Request, db: Session, email: str, what: str) -> int:
@@ -94,13 +116,20 @@ def _start_session(request: Request, db: Session, user: User) -> None:
     deps.issue_cookie(request, issued.token)
 
 
-@router.post("/login", response_model=UserOut, responses={**_401, **_429})
+@router.post("/login", response_model=UserOut, responses={**_401, **_429, **_503})
 def login(body: LoginIn, request: Request, db: Db) -> User:
     """Sign in. Every attempt is recorded (unknown and disabled accounts too) and checked
     against the limits first: 5 failures per email (reset by a success) and 20 per client
     address in 15 minutes, else 429 with Retry-After in seconds."""
     attempt = _reserve_attempt(request, db, throttle.attempt_email(body.email), LOGIN_THROTTLED)
-    user = service.authenticate(db, body.email, body.password)
+    # The slot is taken here, after the cheap refusals (body size, shape, throttle) and before
+    # the account is looked up: whether the email has an account changes neither the wait nor
+    # the 503, and no database connection is checked out while waiting.
+    try:
+        with security.password_slots.hold():
+            user = service.authenticate(db, body.email, body.password)
+    except security.HashBusyError as exc:
+        raise _busy_attempt(db, attempt, exc) from None
     if user is None:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=LOGIN_FAILED)
@@ -166,6 +195,7 @@ def rename_me(body: NameIn, request: Request, db: Db, active: CurrentSession) ->
         400: {"model": ErrorOut, "description": "current_password: incorrect"},
         422: {"model": ErrorOut, "description": "new_password: the rule it breaks"},
         **_429,
+        **_503,
     },
 )
 def change_password(
@@ -181,14 +211,19 @@ def change_password(
     when the new password is then refused."""
     attempt = _reserve_attempt(request, db, active.user.email, PASSWORD_THROTTLED)
     try:
-        service.change_password(
-            db,
-            active.user.id,
-            active.row.id,
-            body.current_password,
-            body.new_password,
-            now=deps.clock(request),
-        )
+        # One slot for the verification and the new hash; nothing reads the database between
+        # the commit of the attempt and the slot, so the wait holds no connection.
+        with security.password_slots.hold():
+            service.change_password(
+                db,
+                active.user.id,
+                active.row.id,
+                body.current_password,
+                body.new_password,
+                now=deps.clock(request),
+            )
+    except security.HashBusyError as exc:
+        raise _busy_attempt(db, attempt, exc) from None
     except service.WrongPasswordError:
         db.rollback()
         raise HTTPException(
@@ -219,15 +254,26 @@ def check_invite(token: str, request: Request, db: Db) -> InviteOut:
 @router.post(
     "/invites/{token}/accept",
     response_model=UserOut,
-    responses={**_404, **_422, 409: {"model": ErrorOut, "description": "Account exists"}},
+    responses={**_404, **_422, **_503, 409: {"model": ErrorOut, "description": "Account exists"}},
 )
 def accept_invite(token: str, body: AcceptInviteIn, request: Request, db: Db) -> User:
     """Set a name and password from an invite, or a new password from a reset link, then sign
     in. A reset ends every earlier session of that user."""
+    # A link that is not valid is refused before any slot is asked for, so a flood of made up
+    # tokens costs no hash and takes no place in the queue; the rollback hands the connection
+    # back before the wait.
+    if service.lookup_invite(db, token, deps.clock(request)) is None:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=LINK_INVALID)
+    db.rollback()
     try:
-        user = service.accept_invite(
-            db, token, body.password, name=body.name, now=deps.clock(request)
-        )
+        with security.password_slots.hold():
+            user = service.accept_invite(
+                db, token, body.password, name=body.name, now=deps.clock(request)
+            )
+    except security.HashBusyError as exc:
+        db.rollback()
+        raise _busy(exc) from None
     except service.InvalidLinkError:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=LINK_INVALID) from None

@@ -1202,11 +1202,14 @@ def test_nothing_of_a_document_reaches_a_log(
     words = f"words-{uuid.uuid4().hex}"
     secret = secret_like()
     text = f"{words} key={secret}"
+    # What only the pasted text holds is a token too: "pasted" is a word a path, a logger or a
+    # field of a record may hold by chance.
+    pasted = f"pasted-{uuid.uuid4().hex}"
     with caplog.at_level("DEBUG"):
         first = uploaded(api, alice, text.encode(), f"{name}.txt")
         upload(api, alice, text.encode(), f"{name}.txt")  # duplicate
         binary = uploaded(api, alice, pdf() + words.encode(), f"{name}.pdf")
-        paste(api, alice, f"pasted {text}", name=name)
+        paste(api, alice, f"{pasted} {text}", name=name)
         upload(api, alice, b"GIF89a" + words.encode(), f"{name}.gif")  # 415
         upload(api, alice, b"", f"{name}.empty")  # 422
         upload(api, alice, pdf(FILE_MAX_BYTES + 1), f"{name}.big")  # 413
@@ -1224,7 +1227,7 @@ def test_nothing_of_a_document_reaches_a_log(
     logged = caplog.text + "".join(
         json.dumps({k: str(v) for k, v in vars(record).items()}) for record in caplog.records
     )
-    for private in (name, words, secret, "pasted "):
+    for private in (name, words, secret, pasted):
         assert private not in logged
     events = [record.getMessage() for record in caplog.records if record.name == "app.ingestion"]
     assert events == [
