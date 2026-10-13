@@ -26,6 +26,11 @@
 #      snippet itself (the image holds no test code), each read through pc.parse: wall time,
 #      and the child's CPU, resident memory and address space, to judge `as` (256 MiB), the
 #      CPU limit and the time budget of the kind against this machine.
+#   7. (G8) the image reader and the page renderer at the worst inputs their guards allow, built
+#      in the snippet as well: a 25 megapixel progressive JPEG and a 25 megapixel RGBA PNG (kind
+#      image), a PDF page whose picture inflates to 1.7 GiB and six pages scanned at 600 dpi (kind
+#      pdf_render). Per kind: wall time, child CPU and the child's peak address space, to set the
+#      `as` limits of the kinds (320 and 256 MiB, measured on the Mac) against this machine.
 #
 # A problem shows as a line starting with PROBLEM and exit status 1. The numbers go under
 # "Measurements" in the plan of the module.
@@ -268,6 +273,97 @@ ARCHIVES = (
 )
 
 
+def png_rgba(width, height):
+    """A PNG of `width` by `height` pixels with an alpha channel, all zero: a few kilobytes that
+    decode to width x height x 4 bytes."""
+    import struct
+    import zlib
+
+    def chunk(name, content):
+        return struct.pack(">I", len(content)) + name + content + struct.pack(">I", zlib.crc32(name + content))
+
+    packer = zlib.compressobj(1)
+    row = b"\x00" + bytes(width * 4)
+    data = b"".join(packer.compress(row) for _ in range(height)) + packer.flush()
+    header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", data) + chunk(b"IEND", b"")
+
+
+def jpeg_progressive(width, height):
+    """A progressive JPEG with no subsampling: the decoder keeps every coefficient of every
+    component for the whole picture (Pillow is in the image of the worker)."""
+    from PIL import Image
+
+    grain = Image.effect_noise((width // 8, height // 8), 40).resize((width, height)).convert("RGB")
+    out = io.BytesIO()
+    grain.save(out, format="JPEG", quality=30, progressive=True, subsampling=0)
+    return out.getvalue()
+
+
+def scan_pdf(pictures):
+    """A PDF of one page per picture, each page its own picture drawn over the whole A4 page.
+    A picture is (stream, width, height, the entries of its dictionary)."""
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>"]
+    count = len(pictures)
+    objects.append(b"<< /Type /Pages /Kids [%s] /Count %d >>" % (b" ".join(b"%d 0 R" % (3 + 3 * n) for n in range(count)), count))
+    for n, (stream, width, height, entries) in enumerate(pictures):
+        draw = b"q 595 0 0 842 0 0 cm /Im0 Do Q"
+        objects.append(
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents %d 0 R "
+            b"/Resources << /XObject << /Im0 %d 0 R >> >> >>" % (4 + 3 * n, 5 + 3 * n)
+        )
+        objects.append(b"<< /Length %d >>\nstream\n" % len(draw) + draw + b"\nendstream")
+        objects.append(
+            b"<< /Type /XObject /Subtype /Image /Width %d /Height %d %s /Length %d >>\nstream\n"
+            % (width, height, entries, len(stream))
+            + stream
+            + b"\nendstream"
+        )
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    start = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, start)
+    return bytes(out)
+
+
+def inflating_pdf(side):
+    """One page whose picture is a few kilobytes of Flate that inflate to side x side x 3 bytes:
+    24,000 is 1.7 GiB, which PDFium gives up and draws the page without."""
+    import zlib
+
+    packer = zlib.compressobj(1)
+    row = bytes(side * 3)
+    data = b"".join(packer.compress(row) for _ in range(side)) + packer.flush()
+    return scan_pdf([(data, side, side, b"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode")])
+
+
+def heavy_scans(pages):
+    """A4 pages scanned in grey at 600 dpi (4960 by 7016), each page its own picture of grain
+    that does not compress: 17.5 MiB for six."""
+    from PIL import Image
+
+    grain = Image.effect_noise((4960 // 4, 7016 // 4), 30).resize((4960, 7016))
+    out = io.BytesIO()
+    grain.save(out, format="JPEG", quality=25)
+    entries = b"/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /DCTDecode"
+    return scan_pdf([(out.getvalue(), 4960, 7016, entries) for _ in range(pages)])
+
+# (label, kind of parser job, the file, its options, rounds): the images and the scanned pages of
+# G8, at the worst inputs the guards let through. The address space of the child is read against
+# the limits of the kinds (320 MiB for image, 256 MiB for pdf_render, main.py of the sandbox).
+PICTURES = (
+    ("image, 25 Mpx progressive JPEG", "image", lambda: jpeg_progressive(5000, 5000), None, 3),
+    ("image, 25 Mpx RGBA PNG", "image", lambda: png_rgba(5000, 5000), None, 3),
+    ("render, picture inflating to 1.7 GiB", "pdf_render", lambda: inflating_pdf(24_000), {"pages": [0]}, 3),
+    ("render, 6 pages at 600 dpi", "pdf_render", lambda: heavy_scans(6), {"pages": list(range(6))}, 3),
+)
+
+
 def spread(values):
     return [round(min(values), 1), round(statistics.median(values), 1), round(max(values), 1)]
 
@@ -323,6 +419,25 @@ async def main():
         found["jobs"].append(
             {"job": label, "bytes": len(data), "rounds": rounds, "files": len(parsed.documents),
              "characters": characters, "truncated": parsed.truncated,
+             "wall_ms": spread(wall), "child_cpu_ms": spread(cpu),
+             "child_max_rss_mib": spread(rss), "child_max_vm_mib": spread(vm)}
+        )
+    for label, kind, make, options, rounds in PICTURES:
+        data = make()
+        wall, cpu, rss, vm = [], [], [], []
+        parsed = None
+        for _ in range(rounds):
+            started = time.monotonic()
+            parsed = await pc.parse(kind, data, options, timeout_s=90)
+            wall.append((time.monotonic() - started) * 1000)
+            used = parsed.usage or {}
+            cpu.append(used.get("cpu_ms", 0))
+            rss.append(used.get("max_rss_kb", 0) / 1024)
+            vm.append(used.get("max_vm_kb", 0) / 1024)
+        # Counts only: nothing of a picture is printed.
+        found["jobs"].append(
+            {"job": label, "bytes": len(data), "rounds": rounds, "pages": parsed.pages,
+             "pages_image": parsed.pages_image, "images": len(parsed.images),
              "wall_ms": spread(wall), "child_cpu_ms": spread(cpu),
              "child_max_rss_mib": spread(rss), "child_max_vm_mib": spread(vm)}
         )
@@ -415,9 +530,9 @@ for name, answer in sorted(sandbox["denied"].items()):
 for problem in sandbox["problems"]:
     print("PROBLEM: sandbox: %s" % problem)
 print()
-print("%-16s %6s  %-26s %-26s %s" % ("job", "rounds", "wall ms (min med max)", "child CPU ms", "child peak RSS MiB"))
+print("%-38s %6s  %-26s %-26s %-26s %s" % ("job", "rounds", "wall ms (min med max)", "child CPU ms", "child peak RSS MiB", "child peak address space MiB"))
 for job in found["jobs"]:
-    print("%-16s %6d  %-26s %-26s %s" % (job["job"], job["rounds"], job["wall_ms"], job["child_cpu_ms"], job["child_max_rss_mib"]))
+    print("%-38s %6d  %-26s %-26s %-26s %s" % (job["job"], job["rounds"], job["wall_ms"], job["child_cpu_ms"], job["child_max_rss_mib"], job.get("child_max_vm_mib", "")))
 print()
 for job in found.get("refused", []):
     print("%-48s %9d bytes  %6d ms  %s" % (job["job"], job["bytes"], job["wall_ms"], job["answer"]))
