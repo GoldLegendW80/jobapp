@@ -532,6 +532,10 @@ describe("documents: adding files", () => {
     });
     const button = screen.getByRole("button", { name: "Choose files" });
     expect(button).toHaveAccessibleDescription(/up to 20 MB each/);
+    // What is kept from an export is said where the export is offered.
+    expect(button).toHaveAccessibleDescription(
+      /From a LinkedIn export, your own profile files are the only ones read: connections, messages, contacts and invitations are ignored\./,
+    );
     button.focus();
     await user.keyboard("{Enter}");
     expect(opened).toBe(1);

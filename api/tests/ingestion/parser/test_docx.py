@@ -202,6 +202,13 @@ def test_what_zipcaps_refuses_before_it_reads_an_entry() -> None:
     at = encrypted.find(b"PK\x01\x02")
     encrypted[at + 8] |= 1  # the flag of an encrypted entry, in the central directory
     assert code(bytes(encrypted)) == "protected"
+    # By its first bytes, when an entry is read: gzip under another name is an archive. bzip2
+    # under another name is not, it is told by its name alone (the docstring of zipcaps.py).
+    assert zipcaps.Archive(fx.zip_of([("a.csv", b"BZh91AY&SY and so on")])).read("a.csv")
+    assert code(fx.zip_of([("a.csv.bz2", b"BZh91AY&SY and so on")])) == "nested_archive"
+    with pytest.raises(zipcaps.Refused) as nested:
+        zipcaps.Archive(fx.zip_of([("a.csv", b"\x1f\x8b\x08 and so on")])).read("a.csv")
+    assert nested.value.code == "nested_archive"
 
 
 def test_a_zip_that_is_neither_docx_nor_an_export_is_not_a_docx() -> None:

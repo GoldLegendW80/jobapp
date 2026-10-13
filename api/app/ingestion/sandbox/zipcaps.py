@@ -9,7 +9,10 @@ knows. No name becomes a path.
 Checked on the central directory, before any entry is read (`Archive(data)`):
 
     ENTRIES_MAX  entries, counted on the end record before the directory is parsed and again
-                 on what was parsed (a ZIP64 archive is refused: nothing under 20 MiB needs one)
+                 on what was parsed. An archive whose end record is ZIP64 is refused (nothing
+                 under 20 MiB needs one). An entry that carries a ZIP64 extra field in an
+                 ordinary archive is not: it is read, and the caps below are applied to the
+                 sizes that field gives, which are the sizes then used
     ENTRY_MAX    bytes one entry may declare, TOTAL_MAX for all of them together
     RATIO_MAX    declared size over packed size, per entry
     no nested archive (told by the name of an entry), no encrypted entry, no other packing
@@ -54,7 +57,8 @@ NESTED_SUFFIXES = (
     ".ods", ".odp", ".jar", ".war", ".apk", ".epub", ".7z", ".rar", ".gz", ".tgz", ".bz2",
     ".xz", ".zst", ".tar", ".cab", ".iso",
 )  # fmt: skip
-# And by its first bytes, for an entry that is read: ZIP, gzip, 7z, RAR, xz, bzip2.
+# And by its first bytes, for an entry that is read: ZIP, gzip, 7z, RAR, xz. Not bzip2, which
+# is told by its name alone (`.bz2` above): under another name its bytes are read as text.
 _NESTED_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"\x1f\x8b", b"7z\xbc\xaf", b"Rar!", b"\xfd7zXZ")
 
 

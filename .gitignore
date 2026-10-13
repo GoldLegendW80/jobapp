@@ -21,6 +21,7 @@ build/
 .vite/
 playwright-report/
 test-results/
+.vitest/
 
 # OS and editors
 .DS_Store
