@@ -38,7 +38,8 @@ Ingestion queue (app.queue.INGESTION, ingestion G2b, app/ingestion/jobs.py):
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
 cancelled agent run likewise (runner.execute), its scratch directory removed. Every Worker is
-then closed (close_worker), even when a job was cancelled while still being picked up.
+then closed (close_worker), even when a job was cancelled while still being picked up, and only
+once the end of every job that was finishing is written (QueueWorker).
 """
 
 import argparse
@@ -354,8 +355,40 @@ def queues(settings: Settings | None = None) -> list[QueueSpec]:
     return [sweeps_queue(fast=fast), agents_queue(), ingestion_queue()]
 
 
-def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> Worker:
-    return Worker(
+class QueueWorker(Worker):
+    """arq's Worker, which also knows the job ends it is still writing.
+
+    arq writes the end of a job (its result, its in progress key, its place in the queue) in a
+    task of its own, shielded from the job's cancellation, and keeps no reference to it. A stop
+    that cancels a job during that write ends the job's task at once and leaves the write
+    running: closing the Redis pool then cuts it, or it reconnects on the closed pool and its
+    socket is never closed, and the job stays "in progress" in Redis until that key expires.
+    `endings` holds those writes so that close_worker can wait for them."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.endings: set[asyncio.Task[Any]] = set()
+
+    async def _ending(self, write: Awaitable[None]) -> None:
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover, a coroutine always runs in a task
+            await write
+            return
+        self.endings.add(task)
+        try:
+            await write
+        finally:
+            self.endings.discard(task)
+
+    async def finish_job(self, *args: Any, **kwargs: Any) -> None:
+        await self._ending(super().finish_job(*args, **kwargs))
+
+    async def finish_failed_job(self, *args: Any, **kwargs: Any) -> None:
+        await self._ending(super().finish_failed_job(*args, **kwargs))
+
+
+def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> QueueWorker:
+    return QueueWorker(
         functions=list(spec.functions),
         queue_name=spec.name,
         cron_jobs=list(spec.cron_jobs),
@@ -392,20 +425,30 @@ def make_context(settings: Settings, clock: Callable[[], datetime] = utcnow) -> 
     }
 
 
-async def close_worker(worker: Worker) -> None:
-    """Stop one Worker: cancel its jobs still in flight, wait for them, then close it.
+async def close_worker(worker: QueueWorker) -> None:
+    """Stop one Worker: stop its poll, cancel its jobs still in flight, wait for them and for
+    the job ends being written, then close it.
 
-    arq's Worker.close() cancels them itself, then awaits them with a plain asyncio.gather. A job
-    cancelled inside its function is caught by arq (run_job records it), but one cancelled while
-    run_job still awaits Redis (a job just picked up) re-raises CancelledError from that gather:
-    close() then stops before deleting the health key and closing the Redis pool, and serve()
-    never reaches the next Worker. Draining the tasks here, with return_exceptions, leaves
-    close() nothing to raise. Done tasks are dropped from `tasks` as arq's own poll does."""
+    arq's Worker.close() cancels the jobs itself, then awaits them with a plain asyncio.gather. A
+    job cancelled inside its function is caught by arq (run_job records it), but one cancelled
+    while run_job still awaits Redis (a job just picked up) re-raises CancelledError from that
+    gather: close() then stops before deleting the health key and closing the Redis pool, and
+    serve() never reaches the next Worker. Draining the tasks here, with return_exceptions,
+    leaves close() nothing to raise. The poll is stopped first, so that no job is picked up
+    while the others are drained, and the ends still being written (QueueWorker) are awaited
+    last: a job that finished as the stop arrived is recorded as finished, and nothing uses
+    the pool once close() has closed it. Done tasks are dropped from `tasks` as arq's own poll
+    does."""
+    poll = worker.main_task
+    if poll is not None:
+        poll.cancel()
+        await asyncio.gather(poll, return_exceptions=True)
     in_flight = list(worker.tasks.values())
     for task in in_flight:
         if not task.done():
             task.cancel()
     await asyncio.gather(*in_flight, return_exceptions=True)
+    await asyncio.gather(*worker.endings, return_exceptions=True)
     for job_id, task in list(worker.tasks.items()):
         if task.done():
             del worker.tasks[job_id]

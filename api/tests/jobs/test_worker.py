@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 import pytest
 import redis.asyncio as aioredis
 import sqlalchemy as sa
+from arq.utils import to_unix_ms
 from arq.worker import Worker
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -31,6 +32,9 @@ from tests.pg import docker_available
 from tests.redis_server import start_redis
 
 __all__ = ["fake_ats"]
+
+# How long the write of a job's end is held open for a stop to land in it.
+END_WRITE_PAUSE_S = 0.3
 
 
 def worker_redis_url(url: str) -> str:
@@ -234,6 +238,53 @@ def test_stop_while_a_job_is_being_picked_up_closes_every_worker(
     gc.collect()
 
 
+def test_stop_while_a_job_writes_its_end_waits_for_the_write(
+    settings: Settings, fake_ats: FakeAts, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """arq shields the write of a job's end (its result, its in progress key, its place in the
+    queue) from the job's cancellation. A stop landing during that write used to end the job's
+    task and leave the write running by itself: close() then closed the Redis pool under it,
+    the write reconnected on the closed pool or was dropped with the loop, and the socket it
+    opened was never closed (the ResourceWarning of issues #104 and #117, and a job left in
+    progress in Redis until its key expired)."""
+    job_id = "ends-at-the-stop"
+    written: list[str] = []
+    finish_job = Worker.finish_job
+
+    async def scenario(workers: list[Worker]) -> None:
+        writing = asyncio.Event()
+
+        async def slow_finish(self: Worker, ended: str, *args: Any, **kwargs: Any) -> None:
+            if ended != job_id:
+                return await finish_job(self, ended, *args, **kwargs)
+            writing.set()
+            await asyncio.sleep(
+                END_WRITE_PAUSE_S
+            )  # the stop arrives here, in the middle of the write
+            await finish_job(self, ended, *args, **kwargs)
+            written.append(ended)
+
+        monkeypatch.setattr(Worker, "finish_job", slow_finish)
+        await workers[0].pool.enqueue_job("reap_sweeps", _job_id=job_id, _queue_name=queues.SWEEPS)
+        await asyncio.wait_for(writing.wait(), 30)
+
+    serve_until(settings, context(settings, fake_ats), scenario)
+    assert written == [job_id]
+
+    async def left_in_redis() -> tuple[int, int, float | None]:
+        async with aioredis.from_url(settings.redis_url.get_secret_value()) as redis:
+            return (
+                await redis.exists(f"arq:in-progress:{job_id}"),
+                await redis.exists(f"arq:result:{job_id}"),
+                await redis.zscore(queues.SWEEPS, job_id),
+            )
+
+    # The end is whole: no longer in progress, its result kept, out of the queue.
+    assert asyncio.run(left_in_redis()) == (0, 1, None)
+    # A write left behind would surface here as an unclosed socket ResourceWarning.
+    gc.collect()
+
+
 def test_stale_sweeps_are_reaped_when_the_worker_starts(
     settings: Settings, factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
 ) -> None:
@@ -286,19 +337,27 @@ def test_the_schedule_cron_enqueues_each_due_slot_once(
         assert cron_job.minute == set(range(0, 60, 5))
         assert (cron_job.second, cron_job.unique) == (0, True)
         # Two cron passes over the same 5 minute mark (two workers, or a restart): arq's unique
-        # job id lets one tick through.
-        tick = datetime(2026, 10, 10, 6, 19, 59, 900_000, tzinfo=sweep.SWEEP_TZ)
+        # job id lets one tick through. The mark is one still to come, as it is for the worker
+        # (arq queues a tick within the second before its mark, deferred to the mark): the job
+        # waits in the queue, where it is counted, and the worker's own poll, which reads the
+        # real clock and runs beside this scenario, finds nothing due on this cron. With the
+        # mark of 2026-10-10, once that day was over, each poll queued the next mark (06:25,
+        # 06:30, ...) as a second job and ran it at once (issue #104).
+        tick = datetime(2100, 10, 10, 6, 19, 59, 900_000, tzinfo=sweep.SWEEP_TZ)
         others = [c for c in sweeps_worker.cron_jobs if c is not cron_job]
         sweeps_worker.cron_jobs = [cron_job]
         try:
             for _ in range(2):
                 cron_job.next_run = None
                 cron_job.calculate_next(tick)
+                mark = cron_job.next_run
+                assert mark is not None
+                assert (mark.hour, mark.minute, mark.second) == (6, 20, 0)
                 await sweeps_worker.run_cron(tick, 0.5)
         finally:
             sweeps_worker.cron_jobs = [cron_job, *others]
         queued = await sweeps_worker.pool.queued_jobs(queue_name=queues.SWEEPS)
-        assert [j.function for j in queued].count("cron:scheduled_sweeps") == 1
+        assert [j.job_id for j in queued] == [f"cron:scheduled_sweeps:{to_unix_ms(mark)}"]
 
         # The tick itself, three times: each due slot starts once, under its own job id.
         redis_ctx = ctx | {"redis": sweeps_worker.pool}
