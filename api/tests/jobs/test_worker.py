@@ -149,7 +149,11 @@ def test_a_queued_sweep_runs_and_the_worker_reports_healthy(
             await api_queue.close()
 
     async def play(workers: list[Worker]) -> None:
-        assert [w.queue_name for w in workers] == [queues.SWEEPS, queues.AGENTS]
+        assert [w.queue_name for w in workers] == [
+            queues.SWEEPS,
+            queues.AGENTS,
+            queues.INGESTION,
+        ]
         assert await api_queue.enqueue(
             "run_sweep", str(sweep_id), queue=queues.SWEEPS, job_id=queues.sweep_job_id(sweep_id)
         )
@@ -220,7 +224,7 @@ def test_stop_while_a_job_is_being_picked_up_closes_every_worker(
             )
 
     serve_until(settings, context(settings, fake_ats), scenario)
-    assert len(workers_seen) == 2
+    assert len(workers_seen) == 3
     for item in workers_seen:
         assert item._pool is None  # closed, health key deleted
         assert all(task.done() for task in item.tasks.values())

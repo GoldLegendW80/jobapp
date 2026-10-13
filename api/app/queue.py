@@ -1,7 +1,8 @@
 """The Redis queue between the api and the worker: arq (decision in tasks/jobs/todo.md, J5).
 
 Queues are named lists in Redis, each consumed by its own arq Worker inside the `worker`
-container (app/worker.py): SWEEPS (jobs J5) and AGENTS (agents A2, the user's agent runs). A
+container (app/worker.py): SWEEPS (jobs J5), AGENTS (agents A2, the user's agent runs) and
+INGESTION (ingestion G2b, the reading of uploaded documents, one at a time). A
 later lane for automatic agent runs (mail triage, scheduled assessments) gets a queue name of its
 own here, consumed after the interactive one, so a batch never delays a run someone is watching.
 
@@ -17,12 +18,14 @@ QueueUnavailableError after at most CONNECT_TIMEOUT_S instead of retrying for se
 import asyncio
 import contextlib
 import json
+from datetime import datetime
 from typing import Any
 
 from arq.connections import ArqRedis, RedisSettings, create_pool
 
 SWEEPS = "jobapp:sweeps"
 AGENTS = "jobapp:agents"
+INGESTION = "jobapp:ingestion"
 CONNECT_TIMEOUT_S = 2
 
 
@@ -56,6 +59,13 @@ def schedule_job_id(user_id: object, slot: str) -> str:
 
 def agent_run_job_id(run_id: object) -> str:
     return f"agent-run:{run_id}"
+
+
+def document_job_id(document_id: object, attempts: int, pending_since: datetime | None) -> str:
+    """One id per try of one upload: the same document, tried again or uploaded again, is
+    another job; the same try asked for twice (by the upload and by the reaper) is one."""
+    since = int(pending_since.timestamp() * 1_000_000) if pending_since is not None else 0
+    return f"document:{document_id}:{attempts}:{since}"
 
 
 class Queue:

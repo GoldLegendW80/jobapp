@@ -166,8 +166,8 @@ def test_a_broken_annotation_never_costs_the_page() -> None:
 
 
 def test_the_text_of_a_page_is_cleaned() -> None:
-    raw = "Café  \r\nnext\x0cpage\x00 \x1b[0m\ud83d end \n\n\n\n\nlast  line\x85."
-    assert pdf_text.clean(raw) == "Café\nnext\npage [0m end\n\nlast\nline\n."
+    raw = "Cafe\u0301  \r\nnext\x0cpage\x00 \x1b[0m\ud83d end \n\n\n\n\nlast \u2028line\x85."
+    assert pdf_text.clean(raw) == "Caf\u00e9\nnext\npage [0m end\n\nlast\nline\n."
     assert pdf_text.clean(" \n\t ") == ""
 
 
