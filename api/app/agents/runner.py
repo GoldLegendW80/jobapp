@@ -183,11 +183,13 @@ from app.agents.failures import (
     TURN_LIMIT,
     UNKNOWN_AGENT,
     UNREADABLE,
+    UNUSABLE,
 )
 from app.agents.failures import is_box_failure as is_box_failure
 from app.agents.failures import is_provider_failure as is_provider_failure
 from app.agents.models import CredentialKind, RunStatus
 from app.config import Settings
+from app.logging_config import hidden as hidden_from_logs
 
 logger = logging.getLogger("app.agents.runner")
 
@@ -198,6 +200,10 @@ FINAL_HOOK_TIMEOUT_S = 30.0
 # How long the gate waits for the assistant message of a tool call to be counted against the
 # run's token budget before it decides with what is counted so far (`Budget.counted`).
 GATE_WAIT_S = 5.0
+# How long the end of a run waits for its cancelled live text pump (seconds). The pump ends at
+# once when it is cancelled; the bound is for a store call that does not let itself be stopped,
+# which must not keep the run's final status from being written (issue #90).
+PUMP_STOP_S = 2.0
 TEXT_MAX = 20_000
 TOOL_RESULT_MAX = 2_000
 ARG_VALUE_MAX = 200
@@ -302,6 +308,7 @@ class RunContext:
     services: Mapping[str, Any] = field(default_factory=dict)
     final_hook_timeout_s: float = FINAL_HOOK_TIMEOUT_S
     gate_wait_s: float = GATE_WAIT_S
+    pump_stop_s: float = PUMP_STOP_S
 
     def definition(self, name: str) -> definitions.AgentDefinition:
         if self.agents is not None and name in self.agents:
@@ -322,7 +329,18 @@ def scrub(value: Any, secret: str | None) -> Any:
     next, two tool arguments, two events) or rewritten by it (spaces, another case, an
     encoding) is not recognised, and nothing joins stored values to look again. That is why a
     value is always scrubbed whole and only then shortened (`shorten`): shortening first can
-    cut a credential in two, and the part that is kept would be stored as it is."""
+    cut a credential in two, and the part that is kept would be stored as it is.
+
+    Two copies that overlap: a credential whose end repeats its own beginning can stand twice
+    in a text with the two copies sharing those characters. The first copy is replaced and the
+    rest of the second stays, a part of the credential without its beginning. This cannot
+    happen with a real credential: after their fixed prefix, which never comes back inside,
+    tokens and keys are random characters. It is said here so that nobody reads "every
+    occurrence" as more than it is.
+
+    The secret is never a short one: `_reveal` refuses a credential under
+    `credentials.MIN_LENGTH`, because replacing a few characters everywhere would mangle
+    everything a run stores."""
     if not secret:
         return value
     if isinstance(value, str):
@@ -1191,6 +1209,11 @@ def _reveal(
         if revealed is None:
             db.rollback()
             return NO_CREDENTIAL
+        if len(revealed.secret) < credentials.MIN_LENGTH:
+            # Checked when it was saved (credentials.clean_secret), and again here, where the
+            # scrub starts to rely on it: a row written any other way never reaches a run.
+            db.rollback()
+            return UNUSABLE
         row = revealed.row
         chosen = definition.model_for(row.kind) if definition.model_by_credential else None
         runs.record_credential_kind(db, run_id, row.kind, chosen)
@@ -1309,7 +1332,18 @@ def _mark_verified(context: RunContext, user_id: uuid.UUID, secret: _Secret) -> 
 
 
 async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
-    """Run one queued run to its end (module docstring). None when it was not queued."""
+    """Run one queued run to its end (module docstring). None when it was not queued.
+
+    From the moment the credential is decrypted to the end of this call, it is replaced in
+    every log record of the process, whoever logs (app/logging_config.py): the SDK, the HTTP
+    client and the queue log on their own, outside the scrub of what the run stores."""
+    with contextlib.ExitStack() as held:
+        return await _execute(context, run_id, held)
+
+
+async def _execute(
+    context: RunContext, run_id: uuid.UUID, held: contextlib.ExitStack
+) -> RunStatus | None:
     claimed = await asyncio.to_thread(_claim, context, run_id)
     if claimed is None:
         logger.info("agent run skipped: not queued", extra={"run_id": str(run_id)})
@@ -1367,6 +1401,7 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
             outcome = runs.Outcome(status=RunStatus.failed, error=found, model=model)
             return RunStatus.failed
         secret = found
+        held.enter_context(hidden_from_logs(secret.value))
         recorder.secret = secret.value
         state.credential_kind = secret.kind.value
         model = definition.model_for(secret.kind)
@@ -1483,9 +1518,14 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
         _log_later(later)
         if pump is not None:
             # Cancelled and awaited: the pump may be in the middle of a write, and the clear
-            # below must come after it, not next to it.
+            # below must come after it, not next to it. Bounded: a store call that ignores
+            # the cancellation must not hold the end of the run (the clear is bounded too).
             pump.cancel()
-            await asyncio.gather(pump, return_exceptions=True)
+            stopped, _ = await asyncio.wait({pump}, timeout=context.pump_stop_s)
+            if not stopped:
+                logger.warning("live text pump did not stop", extra=log)
+            elif not pump.cancelled():
+                pump.exception()  # looked at, so that asyncio does not report it at exit
         if scratch is not None:
             await asyncio.to_thread(shutil.rmtree, scratch, True)
         if outcome is not None:
@@ -1513,6 +1553,7 @@ async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
                     "live_deltas": state.live_text.deltas if state.live_text else None,
                     "live_dropped": state.live_text.dropped if state.live_text else None,
                     "live_failures": state.live_text.failures if state.live_text else None,
+                    "live_slow": state.live_text.slow if state.live_text else None,
                 },
             )
         if state.live_text is not None:

@@ -46,6 +46,7 @@ _FIXTURES = (key, keyring, settings)
 PROVIDER = [
     failures.NO_CREDENTIAL,
     failures.UNREADABLE,
+    failures.UNUSABLE,  # a stored credential the provider will not take
     failures.REFUSED,
     failures.BUSY,
     failures.NO_CREDIT,  # a key without credit, whatever its HTTP status
