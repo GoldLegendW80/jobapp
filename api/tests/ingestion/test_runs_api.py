@@ -486,6 +486,35 @@ def test_continue_raises_the_ceiling_by_h_and_the_history_holds_one_entry(
     )
 
 
+def test_a_run_paused_with_nothing_left_to_read_asks_no_raise_and_a_continue_closes_it(
+    app: FastAPI, factory: sessionmaker[Session], api: Api, alice: str, ready: list[str]
+) -> None:
+    """Issue #158: the last planned document is deleted during a ceiling pause, through the
+    route and its guard. The run shows that one Continue adds nothing, and the click of a page
+    that still shows one `H` adds nothing and is refused (409, figure 0): the run closes on the
+    ceiling it had."""
+    run = started(api, alice, ready)
+    url = f"{RUNS}/{run['id']}"
+    ceiling, high = run["tokens"]["ceiling"], run["tokens"]["high"]
+    end_step(app, factory, run, tokens=ceiling)
+    assert api.get(url, token=alice).json()["tokens"]["continue_adds"] == high
+    assert delete(api, alice, ready[1]).status_code == 204
+
+    paused = api.get(url, token=alice).json()
+    assert (paused["status"], paused["paused_reason"]) == ("paused", "token_ceiling")
+    assert paused["tokens"]["continue_adds"] == 0
+    before = agents_started(factory)
+    response = api.post(f"{url}/continue", token=alice, json={"adds": high})
+    assert response.status_code == 409  # a click never looks accepted when it was not
+    assert response.json()["code"] == "continue_changed"
+    assert response.json()["continue_adds"] == 0
+    body = response.json()["run"]
+    assert (body["status"], body["partial"]) == ("done", True)  # and the run is closed
+    assert (body["tokens"]["ceiling"], body["tokens"]["history"]) == (ceiling, [])
+    assert (body["tokens"]["spent"], body["tokens"]["continue_adds"]) == (ceiling, None)
+    assert agents_started(factory) == before
+
+
 def agents_started(factory: sessionmaker[Session]) -> int:
     with factory() as db:
         return int(db.scalar(sa.select(sa.func.count()).select_from(AgentRun)) or 0)

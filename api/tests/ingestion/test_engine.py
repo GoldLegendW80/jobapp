@@ -508,7 +508,7 @@ def test_the_ceiling_reached_inside_a_step(
     # One `H` would start it again on less than the budget that was not enough: Continue adds
     # what gives it twice that budget, and the run says so before the click.
     with factory() as db:
-        adds = engine.continue_adds(db, paused, eh.steps_of(factory, run_id))
+        adds = engine.continue_adds(db, paused, eh.steps_of(factory, run_id), now())
     assert adds == 2 * run.token_ceiling + 9 > paused.estimate_high
 
     with factory() as db, db.begin():
@@ -532,7 +532,7 @@ def shown(db: Session, run_id: uuid.UUID) -> int:
     """What the page shows before the click (`tokens.continue_adds` of now): the click sends it
     back, and the engine applies that figure or nothing."""
     run = db.get_one(IngestionRun, run_id)
-    return engine.continue_adds(db, run, engine._steps(db, run_id))
+    return engine.continue_adds(db, run, engine._steps(db, run_id), now())
 
 
 def cut_and_continue(
