@@ -82,6 +82,7 @@
    ok: --yes skips the prompt without a terminal; BACKUP_DIR reaches ops/db.sh, and no BACKUP_KEEP when none is set on the Mac (T10: the Jetson's .env, then the default of ops/db.sh, decide)
    ok: backup passes a BACKUP_KEEP set on the Mac (an explicit value wins), and fails when ops/db.sh reports no file
    ok: T10: BACKUP_ACCEPT_SHRINK=1 in the shell of one ./deploy.sh backup reaches ops/db.sh, and nothing sends it otherwise
+   ok: T10: a slash or a /. after BACKUP_DIR is trimmed before the name is sent (ops/db.sh would not see a symbolic link behind it); the home folder and / are refused however they are spelled
 
 == ops/db.sh restore-live stops the api and the worker, and starts both on every path
    ok: restore-live: api and worker stopped through drop and restore, started healthy after the migrations
@@ -110,8 +111,9 @@
 == T10, safety: the newest verified dump of the whole tree stays, and no folder has an exception
    ok: deploys/ and incoming/ hold only dumps past the limit: all go, the last predeploy dump and the last upload included; no folder keeps its newest for its own sake
    ok: a week without a deploy: the only predeploy dump, taken 7 days ago in the afternoon, goes with the nightly dump of that day, so nothing a user deleted since is left in it
-   ok: every other dump of the three folders is past the limit: five go and the newest of them, wherever it is, stays for this run, with the reason; the next run, a day later, deletes it. One night more, in that case only
-   ok: at the same time in three names, the one in the folder of the run is the one spared
+   ok: every other dump of the three folders is past the limit: five go and the newest of them, wherever it is, stays for this run, with the reason; the next run, a day later, deletes it. One run more, in that case only
+   ok: at the same time in several names, the one in the folder of the run is the one spared: the time alone is compared, so a tag in the name does not decide
+   ok: an empty file named like a dump is never the one spared (the newest real dump is, though an empty one is newer), an empty file of yesterday does not count as a dump left, and when every other dump is empty none is kept
    ok: a deploy after a long pause: its backup deletes the older predeploy dumps but the newest of them, which the next deploy (or the next nightly run) deletes; the folder of the nightly run is not its to rotate
    ok: BACKUP_KEEP=1 therefore keeps two: the run's dump and the one before it
    ok: a clock set back: the dump this run wrote is the oldest name of nine and still stays (the count rule takes the next one); the dumps named ahead of it are kept and said
@@ -119,8 +121,8 @@
    ok: a dump that cannot be written (pg_dump fails, writes nothing, no disk, db unhealthy, lock held) or verified (the list, the full read): exit 1, no partial file, and not one old dump deleted, by count or by age
    ok: the new dump is flushed to the disk under its partial name, then the folder with the dump renamed and every old dump still in it, and only then is the first old dump deleted
    ok: a flush that fails ends the run with exit 1 and deletes nothing: before the name, the partial file is removed; after it, the dump stays and so does every old one
-   ok: a sync that takes no path (coreutils before 8.24) flushes every disk instead, twice, still before the first deletion
-   ok: a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes eight, keeping the newest of them one night more; the night after, that one goes
+   ok: a sync that takes no path (coreutils before 8.24) flushes every disk instead, twice, still before the first deletion; when that sync fails the run ends with exit 1, its partial file removed and nothing deleted
+   ok: a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes eight, keeping the newest of them for one more run; the next run, the night after, deletes it
    ok: prune alone never deletes by age (three dumps of 10 to 30 days stay), only by count, and only in its own folder
    ok: a restore never deletes: restore-live of a 20 day old dump writes its pre-restore dump and keeps every old one, the dump being restored included; restore, verify and list change nothing
    ok: deploys/ is left alone while a predeploy backup or a restore holds its lock: exit 0, the folder of the run still rotated
@@ -130,17 +132,24 @@
 
 == T10, safety: a dump less than half the size of the last one accepted deletes nothing
    ok: yesterday's dump is 100 bytes and today's 16: exit 0, the dump kept and reported, a warning with both sizes, and not one of the four dumps past the limit deleted, in any folder
-   ok: the night after, as small: still measured against the 100 bytes of the last accepted dump, not against yesterday's 16, so still nothing deleted; retention, so status, shows the hold with both sizes
-   ok: a dump of half that size (50 of 100, not less than half) lifts the hold by itself, and that run deletes what was waiting
+   ok: the night after, as small: still measured against the 100 bytes of the last accepted dump, not against yesterday's 16, so still nothing deleted; retention shows the hold with both sizes, the count and since when, and ends with status 3 so that it is seen
+   ok: prune during a hold: refused with exit 1 and the hold shown, nothing deleted, the mark untouched
+   ok: a dump of half that size (50 of 100, not less than half) lifts the hold by itself, that run deletes what was waiting, and retention ends with 0 again
+   ok: seven nights held: six warnings, then an ERROR from the seventh run that says since which dump and that the folder grows without bound; ten dumps, three of them past the limit, none deleted; retention says the same
    ok: a database meant to shrink: one run with BACKUP_ACCEPT_SHRINK=1 lifts the hold and deletes what was waiting, and the run after it, without the variable, is measured against that accepted dump
-   ok: exactly half passes, a first dump passes, any other value of BACKUP_ACCEPT_SHRINK is refused before the dump, and a mark that names no dump of the folder holds nothing
-   ok: the same in the deploy's own folder: the predeploy backup ends well, so the deploy goes on, and deletes nothing there; the nightly run, whose own dump passes its check, still deletes by age in deploys/, and status shows the hold of that folder
+   ok: with a 100 byte dump named a year ahead in the folder: a run is measured against the newest dump that is not after it, the override lasts one run, and the next run passes against the accepted dump
+   ok: exactly half passes, 40 of 100 is held (less than half, not less than a quarter), a first dump passes, any other value of BACKUP_ACCEPT_SHRINK is refused before the dump, and the variable in .env is not read: it is for one run, from that run's environment
+   ok: a small pre-restore dump of yesterday is not the reference: the run is measured against the 100 byte dump before it and held; with nothing but a pre-restore dump beside it, a run has nothing to be measured against
+   ok: a mark that is a symbolic link (to a file naming a real dump), a FIFO or a folder is never opened: the run does not hang, deletes nothing, keeps and reports its dump and ends with exit 1; retention ends with 3 and prune is refused; a plain mark that names no dump holds nothing and is removed
+   ok: the mark is written beside itself and renamed: a link waiting at that name is replaced, never written through; a mark that cannot be written ends the run with exit 1 and nothing deleted; a mark removed by hand ends the hold, and the run then says in so many words which dump it was measured against
+   ok: the same in the deploy's own folder: the predeploy backup ends well, so the deploy goes on, and deletes nothing there; the nightly run, whose own dump passes its check, still deletes by age in deploys/, and retention shows the hold of that folder
 
 == T10, safety: only whole dump names, directly in the folder, never through a link
    ok: left alone and reported, run after run: no timestamp, a date that does not exist, another suffix or prefix, an upper case tag, a partial file, a name with a line break, a folder and a symbolic link named like old dumps (the file it points to untouched), a deploys/ that is a link
    ok: retention lists the same files and the same link, so status shows what sits outside the rotation
-   ok: the deploy's own command line with a deploys/ that is a link: the dump is written through it, and of the ten dumps in the folder it points to, two past the age limit and two more beyond the newest 7, none goes; that folder's mode is untouched, and the run says why
-   ok: prune and retention through the link, and the folder of the nightly run when it is a link: the same, nothing deleted in it or in its incoming/, and said
+   ok: the deploy's own command line with a deploys/ that is a link, named as it is or with /, /., //, /./ or /.//. after it: the dump is written through it, and of the ten dumps in the folder it points to, two past the age limit and two more beyond the newest 7, none goes, by backup or by prune; that folder's mode is untouched; backup, prune and retention say why, with the name trimmed
+   ok: the folder of the nightly run when it is a link, with or without a slash or a /. after its name: the same, nothing deleted in it or in its incoming/, and said
+   ok: a real folder named with a slash is rotated as usual, under its trimmed name; / and the home folder, however they are spelled, are refused by every command before it does anything
    ok: ops/db.sh: no recursive rm, no find -delete, no xargs; one rm deletes dumps, by one full path
 
 == T10, ops/db.sh retention: what must hold for the 7 days, shown so that it can be checked
@@ -157,6 +166,8 @@
    ok: a retention changed in the Jetson's .env is what the next nightly run applies and what status shows: no reinstall, the crontab untouched
    ok: a BACKUP_KEEP set on the Mac at install is written into the line and wins over the Jetson's .env, and status says which one applies
    ok: remove, twice: only the jobapp line goes; status says not installed and what a backup run by hand would keep
+   ok: status marks the last lines of backup.log as those of the last run: a WARNING there is prefixed, and no unprefixed line warns when the state now is sound
+   ok: status with a rotation held in the folder and in deploys/: exit 1, each hold with both sizes, its count and since when (an ERROR from seven runs), and for each folder the one command that lifts it; exit 0 again once the holds are gone
    ok: status against a Jetson not deployed since T10 says the retention is not reported and to deploy first, instead of guessing
 
 == T10, the defaults written down: one number, 7, and no other left
@@ -201,6 +212,7 @@
 == deploy.yml: the deploy step itself, run against the fakes
    ok: a pending migration: :previous tagged, images built, the predeploy backup, the migration in the one off container, then compose up, then the smoke
    ok: T10: the predeploy backup names no retention of its own, so ops/db.sh applies the one of every backup (the Jetson's .env, then 7) in the predeploy folder
+   ok: T10: a WARNING of the predeploy backup (a held rotation, a BACKUP_KEEP above 7) is a ::warning:: annotation of the run and an ERROR line an ::error:: one; the deploy goes on, since the backup itself ended well
    ok: T10: a predeploy backup that fails after its dump is written: what it had printed is in the job log with its error, the deploy stops before the migrations, the previous files are put back
    ok: a database already at head: a no-op, the deploy goes on
    ok: a failing migration: exit 1 before compose up, nothing stopped or restarted, the previous files and :latest tags back, .deployed-commit kept
@@ -209,4 +221,4 @@
    ok: a smoke that fails once the new stack is up: red, no rollback, .deployed-commit kept (issue #16, unchanged)
    ok: first install on an empty database: db started alone, every migration applied, then the stack
 
-All 150 checks passed.
+All 162 checks passed.

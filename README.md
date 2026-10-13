@@ -1163,7 +1163,8 @@ removes the residue at the price of one night of history.
   exists, directly in one of the three folders, one full path at a time. Anything else there (an
   upload under another name, a `.partial` left by a killed run, a folder, a symbolic link, which
   is neither followed nor removed) is left alone and listed at every run. A backup folder that is
-  itself a symbolic link gets its dump and no deletion at all, and every run says so. A dump
+  itself a symbolic link gets its dump and no deletion at all, however its name is written (a
+  slash or a `/.` after it is trimmed before anything looks at it), and every run says so. A dump
   whose name is ahead of the run's date (a clock that was wrong) is kept until that date has
   passed, and said.
 
@@ -1173,24 +1174,39 @@ a rule by age deletes every other dump in one run after a week without a backup.
 
 - **A run never leaves the server with its own dump alone.** When every other dump would go in
   the same run (the Jetson off for a week, a week of failed nights, a clock ahead), the newest of
-  them, by the time in its name, stays for one more run, and the run says which and why. The
-  next run has that run's dump beside its own and deletes it. The residue: one night more than 7
-  days for that one dump, in that case only. (`BACKUP_KEEP=1` therefore keeps two dumps.)
+  them that is not an empty file, by the time in its name, stays for one more run, and the run
+  says which and why. The next run that leaves another dump beside its own deletes it. The
+  residue is one run more than 7 days for that one dump, in that case only: one night when the
+  next nightly run succeeds, longer when it fails or when a deploy's backup, which sees its own
+  folder alone, comes in between. (`BACKUP_KEEP=1` therefore keeps two dumps.)
 - **A dump less than half the size of the last one accepted in its folder deletes nothing.** A
   database that lost its data still dumps, and the dump still verifies. The run keeps its dump,
   deletes nothing in any folder, prints a warning with both sizes, and ends well, so a deploy is
   not stopped by it. Every later run of that folder is measured against that last accepted
   dump, not against the small ones, and deletes nothing either, until a dump is at least half
-  its size again. `status` shows the hold with both sizes. When the database was meant to
-  shrink, one backup accepts it: `BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup` (for the predeploy
-  folder, add `BACKUP_DIR=jobapp-backups/deploys`; left alone, that one ends by itself within 7
-  days, when the nightly run has deleted the dump it is measured against).
-  **This hold delays the 7 days**, and the very thing they are about can cause it: a user who
-  deletes more than half of what the database holds. Nothing lifts it but a larger dump or the
-  owner's command, so a hold seen in `status` or `backup.log` is to be looked at the same day.
+  its size again; `ops/db.sh prune` is refused meanwhile. A run is never measured against a
+  pre-restore dump, an empty file or a dump named after it, and each run prints which dump it
+  was measured against. When the database was meant to shrink, or was restored to an older and
+  smaller state, one backup accepts it, for that run alone:
+  `BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup` (for the predeploy folder, add
+  `BACKUP_DIR=jobapp-backups/deploys`; left alone, that one ends by itself within 7 days, when
+  the nightly run has deleted the dump it is measured against).
+  **This hold delays the 7 days, and it has no bound but the disk.** The very thing the 7 days
+  are about can cause it: a user who deletes more than half of what the database holds. Nothing
+  lifts it but a larger dump or the owner's command, and the folder grows by one dump at every
+  run until the disk is full. So it is made to be seen, not left in a log:
+  `./deploy.sh backup-schedule status` ends with a non zero status while a hold stands, with
+  both sizes, the number of runs held, since which dump, and the command that lifts it; from the
+  seventh run held the line is an ERROR; and a deploy whose backup is held carries the line as
+  an annotation on the summary page of its run. The hold itself is a small file, `.size-hold`,
+  in the folder: removing it by hand ends the hold, and anything there that is not a plain file
+  stops every deletion until it is removed.
 
 **For the 7 days to be true on the Jetson**, all of this must hold. `./deploy.sh backup-schedule
-status` shows each point, and every nightly run writes the same lines to `backup.log`.
+status` shows each point, and every nightly run writes the same lines to `backup.log`. What
+counts in its output is what stands above "last lines of": the state now. The lines under it,
+each marked with a bar, are those of the last run as it was then, so a WARNING there (about 14,
+from the night before a reinstall) is the past.
 
 1. The schedule is installed, by a release that has this retention, and `status` says
    `BACKUP_KEEP=7`. A line installed before 2026-10-11 carries `BACKUP_KEEP=14` and keeps 14
@@ -1200,8 +1216,8 @@ status` shows each point, and every nightly run writes the same lines to `backup
 3. The nightly backup succeeds. A run that fails deletes nothing, so every deletion waits for the
    next run that works: `status` gives the age of the newest and of the oldest dump of each
    folder, warns after two days without a verified backup, and marks a dump past the limit.
-4. No hold on the rotation (the second guard above): `status` shows one with a WARNING and both
-   sizes, and nothing is deleted while it stands.
+4. No hold on the rotation (the second guard above): `status` ends with a non zero status while
+   one stands, and nothing is deleted until it is lifted.
 5. No copy of the data sits under a name the rotation does not delete or in a place it does not
    look. A file of the backup folders that is not named like a dump, and the scratch database
    `jobapp_restore_check` left by `restore --keep` (a whole copy of a dump inside Postgres, until
@@ -1219,7 +1235,7 @@ damaged by a migration or a bug more than 7 days ago cannot be recovered from th
 predeploy dumps included (until 2026-10-11 the newest 10 of those stayed whatever their age, and
 14 nightly ones). In so many words: the first backup that works after 7 days without one deletes
 every other dump but the newest of them, in the three folders, in that one run, and that last
-one the night after. A dump pulled to the Mac in time is the only older copy.
+one at the run after. A dump pulled to the Mac in time is the only older copy.
 
 **An explicit `BACKUP_KEEP` wins, for both rules:** 14 keeps 14 dumps and 14 days. The promise
 is 7 days whatever the setting, so a value above 7 breaks it knowingly, and every backup then

@@ -58,7 +58,9 @@
 #   newest of them stays for one more run (spare_one);
 #   a dump less than half the size of the last one accepted in its folder deletes nothing, and
 #   neither do the runs after it, until a dump is that size again or one run is made with
-#   BACKUP_ACCEPT_SHRINK=1 in its environment (size_check).
+#   BACKUP_ACCEPT_SHRINK=1 in its environment (size_check). That hold has no bound but the disk,
+#   so it is made to be seen: an ERROR from the seventh run held, status 3 from `retention`,
+#   and `prune` refused while it stands.
 set -euo pipefail
 umask 077
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
