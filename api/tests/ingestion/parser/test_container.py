@@ -25,6 +25,7 @@ from typing import Any
 
 import pytest
 
+from app.ingestion import parser_client
 from tests.ingestion.parser.helpers import API, HERE, ROOT, sandbox_module
 from tests.pg import docker_available
 
@@ -578,8 +579,11 @@ def test_the_child_sees_the_server_and_itself_and_no_other_process(
 
 
 def test_the_limits_of_the_table_hold_in_the_child(state: dict[str, Any]) -> None:
+    # The child of `state` is of the kind pdf_render: its address space is the 256 MiB that G8
+    # measured for the renderer (main.PDF_RENDER_AS), no longer the 512 MiB every kind began with.
+    assert main.LIMITS["pdf_render"]["as"] == main.PDF_RENDER_AS == 256 * MIB
     assert state["limits"] == {
-        "as": [512 * MIB, 512 * MIB],
+        "as": [256 * MIB, 256 * MIB],
         "cpu": [45, 46],
         "fsize": [0, 0],
         "nofile": [16, 16],
@@ -673,10 +677,48 @@ def test_an_answer_of_3_mib_arrives_although_no_file_may_grow(stack: Stack) -> N
 def test_a_child_that_dies_is_a_failure_of_the_server_and_leaves_no_core(
     stack: Stack, options: dict, header: dict
 ) -> None:
-    assert stack.raw(options)["header"] == header
-    found = stack.parse(options)
+    """With the kind docx, which stands here for every kind that is not in
+    parser_client.FILE_DEATH_KINDS (pdf_text, docx, linkedin_zip): the death of its child is
+    the server's failure, the worker tries the document again."""
+    assert "docx" not in parser_client.FILE_DEATH_KINDS
+    assert stack.raw(options, kind="docx")["header"] == header
+    found = stack.parse(options, kind="docx")
     assert found["failure"] == "server"
     assert found["error"] in ("ParserRefusedError", "ParserMalformedError")
+    no_core_and_alive(stack)
+
+
+@pytest.mark.parametrize(
+    ("options", "header", "outcome"),
+    [
+        ({"act": "segfault"}, {**REFUSED, "code": "crashed"}, ("file", "bomb")),
+        ({"act": "abort"}, {**REFUSED, "code": "crashed"}, ("file", "bomb")),
+        ({"act": "exit", "status": 3}, {**REFUSED, "code": "crashed"}, ("file", "bomb")),
+        ({"act": "exit", "status": 70}, {**REFUSED, "code": "sandbox"}, ("server", None)),
+        ({"act": "os_exit", "status": 0}, {**OK, "length": 0}, ("server", None)),
+    ],
+)
+def test_a_child_of_the_two_kinds_of_g8_that_dies_is_the_files_failure_and_leaves_no_core(
+    stack: Stack, options: dict, header: dict, outcome: tuple[str, str | None]
+) -> None:
+    """The kinds image and pdf_render hand the file to a C library (G8, FILE_DEATH_KINDS): the
+    server answers what it answers for every kind, and the client reads the death of that child
+    (`crashed`) as the file's `bomb`, so the document is failed at once and never read twice.
+    What is not a death of the child stays the server's: a sandbox that could not be set
+    (exit 70) and a child that left without an answer."""
+    assert set(parser_client.FILE_DEATH_KINDS) == {"image", "pdf_render"}
+    assert stack.raw(options)["header"] == header, "the server's own answer did not change"
+    found = stack.parse(options)
+    failure, code = outcome
+    assert found["failure"] == failure
+    if code is None:
+        assert found["error"] in ("ParserRefusedError", "ParserMalformedError")
+    else:
+        assert (found["error"], found["code"]) == ("ParserRefusedError", code)
+    no_core_and_alive(stack)
+
+
+def no_core_and_alive(stack: Stack) -> None:
     listing = stack.inside(
         "parser",
         "import os; print(sorted(n for d in ('/', '/tmp', '/app') for n in os.listdir(d)"
@@ -807,9 +849,25 @@ def test_jobs_sent_at_once_run_one_at_a_time(stack: Stack) -> None:
 
 
 def test_the_kinds_without_a_handler_answer_not_supported_yet(stack: Stack) -> None:
-    """image has no file yet (pdf_render and docx are the tests' own here; pdf_text is the
-    image's since G2b, linkedin_zip since G7: test_pdf_container.py and
-    test_archive_container.py are about them). Every kind answers through the whole chain."""
+    """Since G8 the image holds a file for each of the five kinds of the plan, so none is left
+    without a handler: compose.sandbox.yml takes the file of `image` away in this stack (the
+    null device mounted over it, which is no regular file), and that kind answers through the
+    whole chain what a kind without its file answers. pdf_render and docx are the tests' own
+    here; test_pdf_container.py, test_archive_container.py and test_image_container.py are
+    about the real handlers."""
+    sandbox = "/app/app/ingestion/sandbox"
+    files = (
+        "import os; print(sorted(n for n in os.listdir('" + sandbox + "')"
+        " if os.path.isfile('" + sandbox + "/' + n)))"
+    )
+    handlers = {name + ".py" for name in main.HANDLERS.values() if name}
+    assert handlers == {"pdf_text.py", "docx.py", "linkedin_zip.py", "image.py", "pdf_render.py"}
+    # The image as it is built (the client runs it with nothing mounted there): all five.
+    shipped = set(json.loads(stack.inside("client", files).stdout.replace("'", '"')))
+    assert handlers <= shipped
+    # The parser of this stack: the same without image.py.
+    here = set(json.loads(stack.inside("parser", files).stdout.replace("'", '"')))
+    assert handlers - here == {"image.py"}
     for kind in ("image",):
         answer = stack.raw({}, size=1024, kind=kind)
         assert answer["body"] == {"ok": False, "failure": "server", "code": "not_supported"}
