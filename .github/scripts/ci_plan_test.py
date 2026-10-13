@@ -1094,9 +1094,9 @@ class WorkflowTest(unittest.TestCase):
                 self.assertLess(int(minutes), whole, step)
 
     def test_the_triggers_have_no_filter(self) -> None:
-        """A `paths` or `branches` filter on pull_request would skip the whole run for some
-        pull requests, with every check a merge waits for; `types` with `edited` would start
-        and cancel runs on every edit of a title. What narrows a run is the plan, inside it."""
+        """Issue #116: the workflow runs by hand only. A pull_request or push trigger put back
+        here would start a ten minute run on the Mac runners for every push again, next to
+        the batch check (ops/local-check.sh) that a merge waits for now."""
         lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
         block = []
         for line in lines[lines.index("on:") + 1 :]:
@@ -1107,9 +1107,6 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(
             block,
             [
-                "  pull_request:",
-                "  push:",
-                "    branches: [main]",
                 "  workflow_dispatch:",
             ],
         )

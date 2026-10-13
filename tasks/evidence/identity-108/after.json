@@ -1,0 +1,50 @@
+{
+  "label": "after: identity/108-bound-password-checks",
+  "api_dir": "/Users/harald-thorvaldhautin/Desktop/job/app/.claude/worktrees/p108/api",
+  "machine": "development Mac, not the Jetson; resident memory of the uvicorn process",
+  "rest_mib": 141,
+  "one_sign_in_at_a_time": {
+    "median_answer_ms": 85,
+    "peak_mib": 206
+  },
+  "flood_40": {
+    "requests": 40,
+    "statuses": {
+      "401": 25,
+      "503": 15
+    },
+    "retry_after_of_503": [
+      "2"
+    ],
+    "all_done_in_s": 1.12,
+    "slowest_answer_s": 1.08,
+    "fastest_answer_s": 0.327,
+    "peak_mib": 276
+  },
+  "flood_120": {
+    "requests": 120,
+    "statuses": {
+      "401": 33,
+      "503": 87
+    },
+    "retry_after_of_503": [
+      "2"
+    ],
+    "all_done_in_s": 2.46,
+    "slowest_answer_s": 2.41,
+    "fastest_answer_s": 0.213,
+    "peak_mib": 283
+  },
+  "burst_of_10_real_sign_ins": {
+    "requests": 10,
+    "statuses": {
+      "200": 10
+    },
+    "retry_after_of_503": [],
+    "all_done_in_s": 0.55,
+    "slowest_answer_s": 0.55,
+    "fastest_answer_s": 0.175,
+    "peak_mib": 283
+  },
+  "rest_afterwards_mib": 283
+}

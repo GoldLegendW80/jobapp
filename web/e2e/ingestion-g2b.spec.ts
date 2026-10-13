@@ -147,7 +147,8 @@ test.afterAll(async () => {
 test("a new user opens the documents step", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
-  await page.goto("/profile/fill");
+  // The page opens on step 1 (the prompt) since G3: this journey is about the documents.
+  await page.goto("/profile/fill?step=documents");
   await expect(
     page.getByRole("heading", { level: 2, name: "Step 2: Add your documents" }),
   ).toBeVisible();

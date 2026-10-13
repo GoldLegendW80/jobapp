@@ -18,28 +18,27 @@ in the job folder that holds this repository (it is not part of the repository).
 3. The branch is pushed and a pull request is opened with `gh pr create`; the template
    (`.github/pull_request_template.md`) asks for what, why, the spec and task, tests, evidence and
    risks.
-4. CI (`.github/workflows/ci.yml`) runs on the pull request, on the self-hosted runners of
-   Harald's Mac (`[self-hosted, mac-ci]`, three of them with 3 CPUs and 4 GB each; all of them
-   wait while the Mac is asleep or Docker Desktop is closed; README, CI runners on the Mac), in
-   three jobs, one per runner:
+4. No CI run per pull request (the owner's decision of 2026-10-13, issue #116: a run took about
+   ten minutes on the Mac's runners and runs queued behind each other, so five approved pull
+   requests meant an hour of waiting). The checks are the ones CI ran, and they run once per
+   batch, natively on the Mac, by `ops/local-check.sh` (step 6). The author runs what the change
+   touches before pushing (Locally before pushing, below) and says in the pull request what was
+   run. The batch check always runs the full set, whatever the batch touches, which is the steps
+   of the three jobs of `.github/workflows/ci.yml`:
    `api` (ruff, the whole pytest suite against Postgres and Redis, the coverage floor of 95
-   percent, the docker marked tests), `checks` (pre-commit, the secret scan of every commit
-   the pull request brings, shellcheck, the `tests/*.sh`
-   scripts and the guards, then the e2e groups apps and ingestion) and `journeys` (eslint, tsc,
-   build, Vitest,
-   then the e2e groups identity and sweep; every e2e group against its own scratch Compose
-   stack). The run must be green: all three jobs, none of which can be skipped. A pull request
-   that touches documentation only (`tasks/`, `docs/`, `CONTRIBUTING.md`, `CAPABILITY-MAP.md`,
-   the `SPEC-*.md` files, the pull request template) runs
-   pre-commit alone (the shell tests too when it touches `README.md`, which they check, and
-   the api tests when it touches `tasks/ingestion/todo.md`, whose table of citation examples
-   an api test checks);
-   one that touches `web/` only skips the api tests; anything else runs
-   everything, and so does every push to `main` (README, What a CI run does). Only a pull
-   request against `main` is narrowed this way: one against another branch (stacked on an
-   unmerged pull request) runs everything, whatever it touches. A new
+   percent, the docker marked tests, the scoring timing test), `checks` (pre-commit, the secret
+   scan of every commit the batch brings, shellcheck, the `tests/*_test.sh` scripts and the
+   guards, the e2e groups apps and ingestion) and `journeys` (eslint, tsc, build, Vitest, the
+   e2e groups identity and sweep; every e2e group against its own scratch Compose stack).
+   `ci.yml` stays the definition of those steps and starts by hand only
+   (`gh workflow run ci.yml --ref <branch>`, with a runner started: README, CI runners on the
+   Mac). The batch check reads two lists from the `ci.yml` of the tree it checks: the files of
+   the Shellcheck step and the `tests/*_test.sh` steps. So a new `tests/*_test.sh` gets a step
+   in `ci.yml`, and a new shell script joins the Shellcheck step. A new
    `web/e2e/*.spec.ts` joins one of the e2e groups in the workflow, or the exclusion list of
-   `.github/scripts/e2e_groups.py` with its reason; CI fails otherwise. A spec of the ingestion
+   `.github/scripts/e2e_groups.py` with its reason; the check fails otherwise. A spec added to
+   the groups apps or sweep is also added to `journey_specs` in `ops/local-check.sh`
+   (`tests/local_check_test.sh` fails when the two differ). A spec of the ingestion
    module is named `ingestion-<task>.spec.ts` and joins its group by that name alone
    (`web/e2e/ingestion-all.config.ts` runs them all). Every step of `ci.yml`
    has an `id` and is listed in `.github/scripts/ci_plan.py`: a new check under its unit in
@@ -53,9 +52,11 @@ in the job folder that holds this repository (it is not part of the repository).
    repository owner, and GitHub does not let the author of a pull request approve it.) Findings
    are fixed on the same branch and the subagent reviews the new head. A diff that touches
    `.github/scripts/ci_plan.py`, `ci_plan_test.py` or a step condition of `ci.yml` changes
-   the gate that judges it (a pull request runs its own copy of all three): the reviewer reads
-   it as such, and reads the plan line of the run (`ci_plan: ...`, the first step of each job)
-   against the files of the diff. The same goes for what the secret scan goes by, which a
+   the definition of the checks. So does one that touches `ops/local-check.sh` or
+   `ops/deploy-checked.sh`, the gate itself since issue #116, or the two lists of `ci.yml` the
+   batch check reads (the Shellcheck files, the `tests/*_test.sh` steps): the check is run with
+   the script of the main checkout, on the lists of the tree it checks, so a pull request can
+   take a step out of its own check. The reviewer reads such a diff as a change of the gate. The same goes for what the secret scan goes by, which a
    pull request also brings itself: `.gitleaks.toml`, `.gitleaksignore`, any added
    `gitleaks:allow` comment, `.github/scripts/secret_scan.sh` and the gitleaks block of
    `.pre-commit-config.yaml`. The scan's log names them when a pull request touches one
@@ -63,42 +64,74 @@ in the job folder that holds this repository (it is not part of the repository).
 6. The orchestrator merges with a **merge commit** (`gh pr merge --merge --delete-branch`): the
    branch's commits, one per step of the agent's work, stay readable in the history, and the
    merge commit names the pull request. Squash is not used. **A pull request is mergeable
-   when** the latest `pull_request` run of CI for its current head commit, started against
-   the base it will merge into, concluded success, and the latest review verdict on that head
-   is APPROVE. "All checks green" alone is not the test: it is true while no check has
-   registered yet, and checks belong to the head commit, so they stay green when the base of
-   the pull request is changed, which starts no run. To read the three facts:
+   when** the latest review verdict on its CURRENT head commit is APPROVE. After any push, a
+   reviewer confirms the new head: a verdict about an older commit does not count. To read the
+   two facts:
 
    ```bash
-   gh pr view <n> --json headRefOid,baseRefName                                      # the head commit and the base
-   gh run list --workflow ci.yml --event pull_request --commit <head> --limit 1      # the latest run for that head: completed, success
-   gh run view <run> --log | grep 'ci_plan: '                                        # the base that run was started against, and its plan
+   gh pr view <n> --json headRefOid                                                  # the head commit
    gh api repos/GoldLegendW80/jobapp/pulls/<n>/reviews --jq '.[-1] | .commit_id, (.body | split("\n")[0])'   # the latest verdict and the commit it is about
    ```
 
-   A run that started before `main` last moved tested the old `main`:
-   `ops/ci-rerun.sh <n>` gives the same head a fresh run (below).
-7. Every push to `main` deploys: once CI is green on `main`, `.github/workflows/deploy.yml` runs
-   on the self-hosted runner on the Jetson (README, Continuous delivery).
+   **Approved pull requests merge as a batch, in a stated order, after the batch check passed
+   on that order.** No run in between:
 
-`main` is always deployable: nothing is pushed to it directly, and a red `main` is fixed first.
+   ```bash
+   ops/local-check.sh --merge <n1> --merge <n2> --merge <n3>   # main, then each head merged in that order. The proof is the last line, exactly: LOCAL CHECK: PASS <tree sha> <seconds>s
+   gh pr merge <n1> --merge --delete-branch                    # the same order, back to back
+   gh pr merge <n2> --merge --delete-branch
+   gh pr merge <n3> --merge --delete-branch
+   git fetch origin && git rev-parse 'origin/main^{tree}'      # must print the tree sha of the PASS line
+   ops/deploy-checked.sh                                       # step 7
+   ```
 
-A job that never starts ("Waiting for a runner") means the Mac's runners are offline:
-`ops/ci-runners.sh status` on the Mac, then `ops/ci-runners.sh start`. A run that stays queued
-although `status` shows the runners listening and idle was queued while a runner was being
-recreated and is never assigned: cancel it and start it again. A job that died with a lost runner
-(the Mac went to sleep) is rerun with `gh run rerun <id> --failed`.
+   The tree sha is the key. The check writes a record `.local-check/<tree sha>.json` in the main
+   checkout (git ignored) only when the full set passed, and once the pull requests are merged
+   in the same order, `git rev-parse 'origin/main^{tree}'` equals that sha exactly when what
+   was checked is what is on `main`. When it differs (another order, a head pushed after the
+   check, something merged in between), `main` is checked again before any deploy:
+   `ops/local-check.sh` with no argument checks `origin/main` as it is. Exit status of the
+   check: 0 every step that ran passed (a proof only with the `LOCAL CHECK: PASS` line,
+   below), 1 a check failed (the failed steps are named on the last line, the end of
+   their logs is shown, the full logs are kept in the folder it prints), 2 a merge conflict (it
+   names the ref: that branch is updated first, which is a new head and so a new review
+   confirmation), 3 another check holds the lock or the disk is under 12 GiB free.
 
-To test an open pull request again after `main` moved (the merge queue, a changed workflow):
-`ops/ci-rerun.sh <number>`. It waits until GitHub's merge commit for the pull request is `main`
-as it is now plus the branch, then closes and reopens the pull request, which starts a pull
-request run on that commit; the branch gets no commit, so a review of its head stays valid.
-`gh run rerun` would test the old merge commit with the old workflow, `gh workflow run` the
-branch alone with its own copy of the workflow, and a close and reopen done by hand right after
-`main` moved the stale merge commit (README, What a CI run does). When GitHub never reports
-a fresh merge commit (seen once, for a draft against another branch than `main`), the script
-gives up after two minutes with nothing changed, and a commit on the branch is what starts a
-fresh run. A new workflow
+   What counts as proof. Only a last line that begins with exactly `LOCAL CHECK: PASS `,
+   followed by the tree sha, and the record `.local-check/<tree sha>.json` written next to it.
+   That line is printed by a run of the full set with the real steps and by nothing else. A
+   run with `--only` ends with `LOCAL CHECK: PARTIAL PASS <tree sha> ...` and writes no
+   record: it is a tool for the author, never a proof for a merge or a deploy. A run of the
+   script's own tests ends with `LOCAL CHECK: STUB PASS ...`. Exit status 0 alone proves
+   nothing, a partial run has it too. Before the record is written the check compares the
+   steps that ran with the list of the full set, and a step that did not run fails the check.
+   A new `tests/*_test.sh` gets a step `run: tests/<name>_test.sh` in `ci.yml`, or a line with
+   its reason in `shell_tests_left_out` of `ops/local-check.sh`: one that has neither fails
+   the check. The secret scan reads every commit since the last tree that has a PASS record
+   (50 commits before the base when there is none), and prints that range.
+
+   What the batch check does not give. There is no check per pull request: a failure belongs
+   to the batch, and is bisected by running the check again with fewer `--merge` refs. It runs
+   only while the Mac is awake and Docker Desktop is open, one check at a time. Nothing on
+   GitHub shows its result: the record on the Mac and the `LOCAL CHECK: PASS` line are the
+   proof, so the orchestrator quotes that whole line when it merges.
+7. Only a checked tree is deployed, through `ops/deploy-checked.sh`. It refuses a commit whose
+   tree has no PASS record, and a commit that is not on `origin/main`. Then it starts
+   `.github/workflows/deploy.yml` on the Jetson's own runner for the full sha
+   (`gh workflow run deploy.yml -f ref=<sha>`), waits for that run, prints its conclusion and
+   asks the public health URL (README, Continuous delivery). Nothing deploys by itself any
+   more: the deploy workflow has no trigger but the dispatch. `--dry-run` says what it would
+   start.
+
+`main` is always deployable: nothing is pushed to it directly, and a `main` whose check fails is fixed first.
+
+The Mac's CI runners (`ops/ci-runners.sh`, README, CI runners on the Mac) are optional and
+stopped by default since issue #116. They serve a run of `ci.yml` started by hand, and nothing
+else: `ops/ci-runners.sh status` on the Mac, then `ops/ci-runners.sh start`, then
+`gh workflow run ci.yml --ref <branch>`. A job that never starts ("Waiting for a runner") means
+they are stopped or the Mac is asleep. `ops/ci-rerun.sh` gave a pull request a fresh run by
+closing and reopening it; `ci.yml` has no pull request trigger any more, so it starts nothing
+today. A new workflow
 file cannot use the Mac's runners until `ops/ci-runner/job-started.sh` allows it, and no job may
 target `self-hosted` alone: that label is also the Jetson's. Test jobs name their worker count
 (`PYTEST_WORKERS`, `VITEST_WORKERS`) and never ask for every core: the Mac is shared.
@@ -147,7 +180,7 @@ The repository is private on GitHub's free plan, where protected branches and ru
 feature for private repositories. Checked on 2026-10-09: `gh api repos/GoldLegendW80/jobapp/rulesets`
 answers an empty list and `.../branches/main/protection` answers 404 "Branch not protected"; no
 ruleset or protection was created (that write was not attempted). The rules above are therefore
-kept by convention and by the orchestrator, which merges only what step 6 above calls mergeable. Moving to a paid plan or a public repository would let a ruleset require the CI checks (the three job names `api`, `checks`, `journeys`, kept stable for that) and one approval on `main`.
+kept by convention and by the orchestrator, which merges only what step 6 above calls mergeable, after the batch check, and deploys only through `ops/deploy-checked.sh`. Moving to a paid plan or a public repository would let a ruleset require one approval on `main`; the batch check runs on the Mac and has no status on GitHub that a ruleset could require.
 
 ## Locally before pushing
 
@@ -161,4 +194,6 @@ tests/migrate_test.sh                                    # by hand, not in CI: w
 tests/ci_runners_test.sh                                 # when ops/ci-runners.sh, ops/ci-rerun.sh, ops/ci-runner/ or the workflows change
 python3 .github/scripts/ci_plan_test.py                  # when ci.yml, .pre-commit-config.yaml or the path rules of ci_plan.py change
 tests/secret_scan_test.sh                                # when .github/scripts/secret_scan.sh or the gitleaks hooks change
+tests/local_check_test.sh                                # when ops/local-check.sh, ops/deploy-checked.sh or the triggers of the workflows change
+ops/local-check.sh --base HEAD --only api                # one job of the batch check on a commit of one's own (api, checks or journeys; a partial run writes no record)
 ```

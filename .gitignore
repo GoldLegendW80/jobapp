@@ -21,6 +21,7 @@ build/
 .vite/
 playwright-report/
 test-results/
+.vitest/
 
 # OS and editors
 .DS_Store
@@ -33,3 +34,6 @@ test-results/
 # Database dumps: pulled by ./deploy.sh backup --pull, never committed
 backups/
 *.dump
+
+# Records and logs of ops/local-check.sh (the batch check): local to this machine
+.local-check/

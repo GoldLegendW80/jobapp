@@ -1,8 +1,23 @@
 # Continuous integration (SPEC-platform.md, Repository and automation; CONTRIBUTING.md).
-# Every pull request and every push to main: api lint and tests against Postgres and Redis service
+#
+# MANUAL ONLY since 2026-10-13 (issue #116, the owner's decision): no run per pull request and none
+# per push to main any more. A run took about ten minutes on the Mac runners and runs queued
+# behind each other. What a merge waits for now is ops/local-check.sh, which runs the steps of the
+# three jobs below natively on the Mac, once, on the tree a batch of approved pull requests
+# produces (CONTRIBUTING.md, Merging), and the deploy is started by ops/deploy-checked.sh.
+# This file stays as the definition of those steps: ops/local-check.sh reads from it the list of
+# files of the Shellcheck step and the tests/*_test.sh steps, and tests pin the rest.
+# To run it by hand, on a branch or on main, with a runner started (ops/ci-runners.sh start, or
+# CI_RUNS_ON set to GitHub's machines, below):
+#   gh workflow enable ci.yml                 once, the workflow is disabled in the settings
+#   gh workflow run ci.yml --ref <branch>
+# A run started by hand has no pull request to narrow it by: the plan runs everything.
+#
+# What it runs: api lint and tests against Postgres and Redis service
 # containers with the coverage floor, web lint, typecheck, Vitest and build, the shell scripts,
 # the browser journeys against scratch Compose stacks built on the runner, and the pre-commit
-# hooks not covered elsewhere. A green run on main is what .github/workflows/deploy.yml waits for.
+# hooks not covered elsewhere. Nothing waits for a run: .github/workflows/deploy.yml is started on
+# demand, for a tree that passed ops/local-check.sh.
 #
 # Layout (issue #91): three jobs of about the same length, one per runner.
 #   api       ruff, the whole pytest suite in one run with the 95 percent floor, the docker
@@ -67,9 +82,6 @@
 name: CI
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -375,6 +387,7 @@ jobs:
           tests/reboot_check.sh tests/e2e_jetson.sh tests/tailscale_test.sh tests/agents_real_run_jetson.sh
           tests/agents_real_run_test.sh tests/ingestion_parser_jetson.sh
           ops/env_check.sh tests/env_check_test.sh
+          ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh
       # Issue #18: the .env syntax check and where it runs (deploy.sh, deploy.yml, the smoke).
       - name: tests/env_check_test.sh
         id: env_check_test
@@ -423,6 +436,13 @@ jobs:
         id: tailscale_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/tailscale_test.sh
+      # Issue #116: the batch check and the checked deploy (ops/local-check.sh,
+      # ops/deploy-checked.sh) on throwaway repositories with stub steps: the lock, the disk
+      # floor, a merge conflict, a failing step, the record of a pass, the cleanup.
+      - name: tests/local_check_test.sh
+        id: local_check_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
+        run: tests/local_check_test.sh
 
       # --- unit: e2e (groups apps and ingestion) -------------------------------------------
       # Playwright comes with the web dependencies. The pnpm version comes from packageManager
