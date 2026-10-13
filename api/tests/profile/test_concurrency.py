@@ -103,9 +103,13 @@ def test_service_reads_only_the_callers_revision(factory: sessionmaker[Session])
 
 @pytest.fixture
 def roomy_client(migrated_url: str, clock: Clock) -> Iterator[TestClient]:
-    """An app whose pool waits long enough for twenty requests queued on one row lock."""
+    """An app whose pool waits long enough for twenty requests queued on one row lock, and
+    which lets one user have that many bodies in flight: twenty at once from one session is
+    the device of the test, the api's own bound is six and the rest would be 429 (issue #108)."""
     settings = make_settings(migrated_url, db_connect_timeout_s=15)
-    with TestClient(create_app(settings, clock=clock)) as client:
+    app = create_app(settings, clock=clock)
+    app.state.bodies_in_flight.per_user = WRITERS
+    with TestClient(app) as client:
         yield client
 
 

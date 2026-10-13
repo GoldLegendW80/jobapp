@@ -639,7 +639,9 @@ function ChatBody({ job }: { job: JobDetail }) {
         </div>
         <p id={ids.hint} className="text-xs text-muted-foreground">
           {holding
-            ? "Your message is sent as soon as the answer is complete. Clear it to cancel."
+            ? `Your message is sent as soon as ${
+                busy ? "the answer is complete" : "the conversation has loaded"
+              }. Clear it to cancel.`
             : busy
               ? "Enter sends your message once the answer is complete."
               : "Enter sends, Shift and Enter adds a line."}

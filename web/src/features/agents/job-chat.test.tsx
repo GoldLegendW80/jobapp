@@ -471,6 +471,11 @@ describe("job detail: chat panel", () => {
     await user.type(composer(), "Hello{Enter}");
     expect(state.sends).toEqual([]);
     expect(composer()).toHaveValue("Hello");
+    expect(
+      within(panel).getByText(
+        "Your message is sent as soon as the conversation has loaded. Clear it to cancel.",
+      ),
+    ).toBeInTheDocument();
     release();
     await waitFor(() => {
       expect(state.sends).toEqual(["Hello"]);
@@ -502,7 +507,10 @@ describe("job detail: chat panel", () => {
     await waitFor(() => {
       expect(composer()).toBeEnabled();
     });
-    void app.client.refetchQueries({ queryKey: jobThreadKey(JOB), exact: true });
+    void app.client.refetchQueries({
+      queryKey: jobThreadKey(JOB),
+      exact: true,
+    });
     await waitFor(() => {
       expect(reads).toBe(2);
     });
@@ -549,8 +557,12 @@ describe("job detail: chat panel", () => {
     ).toBeInTheDocument();
     // The empty state, not an error that only a reload clears, and the draft is kept.
     expect(await within(panel).findByTestId("chat-empty")).toBeInTheDocument();
-    expect(within(panel).queryByText("Earlier question")).not.toBeInTheDocument();
-    expect(within(panel).queryByText(/could not be loaded/i)).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByText("Earlier question"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByText(/could not be loaded/i),
+    ).not.toBeInTheDocument();
     expect(composer()).toHaveValue("Still there?");
   });
 
@@ -565,7 +577,9 @@ describe("job detail: chat panel", () => {
     state.messages = [];
     void app.client.invalidateQueries({ queryKey: threadKey(THREAD) });
     expect(await within(panel).findByTestId("chat-empty")).toBeInTheDocument();
-    expect(within(panel).queryByText(/could not be loaded/i)).not.toBeInTheDocument();
+    expect(
+      within(panel).queryByText(/could not be loaded/i),
+    ).not.toBeInTheDocument();
     expect(app.client.getQueryData(jobThreadKey(JOB))).toBeNull();
   });
 
