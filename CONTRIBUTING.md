@@ -123,6 +123,13 @@ release runs on the new schema**. A migration must leave it able to.
   and is stopped after `MIGRATE_TIMEOUT_S` (300 seconds), rolled back.
 - `downgrade()` is still written and tested, for a human who decides to go back; no deploy runs it.
 
+What the code stores in JSONB follows the same rule. The sections of a profile are validated on
+every read, so a release that starts storing a form the previous release refuses cannot be taken
+back once a user has saved one: the previous release answers 500 on that user's profile. Ship the
+reader one release before the writer, or say in the pull request that the release is a one way
+door, with the read only query that names who would break before a rollback by hand (P7, a year
+alone as a date, was merged that way: its query is in the description of pull request #105).
+
 `api/tests/test_migration_rules.py` reads every revision and fails on a drop, a rename, a type
 change, a new `NOT NULL` in `upgrade()`. When the previous release really no longer uses the
 thing, say so on the statement and the guard lets it through:

@@ -10,7 +10,6 @@ import {
   fromExperienceForm,
   fromIdentityForm,
   identitySchema,
-  isMonth,
   NEW_EMPLOYER,
   NEW_SCHOOL,
   slugify,
@@ -173,20 +172,67 @@ describe("experience schema", () => {
     ["2024-1", false],
     ["1899-12", false],
     ["2101-01", false],
+    ["1899", false],
+    ["2101", false],
+    ["24", false],
+    ["2024/05", false],
     ["1900-01", true],
     ["2100-12", true],
-    ["2024-01 ", false],
-  ])("month %j valid: %s", (value, valid) => {
-    expect(isMonth(value)).toBe(valid);
+    ["1900", true],
+    ["2100", true],
+    ["2024", true],
+    [" 2024 ", true],
+  ])("start %j accepted: %s", (start, accepted) => {
+    const result = experienceSchema.safeParse(
+      experience({ employers: [employer({ start })] }),
+    );
+    expect(result.success).toBe(accepted);
+    if (!accepted)
+      expect(issues(result)).toEqual({
+        "employers.0.start":
+          "Write the date as YYYY or YYYY-MM, between 1900 and 2100.",
+      });
   });
 
-  it("names the month format", () => {
+  it("accepts a year alone on each of the four dates and saves it as typed", () => {
+    const form = experience({
+      employers: [employer({ present: false, start: "2021", end: "2023" })],
+      education: [
+        { ...NEW_SCHOOL, school: "S", degree: "D", start: "2019", end: "2021" },
+      ],
+    });
+    expect(experienceSchema.safeParse(form).success).toBe(true);
+    const out = fromExperienceForm(form);
+    expect(out.employers[0]).toMatchObject({ start: "2021", end: "2023" });
+    expect(out.education[0]).toMatchObject({ start: "2019", end: "2021" });
+    // And back into a form: no month appears on the way.
+    const again = toExperienceForm(out);
+    expect(again.employers[0]).toMatchObject({ start: "2021", end: "2023" });
+    expect(JSON.stringify(out)).not.toMatch(/20\d\d-\d\d/);
+  });
+
+  it("names the two forms on each of the four dates", () => {
+    const message = "Write the date as YYYY or YYYY-MM, between 1900 and 2100.";
     const result = experienceSchema.safeParse(
-      experience({ employers: [employer({ start: "2024/05" })] }),
+      experience({
+        employers: [employer({ present: false, start: "2024/05", end: "24" })],
+        education: [
+          {
+            ...NEW_SCHOOL,
+            school: "S",
+            degree: "D",
+            start: "2021-3",
+            end: "1899",
+          },
+        ],
+      }),
     );
-    expect(issues(result)["employers.0.start"]).toBe(
-      "Write the month as YYYY-MM, between 1900 and 2100.",
-    );
+    expect(issues(result)).toEqual({
+      "employers.0.start": message,
+      "employers.0.end": message,
+      "education.0.start": message,
+      "education.0.end": message,
+    });
   });
 
   it("requires organisation, title, key and start", () => {
@@ -197,17 +243,24 @@ describe("experience schema", () => {
       "employers.0.key": "Enter a key.",
       "employers.0.organisation": "Enter the organisation.",
       "employers.0.title": "Enter the job title.",
-      "employers.0.start": "Enter the start month.",
+      "employers.0.start": "Enter the start, as YYYY or YYYY-MM.",
     });
   });
 
-  it("asks for an end month unless present is ticked", () => {
+  it("asks for an end unless present is ticked", () => {
     const result = experienceSchema.safeParse(
       experience({ employers: [employer({ present: false, end: "" })] }),
     );
     expect(issues(result)["employers.0.end"]).toBe(
-      "Enter the end month, or tick Present.",
+      "Enter the end, or tick Present.",
     );
+  });
+
+  it("leaves both dates of a school empty", () => {
+    const result = experienceSchema.safeParse(
+      experience({ education: [{ ...NEW_SCHOOL, school: "S", degree: "D" }] }),
+    );
+    expect(result.success).toBe(true);
   });
 
   it("refuses an end before the start, for employers and schools", () => {
@@ -228,9 +281,34 @@ describe("experience schema", () => {
       }),
     );
     expect(issues(result)).toEqual({
-      "employers.0.end": "The end month is before the start month.",
-      "education.0.end": "The end month is before the start month.",
+      "employers.0.end": "The end is before the start.",
+      "education.0.end": "The end is before the start.",
     });
+  });
+
+  // start, end, accepted: only an end that is certainly before the start is refused.
+  it.each([
+    ["2023-05", "2023", true],
+    ["2023", "2022-12", false],
+    ["2023", "2023", true],
+    ["2023-06", "2023-05", false],
+    ["2021", "2021-03", true],
+    ["2021-03", "2021", true],
+    ["2024", "2023", false],
+    ["2024-01", "2023", false],
+  ])("start %j with end %j accepted: %s", (start, end, accepted) => {
+    const result = experienceSchema.safeParse(
+      experience({
+        employers: [employer({ present: false, start, end })],
+        education: [{ ...NEW_SCHOOL, school: "S", degree: "D", start, end }],
+      }),
+    );
+    expect(result.success).toBe(accepted);
+    if (!accepted)
+      expect(issues(result)).toEqual({
+        "employers.0.end": "The end is before the start.",
+        "education.0.end": "The end is before the start.",
+      });
   });
 
   it("accepts the same month as start and end, and ignores end when present", () => {
@@ -245,6 +323,14 @@ describe("experience schema", () => {
       experienceSchema.safeParse(experience({ employers: [same, ignored] }))
         .success,
     ).toBe(true);
+    // Present with a year only start, and an end typed before it was ticked.
+    const year = employer({ present: true, start: "2024", end: "2020" });
+    expect(
+      experienceSchema.safeParse(experience({ employers: [year] })).success,
+    ).toBe(true);
+    expect(
+      fromExperienceForm(experience({ employers: [year] })).employers[0],
+    ).toMatchObject({ start: "2024", end: null });
   });
 
   it("refuses duplicate employer keys on the later one", () => {

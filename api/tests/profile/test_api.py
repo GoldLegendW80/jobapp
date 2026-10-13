@@ -204,7 +204,40 @@ def test_large_fact_base_round_trip(api: Api, alice: str) -> None:
         (
             "experience",
             {"employers": [{"key": "a", "organisation": "A", "title": "T", "start": "2025-13"}]},
-            "data.employers.0.start: must be a month written YYYY-MM between 1900 and 2100",
+            "data.employers.0.start: must be a year or a month, written YYYY or YYYY-MM, "
+            "between 1900 and 2100",
+        ),
+        (
+            "experience",
+            {"employers": [{"key": "a", "organisation": "A", "title": "T", "start": "2021-3"}]},
+            "data.employers.0.start: must be a year or a month, written YYYY or YYYY-MM, "
+            "between 1900 and 2100",
+        ),
+        (
+            "experience",
+            {"education": [{"school": "S", "degree": "D", "end": "21"}]},
+            "data.education.0.end: must be a year or a month, written YYYY or YYYY-MM, "
+            "between 1900 and 2100",
+        ),
+        (
+            "experience",
+            {"employers": [{"key": "a", "organisation": "A", "title": "T", "start": 2021}]},
+            "data.employers.0.start: Input should be a valid string",
+        ),
+        (
+            "experience",
+            {
+                "employers": [
+                    {
+                        "key": "a",
+                        "organisation": "A",
+                        "title": "T",
+                        "start": "2023",
+                        "end": "2022-12",
+                    }
+                ]
+            },
+            "data.employers.0: end must not be before start",
         ),
         (
             "experience",
@@ -253,6 +286,168 @@ def test_422_never_echoes_the_value(api: Api, alice: str) -> None:
     response = save(api, alice, "identity", {"full_name": secret * 20}, 0)
     assert response.status_code == 422
     assert secret not in response.text
+    employer = {"key": "a", "organisation": "A", "title": "T", "start": "not-a-date-1987"}
+    response = save(api, alice, "experience", {"employers": [employer]}, 0)
+    assert response.status_code == 422
+    assert "1987" not in response.text
+
+
+# --- dates: a month, or a year alone (P7) -------------------------------------------------------
+
+
+def employer(start: str, end: str | None = None, key: str = "acme") -> dict[str, Any]:
+    return {
+        "key": key,
+        "organisation": "Acme Group",
+        "title": "Engineer",
+        "start": start,
+        "end": end,
+        "location": None,
+        "contract": None,
+    }
+
+
+def school(start: str | None, end: str | None) -> dict[str, Any]:
+    return {
+        "school": "School of Engineering",
+        "degree": "MSc",
+        "start": start,
+        "end": end,
+        "location": None,
+        "details": None,
+    }
+
+
+def test_a_year_alone_is_saved_read_and_kept_in_history_as_written(
+    api: Api, alice: str, factory: sessionmaker[Session], clock: Clock
+) -> None:
+    years = {"employers": [employer("2021", "2023")], "education": [school("2019", None)]}
+    body = save_ok(api, alice, "experience", years, 0)
+    assert body["sections"]["experience"] == years
+    assert body["completeness"]["sections"]["experience"] == {"percent": 100, "missing": []}
+    assert read(api, alice)["sections"]["experience"] == years
+    # In Postgres too: the JSONB of the profile and of the revision hold the four characters.
+    with factory() as db:
+        raw = db.execute(
+            sa.text(
+                "select sections #>> '{experience,employers,0,start}',"
+                " sections #>> '{experience,employers,0,end}',"
+                " sections #>> '{experience,education,0,start}',"
+                " sections #> '{experience,education,0,end}' from profiles"
+            )
+        ).one()
+        kept = db.execute(
+            sa.text("select data #>> '{employers,0,start}' from profile_revisions")
+        ).scalar_one()
+    assert tuple(raw) == ("2021", "2023", "2019", None)
+    assert kept == "2021"
+
+    # Edited to a month: a new revision, the old one unchanged, and a restore brings the year back.
+    clock.advance(minutes=1)
+    months = {"employers": [employer("2021-03", "2023")], "education": [school("2019", None)]}
+    assert save_ok(api, alice, "experience", months, 1)["sections"]["experience"] == months
+    first = api.get("/api/profile/revisions/1", token=alice).json()
+    second = api.get("/api/profile/revisions/2", token=alice).json()
+    assert first["data"] == years
+    assert second["data"] == months
+    assert (first["data"]["employers"][0]["start"], second["data"]["employers"][0]["start"]) == (
+        "2021",
+        "2021-03",
+    )
+    restored = save_ok(api, alice, "experience", first["data"], 2)
+    assert restored["revision"] == 3
+    assert restored["sections"]["experience"] == years
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        ("2023-05", "2023"),
+        ("2023", "2023"),
+        ("2021", "2021-03"),
+        ("2021-03", "2021"),
+        ("2021", None),
+    ],
+)
+def test_ranges_that_may_be_in_order_are_saved(
+    api: Api, alice: str, start: str, end: str | None
+) -> None:
+    data = {"employers": [employer(start, end)], "education": [school(start, end)]}
+    stored = save_ok(api, alice, "experience", data, 0)["sections"]["experience"]
+    assert stored == data
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [("2023", "2022-12"), ("2023-06", "2023-05"), ("2024", "2023"), ("2024-01", "2023")],
+)
+def test_ranges_certainly_out_of_order_are_422_on_the_entry(
+    api: Api, alice: str, factory: sessionmaker[Session], start: str, end: str
+) -> None:
+    response = save(api, alice, "experience", {"employers": [employer(start, end)]}, 0)
+    assert response.status_code == 422
+    assert response.json() == {"detail": "data.employers.0: end must not be before start"}
+    response = save(api, alice, "experience", {"education": [school(start, end)]}, 0)
+    assert response.json() == {"detail": "data.education.0: end must not be before start"}
+    assert rows(factory, ProfileRevision) == []
+
+
+def test_a_profile_stored_before_the_change_reads_and_saves_unchanged(
+    api: Api, alice: str, factory: sessionmaker[Session]
+) -> None:
+    """Rows written by the month only model: read as they are, complete, exported as they are,
+    and a save of the same data stores the same data. Nothing is rewritten on the way."""
+    legacy = full("experience")
+    read(api, alice)  # creates the row
+    with factory() as db:
+        profile = db.execute(sa.select(Profile)).scalar_one()
+        profile.sections = {"experience": legacy}
+        profile.revision = 1
+        db.add(
+            ProfileRevision(
+                user_id=profile.user_id,
+                revision=1,
+                section="experience",
+                data=legacy,
+                created_at=profile.updated_at,
+            )
+        )
+        db.commit()
+    body = read(api, alice)
+    assert body["sections"]["experience"] == FULL["experience"]
+    assert body["completeness"]["sections"]["experience"]["percent"] == 100
+    exported = api.get("/api/profile/export", token=alice).json()
+    assert exported["sections"]["experience"] == FULL["experience"]
+    assert api.get("/api/profile/revisions/1", token=alice).json()["data"] == FULL["experience"]
+    saved = save_ok(api, alice, "experience", body["sections"]["experience"], 1)
+    assert saved["sections"]["experience"] == FULL["experience"]
+    assert rows(factory, ProfileRevision)[-1].data == FULL["experience"]
+
+
+def test_two_tabs_saving_dates_the_second_gets_409_with_the_first_ones_year(
+    api: Api, alice: str
+) -> None:
+    base = read(api, alice)["revision"]
+    save_ok(api, alice, "experience", {"employers": [employer("2021")]}, base)
+    conflict = save(api, alice, "experience", {"employers": [employer("2021-03")]}, base)
+    assert conflict.status_code == 409
+    assert conflict.json()["sections"]["experience"]["employers"][0]["start"] == "2021"
+    retry = save_ok(
+        api, alice, "experience", {"employers": [employer("2021-03")]}, conflict.json()["revision"]
+    )
+    assert retry["sections"]["experience"]["employers"][0]["start"] == "2021-03"
+
+
+def test_openapi_describes_a_year_alone_and_a_month(api: Api) -> None:
+    schema = api.client.get("/openapi.json").json()
+    body = schema["paths"]["/api/profile/import"]["post"]["requestBody"]["content"]
+    employer_schema = body["application/json"]["schema"]["$defs"]["Employer"]["properties"]
+    assert "a year alone, YYYY" in employer_schema["start"]["description"]
+    assert employer_schema["start"]["examples"] == ["2021-03", "2021"]
+    assert employer_schema["start"]["pattern"] == r"^\d{4}(-(0[1-9]|1[0-2]))?$"
+    assert "a year alone, YYYY" in employer_schema["end"]["description"]
+    put = schema["paths"]["/api/profile/{section}"]["put"]["description"]
+    assert "YYYY-MM or YYYY" in put
 
 
 @pytest.mark.parametrize(
