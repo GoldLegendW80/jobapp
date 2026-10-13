@@ -7,8 +7,11 @@ The end of a step's agent run is written to `agent_runs` as the runner or a reap
 real runner on the fake backend, through the `on_final` hook."""
 
 import asyncio
+import itertools
+import math
 import threading
 import uuid
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 
@@ -435,6 +438,11 @@ def test_the_ceiling_reached_inside_a_step(
     # The interrupted step is back to `planned` and keeps its items.
     assert eh.statuses(factory, run_id) == ["planned"]
     assert eh.items_of(factory, run_id) == 1
+    # One `H` would start it again on less than the budget that was not enough: Continue adds
+    # what gives it twice that budget, and the run says so before the click.
+    with factory() as db:
+        adds = engine.continue_adds(db, paused, eh.steps_of(factory, run_id))
+    assert adds == 2 * run.token_ceiling + 9 > paused.estimate_high
 
     with factory() as db, db.begin():
         engine.continue_(db, alice, run_id, now())
@@ -442,13 +450,123 @@ def test_the_ceiling_reached_inside_a_step(
     again = eh.running(factory, run_id)
     assert again.id == step.id
     assert again.agent_run_id != step.agent_run_id
-    assert again.token_budget == paused.estimate_high - 9
+    assert again.token_budget == 2 * run.token_ceiling > step.token_budget
     eh.finish_step(factory, run_id, settings, tokens=1_000)
     done = eh.run_of(factory, run_id)
     assert done.status is RunStatus.done
-    assert len(done.ceiling_history) == 1
+    assert [(one["from"], one["to"]) for one in done.ceiling_history] == [
+        (run.token_ceiling, run.token_ceiling + adds)
+    ]
     assert eh.items_of(factory, run_id) == 1  # stored once: the step row is the same
     assert eh.steps_of(factory, run_id)[0].items_count == 1
+
+
+def cut_and_continue(
+    factory: sessionmaker[Session],
+    user: uuid.UUID,
+    settings: Settings,
+    run_id: uuid.UUID,
+    overshoots: Sequence[int],
+) -> tuple[list[int], int]:
+    """The step of a one step run is cut at its budget every time (plus the overshoot of that
+    attempt) and the user clicks Continue every time the run asks. The budgets of the step and
+    the number of Continues, once the run has ended."""
+    budgets: list[int] = []
+    clicks = 0
+    for _ in range(40):
+        run = eh.run_of(factory, run_id)
+        if run.status not in engine.ACTIVE:
+            return budgets, clicks
+        if run.status is RunStatus.paused:
+            assert run.paused_reason == engine.TOKEN_CEILING
+            spent, agents = run.tokens_spent, len(eh.agent_runs_of(factory, user))
+            with factory() as db, db.begin():
+                engine.continue_(db, user, run_id, now())
+            clicks += 1
+            eh.advance(factory, run_id, settings)
+            # The click itself spends nothing and always starts the step.
+            assert eh.run_of(factory, run_id).tokens_spent == spent
+            assert len(eh.agent_runs_of(factory, user)) == agents + 1
+            continue
+        budget = eh.running(factory, run_id).token_budget
+        assert budget is not None
+        budgets.append(budget)
+        over = overshoots[(len(budgets) - 1) % len(overshoots)] if overshoots else 0
+        eh.finish_step(
+            factory, run_id, settings, AgentStatus.failed, failures.TOKEN_LIMIT, budget + over
+        )
+    raise AssertionError("the run never ended")
+
+
+def test_a_step_the_ceiling_cut_never_starts_again_on_a_budget_that_already_failed(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """The probe of the review of PR #148 (B1): one document, the step cut exactly at its
+    budget, Continue after Continue. It read budgets of `[2H, H, H, H]` and a run that never
+    ended."""
+    run_id = started(factory, alice, settings, count=1)
+    first = eh.run_of(factory, run_id)
+    high = first.estimate_high
+    backstop = estimate.extraction(len(eh.text_of(1))).backstop
+    budgets, clicks = cut_and_continue(factory, alice, settings, run_id, ())
+    assert budgets[0] == 2 * high
+    assert all(later > earlier for earlier, later in itertools.pairwise(budgets))
+    assert budgets == [min(backstop, 2 * high * 2**index) for index in range(len(budgets))]
+    assert budgets[-1] == backstop
+    ended = eh.run_of(factory, run_id)
+    # Cut at its backstop, the step has failed for good: nothing was read, the run is closed.
+    assert (ended.status, eh.statuses(factory, run_id)) == (RunStatus.failed, ["failed"])
+    assert ended.tokens_spent == sum(budgets) < 3 * backstop
+    assert clicks == len(budgets) - 1 == len(ended.ceiling_history)
+
+
+@pytest.mark.parametrize(
+    "overshoots",
+    [(0,), (1,), (9, 0, 70_000), (88_110,), (300_000, 1), (5, 500_000), (1_000_000,)],
+)
+def test_any_sequence_of_continues_on_one_step_is_bounded_and_ends(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings, overshoots: tuple[int]
+) -> None:
+    """Whatever each attempt overshoots by: the budgets of the step grow strictly, the last is
+    its backstop at most, the cuts number `1 + ceil(log2(backstop / first budget))` at most,
+    and the run has spent under three backstops plus the overshoots when it ends."""
+    run_id = started(factory, alice, settings, count=1)
+    backstop = estimate.extraction(len(eh.text_of(1))).backstop
+    budgets, clicks = cut_and_continue(factory, alice, settings, run_id, overshoots)
+    assert all(later > earlier for earlier, later in itertools.pairwise(budgets))
+    assert budgets[-1] <= backstop
+    assert len(budgets) <= 1 + math.ceil(math.log2(backstop / budgets[0]))
+    ended = eh.run_of(factory, run_id)
+    assert ended.status is RunStatus.failed
+    over = sum(overshoots[turn % len(overshoots)] for turn in range(len(budgets)))
+    assert ended.tokens_spent == sum(budgets) + over
+    assert sum(budgets) < 3 * backstop
+    assert clicks == len(ended.ceiling_history) == len(budgets) - 1
+
+
+def test_a_cut_step_whose_floor_the_remainder_does_not_reach_pauses_without_a_model_call(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """The rule holds where agent runs are created, not only in Continue: a ceiling lowered
+    behind the engine's back (written by hand here) starts nothing."""
+    run_id = started(factory, alice, settings, count=1)
+    run = eh.run_of(factory, run_id)
+    budget = run.token_ceiling
+    eh.finish_step(factory, run_id, settings, AgentStatus.failed, failures.TOKEN_LIMIT, budget)
+    # What one `H` used to leave: the cut step would start on half the budget that failed.
+    eh.set_run(
+        factory,
+        run_id,
+        status=RunStatus.running,
+        paused_reason=None,
+        token_ceiling=budget + run.estimate_high,
+    )
+    before = len(eh.agent_runs_of(factory, alice))
+    eh.advance(factory, run_id, settings)
+    paused = eh.run_of(factory, run_id)
+    assert (paused.status, paused.paused_reason) == (RunStatus.paused, engine.TOKEN_CEILING)
+    assert len(eh.agent_runs_of(factory, alice)) == before
+    assert paused.tokens_spent == budget
 
 
 def test_what_remains_just_below_the_next_steps_low_estimate_pauses_before_the_step(

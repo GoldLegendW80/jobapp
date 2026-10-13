@@ -40,6 +40,7 @@ Rules that hold everywhere in this file:
 
 import asyncio
 import logging
+import math
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -93,6 +94,10 @@ ENQUEUE_SERVICE = "enqueue_agent_run"
 # What G6 measured: a run can pass its ceiling by the request in flight when the count crosses
 # it, and by one more when the CLI had already sent the next one.
 OVERSHOOT_REQUESTS = 2
+# A step the ceiling cut starts again from its first request, so it is never started on the
+# budget that already failed or on less: its next budget is at least this many times the last
+# one, and never above its backstop. A step cut at its backstop is the step's own failure.
+CUT_GROWTH = 2
 
 Enqueue = Callable[[uuid.UUID], Awaitable[Any]]
 # The recorded streams of the fake backend (app/agents/fake_backend.py), found without importing it.
@@ -408,6 +413,39 @@ def _on_the_remainder(step: IngestionRunStep) -> bool:
     return step.token_budget < estimate.of_step(_plan_step(step)).backstop
 
 
+def _cut_by_ceiling(db: Session, step: IngestionRunStep) -> bool:
+    """Whether the last agent run of the step was interrupted by what remained under the
+    ceiling: the step then needs more than `step.token_budget`."""
+    if step.agent_run_id is None or not _on_the_remainder(step):
+        return False
+    agent = _agent(db, step.agent_run_id)
+    return agent is not None and agent.error == failures.TOKEN_LIMIT
+
+
+def _floor(db: Session, step: IngestionRunStep) -> int:
+    """The smallest budget the step may start on. Its low estimate when the ceiling never cut
+    it. After a cut, `CUT_GROWTH` times the budget that failed, or its backstop when that is
+    less: the budgets of one step grow at each cut and stop at the backstop, where a cut is the
+    step's own failure and the chain goes on. So a step is cut by the ceiling at most
+    `1 + ceil(log2(backstop / first budget))` times and its attempts spend under three
+    backstops in all, whatever the number of Continues."""
+    one = estimate.of_step(_plan_step(step))
+    if step.token_budget is not None and _cut_by_ceiling(db, step):
+        return min(one.backstop, CUT_GROWTH * step.token_budget)
+    return math.ceil(one.low)
+
+
+def continue_adds(db: Session, run: IngestionRun, steps: Sequence[IngestionRunStep]) -> int:
+    """What one Continue adds to the ceiling now: one `H`, or what the next step needs to start
+    on its floor when one `H` is not enough (a step the ceiling cut on more than half an `H`).
+    The page shows this figure before the click."""
+    step = next((one for one in steps if one.status is StepStatus.planned), None)
+    if step is None:
+        return run.estimate_high
+    need = _floor(db, step) - (run.token_ceiling - run.tokens_spent)
+    return max(run.estimate_high, need)
+
+
 def _pause(run: IngestionRun, reason: str) -> None:
     run.status = RunStatus.paused
     run.paused_reason = reason
@@ -438,7 +476,9 @@ def _next(
         return Moved(run.status)
     remaining = run.token_ceiling - run.tokens_spent
     budget = estimate.budget(_plan_step(step), remaining) if remaining > 0 else None
-    if budget is None:
+    if budget is None or budget < _floor(db, step):
+        # Under the step's low estimate, or not above the budget that already cut it: no agent
+        # run, no token. Continue raises the ceiling by what this step needs (`continue_adds`).
         _pause(run, TOKEN_CEILING)
         return Moved(run.status)
     if agent_runs.count_active(db, run.user_id) >= agent_runs.ACTIVE_PER_USER:
@@ -697,14 +737,16 @@ def resume(
 def continue_(
     db: Session, user_id: uuid.UUID, run_id: uuid.UUID, now: datetime
 ) -> IngestionRun | None:
-    """A run paused on its ceiling gets one more `H`, recorded in its history, and runs again.
-    Raises `WrongStateError` for any other state. None for a run that is not this user's."""
+    """A run paused on its ceiling gets `continue_adds` more (one `H`, or what the step the
+    ceiling cut needs to start on more than the budget that failed), recorded in its history,
+    and runs again. Raises `WrongStateError` for any other state. None for a run that is not
+    this user's."""
     run = _lock(db, run_id, user_id)
     if run is None:
         return None
     if run.status is not RunStatus.paused or run.paused_reason != TOKEN_CEILING:
         raise WrongStateError
-    raised = run.token_ceiling + run.estimate_high
+    raised = run.token_ceiling + continue_adds(db, run, _steps(db, run.id))
     _restart(db, run, now)
     run.ceiling_history = [
         *run.ceiling_history,

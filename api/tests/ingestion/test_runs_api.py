@@ -466,11 +466,15 @@ def test_continue_raises_the_ceiling_by_h_and_the_history_holds_one_entry(
     end_step(app, factory, run, tokens=ceiling)
     paused = api.get(f"{RUNS}/{run['id']}", token=alice).json()
     assert (paused["status"], paused["paused_reason"]) == ("paused", "token_ceiling")
+    # What the click buys, said before the click: one `H` here, the next step was never cut.
+    assert paused["tokens"]["continue_adds"] == high
+    assert run["tokens"]["continue_adds"] is None
     assert api.post(f"{RUNS}/{run['id']}/resume", token=alice).status_code == 409
     response = api.post(f"{RUNS}/{run['id']}/continue", token=alice)
     assert response.status_code == 200
     body = response.json()
     assert (body["status"], body["tokens"]["ceiling"]) == ("running", ceiling + high)
+    assert body["tokens"]["continue_adds"] is None
     (entry,) = body["tokens"]["history"]
     assert (entry["spent"], entry["from"], entry["to"]) == (ceiling, ceiling, ceiling + high)
     assert body["steps"][1]["status"] == "running"

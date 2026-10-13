@@ -5,7 +5,7 @@
     GET  /api/ingestion/runs/{id}
     POST /api/ingestion/runs/{id}/cancel
     POST /api/ingestion/runs/{id}/resume     a run paused for anything but its ceiling
-    POST /api/ingestion/runs/{id}/continue   a run paused on its token ceiling: one more `H`
+    POST /api/ingestion/runs/{id}/continue   a run paused on its token ceiling: `continue_adds`
 
 The start checks, in this order and in one transaction: the consent (409 `consent_required`),
 the selection through `estimate_router.quote` (404, 422), the echo of the estimate the dialog
@@ -133,6 +133,11 @@ class TokensOut(BaseModel):
     low: int
     high: int
     history: list[CeilingEntryOut]
+    continue_adds: int | None = Field(
+        description="For a run paused on `token_ceiling`: what one Continue adds to the ceiling "
+        "now. One `high`, or more when the step the ceiling interrupted needs it: that step "
+        "starts again from its first request, on at least twice the budget that was not enough."
+    )
     overshoot_requests: int
     overshoot: str
 
@@ -286,6 +291,9 @@ def run_out(db: Session, run: IngestionRun) -> RunOut:
             low=run.estimate_low,
             high=run.estimate_high,
             history=[CeilingEntryOut.model_validate(entry) for entry in run.ceiling_history],
+            continue_adds=engine.continue_adds(db, run, [row[0] for row in rows])
+            if run.status is RunStatus.paused and run.paused_reason == engine.TOKEN_CEILING
+            else None,
             overshoot_requests=engine.OVERSHOOT_REQUESTS,
             overshoot=OVERSHOOT,
         ),
