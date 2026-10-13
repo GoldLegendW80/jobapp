@@ -1,0 +1,72 @@
+{
+  "20 MiB, 1 page": {
+    "bytes": 20971520,
+    "characters": 1870,
+    "cpu_ms": 259,
+    "max_rss_kb": 55480,
+    "max_vm_kb": 70824,
+    "pages": 1,
+    "pages_read": 1,
+    "wall_ms": 471
+  },
+  "500,000 astral characters": {
+    "bytes": 67608,
+    "characters": 500000,
+    "cpu_ms": 536,
+    "max_rss_kb": 38224,
+    "max_vm_kb": 53620,
+    "pages": 200,
+    "pages_read": 189,
+    "wall_ms": 577
+  },
+  "one endless page": {
+    "bytes": 5296,
+    "characters": 1118,
+    "cpu_ms": 35529,
+    "max_rss_kb": 63728,
+    "max_vm_kb": 79536,
+    "pages": 3,
+    "pages_read": 1,
+    "wall_ms": 35698
+  },
+  "slow pages": {
+    "bytes": 33221,
+    "characters": 5474,
+    "cpu_ms": 35394,
+    "max_rss_kb": 79512,
+    "max_vm_kb": 95100,
+    "pages": 200,
+    "pages_read": 73,
+    "wall_ms": 35542
+  },
+  "text, 1 pages": {
+    "bytes": 1236,
+    "characters": 1870,
+    "cpu_ms": 299,
+    "max_rss_kb": 35172,
+    "max_vm_kb": 50344,
+    "pages": 1,
+    "pages_read": 1,
+    "wall_ms": 452
+  },
+  "text, 20 pages": {
+    "bytes": 9662,
+    "characters": 37639,
+    "cpu_ms": 284,
+    "max_rss_kb": 35112,
+    "max_vm_kb": 50352,
+    "pages": 20,
+    "pages_read": 20,
+    "wall_ms": 310
+  },
+  "text, 200 pages": {
+    "bytes": 90364,
+    "characters": 380039,
+    "cpu_ms": 499,
+    "max_rss_kb": 35756,
+    "max_vm_kb": 51392,
+    "pages": 200,
+    "pages_read": 200,
+    "wall_ms": 522
+  }
+}

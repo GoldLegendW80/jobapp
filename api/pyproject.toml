@@ -37,6 +37,21 @@ agents = [
     # tasks/agents/todo.md).
     "claude-agent-sdk==0.2.163",
 ]
+# What the parser service reads documents with (tasks/ingestion/todo.md, Text extraction per file
+# type). Installed in the `worker` image, which the `parser` service runs, and for the tests;
+# never in the api image: nothing is parsed in the api. Only app/ingestion/sandbox/ imports them,
+# inside the locked down child.
+ingestion = [
+    # Pure Python (py3-none-any), BSD-3-Clause. 6.20.1 and not the 6.20.0 of the plan: checked on
+    # PyPI on 2026-10-13, 6.20.1 (2026-10-12) is a fix release whose one security change,
+    # "Prevent cyclic tree handling" (#4188), is one of this module's own hostile cases, and it is
+    # the first release that patches GHSA-qfv9-64jg-mh7p and GHSA-9mx8-4j7g-633p. 6.20.0 brought
+    # "Limit work per stream" and "Flatten the page tree iteratively". No advisory is open
+    # against 6.20.1. The parser blocks `cryptography` before importing it (sandbox/main.py), so
+    # it reads RC4 protected files only: on an upgrade, tests/ingestion/parser/test_pdf_text.py
+    # must still find its fallback provider.
+    "pypdf==6.20.1",
+]
 dev = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
@@ -47,8 +62,9 @@ dev = [
 [tool.uv]
 package = false
 # Local `uv sync` and CI install everything; the images choose: the api's `runtime` target syncs
-# with --no-default-groups (no SDK, no test tools), the `worker` target adds --group agents.
-default-groups = ["dev", "agents"]
+# with --no-default-groups (no SDK, no test tools, no parser library), the `worker` target adds
+# --group agents and --group ingestion.
+default-groups = ["dev", "agents", "ingestion"]
 
 [tool.ruff]
 line-length = 100

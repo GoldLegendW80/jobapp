@@ -324,6 +324,35 @@ def forget_handlers() -> object:
             del sys.modules[name]
 
 
+def test_usage_is_the_cpu_time_and_the_two_peaks_of_this_process_alone() -> None:
+    """VmHWM and VmPeak of /proc, not ru_maxrss: that one survives fork and execve on Linux, so
+    a child would report the highest the server ever reached."""
+    fields = {"VmHWM": "38012 kB", "VmPeak": "53440 kB"}
+    found = main.usage(field=lambda name: fields[name])
+    assert (found["max_rss_kb"], found["max_vm_kb"]) == (38012, 53440)
+    assert found["cpu_ms"] > 0
+    assert set(found) == {"cpu_ms", "max_rss_kb", "max_vm_kb"}
+
+    def no_proc(_: str) -> str:
+        raise FileNotFoundError("/proc/self/status")
+
+    assert main.usage(field=no_proc) == {
+        "cpu_ms": main.usage(field=no_proc)["cpu_ms"],
+        "max_rss_kb": 0,
+        "max_vm_kb": 0,
+    }
+    assert main.usage(field=lambda _: "") == {**main.usage(field=lambda _: ""), "max_rss_kb": 0}
+
+
+def test_the_pdf_reader_has_half_the_address_space_of_the_other_kinds() -> None:
+    """Set from the measurements of G2b (tasks/ingestion/todo.md): 256 MiB, where the worst
+    child of every fixture reached 95. The ping keeps the 512 MiB the healthcheck expects."""
+    assert main.LIMITS["pdf_text"] == {**main.DEFAULT_LIMITS, "as": 256 * main.MIB}
+    for kind in ("ping", "docx", "linkedin_zip", "image", "pdf_render"):
+        assert main.LIMITS[kind] == main.DEFAULT_LIMITS
+    assert main.LIMITS["pdf_text"] is not main.LIMITS["ping"]
+
+
 def test_a_kind_without_its_file_is_not_supported_yet(tmp_path: Path) -> None:
     for kind in ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render"):
         assert main.load_handler(kind, str(tmp_path)) is None
@@ -334,10 +363,11 @@ def test_a_kind_without_its_file_is_not_supported_yet(tmp_path: Path) -> None:
         }
 
 
-def test_the_five_handlers_are_not_there_yet_in_this_task() -> None:
-    """G2b, G7 and G8 each add theirs: until then the service answers not_supported."""
+def test_the_table_names_the_five_handlers_and_the_tasks_add_their_files() -> None:
+    """G2b added pdf_text.py; G7 and G8 each add theirs: until then the service answers
+    not_supported for their kinds."""
     present = sorted(path.name for path in SANDBOX.glob("*.py"))
-    assert set(present) >= {"main.py", "server.py"}
+    assert set(present) >= {"main.py", "server.py", "pdf_text.py"}
     assert main.HANDLERS["ping"] is None
     assert sorted(name for name in main.HANDLERS.values() if name) == [
         "docx", "image", "linkedin_zip", "pdf_render", "pdf_text",

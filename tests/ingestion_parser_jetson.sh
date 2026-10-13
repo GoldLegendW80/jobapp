@@ -22,7 +22,10 @@
 #   3. the idle memory of the service, and the highest the container reached while it worked;
 #   4. CPU and wall time of the trivial job: a ping, and an echo of 1 MiB and of 20 MiB;
 #   5. the lowest available memory of the host during it.
-# G2b adds its PDF fixtures to JOBS below, and reads `as`, `cpu` and the time budget from them.
+#   6. (G2b) the PDF reader: text PDFs of 1, 20 and 200 pages and a 20 MiB PDF, made in the
+#      snippet itself (the image holds no test code), each read through pc.parse: wall time,
+#      and the child's CPU, resident memory and address space, to judge `as` (256 MiB), the
+#      CPU limit and the time budget of the kind against this machine.
 #
 # A problem shows as a line starting with PROBLEM and exit status 1. The numbers go under
 # "Measurements" in the plan of the module.
@@ -145,8 +148,56 @@ import time
 from app.ingestion import parser_client as pc
 
 MIB = 1024 * 1024
-# (label, bytes sent, rounds). G2b adds its PDF fixtures here, through pc.parse.
+# (label, bytes sent, rounds), each a ping. The PDF fixtures of G2b follow in PDFS.
 JOBS = (("ping", 0, int(sys.argv[1])), ("echo of 1 MiB", MIB, 5), ("echo of 20 MiB", 20 * MIB, 3))
+
+
+SENTENCE = "Robin Example led the migration of the billing service to Postgres in 2021."
+
+
+def pdf(pages, rows=40, filler=0):
+    """A PDF written by hand: `pages` pages of `rows` lines of made up text, and `filler` bytes
+    of an image nothing shows (bytes that do not compress), for the 20 MiB case."""
+    import random
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [%s] /Count %d >>"
+        % (b" ".join(b"%d 0 R" % (5 + 2 * n) for n in range(pages)), pages),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]
+    noise = random.Random(7).randbytes(filler)
+    objects.append(
+        b"<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray "
+        b"/BitsPerComponent 8 /Length %d >>\nstream\n" % len(noise) + noise + b"\nendstream"
+    )
+    for n in range(pages):
+        lines = " ".join(f"(Page {n + 1}, line {row + 1}. {SENTENCE}) Tj T*" for row in range(rows))
+        stream = f"BT /F1 9 Tf 40 800 Td 11 TL {lines} ET".encode("latin-1")
+        objects.append(
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents %d 0 R "
+            b"/Resources << /Font << /F1 3 0 R >> >> >>" % (6 + 2 * n)
+        )
+        objects.append(b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"\nendstream")
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % number + body + b"\nendobj\n"
+    start = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    out += b"".join(b"%010d 00000 n \n" % offset for offset in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objects) + 1, start)
+    return bytes(out)
+
+
+# (label, the file, rounds): what a CV is, what the page cap allows, and the largest file.
+PDFS = (
+    ("pdf, 1 page", lambda: pdf(1), 5),
+    ("pdf, 20 pages", lambda: pdf(20), 5),
+    ("pdf, 200 pages", lambda: pdf(200, rows=25), 3),  # under the cap of 500,000 characters
+    ("pdf, 20 MiB, 1 page", lambda: pdf(1, filler=20 * MIB - 8192), 3),
+)
 
 
 def spread(values):
@@ -168,6 +219,25 @@ async def main():
         found["jobs"].append(
             {"job": label, "rounds": rounds, "wall_ms": spread(wall), "child_cpu_ms": spread(cpu),
              "child_max_rss_mib": spread(rss)}
+        )
+    for label, make, rounds in PDFS:
+        data = make()
+        wall, cpu, rss, vm = [], [], [], []
+        parsed = None
+        for _ in range(rounds):
+            started = time.monotonic()
+            parsed = await pc.parse("pdf_text", data, timeout_s=90)
+            wall.append((time.monotonic() - started) * 1000)
+            used = parsed.usage or {}
+            cpu.append(used.get("cpu_ms", 0))
+            rss.append(used.get("max_rss_kb", 0) / 1024)
+            vm.append(used.get("max_vm_kb", 0) / 1024)
+        # Counts only: nothing of a text is printed, not even of a made up one.
+        found["jobs"].append(
+            {"job": label, "bytes": len(data), "rounds": rounds, "pages": parsed.pages,
+             "pages_text": parsed.pages_text, "characters": len(parsed.text or ""),
+             "wall_ms": spread(wall), "child_cpu_ms": spread(cpu),
+             "child_max_rss_mib": spread(rss), "child_max_vm_mib": spread(vm)}
         )
     sandbox = report.sandbox
     found["sandbox"] = {

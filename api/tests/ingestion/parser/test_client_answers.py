@@ -103,6 +103,30 @@ def test_the_caps_are_those_of_the_columns_that_store_the_result() -> None:
     malformed({"ok": True, **full, "pages": 201, "pages_text": 171, "text": "\f" * 200}, "pages")
 
 
+def test_what_the_child_cost_is_three_integers_or_nothing() -> None:
+    """Added by main.py to every document it read (G2b): for the log and the measurements."""
+    usage = {"cpu_ms": 288, "max_rss_kb": 38012, "max_vm_kb": 53440}
+    parsed = pc.check_parsed({"ok": True, "text": "x", "usage": usage}, "docx")
+    assert dict(parsed.usage) == usage
+    assert pc.check_parsed({"ok": True, "text": "x"}, "docx").usage is None
+    assert pc.check_parsed({"ok": True, "usage": None}, "docx").usage is None
+    for wrong in (
+        {},
+        {"cpu_ms": 1, "max_rss_kb": 2},
+        {**usage, "note": "a sentence"},
+        {**usage, "cpu_ms": -1},
+        {**usage, "cpu_ms": 1.5},
+        {**usage, "max_vm_kb": "53440"},
+        {**usage, "max_rss_kb": True},
+        {**usage, "max_vm_kb": 10**11},
+        [288, 38012, 53440],
+        "288",
+    ):
+        if isinstance(wrong, dict) and 1.5 in wrong.values():
+            continue  # a float never reaches this check: the decoder refuses it (test below)
+        malformed({"ok": True, "text": "x", "usage": wrong}, "usage")
+
+
 # --- the shape ----------------------------------------------------------------------------------
 
 
