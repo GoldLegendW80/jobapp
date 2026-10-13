@@ -2,6 +2,7 @@ import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 export const TOO_MANY_ATTEMPTS =
   "Too many sign in attempts. Wait a few minutes, then try again.";
+export const SERVER_BUSY = "The server is busy. Try again in a moment.";
 export const SERVER_UNREACHABLE =
   "The server could not be reached. Check your connection and try again.";
 
@@ -12,6 +13,9 @@ export function loginErrorMessage(error: unknown): string {
     if (error.status === 401)
       return errorDetail(error) ?? "Incorrect email or password.";
     if (error.status === 422) return errorDetail(error) ?? describeError(error);
+    // Too many passwords being checked at once (the api's own words), or an api too loaded
+    // to take the request at all (no words): nothing is wrong with what was typed.
+    if (error.status === 503) return errorDetail(error) ?? SERVER_BUSY;
     if (error.kind === "network" || error.kind === "timeout")
       return SERVER_UNREACHABLE;
   }

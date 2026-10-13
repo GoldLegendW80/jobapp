@@ -92,7 +92,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # --limit-concurrency 256 (issue #100): once 256 connections are open, a connection counting as
 # soon as it is open, uvicorn answers the next request 503. Measured once on a scratch stack:
 # 260 slow connections cost about 42 MiB here, and while they were held every other request,
-# the health check included, got 503. So this number bounds memory and is also how many slow
+# the health check included, got 503. So this number bounds the memory callers with no session
+# can take (a signed in user's bodies are bounded per user in app/body_limit.py, and password
+# checks by their slots in app/identity/hash_slots.py, issue #108) and is also how many slow
 # connections stop the api answering while they last; raising it trades one for the other
 # (SPEC-platform.md, Request limits by layer). An event stream holds one connection, and so
 # does the container's own health check, which reads unhealthy while the limit is reached.
