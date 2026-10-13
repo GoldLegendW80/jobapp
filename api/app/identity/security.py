@@ -56,9 +56,10 @@ _hasher = PasswordHasher.from_parameters(PASSWORD_HASH_PARAMETERS)
 # Up to PASSWORD_HASH_MAX_WAITING callers wait for a slot, at most PASSWORD_HASH_MAX_WAIT_S
 # each; beyond either bound the answer is 503 with Retry-After. A waiter holds a threadpool
 # thread and nothing else (no database connection, no hash memory): 2 + 16 = 18 of the 40
-# threads at the worst. A full queue empties in 16 / 2 = 8 rounds of one hash: 0.4 s at the
-# 50 ms a hash takes on a development Mac, 3 s if the Jetson needs 375 ms per hash with two
-# running together (assumed, not measured there), which is why the wait bound is 3 s.
+# threads at the worst. A full queue empties in 16 / 2 = 8 rounds of one hash: about 1 s at
+# the 85 to 144 ms a whole sign in took on a development Mac (tasks/evidence/identity-108),
+# 3 s if the Jetson needs 375 ms per hash with two running together (assumed, not measured
+# there), which is why the wait bound is 3 s. Ten sign ins in the same instant are 5 rounds.
 PASSWORD_HASH_MEMORY_MIB = PASSWORD_HASH_PARAMETERS.memory_cost // 1024
 PASSWORD_HASH_SLOTS = 2
 PASSWORD_HASH_MAX_WAITING = 16

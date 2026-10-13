@@ -119,6 +119,36 @@ describe("login page", () => {
     expect(email()).toHaveValue("Harald@Example.org");
   });
 
+  it.each([
+    [
+      "the api's words",
+      { detail: "The server is busy. Try again in a moment." },
+    ],
+    ["its own words when the answer has none", null],
+  ])(
+    "on 503 says the server is busy, with %s, and lets the person try again at once",
+    async (_, body) => {
+      loginAnswers(() =>
+        body
+          ? HttpResponse.json(body, {
+              status: 503,
+              headers: { "Retry-After": "2" },
+            })
+          : new HttpResponse("Service Unavailable", { status: 503 }),
+      );
+      const { location } = renderApp("/login");
+      await fillAndSubmit();
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(
+        /^The server is busy\. Try again in a moment\.$/,
+      );
+      expect(location()).toBe("/login");
+      // No countdown: that is for the lockout of a 429, not for a busy moment.
+      expect(submit()).toBeEnabled();
+      expect(email()).toHaveValue("Harald@Example.org");
+    },
+  );
+
   it("shows a 422 detail verbatim", async () => {
     loginAnswers(() =>
       HttpResponse.json(

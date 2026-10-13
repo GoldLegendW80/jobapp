@@ -20,7 +20,7 @@ from app.agents.crypto import Keyring
 from app.agents.live import RedisLiveStore
 from app.agents.ratelimit import RateLimiter
 from app.agents.verify import Verifier
-from app.body_limit import LimitRequestBodyMiddleware, SessionGate
+from app.body_limit import BodiesInFlight, LimitRequestBodyMiddleware, SessionGate
 from app.config import Settings, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity import deps as identity_deps
@@ -141,8 +141,11 @@ def create_app(
     # dependency runs, its refusals still pass out through request_log, and the cookie writer
     # outside it still clears a stale cookie on its 401. No session, no body: on every route
     # that is not public a request without a valid session is answered before its body is read.
+    # One count of bodies in flight per app, on its state so a test can read it.
+    app.state.bodies_in_flight = BodiesInFlight()
     app.add_middleware(
         LimitRequestBodyMiddleware,
+        bodies=app.state.bodies_in_flight,
         gate=SessionGate(
             needs_session=lambda method, path: not identity_deps.is_public_request(method, path),
             has_session=identity_deps.scope_has_session,

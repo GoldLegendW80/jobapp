@@ -719,13 +719,16 @@ JSON route, the ones that answer 401 included: thirty stalled 9 MiB sign ins too
 What remains possible, for a small private app (measured once each, on a scratch stack by the
 author, `tasks/evidence/platform-100/`, or by the reviewer of pull request #106 where said):
 
-- **Sign ins at once are not bounded by any of this: issue #108, the next thing to do.** Each
-  password check takes 64 MiB by design; four at once took the api from 116 to a peak of 378 MiB,
-  and the sign in limit admits 20 checks per address in 15 minutes without stopping them from
-  running together. It is now the cheapest way for a caller with no session to exhaust the api's
-  memory. Not changed here.
+- **Sign ins at once are bounded since issue #108.** Each password check takes 64 MiB by design,
+  so the api runs two at once (128 MiB of its 512), lets 16 callers wait at most 3 seconds, and
+  answers the rest 503 with `Retry-After: 2`. On the development Mac 120 sign ins at once peaked
+  at 782 MiB before and 283 MiB after (`tasks/evidence/identity-108/`). A caller who keeps those
+  places taken makes real sign ins answer 503 while the flood lasts; people already signed in are
+  not affected. A signed in user has at most six requests with a body in flight, the next is a
+  429 (`api/app/body_limit.py`).
 - **256 slow connections stop the app answering while they last.** That is the price of the
-  uvicorn limit, which keeps memory bounded: 260 connections each holding a sign in body just
+  uvicorn limit, which keeps memory bounded for callers with no session (a signed in user's
+  bodies are bounded per user, six in flight): 260 connections each holding a sign in body just
   under 64 KiB cost about 42 MiB at the api and 35 MiB at Caddy, and every other request, the
   health check included, was answered 503 until they were released. A silent sign in holds its
   place for 5s and a trickling one for 10s (20s and 60s when that was measured), so the caller
