@@ -29,10 +29,12 @@ What it serves (paths as Google's, under one host):
     POST /gmail/v1/users/me/messages/send        stores the raw message, answers id and threadId
     GET  /healthz
 
-The shapes are those of Google's reference, written here from the documentation as it was known
-to the author on 2026-10-13 (the pages could not be opened from the build machine that day, so
-they are ASSUMPTIONS until checkpoint stage A reads a real answer; see "Measurements", M1, of
-tasks/mail/todo.md):
+The shapes are those of Google's reference. Read on 2026-10-14: the Gmail API "Usage limits"
+page and the reference of `users.history.list` (a start id that is invalid or out of date
+"typically returns an HTTP 404", `maxResults` 100 by default and 500 at most, the four
+`historyTypes`). Every other shape below was written from the author's knowledge of the
+reference and was NOT compared with a real answer: each one is an assumption until checkpoint
+stage A reads a real account (see "Measurements", M1, of tasks/mail/todo.md):
 
 - token: `{"access_token", "expires_in", "refresh_token", "scope", "token_type": "Bearer",
   "id_token"}`; a refresh answers the same without `refresh_token`; errors are
@@ -279,6 +281,9 @@ def oauth_error(status: int, error: str, description: str) -> Reply:
 def _page(status: int, title: str, body: str) -> Reply:
     text = (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<style>body{font-family:sans-serif;margin:16px;overflow-wrap:anywhere}"
+        "@media (prefers-color-scheme: dark){body{background:#111;color:#eee}}</style>"
         f"<title>{html.escape(title)}</title></head><body>{body}</body></html>"
     )
     return Reply(status, {"Content-Type": "text/html; charset=utf-8"}, text.encode("utf-8"))

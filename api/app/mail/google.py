@@ -116,17 +116,18 @@ TOKEN_MARGIN_S = 60
 PAGE_CAP = 60
 PAGE_SIZE = 100
 
-# Quota units per call and the per user rate: the figures and where they come from are under
-# "Measurements", M1, of tasks/mail/todo.md (assumption A2).
+# Quota units per call and the per user rate, as Google's "Usage limits" page of the Gmail API
+# gave them on 2026-10-14 (the page said: last updated 2026-09-10). Copied under "Measurements",
+# M1, of tasks/mail/todo.md (assumption A2). The client stays under half of the per user rate.
 UNITS: Mapping[str, int] = {
     "getProfile": 1,
     "messages.list": 5,
-    "messages.get": 5,
+    "messages.get": 20,
     "history.list": 2,
-    "threads.get": 10,
-    "attachments.get": 5,
+    "threads.get": 40,
+    "attachments.get": 20,
 }
-GOOGLE_USER_UNITS_PER_MINUTE = 15_000
+GOOGLE_USER_UNITS_PER_MINUTE = 6_000
 USER_UNITS_PER_MINUTE = GOOGLE_USER_UNITS_PER_MINUTE // 2
 
 _ID = re.compile(r"\A[A-Za-z0-9_-]{1,4096}\Z")

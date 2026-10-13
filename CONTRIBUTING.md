@@ -28,7 +28,7 @@ in the job folder that holds this repository (it is not part of the repository).
    `api` (ruff, the whole pytest suite against Postgres and Redis, the coverage floor of 95
    percent, the docker marked tests, the scoring timing test), `checks` (pre-commit, the secret
    scan of every commit the batch brings, shellcheck, the `tests/*_test.sh` scripts and the
-   guards, the e2e groups apps and ingestion) and `journeys` (eslint, tsc, build, Vitest, the
+   guards, the e2e groups apps, ingestion and mail) and `journeys` (eslint, tsc, build, Vitest, the
    e2e groups identity and sweep; every e2e group against its own scratch Compose stack).
    `ci.yml` stays the definition of those steps and starts by hand only
    (`gh workflow run ci.yml --ref <branch>`, with a runner started: README, CI runners on the

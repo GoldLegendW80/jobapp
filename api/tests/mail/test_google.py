@@ -13,7 +13,6 @@ import logging
 import pickle
 import traceback
 import tracemalloc
-from collections.abc import Callable
 from urllib.parse import unquote
 
 import httpx
@@ -277,10 +276,7 @@ def _big_attachment(fake: FakeGoogle, answer_bytes: int) -> tuple[str, int]:
 
 
 def test_an_attachments_get_answer_of_34_mb_is_read_in_chunks_with_the_peak_memory_measured(
-    fake: FakeGoogle,
-    google: GoogleClient,
-    account_a: Connected,
-    record_property: Callable[[str, object], None],
+    fake: FakeGoogle, google: GoogleClient, account_a: Connected
 ) -> None:
     attachment_id, size = _big_attachment(fake, 34 * MB)
     expected = hashlib.sha256()
@@ -311,7 +307,8 @@ def test_an_attachments_get_answer_of_34_mb_is_read_in_chunks_with_the_peak_memo
     assert largest <= 64 * 1024
     # The whole answer is 34 MB and the file 25.5 MB: the process never held a tenth of it.
     assert peak < 3 * MB, f"peak of {peak} bytes while downloading"
-    record_property("peak_bytes", peak)
+    # Shown with `pytest -s`: the figure of "Measurements", M1, in tasks/mail/todo.md.
+    print(f"attachment download: {total} bytes decoded, peak of {peak} bytes traced")
     assert google.slots.active == 0
 
 
@@ -685,7 +682,7 @@ def test_two_mailboxes_on_the_fake_never_mix(
 def test_the_client_counts_quota_units_per_user_and_minute_and_refuses_over_half_the_rate(
     fake: FakeGoogle, google: GoogleClient, account_a: Connected, account_b: Connected, clock: Clock
 ) -> None:
-    assert USER_UNITS_PER_MINUTE == google_module.GOOGLE_USER_UNITS_PER_MINUTE // 2 == 7500
+    assert USER_UNITS_PER_MINUTE == google_module.GOOGLE_USER_UNITS_PER_MINUTE // 2 == 3000
     clock.now = 60_000.0  # the start of a minute
     run(google.get_profile(account_a.grant))
     run(google.list_messages(account_a.grant))

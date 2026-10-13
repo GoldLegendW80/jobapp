@@ -23,11 +23,12 @@
 #             the rule of its range is below, at SCAN_FROM), the shell lint of the files ci.yml
 #             lists, the e2e groups and CI plan tests, every tests/*_test.sh that ci.yml runs
 #             (one that neither runs nor is left out with a reason fails the step shell-tests);
-#             the journey groups apps and ingestion.
+#             the journey groups apps, ingestion and mail (mail on a stack that also runs
+#             the fake Google of tests/gmail-stub.compose.yml, never a real account).
 #   journeys  the web lint, type check, vitest and build; the journey groups identity and sweep.
 #
 # The lists that ci.yml holds (the files of its Shellcheck step, the tests/*_test.sh steps) are read from
-# ci.yml, so a step added there runs here. The four journey groups are written below, and
+# ci.yml, so a step added there runs here. The five journey groups are written below, and
 # tests/local_check_test.sh fails when their spec files differ from those of ci.yml.
 #
 # Arrangement. Four lanes start together: api (its own Postgres and Redis containers on free
@@ -639,6 +640,7 @@ journey_specs() { # the Playwright arguments of a group, as ci.yml has them
   case "$1" in
   apps) echo "jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts --workers=1" ;;
   ingestion) echo "-c e2e/ingestion-all.config.ts" ;;
+  mail) echo "-c e2e/mail-all.config.ts" ;;
   identity) echo "-c e2e/identity-all.config.ts" ;;
   sweep) echo "jobs-sweep.spec.ts --workers=1" ;;
   esac
@@ -685,6 +687,13 @@ s_journey() {
     ;;
   identity) export E2E_ADMIN_EMAIL=e2e-admin@example.org E2E_PASSWORD_THROTTLE=1 ;;
   sweep) export E2E_SKIP_REAL_SWEEP=1 ;;
+  mail)
+    # The fake Google beside the stack. The browser of the journey opens its consent page, so
+    # it is published on a loopback port of its own, claimed like the stack's.
+    GMAIL_STUB_PORT="$(claim_port)" || return 1
+    export GMAIL_STUB_PORT E2E_GMAIL_STUB_URL="http://127.0.0.1:$GMAIL_STUB_PORT"
+    files+=(-f tests/gmail-stub.compose.yml)
+    ;;
   esac
   specs="$(journey_specs "$group")"
   stack_up "$group" "$project" "${files[@]}" &&
@@ -697,7 +706,7 @@ s_journey() {
 
 lane_journeys() {
   local groups=() group running=0 why=""
-  if wanted checks; then groups+=(apps ingestion); fi
+  if wanted checks; then groups+=(apps ingestion mail); fi
   if wanted journeys; then groups+=(identity sweep); fi
   ((${#groups[@]})) || return 0
   while [[ ! -f "$WORK/images.done" || ! -f "$WORK/web.done" ]]; do sleep 1; done
@@ -857,7 +866,7 @@ expected_steps() {
   fi
   if wanted checks || wanted journeys; then printf '%s\n' web-install images chromium; fi
   if wanted checks; then
-    printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests journeys-apps journeys-ingestion
+    printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests journeys-apps journeys-ingestion journeys-mail
     (cd "$TREE" && shell_tests) | sed 's/^tests\///; s/\.sh$//'
   fi
   if wanted journeys; then printf '%s\n' lint typecheck build vitest journeys-identity journeys-sweep; fi

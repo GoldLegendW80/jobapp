@@ -199,8 +199,83 @@ class CheckTest(unittest.TestCase):
         self.assertIn("5 specs run in CI, 4 excluded", ran.stdout)
 
 
+class LocalCheckGroupTest(unittest.TestCase):
+    """A journey group that only ops/local-check.sh runs (the mail module's)."""
+
+    CONFIG = "e2e/mail-all.config.ts"
+
+    def repo(self, script: str | None, specs: list[str]) -> Repo:
+        made = Repo(specs=[*ON_DISK, *specs])
+        self.addCleanup(made.tmp.cleanup)
+        (made.root / "web" / self.CONFIG).write_text(
+            'const SPEC_PREFIX = "mail-";\n', encoding="utf-8"
+        )
+        if script is not None:
+            (made.root / "ops").mkdir()
+            (made.root / "ops/local-check.sh").write_text(script, encoding="utf-8")
+        return made
+
+    def test_a_spec_of_a_group_the_local_check_names_is_accounted_for(self) -> None:
+        repo = self.repo(
+            '  mail) echo "-c e2e/mail-all.config.ts" ;;\n', ["mail-m1", "mail-m4"]
+        )
+        self.assertEqual(repo.problems(), [])
+        self.assertEqual(
+            e2e_groups.specs_in_local_check(repo.root),
+            ["mail-m1.spec.ts", "mail-m4.spec.ts"],
+        )
+
+    def test_without_the_line_in_the_local_check_the_spec_is_in_no_group(self) -> None:
+        for script in (None, "", '# mail) echo "-c e2e/mail-all.config.ts" ;;\n'):
+            problems = self.repo(script, ["mail-m1"]).problems()
+            self.assertEqual(len(problems), 1, script)
+            self.assertIn("mail-m1.spec.ts is in no e2e group", problems[0])
+
+    def test_a_config_that_is_not_listed_accounts_for_nothing(self) -> None:
+        repo = self.repo('  other) echo "-c e2e/other-all.config.ts" ;;\n', ["other-a"])
+        (repo.root / "web/e2e/other-all.config.ts").write_text(
+            'const SPEC_PREFIX = "other-";\n', encoding="utf-8"
+        )
+        self.assertEqual(len(repo.problems()), 1)
+
+    def test_a_spec_run_by_both_or_also_excluded_is_a_problem(self) -> None:
+        repo = self.repo('  mail) echo "-c e2e/mail-all.config.ts" ;;\n', ["mail-m1"])
+        excluded = {**EXCLUDED, "mail-m1.spec.ts": "why"}
+        self.assertTrue(
+            any("pick one" in problem for problem in repo.problems(excluded))
+        )
+        workflow = (
+            WORKFLOW
+            + "      - name: Mail\n        run: pnpm exec playwright test mail-m1.spec.ts\n"
+        )
+        both = Repo(workflow=workflow, specs=[*ON_DISK, "mail-m1"])
+        self.addCleanup(both.tmp.cleanup)
+        (both.root / "web" / self.CONFIG).write_text(
+            'const SPEC_PREFIX = "mail-";\n', encoding="utf-8"
+        )
+        (both.root / "ops").mkdir()
+        (both.root / "ops/local-check.sh").write_text(
+            'mail) echo "-c e2e/mail-all.config.ts" ;;\n', encoding="utf-8"
+        )
+        self.assertTrue(any("pick one" in problem for problem in both.problems()))
+
+
 class ThisRepositoryTest(unittest.TestCase):
     ROOT = Path(__file__).resolve().parents[2]
+
+    def test_every_local_check_config_exists_is_named_and_has_a_reason(self) -> None:
+        script = e2e_groups.uncommented(
+            (self.ROOT / "ops/local-check.sh").read_text(encoding="utf-8")
+        )
+        for config, reason in e2e_groups.LOCAL_CHECK_CONFIGS.items():
+            self.assertTrue((self.ROOT / "web" / config).is_file(), config)
+            self.assertIn(f"-c {config}", script)
+            self.assertTrue(reason.strip(), config)
+        mail = set(e2e_groups.specs_in_local_check(self.ROOT))
+        self.assertIn("mail-m1.spec.ts", mail)
+        on_disk = {p.name for p in (self.ROOT / "web/e2e").glob("mail-*.spec.ts")}
+        self.assertEqual(mail, on_disk)
+        self.assertFalse(mail & set(e2e_groups.specs_in_ci(self.ROOT)))
 
     def test_the_real_workflow_accounts_for_every_spec(self) -> None:
         self.assertEqual(e2e_groups.check(self.ROOT), [])
