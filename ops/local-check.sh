@@ -37,8 +37,8 @@
 # when the images and the web install are done, each on a scratch stack of its own (own project,
 # own port, own database), LOCAL_CHECK_STACKS of them side by side (default: one per 4 GiB of
 # Docker memory, at most 4), with one Playwright worker each, as in CI. When every lane has
-# ended, the tests that measure time run in a quiet phase: Vitest next to the docker marked
-# tests, then alone, one after the other, the test of the suite that measures its own speed, the
+# ended, the tests that measure time run in a quiet phase, one at a time: Vitest, the docker
+# marked tests, the test of the suite that measures its own speed, the
 # coverage floor and the scoring test. Before the result, the steps that ran are compared with
 # the list of the set (expected_steps): one that did not run fails the check.
 #
@@ -502,19 +502,18 @@ passed() { # passed <step>: true when that step ran and passed
 # Measured on 2026-10-13, next to the suite and four journey stacks (load 15 on 12 cores): Vitest
 # failed in 2 runs of 4, two CPU limit tests and two `docker run` of the docker marked tests'
 # own Postgres failed in 1 run; alone they passed every time.
-# Since the review of pull request #121 (N17) Vitest and the docker marked tests run side by
-# side: three Vitest workers next to one serial pytest is far from that load. That pairing has
-# not been measured on a full run yet; LOCAL_CHECK_QUIET_SERIAL=1 puts the two back one after the
-# other. The rest runs alone, one after the other.
+# Pull request #121 ran Vitest next to the docker marked tests; the second full run showed that
+# cannot work (two parser tests got wall_limit for cpu_limit), so they run one after the other
+# again and every step of the phase has the machine to itself.
 quiet_phase() {
   local api=0
   if wanted api && [[ -f "$WORK/api.env" ]]; then api=1; fi
   if wanted journeys && [[ "$(cat "$WORK/web.done" 2>/dev/null)" == 0 ]]; then
-    run_step vitest s_vitest &
-    [[ -z "${LOCAL_CHECK_QUIET_SERIAL:-}" ]] || wait
+    run_step vitest s_vitest || true
   fi
+  # Alone: two parser tests burn 45 s of CPU within 60 s of wall time by construction, which
+  # needs most of a core for a minute; beside Vitest they end on wall_limit.
   if ((api)); then run_step pytest-docker s_pytest_docker || true; fi
-  wait
   ((api)) || return 0
   if passed pytest; then
     run_step pytest-alone s_pytest_alone || true
