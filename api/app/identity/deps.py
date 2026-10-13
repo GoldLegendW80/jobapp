@@ -188,6 +188,14 @@ async def scope_has_session(scope: MutableMapping[str, Any]) -> bool:
     return await resolve(Request(scope)) is not None
 
 
+async def scope_session_owner(scope: MutableMapping[str, Any]) -> str | None:
+    """The user whose session the request of this ASGI scope carries, as text, or None. The key
+    under which app.body_limit counts that user's bodies in flight; the same single lookup as
+    `scope_has_session`."""
+    active = await resolve(Request(scope))
+    return None if active is None else str(active.user.id)
+
+
 def unauthorized() -> HTTPException:
     return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=UNAUTHORIZED)
 

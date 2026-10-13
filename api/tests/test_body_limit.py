@@ -368,3 +368,221 @@ def test_non_http_scope_passes_through() -> None:
 
     asyncio.run(run())
     assert seen == ["lifespan"]
+
+
+# --- bodies in flight per user (issue #108) ----------------------------------------------------
+
+
+class Desk:
+    """An app that reads its body, then waits to be let go before it answers. With `early`, it
+    starts its answer first and waits in the middle of it, like a long event stream."""
+
+    def __init__(self, early: bool = False, fail: bool = False) -> None:
+        self.early = early
+        self.fail = fail
+        self.inside = 0
+        self.let_go = asyncio.Event()
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        while True:
+            message = await receive()
+            if message["type"] != "http.request" or not message.get("more_body", False):
+                break
+        self.inside += 1
+        try:
+            if self.fail:
+                raise RuntimeError("the route broke")
+            if self.early:
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+            await self.let_go.wait()
+            if not self.early:
+                await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"{}"})
+        finally:
+            self.inside -= 1
+
+
+def owned_gate(owners: dict[str, str]) -> SessionGate:
+    """Everyone has a session; the user is named by the x-user header of the test request."""
+
+    async def has_session(scope: Any) -> bool:
+        return True
+
+    async def owner(scope: Any) -> str | None:
+        owners["asked"] = scope["path"]
+        return dict(scope["headers"]).get(b"x-user", b"").decode() or None
+
+    return SessionGate(lambda method, path: path != "/api/auth/login", has_session, "no", owner)
+
+
+class Flight:
+    """Several requests through one middleware, at once."""
+
+    def __init__(self, app: Any, per_user: int) -> None:
+        self.bodies = bl.BodiesInFlight(per_user)
+        self.asked: dict[str, str] = {}
+        self.middleware = LimitRequestBodyMiddleware(
+            app, gate=owned_gate(self.asked), bodies=self.bodies
+        )
+
+    def start(
+        self, user: str, path: str = "/api/jobs", size: int = 10, stall: bool = False
+    ) -> tuple["asyncio.Task[None]", list[Message]]:
+        sent: list[Message] = []
+        request = scope("POST", path, [*length(size), (b"x-user", user.encode())])
+        queue: list[Message] = [{"type": "http.request", "body": b"x" * size, "more_body": False}]
+
+        async def receive() -> Message:
+            if stall or not queue:
+                await asyncio.sleep(3600)
+            return queue.pop(0)
+
+        async def send(message: Message) -> None:
+            sent.append(message)
+
+        return asyncio.ensure_future(self.middleware(request, receive, send)), sent
+
+
+def statuses(sent: list[Message]) -> list[int]:
+    return [m["status"] for m in sent if m["type"] == "http.response.start"]
+
+
+async def settle() -> None:
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+
+def test_one_user_has_at_most_six_bodies_in_flight_and_the_rest_are_429() -> None:
+    assert bl.USER_BODIES_IN_FLIGHT == 6
+
+    async def scenario() -> None:
+        desk = Desk()
+        flight = Flight(desk, bl.USER_BODIES_IN_FLIGHT)
+        started = [flight.start("ada") for _ in range(10)]
+        await settle()
+        assert desk.inside == 6
+        assert flight.bodies.count("ada") == 6
+        refused = [sent for task, sent in started if task.done()]
+        assert len(refused) == 4
+        for sent in refused:
+            assert statuses(sent) == [429]
+            headers = dict(sent[0]["headers"])
+            assert headers[b"retry-after"] == b"1"
+            assert json.loads(sent[1]["body"]) == {"detail": bl.TOO_MANY_BODIES}
+        assert flight.bodies.refused == 4
+
+        # Another user is not held back by this one.
+        other, other_sent = flight.start("grace")
+        await settle()
+        assert (desk.inside, flight.bodies.count("grace")) == (7, 1)
+
+        desk.let_go.set()
+        await asyncio.gather(other, *(task for task, _ in started))
+        assert statuses(other_sent) == [200]
+        assert sorted(statuses(sent)[0] for _, sent in started) == [200] * 6 + [429] * 4
+        assert (flight.bodies.count("ada"), flight.bodies.count("grace")) == (0, 0)
+        assert flight.bodies._counts == {}
+
+        again, again_sent = flight.start("ada")
+        await again
+        assert statuses(again_sent) == [200]
+
+    asyncio.run(scenario())
+
+
+def test_a_refused_body_is_never_read() -> None:
+    async def scenario() -> None:
+        desk = Desk()
+        flight = Flight(desk, 1)
+        first, _ = flight.start("ada")
+        await settle()
+        # Its receive would stall for an hour: the 429 comes without asking for a byte.
+        second, sent = flight.start("ada", stall=True)
+        await asyncio.wait_for(second, 1)
+        assert statuses(sent) == [429]
+        desk.let_go.set()
+        await first
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("ending", ["too large", "route error", "cancelled", "gathering"])
+def test_the_place_is_given_back_however_the_request_ends(ending: str) -> None:
+    async def scenario() -> None:
+        desk = Desk(fail=ending == "route error")
+        flight = Flight(desk, 1)
+        if ending == "too large":
+            task, sent = flight.start("ada", size=DEFAULT_MAX_BYTES + 1, path="/api/agents")
+            await task
+            assert statuses(sent) == [413]
+        elif ending == "route error":
+            task, _ = flight.start("ada")
+            with pytest.raises(RuntimeError, match="the route broke"):
+                await task
+        else:
+            # A client that goes away: while the app works, or while its body is gathered.
+            task, _ = flight.start("ada", stall=ending == "gathering")
+            await settle()
+            assert flight.bodies.count("ada") == 1
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        assert flight.bodies.count("ada") == 0
+        assert desk.inside == 0
+
+        desk.fail = False
+        desk.let_go.set()
+        after, sent = flight.start("ada")
+        await after
+        assert statuses(sent) == [200]
+
+    asyncio.run(scenario())
+
+
+def test_a_long_answer_holds_no_place() -> None:
+    async def scenario() -> None:
+        desk = Desk(early=True)
+        flight = Flight(desk, 1)
+        streaming, _ = flight.start("ada")
+        await settle()
+        assert desk.inside == 1  # still answering
+        assert flight.bodies.count("ada") == 0  # but its body is done with
+        second, _ = flight.start("ada")
+        await settle()
+        assert desk.inside == 2
+        desk.let_go.set()
+        await asyncio.gather(streaming, second)
+
+    asyncio.run(scenario())
+
+
+def test_a_route_that_reads_its_own_body_counts_too() -> None:
+    async def scenario() -> None:
+        desk = Desk()
+        flight = Flight(desk, 1)
+        assert ("POST", "/api/jobs/import") in bl.SELF_LIMITED
+        upload, _ = flight.start("ada", path="/api/jobs/import")
+        await settle()
+        assert flight.bodies.count("ada") == 1
+        second, sent = flight.start("ada")
+        await second
+        assert statuses(sent) == [429]
+        desk.let_go.set()
+        await upload
+
+    asyncio.run(scenario())
+
+
+def test_public_routes_are_not_counted() -> None:
+    async def scenario() -> None:
+        desk = Desk()
+        flight = Flight(desk, 1)
+        tasks = [flight.start("ada", path="/api/auth/login")[0] for _ in range(3)]
+        await settle()
+        assert desk.inside == 3
+        assert flight.bodies._counts == {}
+        assert "asked" not in flight.asked  # the user is not even looked up
+        desk.let_go.set()
+        await asyncio.gather(*tasks)
+
+    asyncio.run(scenario())
