@@ -728,6 +728,7 @@ if [[ "${1:-}" == --help ]]; then
 fi
 if [[ $# -eq 0 ]]; then
   echo "sync" >>"$FAKE_DIR/order"
+  [[ "${FAKE_FAIL_SYNC:-}" != plain ]] || exit 1
 elif [[ -d "$1" ]]; then
   echo "sync dir $1 holding: $(ls -A "$1" | tr '\n' ' ')" >>"$FAKE_DIR/order"
   [[ "${FAKE_FAIL_SYNC:-}" != dir ]] || exit 1
@@ -1236,10 +1237,15 @@ rot_new
 seed "$(d 9)" "$(d 8)" "$(d 1)"
 rot 0 "$NOW"
 only . "$(d 1)" "$(d 0)"
-verified="$(grep -n '^verify read$' "$ROT/order" | tail -n 1 | cut -d: -f1)"
-flushed_file="$(grep -n "^sync file $ROT/backups/\.$(d 0)\.partial$" "$ROT/order" | cut -d: -f1)"
-flushed_dir="$(grep -n "^sync dir $ROT/backups holding: " "$ROT/order" | cut -d: -f1)"
-first_rm="$(grep -n "^rm -f -- $ROT/backups/" "$ROT/order" | head -n 1 | cut -d: -f1)"
+# first_at and last_at: the line of $ROT/order a pattern is first or last found at, nothing when it
+# is not there. Never a failure of their own (the review's N20): a missing flush must reach the
+# message below, not end this script without a FAIL line.
+first_at() { grep -n -- "$1" "$ROT/order" | head -n 1 | cut -d: -f1 || true; }
+last_at() { grep -n -- "$1" "$ROT/order" | tail -n 1 | cut -d: -f1 || true; }
+verified="$(last_at '^verify read$')"
+flushed_file="$(first_at "^sync file $ROT/backups/\.$(d 0)\.partial$")"
+flushed_dir="$(first_at "^sync dir $ROT/backups holding: ")"
+first_rm="$(first_at "^rm -f -- $ROT/backups/")"
 [[ -n "$verified" && -n "$flushed_file" && -n "$flushed_dir" && -n "$first_rm" ]] ||
   fail "a verification, a flush or a deletion is missing: $(cat "$ROT/order")"
 ((verified < flushed_file && flushed_file < flushed_dir && flushed_dir < first_rm)) ||
@@ -1263,10 +1269,18 @@ rot_new
 seed "$(d 9)" "$(d 1)"
 rot 0 "$NOW" FAKE_OLD_SYNC=1
 only . "$(d 1)" "$(d 0)"
-[[ "$(grep -c '^sync$' "$ROT/order")" == 2 ]] || fail "an old sync was not run twice without a path: $(cat "$ROT/order")"
-(($(grep -n '^sync$' "$ROT/order" | tail -n 1 | cut -d: -f1) < $(grep -n "^rm -f -- $ROT/backups/" "$ROT/order" | head -n 1 | cut -d: -f1))) ||
-  fail "an old sync ran after the first deletion: $(cat "$ROT/order")"
-ok "a sync that takes no path (coreutils before 8.24) flushes every disk instead, twice, still before the first deletion"
+[[ "$(grep -c '^sync$' "$ROT/order" || true)" == 2 ]] || fail "an old sync was not run twice without a path: $(cat "$ROT/order")"
+last_sync="$(last_at '^sync$')"
+first_rm="$(first_at "^rm -f -- $ROT/backups/")"
+[[ -n "$last_sync" && -n "$first_rm" ]] || fail "an old sync or the deletion is missing: $(cat "$ROT/order")"
+((last_sync < first_rm)) || fail "an old sync ran after the first deletion: $(cat "$ROT/order")"
+rot_new
+seed "$(d 9)" "$(d 1)"
+before="$(tree_of)"
+rot 1 "$NOW" FAKE_OLD_SYNC=1 FAKE_FAIL_SYNC=plain
+out_has "db.sh: could not flush the disks, nothing deleted"
+no_delete "$before"
+ok "a sync that takes no path (coreutils before 8.24) flushes every disk instead, twice, still before the first deletion; when that sync fails the run ends with exit 1, its partial file removed and nothing deleted"
 
 rot_new
 for n in 10 11 12 13 14 15 16; do seed "$(d "$n")"; done
@@ -1277,8 +1291,8 @@ no_delete "$before"
 rot 0 "$NOW"
 only . "$(d 10)" "$(d 0)"
 only deploys
-verified="$(grep -n '^verify read$' "$ROT/order" | tail -n 1 | cut -d: -f1)"
-first_rm="$(grep -n "^rm -f -- $ROT/backups/" "$ROT/order" | head -n 1 | cut -d: -f1)"
+verified="$(last_at '^verify read$')"
+first_rm="$(first_at "^rm -f -- $ROT/backups/")"
 [[ -n "$verified" && -n "$first_rm" ]] || fail "no verification or no deletion in: $(cat "$ROT/order")"
 ((verified < first_rm)) || fail "a dump was deleted before the new one was verified: $(cat "$ROT/order")"
 [[ "$(sed -n '1p' "$ROT/order")" == pg_dump ]] || fail "the run did not start with the dump: $(cat "$ROT/order")"
@@ -1286,7 +1300,7 @@ first_rm="$(grep -n "^rm -f -- $ROT/backups/" "$ROT/order" | head -n 1 | cut -d:
 out_has "kept $(d 10) in $ROT/backups although it is 10 days old, the limit is 7: every other dump goes in this run"
 rot 0 "$(ago -1)"
 only . "$(d 0)" "$(d -1)"
-ok "a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes eight, keeping the newest of them one night more; the night after, that one goes"
+ok "a Jetson switched off for ten days: a first night whose dump fails deletes none of the nine old dumps; the next writes a dump, verifies it, and only then deletes eight, keeping the newest of them for one more run; the next run, the night after, deletes it"
 
 rot_new
 seed "$(d 30)" "$(d 20)" "$(d 10)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 20 predeploy-bbbbbbbbbbbb)" "incoming/$(d 30)"
@@ -1890,6 +1904,38 @@ out_has "not installed"
 out_has "retention: BACKUP_KEEP=2 (set in $JH/home/jobapp/.env)"
 ok "remove, twice: only the jobapp line goes; status says not installed and what a backup run by hand would keep"
 
+# The review's N19: the log is the past. A WARNING of the last run (made at 14, the night before a
+# reinstall) must not be read as the state now, so its lines are marked and told apart.
+printf '   WARNING: BACKUP_KEEP=14 keeps dumps up to 14 days, more than the 7 days\nbackup=/x\n' >>"$JH/home/jobapp-backups/backup.log"
+run 0 jet env FAKE_NOW=2026-10-13T140000 ./deploy.sh backup-schedule status
+out_has "last lines of jobapp-backups/backup.log (the last run, as it was then; the state now is above):"
+out_has "^     | *WARNING: BACKUP_KEEP=14 keeps dumps up to 14 days"
+grep "WARNING" "$WORK/out" | grep -qv '^     | ' && fail "a WARNING of the log is not told apart from the state now: $(cat "$WORK/out")"
+ok "status marks the last lines of backup.log as those of the last run: a WARNING there is prefixed, and no unprefixed line warns when the state now is sound"
+
+# The review's N12: a rotation that is held must be seen. status ends non zero while one stands,
+# with both sizes and the one command that lifts it, for each folder.
+{
+  printf 'PGDMP fake dump\n'
+  head -c 84 /dev/zero | tr '\0' x
+} >"$JH/home/jobapp-backups/jobapp-2026-10-13T120000.dump"
+printf 'PGDMP fake dump\n' >"$JH/home/jobapp-backups/jobapp-2026-10-13T130000.dump"
+printf '%s\n%s\n2\n' jobapp-2026-10-13T120000.dump jobapp-2026-10-13T130000.dump >"$JH/home/jobapp-backups/.size-hold"
+mkdir -p "$JH/home/jobapp-backups/deploys"
+cp "$JH/home/jobapp-backups/jobapp-2026-10-13T120000.dump" "$JH/home/jobapp-backups/deploys/jobapp-2026-10-13T120000-predeploy-aaaaaaaaaaaa.dump"
+printf 'PGDMP fake dump\n' >"$JH/home/jobapp-backups/deploys/jobapp-2026-10-13T130000-predeploy-bbbbbbbbbbbb.dump"
+printf '%s\n%s\n7\n' jobapp-2026-10-13T120000-predeploy-aaaaaaaaaaaa.dump jobapp-2026-10-13T130000-predeploy-bbbbbbbbbbbb.dump >"$JH/home/jobapp-backups/deploys/.size-hold"
+run 1 jet env FAKE_NOW=2026-10-13T140000 ./deploy.sh backup-schedule status
+out_has "   WARNING: held for 2 run(s), since jobapp-2026-10-13T130000.dump: the rotation of $JH/home/jobapp-backups. A dump came out less than half the size of jobapp-2026-10-13T120000.dump (100 bytes), the last one accepted there, and its newest is jobapp-2026-10-13T130000.dump (16 bytes)"
+out_has "   ERROR: held for 7 runs, since jobapp-2026-10-13T130000-predeploy-bbbbbbbbbbbb.dump"
+out_has "to lift the hold of $JH/home/jobapp-backups: BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup"
+out_has "to lift the hold of $JH/home/jobapp-backups/deploys: BACKUP_DIR=jobapp-backups/deploys BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup"
+out_has "deploy.sh: a rotation is held on fakejetson, or its mark cannot be read (above): its backups delete nothing until it is lifted"
+grep -q -e "^held=" -e "^keep=" "$WORK/out" && fail "status shows the machine lines of ops/db.sh: $(cat "$WORK/out")"
+rm -f "$JH/home/jobapp-backups/.size-hold" "$JH/home/jobapp-backups/deploys/.size-hold"
+run 0 jet env FAKE_NOW=2026-10-13T140000 ./deploy.sh backup-schedule status
+ok "status with a rotation held in the folder and in deploys/: exit 1, each hold with both sizes, its count and since when (an ERROR from seven runs), and for each folder the one command that lifts it; exit 0 again once the holds are gone"
+
 # A Jetson whose deployed ops/db.sh is the one of before T10: it knows no `retention`.
 printf '#!/usr/bin/env bash\necho "db.sh: usage: db.sh backup [--tag NAME] | list | prune" >&2\nexit 1\n' >"$JH/home/jobapp/ops/db.sh"
 run 0 jet ./deploy.sh backup-schedule status
@@ -2340,6 +2386,8 @@ wf() {
 #!/usr/bin/env bash
 echo "db.sh $* in $BACKUP_DIR keep=${BACKUP_KEEP:-unset}" >>"$FAKE_DIR/calls"
 echo "   backup: $BACKUP_DIR/jobapp-2026-10-10T120000-predeploy.dump"
+# A line the backup prints on its way, a held rotation for instance (T10, review N12).
+[[ -z "${FAKE_PREDEPLOY_SAYS:-}" ]] || echo "$FAKE_PREDEPLOY_SAYS"
 if [[ -n "${FAKE_FAIL_PREDEPLOY:-}" ]]; then
   # The dump is written, then the rotation stops on a dump it cannot delete (T10, review N10).
   echo "   deleted old backup jobapp-2026-10-01T120000-predeploy.dump (9 days old, the limit is 7)"
@@ -2387,6 +2435,17 @@ grep -qx "db.sh backup --tag predeploy-0123456789ab in $WF/backups/deploys keep=
   fail "the predeploy backup was given a BACKUP_KEEP of its own: $(grep '^db.sh' "$MIG/calls")"
 ok "T10: the predeploy backup names no retention of its own, so ops/db.sh applies the one of every backup (the Jetson's .env, then 7) in the predeploy folder"
 out_has "   backup: $WF/backups/deploys/jobapp-2026-10-10T120000-predeploy.dump"
+grep -q "predeploy backup: " "$WORK/out" && fail "a backup that warns of nothing left an annotation: $(cat "$WORK/out")"
+
+# The review's N12: a rotation held by the size check ends its backup well, so the deploy is
+# green. The line must not stay inside a folded group: it becomes an annotation of the run.
+wf 0 "FAKE_PREDEPLOY_SAYS=   WARNING: held for 2 run(s), since jobapp-b.dump. This dump is 16 bytes, less than half of jobapp-a.dump (100 bytes)"
+out_has "^::warning::predeploy backup: WARNING: held for 2 run(s), since jobapp-b.dump. This dump is 16 bytes, less than half of jobapp-a.dump (100 bytes)$"
+[[ "$(cat "$WF/app/.deployed-commit")" == "$WF_COMMIT" ]] || fail "a warning of the predeploy backup stopped the deploy"
+wf 0 "FAKE_PREDEPLOY_SAYS=   ERROR: held for 7 runs, since jobapp-b.dump. Nothing is deleted there"
+out_has "^::error::predeploy backup: ERROR: held for 7 runs, since jobapp-b.dump. Nothing is deleted there$"
+[[ "$(cat "$WF/app/.deployed-commit")" == "$WF_COMMIT" ]] || fail "an error line of the predeploy backup stopped the deploy"
+ok "T10: a WARNING of the predeploy backup (a held rotation, a BACKUP_KEEP above 7) is a ::warning:: annotation of the run and an ERROR line an ::error:: one; the deploy goes on, since the backup itself ended well"
 
 wf 1 FAKE_PENDING=1 FAKE_FAIL_PREDEPLOY=1
 out_has "   backup: $WF/backups/deploys/jobapp-2026-10-10T120000-predeploy.dump"
