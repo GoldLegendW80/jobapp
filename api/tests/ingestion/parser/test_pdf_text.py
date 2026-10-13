@@ -24,7 +24,7 @@ import pytest
 
 from app.ingestion import parser_client as pc
 from tests.ingestion import pdf_fixtures as fx
-from tests.ingestion.parser.helpers import SANDBOX, sandbox_module
+from tests.ingestion.parser.helpers import SANDBOX, restoring_modules, sandbox_module
 
 main = sandbox_module("main")
 
@@ -109,15 +109,15 @@ def test_a_text_pdf_gives_its_pages_joined_by_form_feeds() -> None:
 
 def test_the_handler_is_the_one_main_loads_for_the_kind() -> None:
     """Through main.run_handler, with a real Budget: the file is found, loaded and called."""
-    answer = main.run_handler("pdf_text", fx.text_pdf(1, rows=3), {})
-    sys.modules.pop("pdf_text", None)
-    assert accepted(answer).text.startswith(fx.SENTENCE)
-    assert main.run_handler("pdf_text", b"not a pdf", {}) == {
-        "ok": False,
-        "failure": "file",
-        "code": "unreadable",
-    }
-    sys.modules.pop("pdf_text", None)
+    with restoring_modules("pdf_text"):  # run_handler registers the module under its flat name
+        answer = main.run_handler("pdf_text", fx.text_pdf(1, rows=3), {})
+        sys.modules.pop("pdf_text", None)
+        assert accepted(answer).text.startswith(fx.SENTENCE)
+        assert main.run_handler("pdf_text", b"not a pdf", {}) == {
+            "ok": False,
+            "failure": "file",
+            "code": "unreadable",
+        }
 
 
 def test_a_deflated_pdf_reads_the_same() -> None:

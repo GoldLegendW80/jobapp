@@ -14,11 +14,12 @@ import os
 import struct
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from tests.ingestion.parser.helpers import SANDBOX, sandbox_module
+from tests.ingestion.parser.helpers import FLAT_NAMES, SANDBOX, restoring_modules, sandbox_module
 
 main = sandbox_module("main")
 server = sandbox_module("server")
@@ -315,13 +316,11 @@ def write_handler(directory: Path, name: str, body: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def forget_handlers() -> object:
-    """A handler is loaded under its own name: each test starts without any."""
-    before = set(sys.modules)
-    yield
-    for name in set(sys.modules) - before:
-        if name in main.HANDLERS:
-            del sys.modules[name]
+def forget_handlers() -> Iterator[None]:
+    """A handler is loaded under its own name: each test starts, and ends, with the entries of
+    sys.modules it found."""
+    with restoring_modules(*FLAT_NAMES):
+        yield
 
 
 def test_usage_is_the_cpu_time_and_the_two_peaks_of_this_process_alone() -> None:

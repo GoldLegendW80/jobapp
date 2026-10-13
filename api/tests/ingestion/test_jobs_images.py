@@ -14,7 +14,6 @@ adds.
 import io
 import logging
 import re
-import sys
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -42,12 +41,15 @@ from tests.ingestion.helpers import (
     uploaded,
     user_id,
 )
-from tests.ingestion.parser.helpers import Plenty, sandbox_handler, sandbox_module
+from tests.ingestion.parser.helpers import (
+    Plenty,
+    as_in_the_child,
+    sandbox_handler,
+    sandbox_module,
+)
 from tests.ingestion.test_jobs import Parser, run, stored_before
 
 main = sandbox_module("main")
-# pdf_render.py imports pdf_text.py from beside it, as it does in the child.
-sys.modules.setdefault("pdf_text", sandbox_handler("pdf_text"))
 
 
 class RealParser(Parser):
@@ -72,7 +74,8 @@ class RealParser(Parser):
             if isinstance(answer, BaseException):
                 raise answer
             return answer
-        found = sandbox_handler(kind).handle(data, dict(options or {}), Plenty())
+        with as_in_the_child():  # pdf_render.py imports pdf_text.py from beside it, as in the child
+            found = sandbox_handler(kind).handle(data, dict(options or {}), Plenty())
         return pc.check_parsed(pc.loads(main.encode(found)), kind)
 
 

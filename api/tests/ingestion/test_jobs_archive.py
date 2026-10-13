@@ -26,7 +26,12 @@ from tests.ingestion import archive_fixtures as fx
 from tests.ingestion import image_fixtures as pictures
 from tests.ingestion.conftest import ALICE, BOB, RecordingQueue
 from tests.ingestion.helpers import delete, row, rows, upload, uploaded, user_id
-from tests.ingestion.parser.helpers import Plenty, sandbox_handler, sandbox_module
+from tests.ingestion.parser.helpers import (
+    Plenty,
+    as_in_the_child,
+    sandbox_handler,
+    sandbox_module,
+)
 from tests.ingestion.test_jobs import Parser, run, stored_before
 
 main = sandbox_module("main")
@@ -42,7 +47,8 @@ class RealParser(Parser):
         self.calls.append((kind, data))
         if self.during is not None:
             self.during()
-        answer = sandbox_handler(kind).handle(data, dict(options or {}), Plenty())
+        with as_in_the_child():
+            answer = sandbox_handler(kind).handle(data, dict(options or {}), Plenty())
         return pc.check_parsed(pc.loads(main.encode(answer)), kind)
 
 

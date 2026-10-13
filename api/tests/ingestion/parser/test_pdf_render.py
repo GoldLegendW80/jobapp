@@ -10,7 +10,7 @@ and its filter, in the container of the service: test_image_container.py.
 
 import io
 import re
-import sys
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -19,13 +19,24 @@ from PIL import Image
 from app.ingestion import parser_client as pc
 from tests.ingestion import pdf_fixtures as pdfs
 from tests.ingestion import scan_fixtures as fx
-from tests.ingestion.parser.helpers import Plenty, SpentAfter, sandbox_handler, sandbox_module
+from tests.ingestion.parser.helpers import (
+    Plenty,
+    SpentAfter,
+    as_in_the_child,
+    sandbox_handler,
+    sandbox_module,
+)
 
 main = sandbox_module("main")
 pdf_text = sandbox_handler("pdf_text")
-# The text job imports the PDF reader by its name, as it does beside it in the image.
-sys.modules.setdefault("pdf_text", pdf_text)
 pdf_render = sandbox_handler("pdf_render")
+
+
+@pytest.fixture(autouse=True)
+def the_reader_is_found_by_its_name() -> Iterator[None]:
+    """The render job imports the PDF reader by its name, as it does beside it in the child."""
+    with as_in_the_child():
+        yield
 
 
 def ask(data: bytes, options: dict, budget: Any = None) -> pc.Parsed:
