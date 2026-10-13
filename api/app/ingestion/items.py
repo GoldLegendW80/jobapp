@@ -121,9 +121,12 @@ __all__ = [
     "clean_text",
     "entry_key",
     "from_payload",
+    "held",
+    "held_hash",
     "is_locked",
     "parse_key",
     "read",
+    "restore",
     "section_paths",
     "value_hash",
 ]
@@ -964,6 +967,60 @@ def apply(
             if slot.name == "employers" and "key" not in entry:
                 entry["key"] = _unused_key(entries, _identity(slot, entry))
             _insert(slot, entries, entry)
+        after[slot.name] = entries
+    try:
+        return schemas.validate_section(section, after)
+    except ValidationError as exc:
+        raise ProfileConflict(schemas.describe_validation_error(exc)) from None
+
+
+# --- taking an item back --------------------------------------------------------------------------
+
+
+def held(section: str, data: Mapping[str, Any], key: str) -> dict[str, Any] | None:
+    """What a canonical section holds at a key, with its place, for an undo: `{"value": v}` for
+    a slot that holds one value, `{"entries": [[position, entry]]}` for an entry (an empty list
+    when there is none). None when several entries share the key: what an item did there cannot
+    be taken back exactly."""
+    slot, key = parse_key(section, key)
+    stored = data.get(slot.name)
+    if not slot.keyed:
+        return {"value": stored}
+    entries = list(stored or [])
+    found = _matches(slot, entries, key)
+    if len(found) > 1:
+        return None
+    return {"entries": [[position, entries[position]] for position in found]}
+
+
+def held_hash(record: Mapping[str, Any]) -> str:
+    """The hash of what `held` recorded, without the places: an entry that moved because another
+    one was inserted above it is still the same entry."""
+    if "entries" in record:
+        return value_hash([entry for _, entry in record["entries"]])
+    return value_hash(record.get("value"))
+
+
+def restore(
+    section: str, data: Mapping[str, Any] | None, key: str, record: Mapping[str, Any]
+) -> dict[str, Any]:
+    """The section with what `held` recorded put back at `key`: the inverse of one `apply`. An
+    entry returns to the place of the entry that replaced it, or, when the item removed it, to
+    its recorded position (the end when the list is shorter now). No other entry moves. Raises
+    ProfileConflict when the section as it is cannot take it back."""
+    after = canonical(section, data)
+    slot, key = parse_key(section, key)
+    if not slot.keyed:
+        after[slot.name] = record.get("value")
+    else:
+        entries = list(after[slot.name])
+        found = _matches(slot, entries, key)
+        kept = [(position, entry) for position, entry in record["entries"]]
+        if found:
+            entries[found[0] : found[0] + 1] = [entry for _, entry in kept]
+        else:
+            for position, entry in kept:
+                entries.insert(min(int(position), len(entries)), entry)
         after[slot.name] = entries
     try:
         return schemas.validate_section(section, after)

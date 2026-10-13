@@ -5,13 +5,16 @@ A profile item (`app/ingestion/items.py`) lives in the `proposals` table of the 
 with `target = "profile"`, `target_id = null`, `kind = "profile_item"`, `run_id = null` and
 
     payload = {ingestion_run_id, section, key, action, value, value_hash, citations[],
-               base_revision, base_hash, flags[], conflict?, depends_on?, applied_revision?}
+               base_revision, base_hash, flags[], conflict?, depends_on?,
+               applied_revision?, undo?, undone_revision?}
 
 `value` is the item's cleaned value and `value_hash` its hash: `propose` takes an `items.Item`,
 so nothing reaches the table that the section model has not validated. `base_revision` is the
 profile's revision when the item was proposed and `base_hash` the hash of what the profile held
 at the item's key then (the hash of null when it held nothing). `applied_revision` is written by
 an accept: the one profile revision it made, or null when the profile already held the item.
+`undo` is written with it: what the profile held at that key before, and the hash of what the
+accept left there (null when that cannot be restored exactly).
 
 What the words mean here:
 - **equal to the profile**: applying the item would change nothing. Such an item is not stored
@@ -31,6 +34,11 @@ What the words mean here:
   `invalid` by the system, with the reason, and cannot be accepted.
 - **conflict** (a flag, with `payload.conflict`): two documents disagree. The user picks one
   value, sent as `edited_value`; an accept without one is refused.
+- **undone**: an accepted item taken back by the user (`undo`). The profile returns to what it
+  held at the item's key before the accept, as one revision, and only while it still holds
+  there what the accept left: a later edit of the user at that key is never overwritten
+  (`UndoError`, `changed_since`), the guarantee the undo of a job's status gives. Edits
+  elsewhere in the profile do not prevent it.
 
 Accepting changes the profile by exactly that item, as one revision, through
 `profile.service.save_section`, in the caller's transaction, so the revision and the proposal's
@@ -53,6 +61,7 @@ from datetime import datetime
 from typing import Any
 
 import sqlalchemy as sa
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.agents import proposals
@@ -64,6 +73,7 @@ from app.profile.models import Profile
 
 CITATIONS_MAX = 60  # citations kept on one proposal, all documents together
 DEPENDS_ON_MAX = 100
+CONFLICT_MAX = 10  # other values kept beside one item
 
 # Outcomes of `propose`.
 CREATED = "created"
@@ -84,9 +94,24 @@ PROFILE_CONFLICT = "profile_conflict"
 SECTION_FAILED = "section_failed"  # another item of its section failed: nothing of it applied
 
 CHOOSE = "this item holds several values: choose one of them"
+STORED_SECTION = "this section of the profile no longer fits its form: save it again first"
+
+# why an undo is refused
+NOT_ACCEPTED = "not_accepted"
+NOT_UNDOABLE = "not_undoable"  # several entries shared the key: no exact way back
+CHANGED_SINCE = "changed_since"  # the profile no longer holds there what the accept left
 NO_LONGER_FITS = "This value no longer fits the profile: {reason}."
 
 _MISSING: Any = proposals._MISSING
+
+
+class UndoError(Exception):
+    """An undo that changed nothing. `reason` is not_accepted, not_undoable or changed_since."""
+
+    def __init__(self, proposal: Proposal, reason: str) -> None:
+        super().__init__(reason)
+        self.proposal = proposal
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -173,6 +198,34 @@ def _lock_profile(db: Session, user_id: uuid.UUID, now: datetime) -> Profile:
     ).scalar_one()
 
 
+def _section(profile: Profile, name: str) -> dict[str, Any]:
+    """The stored section in its canonical form. Raises items.ProfileConflict when what is
+    stored no longer fits its model (the user saves that section again first)."""
+    try:
+        return items.canonical(name, (profile.sections or {}).get(name))
+    except ValidationError:
+        raise items.ProfileConflict(STORED_SECTION) from None
+
+
+def list_items(
+    db: Session,
+    user_id: uuid.UUID,
+    *,
+    ingestion_run_id: uuid.UUID | None = None,
+    section: str | None = None,
+    statuses: Sequence[ProposalStatus] = (ProposalStatus.pending,),
+    limit: int = 500,
+) -> Sequence[Proposal]:
+    """The user's profile items (pending ones unless `statuses` says otherwise) of one run and
+    one section when given, in the order they were proposed."""
+    query = _items_of(user_id).where(Proposal.status.in_(list(statuses)))
+    if ingestion_run_id is not None:
+        query = query.where(Proposal.payload["ingestion_run_id"].astext == str(ingestion_run_id))
+    if section is not None:
+        query = query.where(Proposal.payload["section"].astext == section)
+    return db.scalars(query.order_by(Proposal.created_at, Proposal.id).limit(limit)).all()
+
+
 def _flags(payload: Mapping[str, Any]) -> list[str]:
     flags = payload.get("flags")
     return [flag for flag in flags if isinstance(flag, str)] if isinstance(flags, list) else []
@@ -203,7 +256,10 @@ def review(payload: Mapping[str, Any], section_data: Mapping[str, Any] | None) -
         item = items.from_payload(payload)
     except items.ItemError as exc:
         return Review(None, None, False, False, locked, INVALID, exc.reason)
-    current = items.canonical(item.section, section_data)
+    try:
+        current = items.canonical(item.section, section_data)
+    except ValidationError:
+        return Review(None, None, False, False, locked, PROFILE_CONFLICT, STORED_SECTION)
     before = items.read(item.section, current, item.key)
     stale = items.value_hash(before) != payload.get("base_hash")
     try:
@@ -225,15 +281,24 @@ def review(payload: Mapping[str, Any], section_data: Mapping[str, Any] | None) -
 # --- proposing ------------------------------------------------------------------------------------
 
 
-def _citation(raw: Mapping[str, Any]) -> dict[str, Any]:
-    document_id = raw["document_id"]
-    start, end, excerpt = raw["start"], raw["end"], raw["excerpt"]
+def _citation(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, Mapping):
+        raise ValueError("a citation is an object")
+    try:
+        document_id = raw["document_id"]
+        start, end, excerpt = raw["start"], raw["end"], raw["excerpt"]
+    except KeyError:
+        raise ValueError("a citation has document_id, excerpt, start and end") from None
     if type(start) is not int or type(end) is not int or not 0 <= start <= end:
         raise ValueError("a citation has offsets 0 <= start <= end")
     if not isinstance(excerpt, str) or len(excerpt) > SPAN_SOURCE_MAX:
         raise ValueError(f"an excerpt is a text of at most {SPAN_SOURCE_MAX} characters")
+    try:
+        document = document_id if isinstance(document_id, uuid.UUID) else uuid.UUID(document_id)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("a citation names its document by id") from None
     return {
-        "document_id": str(document_id if isinstance(document_id, uuid.UUID) else uuid.UUID(document_id)),
+        "document_id": str(document),
         "excerpt": excerpt,
         "start": start,
         "end": end,
@@ -285,7 +350,8 @@ def propose(
     gave them; a transcribed one flags the item. `conflict` lists the other values documents
     give for this key, each an item of its own with its citations: it flags the item. Raises
     ValueError for a citation, a flag or a conflict of the wrong shape (the caller's mistake,
-    never the model's: the value went through `items.build`).
+    never the model's: the value went through `items.build`) and items.ProfileConflict when the
+    stored section no longer fits its model.
 
     One writer at a time per user and key. The profile is read, not locked."""
     section, key = item.section, item.key
@@ -294,6 +360,8 @@ def propose(
     if any(citation["transcribed"] for citation in cited):
         kept_flags.add(items.FLAG_TRANSCRIBED)
     others: list[dict[str, Any]] = []
+    if conflict is not None and len(conflict) > CONFLICT_MAX:
+        raise ValueError(f"a conflict holds at most {CONFLICT_MAX} other values")
     for other, other_citations in conflict or ():
         if (other.section, other.key) != (section, key):
             raise ValueError("a conflict is between values of one key")
@@ -313,7 +381,7 @@ def propose(
     lock = f"proposals:{user_id}:{items.TARGET}:{section}:{key}"
     db.execute(sa.select(sa.func.pg_advisory_xact_lock(sa.func.hashtextextended(lock, 0))))
     profile = profile_service.get_profile(db, user_id, now)
-    current = items.canonical(section, (profile.sections or {}).get(section))
+    current = _section(profile, section)
     if not others:
         try:
             if items.apply(section, current, item) == current:
@@ -408,17 +476,25 @@ def propose_payload(
     target "profile". The values are built like an agent's (or like the merge's when the flags
     say `derived`). Raises proposals.InvalidValueError when an item is refused."""
     flags = payload.get("flags") or ()
+    others = payload.get("conflict") or ()
+    run = payload.get("ingestion_run_id")
+    if not isinstance(flags, list | tuple) or not isinstance(others, list | tuple):
+        raise ValueError("flags and conflict are lists")
+    if any(not isinstance(other, Mapping) for other in others):
+        raise ValueError("a conflict lists objects {value, citations}")
     origin = items.Origin.derived if items.FLAG_DERIVED in flags else items.Origin.agent
     section, key, action = payload.get("section"), payload.get("key"), payload.get("action")
     try:
         item = items.build(section, key, action, payload.get("value"), origin=origin)
         conflict = [
-            (items.build(section, key, action, other["value"], origin=origin), other["citations"])
-            for other in payload.get("conflict") or ()
+            (
+                items.build(section, key, action, other.get("value"), origin=origin),
+                other.get("citations") or (),
+            )
+            for other in others[: CONFLICT_MAX + 1]
         ]
     except items.ItemError as exc:
         raise proposals.InvalidValueError(f"{exc.index}: {exc.reason}") from None
-    run = payload.get("ingestion_run_id")
     return propose(
         db,
         user_id,
@@ -473,13 +549,35 @@ def _invalid(db: Session, proposal: Proposal, now: datetime, reason: str) -> Non
     db.flush()
 
 
-def _accepted(proposal: Proposal, now: datetime, revision: int | None) -> None:
+def _undo_record(
+    section: str, before: Mapping[str, Any], after: Mapping[str, Any], key: str, at: str
+) -> dict[str, Any] | None:
+    """What an undo needs of one applied item: where the value is now (`at`, which is not the
+    proposal's key when the user renamed the entry), what the section held at the proposal's key
+    before, and the hash of what it holds at `at` now. None when several entries share one of
+    the two keys."""
+    held = items.held(section, before, key)
+    made = items.held(section, after, at)
+    if held is None or made is None:
+        return None
+    return {"at": at, "before": held, "after_hash": items.held_hash(made)}
+
+
+def _accepted(
+    proposal: Proposal, now: datetime, revision: int | None, record: dict[str, Any] | None
+) -> None:
     proposals._decide(proposal, ProposalStatus.accepted, ProposalDecider.user, now)
-    proposal.payload = {**proposal.payload, "applied_revision": revision}
+    proposal.payload = {
+        **proposal.payload,
+        "applied_revision": revision,
+        "undo": record if revision is not None else None,
+    }
 
 
-def _edited(payload: Mapping[str, Any], value: Any) -> items.Item:
-    """The user's own value for a proposed item: validated by the section model alone."""
+def _edited(payload: Mapping[str, Any], value: Any) -> items.Item | None:
+    """The user's own value for a proposed item: validated by the section model alone. None
+    when the stored item itself is broken (its section, key or action): the accept then marks
+    the proposal invalid."""
     try:
         return items.build(
             payload.get("section"),
@@ -489,11 +587,13 @@ def _edited(payload: Mapping[str, Any], value: Any) -> items.Item:
             origin=items.Origin.user,
         )
     except items.ItemError as exc:
+        if not exc.index.startswith("value"):
+            return None
         loc = tuple(
             int(part) if part.isdigit() else part
             for part in exc.index.replace("]", "").replace("[", ".").split(".")[1:]
         )
-        raise proposals.EditedValueError(exc.reason, loc if exc.index.startswith("value") else ())
+        raise proposals.EditedValueError(exc.reason, loc) from None
 
 
 def accept(
@@ -527,7 +627,7 @@ def accept(
         return None
     if proposal.status is not ProposalStatus.pending:
         raise proposals.NotPendingError(proposal)
-    if proposal.kind != items.KIND:
+    if proposal.kind != items.KIND or proposal.target != items.TARGET:
         raise proposals.InvalidValueError(proposals.UNKNOWN_KIND)
     edited = None if edited_value is _MISSING else _edited(proposal.payload, edited_value)
 
@@ -546,22 +646,74 @@ def accept(
     if edited is None and payload.get("conflict"):
         raise proposals.InvalidValueError(CHOOSE)
 
-    section = item.section
-    current = items.canonical(section, (profile.sections or {}).get(section))
+    section, target = item.section, edited or item
     try:
-        after = items.apply(section, current, edited or item, at=item.key)
+        current = _section(profile, section)
+        after = items.apply(section, current, target, at=item.key)
     except items.ProfileConflict as exc:
         raise proposals.ProfileConflictError(proposal, exc.message) from None
     revision: int | None = None
+    record: dict[str, Any] | None = None
     if after != current:
         changed = _hash_at(section, current, item.key) != payload.get("base_hash")
         if changed and profile_revision != profile.revision:
             raise proposals.StaleItemError(proposal, profile.revision)
         profile = profile_service.save_section(db, user_id, section, after, profile.revision, now)
         revision = profile.revision
-    _accepted(proposal, now, revision)
+        record = _undo_record(section, current, after, item.key, target.key)
+    _accepted(proposal, now, revision, record)
     if edited is not None:
         proposal.edited_value = edited.value
+    db.flush()
+    return proposal, profile
+
+
+def undo(
+    db: Session, user_id: uuid.UUID, proposal_id: uuid.UUID, now: datetime
+) -> tuple[Proposal, Profile] | None:
+    """Take back one accepted profile item: the profile holds again, at the item's key, what it
+    held before the accept, as one revision (none when the accept had changed nothing), and the
+    proposal becomes `undone` with `payload.undone_revision`. None when it is not one of the
+    user's profile items.
+
+    Raises UndoError, nothing changed: `not_accepted` (pending, rejected, undone already);
+    `not_undoable` (several entries shared the key: there is no exact way back);
+    `changed_since` (the profile no longer holds at that key what the accept left there, or
+    cannot take the old value back: the user's later edit stays)."""
+    profile = _lock_profile(db, user_id, now)
+    proposal = db.execute(
+        _items_of(user_id)
+        .where(Proposal.id == proposal_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if proposal is None:
+        return None
+    if proposal.status is not ProposalStatus.accepted:
+        raise UndoError(proposal, NOT_ACCEPTED)
+    payload = proposal.payload
+    revision: int | None = None
+    if payload.get("applied_revision") is not None:
+        record, section = payload.get("undo"), payload.get("section")
+        if not isinstance(record, Mapping) or not isinstance(section, str):
+            raise UndoError(proposal, NOT_UNDOABLE)
+        try:
+            current = _section(profile, section)
+            now_held = items.held(section, current, record["at"])
+            if now_held is None or items.held_hash(now_held) != record["after_hash"]:
+                raise UndoError(proposal, CHANGED_SINCE)
+            restored = items.restore(section, current, record["at"], record["before"])
+        except items.ProfileConflict:
+            raise UndoError(proposal, CHANGED_SINCE) from None
+        except (items.ItemError, KeyError, TypeError):
+            raise UndoError(proposal, NOT_UNDOABLE) from None
+        if restored != current:
+            profile = profile_service.save_section(
+                db, user_id, section, restored, profile.revision, now
+            )
+            revision = profile.revision
+    proposals._decide(proposal, ProposalStatus.undone, ProposalDecider.user, now)
+    proposal.payload = {**payload, "undone_revision": revision}
     db.flush()
     return proposal, profile
 
@@ -617,7 +769,7 @@ def accept_many(
     ingestion_run_id: uuid.UUID | None = None,
     section: str | None = None,
 ) -> BulkResult:
-    """"Accept all": every pending profile item of the user (of one run, of one section, or the
+    """ "Accept all": every pending profile item of the user (of one run, of one section, or the
     ids given, which must then also be of that run and section) except the locked and the
     flagged ones, in one profile revision per section.
 
@@ -641,11 +793,16 @@ def accept_many(
             by_section.setdefault(row.payload["section"], []).append(row)
     for name in sorted(by_section):
         batch = sorted(by_section[name], key=lambda row: (row.created_at, row.id))
-        current = items.canonical(name, (profile.sections or {}).get(name))
-        after = current
-        taken: list[Proposal] = []
+        taken: list[tuple[Proposal, dict[str, Any] | None, bool]] = []
         failure: SectionFailure | None = None
+        try:
+            current = _section(profile, name)
+        except items.ProfileConflict as exc:
+            current, failure = {}, SectionFailure(batch[0].id, PROFILE_CONFLICT, exc.message)
+        after = current
         for row in batch:
+            if failure is not None:
+                break
             try:
                 item = items.from_payload(row.payload)
             except items.ItemError as exc:
@@ -660,11 +817,12 @@ def accept_many(
                 except items.ProfileConflict:
                     pass  # reported below, by the apply onto the batch
             try:
-                after = items.apply(name, after, item)
+                step = items.apply(name, after, item)
             except items.ProfileConflict as exc:
                 failure = SectionFailure(row.id, PROFILE_CONFLICT, exc.message)
                 break
-            taken.append(row)
+            taken.append((row, _undo_record(name, after, step, item.key, item.key), step != after))
+            after = step
         if failure is not None:
             result.failed[name] = failure
             for row in batch:
@@ -675,8 +833,8 @@ def accept_many(
         if after != current:
             profile = profile_service.save_section(db, user_id, name, after, profile.revision, now)
             revision = result.revisions[name] = profile.revision
-        for row in taken:
-            _accepted(row, now, revision)
+        for row, record, changed in taken:
+            _accepted(row, now, revision if changed else None, record)
             result.done.append(row.id)
     db.flush()
     return result
