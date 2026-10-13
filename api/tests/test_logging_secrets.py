@@ -248,3 +248,117 @@ def test_a_line_without_a_credential_is_written_as_it_was(lines: Lines) -> None:
     assert first["msg"] == "SELECT title FROM jobs WHERE id = 7"
     assert (first["rows"], first["ok"]) == (3, True)
     assert second["msg"] == f"Paste a regular API key, which starts with {REDACTED}"
+
+
+# A record that cannot be written, a filter that fails: the log call never raises, and nothing
+# of the credential is written, to stdout or to stderr (review of PR #153, B1 and N1).
+FAKE_KEY = "sk-ant-api03-" + "Pq3_" * 22 + "Zz9"
+
+
+@pytest.fixture
+def real_handler() -> Iterator[Callable[[], None]]:
+    """Call it inside the test, once `capfd` is capturing: `configure_logging` on the real
+    stdout, restored when the test ends. Read with `capfd`."""
+    root = logging.getLogger()
+    before = (list(root.handlers), root.level)
+
+    yield lambda: configure_logging("info")
+    root.handlers, root.level = before[0], before[1]
+
+
+def pieces(secret: str, size: int = 16) -> list[str]:
+    return [secret[i : i + size] for i in range(len(secret) - size + 1)]
+
+
+def assert_none_of_it(text: str, secret: str) -> None:
+    assert secret not in text
+    assert not [piece for piece in pieces(secret) if piece in text]
+
+
+@pytest.mark.parametrize("registered", [False, True], ids=["by shape", "hidden"])
+def test_a_record_that_cannot_be_written_leaves_the_credential_nowhere(
+    real_handler: Callable[[], None], capfd: pytest.CaptureFixture[str], registered: bool
+) -> None:
+    import contextlib
+    import uuid
+
+    real_handler()
+    logger = logging.getLogger("app.agents.runner")
+    with hidden(FAKE_KEY) if registered else contextlib.nullcontext():
+        try:
+            raise RuntimeError(f"spawn failed with ANTHROPIC_API_KEY={FAKE_KEY}")
+        except RuntimeError:
+            logger.warning("agent run error", extra={"m": {uuid.uuid4(): 1}})
+    out, err = capfd.readouterr()
+    for stream in (out, err):
+        assert_none_of_it(stream, FAKE_KEY)
+    written = [json.loads(line) for line in (out + err).splitlines() if line.strip()]
+    assert len(written) == 1
+    assert written[0]["msg"] == logging_config.LOST
+    assert written[0]["logger"] == "app.agents.runner"
+    assert written[0]["level"] == "warning"
+    assert written[0]["error"] == "TypeError"
+    assert set(written[0]) == {"ts", "level", "logger", "msg", "error"}
+
+
+def test_a_stream_that_fails_to_write_gives_no_traceback_and_no_exception(
+    real_handler: Callable[[], None], capfd: pytest.CaptureFixture[str]
+) -> None:
+    real_handler()
+    handler = logging.getLogger().handlers[0]
+
+    def broken(self: object, text: str) -> int:
+        raise BrokenPipeError(f"cannot write {FAKE_KEY}")
+
+    class Closed(io.StringIO):
+        write = broken  # type: ignore[assignment]
+
+    handler.stream = Closed()  # type: ignore[attr-defined]
+    try:
+        raise RuntimeError(f"spawn failed with {FAKE_KEY}")
+    except RuntimeError:
+        logging.getLogger("x").error("lost")  # must not raise
+    out, err = capfd.readouterr()
+    assert_none_of_it(out + err, FAKE_KEY)
+
+
+def _cyclic() -> dict[str, Any]:
+    loop: list[Any] = []
+    loop.append(loop)
+    return {"m": loop}
+
+
+class Unprintable:
+    def __str__(self) -> str:
+        raise RuntimeError(f"cannot print {FAKE_KEY}")
+
+
+@pytest.mark.parametrize(
+    "shape",
+    ["tuple key", "frozenset key", "cyclic extra", "message whose str raises"],
+)
+def test_an_error_inside_the_filter_never_reaches_the_caller_nor_lets_the_record_through(
+    real_handler: Callable[[], None], capfd: pytest.CaptureFixture[str], shape: str
+) -> None:
+    real_handler()
+    logger = logging.getLogger("app.agents.runner")
+    extra: dict[str, Any] = {"token": FAKE_KEY}
+    message: Any = f"agent run error {FAKE_KEY}"
+    if shape == "tuple key":
+        extra["m"] = {("a", "b"): FAKE_KEY}
+    elif shape == "frozenset key":
+        extra["m"] = {frozenset({"a", FAKE_KEY}): 1}
+    elif shape == "cyclic extra":
+        extra.update(_cyclic())
+    else:
+        message = Unprintable()
+    try:
+        raise RuntimeError(f"spawn failed with {FAKE_KEY}")
+    except RuntimeError:
+        logger.warning(message, extra=extra, exc_info=True, stack_info=True)  # must not raise
+    out, err = capfd.readouterr()
+    assert_none_of_it(out + err, FAKE_KEY)
+    (line,) = [json.loads(text) for text in out.splitlines()]
+    assert err == ""
+    assert line["msg"] == logging_config.LOST
+    assert set(line) == {"ts", "level", "logger", "msg", "error"}
