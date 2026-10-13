@@ -332,4 +332,78 @@ Tasks of one group never edit the same file. Where two tasks touch one file they
 - **Stage B, after group 5 (and again after M16):** the first sync ends; on ten of his real postings the threads are the right ones; he counts wrong links and unmatched threads and the figures go into "Measurements" (M5's weights are adjusted in a follow up if more than one link in twenty is wrong); the first sync changed no status; the suggestions are plausible; a real rejection or confirmation arriving later moves its posting, and Undo works; a mail from a friend's address made to look like an ATS mail is suggested at most, never applied. Read only: nothing is sent.
 - **Stage C, after M21:** on a thread he started himself from a second address of his own, he drafts with the agent, edits by hand, and sends one reply. It arrives at his own address, in the same conversation in Gmail, from his address, with the text he confirmed. He checks the audit row and the count left today. **No mail to a company is sent from this checkpoint.** Then the day 8 check of M2.
 
-<!-- TAIL -->
+## Task table
+| Id | Issue | What | Scope | Depends on | Migration | Group |
+|---|---|---|---|---|---|---|
+| M0 | #62 | This plan | S | none | none | done with its merge |
+| J8 | #122 | Jobs: status changes under a row lock | S | none | none | 1 |
+| M1 | #123 | The fake Gmail server and the Google client | M | none | none | 1 |
+| M2 | #63 | Public pages, and the human steps to publish the Google app | S | none | none | 1 |
+| M3 | #124 | A mail into stored text, sanitised in the parser sandbox | M | none | none | 1 |
+| M4 | #125 | Connect and disconnect Gmail: tables, OAuth, purge, the card | M | M1 | 0013 | 2 |
+| M5 | #126 | Linking rules | S | M3 | none | 2 |
+| M6 | #127 | Classifier rules and the transition table | M | M3 | none | 2 |
+| M9 | #130 | Fact check rules for a draft | S | none | none | 2 |
+| M7 | #128 | The bounded first sync, storage, the mail queue | M | M1, M3, M4 | none | 3 |
+| M8 | #129 | Drafts: tables, recipients, API, editing by hand | M | M4 | 0014 | 3 |
+| M10 | #131 | Incremental sync, backoff, reconnect, Sync now | M | M7 | none | 4 |
+| M11 | #132 | Links applied, manual link and unlink, the mail of a posting | M | M5, M7 | none | 4 |
+| M12 | #133 | The send gate, its audit, the daily limit and the caps | M | M1, M8, M9 | none | 4 |
+| M13 | #134 | Status changes from mail: apply, record, undo, suggestions | M | J8, M6, M11 | none | 5 |
+| M14 | #135 | The history view and the unmatched inbox | M | M11 | none | 5 |
+| M15 | #136 | Attachments streamed on demand | S | M7 | none | 5 |
+| M16 | #137 | Status in the pages, Waiting for your answer | M | M13, M14 | none | 6 |
+| M17 | #138 | The assistant for what the rules leave, budget, daily cap | M | M11, M13 | none | 6 |
+| M18 | #139 | The draft in the page, Send with confirmation | M | M12, M14 | none | 6 |
+| M19 | #140 | The reply agent | M | M13, M17, M18 | none | 7 |
+| M20 | #141 | The fact check by model | S | M9, M12, M17 | none | 7 |
+| M21 | #142 | Privacy proof over the whole module | S | M10 to M20 | none | 8 |
+| Checkpoint M | #143 | The owner's real account, stages A, B and C | human | M2 and M4, then M16, then M21 | none | after 2, 6 and 8 |
+
+No task is L. The three that were (the sync, the status changes, the drafting) are each split in two or three above.
+
+## Order and parallel work
+At most four tasks at a time. The tasks of one group run in parallel and touch no common file; a group starts when the tasks it depends on have merged.
+- **Group 1:** J8, M1, M2, M3. **Group 2:** M4, M5, M6, M9. **Group 3:** M7, M8. **Group 4:** M10, M11, M12. **Group 5:** M13, M14, M15. **Group 6:** M16, M17, M18. **Group 7:** M19, M20. **Group 8:** M21, then the last stage of the checkpoint.
+- **Critical path:** M1, M4, M7, M11, M13, M17, M19, M21, Checkpoint stage C. Eight tasks deep. M3 must also be merged before M7. Everything else has slack: M9 and M5 may start in group 1 if a slot is free (M5 once M3 has merged), and M15 may run any time after M7.
+- **Migrations are unique and ordered across the groups:** 0013 in group 2, 0014 in group 3, and no other. If ingestion G9's 0012 has not merged when M4 starts, M4 waits for it or the orchestrator renumbers both in this file first.
+- **Waits on other modules:** M3 not while ingestion G8 (#53) is open (`sandbox/main.py`, the dependency files). M7 not while ingestion G10 (#55) is open (`worker.py`). J8 and M11 not while a follow up of G5 (#111) edits `agents/proposals.py`. Issue #73 (Job becomes Opportunity) renames tables this module points at: it runs before group 2 or after group 8, never in between.
+- **Each task is one pull request that leaves `main` working:** M2 gives the public pages, M4 a Gmail card that connects and disconnects, M7 stored mail, M10 a mailbox that stays current, M11 the mail of a posting through the api, M14 the same in the page, M13 and M16 statuses that follow the mail, M8, M12 and M18 a reply written by hand and sent on a click, M17 the assistant on the leftovers, M19 and M20 drafts written and checked by the agent.
+- **Deploys:** one after group 2 with M2 (checkpoint stage A needs it), one after group 6 (stage B), one after group 8 (stage C). Each is gated by `ops/local-check.sh`.
+
+## Assumptions, each with the task that verifies it
+- **A1.** `nh3` has an arm64 Linux wheel and no open advisory on the day M3 starts. If not: M3 stores plain text only and the frame shows text, and the owner is asked.
+- **A2.** Gmail's quota units per call and its per user rate are as Google documents them on the day M1 starts; M1 writes the figures in "Measurements" and the client stays under half.
+- **A3.** `history.list` answers 404 for a start id that is too old. Verified against the real API at checkpoint stage B by the absence of a stuck sync, and by the fake in M10.
+- **A4.** Gmail writes its own `Authentication-Results` header first, with `mx.google.com`, above anything the sender forged. M3's fixtures assume it; stage B checks it on ten real messages before any automatic change is trusted on the owner's account.
+- **A5.** An unverified app in Production keeps its refresh tokens beyond 7 days. The owner's day 8 check (M2, step 5).
+- **A6.** `messages.send` with `threadId`, `In-Reply-To` and `References` places the reply in the same conversation for the sender and for the recipient. Stage C.
+- **A7.** Google may grant fewer scopes than asked (granular consent). The fake does in M4; stage A shows the real screen.
+- **A8.** The runner's `token_budget` applies to any agent's input. Read in `api/app/agents/runner.py` on 2026-10-13; M17's first test proves it for a mail agent.
+- **A9.** One parser job per message is fast enough for a first sync of 5,000 messages. M3 measures; over 300 ms per message a job carries ten.
+
+## Issue #17: where each follow up of the spec's review is answered
+1. **`proposals.run_id` nullable.** Already built: migration 0008 and `agents/models.py`, and SPEC-agents says so. M11's first system proposal is created with `run_id = null` and a test asserts it.
+2. **Disconnect deletes or strips the mail proposals' payloads.** M4, `purge.py`: `mail_link` proposals are deleted, `mail_status` payloads are reduced to `{from, to, mail_deleted: true}`, job events lose `message_id`. The same strip runs when one thread is deleted from the app (M11). M21 proves it with a canary.
+3. **`event_ids` becomes `suggestion_ids`.** M13: a suggestion is a pending `mail_status` proposal, and `suggestion_ids` are proposal ids.
+4. **Pruning after 180 days against "whole history".** Decided by the owner: no pruning by age. The 180 days are the window of the first sync only. The trade off is storage, bounded by the cap of question 4, and a longer life of third parties' text, stated in `/privacy` and ended by Disconnect, by deleting a thread, or by deleting the mail in Gmail.
+5. **Lock the job row for undo, manual and automatic changes; test the 409 under concurrency.** J8 builds the lock for every existing path; M13 uses it for the automatic change and the undo, and carries the concurrency tests of the 409.
+
+## Where the spec is contradicted or silent
+Each point is amended in SPEC-mail by the task named.
+- **Retention.** The spec deletes synced mail older than 180 days at each sync; decision 7 keeps it until the user disconnects or deletes. M7 amends.
+- **Models.** The spec names `claude-opus-5-5` for the triage agent; decision 6 picks the model by credential. M17 amends, and the sentence of SPEC-agents that lists who uses `model_by_credential`.
+- **"No code path from agents to send."** Replaced by the one gate and its three tests (decision 3). M12 amends, with the Boundaries section ("Never: send mail from a worker") reworded to "never outside `gate.send`".
+- **Applying a model's verdict above a threshold.** Replaced by question 1's answer. M17 amends.
+- **The spec has no table for classifier results**, though its undo rule and its disconnect rule both rely on one: `mail_classifications` (0013).
+- **The spec has no audit of sends, no daily limit, no cap per company and no fact check before a send.** All four come from decision 4: `mail_sends`, `limits.py`, `guardrails.py`, M9 and M20.
+- **Event keys.** The spec writes `{before, after, source}`; the jobs module writes `{from, to, via}`. The code wins. M13 amends.
+- **"Company domain."** A posting has no domain column. The rule uses the host of the posting's address when it is not an ATS or a job board, and the company name otherwise. M5 amends.
+- **`agent_thread_id` on drafts.** Dropped: instructions are kept in `mail_draft_instructions` (planner default). M8 amends.
+- **`sandbox=""`** cannot open a link. M14 amends with the sandbox of this plan.
+- **CI.** The spec's testing strategy and success criterion 5 say CI; there is none (decision 8). M1 amends both to "each task's tests and the local check".
+- **Consent.** The spec sends mail content to the model provider with no recorded consent. Question 5. M4 amends.
+- **`CONTRIBUTING.md` on `main` still describes CI and its merge rule** on 2026-10-13. PR #121 changes it; this plan follows PR #121.
+
+## Measurements
+Each task adds one paragraph here, headed by its id.
