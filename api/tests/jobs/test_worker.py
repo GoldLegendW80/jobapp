@@ -458,7 +458,7 @@ def test_main_exits_at_once_when_the_stop_left_threads(
     events: list[Any] = []
     left = [2]
 
-    async def served(_settings: Settings) -> int:
+    async def served(_settings: Settings, _specs: Any) -> int:
         return left[0]
 
     monkeypatch.setattr(worker, "load_settings", lambda: settings)

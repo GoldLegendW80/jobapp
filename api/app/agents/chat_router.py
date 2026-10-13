@@ -49,6 +49,7 @@ from app.agents.schemas import (
     ThreadList,
     ThreadOut,
 )
+from app.db import read_snapshot
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
@@ -172,7 +173,7 @@ def _detail(
         # One snapshot for the three reads below. At READ COMMITTED each statement sees what is
         # committed when it starts, so a send committing in between gave a thread whose answer
         # was pending (and whose count said one message) while its message list was still empty.
-        db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
+        read_snapshot(db)
         thread = chat.get_thread(db, user_id, thread_id)
         if thread is None:
             return None

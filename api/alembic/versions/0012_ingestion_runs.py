@@ -1,9 +1,18 @@
 """Ingestion G9: ingestion_runs, ingestion_run_steps, ingestion_items and their three enums.
 
+Amended in place by G10 (review of PR #148, 2026-10-13), before this migration was deployed
+anywhere (production stops at 0011): `ingestion_runs.paused_at`, the start of the current pause,
+`advance_failures`, how many times in a row the cron failed to move the run, and `closed_reason`,
+the sentence of a run the engine closed for that. Amended again by the second review of the
+same PR, same day, still before any deploy: `ingestion_runs.advance_failed_at`, when the last
+counted failure happened, and `ingestion_run_steps.cut_budget`, the largest budget on which
+the ceiling cut the step.
+
 The second half of the DDL of SPEC-ingestion.md (Documents); the first half (documents, images,
 consents) is migration 0011, task G1. These three tables hold every column a later task stores
 into, so none of G10, G12, G14 and G15 adds a migration: the chain's columns on runs and steps
-(`waiting`, `paused_reason`, `deadline_at`, `cancel_requested_at`, the estimates, the ceiling and
+(`waiting`, `paused_reason`, `paused_at`, `deadline_at`, `cancel_requested_at`, the estimates,
+the ceiling and
 its history, `agent_run_id`, `attempt`, `token_budget`, `purge_events`) are written by G10 and
 G15, the three counters of a step and `ingestion_items` by G9.
 
@@ -90,6 +99,10 @@ def upgrade() -> None:
         ),
         sa.Column("partial", sa.Boolean(), nullable=False, server_default=_false()),
         sa.Column("paused_reason", sa.Text(), nullable=True),
+        sa.Column("paused_at", _tz(), nullable=True),
+        sa.Column("advance_failures", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("advance_failed_at", _tz(), nullable=True),
+        sa.Column("closed_reason", sa.Text(), nullable=True),
         sa.Column("waiting", sa.Text(), nullable=True),
         sa.Column("deadline_at", _tz(), nullable=False),
         sa.Column("cancel_requested_at", _tz(), nullable=True),
@@ -164,6 +177,7 @@ def upgrade() -> None:
         sa.Column("agent_run_id", _uuid(), nullable=True),
         sa.Column("attempt", sa.SmallInteger(), nullable=False, server_default="0"),
         sa.Column("token_budget", sa.BigInteger(), nullable=True),
+        sa.Column("cut_budget", sa.BigInteger(), nullable=True),
         sa.Column("refused_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("two_digit_year_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("items_count", sa.Integer(), nullable=False, server_default="0"),

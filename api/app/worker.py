@@ -96,9 +96,8 @@ SWEEP_JOB_TIMEOUT_S = sweep.SWEEP_TIMEOUT_S + 60
 MAX_AGENT_RUNS = 2
 # The runner stops a run at its wall time and gives the stream its grace to end; arq's own timeout
 # only catches a runner stuck beyond that.
-LONGEST_AGENT_S = max(agent.wall_time_s for agent in definitions.AGENTS.values())
-AGENT_JOB_TIMEOUT_S = LONGEST_AGENT_S + 120
-AGENT_STALE_RUNNING = timedelta(seconds=LONGEST_AGENT_S + 300)
+AGENT_JOB_MARGIN_S = 120
+AGENT_STALE_MARGIN_S = 300
 AGENT_STALE_QUEUED = timedelta(hours=6)
 # What a stop waits, in all, for the cancelled jobs, the job ends being written and the threads
 # of asyncio.to_thread, before it disposes of the engine and returns whatever is left. Compose
@@ -108,6 +107,44 @@ AGENT_STALE_QUEUED = timedelta(hours=6)
 # Postgres at 15 s (statement_timeout), so a thread stuck in one would outlast any bound that
 # still lets the worker say why it stopped: that is the case the bound exists for.
 STOP_WAIT_S = 12.0
+INGESTION_ADVANCE_SECOND = 20  # the tick of the ingestion chain, once a minute
+
+
+class AgentTooLongError(RuntimeError):
+    """A registered agent may run longer than the job timeout of the agents queue."""
+
+
+def register_ingestion_agents() -> None:
+    """Make this process know the ingestion agents and the engine that chains them (ingestion
+    G10): the import registers `profile_extract`, its tools and the `on_final` hook. Called
+    where the agents queue is built and where a run's context is made, not at the top of this
+    file: `python -m app.worker --check` must not need the SDK."""
+    from app.ingestion import engine  # noqa: F401
+
+
+def longest_agent_s() -> float:
+    """The longest wall time of any registered agent. Computed when it is asked, never as a
+    module constant: an agent registered after this file was imported counts too."""
+    return max(agent.wall_time_s for agent in definitions.AGENTS.values())
+
+
+def agent_job_timeout_s() -> float:
+    return longest_agent_s() + AGENT_JOB_MARGIN_S
+
+
+def agent_stale_running() -> timedelta:
+    return timedelta(seconds=longest_agent_s() + AGENT_STALE_MARGIN_S)
+
+
+def check_agents_fit(job_timeout_s: float) -> None:
+    """Refuse to start when a registered agent can outlive the job timeout: arq would cut its
+    run as `STOPPED`, no hook would be called, and the step would run and be paid twice."""
+    for agent in definitions.AGENTS.values():
+        if agent.wall_time_s > job_timeout_s:
+            raise AgentTooLongError(
+                f"agent {agent.name} may run {agent.wall_time_s:.0f} s, "
+                f"longer than the job timeout of {job_timeout_s:.0f} s"
+            )
 
 
 # --- job context ------------------------------------------------------------------------------
@@ -214,8 +251,13 @@ def agent_context(ctx: dict[str, Any]) -> Any:
     """The runner's view of the job context. Imported here, not at the top: the SDK lives in the
     worker image only, and `python -m app.worker --check` must not need it."""
     from app.agents import backend, live, runner
+    from app.ingestion import engine as ingestion_engine
 
     settings: Settings = ctx["settings"]
+    # What the `on_final` hook of the ingestion agents needs to start the next step.
+    services: dict[str, Any] = {}
+    if ctx.get("redis") is not None:
+        services[ingestion_engine.ENQUEUE_SERVICE] = ingestion_engine.pool_enqueue(ctx["redis"])
     factory = ctx.get("agent_backend") or backend.for_settings(settings)
     # The answer being written goes to Redis for the api's run stream (issue #33): arq puts its
     # pool in the job context. Without one, or with AGENTS_LIVE_TEXT off, no live text.
@@ -233,6 +275,7 @@ def agent_context(ctx: dict[str, Any]) -> Any:
         interrupt_grace_s=ctx.get("agent_interrupt_grace_s", runner.INTERRUPT_GRACE_S),
         agents=ctx.get("agent_definitions"),
         live_store=store if settings.agents_live_text else None,
+        services=services,
     )
 
 
@@ -248,7 +291,7 @@ def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: b
         if at_start:
             count = agent_runs.reap_orphans(db, now)
         else:
-            count = agent_runs.reap_stale(db, now, AGENT_STALE_RUNNING, AGENT_STALE_QUEUED)
+            count = agent_runs.reap_stale(db, now, agent_stale_running(), AGENT_STALE_QUEUED)
         db.commit()
     return count
 
@@ -307,22 +350,38 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
 
 
 def agents_queue() -> QueueSpec:
+    # The limits are computed here, after the import that registers the ingestion agents: a
+    # 15 minute step under a timeout computed before it would be cut at 12 minutes.
+    register_ingestion_agents()
+    job_timeout_s = agent_job_timeout_s()
+    check_agents_fit(job_timeout_s)
     return QueueSpec(
         name=queue.AGENTS,
         functions=[
-            func(run_agent, name="run_agent", timeout=AGENT_JOB_TIMEOUT_S, max_tries=1),
+            func(run_agent, name="run_agent", timeout=job_timeout_s, max_tries=1),
             func(reap_agent_runs, name="reap_agent_runs", timeout=60, max_tries=1),
         ],
         cron_jobs=[cron(reap_agent_runs, name="cron:reap_agent_runs", second=45, timeout=60)],
         # Two jobs at once: a third run waits in the queue (the reaper cron, a few milliseconds,
         # waits for a free slot too).
         max_jobs=MAX_AGENT_RUNS,
-        job_timeout_s=AGENT_JOB_TIMEOUT_S,
+        job_timeout_s=job_timeout_s,
         on_start=reap_agent_runs_at_start,
     )
 
 
 # --- ingestion queue (G2b; G10 adds its `advance` cron to the same block) ----------------------
+
+
+async def advance_ingestion_runs(ctx: dict[str, Any]) -> int:
+    """The tick of the ingestion chain (G10): every run that is not final is advanced. It is the
+    only guarantee that a chain moves: the `on_final` hook of a step is a shortcut that is not
+    called for a run a reaper failed, nor when the worker dies. Answers a count, nothing else."""
+    from app.ingestion import engine as ingestion_engine
+
+    pool = ctx.get("redis")
+    enqueue = ingestion_engine.pool_enqueue(pool) if pool is not None else None
+    return await ingestion_engine.tick(sessions_of(ctx), enqueue, clock_of(ctx), ctx["settings"])
 
 
 def ingestion_queue() -> QueueSpec:
@@ -345,8 +404,22 @@ def ingestion_queue() -> QueueSpec:
                 max_tries=1,
                 keep_result=0,
             ),
+            func(
+                advance_ingestion_runs,
+                name="advance_ingestion_runs",
+                timeout=120,
+                max_tries=1,
+                keep_result=0,
+            ),
         ],
         cron_jobs=[
+            cron(
+                advance_ingestion_runs,
+                name="cron:advance_ingestion_runs",
+                second=INGESTION_ADVANCE_SECOND,
+                timeout=120,
+                keep_result=0,
+            ),
             cron(
                 ingestion_jobs.reap_documents,
                 name="cron:reap_documents",
@@ -355,7 +428,7 @@ def ingestion_queue() -> QueueSpec:
                 # The first tick comes with the worker: the documents that waited for this
                 # version are read at the deploy, not a quarter of a minute later.
                 run_at_startup=True,
-            )
+            ),
         ],
         # One document at a time; the reaper's tick waits its turn behind a reading.
         max_jobs=1,
@@ -399,6 +472,16 @@ class QueueWorker(Worker):
 
     async def finish_failed_job(self, *args: Any, **kwargs: Any) -> None:
         await self._ending(super().finish_failed_job(*args, **kwargs))
+
+
+def checked_queues(settings: Settings | None = None) -> list[QueueSpec]:
+    """The queues the worker serves, or `AgentTooLongError`: the worker refuses to start when an
+    agent registered since the agents queue was built can outlive its job timeout."""
+    specs = queues(settings)
+    for spec in specs:
+        if spec.name == queue.AGENTS:
+            check_agents_fit(spec.job_timeout_s)
+    return specs
 
 
 def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> QueueWorker:
@@ -721,7 +804,7 @@ def main(argv: list[str] | None = None) -> int:
     skip_sdk_version_probe()
     dropped = drop_secrets_from_environ()
     logger.info("secrets dropped from the environment", extra={"names": dropped})
-    if asyncio.run(serve(settings)):
+    if asyncio.run(serve(settings, checked_queues(settings))):
         # Something was still running at the bound of the stop, and the interpreter joins
         # every thread of an executor before it exits: it would wait here until Compose kills
         # the process. All is said and the engine is disposed of, so leave now. The
