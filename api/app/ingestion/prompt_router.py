@@ -13,7 +13,9 @@ route only hands out text.
   also written by the prompt into the dossier's first line (`dossier-format: <n>`), so a later
   step can tell which prompt a dossier came from.
 - The only thing of the caller in the text is their display name, made safe for one line
-  (`clean_name`). Nothing else of the account is in the answer: no email, no id.
+  (`clean_name`) and written as data: inside the two marks the template puts around it, under a
+  sentence that says the marks hold a name only. A name cannot hold those marks, so it cannot
+  close its own field. Nothing else of the account is in the answer: no email, no id.
 - Like every route under /api/ingestion, the answer is `Cache-Control: no-store` (the middleware
   of routers.py).
 """
@@ -39,8 +41,10 @@ TEMPLATE_PATH = Path(__file__).parent / "prompts" / "laptop_dossier.md"
 OUTPUT_FOLDER = "~/jobapp-dossier"
 # A name is one line of the prompt: longer than this it is cut.
 NAME_MAX = 80
-# What the prompt says in place of a name the account does not have.
-NAME_UNKNOWN = "not given here, so ask me for my full name before you start"
+# The marks the template writes around the name (`«{{user_name}}»`). The sentence above that line
+# tells the assistant that what the marks hold is a name only, and to ask when they are empty.
+NAME_OPEN = "\u00ab"
+NAME_CLOSE = "\u00bb"
 
 ASSISTANTS = ("claude_code", "codex")
 
@@ -50,6 +54,17 @@ _PLACEHOLDER = re.compile(r"\{\{([a-z_]+)\}\}")
 _PLACEHOLDERS = frozenset({"user_name", "output_folder", "version"})
 # The two invisible characters that spell words in some scripts (Persian, Hindi): kept in a name.
 _JOINERS = "\u200c\u200d"
+# Never in a name: the two marks around it and the marks that look like them (single and double
+# angle quotation marks, much less than and much greater than, the angle brackets of CJK text and
+# of mathematics), so that no name can close the field it is written in.
+_NAME_MARKS = frozenset(
+    NAME_OPEN
+    + NAME_CLOSE
+    + "\u2039\u203a\u226a\u226b\u300a\u300b\u3008\u3009\u27ea\u27eb\u27e8\u27e9"
+)
+# Characters that print nothing and are not of a control category: the grapheme joiner, the
+# Hangul fillers and the blank Braille pattern. The variation selectors are found by their name.
+_BLANKS = frozenset("\u034f\u115f\u1160\u3164\uffa0\u2800")
 
 
 @dataclass(frozen=True)
@@ -94,26 +109,35 @@ def template() -> Template:
     return parse(TEMPLATE_PATH.read_bytes())
 
 
+def _kept(char: str) -> bool:
+    """Whether a character of a name is written in the prompt."""
+    if char in _JOINERS:
+        return True
+    if char in _NAME_MARKS or char in _BLANKS:
+        return False
+    if unicodedata.category(char).startswith("C"):
+        return False
+    return "VARIATION SELECTOR" not in unicodedata.name(char, "")
+
+
 def clean_name(name: str) -> str:
     """A display name as one short line of plain text: control and invisible characters dropped,
-    every run of white space (a newline included) made one space, cut at NAME_MAX characters.
-    Quotes, braces, backticks and Markdown stay as typed: the name is written once, on a line of
-    its own, and the text is filled in a single pass, so nothing in a name is read as a
-    placeholder. Empty when nothing is left."""
+    the marks the template writes around the name dropped with their lookalikes, every run of
+    white space (a newline included) made one space, cut at NAME_MAX characters and never ending
+    on a space or a joiner. Quotes, braces, backticks and Markdown stay as typed: the name is
+    written once, between its marks, and the text is filled in a single pass, so nothing in a
+    name is read as a placeholder. Empty when nothing is left."""
     spaced = "".join(" " if char.isspace() else char for char in name)
-    visible = "".join(
-        char
-        for char in spaced
-        if char in _JOINERS or not unicodedata.category(char).startswith("C")
-    )
-    return " ".join(visible.split())[:NAME_MAX].strip()
+    visible = "".join(char for char in spaced if _kept(char))
+    return " ".join(visible.split())[:NAME_MAX].strip(" " + _JOINERS)
 
 
 def fill(assistant: str, name: str) -> str:
     """The prompt for one assistant, with the caller's name, the output folder and the version."""
     shipped = template()
     values = {
-        "user_name": clean_name(name) or NAME_UNKNOWN,
+        # Empty when the account has no name: the template asks the assistant to ask for it.
+        "user_name": clean_name(name),
         "output_folder": OUTPUT_FOLDER,
         "version": str(shipped.version),
     }
