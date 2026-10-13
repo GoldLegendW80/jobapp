@@ -755,3 +755,16 @@ def test_whatever_an_answer_holds_it_is_a_result_that_holds_or_a_parser_error() 
         with contextlib.suppress(pc.ParserError):
             assert 0 <= pc.check_header(raw) <= pc.MAX_ANSWER
     assert passed > 50, "some mutations must leave a valid answer, or nothing was exercised"
+
+
+def test_no_cap_is_looser_than_the_check_constraint_of_its_column() -> None:
+    """The limits migration 0011 puts on stored data (app/ingestion/models.py): a result that
+    passed this client must never be refused by the database."""
+    from app.ingestion import models
+
+    assert pc.MAX_SIZE <= models.FILE_MAX_BYTES
+    assert pc.MAX_TEXT_CHARS <= models.TEXT_MAX_CHARS
+    assert pc.MAX_IMAGE_BYTES <= models.IMAGE_MAX_BYTES
+    assert pc.MAX_IMAGE_SIDE <= models.IMAGE_MAX_SIDE
+    assert pc.MAX_READ_PAGES <= models.PAGES_MAX
+    assert pc.MAX_PAGES < 2**31
