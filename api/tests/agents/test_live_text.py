@@ -262,13 +262,18 @@ def test_the_secret_never_reaches_the_store_even_split_across_deltas() -> None:
 def test_a_failing_store_gives_the_block_up_and_the_next_block_tries_again(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # Tokens drawn for this run: a short word of the language ("one") is in many a logger name,
+    # file name or message, and its absence from a log would prove nothing.
+    said = f"said-{uuid.uuid4().hex} "
+    sensitive = f"SENSITIVE-{uuid.uuid4().hex}"
+
     async def go() -> tuple[RecordingStore, live.LiveText]:
         store = RecordingStore()
         text = make(store)
         text.feed(start(0, text=""))
-        text.feed(delta(0, "one "))
+        text.feed(delta(0, said))
         await text._sync()
-        store.fail = ConnectionError("redis is down: SENSITIVE")
+        store.fail = ConnectionError(f"redis is down: {sensitive}")
         text.feed(delta(0, "two "))
         await text._sync()
         store.fail = None
@@ -283,11 +288,11 @@ def test_a_failing_store_gives_the_block_up_and_the_next_block_tries_again(
 
     with caplog.at_level(logging.WARNING):
         store, text = asyncio.run(go())
-    assert store.written() == {1: "one ", 2: "next"}
+    assert store.written() == {1: said, 2: "next"}
     assert text.failures == 1
     assert "live text not published" in caplog.text
-    assert "SENSITIVE" not in caplog.text
-    assert "one" not in caplog.text
+    assert sensitive not in caplog.text
+    assert said.strip() not in caplog.text
 
 
 def test_a_block_that_begins_while_the_store_is_written_is_published_whole() -> None:

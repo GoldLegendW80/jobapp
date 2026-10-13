@@ -10,6 +10,7 @@ the lockdown, which tests/ingestion/parser/test_archive_container.py adds.
 
 import hashlib
 import logging
+import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -329,13 +330,17 @@ def test_nothing_of_an_export_or_a_document_reaches_a_log_or_the_result(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    export = uploaded(api, alice, fx.export(), "Camille private export.zip")
-    word = uploaded(api, alice, fx.cv_docx(), "Camille private cv.docx")
-    bomb = uploaded(api, alice, fx.ratio_bomb(), "Camille private bomb.zip")
+    # The name of the files is a token drawn for this run, never a word of the language: a log
+    # record carries the path of the module that wrote it (`pathname`), and a checkout under
+    # macOS's `/private/var/folders` holds "private", as another one may hold any common word.
+    name = f"name-{uuid.uuid4().hex}"
+    export = uploaded(api, alice, fx.export(), f"Camille {name} export.zip")
+    word = uploaded(api, alice, fx.cv_docx(), f"Camille {name} cv.docx")
+    bomb = uploaded(api, alice, fx.ratio_bomb(), f"Camille {name} bomb.zip")
     results = [run(factory, clock, RealParser(), body["id"]) for body in (export, word, bomb)]
     assert results == [jobs.DONE, jobs.DONE, jobs.FAILED]
     said = caplog.text + " ".join(repr(vars(record)) for record in caplog.records)
-    for secret in ("Camille", "Durand", "private", "Positions.csv", "Example Rail", "example.org"):
+    for secret in (name, "Camille", "Durand", "Positions.csv", "Example Rail", "example.org"):
         assert secret not in said, secret
     unpacked = [record for record in caplog.records if record.getMessage() == "export unpacked"]
     assert [(record.files, record.new_files) for record in unpacked] == [(3, 3)]  # type: ignore[attr-defined]
