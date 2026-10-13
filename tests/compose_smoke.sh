@@ -325,6 +325,26 @@ big() { head -c "$1" /dev/zero; }
 [[ "$(curl_c / -X POST --data-binary @<(big 20000000))" == "413" ]] || fail "20 MB to / not refused"
 [[ "$(curl_c /api/health -X POST --data-binary @<(big 10485760))" == "405" ]] || fail "10 MiB exactly did not reach the api"
 ok "bodies over 10 MiB refused with 413, 10 MiB exactly reaches the api (405 from FastAPI)"
+# The upload of a document is the one route that takes 20 MiB (SPEC-ingestion.md, task G1).
+# No session here: a body that Caddy lets through reaches the api, which answers 401; a body
+# over the limit is Caddy's own 413.
+up=/api/ingestion/documents
+csrf=(-H 'X-Requested-With: jobapp')
+[[ "$(curl_c "$up" -X POST "${csrf[@]}" --data-binary @<(big 20971520))" == "401" ]] || fail "20 MiB did not reach the api on $up"
+[[ "$(curl_c "$up" -X POST "${csrf[@]}" --data-binary @<(big 20971521))" == "413" ]] || fail "20 MiB + 1 not refused on $up"
+[[ "$(curl_c "$up" -X POST "${csrf[@]}" --data-binary @<(big 10485761))" == "401" ]] || fail "10 MiB + 1 did not reach the api on $up"
+for other in "$up/text" "$up/" "/API/INGESTION/DOCUMENTS" /api/ingestion//documents /api/ingestion/./documents \
+  "$up/00000000-0000-4000-8000-000000000000/confirm" /api/ingestion/other; do
+  [[ "$(curl_c "$other" -X POST "${csrf[@]}" --data-binary @<(big 10485761))" == "413" ]] || fail "10 MiB + 1 not refused on POST $other"
+done
+for method in PUT PATCH DELETE; do
+  [[ "$(curl_c "$up" -X "$method" "${csrf[@]}" --data-binary @<(big 10485761))" == "413" ]] || fail "10 MiB + 1 not refused on $method $up"
+done
+ok "20 MiB on POST $up only: its other spellings, its other methods and every other route keep 10 MiB"
+curl_c "$up" -X POST "${csrf[@]}" -H "X-Filename: UTF-8''smoke-private-name.txt" --data-binary 'x' >/dev/null
+sleep 1
+"${DEV[@]}" logs --no-color caddy 2>/dev/null | grep -qi 'smoke-private-name\|x-filename' && fail "caddy logs the name of an uploaded document"
+ok "the name of an uploaded document (X-Filename) is in no caddy log line"
 
 step "caddy: headers and streaming limit, against an echo stand-in for the api"
 "${DEV[@]}" stop api >/dev/null 2>&1
@@ -352,6 +372,13 @@ ok "api sees /api prefix, X-Request-ID, X-Forwarded-For (spoof replaced), -Proto
 [[ "$(curl_c /api/echo -X POST -H 'Transfer-Encoding: chunked' --data-binary @<(big 5000000))" == "200" ]] \
   && grep -q '"body_bytes": 5000000' "$CURL_DIR/b" || fail "chunked 5 MB body not delivered whole"
 ok "chunked bodies: 5 MB delivered whole, 12 MB cut with 413"
+[[ "$(curl_c /api/ingestion/documents -X POST -H 'Transfer-Encoding: chunked' --data-binary @<(big 12000000))" == "200" ]] \
+  && grep -q '"body_bytes": 12000000' "$CURL_DIR/b" || fail "chunked 12 MB body not delivered whole on the upload route"
+[[ "$(curl_c /api/ingestion/documents -X POST -H 'Transfer-Encoding: chunked' --data-binary @<(big 21000000))" == "413" ]] \
+  || fail "chunked body over 20 MiB not cut on the upload route"
+[[ "$(curl_c /api/ingestion/documents/text -X POST -H 'Transfer-Encoding: chunked' --data-binary @<(big 12000000))" == "413" ]] \
+  || fail "chunked 12 MB body not cut on another ingestion route"
+ok "chunked bodies on the upload route: 12 MB delivered whole, 21 MB cut with 413; 12 MB cut on its neighbour"
 docker rm -f -v "$ECHO_NAME" >/dev/null
 
 step "caddy: api stopped gives 502 at once, database down passes the 503 through"

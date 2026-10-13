@@ -256,6 +256,145 @@ export async function request<T>(
   }
 }
 
+export interface UploadOptions<T> {
+  /** Extra request headers (the file's name, for instance). */
+  headers?: Record<string, string>;
+  /** Called as the body leaves, with the part sent so far, from 0 to 1. */
+  onProgress?: (fraction: number) => void;
+  /** Caller's cancellation: the upload stops and fails as `aborted`. */
+  signal?: AbortSignal;
+  /** No complete answer within this long is a `timeout`. Default: no limit. */
+  timeoutMs?: number;
+  /** Runtime check of the decoded body; throw to reject it as a `parse` error. */
+  validate?: Validator<T>;
+}
+
+/**
+ * POST a file as the raw request body, with progress. Same contract as `request` (credentials,
+ * the CSRF header, `ApiError` kinds, 401 reported to the listeners), over XMLHttpRequest because
+ * fetch cannot report how much of a body has been sent.
+ */
+export function upload<T>(
+  path: string,
+  file: Blob,
+  options: UploadOptions<T> = {},
+): Promise<T> {
+  if (!path.startsWith("/")) {
+    throw new TypeError(`api path must start with "/": ${path}`);
+  }
+  const { headers = {}, onProgress, signal, validate } = options;
+  const url = `${API_BASE}${path}`;
+  return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(
+        new ApiError("aborted", "upload cancelled", { cause: signal.reason }),
+      );
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    const onCallerAbort = () => {
+      xhr.abort();
+    };
+    const settle = (finish: () => void) => {
+      signal?.removeEventListener("abort", onCallerAbort);
+      finish();
+    };
+    xhr.open("POST", url);
+    xhr.withCredentials = true;
+    xhr.timeout = options.timeoutMs ?? 0;
+    const sent: Record<string, string> = {
+      Accept: "application/json",
+      "Content-Type": file.type || "application/octet-stream",
+      [CSRF_HEADER]: CSRF_VALUE,
+      ...headers,
+    };
+    for (const [name, value] of Object.entries(sent)) {
+      xhr.setRequestHeader(name, value);
+    }
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress?.(Math.min(1, event.loaded / event.total));
+      }
+    });
+    xhr.addEventListener("load", () => {
+      settle(() => {
+        const text = xhr.responseText;
+        const decoded = decode(text);
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const error = new ApiError(
+            "http",
+            `POST ${url} answered ${xhr.status}`,
+            {
+              status: xhr.status,
+              body: decoded.ok ? decoded.value : text,
+              retryAfter: parseRetryAfter(xhr.getResponseHeader("Retry-After")),
+            },
+          );
+          if (xhr.status === 401) {
+            for (const listener of [...unauthorizedListeners]) listener(error);
+          }
+          reject(error);
+          return;
+        }
+        if (!decoded.ok) {
+          reject(
+            new ApiError(
+              "parse",
+              `POST ${url} returned a body that is not JSON`,
+              {
+                status: xhr.status,
+                body: text,
+              },
+            ),
+          );
+          return;
+        }
+        if (!validate) {
+          resolve(decoded.value as T);
+          return;
+        }
+        try {
+          resolve(validate(decoded.value));
+        } catch (error) {
+          reject(
+            new ApiError("parse", `POST ${url} returned an unexpected body`, {
+              status: xhr.status,
+              body: decoded.value,
+              cause: error,
+            }),
+          );
+        }
+      });
+    });
+    xhr.addEventListener("error", () => {
+      settle(() => {
+        reject(new ApiError("network", `could not reach ${url}`));
+      });
+    });
+    xhr.addEventListener("timeout", () => {
+      settle(() => {
+        reject(
+          new ApiError(
+            "timeout",
+            `no answer from ${url} within ${xhr.timeout} ms`,
+          ),
+        );
+      });
+    });
+    xhr.addEventListener("abort", () => {
+      settle(() => {
+        reject(
+          new ApiError("aborted", "upload cancelled", {
+            cause: signal?.reason,
+          }),
+        );
+      });
+    });
+    signal?.addEventListener("abort", onCallerAbort, { once: true });
+    xhr.send(file);
+  });
+}
+
 export interface Health {
   status: "ok";
 }
