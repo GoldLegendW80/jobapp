@@ -191,6 +191,14 @@ def mark_success(session: Session, attempt_id: int) -> None:
     )
 
 
+def forget(session: Session, attempt_id: int) -> None:
+    """Remove a reserved attempt whose password was never tested, because the api had no slot
+    free to verify it (503, issue #108). Like a refused attempt (429) it must not count: the
+    caller did nothing wrong, and a busy moment must not bring anyone closer to a lockout. The
+    caller commits."""
+    session.execute(sa.delete(LoginAttempt).where(LoginAttempt.id == attempt_id))
+
+
 def failures_in_window(
     session: Session, now: datetime, *, email: str | None = None, ip: str | None = None
 ) -> int:

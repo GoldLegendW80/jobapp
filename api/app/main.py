@@ -27,6 +27,7 @@ from app.identity import deps as identity_deps
 from app.identity import service as identity_service
 from app.identity import throttle as identity_throttle
 from app.identity.admin_router import router as admin_router
+from app.identity.hash_slots import HashBusyError
 from app.identity.router import router as auth_router
 from app.ingestion.routers import no_store as ingestion_no_store
 from app.ingestion.routers import private as ingestion_private
@@ -187,6 +188,16 @@ def create_app(
         headers = {"Cache-Control": "no-store"} if ingestion_private(request.url.path) else None
         return JSONResponse(
             status_code=500, content={"detail": "internal server error"}, headers=headers
+        )
+
+    @app.exception_handler(HashBusyError)
+    async def hash_busy(_: Request, exc: HashBusyError) -> JSONResponse:
+        # The identity routes answer this themselves; this is the net under any other caller
+        # of a password hash, so a busy moment is never a 500.
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "The server is busy. Try again in a moment."},
+            headers={"Retry-After": str(exc.retry_after), "Cache-Control": "no-store"},
         )
 
     @app.exception_handler(RequestValidationError)
