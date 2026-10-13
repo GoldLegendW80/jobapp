@@ -261,6 +261,9 @@ class Parsed:
     truncated: bool = False
     notes: tuple[Note, ...] = ()
     images: tuple[PageImage, ...] = ()
+    # What the child said its run cost (CPU milliseconds, highest resident memory and highest
+    # address space in kB), None when it said nothing. For the log and the measurements only.
+    usage: Mapping[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -378,8 +381,20 @@ def check_header(line: bytes) -> int:
 
 _FAILURE_KEYS = frozenset({"ok", "failure", "code"}) | NOTE_VALUES
 _RESULT_KEYS = frozenset(
-    {"ok", "kind", "text", "pages", "pages_text", "pages_image", "truncated", "notes", "images"}
+    {
+        "ok",
+        "kind",
+        "text",
+        "pages",
+        "pages_text",
+        "pages_image",
+        "truncated",
+        "notes",
+        "images",
+        "usage",
+    }
 )
+_USAGE_KEYS = frozenset({"cpu_ms", "max_rss_kb", "max_vm_kb"})
 _IMAGE_KEYS = frozenset({"position", "width", "height", "jpeg"})
 # Base64 of MAX_IMAGE_BYTES: checked on the text before anything is decoded.
 _MAX_IMAGE_BASE64 = (MAX_IMAGE_BYTES + 2) // 3 * 4
@@ -455,6 +470,14 @@ def _images(value: Any) -> tuple[PageImage, ...]:
     return tuple(images)
 
 
+def _usage(value: Any) -> Mapping[str, int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != _USAGE_KEYS:
+        _bad("usage")
+    return MappingProxyType({name: _integer(value[name], 0, 10**10, "usage") for name in value})
+
+
 def check_parsed(answer: Any, kind: str) -> Parsed:
     """The result an answer holds, or the error it stands for. Nothing of `answer` is trusted:
     this is the one door through which a parser's words enter the application."""
@@ -497,6 +520,7 @@ def check_parsed(answer: Any, kind: str) -> Parsed:
         truncated=truncated,
         notes=_notes(answer.get("notes", [])),
         images=_images(answer.get("images", [])),
+        usage=_usage(answer.get("usage")),
     )
 
 

@@ -388,6 +388,8 @@ def _store_text(
             secret_rules=secret_rules,
             attempts=claim.attempts,
             ms=int((time.monotonic() - started) * 1000),
+            # What the parser's child said the reading cost: the figures its limits are set by.
+            **{f"child_{name}": value for name, value in (parsed.usage or {}).items()},
         )
         db.commit()
     return DONE

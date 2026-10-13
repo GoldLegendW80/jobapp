@@ -387,12 +387,13 @@ def pdf_with_zip_tail() -> bytes:
 
 
 def slow_pdf(pages: int, operators: int) -> bytes:
-    """`pages` pages that all show the same content stream of `operators` text operators,
-    stored once and deflated: a small file that takes its time, page after page."""
+    """`pages` pages that all show the same content stream: a line of text, then `operators`
+    strokes that draw nothing. Stored once and deflated: a small file that takes its time, page
+    after page, and gives one line of text for each."""
     pdf = Built()
     font = pdf.add(FONT)
     tree = pdf.reserve()
-    body = b"BT /F1 6 Tf 56 780 Td " + b"(slow) Tj 1 0 Td " * operators + b"ET"
+    body = lines(SENTENCE) + b" " + b"0 0 m 9 9 l S " * operators
     content = pdf.stream(body, compress=True)
     kids = [
         pdf.add(
@@ -401,9 +402,40 @@ def slow_pdf(pages: int, operators: int) -> bytes:
         )
         for _ in range(pages)
     ]
-    pdf.objects[tree] = (
-        b"<< /Type /Pages /Count %d /Kids [" % pages
-        + b" ".join(b"%d 0 R" % k for k in kids)
-        + b"] >>"
-    )
+    listed = b" ".join(b"%d 0 R" % kid for kid in kids)
+    pdf.objects[tree] = b"<< /Type /Pages /Count %d /Kids [%s] >>" % (pages, listed)
     return pdf.write(pdf.add(b"<< /Type /Catalog /Pages %d 0 R >>" % tree))
+
+
+def endless_page(invocations: int = 4000, operators: int = 20_000) -> tuple[bytes, bytes]:
+    """A page that takes minutes to read and stays far under every size limit: its content
+    draws one form `invocations` times, and the form holds `operators` text operators. Returns
+    the form (an object for `build(extra_objects=...)`, the first one) and the page's content."""
+    body = zlib.compress(b"BT /F1 6 Tf " + b"(slow) Tj 1 0 Td " * operators + b"ET", 9)
+    form = (
+        b"<< /Type /XObject /Subtype /Form /BBox [0 0 595 842] /Filter /FlateDecode "
+        b"/Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> "
+        b"/Length %d >>\nstream\n" % len(body) + body + b"\nendstream"
+    )
+    return form, b"q /X Do Q " * invocations
+
+
+def one_endless_page_pdf() -> bytes:
+    """A page of text, a page that never ends, a page of text."""
+    form, content = endless_page()
+    return build(
+        [
+            page_text(1, 12),
+            Page(content, compress=True, extra=b"/Marker 1"),
+            page_text(3, 12),
+        ],
+        extra_objects=[form],
+        fonts=b"<< /Font << /F1 2 0 R >> /XObject << /X 1 0 R >> >>",
+    )
+
+
+def memory_hungry_pdf(operators: int = 2_000_000) -> bytes:
+    """One page whose content stream stays under the size a stream may inflate to (28 MB of
+    it) and is nothing but operators: pypdf keeps every one of them as objects, a gigabyte of
+    them, far past the memory a child may have."""
+    return build([Page(lines(SENTENCE) + b" " + b"0 0 m 9 9 l S " * operators, compress=True)])
