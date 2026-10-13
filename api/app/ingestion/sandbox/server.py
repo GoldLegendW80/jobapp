@@ -63,6 +63,12 @@ MIB = 1024 * 1024
 MAX_HEADER = 4096
 MAX_SIZE = 20 * MIB
 MAX_ANSWER = 4 * MIB
+# What is read, and dropped, from the pipe of a child once it is dead: what the kernel still
+# held for it (64 KiB by default, 1 MiB at most for a process without privileges,
+# fs.pipe-max-size) and what the reader had taken ahead (under 400 KiB). Nothing writes to the
+# pipe of a dead child, so more than this means the pipe has another writer: reading stops.
+DRAIN_MAX = 2 * MIB
+REAP_POLL_S = 0.01
 READ_TIMEOUT_S = 10.0  # silence on a connection
 REQUEST_S = 60.0  # a whole request, however slowly it trickles in
 WALL_S = 60.0  # a child, from its start to its end
@@ -148,10 +154,13 @@ class ClientGoneError(Exception):
 class Outcome:
     """How a job ended: `code` (ok, or why there is no answer), and the child's answer."""
 
-    __slots__ = ("body", "code", "ms", "status")
+    __slots__ = ("body", "code", "ms", "read", "status")
 
-    def __init__(self, code: str, body: bytes = b"", status: int | None = None, ms: int = 0):
+    def __init__(
+        self, code: str, body: bytes = b"", status: int | None = None, ms: int = 0, read: int = 0
+    ):
         self.code, self.body, self.status, self.ms = code, body, status, ms
+        self.read = read  # the bytes read from the child's output, kept or not
 
 
 def log(event: str, **fields: object) -> None:
@@ -284,8 +293,18 @@ class Server:
             del data
         finally:
             self.jobs -= 1
+        # `status` is how the child ended (0, its exit status, minus the signal that killed
+        # it) and `read` how much of its output was read: the record that a child past a
+        # limit was killed, and not read to its end.
         self.log(
-            "job", kind=kind, size=size, code=outcome.code, ms=outcome.ms, out=len(outcome.body)
+            "job",
+            kind=kind,
+            size=size,
+            code=outcome.code,
+            ms=outcome.ms,
+            out=len(outcome.body),
+            status=outcome.status,
+            read=outcome.read,
         )
         await self.answer(writer, outcome)
 
@@ -360,14 +379,37 @@ class Server:
                 stdin.close()
                 await stdin.wait_closed()
 
+        read = 0
+
         async def collect() -> bytes | None:
+            nonlocal read
             chunks, total = [], 0
             while chunk := await stdout.read(1 << 16):
                 total += len(chunk)
+                read += len(chunk)
                 if total > self.max_answer:
                     return None
                 chunks.append(chunk)
             return b"".join(chunks)
+
+        async def reap() -> None:
+            nonlocal read
+            # The process first: not a byte more is read until it is dead, so it is the kill
+            # that ends a child past the cap or the clock, never this service reading on
+            # whatever it writes. `returncode` is set when the loop has reaped the process,
+            # whatever its pipes (Process.wait() waits for the pipes as well).
+            while proc.returncode is None:  # noqa: ASYNC110, asyncio has no event for it
+                await asyncio.sleep(REAP_POLL_S)
+            # Then what it left in the pipe. Past its buffer limit asyncio stops reading a
+            # pipe nobody reads and never sees its end, and Process.wait() would wait for
+            # ever, the job with it (issue #104). So the pipe is read to its end, nothing of
+            # it is kept, and DRAIN_MAX bounds it by what a dead child can have left, not by
+            # what a child wrote.
+            drained = 0
+            while drained <= DRAIN_MAX and (chunk := await stdout.read(1 << 16)):
+                drained += len(chunk)
+            read += drained
+            await proc.wait()
 
         feeding = asyncio.ensure_future(feed())
         code, body = "wall_limit", b""
@@ -388,7 +430,7 @@ class Server:
                     proc.kill()
             feeding.cancel()
             await asyncio.gather(feeding, return_exceptions=True)
-            await asyncio.shield(proc.wait())
+            await asyncio.shield(reap())
         status = proc.returncode
         if code == "ok" and status != 0:
             body = b""
@@ -398,7 +440,7 @@ class Server:
                 code = "cpu_limit"
             else:
                 code = "crashed"
-        return Outcome(code, body, status, int((time.monotonic() - started) * 1000))
+        return Outcome(code, body, status, int((time.monotonic() - started) * 1000), read)
 
     # --- answers ----------------------------------------------------------------------------
 

@@ -9,6 +9,7 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -61,24 +62,30 @@ def alice_id(factory: sessionmaker[Session], keyring: Keyring) -> uuid.UUID:
 
 
 class Hung(RecordingStore):
-    """A store that never answers: every call waits until it is cancelled."""
+    """A store that never answers: every call waits until it is cancelled. It keeps what a bound
+    on its cost needs, and no clock: how many calls and, when given `status`, the status of the
+    run at the moment of each call."""
 
-    def __init__(self) -> None:
+    def __init__(self, status: Callable[[uuid.UUID], RunStatus] | None = None) -> None:
         super().__init__()
         self.calls = 0
+        self.statuses: list[RunStatus] = []
+        self._status = status
 
-    async def _never(self) -> None:
+    async def _never(self, run_id: uuid.UUID) -> None:
         self.calls += 1
+        if self._status is not None:
+            self.statuses.append(self._status(run_id))
         await asyncio.Event().wait()
 
     async def open(self, run_id: uuid.UUID, block: int, after: int, previous: int | None) -> None:
-        await self._never()
+        await self._never(run_id)
 
     async def append(self, run_id: uuid.UUID, block: int, text: str) -> None:
-        await self._never()
+        await self._never(run_id)
 
     async def clear(self, run_id: uuid.UUID, block: int | None) -> None:
-        await self._never()
+        await self._never(run_id)
 
 
 # --- point 2: the per agent switch --------------------------------------------------------------
@@ -457,7 +464,10 @@ def test_a_run_on_a_store_that_never_answers_keeps_its_speed(
     its status is stored, adds at most two timeouts and the retry pause. Before issue #80 the
     same run waited up to two timeouts per block: 3.6 s here. The bound is held by the number
     of times the store was called, never by a clock: durations on a loaded machine prove
-    nothing (issue #90, point 5)."""
+    nothing (issue #90, point 5). The store also notes the status of the run at each call, so
+    the order is held too: one attempt while the run is running, then the end of the run. The
+    back off is set far above what a run can last on a starved machine, so that the single
+    attempt of a running run is not decided by a clock either (issue #104)."""
     timeout, blocks = 0.3, 6
     said = [assistant(text(f"Part {number} of the answer. " * 4)) for number in range(blocks)]
     name = script("sixblocks", [*said, result("Done.")], chars=40, sleep=0.0)
@@ -465,18 +475,29 @@ def test_a_run_on_a_store_that_never_answers_keeps_its_speed(
     def run(store: live.LiveStore | None) -> uuid.UUID:
         run_id = new_run(factory, alice_id, {"message": "x", "script": name})
         rc = context(settings, factory, keyring, Backends(speed=0.0), max_turns=4)
-        rc = replace(rc, live_store=store, live_flush_s=0.0, live_timeout_s=timeout)
+        rc = replace(
+            rc,
+            live_store=store,
+            live_flush_s=0.0,
+            live_timeout_s=timeout,
+            live_backoff_s=live.WRITE_BACKOFF_MAX_S,
+        )
         assert execute(rc, run_id) is RunStatus.done
         assert run_row(factory, run_id).finished_at is not None
         return run_id
 
     plain_id = run(None)
-    hung = Hung()
+    hung = Hung(status=lambda run_id: run_row(factory, run_id).status)
     with caplog.at_level(logging.WARNING):
         hung_id = run(hung)
     # One attempt in the run, two at its end: each waits one timeout at most, so the whole
     # cost is three timeouts whatever the number of blocks.
     assert 1 <= hung.calls <= 1 + 2
+    # And in that order: one attempt while the run is running, the others once its status is
+    # stored. Every call noted a status, so none was made that this list does not hold.
+    assert hung.statuses[0] is RunStatus.running
+    assert hung.statuses[1:] in ([RunStatus.done], [RunStatus.done] * 2)
+    assert hung.calls == len(hung.statuses)
     assert stored(factory, hung_id) == stored(factory, plain_id)  # and the run is the same
     assert caplog.text.count("live text not published") == 1
 

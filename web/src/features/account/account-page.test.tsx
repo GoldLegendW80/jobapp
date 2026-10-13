@@ -169,10 +169,9 @@ describe("change password card", () => {
   });
 
   it("after a 429 shows the message and waits out Retry-After with a countdown", async () => {
-    vi.useFakeTimers({
-      shouldAdvanceTime: true,
-      toFake: ["setInterval", "clearInterval", "Date"],
-    });
+    // The clock and the tick of the countdown stand still until the test moves them (issue
+    // #104): with shouldAdvanceTime a second of real time was a second less on the button.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     try {
       const detail =
         "Too many attempts with a wrong current password. Try again in 15 minutes.";
