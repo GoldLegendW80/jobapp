@@ -396,7 +396,7 @@ describe("job detail: chat panel", () => {
   );
 
   const HOLDING =
-    "Your message is sent as soon as the answer is complete. Clear it to cancel.";
+    "Your message will be sent when the answer is complete. Edit or clear it to cancel.";
 
   /** The answer of the chat of `answering()` is stored and its run ends. */
   function settle(
@@ -442,14 +442,136 @@ describe("job detail: chat panel", () => {
     expect(within(chat.panel).getByText(HOLDING)).toBeInTheDocument();
     await chat.user.clear(composer());
     expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
-    // What is typed next is a new draft: Enter was not pressed for it.
-    await chat.user.type(composer(), "Second idea");
+    // What is typed next, even the same words, is a new draft: Enter was not pressed for it.
+    await chat.user.type(composer(), "First idea");
     settle(chat);
     await waitFor(() => {
       expect(sendButton()).toBeEnabled();
     });
     expect(chat.state.sends).toEqual([]);
-    expect(composer()).toHaveValue("Second idea");
+    expect(composer()).toHaveValue("First idea");
+  });
+
+  it("drops the hold on any edit after Enter: it is sent only by an Enter on that exact text", async () => {
+    const chat = await answering();
+    await chat.user.type(composer(), "First idea{Enter}");
+    expect(within(chat.panel).getByText(HOLDING)).toBeInTheDocument();
+    await chat.user.type(composer(), " and a second one");
+    expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
+    settle(chat);
+    await waitFor(() => {
+      expect(sendButton()).toBeEnabled();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chat.state.sends).toEqual([]);
+    expect(composer()).toHaveValue("First idea and a second one");
+    // His Enter, on the text as it stands now, sends it.
+    await chat.user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(chat.state.sends).toEqual(["First idea and a second one"]);
+    });
+  });
+
+  /** The send of the first message of a chat whose conversation exists, held back until released. */
+  function slowSend(state: ReturnType<typeof fakeApi>, fails = false) {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.post(
+        `*/api/agents/threads/${THREAD}/messages`,
+        async ({ request }) => {
+          const body = (await request.json()) as { text: string };
+          state.sends.push(body.text);
+          await gate;
+          if (fails) {
+            return HttpResponse.json({ detail: "Broken." }, { status: 500 });
+          }
+          const sent = message(state.nextId++, "user", body.text, {
+            run_id: RUN_1,
+            run_status: "queued",
+          });
+          state.messages = [...state.messages, sent];
+          state.active = RUN_1;
+          return HttpResponse.json(
+            { message: sent, run: run(RUN_1) },
+            { status: 202 },
+          );
+        },
+      ),
+    );
+    return release;
+  }
+  const HOLD_HINT = /will be sent when/;
+
+  // Review of PR #160, B1: a second Enter while the first send is still on its way repeats a
+  // message already sent. It must not arm a hold that would send the next draft by itself.
+  it("does not hold a second Enter pressed while the send is in flight, nor send the next draft by itself", async () => {
+    const state = fakeApi({ thread: true });
+    const release = slowSend(state);
+    const { user, panel } = await openChat(`/jobs/${JOB}?chat=open`);
+    await waitFor(() => {
+      expect(composer()).toBeEnabled();
+    });
+    await user.type(composer(), "First question{Enter}");
+    await waitFor(() => {
+      expect(state.sends).toEqual(["First question"]);
+    });
+    await user.keyboard("{Enter}");
+    expect(within(panel).queryByText(HOLD_HINT)).not.toBeInTheDocument();
+    release();
+    await waitFor(() => {
+      expect(composer()).toHaveValue("");
+    });
+    await waitFor(() => {
+      expect(streamOf(RUN_1)).toBeDefined();
+    });
+    await user.type(composer(), "half typed tho");
+    expect(within(panel).queryByText(HOLD_HINT)).not.toBeInTheDocument();
+    // The answer completes.
+    state.messages = [
+      ...state.messages.map((m) => ({ ...m, run_status: "done" as const })),
+      message(300, "assistant", "Done."),
+    ];
+    state.active = null;
+    act(() => {
+      streamOf(RUN_1)!.open();
+      streamOf(RUN_1)!.emit("step", {
+        seq: 1,
+        at: "2026-10-10T08:00:01Z",
+        kind: "status",
+        data: { status: "done" },
+      });
+    });
+    await waitFor(() => {
+      expect(sendButton()).toBeEnabled();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(state.sends).toEqual(["First question"]);
+    expect(composer()).toHaveValue("half typed tho");
+  });
+
+  it("does not send again by itself a message whose send failed after a second Enter", async () => {
+    const state = fakeApi({ thread: true });
+    const release = slowSend(state, true);
+    const { user, panel } = await openChat(`/jobs/${JOB}?chat=open`);
+    await waitFor(() => {
+      expect(composer()).toBeEnabled();
+    });
+    await user.type(composer(), "First question{Enter}");
+    await waitFor(() => {
+      expect(state.sends).toEqual(["First question"]);
+    });
+    await user.keyboard("{Enter}");
+    release();
+    await waitFor(() => {
+      expect(sendButton()).toBeEnabled(); // the send failed, the draft is kept
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(state.sends).toEqual(["First question"]);
+    expect(composer()).toHaveValue("First question");
+    expect(within(panel).queryByText(HOLD_HINT)).not.toBeInTheDocument();
   });
 
   it("sends a message entered while the conversation loads, once it has loaded", async () => {
@@ -473,7 +595,7 @@ describe("job detail: chat panel", () => {
     expect(composer()).toHaveValue("Hello");
     expect(
       within(panel).getByText(
-        "Your message is sent as soon as the conversation has loaded. Clear it to cancel.",
+        "Your message will be sent when the conversation has loaded. Edit or clear it to cancel.",
       ),
     ).toBeInTheDocument();
     release();
