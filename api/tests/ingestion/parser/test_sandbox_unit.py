@@ -10,6 +10,7 @@ import ast
 import ctypes
 import errno
 import json
+import os
 import struct
 import sys
 from pathlib import Path
@@ -486,7 +487,7 @@ def test_the_report_of_a_process_that_is_not_locked_down_shows_it() -> None:
     plan, the parent can be read, and the judgement of the service says so. A healthcheck that
     passed on this would prove nothing."""
     libc = main.load_libc()
-    machine = __import__("os").uname().machine
+    machine = os.uname().machine
     before, _ = main.open_descriptors()
     report = main.sandbox_report("ping", libc, machine, main.received_environment())
     assert main.open_descriptors()[0] == before, "a probe left a descriptor open"
@@ -498,14 +499,16 @@ def test_the_report_of_a_process_that_is_not_locked_down_shows_it() -> None:
     assert report["limits"] != main.LIMITS["ping"]
     assert report["dumpable"] == 1
     assert report["environ"] > 0
-    assert report["parent_hidden"] is False
+    # The parent of the test process is readable where it has one of its own uid (a shell, the
+    # test runner); started by `docker exec` it has none inside the container.
+    assert report["parent_hidden"] is not Path(f"/proc/{os.getppid()}/environ").exists()
     assert report["cryptography_blocked"] is False
-    assert report["kernel"] == __import__("os").uname().release
+    assert report["kernel"] == os.uname().release
     problems = server.sandbox_problems(report)
     for expected in ("allowed:kill", "allowed:socket", "allowed:execve", "limits", "dumpable"):
         assert expected in problems
     assert "environ" in problems
-    assert "parent_hidden" in problems
+    assert ("parent_hidden" in problems) is not report["parent_hidden"]
 
 
 @linux
@@ -513,7 +516,7 @@ def test_a_ping_in_a_process_that_is_not_locked_down_counts_and_hashes_its_bytes
     import hashlib
 
     libc = main.load_libc()
-    answer = main.ping("ping", b"abc", libc, __import__("os").uname().machine, 0)
+    answer = main.ping("ping", b"abc", libc, os.uname().machine, 0)
     assert answer["ok"] is True
     assert answer["kind"] == "ping"
     assert answer["received"] == 3

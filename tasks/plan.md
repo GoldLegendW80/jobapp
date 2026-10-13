@@ -151,6 +151,16 @@ Idle RAM after the crash tests and a live restore, `docker stats --no-stream`:
 Host `free -m`: 1530M used of 7619M, 5805M available, swap unused. Success criterion 5 (idle
 stack under 1G) holds with a wide margin.
 
+Ingestion G2a, 2026-10-13, the `parser` service (`mem_limit` 640m). Measured on the Mac (M4, Docker
+Desktop 27.4, kernel 6.10.14, arm64); the Jetson's column is filled by the orchestrator from
+`tests/ingestion_parser_jetson.sh` after the first deploy.
+
+| Service | Idle, Mac | Idle, Jetson | Limit |
+|---|---|---|---|
+| parser | 18.4MiB (`docker stats`), one Python process | to measure | 640MiB |
+
+Sum of the limits of compose.yml with it: 3968MiB.
+
 ## Open questions
 
 None blocking. Human prerequisites are tracked in tasks 4 and 7.
