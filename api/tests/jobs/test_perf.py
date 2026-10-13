@@ -41,6 +41,12 @@ ROUNDS = 7
 # on that machine: about 40 for the list and 80 for the places, where the budget was 150.
 LIST_RATIO = 4.0
 PLACES_RATIO = 10.0
+# The ratio is blind to a cost added to every request: it raises the baseline with the rest,
+# and with 130 ms of fixed cost the list would pass until about 600 ms. So an absolute
+# ceiling stands beside it, on the same best of ROUNDS: ten times the old budget of 150 ms,
+# far above what a loaded machine adds to the 40 and 80 ms measured, and still under a
+# request that takes seconds (PR #156, N3).
+CEILING_MS = 1_500.0
 WORDS = ["agent", "engineer", "platform", "data", "ml", "applied", "ai", "backend", "forward"]
 
 
@@ -161,6 +167,7 @@ def test_list_over_5000_rows(
         + ", ".join(f"{ratio:.2f}" for ratio in ratios)
     )
     assert max(ratios) < LIST_RATIO, (baseline, over_the_volume)
+    assert max(baseline, *over_the_volume) < CEILING_MS, (baseline, over_the_volume)
 
 
 PLACED = ["Paris, France", "London", "Berlin, Germany", "Remote, United States", "Zürich",
@@ -206,3 +213,4 @@ def test_places_over_5000_rows(api: Api, factory: sessionmaker[Session]) -> None
         f"over {ROWS}, ratio {cost / baseline:.2f}"
     )
     assert cost / baseline < PLACES_RATIO, (baseline, cost)
+    assert max(baseline, cost) < CEILING_MS, (baseline, cost)
