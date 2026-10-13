@@ -655,9 +655,27 @@ def listen(stage: Stage, run_id: uuid.UUID, seconds: float) -> list[Parsed]:
     return seen
 
 
+def listen_while_polled(stage: Stage, run_id: uuid.UUID, watch: Watch) -> tuple[list[Parsed], int]:
+    """One connection to the stream of a running run, and how many times Redis was asked for
+    its live text meanwhile. Reading again and again within ONE connection is what is looked
+    for (a single read at the connection would not show the text as it is written), and it is
+    waited for, not timed: a machine too loaded to poll three times in a window gets another
+    window, up to a deadline no polling stream misses. How often the stream polls is a setting
+    (`transient_interval_s`), which no assertion here turns into a rate."""
+    deadline = time.monotonic() + 60
+    while True:
+        before = len(watch.named("get"))
+        found = listen(stage, run_id, 1.2)
+        reads = len(watch.named("get")) - before
+        if reads >= 3 or time.monotonic() > deadline:
+            return found, reads
+
+
 def test_the_stream_reads_redis_only_while_the_run_is_running(stage: Stage, redis_url: str) -> None:
     """Queued, running without a block, running with one, ended: what the stream asks Redis in
-    each state, counted by Redis. The stage polls its transient source every 20 ms."""
+    each state, counted by Redis. The stage polls its transient source every 20 ms. Not at all
+    before the run is claimed, again and again while it runs, not at all once it has ended:
+    the two zeros are exact, the count in between is not a rate."""
     run_id = stage.run()
     key = live.RedisLiveStore.meta_key(run_id)
     # Queued: a buffer under the run's key (left by anything) is not even looked at.
@@ -672,15 +690,15 @@ def test_the_stream_reads_redis_only_while_the_run_is_running(stage: Stage, redi
     with stage.factory() as db, db.begin():
         runs.claim(db, run_id, now())
     with Watch(redis_url, key) as idle:
-        found = listen(stage, run_id, 1.2)
+        found, reads = listen_while_polled(stage, run_id, idle)
     assert "partial" not in [name for name, _, _ in found]
-    assert len(idle.named("get")) >= 15
+    assert reads >= 3
     # Running, a block being written.
     write_stale(redis_url, run_id, after=1, text="being written")
     with Watch(redis_url, key) as writing:
-        found = listen(stage, run_id, 1.2)
+        found, reads = listen_while_polled(stage, run_id, writing)
     assert [data["text"] for name, _, data in found if name == "partial"] == ["being written"]
-    assert len(writing.named("get")) >= 15
+    assert reads >= 3
     # Ended: the stream closes without a look at Redis.
     with stage.factory() as db, db.begin():
         runs.finish(db, run_id, runs.Outcome(status=RunStatus.done), now())
