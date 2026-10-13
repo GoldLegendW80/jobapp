@@ -29,11 +29,13 @@
 # tests/local_check_test.sh fails when their spec files differ from those of ci.yml.
 #
 # Arrangement. Four lanes start together: api (its own Postgres and Redis containers on free
-# loopback ports), web (install, then lint, type check, vitest and build side by side), images
-# (buildx bake of api, worker and caddy under this check's own image names), checks. The journey
-# groups start when the images and the web install are done, each on a scratch stack of its own
-# (own project, own port, own database), LOCAL_CHECK_STACKS of them side by side (default: one
-# per 4 GiB of Docker memory, at most 4), with one Playwright worker each, as in CI.
+# loopback ports; ruff, the suite, the coverage floor), web (install, then lint, type check,
+# vitest and build side by side), images (api, worker and caddy built by compose under this
+# check's own image names), checks (the tests/*_test.sh side by side). The journey groups start
+# when the images and the web install are done, each on a scratch stack of its own (own project,
+# own port, own database), LOCAL_CHECK_STACKS of them side by side (default: one per 4 GiB of
+# Docker memory, at most 4), with one Playwright worker each, as in CI. When every lane has
+# ended, the tests that measure time run alone: the docker marked tests, then the scoring test.
 #
 # Safety of this machine:
 # - one check at a time: a lock in .local-check/ of the main checkout; a second call says who
@@ -216,6 +218,7 @@ cleanup() {
     # shellcheck disable=SC2086
     kill -KILL $pids 2>/dev/null
   fi
+  wait 2>/dev/null
   if [[ -n "$WORK" ]]; then
     # shellcheck disable=SC2086
     if docker_up; then remove_docker_things $pids; fi
@@ -418,11 +421,16 @@ lane_api() {
     return 0
   fi
   run_step ruff s_ruff || true
-  # The docker marked tests next to the suite: they share nothing with it (containers of their
-  # own, no coverage data). The scoring timing test after both, as alone as this lane can be.
-  run_step pytest-docker s_pytest_docker &
   if run_step pytest s_pytest; then run_step coverage s_coverage || true; fi
-  wait
+}
+
+# The tests that measure time: the docker marked tests (the parser's CPU and wall clock limits,
+# a paused database) and the scoring bound. They run alone, once every lane has ended. Next to
+# the suite and four journey stacks (load 15 on 12 cores, measured on 2026-10-13) two CPU limit
+# tests failed and two `docker run` of their own Postgres did; alone they pass.
+quiet_phase() {
+  [[ -f "$WORK/api.env" ]] || return 0 # the api lane already failed, with the reason
+  run_step pytest-docker s_pytest_docker || true
   run_step scoring s_scoring || true
 }
 
@@ -472,6 +480,7 @@ stack_files() {
 }
 
 s_images() {
+  local files=() one
   umask 077
   .github/scripts/ci_env.sh 8080 >.env
   if grep -q change-me .env; then
@@ -490,11 +499,12 @@ services:
   parser:
     image: $PREFIX-worker:latest
 EOF
-  # As the CI step, from compose.yml alone (bake does not read a second compose file the way
-  # compose does: "undefined network default"). The names of this check are given as tags.
-  docker buildx bake --progress=plain -f compose.yml --load \
-    --set "api.tags=$PREFIX-api:latest" --set "worker.tags=$PREFIX-worker:latest" \
-    --set "caddy.tags=$PREFIX-caddy:latest" api worker caddy
+  # CI built with `docker buildx bake -f compose.yml`. The bake of Docker Desktop on this Mac
+  # refuses that file ("service worker refers to undefined network default", measured on
+  # 2026-10-13), so the same three images are built by compose, which starts them below, under
+  # this check's names: the shared jobapp-*:latest tags are not written.
+  while IFS= read -r one; do files+=("$one"); done < <(stack_files)
+  docker compose --progress plain -p "$PREFIX-build" "${files[@]}" build api worker caddy
 }
 
 lane_images() {
@@ -650,6 +660,7 @@ real_plan() {
   fi
   for pid in "${pids[@]}"; do wait "$pid" || lanes_failed=1; done
   ((lanes_failed == 0)) || not_run lanes "a lane of the check ended early"
+  if wanted api; then quiet_phase; fi
 }
 
 tool_versions() {
