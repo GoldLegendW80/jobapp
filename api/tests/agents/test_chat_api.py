@@ -413,6 +413,7 @@ def test_thread_detail_is_one_snapshot_when_a_send_commits_meanwhile(
     user = user_id(api, alice)
     original = chat.active_run
     sent: list[uuid.UUID] = []
+    levels: list[str | None] = []
     calls = 0
 
     def active_run_after_a_send(db: Session, thread_id: uuid.UUID) -> AgentRun | None:
@@ -421,6 +422,8 @@ def test_thread_detail_is_one_snapshot_when_a_send_commits_meanwhile(
         nonlocal calls
         calls += 1
         if calls == 1:
+            # Inside the detail read: one snapshot for all of its statements.
+            levels.append(db.scalar(sa.text("SHOW transaction_isolation")))
             with factory() as other:
                 row = chat.get_thread(other, user, uuid.UUID(thread), lock=True)
                 assert row is not None
@@ -433,6 +436,12 @@ def test_thread_detail_is_one_snapshot_when_a_send_commits_meanwhile(
     detail = api.get(f"{THREADS}/{thread}", token=alice).json()
     monkeypatch.setattr(chat, "active_run", original)
     assert len(sent) == 1
+    assert levels == ["repeatable read"]
+    # And after it: the level was the read's own, the connections of the pool are back at the
+    # default for whoever takes one next (the api's own pool is read through the same route).
+    for _ in range(3):
+        with factory() as db:
+            assert db.scalar(sa.text("SHOW transaction_isolation")) == "read committed"
     assert detail["messages"] == []
     assert detail["messages_truncated"] is False
     assert detail["active_run_id"] is None

@@ -9,7 +9,13 @@ import { makeDetail } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-import type { ChatMessage, Thread, ThreadDetail } from "./chat-api";
+import {
+  jobThreadKey,
+  threadKey,
+  type ChatMessage,
+  type Thread,
+  type ThreadDetail,
+} from "./chat-api";
 import type { Run } from "./runs-api";
 
 const JOB = "00000000-0000-4000-9000-000000000001";
@@ -236,13 +242,13 @@ describe("job detail: chat panel", () => {
     expect(state.opens).toBe(1);
     expect(await within(panel).findByText("Does it fit?")).toBeInTheDocument();
     expect(composer()).toHaveValue("");
-    // While the answer is pending: Send is disabled and Enter does nothing.
-    await user.type(composer(), "Next question{Enter}");
+    // While the answer is pending: Send is disabled, and the hint says what Enter will do.
+    await user.type(composer(), "Next question");
     expect(state.sends).toHaveLength(1);
     expect(sendButton()).toBeDisabled();
     expect(
       within(panel).getByText(
-        "Wait for the answer before sending the next message.",
+        "Enter sends your message once the answer is complete.",
       ),
     ).toBeInTheDocument();
 
@@ -388,6 +394,180 @@ describe("job detail: chat panel", () => {
       expect(sendButton()).toBeDisabled();
     },
   );
+
+  const HOLDING =
+    "Your message is sent as soon as the answer is complete. Clear it to cancel.";
+
+  /** The answer of the chat of `answering()` is stored and its run ends. */
+  function settle(
+    chat: Awaited<ReturnType<typeof answering>>,
+    answer = "It fits.",
+  ) {
+    chat.state.messages = [
+      ...chat.state.messages.map((m) =>
+        m.id === 3 ? { ...m, run_status: "done" as const } : m,
+      ),
+      message(4, "assistant", answer),
+    ];
+    chat.state.active = null;
+    chat.emit("step", chat.stepOf(9, "status", { status: "done" }));
+  }
+
+  // Issue #37: the composer is enabled while an answer is pending and while it is being
+  // settled (the answer is on screen, the thread's read is still out). Enter was dropped
+  // there, silently. It now holds the message, which goes out when the answer is complete.
+  it("holds a message sent with Enter while an answer is pending, and sends it afterwards", async () => {
+    const chat = await answering();
+    await chat.user.type(composer(), "And the salary?{Enter}");
+    expect(chat.state.sends).toEqual([]);
+    expect(composer()).toHaveValue("And the salary?");
+    expect(within(chat.panel).getByText(HOLDING)).toBeInTheDocument();
+    settle(chat);
+    await waitFor(() => {
+      expect(chat.state.sends).toEqual(["And the salary?"]);
+    });
+    await waitFor(() => {
+      expect(composer()).toHaveValue("");
+    });
+    expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
+    expect(
+      await within(chat.panel).findByText("And the salary?"),
+    ).toBeInTheDocument();
+    expect(chat.state.sends).toHaveLength(1); // once
+  });
+
+  it("holds the text as it is when the answer is complete, and nothing once it was cleared", async () => {
+    const chat = await answering();
+    await chat.user.type(composer(), "First idea{Enter}");
+    expect(within(chat.panel).getByText(HOLDING)).toBeInTheDocument();
+    await chat.user.clear(composer());
+    expect(within(chat.panel).queryByText(HOLDING)).not.toBeInTheDocument();
+    // What is typed next is a new draft: Enter was not pressed for it.
+    await chat.user.type(composer(), "Second idea");
+    settle(chat);
+    await waitFor(() => {
+      expect(sendButton()).toBeEnabled();
+    });
+    expect(chat.state.sends).toEqual([]);
+    expect(composer()).toHaveValue("Second idea");
+  });
+
+  it("sends a message entered while the conversation loads, once it has loaded", async () => {
+    const state = fakeApi({
+      thread: true,
+      messages: [message(1, "user", "Earlier question")],
+    });
+    let release = () => {};
+    const loaded = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("*/api/agents/threads", async () => {
+        await loaded;
+        return HttpResponse.json({ items: [thread] });
+      }),
+    );
+    const { user, panel } = await openChat(`/jobs/${JOB}?chat=open`);
+    await user.type(composer(), "Hello{Enter}");
+    expect(state.sends).toEqual([]);
+    expect(composer()).toHaveValue("Hello");
+    release();
+    await waitFor(() => {
+      expect(state.sends).toEqual(["Hello"]);
+    });
+    expect(await within(panel).findByText("Hello")).toBeInTheDocument();
+    expect(state.opens).toBe(0); // to the conversation that was loading, not a new one
+  });
+
+  // Issue #37, point 1: a read of the job's conversation that started before the first
+  // message (a refetch) and answers "none" after it must not bring the empty state back.
+  it("keeps the new conversation when an older read of the job's conversation answers late", async () => {
+    const state = fakeApi();
+    let reads = 0;
+    let release = () => {};
+    const late = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("*/api/agents/threads", async () => {
+        reads += 1;
+        if (reads !== 2)
+          return HttpResponse.json({ items: state.exists ? [thread] : [] });
+        await late;
+        return HttpResponse.json({ items: [] }); // as it was before the message
+      }),
+    );
+    const { user, app, panel } = await openChat();
+    await within(panel).findByTestId("chat-empty");
+    await waitFor(() => {
+      expect(composer()).toBeEnabled();
+    });
+    void app.client.refetchQueries({ queryKey: jobThreadKey(JOB), exact: true });
+    await waitFor(() => {
+      expect(reads).toBe(2);
+    });
+    await user.type(composer(), "Does it fit?{Enter}");
+    await waitFor(() => {
+      expect(composer()).toHaveValue("");
+    });
+    release();
+    await waitFor(() => {
+      expect(streamOf(RUN_1)).toBeDefined();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+    expect(within(panel).queryByTestId("chat-empty")).not.toBeInTheDocument();
+    expect(within(panel).getByText("Does it fit?")).toBeInTheDocument();
+    expect(within(panel).getByTestId("chat-live-reply")).toBeInTheDocument();
+    expect(app.client.getQueryData(jobThreadKey(JOB))).toEqual(thread);
+  });
+
+  // Issue #37, point 3: the conversation was deleted in another tab.
+  it("starts over when a send finds the conversation deleted somewhere else", async () => {
+    const state = fakeApi({
+      thread: true,
+      messages: [message(1, "user", "Earlier question")],
+    });
+    server.use(
+      http.post(`*/api/agents/threads/${THREAD}/messages`, () =>
+        HttpResponse.json(
+          { detail: "Conversation not found." },
+          { status: 404 },
+        ),
+      ),
+    );
+    const { user, panel } = await openChat(`/jobs/${JOB}?chat=open`);
+    await within(panel).findByText("Earlier question");
+    state.exists = false; // deleted in another tab
+    state.messages = [];
+    await user.type(composer(), "Still there?{Enter}");
+    expect(
+      await screen.findByText(
+        "This conversation was deleted. Send again to start a new one.",
+      ),
+    ).toBeInTheDocument();
+    // The empty state, not an error that only a reload clears, and the draft is kept.
+    expect(await within(panel).findByTestId("chat-empty")).toBeInTheDocument();
+    expect(within(panel).queryByText("Earlier question")).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/could not be loaded/i)).not.toBeInTheDocument();
+    expect(composer()).toHaveValue("Still there?");
+  });
+
+  it("shows the empty state when a read finds the conversation deleted somewhere else", async () => {
+    const state = fakeApi({
+      thread: true,
+      messages: [message(1, "user", "Earlier question")],
+    });
+    const { app, panel } = await openChat(`/jobs/${JOB}?chat=open`);
+    await within(panel).findByText("Earlier question");
+    state.exists = false;
+    state.messages = [];
+    void app.client.invalidateQueries({ queryKey: threadKey(THREAD) });
+    expect(await within(panel).findByTestId("chat-empty")).toBeInTheDocument();
+    expect(within(panel).queryByText(/could not be loaded/i)).not.toBeInTheDocument();
+    expect(app.client.getQueryData(jobThreadKey(JOB))).toBeNull();
+  });
 
   it("adds a line with Shift and Enter instead of sending", async () => {
     const state = fakeApi();
