@@ -146,6 +146,7 @@ def stack() -> Iterator[Stack]:
         if out and MEASURED:
             with open(out, "w", encoding="utf-8") as handle:
                 json.dump(MEASURED, handle, indent=2, sort_keys=True)
+                handle.write("\n")  # the end-of-file hook of pre-commit wants one
 
 
 @pytest.fixture(scope="module")
