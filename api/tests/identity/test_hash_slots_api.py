@@ -21,7 +21,15 @@ from app.identity.hash_slots import HashBusyError, HashSlots
 from app.identity.models import InviteKind, LoginAttempt, Role
 from app.identity.router import LOGIN_FAILED, SERVER_BUSY
 from tests.conftest import FAST_HASHER
-from tests.identity.api_helpers import CSRF, PASSWORD, Api, Clock, make_user, session_cookie
+from tests.identity.api_helpers import (
+    CSRF,
+    PASSWORD,
+    Api,
+    Clock,
+    issue_link,
+    make_user,
+    session_cookie,
+)
 from tests.identity.test_body_limit_api import Server
 
 WRONG = "not the password at all"
@@ -376,6 +384,70 @@ def test_accepting_a_link_with_no_slot_is_503_and_the_link_stays_usable(
     assert accepted.status_code == 200, accepted.text
     assert hasher.calls == 1
     assert api.post(path, json=body).status_code == 404  # used once
+
+
+# --- waiting for a slot holds no database connection -------------------------------------------
+
+
+def test_callers_waiting_for_a_slot_hold_no_database_connection(
+    app: FastAPI,
+    api: Api,
+    factory: sessionmaker[Session],
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The pool has 10 connections and 16 callers may wait 3 s each: a waiter that kept its
+    # connection would let a flood of sign ins stall every other request of the api. So the four
+    # kinds of waiters are parked on the slot together and the pool is read while they wait.
+    # Each one reaches the slot by a different road: the committed attempt of a sign in (known
+    # and unknown email), the session lookup plus the committed attempt of a password change,
+    # and the rollback after the link lookup of an acceptance.
+    use_hasher(monkeypatch)
+    slots = use_slots(monkeypatch, 1, 8, 20.0, 2)
+    changing = make_user(factory, email="e2e-changing@example.org")
+    guessed = make_user(factory, email="e2e-guessed@example.org")  # its own email lock
+    token = api.login_token(changing.email)
+    link = issue_link(factory, "e2e-invited@example.org", now=clock())
+    pool = app.state.engine.pool
+    assert pool.checkedout() == 0
+    waiters = {
+        "sign in, wrong password": lambda: api.login(guessed.email, WRONG),
+        "sign in, unknown account": lambda: api.login("e2e-nobody@example.org"),
+        "password change": lambda: api.post(
+            "/api/auth/password",
+            token=token,
+            json={"current_password": PASSWORD, "new_password": NEW},
+        ),
+        "link acceptance": lambda: api.post(
+            f"/api/auth/invites/{link}/accept", json={"password": NEW, "name": "Invited"}
+        ),
+    }
+
+    checked_out: list[int] = []
+    with ThreadPoolExecutor(max_workers=len(waiters)) as workers:
+        with occupied(slots):
+            futures = {name: workers.submit(call) for name, call in waiters.items()}
+            deadline = time.monotonic() + 10
+            while slots.waiting < len(waiters) and time.monotonic() < deadline:
+                time.sleep(0.005)
+            waiting_before = slots.waiting
+            for _ in range(20):
+                checked_out.append(pool.checkedout())
+                time.sleep(0.02)
+            waiting_after = slots.waiting
+        # The slot is free again: the four are served one after the other.
+        answers = {name: future.result(timeout=30) for name, future in futures.items()}
+
+    assert (waiting_before, waiting_after) == (4, 4)  # all four waited through every sample
+    assert checked_out == [0] * 20, checked_out
+    assert {name: answer.status_code for name, answer in answers.items()} == {
+        "sign in, wrong password": 401,
+        "sign in, unknown account": 401,
+        "password change": 204,
+        "link acceptance": 200,
+    }
+    assert (slots.held, slots.waiting, slots.refused) == (0, 0, 0)
+    assert pool.checkedout() == 0
 
 
 def test_a_stray_busy_error_is_a_503_never_a_500(
