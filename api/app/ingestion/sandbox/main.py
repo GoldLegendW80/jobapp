@@ -83,7 +83,7 @@ USAGE_EXIT = 64
 SANDBOX_EXIT = 70
 
 # Resource limits, soft and hard alike, but for the CPU. `as` starts at 512 MiB for every kind;
-# G2b and G8 set it per kind from the peak they measure.
+# G2b and G8 set it per kind from the peak they measure (below, after LIMITS).
 DEFAULT_LIMITS = {
     "as": 512 * MIB,
     "cpu": 45,
@@ -94,6 +94,12 @@ DEFAULT_LIMITS = {
     "msgqueue": 0,
 }
 LIMITS = {kind: dict(DEFAULT_LIMITS) for kind in HANDLERS}
+# The PDF text reader (G2b), measured in the service's container on 2026-10-13
+# (tasks/ingestion/todo.md, Measurements): the highest address space of a child was 95 MiB
+# (200 heavy pages stopped at the time budget), 71 MiB for a 20 MiB file, 52 to 70 MiB for PDFs
+# of 1 to 200 pages printed by a browser. 256 MiB is more than twice the worst of them; a file
+# that asks for more ends as `bomb`, with the service untouched.
+LIMITS["pdf_text"]["as"] = 256 * MIB
 # The hard CPU limit is one second above the soft one. At the soft limit the kernel sends
 # SIGXCPU, whose default action ends the process, and the server reports `cpu_limit`. The
 # kernel looks at the hard limit first, though: with both at 45 it would send SIGKILL straight
@@ -469,6 +475,27 @@ def ping(kind: str, data: bytes, libc, machine: str, environment: int) -> dict[s
     }
 
 
+def usage(field=status_field) -> dict[str, int]:
+    """What this process cost so far: CPU time, the highest resident memory (VmHWM) and the
+    highest address space (VmPeak, the figure RLIMIT_AS bounds), 0 where the system does not
+    say. Added to every answer that read a document: the worker logs it, and the limits of each
+    kind are set from what real documents cost (tasks/ingestion/todo.md, Measurements).
+
+    Not getrusage's ru_maxrss for the memory: on Linux that figure survives fork and execve, so
+    a child reports at least the highest the server ever reached (77 MiB for every job once the
+    server had held one 20 MiB document, measured in G2b). The two fields of /proc are those of
+    this process's own memory since it was executed."""
+    used = resource.getrusage(resource.RUSAGE_SELF)
+    found = {"cpu_ms": int((used.ru_utime + used.ru_stime) * 1000)}
+    for name, key in (("VmHWM", "max_rss_kb"), ("VmPeak", "max_vm_kb")):
+        try:
+            value = field(name).split(" ")[0]
+        except OSError:
+            value = ""
+        found[key] = int(value) if value.isdigit() else 0
+    return found
+
+
 def load_handler(kind: str, directory: str = HERE):
     """The `handle` function of the file that parses `kind`, or None when that file is not in
     `directory` yet. Loaded by its path, under the name of the table, so that nothing installed
@@ -562,6 +589,8 @@ def main(argv: list[str]) -> int:  # pragma: no cover
             answer = ping(kind, data, libc, machine, environment)
         else:
             answer = run_handler(kind, data, options)
+            if answer.get("ok") is True:
+                answer["usage"] = usage()
     del data
     sys.stdout.buffer.write(encode(answer))
     sys.stdout.buffer.flush()

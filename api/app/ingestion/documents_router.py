@@ -7,8 +7,14 @@ secret warning, delete (SPEC-ingestion.md, API; the rules are in documents.py).
   200 when this user already has the same file (`duplicate: true`, nothing written).
   413 over 20 MiB or over the user's 100 MB, 415 for a type that is not read, 422 for an empty
   file, a file without text or a 201st document, 408 when the body stalls, 400 when the client
-  goes away, 429 with Retry-After while another body of the same user is still on its way, 503
-  with Retry-After when both upload slots stay busy.
+  goes away, 429 with Retry-After while another body of the same user is still on its way or
+  when the user added too many files to read in a minute, 503 with Retry-After when both upload
+  slots stay busy.
+  A file that a reader must read (a PDF since G2b) is stored `pending`, and its reading is
+  queued once the transaction has committed and the turn and the slot are given back
+  (`_queue_reading`): the answer comes with the document still `pending`, and the list shows it
+  ready or failed a moment later. When the queue cannot take the job the document is failed at
+  once and the answer, still 201, says so in `failed_reason`.
 - POST /api/ingestion/documents/text {text, name?}: a pasted text, same answers (it takes no
   upload slot, so never 503); 413 over 100,000 characters.
 - GET /api/ingestion/documents: the caller's documents, newest first, what they take and the
@@ -53,6 +59,20 @@ a body of some size, one of them 20 MiB:
   such a body is dropped by the server as it arrives, in no buffer, holding no turn and no slot,
   and Caddy bounds it. The refusals that end a body which will never be whole (408, 400) close
   it, and so does the 413 of a file, which Caddy refuses itself before the api can.
+- A file that costs a reading is counted per user: READS_PER_MINUTE of them in any minute,
+  then 429 with Retry-After and a sentence naming the wait (`_read_rate`). Each reading is a
+  child process of the parser for up to a minute of its one job slot, which every user shares:
+  without this bound one account could keep the reader to itself. It is counted once the body
+  is whole and its first bytes say what it is, so a text file, which is read at once and costs
+  no job, is never counted, and a file refused for the rate has been uploaded for nothing:
+  the page says how long to wait. A duplicate counts too: it is told from a new file only
+  later, under the user's lock. What it leaves: the 200 documents an account may keep do not
+  cap its readings. A document that failed is replaced by a new upload of the same file, so
+  one account can keep sending the same slow files as they fail, ten a minute, for as long as
+  it likes. Each costs the single reader up to its budget of 35 s, or two tries of 60 s when
+  the child is killed at the wall limit: that is a failure of the server, and its sentence
+  invites the user to add the file again. Nothing here caps the documents one user has
+  waiting, and the reader takes them in the order they came, whoever sent them.
 What this does not prevent: two accounts acting together can each hold one slot for as long as
 each keeps sending at that pace, which is the whole of the two slots. A body that ends with 408
 stores nothing and counts for nothing, so the quota does not bound such an account: its one
@@ -82,11 +102,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
+from app import queue as queues
+from app.agents.ratelimit import RateLimiter
 from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.ingestion import documents
+from app.ingestion import documents, jobs
 from app.ingestion.models import (
     FILE_MAX_BYTES,
     NAME_MAX_CHARS,
@@ -113,6 +135,9 @@ TOTAL_TIMEOUT_S = 600.0  # the whole file: 20 MiB at 280 kbit/s
 PASTE_TIMEOUT_S = 60.0  # the whole JSON of a paste
 # The JSON of a paste: 100,000 characters, each at most 12 bytes when escaped.
 PASTE_BODY_MAX_BYTES = 2 * 1024 * 1024
+# Files that cost a reading (a job of the parser), per user and per minute.
+READS_PER_MINUTE = 10
+READS_WINDOW_S = 60.0
 PREVIEW_DEFAULT = 20_000
 PREVIEW_MAX = 50_000
 
@@ -123,6 +148,10 @@ STALLED = (
 )
 INTERRUPTED = "The upload was interrupted."
 BUSY = "Other uploads are in progress. Try again in a moment."
+TOO_FAST = (
+    f"You added {READS_PER_MINUTE} files to read in less than a minute, the most allowed. "
+    "Wait {wait} seconds, then add this one again."
+)
 OWN_BUSY = "Another upload of yours is still on its way. Wait for it to finish, then add this one."
 PASTE_BODY_TOO_LARGE = documents.PASTE_TOO_LONG
 BAD_JSON = "The request is not valid JSON."
@@ -147,7 +176,11 @@ _STORE_ERRORS: dict[int | str, dict[str, Any]] = {
     408: {"model": ErrorOut, "description": "The body stalled or arrived too slowly"},
     413: {"model": ErrorOut, "description": "Over the size limit or the user's quota"},
     422: {"model": ErrorOut, "description": "Empty, no text in it, or the 201st document"},
-    429: {"model": ErrorOut, "description": "Another body of this user is still on its way"},
+    429: {
+        "model": ErrorOut,
+        "description": "Another body of this user is still on its way, or too many files to "
+        "read in a minute",
+    },
 }
 
 
@@ -360,6 +393,51 @@ async def _admitted(request: Request, user: User, size: int, slot: bool) -> Asyn
         gate.give_turn(user.id)
 
 
+def _read_rate(app: FastAPI) -> RateLimiter:
+    """The counter of the files each user gave the reader in the last minute, of this process
+    (one api process), made on first use."""
+    rate: RateLimiter | None = getattr(app.state, "ingestion_read_rate", None)
+    if rate is None:
+        rate = RateLimiter(READS_PER_MINUTE, READS_WINDOW_S)
+        app.state.ingestion_read_rate = rate
+    return rate
+
+
+def _costs_a_reading(body: bytearray) -> bool:
+    """True when storing this file would queue a job of the parser: its first bytes say it is
+    of a kind a reader reads later. A text is read here and now, a type that is refused or
+    kept for a later version costs nothing."""
+    try:
+        mime = documents.sniff(bytes(body[: documents.SNIFF_BYTES]))
+    except documents.DocumentError:
+        return False
+    kind = documents.kind_of(mime) if mime is not None else documents.Kind.text
+    return kind in documents.READABLE_KINDS and kind in jobs.PARSER_KIND
+
+
+async def _queue_reading(request: Request, stored: documents.Stored) -> documents.Stored:
+    """Queue the reading of a document that was just stored or replaced and waits for a reader.
+    Called after the commit and outside the admission: a slow Redis holds no turn and no slot.
+    When the queue cannot take it, the document is failed at once (jobs.fail_unqueued) and
+    returned as it then is."""
+    document = stored.document
+    if not stored.created or not jobs.queueable(document):
+        return stored
+    try:
+        await jobs.enqueue(request.app.state.queue, document)
+    except queues.QueueUnavailableError:
+        failed = await run_in_threadpool(
+            jobs.fail_unqueued,
+            request.app.state.sessionmaker,
+            document.id,
+            document.user_id,
+            document.pending_since,
+        )
+        if failed is not None:
+            return documents.Stored(failed, created=True)
+    return stored
+
+
 def _declared(request: Request) -> int:
     """The Content-Length the client declared, 0 when it declared none or not a number."""
     declared = request.headers.get("content-length", "")
@@ -475,6 +553,18 @@ async def upload_document(request: Request, user: CurrentUser, response: Respons
                 request, FILE_MAX_BYTES, TOTAL_TIMEOUT_S, (documents.TOO_LARGE, "file-too-large")
             )
             size = len(body)
+            if _costs_a_reading(body):
+                wait = _read_rate(request.app).take(user.id)
+                if wait is not None:
+                    # The body is whole: the connection stays, the answer is read.
+                    _refuse(
+                        user,
+                        status.HTTP_429_TOO_MANY_REQUESTS,
+                        TOO_FAST.format(wait=wait),
+                        "upload-rate",
+                        size,
+                        **{"Retry-After": str(wait)},
+                    )
             name = documents.decode_filename(request.headers.get("x-filename"))
             stored = await run_in_threadpool(
                 _store_file,
@@ -491,7 +581,7 @@ async def upload_document(request: Request, user: CurrentUser, response: Respons
             _refuse(user, exc.code, exc.detail, exc.rule, exc.size, **CLOSE)
         except documents.DocumentError as exc:
             _refused(exc, user, size)
-    return _stored(stored, response)
+    return _stored(await _queue_reading(request, stored), response)
 
 
 # --- paste ---------------------------------------------------------------------------------

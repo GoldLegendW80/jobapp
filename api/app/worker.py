@@ -27,6 +27,14 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
   so long that their message must be lost).
 
+Ingestion queue (app.queue.INGESTION, ingestion G2b, app/ingestion/jobs.py):
+- parse_document(document_id): reads one uploaded document. One at a time (max_jobs 1): the
+  parser service runs one job at a time too, and the bytes of one document are in this
+  process while it is read. Tried once by arq; its result is not kept in Redis.
+- reap_documents: cron every 15 seconds, and once at start: queues the pending documents that
+  no job holds (a lost job, a document stored before its kind had a reader), queues again the
+  ones whose try failed for the server, and fails the ones whose last try never came back.
+
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
 cancelled agent run likewise (runner.execute), its scratch directory removed. Every Worker is
@@ -58,6 +66,7 @@ from app.agents import runs as agent_runs
 from app.config import Settings, load_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity.service import utcnow
+from app.ingestion import jobs as ingestion_jobs
 from app.jobs import ats, service, sweep
 from app.logging_config import configure_logging
 
@@ -298,10 +307,51 @@ def agents_queue() -> QueueSpec:
     )
 
 
+# --- ingestion queue (G2b; G10 adds its `advance` cron to the same block) ----------------------
+
+
+def ingestion_queue() -> QueueSpec:
+    return QueueSpec(
+        name=queue.INGESTION,
+        functions=[
+            # keep_result=0: nothing about a document's reading is left in Redis, and a try
+            # whose job ended can be queued again under the same id by the reaper.
+            func(
+                ingestion_jobs.parse_document,
+                name="parse_document",
+                timeout=ingestion_jobs.JOB_TIMEOUT_S,
+                max_tries=1,
+                keep_result=0,
+            ),
+            func(
+                ingestion_jobs.reap_documents,
+                name="reap_documents",
+                timeout=60,
+                max_tries=1,
+                keep_result=0,
+            ),
+        ],
+        cron_jobs=[
+            cron(
+                ingestion_jobs.reap_documents,
+                name="cron:reap_documents",
+                second=set(ingestion_jobs.REAP_SECONDS),
+                timeout=60,
+                # The first tick comes with the worker: the documents that waited for this
+                # version are read at the deploy, not a quarter of a minute later.
+                run_at_startup=True,
+            )
+        ],
+        # One document at a time; the reaper's tick waits its turn behind a reading.
+        max_jobs=1,
+        job_timeout_s=ingestion_jobs.JOB_TIMEOUT_S,
+    )
+
+
 def queues(settings: Settings | None = None) -> list[QueueSpec]:
     """Every queue this worker consumes (TEST_FAST_TIMERS shortens the schedule tick)."""
     fast = bool(settings is not None and settings.test_fast_timers)
-    return [sweeps_queue(fast=fast), agents_queue()]
+    return [sweeps_queue(fast=fast), agents_queue(), ingestion_queue()]
 
 
 def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> Worker:

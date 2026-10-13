@@ -116,9 +116,16 @@ CHILD_SERVER_CODES = frozenset(
 )
 # Why a file cannot be read. The tasks that add a parser add their codes here, and the sentence
 # each one becomes for the user where they store the result.
-FILE_CODES = frozenset({"unreadable", "protected", "no_text", "bomb", "too_many_pixels"})
+# G2b (sandbox/pdf_text.py, sentences in app/ingestion/jobs.py): `encryption` is a PDF protected
+# with AES, which the parser cannot open without `cryptography`; `too_slow` one whose first page
+# was not read when the time budget ended.
+FILE_CODES = frozenset(
+    {"unreadable", "protected", "encryption", "no_text", "bomb", "too_slow", "too_many_pixels"}
+)
 # What was not read, on a document that was. Each comes with integers named in NOTE_VALUES.
-NOTE_CODES = frozenset({"pages_not_read", "time_limit", "scans_not_read"})
+# `pages_not_read` is the page cap, `text_limit` the character cap (G2b), `time_limit` the time
+# budget: each names the pages left out (from, to); `scans_not_read` counts the image pages.
+NOTE_CODES = frozenset({"pages_not_read", "text_limit", "time_limit", "scans_not_read"})
 NOTE_VALUES = frozenset({"from", "to", "count"})
 _TIMEOUT_CODES = frozenset({"wall_limit", "cpu_limit", "read_timeout"})
 
@@ -254,6 +261,9 @@ class Parsed:
     truncated: bool = False
     notes: tuple[Note, ...] = ()
     images: tuple[PageImage, ...] = ()
+    # What the child said its run cost (CPU milliseconds, highest resident memory and highest
+    # address space in kB), None when it said nothing. For the log and the measurements only.
+    usage: Mapping[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -371,8 +381,20 @@ def check_header(line: bytes) -> int:
 
 _FAILURE_KEYS = frozenset({"ok", "failure", "code"}) | NOTE_VALUES
 _RESULT_KEYS = frozenset(
-    {"ok", "kind", "text", "pages", "pages_text", "pages_image", "truncated", "notes", "images"}
+    {
+        "ok",
+        "kind",
+        "text",
+        "pages",
+        "pages_text",
+        "pages_image",
+        "truncated",
+        "notes",
+        "images",
+        "usage",
+    }
 )
+_USAGE_KEYS = frozenset({"cpu_ms", "max_rss_kb", "max_vm_kb"})
 _IMAGE_KEYS = frozenset({"position", "width", "height", "jpeg"})
 # Base64 of MAX_IMAGE_BYTES: checked on the text before anything is decoded.
 _MAX_IMAGE_BASE64 = (MAX_IMAGE_BYTES + 2) // 3 * 4
@@ -448,6 +470,14 @@ def _images(value: Any) -> tuple[PageImage, ...]:
     return tuple(images)
 
 
+def _usage(value: Any) -> Mapping[str, int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != _USAGE_KEYS:
+        _bad("usage")
+    return MappingProxyType({name: _integer(value[name], 0, 10**10, "usage") for name in value})
+
+
 def check_parsed(answer: Any, kind: str) -> Parsed:
     """The result an answer holds, or the error it stands for. Nothing of `answer` is trusted:
     this is the one door through which a parser's words enter the application."""
@@ -490,6 +520,7 @@ def check_parsed(answer: Any, kind: str) -> Parsed:
         truncated=truncated,
         notes=_notes(answer.get("notes", [])),
         images=_images(answer.get("images", [])),
+        usage=_usage(answer.get("usage")),
     )
 
 

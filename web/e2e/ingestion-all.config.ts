@@ -6,6 +6,7 @@ import { defineConfig, devices } from "@playwright/test";
  * with accounts of its own, so they do not depend on one another.
  *
  *   ingestion-g1   documents: add, paste, list, preview, delete, the 20 MiB route (task G1)
+ *   ingestion-g2b  a PDF is read while the page watches: text, links, protected, scans (task G2b)
  *
  * A task of the module adds its spec as ingestion-<task>.spec.ts and it runs here: the CI
  * workflow names this config, not the specs, and .github/scripts/e2e_groups.py reads SPEC_PREFIX

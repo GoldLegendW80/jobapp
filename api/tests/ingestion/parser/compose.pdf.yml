@@ -1,0 +1,67 @@
+# The stack of test_pdf_container.py: the parser service exactly as compose.yml defines it (every
+# hardening key comes from there through `extends`), with the PDF reader of the image, nothing
+# mounted over it, and a door for the test process to reach it.
+#   PARSER_TEST_IMAGE=jobapp-worker:pdf-test docker compose -p jobapp-pdf-test \
+#     -f api/tests/ingestion/parser/compose.pdf.yml up -d --wait
+#
+#   parser         the service as it is deployed
+#   parser-slow    the same again, each for one of the two tests that last as long as the time
+#   parser-slower  budget (35 s of CPU), so that they run side by side and next to the others
+#   relay          stands where the worker stands, on `default` and on `parsing`, and forwards
+#                  three published ports to the three parsers (relay.py). The test process then
+#                  uses the application's own client against the real service
+#
+# `networks` is the tests' own declaration: `extends` copies a service, never the networks of
+# its file. POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB must be set to anything: Compose
+# interpolates the whole of compose.yml to read one service of it.
+
+x-parser: &parser
+  extends:
+    file: ../../../../compose.yml
+    service: parser
+  image: ${PARSER_TEST_IMAGE:?the worker image under test}
+  restart: "no"
+  healthcheck:
+    # A first probe after one second instead of fifteen (compose.yml keeps its values).
+    interval: 15s
+    timeout: 8s
+    start_period: 30s
+    start_interval: 1s
+    retries: 3
+
+services:
+  parser: *parser
+  parser-slow: *parser
+  parser-slower: *parser
+
+  relay:
+    image: ${PARSER_TEST_IMAGE:?the worker image under test}
+    pull_policy: never
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    command:
+      ["python", "-I", "/relay/relay.py", "7071=parser", "7072=parser-slow", "7073=parser-slower"]
+    healthcheck:
+      test: ["CMD", "python", "-I", "/relay/relay.py", "--check", "7071"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      start_interval: 1s
+      retries: 3
+    volumes:
+      - ./relay.py:/relay/relay.py:ro
+    ports:
+      - "127.0.0.1::7071"
+      - "127.0.0.1::7072"
+      - "127.0.0.1::7073"
+    networks:
+      - default
+      - parsing
+    mem_limit: 128m
+
+networks:
+  parsing:
+    internal: true

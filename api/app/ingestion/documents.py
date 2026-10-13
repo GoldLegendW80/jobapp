@@ -11,9 +11,11 @@ What an upload is, decided from its bytes alone (`sniff`), never from its name o
   Text is complete at once: decoded, cleaned (`clean_text`), cut at TEXT_MAX_CHARS, scanned for
   secrets, stored `done`. Its bytes are never stored. A pasted text takes the same path.
 
-READABLE_KINDS says which kinds have a reader in this version. In G1 only text has: a PDF, an
-archive or an image is kept and waits. G2b adds `Kind.pdf` when it queues the parse job, G7
-`Kind.archive`, G8 `Kind.image`; the list tells the user which documents wait for a later version.
+READABLE_KINDS says which kinds have a reader in this version: text since G1, and since G2b
+the PDF, whose upload queues a parse job (jobs.py: the worker sends the file to the parser
+service and stores the text it gets back). An archive or an image is kept and waits: G7 adds
+`Kind.archive`, G8 `Kind.image`; the list tells the user which documents wait for a later
+version, and the reaper of jobs.py which waiting rows to queue.
 
 Storing (`store_file`, `store_paste`), in one transaction that the caller commits:
 1. The same file already there for this user (`unique(user_id, sha256)`): it is returned and
@@ -116,7 +118,7 @@ KIND_OF_MIME: dict[str, Kind] = {
 }
 
 # The kinds a reader exists for in this version (module docstring).
-READABLE_KINDS: frozenset[Kind] = frozenset({Kind.text})
+READABLE_KINDS: frozenset[Kind] = frozenset({Kind.text, Kind.pdf})
 
 TOO_LARGE = f"The file is larger than {FILE_MAX_BYTES // (1024 * 1024)} MB."
 EMPTY = "The file is empty."
@@ -413,8 +415,10 @@ def _attach(db: Session, document_id: uuid.UUID) -> None:
     )
 
 
-def _lock_user(db: Session, user_id: uuid.UUID) -> None:
-    """Serialises the dedupe, the count, the quota and the insert of one user's uploads."""
+def lock_user(db: Session, user_id: uuid.UUID) -> None:
+    """Serialises everything that changes what one user's documents take: the dedupe, the
+    count, the quota and the insert of an upload, and the parse job's writes (jobs.py). Taken
+    before any document row (lock order)."""
     key = f"ingestion-documents:{user_id}"
     db.execute(sa.select(sa.func.pg_advisory_xact_lock(sa.func.hashtextextended(key, 0))))
 
@@ -503,7 +507,7 @@ def _store(
         _check_room(usage(db, user_id), cost, new=True)
     if body is not None:
         _stage(db, body)
-    _lock_user(db, user_id)
+    lock_user(db, user_id)
     document = _by_hash(db, user_id, digest, lock=True)
     if document is not None and not replaceable(document):
         _log("document duplicate", document)

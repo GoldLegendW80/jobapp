@@ -86,7 +86,7 @@ class Stack:
     def driver(self, *arguments: str, timeout: float = 300) -> Any:
         done = self.execute("client", "python", "/driver/driver.py", *arguments, timeout=timeout)
         assert done.returncode == 0, f"driver {arguments[:3]} failed:\n{done.stderr[-2000:]}"
-        return json.loads(done.stdout)
+        return without_usage(json.loads(done.stdout))
 
     def raw(self, options: dict, size: int = 1, kind: str = "pdf_render", host: str = "parser"):
         return self.driver("raw", host, kind, json.dumps(options), str(size))
@@ -110,6 +110,25 @@ class Stack:
 
     def inside(self, service: str, code: str) -> subprocess.CompletedProcess:
         return self.execute(service, "python", "-I", "-c", code)
+
+
+def without_usage(found: Any) -> Any:
+    """What the driver gave, without the cost that a child reports since G2b in every answer
+    that read its document (`usage`: CPU, resident memory, address space). Its values are
+    checked here once for all, and it is taken out: the tests below are about the rest."""
+    if isinstance(found, list):
+        for item in found:
+            without_usage(item)
+    elif isinstance(found, dict):
+        body = found.get("body")
+        used = body.get("usage") if isinstance(body, dict) else None
+        # A ping has a report of its own, with two figures, which its tests read: it stays.
+        if isinstance(used, dict) and set(used) == {"cpu_ms", "max_rss_kb", "max_vm_kb"}:
+            assert all(type(value) is int and value >= 0 for value in used.values()), used
+            del body["usage"]
+        for value in found.values():
+            without_usage(value)
+    return found
 
 
 @pytest.fixture(scope="module")
@@ -587,7 +606,10 @@ def test_a_child_that_floods_its_output_is_killed_at_the_cap(stack: Stack) -> No
 def test_an_answer_of_3_mib_arrives_although_no_file_may_grow(stack: Stack) -> None:
     """RLIMIT_FSIZE is 0: pipes are not files."""
     answer = stack.raw({"act": "text", "chars": 3 * MIB})
-    assert answer["header"] == {**OK, "length": 3 * MIB + len('{"ok":true,"text":""}')}
+    # The text, its envelope, and the few bytes of what the child says it cost.
+    least = 3 * MIB + len('{"ok":true,"text":""}')
+    assert least < answer["header"].pop("length") <= least + 100
+    assert answer["header"] == OK
     found = stack.parse({"act": "text", "chars": 500_000, "char": "\U0001f600"})
     assert found["parsed"]["text_chars"] == 500_000, "2 MB of UTF-8, not 6 MB of escapes"
     # One character more than a document may hold is the worker's to refuse.
@@ -742,9 +764,10 @@ def test_jobs_sent_at_once_run_one_at_a_time(stack: Stack) -> None:
 
 
 def test_the_kinds_without_a_handler_answer_not_supported_yet(stack: Stack) -> None:
-    """In this task the service parses nothing: pdf_text, linkedin_zip and image have no file
-    (pdf_render and docx are the tests' own here). Every kind answers through the whole chain."""
-    for kind in ("pdf_text", "linkedin_zip", "image"):
+    """linkedin_zip and image have no file yet (pdf_render and docx are the tests' own here;
+    pdf_text is the image's since G2b, and test_pdf_container.py is about it). Every kind
+    answers through the whole chain."""
+    for kind in ("linkedin_zip", "image"):
         answer = stack.raw({}, size=1024, kind=kind)
         assert answer["body"] == {"ok": False, "failure": "server", "code": "not_supported"}
         found = stack.parse({}, size=1024, kind=kind)

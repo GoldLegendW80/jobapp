@@ -30,7 +30,7 @@ from app.ingestion.models import (
     TextStatus,
 )
 from tests.identity.api_helpers import Api, Clock
-from tests.ingestion.conftest import ALICE, BOB
+from tests.ingestion.conftest import ALICE, BOB, RecordingQueue
 from tests.ingestion.helpers import (
     DOSSIER,
     MIB,
@@ -140,26 +140,31 @@ def test_the_name_never_decides_the_type(
 
 
 @pytest.mark.parametrize(
-    ("data", "kind", "mime", "source"),
+    ("data", "kind", "mime", "source", "readable"),
     [
-        (pdf(), "pdf", "application/pdf", "parsed"),
-        (archive(), "archive", "application/zip", "parsed"),
-        (png(), "image", "image/png", "transcribed"),
-        (jpeg(), "image", "image/jpeg", "transcribed"),
+        # Since G2b a PDF has a reader: it waits for its job, not for a later version.
+        (pdf(), "pdf", "application/pdf", "parsed", True),
+        (archive(), "archive", "application/zip", "parsed", False),
+        (png(), "image", "image/png", "transcribed", False),
+        (jpeg(), "image", "image/jpeg", "transcribed", False),
     ],
 )
 def test_a_binary_kind_is_kept_whole_and_waits_for_a_reader(
     api: Api,
     alice: str,
     factory: sessionmaker[Session],
+    jobs_queue: RecordingQueue,
     data: bytes,
     kind: str,
     mime: str,
     source: str,
+    readable: bool,
 ) -> None:
     body = uploaded(api, alice, data, "file.bin")
     assert (body["kind"], body["mime"], body["source"]) == (kind, mime, source)
-    assert (body["status"], body["readable"]) == ("pending", False)
+    assert (body["status"], body["readable"]) == ("pending", readable)
+    # A reading is queued for the kind that has a reader, and for no other.
+    assert [job["args"] for job in jobs_queue.jobs] == ([(body["id"],)] if readable else [])
     assert body["size"] == len(data)
     stored = row(factory, body["id"])
     assert stored.raw == data
