@@ -10,7 +10,7 @@ import { RunStart } from "./run-start";
  * REVIEW_READY is what the page shell reads: while it is false the step shows as "Soon" and
  * cannot be opened. The task that makes a run startable from the page (G11) sets it to true.
  */
-export const REVIEW_READY = false;
+export const REVIEW_READY = true;
 
 export function StepReview() {
   return (

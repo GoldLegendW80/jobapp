@@ -365,14 +365,14 @@ test("a new user follows Fill my profile with an agent from the profile", async 
   ).toBeVisible();
   await expect(page).toHaveTitle("Fill my profile \u00b7 jobapp");
 
-  // Three steps; the one that a later task builds is listed as Soon and is not a control.
+  // Three steps, each one a control since task G11 built the run of the third.
   const steps = page.getByRole("navigation", { name: "Steps" });
   await expect(steps.getByRole("listitem")).toHaveText([
     /Prepare(?!\s*Soon)/,
-    /Documents/,
-    /Review\s*Soon/,
+    /Documents(?!\s*Soon)/,
+    /Review(?!\s*Soon)/,
   ]);
-  await expect(steps.getByRole("button")).toHaveCount(2);
+  await expect(steps.getByRole("button")).toHaveCount(3);
   // The page opens on step 1, the prompt (task G3, ingestion-g3.spec.ts): on to the documents.
   await expect(
     steps.getByRole("button", { name: /Step 1: Prepare/ }),
