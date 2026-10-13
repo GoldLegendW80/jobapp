@@ -9,7 +9,7 @@ The units of .github/workflows/ci.yml:
     api     ruff, pytest with the 95 percent coverage floor, the docker marked tests
     web     eslint, tsc, build, vitest
     shell   shellcheck and the test scripts of tests/
-    e2e     the three Playwright groups on their scratch stacks
+    e2e     the four Playwright groups on their scratch stacks
 
 pre-commit and the secret scan are no unit: they run on every run, whatever changed.
 
@@ -107,7 +107,9 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
             "secret_scan_test",
             "tailscale_test",
         ),
-        "e2e": ("e2e_apps",),
+        # ingestion: every web/e2e/ingestion-*.spec.ts through one config, so a task of that
+        # module adds a spec without a new step here or in ci.yml (e2e_groups.py, SPEC_PREFIX).
+        "e2e": ("e2e_apps", "e2e_ingestion"),
     },
     "journeys": {
         "web": ("lint", "typecheck", "build", "vitest"),
@@ -148,8 +150,11 @@ SUPPORT: dict[str, tuple[str, ...]] = {
         "e2e_ready",
         "apps_stack",
         "apps_data",
-        "apps_logs",  # logs, teardown, upload
+        "apps_logs",  # logs, teardown
         "apps_down",
+        "ingestion_stack",  # the second scratch stack of this job, after the first is gone
+        "ingestion_logs",
+        "ingestion_down",
         "upload",
         "memory",
         "verify",

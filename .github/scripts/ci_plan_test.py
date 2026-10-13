@@ -1082,7 +1082,7 @@ class WorkflowTest(unittest.TestCase):
     def test_the_long_steps_have_a_bound_of_their_own(self) -> None:
         bounded = {
             "api": ("pytest", "docker_tests"),
-            "checks": ("e2e_apps",),
+            "checks": ("e2e_apps", "e2e_ingestion"),
             "journeys": ("vitest", "e2e_identity", "e2e_sweep"),
         }
         for lane, ids in bounded.items():
@@ -1216,7 +1216,9 @@ class WorkflowTest(unittest.TestCase):
                 self.assertIn(
                     "com.docker.compose.project=$PROJECT", following["run"], lane
                 )
-        self.assertEqual(seen, 1, "the teardown between identity and sweep")
+        self.assertEqual(
+            seen, 2, "the teardowns between apps and ingestion, identity and sweep"
+        )
 
 
 class HookSafetyTest(unittest.TestCase):

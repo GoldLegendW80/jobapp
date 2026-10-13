@@ -1,1 +1,1 @@
-"""Ingestion module: documents, extraction runs and profile proposals (SPEC-ingestion.md)."""
+"""Ingestion: a profile filled from the user's own documents (SPEC-ingestion.md)."""

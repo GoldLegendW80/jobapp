@@ -40,13 +40,18 @@ ingestion_documents(id uuid, user_id fk users on delete cascade, name text, mime
                     text_status enum(pending, awaiting_transcription, done, failed),
                     note text null, truncated bool default false,
                     pages int null, pages_text int null, pages_image int null,
+                    transcribed_pages int[] null,
                     parser_version smallint,
                     failed_reason text null, failed_kind enum(file, server) null, attempts smallint,
                     secret_warning bool default false, secret_confirmed_at null,
-                    created_at, unique(user_id, sha256))
-ingestion_images(id, document_id fk cascade, user_id fk cascade, position int, jpeg bytea,
-                 width int, height int, text text null, unique(document_id, position))
-ingestion_consents(user_id pk fk cascade, text_version int, accepted_at)
+                    pending_since null,
+                    created_at, unique(user_id, sha256), unique(id, user_id))
+ingestion_images(id, document_id, user_id fk cascade, position int, jpeg bytea,
+                 width int, height int, text text null, unique(document_id, position),
+                 foreign key (document_id, user_id) references ingestion_documents (id, user_id)
+                 on delete cascade)
+ingestion_consents(user_id fk cascade, text_version int, accepted_at,
+                   primary key (user_id, text_version))
 
 ingestion_runs(id uuid, user_id fk cascade, document_ids uuid[], base_revision int,
                status enum(running, paused, done, failed, cancelled), partial bool,
@@ -67,7 +72,7 @@ ingestion_items(id, user_id fk cascade, document_id fk cascade, step_id fk casca
                 unique(step_id, section, key, value_hash))
 ```
 
-The first three tables are one migration (task G1), the last three another (task G9); each holds every column a later task stores into, so no other ingestion task adds a migration. **Pages:** `ingestion_documents.text` holds the pages of a PDF in order, joined with a form feed (U+000C); a page that waits for its transcription is the empty string between two form feeds; `ingestion_images.position` is the zero based page index of a PDF page, and 0 for an uploaded image. `note` says what was not read on a document that is not failed ("pages 31 to 44 were not read"), and `pages_text` and `pages_image` are shown per document.
+The first three tables are one migration (task G1), the last three another (task G9); each holds every column a later task stores into, so no other ingestion task adds a migration. **Pages:** `ingestion_documents.text` holds the pages of a PDF in order, joined with a form feed (U+000C); a page that waits for its transcription is the empty string between two form feeds; `ingestion_images.position` is the zero based page index of a PDF page, and 0 for an uploaded image. `note` says what was not read on a document that is not failed ("pages 31 to 44 were not read"), and `pages_text` and `pages_image` are shown per document. `transcribed_pages` keeps the page indexes whose text came from a transcription, since the images themselves are deleted once transcribed. `pending_since` is when the document last started to wait for its reader (upload, replacement, a new try): a replaced row keeps its `created_at`. An image is tied to the user of its document by the foreign key on `(document_id, user_id)`.
 
 As planned against the merged runner (tasks/ingestion/todo.md): the runner executes one SDK session per `agent_runs` row with fixed limits and has no sub-runs, so an ingestion run is a chain of steps, each an ordinary agent run, and the merge is code. Steps store checked candidates in `ingestion_items`; the merge turns them into proposals.
 
@@ -76,7 +81,7 @@ As planned against the merged runner (tasks/ingestion/todo.md): the runner execu
 - **Parser safety:** DOCX and ZIP opened with uncompressed-size and entry-count caps (zip bomb guard, 50 MB uncompressed, 200 entries), PDFs parsed with a page cap and a time budget, images opened with the same pixel guard as the profile photo (25 MP) and normalised to a JPEG of at most 1568 px and 300,000 bytes before sending. Every parser and every image decode runs in a **separate `parser` compose service** (decided by Harald on 2026-10-10; tasks/ingestion/todo.md, "The parser service"): the worker's image under its own unprivileged uid, in its own PID namespace, with no secret in its environment, on an internal network it shares with the worker alone, so it reaches neither Postgres nor Redis nor the internet. The worker sends it the bytes and writes the result to the database itself. Inside it, each file is parsed by a child process under resource limits and a seccomp deny list. Nothing is parsed in the api or in the worker.
 - **Text extraction:** PDF text layer and DOCX text with pure-Python libraries (`pypdf`, `defusedxml`, recorded in the plan). Images are **transcribed by the model** in the first steps of the run: an app tool hands the agent one stored image as an image block (no built-in file tool; the path through the real Claude Code CLI was verified on 2026-10-10, `tasks/evidence/ingestion-g0/`), the agent stores the transcription through a write tool bound to that image, and it becomes the document's `text` with `text_source = transcribed`. **A PDF page without a text layer is rendered to an image with `pypdfium2`** inside the parser service (decided by Harald on 2026-10-10), then transcribed like a screenshot; pages that have text keep it. A document's `bytes` are set to null once its text or its images are stored, and its images are deleted once transcribed. Citations into transcribed text are checked against the transcription and flagged "transcribed, check it" in the review.
 - **Dedupe** by `unique(user_id, sha256)`: per user only, never revealing another user's uploads. An upload that matches a document whose extraction failed replaces it and is processed again, and so does one that matches a document an older parser version left with a note.
-- **Retention:** a document's text is kept until the user deletes it (decided 2026-10-10). The server's backups keep 7 nightly dumps, so a deleted document leaves them within 7 days; the delete dialog says so.
+- **Retention:** a document's text is kept until the user deletes it (decided 2026-10-10). The server's backups keep 7 nightly dumps, so a deleted document leaves them within 7 days; the delete dialog says so. Both hold once T10 is deployed and verified on the server, predeploy dumps included (today the server keeps 14 nightly dumps and its predeploy dumps by count, whatever their age); until then the dialog says only that the server's backups still hold a copy for a while, and G15 puts the 7 days sentence in.
 - **Deletion is a hard delete:** removing a document deletes its row (bytes and text gone at once) and, in the same transaction:
   - strips its excerpts from proposals of **every** status; a pending item left without any citation is deleted; accepted items keep only "source deleted" in place of the excerpt (the accepted value is the user's own profile now); rejected and superseded items keep only their section, key and value hash (needed so re-runs do not re-propose them);
   - deletes every `agent_events` row of the steps that read the document (the model's own words can quote it; tool arguments and results are never stored for these runs); a step still running is cancelled and its events are deleted again once it has ended; the run and step rows stay with ids, status, tokens and cost;
