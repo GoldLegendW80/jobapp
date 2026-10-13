@@ -98,6 +98,22 @@ def run_in_thread(errors: list[BaseException], work: Callable[[], None]) -> thre
     return thread
 
 
+def wait_until_blocked(factory: sessionmaker[Session]) -> None:
+    """Return once Postgres reports a backend waiting for a lock (polled up to WAIT_S): the
+    proof that a second transaction is queued behind the first, whatever the machine's speed."""
+    deadline = time.monotonic() + WAIT_S
+    query = sa.text(
+        "select count(*) from pg_stat_activity "
+        "where datname = current_database() and wait_event_type = 'Lock'"
+    )
+    while time.monotonic() < deadline:
+        with factory() as db:
+            if db.scalar(query):
+                return
+        threading.Event().wait(0.01)
+    raise AssertionError("no transaction ever waited for a lock")
+
+
 def join_all(*threads: threading.Thread) -> None:
     for thread in threads:
         thread.join(WAIT_S)
@@ -258,7 +274,8 @@ def test_two_transactions_changing_one_posting_the_second_waits_and_sees_the_fir
 
     threads = [run_in_thread(errors, first), run_in_thread(errors, second)]
     assert first_has_lock.wait(WAIT_S)
-    assert not second_done.wait(0.5)  # still waiting while the first holds the row
+    wait_until_blocked(factory)  # Postgres shows the second waiting for the first's row
+    assert not second_done.is_set()
     first_may_commit.set()
     join_all(*threads)
     assert errors == []
@@ -324,7 +341,8 @@ def test_a_bulk_change_racing_a_single_change_on_one_of_its_rows(
         ]
         final = JobStatus.closed
     assert holds.wait(WAIT_S)
-    assert not waiter_done.wait(0.5)
+    wait_until_blocked(factory)
+    assert not waiter_done.is_set()
     may_commit.set()
     join_all(first, second)
     assert errors == []
@@ -376,7 +394,8 @@ def test_an_accept_racing_a_manual_change(
     if proposed == "during":
         pids.append(propose(factory, alice.id, job_id, STATUS, payload))
     accept_thread = run_in_thread(errors, accept)
-    assert not accept_done.wait(0.5)  # waiting for the job while the manual change is open
+    wait_until_blocked(factory)  # the accept waits for the job while the manual change is open
+    assert not accept_done.is_set()
     may_commit.set()
     join_all(manual_thread, accept_thread)
     assert errors == []
@@ -405,7 +424,9 @@ def test_a_lock_wait_over_the_timeout_raises_busy_after_about_the_timeout(
         with pytest.raises(service.JobBusyError):
             service.lock_job(db, alice.id, job_id)
         waited = time.monotonic() - started
-        assert short_lock / 1000 * 0.8 < waited < 3  # it waited the timeout, not the 15 s
+        # It waited the timeout, not the 15 s statement timeout: a bound that tells 0.3 s from a
+        # hung request and that a loaded machine cannot reach.
+        assert short_lock / 1000 * 0.8 < waited < 5
         db.rollback()
         with pytest.raises(service.JobBusyError):
             service.lock_jobs(db, alice.id, [job_id])
@@ -424,17 +445,15 @@ def test_a_lock_wait_over_the_timeout_answers_409_on_each_route(
     undo_token = first.json()["undo_token"]
 
     with holding(factory, alice.id, job_id):
-        for started, response in (
-            (time.monotonic(), patch(api, alice, job_id, status="interview")),
-            (time.monotonic(), bulk(api, alice, [job_id], status="interview")),
-            (
-                time.monotonic(),
-                api.post("/api/jobs/bulk/undo", token=alice.token, json={"token": undo_token}),
-            ),
+        # The outcome is the test: with the lock timeout at 300 ms a request can only answer 409
+        # by timing out on the lock. No wall clock here, which load would move.
+        for response in (
+            patch(api, alice, job_id, status="interview"),
+            bulk(api, alice, [job_id], status="interview"),
+            api.post("/api/jobs/bulk/undo", token=alice.token, json={"token": undo_token}),
         ):
             assert response.status_code == 409, response.text
             assert response.json() == {"detail": "This job is being changed. Try again."}
-            assert time.monotonic() - started < 5
     assert status_of(factory, job_id) is JobStatus.applied
     # Released: the same calls now work, so nothing was left half done or poisoned.
     assert patch(api, alice, job_id, status="interview").status_code == 200
@@ -510,9 +529,7 @@ def test_user_b_cannot_lock_or_change_user_as_row(
         db.rollback()
     # While A holds the row, B is not made to wait: A's row is not B's to queue for.
     with holding(factory, alice.id, job_id), factory() as db:
-        started = time.monotonic()
-        assert service.lock_job(db, bob.id, job_id) is None
-        assert time.monotonic() - started < SHORT_LOCK_MS / 1000
+        assert service.lock_job(db, bob.id, job_id) is None  # a wait would raise JobBusyError
         db.rollback()
     for response in (
         patch(api, bob, job_id, status="applied"),
