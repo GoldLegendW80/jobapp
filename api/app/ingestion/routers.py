@@ -10,9 +10,9 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, Request, Response
 
-from app.ingestion import documents_router
+from app.ingestion import documents_router, estimate_router
 
-routers: tuple[APIRouter, ...] = (documents_router.router,)
+routers: tuple[APIRouter, ...] = (documents_router.router, estimate_router.router)
 
 PREFIX = "/api/ingestion"
 

@@ -42,6 +42,8 @@ RUN_MAX_DOCUMENTS = 30
 RUN_MAX_CHARS = 1_500_000
 RUN_MAX_IMAGES = 60
 RUN_MAX_STEPS = 60
+RUN_MINUTES = 60
+STEP_MINUTES = 15
 PART_MAX_CHARS = 100_000
 GROUP_MAX_IMAGES = 8
 # What one transcribed image is counted as, in characters to extract afterwards (A10).
@@ -197,15 +199,23 @@ def groups(images: Sequence[int]) -> tuple[tuple[int, ...], ...]:
     )
 
 
-def _check_limits(documents: Sequence[Document]) -> None:
-    if not documents:
+def check_count(count: int) -> None:
+    """A selection of `count` documents is one a run may take: at least one, at most 30. The
+    route asks before it reads any row, `build` asks again."""
+    if count < 1:
         raise LimitError("no_document", "Select at least one document.")
-    if len(documents) > RUN_MAX_DOCUMENTS:
+    if count > RUN_MAX_DOCUMENTS:
         raise LimitError(
             "documents",
-            f"A run reads at most {RUN_MAX_DOCUMENTS} documents, and {len(documents)} are "
+            f"A run reads at most {RUN_MAX_DOCUMENTS} documents, and {count} are "
             "selected. Select fewer and start again for the others.",
         )
+
+
+def check_limits(documents: Sequence[Document]) -> None:
+    """Raises `LimitError` for a selection over the documents, the characters or the images of
+    a run. Asked by `build`, and by a caller that wants the answer before it loads any text."""
+    check_count(len(documents))
     characters = sum(document.characters for document in documents)
     if characters > RUN_MAX_CHARS:
         raise LimitError(
@@ -271,7 +281,7 @@ def build(
 ) -> Plan:
     """The plan of a selection, in the order given (module docstring). Raises `LimitError` for a
     selection over a limit of the run or with no document."""
-    _check_limits(documents)
+    check_limits(documents)
     transcribing = TRANSCRIPTION if transcription is None else transcription
     first: list[Step] = []
     then: list[Step] = []
