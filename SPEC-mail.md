@@ -33,7 +33,7 @@ mail_messages(id uuid, user_id, thread_id fk cascade, gmail_message_id text, fro
               cc_addrs text[], date, subject, snippet text, body_text text, body_html_sanitized text,
               direction enum(inbound, outbound), labels text[], attachments jsonb, created_at,
               unique(user_id, gmail_message_id))
-mail_drafts(id uuid, user_id, thread_id fk, job_id, body text, subject text, to_addrs text[], status enum(draft, sending, sent, failed),
+mail_drafts(id uuid, user_id, thread_id fk, job_id, body text, subject text, to_addrs text[], status enum(draft, sending, send_unknown, sent, failed),
             agent_thread_id uuid null, gmail_message_id text null, created_at, updated_at, sent_at)
 ```
 
@@ -46,18 +46,18 @@ mail_drafts(id uuid, user_id, thread_id fk, job_id, body text, subject text, to_
 
 ## Automatic changes: an explicit exception
 
-SPEC-agents says nothing changes user data until the user accepts a proposal. The mail module is the one named exception, wanted by Harald: **links between mail threads and jobs** (above the confidence threshold) and **status changes from mail** (the transitions below) are applied automatically. They are recorded as `proposals` rows created directly with status `accepted` and `decided_by = system`, plus a job event, so every automatic change is visible, attributable to its mail, and undoable. Drafts are never sent automatically: no exception there. SPEC-agents is amended in this PR to name this exception.
+SPEC-agents says nothing changes user data until the user accepts a proposal. The mail module is the one named exception, wanted by Harald: **links between mail threads and jobs** (above the confidence threshold) and **status changes from mail** (the transitions below) are applied automatically, **only under the binding rule** of the task plan (`tasks/mail/todo.md`, "The binding rule", decided 2026-10-13): Gmail's own authentication result passes for the visible sender, that sender's domain is bound to the job (the company's own domain, an address the user wrote to, a domain he confirmed, or, for a mail of an applicant tracking system, a reply to a mail he sent or a posting in the status `staged`, `applied` or `interview` hosted on that same system whose company the mail names; for a `staged` posting only the confirmation of the application applies by itself), and the verdict, of a rule or of the model, reaches `MAIL_AUTO_APPLY_CONFIDENCE` (default 0.90). A reference id that the mail carries is never enough alone. Anything else is a proposal the user accepts. A status change never triggers a send. They are recorded as `proposals` rows created directly with status `accepted` and `decided_by = system`, plus a job event, so every automatic change is visible, attributable to its mail, and undoable. Drafts are never sent automatically: no exception there. SPEC-agents is amended in this PR to name this exception.
 
 ## Retention and privacy
 
 - **Disconnect** revokes the token at Google and deletes the user's `mail_accounts`, `mail_messages`, `mail_threads`, drafts and mail classifier results; job events keep only "status changed from a mail (mail deleted)". **Account deletion** cascades to every mail table.
-- Synced mail older than 180 days is deleted on each sync.
-- `/privacy` states what is read (job-related mail only, per the sync query), where it is stored (the user's app instance on the owner's Jetson), that message content is sent to the user's own model provider (Anthropic) only to classify, match and draft, that nothing is shared with anyone else, retention as above, and how to disconnect and delete. It includes the Google API Services User Data Policy **Limited Use** disclosure. `/terms` is a short plain statement.
+- Nothing is pruned by age (decided 2026-10-13): the 180 days are the window of the first sync only. Storage is bounded at 20,000 stored messages or 300 MB of mail text per user, and the user can delete one thread from the app. The log of sends, which holds no address and no text, is kept 365 days, also after a disconnect.
+- `/privacy` states what is read (the sender, the recipients, the subject and the preview of each new mail, and the whole mail only when it concerns a job; the search terms of the first sync), where it is stored (the user's app instance on the owner's Jetson), that message content is sent to the user's own model provider (Anthropic) only to classify, match and draft, and only after a recorded consent, that nothing is shared with anyone else, retention as above, what stays after a disconnect, how to disconnect, and that the administrator deletes an account on request. It includes the Google API Services User Data Policy **Limited Use** disclosure. `/terms` is a short plain statement.
 
 ## Matching mails to jobs
 
 - Deterministic first: sender or recipient domain equal to the job's company domain or ATS domain (ashbyhq.com, greenhouse.io, lever.co, workday, smartrecruiters, teamtailor, welcometothejungle, linkedin jobs), job title or company name in the subject, a reference id from the posting URL in the body. Score with confidence; one job wins when its confidence is clearly above the others.
-- Ambiguous threads go to a small **mail triage agent** (agents runtime, model claude-opus-5-5, read-only tools: get_thread, list_candidate_jobs) that proposes a link; proposals are applied automatically only above a confidence threshold, otherwise listed in an "Unmatched mail" inbox for the user.
+- Ambiguous threads go to a small **mail triage agent** (agents runtime, model chosen by the credential: `claude-opus-5-5` on a subscription, `claude-sonnet-5-5` on an API key; read-only tools: get_thread, list_candidate_jobs) that proposes a link; a proposal is applied automatically only under the binding rule and at the threshold, otherwise listed in an "Unmatched mail" inbox for the user.
 - Manual link and unlink always win and are never overridden by later syncs.
 
 ## Status updates from mail
@@ -66,18 +66,18 @@ SPEC-agents says nothing changes user data until the user accepts a proposal. Th
 - **Active statuses** are `found`, `shortlisted`, `cv_ready`, `staged`, `applied`, `interview`. `rejected`, `closed` and `skipped` are final for automation: mail never moves a job out of them.
 - Allowed automatic transitions: `found`, `shortlisted`, `cv_ready`, `staged` → `applied` on `application_received` (fills `applied_on` if empty); any active status → `rejected` on `rejection`; `applied` → `interview` on `interview_invitation` or `assessment`. Nothing moves a job backwards.
 - **Only newer mail moves a status:** a message changes a status only if its date is later than the job's last status change (manual or automatic). The **initial 180-day sync never applies transitions**: it only links threads and lists "suggested status changes" the user can apply in one click per job or all at once; transitions apply automatically only for messages arriving after the account was connected.
-- **Recording:** a `job_events` row of kind `status` with `data = {before, after, source: "mail", message_id, proposal_id}`.
-- **Undo** (`POST /api/mail/status-changes/{event_id}/undo`, owned by this module): allowed only while the job still has the status that event set (else 409 with the current status); restores `before`, writes a new `status` event with `source: "mail_undo"`, marks the event and its proposal `undone`; an undone message is **never re-applied** by later syncs (the classifier result is kept with `applied = false, undone = true`).
+- **Recording:** a `job_events` row of kind `status` with `data = {from, to, via: "mail", message_id, proposal_id}`, the keys the jobs module writes.
+- **Undo** (`POST /api/mail/status-changes/{event_id}/undo`, owned by this module): allowed only while the job still has the status that event set (else 409 with the current status); restores `from`, writes a new `status` event with `via: "mail_undo"`, marks the event and its proposal `undone`; an undone message is **never re-applied** by later syncs (the classifier result is kept with `applied = false, undone = true`).
 - `needs_reply` is true when the last message of a linked thread is inbound and classified `interview_invitation`, `assessment`, `offer` or `info_request`; the board shows these as "Waiting for your answer".
 
 ## Drafting and sending
 
 - When a thread gets `needs_reply`, the **reply agent** prepares a draft in the user's language and tone using the job, the thread, the profile (facts only, same no-invention rule as documents) and the user's answers section (availability, notice, salary policy). The draft is stored in `mail_drafts`, never sent.
-- The reply agent cannot change recipients: the draft's recipients come from the thread (reply or reply-all chosen by the user); the Send confirmation highlights any recipient not already in the thread. Mail content is data for agents, never instructions (stated in every mail agent's system prompt).
+- The reply agent cannot change recipients: the draft's recipients are computed by code from the addresses the user himself wrote to in the thread and from a sender bound to the job (reply or reply-all chosen by the user); any other address is flagged, never prefilled (a sender bound only as a mail of an applicant tracking system is a shared sender: flagged, never prefilled), and confirmed one by one in the Send confirmation. Mail content is data for agents, never instructions (stated in every mail agent's system prompt).
 - On a job: "Draft a reply" opens the chat panel (agents threads) bound to that mail thread; each message to the agent updates the draft; the user can edit the draft text directly at any time; the latest of either wins and the agent sees manual edits.
-- **Send** is a button, enabled only on an explicit click by the signed-in owner, with a confirmation showing recipients and subject; the server sends with `users.messages.send` in the same Gmail thread (`threadId`, `In-Reply-To`, `References`), records the sent message, marks the draft `sent`. A draft is never sent by a worker, an agent tool or a schedule: there is no code path from agents to `messages.send`.
+- **Send** is a button, enabled only on an explicit click by the signed-in owner, with a confirmation showing recipients and subject; the server sends with `users.messages.send` in the same Gmail thread (`threadId`, `In-Reply-To`, `References`), records the sent message, marks the draft `sent`. Every send passes one function, `mail.gate.send`, which today accepts a single authorisation: the click of the signed-in owner on that exact draft. No worker, agent tool or schedule can build one. The gate writes its audit row before Gmail is called, and a send whose result is unknown (also a 5xx answer of Gmail) is never sent again by the app itself, and its draft waits in `send_unknown`.
 - Sending is idempotent per draft (a double click sends once). Send is a POST protected by the app's CSRF rule (`X-Requested-With: jobapp`) and the session.
-- **Model spend:** without a model credential, matching falls back to rules only, classification to rules only, and no drafts are prepared (the UI says why). Automatic runs (triage, classification, drafts) are capped at 100 per user per day and run on the agents queue at lower priority than interactive runs.
+- **Model spend:** without a model credential, matching falls back to rules only, classification to rules only, and no drafts are prepared (the UI says why). Automatic runs (triage, classification, drafts) need the user's recorded consent, are capped at 100 per user per day, and share the user's four active runs, one at a time: the runner has no priority. No agent drafts for a job the user's never apply rules exclude. There is no sending limit as a product rule (decided 2026-10-13): Gmail's own quota is the ceiling.
 
 ## API
 
@@ -87,29 +87,29 @@ SPEC-agents says nothing changes user data until the user accepts a proposal. Th
 | GET /api/mail/account | status, email, last sync |
 | POST /api/mail/sync | sync now (rate limited) |
 | GET /api/jobs/{id}/mail | threads and messages for a job |
-| GET /api/mail/unmatched ; POST /api/mail/threads/{id}/link `{job_id}` ; DELETE /api/mail/threads/{id}/link | inbox of unmatched threads, manual link |
+| GET /api/mail/unmatched ; POST /api/mail/threads/{id}/link `{posting_id}` ; DELETE /api/mail/threads/{id}/link | inbox of unmatched threads, manual link |
 | GET /api/mail/messages/{id}/attachments/{att} | stream one attachment from Gmail |
 | GET/PUT /api/mail/drafts/{id} ; POST /api/mail/threads/{id}/drafts ; POST /api/mail/drafts/{id}/send | drafts and send |
 | POST /api/mail/status-changes/{event_id}/undo | undo an automatic status change |
-| GET /api/mail/suggested-changes ; POST /api/mail/suggested-changes/apply `{event_ids? | job_ids?}` | status changes suggested by the initial sync |
+| GET /api/mail/suggested-changes ; POST /api/mail/suggested-changes/apply `{suggestion_ids? | posting_ids?}` | status changes suggested by the initial sync |
 | GET /privacy ; GET /terms ; GET / (public home when signed out) | pages required by Google |
 
 ## Frontend
 
-Account: "Gmail" card (connect, status, last sync, sync now, disconnect). Jobs list: "Waiting for your answer" badge and filter. Job detail: Mail tab with threads, messages (sanitized HTML in an iframe with `sandbox=""` and a strict CSP, links opened with `noopener noreferrer`, plain text fallback), attachments, link and unlink; automatic status changes shown with Undo; Draft panel with chat on the side, editable draft, Send with confirmation. `/mail/unmatched` inbox. Public `/privacy`, `/terms`, home. Mobile friendly.
+Account: "Gmail" card (connect, status, last sync, sync now, disconnect). Jobs list: "Waiting for your answer" badge and filter. Job detail: Mail tab with threads, messages (sanitized HTML in an iframe with `sandbox="allow-popups allow-popups-to-escape-sandbox"`, since an empty sandbox cannot open a link, and a strict CSP, links opened with `noopener noreferrer`, plain text fallback), attachments, link and unlink; automatic status changes shown with Undo; Draft panel with chat on the side, editable draft, Send with confirmation. `/mail/unmatched` inbox. Public `/privacy`, `/terms`, home. Mobile friendly.
 
 ## Testing strategy
 
 - Unit: OAuth state and PKCE, token encryption, query building, history sync (new, changed, deleted messages, expired history id), MIME parsing (multipart, encodings, French accents, inline images, attachments), HTML sanitization (scripts, event handlers, remote images, CSS tricks), matching scores, classifier rules on real-looking ATS templates (Ashby, Greenhouse, Lever, Workday, WTTJ, French and English), allowed transitions, undo, needs_reply.
-- Integration: a fake Gmail API server (recorded shapes) in CI; isolation between users; send idempotency; no code path from the worker or agents to send (a test asserts the send function is only reachable from the send endpoint).
-- Agents (matching, classification, reply) run on the fake model backend in CI.
+- Integration: a fake Gmail API server (recorded shapes) in each task's tests and in the local check (`ops/local-check.sh`; there is no CI); isolation between users; send idempotency; no path to Gmail's send call outside `mail.gate.send` (tests assert that the gate is reachable from the send endpoint alone).
+- Agents (matching, classification, reply) run on the fake model backend in the same tests.
 - End to end on the Jetson with Harald's real Gmail (connected by him through the OAuth screen; read-only checks first, one real reply sent only to his own address as a test, never to a company).
 
 ## Boundaries
 
 - **Always:** user click before any send; undo for every automatic status change; owner-only access; sanitized rendering.
 - **Ask first:** widening scopes; auto-send of any kind; keeping attachment contents; syncing beyond 180 days.
-- **Never:** send mail from a worker, a schedule or an agent tool; log message bodies or tokens; delete mail in Gmail.
+- **Never:** send mail outside `mail.gate.send`, or from a worker, a schedule or an agent tool; log message bodies or tokens; delete mail in Gmail.
 
 ## Success criteria
 
@@ -117,8 +117,8 @@ Account: "Gmail" card (connect, status, last sync, sync now, disconnect). Jobs l
 2. Confirmations, rejections and invitations move statuses automatically, each with its source mail and an Undo.
 3. "Waiting for your answer" jobs have a prepared draft; drafting with the agent and editing by hand both work; Send replies in the same Gmail thread.
 4. No mail is ever sent without the user's click (automated test and code review).
-5. CI covers sync, matching, classification, drafting and send with a fake Gmail and a fake model; no cross-user access.
+5. Each task's tests and the local check cover sync, matching, classification, drafting and send with a fake Gmail and a fake model; no cross-user access.
 
 ## Open questions
 
-None blocking; defaults above are proposed for approval.
+The owner answered the plan's questions on 2026-10-13. His decisions, and the questions still open, are at the top of `tasks/mail/todo.md`.

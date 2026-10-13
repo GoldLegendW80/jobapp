@@ -1,0 +1,44 @@
+{
+  "label": "before: origin/main at 0998726",
+  "api_dir": "/Users/harald-thorvaldhautin/Desktop/job/app/.claude/worktrees/p108-base/api",
+  "machine": "development Mac, not the Jetson; resident memory of the uvicorn process",
+  "rest_mib": 145,
+  "one_sign_in_at_a_time": {
+    "median_answer_ms": 144,
+    "peak_mib": 202
+  },
+  "flood_40": {
+    "requests": 40,
+    "statuses": {
+      "401": 40
+    },
+    "retry_after_of_503": [],
+    "all_done_in_s": 1.24,
+    "slowest_answer_s": 1.22,
+    "fastest_answer_s": 0.688,
+    "peak_mib": 656
+  },
+  "flood_120": {
+    "requests": 120,
+    "statuses": {
+      "401": 120
+    },
+    "retry_after_of_503": [],
+    "all_done_in_s": 3.45,
+    "slowest_answer_s": 3.38,
+    "fastest_answer_s": 0.792,
+    "peak_mib": 782
+  },
+  "burst_of_10_real_sign_ins": {
+    "requests": 10,
+    "statuses": {
+      "200": 10
+    },
+    "retry_after_of_503": [],
+    "all_done_in_s": 0.5,
+    "slowest_answer_s": 0.5,
+    "fastest_answer_s": 0.438,
+    "peak_mib": 536
+  },
+  "rest_afterwards_mib": 126
+}

@@ -7,7 +7,7 @@ answer 401, whose body is read before the 401). Caddy caps bodies at the edge, b
 not depend on the proxy being in front of it.
 
 `LimitRequestBodyMiddleware` is a pure ASGI middleware that runs before the body is parsed. It
-does two things, in this order.
+does three things, in this order.
 
 1. No session, no body (`SessionGate`, given by app.main): a request under /api that announces
    a body, on a route that is not public, is answered 401 before a byte of its body is read
@@ -15,7 +15,13 @@ does two things, in this order.
    (once per request, kept on the request's state), and a request without the cookie costs no
    database call. So the only bodies a caller with no session can make the api read are those
    of the public routes, which are small (below).
-2. A size limit by route class, and a time limit on the read, for the routes whose body the
+2. A bound on the bodies one user has in flight (`BodiesInFlight`, issue #108): a signed in
+   user's request that announces a body, when USER_BODIES_IN_FLIGHT of that user's are already
+   being read or worked on, is answered 429 with Retry-After before a byte of it is read. It
+   covers the routes whose body is gathered here and the ones that read their own. So what one
+   user can make the api hold in bodies is that many times the largest body, not as many as
+   uvicorn has connections.
+3. A size limit by route class, and a time limit on the read, for the routes whose body the
    framework would read (the routes that read their own raw body keep their own rules and are
    neither capped nor read here: SELF_LIMITED):
    - routes under /api/auth/ (sign in, sign out, link check and accept, and the account
@@ -88,6 +94,7 @@ SELF_LIMITED: frozenset[tuple[str, str]] = frozenset(
 )
 
 TOO_LARGE = "The request body is too large."
+TOO_MANY_BODIES = "Too many requests at once. Try again in a moment."
 TOO_SLOW = "The request body stopped arriving."
 
 # The time a capped body has to arrive: it must bring something at least every *_IDLE_S and be
@@ -101,6 +108,21 @@ PUBLIC_READ_IDLE_S = 5.0
 PUBLIC_READ_TOTAL_S = 10.0
 BODY_READ_IDLE_S = 20.0
 BODY_READ_TOTAL_S = 60.0
+
+
+# How many requests with a body one user may have in flight at once (issue #108). The limits
+# above bound one body; a signed in user could still send many at once, and each holds its
+# class's size while it is gathered: measured in the review of pull request #106, 4.45 MiB per
+# stalled `POST /api/jobs`, so 85 to 90 of them from one session passed the api's 512 MiB.
+# With 6: 6 x 4.45 MiB = 27 MiB per user on the largest class gathered here, 6 x 10 MiB = 60 MiB
+# on the largest body a route reads for itself (`POST /api/jobs/import`, Caddy's own limit;
+# document uploads keep their own slots). The password hashes leave about 210 MiB of the
+# container for bodies (identity/security.py), which is three users each at that worst. The
+# page sends its requests one at a time, so 6 at once is far above ordinary use. The bound is
+# per user, not for the whole api: more than three invited users all at their worst at the
+# same moment are not covered.
+USER_BODIES_IN_FLIGHT = 6
+BODIES_RETRY_AFTER_S = 1
 
 
 @dataclass(frozen=True)
@@ -135,11 +157,43 @@ def limit_for(method: str, path: str) -> int | None:
 class SessionGate:
     """Who may send a body at all (module docstring, 1). `needs_session(method, path)` says
     whether the route is one that answers only with a session; `has_session(scope)` looks the
-    session of this request up; `detail` is the sentence of the 401."""
+    session of this request up; `detail` is the sentence of the 401. `owner(scope)`, when
+    given, names the user of that session: the key of the bound on bodies in flight."""
 
     needs_session: Callable[[str, str], bool]
     has_session: Callable[[Scope], Awaitable[bool]]
     detail: str
+    owner: Callable[[Scope], Awaitable[str | None]] | None = None
+
+
+class BodiesInFlight:
+    """Requests with a body in flight, counted per user (issue #108). A request counts from the
+    moment its session is known until its response starts (or it ends without one): the time
+    its body is being gathered here, or read by a route that reads its own, and worked on.
+    Touched from the event loop only, so a plain dict is enough."""
+
+    def __init__(self, per_user: int = USER_BODIES_IN_FLIGHT) -> None:
+        self.per_user = per_user
+        self.refused = 0
+        self._counts: dict[str, int] = {}
+
+    def enter(self, owner: str) -> bool:
+        count = self._counts.get(owner, 0)
+        if count >= self.per_user:
+            self.refused += 1
+            return False
+        self._counts[owner] = count + 1
+        return True
+
+    def leave(self, owner: str) -> None:
+        count = self._counts.get(owner, 0) - 1
+        if count > 0:
+            self._counts[owner] = count
+        else:
+            self._counts.pop(owner, None)  # no entry is kept for a user with nothing in flight
+
+    def count(self, owner: str) -> int:
+        return self._counts.get(owner, 0)
 
 
 def _declared_length(scope: Scope) -> int | None:
@@ -162,7 +216,9 @@ def announces_body(scope: Scope) -> bool:
     return False
 
 
-async def _send_error(send: Send, status: int, detail: str, close: bool = False) -> None:
+async def _send_error(
+    send: Send, status: int, detail: str, close: bool = False, retry_after: int | None = None
+) -> None:
     body = json.dumps({"detail": detail}).encode()
     headers = [
         (b"content-type", b"application/json"),
@@ -171,17 +227,22 @@ async def _send_error(send: Send, status: int, detail: str, close: bool = False)
     ]
     if close:
         headers.append((b"connection", b"close"))
+    if retry_after is not None:
+        headers.append((b"retry-after", str(retry_after).encode()))
     await send({"type": "http.response.start", "status": status, "headers": headers})
     await send({"type": "http.response.body", "body": body, "more_body": False})
 
 
 class LimitRequestBodyMiddleware:
-    """No session, no body; then a size and a time limit by route class (module docstring).
-    Without a `gate` only the limits apply."""
+    """No session, no body; then a bound on the bodies one user has in flight; then a size and
+    a time limit by route class (module docstring). Without a `gate` only the limits apply."""
 
-    def __init__(self, app: ASGIApp, gate: SessionGate | None = None) -> None:
+    def __init__(
+        self, app: ASGIApp, gate: SessionGate | None = None, bodies: BodiesInFlight | None = None
+    ) -> None:
         self.app = app
         self.gate = gate
+        self.bodies = bodies or BodiesInFlight()
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not announces_body(scope):
@@ -190,15 +251,42 @@ class LimitRequestBodyMiddleware:
             return
         method, path = scope.get("method", ""), scope.get("path", "")
         gate = self.gate
-        if (
-            gate is not None
-            and is_api_path(path)
-            and gate.needs_session(method, path)
-            and not await gate.has_session(scope)
-        ):
-            # Before anything is read: the body of this request never enters the process.
-            await _send_error(send, 401, gate.detail)
+        owner: str | None = None
+        if gate is not None and is_api_path(path) and gate.needs_session(method, path):
+            if not await gate.has_session(scope):
+                # Before anything is read: the body of this request never enters the process.
+                await _send_error(send, 401, gate.detail)
+                return
+            if gate.owner is not None:
+                owner = await gate.owner(scope)
+        if owner is None:
+            await self._limited(scope, receive, send, method, path)
             return
+        if not self.bodies.enter(owner):
+            # Also before anything is read, and the connection is kept, like the 413 below.
+            await _send_error(send, 429, TOO_MANY_BODIES, retry_after=BODIES_RETRY_AFTER_S)
+            return
+        counted = True
+
+        def leave() -> None:
+            nonlocal counted
+            if counted:
+                counted = False
+                self.bodies.leave(owner)
+
+        async def counting_send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                leave()  # the body was read and worked on: a long answer holds no place
+            await send(message)
+
+        try:
+            await self._limited(scope, receive, counting_send, method, path)
+        finally:
+            leave()  # whatever ended it: a refusal, an error, a client that went away
+
+    async def _limited(
+        self, scope: Scope, receive: Receive, send: Send, method: str, path: str
+    ) -> None:
         limits = class_for(method, path)
         if limits is None:
             await self.app(scope, receive, send)
@@ -225,7 +313,7 @@ class LimitRequestBodyMiddleware:
                 await _send_error(send, 408, TOO_SLOW, close=True)
                 return
             if message.get("type") != "http.request":
-                first = message  # the client went away: the app is told, as it was before
+                first: Message | None = message  # the client went away: the app is told
                 break
             chunk = message.get("body", b"")
             if len(buffer) + len(chunk) > limits.max_bytes:
@@ -235,14 +323,16 @@ class LimitRequestBodyMiddleware:
             if not message.get("more_body", False):
                 first = {"type": "http.request", "body": bytes(buffer), "more_body": False}
                 break
-        del buffer
-        handed = False
+        # Nothing of the body stays referenced from this frame while the app runs: the app
+        # holds the one message it is handed, for as long as it needs it and no longer.
+        del buffer, message
+        chunk = b""
 
         async def gathered() -> Message:
-            nonlocal handed
-            if not handed:
-                handed = True
-                return first
+            nonlocal first
+            if first is not None:
+                handed, first = first, None
+                return handed
             return await receive()  # after the body: the app waiting for a disconnect
 
         await self.app(scope, gathered, send)

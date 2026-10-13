@@ -377,9 +377,12 @@ def test_a_new_link_only_revokes_the_same_email_and_kind(
 
 
 def test_ten_parallel_creates_for_one_email_leave_exactly_one_active(
-    api: Api, admin: str, factory: sessionmaker[Session]
+    app: FastAPI, api: Api, admin: str, factory: sessionmaker[Session]
 ) -> None:
     client: TestClient = api.client
+    # Ten at once from one session is the device of this test, to race the creates. The api
+    # lets a user have six bodies in flight and would answer the others 429 (issue #108).
+    app.state.bodies_in_flight.per_user = 10
     barrier = threading.Barrier(10)
 
     def attempt(index: int) -> tuple[int, str]:

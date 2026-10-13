@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from app.identity import security, throttle
+from app.identity import security, service, throttle
 from app.identity.models import LoginAttempt, Role
 from app.identity.router import LOGIN_FAILED
 from tests.identity.api_helpers import CSRF, PASSWORD, Api, Clock, make_user, session_cookie
@@ -183,6 +183,108 @@ def test_a_success_does_not_reset_the_address_counter(
     assert login(api, password=PASSWORD).status_code == 429
 
 
+# An IPv6 subscriber is given a whole /64: the limit counts the /64, not each address in it.
+SUBSCRIBER = "2001:db8:1:2"
+NEIGHBOUR = "2001:db8:1:3"
+
+
+def in_64(prefix: str, host: int) -> str:
+    """One of the addresses of a /64, a different one for each `host`."""
+    return f"{prefix}:{host + 1:x}:aaaa:0:{host + 1:x}"
+
+
+def test_addresses_of_one_ipv6_64_share_a_count_and_another_64_does_not(
+    api: Api, factory: sessionmaker[Session], clock: Clock
+) -> None:
+    make_user(factory)
+    for i in range(20):
+        assert login(api, f"user{i}@example.org", ip=in_64(SUBSCRIBER, i)).status_code == 401
+    # A fresh address of the same /64 is stopped, the right password included.
+    response = login(api, "fresh@example.org", ip=in_64(SUBSCRIBER, 500))
+    assert response.status_code == 429
+    assert response.json() == throttled(15)
+    assert login(api, password=PASSWORD, ip=in_64(SUBSCRIBER, 501)).status_code == 429
+    # The /64 next to it has its own count: a failure is a 401 and the right password signs in.
+    assert login(api, "fresh@example.org", ip=in_64(NEIGHBOUR, 0)).status_code == 401
+    assert login(api, password=PASSWORD, ip=in_64(NEIGHBOUR, 1)).status_code == 200
+    # The rows keep the whole address: 20 different ones from the first /64.
+    stored = [str(row.ip) for row in attempts(factory)]
+    assert len({ip for ip in stored if ip.startswith(SUBSCRIBER + ":")}) == 20
+    with factory() as db:
+        assert throttle.failures_in_window(db, clock(), ip=in_64(SUBSCRIBER, 999)) == 20
+        assert throttle.failures_in_window(db, clock(), ip=in_64(NEIGHBOUR, 999)) == 1
+
+
+def test_two_ipv4_addresses_next_to_each_other_do_not_share_a_count(
+    api: Api, factory: sessionmaker[Session]
+) -> None:
+    # IPv4 stays as it was: the whole address, no grouping by network.
+    for i in range(20):
+        assert login(api, f"user{i}@example.org", ip="198.51.100.7").status_code == 401
+    assert login(api, "fresh@example.org", ip="198.51.100.7").status_code == 429
+    assert login(api, "fresh@example.org", ip="198.51.100.8").status_code == 401
+
+
+def test_an_ipv4_mapped_address_counts_with_its_ipv4_form(
+    api: Api, factory: sessionmaker[Session]
+) -> None:
+    for i in range(10):
+        assert login(api, f"user{i}@example.org", ip=IP).status_code == 401
+        assert login(api, f"mapped{i}@example.org", ip=f"::ffff:{IP}").status_code == 401
+    assert login(api, "fresh@example.org", ip=f"::ffff:{IP}").status_code == 429
+    assert login(api, "fresh@example.org", ip=IP).status_code == 429
+    assert {str(row.ip) for row in attempts(factory)} == {IP}
+    # Another mapped address is another IPv4 address, not a neighbour in some /64.
+    assert login(api, "fresh@example.org", ip=f"::ffff:{OTHER_IP}").status_code == 401
+
+
+def test_a_malformed_address_is_recorded_as_null_and_not_limited_per_address(
+    api: Api, factory: sessionmaker[Session]
+) -> None:
+    # As before the /64: what is not an address has no per address count, only the email one.
+    for i in range(25):
+        assert login(api, f"user{i}@example.org", ip="2001:db8:1:2::zz").status_code == 401
+    assert all(row.ip is None for row in attempts(factory))
+
+
+@pytest.mark.parametrize(
+    ("raw", "stored", "key"),
+    [
+        ("198.51.100.7", "198.51.100.7", "198.51.100.7"),
+        (
+            "2001:db8:1:2:aaaa:bbbb:cccc:dddd",
+            "2001:db8:1:2:aaaa:bbbb:cccc:dddd",
+            "2001:db8:1:2::/64",
+        ),
+        ("2001:DB8:1:2::1", "2001:db8:1:2::1", "2001:db8:1:2::/64"),
+        ("2001:db8:1:3::1", "2001:db8:1:3::1", "2001:db8:1:3::/64"),
+        ("::1", "::1", "::/64"),
+        ("fe80::1%eth0", "fe80::1", "fe80::/64"),  # the zone is dropped, inet refuses one
+        ("::ffff:198.51.100.7", "198.51.100.7", "198.51.100.7"),
+        ("::ffff:c633:6407", "198.51.100.7", "198.51.100.7"),
+    ],
+)
+def test_client_address(raw: str, stored: str, key: str) -> None:
+    assert throttle.client_address(raw) == throttle.ClientAddress(stored, key)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        "",
+        "testclient",
+        "not an address",
+        "198.51.100.7:1234",
+        "[2001:db8::1]",
+        "2001:db8::/64",
+    ],
+)
+def test_client_address_of_what_is_not_an_address(raw: str | None) -> None:
+    assert throttle.client_address(raw) is None
+    assert service.clean_ip(raw) is None  # the same fallback as the sessions table
+
+
 def test_without_an_address_only_the_email_limit_applies(
     api: Api, factory: sessionmaker[Session]
 ) -> None:
@@ -266,22 +368,23 @@ def test_after_the_window_the_right_password_works(
 # --- concurrency -------------------------------------------------------------------------------
 
 
-def _parallel_logins(app: FastAPI, bodies: list[tuple[str, str]], ip: str) -> list[int]:
+def _parallel_logins(app: FastAPI, bodies: list[tuple[str, str]], ip: str | list[str]) -> list[int]:
     # One client, so one lifespan and one engine: its portal takes calls from any thread, and
     # each request runs its handler on the app's threadpool, all at once after the barrier.
     barrier = threading.Barrier(len(bodies))
+    ips = [ip] * len(bodies) if isinstance(ip, str) else ip
     with TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*")) as client:
 
-        def attempt(body: tuple[str, str]) -> int:
+        def attempt(body: tuple[str, str], from_address: str) -> int:
             barrier.wait(timeout=30)
             return client.post(
                 "/api/auth/login",
                 json={"email": body[0], "password": body[1]},
-                headers={**CSRF, **from_ip(ip)},
+                headers={**CSRF, **from_ip(from_address)},
             ).status_code
 
         with ThreadPoolExecutor(max_workers=len(bodies)) as pool:
-            return list(pool.map(attempt, bodies))
+            return list(pool.map(attempt, bodies, ips))
 
 
 def test_parallel_guesses_on_one_email_never_overshoot(
@@ -299,6 +402,16 @@ def test_parallel_guesses_from_one_address_never_overshoot(
     app: FastAPI, factory: sessionmaker[Session], argon2_calls: list[str]
 ) -> None:
     codes = _parallel_logins(app, [(f"user{i}@example.org", WRONG) for i in range(30)], IP)
+    assert sorted(codes) == [401] * 20 + [429] * 10, codes
+    assert len(argon2_calls) == 20
+
+
+def test_parallel_guesses_from_one_ipv6_64_never_overshoot(
+    app: FastAPI, factory: sessionmaker[Session], argon2_calls: list[str]
+) -> None:
+    # Thirty addresses of one /64 at once: one lock and one count for the /64, exactly 20 pass.
+    bodies = [(f"user{i}@example.org", WRONG) for i in range(30)]
+    codes = _parallel_logins(app, bodies, [in_64(SUBSCRIBER, i) for i in range(30)])
     assert sorted(codes) == [401] * 20 + [429] * 10, codes
     assert len(argon2_calls) == 20
 

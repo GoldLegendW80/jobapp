@@ -5,6 +5,7 @@ still work. The unit-level behaviour of the middleware is in tests/test_body_lim
 
 import json
 import re
+import select
 import socket
 import threading
 import time
@@ -233,7 +234,10 @@ def schema_bound(schema: dict[str, Any], defs: dict[str, Any], depth: int = 0) -
 UNBOUNDED_SCHEMAS = {
     ("POST", "/api/agents/runs"): "input is free JSON, at most 16 KiB (runs_router)",
     ("POST", "/api/proposals/{proposal_id}/accept"): "the edited fields are free JSON",
-    ("PUT", "/api/profile/{section}"): "data is validated per section; facts at most 200,000 bytes",
+    ("PUT", "/api/profile/{section}"): (
+        "data is validated per section; facts at most 200,000 bytes. Its real limit is the "
+        "1 MiB default class, below the 2 MiB the profile import takes"
+    ),
 }
 
 
@@ -452,3 +456,67 @@ def test_socket_limit_concurrency_counts_open_connections_and_answers_503(app: F
         for sock in held:
             sock.close()
         server.close()
+
+
+# --- bodies in flight per user (issue #108) ----------------------------------------------------
+
+
+def test_one_user_cannot_hold_more_than_six_bodies_in_flight(
+    server: Server, factory: sessionmaker[Session]
+) -> None:
+    base = f"http://127.0.0.1:{server.port}"
+    cookies = {}
+    for email in ("e2e-bodies-a@example.org", "e2e-bodies-b@example.org"):
+        make_user(factory, email=email)
+        signed_in = httpx.post(
+            f"{base}/api/auth/login",
+            json={"email": email, "password": "correct horse battery 42"},
+            headers={"X-Requested-With": "jobapp"},
+        )
+        assert signed_in.status_code == 200, signed_in.text
+        (cookie,) = signed_in.headers.get_list("set-cookie")
+        cookies[email] = cookie.split(";", 1)[0]
+    mine, theirs = cookies.values()
+
+    def stalled(cookie: str) -> socket.socket:
+        # A body of 1000 bytes is announced, 10 arrive, then nothing more.
+        sock = socket.create_connection(("127.0.0.1", server.port), timeout=10)
+        send_head(
+            sock, "POST", "/api/jobs", server.port, f"Cookie: {cookie}\r\nContent-Length: 1000\r\n"
+        )
+        sock.sendall(b"x" * 10)
+        return sock
+
+    # Nine from one user, in whatever order the api comes to them, and one from another user.
+    sockets = [stalled(mine) for _ in range(bl.USER_BODIES_IN_FLIGHT + 3)]
+    other = stalled(theirs)
+    try:
+        # Three are answered at once, before their body: 429, come back soon.
+        deadline = time.monotonic() + 10
+        answered: list[socket.socket] = []
+        while len(answered) < 3:
+            assert time.monotonic() < deadline, len(answered)
+            answered, _, _ = select.select(sockets, [], [], 0.2)
+        time.sleep(0.5)  # and no fourth one after them
+        answered, _, _ = select.select([*sockets, other], [], [], 0)
+        assert len(answered) == 3
+        assert other not in answered
+        for sock in answered:
+            sock.settimeout(10)
+            head = b""
+            while b"\r\n\r\n" not in head:
+                head += sock.recv(4096)
+            assert head.startswith(b"HTTP/1.1 429 "), head[:80]
+            assert b"retry-after: 1\r\n" in head.lower()
+        # The six others are still being read. One completes (not valid JSON, so 422) and its
+        # place is free again: the next body is taken, not refused.
+        held = [sock for sock in sockets if sock not in answered]
+        assert len(held) == bl.USER_BODIES_IN_FLIGHT
+        held[0].sendall(b"x" * 990)
+        assert read_status(held[0]) == 422
+        again = stalled(mine)
+        sockets.append(again)
+        assert select.select([again], [], [], 0.5)[0] == []
+    finally:
+        for sock in [*sockets, other]:
+            sock.close()
