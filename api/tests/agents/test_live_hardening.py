@@ -9,6 +9,7 @@ import asyncio
 import logging
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -61,24 +62,35 @@ def alice_id(factory: sessionmaker[Session], keyring: Keyring) -> uuid.UUID:
 
 
 class Hung(RecordingStore):
-    """A store that never answers: every call waits until it is cancelled."""
+    """A store that never answers: every call waits until it is cancelled. It keeps what a bound
+    on its cost needs: how many calls, how long each one waited, and, when given `status`, the
+    status of the run at the moment of each call."""
 
-    def __init__(self) -> None:
+    def __init__(self, status: Callable[[uuid.UUID], RunStatus] | None = None) -> None:
         super().__init__()
         self.calls = 0
+        self.waits: list[float] = []
+        self.statuses: list[RunStatus] = []
+        self._status = status
 
-    async def _never(self) -> None:
+    async def _never(self, run_id: uuid.UUID) -> None:
+        began = time.perf_counter()
         self.calls += 1
-        await asyncio.Event().wait()
+        try:
+            if self._status is not None:
+                self.statuses.append(self._status(run_id))
+            await asyncio.Event().wait()
+        finally:
+            self.waits.append(time.perf_counter() - began)
 
     async def open(self, run_id: uuid.UUID, block: int, after: int, previous: int | None) -> None:
-        await self._never()
+        await self._never(run_id)
 
     async def append(self, run_id: uuid.UUID, block: int, text: str) -> None:
-        await self._never()
+        await self._never(run_id)
 
     async def clear(self, run_id: uuid.UUID, block: int | None) -> None:
-        await self._never()
+        await self._never(run_id)
 
 
 # --- point 2: the per agent switch --------------------------------------------------------------
@@ -302,31 +314,70 @@ def test_a_run_on_a_store_that_never_answers_keeps_its_speed(
     run itself (claimed to final status) waits for the store at most one timeout per attempt,
     and with a back off longer than the run there is one attempt; the end of the run, after
     its status is stored, adds at most two timeouts and the retry pause. Before issue #80 the
-    same run waited up to two timeouts per block: 3.6 s here."""
+    same run waited up to two timeouts per block: twelve attempts here, 3.6 s.
+
+    The bound is asserted in attempts, which no clock decides: the store notes the status of
+    the run at each call, and the back off is set far above what a run can last on a starved
+    machine. The clock is read for two things only, each against a measure taken in this same
+    test and never against a fixed number of seconds (issue #104: next to four end to end
+    stacks the run took 3.27 s and an absolute margin of 0.6 s failed): no attempt outlasts
+    its timeout by more than the event loop itself was late, and what the run takes besides
+    its waits on the store stays in proportion to the same run without a store."""
     timeout, blocks = 0.3, 6
     said = [assistant(text(f"Part {number} of the answer. " * 4)) for number in range(blocks)]
     name = script("sixblocks", [*said, result("Done.")], chars=40, sleep=0.0)
+    lateness: list[float] = []
 
-    def run(store: live.LiveStore | None) -> tuple[uuid.UUID, float, float]:
+    async def heartbeat(period: float = 0.05) -> None:
+        """How late this event loop wakes a sleeper: what load adds to any timeout."""
+        while True:
+            began = time.perf_counter()
+            await asyncio.sleep(period)
+            lateness.append(time.perf_counter() - began - period)
+
+    async def timed(rc: Any, run_id: uuid.UUID) -> RunStatus:
+        beat = asyncio.create_task(heartbeat())
+        try:
+            return await runner.execute(rc, run_id)
+        finally:
+            beat.cancel()
+
+    def run(store: live.LiveStore | None) -> tuple[uuid.UUID, float]:
         run_id = new_run(factory, alice_id, {"message": "x", "script": name})
         rc = context(settings, factory, keyring, Backends(speed=0.0), max_turns=4)
-        rc = replace(rc, live_store=store, live_flush_s=0.0, live_timeout_s=timeout)
+        rc = replace(
+            rc,
+            live_store=store,
+            live_flush_s=0.0,
+            live_timeout_s=timeout,
+            live_backoff_s=live.WRITE_BACKOFF_MAX_S,
+        )
         began = time.perf_counter()
-        assert execute(rc, run_id) is RunStatus.done
-        whole = time.perf_counter() - began
-        row = run_row(factory, run_id)
-        assert row.started_at is not None
-        assert row.finished_at is not None
-        return run_id, (row.finished_at - row.started_at).total_seconds(), whole
+        assert asyncio.run(timed(rc, run_id)) is RunStatus.done
+        return run_id, time.perf_counter() - began
 
-    plain_id, plain_run, plain_whole = run(None)
-    hung = Hung()
+    plain_id, plain_whole = run(None)
+    lateness.clear()
+    hung = Hung(status=lambda run_id: run_row(factory, run_id).status)
     with caplog.at_level(logging.WARNING):
-        hung_id, hung_run, hung_whole = run(hung)
-    margin = 0.6  # scheduling noise of a loaded test machine, far under the old cost
-    assert hung_run <= plain_run + 1 * timeout + margin
-    assert hung_whole <= plain_whole + 1 * timeout + (2 * timeout + live.CLOSE_RETRY_S) + margin
-    assert hung.calls <= 1 + 2  # one attempt in the run, two at its end
+        hung_id, hung_whole = run(hung)
+    # One attempt while the run is running, at most two once its status is stored, in that
+    # order: three timeouts at most, where the run of before issue #80 made twelve attempts.
+    assert hung.statuses[0] is RunStatus.running
+    assert hung.statuses[1:] in ([RunStatus.done], [RunStatus.done] * 2)
+    assert hung.calls == len(hung.statuses) == len(hung.waits)
+    # Each attempt is ended by its timeout: it never returns sooner (the store did not answer),
+    # and it outlasts the timeout only by what this loop was late for any sleeper at that time.
+    late = max(lateness)
+    assert all(timeout * 0.9 <= wait <= timeout + 2 * late + 0.1 for wait in hung.waits), (
+        hung.waits,
+        late,
+    )
+    # Besides those waits and the retry pause the run costs what it costs without a store: a
+    # proportion of the plain run measured a moment ago under the same load, so a run that
+    # slept its back off (a minute here) or waited elsewhere fails, and a slow machine does not.
+    besides = hung_whole - sum(hung.waits) - live.CLOSE_RETRY_S
+    assert besides <= 3 * plain_whole + 4 * late + 0.5
     assert stored(factory, hung_id) == stored(factory, plain_id)  # and the run is the same
     assert caplog.text.count("live text not published") == 1
 
