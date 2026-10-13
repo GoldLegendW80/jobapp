@@ -43,6 +43,10 @@ services:
   caddy:
     healthcheck: *fast-start
 
+  # Its healthcheck starts a sandboxed child (compose.yml, parser): the same probe, sooner.
+  parser:
+    healthcheck: *fast-start
+
   db:
     healthcheck: *fast-start
 

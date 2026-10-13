@@ -13,6 +13,7 @@
 # The full local checks live in tests/compose_smoke.sh; this keeps the ones that matter on the
 # target: health and SPA through caddy on loopback, nothing on the LAN, tailscale logged in with
 # Funnel on and caddy's tunnel listener trusting only its X-Forwarded-For, production settings,
+# the parser service (hardened, holding no secret, reaching nothing, its sandbox in force),
 # migrations, redis persistence, database outage and recovery, memory limits.
 set -euo pipefail
 
@@ -74,7 +75,7 @@ body_of() { sed -n '/^---8<---$/,$p' <<<"$1" | tail -n +2; }
 hdr() { headers_of "$1" | grep -i "^$2:" | head -n 1 | cut -d' ' -f2-; }
 
 step "services healthy, only caddy published, on loopback"
-for svc in api caddy db redis worker tailscale; do
+for svc in api caddy db redis worker parser tailscale; do
   id="$(rc ps -q "$svc")"
   [[ -n "$id" ]] || fail "$svc is not running"
   # A service that has just (re)started is `starting` until its first healthcheck: give it a minute.
@@ -91,7 +92,7 @@ for svc in api caddy db redis worker tailscale; do
     [[ -z "$ports" ]] || fail "$svc publishes $ports"
   fi
 done
-ok "api, caddy, db, redis, worker, tailscale healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
+ok "api, caddy, db, redis, worker, parser, tailscale healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
 if [[ "$HOST" == "local" ]]; then
   ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')"
 else
@@ -128,6 +129,45 @@ ok "runtime image: no dev dependencies, runs as uid 10001"
 [[ "$(r "docker inspect -f '{{.Architecture}}' jobapp-api:latest jobapp-worker:latest jobapp-caddy:latest" | sort -u)" == "arm64" ]] ||
   fail "images are not arm64"
 ok "jobapp-api, jobapp-worker and jobapp-caddy images are arm64"
+
+# --- parser (ingestion G2a) --------------------------------------------------------------------
+# Read only, a few seconds: what the container is (docker inspect, judged here by
+# tests/parser_check.py), what it can reach from inside, and one ping from the worker, whose
+# child reports the seccomp filter and the limits as they are on this kernel.
+step "parser: hardened, no secret, no route out, the sandbox in force on this kernel"
+CHECK="$(dirname "$0")/parser_check.py"
+parser_id="$(rc ps -q parser)"
+secret_names=()
+# The names of the variables of .env, never a value: none may be in the parser's environment.
+while read -r name; do
+  [[ -z "$name" ]] || secret_names+=(--secret-name "$name")
+done < <(r "sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' $RDIR/.env")
+summary="$(r "docker inspect $parser_id" | python3 "$CHECK" inspect "${secret_names[@]}")" ||
+  fail "the parser container is not what compose.yml says (above)"
+ok "$summary"
+[[ "$(r "docker inspect -f '{{.Image}}' $parser_id")" == "$(r "docker inspect -f '{{.Image}}' $(rc ps -q worker)")" ]] ||
+  fail "the parser does not run the image of the worker beside it"
+ok "the parser runs the worker's image"
+ip_of() { r "docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $1"; }
+db_ip="$(ip_of "$(rc ps -q db)")"
+parser_ip="$(ip_of "$parser_id")"
+reach="$(rc exec -T parser python -I - reach db:5432 redis:6379 api:8000 caddy:80 example.org:443 "$db_ip:5432" 1.1.1.1:443 <"$CHECK" | tr -d '\r')"
+[[ "$(wc -l <<<"$reach")" -eq 7 ]] || fail "the probe inside the parser did not run: $reach"
+if grep -q 'connected=1' <<<"$reach"; then fail "the parser reached something: $reach"; fi
+if grep -Eq '^[a-z][a-z.]*:[0-9]+ resolved=1' <<<"$reach"; then fail "the parser resolved a name: $reach"; fi
+ok "the parser cannot resolve db, redis, api, caddy or an outside name, nor connect to the db's address or to 1.1.1.1"
+reach="$(rc exec -T api python - reach parser:7070 "$parser_ip:7070" db:5432 <"$CHECK" | tr -d '\r')"
+grep -q '^parser:7070 resolved=0 connected=0$' <<<"$reach" || fail "the api resolved the parser: $reach"
+grep -q "^$parser_ip:7070 resolved=1 connected=0\$" <<<"$reach" || fail "the api reached the parser: $reach"
+grep -q '^db:5432 resolved=1 connected=1$' <<<"$reach" || fail "the control failed, the probe reaches nothing: $reach"
+ok "the api cannot resolve the parser or connect to its address (and the same probe reaches db)"
+# One round trip from the worker. "ok":true means the child reported every denied call
+# answering EPERM and every limit at its value; the line names the kernel it ran on.
+line="$(rc exec -T worker python -m app.ingestion.parser_client ping | tr -d '\r')" ||
+  fail "the worker's ping of the parser failed: $line"
+grep -q '"ok":true' <<<"$line" || fail "the sandbox is not in force: $line"
+ok "the worker reaches it and the sandbox is in force: $line"
+# --- end of parser ---------------------------------------------------------------------------
 
 step "health and the React shell through caddy"
 res="$(rcurl /api/health)"
@@ -292,11 +332,11 @@ fi
 step "memory under the limits"
 stats="$(r "docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' \$(cd $RDIR && docker compose -f compose.yml --profile tunnel ps -q)")"
 printf '%s\n' "$stats" | sed 's/^/   /'
-for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB" "worker 1.5GiB" "tailscale 128MiB"; do
+for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB" "worker 1.5GiB" "parser 640MiB" "tailscale 128MiB"; do
   name="${pair% *}"
   limit="${pair#* }"
   grep -Eq "^jobapp-$name-[0-9]+ .* / $limit\$" <<<"$stats" || fail "$name limit is not $limit"
 done
-ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, worker 1.5GiB, tailscale 128MiB"
+ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, worker 1.5GiB, parser 640MiB, tailscale 128MiB"
 
 printf '\nAll %d checks passed on %s.\n' "$passed" "$HOST"

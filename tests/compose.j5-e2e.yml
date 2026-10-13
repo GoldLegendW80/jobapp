@@ -21,6 +21,9 @@ services:
     depends_on:
       fakeats:
         condition: service_healthy
+  # The parser runs the worker's image, whatever its tag (compose.yml, parser).
+  parser:
+    image: jobapp-worker:j5-e2e
   caddy:
     image: jobapp-caddy:j5-e2e
   fakeats:

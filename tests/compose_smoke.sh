@@ -6,13 +6,26 @@
 #
 # Needs Docker, python3, curl and a .env at the repository root (copy .env.example).
 # The persistence check runs on a throwaway project name and only ever deletes that project's
-# volumes; the dev stack's pgdata is never removed.
+# volumes; the dev stack's pgdata is never removed, and nothing here downgrades the dev database:
+# the migration round trip (downgrade base, upgrade head) runs on the throwaway project. It ran
+# on the dev database while the only revision was the empty baseline; with real migrations it
+# would drop every table of the database a developer works in.
+#
+#   COMPOSE_PROJECT_NAME=jobapp-x tests/compose_smoke.sh   the dev stack under another project
+#                                                          name than jobapp (its own volumes)
+#   SMOKE_DEV_OVERLAY=a.yml SMOKE_PROD_OVERLAY=b.yml tests/compose_smoke.sh
+#       one more Compose file for the dev stack and one for the production stack: image tags
+#       of one's own, on a machine where jobapp-*:dev and jobapp-*:latest are someone else's
+#       (both stacks are built here, and a build replaces the tag it is given)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# The project of the dev stack: compose.yml names it jobapp, COMPOSE_PROJECT_NAME overrides that.
+PROJECT="${COMPOSE_PROJECT_NAME:-jobapp}"
 DEV=(docker compose -f compose.yml -f compose.dev.yml)
+[[ -z "${SMOKE_DEV_OVERLAY:-}" ]] || DEV+=(-f "$SMOKE_DEV_OVERLAY")
 PROD=(docker compose -f compose.yml)
 SCRATCH_PROJECT="jobapp-smoke-$$"
 HEALTH_URL="http://127.0.0.1:8000/api/health"
@@ -75,7 +88,7 @@ step "production config: only caddy publishes a port, mem_limit and restart ever
 import json, sys
 cfg = json.load(sys.stdin)
 services = cfg["services"]
-assert set(services) == {"api", "caddy", "db", "redis", "tailscale", "worker"}, sorted(services)
+assert set(services) == {"api", "caddy", "db", "parser", "redis", "tailscale", "worker"}, sorted(services)
 for name, svc in services.items():
     ports, restart = svc.get("ports"), svc.get("restart")
     if name == "caddy":
@@ -100,6 +113,22 @@ assert worker["command"] == ["python", "-m", "app.worker"], worker["command"]
 assert worker["tmpfs"] == ["/tmp:size=128m,mode=1777"], worker.get("tmpfs")
 assert int(worker["mem_limit"]) == 1536 * 1024**2, worker["mem_limit"]
 assert worker["depends_on"]["db"]["condition"] == worker["depends_on"]["redis"]["condition"] == "service_healthy"
+# parser (ingestion G2a): the image of the worker, hardened, on the internal network alone. The same
+# keys are held one by one by api/tests/ingestion/parser/test_compose_parser.py.
+parser = services["parser"]
+assert parser["image"] == worker["image"] and "build" not in parser, parser["image"]
+assert parser["command"] == ["python", "-I", "/app/app/ingestion/sandbox/server.py"], parser["command"]
+assert parser["user"] == "10002:10002" and parser["read_only"] is True and parser["cap_drop"] == ["ALL"], parser
+assert parser["security_opt"] == ["no-new-privileges:true"] and parser["ipc"] == "none", parser
+assert parser["pids_limit"] == 32 and int(parser["mem_limit"]) == 640 * 1024**2, parser
+assert parser["environment"] == {"PARSER_PORT": "7070"} and "env_file" not in parser, parser.get("environment")
+assert not parser.get("volumes") and not parser.get("tmpfs") and not parser.get("depends_on"), parser
+assert list(parser["networks"]) == ["parsing"], parser["networks"]
+assert cfg["networks"]["parsing"]["internal"] is True, cfg["networks"]
+assert sorted(worker["networks"]) == ["default", "parsing"], worker["networks"]
+for name, svc in services.items():
+    if name not in ("parser", "worker"):
+        assert list(svc["networks"]) == ["default"], (name, svc["networks"])
 # tailscale: the full checks of the service are in tests/tailscale_test.sh.
 ts = services["tailscale"]
 import re
@@ -111,6 +140,7 @@ assert ts["environment"]["TS_USERSPACE"] == "true" and not ts.get("privileged"),
 print(f"   total mem_limit today: {total // 1024**2} MiB")
 ' || fail "production config"
 ok "caddy alone publishes, on 127.0.0.1; limits, restart policy, healthchecks, depends_on healthy; tailscale pinned, userspace, in the tunnel profile"
+ok "parser: the worker's image, uid 10002, hardened, no env_file, on the internal network that the worker alone shares"
 for files in "compose.yml" "compose.yml -f compose.dev.yml"; do
   # shellcheck disable=SC2086 # two words on purpose
   ! docker compose -f $files config --services | grep -qx tailscale || fail "$files starts tailscale without --profile tunnel"
@@ -128,30 +158,73 @@ ok "dev publishes 8000, 5432 and $HTTP_PORT on 127.0.0.1 only"
 
 step "dev stack up, every service healthy"
 "${DEV[@]}" up -d --build --wait --wait-timeout 180 >/dev/null 2>&1 || fail "stack did not become healthy"
-for svc in api caddy db redis worker; do
+for svc in api caddy db parser redis worker; do
   health="$(docker inspect -f '{{.State.Health.Status}}' "$("${DEV[@]}" ps -q "$svc")")"
   [[ "$health" == "healthy" ]] || fail "$svc is $health"
 done
-ok "api, caddy, db, redis, worker healthy"
+ok "api, caddy, db, parser, redis, worker healthy"
+# What the dev api runs, for the stand in that takes its place further down.
+API_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$("${DEV[@]}" ps -q api)")"
+
+# parser_checks <compose command...>: the parser of a running stack, from outside and from inside
+# (ingestion G2a). PARSER_MOUNT is --code-mount for the dev stack, whose parser has the code
+# mounted read only, and empty for the production stack, whose parser has nothing mounted.
+parser_checks() {
+  local parser_id worker_id summary line reach db_ip parser_ip name
+  local -a secret_names=()
+  parser_id="$("$@" ps -q parser)"
+  worker_id="$("$@" ps -q worker)"
+  "$@" exec -T parser python -I /app/app/ingestion/sandbox/server.py --check \
+    || fail "the parser's healthcheck fails"
+  ok "healthcheck: a child started, locked itself down and reported the filter and the limits in force"
+  # The names of every variable of .env, never a value: none may be in the parser's environment.
+  while read -r name; do
+    secret_names+=(--secret-name "$name")
+  done < <(sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' .env .env.example | sort -u)
+  # shellcheck disable=SC2086 # PARSER_MOUNT is one option or nothing
+  summary="$(docker inspect "$parser_id" | python3 tests/parser_check.py inspect ${PARSER_MOUNT:-} "${secret_names[@]}")" \
+    || fail "the parser container is not what compose.yml says"
+  ok "$summary"
+  [[ "$(docker inspect -f '{{.Image}}' "$parser_id")" == "$(docker inspect -f '{{.Image}}' "$worker_id")" ]] \
+    || fail "the parser does not run the image of the worker beside it"
+  ok "the parser runs the worker's image, $(docker inspect -f '{{.Config.Image}}' "$parser_id"), which it did not build"
+  db_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$("$@" ps -q db)")"
+  parser_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$parser_id")"
+  reach="$("$@" exec -T parser python -I - reach db:5432 redis:6379 api:8000 caddy:80 example.org:443 \
+    "$db_ip:5432" 1.1.1.1:443 <tests/parser_check.py)"
+  [[ "$(wc -l <<<"$reach")" -eq 7 ]] || fail "the probe inside the parser did not run: $reach"
+  ! grep -q 'connected=1' <<<"$reach" || fail "the parser reached something: $reach"
+  ! grep -Eq '^[a-z][a-z.]*:[0-9]+ resolved=1' <<<"$reach" || fail "the parser resolved a name: $reach"
+  ok "the parser cannot resolve db, redis, api, caddy or an outside name, nor connect to the db's address or to 1.1.1.1"
+  reach="$("$@" exec -T api python - reach "parser:7070" "$parser_ip:7070" db:5432 <tests/parser_check.py)"
+  grep -q '^parser:7070 resolved=0 connected=0$' <<<"$reach" || fail "the api resolved the parser: $reach"
+  grep -q "^$parser_ip:7070 resolved=1 connected=0\$" <<<"$reach" || fail "the api reached the parser: $reach"
+  grep -q '^db:5432 resolved=1 connected=1$' <<<"$reach" || fail "the control failed, the probe reaches nothing: $reach"
+  ok "the api cannot resolve the parser or connect to its address (and the same probe reaches db)"
+  line="$("$@" exec -T worker python -m app.ingestion.parser_client ping --bytes 1048576)" \
+    || fail "the worker's ping of the parser failed: $line"
+  grep -q '"ok":true' <<<"$line" || fail "the worker's ping: $line"
+  ok "the worker reaches it, 1 MiB through a sandboxed child and back: $line"
+}
+
+step "parser: the sandbox in force, nothing to steal, nowhere to go (dev stack)"
+PARSER_MOUNT=--code-mount parser_checks "${DEV[@]}"
 
 step "GET /api/health"
 body="$(curl -s --max-time 5 "$HEALTH_URL")"
 [[ "$body" == '{"status":"ok"}' ]] || fail "unexpected body: $body"
 ok "$body"
 
-step "alembic: upgrade head twice, current, downgrade base, upgrade again"
+step "alembic: one head, upgrade head twice, current is that head"
+# The head is whatever the migrations of this tree say, never a number written here: every module
+# adds revisions. One line "<revision> (head)": two heads would be two lines and fail here.
+head="$("${DEV[@]}" exec -T api alembic heads 2>/dev/null | tr -d '\r')"
+[[ "$head" =~ ^[0-9a-z_]+\ \(head\)$ ]] || fail "alembic heads: ${head:-nothing}"
 "${DEV[@]}" exec -T api alembic upgrade head >/dev/null 2>&1
 "${DEV[@]}" exec -T api alembic upgrade head >/dev/null 2>&1
-current="$("${DEV[@]}" exec -T api alembic current 2>/dev/null)"
-[[ "$current" == "0001 (head)" ]] || fail "alembic current: $current"
-ok "upgrade twice, current is $current"
-"${DEV[@]}" exec -T api alembic downgrade base >/dev/null 2>&1
-current="$("${DEV[@]}" exec -T api alembic current 2>/dev/null)"
-[[ -z "$current" ]] || fail "after downgrade base, current is $current"
-"${DEV[@]}" exec -T api alembic upgrade head >/dev/null 2>&1
-current="$("${DEV[@]}" exec -T api alembic current 2>/dev/null)"
-[[ "$current" == "0001 (head)" ]] || fail "alembic current: $current"
-ok "downgrade base then upgrade head: $current"
+current="$("${DEV[@]}" exec -T api alembic current 2>/dev/null | tr -d '\r')"
+[[ "$current" == "$head" ]] || fail "alembic current: $current, head: $head"
+ok "upgrade twice, current is $current (no downgrade here: this is the dev database)"
 
 step "pytest inside the api container against the compose db ($TEST_DB)"
 if [[ "$(psql_dev "select 1 from pg_database where datname = '$TEST_DB'")" != "1" ]]; then
@@ -159,9 +232,14 @@ if [[ "$(psql_dev "select 1 from pg_database where datname = '$TEST_DB'")" != "1
 fi
 encoded_pw="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$PG_PASSWORD")"
 test_url="postgresql+psycopg://${PG_USER}:${encoded_pw}@db:5432/${TEST_DB}"
+# A few files, not the suite: the point here is that the dev image holds the test tools and
+# reaches the compose database. The whole suite is CI's (the api job). In this container it is
+# one process next to uvicorn under the api's 512m: on 2026-10-11 it stood at 438 MiB at 95
+# percent of the tests, after more than twenty minutes, and the run ended with status 137.
 "${DEV[@]}" exec -T -e TEST_DATABASE_URL="$test_url" api pytest -q -m "not docker" -p no:cacheprovider \
+  tests/test_health.py tests/test_db.py tests/test_migrations.py tests/ingestion/parser \
   | tail -n 3
-ok "pytest -m 'not docker' passed"
+ok "pytest -m 'not docker' passed on tests/test_health.py, test_db.py, test_migrations.py and tests/ingestion/parser"
 
 step "redis answers PING and persists with AOF"
 [[ "$("${DEV[@]}" exec -T redis redis-cli ping | tr -d '\r')" == "PONG" ]] || fail "no PONG"
@@ -246,8 +324,8 @@ big() { head -c "$1" /dev/zero; }
 [[ "$(curl_c /api/health -X POST --data-binary @<(big 10485761))" == "413" ]] || fail "10 MiB + 1 not refused"
 [[ "$(curl_c / -X POST --data-binary @<(big 20000000))" == "413" ]] || fail "20 MB to / not refused"
 # 10 MiB exactly passes caddy and is answered by the api: its 401, since a body with no session
-# is refused unread on every route that is not public (it was a 405 before issue #100, and a 403
-# without the CSRF header).
+# is refused unread on every route that is not public (issue #100; a 405 before). With the header
+# the api's CSRF check asks of every write: without it the api answers 403 before anything else.
 [[ "$(curl_c /api/health -X POST -H 'X-Requested-With: jobapp' --data-binary @<(big 10485760))" == "401" ]] \
   && grep -q 'Sign in to continue' "$CURL_DIR/b" || fail "10 MiB exactly did not reach the api"
 ok "bodies over 10 MiB refused with 413, 10 MiB exactly reaches the api (its 401, no session)"
@@ -310,7 +388,7 @@ step "caddy: headers and streaming limit, against an echo stand-in for the api"
 "${DEV[@]}" stop api >/dev/null 2>&1
 network="$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$("${DEV[@]}" ps -q caddy)")"
 docker run -d --rm --name "$ECHO_NAME" --network "$network" --network-alias api \
-  -v "$ROOT/tests/echo_upstream.py:/echo.py:ro" jobapp-api:dev python /echo.py >/dev/null
+  -v "$ROOT/tests/echo_upstream.py:/echo.py:ro" "$API_IMAGE" python /echo.py >/dev/null
 deadline=$((SECONDS + 20))
 until [[ "$(curl_c /api/echo)" == "200" ]]; do
   ((SECONDS < deadline)) || fail "echo stand-in never answered"
@@ -378,15 +456,16 @@ ok "api container never restarted"
 step "memory limits visible in docker stats"
 stats="$(docker stats --no-stream --format '{{.Name}} {{.MemUsage}}' $("${DEV[@]}" ps -q))"
 printf '%s\n' "$stats" | sed 's/^/   /'
-for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB"; do
+for pair in "api 512MiB" "caddy 128MiB" "db 768MiB" "redis 256MiB" "parser 640MiB" "worker 1.5GiB"; do
   set -- $pair
-  grep -Eq "jobapp-$1-[0-9]+ .* / $2\$" <<<"$stats" || fail "$1 limit is not $2"
+  grep -Eq "^$PROJECT-$1-[0-9]+ .* / $2\$" <<<"$stats" || fail "$1 limit is not $2"
 done
-ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB"
+ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, parser 640MiB, worker 1.5GiB"
 
 # compose.mac.yml: OPENSSL_armcap=0 for api and worker, or the runtime image dies with SIGILL at
 # import inside Docker on an M4 (README, Apple silicon). This script only ever runs on the Mac.
 SCRATCH=(docker compose -p "$SCRATCH_PROJECT" -f compose.yml -f compose.mac.yml)
+[[ -z "${SMOKE_PROD_OVERLAY:-}" ]] || SCRATCH+=(-f "$SMOKE_PROD_OVERLAY")
 psql_scratch() { "${SCRATCH[@]}" exec -T db psql -v ON_ERROR_STOP=1 -U "$PG_USER" -d "$PG_DB" -tAc "$1"; }
 
 step "production stack alone on $SCRATCH_PROJECT: runtime image healthy, migrations, only caddy published"
@@ -401,15 +480,28 @@ curl -s --max-time 5 "http://$scratch_caddy/some/route" | grep -q '<div id="root
 ok "prod caddy on $scratch_caddy: /api/health ok, /some/route is the shell"
 [[ -z "$(docker port "$("${SCRATCH[@]}" ps -q api)")$(docker port "$("${SCRATCH[@]}" ps -q db)")" ]] \
   || fail "prod stack publishes a host port"
-"${SCRATCH[@]}" exec -T api alembic upgrade head >/dev/null 2>&1
-[[ "$("${SCRATCH[@]}" exec -T api alembic current 2>/dev/null)" == "0001 (head)" ]] \
-  || fail "alembic in the runtime image"
+scratch_alembic() { "${SCRATCH[@]}" exec -T api alembic "$@" 2>/dev/null | tr -d '\r'; }
+scratch_alembic upgrade head >/dev/null
+[[ "$(scratch_alembic current)" == "$head" ]] || fail "alembic in the runtime image: $(scratch_alembic current), head: $head"
 "${SCRATCH[@]}" exec -T api python -c "import urllib.request as u; print(u.urlopen('http://127.0.0.1:8000/api/health').read().decode())" \
   | grep -q '"status":"ok"' || fail "health inside the runtime image"
 if "${SCRATCH[@]}" exec -T api python -c "import pytest" >/dev/null 2>&1; then
   fail "runtime image ships dev dependencies"
 fi
-ok "runtime image healthy, alembic at 0001, api and db publish nothing, no dev dependencies"
+ok "runtime image healthy, alembic at $head, api and db publish nothing, no dev dependencies"
+
+step "parser of the production stack, started from an image only the worker builds"
+PARSER_MOUNT="" parser_checks "${SCRATCH[@]}"
+
+step "alembic round trip on throwaway project $SCRATCH_PROJECT: downgrade base, upgrade head"
+# Here and only here: this database is deleted with the project at the end of the script.
+scratch_alembic downgrade base >/dev/null || fail "downgrade base"
+current="$(scratch_alembic current)"
+[[ -z "$current" ]] || fail "after downgrade base, current is $current"
+scratch_alembic upgrade head >/dev/null || fail "upgrade head after downgrade base"
+current="$(scratch_alembic current)"
+[[ "$current" == "$head" ]] || fail "alembic current: $current, head: $head"
+ok "downgrade base then upgrade head: $current"
 
 step "volume persistence on throwaway project $SCRATCH_PROJECT"
 psql_scratch "create table smoke (note text); insert into smoke values ('persisted ✓')" >/dev/null
