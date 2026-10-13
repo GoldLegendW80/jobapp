@@ -4,6 +4,12 @@
 A document of a kind that has a reader (documents.READABLE_KINDS; PARSER_KIND says which reader)
 is stored `pending` with its bytes. Then:
 
+(An archive, G7, is asked twice at most: the parser's `docx` reader first, and when that one
+answers `not_docx`, its `linkedin_zip` reader. A Word document is stored as a text below, its
+row then carrying DOCX_MIME. An export is stored by `_store_export`: one transaction makes a
+document of each CSV, found again by its own hash, and deletes the row of the archive. A ZIP
+that is neither is failed with its reason and keeps its row, as any file that cannot be read.)
+
 1. The upload route queues `parse_document(document_id)` once its transaction has committed
    (`enqueue`). When Redis cannot take the job the document is failed at once, as a failure of
    the server (`fail_unqueued`): the user adds the file again.
@@ -80,9 +86,12 @@ from app.ingestion.models import (
 
 logger = logging.getLogger("app.ingestion")
 
-# kind of document -> kind of parser job (sandbox/main.py, HANDLERS). G7 adds the archive, G8
-# the image and the rendering of the pages a PDF has no text for.
-PARSER_KIND: dict[Kind, str] = {Kind.pdf: "pdf_text"}
+# kind of document -> kind of parser job (sandbox/main.py, HANDLERS). An archive is asked as a
+# Word document first, then as an export (module docstring). G8 adds the image and the
+# rendering of the pages a PDF has no text for.
+PARSER_KIND: dict[Kind, str] = {Kind.pdf: "pdf_text", Kind.archive: "docx"}
+EXPORT_PARSER_KIND = "linkedin_zip"
+NOT_DOCX = "not_docx"  # the answer of the `docx` reader that sends an archive to the other one
 
 MAX_ATTEMPTS = 2  # tries of one upload: the first, and one more after a failure of the server
 # A whole job: the bytes read (the statement timeout), the parser (parser_client.TIMEOUT_S, 75 s,
@@ -118,6 +127,28 @@ FILE_SENTENCES = {
     "too_slow": "This PDF took too long to read. Export it again, or split it, and add the "
     "new file.",
 }
+# The same codes for a Word document or a ZIP, and the codes only an archive has.
+_NEITHER = (
+    "This ZIP file is neither a Word document nor a LinkedIn data export, so there is "
+    "nothing in it to read."
+)
+_SAVE_AGAIN = "Save it again from the application that made it, and add the new file."
+ARCHIVE_SENTENCES = {
+    "unreadable": f"This file could not be read. It may be damaged. {_SAVE_AGAIN}",
+    "not_docx": _NEITHER,
+    "not_export": _NEITHER,
+    "macros": "This Word document carries macros, which are never opened here. Save it as "
+    "a .docx file without macros, and add the new file.",
+    "bomb": f"This file unpacks to more than a file may hold here. {_SAVE_AGAIN}",
+    "nested_archive": "This file holds another archive inside it, which is never opened "
+    "here. Add the files it holds one by one.",
+    "protected": "This file is protected by a password. Remove the protection, and add "
+    "the new file.",
+    "not_utf8": "A file of this export is not text in UTF-8, so the export was not read. "
+    "Download the export again from LinkedIn, and add the new file.",
+    "no_text": "There is no text in this file.",
+    "too_slow": f"This file took too long to read. {_SAVE_AGAIN}",
+}
 FILE_FALLBACK = "This file could not be read."
 OVER_QUOTA = (
     f"The text of this file would take your documents over the "
@@ -142,7 +173,7 @@ def _pages(first: int, last: int) -> str:
     )
 
 
-def note_sentence(note: parser_client.Note) -> str:
+def note_sentence(note: parser_client.Note, kind: Kind = Kind.pdf) -> str:
     """One note of the parser in plain words. The parser sends a code and integers; the words
     are written here."""
     values = note.values
@@ -152,7 +183,8 @@ def note_sentence(note: parser_client.Note) -> str:
     if note.code == "text_limit":
         return f"Only the first {TEXT_MAX_CHARS:,} characters were read. {left_out}".strip()
     if note.code == "time_limit":
-        return f"This PDF took too long to read to its end. {left_out}".strip()
+        what = "PDF" if kind is Kind.pdf else "document"
+        return f"This {what} took too long to read to its end. {left_out}".strip()
     if note.code == "scans_not_read":
         count = values.get("count", 0)
         if count == 1:
@@ -161,13 +193,14 @@ def note_sentence(note: parser_client.Note) -> str:
     return "A part of this file was not read."  # a code of a later task, before its sentence
 
 
-def note_of(parsed: parser_client.Parsed) -> str | None:
+def note_of(parsed: parser_client.Parsed, kind: Kind = Kind.pdf) -> str | None:
     """What was not read, for `ingestion_documents.note`: a sentence per note, None for none."""
-    return " ".join(note_sentence(note) for note in parsed.notes) or None
+    return " ".join(note_sentence(note, kind) for note in parsed.notes) or None
 
 
-def file_sentence(code: str) -> str:
-    return FILE_SENTENCES.get(code, FILE_FALLBACK)
+def file_sentence(code: str, kind: Kind = Kind.pdf) -> str:
+    sentences = ARCHIVE_SENTENCES if kind is Kind.archive else FILE_SENTENCES
+    return sentences.get(code, FILE_FALLBACK)
 
 
 # --- text as it is stored -----------------------------------------------------------------------
@@ -412,7 +445,9 @@ def _store_text(
         document.pages_text = parsed.pages_text
         document.pages_image = parsed.pages_image
         document.truncated = parsed.truncated
-        document.note = note_of(parsed)
+        document.note = note_of(parsed, claim.kind)
+        if claim.kind is Kind.archive:
+            document.mime = documents.DOCX_MIME  # what the parser found the ZIP to be
         document.parser_version = documents.PARSER_VERSION
         document.failed_kind = document.failed_reason = None
         document.pending_since = None
@@ -441,6 +476,63 @@ def _store_text(
     return DONE
 
 
+def _store_export(
+    sessions: sessionmaker[Session],
+    claim: _Claim,
+    parsed: parser_client.Parsed,
+    started: float,
+    now: datetime,
+) -> str:
+    """The files of a LinkedIn export, written in one transaction: a document per CSV, and the
+    row of the archive deleted. An export that does not fit keeps nothing but its row, failed
+    with the reason."""
+    entries = []
+    secret_rules: set[str] = set()
+    for file in parsed.documents:
+        # Before the locks: the scan for secrets takes its time on a long text.
+        content = documents.export_content(file.text, file.truncated)
+        if content is not None:
+            entries.append(documents.ExportEntry(file.name, file.sha256, file.size, content))
+            secret_rules.update(content.secret_rules)
+    if not entries:
+        return _store_failure(sessions, claim, "file", "no_text", started)
+    with sessions() as db:
+        documents.lock_user(db, claim.user_id)
+        document = _held(db, claim.document_id, claim.attempts, claim.pending_since)
+        if document is None:
+            return SUPERSEDED
+        try:
+            stored = documents.store_export(db, claim.user_id, document, entries, now)
+        except documents.DocumentError as refused:
+            # Nothing of the export is kept: the transaction starts over, for the row alone.
+            db.rollback()
+            documents.lock_user(db, claim.user_id)
+            document = _held(db, claim.document_id, claim.attempts, claim.pending_since)
+            if document is None:
+                return SUPERSEDED
+            _fail(db, document, FailedKind.file, refused.message)
+            _log("document parse failed", document, failure="file", code=refused.rule)
+            db.commit()
+            return FAILED
+        logger.info(
+            "export unpacked",
+            extra={
+                "document_id": str(claim.document_id),
+                "user_id": str(claim.user_id),
+                "size": claim.size,
+                "files": len(entries),
+                "created": sum(1 for one in stored if one.created),
+                "characters": sum(len(entry.content.text) for entry in entries),
+                "secret_rules": sorted(secret_rules),
+                "attempts": claim.attempts,
+                "ms": int((time.monotonic() - started) * 1000),
+                **{f"child_{name}": value for name, value in (parsed.usage or {}).items()},
+            },
+        )
+        db.commit()
+    return DONE
+
+
 def _store_failure(
     sessions: sessionmaker[Session], claim: _Claim, failure: str, code: str, started: float
 ) -> str:
@@ -451,7 +543,7 @@ def _store_failure(
         if document is None:
             return SUPERSEDED
         if failure == "file":
-            _fail(db, document, FailedKind.file, file_sentence(code))
+            _fail(db, document, FailedKind.file, file_sentence(code, claim.kind))
             outcome = FAILED
         elif claim.attempts >= MAX_ATTEMPTS:
             _fail(db, document, FailedKind.server, SERVER_FAILED)
@@ -472,6 +564,18 @@ def _store_failure(
         )
         db.commit()
     return outcome
+
+
+async def _read(parse: Parse, kind: Kind, data: bytes) -> parser_client.Parsed:
+    """What the parser makes of `data`. An archive is a Word document or an export, and only
+    the parser can tell: its `docx` reader is asked first, and the `linkedin_zip` one when the
+    first answers that the ZIP is not a Word document."""
+    try:
+        return await parse(PARSER_KIND[kind], data)
+    except parser_client.ParserRefusedError as error:
+        if kind is not Kind.archive or error.failure != "file" or error.code != NOT_DOCX:
+            raise
+    return await parse(EXPORT_PARSER_KIND, data)
 
 
 async def _parse(ctx: dict[str, Any], document_id: uuid.UUID) -> str:
@@ -497,14 +601,17 @@ async def _parse(ctx: dict[str, Any], document_id: uuid.UUID) -> str:
         return claim
     data, claim.data = claim.data, b""
     try:
-        parsed = await parse(PARSER_KIND[claim.kind], data)
+        parsed = await _read(parse, claim.kind, data)
     except parser_client.ParserError as error:
         del data
         return await asyncio.to_thread(
             _store_failure, sessions, claim, error.failure, error.code, started
         )
     del data
-    if parsed.text is None or parsed.pages is None:
+    if parsed.documents:
+        return await asyncio.to_thread(_store_export, sessions, claim, parsed, started, now)
+    # A PDF comes with its page counts, a Word document has no pages.
+    if parsed.text is None or (parsed.pages is None) is (claim.kind is Kind.pdf):
         # Not what a text reader answers: the parser's fault, not the file's.
         return await asyncio.to_thread(
             _store_failure, sessions, claim, "server", "no_text_in_answer", started
