@@ -332,3 +332,61 @@ def test_pillow_never_loads_a_directory_of_tags(monkeypatch: pytest.MonkeyPatch)
     # And Pillow is itself again outside: the table of its JPEG reader is as it was.
     with Image.open(io.BytesIO(fx.rotated_jpeg())) as opened:
         assert opened.getexif()[0x0112] == 6
+
+
+# --- the scans of a JPEG are counted before it is decoded (review of PR #157, B3) ---------------
+
+
+def test_an_honest_jpeg_has_few_scans_and_is_read() -> None:
+    baseline, progressive = fx.photo_jpeg(), fx.progressive_jpeg(640, 480)
+    assert image.jpeg_scans(baseline) == len(fx.scans_of(baseline)) == 1
+    assert image.jpeg_scans(progressive) == len(fx.scans_of(progressive)) == 10
+    assert image.jpeg_scans(fx.cmyk_jpeg()) == 1
+    for data in (baseline, progressive):
+        assert image.handle(data, {}, Plenty())["ok"] is True
+
+
+def test_64_scans_are_read_and_65_are_refused() -> None:
+    assert image.SCANS_MAX == 64
+    most, one_more = fx.many_scans_jpeg(64), fx.many_scans_jpeg(65)
+    assert (image.jpeg_scans(most), image.jpeg_scans(one_more)) == (64, 65)
+    assert image.handle(most, {}, Plenty())["ok"] is True
+    assert refusal(one_more) == "bomb"
+
+
+def test_only_the_scans_of_the_picture_are_counted() -> None:
+    """0xFF 0xDA in a segment or after the end of the picture is no scan, and neither is what
+    the compressed data holds: a stuffed 0xFF followed by 0xDA, a restart marker."""
+    data = fx.jpeg_with_markers_in_its_data()
+    assert data.count(b"\xff\xda") == 601  # what counting the two bytes would say
+    assert image.jpeg_scans(data) == 1
+    assert image.handle(data, {}, Plenty())["ok"] is True
+    stuffed = fx.jpeg_with_markers_in_its_data(
+        b"\xff\x00\xda\xff\xd0\xff\x00\xda\xff\xd7\xff\xff\x00"
+    )
+    assert b"\xff\x00\xda" in stuffed
+    assert image.jpeg_scans(stuffed) == 1
+
+
+def test_bytes_between_two_scans_hide_none_of_them() -> None:
+    """The decoder skips what stands where a marker is due and reads on: so does the count."""
+    for between in (b"\x00\x01\x02", b"\xff\x00\xff\x00", b"\xff\xff\xff", b"\xff\xd3"):
+        assert image.jpeg_scans(fx.many_scans_jpeg(70, between=between)) == 65, between
+        assert refusal(fx.many_scans_jpeg(70, between=between)) == "bomb"
+    assert image.jpeg_scans(fx.many_scans_jpeg(30, between=b"\x00\x01\x02")) == 30
+
+
+def test_a_file_cut_anywhere_is_counted_without_an_error() -> None:
+    data = fx.many_scans_jpeg(12)
+    for keep in range(2, len(data), 7):
+        assert 0 <= image.jpeg_scans(data[:keep]) <= 12
+
+
+def test_the_many_scans_file_of_the_review_is_refused_before_any_decoding() -> None:
+    import time
+
+    data = fx.many_scans_jpeg(2000, 5000)
+    assert len(data) < 200_000
+    started = time.process_time()
+    assert refusal(data) == "bomb"
+    assert time.process_time() - started < 1  # 16 s of CPU when it was decoded

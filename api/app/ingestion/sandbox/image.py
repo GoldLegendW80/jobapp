@@ -22,7 +22,11 @@ What is done, in this order:
    and nothing is decoded: a PNG of a few kilobytes may declare 30,000 by 30,000 pixels. A
    decoder allocates what the header declares, never what the data holds, so a header that
    lies costs what it says at most; what Pillow reads of the size is checked the same way.
-3. Decoding. A JPEG is decoded at the smallest scale its DCT allows above the target. Only the
+3. The scans of a JPEG are counted from its bytes (`jpeg_scans`), and more than SCANS_MAX is
+   a `bomb`: a progressive file is read scan after scan, each one a pass over every block of
+   the picture, and nothing in the decoder bounds how many a file holds. 2,000 scans of 42
+   bytes each took 16 s of CPU at 25 megapixels (review of PR #157); an encoder writes ten.
+   Decoding. A JPEG is decoded at the smallest scale its DCT allows above the target. Only the
    first frame of an animated PNG or of a multi picture JPEG is read. A file cut short is
    `unreadable`: nothing is made up for the missing part.
 4. Shrinking, in bands of at most BAND_PIXELS, so that the conversion never holds a second
@@ -44,7 +48,8 @@ What comes back otherwise, `{"ok": false, "failure": "file", "code": ...}`:
 
     unreadable       neither a PNG nor a JPEG, damaged, cut short, or anything Pillow raised
     too_many_pixels  the header guard
-    bomb             the memory of the child was not enough
+    bomb             a JPEG of more than SCANS_MAX scans, or the memory of the child was not
+                     enough
     too_slow         the time budget was spent
 
 Nothing is written anywhere: Pillow decodes from memory and encodes to memory. Nothing else
@@ -57,6 +62,7 @@ Only main.py may import this file in production (and pdf_render.py, for `encode`
 import base64
 import contextlib
 import io
+import re
 import struct
 
 from PIL import Image, ImageFile, JpegImagePlugin, PngImagePlugin
@@ -69,6 +75,7 @@ QUALITIES = (80, 70, 60, 50)
 SHRINK = 0.85  # then the size, a step at a time, at the last quality
 BAND_PIXELS = 2_000_000  # what is converted at once
 SEGMENTS_MAX = 2_000  # segments of a JPEG looked at before its size is found
+SCANS_MAX = 64  # scans of one JPEG: a progressive file from an encoder holds about ten
 CHUNKS_MAX = 4_096  # chunks of a PNG looked at for its EXIF block
 EXIF_MAX = 65_536  # bytes of an EXIF block looked at: a JPEG segment holds no more
 EXIF_ENTRIES_MAX = 256  # entries of its first directory looked at; a camera writes a dozen
@@ -149,6 +156,44 @@ def _jpeg_size(data: bytes) -> tuple[int, int]:
             return width, height
         at += length
     raise Refused("unreadable")
+
+
+# The next marker as the decoder looks for it: 0xFF, then a code. Not 0xFF 0x00 (a 0xFF of the
+# compressed data, which is always followed by that zero), not a restart marker (they sit
+# inside a scan, thousands of them in some files), not a fill byte.
+_MARKER = re.compile(rb"\xff[^\x00\xd0-\xd7\xff]")
+
+
+def jpeg_scans(data: bytes) -> int:
+    """How many scans the first picture of a JPEG holds, counted up to SCANS_MAX + 1, without
+    any decoder. Marker after marker to the end of the picture: a segment is stepped over by
+    its length (an EXIF thumbnail has scans of its own, which are not this picture's), the
+    compressed data of a scan by the search for the next marker, and so is anything that
+    stands where a marker is due, as the decoder itself resynchronises: bytes put between two
+    scans hide none of them. What follows the end of the picture (a second picture, a video)
+    is not looked at, since no decoder is given it. Raises Refused for a file with more
+    markers than SEGMENTS_MAX, whose scans cannot be counted within the bound."""
+    at, end, scans = 2, len(data), 0
+    for _ in range(SEGMENTS_MAX):
+        found = _MARKER.search(data, at)
+        if found is None:
+            return scans
+        code, at = data[found.start() + 1], found.end()
+        if code == 0xD9:  # the end of the picture
+            return scans
+        if code in (0x01, 0xD8):  # markers that stand alone
+            continue
+        if at + 2 > end:
+            return scans
+        (length,) = struct.unpack(">H", data[at : at + 2])
+        if length < 2:  # the decoder stops there too
+            return scans
+        at += length
+        if code == 0xDA:
+            scans += 1
+            if scans > SCANS_MAX:
+                return scans
+    raise Refused("bomb")
 
 
 def declared_size(data: bytes, kind: str) -> tuple[int, int]:
@@ -346,6 +391,8 @@ def normalise(data: bytes, budget=None) -> Image.Image:
     if kind is None:
         raise Refused("unreadable")
     guard(*declared_size(data, kind))
+    if kind == "JPEG" and jpeg_scans(data) > SCANS_MAX:
+        raise Refused("bomb")
     orientation = orientation_of(data, kind)
     try:
         with _unread():

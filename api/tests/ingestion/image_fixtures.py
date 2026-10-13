@@ -219,8 +219,10 @@ def with_exif(block: bytes, kind: str = "JPEG") -> bytes:
 def exif_bomb(kind: str = "JPEG") -> bytes:
     """The file of the review of PR #157 (B1): every tag of the directory is 60,000 bytes of
     type 7 at offset 0, the same bytes each time. 5,300 tags fill one JPEG segment and made
-    Pillow's EXIF reader copy 318 MB out of a 64 KB file. A PNG chunk has no such ceiling:
-    60,000 tags over one megabyte each."""
+    Pillow's EXIF reader copy 318 MB out of a 64 KB file (304 MiB traced here before the fix).
+    The PNG carries the same trick in an eXIf chunk, 60,000 tags over one megabyte: Pillow
+    12.3 held 10 MiB for it, and it stays a row so that a later Pillow cannot change that
+    unseen."""
     if kind == "JPEG":
         return with_exif(exif_block([(0x9000 + n, 7, 60_000, 0) for n in range(5300)]))
     tags = [(0x1000 + n, 7, MIB, 0) for n in range(60_000)]
@@ -232,6 +234,34 @@ def exif_loop(kind: str = "JPEG") -> bytes:
     and its next directory are all the first one again."""
     loop = [(0x8769, 4, 1, 8), (0x8825, 4, 1, 8), (0xA005, 4, 1, 8)]
     return with_exif(exif_block(loop), kind)
+
+
+def scans_of(data: bytes) -> list[bytes]:
+    """The scans of a JPEG that Pillow wrote, each from its marker to the next one (no segment
+    of these files holds the two bytes of the marker by chance; the fixtures below check)."""
+    cuts = [at for at in range(len(data) - 1) if data[at : at + 2] == b"\xff\xda"]
+    return [data[a:b] for a, b in zip(cuts, [*cuts[1:], len(data) - 2], strict=True)]
+
+
+def many_scans_jpeg(scans: int, side: int = 64, between: bytes = b"") -> bytes:
+    """A progressive JPEG of a flat grey square holding exactly `scans` scans: the ones the
+    encoder wrote, then its last one (a refinement of 42 bytes at any size) again and again,
+    `between` before each. The file of the review of PR #157 (B3) is 2,000 scans at 5,000 a
+    side: 16 s of CPU in 182 KB, and nothing in the decoder to stop it."""
+    data = saved(Image.new("L", (side, side), 128), "JPEG", progressive=True)
+    written = scans_of(data)
+    assert 1 < len(written) <= scans
+    more = (between + written[-1]) * (scans - len(written))
+    return data[:-2] + more + b"\xff\xd9"
+
+
+def jpeg_with_markers_in_its_data(extra: bytes = b"") -> bytes:
+    """An honest photo, one scan, in which the two bytes of the scan marker occur 600 times
+    where they mark nothing: in an application segment (as in an EXIF thumbnail) and after the
+    end of the picture (as in a second picture or a video a phone appends)."""
+    data = photo_jpeg(200, 100)
+    segment = b"\xff\xe5" + struct.pack(">H", 2 + 600) + b"\xff\xda" * 300
+    return data[:2] + segment + data[2:-2] + extra + b"\xff\xd9" + b"\xff\xda\x00\x02" * 300
 
 
 # Hostile files that are simply read: (name, the file). What made them hostile is metadata,
@@ -265,6 +295,13 @@ HOSTILE: list[tuple[str, Callable[[], bytes], str]] = [
     ("a JPEG cut inside its header", lambda: photo_jpeg()[:12], "unreadable"),
     ("a GIF named like a PNG", gif, "unreadable"),
     ("a PNG signature and nothing else", lambda: PNG_MAGIC, "unreadable"),
+    ("a progressive JPEG of 2,000 scans", lambda: many_scans_jpeg(2000, 5000), "bomb"),
+    ("a JPEG of 65 scans", lambda: many_scans_jpeg(65), "bomb"),
+    (
+        "a JPEG whose scans are hidden behind 3,000 other markers",
+        lambda: many_scans_jpeg(20, between=b"\xff\xfe\x00\x02" * 300),
+        "bomb",
+    ),
     (
         "a PNG with megabytes of inflated text chunks",
         lambda: png_of(
