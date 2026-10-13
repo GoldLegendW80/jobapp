@@ -450,11 +450,27 @@ class QueueWorker(Worker):
     that cancels a job during that write ends the job's task at once and leaves the write
     running: closing the Redis pool then cuts it, or it reconnects on the closed pool and its
     socket is never closed, and the job stays "in progress" in Redis until that key expires.
-    `endings` holds those writes so that close_worker can wait for them."""
+    `endings` holds those writes so that close_worker can wait for them.
+
+    The poll is the other place where arq holds a Redis pipeline: a poll iteration reads the
+    queue and starts jobs (a WATCH pipeline), records the health and enqueues the crons (WATCH
+    pipelines again). redis-py's pipeline, when it ends, sends UNWATCH and waits for the answer
+    before it gives its connection back. A stop that cancels the poll during that wait leaves
+    the pipeline holding its connection: it is never given back, and the garbage collector
+    reports "Unclosed client session" on whichever test or log line comes next (issue #104).
+    An iteration is therefore not cancellable: it runs to its end as one of the `endings`."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.endings: set[asyncio.Task[Any]] = set()
+
+    async def _poll_iteration(self) -> None:
+        # Registered when it is made, not when it first runs: a cancel of the poll at once
+        # must still find it in `endings`.
+        iteration = asyncio.ensure_future(super()._poll_iteration())
+        self.endings.add(iteration)
+        iteration.add_done_callback(self.endings.discard)
+        await asyncio.shield(iteration)
 
     async def _ending(self, write: Awaitable[None]) -> None:
         task = asyncio.current_task()
@@ -634,16 +650,20 @@ async def close_worker(worker: QueueWorker, deadline: float | None = None) -> tu
     last: a job that finished as the stop arrived is recorded as finished, and nothing uses
     the pool once close() has closed it. Done tasks are dropped from `tasks` as arq's own poll
     does."""
+    worker.allow_pick_jobs = False  # an iteration that ends after the cancel starts no job
     poll = worker.main_task
     if poll is not None:
         poll.cancel()
         await asyncio.gather(poll, return_exceptions=True)
+    # The iteration the poll was in the middle of ends first, so that no job it starts is missed
+    # by `in_flight` below and no pipeline of it is cut by the closing of the pool.
+    ends_left = await _ended(list(worker.endings), deadline)
     in_flight = list(worker.tasks.values())
     for task in in_flight:
         if not task.done():
             task.cancel()
     jobs_left = await _ended(in_flight, deadline)
-    ends_left = await _ended(list(worker.endings), deadline)
+    ends_left = max(ends_left, await _ended(list(worker.endings), deadline))
     for job_id, task in list(worker.tasks.items()):
         # A job given up at the bound goes too: arq's close() awaits what is left, unbounded.
         if task.done() or jobs_left:

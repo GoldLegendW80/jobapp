@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from arq.worker import Worker
 from fastapi.testclient import TestClient
+from redis.asyncio.client import Pipeline
 from sqlalchemy.orm import Session, sessionmaker
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
@@ -183,6 +184,51 @@ def test_stopping_the_worker_fails_its_running_run(
     row = run_row(factory, run_id)
     assert (row.status, row.error) == (RunStatus.failed, runs.STOPPED)
     assert list(Path(settings.agents_scratch_dir or "").iterdir()) == []
+
+
+def test_stopping_the_worker_in_a_poll_gives_every_pipeline_its_connection_back(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The poll holds a WATCH pipeline whose end waits for UNWATCH. A stop that cancels the poll
+    there used to leave the pipeline holding its connection (issue #104). Here the wait is held
+    until the poll task is done, which is the cancel, whatever the load."""
+    made: list[Pipeline] = []
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+    init, reset = Pipeline.__init__, Pipeline.reset
+
+    def tracked(self: Pipeline, *args: Any, **kwargs: Any) -> None:
+        init(self, *args, **kwargs)
+        made.append(self)
+
+    async def held(self: Pipeline) -> None:
+        if self.watching:
+            entered.set()
+            await cancelled.wait()
+        await reset(self)
+
+    monkeypatch.setattr(Pipeline, "__init__", tracked)
+    monkeypatch.setattr(Pipeline, "reset", held)
+
+    async def scenario() -> None:
+        ctx = worker.make_context(settings)
+        try:
+            queue_worker = worker.build_worker(worker.agents_queue(), settings, ctx)
+
+            async def watching(job_ids: list[bytes]) -> None:
+                async with queue_worker.pool.pipeline(transaction=True) as pipe:
+                    await pipe.watch("never-set")
+
+            monkeypatch.setattr(queue_worker, "start_jobs", watching)
+            poll = queue_worker.main_task = asyncio.create_task(queue_worker.main())
+            poll.add_done_callback(lambda _: cancelled.set())
+            await entered.wait()
+            assert await worker.close_worker(queue_worker) == (0, 0)
+            assert [pipe.connection for pipe in made if pipe.connection is not None] == []
+        finally:
+            ctx["engine"].dispose()
+
+    asyncio.run(scenario())
 
 
 def test_reaper_cron_function(settings: Settings, factory: sessionmaker[Session]) -> None:
