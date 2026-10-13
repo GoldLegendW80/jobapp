@@ -358,6 +358,7 @@ rules are a short list in that script, first match wins:
 | `tasks/`, `docs/`, `CONTRIBUTING.md`, `CAPABILITY-MAP.md`, the `SPEC-*.md` files, the pull request template (a Markdown file at the root that is none of these runs everything) | none: pre-commit alone | nothing executable reads them (a test fails when something starts to) |
 | `README.md` | `shell` | `tests/deploy_test.sh` checks that the recovery statements it tests are the ones written here |
 | `tasks/evidence/agents-a5/` | `shell` | `tests/agents_real_run_test.sh` compares against it |
+| `tasks/ingestion/todo.md`, `tasks/evidence/ingestion-g0/citation_rules.txt` | `api` | `api/tests/ingestion/test_citation_examples.py` fails when the plan's table of citation examples is not the one its data generates, and compares the first 108 verdicts with that output |
 | `web/` | `web`, `shell`, `e2e` | no api file reads a file of `web/` (a test fails when one starts to) |
 | anything else, or a mix with anything else | all four | a path no rule names runs everything |
 

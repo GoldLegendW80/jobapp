@@ -1,0 +1,643 @@
+"""The bounds of the citation checker. It is called on hostile input, a document of up to 500,000
+characters and a model's output, so its cost must stay linear and no regular expression may
+backtrack.
+
+Complexity, as built (app/ingestion/citations.py):
+- `prepare(document)`: one pass, O(n). The caller keeps the result for the step.
+- `find`: one substring search of the document's skeleton, O(n), then at most OCCURRENCES_MAX
+  occurrences are looked at, each in constant time, and a span is at most SPAN_MAX characters.
+- every value rule reads spans of bounded size: O(length of the value) per part of the value.
+
+The time bounds are on CPU time (`time.process_time`, the best of three), not on the wall clock,
+which other pytest-xdist workers sharing the runner's cores would stretch. They are generous: 10
+to 60 times what the Mac measures with coverage traced, as in CI. What they catch is a change of
+order: a quadratic scan of 500,000 characters takes minutes, not seconds. The realistic document
+has the full 500,000 characters; the crafted ones are shorter (a quadratic scan of 60,000
+characters is still thousands of millions of steps) so that the whole file stays cheap in CI. Memory
+is traced on shorter texts for the same reason, and never while a time is taken.
+Measured figures are in tasks/ingestion/todo.md, "Measurements".
+"""
+
+import random
+import re
+import time
+import tracemalloc
+from collections.abc import Callable
+
+import pytest
+
+from app.ingestion import citations
+from app.ingestion.citations import Accepted, Refusal, Rule, Span, check_item, find, prepare
+
+LARGE = 500_000  # the limit of one document's text (SPEC-ingestion.md, "Limits")
+CRAFTED = 60_000  # a crafted document
+VALUE = 60_000  # a crafted value or excerpt
+TRACED = 60_000  # a text whose memory is traced
+PREPARE_BUDGET_S = 5.0  # one document of 500,000 characters: 0.08 s on the Mac, 0.2 s traced
+FIND_BUDGET_S = 1.0  # one excerpt in it: under 0.001 s on the Mac
+CHECK_BUDGET_S = 2.0  # one item against it, twenty excerpts and a long value included
+GROWTH_MAX = 8.0  # the cost of four times the text: about 4 when linear, 16 when quadratic
+
+WORDS = [
+    "Betclic",
+    "Thales",
+    "développeur",
+    "ingénieur",
+    "full-stack",
+    "Python",
+    "Docker",
+    "équipe",
+    "projet",
+    "depuis",
+    "janvier",
+    "2023",
+    "mission",
+    "chez",
+    "Bordeaux",
+    "l\u2019équipe",
+    "GenAI",
+    "à",
+    "de",
+    "la",
+    "et",
+    "en",
+    "production",
+    "10\u202f000",
+    "3,5",
+    "ans",
+    "camille.durand@example.org",
+    "06",
+    "39",
+    "98",
+    "12",
+    "34",
+    "https://www.example.org/in/camille-durand",
+    "01/2023",
+]
+
+
+def cpu(action: Callable[[], object], repeat: int = 3) -> float:
+    """The CPU seconds of one call, the best of `repeat`."""
+    best = float("inf")
+    for _ in range(repeat):
+        started = time.process_time()
+        action()
+        best = min(best, time.process_time() - started)
+    return best
+
+
+def traced(action: Callable[[], object]) -> tuple[object, int, int]:
+    """What `action` returns, the bytes it leaves allocated and the bytes at its peak."""
+    tracemalloc.start()
+    try:
+        result = action()
+        current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return result, current, peak
+
+
+def cv(size: int, seed: int = 7) -> str:
+    """A text of `size` characters that reads like a long French dossier."""
+    rng = random.Random(seed)  # noqa: S311 (test data, not a secret)
+    out = []
+    length = 0
+    while length < size:
+        word = rng.choice(WORDS)
+        out.append(word)
+        out.append("\n" if rng.random() < 0.05 else " ")
+        length += len(word) + 1
+    return "".join(out)[:size]
+
+
+def fill(unit: str, size: int) -> str:
+    return unit * (size // len(unit))
+
+
+def sound(text: str, result: Accepted | Refusal) -> None:
+    """The answer holds together whatever the text: a refusal says its rule in the module's own
+    sentence and names a place by the caller's words, an acceptance cites the text at its own
+    offsets."""
+    if isinstance(result, Refusal):
+        assert result.reason == citations.REASONS[result.rule]
+        assert re.fullmatch(r"(?:value|excerpts\[\d+\])?", result.index), result.index
+        return
+    assert result.citations
+    for citation in result.citations:
+        assert 0 <= citation.start < citation.end <= len(text)
+        assert text[citation.start : citation.end] == citation.excerpt
+
+
+@pytest.fixture(scope="module")
+def large() -> str:
+    return cv(LARGE)
+
+
+# --- the large document --------------------------------------------------------------------------
+
+
+def test_a_document_of_500_000_characters_is_prepared_in_bounded_time(large: str) -> None:
+    assert len(large) == LARGE
+    elapsed = cpu(lambda: prepare(large))
+    assert elapsed < PREPARE_BUDGET_S, f"{elapsed:.3f} s"
+
+
+def test_an_excerpt_is_found_in_500_000_characters_in_bounded_time(large: str) -> None:
+    document = prepare(large)
+    middle = large.index(" ", LARGE // 2) + 1
+    last = large.rindex(" ", 0, LARGE - 400) + 1
+    for start in (0, middle, last):
+        excerpt = large[start : large.index(" ", start + 300)]
+        found = find(document, excerpt)
+        assert isinstance(found, Span)
+        assert citations.normalise(excerpt).text in found.text
+        elapsed = cpu(lambda excerpt=excerpt: find(document, excerpt))
+        assert elapsed < FIND_BUDGET_S, f"{elapsed:.3f} s"
+    for absent in ("zèbre girafe quokka okapi wombat narval", large[1000:1300] + " zèbre"):
+        assert find(document, absent) == Refusal("", Rule.EXCERPT_NOT_FOUND, "excerpt not found")
+        elapsed = cpu(lambda absent=absent: find(document, absent))
+        assert elapsed < FIND_BUDGET_S, f"{elapsed:.3f} s"
+
+
+def test_an_item_is_checked_against_500_000_characters_in_bounded_time(large: str) -> None:
+    document = prepare(large)
+    rng = random.Random(11)  # noqa: S311 (test data, not a secret)
+    excerpts = []
+    for _ in range(citations.EXCERPTS_MAX):
+        start = large.index(" ", rng.randrange(LARGE - 1000)) + 1
+        excerpts.append(large[start : large.index(" ", start + 200)])
+    types = {
+        "organisation": "name",
+        "title": "text",
+        "start": "date",
+        "email": "email",
+        "url": "url",
+        "phone": "phone",
+        "terms[]": "term",
+    }
+    value = {
+        "organisation": "Betclic",
+        "title": "Développeur full-stack, 10 000 utilisateurs, 3,5 ans",
+        "start": "2023-01",
+        "email": "camille.durand@example.org",
+        "url": "https://example.org/in/camille-durand",
+        "phone": "06 39 98 12 34",
+        "terms": ["python", "docker"] * 500,
+    }
+    # the text holds every part of the value but a phone number that stands alone
+    result = check_item(types, value, document, excerpts)
+    assert result == Refusal(
+        "value.phone", Rule.PHONE_NOT_IN_SOURCE, citations.REASONS[Rule.PHONE_NOT_IN_SOURCE]
+    )
+    held = check_item(types, {**value, "phone": None}, document, excerpts)
+    assert isinstance(held, Accepted)
+    assert [large[citation.start : citation.end] for citation in held.citations] == [
+        citation.excerpt for citation in held.citations
+    ]
+    assert len(held.citations) == citations.EXCERPTS_MAX
+    elapsed = cpu(lambda: check_item(types, value, document, excerpts))
+    assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"
+    # and without the prepared document, the same answer, in the time of one more pass
+    assert check_item(types, value, large, excerpts[:2]) == check_item(
+        types, value, document, excerpts[:2]
+    )
+
+
+def test_the_cost_grows_linearly_with_the_document() -> None:
+    """Four times the text costs about four times the work. A quadratic scan would cost sixteen
+    times: this is the test that the seed script would fail."""
+    small, big = cv(LARGE // 4), cv(LARGE)
+
+    def work(text: str) -> None:
+        document = prepare(text)
+        half = len(text) // 2
+        start = text.index(" ", half) + 1
+        for excerpt in (text[start : start + 300], text[half : half + 43], "zèbre " * 6):
+            find(document, excerpt)
+        check_item("text", "10 000 utilisateurs", document, [text[start : start + 200]])
+
+    quarter, whole = cpu(lambda: work(small)), cpu(lambda: work(big))
+    assert whole < PREPARE_BUDGET_S, f"{whole:.3f} s"
+    assert whole / quarter < GROWTH_MAX, f"{quarter:.3f} s then {whole:.3f} s"
+
+
+# --- crafted documents ---------------------------------------------------------------------------
+
+UNITS = {
+    "one letter": "a",
+    "two letters": "ab",
+    "letters and spaces": "a b ",
+    "digits": "1",
+    "numbers": "1 2 3 4 ",
+    "decimals": "1.1,1'1 ",
+    "phone": "06 39 98 12 34 ",
+    "phone signs": "0(-/.)",
+    "plus": "+33 (0)",
+    "parentheses": "((((((",
+    "months": "janvier ",
+    "month chain": "juin à ",
+    "month chain with days": "du 1er juin au 31 ",
+    "short dates": "09/21 à ",
+    "date chain": "01/02-",
+    "years": "2019-",
+    "emails": "a@a.a.",
+    "address signs": "a./?#:=&~",
+    "urls": "https://www.",
+    "versions": "version 1.",
+    "the v": "v",
+    "instructions": "ignore all the ",
+    "hyphens": "-",
+    "spaced hyphens": " - ",
+    "full stops": "x.",
+    "spaces": " ",
+    "line breaks": "a\n",
+    "non breaking spaces": "\u00a0x",
+    "apostrophes": "jusqu\u2019",
+    "accents": "é",
+    "combining accents": "e\u0301",
+    "zalgo": "\u0301\u0316",
+    "superscripts": "\u00b2",
+    "numbers with superscripts": "10\u00b3 ",
+    "fractions": "\u00bd",
+    "ligature of eighteen": "\ufdfa",
+    "sharp s": "\u00df",
+    "soft hyphens": "a\u00ad",
+    "bidi marks": "\u202e\u200fa",
+    "controls": "\x00\x01a",
+    "vertical tabs": "5\x0b",
+    "chinese": "阿里巴巴集团担任高级软件工程师",
+    "thai": "\u0e17\u0e35\u0e48\u0e19\u0e35\u0e48",
+    "hangul in parts": "\u1112\u1161\u11ab",
+    "emoji": "\U0001f600",
+    "lone surrogates": chr(0xD800) + "a",
+    "tags": "\U000e0041",
+}
+
+
+@pytest.mark.parametrize("unit", UNITS.values(), ids=UNITS.keys())
+def test_a_crafted_document_costs_no_more_than_its_size(unit: str) -> None:
+    """One unit repeated up to 60,000 characters: the worst a document can do to each scan
+    (one giant token, an excerpt present everywhere, a number without end)."""
+    text = fill(unit, CRAFTED)
+    elapsed = cpu(lambda: prepare(text), repeat=1)
+    assert elapsed < PREPARE_BUDGET_S, f"prepare: {elapsed:.3f} s"
+    document = prepare(text)
+    middle = len(text) // 2
+    excerpts = [
+        text[middle : middle + 300],
+        text[middle + 1 : middle + 44],
+        unit * 20,
+        "zèbre " * 6,
+    ]
+    for excerpt in excerpts:
+        elapsed = cpu(lambda excerpt=excerpt: find(document, excerpt), repeat=1)
+        assert elapsed < FIND_BUDGET_S, f"find: {elapsed:.3f} s"
+    for field in ("email", "url", "name", "date", "phone", "text"):
+        for value in ("2023-01", unit * 8, text[middle : middle + 60]):
+            started = time.process_time()
+            result = check_item(field, value, document, excerpts[:3])
+            elapsed = time.process_time() - started
+            sound(text, result)
+            assert elapsed < CHECK_BUDGET_S, f"{field}: {elapsed:.3f} s"
+
+
+@pytest.mark.parametrize("unit", ["ab", "a b ", "1 2 3 4 ", "e\u0301", "阿里"])
+def test_an_excerpt_present_everywhere_is_not_scanned_everywhere(unit: str) -> None:
+    """The quadratic case of the seed script: every occurrence cut a token, and each was looked
+    at with every token of the document. Here the cost of the search does not depend on how
+    many times the excerpt occurs."""
+    excerpt = unit * (40 // len(unit))
+
+    def work(size: int) -> float:
+        document = prepare(fill(unit, size))
+        return cpu(lambda: find(document, excerpt))
+
+    quarter, whole = work(LARGE // 4), work(LARGE)
+    assert whole < FIND_BUDGET_S, f"{whole:.4f} s"
+    # too small to compare when both are a fraction of a millisecond
+    assert whole < 0.02 or whole / quarter < GROWTH_MAX, f"{quarter:.4f} s then {whole:.4f} s"
+
+
+def test_a_long_run_of_combining_marks_is_not_sorted_as_one() -> None:
+    """Unicode normalisation sorts the marks of one character, and that sort is quadratic: a
+    character with 250,000 marks would cost minutes. Clusters are cut at CLUSTER_MAX."""
+    text = "a" + "\u0301\u0316" * (LARGE // 4)
+    elapsed = cpu(lambda: prepare(text), repeat=1)
+    assert elapsed < PREPARE_BUDGET_S, f"{elapsed:.3f} s"
+    value = "e" + "\u0301\u0316" * 50_000
+    source = "Compétences : Python, Docker, Kubernetes en production depuis trois ans."
+    for field in ("text", "name", "email", "url", "phone", "date"):
+        elapsed = cpu(lambda field=field: check_item(field, value, source, [source]), repeat=1)
+        assert elapsed < CHECK_BUDGET_S, f"{field}: {elapsed:.3f} s"
+
+
+# --- crafted values and excerpts -----------------------------------------------------------------
+
+SOURCE = (
+    "Camille Durand, camille.durand@example.org, +33 6 39 98 12 34, Betclic depuis janvier "
+    "2023, version 1.10 du moteur, 10 000 utilisateurs, https://www.example.org/in/camille."
+)
+VALUES = {
+    "numbers": fill("1 ", VALUE),
+    "one number": fill("1", VALUE),
+    "groups": "1 000" + fill(" 000", VALUE),
+    "decimals": fill("1.1,", VALUE),
+    "versions": fill("v1.1 ", VALUE),
+    "version words": fill("version ", VALUE),
+    "numbers with superscripts": fill("10\u00b3 ", VALUE),
+    "email signs": fill("a@a.", VALUE),
+    "slashes": fill("/", VALUE),
+    "url heads": fill("https://www.", VALUE),
+    "letters": fill("a", VALUE),
+    "words": fill("a b ", VALUE),
+    "the source many times": fill(SOURCE, VALUE),
+    "instructions": fill("ignore all the ", VALUE),
+    "almost an instruction": fill("as an a", VALUE),
+    "accents": fill("é", VALUE),
+    "combining": fill("e\u0301", VALUE),
+    "zalgo": "a" + fill("\u0301\u0316", VALUE),
+    "spaces": fill(" ", VALUE),
+    "hyphens": fill("-", VALUE),
+    "digits and signs": fill("0(-/.)", VALUE),
+    "months": fill("janvier 2023 ", VALUE),
+    "chinese": fill("阿里巴巴", VALUE),
+    "lone surrogates": fill(chr(0xDFFF), VALUE),
+}
+
+
+@pytest.mark.parametrize("value", VALUES.values(), ids=VALUES.keys())
+def test_a_crafted_value_costs_no_more_than_its_size(value: str) -> None:
+    """A value of 60,000 characters made to defeat one of the readers, under every field type
+    that reads it."""
+    document = prepare(SOURCE)
+    for field in ("email", "url", "name", "phone", "text", "term"):
+        started = time.process_time()
+        result = check_item(field, value, document, [SOURCE])
+        elapsed = time.process_time() - started
+        sound(SOURCE, result)
+        if field not in ("text", "term"):  # no address, name or phone number of that size
+            assert isinstance(result, Refusal), field
+            assert result.index == "value"
+        assert elapsed < CHECK_BUDGET_S, f"{field}: {elapsed:.3f} s"
+    for field in ("date", "setting"):
+        assert isinstance(check_item(field, value, document, [SOURCE]), Refusal)
+
+
+@pytest.mark.parametrize("excerpt", VALUES.values(), ids=VALUES.keys())
+def test_a_crafted_excerpt_is_refused_at_once(excerpt: str) -> None:
+    document = prepare(SOURCE)
+    started = time.process_time()
+    result = check_item("text", "Betclic", document, [excerpt])
+    elapsed = time.process_time() - started
+    assert isinstance(result, Refusal)
+    assert result.index == "excerpts[0]"
+    assert elapsed < FIND_BUDGET_S, f"{elapsed:.3f} s"
+
+
+def test_twenty_excerpts_and_two_thousand_parts() -> None:
+    document = prepare(SOURCE * 50)
+    excerpts = [SOURCE[: 40 + position] for position in range(citations.EXCERPTS_MAX)]
+    value = {"body[]": ["10 000 utilisateurs depuis janvier 2023"] * citations.VALUE_LEAVES_MAX}
+    types = {"body[][]": "text"}
+    assert isinstance(check_item(types, value, document, excerpts), Refusal)
+    flat = ["10 000 utilisateurs depuis janvier 2023"] * citations.VALUE_LEAVES_MAX
+    result = check_item("text", flat, document, [SOURCE])
+    assert isinstance(result, Accepted)
+    elapsed = cpu(lambda: check_item("text", flat, document, [SOURCE] * citations.EXCERPTS_MAX))
+    assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"
+    names = ["Betclic depuis janvier"] * citations.VALUE_LEAVES_MAX
+    elapsed = cpu(lambda: check_item("name", names, document, excerpts), repeat=1)
+    assert elapsed < 3 * CHECK_BUDGET_S, f"{elapsed:.3f} s"
+
+
+def test_two_thousand_names_read_each_span_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first review of pull request #97: every span was made into its skeleton again for
+    every name of the value, 3.3 s of CPU for one item whose names the last span holds."""
+    text = cv(20_000, seed=3).replace("\n", " ") + " zèbre quokka okapi wombat narval"
+    document = prepare(text)
+    excerpts = []
+    for position in range(citations.EXCERPTS_MAX - 1):
+        start = text.index(" ", position * 900) + 1
+        excerpts.append(text[start : text.index(" ", start + 560)])
+    excerpts.append(text[-580:])
+    names = ["Zèbre Quokka Okapi"] * citations.VALUE_LEAVES_MAX
+    made = []
+    skeleton = citations.skeleton
+
+    def counted(norm: str) -> citations.Skeleton:
+        made.append(len(norm))
+        return skeleton(norm)
+
+    monkeypatch.setattr(citations, "skeleton", counted)
+    result = check_item("name", names, document, excerpts)
+    assert isinstance(result, Accepted)
+    assert len(result.citations) == citations.EXCERPTS_MAX
+    # one per name, one per excerpt to find it, one per span to read it
+    assert len(made) <= len(names) + 2 * len(excerpts)
+    monkeypatch.undo()
+    elapsed = cpu(lambda: check_item("name", names, document, excerpts), repeat=1)
+    assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"
+    # and a name that no span holds costs no more
+    absent = ["Zèbre Quokka Wombat"] * citations.VALUE_LEAVES_MAX
+    assert check_item("name", absent, document, excerpts) == Refusal(
+        "value[0]", Rule.NAME_NOT_IN_SOURCE, citations.REASONS[Rule.NAME_NOT_IN_SOURCE]
+    )
+
+
+def test_a_name_or_an_address_present_everywhere_in_a_span_is_bounded() -> None:
+    """At most OCCURRENCES_MAX places of a span are looked at for one value."""
+    letters = "ab " * 600
+    document = prepare(letters)
+    span = letters[: 3 * 190]
+    for field, value, rule in (
+        ("name", "ab " * 150 + "abab", Rule.NAME_NOT_IN_SOURCE),
+        ("email", "ab", Rule.ADDRESS_NOT_IN_SOURCE),
+        ("url", "b ab", Rule.ADDRESS_NOT_IN_SOURCE),
+    ):
+        result = check_item(field, value, document, [span] * citations.EXCERPTS_MAX)
+        assert result == Refusal("value", rule, citations.REASONS[rule])
+        elapsed = cpu(
+            lambda field=field, value=value: check_item(
+                field, value, document, [span] * citations.EXCERPTS_MAX
+            )
+        )
+        assert elapsed < CHECK_BUDGET_S, f"{field}: {elapsed:.3f} s"
+
+
+def test_a_deeply_nested_value_is_refused_without_recursion() -> None:
+    nested: object = "Betclic"
+    for _ in range(50_000):
+        nested = [nested]
+    assert check_item("text", nested, SOURCE, [SOURCE]) == Refusal(
+        "value[0]", Rule.UNKNOWN_FIELD, citations.REASONS[Rule.UNKNOWN_FIELD]
+    )
+    deep: object = "Betclic"
+    for _ in range(50_000):
+        deep = {"a": deep}
+    result = check_item({"a": "text"}, deep, SOURCE, [SOURCE])
+    assert isinstance(result, Refusal)
+    assert (result.index, result.rule) == ("value.a", Rule.UNKNOWN_FIELD)
+    loop: list[object] = []
+    loop.append(loop)
+    assert isinstance(check_item("text", loop, SOURCE, [SOURCE]), Refusal)
+    ring: dict[str, object] = {}
+    ring["a"] = ring
+    assert isinstance(check_item({"a": "text", "a.a": "text"}, ring, SOURCE, [SOURCE]), Refusal)
+
+
+def test_a_value_wider_than_the_limit_is_not_walked() -> None:
+    wide = ["x"] * 3_000_000
+    started = time.process_time()
+    result = check_item("text", wide, SOURCE, [SOURCE])
+    elapsed = time.process_time() - started
+    assert result == Refusal("value", Rule.VALUE_TOO_LARGE, citations.REASONS[Rule.VALUE_TOO_LARGE])
+    assert elapsed < 0.5, f"{elapsed:.3f} s"
+
+
+def test_a_value_is_bounded_before_it_is_read() -> None:
+    document = prepare(SOURCE)
+    for value in ("\ufdfa" * 200_000, "a" * 5_000_000, ["a" * 200_000] * 20):
+        started = time.process_time()
+        result = check_item("text", value, document, [SOURCE])
+        elapsed = time.process_time() - started
+        assert isinstance(result, Refusal)
+        assert result.rule is Rule.VALUE_TOO_LARGE
+        assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"
+
+
+# --- regular expressions -------------------------------------------------------------------------
+
+PATTERNS = {
+    name: pattern for name, pattern in vars(citations).items() if isinstance(pattern, re.Pattern)
+}
+PATTERNS |= {f"_FRENCH[{position}]": pattern for position, pattern in enumerate(citations._FRENCH)}
+# Each of these makes a regular expression with nested or overlapping repetitions backtrack.
+ATTACKS = {
+    "digits": "1" * 100_000 + "x",
+    "numbers": "1 " * 50_000 + "x",
+    "numbers with every separator": "1 1.1,1'1" * 11_000 + "x",
+    "numbers that almost end": "1." * 50_000 + ".",
+    "phone pairs": "06 39 98 12 3" * 7_000 + "x",
+    "phone signs": "0(-/.)" * 16_000 + " x",
+    "open parentheses": "(" * 100_000,
+    "spaces and parentheses": "0 (" * 33_000 + "x",
+    "plus signs": "+33" * 33_000,
+    "french numbers that almost end": "+33 (0)6" + " 39" * 30_000 + "x",
+    "pairs without end": "06" + ".39" * 30_000,
+    "letters": "a" * 100_000 + "1",
+    "words": "a b " * 25_000,
+    "url heads": "https://www." * 8_000,
+    "www": "www." * 25_000,
+    "almost a url head": "http" * 25_000 + "s:/",
+    "versions": "version " * 12_000 + "1",
+    "the v": "v" * 100_000 + " 1",
+    "almost a version": "versions : " * 9_000,
+    "instructions": "ignore all the " * 6_000 + "previou",
+    "almost an instruction": "as an a" * 14_000 + "i",
+    "en tant": "en tant qu'" * 9_000,
+    "spaces": " " * 100_000 + "x",
+    "line breaks": "\n" * 100_000,
+    "hyphens": "-" * 100_000,
+    "accents": "é" * 100_000,
+    "underscores": "_" * 100_000 + "1",
+    "empty": "",
+}
+
+
+@pytest.mark.parametrize("name", sorted(PATTERNS))
+def test_no_regular_expression_backtracks(name: str) -> None:
+    """Every compiled pattern of the module, against inputs made to defeat it: each call ends
+    in the time of one pass. A pattern added later is tested here without a line of code."""
+    pattern = PATTERNS[name]
+    for label, text in ATTACKS.items():
+        started = time.process_time()
+        pattern.search(text)
+        pattern.match(text)
+        pattern.fullmatch(text)
+        for _ in pattern.finditer(text):
+            pass
+        pattern.sub("", text)
+        elapsed = time.process_time() - started
+        assert elapsed < 1.0, f"{name} on {label}: {elapsed:.3f} s"
+
+
+def test_the_patterns_under_test_are_those_of_the_module() -> None:
+    assert len(PATTERNS) >= 12
+    assert {"_NUMBER_RUN", "_PHONE_RUN", "_DATE_TOKEN", "_INSTRUCTION", "_PLAIN"} <= set(PATTERNS)
+
+
+@pytest.mark.parametrize("label", sorted(ATTACKS))
+def test_the_readers_end_on_the_inputs_made_to_defeat_them(label: str) -> None:
+    text = ATTACKS[label][-40_000:]
+    started = time.process_time()
+    norm = citations.normalise(text).text
+    citations.skeleton(norm)
+    citations.dates_of(norm)
+    citations.phones_of(norm)
+    citations.numbers_of(norm)
+    citations.looks_like_instruction(norm)
+    citations.readings(text)
+    elapsed = time.process_time() - started
+    assert elapsed < CHECK_BUDGET_S, f"{label}: {elapsed:.3f} s"
+
+
+# --- memory --------------------------------------------------------------------------------------
+
+
+def test_the_memory_of_a_prepared_document_is_bounded() -> None:
+    """N, S and their two maps: about ten bytes per character kept, nothing per occurrence, and
+    no string made per character, in French as in Chinese (8.7 MB at the peak for 500,000
+    characters of French, measured by tasks/evidence/ingestion-g4/measure.py)."""
+    chinese = fill("阿里巴巴集团担任高级软件工程师\uff0c负责搜索平台的开发工作\u3002", TRACED)
+    for text in (cv(TRACED), chinese):
+        document, kept, peak = traced(lambda text=text: prepare(text))
+        assert isinstance(document, citations.Document)
+        assert document.readable
+        assert peak < 32 * len(text), f"{peak / len(text):.1f} bytes per character at the peak"
+        assert kept < 20 * len(text), f"{kept / len(text):.1f} bytes per character kept"
+        assert document.origin.itemsize == document.skeleton_index.itemsize == 4
+
+
+def test_the_clusters_remembered_while_a_text_is_normalised_are_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The worst for the normalisation is a text in which no two characters are the same: the
+    N of a cluster is remembered to be used again, but of at most CLUSTERS_REMEMBERED clusters
+    (65 bytes per character at the peak for 500,000 such characters, 130 without that bound).
+    Shown here with a smaller bound, on a smaller text."""
+    assert citations.CLUSTERS_REMEMBERED == 65_536
+    text = "".join(
+        chr(0x4E00 + at % 20_000) + chr(0x0300 + at // 20_000 % 100) for at in range(10_000)
+    )
+    monkeypatch.setattr(citations, "CLUSTERS_REMEMBERED", 1_000)
+    bounded, kept, peak = traced(lambda: prepare(text))
+    monkeypatch.setattr(citations, "CLUSTERS_REMEMBERED", 10**9)
+    unbounded, _, without = traced(lambda: prepare(text))
+    assert isinstance(bounded, citations.Document)
+    assert isinstance(unbounded, citations.Document)
+    assert bounded.text == unbounded.text
+    assert list(bounded.origin) == list(unbounded.origin)
+    assert peak < 0.75 * without, f"{peak} bytes with the bound, {without} without"
+    assert peak < 96 * len(text), f"{peak / len(text):.1f} bytes per character at the peak"
+    assert kept < 20 * len(text), f"{kept / len(text):.1f} bytes per character kept"
+
+
+def test_a_text_that_unfolds_is_left_unread_before_it_costs_its_memory() -> None:
+    """500,000 times U+FDFA is nine million characters once normalised, with two maps of four
+    bytes each: about a hundred megabytes for one hostile document. `prepare` stops at four
+    times the length of the text, whatever that length."""
+    text = "\ufdfa" * LARGE
+    elapsed = cpu(lambda: prepare(text), repeat=1)
+    assert elapsed < PREPARE_BUDGET_S, f"{elapsed:.3f} s"
+    document = prepare(text)
+    assert not document.readable
+    assert (document.text, document.skeleton) == ("", "")
+    assert find(document, "x" * 30) == Refusal(
+        "", Rule.DOCUMENT_UNREADABLE, citations.REASONS[Rule.DOCUMENT_UNREADABLE]
+    )
+    short = "\ufdfa" * (TRACED // 2)
+    unread, kept, peak = traced(lambda: prepare(short))
+    assert isinstance(unread, citations.Document)
+    assert not unread.readable
+    assert peak < 64 * len(short), f"{peak / len(short):.1f} bytes per character at the peak"
+    assert kept < 100_000, f"{kept} bytes kept"
