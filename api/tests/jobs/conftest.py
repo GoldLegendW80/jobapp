@@ -19,6 +19,7 @@ db = identity.db
 clock = identity.clock
 app = identity.app
 api = identity.api
+one_connection = identity.one_connection
 
 NOW = datetime(2026, 10, 8, 9, 30, tzinfo=UTC)
 

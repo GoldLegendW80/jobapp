@@ -49,7 +49,7 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db import get_session
+from app.db import get_session, read_snapshot
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
@@ -167,6 +167,7 @@ def list_jobs(
     cursor: Annotated[str | None, Query(max_length=1000)] = None,
 ) -> JobListPage:
     """One page of the caller's jobs, with the counts and the histogram of the filtered set."""
+    read_snapshot(db)  # the page, the counts and the histogram are one moment of the table
     try:
         page = service.list_page(db, user.id, filters, sort, limit, cursor)
     except InvalidCursorError as exc:
@@ -277,6 +278,7 @@ def import_jobs(
 def read_job(job_id: str, user: CurrentUser, db: Db) -> JobDetail:
     """One of the caller's jobs: every field, the posting text, the files (without their bytes)
     and the newest events."""
+    read_snapshot(db)  # the events and their count are one moment, with the job
     return _detail(db, user, _job_or_404(db, user, job_id))
 
 

@@ -56,6 +56,7 @@ from app.agents.schemas import (
     RunList,
     RunOut,
 )
+from app.db import read_snapshot
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
@@ -348,6 +349,9 @@ def _detail(
     sessions: sessionmaker[Session], user_id: uuid.UUID, run_id: uuid.UUID
 ) -> RunDetail | None:
     with sessions() as db:
+        # One snapshot for the run and its events: the final status is committed with the run's
+        # last event, and two statements at READ COMMITTED could show one without the other.
+        read_snapshot(db)
         row = runs.get_run(db, user_id, run_id)
         if row is None:
             return None

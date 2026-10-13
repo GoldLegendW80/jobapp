@@ -19,7 +19,12 @@ from app.identity.models import User
 from app.jobs import service
 from app.jobs.models import ContractType, Job, JobEventKind, JobFile, JobStatus
 from app.jobs.schemas import IMPORT_HTTP_MAX_BYTES, ImportFile, JobsImportDocument
-from tests.identity.api_helpers import Api, make_user
+from tests.identity.api_helpers import (
+    Api,
+    assert_pooled_connection_is_at_default,
+    backend_pid,
+    make_user,
+)
 from tests.jobs.conftest import NOW
 from tests.jobs.sources import PDF
 
@@ -617,3 +622,59 @@ def test_import_counts_match_status_counts(api: Api, alice: Signed) -> None:
     expected = Counter(j["status"] for j in jobs)
     assert page["counts_by_status"] == {s: expected[s] for s in statuses}
     assert page["total"] == 40
+
+
+# --- one snapshot per read (issue #37, point 4) -------------------------------------------------
+
+
+def _level(db: Session) -> str | None:
+    return db.scalar(sa.text("SHOW transaction_isolation"))
+
+
+def test_the_list_is_read_at_one_snapshot(
+    api: Api,
+    alice: Signed,
+    factory: sessionmaker[Session],
+    one_connection: sa.Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The page, the status counts and the histogram are three statements: at READ COMMITTED a
+    job committed between them is in the counts and not in the page."""
+    seed(factory, alice.id, [{}])
+    levels: list[str | None] = []
+    pids: list[int] = []
+    real = service.fit_histogram
+
+    def histogram(db: Session, *args: Any, **kwargs: Any) -> Any:
+        levels.append(_level(db))  # the last of the three reads
+        pids.append(backend_pid(db))
+        return real(db, *args, **kwargs)
+
+    monkeypatch.setattr(service, "fit_histogram", histogram)
+    assert api.get("/api/jobs", token=alice.token).status_code == 200
+    assert levels == ["repeatable read"]
+    assert_pooled_connection_is_at_default(one_connection, pids)
+
+
+def test_the_detail_is_read_at_one_snapshot(
+    api: Api,
+    alice: Signed,
+    factory: sessionmaker[Session],
+    one_connection: sa.Engine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The newest events and their count are two statements of the same moment."""
+    (job,) = seed(factory, alice.id, [{}])
+    levels: list[str | None] = []
+    pids: list[int] = []
+    real = service.recent_events
+
+    def events(db: Session, *args: Any, **kwargs: Any) -> Any:
+        levels.append(_level(db))
+        pids.append(backend_pid(db))
+        return real(db, *args, **kwargs)
+
+    monkeypatch.setattr(service, "recent_events", events)
+    assert api.get(f"/api/jobs/{job.id}", token=alice.token).status_code == 200
+    assert levels == ["repeatable read"]
+    assert_pooled_connection_is_at_default(one_connection, pids)
