@@ -149,6 +149,7 @@ def test_filters(db: Session, alice: uuid.UUID, bob: uuid.UUID) -> None:
     b = add(db, alice, "Mistral AI", "Applied AI Engineer", location="Paris", notes="call back")
     c = add(db, alice, "100%_Acme", "Data Engineer", location="Remote")
     add(db, bob, "Mistral AI", "Applied AI Engineer")
+    service.lock_job(db, alice, c.id)  # set_status wants the row read under the lock
     b.fit, c.fit = 80, 40
     service.set_status(db, c, JobStatus.skipped, NOW)
     c.found_on = NOW.date() - timedelta(days=10)
@@ -185,6 +186,7 @@ def test_filters(db: Session, alice: uuid.UUID, bob: uuid.UUID) -> None:
 
 def test_set_status_fills_applied_on_once(db: Session, alice: uuid.UUID) -> None:
     job = add(db, alice)
+    service.lock_job(db, alice, job.id)
     assert service.set_status(db, job, JobStatus.found, NOW) is False
     assert service.set_status(db, job, JobStatus.applied, NOW) is True
     assert job.applied_on == NOW.date()

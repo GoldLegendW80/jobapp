@@ -280,6 +280,7 @@ Tasks of one group never edit the same file. Where two tasks touch one file they
 **Edge cases to test:** `set_status` given a row that was read without the lock raises, in a test that fails if the guard is removed; two transactions changing the same posting to two statuses: the second waits, then sees the first's status and its event; a bulk change racing a single change on one of its rows; an accept racing a manual change (the proposal turns `invalid` with "The job's status changed", as today); a lock wait that exceeds 5 s answers 409, not a hung request and not a 500; the mark does not survive a commit (a row locked in one transaction and changed in the next is refused); user B cannot lock or change A's row (404).
 **Playwright journey:** none: no page changes. The existing `jobs-edit.spec.ts` and `agents-triage.spec.ts` stay green.
 **Scope:** S. **Depends on:** none. **Migration:** none. **Owns:** `api/app/jobs/service.py`, `api/app/jobs/router.py`, `api/tests/jobs/`. It does not touch `api/app/agents/proposals.py`, so issue #111 does not hold it back.
+**For the task that calls it (M13):** lock the job with `lock_job` in the same transaction before `set_status`; the guard raises `UnlockedJobError` otherwise, and a lock wait over 5 s raises `JobBusyError` (the jobs routes answer it 409 "This job is being changed. Try again.").
 
 ## M1: The fake Gmail server and the Google client
 **Issue:** #123.

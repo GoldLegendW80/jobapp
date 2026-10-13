@@ -370,7 +370,12 @@ RESCORE_BUDGET_S = 20.0  # per call, checked between batches
 NO_SKILLS = "Your profile has no skills to score with yet. Add them in Profile, then rescore."
 DUPLICATE = "This posting is already in your list."
 STALE = "This job changed since you loaded it. Reload it and try again."
-_409 = {409: {"model": DuplicateOut, "description": "Duplicate posting, or stale version"}}
+_409 = {
+    409: {
+        "model": DuplicateOut,
+        "description": "Duplicate posting, stale version, or the job is being changed",
+    }
+}
 
 
 def _duplicate(job: Job) -> JSONResponse:
@@ -490,7 +495,12 @@ def edit_job(job_id: str, body: JobPatchIn, user: CurrentUser, request: Request,
 @router.post(
     "/bulk",
     response_model=BulkOut,
-    responses={**_401, 404: {"model": MissingOut, "description": "Ids not found"}, **_422},
+    responses={
+        **_401,
+        404: {"model": MissingOut, "description": "Ids not found"},
+        409: {"model": ErrorOut, "description": "A job is being changed"},
+        **_422,
+    },
     dependencies=[Depends(_no_store)],
 )
 def bulk(body: BulkIn, user: CurrentUser, request: Request, db: Db) -> Any:
@@ -531,7 +541,7 @@ def bulk(body: BulkIn, user: CurrentUser, request: Request, db: Db) -> Any:
     responses={
         **_401,
         400: {"model": ErrorOut, "description": "Invalid token"},
-        409: {"model": ErrorOut, "description": "Nothing left to undo"},
+        409: {"model": ErrorOut, "description": "Nothing left to undo, or a job is being changed"},
         410: {"model": ErrorOut, "description": "The undo window has passed"},
     },
     dependencies=[Depends(_no_store)],
