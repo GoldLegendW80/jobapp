@@ -143,9 +143,14 @@ def test_a_document_more_never_lowers_the_estimate() -> None:
         assert fewer.ceiling < more.ceiling
 
 
-def test_one_character_past_a_full_part_is_two_half_parts_and_they_count_less() -> None:
-    """The formula as "Tokens" writes it: a full part is dearer than two halves. Asserted so
-    that nobody takes the dip at the edge of a part for a bug and smooths it."""
+def test_counted_without_its_text_one_character_past_a_full_part_is_two_halves() -> None:
+    """The pure case only: a document given by its size, without the offsets of its parts (a
+    text that is not there yet, or a caller of `plan.build`), is split into equal parts, and the
+    formula as "Tokens" writes it counts a full part dearer than two halves. Asserted so that
+    nobody takes the dip for a bug and smooths it. The route cuts the real text, where one
+    character more can count higher or lower depending on where the text breaks: that case is
+    `test_at_the_edge_of_a_part_the_estimate_follows_where_the_text_breaks` in
+    `test_estimate_api.py`."""
     assert of(doc(1, 100_000)).high == 603_343
     assert of(doc(1, 100_001)).high == 2 * 275_670 + 1 + 2 * 8_000  # 567,341
 
@@ -172,6 +177,18 @@ def test_the_budget_is_what_remains_when_that_is_exactly_the_low_estimate() -> N
     assert low == 87_835
     assert estimate.budget(step, low) == low
     assert estimate.budget(step, low - 1) is None
+
+
+def test_a_reused_step_has_no_budget_and_asking_is_an_error() -> None:
+    """Neither a number nor None ("pause the run") is true of a step that calls no model."""
+    documents = [doc(1, 50_000)]
+    fresh = plan.build(documents, model=OPUS).steps[0]
+    reused = plan.build(documents, model=OPUS, finished={fresh.identity}).steps[0]
+    assert (fresh.reused, reused.reused) == (False, True)
+    assert estimate.budget(fresh, 10_000_000) == estimate.of_step(fresh).backstop
+    for remaining in (10_000_000, 0, float("inf")):
+        with pytest.raises(ValueError, match="reused"):
+            estimate.budget(reused, remaining)
 
 
 @pytest.mark.parametrize("remaining", [1, 0, -1, -10_000_000, float("nan"), float("-inf")])

@@ -14,7 +14,11 @@ The three costs of an estimate ("Tokens", cost):
   input price, assumption A14), every later appearance at the cache read price, plus the low
   output at the output price;
 - **high**: every input token of `H` at the full input price, plus the high output;
-- **ceiling**: every token of `C` at the full input price, as the plan quotes it.
+- **ceiling**: every token of `C` at the full input price, as the plan quotes it. It is the
+  price of the token ceiling counted in input tokens, **not a bound on money**: what a run
+  spends under `C` includes output tokens (five times the input price) and cache writes (1.25
+  times), so a run that reaches `C` can cost more than this amount. Nothing shown to a user
+  may call it a maximum.
 
 Amounts are US dollars rounded to the cent, half up, and an amount above zero is never shown as
 0.00 (it becomes 0.01). They are estimates from list prices: the provider's invoice is the only
@@ -67,6 +71,9 @@ PRICES: dict[str, Price] = {
 
 @dataclass(frozen=True)
 class Costs:
+    """Three estimates in US dollars. `ceiling` prices the token ceiling as input tokens: it is
+    not the most a run can cost (module docstring)."""
+
     low: Decimal
     high: Decimal
     ceiling: Decimal

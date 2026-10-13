@@ -181,7 +181,13 @@ def budget(step: plan.Step, remaining: float | Fraction) -> int | None:
     None means "do not create the step": what remains is less than the step's low estimate, so
     it would start, be interrupted at its first call and be paid twice after Continue. The
     engine then pauses the run on `token_ceiling`. A remainder that a division left fractional
-    is rounded down first; the runner reads anything but an `int` above zero as "no call"."""
+    is rounded down first; the runner reads anything but an `int` above zero as "no call".
+
+    A reused step calls no model, so it has no budget and "pause" would be as wrong an answer as
+    a number: asking is a mistake of the caller, and raises `ValueError`. The engine marks a
+    reused step done without asking."""
+    if step.reused:
+        raise ValueError("a reused step calls no model and has no budget")
     if isinstance(remaining, float) and not math.isfinite(remaining):
         whole = None if remaining > 0 else 0  # inf: only the backstop bounds; nan and -inf: stop
     else:
