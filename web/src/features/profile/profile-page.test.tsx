@@ -518,7 +518,7 @@ describe("experience tab", () => {
     expect(screen.getByLabelText("Key of employer 1")).toHaveValue("betclic");
   });
 
-  it("validates months, end before start, present, duplicate and malformed keys", async () => {
+  it("validates dates, end before start, present, duplicate and malformed keys", async () => {
     fakeSession(admin);
     const state = fakeProfile();
     const { user } = await openProfile("/profile?tab=experience");
@@ -537,19 +537,17 @@ describe("experience tab", () => {
     await user.click(saveButton("experience"));
     expect(
       await screen.findByText(
-        "Write the month as YYYY-MM, between 1900 and 2100.",
+        "Write the date as YYYY or YYYY-MM, between 1900 and 2100.",
       ),
     ).toBeVisible();
     // employer 2 untick present, employer 3 end cleared, employer 4 new
-    expect(
-      screen.getAllByText("Enter the end month, or tick Present."),
-    ).toHaveLength(3);
+    expect(screen.getAllByText("Enter the end, or tick Present.")).toHaveLength(
+      3,
+    );
     expect(
       screen.getByText("Another employer already uses this key."),
     ).toBeVisible();
-    expect(
-      screen.getByText("The end month is before the start month."),
-    ).toBeVisible();
+    expect(screen.getByText("The end is before the start.")).toBeVisible();
     expect(
       screen.getByText(
         "Use lowercase letters and digits, words joined by single hyphens.",
@@ -559,7 +557,7 @@ describe("experience tab", () => {
     expect(state.saves).toHaveLength(0);
   });
 
-  it("ticking present clears and disables the end month and sends null", async () => {
+  it("ticking present clears and disables the end and sends null", async () => {
     fakeSession(admin);
     const state = fakeProfile();
     const { user } = await openProfile("/profile?tab=experience");
@@ -575,6 +573,149 @@ describe("experience tab", () => {
     expect(
       (state.saves[0]!.body.data as Experience).employers[2]!.end,
     ).toBeNull();
+  });
+
+  it("takes a year alone, says how it reads it, and saves it as typed", async () => {
+    fakeSession(member);
+    const state = fakeProfile(null);
+    const { user } = await openProfile("/profile?tab=experience");
+    await user.click(screen.getByRole("button", { name: "Add employer" }));
+    await user.type(
+      screen.getByLabelText("Organisation of employer 1"),
+      "Northwind Labs",
+    );
+    await user.type(
+      screen.getByLabelText("Job title at employer 1"),
+      "Engineer",
+    );
+    const start = screen.getByLabelText("Start of employer 1");
+    const end = screen.getByLabelText("End of employer 1");
+    expect(start).toHaveAttribute("placeholder", "YYYY or YYYY-MM");
+    // The hint is the field's description, so a screen reader says it with the label.
+    expect(start).toHaveAccessibleDescription(
+      "A year alone or a month: 2021 or 2021-03.",
+    );
+    await user.type(start, "2021");
+    expect(start).toHaveValue("2021");
+    expect(start).toHaveAccessibleDescription("Read as the year 2021.");
+    await user.type(end, "2023");
+    expect(end).toHaveAccessibleDescription("Read as the year 2023.");
+
+    await user.click(screen.getByRole("button", { name: "Add school" }));
+    await user.type(screen.getByLabelText("School 1"), "École Exemple");
+    await user.type(screen.getByLabelText("Degree at school 1"), "MSc");
+    await user.type(screen.getByLabelText("Start of school 1"), "2019");
+
+    await user.click(saveButton("experience"));
+    expect(await screen.findByText("Experience saved.")).toBeVisible();
+    const sent = state.saves[0]!.body.data as Experience;
+    expect(sent.employers[0]).toMatchObject({ start: "2021", end: "2023" });
+    expect(sent.education[0]).toMatchObject({ start: "2019", end: null });
+    // The saved form shows the same four characters, not a month made up for them.
+    expect(screen.getByLabelText("Start of employer 1")).toHaveValue("2021");
+    expect(screen.getByLabelText("End of employer 1")).toHaveValue("2023");
+    expect(screen.getByLabelText("Start of school 1")).toHaveValue("2019");
+    expect(screen.getByLabelText("End of school 1")).toHaveValue("");
+  });
+
+  it("shows stored years as stored, and a year becomes a month only when one is typed", async () => {
+    fakeSession(admin);
+    const experience = haraldLike().experience;
+    experience.employers[2] = {
+      ...experience.employers[2]!,
+      start: "2021",
+      end: "2023",
+    };
+    const state = fakeProfile({ ...haraldLike(), experience });
+    const { user } = await openProfile("/profile?tab=experience");
+    const start = screen.getByLabelText("Start of employer 3");
+    expect(start).toHaveValue("2021");
+    expect(start).toHaveAccessibleDescription("Read as the year 2021.");
+    expect(screen.getByLabelText("End of employer 3")).toHaveValue("2023");
+    expect(screen.getByLabelText("Start of employer 1")).toHaveValue("2025-09");
+    expect(
+      screen.getByLabelText("Start of employer 1"),
+    ).toHaveAccessibleDescription("Read as September 2025.");
+
+    // Six digits typed on a number pad, which has no hyphen key.
+    await user.clear(start);
+    await user.type(start, "202103");
+    expect(start).toHaveValue("2021-03");
+    expect(start).toHaveAccessibleDescription("Read as March 2021.");
+    await user.click(saveButton("experience"));
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(1);
+    });
+    const sent = state.saves[0]!.body.data as Experience;
+    expect(sent.employers[2]).toMatchObject({ start: "2021-03", end: "2023" });
+    // The other dates went back exactly as they came.
+    expect(sent.employers.slice(0, 2)).toEqual(
+      haraldLike().experience.employers.slice(0, 2),
+    );
+    expect(sent.education).toEqual(haraldLike().experience.education);
+  });
+
+  it("refuses only an end that is certainly before the start", async () => {
+    fakeSession(admin);
+    const state = fakeProfile();
+    const { user } = await openProfile("/profile?tab=experience");
+    const start = screen.getByLabelText("Start of employer 3");
+    const end = screen.getByLabelText("End of employer 3");
+    await user.clear(start);
+    await user.type(start, "2023");
+    await user.clear(end);
+    await user.type(end, "2022-12");
+    await user.click(saveButton("experience"));
+    expect(
+      await screen.findByText("The end is before the start."),
+    ).toBeVisible();
+    expect(end).toHaveAttribute("aria-invalid", "true");
+    expect(end).toHaveAccessibleDescription(
+      "Read as December 2022. The end is before the start.",
+    );
+    expect(state.saves).toHaveLength(0);
+
+    // 2023-05 to 2023: the end may be December, so it is in order.
+    await user.clear(start);
+    await user.type(start, "2023-05");
+    await user.clear(end);
+    await user.type(end, "2023");
+    await user.click(saveButton("experience"));
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(1);
+    });
+    expect(
+      (state.saves[0]!.body.data as Experience).employers[2],
+    ).toMatchObject({ start: "2023-05", end: "2023" });
+  });
+
+  it("with Present ticked a year alone start is saved and the end has no hint", async () => {
+    fakeSession(member);
+    const state = fakeProfile(null);
+    const { user } = await openProfile("/profile?tab=experience");
+    await user.click(screen.getByRole("button", { name: "Add employer" }));
+    await user.type(
+      screen.getByLabelText("Organisation of employer 1"),
+      "Northwind Labs",
+    );
+    await user.type(
+      screen.getByLabelText("Job title at employer 1"),
+      "Engineer",
+    );
+    await user.type(screen.getByLabelText("Start of employer 1"), "2024");
+    await user.type(screen.getByLabelText("End of employer 1"), "2020");
+    await user.click(screen.getByLabelText("Present at employer 1"));
+    const end = screen.getByLabelText("End of employer 1");
+    expect(end).toBeDisabled();
+    expect(end).toHaveValue("");
+    expect(end).not.toHaveAccessibleDescription();
+    await user.click(saveButton("experience"));
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(1);
+    });
+    expect(
+      (state.saves[0]!.body.data as Experience).employers[0],
+    ).toMatchObject({ start: "2024", end: null });
   });
 
   it("maps the server's end before start and duplicate key errors to the fields", async () => {

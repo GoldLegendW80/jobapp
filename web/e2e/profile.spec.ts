@@ -371,9 +371,7 @@ test("Experience: add an employer, reorder, save", async () => {
   // Wrong order first: the end before the start is caught before any request.
   await page.getByLabel("End of employer 3", { exact: true }).fill("2020-06");
   await page.getByRole("button", { name: "Save experience" }).click();
-  await expect(
-    page.getByText("The end month is before the start month."),
-  ).toBeVisible();
+  await expect(page.getByText("The end is before the start.")).toBeVisible();
   await page.getByLabel("End of employer 3", { exact: true }).fill("2021-06");
   await page.getByRole("button", { name: "Move employer 2 down" }).click();
   await expect(

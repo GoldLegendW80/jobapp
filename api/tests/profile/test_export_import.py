@@ -194,6 +194,106 @@ def test_round_trip_of_an_empty_profile(api: Api, alice: str, bob: str) -> None:
     assert canonical(export(api, bob)["sections"]) == canonical(first["sections"])
 
 
+def year_only_experience() -> dict[str, Any]:
+    """Every mix of the two forms: years alone, a year with a month, an open end, no date."""
+    return {
+        "employers": [
+            {
+                "key": "northwind",
+                "organisation": "Northwind Labs",
+                "title": "Engineer",
+                "start": "2023",
+                "end": None,
+                "location": None,
+                "contract": None,
+            },
+            {
+                "key": "acme",
+                "organisation": "Acme Group",
+                "title": "Developer",
+                "start": "2021",
+                "end": "2023",
+                "location": "Lyon",
+                "contract": "CDI",
+            },
+            {
+                "key": "clinic",
+                "organisation": "Clinic",
+                "title": "Intern",
+                "start": "2020-09",
+                "end": "2021",
+                "location": None,
+                "contract": "internship",
+            },
+        ],
+        "education": [
+            {
+                "school": "School of Engineering",
+                "degree": "MSc",
+                "start": "2019",
+                "end": None,
+                "location": None,
+                "details": None,
+            },
+            {
+                "school": "High school",
+                "degree": "Baccalaureate",
+                "start": "2016",
+                "end": "2019-06",
+                "location": None,
+                "details": None,
+            },
+        ],
+    }
+
+
+def test_round_trip_keeps_a_year_alone_character_for_character(
+    api: Api, alice: str, bob: str, factory: sessionmaker[Session]
+) -> None:
+    """Save, export, import into another account, export again: "2021" stays "2021", never
+    "2021-01", in the file as written and in every stored copy."""
+    saved = api.request(
+        "PUT",
+        "/api/profile/experience",
+        token=alice,
+        json={"base_revision": 0, "data": year_only_experience()},
+    )
+    assert saved.status_code == 200, saved.text
+    response = api.get("/api/profile/export", token=alice)
+    text = response.content.decode("utf-8")
+    assert '"start": "2021",\n          "end": "2023",' in text
+    assert '"start": "2020-09",\n          "end": "2021",' in text
+    assert '"start": "2019",\n          "end": null,' in text
+    assert "2021-01" not in text
+    assert "2023-12" not in text
+    first = response.json()
+    assert first["sections"]["experience"] == year_only_experience()
+
+    import_ok(api, bob, first)
+    second = api.get("/api/profile/export", token=bob)
+    assert canonical(second.json()["sections"]) == canonical(first["sections"])
+    assert second.json()["sections"]["experience"] == year_only_experience()
+    # The copies in the database: the profile row and the revision of each account.
+    assert [profile.sections["experience"] for profile in stored(factory)] == [
+        year_only_experience()
+    ] * 2
+    kept = [row.data for row in revisions(factory) if row.section == "experience"]
+    assert kept == [year_only_experience()] * 2
+
+
+def test_an_import_file_with_year_only_dates(api: Api, alice: str) -> None:
+    """A file written by hand or by an agent, never exported by this app."""
+    sections = empty_sections()
+    sections["experience"] = year_only_experience()
+    body = import_ok(api, alice, document(sections))
+    assert body["sections"]["experience"] == year_only_experience()
+    assert body["completeness"]["sections"]["experience"] == {"percent": 100, "missing": []}
+    read = api.get("/api/profile", token=alice).json()
+    assert read["sections"]["experience"] == year_only_experience()
+    past = api.get(f"/api/profile/revisions/{SECTIONS.index('experience') + 1}", token=alice)
+    assert past.json()["data"] == year_only_experience()
+
+
 def test_import_writes_one_revision_per_section_in_order(
     api: Api, alice: str, factory: sessionmaker[Session], clock: Clock
 ) -> None:
@@ -251,8 +351,21 @@ def assert_untouched(factory: sessionmaker[Session]) -> None:
         ),
         (
             lambda d: d["sections"]["experience"]["employers"][0].update(start="2025-13"),
-            "sections.experience.employers.0.start: must be a month written YYYY-MM between "
-            "1900 and 2100",
+            "sections.experience.employers.0.start: must be a year or a month, written YYYY or "
+            "YYYY-MM, between 1900 and 2100",
+        ),
+        (
+            lambda d: d["sections"]["experience"]["education"][0].update(end="2025-8"),
+            "sections.experience.education.0.end: must be a year or a month, written YYYY or "
+            "YYYY-MM, between 1900 and 2100",
+        ),
+        (
+            lambda d: d["sections"]["experience"]["employers"][1].update(start="2023", end="2022"),
+            "sections.experience.employers.1: end must not be before start",
+        ),
+        (
+            lambda d: d["sections"]["experience"]["employers"][0].update(start=2025),
+            "sections.experience.employers.0.start: Input should be a valid string",
         ),
         (
             lambda d: d["sections"]["search"]["title_exclude"].update(terms=["(unclosed"]),

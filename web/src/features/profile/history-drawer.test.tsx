@@ -504,6 +504,36 @@ describe("diff rendering per section", () => {
     expect(row).toHaveTextContent("Empty");
   });
 
+  it("experience: a year alone made a month is one changed field, each shown as stored", async () => {
+    fakeSession(admin);
+    const years = haraldLike().experience;
+    years.employers[2] = { ...years.employers[2]!, start: "2021", end: "2023" };
+    const state = fakeProfile({ ...haraldLike(), experience: years });
+    const months = structuredClone(years);
+    months.employers[2]!.start = "2021-03";
+    pushSave(state, "experience", months);
+    const { user, drawer } = await openHistory("experience");
+    await user.click(await versionButton(drawer, 2));
+    const table = await within(drawer).findByRole("table");
+    expect(
+      within(drawer).getByText("1 field differs from the current version."),
+    ).toBeVisible();
+    const start = within(table).getByRole("row", {
+      name: /^Employer 3 › Start/,
+    });
+    expect(start).toHaveAttribute("data-status", "changed");
+    expect(
+      within(start)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["2021", "2021-03"]);
+    // The end, a year alone on both sides, is the same, and shown as the year.
+    const end = within(table).getByRole("row", { name: /^Employer 3 › End/ });
+    expect(end).toHaveAttribute("data-status", "same");
+    expect(end).toHaveTextContent("2023");
+    expect(end).not.toHaveTextContent("2023-");
+  });
+
   it("facts: added and removed lines of the Markdown", async () => {
     fakeSession(admin);
     const state = fakeProfile();

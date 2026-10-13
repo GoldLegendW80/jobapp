@@ -52,6 +52,14 @@ services:
     volumes:
       - ./api/app:/app/app
 
+  # The parser follows the worker's image, here as everywhere (compose.yml, parser), with the
+  # same code mounted. Read only: a bind mount is not covered by read_only, and on Docker
+  # Desktop any uid can write through one. No OPENSSL_armcap: it never imports `cryptography`.
+  parser:
+    image: jobapp-worker:dev
+    volumes:
+      - ./api/app:/app/app:ro
+
   db:
     ports:
       - "127.0.0.1:5432:5432"

@@ -267,6 +267,40 @@ describe("diffFields", () => {
     expect(rows.find((r) => r.path === "employers.0.key")?.status).toBe("same");
   });
 
+  it("shows a year alone made a month as a change of that one field, each as stored", () => {
+    const past = haraldLike().experience;
+    past.employers[0]!.start = "2021";
+    past.education[0]!.end = "2023";
+    const now = structuredClone(past);
+    now.employers[0]!.start = "2021-03";
+    now.education[0]!.end = "2023-06";
+    const rows = diffFields(
+      flattenSection("experience", past),
+      flattenSection("experience", now),
+    );
+    expect(rows.filter((r) => r.status !== "same")).toEqual([
+      {
+        path: "employers.0.start",
+        label: "Employer 1 › Start",
+        revision: "2021",
+        current: "2021-03",
+        status: "changed",
+      },
+      {
+        path: "education.0.end",
+        label: "School 1 › End",
+        revision: "2023",
+        current: "2023-06",
+        status: "changed",
+      },
+    ]);
+    // The same year on both sides is no difference, and "2021" is not "2021-01".
+    expect(sameData(past, structuredClone(past))).toBe(true);
+    const padded = structuredClone(past);
+    padded.employers[0]!.start = "2021-01";
+    expect(sameData(past, padded)).toBe(false);
+  });
+
   it("marks fields that only the revision has as added", () => {
     const rows = diffFields(
       flattenSection("identity", haraldLike().identity),

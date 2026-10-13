@@ -11,9 +11,10 @@ normalised value.
 Sections and what they replace in the engine:
 - identity: name, headline, contact, city and country, links, languages (`assemble.py`).
   The photo is not here: it lives in its own columns (task P3).
-- experience: employers (each with a stable slug `key`, unique within the section; months as
-  YYYY-MM, `end` null means present, `end` never before `start`) and education
-  (`assemble.py` EMPLOYERS, EDUCATION).
+- experience: employers (each with a stable slug `key`, unique within the section; `start` and
+  `end` a month, YYYY-MM, or a year alone, YYYY, stored as written; `end` null means present,
+  `end` never certainly before `start`) and education (`assemble.py` EMPLOYERS, EDUCATION).
+  See "periods" below for the order, the comparison and the display of these dates.
 - facts: the fact base as named Markdown blocks (titles unique, so agents can cite a block),
   at most FACTS_MAX_BYTES of UTF-8 in all (`profile/facts.md`).
 - skills: the scoring model (`profile/skills.json`): years_experience 0 to 60, categories
@@ -84,8 +85,8 @@ URL_MAX = 500
 TERMS_MAX = 300  # terms in one list
 FACTS_MAX_BYTES = 200_000  # titles and bodies of all fact blocks, UTF-8
 FACT_BLOCKS_MAX = 200
-MONTH_MIN_YEAR = 1900
-MONTH_MAX_YEAR = 2100
+PERIOD_MIN_YEAR = 1900  # of a start or an end, whether a month or a year alone
+PERIOD_MAX_YEAR = 2100
 
 # --- strings ------------------------------------------------------------------------------------
 
@@ -148,20 +149,118 @@ def _url(value: str | None) -> str | None:
 
 OptUrl = Annotated[OptText(URL_MAX), AfterValidator(_url)]
 
-_MONTH = re.compile(r"(\d{4})-(0[1-9]|1[0-2])")
+# --- periods: a month, or a year alone ----------------------------------------------------------
+#
+# The start and the end of an employer and of a school are a period: a month, "2021-03", or a
+# year alone, "2021", when that is all the user or the document says (owner's decision of
+# 2026-10-10: nobody ever assumes a month). The value is stored exactly as written, never padded
+# into a month and never shortened to a year, so save, export, import and history give it back
+# character for character (surrounding spaces removed, as for every field). Every section the
+# earlier month only model accepted is still accepted, value by value and start with end, so
+# stored profiles stay valid untouched (no data migration).
+#
+# One reading of a period for each use, all from `parse_period`:
+# - `period_key`: the order of a list. (year, month), month 0 for a year alone, so a year alone
+#   comes before every month of its year and "newest first" lists it after them. Two different
+#   values written in ASCII digits never share a key (the same year in the digits of two scripts
+#   does), so the order is stable; it is a convention, not a claim about when in the year the
+#   period fell.
+# - `period_span`: the first and the last month a period can mean. A rule that must be certain
+#   reads a start at its first month and an end at its last: that is how "end must not be before
+#   start" is judged, so "2023-05" to "2023" and "2021" to "2021-03" are accepted, "2023" to
+#   "2022-12" is refused (one exception, kept from the month only model: see `_Dated`). A
+#   duration that must not invent precision reads the other way round (a start at its last
+#   month, an end at its first, never below zero); no code computes one today.
+# - `format_period`: the words shown to a person, "2021" or "March 2021". A year alone is printed
+#   as the year: no month is ever made up for it.
+
+# `\d` as the month only pattern had it: in Python it also takes the decimal digits of other
+# scripts for the year, which `int` reads. The web form has always refused those; they stay
+# accepted here because narrowing would make a stored value invalid, a change of its own.
+_PERIOD = re.compile(r"(\d{4})(?:-(0[1-9]|1[0-2]))?")
+# For the JSON schema (OpenAPI), where a pattern is not anchored by itself. An optional date
+# also takes the empty string, which is stored as null.
+PERIOD_PATTERN = r"^\d{4}(-(0[1-9]|1[0-2]))?$"
+OPT_PERIOD_PATTERN = r"^(\d{4}(-(0[1-9]|1[0-2]))?)?$"
+PERIOD_RULE = (
+    f"must be a year or a month, written YYYY or YYYY-MM, between {PERIOD_MIN_YEAR} and "
+    f"{PERIOD_MAX_YEAR}"
+)
+MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
 
 
-def _month(value: str) -> str:
-    match = _MONTH.fullmatch(value)
-    if not match or not MONTH_MIN_YEAR <= int(match.group(1)) <= MONTH_MAX_YEAR:
-        raise ValueError(
-            f"must be a month written YYYY-MM between {MONTH_MIN_YEAR} and {MONTH_MAX_YEAR}"
-        )
+def parse_period(value: str) -> tuple[int, int | None]:
+    """(year, month) of a period, month None for a year alone. Raises ValueError (PERIOD_RULE)
+    for anything that is not YYYY or YYYY-MM within the years allowed: a one digit month, a day,
+    a two digit year, another separator."""
+    match = _PERIOD.fullmatch(value) if isinstance(value, str) else None
+    if not match or not PERIOD_MIN_YEAR <= int(match.group(1)) <= PERIOD_MAX_YEAR:
+        raise ValueError(PERIOD_RULE)
+    return int(match.group(1)), int(match.group(2)) if match.group(2) else None
+
+
+def period_key(value: str) -> tuple[int, int]:
+    """The sort key of a stored period: (year, month), month 0 for a year alone."""
+    year, month = parse_period(value)
+    return year, month or 0
+
+
+def period_span(value: str) -> tuple[int, int]:
+    """The first and the last month a stored period can mean, each counted in months
+    (year x 12 + month, January being 0): equal for a month, January and December for a year
+    alone."""
+    year, month = parse_period(value)
+    if month is None:
+        return year * 12, year * 12 + 11
+    return year * 12 + month - 1, year * 12 + month - 1
+
+
+def format_period(value: str) -> str:
+    """A stored period in words: "2021" for a year alone, "March 2021" for a month."""
+    year, month = parse_period(value)
+    return str(year) if month is None else f"{MONTH_NAMES[month - 1]} {year}"
+
+
+def _period(value: str) -> str:
+    parse_period(value)
     return value
 
 
-Month = Annotated[Text(20), AfterValidator(_month)]
-OptMonth = Annotated[OptText(20), AfterValidator(lambda v: None if v is None else _month(v))]
+_PERIOD_DOC = (
+    "A month, YYYY-MM, or a year alone, YYYY, when the month is not known. Years "
+    f"{PERIOD_MIN_YEAR} to {PERIOD_MAX_YEAR}. Stored as sent, surrounding spaces removed."
+)
+Period = Annotated[
+    Text(20),
+    AfterValidator(_period),
+    Field(
+        description=_PERIOD_DOC,
+        examples=["2021-03", "2021"],
+        json_schema_extra={"pattern": PERIOD_PATTERN},
+    ),
+]
+OptPeriod = Annotated[
+    OptText(20),
+    AfterValidator(lambda v: None if v is None else _period(v)),
+    Field(
+        description=f"{_PERIOD_DOC} Null when there is none (an empty string is stored as null).",
+        examples=["2021-03", "2021", None],
+        json_schema_extra={"pattern": OPT_PERIOD_PATTERN},
+    ),
+]
 
 SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 Slug = Text(40, pattern=SLUG_PATTERN)
@@ -471,7 +570,16 @@ class _Dated(_Section):
 
     @model_validator(mode="after")
     def _end_after_start(self) -> "_Dated":
-        if self.start is not None and self.end is not None and self.end < self.start:
+        # Periods, not strings ("2023" sorts before "2023-05" as text), and only what is
+        # certain: the last month the end can mean is before the first the start can mean.
+        if self.start is None or self.end is None:
+            return self
+        if period_span(self.end)[1] < period_span(self.start)[0]:
+            # Two months were compared as text before P7, which differs from their order only
+            # when a year is written in the digits of another script: what that accepted stays
+            # accepted, so no stored section stops validating.
+            if "-" in self.start and "-" in self.end and self.end >= self.start:
+                return self
             raise ValueError("end must not be before start")
         return self
 
@@ -480,8 +588,8 @@ class Employer(_Dated):
     key: Slug
     organisation: Line
     title: Line
-    start: Month
-    end: OptMonth = None  # null: present
+    start: Period
+    end: OptPeriod = None  # null: present
     location: OptLine = None
     contract: EmployerContract | None = None
 
@@ -489,8 +597,8 @@ class Employer(_Dated):
 class School(_Dated):
     school: Line
     degree: Line
-    start: OptMonth = None
-    end: OptMonth = None
+    start: OptPeriod = None
+    end: OptPeriod = None
     location: OptLine = None
     details: OptParagraph = None
 
