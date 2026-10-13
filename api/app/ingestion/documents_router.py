@@ -66,8 +66,13 @@ a body of some size, one of them 20 MiB:
   is whole and its first bytes say what it is, so a text file, which is read at once and costs
   no job, is never counted, and a file refused for the rate has been uploaded for nothing:
   the page says how long to wait. A duplicate counts too: it is told from a new file only
-  later, under the user's lock. What it leaves: an account can still fill the queue with the
-  200 documents it may keep, ten a minute.
+  later, under the user's lock. What it leaves: the 200 documents an account may keep do not
+  cap its readings. A document that failed is replaced by a new upload of the same file, so
+  one account can keep sending the same slow files as they fail, ten a minute, for as long as
+  it likes. Each costs the single reader up to its budget of 35 s, or two tries of 60 s when
+  the child is killed at the wall limit: that is a failure of the server, and its sentence
+  invites the user to add the file again. Nothing here caps the documents one user has
+  waiting, and the reader takes them in the order they came, whoever sent them.
 What this does not prevent: two accounts acting together can each hold one slot for as long as
 each keeps sending at that pace, which is the whole of the two slots. A body that ends with 408
 stores nothing and counts for nothing, so the quota does not bound such an account: its one
