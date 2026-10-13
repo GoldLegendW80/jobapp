@@ -445,11 +445,23 @@ def test_an_uploaded_pdf_becomes_text_through_the_job_and_the_real_parser(
     assert shown["text"] == stored.text
     assert [image["position"] for image in shown["images"]] == [1]
 
-    protected = uploaded(api, alice, fx.encrypted(fx.text_pdf(1, 5), "AES-256"), "locked.pdf")
+    # An AES file that opens with no password: the text reader of the child cannot open it
+    # (`encryption`), and since G8 the job asks PDFium for its text layer (A8), so it is read.
+    # Until G8 it was failed with FILE_SENTENCES["encryption"].
+    restricted = uploaded(api, alice, fx.encrypted(fx.text_pdf(1, 5), "AES-256"), "aes.pdf")
+    assert asyncio.run(jobs.parse_document(ctx, restricted["id"])) == jobs.DONE
+    stored = row(factory, restricted["id"])
+    assert (stored.text_status, stored.raw) == (TextStatus.done, None)
+    assert (stored.pages, stored.pages_text, stored.pages_image) == (1, 1, 0)
+    assert fx.SENTENCE in stored.text
+
+    # The same behind a real password stays a failure of the file, with the bytes gone.
+    locked = fx.encrypted(fx.text_pdf(1, 5), "AES-256", "a real password")
+    protected = uploaded(api, alice, locked, "locked.pdf")
     assert asyncio.run(jobs.parse_document(ctx, protected["id"])) == jobs.FAILED
     stored = row(factory, protected["id"])
     assert (stored.text_status, stored.failed_kind) == (TextStatus.failed, FailedKind.file)
-    assert stored.failed_reason == jobs.FILE_SENTENCES["encryption"]
+    assert stored.failed_reason == jobs.FILE_SENTENCES["protected"]
     assert (stored.raw, stored.text) == (None, None)
 
     cut = uploaded(api, alice, fx.truncated_pdf(), "cut.pdf")

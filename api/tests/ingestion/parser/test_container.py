@@ -283,10 +283,12 @@ def test_the_container_runs_as_compose_yml_hardens_it(stack: Stack) -> None:
     assert not host.get("PortBindings")
     assert not host.get("Tmpfs")
     assert not host.get("Devices")
-    # Nothing mounted but the tests' handler: the service of compose.yml has no volume at all.
+    # Nothing mounted but the tests' handler, twice, and the null device over the file of
+    # `image` (compose.sandbox.yml): the service of compose.yml has no volume at all.
     assert {mount["Destination"] for mount in found["Mounts"]} == {
         "/app/app/ingestion/sandbox/pdf_render.py",
         "/app/app/ingestion/sandbox/docx.py",
+        "/app/app/ingestion/sandbox/image.py",
     }
     assert all(mount["RW"] is False for mount in found["Mounts"])
 
@@ -317,6 +319,7 @@ def test_the_judge_of_the_smoke_scripts_agrees_on_the_real_container(stack: Stac
     assert done.returncode == 1
     assert sorted(done.stderr.splitlines()) == [
         "parser: mount at /app/app/ingestion/sandbox/docx.py (writable: False)",
+        "parser: mount at /app/app/ingestion/sandbox/image.py (writable: False)",
         "parser: mount at /app/app/ingestion/sandbox/pdf_render.py (writable: False)",
     ]
 
