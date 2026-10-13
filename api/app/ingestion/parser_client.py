@@ -163,7 +163,11 @@ MAX_EXPORT_CHARS = 900_000  # every text of one export together (linkedin_zip.EX
 # What was not read, on a document that was. Each comes with integers named in NOTE_VALUES.
 # `pages_not_read` is the page cap, `text_limit` the character cap (G2b), `time_limit` the time
 # budget: each names the pages left out (from, to); `scans_not_read` counts the image pages.
-NOTE_CODES = frozenset({"pages_not_read", "text_limit", "time_limit", "scans_not_read"})
+# G8 (sandbox/pdf_render.py): `pages_not_rendered` counts the pages of a batch that could not be
+# drawn (a size outside the guards, or a page PDFium cannot load).
+NOTE_CODES = frozenset(
+    {"pages_not_read", "text_limit", "time_limit", "scans_not_read", "pages_not_rendered"}
+)
 NOTE_VALUES = frozenset({"from", "to", "count"})
 _TIMEOUT_CODES = frozenset({"wall_limit", "cpu_limit", "read_timeout"})
 
