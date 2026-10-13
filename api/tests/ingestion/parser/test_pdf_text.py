@@ -346,6 +346,189 @@ def test_a_ring_between_the_end_of_the_reading_and_the_end_of_the_watch_is_a_tim
     assert answer["truncated"] is True
 
 
+class Switch:
+    """A budget a test spends when it wants."""
+
+    def __init__(self) -> None:
+        self.on = False
+
+    def spent(self) -> bool:
+        return self.on
+
+
+def ring_now() -> None:
+    """One ring of the timer, taken at this very line."""
+    import signal
+
+    signal.raise_signal(signal.SIGALRM)
+
+
+def a_second_page_that_rings_in(
+    monkeypatch: pytest.MonkeyPatch, budget: Switch, dies: Any
+) -> list[str]:
+    """Make the second page spend the budget, let `dies(seen)` kill an object whose end rings
+    the timer, then work until it is interrupted. Returns what the page went through."""
+    real = pdf_text.page_text
+    seen: list[str] = []
+    pages = iter(range(1, 10))
+
+    def page_text(page: Any, read: Any) -> str:
+        if next(pages) == 2:
+            budget.on = True
+            dies(seen)
+            seen.append("back in the page")
+            end = time.monotonic() + 5
+            while time.monotonic() < end:
+                pass
+            seen.append("never interrupted")
+        return real(page, read)
+
+    monkeypatch.setattr(pdf_text, "page_text", page_text)
+    return seen
+
+
+def in_a_weak_dictionary(seen: list[str]) -> None:
+    """The case CI met: a key of a WeakKeyDictionary dies, and the ring lands in the callback
+    that takes it out (`remove`, in weakref.py)."""
+    import weakref
+
+    class Entries(dict):
+        def __delitem__(self, key: Any) -> None:
+            ring_now()
+            super().__delitem__(key)
+            seen.append("callback finished")
+
+    class Key:
+        pass
+
+    weak: Any = weakref.WeakKeyDictionary()
+    weak.data = Entries()
+    key = Key()
+    weak[key] = 1
+    del key
+    assert len(weak.data) == 0, "the dead key was taken out"
+
+
+def in_a_destructor(seen: list[str]) -> None:
+    class Dies:
+        def __del__(self) -> None:
+            ring_now()
+            seen.append("callback finished")
+
+    Dies()
+
+
+def in_a_callback_nobody_knows(seen: list[str]) -> None:
+    """A weak reference callback of some library: nothing tells the watch what it is, so the
+    exception is raised in it, and lost."""
+    import weakref
+
+    class Thing:
+        pass
+
+    def gone(_: Any) -> None:
+        ring_now()
+        seen.append("callback finished")
+
+    thing = Thing()
+    reference = weakref.ref(thing, gone)
+    del thing
+    assert reference() is None
+
+
+@pytest.mark.parametrize(
+    ("dies", "callback_finished"),
+    [(in_a_weak_dictionary, True), (in_a_destructor, True), (in_a_callback_nobody_knows, False)],
+)
+def test_a_ring_that_lands_where_no_exception_can_leave_still_ends_the_page(
+    monkeypatch: pytest.MonkeyPatch, dies: Any, callback_finished: bool
+) -> None:
+    """Python drops an exception raised in a destructor or in the callback of a weak reference,
+    after reporting it as unraisable (which fails a test here). The ring raises nothing in the
+    ones it can recognise and lets them finish, the hook of the watch takes the exception lost in
+    the others, and in both cases the timer rings again at once: the page is interrupted, the
+    page before it is kept, and nothing unraisable is reported."""
+    reported: list[Any] = []
+    monkeypatch.setattr(sys, "unraisablehook", reported.append)
+    budget = Switch()
+    seen = a_second_page_that_rings_in(monkeypatch, budget, dies)
+    answer = read(fx.text_pdf(3, rows=3), budget)
+    assert seen == ["callback finished"] * callback_finished + ["back in the page"]
+    assert reported == []
+    assert sys.unraisablehook == reported.append, "the hook that was there is back"
+    assert answer["pages_text"] == 1
+    assert notes(answer) == [("time_limit", {"from": 2, "to": 3})]
+
+
+def test_any_other_unraisable_exception_still_reaches_the_hook_that_was_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def dies(_: list[str]) -> None:
+        class Dies:
+            def __del__(self) -> None:
+                raise ValueError
+
+        Dies()
+        ring_now()
+
+    reported: list[Any] = []
+    monkeypatch.setattr(sys, "unraisablehook", reported.append)
+    budget = Switch()
+    a_second_page_that_rings_in(monkeypatch, budget, dies)
+    answer = read(fx.text_pdf(3, rows=3), budget)
+    assert [found.exc_type for found in reported] == [ValueError]
+    assert answer["pages_text"] == 1
+
+
+def test_a_ring_after_the_reading_has_ended_raises_nothing_and_the_timer_is_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Note N5 of the review of PR #110: a ring between the last page and the end of the watch
+    used to raise before the timer was stopped, which left it ringing on a spent budget while
+    the answer was built and written. A reading that has ended has nothing left to interrupt."""
+    import signal
+
+    budget = Switch()
+
+    class RingsOnItsWayOut(pdf_text._Watch):
+        def __exit__(self, *exc: object) -> None:
+            budget.on = True
+            ring_now()
+            super().__exit__(*exc)
+
+    monkeypatch.setattr(pdf_text, "_Watch", RingsOnItsWayOut)
+    before = signal.getsignal(signal.SIGALRM)
+    try:
+        answer = read(fx.text_pdf(2, rows=3), budget)
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+        assert signal.getsignal(signal.SIGALRM) == before
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, before)
+    assert (answer["pages_text"], answer["truncated"], answer["notes"]) == (2, False, [])
+
+
+def test_the_timer_is_stopped_even_when_the_end_of_the_watch_is_cut_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import signal
+
+    class NeverLeaves(pdf_text._Watch):
+        def __exit__(self, *exc: object) -> None:
+            raise pdf_text._OutOfTimeError
+
+    monkeypatch.setattr(pdf_text, "_Watch", NeverLeaves)
+    before = signal.getsignal(signal.SIGALRM)
+    try:
+        answer = read(fx.text_pdf(2, rows=3))
+        assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+        assert signal.getsignal(signal.SIGALRM) == before
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, before)
+    assert answer["pages_text"] == 2
+
+
 # --- protected ----------------------------------------------------------------------------------
 
 _ISOLATED = """

@@ -23,7 +23,8 @@ What comes back for a PDF that was read:
   of text (`text_limit`), or when the budget is spent (`time_limit`). What was read until then
   is returned, `truncated` is true, and the note names the pages that were not read. One
   system timer checks the budget four times a second and interrupts pypdf in the middle of a
-  page: a single page written to take a minute does not cost the pages before it.
+  page: a single page written to take a minute does not cost the pages before it. The
+  interrupt is only raised where the reading can take it (see _Watch).
 
 What comes back for a PDF that was not read, `{"ok": false, "failure": "file", "code": ...}`:
 
@@ -55,7 +56,9 @@ import io
 import logging
 import re
 import signal
+import sys
 import unicodedata
+import weakref
 
 import pypdf
 from pypdf import errors
@@ -68,6 +71,7 @@ LINK_MAX_CHARS = 2_000
 LINKS_LABEL = "Links: "
 PAGE_BREAK = "\f"
 TICK_S = 0.25  # how often the budget is checked while pypdf works
+RETRY_S = 0.01  # how soon the timer rings again after a ring that could not be delivered
 
 # What one stream may become once decoded. pypdf's own default is 75 MB each, which the child
 # cannot hold several times over (RLIMIT_AS, main.py). A page of text is a few kilobytes of
@@ -112,31 +116,89 @@ class _Refused(Exception):  # noqa: N818, an outcome, not an error of this progr
 
 
 class _Watch:
-    """While it is open, a timer interrupts the work with _OutOfTimeError once the budget is
+    """While it is open, a timer interrupts the reading with _OutOfTimeError once the budget is
     spent. Signals only reach the main thread of a process: anywhere else, and where the system
-    has no such timer, the budget is still checked between two pages."""
+    has no such timer, the budget is still checked between two pages.
+
+    The timer rings wherever the program happens to be, and an exception raised there is only
+    worth something where it can travel up to `handle`. So the ring raises in one case only:
+    `read_pages` is running, and nothing between it and the interrupted line is a destructor or
+    the callback of a weak reference. Python does not let an exception leave those (the memory
+    manager called them, there is nobody to raise to): it hands the exception to
+    `sys.unraisablehook` and goes on, the interrupt is lost and the callback is cut short. They
+    run at any moment, when an object dies or the collector passes, and they may belong to any
+    library loaded in the process.
+
+    - Before and after `read_pages` the ring raises nothing: the loop asks the budget before
+      each page, and a reading that has ended has nothing left to interrupt.
+    - In a `__del__`, or in the code of the standard weak containers, the ring is put off: the
+      timer rings again RETRY_S later, when the callback has returned.
+    - In a callback this cannot recognise, the exception is raised and lost. The hook set for
+      the time of the watch takes it, keeps it from being reported, and rings again the same
+      way. Any other unraisable exception goes to the hook that was there.
+
+    A ring put off is never dropped: the budget stays spent, so the next one raises."""
 
     def __init__(self, budget) -> None:
-        self.budget, self.armed, self.installed, self.previous = budget, False, False, None
+        self.budget, self.armed, self.installed = budget, False, False
+        self.previous, self.hook = None, None
+        self.put_off = 0  # rings that raised nothing, or whose exception was lost
 
-    def _ring(self, *_: object) -> None:
-        if self.armed and self.budget.spent():
-            raise _OutOfTimeError
+    def _again(self) -> None:
+        self.put_off += 1
+        signal.setitimer(signal.ITIMER_REAL, RETRY_S, TICK_S)
+
+    def _ring(self, _number: object = None, frame=None) -> None:
+        if not (self.armed and self.budget.spent()):
+            return
+        while frame is not None:
+            code = frame.f_code
+            if code is read_pages.__code__:
+                raise _OutOfTimeError
+            if (
+                code.co_name == "__del__"
+                or code.co_filename in _WEAK_FILES
+                or code is _Watch._lost.__code__
+            ):
+                self._again()
+                return
+            frame = frame.f_back
+
+    def _lost(self, unraisable) -> None:
+        """sys.unraisablehook while the watch is open."""
+        if unraisable.exc_type is _OutOfTimeError:
+            if self.armed:
+                self._again()
+        elif self.hook is not None:
+            self.hook(unraisable)
 
     def __enter__(self) -> "_Watch":
         try:
             self.previous = signal.signal(signal.SIGALRM, self._ring)
         except (ValueError, OSError, AttributeError):  # not the main thread, or no SIGALRM
             return self
+        self.hook, sys.unraisablehook = sys.unraisablehook, self._lost
         self.installed = self.armed = True
         signal.setitimer(signal.ITIMER_REAL, TICK_S, TICK_S)
         return self
 
     def __exit__(self, *_: object) -> None:
+        self.stop()
+
+    def stop(self) -> None:
+        """No ring after this, and the signal and the hook as they were. Safe to call twice."""
         self.armed = False
         if self.installed:
             signal.setitimer(signal.ITIMER_REAL, 0)
             signal.signal(signal.SIGALRM, self.previous or signal.SIG_DFL)
+            sys.unraisablehook = self.hook
+            self.installed = False
+
+
+# Where the standard library keeps the callbacks of its weak dictionaries and of its weak sets.
+_WEAK_FILES = frozenset(
+    kind.__init__.__code__.co_filename for kind in (weakref.WeakKeyDictionary, weakref.WeakSet)
+)
 
 
 class _Read:
@@ -322,16 +384,19 @@ def handle(data: bytes, options: dict, budget) -> dict:
     # Every logger of pypdf takes its level from this one: no warning is even formatted.
     logging.getLogger("pypdf").setLevel(logging.CRITICAL + 1)
     read = _Read()
+    watch = _Watch(budget)
     try:
-        with pypdf.apply_configuration(**LIMITS), _Watch(budget):
+        with pypdf.apply_configuration(**LIMITS), watch:
             try:
                 read_pages(data, budget, read)
             except _OutOfTimeError:
                 read.stopped = "time_limit"
-    except _OutOfTimeError:  # the timer rang between the end of the reading and its own end
+    except _OutOfTimeError:  # not the timer's doing any more (see _Watch): kept as a last net
         read.stopped = "time_limit"
     except _Refused as refused:
         return failure(refused.code, **refused.values)
     except MemoryError:
         return failure("bomb")
+    finally:
+        watch.stop()  # whatever happened above, nothing rings while the answer is written
     return answer(read)
