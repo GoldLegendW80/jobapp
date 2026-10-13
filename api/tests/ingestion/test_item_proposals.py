@@ -1069,3 +1069,96 @@ def test_a_walk_over_every_kind(factory: sessionmaker[Session], alice: uuid.UUID
         "profile_item": ProposalStatus.accepted,
         "mail_link": ProposalStatus.pending,
     }
+
+
+# --- one key per fact, whatever the name (review of PR #109, B1) ---------------------------------
+
+EXPANDING = "\ufdfa" * 30  # one character each, eighteen once NFKC has run
+TWICE_WWW = {"label": "Site", "url": "https://www.www.example.com"}
+
+
+def test_a_name_that_expands_is_proposed_accepted_and_taken_back(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    save_all(factory, alice)
+    before = stored(factory, alice, "identity")
+    payload = {
+        "section": "identity",
+        "key": "languages",
+        "action": "add",
+        "value": {"name": EXPANDING, "level": "B1"},
+        "citations": [cite()],
+    }
+    pid = create(factory, alice, payload)
+    assert len(row(factory, pid).payload["key"]) < 60
+    accept(factory, alice, pid)
+    assert [language["name"] for language in stored(factory, alice, "identity")["languages"]][
+        -1
+    ] == EXPANDING
+    with pytest.raises(proposals.NotStoredError, match=ip.EQUAL_TO_PROFILE):
+        create(factory, alice, payload)
+    undo(factory, alice, pid)
+    assert stored(factory, alice, "identity") == before
+    # the same name typed by the user over another proposal: accepted, recorded, taken back
+    other = made(factory, alice, "identity", "languages", GERMAN)
+    accept(factory, alice, other, edited_value={"name": EXPANDING, "level": "C1"})
+    assert len(row(factory, other).payload["undo"]["at"]) < 60
+    assert len(stored(factory, alice, "identity")["languages"]) == len(before["languages"]) + 1
+    undo(factory, alice, other)
+    assert stored(factory, alice, "identity") == before
+
+
+def test_a_link_that_says_www_twice_is_one_fact_and_its_undo_removes_it(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    save_all(factory, alice)
+    before = stored(factory, alice, "identity")
+    pid = made(factory, alice, "identity", "links", TWICE_WWW)
+    accept(factory, alice, pid)
+    assert len(stored(factory, alice, "identity")["links"]) == len(before["links"]) + 1
+    # the profile holds it: it is not proposed again, so no accept can add it a second time
+    assert propose(factory, alice, "identity", "links", TWICE_WWW)[0] == ip.EQUAL_TO_PROFILE
+    assert row(factory, pid).payload["undo"]["before"] == {"entries": []}
+    undo(factory, alice, pid)
+    assert stored(factory, alice, "identity") == before
+    found = row(factory, pid)
+    assert found.status is ProposalStatus.undone
+    assert found.payload["undone_revision"] == revision(factory, alice)
+
+
+def test_an_undo_that_finds_nothing_at_its_key_does_not_say_undone(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    save_all(factory, alice)
+    pid = made(factory, alice, "identity", "links", TWICE_WWW)
+    with factory() as db, db.begin():
+        found = db.get(Proposal, pid)
+        assert found is not None
+        found.status = ProposalStatus.accepted
+        found.decided_by = ProposalDecider.user
+        found.decided_at = tick()
+        found.payload = {
+            **found.payload,
+            "applied_revision": revision(factory, alice),
+            "undo": {
+                "at": "links:nowhere.example",
+                "before": {"entries": []},
+                "after_hash": items.held_hash({"entries": []}),
+            },
+        }
+    with pytest.raises(ip.UndoError) as refused:
+        undo(factory, alice, pid)
+    assert refused.value.reason == ip.CHANGED_SINCE
+    assert row(factory, pid).status is ProposalStatus.accepted
+
+
+def test_propose_refuses_a_key_that_build_does_not_give(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    value = {"label": "Site", "url": "https://example.com"}
+    for key in ("links:www.example.com", "links:" + "x" * 500, "nowhere:x", "links"):
+        odd = items.Item("identity", key, items.Action.add, value, items.value_hash(value))
+        with factory() as db, pytest.raises(proposals.InvalidValueError):
+            ip.propose(db, alice, odd, tick(), ingestion_run_id=RUN, citations=[cite()])
+    with factory() as db:
+        assert db.scalar(sa.select(sa.func.count()).select_from(Proposal)) == 0

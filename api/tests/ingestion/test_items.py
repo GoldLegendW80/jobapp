@@ -770,3 +770,142 @@ def test_an_entry_removed_returns_to_its_place_or_to_the_end() -> None:
     }
     with pytest.raises(ProfileConflict):
         items.restore("identity", full_list, "languages:french", record)
+
+
+# --- one key per fact, whatever the name (review of PR #109, B1) ---------------------------------
+
+EXPANDING = "\ufdfa" * 30  # one character each, eighteen once NFKC has run
+HOSTILE_NAMES = [
+    EXPANDING,
+    "\u3350" * 150,
+    "\u3350" * 40,
+    "\u00df",
+    "STRASSE",
+    "\uff26\uff55\uff4c\uff4c\u3000\uff37\uff49\uff44\uff54\uff48",
+    "\u0130stanbul",
+    "\u01c5",
+    "\ufb03",
+    "  padded   name ",
+    "\u1fb3\u0345",
+    "a\u0345\u0301",
+    "\u1e9e",
+    "\u2126",
+    "\u0131\u017f",
+    "e\u0301a\u0301",
+    "\u200bzero\u200bwidth",
+    "\u200b",
+    "\u65e5\u672c\u8a9e",
+    "~" + "0" * 32,
+    "x" * 200,
+    "a:b",
+    "name:2020",
+    "www.www.name",
+    "A/B",
+    "Acme",
+    "ACME-Labs",
+    "acme_labs",
+]
+HOSTILE_LINKS = [
+    "https://www.www.example.com",
+    "https://WWW.Example.COM/Path/",
+    "https://www.example.com//",
+    "https://example.com/a/?q=1#frag",
+    "http://www.www.www.www.www.www.www.example.org/x",
+    "https://example.com/" + "a" * 600,
+    "https://www.example.com/\uff41\uff42\uff43",
+    "HTTPS://EXAMPLE.COM",
+    "https://example.com/?",
+    "https://www.example.com/#",
+    "https://www.www.www.example.com/www.",
+]
+NAMED: dict[tuple[str, str], Any] = {
+    ("identity", "languages"): lambda name: {"name": name, "level": "B1"},
+    ("identity", "links"): lambda name: {"label": "Site", "url": name},
+    ("experience", "employers"): lambda name: {
+        "organisation": name,
+        "title": "Engineer",
+        "start": "2021",
+    },
+    ("experience", "education"): lambda name: {"school": name, "degree": "BSc", "start": "2019"},
+    ("facts", "blocks"): lambda name: {"title": name, "body": "A body."},
+    ("skills", "have"): lambda name: {"name": name, "terms": ["term"]},
+    ("skills", "adjacent"): lambda name: {"name": name, "terms": ["term"]},
+    ("skills", "none"): lambda name: {"name": name, "terms": ["term"]},
+    ("skills", "gates"): lambda name: {"name": name, "terms": ["phd"]},
+    ("search", "boards"): lambda name: {"company": "Acme", "ats": "ashby", "org": name},
+    ("search", "never_apply"): lambda name: name,
+    ("answers", "work_authorization"): lambda name: {
+        "country": name,
+        "answer": "Yes.",
+        "needs_sponsorship": False,
+    },
+}
+
+
+def test_every_keyed_slot_has_a_hostile_template() -> None:
+    keyed = {
+        (section, name)
+        for section, slots in items.SLOTS.items()
+        for name, slot in slots.items()
+        if slot.keyed
+    }
+    assert keyed == set(NAMED)
+
+
+@pytest.mark.parametrize(("section", "name"), sorted(NAMED))
+def test_a_key_that_build_returns_is_the_key_everything_finds(section: str, name: str) -> None:
+    """For every value the section model accepts: `parse_key` accepts the key of the built item
+    and returns it, a stored proposal reads back the same key, the entry is found at that key
+    (once, however often the item is applied) and the stored entry computes the same key."""
+    slot = items.SLOTS[section][name]
+    names = HOSTILE_LINKS if name == "links" else HOSTILE_NAMES
+    built = 0
+    for hostile, origin in itertools.product(names, (Origin.agent, Origin.user)):
+        try:
+            item = build(section, name, NAMED[section, name](hostile), origin=origin)
+        except ItemError:
+            continue  # the section model refuses this name: nothing to key
+        built += 1
+        case = (section, name, names.index(hostile), origin)
+        assert len(item.key) <= items.KEY_MAX, case
+        assert items.parse_key(section, item.key) == (slot, item.key), case
+        if origin is Origin.agent:
+            assert items.from_payload(payload_of(item)).key == item.key, case
+        once = items.apply(section, None, item)
+        assert items.apply(section, once, item) == once, case
+        assert holds(section, once, item), case
+        entry = items.read(section, once, item.key)
+        assert items.entry_key(slot, entry) == item.key, case
+        assert len(items.held(section, once, item.key)["entries"]) == 1, case
+        removal = build(section, item.key, action="remove")
+        assert removal.key == item.key, case
+        assert items.read(section, items.apply(section, once, removal), item.key) is None, case
+    assert built >= 6, (section, name, built)
+
+
+def test_a_name_that_expands_under_nfkc_has_a_short_key() -> None:
+    language = build("identity", "languages", {"name": EXPANDING, "level": "B1"})
+    assert len(language.key) < 60
+    assert items.parse_key("identity", language.key)[1] == language.key
+    assert build("identity", "languages", {"name": EXPANDING + " ", "level": "C1"}).key == (
+        language.key
+    )
+    assert build("identity", "languages", {"name": EXPANDING[:-1], "level": "B1"}).key != (
+        language.key
+    )
+    block = build("facts", "blocks", {"title": "\u3350" * 150, "body": "A body."})
+    assert len(block.key) < 60
+    assert items.from_payload(payload_of(block)).key == block.key
+
+
+def test_a_link_has_one_key_however_often_it_says_www() -> None:
+    link = build("identity", "links", {"label": "Site", "url": "https://www.www.example.com"})
+    assert link.key == "links:example.com"
+    assert items.from_payload(payload_of(link)).key == link.key
+    once = items.apply("identity", None, link)
+    assert items.apply("identity", once, link) == once
+    assert len(once["links"]) == 1
+    assert items.held("identity", once, link.key) == {"entries": [[0, once["links"][0]]]}
+    assert build("identity", "links", {"label": "Site", "url": "https://example.com/"}).key == (
+        link.key
+    )

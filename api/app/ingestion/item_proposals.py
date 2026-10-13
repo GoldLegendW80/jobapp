@@ -350,11 +350,19 @@ def propose(
     gave them; a transcribed one flags the item. `conflict` lists the other values documents
     give for this key, each an item of its own with its citations: it flags the item. Raises
     ValueError for a citation, a flag or a conflict of the wrong shape (the caller's mistake,
-    never the model's: the value went through `items.build`) and items.ProfileConflict when the
-    stored section no longer fits its model.
+    never the model's: the value went through `items.build`), proposals.InvalidValueError for an
+    item whose key is not the one `items.build` gives (an Item made by hand), and
+    items.ProfileConflict when the stored section no longer fits its model. No items.ItemError
+    leaves this function.
 
     One writer at a time per user and key. The profile is read, not locked."""
     section, key = item.section, item.key
+    try:
+        canonical_key = items.parse_key(section, key)[1]
+    except items.ItemError as exc:
+        raise proposals.InvalidValueError(f"{exc.index}: {exc.reason}") from None
+    if canonical_key != key:
+        raise proposals.InvalidValueError(f"key: {items.UNKNOWN_KEY}")
     cited = _joined((), (_citation(raw) for raw in citations))
     kept_flags = set(_checked_flags(flags))
     if any(citation["transcribed"] for citation in cited):
@@ -701,6 +709,10 @@ def undo(
             current = _section(profile, section)
             now_held = items.held(section, current, record["at"])
             if now_held is None or items.held_hash(now_held) != record["after_hash"]:
+                raise UndoError(proposal, CHANGED_SINCE)
+            if payload.get("action") != items.Action.remove.value and now_held.get("entries") == []:
+                # an add or a replace left an entry there: with none, there is nothing to take
+                # back, and saying "undone" would leave what the accept wrote in the profile
                 raise UndoError(proposal, CHANGED_SINCE)
             restored = items.restore(section, current, record["at"], record["before"])
         except items.ProfileConflict:

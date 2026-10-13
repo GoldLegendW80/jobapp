@@ -43,8 +43,12 @@ each with its reason:
   employer takes the identity above as its `key` (with a number added if another employer
   already holds it), and an existing one keeps its own.
 An entry of the profile is found by computing the same identity on it, so a key never depends on
-the position of an entry. When several stored entries share a key (a title that differs by two
-spaces), the first one in the list is the entry at that key.
+the position of an entry. One function computes every key (`entry_key`), and its result is a fixed
+point of `parse_key`: for every value the section model accepts, `parse_key` accepts the key and
+returns it unchanged, so the entry is found again at the key its item carries. An identity that
+comes out empty or longer than IDENTITY_MAX characters (a name of compatibility characters that
+expand under NFKC, a very long address) is held as `~` and a hash, and "www.www.example.com" and
+"example.com" are one address.
 
 **Actions.** What an item does to the section, for the agent and for a user's edit alike:
 - `add`: the key holds the value afterwards, and nothing is erased. A new entry is inserted
@@ -92,7 +96,7 @@ import re
 import types
 import typing
 import unicodedata
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -546,32 +550,73 @@ def _address(url: str) -> str:
     rest = re.sub(r"^https?://", "", url.strip(), flags=re.IGNORECASE)
     cut = re.search(r"[/?#]", rest)
     host, tail = (rest[: cut.start()], rest[cut.start() :]) if cut else (rest, "")
-    return (host.lower().removeprefix("www.") + tail).rstrip("/")
+    return (re.sub(r"^(?:www\.)+", "", host.lower()) + tail).rstrip("/")
+
+
+IDENTITY_MAX = 300  # characters of the identity part of a key: a longer one is held as its hash
+_SETTLE_PASSES = 4
+
+
+def _settled(text: str, normal: Callable[[str], str]) -> str:
+    """`text` in the one form a key holds it: `normal` applied until it changes nothing more.
+    What comes out empty, longer than IDENTITY_MAX or still moving after a few passes is held as
+    `~` and a hash instead. So every value the section model accepts has a key of bounded
+    length, and the form is a fixed point: `_settled(_settled(x, f), f) == _settled(x, f)`,
+    which is what lets `parse_key` read a key that `entry_key` computed and return that key."""
+    settled = normal(text)
+    for _ in range(_SETTLE_PASSES):
+        again = normal(settled)
+        if again == settled:
+            if settled and len(settled) <= IDENTITY_MAX:
+                return settled
+            break
+        settled = again
+    return f"~{_digest(settled, 32)}"
+
+
+def _name(text: str) -> str:
+    return _settled(text, fold)
 
 
 def _identity(slot: Slot, value: Any) -> str:
-    """The identity part of the key of a cleaned entry of this slot."""
+    """The identity part of the key of a cleaned entry of this slot, in its normal form."""
     if slot.kind is SlotKind.lines:
         return _digest(fold(value), 16)
     where = (slot.section, slot.name)
     if where == ("identity", "links"):
-        return _address(value["url"])
+        return _settled(value["url"], _address)
     if where == ("experience", "employers"):
         return f"{slug(value['organisation'])}-{_year(value['start'])}"
     if where == ("experience", "education"):
-        return f"{fold(value['school'])}:{_year(value.get('start'))}"
+        return f"{_name(value['school'])}:{_year(value.get('start'))}"
     if where == ("search", "boards"):
-        return f"{value['ats']}:{value['org'].lower()}"
+        return _name(f"{value['ats']}:{value['org'].lower()}")
     if where == ("facts", "blocks"):
-        return fold(value["title"])
+        return _name(value["title"])
     if where == ("answers", "work_authorization"):
-        return fold(value["country"])
-    return fold(value["name"])  # languages, skill categories, gates
+        return _name(value["country"])
+    return _name(value["name"])  # languages, skill categories, gates
+
+
+def _typed_identity(slot: Slot, identity: str) -> str:
+    """The identity part of a key somebody wrote, in the normal form `_identity` gives: the same
+    functions, so a key computed by `entry_key` comes back unchanged. Empty when it names
+    nothing."""
+    if slot.kind is SlotKind.lines:
+        return identity.strip()
+    if slot.name == "education":
+        school, _, year = identity.rpartition(":")
+        return f"{_name(school)}:{year.strip()}" if fold(school) else ""
+    if slot.name == "links":
+        return _settled(identity, _address) if _address(identity) else ""
+    return _name(identity) if fold(identity) else ""
 
 
 def entry_key(slot: Slot, value: Any) -> str:
     """The key of a cleaned value of this slot: the slot's name, or for an entry the name and
-    its identity. The same function reads the entries of a stored section."""
+    its identity. The same function reads the entries of a stored section, and it is the only
+    place a key is computed. For every value the section model accepts, `parse_key` accepts
+    this key and returns it unchanged, so the entry is found again at the key an item carries."""
     return f"{slot.name}:{_identity(slot, value)}" if slot.keyed else slot.name
 
 
@@ -592,15 +637,7 @@ def parse_key(section: str, key: Any) -> tuple[Slot, str]:
         if colon:
             raise ItemError(UNKNOWN_KEY, "key")
         return slot, name
-    if slot.name == "education":
-        school, _, year = identity.rpartition(":")
-        identity = f"{fold(school)}:{year.strip()}" if fold(school) else ""
-    elif slot.name == "links":
-        identity = _address(identity)
-    elif slot.name == "never_apply":
-        identity = identity.strip()
-    else:
-        identity = fold(identity)
+    identity = _typed_identity(slot, identity)
     if not identity:
         raise ItemError(UNKNOWN_KEY, "key")
     return slot, f"{name}:{identity}"
@@ -801,7 +838,10 @@ def build(
                 period = cleaned.get(name)
                 if kind is FieldType.DATE and period and not _ASCII_PERIOD.fullmatch(period):
                     raise ItemError(INVALID_VALUE, f"value.{name}", ASCII_DATE)
-    return Item(section, entry_key(slot, cleaned), action, cleaned, value_hash(cleaned))
+    whole = entry_key(slot, cleaned)
+    if parse_key(section, whole)[1] != whole:  # never, by construction: see `_settled`
+        raise ItemError(INVALID_VALUE)
+    return Item(section, whole, action, cleaned, value_hash(cleaned))
 
 
 def from_payload(payload: Mapping[str, Any]) -> Item:
