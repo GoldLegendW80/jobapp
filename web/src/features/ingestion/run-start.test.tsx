@@ -80,6 +80,18 @@ describe("the start of a run", () => {
     expect(runs.sent("POST", RUNS)).toEqual([]);
   });
 
+  it("asks for the documents in the order they were ticked", async () => {
+    const { runs, user } = await openStep();
+    await user.click(await screen.findByRole("checkbox", { name: /cv\.txt/ }));
+    await user.click(screen.getByRole("checkbox", { name: /dossier/ }));
+    await user.click(screen.getByRole("button", { name: "See the estimate" }));
+    await waitFor(() => {
+      expect(runs.sent("POST", ESTIMATE).map((call) => call.body)).toEqual([
+        { document_ids: ["d2", "d1"], reread_document_ids: [] },
+      ]);
+    });
+  });
+
   it("shows the estimate of a subscription as the server gave it, in tokens and no amount", async () => {
     const { runs, dialog } = await openDialog();
     expect(runs.sent("POST", ESTIMATE)).toEqual([

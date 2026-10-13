@@ -345,7 +345,7 @@ function RunView({ run }: { run: Run }) {
         </Figure>
         <Figure label="Tokens">
           {tokens(run.tokens.spent)} used
-          {active
+          {run.status === "running"
             ? `. The run pauses at ${tokens(run.tokens.ceiling)} tokens`
             : null}
         </Figure>

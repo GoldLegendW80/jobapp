@@ -155,10 +155,11 @@ async function openDialog(
   all: string[],
   wanted: string[],
 ): Promise<Estimate> {
+  // The run reads the documents in the order they were ticked.
   for (const name of all)
-    await on
-      .getByRole("checkbox", { name: named(name) })
-      .setChecked(wanted.includes(name));
+    await on.getByRole("checkbox", { name: named(name) }).uncheck();
+  for (const name of wanted)
+    await on.getByRole("checkbox", { name: named(name) }).check();
   const [answer] = await Promise.all([
     on.waitForResponse(
       (response) =>
@@ -318,6 +319,9 @@ test("a run that reaches its ceiling shows what was spent, and goes on after a C
   ).toHaveCount(0);
   const sent = await clickStart();
   expect(sent.quote_id).toBe(estimate.quote_id);
+  // The large document first: its step ends over the ceiling, and one step is left to run.
+  expect(estimate.documents.map((one) => one.name)).toEqual([LARGE, PLAIN]);
+  expect(sent.document_ids).toEqual(estimate.documents.map((one) => one.id));
 
   await expect(state()).toHaveAttribute("data-state", "ceiling", {
     timeout: 100_000,

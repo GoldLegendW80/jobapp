@@ -70,7 +70,8 @@ export function RunStart() {
     queryFn: ({ signal }) => listRuns(signal),
     refetchInterval: IDLE_POLL_MS,
   });
-  const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
+  /** The documents ticked, in the order they were ticked: the run reads them in that order. */
+  const [chosen, setChosen] = useState<readonly string[]>([]);
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
 
@@ -97,16 +98,14 @@ export function RunStart() {
   if (runs.data.active_run_id !== null) return null;
 
   const items = documents.data.items;
-  const selected = items
-    .filter((one) => chosen.has(one.id) && canBeChosen(one))
-    .map((one) => one.id);
+  const selected = chosen.filter((id) =>
+    items.some((one) => one.id === id && canBeChosen(one)),
+  );
   const selectable = items.filter(canBeChosen);
   const toggle = (id: string, on: boolean) => {
     setChosen((old) => {
-      const updated = new Set(old);
-      if (on) updated.add(id);
-      else updated.delete(id);
-      return updated;
+      const others = old.filter((one) => one !== id);
+      return on ? [...others, id] : others;
     });
   };
 
@@ -116,8 +115,9 @@ export function RunStart() {
         {runs.data.runs.length > 0 ? "Start another run" : "Start a run"}
       </h3>
       <p className="text-sm text-muted-foreground">
-        Choose the documents the agent reads. Before anything is sent, you see
-        what it would cost in tokens and you decide.
+        Choose the documents the agent reads, in the order you want them read.
+        Before anything is sent, you see what it would cost in tokens and you
+        decide.
       </p>
       {items.length === 0 ? (
         <p className="text-sm">
@@ -134,7 +134,7 @@ export function RunStart() {
                     <input
                       type="checkbox"
                       className={CHECKBOX}
-                      checked={chosen.has(one.id) && canBeChosen(one)}
+                      checked={selected.includes(one.id)}
                       disabled={!canBeChosen(one)}
                       onChange={(event) => {
                         toggle(one.id, event.target.checked);
@@ -173,8 +173,8 @@ export function RunStart() {
                 onClick={() => {
                   setChosen(
                     selected.length === selectable.length
-                      ? new Set()
-                      : new Set(selectable.map((one) => one.id)),
+                      ? []
+                      : selectable.map((one) => one.id),
                   );
                 }}
               >
@@ -310,7 +310,6 @@ function StartDialog({
         active_run_id: isActive(run.status) ? run.id : null,
       }));
       void client.invalidateQueries({ queryKey: runsKey, exact: true });
-      toast.success("The run has started.");
       onClose();
     },
     onError: (error, current) => {
