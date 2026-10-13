@@ -15,6 +15,7 @@ import io
 import logging
 import re
 import sys
+import uuid
 from datetime import timedelta
 from typing import Any
 
@@ -518,16 +519,22 @@ def test_nothing_of_an_image_reaches_a_log_or_a_return_value(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    shot = uploaded(api, alice, pictures.screenshot_png(), "private payslip.png")
-    scan = uploaded(api, alice, scans.mixed(), "private contract.pdf")
-    broken = uploaded(api, alice, pictures.truncated(pictures.photo_jpeg()), "private id.jpg")
+    # The names of the files are tokens drawn for this run, never words of the language: a log
+    # record carries the path of the module that wrote it (`pathname`), and a checkout under
+    # macOS's `/private/var/folders` holds "private", as another one may hold any common word.
+    owner, payslip, contract, card = (
+        f"{word}-{uuid.uuid4().hex}" for word in ("owner", "payslip", "contract", "card")
+    )
+    shot = uploaded(api, alice, pictures.screenshot_png(), f"{owner} {payslip}.png")
+    scan = uploaded(api, alice, scans.mixed(), f"{owner} {contract}.pdf")
+    broken = uploaded(api, alice, pictures.truncated(pictures.photo_jpeg()), f"{owner} {card}.jpg")
     outcomes = [run(factory, clock, RealParser(), body["id"]) for body in (shot, scan, broken)]
     assert outcomes == [jobs.DONE, jobs.DONE, jobs.FAILED]
     stored = images(factory, shot["id"]) + images(factory, scan["id"])
     assert len(stored) == 3
     said = "\n".join(f"{record.getMessage()} {vars(record)}" for record in caplog.records)
     assert "document rendered" in said
-    for secret in ("private", "payslip", "contract", scans.LONG[:20], scans.FOOTER[:20]):
+    for secret in (owner, payslip, contract, card, scans.LONG[:20], scans.FOOTER[:20]):
         assert secret not in said
     for image in stored:
         assert image.jpeg[:16].hex() not in said
