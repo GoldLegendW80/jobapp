@@ -7,6 +7,7 @@ instrument sees both. MARKER stands for the document."""
 
 import asyncio
 import json
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -18,7 +19,7 @@ from arq.worker import Worker
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
-from app.agents import definitions, live
+from app.agents import definitions, fake_backend, live
 from app.agents.models import RunStatus
 from app.config import Settings
 from tests.agents.g6_helpers import (
@@ -115,12 +116,48 @@ def arq_result(url: str, run_id: uuid.UUID) -> Any:
         client.close()
 
 
+def hold_the_text_until_shown(
+    monkeypatch: pytest.MonkeyPatch, browser: Browser, seconds: float = 60
+) -> None:
+    """The model stops between two pieces of a text until the tab has been shown live text.
+
+    The control is shown live text only if the stream asks Redis while a block is being
+    written, and its only long block is written in three pieces 50 ms apart: on a loaded
+    machine the whole block is written and cleared between two looks of the stream, the tab
+    then gets the complete text alone and the control fails for a reason that is not its
+    subject. So what the control needs is waited for, not hoped for within a window: the first
+    piece is written (Redis holds it), and the next one comes once the tab has shown it. The
+    deadline only keeps a stream that never publishes from hanging the test: the run then goes
+    on and the assertions of the control fail as they should.
+
+    Never used for a private run, which is shown nothing whatever the pace: its assertions
+    are counts of what Redis received, exact at any speed."""
+    pause = fake_backend.FakeBackend._sleep
+    pauses = 0
+
+    async def held(self: fake_backend.FakeBackend, wait: float) -> bool:
+        nonlocal pauses
+        pauses += 1
+        interrupted = await pause(self, wait)
+        deadline = time.monotonic() + seconds
+        # The first pause is before anything is written: there is nothing to show yet.
+        while pauses > 1 and not interrupted and not browser.shown and time.monotonic() < deadline:
+            interrupted = await pause(self, 0.01)
+        return interrupted
+
+    monkeypatch.setattr(fake_backend.FakeBackend, "_sleep", held)
+
+
 def play(
-    stage: Stage, settings: Settings, redis_url: str, run_id: uuid.UUID
+    stage: Stage,
+    settings: Settings,
+    redis_url: str,
+    run_id: uuid.UUID,
+    browser: Browser | None = None,
 ) -> tuple[list[Parsed], Browser, Watch, Watch]:
     """The run through the real worker while a browser follows its stream; everything Redis
     was asked about the run, and everything it was told that holds a word of the document."""
-    browser = Browser()
+    browser = Browser() if browser is None else browser
     raw: list[Parsed] = []
 
     async def scenario(workers: list[Worker]) -> None:
@@ -158,7 +195,10 @@ def test_redis_is_never_told_anything_of_a_private_run(
         partial={"chars": 200, "sleep": 0.05},
     )
     run_id = new_run(stage.factory, stage.user, {}, agent="g6_private")
-    raw, browser, named, leaked = play(stage, settings, redis_url, run_id)
+    browser = Browser()
+    if not private:
+        hold_the_text_until_shown(monkeypatch, browser)
+    raw, browser, named, leaked = play(stage, settings, redis_url, run_id, browser)
     assert run_row(stage.factory, run_id).status is RunStatus.done
     assert browser.ended
     touched = [command for command in named.commands if live.KEY in command]
@@ -187,6 +227,7 @@ def test_redis_is_never_told_anything_of_a_private_run(
         assert any(command.upper().startswith("APPEND ") for command in touched)
         assert any(command.upper().startswith("GET ") for command in touched)
         assert "partial" in names
+        assert browser.shown != []
         assert leaked.commands != []
         assert "content" in steps["tool_result"]
     assert redis_keys(redis_url) == []  # nothing live is left either way

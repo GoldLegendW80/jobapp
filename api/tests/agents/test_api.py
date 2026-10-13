@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import credentials
 from app.agents import router as agents_router
+from app.agents import verify as agents_verify
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind, ModelCredential
 from app.agents.ratelimit import RateLimiter
@@ -368,6 +369,43 @@ def test_verify_accepted_key(
     assert sent.headers["x-api-key"] == API_KEY
     assert "authorization" not in sent.headers
     assert api.get(PATH, token=alice).json()["verified_at"] is not None
+
+
+def test_verify_hides_the_credential_it_decrypted_from_the_logs(
+    app: FastAPI, api: Api, alice: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A library under the check that logs the credential (an HTTP client logging a header):
+    with the shape turned off, only the registration at the place of decryption hides it."""
+    import io
+    import logging
+    import re
+
+    from app import logging_config
+
+    monkeypatch.setattr(logging_config, "SHAPE", re.compile(r"(?!)"))
+    seen: list[str] = []
+
+    class Loud:
+        def check(self, kind: CredentialKind, secret: str) -> agents_verify.Result:
+            logging.getLogger("httpx").error("HTTP Request x-api-key=%s", secret)
+            seen.append(logging_config.clean_text(secret))
+            return agents_verify.Result(agents_verify.Outcome.unverified)
+
+    app.state.model_verifier = Loud()
+    out = io.StringIO()
+    handler = logging.StreamHandler(out)
+    handler.setFormatter(logging_config.JsonFormatter())
+    handler.addFilter(logging_config.SecretFilter())
+    logging.getLogger().addHandler(handler)
+    try:
+        put(api, alice)
+        assert api.post(VERIFY, token=alice).status_code == 200
+    finally:
+        logging.getLogger().removeHandler(handler)
+    assert seen == [logging_config.REDACTED]
+    assert API_KEY not in out.getvalue()
+    assert "x-api-key=[redacted]" in out.getvalue()
+    assert logging_config.clean_text(API_KEY) == API_KEY  # and nothing stays hidden after
 
 
 def test_subscription_token_is_stored_unverified_without_any_call(

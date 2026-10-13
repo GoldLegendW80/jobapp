@@ -114,8 +114,16 @@ def test_deltas_are_coalesced_by_the_pump(monkeypatch: pytest.MonkeyPatch) -> No
     """Deltas that arrive while the pump pauses between two writes go out in one write. The
     pause is held by the test, not by a clock: real time decides nothing here."""
     pieces = ("two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
-    turn = asyncio.sleep  # the real one, to let the pump run
     pauses: list[float] = []
+
+    async def paused(times: int) -> None:
+        """Give the pump its turn until it has paused `times` times. A bounded number of
+        turns: if the pump ever pauses another way, this test fails instead of hanging."""
+        for _ in range(1000):
+            if len(pauses) >= times:
+                return
+            await asyncio.sleep(0)
+        raise AssertionError(f"the pump paused {len(pauses)} times, {times} were expected")
 
     async def go() -> tuple[RecordingStore, live.LiveText, int]:
         store = RecordingStore()
@@ -129,21 +137,20 @@ def test_deltas_are_coalesced_by_the_pump(monkeypatch: pytest.MonkeyPatch) -> No
         def appends() -> int:
             return len([op for op in store.ops if op[0] == "append"])
 
-        monkeypatch.setattr(live.asyncio, "sleep", pause)
+        # Only this module's pauses: `asyncio.sleep` stays what it is for everyone else.
+        monkeypatch.setattr(live, "_pause", pause)
         text = live.LiveText(store, RUN, lambda: 3, flush_s=0.05)
         pump = asyncio.create_task(text.pump())
         text.feed(start(0, text=""))
         text.feed(delta(0, "one "))
-        while len(pauses) < 1:  # the first delta is written at once, then the pump pauses
-            await turn(0)
+        await paused(1)  # the first delta is written at once, then the pump pauses
         assert appends() == 1
         for piece in pieces:
             text.feed(delta(0, piece + " "))
-            await turn(0)  # the pump gets its turn after every delta, and stays paused
+            await asyncio.sleep(0)  # the pump gets its turn after every delta, and stays paused
         during = appends()
         resume.set()
-        while len(pauses) < 2:
-            await turn(0)
+        await paused(2)
         pump.cancel()
         await asyncio.gather(pump, return_exceptions=True)
         return store, text, during
@@ -262,13 +269,18 @@ def test_the_secret_never_reaches_the_store_even_split_across_deltas() -> None:
 def test_a_failing_store_gives_the_block_up_and_the_next_block_tries_again(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    # Tokens drawn for this run: a short word of the language ("one") is in many a logger name,
+    # file name or message, and its absence from a log would prove nothing.
+    said = f"said-{uuid.uuid4().hex} "
+    sensitive = f"SENSITIVE-{uuid.uuid4().hex}"
+
     async def go() -> tuple[RecordingStore, live.LiveText]:
         store = RecordingStore()
         text = make(store)
         text.feed(start(0, text=""))
-        text.feed(delta(0, "one "))
+        text.feed(delta(0, said))
         await text._sync()
-        store.fail = ConnectionError("redis is down: SENSITIVE")
+        store.fail = ConnectionError(f"redis is down: {sensitive}")
         text.feed(delta(0, "two "))
         await text._sync()
         store.fail = None
@@ -283,11 +295,11 @@ def test_a_failing_store_gives_the_block_up_and_the_next_block_tries_again(
 
     with caplog.at_level(logging.WARNING):
         store, text = asyncio.run(go())
-    assert store.written() == {1: "one ", 2: "next"}
+    assert store.written() == {1: said, 2: "next"}
     assert text.failures == 1
     assert "live text not published" in caplog.text
-    assert "SENSITIVE" not in caplog.text
-    assert "one" not in caplog.text
+    assert sensitive not in caplog.text
+    assert said.strip() not in caplog.text
 
 
 def test_a_block_that_begins_while_the_store_is_written_is_published_whole() -> None:

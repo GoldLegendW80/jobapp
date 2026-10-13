@@ -25,6 +25,10 @@ from app.agents import runs
 
 NO_CREDENTIAL = "No model credential is saved. Add one on the Account page."
 UNREADABLE = "The saved credential cannot be read with this server's key. Paste it again."
+# What was decrypted is shorter than any credential the app accepts (credentials.MIN_LENGTH):
+# never used, because replacing a value that short in everything a run stores and logs would
+# mangle the run and hide nothing.
+UNUSABLE = "The saved credential is not a whole one. Paste it again."
 UNKNOWN_AGENT = "This agent no longer exists."
 THREAD_GONE = "This conversation no longer exists."
 # The run was bound to something that is gone when it starts (AgentDefinition.bind returned
@@ -51,7 +55,7 @@ INTERNAL = "The run failed on an internal error."
 # same content again fails the same way, whatever the credential.
 CONTENT_STATUSES = frozenset({400, 413, 422})
 _API_ERROR = re.compile(re.escape(API_ERROR).replace(re.escape("{status}"), r"(\d{3})"))
-_PROVIDER = frozenset({NO_CREDENTIAL, UNREADABLE, REFUSED, BUSY, runs.QUEUE_DOWN})
+_PROVIDER = frozenset({NO_CREDENTIAL, UNREADABLE, UNUSABLE, REFUSED, BUSY, runs.QUEUE_DOWN})
 # The worker could not run the agent: Claude Code is missing, did not start or died, the runner
 # itself failed, or this worker does not know the agent (an older worker during a deploy).
 _BOX = frozenset({NO_CLI, NO_START, INTERNAL, UNKNOWN_AGENT})

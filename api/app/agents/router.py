@@ -16,6 +16,7 @@ The user always comes from the session (default deny, CSRF on every write, like 
 route). No answer, error or log line carries the secret.
 """
 
+from contextlib import nullcontext
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -30,6 +31,7 @@ from app.db import get_session
 from app.identity import deps, throttle
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
+from app.logging_config import HIDDEN_MIN, hidden
 
 router = APIRouter(prefix="/api/me/model-credential", tags=["agents"])
 
@@ -159,7 +161,10 @@ def verify_credential(request: Request, user: CurrentUser, db: Db) -> VerifyOut:
     db.commit()
     checked_kind, checked_at = revealed.row.kind, revealed.row.updated_at
     verifier: Verifier = request.app.state.model_verifier
-    result = verifier.check(checked_kind, revealed.secret)
+    # Out of every log line of the process while the check holds it (the shape alone cannot
+    # hide a stored secret of no known shape). A secret under the minimum cannot be hidden.
+    with hidden(revealed.secret) if len(revealed.secret) >= HIDDEN_MIN else nullcontext():
+        result = verifier.check(checked_kind, revealed.secret)
     # Drops this function's reference only: Python cannot wipe a str from memory.
     del revealed
     if result.outcome in (Outcome.verified, Outcome.invalid):
