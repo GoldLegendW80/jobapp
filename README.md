@@ -6,7 +6,7 @@ A self-hosted job-search app for Harald and a few invited friends. It finds post
 
 - [CAPABILITY-MAP.md](CAPABILITY-MAP.md): the modules, their dependencies and the build order.
 - [SPEC-platform.md](SPEC-platform.md): the platform module (Compose stack, deploy, public URL through Tailscale Funnel), built first.
-- [CONTRIBUTING.md](CONTRIBUTING.md): branches, pull requests, CI, review and automatic deploys.
+- [CONTRIBUTING.md](CONTRIBUTING.md): branches, pull requests, review, the batch check on the Mac and the deploy of a checked tree, started by hand.
 - [tasks/plan.md](tasks/plan.md) and [tasks/todo.md](tasks/todo.md): the implementation plan and task list of the current module.
 
 ## Setup
@@ -132,12 +132,30 @@ ops/deploy-checked.sh --dry-run                # what it would start
 the refs it is given in order (a conflict is exit 2 and names the ref), and runs there every step
 of the three jobs of `.github/workflows/ci.yml`, always the full set: the api lint, the whole
 pytest suite with the 95 percent coverage floor, the docker marked tests, the scoring timing
-test; pre-commit, the secret scan of the commits between `main` and the merged head, shellcheck,
-the guards and every `tests/*_test.sh` that `ci.yml` runs; the web lint, type check, Vitest and
-build; and the four Playwright journey groups, each on a scratch Compose stack of its own. Four
-lanes start together (api with its own Postgres and Redis containers, web, the image build,
-the checks), and the journey groups start when the images and the web install are done, side by
-side on their own ports. It prints one line per step with its seconds, the end of the log of a
+test; pre-commit, the secret scan, shellcheck, the guards and every `tests/*_test.sh` that
+`ci.yml` runs; the web lint, type check, Vitest and build; and the four Playwright journey
+groups, each on a scratch Compose stack of its own. Four lanes start together (api with its own
+Postgres and Redis containers, web, the image build, the checks), and the journey groups start
+when the images and the web install are done, side by side on their own ports. When every lane
+has ended, the tests that measure time run in a quiet phase: Vitest next to the docker marked
+tests, then alone the one test of the suite that measures its own speed, the coverage floor and
+the scoring test.
+
+Three rules keep the set whole. Each step runs in a bash of its own with errexit and pipefail, so
+a step fails when any of its commands fails. Before the result, the steps that ran are compared
+with the list of the set, and one that did not run fails the check. Every `tests/*_test.sh` of
+the tree is either run (a line `run: tests/<name>_test.sh` in `ci.yml`) or named with its reason
+in `shell_tests_left_out` of the script (`tests/migrate_test.sh` and `tests/backup_test.sh`
+today); a file that is neither fails the step `shell-tests`.
+
+The secret scan reads every commit that no passed check has read, up to the merged head. It
+starts after the newest commit on the first parent line of the base whose tree has a PASS record
+(the base itself when it was checked, and the range is then the merged pull requests). When none
+of the last 200 commits of the base has a record it starts 50 commits before the base. So a
+check of `origin/main` with no `--merge` reads what reached `main` since the last checked tree.
+The range is printed at the start, on a line that begins with `secret scan:`.
+
+It prints one line per step with its seconds, the end of the log of a
 failed step, the folder that keeps the full logs, and as its last line
 `LOCAL CHECK: PASS <tree sha> <seconds>s` or `LOCAL CHECK: FAIL <tree sha> <failed steps>`.
 Exit 0 every step that ran passed, 1 a check failed, 2 a merge conflict, 3 the lock or the disk.

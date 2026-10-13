@@ -105,6 +105,10 @@ in the job folder that holds this repository (it is not part of the repository).
    script's own tests ends with `LOCAL CHECK: STUB PASS ...`. Exit status 0 alone proves
    nothing, a partial run has it too. Before the record is written the check compares the
    steps that ran with the list of the full set, and a step that did not run fails the check.
+   A new `tests/*_test.sh` gets a step `run: tests/<name>_test.sh` in `ci.yml`, or a line with
+   its reason in `shell_tests_left_out` of `ops/local-check.sh`: one that has neither fails
+   the check. The secret scan reads every commit since the last tree that has a PASS record
+   (50 commits before the base when there is none), and prints that range.
 
    What the batch check does not give. There is no check per pull request: a failure belongs
    to the batch, and is bisected by running the check again with fewer `--merge` refs. It runs

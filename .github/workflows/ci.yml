@@ -7,7 +7,7 @@
 # produces (CONTRIBUTING.md, Merging), and the deploy is started by ops/deploy-checked.sh.
 # This file stays as the definition of those steps: ops/local-check.sh reads from it the list of
 # files of the Shellcheck step and the tests/*_test.sh steps, and tests pin the rest.
-# To run it by hand, on a branch or on main, with a runner started (ops/ci-runners.sh up, or
+# To run it by hand, on a branch or on main, with a runner started (ops/ci-runners.sh start, or
 # CI_RUNS_ON set to GitHub's machines, below):
 #   gh workflow enable ci.yml                 once, the workflow is disabled in the settings
 #   gh workflow run ci.yml --ref <branch>

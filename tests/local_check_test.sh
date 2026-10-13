@@ -77,8 +77,30 @@ branch feature-a a.txt "a"
 branch feature-b b.txt "b"
 branch conflict-a file.txt "two"
 branch conflict-b file.txt "three"
-# The folders the real step functions enter (s_ruff does `cd api`).
-branch shape api/.keep ""
+# The folders and files the real step functions read: s_ruff does `cd api`, s_shell_tests reads
+# tests/*_test.sh and the `run:` lines of ci.yml. ci.yml runs a_test.sh only: b_test.sh is
+# neither run nor left out with a reason, migrate_test.sh is left out by the script.
+git -C "$REPO" checkout -q -b shape main
+mkdir -p "$REPO/api" "$REPO/tests" "$REPO/.github/workflows"
+: >"$REPO/api/.keep"
+for name in a b migrate; do printf '#!/bin/sh\necho %s\n' "$name" >"$REPO/tests/${name}_test.sh"; done
+printf 'jobs:\n  checks:\n    steps:\n      - name: A\n        run: tests/a_test.sh\n' >"$REPO/.github/workflows/ci.yml"
+git -C "$REPO" add -A
+git -C "$REPO" commit -q -m "shape"
+git -C "$REPO" push -q origin shape
+printf '      - name: B\n        run: tests/b_test.sh\n' >>"$REPO/.github/workflows/ci.yml"
+git -C "$REPO" checkout -q -b shape-whole
+git -C "$REPO" commit -q -a -m "shape-whole"
+git -C "$REPO" push -q origin shape-whole
+# A base of more than 50 commits, none of them checked.
+git -C "$REPO" checkout -q -b long main
+for n in $(seq 1 51); do
+  printf '%s\n' "$n" >"$REPO/long.txt"
+  git -C "$REPO" add -A
+  git -C "$REPO" commit -q -m "long $n"
+done
+git -C "$REPO" push -q origin long
+git -C "$REPO" checkout -q main
 
 CHECK="$REPO/ops/local-check.sh"
 DEPLOY="$REPO/ops/deploy-checked.sh"
@@ -170,8 +192,11 @@ out_has "the reason it broke"
 [[ "$(last_line)" == "LOCAL CHECK: FAIL $base_tree broken" ]] || fail "last line of a failure: $(last_line)"
 nothing_left "a failing step"
 [[ "$(records)" == 0 ]] || fail "a failing check wrote a record"
+out_has "secret scan: 1 commits, the whole history up to $(git -C "$REPO" rev-parse origin/main) (no commit of origin/main has a PASS record and it has fewer than 50)"
 logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
 grep -q "the reason it broke" "$logs/broken.log" || fail "the full log of the failed step is not kept in $logs"
+run 1 env LOCAL_CHECK_STUB="$WORK/fail.sh" "$CHECK" --base origin/long
+out_has "secret scan: 50 commits, after $(git -C "$REPO" rev-parse 'origin/long~50') up to $(git -C "$REPO" rev-parse origin/long) (no commit in the last 200 of origin/long has a PASS record: from 50 commits before it)"
 ok "a failing step is exit 1 with the step named, the end of its log shown, its log kept, and no record"
 
 # --- a step of several commands --------------------------------------------------------------------
@@ -297,6 +322,40 @@ out_has "taken over"
 nothing_left "a lock left by a dead process"
 ok "one check at a time: the second says who holds the lock and exits 3; a lock whose holder is dead is taken over"
 
+# --- the set is whole ------------------------------------------------------------------------------
+# main's own tree has a record here (the takeover above passed on it), so a check that merges one
+# branch reads the commits of that branch only: the range starts at the checked commit.
+cat >"$WORK/set.sh" <<'EOF'
+stub_expected() { printf '%s\n' one two three; }
+stub_plan() {
+  run_step one true || true
+  run_step two true || true
+  [[ -z "${STUB_THREE:-}" ]] || run_step three true || true
+}
+EOF
+run 1 env LOCAL_CHECK_STUB="$WORK/set.sh" "$CHECK" --merge origin/feature-a
+out_has "secret scan: 2 commits, after $(git -C "$REPO" rev-parse origin/main) up to "
+out_has "(the newest commit of origin/main whose tree has a PASS record)"
+grep -qE '^three +FAIL .*a step of the set that did not run' "$WORK/out" || fail "a step of the set that did not run is not a failed step: $(cat "$WORK/out")"
+[[ "$(last_line)" =~ ^LOCAL\ CHECK:\ FAIL\ [0-9a-f]{40}\ three$ ]] || fail "last line when a step of the set did not run: $(last_line)"
+[[ "$(records)" == 2 ]] || fail "a check that lacked a step of its set wrote a record"
+run 0 env LOCAL_CHECK_STUB="$WORK/set.sh" STUB_THREE=1 "$CHECK" --merge origin/feature-a
+[[ "$(records)" == 3 ]] || fail "a check whose whole set ran wrote no record"
+ok "a step of the set that did not run fails the check, with no record; with the whole set the check passes"
+
+cat >"$WORK/select.sh" <<'EOF'
+stub_plan() { run_step shell-tests s_shell_tests || true; }
+EOF
+run 1 env LOCAL_CHECK_STUB="$WORK/select.sh" "$CHECK" --merge origin/shape
+out_has "run       tests/a_test.sh"
+out_has "left out  tests/migrate_test.sh: run by hand"
+out_has "MISSED    tests/b_test.sh: no step of ci.yml runs it"
+[[ "$(last_line)" =~ ^LOCAL\ CHECK:\ FAIL\ [0-9a-f]{40}\ shell-tests$ ]] || fail "last line when a shell test is not selected: $(last_line)"
+run 0 env LOCAL_CHECK_STUB="$WORK/select.sh" "$CHECK" --merge origin/shape-whole
+run 1 env LOCAL_CHECK_STUB="$WORK/select.sh" "$CHECK"
+out_has "shell-tests                FAIL"
+ok "a tests/*_test.sh that ci.yml does not run and that is not left out with a reason fails the step shell-tests; so does a ci.yml that names none"
+
 # --- Ctrl+C ----------------------------------------------------------------------------------------
 # SIGINT as a terminal sends it. The check is started by python with the default disposition
 # restored: a script started in the background has SIGINT ignored, and bash cannot trap that.
@@ -418,6 +477,16 @@ FAKE_CONCLUSION=failure deploy 1
 out_has "the deploy did not succeed (failure)"
 ! grep -q '^curl' "$FAKE_LOG" || fail "the health URL was asked after a failed deploy"
 ok "a checked main is dispatched with its full sha, waited for and asked for its health; a failed run is exit 1"
+
+# main moves on with a commit that no check read: a check of main as it is, with no --merge, reads
+# the commits since the last tree that has a PASS record (the range base..head would be empty).
+printf 'later\n' >"$GITHUB/later.txt"
+git -C "$GITHUB" add -A
+git -C "$GITHUB" commit -q -m "later"
+git -C "$GITHUB" push -q origin HEAD:main
+run 0 env LOCAL_CHECK_STUB="$WORK/pass.sh" "$CHECK"
+out_has "secret scan: 1 commits, after $main_sha up to $(git -C "$GITHUB" rev-parse HEAD) (the newest commit of origin/main whose tree has a PASS record)"
+ok "the secret scan of main as it is starts after the last commit whose tree has a PASS record; with no record, 50 commits before the base or the whole history"
 
 # --- the files of the repository -------------------------------------------------------------------
 cd "$ROOT"

@@ -18,10 +18,12 @@
 #             the docker marked tests (the parser in its container, their own Postgres), the
 #             scoring timing test alone. The migration rules are part of the suite
 #             (api/tests/test_migration_rules.py, test_migrations.py).
-#   checks    pre-commit on all files, the secret scan of the commits between base and the merged
-#             head (.github/scripts/secret_scan.sh through its pre-commit hook, as CI called it),
-#             the shell lint of the files ci.yml lists, the e2e groups and CI plan tests, every
-#             tests/*_test.sh that ci.yml runs; the journey groups apps and ingestion.
+#   checks    pre-commit on all files, the secret scan of the commits that no passed check has
+#             read (.github/scripts/secret_scan.sh through its pre-commit hook, as CI called it;
+#             the rule of its range is below, at SCAN_FROM), the shell lint of the files ci.yml
+#             lists, the e2e groups and CI plan tests, every tests/*_test.sh that ci.yml runs
+#             (one that neither runs nor is left out with a reason fails the step shell-tests);
+#             the journey groups apps and ingestion.
 #   journeys  the web lint, type check, vitest and build; the journey groups identity and sweep.
 #
 # The lists that ci.yml holds (the files of its Shellcheck step, the tests/*_test.sh steps) are read from
@@ -35,8 +37,10 @@
 # when the images and the web install are done, each on a scratch stack of its own (own project,
 # own port, own database), LOCAL_CHECK_STACKS of them side by side (default: one per 4 GiB of
 # Docker memory, at most 4), with one Playwright worker each, as in CI. When every lane has
-# ended, the tests that measure time run alone, one after the other: Vitest, the docker marked
-# tests, the scoring test.
+# ended, the tests that measure time run in a quiet phase: Vitest next to the docker marked
+# tests, then alone, one after the other, the test of the suite that measures its own speed, the
+# coverage floor and the scoring test. Before the result, the steps that ran are compared with
+# the list of the set (expected_steps): one that did not run fails the check.
 #
 # Safety of this machine:
 # - one check at a time: a lock in .local-check/ of the main checkout; a second call says who
@@ -306,6 +310,40 @@ done
 head_sha="$(git -C "$TREE" rev-parse HEAD)"
 tree_sha="$(git -C "$TREE" rev-parse 'HEAD^{tree}')"
 
+# --- the range of the secret scan ------------------------------------------------------------------
+# The rule: the scan reads every commit that no passed check has read, up to the merged head. It
+# starts after the newest commit on the first parent line of the base whose tree has a PASS record
+# in .local-check/ (the base itself when it was checked: the range is then the merged pull
+# requests, as a push in CI). When none of the last 200 commits of the base has a record, it
+# starts 50 commits before the base, and reads the whole history when the base has fewer.
+# So `ops/local-check.sh` with no argument, the remedy when main holds a tree that was not checked,
+# reads what reached main since the last checked tree (review of pull request #121, N3: the range
+# base..head was empty there, and only the tip against its first parent was read).
+SCAN_FROM=""
+scan_why="no commit in the last 200 of $BASE has a PASS record: from 50 commits before it"
+while read -r commit tree; do
+  record="$RECORDS/$tree.json"
+  [[ -f "$record" ]] || continue
+  grep -q '"result": "PASS"' "$record" || continue
+  # A record of stub steps counts for the script's own tests only.
+  if [[ -z "${LOCAL_CHECK_STUB:-}" ]] && ! grep -q '"stub": false' "$record"; then continue; fi
+  SCAN_FROM="$commit"
+  scan_why="the newest commit of $BASE whose tree has a PASS record"
+  break
+done < <(git -C "$TREE" log --first-parent -n 200 --format='%H %T' "$base_sha")
+if [[ -z "$SCAN_FROM" ]]; then
+  SCAN_FROM="$(git -C "$TREE" rev-parse -q --verify "$base_sha~50^{commit}" 2>/dev/null)" || {
+    SCAN_FROM=""
+    scan_why="no commit of $BASE has a PASS record and it has fewer than 50"
+  }
+fi
+scan_count="$(git -C "$TREE" rev-list --count "${SCAN_FROM:+$SCAN_FROM..}$head_sha")"
+if [[ -n "$SCAN_FROM" ]]; then
+  scan_line="secret scan: $scan_count commits, after $SCAN_FROM up to $head_sha ($scan_why)"
+else
+  scan_line="secret scan: $scan_count commits, the whole history up to $head_sha ($scan_why)"
+fi
+
 # --- running steps ---------------------------------------------------------------------------------
 # run_step <name> <command ...>: the command in a bash process of its own, started in the tree with
 # errexit, nounset and pipefail, its output in the step's log; one line when it ends. A step that
@@ -318,7 +356,7 @@ tree_sha="$(git -C "$TREE" rev-parse 'HEAD^{tree}')"
 # 3.2 and 5). A new bash inherits nothing of that state, so the status of a step is the same
 # however run_step is called. The step is given every function of this script (declare -f) and the
 # variables named in STEP_ENV; a name it lacks stops it (nounset) and the step fails.
-STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha)
+STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST)
 run_step() {
   local name="$1" start=$SECONDS rc=0 pid watcher
   shift
@@ -400,12 +438,27 @@ s_ruff() {
   uv run --frozen ruff format --check .
 }
 
+# One test of the suite measures its own speed and failed once in five runs next to the four
+# journey stacks (review of pull request #121, N17): a check that is flaky gets run again until it
+# is green. It is taken out of the parallel suite and run alone in the quiet phase, its coverage
+# added to the suite's, and the coverage floor is read after it. A test of that name that is gone
+# fails the step pytest-alone (pytest finds nothing to run).
+ALONE_TEST="tests/agents/test_live_hardening.py::test_a_run_on_a_store_that_never_answers_keeps_its_speed"
+
 s_pytest() {
   cd api
   # shellcheck disable=SC1091
   . "$WORK/api.env"
-  interruptible uv run --frozen pytest tests -m "not docker" -p no:cacheprovider \
+  interruptible uv run --frozen pytest tests -m "not docker" -p no:cacheprovider --deselect "$ALONE_TEST" \
     -n "$JOBS" --dist worksteal --cov --cov-report= --cov-fail-under=0 --durations=25
+}
+
+s_pytest_alone() {
+  cd api
+  # shellcheck disable=SC1091
+  . "$WORK/api.env"
+  interruptible uv run --frozen pytest "$ALONE_TEST" -p no:cacheprovider \
+    --cov --cov-append --cov-report= --cov-fail-under=0
 }
 
 s_coverage() {
@@ -435,23 +488,39 @@ lane_api() {
     return 0
   fi
   run_step ruff s_ruff || true
-  if run_step pytest s_pytest; then run_step coverage s_coverage || true; fi
+  run_step pytest s_pytest || true
 }
 
-# The tests that measure time run alone, one after the other, once every lane has ended: Vitest
-# (a countdown of the account page and a sort of the search tab read the real clock), the docker
-# marked tests (the parser's CPU and wall clock limits, a paused database) and the scoring bound.
+passed() { # passed <step>: true when that step ran and passed
+  awk -F '\t' -v name="$1" '$1 == name && $2 == 0 { ok = 1 } END { exit !ok }' "$WORK/results"
+}
+
+# The tests that measure time run once every lane has ended: Vitest (a countdown of the account
+# page and a sort of the search tab read the real clock), the docker marked tests (the parser's
+# CPU and wall clock limits, a paused database), the test of the suite that measures its own
+# speed and the scoring bound.
 # Measured on 2026-10-13, next to the suite and four journey stacks (load 15 on 12 cores): Vitest
 # failed in 2 runs of 4, two CPU limit tests and two `docker run` of the docker marked tests'
 # own Postgres failed in 1 run; alone they passed every time.
+# Since the review of pull request #121 (N17) Vitest and the docker marked tests run side by
+# side: three Vitest workers next to one serial pytest is far from that load. That pairing has
+# not been measured on a full run yet; LOCAL_CHECK_QUIET_SERIAL=1 puts the two back one after the
+# other. The rest runs alone, one after the other.
 quiet_phase() {
+  local api=0
+  if wanted api && [[ -f "$WORK/api.env" ]]; then api=1; fi
   if wanted journeys && [[ "$(cat "$WORK/web.done" 2>/dev/null)" == 0 ]]; then
-    run_step vitest s_vitest || true
+    run_step vitest s_vitest &
+    [[ -z "${LOCAL_CHECK_QUIET_SERIAL:-}" ]] || wait
   fi
-  if wanted api && [[ -f "$WORK/api.env" ]]; then
-    run_step pytest-docker s_pytest_docker || true
-    run_step scoring s_scoring || true
+  if ((api)); then run_step pytest-docker s_pytest_docker || true; fi
+  wait
+  ((api)) || return 0
+  if passed pytest; then
+    run_step pytest-alone s_pytest_alone || true
+    run_step coverage s_coverage || true
   fi
+  run_step scoring s_scoring || true
 }
 
 # --- the steps: web --------------------------------------------------------------------------------
@@ -608,10 +677,12 @@ s_precommit() {
   SKIP=ruff-check,ruff-format,eslint,shellcheck,gitleaks uvx --from pre-commit==4.6.2 pre-commit run --all-files
 }
 
-# The commits between the base and the merged head, read as CI read the commits of a push
-# (secret_scan.sh: each commit, each merge commit, the messages, then the tip as a whole).
+# The commits after SCAN_FROM (its rule is above) up to the merged head, read as CI read the
+# commits of a push (secret_scan.sh: each commit, each merge commit, the messages, then the tip
+# as a whole). With no SCAN_FROM that script reads the whole history.
 s_secret_scan() {
-  env -u SKIP GITHUB_EVENT_NAME=push CI_PUSH_BEFORE="$base_sha" \
+  echo "$scan_line"
+  env -u SKIP GITHUB_EVENT_NAME=push CI_PUSH_BEFORE="$SCAN_FROM" \
     uvx --from pre-commit==4.6.2 pre-commit run gitleaks-commits --hook-stage manual --verbose
 }
 
@@ -642,7 +713,43 @@ s_e2e_groups() {
 s_ci_plan() { python3 .github/scripts/ci_plan_test.py; }
 
 shell_tests() { # every tests/*_test.sh that a step of ci.yml runs
-  sed -n 's/^ *run: \(tests\/[a-z_]*_test\.sh\)$/\1/p' .github/workflows/ci.yml
+  sed -n 's/^ *run: \(tests\/[A-Za-z0-9_-]*_test\.sh\)$/\1/p' .github/workflows/ci.yml
+}
+
+# The tests/*_test.sh that no step runs, each with its reason: "<file>: <why>".
+shell_tests_left_out() {
+  echo "tests/migrate_test.sh: run by hand, real Docker and four builds of the api image; tests/deploy_test.sh covers the same paths with fakes"
+  echo "tests/backup_test.sh: run by hand from the Mac against the Jetson, which a check never touches"
+}
+
+# The selection is a step of its own: every tests/*_test.sh of the tree is either run (ci.yml has
+# a line `run: <file>` for it) or left out above with a reason. A file that is neither, for
+# instance one whose step is written `run: bash tests/x_test.sh` or over several lines, fails
+# here: nothing is dropped silently (review of pull request #121, N2).
+s_shell_tests() {
+  local selected left file line why missed=0
+  selected="$(shell_tests)"
+  left="$(shell_tests_left_out)"
+  if [[ -z "$selected" ]]; then
+    echo "no step of .github/workflows/ci.yml runs a tests/*_test.sh: its lines \`run: tests/<name>_test.sh\` are the list read here"
+    return 1
+  fi
+  for file in tests/*_test.sh; do
+    [[ -e "$file" ]] || continue
+    why=""
+    while IFS= read -r line; do
+      if [[ "$line" == "$file: "* ]]; then why="${line#*: }"; fi
+    done <<<"$left"
+    if grep -qxF -- "$file" <<<"$selected"; then
+      echo "run       $file"
+    elif [[ -n "$why" ]]; then
+      echo "left out  $file: $why"
+    else
+      echo "MISSED    $file: no step of ci.yml runs it (a line \`run: $file\`) and shell_tests_left_out of ops/local-check.sh gives no reason to leave it out"
+      missed=1
+    fi
+  done
+  return "$missed"
 }
 
 lane_checks() {
@@ -652,6 +759,7 @@ lane_checks() {
   run_step shellcheck s_shellcheck || true
   run_step e2e-groups s_e2e_groups || true
   run_step ci-plan s_ci_plan || true
+  run_step shell-tests s_shell_tests || true
   # Side by side: each works in a temporary folder of its own, against fakes of docker, ssh and gh.
   for script in $(cd "$TREE" && shell_tests); do
     script="${script#tests/}"
@@ -682,6 +790,24 @@ real_plan() {
   for pid in "${pids[@]}"; do wait "$pid" || lanes_failed=1; done
   ((lanes_failed == 0)) || not_run lanes "a lane of the check ended early"
   quiet_phase
+}
+
+# The steps of the set, by CI job: what a run must have run. With stub steps (the script's own
+# tests) the list is the one the stub gives in stub_expected, if it defines it.
+expected_steps() {
+  if [[ -n "${LOCAL_CHECK_STUB:-}" ]]; then
+    if declare -F stub_expected >/dev/null; then stub_expected; fi
+    return 0
+  fi
+  if wanted api; then
+    printf '%s\n' api-install api-services ruff pytest pytest-alone coverage pytest-docker scoring
+  fi
+  if wanted checks || wanted journeys; then printf '%s\n' web-install images chromium; fi
+  if wanted checks; then
+    printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests journeys-apps journeys-ingestion
+    (cd "$TREE" && shell_tests) | sed 's/^tests\///; s/\.sh$//'
+  fi
+  if wanted journeys; then printf '%s\n' lint typecheck build vitest journeys-identity journeys-sweep; fi
 }
 
 tool_versions() {
@@ -725,6 +851,7 @@ fi
 
 say "local check $CHECK_ID: base $BASE ($base_sha), $(wc -l <"$WORK/merges" | tr -d ' ') merged, tree $tree_sha"
 say "logs: $LOGS"
+say "$scan_line"
 if [[ -n "${LOCAL_CHECK_STUB:-}" ]]; then
   stub_plan
 else
@@ -733,6 +860,22 @@ else
 fi
 
 # --- the result ------------------------------------------------------------------------------------
+# Every step of the set must have run, as CI had "Every step the plan needs has run": a step
+# that a lane left out, or that a change to this script dropped, is a failed step, so the check
+# fails and no record is written (review of pull request #121, N2).
+: >>"$WORK/results"
+expected="$(expected_steps)" || {
+  not_run expected-steps "the list of the steps of the set could not be read"
+  expected=""
+}
+if [[ -z "$expected" && -z "${LOCAL_CHECK_STUB:-}" ]]; then
+  not_run expected-steps "the list of the steps of the set is empty"
+fi
+while IFS= read -r name; do
+  [[ -n "$name" ]] || continue
+  awk -F '\t' -v name="$name" '$1 == name { found = 1 } END { exit !found }' "$WORK/results" ||
+    not_run "$name" "a step of the set that did not run"
+done <<<"$expected"
 total=$((SECONDS - STARTED))
 failed="$(awk -F '\t' '$2 != 0 { printf "%s%s", sep, $1; sep = "," }' "$WORK/results")"
 [[ -s "$WORK/results" ]] || failed="no-step-ran"
