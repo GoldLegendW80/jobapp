@@ -12,6 +12,7 @@ import {
   deleteDocument,
   failureSentence,
   filenameHeader,
+  documentImageUrl,
   getDocumentText,
   listDocuments,
   loadFailureSentence,
@@ -290,13 +291,21 @@ describe("calls", () => {
       offset: 0,
       next_offset: 4,
       total: 10,
+      images: [],
     });
+    // The pages that wait as images come with the text, each with its place and its size.
+    const stored = [{ position: 2, width: 1109, height: 1568 }];
+    state.images.set(document.id, stored);
     await expect(getDocumentText(document.id, 8)).resolves.toEqual({
       text: "ij",
       offset: 8,
       next_offset: null,
       total: 10,
+      images: stored,
     });
+    expect(documentImageUrl("a b/c", 2)).toBe(
+      "/api/ingestion/documents/a%20b%2Fc/images/2",
+    );
   });
 
   it("asks for 20,000 characters from the offset", async () => {

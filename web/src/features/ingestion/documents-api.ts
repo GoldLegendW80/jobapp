@@ -6,6 +6,7 @@
 import { z } from "zod";
 
 import {
+  API_BASE,
   errorDetail,
   isApiError,
   request,
@@ -82,11 +83,21 @@ export const documentListSchema = z.object({
 });
 export type DocumentList = z.infer<typeof documentListSchema>;
 
+/** One stored page image: `position` is the zero based page of a PDF, 0 for an uploaded image. */
+export const pageImageSchema = z.object({
+  position: z.number().int().nonnegative(),
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+});
+export type PageImage = z.infer<typeof pageImageSchema>;
+
 export const textPageSchema = z.object({
   text: z.string(),
   offset: z.number(),
   next_offset: z.number().nullable(),
   total: z.number(),
+  // The pages that wait for the agent as images. Absent from an api older than these images.
+  images: z.array(pageImageSchema).default([]),
 });
 export type TextPage = z.infer<typeof textPageSchema>;
 
@@ -157,6 +168,14 @@ export function pasteDocument(text: string): Promise<StoredDocument> {
     timeoutMs: PASTE_TIMEOUT_MS,
     validate: (body) => storedSchema.parse(body),
   });
+}
+
+/**
+ * Where the browser fetches one stored page image, with the session cookie: the api serves it
+ * to its owner only, as a JPEG and nothing else.
+ */
+export function documentImageUrl(id: string, position: number): string {
+  return `${API_BASE}${BASE}/${encodeURIComponent(id)}/images/${String(position)}`;
 }
 
 export function getDocumentText(

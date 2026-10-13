@@ -13,10 +13,12 @@ import {
 } from "@/components/ui/dialog";
 
 import {
+  documentImageUrl,
   documentTextKey,
   failureSentence,
   getDocumentText,
   type IngestionDocument,
+  type PageImage,
 } from "./documents-api";
 
 const number = new Intl.NumberFormat("en");
@@ -65,6 +67,8 @@ function Preview({ document }: { document: IngestionDocument }) {
   const text = pages.map((page) => page.text).join("");
   const total = pages[0]?.total ?? 0;
   const shown = pages.reduce((sum, page) => sum + page.text.length, 0);
+  // Every page of the text carries the whole list of images: the first one is enough.
+  const images = pages[0]?.images ?? [];
 
   return (
     <>
@@ -107,7 +111,12 @@ function Preview({ document }: { document: IngestionDocument }) {
             tabIndex={0}
             className="max-h-[55vh] overflow-y-auto rounded-md border bg-muted/40 p-3 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
-            <PreviewText text={text} waiting={document.status !== "done"} />
+            <PreviewText
+              documentId={document.id}
+              text={text}
+              images={images}
+              waiting={document.status !== "done"}
+            />
           </div>
           <DialogFooter className="items-center sm:justify-between">
             <p className="text-xs text-muted-foreground tabular-nums">
@@ -144,15 +153,61 @@ function Preview({ document }: { document: IngestionDocument }) {
 const TEXT =
   "font-sans text-sm leading-relaxed break-words whitespace-pre-wrap";
 
-function PreviewText({ text, waiting }: { text: string; waiting: boolean }) {
-  if (text === "")
-    return (
-      <p className="text-sm text-muted-foreground">
-        There is no text in this document.
-      </p>
-    );
+const WAITING_PAGE =
+  "This page is an image. The agent will read it at the next run.";
+
+/** One stored page image, as the agent will see it. */
+function PageImageView({
+  documentId,
+  image,
+}: {
+  documentId: string;
+  image: PageImage;
+}) {
+  return (
+    <img
+      src={documentImageUrl(documentId, image.position)}
+      alt={`Page ${String(image.position + 1)}, kept as an image`}
+      width={image.width}
+      height={image.height}
+      loading="lazy"
+      decoding="async"
+      className="h-auto w-full rounded-sm border bg-background"
+    />
+  );
+}
+
+function PreviewText({
+  documentId,
+  text,
+  images,
+  waiting,
+}: {
+  documentId: string;
+  text: string;
+  images: PageImage[];
+  waiting: boolean;
+}) {
+  const byPage = new Map(images.map((image) => [image.position, image]));
   const parts = text.split(PAGE_BREAK);
-  if (parts.length === 1) return <pre className={TEXT}>{text}</pre>;
+  if (parts.length === 1) {
+    // An uploaded image, or a PDF of one scanned page: the image is the document.
+    const only = byPage.get(0);
+    if (text === "" && only)
+      return (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-muted-foreground">{WAITING_PAGE}</p>
+          <PageImageView documentId={documentId} image={only} />
+        </div>
+      );
+    if (text === "")
+      return (
+        <p className="text-sm text-muted-foreground">
+          There is no text in this document.
+        </p>
+      );
+    return <pre className={TEXT}>{text}</pre>;
+  }
   return (
     <ol className="flex flex-col gap-4">
       {parts.map((part, index) => (
@@ -162,11 +217,19 @@ function PreviewText({ text, waiting }: { text: string; waiting: boolean }) {
             Page {index + 1}
           </p>
           {part === "" ? (
-            <p className="text-sm text-muted-foreground">
-              {waiting
-                ? "This page is an image. The agent will read it at the next run."
-                : "This page holds no text."}
-            </p>
+            <>
+              <p className="text-sm text-muted-foreground">
+                {waiting && byPage.has(index)
+                  ? WAITING_PAGE
+                  : "This page holds no text."}
+              </p>
+              {byPage.has(index) ? (
+                <PageImageView
+                  documentId={documentId}
+                  image={byPage.get(index) as PageImage}
+                />
+              ) : null}
+            </>
           ) : (
             <pre className={TEXT}>{part}</pre>
           )}

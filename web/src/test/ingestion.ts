@@ -52,6 +52,11 @@ export interface FakeDocuments {
   items: IngestionDocument[];
   /** The stored text of each document, by id. */
   texts: Map<string, string>;
+  /** The page images stored for each document, by id: what the text route lists. */
+  images: Map<
+    string,
+    Array<{ position: number; width: number; height: number }>
+  >;
   /** What each upload sent: the name header as received, and the body. */
   uploads: Array<{ filename: string | null; body: Uint8Array; type: string }>;
   pastes: string[];
@@ -84,6 +89,7 @@ export function fakeDocuments(
   const state: FakeDocuments = {
     items: [...initial],
     texts: new Map(),
+    images: new Map(),
     uploads: [],
     pastes: [],
     deleted: [],
@@ -195,6 +201,7 @@ export function fakeDocuments(
         offset,
         next_offset: end < characters.length ? end : null,
         total: characters.length,
+        images: state.images.get(id) ?? [],
       });
     }),
     http.post("*/api/ingestion/documents/:id/confirm", ({ params }) => {

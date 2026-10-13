@@ -95,7 +95,9 @@ export function statusView(document: IngestionDocument): StatusView {
         label: "Waiting for the agent",
         tone: "waiting",
         detail:
-          "Its pages are images. The agent will read them at the next run.",
+          document.kind === "image"
+            ? "This image will be read by the agent at the next run."
+            : "Its scanned pages will be read by the agent at the next run.",
       };
     case "failed":
       return {

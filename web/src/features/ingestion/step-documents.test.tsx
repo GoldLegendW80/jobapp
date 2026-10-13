@@ -725,10 +725,19 @@ describe("documents: the secret warning", () => {
 });
 
 describe("documents: the preview", () => {
-  async function preview(content: string, overrides = {}, page = 20_000) {
+  async function preview(
+    content: string,
+    overrides = {},
+    page = 20_000,
+    images: number[] = [],
+  ) {
     const document = fakeDocument({ name: "dossier.md", ...overrides });
     const opened = await open([document]);
     opened.state.texts.set(document.id, content);
+    opened.state.images.set(
+      document.id,
+      images.map((position) => ({ position, width: 1109, height: 1568 })),
+    );
     opened.state.page = page;
     await opened.user.click(
       screen.getByRole("button", { name: "Preview dossier.md" }),
@@ -776,9 +785,11 @@ describe("documents: the preview", () => {
   });
 
   it("numbers the pages of a PDF and says which ones wait for the agent", async () => {
-    const { dialog } = await preview(
-      ["first page", "", "third page"].join(String.fromCharCode(12)),
+    const { dialog, document } = await preview(
+      ["first page", "", "third page", ""].join(String.fromCharCode(12)),
       { kind: "pdf", status: "awaiting_transcription" },
+      20_000,
+      [1],
     );
     const pages = within(await dialog.findByRole("region")).getAllByRole(
       "listitem",
@@ -787,7 +798,42 @@ describe("documents: the preview", () => {
       "Page 1first page",
       "Page 2This page is an image. The agent will read it at the next run.",
       "Page 3third page",
+      // A scanned page that got no image (over the cap, a size that is refused) waits for
+      // nothing: the note of the document says it was left out.
+      "Page 4This page holds no text.",
     ]);
+    // The stored image of the page is shown, at its own address, with its size reserved.
+    const image = dialog.getByRole("img", {
+      name: "Page 2, kept as an image",
+    });
+    expect(image).toHaveAttribute(
+      "src",
+      `/api/ingestion/documents/${document.id}/images/1`,
+    );
+    expect(image).toHaveAttribute("width", "1109");
+    expect(image).toHaveAttribute("height", "1568");
+    expect(dialog.getAllByRole("img")).toHaveLength(1);
+  });
+
+  it("shows an uploaded image that waits for the agent", async () => {
+    const { dialog, document } = await preview(
+      "",
+      { kind: "image", status: "awaiting_transcription" },
+      20_000,
+      [0],
+    );
+    expect(
+      await dialog.findByText(
+        "This page is an image. The agent will read it at the next run.",
+      ),
+    ).toBeVisible();
+    expect(
+      dialog.getByRole("img", { name: "Page 1, kept as an image" }),
+    ).toHaveAttribute(
+      "src",
+      `/api/ingestion/documents/${document.id}/images/0`,
+    );
+    expect(dialog.queryByText("There is no text in this document.")).toBeNull();
   });
 
   it("says when a page of a document that was read holds no text", async () => {
