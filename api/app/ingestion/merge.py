@@ -53,7 +53,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.agents import proposals
-from app.agents.models import ProposalStatus
+from app.agents.models import Proposal, ProposalStatus
 from app.ingestion import item_proposals, items, reuse, stored_items
 from app.ingestion.models import IngestionDocument, TextSource
 from app.ingestion.runs_models import IngestionItem, IngestionRun
@@ -234,6 +234,23 @@ def _holds(section_data: Mapping[str, Any], item: items.Item) -> bool:
         return bool(items.apply(item.section, dict(section_data), item) == section_data)
     except items.ProfileConflict:
         return False  # it does not fit today: the user sees it and decides
+
+
+def count_of_run(db: Session, user_id: uuid.UUID, run_id: uuid.UUID) -> int:
+    """How many proposals belong to this run, whatever was decided on them since."""
+    return int(
+        db.scalar(
+            sa.select(sa.func.count())
+            .select_from(Proposal)
+            .where(
+                Proposal.user_id == user_id,
+                Proposal.target == items.TARGET,
+                Proposal.kind == items.KIND,
+                Proposal.payload["ingestion_run_id"].astext == str(run_id),
+            )
+        )
+        or 0
+    )
 
 
 # --- the merge ------------------------------------------------------------------------------------
