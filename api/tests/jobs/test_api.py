@@ -617,3 +617,53 @@ def test_import_counts_match_status_counts(api: Api, alice: Signed) -> None:
     expected = Counter(j["status"] for j in jobs)
     assert page["counts_by_status"] == {s: expected[s] for s in statuses}
     assert page["total"] == 40
+
+
+# --- one snapshot per read (issue #37, point 4) -------------------------------------------------
+
+
+def _level(db: Session) -> str | None:
+    return db.scalar(sa.text("SHOW transaction_isolation"))
+
+
+def _pool_is_back_at_default(factory: sessionmaker[Session]) -> None:
+    for _ in range(3):
+        with factory() as db:
+            assert _level(db) == "read committed"
+
+
+def test_the_list_is_read_at_one_snapshot(
+    api: Api, alice: Signed, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The page, the status counts and the histogram are three statements: at READ COMMITTED a
+    job committed between them is in the counts and not in the page."""
+    seed(factory, alice.id, [{}])
+    levels: list[str | None] = []
+    real = service.fit_histogram
+
+    def histogram(db: Session, *args: Any, **kwargs: Any) -> Any:
+        levels.append(_level(db))  # the last of the three reads
+        return real(db, *args, **kwargs)
+
+    monkeypatch.setattr(service, "fit_histogram", histogram)
+    assert api.get("/api/jobs", token=alice.token).status_code == 200
+    assert levels == ["repeatable read"]
+    _pool_is_back_at_default(factory)
+
+
+def test_the_detail_is_read_at_one_snapshot(
+    api: Api, alice: Signed, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The newest events and their count are two statements of the same moment."""
+    (job,) = seed(factory, alice.id, [{}])
+    levels: list[str | None] = []
+    real = service.recent_events
+
+    def events(db: Session, *args: Any, **kwargs: Any) -> Any:
+        levels.append(_level(db))
+        return real(db, *args, **kwargs)
+
+    monkeypatch.setattr(service, "recent_events", events)
+    assert api.get(f"/api/jobs/{job.id}", token=alice.token).status_code == 200
+    assert levels == ["repeatable read"]
+    _pool_is_back_at_default(factory)

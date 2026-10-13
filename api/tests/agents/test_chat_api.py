@@ -478,3 +478,28 @@ def test_job_deleted_takes_the_thread(
         db.execute(sa.text("DELETE FROM jobs WHERE id = :j"), {"j": job})
     assert api.get(f"{THREADS}/{thread}", token=alice).status_code == 404
     assert api.get(THREADS, token=alice).json()["items"] == []
+
+
+def test_run_detail_is_read_at_one_snapshot(
+    api: Api,
+    ready: tuple[str, uuid.UUID, str],
+    factory: sessionmaker[Session],
+    monkeypatch: Any,
+) -> None:
+    """Issue #37, point 4. The run and its events are two statements, and the final status is
+    committed with the last event: one snapshot shows both or neither."""
+    alice, _, thread = ready
+    run = send(api, alice, thread).json()["run"]["id"]
+    levels: list[str | None] = []
+    real = runs.events_after
+
+    def events_after(db: Session, *args: Any, **kwargs: Any) -> Any:
+        levels.append(db.scalar(sa.text("SHOW transaction_isolation")))
+        return real(db, *args, **kwargs)
+
+    monkeypatch.setattr(runs, "events_after", events_after)
+    assert api.get(f"/api/agents/runs/{run}", token=alice).status_code == 200
+    assert levels == ["repeatable read"]
+    for _ in range(3):
+        with factory() as db:
+            assert db.scalar(sa.text("SHOW transaction_isolation")) == "read committed"

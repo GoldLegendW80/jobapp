@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.db import build_engine, build_sessionmaker, get_session
+from app.db import build_engine, build_sessionmaker, get_session, read_snapshot
 from app.identity.deps import default_deny
 from app.main import create_app
 from tests.conftest import make_settings
@@ -66,3 +66,22 @@ def test_get_session_dependency_closes_session(database_url: str) -> None:
         assert app.state.engine.pool.checkedout() == 0
     assert len(seen) == 1
     assert not seen[0].in_transaction()
+
+
+def test_read_snapshot_is_the_transactions_own_and_refuses_a_late_call(
+    database_url: str,
+) -> None:
+    """The level holds for the reads that follow and is gone when the session is closed; once a
+    statement has run it cannot be changed, so a route that already read or wrote fails loudly."""
+    engine = build_engine(make_settings(database_url))
+    factory = build_sessionmaker(engine)
+    try:
+        with factory() as db:
+            read_snapshot(db)
+            assert db.scalar(text("SHOW transaction_isolation")) == "repeatable read"
+        with factory() as db:
+            assert db.scalar(text("SHOW transaction_isolation")) == "read committed"
+            with pytest.raises(RuntimeError, match="first statement"):
+                read_snapshot(db)
+    finally:
+        engine.dispose()
