@@ -147,8 +147,9 @@ def test_the_name_never_decides_the_type(
         (pdf(), "pdf", "application/pdf", "parsed", True),
         # Since G7 an archive too: the parser tells a Word document from an export.
         (archive(), "archive", "application/zip", "parsed", True),
-        (png(), "image", "image/png", "transcribed", False),
-        (jpeg(), "image", "image/jpeg", "transcribed", False),
+        # Since G8 an image as well: the parser normalises it, an agent run transcribes it.
+        (png(), "image", "image/png", "transcribed", True),
+        (jpeg(), "image", "image/jpeg", "transcribed", True),
     ],
 )
 def test_a_binary_kind_is_kept_whole_and_waits_for_a_reader(
@@ -585,7 +586,11 @@ def test_a_done_document_with_a_note_is_read_again_only_by_a_newer_parser(
     assert (newer.status_code, newer.json()["id"]) == (201, first["id"])
     assert (newer.json()["status"], newer.json()["note"]) == ("pending", None)
     stored = row(factory, first["id"])
-    assert (stored.raw, stored.text, stored.parser_version) == (pdf(), None, 2)
+    assert (stored.raw, stored.text, stored.parser_version) == (
+        pdf(),
+        None,
+        documents.PARSER_VERSION,
+    )
 
 
 def test_a_done_document_without_a_note_is_never_replaced(
@@ -594,7 +599,7 @@ def test_a_done_document_without_a_note_is_never_replaced(
     first = uploaded(api, alice, b"a text read in full")
     monkeypatch.setattr(documents, "PARSER_VERSION", documents.PARSER_VERSION + 1)
     assert upload(api, alice, b"a text read in full").status_code == 200
-    assert row(factory, first["id"]).parser_version == 1
+    assert row(factory, first["id"]).parser_version == documents.PARSER_VERSION - 1
 
 
 def test_a_failed_text_document_is_replaced_by_its_text(
@@ -831,6 +836,7 @@ def test_the_text_is_read_back_a_page_at_a_time(api: Api, alice: str) -> None:
         "offset": 0,
         "next_offset": 1000,
         "total": len(text),
+        "images": [],
     }
     # Offsets count characters, astral ones included, so the pages join exactly.
     pieces, offset = [], 0
@@ -842,7 +848,13 @@ def test_the_text_is_read_back_a_page_at_a_time(api: Api, alice: str) -> None:
     last = text_of(api, alice, body["id"], offset=len(text) - 5, limit=1000).json()
     assert (last["text"], last["next_offset"]) == (text[-5:], None)
     beyond = text_of(api, alice, body["id"], offset=len(text) + 10).json()
-    assert beyond == {"text": "", "offset": len(text) + 10, "next_offset": None, "total": len(text)}
+    assert beyond == {
+        "text": "",
+        "offset": len(text) + 10,
+        "next_offset": None,
+        "total": len(text),
+        "images": [],
+    }
     whole = text_of(api, alice, body["id"]).json()  # the default page holds this text whole
     assert (whole["text"], whole["next_offset"]) == (text, None)
 
@@ -858,6 +870,7 @@ def test_the_form_feeds_between_the_pages_of_a_pdf_are_part_of_the_text(
         "offset": 4,
         "next_offset": 5,
         "total": 10,
+        "images": [],
     }
 
 

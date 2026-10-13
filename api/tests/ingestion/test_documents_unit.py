@@ -109,8 +109,8 @@ def test_kind_of() -> None:
     # A type nobody declared is never taken for one that has a reader.
     for unknown in ("application/x-something-new", "text/html", "image/gif", ""):
         assert kind_of(unknown) is Kind.other
-    # G2b: the PDF. G7: the archive.
-    assert frozenset({Kind.text, Kind.pdf, Kind.archive}) == documents.READABLE_KINDS
+    # G2b: the PDF. G7: the archive. G8: the image.
+    assert frozenset({Kind.text, Kind.pdf, Kind.archive, Kind.image}) == documents.READABLE_KINDS
     assert Kind.other not in documents.READABLE_KINDS
 
 

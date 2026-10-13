@@ -7,6 +7,8 @@ import hashlib
 import importlib.util
 import sys
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -108,15 +110,49 @@ class BackgroundServer:
         self.stop()
 
 
+# The names under which the child imports its own files from beside them (it puts the folder on
+# its path): the handlers, and the helper two of them share.
+FLAT_NAMES = ("docx", "image", "linkedin_zip", "pdf_render", "pdf_text", "zipcaps")
+_ABSENT = object()
+
+
+@contextmanager
+def restoring_modules(*names: str) -> Iterator[None]:
+    """Whatever the body does to these entries of sys.modules (imports, replaces, pops), they are
+    put back as they were: absent stays absent, a module that was there is there again."""
+    saved = {name: sys.modules.get(name, _ABSENT) for name in names}
+    try:
+        yield
+    finally:
+        for name, module in saved.items():
+            if module is _ABSENT:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
+@contextmanager
+def as_in_the_child() -> Iterator[None]:
+    """The world a handler runs in inside the sandbox: the folder of the handlers on the path, so
+    that `import zipcaps` or `import pdf_text` (pdf_render.py imports it when it opens a PDF) find
+    the file beside them, and `pdf_text` is the very module the tests of the reader use. Wrap
+    every call of a real handler in it, and its loading: nothing of it outlives the block, so what
+    another test imported or popped before cannot change the result."""
+    with restoring_modules(*FLAT_NAMES):
+        sys.path.insert(0, str(SANDBOX))
+        try:
+            sys.modules["pdf_text"] = sandbox_module("pdf_text")
+            yield
+        finally:
+            sys.path.remove(str(SANDBOX))
+
+
 def sandbox_handler(name: str) -> ModuleType:
     """A handler of sandbox/ that imports a helper from beside it (docx.py and linkedin_zip.py
     import zipcaps.py), loaded as main.py loads it: with that directory on the path."""
     if name not in _loaded:
-        sys.path.insert(0, str(SANDBOX))
-        try:
-            _loaded[name] = sandbox_module(name)
-        finally:
-            sys.path.remove(str(SANDBOX))
+        with as_in_the_child():
+            sandbox_module(name)
     return _loaded[name]
 
 

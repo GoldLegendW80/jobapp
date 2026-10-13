@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.ingestion import jobs
 from app.ingestion import parser_client as pc
-from app.ingestion.models import FailedKind, TextStatus
+from app.ingestion.models import FailedKind, TextSource, TextStatus
 from tests.identity.api_helpers import Api, Clock
 from tests.ingestion import pdf_fixtures as fx
 from tests.ingestion.helpers import listing, row, text_of, uploaded
@@ -403,28 +403,65 @@ def test_an_uploaded_pdf_becomes_text_through_the_job_and_the_real_parser(
     """The upload route, the worker's job, the service, the row: only the queue is left out
     (test_jobs_worker.py runs it on Redis)."""
     ctx = {"sessions": factory, "clock": clock, "ingestion_parse": stack.parse()}
+    # A PDF whose pages all hold text is read and done, as before G8: nothing is rendered,
+    # nothing waits for a transcription.
     page = fx.Page(fx.lines(*fx.page_text(1, 12).split("\n")), links=["https://example.org/robin"])
+    whole = uploaded(api, alice, fx.build([page, fx.page_text(2, 12)]), "cv.pdf")
+    assert (whole["status"], whole["readable"]) == ("pending", True)
+    assert asyncio.run(jobs.parse_document(ctx, whole["id"])) == jobs.DONE
+    stored = row(factory, whole["id"])
+    assert (stored.text_status, stored.raw) == (TextStatus.done, None)
+    assert (stored.pages, stored.pages_text, stored.pages_image) == (2, 2, 0)
+    assert (stored.note, stored.text_source) == (None, TextSource.parsed)
+    first, second = stored.text.split("\f")
+    assert first.split("\n")[-1] == "Links: https://example.org/robin"
+    assert second.split("\n")[0] == f"{fx.SENTENCE} Line 1 of page 2."
+    shown = text_of(api, alice, whole["id"]).json()
+    assert (shown["text"], shown["images"]) == (stored.text, [])
+
+    # The same with a scanned page between two pages of text. Until G8 it ended `done` with a
+    # note ("1 page holds no text and waits for the image reader."). Now the scanned page is
+    # rendered and the document waits for its transcription: the two pages read are stored and
+    # shown at once, the slot of the scan is empty, and its image sits at its page index.
     data = fx.build([page, fx.scanned_page(), fx.page_text(3, 12)])
-    body = uploaded(api, alice, data, "cv.pdf")
+    body = uploaded(api, alice, data, "scan.pdf")
     assert (body["status"], body["readable"]) == ("pending", True)
     assert asyncio.run(jobs.parse_document(ctx, body["id"])) == jobs.DONE
     stored = row(factory, body["id"])
-    assert (stored.text_status, stored.raw) == (TextStatus.done, None)
+    assert (stored.text_status, stored.raw) == (TextStatus.awaiting_transcription, None)
     assert (stored.pages, stored.pages_text, stored.pages_image) == (3, 2, 1)
-    assert stored.note == "1 page holds no text and waits for the image reader."
+    assert (stored.note, stored.text_source) == (None, TextSource.parsed)
     first, scan, third = stored.text.split("\f")
     assert first.split("\n")[-1] == "Links: https://example.org/robin"
     assert scan == ""
     assert third.split("\n")[0] == f"{fx.SENTENCE} Line 1 of page 3."
-    item = listing(api, alice)["items"][0]
-    assert (item["status"], item["pages_text"], item["pages_image"]) == ("done", 2, 1)
-    assert text_of(api, alice, body["id"]).json()["text"] == stored.text
+    item = next(item for item in listing(api, alice)["items"] if item["id"] == body["id"])
+    assert (item["status"], item["pages_text"], item["pages_image"]) == (
+        "awaiting_transcription",
+        2,
+        1,
+    )
+    shown = text_of(api, alice, body["id"]).json()
+    assert shown["text"] == stored.text
+    assert [image["position"] for image in shown["images"]] == [1]
 
-    protected = uploaded(api, alice, fx.encrypted(fx.text_pdf(1, 5), "AES-256"), "locked.pdf")
+    # An AES file that opens with no password: the text reader of the child cannot open it
+    # (`encryption`), and since G8 the job asks PDFium for its text layer (A8), so it is read.
+    # Until G8 it was failed with FILE_SENTENCES["encryption"].
+    restricted = uploaded(api, alice, fx.encrypted(fx.text_pdf(1, 5), "AES-256"), "aes.pdf")
+    assert asyncio.run(jobs.parse_document(ctx, restricted["id"])) == jobs.DONE
+    stored = row(factory, restricted["id"])
+    assert (stored.text_status, stored.raw) == (TextStatus.done, None)
+    assert (stored.pages, stored.pages_text, stored.pages_image) == (1, 1, 0)
+    assert fx.SENTENCE in stored.text
+
+    # The same behind a real password stays a failure of the file, with the bytes gone.
+    locked = fx.encrypted(fx.text_pdf(1, 5), "AES-256", "a real password")
+    protected = uploaded(api, alice, locked, "locked.pdf")
     assert asyncio.run(jobs.parse_document(ctx, protected["id"])) == jobs.FAILED
     stored = row(factory, protected["id"])
     assert (stored.text_status, stored.failed_kind) == (TextStatus.failed, FailedKind.file)
-    assert stored.failed_reason == jobs.FILE_SENTENCES["encryption"]
+    assert stored.failed_reason == jobs.FILE_SENTENCES["protected"]
     assert (stored.raw, stored.text) == (None, None)
 
     cut = uploaded(api, alice, fx.truncated_pdf(), "cut.pdf")

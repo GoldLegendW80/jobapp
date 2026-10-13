@@ -132,11 +132,22 @@ describe("statusView", () => {
 
   it("pages kept as images wait for the agent", () => {
     expect(
-      statusView(fakeDocument({ status: "awaiting_transcription" })),
+      statusView(
+        fakeDocument({ kind: "pdf", status: "awaiting_transcription" }),
+      ),
     ).toEqual({
       label: "Waiting for the agent",
       tone: "waiting",
-      detail: "Its pages are images. The agent will read them at the next run.",
+      detail: "Its scanned pages will be read by the agent at the next run.",
+    });
+    expect(
+      statusView(
+        fakeDocument({ kind: "image", status: "awaiting_transcription" }),
+      ),
+    ).toEqual({
+      label: "Waiting for the agent",
+      tone: "waiting",
+      detail: "This image will be read by the agent at the next run.",
     });
   });
 

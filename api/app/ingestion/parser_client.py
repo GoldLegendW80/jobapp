@@ -18,7 +18,8 @@ nothing of it is stored, logged or shown before it has passed here:
   2,000 pixels a side per image; migration 0011), so that a result that passes can be stored;
 - the text holds no U+0000 and no lone surrogate (Postgres refuses both, and the job would
   fail again on every try), and exactly as many form feeds as its page counts say;
-- every image is base64 that decodes to bytes starting with the JPEG magic;
+- every image is base64 that decodes to bytes starting with the JPEG magic, whose frame
+  header declares the very width and height the answer states (`_jpeg_size`);
 - a reason and a note are codes from the closed lists below, with integers beside them: the
   parser never sends a sentence, the application writes them.
 
@@ -163,9 +164,25 @@ MAX_EXPORT_CHARS = 900_000  # every text of one export together (linkedin_zip.EX
 # What was not read, on a document that was. Each comes with integers named in NOTE_VALUES.
 # `pages_not_read` is the page cap, `text_limit` the character cap (G2b), `time_limit` the time
 # budget: each names the pages left out (from, to); `scans_not_read` counts the image pages.
-NOTE_CODES = frozenset({"pages_not_read", "text_limit", "time_limit", "scans_not_read"})
+# G8 (sandbox/pdf_render.py): `pages_not_rendered` counts the pages of a batch that could not be
+# drawn (a size outside the guards, or a page PDFium cannot load).
+NOTE_CODES = frozenset(
+    {"pages_not_read", "text_limit", "time_limit", "scans_not_read", "pages_not_rendered"}
+)
 NOTE_VALUES = frozenset({"from", "to", "count"})
 _TIMEOUT_CODES = frozenset({"wall_limit", "cpu_limit", "read_timeout"})
+# The kinds whose child hands a user's file to a C library that nothing stops from inside
+# (libjpeg and libpng behind Pillow, PDFium), and what the death of that child means for them.
+# PDFium ends the process when memory is refused to it, and a decoder that spins is ended by
+# the CPU limit: the child died of the file it was reading, and reading it again would kill it
+# again. So for these kinds the three deaths below are the file's failure, with the file's
+# code: never a failure of the server, and so never a second try (review of PR #157, B2 and
+# B3). The server's own log line still says `crashed`, `cpu_limit` or `wall_limit`, and so
+# does the line this client logs. Every other kind, and every other code, is as before.
+FILE_DEATH_KINDS = frozenset({"image", "pdf_render"})
+FILE_DEATHS = MappingProxyType(
+    {"crashed": "bomb", "cpu_limit": "too_slow", "wall_limit": "too_slow"}
+)
 
 # What a ping must show for the sandbox to be in force: the limits of sandbox/main.py and the
 # names of its deny list (tests/ingestion/parser keeps the three files in step).
@@ -255,6 +272,19 @@ class ParserRefusedError(ParserError):
     ) -> None:
         super().__init__(code, values)
         self.failure = failure
+
+
+def blame(kind: str, error: ParserError) -> ParserError:
+    """`error`, or the refusal of the file it stands for: the death of a child of
+    FILE_DEATH_KINDS, as the server's header reports it (FILE_DEATHS)."""
+    if (
+        kind in FILE_DEATH_KINDS
+        and type(error) in (ParserRefusedError, ParserTimeoutError)
+        and error.failure == "server"
+        and error.code in FILE_DEATHS
+    ):
+        return ParserRefusedError(FILE_DEATHS[error.code], failure="file")
+    return error
 
 
 class ParserMalformedError(ParserError):
@@ -497,6 +527,39 @@ def _notes(value: Any) -> tuple[Note, ...]:
     return tuple(notes)
 
 
+_JPEG_SEGMENTS = 64  # segments looked at before the frame header: an encoder writes a few
+# The start of frame markers (SOF0 to SOF15), without the three codes of that range that are
+# tables and not frames (DHT, JPG, DAC).
+_JPEG_FRAMES = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+
+
+def _jpeg_size(jpeg: bytes) -> tuple[int, int]:
+    """The width and the height the frame header of a JPEG declares. Nothing is decoded: the
+    segments are walked by their lengths, a bounded number of them, and a file without a frame
+    header among them is not a JPEG this application stores."""
+    at = 2
+    for _ in range(_JPEG_SEGMENTS):
+        if at + 4 > len(jpeg) or jpeg[at] != 0xFF:
+            break
+        marker = jpeg[at + 1]
+        if marker == 0xFF:  # a fill byte
+            at += 1
+            continue
+        if marker in (0xD9, 0xDA):  # the end, or the pixels: no frame header came before
+            break
+        length = int.from_bytes(jpeg[at + 2 : at + 4], "big")
+        if length < 2:
+            break
+        if marker in _JPEG_FRAMES:
+            if length < 7 or at + 9 > len(jpeg):
+                break
+            height = int.from_bytes(jpeg[at + 5 : at + 7], "big")
+            width = int.from_bytes(jpeg[at + 7 : at + 9], "big")
+            return width, height
+        at += 2 + length
+    _bad("image_not_jpeg")
+
+
 def _images(value: Any) -> tuple[PageImage, ...]:
     if not isinstance(value, list) or len(value) > MAX_IMAGES:
         _bad("images")
@@ -521,6 +584,8 @@ def _images(value: Any) -> tuple[PageImage, ...]:
             _bad("image_size")
         if not jpeg.startswith(JPEG_MAGIC):
             _bad("image_not_jpeg")
+        if _jpeg_size(jpeg) != (width, height):
+            _bad("image_side")  # the sides the answer states are not the picture's own
         images.append(PageImage(position, width, height, jpeg))
     return tuple(images)
 
@@ -835,7 +900,11 @@ async def _call[Checked](
         return await asyncio.to_thread(lambda: check(loads(body)))
     except ParserError as error:
         outcome = f"{type(error).__name__}:{error.code}"
-        raise
+        blamed = blame(kind, error)
+        if blamed is error:
+            raise
+        outcome += f":file/{blamed.code}"  # the log keeps how the child ended
+        raise blamed from None
     finally:
         logger.info(
             "parser call",

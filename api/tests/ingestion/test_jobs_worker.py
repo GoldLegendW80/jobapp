@@ -156,7 +156,11 @@ def test_the_documents_of_two_users_each_get_their_own_text(
     his = uploaded(api, bob, pdf(1000) + b"bob", "cv.pdf")
 
     class ByContent(Parser):
-        async def __call__(self, kind: str, data: bytes) -> pc.Parsed:
+        async def __call__(self, kind: str, data: bytes, options: Any = None) -> pc.Parsed:
+            if kind == jobs.RENDER_KIND:
+                # The renderer of the scanned pages (G8) is asked after each short PDF; the
+                # plain Parser declines every page, as the real one does for a page of text.
+                return await super().__call__(kind, data, options)
             self.calls.append((kind, data))
             return parsed(f"the text of {data[-5:].decode().strip(chr(0))}")
 
@@ -232,13 +236,16 @@ def test_what_was_stored_before_this_version_is_read_when_the_worker_starts(
     settings: Settings, served: tuple[Api, str, str], factory: sessionmaker[Session]
 ) -> None:
     """Rows as G1 left them, never queued: the PDF is read on the reaper's first tick, without
-    a new upload; the image still waits after ten ticks, bytes and all, and the parser never
-    saw it (an archive has a reader since G7: tests/ingestion/test_jobs_archive.py)."""
+    a new upload; a row of a type no reader exists for still waits after ten ticks, bytes and
+    all, and the parser never saw it. An archive has a reader since G7 and an image since G8
+    (tests/ingestion/test_jobs_archive.py: the reaper queues both), so the waiting row here is of
+    a type outside the readable ones."""
     api, alice, _ = served
     owner = user_id(factory, ALICE)
     weeks_ago = datetime.now(UTC).replace(microsecond=0) - timedelta(days=20)
     old_pdf = stored_before(factory, owner, pdf(1200), "application/pdf", weeks_ago)
-    image = stored_before(factory, owner, png(), "image/png", weeks_ago)
+    unread = stored_before(factory, owner, png(), "image/webp", weeks_ago)
+    assert "image/webp" not in jobs.readable_mimes()
     parser = Parser(parsed("read at the deploy"))
     ticks = 0
 
@@ -254,13 +261,13 @@ def test_what_was_stored_before_this_version_is_read_when_the_worker_starts(
     assert ticks >= 10
     assert row(factory, str(old_pdf)).text == "read at the deploy"
     assert parser.calls == [("pdf_text", pdf(1200))]
-    for document_id, data in ((image, png()),):
+    for document_id, data in ((unread, png()),):
         waiting = row(factory, str(document_id))
         assert (waiting.text_status, waiting.raw) == (TextStatus.pending, data)
         assert (waiting.attempts, waiting.failed_kind, waiting.failed_reason) == (0, None, None)
         assert waiting.pending_since == weeks_ago
     items = {item["id"]: item for item in listing(api, alice)["items"]}
-    assert items[str(image)]["readable"] is False
+    assert items[str(unread)]["readable"] is False
     assert (items[str(old_pdf)]["status"], items[str(old_pdf)]["readable"]) == ("done", True)
 
 

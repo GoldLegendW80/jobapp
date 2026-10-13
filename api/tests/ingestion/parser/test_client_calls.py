@@ -681,3 +681,88 @@ def test_an_error_carries_codes_and_integers_and_never_the_parsers_words() -> No
             assert error.__cause__ is None or "PRIVATE" not in repr(error.__cause__)
 
     run(test)
+
+
+# --- the death of a child that decodes a user's file (review of PR #157, B2 and B3) -------------
+
+DEATHS = [("crashed", "bomb"), ("cpu_limit", "too_slow"), ("wall_limit", "too_slow")]
+
+
+@pytest.mark.parametrize("kind", ["image", "pdf_render"])
+@pytest.mark.parametrize(("code", "becomes"), DEATHS)
+def test_the_death_of_an_image_or_render_child_is_the_files_failure(
+    kind: str, code: str, becomes: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def test() -> None:
+        async with lying(framed(b"", ok=False, failure="server", code=code)) as port:
+            with pytest.raises(pc.ParserError) as raised:
+                await pc.parse(kind, b"a file", host="127.0.0.1", port=port)
+        error = raised.value
+        assert type(error) is pc.ParserRefusedError
+        assert (error.failure, error.code) == ("file", becomes)
+        assert becomes in pc.FILE_CODES
+
+    with caplog.at_level("INFO", logger=pc.logger.name):
+        run(test)
+    # The log keeps how the child ended, beside what the worker is told.
+    outcomes = [record.outcome for record in caplog.records if hasattr(record, "outcome")]
+    assert len(outcomes) == 1
+    assert outcomes[0].endswith(f":{code}:file/{becomes}")
+
+
+@pytest.mark.parametrize("kind", ["pdf_text", "docx", "linkedin_zip"])
+@pytest.mark.parametrize(("code", "becomes"), DEATHS)
+def test_the_death_of_any_other_child_stays_a_failure_of_the_server(
+    kind: str, code: str, becomes: str
+) -> None:
+    async def test() -> None:
+        async with lying(framed(b"", ok=False, failure="server", code=code)) as port:
+            with pytest.raises(pc.ParserError) as raised:
+                await pc.parse(kind, b"a file", host="127.0.0.1", port=port)
+        assert (raised.value.failure, raised.value.code) == ("server", code)
+
+    run(test)
+
+
+@pytest.mark.parametrize("code", sorted(pc.SERVER_CODES - {"crashed", "cpu_limit", "wall_limit"}))
+def test_what_is_not_the_death_of_the_child_stays_a_failure_of_the_server(code: str) -> None:
+    """Busy, a child that could not lock itself down or start, an answer over the cap: none
+    of these says the file killed anything."""
+
+    async def test() -> None:
+        async with lying(framed(b"", ok=False, failure="server", code=code)) as port:
+            with pytest.raises(pc.ParserError) as raised:
+                await pc.parse("image", b"a file", host="127.0.0.1", port=port)
+        assert (raised.value.failure, raised.value.code) == ("server", code)
+
+    run(test)
+    own = pc.ParserTimeoutError("deadline")  # this client's own clock: the machine, not the file
+    assert pc.blame("image", own) is own
+    child = pc.ParserRefusedError("memory_limit")  # the child's own word, before any decoding
+    assert pc.blame("pdf_render", child) is child
+    assert set(pc.FILE_DEATHS) <= pc.SERVER_CODES
+    assert set(pc.FILE_DEATHS.values()) <= pc.FILE_CODES
+    assert frozenset({"image", "pdf_render"}) == pc.FILE_DEATH_KINDS
+
+
+def test_through_the_real_server_an_image_child_that_dies_is_the_files_failure() -> None:
+    with BackgroundServer(wall_s=0.5, max_answer=100_000) as background:
+
+        async def test() -> None:
+            for kind in ("image", "pdf_render"):
+                for options, failure, code in (
+                    ({"act": "signal", "name": "SIGSEGV"}, "file", "bomb"),
+                    ({"act": "signal", "name": "SIGABRT"}, "file", "bomb"),
+                    ({"act": "signal", "name": "SIGKILL"}, "file", "bomb"),
+                    ({"act": "signal", "name": "SIGXCPU"}, "file", "too_slow"),
+                    ({"act": "sleep", "s": 30}, "file", "too_slow"),
+                    ({"act": "exit", "status": 70}, "server", "sandbox"),
+                    ({"act": "flood", "blocks": 100}, "server", "output_cap"),
+                ):
+                    with pytest.raises(pc.ParserError) as raised:
+                        await pc.parse(
+                            kind, b"a file", options, host="127.0.0.1", port=background.port
+                        )
+                    assert (raised.value.failure, raised.value.code) == (failure, code), options
+
+        run(test)

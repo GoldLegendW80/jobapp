@@ -445,7 +445,7 @@ test("text files are read at once: chosen by keyboard, then dropped", async () =
   await expect(documents(page).getByRole("listitem")).toHaveCount(3);
 });
 
-test("a PDF is read, and an image is kept: the page says it waits for a later version", async () => {
+test("a PDF is read, and an image is kept as a page image: the page says the agent will read it", async () => {
   await add(
     page,
     file(
@@ -463,14 +463,27 @@ test("a PDF is read, and an image is kept: the page says it waits for a later ve
   await expect(cv).toContainText("Ready", { timeout: 60_000 });
   await expect(cv).toContainText("1 page read as text");
   await expect(cv).toContainText(/PDF, \d+ bytes/);
+  // Since G8 an image has a reader too: the worker normalises it through the parser service and
+  // the row says in plain words who reads it next. Until G8 it said "Waiting" and "This version
+  // cannot read images yet."; no kind that is kept waits for a later version any more (a GIF or
+  // a WebP is refused at the door: "a refused type..." below).
   const image = row(page, "screenshot.png");
-  await expect(image).toContainText("Waiting");
-  await expect(image).toContainText("This version cannot read images yet.");
-  // The image was not read, so it has no text to preview; both can be deleted.
+  await expect(image).toContainText("Waiting for the agent", {
+    timeout: 60_000,
+  });
+  await expect(image).toContainText(
+    "This image will be read by the agent at the next run.",
+  );
+  await expect(image).toContainText("1 page kept as an image");
+  await expect(image).not.toContainText("This version cannot read");
+  // The PDF has its text to preview and the image its page image; both can be deleted.
   await expect(cv.getByRole("button", { name: /^Preview/ })).toHaveCount(1);
-  await expect(image.getByRole("button", { name: /^Preview/ })).toHaveCount(0);
+  await expect(image.getByRole("button", { name: /^Preview/ })).toHaveCount(1);
   await expect(
     cv.getByRole("button", { name: "Delete CV Robin Example.pdf" }),
+  ).toBeVisible();
+  await expect(
+    image.getByRole("button", { name: "Delete screenshot.png" }),
   ).toBeVisible();
 
   // The type came from the bytes: what the browser declared changed nothing.

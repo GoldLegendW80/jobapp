@@ -116,6 +116,31 @@ LIMITS["pdf_text"]["as"] = 256 * MIB
 # the limit, not the sizing, is what holds against a hostile one.
 LIMITS["docx"]["as"] = 256 * MIB
 LIMITS["linkedin_zip"]["as"] = 256 * MIB
+# The image reader and the renderer (G8), set from the highest address space of the child for
+# the worst inputs its guards let through, measured in the parser container on the Mac
+# (arm64, 2026-10-13, taken again after the review of PR #157; plan, G8, Measurements;
+# tests/ingestion/parser/test_image_container.py measures them again on every run and holds
+# each under 80 % of its limit):
+#   image       221 MiB  25 megapixels of progressive JPEG in a file of 20 MiB (202 MiB in a
+#                        file of 1.8 MB: the child holds every byte of the file). 215 MiB for
+#                        four components at their own cap of 18.75 megapixels in 20 MiB: at
+#                        25 they keep a third more coefficients than three components, so
+#                        image.py holds them lower. 167 MiB for 25 megapixels of RGBA PNG,
+#                        147 MiB for a PNG of 20,000 by 1,250, 115 MiB for a baseline JPEG
+#   pdf_render  164 MiB  a page whose picture inflates to 1.7 GiB: PDFium gives the picture up
+#                        and draws the page without it. 150 MiB for a page whose content is
+#                        the 4 MiB pdf_render.py allows, 122 MiB for six pages of 600 dpi
+#                        scans (17.5 MiB of file), 81 MiB for eight ordinary scanned pages
+# 320 MiB is 1.45 times the worst image and 256 MiB 1.56 times the worst page, in steps of
+# 64 MiB. One input does meet a limit: a page that draws a form of 64 MB of path operators
+# takes PDFium to the 256 MiB, and PDFium ends the process (0.45 s). The server answers
+# `crashed`, and the client reads that death as the file's `bomb` for these two kinds
+# (parser_client.FILE_DEATHS): no second try. The Jetson's own figures are taken after the
+# merge with tests/ingestion_parser_jetson.sh.
+IMAGE_AS = 320 * MIB
+PDF_RENDER_AS = 256 * MIB
+LIMITS["image"]["as"] = IMAGE_AS
+LIMITS["pdf_render"]["as"] = PDF_RENDER_AS
 # The hard CPU limit is one second above the soft one. At the soft limit the kernel sends
 # SIGXCPU, whose default action ends the process, and the server reports `cpu_limit`. The
 # kernel looks at the hard limit first, though: with both at 45 it would send SIGKILL straight

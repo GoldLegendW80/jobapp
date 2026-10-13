@@ -14,11 +14,12 @@ import os
 import struct
 import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from tests.ingestion.parser.helpers import SANDBOX, sandbox_module
+from tests.ingestion.parser.helpers import FLAT_NAMES, SANDBOX, restoring_modules, sandbox_module
 
 main = sandbox_module("main")
 server = sandbox_module("server")
@@ -315,13 +316,11 @@ def write_handler(directory: Path, name: str, body: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def forget_handlers() -> object:
-    """A handler is loaded under its own name: each test starts without any."""
-    before = set(sys.modules)
-    yield
-    for name in set(sys.modules) - before:
-        if name in main.HANDLERS:
-            del sys.modules[name]
+def forget_handlers() -> Iterator[None]:
+    """A handler is loaded under its own name: each test starts, and ends, with the entries of
+    sys.modules it found."""
+    with restoring_modules(*FLAT_NAMES):
+        yield
 
 
 def test_usage_is_the_cpu_time_and_the_two_peaks_of_this_process_alone() -> None:
@@ -347,11 +346,14 @@ def test_usage_is_the_cpu_time_and_the_two_peaks_of_this_process_alone() -> None
 def test_the_pdf_reader_has_half_the_address_space_of_the_other_kinds() -> None:
     """Set from the measurements of G2b (tasks/ingestion/todo.md): 256 MiB, where the worst
     child of every fixture reached 95. The two readers of an archive have the same since G7,
-    from their own measurements. The ping keeps the 512 MiB the healthcheck expects."""
-    for kind in ("pdf_text", "docx", "linkedin_zip"):
+    from their own measurements, and since G8 the renderer; the image reader has 320 MiB,
+    where 25 megapixels of progressive JPEG reached 203. The ping keeps the 512 MiB the
+    healthcheck expects."""
+    for kind in ("pdf_text", "docx", "linkedin_zip", "pdf_render"):
         assert main.LIMITS[kind] == {**main.DEFAULT_LIMITS, "as": 256 * main.MIB}
-    for kind in ("ping", "image", "pdf_render"):
-        assert main.LIMITS[kind] == main.DEFAULT_LIMITS
+    assert main.LIMITS["image"] == {**main.DEFAULT_LIMITS, "as": 320 * main.MIB}
+    assert (main.IMAGE_AS, main.PDF_RENDER_AS) == (320 * main.MIB, 256 * main.MIB)
+    assert main.LIMITS["ping"] == main.DEFAULT_LIMITS
     assert main.LIMITS["pdf_text"] is not main.LIMITS["ping"]
 
 

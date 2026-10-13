@@ -41,6 +41,9 @@ x-parser: &parser
   volumes:
     - ./handlers/hostile.py:/app/app/ingestion/sandbox/pdf_render.py:ro
     - ./handlers/hostile.py:/app/app/ingestion/sandbox/docx.py:ro
+    # No handler for `image` here: the null device is no regular file, so main.load_handler
+    # finds none and the kind answers `not_supported` (every kind has its file since G8).
+    - /dev/null:/app/app/ingestion/sandbox/image.py:ro
 
 services:
   parser: *parser

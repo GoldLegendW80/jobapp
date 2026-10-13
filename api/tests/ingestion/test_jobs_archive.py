@@ -23,9 +23,15 @@ from app.ingestion import parser_client as pc
 from app.ingestion.models import FailedKind, IngestionDocument, TextSource, TextStatus
 from tests.identity.api_helpers import Api, Clock
 from tests.ingestion import archive_fixtures as fx
+from tests.ingestion import image_fixtures as pictures
 from tests.ingestion.conftest import ALICE, BOB, RecordingQueue
 from tests.ingestion.helpers import delete, row, rows, upload, uploaded, user_id
-from tests.ingestion.parser.helpers import Plenty, sandbox_handler, sandbox_module
+from tests.ingestion.parser.helpers import (
+    Plenty,
+    as_in_the_child,
+    sandbox_handler,
+    sandbox_module,
+)
 from tests.ingestion.test_jobs import Parser, run, stored_before
 
 main = sandbox_module("main")
@@ -37,11 +43,12 @@ class RealParser(Parser):
     def __init__(self) -> None:
         super().__init__(None)
 
-    async def __call__(self, kind: str, data: bytes) -> pc.Parsed:
+    async def __call__(self, kind: str, data: bytes, options: Any = None) -> pc.Parsed:
         self.calls.append((kind, data))
         if self.during is not None:
             self.during()
-        answer = sandbox_handler(kind).handle(data, {}, Plenty())
+        with as_in_the_child():
+            answer = sandbox_handler(kind).handle(data, dict(options or {}), Plenty())
         return pc.check_parsed(pc.loads(main.encode(answer)), kind)
 
 
@@ -301,20 +308,22 @@ def test_the_zip_rows_waiting_since_g1_are_queued_by_the_reaper_on_its_first_tic
     neither = stored_before(
         factory, owner, fx.zip_of([("a.txt", "a")]), "application/zip", weeks_ago
     )
-    image = stored_before(factory, owner, b"\x89PNG\r\n\x1a\n" + bytes(64), "image/png", weeks_ago)
-    assert "application/zip" in jobs.readable_mimes()
+    # Since G8 an image is read too: the one that waited since G1 is queued with the zip rows.
+    image = stored_before(factory, owner, pictures.screenshot_png(), "image/png", weeks_ago)
+    assert {"application/zip", "image/png"} <= set(jobs.readable_mimes())
     found = jobs.reap(factory, clock.now)
-    assert sorted(job[0] for job in found.queue) == sorted([export, word, neither])
+    assert sorted(job[0] for job in found.queue) == sorted([export, word, neither, image])
     outcomes = {
         document_id: run(factory, clock, RealParser(), str(document_id))
         for document_id, _ in found.queue
     }
-    assert outcomes == {export: jobs.DONE, word: jobs.DONE, neither: jobs.FAILED}
+    assert outcomes == {export: jobs.DONE, word: jobs.DONE, neither: jobs.FAILED, image: jobs.DONE}
     left = {document.id: document for document in of_user(factory, ALICE)}
     assert export not in left
     assert left[word].mime == documents.DOCX_MIME
     assert left[neither].failed_reason == jobs.ARCHIVE_SENTENCES["not_export"]
-    assert (left[image].text_status, left[image].raw is not None) == (TextStatus.pending, True)
+    # The image is read as a picture, waiting for its transcription, and nothing of it is kept raw.
+    assert (left[image].text_status, left[image].raw) == (TextStatus.awaiting_transcription, None)
     assert len(left) == 3 + 3  # the three files of the export, the document, the two others
     assert jobs.reap(factory, clock.now + timedelta(hours=1)).queue == []
 

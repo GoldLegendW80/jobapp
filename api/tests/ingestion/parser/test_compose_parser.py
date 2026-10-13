@@ -210,9 +210,14 @@ def test_the_test_stack_takes_the_service_from_compose_yml_and_adds_no_privilege
     assert template["extends"] == {"file": "../../../../compose.yml", "service": "parser"}
     assert (HERE / template["extends"]["file"]).resolve() == ROOT / "compose.yml"
     assert set(template) == {"extends", "image", "restart", "healthcheck", "volumes"}
-    for volume in template["volumes"]:
-        assert volume.startswith("./handlers/hostile.py:/app/app/ingestion/sandbox/")
-        assert volume.endswith(":ro")
+    # The tests' own handler stands for two kinds, and the null device takes the file of a
+    # third away (a kind without a handler, since G8 gave every kind its file): read only, in
+    # the folder of the handlers, and nothing of the host besides.
+    assert template["volumes"] == [
+        "./handlers/hostile.py:/app/app/ingestion/sandbox/pdf_render.py:ro",
+        "./handlers/hostile.py:/app/app/ingestion/sandbox/docx.py:ro",
+        "/dev/null:/app/app/ingestion/sandbox/image.py:ro",
+    ]
     for name in ("parser", "parser-cpu", "parser-kill", "parser-wall"):
         assert document["services"][name] == template
     unfiltered = document["services"]["parser-unfiltered"]

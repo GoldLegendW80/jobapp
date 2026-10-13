@@ -1532,3 +1532,7 @@ tests/reboot_check.sh 2>&1 | tee tasks/evidence/task9/reboot.log   # asks for th
 It reboots the Jetson, waits for ssh with a new boot id, waits for the five services to be healthy,
 runs `./deploy.sh smoke` and prints the new URL and the seconds since boot; it passes when the
 stack is healthy within 120 seconds of boot.
+
+## Updating pypdfium2
+
+`pypdfium2` (the `ingestion` dependency group of `api/pyproject.toml`) bundles PDFium itself, the library that renders scanned pages inside the parser's sandbox. After a PDFium security release, take the `pypdfium2` release that carries it: change the pin, run `uv lock`, check that the lock holds a wheel for `manylinux_2_17_aarch64`, rebuild the worker image and run `pytest -m docker tests/ingestion/parser/test_image_container.py`, which measures the child again against its limits.
