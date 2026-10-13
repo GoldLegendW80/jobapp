@@ -427,9 +427,17 @@ def queues(settings: Settings | None = None) -> list[QueueSpec]:
     return [sweeps_queue(fast=fast), agents_queue(), ingestion_queue()]
 
 
+def checked_queues(settings: Settings | None = None) -> list[QueueSpec]:
+    """The queues the worker serves, or `AgentTooLongError`: the worker refuses to start when an
+    agent registered since the agents queue was built can outlive its job timeout."""
+    specs = queues(settings)
+    for spec in specs:
+        if spec.name == queue.AGENTS:
+            check_agents_fit(spec.job_timeout_s)
+    return specs
+
+
 def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> Worker:
-    if spec.name == queue.AGENTS:
-        check_agents_fit(spec.job_timeout_s)  # an agent registered since the queue was built
     return Worker(
         functions=list(spec.functions),
         queue_name=spec.name,
@@ -605,7 +613,7 @@ def main(argv: list[str] | None = None) -> int:
     skip_sdk_version_probe()
     dropped = drop_secrets_from_environ()
     logger.info("secrets dropped from the environment", extra={"names": dropped})
-    asyncio.run(serve(settings))
+    asyncio.run(serve(settings, checked_queues(settings)))
     return 0
 
 

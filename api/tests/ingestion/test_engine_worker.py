@@ -65,10 +65,11 @@ def test_an_agent_longer_than_the_job_timeout_registered_when_the_queue_is_built
     longer = replace(agents.EXTRACT, name="g10_longer", wall_time_s=spec.job_timeout_s + 1)
     monkeypatch.setitem(definitions.AGENTS, longer.name, longer)
     # The worker refuses to start: arq would cut that agent's run and the step would run twice.
-    with pytest.raises(worker.AgentTooLongError):
-        worker.build_worker(spec, settings, {})
-    with pytest.raises(worker.AgentTooLongError):
+    with pytest.raises(worker.AgentTooLongError, match="g10_longer"):
         worker.check_agents_fit(spec.job_timeout_s)
+    monkeypatch.setattr(worker, "queues", lambda settings=None: [spec])
+    with pytest.raises(worker.AgentTooLongError):
+        worker.checked_queues(settings)  # what `main` serves
     assert worker.agents_queue().job_timeout_s == longer.wall_time_s + worker.AGENT_JOB_MARGIN_S
 
 
