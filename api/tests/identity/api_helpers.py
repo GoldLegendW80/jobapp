@@ -6,12 +6,37 @@ from http.cookies import Morsel, SimpleCookie
 from typing import Any
 
 import httpx
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.identity import security, service
 from app.identity.deps import COOKIE_NAME
 from app.identity.models import InviteKind, Role, User
+
+
+def backend_pid(db: Session) -> int:
+    """The Postgres backend serving this session: the identity of its connection."""
+    pid = db.scalar(sa.text("SELECT pg_backend_pid()"))
+    assert isinstance(pid, int)
+    return pid
+
+
+def assert_pooled_connection_is_at_default(engine: sa.Engine, pids: list[int]) -> None:
+    """The one connection of `engine`'s pool, which served a request that called read_snapshot,
+    is back at the database's default: READ COMMITTED, writable. It must be the very connection
+    the request used (`pids`, read inside the route); with a pool of one, the next checkout gets
+    it again, so the check cannot pass on a fresh connection."""
+    assert pids, "the route did not run the probe"
+    with engine.connect() as conn:
+        assert conn.scalar(sa.text("SELECT pg_backend_pid()")) == pids[0]
+        assert conn.scalar(sa.text("SHOW transaction_isolation")) == "read committed"
+    with engine.begin() as conn:
+        # Refused with "read-only transaction" if the level had stuck with the connection.
+        conn.execute(sa.text("CREATE TEMP TABLE snapshot_probe (x int) ON COMMIT DROP"))
+        conn.execute(sa.text("INSERT INTO snapshot_probe VALUES (1)"))
+        assert conn.scalar(sa.text("SELECT pg_backend_pid()")) == pids[0]
+
 
 PASSWORD = "correct horse battery 42"
 CSRF = {"X-Requested-With": "jobapp"}

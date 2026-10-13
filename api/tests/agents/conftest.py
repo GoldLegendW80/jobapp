@@ -25,6 +25,7 @@ engine = identity.engine
 factory = identity.factory
 db = identity.db
 clock = identity.clock
+one_connection = identity.one_connection
 
 ALICE = "alice@example.org"
 BOB = "bob@example.org"

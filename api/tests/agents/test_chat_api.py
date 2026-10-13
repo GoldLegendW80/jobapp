@@ -17,7 +17,7 @@ from app.agents import chat, runs
 from app.agents.models import AgentMessage, AgentRun, AgentThread, MessageRole, RunStatus
 from tests.agents.run_helpers import add_job, now
 from tests.agents.test_runs_api import RecordingQueue, recorded, save_key, user_id
-from tests.identity.api_helpers import Api
+from tests.identity.api_helpers import Api, assert_pooled_connection_is_at_default, backend_pid
 
 __all__ = ["recorded"]
 
@@ -404,7 +404,11 @@ def test_thread_detail_lists_the_newest_messages(
 
 
 def test_thread_detail_is_one_snapshot_when_a_send_commits_meanwhile(
-    api: Api, ready: tuple[str, uuid.UUID, str], factory: sessionmaker[Session], monkeypatch: Any
+    api: Api,
+    ready: tuple[str, uuid.UUID, str],
+    factory: sessionmaker[Session],
+    one_connection: sa.Engine,
+    monkeypatch: Any,
 ) -> None:
     """A message sent while the thread is being read (the web does both at once on the first
     message) never gives a torn answer, a pending run without the message it answers: the read
@@ -414,6 +418,7 @@ def test_thread_detail_is_one_snapshot_when_a_send_commits_meanwhile(
     original = chat.active_run
     sent: list[uuid.UUID] = []
     levels: list[str | None] = []
+    pids: list[int] = []
     calls = 0
 
     def active_run_after_a_send(db: Session, thread_id: uuid.UUID) -> AgentRun | None:
@@ -424,6 +429,7 @@ def test_thread_detail_is_one_snapshot_when_a_send_commits_meanwhile(
         if calls == 1:
             # Inside the detail read: one snapshot for all of its statements.
             levels.append(db.scalar(sa.text("SHOW transaction_isolation")))
+            pids.append(backend_pid(db))
             with factory() as other:
                 row = chat.get_thread(other, user, uuid.UUID(thread), lock=True)
                 assert row is not None
@@ -437,11 +443,9 @@ def test_thread_detail_is_one_snapshot_when_a_send_commits_meanwhile(
     monkeypatch.setattr(chat, "active_run", original)
     assert len(sent) == 1
     assert levels == ["repeatable read"]
-    # And after it: the level was the read's own, the connections of the pool are back at the
-    # default for whoever takes one next (the api's own pool is read through the same route).
-    for _ in range(3):
-        with factory() as db:
-            assert db.scalar(sa.text("SHOW transaction_isolation")) == "read committed"
+    # And after it: the level was the read's own. The app's pool holds one connection, the one
+    # the read used: it is back at READ COMMITTED, and writable, for whoever takes it next.
+    assert_pooled_connection_is_at_default(one_connection, pids)
     assert detail["messages"] == []
     assert detail["messages_truncated"] is False
     assert detail["active_run_id"] is None
@@ -484,6 +488,7 @@ def test_run_detail_is_read_at_one_snapshot(
     api: Api,
     ready: tuple[str, uuid.UUID, str],
     factory: sessionmaker[Session],
+    one_connection: sa.Engine,
     monkeypatch: Any,
 ) -> None:
     """Issue #37, point 4. The run and its events are two statements, and the final status is
@@ -491,15 +496,15 @@ def test_run_detail_is_read_at_one_snapshot(
     alice, _, thread = ready
     run = send(api, alice, thread).json()["run"]["id"]
     levels: list[str | None] = []
+    pids: list[int] = []
     real = runs.events_after
 
     def events_after(db: Session, *args: Any, **kwargs: Any) -> Any:
         levels.append(db.scalar(sa.text("SHOW transaction_isolation")))
+        pids.append(backend_pid(db))
         return real(db, *args, **kwargs)
 
     monkeypatch.setattr(runs, "events_after", events_after)
     assert api.get(f"/api/agents/runs/{run}", token=alice).status_code == 200
     assert levels == ["repeatable read"]
-    for _ in range(3):
-        with factory() as db:
-            assert db.scalar(sa.text("SHOW transaction_isolation")) == "read committed"
+    assert_pooled_connection_is_at_default(one_connection, pids)
