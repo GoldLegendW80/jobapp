@@ -7,6 +7,7 @@ and leaves nothing on the pooled connection; another user's row can be neither l
 The 5 s lock timeout is `service.LOCK_TIMEOUT_MS`: the tests that wait for it set it to 300 ms
 (monkeypatch), so each runs in about half a second."""
 
+import contextlib
 import threading
 import time
 import uuid
@@ -75,16 +76,40 @@ def status_events(factory: sessionmaker[Session], job_id: uuid.UUID) -> list[dic
         return [event.data for event in rows]
 
 
+def _release_after(factory: sessionmaker[Session], pid: int) -> threading.Timer:
+    """A watchdog for a holder: if its block outlasts WAIT_S, its backend is terminated, so a
+    test that depends on the lock timeout fails on its assertions (the waiter got through)
+    instead of hanging for ever behind a lock the timeout should have cut."""
+
+    def terminate() -> None:
+        with factory() as db:
+            db.execute(sa.text("select pg_terminate_backend(:pid)"), {"pid": pid})
+            db.commit()
+
+    timer = threading.Timer(WAIT_S, terminate)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
+def _rollback_quietly(holder: Session) -> None:
+    with contextlib.suppress(DBAPIError):  # the watchdog may have ended the backend
+        holder.rollback()
+
+
 @contextmanager
 def holding(factory: sessionmaker[Session], owner: uuid.UUID, job_id: uuid.UUID) -> Iterator[Job]:
-    """Another connection holds the job's row lock, in an open transaction, until the block ends."""
+    """Another connection holds the job's row lock, in an open transaction, until the block ends
+    (or for WAIT_S at most)."""
     with factory() as holder:
         job = service.lock_job(holder, owner, job_id)
         assert job is not None
+        watchdog = _release_after(factory, holder.scalar(sa.text("select pg_backend_pid()")))
         try:
             yield job
         finally:
-            holder.rollback()
+            watchdog.cancel()
+            _rollback_quietly(holder)
 
 
 @contextmanager
@@ -92,10 +117,26 @@ def holding_proposal(factory: sessionmaker[Session], proposal_id: uuid.UUID) -> 
     """Another connection holds a proposal's row lock until the block ends."""
     with factory() as holder:
         holder.execute(sa.select(Proposal).where(Proposal.id == proposal_id).with_for_update())
+        watchdog = _release_after(factory, holder.scalar(sa.text("select pg_backend_pid()")))
         try:
             yield
         finally:
-            holder.rollback()
+            watchdog.cancel()
+            _rollback_quietly(holder)
+
+
+def row_is_locked(factory: sessionmaker[Session], job_id: uuid.UUID) -> bool:
+    """Whether another connection holds the job's row lock, asked of Postgres on its own: a raw
+    FOR UPDATE with its own 300 ms lock timeout, independent of the code under test."""
+    with factory() as db:
+        db.execute(sa.text("set local lock_timeout = 300"))
+        try:
+            db.execute(sa.select(Job.id).where(Job.id == job_id).with_for_update()).all()
+        except DBAPIError as exc:
+            if not service.is_lock_timeout(exc):
+                raise
+            return True
+        return False
 
 
 def run_in_thread(errors: list[BaseException], work: Callable[[], None]) -> threading.Thread:
@@ -105,7 +146,7 @@ def run_in_thread(errors: list[BaseException], work: Callable[[], None]) -> thre
         except BaseException as exc:
             errors.append(exc)
 
-    thread = threading.Thread(target=guarded)
+    thread = threading.Thread(target=guarded, daemon=True)  # a hung one never holds the run
     thread.start()
     return thread
 
@@ -244,9 +285,7 @@ def test_a_row_locked_in_a_savepoint_that_is_rolled_back_is_refused(
         savepoint.rollback()
         with pytest.raises(service.UnlockedJobError):
             service.set_status(db, job, JobStatus.applied, NOW)
-        with factory() as other:  # the lock is really free: the refusal matches the database
-            assert service.lock_job(other, alice.id, job_id) is not None
-            other.rollback()
+        assert not row_is_locked(factory, job_id)  # really free: the refusal matches the database
         db.rollback()
     assert status_of(factory, job_id) is JobStatus.found
 
@@ -267,8 +306,8 @@ def test_a_row_locked_before_a_savepoint_stays_accepted_when_the_savepoint_rolls
         assert service.set_status(db, job, JobStatus.applied, NOW) is True  # still locked
         with pytest.raises(service.UnlockedJobError):  # locked inside: released by Postgres
             service.set_status(db, taken_inside, JobStatus.applied, NOW)
-        with factory() as other, pytest.raises(service.JobBusyError):  # and really still held
-            service.lock_job(other, alice.id, before)
+        assert row_is_locked(factory, before)  # and really still held
+        assert not row_is_locked(factory, inside)
         db.commit()
     assert status_of(factory, before) is JobStatus.applied
     assert status_of(factory, inside) is JobStatus.found
@@ -302,6 +341,9 @@ def test_the_mark_belongs_to_one_session_and_follows_the_row_not_the_object(
         # shares nothing with the locker: it is refused.
         theirs = service.get_job(reader, alice.id, job_id)
         assert theirs is not None
+        # Were the guard gone, the refused UPDATE would queue behind the locker for ever (this
+        # engine has no statement timeout): bound it, so the regression is a red test.
+        reader.execute(sa.text("set local lock_timeout = 1000"))
         with pytest.raises(service.UnlockedJobError):
             service.set_status(reader, theirs, JobStatus.applied, NOW)
         # The locker's row reloaded as a new Python object is the same row: accepted.
@@ -639,7 +681,6 @@ def test_user_b_cannot_lock_or_change_user_as_row(
         with pytest.raises(service.MissingJobsError) as missing:
             service.lock_jobs(db, bob.id, [job_id])
         assert missing.value.missing == [job_id]
-        assert service.undo_bulk(db, bob.id, [], NOW).restored == []
         db.rollback()
     # While A holds the row, B is not made to wait: A's row is not B's to queue for.
     with holding(factory, alice.id, job_id), factory() as db:
@@ -652,3 +693,14 @@ def test_user_b_cannot_lock_or_change_user_as_row(
         assert response.status_code == 404, response.text
     assert status_of(factory, job_id) is JobStatus.found
     assert status_events(factory, job_id) == []
+    # A's own undo list, handed to B: nothing is restored, and A's status is untouched.
+    with factory() as db, db.begin():
+        outcome = service.bulk_update(db, alice.id, [job_id], NOW, status=JobStatus.closed)
+    assert outcome.undo
+    with factory() as db:
+        assert service.undo_bulk(db, bob.id, outcome.undo, NOW).restored == []
+        db.rollback()
+    assert status_of(factory, job_id) is JobStatus.closed  # B's undo restored nothing
+    with factory() as db, db.begin():
+        assert service.undo_bulk(db, alice.id, outcome.undo, NOW).restored == [job_id]
+    assert status_of(factory, job_id) is JobStatus.found
