@@ -1,0 +1,120 @@
+# one line of app/ingestion/citations.py broken at a time: which tests notice
+noticed by the unit tests | no context before a date
+noticed by the unit tests | no context after a date
+noticed by the unit tests | no context around a phone
+noticed by the unit tests | one occurrence looked at
+noticed by the unit tests | a separator before a digit is no token
+noticed by the unit tests | a chain of months may go backward
+noticed by the unit tests | school years are months
+noticed by the unit tests | a range in any order
+noticed by the unit tests | YYYY-MM always firm
+noticed by the unit tests | control characters removed
+noticed by the unit tests | no fence around a superscript
+noticed by the unit tests | no version
+noticed by the unit tests | a URL ends anywhere
+noticed by the unit tests | an email ends anywhere
+noticed by the unit tests | a URL starts anywhere
+noticed by the unit tests | an email starts anywhere
+noticed by the unit tests | the words of a name not kept
+noticed by the unit tests | a name inside tokens
+noticed by the unit tests | short names in any case
+noticed by the unit tests | three digits after four are a second number
+noticed by the unit tests | groups of any size
+noticed by the unit tests | a phone number cut by the span
+noticed by the unit tests | no french rule
+noticed by the unit tests | sept is always a month
+noticed by the unit tests | a year outside the span pairs
+noticed by the unit tests | a chain of numbers cut by the span is read
+noticed by the unit tests | a chain of numbers glued to a word is read
+noticed by the unit tests | any month
+noticed by the unit tests | any year
+noticed by the unit tests | dotted dates month first
+noticed by the unit tests | an ambiguous date is day first
+noticed by the unit tests | no minimum length
+noticed by the unit tests | no minimum skeleton
+noticed by the unit tests | no maximum length
+noticed by the unit tests | settings pass
+noticed by the unit tests | unknown fields pass
+noticed by the unit tests | no dotted abbreviation
+noticed by the unit tests | accents kept in month words
+noticed by the unit tests | no case fold
+noticed by the unit tests | no widening
+noticed by the unit tests | no limit on the source under a span
+noticed by the unit tests | never flagged by a span
+noticed by the unit tests | any phone number
+noticed by the unit tests | a version in the value is a number
+noticed by the unit tests | a version in the source is a number
+noticed by the unit tests | format characters kept
+noticed by the unit tests | no fold before NFKC
+noticed by the unit tests | the present outside the span
+noticed by the unit tests | a shared year outside the span
+noticed by the unit tests | letters of a script without spaces are address
+noticed by the unit tests | a script without spaces has runs
+noticed by the unit tests | no limit on a span
+noticed by the unit tests | no limit on the excerpts
+noticed by the unit tests | digits of other scripts kept
+noticed by the unit tests | numbers as floats
+noticed by the unit tests | the scheme of a URL anywhere
+noticed by the unit tests | a date value of any shape
+noticed by the unit tests | years of any size
+noticed by the unit tests | a day of any size
+noticed by the unit tests | two commas between a month and its year
+noticed by the unit tests | a month in one digit anywhere
+noticed by the unit tests | two digit years read
+noticed by the unit tests | a number with a superscript gives its numbers
+noticed by the unit tests | any written form in a value
+noticed by the unit tests | no limit on a text that unfolds
+noticed by the unit tests | no limit on the characters of a value
+noticed by the unit tests | a tie between two readings of a chain is read
+noticed by the unit tests | a chain always split at the hyphen
+noticed by the unit tests | an unreadable document is read
+noticed by the properties | no limit on the clusters remembered
+noticed by the unit tests | superscripts glued to a number never found
+noticed by the unit tests | B1: one number of a run of the value carries the others
+noticed by the unit tests | S4: a decimal with four decimals or more is cut into pieces
+noticed by the unit tests | B2: a sign of a local part before an address is never looked past
+noticed by the unit tests | B2: a sign that joins is looked past as a quote is
+noticed by the unit tests | B2: an address is compared under the case fold
+noticed by the unit tests | B2: the path of a URL in any case
+noticed by the unit tests | B2: the host of a URL as written
+noticed by the unit tests | B2: an underscore after a domain ends it
+noticed by the unit tests | B2: the colon of a scheme or of a port bounds a URL
+noticed by the unit tests | N4: the user and the password of a URL are an email
+noticed by the unit tests | N7: the scheme of a URL is left out of an email too
+noticed by the unit tests | S5: an address cut by a line at a hyphen is an address
+noticed by the unit tests | S1: four digits glued to a decimal are a year
+noticed by the unit tests | S1: four digits of a phone number are a year
+noticed by the unit tests | S1: a month word takes a year cut out of a number
+noticed by the unit tests | S2: a name goes across a blank line or two columns
+noticed by the unit tests | S2: one word of a value goes across a line break
+noticed by the unit tests | S2: a spaced dash asks the value for nothing
+noticed by the unit tests | S3: a format character that has a glyph is no break
+noticed by the unit tests | N3: punctuation alone is a name
+noticed by the properties | N1: every name makes the skeleton of every span again
+noticed by the unit tests | decision: a range of MM/YY up to 12 is read
+noticed by the unit tests | decision: a range that is not read is refused as a month
+noticed by the unit tests | N6: no hyphen between a month word and its year
+noticed by the unit tests | N6: a spaced slash is read inside a longer date
+noticed by the unit tests | N6: a day and its month take the year of a date with another separator
+noticed by the unit tests | N6: a range that goes backward shares its year
+noticed by the unit tests | N2: a key that is not text is printed
+noticed by the unit tests | N2: a path of the table of types that is not text is read
+noticed by the unit tests | N2: a document that is not text is prepared
+noticed by the unit tests | R1: four decimals after a month are its year, whatever they are
+noticed by the unit tests | R1: any two numbers of four digits are two years
+noticed by the unit tests | R1: a month in one digit before a full stop and its year
+noticed by the unit tests | R2: four digits of a number glued by hyphens are a year
+noticed by the unit tests | R2: four digits next to five glued by a hyphen are a year
+noticed by the unit tests | R2: a ratio written with one digit and a full stop gives a year
+noticed by the unit tests | R2: a month in one digit with a full stop is read in a range
+noticed by the unit tests | the cells of a row lose their years
+noticed by the unit tests | two numbers with a comma are the cells of a row
+noticed by the unit tests | a date with spaced slashes ends on any number
+noticed by the unit tests | the password of a URL starts a URL
+noticed by the unit tests | six digits after a colon start a URL
+noticed by the unit tests | an email never starts right after another
+noticed by the unit tests | an email starts after any word and a sign that no domain holds
+noticed by the unit tests | an email starts right after the full stop of another
+noticed by the unit tests | a hyphen before an address is a dash
+noticed by the unit tests | a dash glued to a word bounds an address
+# 118 changes, 118 noticed
