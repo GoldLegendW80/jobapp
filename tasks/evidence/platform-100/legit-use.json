@@ -1,0 +1,33 @@
+{
+  "sign_in_wrong_password": {
+    "status": 401,
+    "seconds": 0.06
+  },
+  "event_stream": {
+    "status": 200,
+    "content_type": "text/event-stream; charset=utf-8",
+    "open_seconds": 75.6,
+    "ended": "still open when the client left",
+    "heartbeats": 5,
+    "events": 1
+  },
+  "photo_upload": {
+    "status": 200,
+    "seconds": 0.03
+  },
+  "document_upload_4_kb": {
+    "status": 201,
+    "seconds": 0.02,
+    "answer": "{\"id\":\"d0031511-af0d-468e-8292-e98b426f2edf\",\"name\":\"notes.txt\",\"kind\":\"text\",\"mime\":\"text/plain\",\"size\":4400,\"status\":\""
+  },
+  "document_upload_12_mib": {
+    "status": 201,
+    "seconds": 0.24,
+    "answer": "{\"id\":\"c8582022-1200-45cb-b230-4bc9fba82ab4\",\"name\":\"large.txt\",\"kind\":\"text\",\"mime\":\"text/plain\",\"size\":12582912,\"statu"
+  },
+  "paste": {
+    "status": 201,
+    "seconds": 0.01,
+    "answer": "{\"id\":\"dc525f74-03cf-4890-a6b5-1f230b016021\",\"name\":\"paste\",\"kind\":\"text\",\"mime\":\"text/plain\",\"size\":1000,\"status\":\"done"
+  }
+}

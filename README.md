@@ -685,34 +685,40 @@ the dev stack nor a plain `docker compose -f compose.yml up` on the Mac joins th
 
 ### Request limits (issue #100)
 
-The app is on the internet through Funnel, so a caller with no session must not be able to make
-the api hold memory with large or slow request bodies. FastAPI reads a JSON body before a route's
-dependencies run, so even a route that answers 401 reads the body first. The limits are set in
-three layers, each able to stand without the others.
+The app is on the internet through Funnel. FastAPI reads a JSON body before a route's
+dependencies run, so on `main` a caller with no session could make the api hold a body on any
+JSON route, the ones that answer 401 included: thirty stalled 9 MiB sign ins took the api from
+115 to 375 MiB of its 512. What bounds it now, by layer:
 
-- **Caddy** (`caddy/Caddyfile`). The public routes under `/api/auth/` take at most **64 KiB** (a
-  sign in or an invite acceptance is a few hundred bytes); every other route keeps **10 MiB** (the
-  jobs import and, in pull request #98, the document upload raise it for themselves). A declared
-  `Content-Length` over the limit is answered 413 by Caddy itself, with no body read and nothing
-  proxied; a body streamed past the limit is cut. Timeouts against slow clients: `read_header`
-  **10s**, `read_body_idle` **15s** with a 1024 bytes/second minimum rate (so a trickle that never
-  fully stalls is still cut), `idle` **60s**. Writes keep their defaults (`write_idle` 1m, no rate),
-  so a long lived event stream, whose heartbeat is well inside a minute, is never cut.
-- **api** (`app/body_limit.py`, an ASGI middleware before the body is parsed). Public routes
-  64 KiB, other JSON routes **1 MiB**; the routes that read their own raw body with their own limit
-  (the profile photo and import, the jobs import, the ingestion upload and paste of #98) pass
-  through untouched, so nothing is read twice. Over the limit is 413 (a declared length before a
-  byte is read, a streamed body cut at the limit); a body that stalls past a generous idle window
-  is 408. This is the second line, for when a request reaches the api without the proxy in front.
-- **uvicorn** (`api/Dockerfile`). `--limit-concurrency 256` bounds how many requests pile up at
-  once on the 512 MiB api container (503 beyond it) and `--timeout-keep-alive 5` keeps idle
-  connections short. Request headers are bounded by Caddy in front (16 KiB, its default).
+- **Caddy** (`caddy/Caddyfile`). Three body classes, each request in exactly one: the routes
+  under `/api/auth/` **64 KiB**, the document upload `POST /api/ingestion/documents` **20 MiB**,
+  everything else **10 MiB**. Over a declared length is Caddy's own 413, nothing proxied; a body
+  streamed past its limit is cut. Request headers must arrive within **10s** (`read_header`), and
+  an idle keep-alive connection is closed after **60s** (`idle`). A request body that goes silent
+  is left to Caddy's default of one minute, so that the upload and the paste, which answer a
+  stalled body themselves after 30s and 60s, speak first.
+- **api** (`api/app/body_limit.py`, before any body is parsed). **No session, no body**: under
+  `/api`, a request that announces a body on a route that is not public is answered 401 before a
+  byte of it is read. Then a size by class: `/api/auth/` 64 KiB, other JSON routes **1 MiB**; the
+  routes that read their own body keep their own limit and are not read twice (profile photo and
+  import 2 MiB, jobs import 10 MiB, document upload 20 MiB and paste). Over the size is 413. A
+  body the api caps must bring something every 20s and be whole within 60s, else 408.
+- **uvicorn** (`api/Dockerfile`). `--limit-concurrency 256`: with 256 connections open, the next
+  request is answered 503. `--timeout-keep-alive 5`.
 
-Residual risk, stated honestly for a small private app: an attacker with many client addresses can
-still open many connections, each now holding at most 64 KiB (public) and cut within about 15s, so
-the memory and connection cost is bounded but not zero. Caddy on the free, open-source build has no
-per-client connection or request-rate cap without a third-party module, so this is left to the
-layers above; a rate limit on sign in by email and address already exists in the identity module.
+What remains possible, for a small private app, measured once on a scratch stack
+(`tasks/evidence/platform-100/`):
+
+- Slow connections still cost a connection each. 260 of them, each holding a sign in body just
+  under 64 KiB, cost about 42 MiB at the api and 35 MiB at Caddy, and while they were held every
+  other request, the health check included, was answered 503. That is the price of the uvicorn
+  limit: it keeps memory bounded and makes 256 slow connections enough to stop the app answering
+  for as long as they last. Raising it trades one for the other. Caddy without a third party
+  module has no limit per client address, and through Funnel every visitor reaches Caddy from the
+  same peer anyway.
+- **Sign ins at once are not bounded by any of this.** Each password check takes 64 MiB by
+  design; four at once took the api from 116 to a peak of 378 MiB. The sign in limit counts
+  failures per email and per address, not requests in flight. Not changed here.
 
 **Bringing the Cloudflare quick tunnel back** (it was the public entry point until 2026-10-10:
 free, no account, but a random `*.trycloudflare.com` URL on every start): restore the
