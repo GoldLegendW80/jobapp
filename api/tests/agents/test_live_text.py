@@ -114,8 +114,16 @@ def test_deltas_are_coalesced_by_the_pump(monkeypatch: pytest.MonkeyPatch) -> No
     """Deltas that arrive while the pump pauses between two writes go out in one write. The
     pause is held by the test, not by a clock: real time decides nothing here."""
     pieces = ("two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
-    turn = asyncio.sleep  # the real one, to let the pump run
     pauses: list[float] = []
+
+    async def paused(times: int) -> None:
+        """Give the pump its turn until it has paused `times` times. A bounded number of
+        turns: if the pump ever pauses another way, this test fails instead of hanging."""
+        for _ in range(1000):
+            if len(pauses) >= times:
+                return
+            await asyncio.sleep(0)
+        raise AssertionError(f"the pump paused {len(pauses)} times, {times} were expected")
 
     async def go() -> tuple[RecordingStore, live.LiveText, int]:
         store = RecordingStore()
@@ -129,21 +137,20 @@ def test_deltas_are_coalesced_by_the_pump(monkeypatch: pytest.MonkeyPatch) -> No
         def appends() -> int:
             return len([op for op in store.ops if op[0] == "append"])
 
-        monkeypatch.setattr(live.asyncio, "sleep", pause)
+        # Only this module's pauses: `asyncio.sleep` stays what it is for everyone else.
+        monkeypatch.setattr(live, "_pause", pause)
         text = live.LiveText(store, RUN, lambda: 3, flush_s=0.05)
         pump = asyncio.create_task(text.pump())
         text.feed(start(0, text=""))
         text.feed(delta(0, "one "))
-        while len(pauses) < 1:  # the first delta is written at once, then the pump pauses
-            await turn(0)
+        await paused(1)  # the first delta is written at once, then the pump pauses
         assert appends() == 1
         for piece in pieces:
             text.feed(delta(0, piece + " "))
-            await turn(0)  # the pump gets its turn after every delta, and stays paused
+            await asyncio.sleep(0)  # the pump gets its turn after every delta, and stays paused
         during = appends()
         resume.set()
-        while len(pauses) < 2:
-            await turn(0)
+        await paused(2)
         pump.cancel()
         await asyncio.gather(pump, return_exceptions=True)
         return store, text, during

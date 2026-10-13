@@ -290,6 +290,159 @@ def test_the_back_off_starts_over_after_a_success_and_the_next_block_is_publishe
     asyncio.run(go())
 
 
+class Late(RecordingStore):
+    """A store that answers, late: every call takes `takes` seconds of the test's clock."""
+
+    def __init__(self, now: list[float], takes: float) -> None:
+        super().__init__()
+        self.now = now
+        self.takes = takes
+        self.calls = 0
+
+    def _late(self) -> None:
+        self.calls += 1
+        self.now[0] += self.takes
+
+    async def open(self, run_id: uuid.UUID, block: int, after: int, previous: int | None) -> None:
+        self._late()
+        await super().open(run_id, block, after, previous)
+
+    async def append(self, run_id: uuid.UUID, block: int, text: str) -> None:
+        self._late()
+        await super().append(run_id, block, text)
+
+    async def clear(self, run_id: uuid.UUID, block: int | None) -> None:
+        self._late()
+        await super().clear(run_id, block)
+
+
+def test_a_store_that_answers_slowly_is_left_alone_like_one_that_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Issue #90, point 4. Each call answers in 0.4 s, under the timeout of 1 s, so nothing
+    ever fails: before, every block of every run paid for it. An attempt that took more than
+    `slow_s` now starts the back off of a failure, and nothing is given up."""
+
+    async def go() -> None:
+        now = [1000.0]
+        store = Late(now, 0.4)
+        writer = live.LiveText(
+            store, RUN, lambda: 3, flush_s=0, timeout_s=1.0, slow_s=0.5, backoff_s=5,
+            clock=lambda: now[0],
+        )  # fmt: skip
+        writer.feed(start(0, text=""))
+        writer.feed(delta(0, "one "))
+        await writer._sync()  # open and append: 0.8 s in all
+        assert (writer.attempts, writer.slow, writer.failures) == (1, 1, 0)
+        # Nothing is given up: the store holds what it was told, and the block is not broken.
+        assert store.ops == [("open", 1, 3), ("append", 1, "one ")]
+        # Left alone: twenty blocks, each closed by the runner, and not one call.
+        for _ in range(20):
+            writer.feed(delta(0, "more "))
+            await writer._sync()
+            await writer.close_block()
+            writer.feed(start(0, text="next "))
+        assert store.calls == 2
+        now[0] += 4.9
+        await writer.close_block()
+        assert store.calls == 2  # not yet
+        # Afterwards the block being written is published whole, in place of the old one.
+        now[0] += 0.2
+        writer.feed(start(0, text=""))
+        writer.feed(delta(0, "twenty two"))
+        await writer._sync()
+        assert store.ops[2:] == [("open", 22, 3), ("append", 22, "twenty two")]
+        assert list(store.text) == [(RUN, 22)]
+        # Slow again: the back off doubles, as it does for failures in a row.
+        assert writer.slow == 2
+        now[0] += 5.1
+        await writer.close_block()
+        assert store.calls == 4
+        now[0] += 5.0
+        store.takes = 0.0  # the store is well again
+        await writer.close_block()
+        assert (store.meta, store.text) == ({}, {})
+        # A quick answer is no reason to wait: the next block is published at once.
+        writer.feed(start(0, text="quick"))
+        await writer._sync()
+        assert store.ops[-2:] == [("open", 23, 3), ("append", 23, "quick")]
+        assert (writer.slow, writer.failures) == (2, 0)
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(go())
+    assert caplog.text.count("live text slow") == 1  # the first one is logged, the rest counted
+
+
+def test_an_answer_under_the_slow_mark_starts_no_back_off() -> None:
+    async def go() -> None:
+        now = [1000.0]
+        store = Late(now, 0.2)  # open and append: 0.4 s, under the mark of 0.5 s
+        writer = live.LiveText(
+            store, RUN, lambda: 3, flush_s=0, timeout_s=1.0, slow_s=0.5, clock=lambda: now[0]
+        )
+        writer.feed(start(0, text=""))
+        for number in range(5):
+            writer.feed(delta(0, f"{number} "))
+            await writer._sync()
+        assert store.calls == 1 + 5
+        assert (writer.slow, writer.failures) == (0, 0)
+        assert live.LiveText(store, RUN, lambda: 3, timeout_s=0.3)._slow_s == 0.3
+        assert live.LiveText(store, RUN, lambda: 3)._slow_s == live.STORE_SLOW_S == 0.5
+
+    asyncio.run(go())
+
+
+def test_the_wait_for_an_attempt_under_way_comes_out_of_the_timeout_of_the_next(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #90, point 4: `close_block` could cost two timeouts, one waiting for the pump's
+    attempt to end and one for its own. Its own attempt now gets what the wait left."""
+
+    async def go() -> list[float]:
+        now = [1000.0]
+        gate = asyncio.Event()
+
+        class Held(RecordingStore):
+            async def append(self, run_id: uuid.UUID, block: int, text: str) -> None:
+                await gate.wait()
+                await super().append(run_id, block, text)
+
+        store = Held()
+        given: list[float] = []
+        real = asyncio.timeout
+
+        def timeout(delay: float | None) -> asyncio.Timeout:
+            assert delay is not None
+            given.append(delay)
+            return real(delay)
+
+        monkeypatch.setattr(live.asyncio, "timeout", timeout)
+        writer = live.LiveText(
+            store, RUN, lambda: 3, flush_s=0, timeout_s=1.0, slow_s=1.0, clock=lambda: now[0]
+        )
+        writer.feed(start(0, text=""))
+        writer.feed(delta(0, "one"))
+        pump = asyncio.create_task(writer._sync())  # the pump's attempt, held in its append
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert store.ops == [("open", 1, 3)]
+        closing = asyncio.create_task(writer.close_block())  # the runner, after the block
+        for _ in range(20):
+            await asyncio.sleep(0)
+        assert not closing.done()
+        now[0] += 0.3  # what the runner has waited when the pump's attempt ends
+        gate.set()
+        await asyncio.gather(pump, closing)
+        assert (store.meta, store.text) == ({}, {})
+        return given
+
+    given = asyncio.run(go())
+    # The pump: the store's lock, then its attempt. The runner: the lock, then what is left.
+    assert given[:3] == [1.0, 1.0, 1.0]
+    assert given[3] == pytest.approx(0.7)
+    assert len(given) == 4
+
+
 def test_a_run_on_a_store_that_never_answers_keeps_its_speed(
     script: Any,
     settings: Settings,
@@ -302,31 +455,28 @@ def test_a_run_on_a_store_that_never_answers_keeps_its_speed(
     run itself (claimed to final status) waits for the store at most one timeout per attempt,
     and with a back off longer than the run there is one attempt; the end of the run, after
     its status is stored, adds at most two timeouts and the retry pause. Before issue #80 the
-    same run waited up to two timeouts per block: 3.6 s here."""
+    same run waited up to two timeouts per block: 3.6 s here. The bound is held by the number
+    of times the store was called, never by a clock: durations on a loaded machine prove
+    nothing (issue #90, point 5)."""
     timeout, blocks = 0.3, 6
     said = [assistant(text(f"Part {number} of the answer. " * 4)) for number in range(blocks)]
     name = script("sixblocks", [*said, result("Done.")], chars=40, sleep=0.0)
 
-    def run(store: live.LiveStore | None) -> tuple[uuid.UUID, float, float]:
+    def run(store: live.LiveStore | None) -> uuid.UUID:
         run_id = new_run(factory, alice_id, {"message": "x", "script": name})
         rc = context(settings, factory, keyring, Backends(speed=0.0), max_turns=4)
         rc = replace(rc, live_store=store, live_flush_s=0.0, live_timeout_s=timeout)
-        began = time.perf_counter()
         assert execute(rc, run_id) is RunStatus.done
-        whole = time.perf_counter() - began
-        row = run_row(factory, run_id)
-        assert row.started_at is not None
-        assert row.finished_at is not None
-        return run_id, (row.finished_at - row.started_at).total_seconds(), whole
+        assert run_row(factory, run_id).finished_at is not None
+        return run_id
 
-    plain_id, plain_run, plain_whole = run(None)
+    plain_id = run(None)
     hung = Hung()
     with caplog.at_level(logging.WARNING):
-        hung_id, hung_run, hung_whole = run(hung)
-    margin = 0.6  # scheduling noise of a loaded test machine, far under the old cost
-    assert hung_run <= plain_run + 1 * timeout + margin
-    assert hung_whole <= plain_whole + 1 * timeout + (2 * timeout + live.CLOSE_RETRY_S) + margin
-    assert hung.calls <= 1 + 2  # one attempt in the run, two at its end
+        hung_id = run(hung)
+    # One attempt in the run, two at its end: each waits one timeout at most, so the whole
+    # cost is three timeouts whatever the number of blocks.
+    assert 1 <= hung.calls <= 1 + 2
     assert stored(factory, hung_id) == stored(factory, plain_id)  # and the run is the same
     assert caplog.text.count("live text not published") == 1
 
