@@ -50,7 +50,7 @@ describe("step 1 of /profile/fill, the prompt", () => {
     const box = promptBox("Claude Code");
     expect(box).toHaveValue(PROMPT.claude_code);
     expect(box).toHaveAttribute("readonly");
-    expect(box.value).toContain(`My name: ${member.name}`);
+    expect(box.value).toContain(`My name: «${member.name}»`);
     // The other prompt is not on the page until its tab is opened.
     expect(
       screen.queryByRole("textbox", { name: "Prompt for Codex" }),
@@ -150,7 +150,7 @@ describe("step 1 of /profile/fill, the prompt", () => {
       await user.click(copyButton());
       await waitFor(() => {
         expect(status()).toHaveTextContent(
-          "This browser blocked copying. The prompt is selected: press Ctrl+C, or Cmd+C on a Mac.",
+          "This browser blocked copying. The prompt is selected: copy it as you usually do, or select the text and copy it.",
         );
       });
       const box = promptBox("Claude Code");

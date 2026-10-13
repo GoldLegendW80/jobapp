@@ -17,6 +17,24 @@ const takeShots = makeShots("ingestion-g3", "ingestion-g3");
  * top with the header in the flow: a sticky header is painted where the page was scrolled to,
  * across whatever is there.
  */
+/**
+ * Nothing scrolls sideways at phone width: the page is no wider than the screen. Said here by
+ * name, on top of the same check the screenshots make, so the journey fails with a clear reason.
+ */
+async function expectNoSidewaysScrollOnAPhone(page: Page, what: string) {
+  await page.setViewportSize({ width: 375, height: 812 });
+  try {
+    const fits = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <=
+        document.documentElement.clientWidth,
+    );
+    expect(fits, `${what}: no sideways scroll at 375px`).toBe(true);
+  } finally {
+    await page.setViewportSize({ width: 1280, height: 800 });
+  }
+}
+
 async function shots(page: Page, name: string) {
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, {
     timeout: 15_000,
@@ -83,7 +101,7 @@ const SECTIONS: Record<string, string> = {
   Experience:
     "### Data engineer, Example Rail (2021-03 to present)\n\nLyon, permanent contract. (evidence: cv/camille-example.md)\n\n### Master in computer science, Example University (2018 to 2020)\n\nLyon. (evidence: cv/camille-example.md)",
   Facts:
-    "A timetable import service that reads the operators' files each night and publishes one clean feed. I wrote the validation step. [unsure] The year it went live is not in the files. (evidence: projects/timetable/README.md)",
+    "A timetable import service that reads the operators' files each night and publishes one clean feed. I wrote the validation step. [unsure] The year it went live is not in the files. (evidence: projects/timetable/validate.py)",
   Skills:
     "Python, used for real work on the timetable import. (evidence: projects/timetable/pyproject.toml)",
   "Search preferences": "Nothing found.",
@@ -156,8 +174,8 @@ test("a new user opens Fill my profile on the prompt, filled with their name", a
   prompt = (await response.json()) as Prompt;
   expect(prompt.version).toBeGreaterThanOrEqual(1);
   expect(prompt.sha256).toMatch(/^[0-9a-f]{64}$/);
-  expect(prompt.claude_code).toContain(`My name: ${NAME}\n`);
-  expect(prompt.codex).toContain(`My name: ${NAME}\n`);
+  expect(prompt.claude_code).toContain(`My name: «${NAME}»\n`);
+  expect(prompt.codex).toContain(`My name: «${NAME}»\n`);
   // Nothing else of the account is in it.
   expect(JSON.stringify(prompt)).not.toContain(EMAIL);
   expect(JSON.stringify(prompt)).not.toContain("example.org");
@@ -178,6 +196,7 @@ test("a new user opens Fill my profile on the prompt, filled with their name", a
       .getByRole("listitem")
       .filter({ hasText: "start Claude Code by typing claude" }),
   ).toBeVisible();
+  await expectNoSidewaysScrollOnAPhone(page, "the prompt for Claude Code");
   await shots(page, "01-prompt-claude-code");
 });
 
@@ -214,7 +233,7 @@ test("one click copies exactly what the api sent, for each assistant", async () 
   await expect(page.getByText("Prompt copied.", { exact: true })).toBeVisible();
   const copied = await page.evaluate(() => navigator.clipboard.readText());
   expect(copied).toBe(prompt.claude_code);
-  expect(copied).toContain(`My name: ${NAME}\n`);
+  expect(copied).toContain(`My name: «${NAME}»\n`);
   await shots(page, "03-copied");
 
   await page.getByRole("tab", { name: "Codex" }).click();
@@ -239,7 +258,7 @@ test("when the browser refuses the clipboard, the prompt is selected to copy by 
   const panel = page.getByRole("tabpanel");
   await panel.getByRole("button", { name: "Copy the prompt" }).click();
   await expect(copyStatus(page)).toHaveText(
-    "This browser blocked copying. The prompt is selected: press Ctrl+C, or Cmd+C on a Mac.",
+    "This browser blocked copying. The prompt is selected: copy it as you usually do, or select the text and copy it.",
   );
   const box = promptBox(page, "Claude Code");
   await expect(box).toBeFocused();
@@ -248,6 +267,8 @@ test("when the browser refuses the clipboard, the prompt is selected to copy by 
   );
   expect(selected).toBe(prompt.claude_code);
   await expect(panel.getByRole("button", { name: "Copied" })).toHaveCount(0);
+  // The longest message of the step, with the whole prompt selected.
+  await expectNoSidewaysScrollOnAPhone(page, "the copy by hand message");
   await shots(page, "04-copy-by-hand");
   // A reload gives the browser's clipboard back for the rest of the journey.
   await page.reload();

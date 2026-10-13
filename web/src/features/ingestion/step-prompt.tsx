@@ -206,7 +206,7 @@ export function StepPrompt({ goTo }: StepProps) {
                     }
                   >
                     {outcome === "failed"
-                      ? "This browser blocked copying. The prompt is selected: press Ctrl+C, or Cmd+C on a Mac."
+                      ? "This browser blocked copying. The prompt is selected: copy it as you usually do, or select the text and copy it."
                       : outcome === "copied"
                         ? "The prompt is on your clipboard."
                         : ""}
