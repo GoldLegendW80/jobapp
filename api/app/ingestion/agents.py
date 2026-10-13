@@ -139,7 +139,6 @@ EXTRACT = definitions.register(
         wall_time_s=EXTRACT_WALL_TIME_S,
         effort="medium",
         default_message=FIRST_MESSAGE,
-        live_text=False,
         internal=True,
         bind=bind_step,
         private_io=True,
