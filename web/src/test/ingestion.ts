@@ -137,8 +137,10 @@ export function fakeDocuments(
             kind: "pdf",
             mime: "application/pdf",
             size: body.length,
+            // Since G2b a PDF has a reader: the api answers with the document still pending
+            // and the worker reads it a moment later.
             status: "pending",
-            readable: false,
+            readable: true,
           }),
           key,
         );

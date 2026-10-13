@@ -141,22 +141,22 @@ describe("documents: the list", () => {
   it("tells the truth about a file this version cannot read yet", async () => {
     await open([
       fakeDocument({
-        name: "cv.pdf",
-        kind: "pdf",
+        name: "scan.png",
+        kind: "image",
         status: "pending",
         readable: false,
       }),
     ]);
-    const cv = row("cv.pdf");
+    const cv = row("scan.png");
     expect(cv.getByText("Waiting")).toBeVisible();
     expect(
       cv.getByText(
-        "This version cannot read PDF files yet. Your file is kept, and it will be read as soon as it can.",
+        "This version cannot read images yet. Your file is kept, and it will be read as soon as it can.",
       ),
     ).toBeVisible();
     // No text yet, so nothing to preview; it can still be deleted.
-    expect(cv.queryByRole("button", { name: "Preview cv.pdf" })).toBeNull();
-    expect(cv.getByRole("button", { name: "Delete cv.pdf" })).toBeVisible();
+    expect(cv.queryByRole("button", { name: "Preview scan.png" })).toBeNull();
+    expect(cv.getByRole("button", { name: "Delete scan.png" })).toBeVisible();
   });
 
   it("shows what a parser will report: being read, pages, a note, a failure", async () => {
@@ -264,11 +264,11 @@ describe("documents: adding files", () => {
     ]);
   });
 
-  it("keeps a PDF and says it waits", async () => {
+  it("keeps a PDF and says it is being read", async () => {
     const { user, input } = await open();
     await user.upload(input, new File(["%PDF-1.7 made up"], "cv.pdf"));
     await listed("cv.pdf");
-    expect(row("cv.pdf").getByText("Waiting")).toBeVisible();
+    expect(row("cv.pdf").getByText("Being read")).toBeVisible();
   });
 
   it("shows the server's sentence for a type that is not read, until dismissed", async () => {

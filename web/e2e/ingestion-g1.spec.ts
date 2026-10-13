@@ -118,9 +118,9 @@ const LONG = Array.from(
 const KEY_LIKE = ["AKIA", "Z7XQ2M4K", "T6WB3N5P"].join("");
 const ENV_NOTES = `Notes on the deployment\n\nexport AWS_ACCESS_KEY_ID=${KEY_LIKE}\n`;
 
-/** A real one page PDF with its cross reference table. Nothing reads it in G1. */
+/** A real one page PDF with its cross reference table. Since G2b the parser reads it. */
 function tinyPdf(line: string): Buffer {
-  const stream = `BT /F1 18 Tf 72 760 Td (${line}) Tj ET`;
+  const stream = `BT /F1 12 Tf 72 760 Td (${line}) Tj ET`;
   const objects = [
     "<< /Type /Catalog /Pages 2 0 R >>",
     "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
@@ -440,27 +440,30 @@ test("text files are read at once: chosen by keyboard, then dropped", async () =
   await expect(documents(page).getByRole("listitem")).toHaveCount(3);
 });
 
-test("a PDF and an image are kept, and the page says they wait for a later version", async () => {
+test("a PDF is read, and an image is kept: the page says it waits for a later version", async () => {
   await add(
     page,
     file(
       "CV Robin Example.pdf",
-      tinyPdf("Robin Example, applied AI engineer"),
+      // Long enough to be a page of text: a page with a few characters only counts as a scan.
+      tinyPdf(
+        "Robin Example, applied AI engineer, has shipped agents to production since 2023",
+      ),
       "application/pdf",
     ),
     file("screenshot.png", gradientPng(), "image/png"),
   );
   const cv = row(page, "CV Robin Example.pdf");
-  await expect(cv).toContainText("Waiting");
-  await expect(cv).toContainText(
-    "This version cannot read PDF files yet. Your file is kept, and it will be read as soon as it can.",
-  );
+  // Since G2b the worker reads a PDF: the row turns to Ready by itself (the list is watched).
+  await expect(cv).toContainText("Ready", { timeout: 60_000 });
+  await expect(cv).toContainText("1 page read as text");
   await expect(cv).toContainText(/PDF, \d+ bytes/);
   const image = row(page, "screenshot.png");
   await expect(image).toContainText("Waiting");
   await expect(image).toContainText("This version cannot read images yet.");
-  // Nothing was read, so there is no text to preview; both can be deleted.
-  await expect(cv.getByRole("button", { name: /^Preview/ })).toHaveCount(0);
+  // The image was not read, so it has no text to preview; both can be deleted.
+  await expect(cv.getByRole("button", { name: /^Preview/ })).toHaveCount(1);
+  await expect(image.getByRole("button", { name: /^Preview/ })).toHaveCount(0);
   await expect(
     cv.getByRole("button", { name: "Delete CV Robin Example.pdf" }),
   ).toBeVisible();
@@ -691,7 +694,7 @@ test("deleting asks first, says what it means, and the document is gone for good
   await page.reload();
   await expect(documents(page).getByRole("listitem")).toHaveCount(after.length);
   await expect(row(page, "dossier.md")).toContainText("Ready");
-  await expect(row(page, "CV Robin Example.pdf")).toContainText("Waiting");
+  await expect(row(page, "CV Robin Example.pdf")).toContainText("Ready");
   await expect(
     page.getByText(/^\d+ documents, .+ of 100 MB used$/),
   ).toBeVisible();
@@ -860,7 +863,16 @@ test("the largest file allowed goes through the page and through Caddy", async (
   test.setTimeout(180_000);
   await add(page, file("portfolio.pdf", bigPdf(FILE_MAX), "application/pdf"));
   const portfolio = row(page, "portfolio.pdf");
-  await expect(portfolio).toContainText("Waiting", { timeout: 120_000 });
+  // Stored whole, then given to the reader, which finds 20 MiB of noise: the row says so.
+  await expect(portfolio).toContainText(/Being read|Could not be read/, {
+    timeout: 120_000,
+  });
+  await expect(portfolio).toContainText("Could not be read", {
+    timeout: 120_000,
+  });
+  await expect(portfolio).toContainText(
+    "This PDF could not be read. It may be damaged",
+  );
   await expect(portfolio).toContainText("PDF, 20 MB");
   const stored = (await listed(context)).find(
     (item) => item.name === "portfolio.pdf",
