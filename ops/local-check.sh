@@ -445,7 +445,6 @@ stack_files() {
 }
 
 s_images() {
-  local files=() one
   umask 077
   .github/scripts/ci_env.sh 8080 >.env
   if grep -q change-me .env; then
@@ -464,8 +463,8 @@ services:
   parser:
     image: $PREFIX-worker:latest
 EOF
-  while IFS= read -r one; do files+=("$one"); done < <(stack_files)
-  docker buildx bake --progress=plain "${files[@]}" --load api worker caddy
+  # As the CI step, from compose.yml alone (the fake ATS has nothing to build), with the names.
+  docker buildx bake --progress=plain -f compose.yml -f "$WORK/images.yml" --load api worker caddy
 }
 
 lane_images() {
@@ -500,7 +499,7 @@ s_journey() {
   local group="$1" project="$PREFIX-$1" rc=0 files=() port specs one
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
   port="$(free_port)"
-  export HTTP_PORT="$port" E2E_CADDY_URL="http://127.0.0.1:$port" E2E_COMPOSE_PROJECT="$project" E2E_EVIDENCE=ci CI=true
+  export HTTP_PORT="$port" E2E_CADDY_URL="http://127.0.0.1:$port" E2E_COMPOSE_PROJECT="$project" E2E_EVIDENCE=ci
   case "$group" in
   apps)
     python3 .github/scripts/synthetic_jobs.py "$WORK/synthetic/data"
@@ -592,10 +591,12 @@ lane_checks() {
   run_step shellcheck s_shellcheck || true
   run_step e2e-groups s_e2e_groups || true
   run_step ci-plan s_ci_plan || true
+  # Side by side: each works in a temporary folder of its own, against fakes of docker, ssh and gh.
   for script in $(cd "$TREE" && shell_tests); do
     script="${script#tests/}"
-    run_step "${script%.sh}" "tests/$script" || true
+    run_step "${script%.sh}" "tests/$script" &
   done
+  wait
 }
 
 # --- the plan --------------------------------------------------------------------------------------
@@ -643,7 +644,10 @@ else
     command -v "$tool" >/dev/null || fail_prepare "$tool is not installed"
   done
   docker_up || fail_prepare "the Docker daemon does not answer: start Docker Desktop"
-  export UV_NATIVE_TLS="${UV_NATIVE_TLS:-1}" FORCE_COLOR=0
+  # CI=true as on a runner: the steps behave as they did there (Playwright retries a failed test
+  # once and forbids test.only; tests/tailscale_test.sh skips its live start of a tailscale
+  # container, which stays a test run by hand).
+  export UV_NATIVE_TLS="${UV_NATIVE_TLS:-1}" FORCE_COLOR=0 CI=true
   cores="$(getconf _NPROCESSORS_ONLN)"
   [[ -n "$JOBS" ]] || JOBS=$((cores > 3 ? cores - 2 : 1))
   WEB_JOBS=$((JOBS > 3 ? JOBS / 2 : 2))

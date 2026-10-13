@@ -1,11 +1,15 @@
 # Continuous delivery to the Jetson (SPEC-platform.md, Repository and automation; CONTRIBUTING.md).
 #
-# Automatic: once CI has finished green for a push to main, on the self-hosted runner installed on
-# the Jetson by ./deploy.sh runner install (labels self-hosted, jetson). The runner only connects
-# out to GitHub; no port is opened. Manual: `gh workflow run deploy.yml -f ref=<branch or sha>`
-# (default main). The workflow definition always comes from main: the runner's job-started hook
+# On demand only (issue #116, the owner's decision of 2026-10-13): nothing starts this workflow by
+# itself any more. It used to follow a green CI run on main; CI no longer runs per push, and what
+# is deployed is a tree that passed ops/local-check.sh on the Mac. ops/deploy-checked.sh holds
+# that rule (it refuses a commit whose tree has no PASS record) and then runs
+# `gh workflow run deploy.yml -f ref=<full sha>`. A dispatch typed by hand skips that check: use
+# the script. The job runs on the self-hosted runner installed on the Jetson by ./deploy.sh
+# runner install (labels self-hosted, jetson). The runner only connects out to GitHub; no port
+# is opened. The workflow definition always comes from main: the runner's job-started hook
 # (ops/runner/job-guard.sh) refuses every job that is not this file on refs/heads/main, run by
-# workflow_run or workflow_dispatch. A dispatched branch is deployed as code, never as workflow.
+# workflow_dispatch. A dispatched branch is deployed as code, never as workflow.
 #
 # The same steps as ./deploy.sh, run on the Jetson itself, under the Jetson's deploy lock
 # (flock on ~/jobapp-backups/.deploy.lock, shared with ./deploy.sh): rsync of the commit into
@@ -53,10 +57,6 @@
 name: Deploy
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
@@ -77,16 +77,10 @@ concurrency:
 jobs:
   deploy:
     name: deploy to the Jetson
-    # workflow_run fires for every completed CI run on main: deploy only a green push.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_branch == 'main')
     runs-on: [self-hosted, jetson]
     timeout-minutes: 45
     env:
-      TARGET: ${{ github.event.workflow_run.head_sha || inputs.ref }}
+      TARGET: ${{ inputs.ref }}
       COMPOSE: docker compose -f compose.yml --profile tunnel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
