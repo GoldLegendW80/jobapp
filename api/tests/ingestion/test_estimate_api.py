@@ -116,10 +116,10 @@ def test_an_api_key_reads_the_range_the_ceiling_and_the_three_costs(
     )
     assert body["cost"] == {
         "currency": "USD",
-        "low": "0.26",
+        "low": "0.24",
         "high": "1.89",
         "ceiling": "3.40",
-        "prices_as_of": "2026-10-06",
+        "prices_as_of": "2026-10-13",
         "note": pricing.ESTIMATE_NOTE,
     }
     assert body["cost_note"] is None

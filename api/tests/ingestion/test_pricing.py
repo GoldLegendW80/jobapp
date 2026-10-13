@@ -58,16 +58,40 @@ def test_an_agent_registered_with_an_unpriced_model_fails_the_check(
     assert without_a_price() == {"claude-other"}
 
 
-def test_the_table_is_dated_and_its_prices_are_positive() -> None:
-    assert pricing.PRICES_AS_OF.isoformat() == "2026-10-06"
+# The pricing page as read on the day of `PRICES_AS_OF`, in US dollars per million tokens:
+# (base input, 5 minute cache write, cache hit, output). Written out figure by figure, so the
+# table of `pricing.py` can only change together with this one and with the date.
+PAGE_READ_ON = "2026-10-13"
+PAGE = {
+    OPUS: ("4", "5", "0.20", "20"),
+    SONNET: ("2", "2.50", "0.10", "10"),
+}
+
+
+def test_the_table_is_dated_and_names_its_source() -> None:
+    assert pricing.PRICES_AS_OF.isoformat() == PAGE_READ_ON
     assert pricing.PRICES_AS_OF.isoformat() in pricing.ESTIMATE_NOTE
-    for price in pricing.PRICES.values():
-        assert 0 < price.cache_read < price.input < price.cache_write < price.output
-        assert price.cache_write == price.input * Fraction(5, 4)
-    assert pricing.PRICES[SONNET].input == 2
-    assert pricing.PRICES[SONNET].output == 10
-    assert pricing.PRICES[OPUS].input == 4
-    assert pricing.PRICES[OPUS].output == 20
+    assert pricing.PRICES_URL == "https://platform.claude.com/docs/en/about-claude/pricing"
+
+
+@pytest.mark.parametrize("model", sorted(PAGE))
+def test_every_price_of_a_model_is_the_figure_of_the_pricing_page(model: str) -> None:
+    """Each figure as a literal, the cache read included: an ordering alone let a cache read of
+    0.20 pass for the second model, whose page figure is 0.10 (review of PR #112, B1)."""
+    base, write, hit, out = (Fraction(figure) for figure in PAGE[model])
+    price = pricing.PRICES[model]
+    assert (price.input, price.cache_write, price.cache_read, price.output) == (
+        base,
+        write,
+        hit,
+        out,
+    )
+    assert price.cache_read == price.input / 20  # the page: a cache hit is 0.05 times the input
+    assert 0 < price.cache_read < price.input < price.cache_write < price.output
+
+
+def test_the_page_figures_cover_exactly_the_priced_models() -> None:
+    assert set(PAGE) == set(pricing.PRICES)
 
 
 def test_only_an_api_key_is_priced() -> None:
@@ -79,11 +103,11 @@ def test_only_an_api_key_is_priced() -> None:
 
 def test_the_three_costs_of_the_typical_dossier() -> None:
     """Three documents of 50,000 characters on the second model, by hand:
-    low: 71,001 tokens seen first at 2.50 (0.1775), 188,002.5 seen again at 0.20 (0.0376),
-    4,500 written at 10 (0.045): 0.2601. high: 827,011.5 at 2 (1.654) and 24,000 at 10 (0.24):
+    low: 71,001 tokens seen first at 2.50 (0.1775), 188,002.5 seen again at 0.10 (0.0188),
+    4,500 written at 10 (0.045): 0.2413. high: 827,011.5 at 2 (1.654) and 24,000 at 10 (0.24):
     1.894. ceiling: 1,702,024 at 2: 3.404."""
     costs = pricing.costs(dossier(50_000, 50_000, 50_000), SONNET)
-    assert costs == pricing.Costs(Decimal("0.26"), Decimal("1.89"), Decimal("3.40"))
+    assert costs == pricing.Costs(Decimal("0.24"), Decimal("1.89"), Decimal("3.40"))
     assert costs.low <= costs.high <= costs.ceiling
 
 

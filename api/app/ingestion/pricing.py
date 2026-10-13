@@ -29,8 +29,12 @@ from fractions import Fraction
 from app.agents.models import CredentialKind
 from app.ingestion.estimate import RunEstimate
 
-PRICES_AS_OF = date(2026, 10, 6)
+# Read on 2026-10-13 from https://platform.claude.com/docs/en/about-claude/pricing, the table
+# "Model pricing": base input, 5 minute cache write, cache hit, output. A cache hit is 0.05 times
+# the base input price of its own model, so it is not the same figure for both models.
+PRICES_AS_OF = date(2026, 10, 13)
 PRICES_SOURCE = "Anthropic list prices for the Claude API, first party, standard speed"
+PRICES_URL = "https://platform.claude.com/docs/en/about-claude/pricing"
 CURRENCY = "USD"
 CACHE_WRITE_FACTOR = Fraction(5, 4)  # a 5 minute cache write (A14)
 PER = 1_000_000
@@ -57,7 +61,7 @@ class Price:
 
 PRICES: dict[str, Price] = {
     "claude-opus-5-5": Price(Fraction(4), Fraction(20), Fraction(1, 5)),
-    "claude-sonnet-5-5": Price(Fraction(2), Fraction(10), Fraction(1, 5)),
+    "claude-sonnet-5-5": Price(Fraction(2), Fraction(10), Fraction(1, 10)),
 }
 
 
