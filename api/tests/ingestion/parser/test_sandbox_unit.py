@@ -13,6 +13,7 @@ import json
 import os
 import struct
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -455,6 +456,14 @@ def test_the_budget_is_spent_after_its_cpu_or_its_wall_time() -> None:
     assert not main.Budget().spent()
     assert main.Budget(cpu_s=0.0).spent()
     assert main.Budget(wall_s=0.0).spent()
+    # Counted from its own start, not from the start of the process: this test process may
+    # have run for minutes (it had, in CI, the first time), a child has run for milliseconds.
+    budget = main.Budget(cpu_s=0.05, wall_s=3600)
+    assert not budget.spent()
+    while time.process_time() - budget.cpu_started < 0.06:
+        sum(range(10_000))
+    assert budget.spent()
+    assert time.process_time() > 0.05
     assert (main.BUDGET_CPU_S, main.BUDGET_WALL_S) == (35.0, 40.0)
 
 

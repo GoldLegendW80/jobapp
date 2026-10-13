@@ -348,14 +348,20 @@ def harden(kind: str, libc=None, res=resource, machine: str | None = None, uid: 
 
 class Budget:
     """The time a handler may use before it returns what it has: BUDGET_CPU_S of CPU or
-    BUDGET_WALL_S of wall time since the process was locked down, whichever comes first."""
+    BUDGET_WALL_S of wall time, whichever comes first, counted from the moment the budget is
+    made (right after the lockdown: what the process used to start, some tens of milliseconds,
+    stays far inside the ten seconds between this budget and RLIMIT_CPU)."""
 
     def __init__(self, cpu_s: float = BUDGET_CPU_S, wall_s: float = BUDGET_WALL_S) -> None:
         self.cpu_s, self.wall_s = cpu_s, wall_s
+        self.cpu_started = time.process_time()
         self.started = time.monotonic()
 
     def spent(self) -> bool:
-        return time.process_time() >= self.cpu_s or time.monotonic() - self.started >= self.wall_s
+        return (
+            time.process_time() - self.cpu_started >= self.cpu_s
+            or time.monotonic() - self.started >= self.wall_s
+        )
 
 
 def status_field(name: str) -> str:
