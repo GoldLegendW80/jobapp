@@ -1,22 +1,23 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
-import { fakeDocuments } from "@/test/ingestion";
+import { fakeDocuments, fakePrompt } from "@/test/ingestion";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 
 import { ProposalList } from "./proposal-list";
 import { RunProgress } from "./run-progress";
 import { RunStart } from "./run-start";
-import { PROMPT_READY, StepPrompt } from "./step-prompt";
+import { PROMPT_READY } from "./step-prompt";
 import { REVIEW_READY, StepReview } from "./step-review";
 import { isStepId, STEP_IDS } from "./steps";
 
 async function open(path = "/profile/fill") {
   fakeSession(member);
   fakeDocuments();
+  fakePrompt();
   const app = renderApp(path);
   await screen.findByRole("heading", {
     level: 1,
@@ -40,34 +41,64 @@ describe("/profile/fill", () => {
     expect(
       screen.getByRole("heading", {
         level: 2,
-        name: "Step 2: Add your documents",
+        name: "Step 1: Prepare a dossier with a coding assistant",
       }),
     ).toBeVisible();
     expect(
-      within(steps()).getByRole("button", { name: /Step 2: Documents/ }),
+      within(steps()).getByRole("button", { name: /Step 1: Prepare/ }),
     ).toHaveAttribute("aria-current", "step");
+    expect(
+      within(steps()).getByRole("button", { name: /Step 2: Documents/ }),
+    ).not.toHaveAttribute("aria-current");
   });
 
   it("lists a step that is not built yet as Soon, and it is not a control", async () => {
-    // What G1 ships: the two other steps belong to later tasks.
-    expect([PROMPT_READY, REVIEW_READY]).toEqual([false, false]);
+    // What G1 and G3 ship: the review belongs to later tasks.
+    expect([PROMPT_READY, REVIEW_READY]).toEqual([true, false]);
     await open();
-    expect(within(steps()).getAllByRole("button")).toHaveLength(1);
-    const [prepare, , review] = within(steps()).getAllByRole("listitem");
-    expect(prepare).toHaveTextContent("Soon");
+    expect(within(steps()).getAllByRole("button")).toHaveLength(2);
+    const [prepare, documents, review] =
+      within(steps()).getAllByRole("listitem");
+    expect(prepare).not.toHaveTextContent("Soon");
+    expect(documents).not.toHaveTextContent("Soon");
     expect(review).toHaveTextContent("Soon");
-    expect(within(prepare as HTMLElement).queryByRole("button")).toBeNull();
+    expect(within(review as HTMLElement).queryByRole("button")).toBeNull();
   });
 
-  it.each(["prompt", "review", "nothing", ""])(
-    "opens the documents for ?step=%s, a step that cannot be opened",
+  it.each(["review", "nothing", ""])(
+    "opens the first step for ?step=%s, a step that cannot be opened",
     async (step) => {
       await open(`/profile/fill?step=${step}`);
       expect(
-        screen.getByRole("heading", { level: 2, name: /Add your documents/ }),
+        screen.getByRole("heading", { level: 2, name: /Prepare a dossier/ }),
       ).toBeVisible();
     },
   );
+
+  it.each([
+    ["prompt", "Step 1: Prepare a dossier with a coding assistant"],
+    ["documents", "Step 2: Add your documents"],
+  ])("opens the step named by ?step=%s", async (step, heading) => {
+    await open(`/profile/fill?step=${step}`);
+    expect(
+      screen.getByRole("heading", { level: 2, name: heading }),
+    ).toBeVisible();
+  });
+
+  it("goes from the first step on to the documents", async () => {
+    const user = userEvent.setup();
+    const app = await open();
+    await user.click(
+      screen.getByRole("button", { name: "Go on to your documents" }),
+    );
+    expect(
+      screen.getByRole("heading", {
+        level: 2,
+        name: "Step 2: Add your documents",
+      }),
+    ).toBeVisible();
+    expect(app.location()).toBe("/profile/fill?step=documents");
+  });
 
   it("keeps the open step in the address", async () => {
     const user = userEvent.setup();
@@ -79,7 +110,7 @@ describe("/profile/fill", () => {
   });
 
   it("says what the page is for and what it never does on its own", async () => {
-    await open();
+    await open("/profile/fill?step=documents");
     expect(
       screen.getByText(/Nothing is written to your profile until you accept/),
     ).toBeVisible();
@@ -104,6 +135,7 @@ describe("/profile/fill", () => {
     fakeSession(member);
     fakeProfile();
     fakeDocuments();
+    fakePrompt();
     const app = renderApp("/profile");
     await user.click(
       await screen.findByRole("link", {
@@ -138,16 +170,6 @@ describe("the steps built by later tasks", () => {
     expect(isStepId("documents")).toBe(true);
     expect(isStepId("upload")).toBe(false);
     expect(isStepId(null)).toBe(false);
-  });
-
-  it("the prompt placeholder sends the user on to the documents", async () => {
-    const user = userEvent.setup();
-    const goTo = vi.fn();
-    render(<StepPrompt goTo={goTo} />);
-    await user.click(
-      screen.getByRole("button", { name: "Go to your documents" }),
-    );
-    expect(goTo).toHaveBeenCalledExactlyOnceWith("documents");
   });
 
   it("the review step lays out the start, the progress and the proposals", () => {

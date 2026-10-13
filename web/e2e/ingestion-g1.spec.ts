@@ -365,14 +365,19 @@ test("a new user follows Fill my profile with an agent from the profile", async 
   ).toBeVisible();
   await expect(page).toHaveTitle("Fill my profile \u00b7 jobapp");
 
-  // Three steps; the two that later tasks build are listed as Soon and are not controls.
+  // Three steps; the one that a later task builds is listed as Soon and is not a control.
   const steps = page.getByRole("navigation", { name: "Steps" });
   await expect(steps.getByRole("listitem")).toHaveText([
-    /Prepare\s*Soon/,
+    /Prepare(?!\s*Soon)/,
     /Documents/,
     /Review\s*Soon/,
   ]);
-  await expect(steps.getByRole("button")).toHaveCount(1);
+  await expect(steps.getByRole("button")).toHaveCount(2);
+  // The page opens on step 1, the prompt (task G3, ingestion-g3.spec.ts): on to the documents.
+  await expect(
+    steps.getByRole("button", { name: /Step 1: Prepare/ }),
+  ).toHaveAttribute("aria-current", "step");
+  await steps.getByRole("button", { name: /Step 2: Documents/ }).click();
   await expect(
     steps.getByRole("button", { name: /Step 2: Documents/ }),
   ).toHaveAttribute("aria-current", "step");
@@ -712,7 +717,7 @@ test("a second user sees nothing and cannot reach the first user's documents", a
     await otherPage.goto(cliLink(OTHER_EMAIL));
     await setPassword(otherPage, PASSWORD, OTHER_NAME);
     secondCookie = await sessionCookie(other);
-    await otherPage.goto("/profile/fill");
+    await otherPage.goto("/profile/fill?step=documents");
     await expect(
       otherPage.getByText("No document yet. Add a file or paste a text above."),
     ).toBeVisible();

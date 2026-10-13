@@ -47,7 +47,7 @@ async function open() {
     }),
   );
   const user = userEvent.setup({ applyAccept: false });
-  renderApp("/profile/fill");
+  renderApp("/profile/fill?step=documents");
   await screen.findByRole("heading", { level: 3, name: "Your documents" });
   await waitFor(() => {
     expect(screen.queryByText("Loading your documents")).toBeNull();
