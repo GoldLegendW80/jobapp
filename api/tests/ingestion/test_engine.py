@@ -27,9 +27,13 @@ from app.ingestion import agents, delete_guard, engine, estimate, estimate_route
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun, RunStatus, text_sha256
 from tests.agents.g6_helpers import run_context
+from tests.agents.push_backend import COUNTED, INPUT_SIDE, OUTPUT, PushBackend, looping
 from tests.agents.run_helpers import add_user, execute, new_run, now, save_credential
+from tests.identity.api_helpers import Api
 from tests.ingestion import engine_helpers as eh
+from tests.ingestion.conftest import CAROL
 from tests.ingestion.extract_helpers import add_document, key, keyring, settings
+from tests.ingestion.test_estimate_api import user_id
 
 _FIXTURES = (key, keyring, settings)
 
@@ -38,6 +42,7 @@ PROVIDER = [
     failures.UNREADABLE,
     failures.REFUSED,
     failures.BUSY,
+    failures.NO_CREDIT,  # a key without credit, whatever its HTTP status
     agent_runs.QUEUE_DOWN,
     failures.API_ERROR.format(status=500),
     failures.API_ERROR.format(status=402),
@@ -1060,3 +1065,185 @@ def test_unknown_agent_from_a_worker_that_does_not_know_the_agent(
     assert (run.status, run.paused_reason) == (RunStatus.paused, failures.UNKNOWN_AGENT)
     assert eh.statuses(factory, run_id) == ["planned", "planned"]
     assert len(eh.agent_runs_of(factory, alice)) == 1
+
+
+# --- the hook that did not finish, on the runner's own paths ----------------------------------
+
+
+def test_arq_ends_the_job_inside_the_hook_and_the_cron_offers_the_step_it_left_queued(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings, keyring: Keyring
+) -> None:
+    """arq ends a job at its timeout by cancelling its task. Here that lands while the hook waits
+    on the queue: the end of the first step and the hook's `advance` are committed, the agent
+    run of the second step exists and was never offered. The cron's next tick offers that very
+    agent run, and no step runs twice."""
+    from app.agents import runner
+
+    fake = settings.model_copy(update={"agents_fake_backend": True})
+    run_id = eh.start(factory, alice, eh.documents(factory, alice, 2))
+    queue: list[uuid.UUID] = []
+
+    async def enqueue(agent_run_id: uuid.UUID) -> None:
+        queue.append(agent_run_id)
+
+    asyncio.run(engine.drive(factory, enqueue, run_id, now, fake))
+    first = queue.pop(0)
+
+    async def job() -> None:
+        reached = asyncio.Event()
+
+        async def never(agent_run_id: uuid.UUID) -> None:
+            reached.set()
+            await asyncio.Event().wait()
+
+        context = run_context(
+            fake, factory, keyring, agents.EXTRACT, services={engine.ENQUEUE_SERVICE: never}
+        )
+        task = asyncio.create_task(runner.execute(context, first))
+        await asyncio.wait_for(reached.wait(), timeout=30)
+        task.cancel()  # arq, at the job timeout
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(job())
+    assert eh.statuses(factory, run_id) == ["done", "running"]
+    second = eh.running(factory, run_id).agent_run_id
+    assert second != first
+    assert queue == []
+
+    asyncio.run(engine.tick(factory, enqueue, now, fake))
+    assert queue == [second]
+    assert len(eh.agent_runs_of(factory, alice)) == 2  # the one the hook created, not another
+    context = run_context(
+        fake, factory, keyring, agents.EXTRACT, services={engine.ENQUEUE_SERVICE: enqueue}
+    )
+    assert execute(context, queue.pop(0)) is AgentStatus.done
+    run = eh.run_of(factory, run_id)
+    assert (run.status, run.partial) == (RunStatus.done, False)
+    assert eh.statuses(factory, run_id) == ["done", "done"]
+    assert queue == []
+    ran = eh.agent_runs_of(factory, alice)
+    assert sorted(str(step.agent_run_id) for step in eh.steps_of(factory, run_id)) == sorted(
+        str(one.id) for one in ran
+    )
+    assert run.tokens_spent == sum(
+        (one.input_tokens or 0) + (one.output_tokens or 0) for one in ran
+    )
+
+
+def test_the_hook_cut_at_its_time_limit_leaves_a_thread_that_ends_after_the_cron(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    settings: Settings,
+    keyring: Keyring,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The runner gives the hook `final_hook_timeout_s` (30 seconds in the worker, a fraction of
+    one here) and that limit does not stop the work the hook handed to a thread. The thread is
+    held before its `advance`; the cron advances the run meanwhile; then the thread goes on,
+    finds the step counted and the next one running, and changes nothing."""
+    from app.agents import runner
+
+    fake = settings.model_copy(update={"agents_fake_backend": True})
+    run_id = eh.start(factory, alice, eh.documents(factory, alice, 2))
+    queue: list[uuid.UUID] = []
+
+    async def enqueue(agent_run_id: uuid.UUID) -> None:
+        queue.append(agent_run_id)
+
+    asyncio.run(engine.drive(factory, enqueue, run_id, now, fake))
+    first = queue.pop(0)
+    real = engine._advance
+    held, release = threading.Event(), threading.Event()
+    calls: list[int] = []
+
+    def advance(*args: Any) -> Any:
+        calls.append(len(calls))
+        if len(calls) == 1:  # the hook's, in its thread
+            held.set()
+            assert release.wait(30)
+        return real(*args)
+
+    monkeypatch.setattr(engine, "_advance", advance)
+    services = {engine.ENQUEUE_SERVICE: enqueue}
+    cut = run_context(
+        fake, factory, keyring, agents.EXTRACT, services=services, final_hook_timeout_s=0.2
+    )
+
+    async def scenario() -> None:
+        assert await runner.execute(cut, first) is AgentStatus.done  # the hook was given up
+        assert held.is_set()
+        assert not release.is_set()
+        assert queue == []
+        await engine.tick(factory, enqueue, now, fake)  # the cron, before the thread
+        release.set()
+
+    asyncio.run(scenario())  # returns once the hook's thread has ended
+    assert len(calls) == 2
+    assert eh.statuses(factory, run_id) == ["done", "running"]
+    second = eh.running(factory, run_id).agent_run_id
+    assert queue == [second]
+    (one, other) = eh.agent_runs_of(factory, alice)
+    assert {one.id, other.id} == {first, second}
+    assert eh.run_of(factory, run_id).tokens_spent == sum(
+        (row.input_tokens or 0) + (row.output_tokens or 0) for row in (one, other)
+    )  # the first step counted once
+
+    context = run_context(fake, factory, keyring, agents.EXTRACT, services=services)
+    assert execute(context, queue.pop(0)) is AgentStatus.done
+    run = eh.run_of(factory, run_id)
+    assert (run.status, run.partial) == (RunStatus.done, False)
+    assert eh.statuses(factory, run_id) == ["done", "done"]
+    assert len(eh.agent_runs_of(factory, alice)) == 2
+
+
+# --- the overshoot, measured and read through the route ---------------------------------------
+
+
+def test_the_overshoot_of_a_step_cut_at_the_ceiling_is_within_what_the_run_announces(
+    factory: sessionmaker[Session], settings: Settings, keyring: Keyring, api: Api, carol: str
+) -> None:
+    """A step on what remains under the ceiling, on the real runner, with a backend that moves
+    at its own pace as Claude Code does (tests/agents/push_backend.py) and calls a tool the gate
+    never hears of: the worst case G6 measured. The requests that left after the one that
+    reached the budget are counted and compared with what `GET /api/ingestion/runs/{id}` says
+    a run can pass its ceiling by; the tokens it reports are those of the answered requests."""
+    user = user_id(factory, CAROL)
+    save_credential(factory, keyring, user)
+    run_id = eh.start(factory, user, eh.documents(factory, user, 2))
+    ceiling = eh.run_of(factory, run_id).token_ceiling // 4  # the high estimate of one step
+    eh.set_run(factory, run_id, token_ceiling=ceiling)
+    queue: list[uuid.UUID] = []
+
+    async def enqueue(agent_run_id: uuid.UUID) -> None:
+        queue.append(agent_run_id)
+
+    asyncio.run(engine.drive(factory, enqueue, run_id, now, settings))
+    (first,) = queue
+    assert eh.running(factory, run_id).token_budget == ceiling  # the remainder, not the backstop
+    reaching = -(-ceiling // COUNTED)  # the request whose count reaches the budget
+    backend = PushBackend(looping("Bash", reaching + 6), request_s=0.005)
+    context = run_context(
+        settings,
+        factory,
+        keyring,
+        agents.EXTRACT,
+        backends=backend,
+        services={engine.ENQUEUE_SERVICE: enqueue},
+    )
+    assert execute(context, first) is AgentStatus.failed
+    assert backend.answered == reaching
+    measured = len(backend.sent) - reaching  # requests that left after the reaching one
+
+    response = api.get(f"/api/ingestion/runs/{run_id}", token=carol)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    tokens = body["tokens"]
+    assert (body["status"], body["paused_reason"]) == ("paused", engine.TOKEN_CEILING)
+    assert tokens["ceiling"] == ceiling
+    assert tokens["overshoot_requests"] == engine.OVERSHOOT_REQUESTS
+    assert 1 == measured <= tokens["overshoot_requests"]
+    # As recorded: every answered request in full, nothing for the one that was cut. The run is
+    # over its ceiling and says so, it does not clamp the figure.
+    assert tokens["spent"] == reaching * (INPUT_SIDE + OUTPUT) > ceiling
+    assert queue == [first]  # paused: no further step was created

@@ -172,6 +172,7 @@ from app.agents.failures import (
     INTERNAL,
     NO_CLI,
     NO_CREDENTIAL,
+    NO_CREDIT,
     NO_RESULT,
     NO_START,
     PROCESS,
@@ -801,6 +802,8 @@ class _State:
     result: ResultMessage | None = None
     last_text: str = ""
     denied: int = 0
+    # An assistant message came marked `billing_error`: the credential has no credit left.
+    no_credit: bool = False
     live_text: live.LiveText | None = None
     # The kind of credential the run uses (never the secret), for the `usage` event.
     credential_kind: str | None = None
@@ -853,6 +856,8 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
                 state.tool_calls += 1
                 await recorder.emit("tool_call", recorder.tool_call(block))
         if message.error:
+            if message.error == "billing_error":
+                state.no_credit = True
             await recorder.emit("api_error", {"error": str(message.error)})
     elif isinstance(message, UserMessage):
         if isinstance(message.content, list):
@@ -969,7 +974,11 @@ def outcome_of(
         return runs.Outcome(status=RunStatus.failed, error=message, **usage)
     if result.is_error:
         status = result.api_error_status
-        if status in (401, 403):
+        if state.no_credit:
+            # Before the status: a balance that is too low comes as HTTP 400, which read alone
+            # is the run's own content, and a chain would fail every remaining step on it.
+            message = NO_CREDIT
+        elif status in (401, 403):
             message = REFUSED
         elif status in (429, 503, 529):
             message = BUSY

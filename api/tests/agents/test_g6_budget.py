@@ -1022,6 +1022,7 @@ KINDS = {
     "UNREADABLE": "provider",
     "REFUSED": "provider",
     "BUSY": "provider",
+    "NO_CREDIT": "provider",
     "NO_CLI": "box",
     "NO_START": "box",
     "PROCESS": "box",
