@@ -29,13 +29,14 @@
 # tests/local_check_test.sh fails when their spec files differ from those of ci.yml.
 #
 # Arrangement. Four lanes start together: api (its own Postgres and Redis containers on free
-# loopback ports; ruff, the suite, the coverage floor), web (install, then lint, type check,
-# vitest and build side by side), images (api, worker and caddy built by compose under this
+# loopback ports; ruff, the suite, the coverage floor), web (install, then lint, type check
+# and build side by side), images (api, worker and caddy built by compose under this
 # check's own image names), checks (the tests/*_test.sh side by side). The journey groups start
 # when the images and the web install are done, each on a scratch stack of its own (own project,
 # own port, own database), LOCAL_CHECK_STACKS of them side by side (default: one per 4 GiB of
 # Docker memory, at most 4), with one Playwright worker each, as in CI. When every lane has
-# ended, the tests that measure time run alone: the docker marked tests, then the scoring test.
+# ended, the tests that measure time run alone, one after the other: Vitest, the docker marked
+# tests, the scoring test.
 #
 # Safety of this machine:
 # - one check at a time: a lock in .local-check/ of the main checkout; a second call says who
@@ -424,14 +425,20 @@ lane_api() {
   if run_step pytest s_pytest; then run_step coverage s_coverage || true; fi
 }
 
-# The tests that measure time: the docker marked tests (the parser's CPU and wall clock limits,
-# a paused database) and the scoring bound. They run alone, once every lane has ended. Next to
-# the suite and four journey stacks (load 15 on 12 cores, measured on 2026-10-13) two CPU limit
-# tests failed and two `docker run` of their own Postgres did; alone they pass.
+# The tests that measure time run alone, one after the other, once every lane has ended: Vitest
+# (a countdown of the account page and a sort of the search tab read the real clock), the docker
+# marked tests (the parser's CPU and wall clock limits, a paused database) and the scoring bound.
+# Measured on 2026-10-13, next to the suite and four journey stacks (load 15 on 12 cores): Vitest
+# failed in 2 runs of 4, two CPU limit tests and two `docker run` of the docker marked tests'
+# own Postgres failed in 1 run; alone they passed every time.
 quiet_phase() {
-  [[ -f "$WORK/api.env" ]] || return 0 # the api lane already failed, with the reason
-  run_step pytest-docker s_pytest_docker || true
-  run_step scoring s_scoring || true
+  if wanted journeys && [[ "$(cat "$WORK/web.done" 2>/dev/null)" == 0 ]]; then
+    run_step vitest s_vitest || true
+  fi
+  if wanted api && [[ -f "$WORK/api.env" ]]; then
+    run_step pytest-docker s_pytest_docker || true
+    run_step scoring s_scoring || true
+  fi
 }
 
 # --- the steps: web --------------------------------------------------------------------------------
@@ -464,7 +471,6 @@ lane_web() {
   wanted journeys || return 0
   run_step lint s_lint &
   run_step typecheck s_typecheck &
-  run_step vitest s_vitest &
   run_step build s_build &
   wait
 }
@@ -660,7 +666,7 @@ real_plan() {
   fi
   for pid in "${pids[@]}"; do wait "$pid" || lanes_failed=1; done
   ((lanes_failed == 0)) || not_run lanes "a lane of the check ended early"
-  if wanted api; then quiet_phase; fi
+  quiet_phase
 }
 
 tool_versions() {
@@ -691,9 +697,7 @@ else
   export UV_NATIVE_TLS="${UV_NATIVE_TLS:-1}" FORCE_COLOR=0 CI=true
   cores="$(getconf _NPROCESSORS_ONLN)"
   [[ -n "$JOBS" ]] || JOBS=$((cores > 3 ? cores - 2 : 1))
-  # Vitest keeps the 3 workers CI gave it: it is not what the check waits for (the api lane is),
-  # and on 5 workers next to the other lanes a countdown test of the account page, which reads
-  # the real clock, failed once (measured on 2026-10-13).
+  # Vitest keeps the 3 workers CI gave it (about 50 s).
   WEB_JOBS="${LOCAL_CHECK_VITEST_WORKERS:-3}"
   STACKS="${LOCAL_CHECK_STACKS:-}"
   if [[ -z "$STACKS" ]]; then
@@ -730,7 +734,7 @@ if [[ -n "$failed" ]]; then
     printf '\n--- %s: the last 40 lines of %s\n' "$name" "$LOGS/$name.log"
     tail -n 40 "$LOGS/$name.log"
   done
-  printf '\nlogs: %s\n' "$LOGS"
+  printf '\nlogs: %s\ntotal: %ss\n' "$LOGS" "$total"
   say "LOCAL CHECK: FAIL $tree_sha $failed"
   exit 1
 fi
