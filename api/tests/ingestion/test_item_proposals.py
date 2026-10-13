@@ -394,7 +394,10 @@ def test_create_takes_a_profile_item_as_a_payload(
     years = {"section": "skills", "key": "years_experience", "action": "replace", "value": 4}
     with pytest.raises(proposals.InvalidValueError, match="setting"):
         create(factory, alice, years)
-    derived = create(factory, alice, {**years, "flags": [items.FLAG_DERIVED]})
+    # whose value it is comes from the calling code, never from the payload a model wrote
+    with pytest.raises(proposals.InvalidValueError, match="setting"):
+        create(factory, alice, {**years, "flags": [items.FLAG_DERIVED]})
+    derived = create(factory, alice, years, derived=True)
     assert row(factory, derived).payload["flags"] == [items.FLAG_DERIVED]
     for broken in (
         {**payload, "section": "nowhere"},
@@ -1279,3 +1282,80 @@ def test_accept_all_applies_nothing_of_a_section_where_a_key_is_shared(
     )
     assert (result.done, result.skipped) == ([], {other: ip.SECTION_FAILED})
     assert stored(factory, alice, "facts") == before
+
+
+# --- whose value it is, and what accept all leaves out (review of PR #109, N1 and N2) -------------
+
+
+def test_the_derived_origin_is_an_argument_and_never_read_from_the_payload(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    save_all(factory, alice)
+    years = {"section": "skills", "key": "years_experience", "action": "replace", "value": 40}
+    forged = {**years, "flags": [items.FLAG_DERIVED], "citations": [cite()]}
+    with pytest.raises(proposals.InvalidValueError, match="setting"):
+        create(factory, alice, forged)
+    with factory() as db, pytest.raises(proposals.InvalidValueError, match="setting"):
+        ip.propose_payload(db, alice, forged, tick())
+    # on an ordinary item the forged flag is dropped: nothing is labelled as computed
+    german = {"section": "identity", "key": "languages", "action": "add", "value": GERMAN}
+    labelled = create(factory, alice, {**german, "flags": [items.FLAG_DERIVED]})
+    assert row(factory, labelled).payload["flags"] == []
+    # the merge says so itself, and only for the slot that is derived
+    computed = create(factory, alice, {**years, "value": 4}, derived=True)
+    assert row(factory, computed).payload["flags"] == [items.FLAG_DERIVED]
+    assert ip.bulk_exclusion(row(factory, computed).payload) == ip.FLAGGED
+    with pytest.raises(proposals.InvalidValueError):
+        create(factory, alice, {**german, "value": {"name": "Dutch", "level": "A2"}}, derived=True)
+    with factory() as db, pytest.raises(ValueError, match="edit"):
+        ip.propose_payload(db, alice, german, tick(), origin=items.Origin.user)
+    job = add_job(factory, alice, "Acme", "Engineer")
+    with pytest.raises(ValueError, match="only a profile item"):
+        create(
+            factory,
+            alice,
+            {"text": "A note."},
+            target=proposals.TARGET_JOB,
+            target_id=job,
+            kind="job_note",
+            derived=True,
+        )
+    assert "flags" not in inspect.signature(proposals.create).parameters
+
+
+def test_accept_all_leaves_out_what_takes_away_and_counts_it(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    save_all(factory, alice)
+    exclude = {**full("search")["title_exclude"], "terms": ["intern", "sales"]}
+    exclude["advanced_regex"] = False
+    save(
+        factory,
+        alice,
+        "search",
+        {**full("search"), "never_apply": ["No sales roles."], "title_exclude": exclude},
+    )
+    save(factory, alice, "answers", {**full("answers"), "leave_blank": ["gender", "ethnicity"]})
+    search, answers = stored(factory, alice, "search"), stored(factory, alice, "answers")
+    line = items.build("search", "never_apply", "add", "No sales roles.").key
+    removal = made(factory, alice, "search", line, action="remove")
+    emptied = made(factory, alice, "search", "title_exclude", action="remove")
+    narrowed = made(factory, alice, "answers", "leave_blank", ["gender"], action="replace")
+    added = made(factory, alice, "search", "never_apply", "No relocation.")
+    scalar = made(factory, alice, "answers", "notice_period", "Two weeks.", action="replace")
+    assert ip.review(row(factory, removal).payload, search).bulk == ip.REMOVAL
+    result = bulk(factory, alice)
+    assert set(result.done) == {added, scalar}
+    assert result.skipped == {removal: ip.REMOVAL, emptied: ip.REMOVAL, narrowed: ip.REMOVAL}
+    assert result.counts == {ip.REMOVAL: 3}
+    assert result.failed == {}
+    after = stored(factory, alice, "search")
+    assert after["never_apply"] == ["No sales roles.", "No relocation."]
+    assert after["title_exclude"] == search["title_exclude"]
+    assert stored(factory, alice, "answers")["leave_blank"] == answers["leave_blank"]
+    left = {row(factory, pid).status for pid in (removal, emptied, narrowed)}
+    assert left == {ProposalStatus.pending}
+    # naming them does not help, and one by one they remain the user's to accept
+    assert bulk(factory, alice, proposal_ids=[removal]).skipped == {removal: ip.REMOVAL}
+    accept(factory, alice, removal)
+    assert stored(factory, alice, "search")["never_apply"] == ["No relocation."]

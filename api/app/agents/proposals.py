@@ -275,6 +275,7 @@ def create(
     run_id: uuid.UUID | None,
     now: datetime,
     status: ProposalStatus = ProposalStatus.pending,
+    derived: bool = False,
 ) -> Proposal:
     """A new proposal. Pending ones of the same kind for the same target are superseded by it
     (one suggestion of each kind stands at a time). `status=accepted` records a change the system
@@ -284,9 +285,13 @@ def create(
     citations, ...}` (item_proposals.propose_payload): an older pending item at the same key with
     another value is superseded, the same value already pending gets the citations joined and is
     the proposal returned, and NotStoredError says the item was dropped because the profile holds
-    it or the user rejected it before. InvalidValueError when the item is refused."""
+    it or the user rejected it before. InvalidValueError when the item is refused. `derived`
+    says the caller computed the value itself (the merge, for `skills.years_experience`): it is
+    an argument of the calling code and is never read from the payload, which a model wrote."""
     if status not in (ProposalStatus.pending, ProposalStatus.accepted):
         raise ValueError(f"a proposal is created pending or accepted, not {status}")
+    if derived and target != TARGET_PROFILE:
+        raise ValueError("only a profile item is derived")
     if target == TARGET_PROFILE:
         if (
             kind != KIND_PROFILE_ITEM
@@ -295,7 +300,9 @@ def create(
             or status is not ProposalStatus.pending
         ):
             raise ValueError("a proposal for the profile is a pending profile_item, without ids")
-        outcome = _profile_items().propose_payload(db, user_id, payload, now)
+        profile_items = _profile_items()
+        origin = profile_items.items.Origin.derived if derived else profile_items.items.Origin.agent
+        outcome = profile_items.propose_payload(db, user_id, payload, now, origin=origin)
         if outcome.proposal is None:
             raise NotStoredError(outcome.status)
         stored: Proposal = outcome.proposal

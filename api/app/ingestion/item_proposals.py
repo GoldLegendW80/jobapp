@@ -88,6 +88,7 @@ OTHER_RUN = "other_run"
 OTHER_SECTION = "other_section"
 LOCKED = "locked"
 FLAGGED = "flagged"
+REMOVAL = "removal"  # it takes away what it does not name, with no citation behind that
 STALE = "stale"
 INVALID = "invalid"
 PROFILE_CONFLICT = "profile_conflict"
@@ -132,8 +133,9 @@ class Review:
     `before` and `after` are what the profile holds at the item's key now and what it would
     hold once the item is accepted (None for nothing). `noop`: the profile already holds it.
     `stale`: see the module. `locked`: a locked fact, accepted on its own. `bulk`: why "accept
-    all" leaves it out (locked, flagged, stale, invalid, profile_conflict), or None when it
-    takes it. `problem`: the sentence when the item is invalid or does not fit the section."""
+    all" leaves it out (locked, flagged, removal, stale, invalid, profile_conflict), or None
+    when it takes it. `problem`: the sentence when the item is invalid or does not fit the
+    section."""
 
     before: Any
     after: Any
@@ -231,15 +233,32 @@ def _flags(payload: Mapping[str, Any]) -> list[str]:
     return [flag for flag in flags if isinstance(flag, str)] if isinstance(flags, list) else []
 
 
+_WHOLE_LISTS = (items.SlotKind.words, items.SlotKind.terms)
+
+
+def _takes_away(section: str, key: str, action: Any) -> bool:
+    """Whether the item erases something it does not name: a `remove` (it carries no value, so
+    the citation checker has nothing to check), or a `replace` of a whole list of words or of
+    terms (`title_exclude`, `leave_blank`: every stored word it leaves out goes)."""
+    if action == items.Action.remove.value:
+        return True
+    slot = items.SLOTS.get(section, {}).get(key.partition(":")[0])
+    return action == items.Action.replace.value and slot is not None and slot.kind in _WHOLE_LISTS
+
+
 def bulk_exclusion(payload: Mapping[str, Any]) -> str | None:
     """Why "accept all" never takes this item, whatever the profile holds: `locked` (a locked
-    fact) or `flagged` (it reads like an instruction, is derived, cites a transcription, or
-    holds a conflict). None when nothing of the kind applies."""
+    fact), `flagged` (it reads like an instruction, is derived, cites a transcription, or holds
+    a conflict) or `removal` (it takes away what it does not name: a document must not empty the
+    user's exclusions or their never apply list through one click, so these are accepted one by
+    one). None when nothing of the kind applies."""
     section, key = payload.get("section"), payload.get("key")
     if not isinstance(section, str) or not isinstance(key, str) or items.is_locked(section, key):
         return LOCKED
     if _flags(payload) or payload.get("conflict"):
         return FLAGGED
+    if _takes_away(section, key, payload.get("action")):
+        return REMOVAL
     return None
 
 
@@ -477,12 +496,25 @@ def propose(
 
 
 def propose_payload(
-    db: Session, user_id: uuid.UUID, payload: Mapping[str, Any], now: datetime
+    db: Session,
+    user_id: uuid.UUID,
+    payload: Mapping[str, Any],
+    now: datetime,
+    *,
+    origin: items.Origin = items.Origin.agent,
 ) -> Outcome:
     """`propose` from a raw payload `{section, key, action, value, citations, ingestion_run_id?,
     flags?, conflict?: [{value, citations}], depends_on?}`: what `proposals.create` calls for the
-    target "profile". The values are built like an agent's (or like the merge's when the flags
-    say `derived`). Raises proposals.InvalidValueError when an item is refused."""
+    target "profile".
+
+    `origin` says whose value this is, and it comes from the caller's code, never from the
+    payload: `agent` (the default) for what a model wrote, `derived` for what the merge computed
+    itself (`skills.years_experience`). The `derived` flag follows the origin: one found in the
+    payload's flags is ignored, so no document can have a value labelled as computed. Raises
+    proposals.InvalidValueError when an item is refused, and ValueError for the origin `user`
+    (a user's own value goes through `accept` with `edited_value`)."""
+    if origin is items.Origin.user:
+        raise ValueError("a proposal is an agent's or derived: a user's value is an edit")
     flags = payload.get("flags") or ()
     others = payload.get("conflict") or ()
     run = payload.get("ingestion_run_id")
@@ -490,7 +522,9 @@ def propose_payload(
         raise ValueError("flags and conflict are lists")
     if any(not isinstance(other, Mapping) for other in others):
         raise ValueError("a conflict lists objects {value, citations}")
-    origin = items.Origin.derived if items.FLAG_DERIVED in flags else items.Origin.agent
+    flags = [flag for flag in flags if flag != items.FLAG_DERIVED]
+    if origin is items.Origin.derived:
+        flags.append(items.FLAG_DERIVED)
     section, key, action = payload.get("section"), payload.get("key"), payload.get("action")
     try:
         item = items.build(section, key, action, payload.get("value"), origin=origin)
@@ -787,7 +821,9 @@ def accept_many(
 
     Left out, each with its reason in `result.skipped`: an id that is not the user's pending
     profile item (`not_found`, `not_pending`), one of another run or section, a locked fact, a
-    flagged item (instruction, derived, transcribed, conflict), a stale one. What remains is
+    flagged item (instruction, derived, transcribed, conflict), a removal (`removal`: a `remove`,
+    or a `replace` of a whole list of words or terms), a stale one. `result.counts` counts them
+    by reason. What remains is
     applied section by section, in the order the items were proposed, all or nothing: when one
     item no longer fits its model (it is marked invalid) or the section cannot take it, nothing
     of that section is applied, `result.failed[section]` names the item, and its other items
