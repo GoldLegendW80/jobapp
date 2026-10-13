@@ -134,8 +134,11 @@ def test_a_users_action_and_advance(
     eh.finish_step(factory, run_id, settings, tokens=eh.run_of(factory, run_id).token_ceiling)
     if action is engine.resume:  # paused for another reason than its ceiling
         eh.set_run(factory, run_id, paused_reason=engine.QUEUE_DOWN)
+    # Continue carries the figure the page showed: one `H` here, the next step was never cut.
+    high = eh.run_of(factory, run_id).estimate_high
+    more = {"adds": high} if action is engine.continue_ else {}
     with factory() as db, db.begin():
-        assert action(db, alice, run_id, now()) is not None  # holds the run row (3)
+        assert action(db, alice, run_id, now(), **more) is not None  # holds the run row (3)
         other = Path(lambda: eh.advance(factory, run_id, settings))
         other.waits()
     other.ends()
