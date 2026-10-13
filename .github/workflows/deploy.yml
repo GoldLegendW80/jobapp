@@ -200,6 +200,16 @@ jobs:
             out="$(mktemp)"
             BACKUP_DIR="$BACKUPS/deploys" bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}" | tee "$out"
             dump="$(sed -n 's/^backup=//p' "$out" | tail -n 1)"
+            # A WARNING or an ERROR of the backup must be seen, not only read by whoever opens
+            # this group of a green job: a rotation held by the size check deletes nothing until
+            # the owner acts (ops/db.sh, size_check), and a BACKUP_KEEP above 7 breaks the 7
+            # days. As annotations they are on the summary page of the run. The step goes on.
+            while IFS= read -r line; do
+              case "$line" in
+                "   WARNING: "*) echo "::warning::predeploy backup: ${line:3:500}" ;;
+                "   ERROR: "*) echo "::error::predeploy backup: ${line:3:500}" ;;
+              esac
+            done <"$out"
             rm -f "$out"
             [[ -n "$dump" ]] || { echo "::error::ops/db.sh reported no backup file"; restore_previous; exit 1; }
           else

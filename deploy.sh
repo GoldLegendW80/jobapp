@@ -1190,12 +1190,28 @@ schedule_retention() {
   elif [[ -n "$line" ]]; then
     info "the line carries no BACKUP_KEEP: each run reads it from $RDIR/.env on $HOST, then from the default of the ops/db.sh deployed there"
   fi
-  if out="$(remote "$env bash $RDIR_Q/ops/db.sh retention" 2>&1)"; then
-    printf '%s\n' "$out" | grep -v '^keep=' || true
+  local rc=0 dir
+  out="$(remote "$env bash $RDIR_Q/ops/db.sh retention" 2>&1)" || rc=$?
+  # 3: the report is whole, and a rotation is held or its mark cannot be read (ops/db.sh).
+  if ((rc == 0 || rc == 3)); then
+    printf '%s\n' "$out" | grep -v -e '^keep=' -e '^held=' || true
   else
     info "retention: not reported. The ops/db.sh deployed on $HOST is older than this command, or it failed:"
     printf '%s\n' "$out" | sed 's/^/     /'
     info "deploy, then run ./deploy.sh backup-schedule status again"
+  fi
+  SCHEDULE_HELD=""
+  if ((rc == 3)); then
+    SCHEDULE_HELD="a rotation is held on $HOST, or its mark cannot be read (above)"
+    while IFS= read -r dir; do
+      dir="${dir#held=}"
+      # The one command that lifts it, when the database was meant to shrink.
+      if [[ "${dir##*/}" == deploys ]]; then
+        info "to lift the hold of $dir: BACKUP_DIR=$BDIR/deploys BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup"
+      else
+        info "to lift the hold of $dir: BACKUP_ACCEPT_SHRINK=1 ./deploy.sh backup"
+      fi
+    done < <(printf '%s\n' "$out" | grep '^held=' || true)
   fi
 }
 
@@ -1235,7 +1251,12 @@ cmd_backup_schedule() {
       fi
       schedule_retention "$line"
       local logf="$BDIR/backup.log" # relative paths resolve in the remote home, where ssh starts
-      remote "test -f $(printf '%q' "$logf") && { echo '   last lines of $logf:'; tail -n 5 $(printf '%q' "$logf") | sed 's/^/     /'; } || true"
+      # Everything above this point is the state now. The log is the past: its last lines are
+      # those of the last run, which may have been made under another retention (a WARNING about
+      # 14 from the night before a reinstall, for instance), so they are told apart.
+      remote "test -f $(printf '%q' "$logf") && { echo '   last lines of $logf (the last run, as it was then; the state now is above):'; tail -n 5 $(printf '%q' "$logf") | sed 's/^/     | /'; } || true"
+      # A hold must be seen (the review's N12): the status of this command says it.
+      [[ -z "$SCHEDULE_HELD" ]] || die "$SCHEDULE_HELD: its backups delete nothing until it is lifted"
       ;;
   esac
 }

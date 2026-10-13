@@ -1136,20 +1136,47 @@ rot 0 "$NOW"
 only . "$(d 0)"
 only deploys
 only incoming "$(d 19)"
-out_has "kept $(d 19) in $ROT/backups/incoming although it is 19 days old, the limit is 7: every other dump goes in this run, and a run never leaves the server with its own dump alone. The next run deletes it"
+out_has "kept $(d 19) in $ROT/backups/incoming although it is 19 days old, the limit is 7: every other dump goes in this run, and a run never leaves the server with its own dump alone. The next run that leaves another dump beside its own deletes it"
 [[ "$(grep -c "^rm -f -- $ROT/backups/" "$ROT/order")" == 5 ]] || fail "not the five others were deleted: $(cat "$ROT/order")"
 rot 0 "$(ago -1)"
 only . "$(d 0)" "$(d -1)"
 only incoming
 grep -q "although" "$WORK/out" && fail "the spared dump was spared a second time: $(cat "$WORK/out")"
-ok "every other dump of the three folders is past the limit: five go and the newest of them, wherever it is, stays for this run, with the reason; the next run, a day later, deletes it. One night more, in that case only"
+ok "every other dump of the three folders is past the limit: five go and the newest of them, wherever it is, stays for this run, with the reason; the next run, a day later, deletes it. One run more, in that case only"
 rot_new
 seed "$(d 20)" "deploys/$(d 20 predeploy-aaaaaaaaaaaa)" "incoming/$(d 20)"
 rot 0 "$NOW"
 only . "$(d 20)" "$(d 0)"
 only deploys
 only incoming
-ok "at the same time in three names, the one in the folder of the run is the one spared"
+rot_new
+seed "$(d 20 pre-restore)" "incoming/$(d 20)"
+rot 0 "$NOW"
+only . "$(d 20 pre-restore)" "$(d 0)"
+only incoming
+ok "at the same time in several names, the one in the folder of the run is the one spared: the time alone is compared, so a tag in the name does not decide"
+
+# The review's N14: the dump that is spared, and the dump that counts as left, must be something
+# to restore. An empty file with a dump's name is neither.
+rot_new
+seed "$(d 30)" "$(d 20)"
+: >"$ROT/backups/$(d 9)"
+rot 0 "$NOW"
+only . "$(d 20)" "$(d 0)"
+out_has "kept $(d 20) in $ROT/backups although it is 20 days old"
+rot_new
+seed "$(d 30)" "$(d 20)"
+: >"$ROT/backups/$(d 1)"
+rot 0 "$NOW"
+only . "$(d 20)" "$(d 1)" "$(d 0)"
+out_has "kept $(d 20) in $ROT/backups although it is 20 days old"
+rot_new
+: >"$ROT/backups/$(d 30)"
+: >"$ROT/backups/$(d 20)"
+rot 0 "$NOW"
+only . "$(d 0)"
+grep -q "although" "$WORK/out" && fail "an empty file was spared: $(cat "$WORK/out")"
+ok "an empty file named like a dump is never the one spared (the newest real dump is, though an empty one is newer), an empty file of yesterday does not count as a dump left, and when every other dump is empty none is kept"
 
 rot_new
 seed "$(d 30)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "deploys/$(d 9 predeploy-bbbbbbbbbbbb)"
@@ -1359,30 +1386,65 @@ seed "$(d 30)" "$(d 20)" "deploys/$(d 30 predeploy-aaaaaaaaaaaa)" "incoming/$(d 
 big "$(d 1)" 100
 before="$(tree_of)"
 rot 0 "$NOW"
-out_has "WARNING: this dump is 16 bytes, less than half of $(d 1) (100 bytes), the last one accepted in $ROT/backups"
+out_has "   WARNING: held for 1 run(s), since $(d 0). This dump is 16 bytes, less than half of $(d 1) (100 bytes), the last one accepted in $ROT/backups"
 out_has "this run keeps its dump and deletes NOTHING, in any folder"
 out_has "^backup=$ROT/backups/$(d 0)$"
 [[ "$(tree_of)" == "$(printf '%s\n%s\n%s\n' "$before" "backups/$(d 0)" "backups/.size-hold" | LC_ALL=C sort)" ]] ||
   fail "more than the new dump and the mark changed: $(tree_of | tr '\n' ' ')"
-[[ "$(cat "$ROT/backups/.size-hold")" == "$(d 1)" ]] || fail "the mark does not name the last accepted dump: $(cat "$ROT/backups/.size-hold")"
+[[ "$(cat "$ROT/backups/.size-hold")" == "$(printf '%s\n%s\n1' "$(d 1)" "$(d 0)")" ]] ||
+  fail "the mark does not hold the last accepted dump, the first dump held and the count: $(cat "$ROT/backups/.size-hold")"
 grep -q -e "deleted old backup" -e "although" "$WORK/out" && fail "a held run deleted or spared: $(cat "$WORK/out")"
-grep "^rm " "$ROT/order" | grep -q "backups/" && fail "a held run removed something in the backup folders: $(cat "$ROT/order")"
+grep "^rm " "$ROT/order" | grep -v "/\.size-hold\.new$" | grep -q "backups/" && fail "a held run removed something in the backup folders: $(cat "$ROT/order")"
 ok "yesterday's dump is 100 bytes and today's 16: exit 0, the dump kept and reported, a warning with both sizes, and not one of the four dumps past the limit deleted, in any folder"
 rot 0 "$(ago -1)"
-out_has "WARNING: this dump is 16 bytes, less than half of $(d 1) (100 bytes), the last one accepted in $ROT/backups"
+out_has "   WARNING: held for 2 run(s), since $(d 0). This dump is 16 bytes, less than half of $(d 1) (100 bytes), the last one accepted in $ROT/backups"
 grep -q "deleted old backup" "$WORK/out" && fail "the second small dump was measured against the first: $(cat "$WORK/out")"
 [[ -f "$ROT/backups/$(d 30)" && -f "$ROT/backups/deploys/$(d 30 predeploy-aaaaaaaaaaaa)" && -f "$ROT/backups/incoming/$(d 30)" ]] || fail "a held run deleted an old dump"
-rot 0 "$(ago -1 120000)" -- retention
-out_has "WARNING: the rotation of $ROT/backups is held: a dump came out less than half the size of $(d 1) (100 bytes), the last one accepted there, and its newest is $(d -1) (16 bytes)"
+rot 3 "$(ago -1 120000)" -- retention
+out_has "   WARNING: held for 2 run(s), since $(d 0): the rotation of $ROT/backups. A dump came out less than half the size of $(d 1) (100 bytes), the last one accepted there, and its newest is $(d -1) (16 bytes)"
+out_has "^held=$ROT/backups$"
+out_has "^keep=7$"
 grep -q "left alone" "$WORK/out" && fail "the mark is reported as a stray file: $(cat "$WORK/out")"
-ok "the night after, as small: still measured against the 100 bytes of the last accepted dump, not against yesterday's 16, so still nothing deleted; retention, so status, shows the hold with both sizes"
+ok "the night after, as small: still measured against the 100 bytes of the last accepted dump, not against yesterday's 16, so still nothing deleted; retention shows the hold with both sizes, the count and since when, and ends with status 3 so that it is seen"
+
+# The review's N11: prune is the command someone types when a folder grows, and what it would
+# take by count is exactly the larger, older dumps the hold keeps.
+before="$(tree_of)"
+rot 1 "$(ago -1 130000)" BACKUP_KEEP=1 -- prune
+out_has "db.sh: prune deletes nothing while the rotation of $ROT/backups is held"
+out_has "   WARNING: held for 2 run(s), since $(d 0): the rotation of $ROT/backups"
+no_delete "$before"
+ok "prune during a hold: refused with exit 1 and the hold shown, nothing deleted, the mark untouched"
+
 rot 0 "$(ago -2)" FAKE_DUMP_BYTES=50
-out_has "the size check passes again (50 bytes): the hold on the rotation of $ROT/backups is lifted"
+out_has "size check: this dump is 50 bytes, measured against $(d 1) (100 bytes): passed"
+out_has "the size check passes again after 2 run(s) held: the hold on the rotation of $ROT/backups is lifted"
 [[ ! -e "$ROT/backups/.size-hold" ]] || fail "the mark is still there"
 only . "$(d 1)" "$(d 0)" "$(d -1)" "$(d -2)"
 only deploys
 only incoming
-ok "a dump of half that size (50 of 100, not less than half) lifts the hold by itself, and that run deletes what was waiting"
+rot 0 "$(ago -2 120000)" -- retention
+grep -q -e WARNING -e ERROR -e "^held=" "$WORK/out" && fail "retention still shows a hold: $(cat "$WORK/out")"
+ok "a dump of half that size (50 of 100, not less than half) lifts the hold by itself, that run deletes what was waiting, and retention ends with 0 again"
+
+# The review's N12: a hold has no bound of its own, so from the seventh run held it is an ERROR
+# that says since when, and still nothing is deleted.
+rot_new
+seed "$(d 30)"
+big "$(d 8)" 100
+for n in 7 6 5 4 3 2; do
+  rot 0 "$(ago "$n")"
+  out_has "   WARNING: held for $((8 - n)) run(s), since $(d 7)"
+done
+rot 0 "$(ago 1)"
+out_has "   ERROR: held for 7 runs, since $(d 7). Nothing is deleted there, the folder grows by a dump at every run without any bound but the disk, and the 7 days wait with it. This dump is 16 bytes, less than half of $(d 8) (100 bytes)"
+grep -q "   WARNING: held" "$WORK/out" && fail "the seventh run held is still a warning: $(cat "$WORK/out")"
+rot 0 "$NOW"
+out_has "   ERROR: held for 8 runs, since $(d 7)"
+only . "$(d 30)" "$(d 8)" "$(d 7)" "$(d 6)" "$(d 5)" "$(d 4)" "$(d 3)" "$(d 2)" "$(d 1)" "$(d 0)" .size-hold
+rot 3 "$(ago 0 120000)" -- retention
+out_has "   ERROR: held for 8 runs, since $(d 7). Nothing is deleted there, the folder grows by a dump at every run without any bound but the disk, and the 7 days wait with it: the rotation of $ROT/backups"
+ok "seven nights held: six warnings, then an ERROR from the seventh run that says since which dump and that the folder grows without bound; ten dumps, three of them past the limit, none deleted; retention says the same"
 
 rot_new
 seed "$(d 30)"
@@ -1393,9 +1455,23 @@ rot 0 "$(ago -1)" BACKUP_ACCEPT_SHRINK=1
 out_has "BACKUP_ACCEPT_SHRINK is set: the size of this dump (16 bytes) is accepted and the hold on the rotation of $ROT/backups is lifted"
 only . "$(d 1)" "$(d 0)" "$(d -1)"
 rot 0 "$(ago -2)"
-grep -q -e WARNING -e "size check" "$WORK/out" && fail "the run after an accepted shrink is held again: $(cat "$WORK/out")"
+out_has "size check: this dump is 16 bytes, measured against $(d -1) (16 bytes): passed"
+grep -q -e WARNING -e ERROR "$WORK/out" && fail "the run after an accepted shrink is held again: $(cat "$WORK/out")"
 [[ ! -e "$ROT/backups/.size-hold" ]] || fail "the mark came back"
 ok "a database meant to shrink: one run with BACKUP_ACCEPT_SHRINK=1 lifts the hold and deletes what was waiting, and the run after it, without the variable, is measured against that accepted dump"
+# The review's N17: the same with a dump named ahead of the clock in the folder. It is not what a
+# run is measured against, so the override still lasts exactly one run.
+rot_new
+big "$(d 2)" 100
+big jobapp-2027-10-11T011700.dump 100
+rot 0 "$NOW"
+out_has "less than half of $(d 2) (100 bytes)"
+rot 0 "$(ago -1)" BACKUP_ACCEPT_SHRINK=1
+rot 0 "$(ago -2)"
+out_has "size check: this dump is 16 bytes, measured against $(d -1) (16 bytes): passed"
+grep -q -e WARNING -e ERROR "$WORK/out" && fail "with a dump named ahead in the folder the run after the override is held again: $(cat "$WORK/out")"
+ok "with a 100 byte dump named a year ahead in the folder: a run is measured against the newest dump that is not after it, the override lasts one run, and the next run passes against the accepted dump"
+
 rot_new
 seed "$(d 1)"
 before="$(tree_of)"
@@ -1408,31 +1484,115 @@ big "$(d 1)" 32
 seed "$(d 9)"
 rot 0 "$NOW"
 only . "$(d 1)" "$(d 0)"
-grep -q WARNING "$WORK/out" && fail "exactly half is held: $(cat "$WORK/out")"
+grep -q -e WARNING -e ERROR "$WORK/out" && fail "exactly half is held: $(cat "$WORK/out")"
+rot_new
+big "$(d 1)" 100
+rot 0 "$NOW" FAKE_DUMP_BYTES=40
+out_has "   WARNING: held for 1 run(s), since $(d 0). This dump is 40 bytes, less than half of $(d 1) (100 bytes)"
 rot_new
 rot 0 "$NOW"
-grep -q WARNING "$WORK/out" && fail "a first dump, with nothing to be measured against, is held: $(cat "$WORK/out")"
+out_has "size check: this dump is 16 bytes, with no other dump of this folder to be measured against: passed"
+grep -q -e WARNING -e ERROR "$WORK/out" && fail "a first dump, with nothing to be measured against, is held: $(cat "$WORK/out")"
+rot_new
+big "$(d 1)" 100
+printf 'BACKUP_ACCEPT_SHRINK=1\n' >>"$ROT/app/.env"
+rot 0 "$NOW"
+out_has "   WARNING: held for 1 run(s), since $(d 0)"
+ok "exactly half passes, 40 of 100 is held (less than half, not less than a quarter), a first dump passes, any other value of BACKUP_ACCEPT_SHRINK is refused before the dump, and the variable in .env is not read: it is for one run, from that run's environment"
+
+# The review's N16: restore-live writes its pre-restore dump without this check, so that dump is
+# never what a later run is measured against.
+rot_new
+big "$(d 2)" 100
+seed "$(d 1 pre-restore)" "$(d 9)"
+rot 0 "$NOW"
+out_has "   WARNING: held for 1 run(s), since $(d 0). This dump is 16 bytes, less than half of $(d 2) (100 bytes)"
+[[ -f "$ROT/backups/$(d 9)" ]] || fail "a run measured against a pre-restore dump deleted: $(cat "$WORK/out")"
+rot_new
+seed "$(d 1 pre-restore)"
+rot 0 "$NOW"
+out_has "size check: this dump is 16 bytes, with no other dump of this folder to be measured against: passed"
+ok "a small pre-restore dump of yesterday is not the reference: the run is measured against the 100 byte dump before it and held; with nothing but a pre-restore dump beside it, a run has nothing to be measured against"
+
+# The review's N15: the hold lives in that one file. It is read only when it is a regular file
+# that can be read, written whole or not at all, and a hold never ends because of the mark.
 rot_new
 seed "$(d 9)" "$(d 1)"
 printf 'not a dump name\n' >"$ROT/backups/.size-hold"
 rot 0 "$NOW"
 only . "$(d 1)" "$(d 0)"
+out_has "size check: the mark $ROT/backups/.size-hold names no dump of this folder, so no hold stands on its word"
 [[ ! -e "$ROT/backups/.size-hold" ]] || fail "a mark that names no dump of the folder was kept"
-ok "exactly half passes, a first dump passes, any other value of BACKUP_ACCEPT_SHRINK is refused before the dump, and a mark that names no dump of the folder holds nothing"
+for kind in link fifo folder; do
+  rot_new
+  seed "$(d 9)" "$(d 1)"
+  case "$kind" in
+    link)
+      # a link to a file that holds a dump's name: if it were read, the run would be held on it
+      printf '%s\n%s\n3\n' "$(d 1)" "$(d 1)" >"$ROT/outside/mark"
+      ln -s "$ROT/outside/mark" "$ROT/backups/.size-hold"
+      ;;
+    fifo) mkfifo "$ROT/backups/.size-hold" ;;
+    folder) mkdir "$ROT/backups/.size-hold" ;;
+  esac
+  before="$(tree_of)"
+  rot 1 "$NOW"
+  out_has "   WARNING: $ROT/backups/.size-hold is not a regular file that can be read"
+  out_has "whether the rotation of $ROT/backups is held cannot be known, so nothing was deleted"
+  out_has "^backup=$ROT/backups/$(d 0)$"
+  out_has "db.sh: the dump is written and kept, but the rotation is not complete"
+  [[ "$(tree_of)" == "$(printf '%s\n%s\n' "$before" "backups/$(d 0)" | LC_ALL=C sort)" ]] || fail "$kind: more than the new dump changed: $(tree_of | tr '\n' ' ')"
+  grep -q -e "deleted old backup" -e "held for" "$WORK/out" && fail "$kind: the mark was read, or the run deleted: $(cat "$WORK/out")"
+  rot 3 "$NOW" -- retention
+  out_has "   WARNING: $ROT/backups/.size-hold is not a regular file that can be read"
+  rot 1 "$NOW" BACKUP_KEEP=1 -- prune
+  out_has "db.sh: prune deletes nothing while the rotation of $ROT/backups is held, or while its mark cannot be read"
+  [[ -f "$ROT/backups/$(d 9)" && -f "$ROT/backups/$(d 1)" ]] || fail "$kind: prune deleted with a mark it cannot read"
+  [[ "$kind" != link || "$(cat "$ROT/outside/mark")" == "$(printf '%s\n%s\n3' "$(d 1)" "$(d 1)")" ]] ||
+    fail "the file a linked mark points to was written: $(cat "$ROT/outside/mark")"
+done
+ok "a mark that is a symbolic link (to a file naming a real dump), a FIFO or a folder is never opened: the run does not hang, deletes nothing, keeps and reports its dump and ends with exit 1; retention ends with 3 and prune is refused; a plain mark that names no dump holds nothing and is removed"
+rot_new
+seed "$(d 9)"
+big "$(d 1)" 100
+printf 'the owner of this file wants it kept\n' >"$ROT/outside/precious"
+ln -s "$ROT/outside/precious" "$ROT/backups/.size-hold.new" # where the mark is written before it is renamed
+rot 0 "$NOW"
+out_has "   WARNING: held for 1 run(s), since $(d 0)"
+[[ -f "$ROT/backups/.size-hold" && ! -L "$ROT/backups/.size-hold" && "$(sed -n '1p' "$ROT/backups/.size-hold")" == "$(d 1)" ]] ||
+  fail "the mark was not written as a file of its own"
+[[ "$(cat "$ROT/outside/precious")" == "the owner of this file wants it kept" ]] || fail "the mark was written through a link: $(cat "$ROT/outside/precious")"
+rot_new
+seed "$(d 9)"
+big "$(d 1)" 100
+mkdir -p "$ROT/backups/.size-hold.new/in-the-way"
+rot 1 "$NOW"
+out_has "db.sh: the dump is written and kept, but the rotation is not complete: could not write the mark $ROT/backups/.size-hold"
+out_has "   WARNING: held for 1 run(s), since $(d 0)"
+[[ -f "$ROT/backups/$(d 9)" ]] || fail "a held run whose mark could not be written deleted"
+rot_new
+seed "$(d 9)"
+big "$(d 2)" 100
+rot 0 "$(ago 1)"
+rm -f "$ROT/backups/.size-hold"
+rot 0 "$NOW"
+out_has "size check: this dump is 16 bytes, measured against $(d 1) (16 bytes): passed"
+ok "the mark is written beside itself and renamed: a link waiting at that name is replaced, never written through; a mark that cannot be written ends the run with exit 1 and nothing deleted; a mark removed by hand ends the hold, and the run then says in so many words which dump it was measured against"
 
 rot_new
 seed "$(d 30)" "deploys/$(d 9 predeploy-bbbbbbbbbbbb)"
 big "deploys/$(d 1 predeploy-aaaaaaaaaaaa)" 100
 rot 0 "$NOW" BACKUP_DIR="$ROT/backups/deploys" -- backup --tag predeploy-0123456789ab
-out_has "WARNING: this dump is 16 bytes, less than half of $(d 1 predeploy-aaaaaaaaaaaa) (100 bytes), the last one accepted in $ROT/backups/deploys"
+out_has "   WARNING: held for 1 run(s), since $(d 0 predeploy-0123456789ab). This dump is 16 bytes, less than half of $(d 1 predeploy-aaaaaaaaaaaa) (100 bytes), the last one accepted in $ROT/backups/deploys"
 out_has "^backup=$ROT/backups/deploys/$(d 0 predeploy-0123456789ab)$"
 only deploys "$(d 9 predeploy-bbbbbbbbbbbb)" "$(d 1 predeploy-aaaaaaaaaaaa)" "$(d 0 predeploy-0123456789ab)" .size-hold
 rot 0 "$(ago 0 030000)"
 only . "$(d 0 '' 030000)"
 only deploys "$(d 1 predeploy-aaaaaaaaaaaa)" "$(d 0 predeploy-0123456789ab)" .size-hold
-rot 0 "$(ago 0 040000)" -- retention
-out_has "WARNING: the rotation of $ROT/backups/deploys is held"
-ok "the same in the deploy's own folder: the predeploy backup ends well, so the deploy goes on, and deletes nothing there; the nightly run, whose own dump passes its check, still deletes by age in deploys/, and status shows the hold of that folder"
+rot 3 "$(ago 0 040000)" -- retention
+out_has "   WARNING: held for 1 run(s), since $(d 0 predeploy-0123456789ab): the rotation of $ROT/backups/deploys"
+out_has "^held=$ROT/backups/deploys$"
+ok "the same in the deploy's own folder: the predeploy backup ends well, so the deploy goes on, and deletes nothing there; the nightly run, whose own dump passes its check, still deletes by age in deploys/, and retention shows the hold of that folder"
 
 step "T10, safety: only whole dump names, directly in the folder, never through a link"
 rot_new
