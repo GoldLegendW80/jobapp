@@ -236,6 +236,7 @@ def _lock(db: Session, run_id: uuid.UUID, user_id: uuid.UUID | None = None) -> I
 
 
 def _steps(db: Session, run_id: uuid.UUID) -> list[IngestionRunStep]:
+    db.flush()  # the sessions do not flush by themselves: a re-read must not undo a change
     return list(
         db.scalars(
             sa.select(IngestionRunStep)
@@ -512,6 +513,7 @@ def _plan_again(db: Session, run: IngestionRun, document_id: uuid.UUID) -> None:
     a step that ran keeps its row. The 60 step rule: when the new parts do not fit, the
     document is left unread and the run ends partial."""
     step = IngestionRunStep
+    db.flush()
     db.execute(
         sa.delete(step).where(
             step.ingestion_run_id == run.id,
