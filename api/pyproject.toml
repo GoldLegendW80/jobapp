@@ -51,6 +51,10 @@ ingestion = [
     # it reads RC4 protected files only: on an upgrade, tests/ingestion/parser/test_pdf_text.py
     # must still find its fallback provider.
     "pypdf==6.20.1",
+    # Pure Python (py2.py3-none-any), PSF licence, no dependency: the XML of a DOCX is parsed
+    # with its parser, which refuses a DTD, an entity and an external reference (G7,
+    # sandbox/docx.py). 0.7.1 is the last release (2021); no advisory is open against it.
+    "defusedxml==0.7.1",
 ]
 dev = [
     "pytest==9.1.1",
