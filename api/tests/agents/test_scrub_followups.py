@@ -20,7 +20,7 @@ import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import logging_config
-from app.agents import credentials, failures, runner
+from app.agents import credentials, failures, runner, runs
 from app.agents import tools as app_tools
 from app.agents.backend import BackendRequest
 from app.agents.crypto import Keyring
@@ -151,6 +151,43 @@ def test_a_crash_that_quotes_the_credential_leaves_it_nowhere(
     assert API_KEY not in json.dumps([row.error, row.output, events(factory, run_id)], default=str)
     assert '"error": "RuntimeError"' in written.getvalue()  # the app's own line of the failure
     assert API_KEY not in written.getvalue()
+
+
+def test_a_traceback_that_quotes_the_credential_is_written_clean_through_the_runs_failure_log(
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice: uuid.UUID,
+    written: io.StringIO,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one path of a public run that writes an exception with its traceback is `_log_failure`
+    (the crash above logs the type alone): here the recording of the run's end fails, outside
+    the stream, with a message and a traceback that hold the credential. With the shape turned
+    off, so that only the run's registration hides it."""
+    monkeypatch.setattr(logging_config, "SHAPE", NO_SHAPE)
+
+    async def failing_finish(self: runner.Recorder, outcome: runs.Outcome) -> bool:
+        raise RuntimeError(f"store refused ANTHROPIC_API_KEY={API_KEY}")
+
+    monkeypatch.setattr(runner.Recorder, "finish", failing_finish)
+    save_credential(factory, keyring, alice)
+    run_id = new_run(factory, alice, {"message": "hello"})
+    rc = context(settings, factory, keyring)
+    asyncio.run(runner.execute(rc, run_id))
+    row = run_row(factory, run_id)
+    assert API_KEY not in json.dumps([row.error, row.output, events(factory, run_id)], default=str)
+    assert API_KEY not in written.getvalue()
+    assert not [
+        piece for piece in (API_KEY[i : i + 16] for i in range(60)) if piece in written.getvalue()
+    ]
+    (failure,) = [line for line in lines(written) if line["msg"] == "agent run end not recorded"]
+    assert "Traceback" in failure["exc"]
+    assert (
+        failure["exc"]
+        .rstrip()
+        .endswith(f"RuntimeError: store refused ANTHROPIC_API_KEY={runner.REDACTED}")
+    )
 
 
 # --- point 2: a credential too short to be scrubbed ---------------------------------------------
