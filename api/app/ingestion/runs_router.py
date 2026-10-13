@@ -33,7 +33,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.models import AgentRun, CredentialKind
@@ -137,6 +137,10 @@ class CeilingEntryOut(BaseModel):
 
 
 class ContinueIn(BaseModel):
+    # No other field: the body is a few bytes, so its schema is bounded and stays inside the
+    # default body class (body_limit.py; the guard in tests/identity/test_body_limit_api.py).
+    model_config = ConfigDict(extra="forbid")
+
     # The echo of `tokens.continue_adds` as the page showed it: the click agrees to that
     # figure and to no other. A strict whole number, so a string, a float or a boolean is a
     # 422 here and never reaches the comparison.

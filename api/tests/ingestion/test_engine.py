@@ -1386,14 +1386,18 @@ def test_ticks_that_pile_up_after_a_stall_count_as_one_failure(
         raise RuntimeError
 
     monkeypatch.setattr(engine, "_record", broken)
+    # One fixed instant for the whole test: with the real clock, the gap was measured from the
+    # first failure while the later ticks read a later "now", so a slow machine pushed the
+    # "just under the gap" tick over it (seen in the full local check of 2026-10-13).
+    first = now()
     for _ in range(2 * engine.ADVANCE_FAILURES):
-        asyncio.run(engine.tick(factory, None, now, settings))
+        asyncio.run(engine.tick(factory, None, lambda: first, settings))
     run = eh.run_of(factory, run_id)
     assert (run.status, run.advance_failures) == (RunStatus.running, 1)
     just_under = engine.ADVANCE_FAILURE_GAP - timedelta(seconds=1)
-    asyncio.run(engine.tick(factory, None, lambda: now() + just_under, settings))
+    asyncio.run(engine.tick(factory, None, lambda: first + just_under, settings))
     assert eh.run_of(factory, run_id).advance_failures == 1
-    asyncio.run(engine.tick(factory, None, lambda: now() + engine.ADVANCE_FAILURE_GAP, settings))
+    asyncio.run(engine.tick(factory, None, lambda: first + engine.ADVANCE_FAILURE_GAP, settings))
     run = eh.run_of(factory, run_id)
     assert (run.status, run.advance_failures) == (RunStatus.running, 2)
     # The cron ticks every minute: real ticks are always further apart than the gap.

@@ -189,6 +189,7 @@ pre-commit run --all-files
 pre-commit run gitleaks-commits --hook-stage manual      # the secret scan of CI: the whole history of the branch (at a commit the hook reads the staged changes only)
 (cd api && uv run --native-tls pytest -m "not docker")    # with TEST_DATABASE_URL, or Docker for a throwaway database
 pnpm --dir web lint && pnpm --dir web typecheck && pnpm --dir web test && pnpm --dir web build
+# a new or changed journey: run the web type check above, it covers web/e2e (Playwright runs a journey without type checking it)
 tests/deploy_test.sh                                     # when deploy.sh, ops/ or tests/*.sh change
 tests/migrate_test.sh                                    # by hand, not in CI: when ops/migrate.sh or api/alembic/env.py change (real Docker, four api builds, no other scratch stack up)
 tests/ci_runners_test.sh                                 # when ops/ci-runners.sh, ops/ci-rerun.sh, ops/ci-runner/ or the workflows change

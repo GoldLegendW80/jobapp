@@ -199,6 +199,57 @@ run 1 env LOCAL_CHECK_STUB="$WORK/fail.sh" "$CHECK" --base origin/long
 out_has "secret scan: 50 commits, after $(git -C "$REPO" rev-parse 'origin/long~50') up to $(git -C "$REPO" rev-parse origin/long) (no commit in the last 200 of origin/long has a PASS record: from 50 commits before it)"
 ok "a failing step is exit 1 with the step named, the end of its log shown, its log kept, and no record"
 
+# --- the ports of the journey stacks ---------------------------------------------------------------
+# The stub gives the real s_journey a fake docker whose first `compose up` fails the way the
+# daemon answered in the second full run ("failed to bind port 127.0.0.1:<port>/tcp"): that
+# stack is taken down and started again on another port, one line says so, three starts at most.
+# Four groups claim their ports up front, and no two are the same.
+cat >"$WORK/ports.sh" <<'EOF'
+docker() {
+  echo "docker $*" >>"$STUB_CALLS"
+  case " $* " in
+  *" up "*)
+    echo "up $HTTP_PORT" >>"$STUB_CALLS"
+    if [[ "$(grep -c '^up ' "$STUB_CALLS")" -le "$STUB_UP_FAILS" ]]; then
+      echo "Error response from daemon: driver failed programming external connectivity on endpoint x: failed to bind port 127.0.0.1:$HTTP_PORT/tcp: address already in use" >&2
+      return 1
+    fi
+    ;;
+  esac
+  return 0
+}
+journey_play() { true; }
+stub_plan() {
+  pick_journey_ports apps ingestion identity sweep
+  cat "$WORK/ports/apps" "$WORK/ports/ingestion" "$WORK/ports/identity" "$WORK/ports/sweep" >"$STUB_CALLS.picked"
+  run_step journeys-sweep s_journey sweep || true
+}
+EOF
+export STUB_CALLS="$WORK/stack-calls"
+ups() { grep -c '^up ' "$STUB_CALLS" || true; }
+downs() { grep -c ' down ' "$STUB_CALLS" || true; }
+
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports.sh" STUB_UP_FAILS=0 "$CHECK" --only journeys
+out_has "journeys-sweep             PASS"
+[[ "$(ups)" == 1 && "$(downs)" == 1 ]] || fail "a stack that starts at once: $(ups) starts, $(downs) teardowns"
+[[ "$(wc -l <"$STUB_CALLS.picked" | tr -d ' ')" == 4 && -z "$(sort "$STUB_CALLS.picked" | uniq -d)" ]] ||
+  fail "the four stacks were given ports that are not four different ones: $(tr '\n' ' ' <"$STUB_CALLS.picked")"
+
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports.sh" STUB_UP_FAILS=1 "$CHECK" --only journeys
+out_has "journeys-sweep             PASS"
+logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
+[[ "$(ups)" == 2 && "$(downs)" == 2 ]] || fail "one failed start: $(ups) starts, $(downs) teardowns (expected 2 and 2)"
+[[ "$(grep -c '^retry ' "$logs/journeys-sweep.log")" == 1 ]] || fail "one retry should leave one line in the log of the step"
+[[ "$(grep '^up ' "$STUB_CALLS" | sort -u | wc -l | tr -d ' ')" == 2 ]] || fail "the second start used the port that was taken"
+
+: >"$STUB_CALLS"
+run 1 env LOCAL_CHECK_STUB="$WORK/ports.sh" STUB_UP_FAILS=3 "$CHECK" --only journeys
+out_has "journeys-sweep             FAIL"
+[[ "$(ups)" == 3 ]] || fail "a port that is always taken: $(ups) starts, expected 3"
+ok "a stack that cannot bind its port is taken down and started on another, three starts at most, and four stacks hold four different ports"
+
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
 # it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded

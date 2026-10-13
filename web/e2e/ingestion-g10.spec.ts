@@ -152,6 +152,20 @@ let errors: string[];
 const ids: Record<string, string> = {};
 const runs: string[] = [];
 
+// The project checks indexed access: these return the element or fail with a clear message.
+function at<T>(list: readonly T[], index: number): T {
+  const one = list[index];
+  if (one === undefined)
+    throw new Error(`expected an element at index ${index} of ${list.length}`);
+  return one;
+}
+
+function idOf(name: string): string {
+  const one = ids[name];
+  if (one === undefined) throw new Error(`no document stored as ${name}`);
+  return one;
+}
+
 test.beforeAll(async ({ browser }) => {
   context = await newContext(browser);
   page = await context.newPage();
@@ -279,7 +293,7 @@ test("a new user saves a credential and adds two documents on the documents step
 });
 
 test("a start is refused without the consent, then the run goes through both steps to done", async () => {
-  const documents = [ids[FIRST], ids[SECOND]];
+  const documents = [idOf(FIRST), idOf(SECOND)];
   const before = await estimateOf(documents);
   expect(before.steps).toBe(2);
   expect(before.reused_steps).toBe(0);
@@ -332,7 +346,7 @@ test("a start is refused without the consent, then the run goes through both ste
   expect(done.finished_at).not.toBeNull();
   expect(done.current_agent_run_id).toBeNull();
   // The second step waits two seconds before each of its messages: it was seen running.
-  expect([...seen]).toContain(`${done.steps[1].position} running`);
+  expect([...seen]).toContain(`${at(done.steps, 1).position} running`);
   expect(
     done.steps.map((step) => [step.document_name, step.kind, step.status]),
   ).toEqual([
@@ -369,7 +383,7 @@ test("a start is refused without the consent, then the run goes through both ste
 });
 
 test("a second run over the same documents reuses both steps and calls no model", async () => {
-  const documents = [ids[FIRST], ids[SECOND]];
+  const documents = [idOf(FIRST), idOf(SECOND)];
   const quote = await estimateOf(documents);
   expect(quote.reused_steps).toBe(2);
   const run = await started(quote, documents);
@@ -393,7 +407,7 @@ test("a run pauses on its ceiling between two steps and one Continue finishes it
     expect(stored.status()).toBe(201);
     ids[name] = ((await stored.json()) as { id: string }).id;
   }
-  const documents = [ids[LARGE], ids[PLAIN]];
+  const documents = [idOf(LARGE), idOf(PLAIN)];
   const quote = await estimateOf(documents);
   const high = quote.tokens.high;
   expect(quote.tokens.ceiling).toBe(2 * high);
@@ -477,7 +491,7 @@ test("a run pauses on its ceiling between two steps and one Continue finishes it
 });
 
 test("a run that reads a document again is cancelled while its step runs", async () => {
-  const documents = [ids[SECOND]];
+  const documents = [idOf(SECOND)];
   expect((await estimateOf(documents)).reused_steps).toBe(1);
   const quote = await estimateOf(documents, documents);
   expect(quote.reused_steps).toBe(0);
@@ -486,10 +500,10 @@ test("a run that reads a document again is cancelled while its step runs", async
   const running = await until(
     run.id,
     "the step runs",
-    (now) => now.steps[0].status !== "planned",
+    (now) => at(now.steps, 0).status !== "planned",
   );
-  expect(running.steps[0].status).toBe("running");
-  expect(running.current_agent_run_id).toBe(running.steps[0].agent_run_id);
+  expect(at(running.steps, 0).status).toBe("running");
+  expect(running.current_agent_run_id).toBe(at(running.steps, 0).agent_run_id);
 
   const cancel = await act(run.id, "cancel");
   expect(cancel.status()).toBe(200);
@@ -499,7 +513,7 @@ test("a run that reads a document again is cancelled while its step runs", async
     (now) => !ACTIVE.includes(now.status),
   );
   expect(cancelled.status).toBe("cancelled");
-  expect(cancelled.steps[0].status).toBe("cancelled");
+  expect(at(cancelled.steps, 0).status).toBe("cancelled");
   expect(cancelled.finished_at).not.toBeNull();
   expect(cancelled.counts).toMatchObject({ done: 0, cancelled: 1 });
   expect((await act(run.id, "cancel")).status()).toBe(409);
@@ -534,7 +548,7 @@ test("another user sees none of these runs and can act on none", async ({
     await other.close();
   }
   // Nothing moved for the owner.
-  expect((await read(runs[3])).status).toBe("cancelled");
+  expect((await read(at(runs, 3))).status).toBe("cancelled");
 });
 
 test("the journey left no error in the browser console", () => {
