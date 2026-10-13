@@ -1,0 +1,26 @@
+# arm64, Darwin, Python 3.12.11
+# milliseconds of CPU for one call, the best of five
+
+characters | prepare | find, present | find, absent | check_item, 3 excerpts
+   125,000 |    18.1 |         0.059 |        0.026 |     0.600
+   250,000 |    36.3 |         0.069 |        0.041 |     0.582
+   500,000 |    73.0 |         0.086 |        0.076 |     0.641
+ 1,000,000 |   148.9 |         0.072 |        0.127 |     0.720
+
+prepare, 500,000 against 125,000 characters: 4.0 times (4 when linear)
+
+crafted documents of 500,000 characters | prepare | find (worst of 3 excerpts)
+                            one letter |    15.1 |    0.575
+                           two letters |    15.3 |    0.597
+                    letters and spaces |   187.6 |    0.115
+                               numbers |   188.1 |    0.567
+                         phone numbers |   134.8 |    0.525
+                     combining accents |   151.6 |    0.648
+                     marks without end |    60.0 |    0.636
+                          superscripts |   280.8 |    0.169
+                  ligature of eighteen |   123.9 |    0.001
+                               chinese |   208.9 |    0.133
+                              controls |   170.1 |    0.103
+
+memory of prepare(500,000 characters): peak 8.7 MB, kept 4.8 MB (9.6 bytes per character)
+N holds 500,000 characters, S 429,821
