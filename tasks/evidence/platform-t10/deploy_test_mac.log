@@ -140,6 +140,7 @@
    ok: with a 100 byte dump named a year ahead in the folder: a run is measured against the newest dump that is not after it, the override lasts one run, and the next run passes against the accepted dump
    ok: exactly half passes, 40 of 100 is held (less than half, not less than a quarter), a first dump passes, any other value of BACKUP_ACCEPT_SHRINK is refused before the dump, and the variable in .env is not read: it is for one run, from that run's environment
    ok: a small pre-restore dump of yesterday is not the reference: the run is measured against the 100 byte dump before it and held; with nothing but a pre-restore dump beside it, a run has nothing to be measured against
+   ok: an empty file named like yesterday's dump is not the reference either: the run is measured against the 100 byte dump before it and held; with nothing but that empty file beside it, a run has nothing to be measured against
    ok: a mark that is a symbolic link (to a file naming a real dump), a FIFO or a folder is never opened: the run does not hang, deletes nothing, keeps and reports its dump and ends with exit 1; retention ends with 3 and prune is refused; a plain mark that names no dump holds nothing and is removed
    ok: the mark is written beside itself and renamed: a link waiting at that name is replaced, never written through; a mark that cannot be written ends the run with exit 1 and nothing deleted; a mark removed by hand ends the hold, and the run then says in so many words which dump it was measured against
    ok: the same in the deploy's own folder: the predeploy backup ends well, so the deploy goes on, and deletes nothing there; the nightly run, whose own dump passes its check, still deletes by age in deploys/, and retention shows the hold of that folder
@@ -221,4 +222,4 @@
    ok: a smoke that fails once the new stack is up: red, no rollback, .deployed-commit kept (issue #16, unchanged)
    ok: first install on an empty database: db started alone, every migration applied, then the stack
 
-All 162 checks passed.
+All 163 checks passed.

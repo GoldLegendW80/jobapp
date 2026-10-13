@@ -1527,6 +1527,20 @@ seed "$(d 1 pre-restore)"
 rot 0 "$NOW"
 out_has "size check: this dump is 16 bytes, with no other dump of this folder to be measured against: passed"
 ok "a small pre-restore dump of yesterday is not the reference: the run is measured against the 100 byte dump before it and held; with nothing but a pre-restore dump beside it, a run has nothing to be measured against"
+# Nor is an empty file with a dump's name (N14 and N16 together): any dump is more than half of
+# nothing, so measured against it the run would pass and delete the good dumps before it.
+rot_new
+big "$(d 2)" 100
+seed "$(d 9)"
+: >"$ROT/backups/$(d 1)"
+rot 0 "$NOW"
+out_has "   WARNING: held for 1 run(s), since $(d 0). This dump is 16 bytes, less than half of $(d 2) (100 bytes)"
+[[ -f "$ROT/backups/$(d 9)" ]] || fail "a run measured against an empty file deleted: $(cat "$WORK/out")"
+rot_new
+: >"$ROT/backups/$(d 1)"
+rot 0 "$NOW"
+out_has "size check: this dump is 16 bytes, with no other dump of this folder to be measured against: passed"
+ok "an empty file named like yesterday's dump is not the reference either: the run is measured against the 100 byte dump before it and held; with nothing but that empty file beside it, a run has nothing to be measured against"
 
 # The review's N15: the hold lives in that one file. It is read only when it is a regular file
 # that can be read, written whole or not at all, and a hold never ends because of the mark.
