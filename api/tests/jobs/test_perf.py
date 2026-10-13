@@ -1,14 +1,19 @@
 """GET /api/jobs over 5,000 rows of one user (and 5,000 of another): the page, the counts and the
-histogram in one request, under LIST_BUDGET_MS (150 ms on the Mac, the median of 7 runs after
-a warm-up, through the whole app). CI machines are slower: CI=1 widens the budget to 1 second.
-GET /api/jobs/places over the same volume, with thousands of distinct free-text locations: every
-matching row goes through the gazetteer, under PLACES_BUDGET_MS (the same 150 ms on the Mac,
-1 second on CI; about 30 ms measured), and the answer stays bounded (UNPLACED_MAX locations,
-JOB_IDS_MAX ids per pin)."""
+histogram in one request. GET /api/jobs/places over the same volume, with thousands of distinct
+free-text locations: every matching row goes through the gazetteer, and the answer stays bounded
+(UNPLACED_MAX locations, JOB_IDS_MAX ids per pin).
 
-import os
+What is measured is what the volume costs, not how fast the machine is: the request over 5,000
+rows against the same request of a user who has BASELINE_ROWS, each the best of ROUNDS, taken
+in turn in the same seconds. A bound in milliseconds (150 ms, then 1 s on CI) failed on a busy
+machine with nothing wrong in the code (issue #104); a load slows both requests alike, and the
+best of several rounds is the one the load touched least. What the ratio still catches is what
+the guard is for: a list whose cost follows the size of the table (a lost index, every row
+loaded or sent, a query per row). It does not catch a cost added to every request whatever the
+volume, which the milliseconds printed with `-s` show (about 30 ms each on the Mac)."""
+
+import math
 import random
-import statistics
 import time
 import uuid
 from collections.abc import Callable
@@ -26,8 +31,16 @@ from tests.identity.api_helpers import Api, make_user
 from tests.jobs.conftest import NOW
 
 ROWS = 5_000
-LIST_BUDGET_MS = 1000.0 if os.environ.get("CI") else 150.0
-PLACES_BUDGET_MS = 1000.0 if os.environ.get("CI") else 150.0
+BASELINE_ROWS = 200  # a full page of every case below, and nothing more
+ROUNDS = 7
+# What 25 times the rows may cost, in times the request over BASELINE_ROWS. Measured on the Mac,
+# alone and beside four busy processes, with the same figures: the list from 1.1 (a filter on
+# dates) to 1.7 (a sort on the company), which is the page read through an index plus the
+# counts and the histogram over every row; the places 4.3, since every matching row goes
+# through the gazetteer. The bounds are a little over twice what was seen. In milliseconds
+# on that machine: about 40 for the list and 80 for the places, where the budget was 150.
+LIST_RATIO = 4.0
+PLACES_RATIO = 10.0
 WORDS = ["agent", "engineer", "platform", "data", "ml", "applied", "ai", "backend", "forward"]
 
 
@@ -36,12 +49,13 @@ def _bulk(
     user: uuid.UUID,
     seed: int,
     location: Callable[[int, random.Random], str] | None = None,
+    count: int = ROWS,
 ) -> None:
     rng = random.Random(seed)  # noqa: S311, synthetic test data
     statuses = list(JobStatus)
     types = list(ContractType)
     rows: list[dict[str, Any]] = []
-    for i in range(ROWS):
+    for i in range(count):
         title = " ".join(rng.sample(WORDS, 3)).title()
         rows.append(
             {
@@ -73,15 +87,42 @@ def _bulk(
         db.execute(sa.text("ANALYZE jobs"))
 
 
-def _median_ms(api: Api, token: str, params: dict[str, Any]) -> float:
-    api.get("/api/jobs", token=token, params=params)  # warm-up
-    times = []
-    for _ in range(7):
+def _best_ms(api: Api, path: str, requests: list[tuple[str, dict[str, Any]]]) -> list[float]:
+    """The best time of each request over ROUNDS, after a warm-up. The requests are taken in
+    turn, so that each round gives all of them the same machine."""
+
+    def once(token: str, params: dict[str, Any]) -> float:
         start = time.perf_counter()
-        response = api.get("/api/jobs", token=token, params=params)
-        times.append((time.perf_counter() - start) * 1000)
+        response = api.get(path, token=token, params=params)
+        elapsed = (time.perf_counter() - start) * 1000
         assert response.status_code == 200, response.text
-    return statistics.median(times)
+        return elapsed
+
+    for token, params in requests:
+        once(token, params)
+    best = [math.inf] * len(requests)
+    for _ in range(ROUNDS):
+        for index, (token, params) in enumerate(requests):
+            best[index] = min(best[index], once(token, params))
+    return best
+
+
+def _users(
+    factory: sessionmaker[Session],
+    api: Api,
+    location: Callable[[int, random.Random], str] | None = None,
+) -> tuple[str, str]:
+    """The tokens of a user with ROWS postings (beside another user's ROWS) and of the user
+    the baseline is measured on, who has BASELINE_ROWS of the same making."""
+    make_user(factory, email="perf@example.org", password_hash=None)
+    make_user(factory, email="other@example.org", password_hash="h")
+    make_user(factory, email="small@example.org", password_hash=None)
+    with factory() as db:
+        users = dict(db.execute(sa.select(User.email, User.id)).all())
+    _bulk(factory, users["perf@example.org"], 1, location)
+    _bulk(factory, users["other@example.org"], 2, location)
+    _bulk(factory, users["small@example.org"], 3, location, count=BASELINE_ROWS)
+    return api.login_token("perf@example.org"), api.login_token("small@example.org")
 
 
 @pytest.mark.parametrize(
@@ -101,24 +142,25 @@ def _median_ms(api: Api, token: str, params: dict[str, Any]) -> float:
 def test_list_over_5000_rows(
     api: Api, factory: sessionmaker[Session], params: dict[str, Any]
 ) -> None:
-    make_user(factory, email="perf@example.org", password_hash=None)
-    make_user(factory, email="other@example.org", password_hash="h")
-    with factory() as db:
-        users = dict(db.execute(sa.select(User.email, User.id)).all())
-    _bulk(factory, users["perf@example.org"], 1)
-    _bulk(factory, users["other@example.org"], 2)
-    token = api.login_token("perf@example.org")
+    token, small = _users(factory, api)
     first = api.get("/api/jobs", token=token, params=params).json()
     assert sum(first["counts_by_status"].values()) <= ROWS
     if not params:
         assert first["total"] == ROWS
     # The second page through the cursor costs the same.
     cursor = first["next_cursor"]
-    median = _median_ms(api, token, params)
-    paged = _median_ms(api, token, {**params, "cursor": cursor}) if cursor else 0.0
-    print(f"GET /api/jobs {params}: {median:.1f} ms, next page {paged:.1f} ms")
-    assert median < LIST_BUDGET_MS
-    assert paged < LIST_BUDGET_MS
+    requests = [(small, params), (token, params)]
+    if cursor:
+        requests.append((token, {**params, "cursor": cursor}))
+    baseline, *over_the_volume = _best_ms(api, "/api/jobs", requests)
+    ratios = [cost / baseline for cost in over_the_volume]
+    print(
+        f"GET /api/jobs {params}: {baseline:.1f} ms over {BASELINE_ROWS} rows, over {ROWS}: "
+        + ", ".join(f"{cost:.1f} ms" for cost in over_the_volume)
+        + " (the page, the next page), ratios "
+        + ", ".join(f"{ratio:.2f}" for ratio in ratios)
+    )
+    assert max(ratios) < LIST_RATIO, (baseline, over_the_volume)
 
 
 PLACED = ["Paris, France", "London", "Berlin, Germany", "Remote, United States", "Zürich",
@@ -136,13 +178,7 @@ def _varied_location(i: int, rng: random.Random) -> str:
 
 
 def test_places_over_5000_rows(api: Api, factory: sessionmaker[Session]) -> None:
-    make_user(factory, email="perf@example.org", password_hash=None)
-    make_user(factory, email="other@example.org", password_hash="h")
-    with factory() as db:
-        users = dict(db.execute(sa.select(User.email, User.id)).all())
-    _bulk(factory, users["perf@example.org"], 1, _varied_location)
-    _bulk(factory, users["other@example.org"], 2, _varied_location)
-    token = api.login_token("perf@example.org")
+    token, small = _users(factory, api, _varied_location)
 
     response = api.get("/api/jobs/places", token=token)
     assert response.status_code == 200, response.text
@@ -161,14 +197,12 @@ def test_places_over_5000_rows(api: Api, factory: sessionmaker[Session]) -> None
     print(f"GET /api/jobs/places: {len(response.content) / 1024:.0f} KiB")
     assert len(response.content) < 1_000_000
 
-    times = []
-    for _ in range(7):
-        start = time.perf_counter()
-        response = api.get("/api/jobs/places", token=token, params={"status": list(JobStatus)})
-        times.append((time.perf_counter() - start) * 1000)
-        assert response.status_code == 200, response.text
-    median = statistics.median(times)
+    everything = {"status": list(JobStatus)}
+    baseline, cost = _best_ms(api, "/api/jobs/places", [(small, everything), (token, everything)])
     filtered = api.get("/api/jobs/places", token=token, params={"q": "agent", "fit_min": 50})
     assert filtered.status_code == 200
-    print(f"GET /api/jobs/places over {ROWS} rows: {median:.1f} ms")
-    assert median < PLACES_BUDGET_MS
+    print(
+        f"GET /api/jobs/places: {baseline:.1f} ms over {BASELINE_ROWS} rows, {cost:.1f} ms "
+        f"over {ROWS}, ratio {cost / baseline:.2f}"
+    )
+    assert cost / baseline < PLACES_RATIO, (baseline, cost)
