@@ -1075,13 +1075,18 @@ for consent the first time (ingestion G16; the page that shows it is G11's).
   are quota and no amount is shown. On an API key three amounts in US dollars are shown, rounded
   to the cent, with the date of the prices.
 - **Prices are a dated table in `api/app/ingestion/pricing.py`**, not a live feed. To update it,
-  read the provider's pricing page and change `PRICES` and `PRICES_AS_OF` in one commit. A test
-  fails when a model a run can choose has no price.
-- **Consent** is one row of `ingestion_consents` per user and version of the text
-  (`CONSENT_VERSION` and `CONSENT_TEXT` in `api/app/ingestion/estimate_router.py`). `GET
-  /api/ingestion/consent` answers the text and whether the caller accepted it, `POST
-  /api/ingestion/consent {version}` records it. Changing the text means raising the version,
-  and every user is asked again; what was accepted before stays recorded with its date.
+  read the provider's pricing page (`PRICES_URL`) and change `PRICES` and `PRICES_AS_OF` in one
+  commit, with the same figures in `api/tests/ingestion/test_pricing.py`, which asserts every
+  price of every model as written on the page. A test also fails when a model a run can choose
+  has no price.
+- **Consent** is one row of `ingestion_consents` per user and version of the text. The texts
+  are kept by version (`CONSENT_TEXTS` in `api/app/ingestion/estimate_router.py`) and the
+  current version is the highest. `GET /api/ingestion/consent` answers the current text and
+  whether the caller accepted it, `POST /api/ingestion/consent {version}` records it. To change
+  the text, add the next version with the new words and its digest in
+  `api/tests/ingestion/test_consent_text.py`: every user is asked again, and what was accepted
+  before stays recorded with its date and its words. Editing the words of an existing version
+  fails that test.
 
 ```bash
 curl -s -X POST -H 'X-Requested-With: jobapp' -H 'Content-Type: application/json' -b cookies \

@@ -524,10 +524,17 @@ def test_the_consent_of_one_user_is_not_the_consent_of_another(
 def test_a_new_text_asks_again_and_keeps_what_was_accepted_before(
     api: Api, factory: sessionmaker[Session], alice: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    assert api.post(CONSENT, token=alice, json={"version": 1}).status_code == 200
-    monkeypatch.setattr(estimate_router, "CONSENT_VERSION", 2)
+    first = api.post(CONSENT, token=alice, json={"version": 1}).json()
+    assert (first["accepted"], first["text"]) == (True, estimate_router.CONSENT_TEXTS[1])
+    # A new text is a new entry beside the old one, and the current version is the highest.
+    new_words = "Synthetic words of a second version."
+    monkeypatch.setitem(estimate_router.CONSENT_TEXTS, 2, new_words)
+    monkeypatch.setattr(estimate_router, "CONSENT_VERSION", max(estimate_router.CONSENT_TEXTS))
     state = api.get(CONSENT, token=alice).json()
     assert (state["version"], state["accepted"], state["accepted_at"]) == (2, False, None)
+    # The words shown are those of the version asked for, and the old ones stay readable.
+    assert state["text"] == new_words
+    assert estimate_router.consent_text(1) == first["text"]
     # The version the page still shows is the old one: refused, nothing recorded.
     old = api.post(CONSENT, token=alice, json={"version": 1})
     assert old.status_code == 422

@@ -12,9 +12,11 @@ and 10 of tasks/ingestion/todo.md). Three routes, no run is started here:
 
 **Consent.** One row of `ingestion_consents` per user and version of the text. The current
 consent of a user is the row of `CONSENT_VERSION`: a user without it has not consented to the
-current text, whatever was accepted before. A new text is a new `CONSENT_VERSION`, and everyone
-is asked again. Recording is one `INSERT ... ON CONFLICT DO NOTHING`, so two posts at once
-leave one row with the first date. A version that is not the current one is refused (422): the
+current text, whatever was accepted before. The texts are kept by version in `CONSENT_TEXTS`
+and the current version is the highest: a new text is a new entry, never an edit of an old one
+(a test pins a digest of each version), and everyone is asked again. Recording is one
+`INSERT ... ON CONFLICT DO NOTHING`, so two posts at once leave one row with the first date.
+A version that is not the current one is refused (422): the
 caller accepted a text this version no longer shows.
 
 **For the tasks that call this module** (the contract is in the plan, block G16): `quote` is the
@@ -53,16 +55,34 @@ from app.ingestion.models import IngestionConsent, IngestionDocument, IngestionI
 
 logger = logging.getLogger("app.ingestion")
 
-# The text a user accepts, and its version. Change both together, never the text alone: the
-# version is what a consent row records, and a new one asks every user again.
-CONSENT_VERSION = 1
-CONSENT_TEXT = (
-    "When you start a run, the app sends the text and the page images of the documents you "
-    "selected, and the current sections of your profile without your contact details, to "
-    "Anthropic. They are sent through your own Claude subscription or Anthropic API key. "
-    "Deleting a document here removes it from this app. It does not delete what Anthropic "
-    "has already received."
-)
+# Every text a user was ever asked to accept, by version. A consent row records the version, so
+# the words of a version are never edited and never removed: they are what the row means. To
+# change what the user is told, ADD the next version with the new words. The current version is
+# the highest, so every user is asked again, and a consent to an older version never counts for
+# the new words. `tests/ingestion/test_consent_text.py` pins a SHA-256 of each version: editing
+# the words of an existing version fails there, and so does a version added without its digest.
+CONSENT_TEXTS: dict[int, str] = {
+    1: (
+        "When you start a run, the app sends the text and the page images of the documents you "
+        "selected, and the current sections of your profile without your contact details, to "
+        "Anthropic. They are sent through your own Claude subscription or Anthropic API key. "
+        "Deleting a document here removes it from this app. It does not delete what Anthropic "
+        "has already received."
+    ),
+}
+CONSENT_VERSION = max(CONSENT_TEXTS)
+CONSENT_TEXT = CONSENT_TEXTS[CONSENT_VERSION]
+
+
+def consent_text(version: int) -> str:
+    """The words of `version`, the ones a consent row of that version accepted. `LookupError`
+    for a version that never existed."""
+    try:
+        return CONSENT_TEXTS[version]
+    except KeyError:
+        raise LookupError(f"no consent text of version {version}") from None
+
+
 CONSENT_REMINDER = "The selected documents are sent to Anthropic through your own credential."
 CONSENT_OUTDATED = "The consent text has changed. Read the current text and accept it."
 
@@ -565,7 +585,7 @@ def estimate_run(body: EstimateIn, user: CurrentUser, db: Db) -> EstimateOut:
 def _consent_out(consent: IngestionConsent | None) -> ConsentOut:
     return ConsentOut(
         version=CONSENT_VERSION,
-        text=CONSENT_TEXT,
+        text=consent_text(CONSENT_VERSION),  # the words of the version asked for, never others
         reminder=CONSENT_REMINDER,
         accepted=consent is not None,
         accepted_at=consent.accepted_at if consent is not None else None,
