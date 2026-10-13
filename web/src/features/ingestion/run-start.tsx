@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, Play } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
@@ -65,6 +72,7 @@ export function RunStart() {
   });
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
   const [open, setOpen] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
 
   if (runs.isPending || documents.isPending)
     return (
@@ -150,6 +158,7 @@ export function RunStart() {
           </fieldset>
           <div className="flex flex-wrap items-center gap-2">
             <Button
+              ref={opener}
               disabled={selected.length === 0}
               onClick={() => {
                 setOpen(true);
@@ -186,6 +195,7 @@ export function RunStart() {
       {open ? (
         <StartDialog
           documentIds={selected}
+          opener={opener}
           onClose={() => {
             setOpen(false);
           }}
@@ -208,9 +218,12 @@ function canBeChosen(document: IngestionDocument): boolean {
  */
 function StartDialog({
   documentIds,
+  opener,
   onClose,
 }: {
   documentIds: string[];
+  /** The button that opened the dialog: it takes the focus back when nothing was started. */
+  opener: RefObject<HTMLButtonElement>;
   onClose: () => void;
 }) {
   const client = useQueryClient();
@@ -363,9 +376,12 @@ function StartDialog({
       <DialogContent
         className="max-h-[90dvh] overflow-y-auto sm:max-w-xl"
         onCloseAutoFocus={(event) => {
-          if (!started.current) return;
-          // The button that opened the dialog is gone: the run on the page takes the focus.
           event.preventDefault();
+          if (!started.current) {
+            opener.current?.focus();
+            return;
+          }
+          // The button that opened the dialog is gone: the run on the page takes the focus.
           window.requestAnimationFrame(() =>
             document.getElementById(RUN_HEADING_ID)?.focus(),
           );
@@ -382,7 +398,6 @@ function StartDialog({
         <div
           ref={noticeRef}
           tabIndex={-1}
-          role="alert"
           className="outline-none empty:hidden"
         >
           {notice ? (
