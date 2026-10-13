@@ -58,9 +58,18 @@ expand under NFKC, a very long address) is held as `~` and a hash, and "www.www.
 - `replace`: the key holds exactly the value afterwards: null fields clear the stored ones and
   words replace the stored ones. Settings of the stored entry that the value does not name
   (a gate's penalty, a board's switch) are kept. On a missing key it inserts.
-- `remove`: nothing is at the key afterwards: every entry with that key is removed, a single
+- `remove`: nothing is at the key afterwards: the entry with that key is removed, a single
   value is cleared, a list is emptied. On a missing key it changes nothing.
 Applying an item twice gives what applying it once gives.
+
+**One entry per item.** An item never changes more than one entry. When several stored entries
+share a key (two positions started the same year at one organisation, two titles that differ by
+two spaces), no item applies at that key, whatever its action: `apply` raises ProfileConflict
+with SHARED_KEY, the proposal stays pending and shows as a conflict, and "accept all" applies
+nothing of that section. The user tells the entries apart (or keeps one) and decides again; the
+item is then stale unless the entry left at the key is the one it was proposed against. `read`
+shows the first entry with the key and `held` answers None, so no reader treats several
+entries as one.
 
 **Where a new entry goes.** Existing entries are never reordered. A new employer or school is
 inserted newest first: before the first stored entry that is certainly older, after every entry
@@ -198,6 +207,10 @@ REASONS: Mapping[str, str] = {
     VALUE_NOT_EXPECTED: "an item that removes carries no value",
 }
 ASCII_DATE = "a date is YYYY or YYYY-MM"
+SHARED_KEY = (
+    "several entries of the profile share this key, so the item cannot say which one it is "
+    "about: tell them apart or keep one, then decide again"
+)
 ADVANCED_LIST = (
     "this list is written as regular expressions: its terms are edited by hand, not by an item"
 )
@@ -969,13 +982,19 @@ def apply(
     a user's edit of a proposed item replaces the entry the proposal was about, whatever the
     edited value is called now.
 
-    Raises ProfileConflict when the section as it is cannot take the item, and
-    pydantic.ValidationError when what is stored no longer fits its model.
+    An item changes one entry at most. When several stored entries share the key, whatever the
+    action, nothing is applied: the item cannot say which entry it is about.
+
+    Raises ProfileConflict when the section as it is cannot take the item (SHARED_KEY when
+    several entries share the key), and pydantic.ValidationError when what is stored no longer
+    fits its model.
     """
     after = canonical(section, data)
     slot, key = parse_key(section, item.key if at is None else at)
     exact = item.action is Action.replace
     value = item.value
+    if slot.keyed and len(_matches(slot, after[slot.name], key)) > 1:
+        raise ProfileConflict(SHARED_KEY)
     if item.action is Action.remove:
         if slot.keyed:
             after[slot.name] = [

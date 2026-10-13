@@ -754,10 +754,16 @@ def test_what_cannot_be_undone(factory: sessionmaker[Session], alice: uuid.UUID)
         ).id
     with pytest.raises(proposals.InvalidValueError, match="cannot be applied"):
         undo(factory, alice, note)
-    # two blocks share a key once folded: what an item does there has no exact way back
-    twins = [{"title": "Side projects", "body": "One."}, {"title": "side  PROJECTS", "body": "2."}]
-    save(factory, alice, "facts", {"blocks": twins})
-    accept(factory, alice, pending, profile_revision=revision(factory, alice))
+    # the user renames the entry onto the key of another block: two blocks share that key
+    # afterwards, and what the item did there has no exact way back
+    save(factory, alice, "facts", {"blocks": [{"title": "Other block", "body": BLOCK["body"]}]})
+    accept(
+        factory,
+        alice,
+        pending,
+        edited_value={"title": "other  BLOCK", "body": "Two."},
+        profile_revision=revision(factory, alice),
+    )
     assert row(factory, pending).payload["undo"] is None
     with pytest.raises(ip.UndoError) as exact:
         undo(factory, alice, pending)
@@ -1162,3 +1168,114 @@ def test_propose_refuses_a_key_that_build_does_not_give(
             ip.propose(db, alice, odd, tick(), ingestion_run_id=RUN, citations=[cite()])
     with factory() as db:
         assert db.scalar(sa.select(sa.func.count()).select_from(Proposal)) == 0
+
+
+# --- one entry per item (review of PR #109, B2) ---------------------------------------------------
+
+SHARED = "employers:globex-2021"
+
+
+def twins() -> list[dict[str, Any]]:
+    """Two positions started the same year at one organisation: one key for both."""
+    return [
+        {
+            "key": "globex-apprentice",
+            "organisation": "Globex",
+            "title": "Apprentice",
+            "start": "2021-09",
+            "end": "2022-08",
+            "location": None,
+            "contract": "apprenticeship",
+        },
+        {
+            "key": "globex-intern",
+            "organisation": "Globex",
+            "title": "Intern",
+            "start": "2021-02",
+            "end": "2021-07",
+            "location": None,
+            "contract": "apprenticeship",
+        },
+    ]
+
+
+def save_positions(
+    factory: sessionmaker[Session], user: uuid.UUID, employers: list[dict[str, Any]]
+) -> None:
+    save(factory, user, "experience", {**full("experience"), "employers": employers})
+
+
+def titles(factory: sessionmaker[Session], user: uuid.UUID) -> list[str]:
+    return [employer["title"] for employer in stored(factory, user, "experience")["employers"]]
+
+
+@pytest.mark.parametrize("action", ["remove", "replace", "add"])
+def test_no_item_applies_at_a_key_two_entries_share(
+    factory: sessionmaker[Session], alice: uuid.UUID, action: str
+) -> None:
+    save_all(factory, alice)
+    save_positions(factory, alice, twins())
+    before = stored(factory, alice, "experience")
+    slot = items.SLOTS["experience"]["employers"]
+    assert [items.entry_key(slot, entry) for entry in before["employers"]] == [SHARED, SHARED]
+    value = {"organisation": "Globex", "title": "Lead", "start": "2021-05"}
+    if action == "remove":
+        pid = made(factory, alice, "experience", SHARED, action=action)
+    else:
+        pid = made(factory, alice, "experience", "employers", value, action=action)
+    seen = ip.review(row(factory, pid).payload, before)
+    assert (seen.after, seen.bulk, seen.problem) == (None, ip.PROFILE_CONFLICT, items.SHARED_KEY)
+    assert seen.before == before["employers"][0]
+    with pytest.raises(proposals.ProfileConflictError):
+        accept(factory, alice, pid, profile_revision=revision(factory, alice))
+    assert stored(factory, alice, "experience") == before
+    assert row(factory, pid).status is ProposalStatus.pending
+    assert revisions(factory, alice)[-1][1] == "experience"  # the save above, no later revision
+    assert len(revisions(factory, alice)) == revision(factory, alice)
+
+
+def test_a_removal_takes_the_one_entry_it_showed_and_is_stale_for_another(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    save_all(factory, alice)
+    first, second = twins()
+    save_positions(factory, alice, [first, second])
+    pid = made(factory, alice, "experience", SHARED, action="remove")
+    # the user moves the position the proposal showed to another year: the key now holds the
+    # other one, which the item never showed, so the removal is stale and takes nothing
+    save_positions(factory, alice, [{**first, "start": "2022-01"}, second])
+    with pytest.raises(proposals.StaleItemError):
+        accept(factory, alice, pid)
+    assert titles(factory, alice) == ["Apprentice", "Intern"]
+    # the other way round: the second position is told apart, the key holds the one it showed
+    save_positions(factory, alice, [first, {**second, "start": "2020-02", "end": "2020-07"}])
+    seen = ip.review(row(factory, pid).payload, stored(factory, alice, "experience"))
+    assert (seen.before["title"], seen.after, seen.stale, seen.problem) == (
+        "Apprentice",
+        None,
+        False,
+        None,
+    )
+    accept(factory, alice, pid)
+    assert titles(factory, alice) == ["Intern"]
+    undo(factory, alice, pid)
+    assert titles(factory, alice) == ["Apprentice", "Intern"]
+
+
+def test_accept_all_applies_nothing_of_a_section_where_a_key_is_shared(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    blocks = [{"title": "Side projects", "body": "One."}, {"title": "side  PROJECTS", "body": "2."}]
+    save(factory, alice, "facts", {"blocks": blocks})
+    before = stored(factory, alice, "facts")
+    other = made(factory, alice, "facts", "blocks", {"title": "New block", "body": "A body."})
+    shared = made(factory, alice, "facts", "blocks", {"title": "SIDE PROJECTS", "body": "New."})
+    result = bulk(factory, alice)
+    failure = result.failed["facts"]
+    assert (failure.proposal_id, failure.reason, failure.message) == (
+        shared,
+        ip.PROFILE_CONFLICT,
+        items.SHARED_KEY,
+    )
+    assert (result.done, result.skipped) == ([], {other: ip.SECTION_FAILED})
+    assert stored(factory, alice, "facts") == before

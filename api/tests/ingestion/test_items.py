@@ -649,11 +649,26 @@ def test_keys_that_collide_after_normalisation() -> None:
     }
     assert items.read("facts", facts, "blocks:Hard Rules")["body"] == "First."
     assert items.held("facts", facts, "blocks:hard rules") is None
-    body = build("facts", "blocks", {"title": "HARD RULES", "body": "New."})
-    after = items.apply("facts", facts, body)["blocks"]
-    assert [block["body"] for block in after] == ["New.", "Second.", "Third."]
+    # an item changes one entry at most: where two share the key, no action applies
+    value = {"title": "HARD RULES", "body": "New."}
+    for action, given in (("add", value), ("replace", value), ("remove", None)):
+        key = "blocks" if given else "blocks:hard rules"
+        with pytest.raises(ProfileConflict) as shared:
+            items.apply("facts", facts, build("facts", key, given, action=action))
+        assert shared.value.message == items.SHARED_KEY
+        # the user's own value for the proposal, applied where the proposal was
+        if given:
+            typed = build("facts", "blocks", {"title": "Mine", "body": "x"}, origin=Origin.user)
+            with pytest.raises(ProfileConflict):
+                items.apply("facts", facts, typed, at="blocks:hard rules")
+    lines = {"never_apply": ["No sales roles.", "no  SALES roles."]}
+    line = build("search", "never_apply", "No sales roles.")
+    with pytest.raises(ProfileConflict):
+        items.apply("search", lines, build("search", line.key, action="remove"))
+    # once the entries are told apart, the item applies to the one at its key and to no other
+    facts["blocks"][1]["title"] = "Soft rules"
     removal = build("facts", "blocks:hard rules", action="remove")
-    assert items.apply("facts", facts, removal)["blocks"] == [facts["blocks"][2]]
+    assert items.apply("facts", facts, removal)["blocks"] == facts["blocks"][1:]
 
 
 def test_an_edit_applies_where_the_proposal_was() -> None:
