@@ -265,9 +265,145 @@ def test_the_time_budget_keeps_what_was_read() -> None:
     assert refusal(data, SpentAfter(0)) == "too_slow"
 
 
-def test_deep_nesting_and_control_characters_end_as_text() -> None:
-    opened = "".join(f'<w:sdt w:n="{word}">' for word in fx.words(50_000).split(" "))
-    deep = opened + fx.paragraph(fx.run("deep")) + "</w:sdt>" * 50_000
-    assert read(fx.docx(deep)).text == "deep"
+def nested(depth: int) -> bytes:
+    """A paragraph inside `depth` elements, each inside the last."""
+    opened = "".join(f'<w:sdt w:n="{word}">' for word in fx.words(depth).split(" "))
+    return fx.docx(opened + fx.paragraph(fx.run("deep")) + "</w:sdt>" * depth)
+
+
+def test_nesting_is_read_to_a_depth_no_document_has_and_control_characters_end_as_text() -> None:
+    # Around the paragraph: w:document and w:body. Inside it: w:r and w:t.
+    assert docx.DEPTH_MAX == 512
+    assert read(nested(docx.DEPTH_MAX - 5)).text == "deep"
+    assert refusal(nested(docx.DEPTH_MAX - 4)) == "bomb"
+    assert refusal(nested(50_000)) == "bomb"
     odd = fx.docx(fx.paragraph(fx.run("a&#x85;b\u2028c&#x9;d&#x7f;")))
     assert read(odd).text == "a\nb\nc\td"
+
+
+def scrambled(count: int) -> list[str]:
+    """`count` distinct names that pack as text does, not as a bomb."""
+    return [f"{number * 2654435761 % 2**32:08x}" for number in range(count)]
+
+
+def named(count: int) -> bytes:
+    """A document that reads "named" and holds `count` distinct names: the eleven of the
+    fixture (five prefixes, w:document, w:body, w:p, w:r, w:t and xml:space) and new ones."""
+    new = "".join(f'<w:q{name} w:a{name}=""/>' for name in scrambled((count - 11) // 2))
+    return fx.docx(fx.paragraph(fx.run("named")), new + ("<w:odd/>" if count % 2 == 0 else ""))
+
+
+def test_a_part_may_hold_the_names_of_a_vocabulary_and_no_more() -> None:
+    """The parser keeps every distinct name for as long as it lives: 19 MiB of new names cost
+    it more than 500 MiB (measured, the G7 block of the plan). Both targets count them, in the
+    body and in the relationship file, and stop at NAMES_MAX. Each shape is read with twenty
+    names fewer, so it is the count that refuses it, not a cap of the archive."""
+    assert docx.NAMES_MAX == 4_096
+    assert read(named(docx.NAMES_MAX)).text == "named"
+    assert refusal(named(docx.NAMES_MAX + 1)) == "bomb"
+    line = fx.paragraph(fx.run("named"))
+    for most, code in ((docx.NAMES_MAX - 20, ""), (docx.NAMES_MAX, "bomb")):
+        names = scrambled(most)
+        skipped = "".join(f"<w:q{name}/>" for name in names)
+        shapes = {
+            # A name is counted where it is skipped too: inside what was deleted.
+            "skipped": fx.docx(line, f"<w:del>{skipped}</w:del>"),
+            "prefixes": fx.docx(line, "".join(f'<w:r xmlns:p{name}="urn:x"/>' for name in names)),
+            "one tag": fx.docx(line, f"<w:r {' '.join(f'a{name}=""' for name in names)}/>"),
+            "the relationship file": fx.zip_of(
+                [
+                    ("[Content_Types].xml", fx.CONTENT_TYPES),
+                    ("word/document.xml", fx.part("w:document", line)),
+                    (
+                        "word/_rels/document.xml.rels",
+                        fx.relationships({"rId1": fx.LINK}).replace(
+                            "</R", "".join(f"<q{name}/>" for name in names) + "</R"
+                        ),
+                    ),
+                ]
+            ),
+        }
+        for shape, data in shapes.items():
+            if code:
+                assert refusal(data) == code, shape
+            else:
+                assert read(data).text == "named", shape
+    # The same names again and again are one name each.
+    again = "".join(
+        f'<w:q{number % 100} w:a{number % 100}="{word}"/>'
+        for number, word in enumerate(fx.words(20_000).split(" "))
+    )
+    assert read(fx.docx(line, again)).text == "named"
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: fx.distinct_names_docx("element", fx.MIB),
+        lambda: fx.distinct_names_docx("attribute", fx.MIB),
+        lambda: fx.distinct_names_docx("one tag", fx.MIB),
+        lambda: fx.deep_docx(fx.MIB),
+    ],
+    ids=["a new element name each time", "a new attribute name each time", "one tag", "deep"],
+)
+def test_the_shapes_that_grow_the_parser_are_a_bomb(make: Any) -> None:
+    """Their 19 MiB against the real child and its limit: test_archive_container.py."""
+    assert refusal(make()) == "bomb"
+
+
+def out_of_memory(code: int) -> type:
+    """A parser that fails as expat does when the kernel gives it no more memory (code 1)."""
+
+    class Parser:
+        def __init__(self, **options: Any) -> None:
+            return None
+
+        def feed(self, content: bytes) -> None:
+            error = docx.ElementTree.ParseError("out of memory: line 1, column 0")
+            error.code, error.position = code, (1, 0)
+            raise error
+
+    return Parser
+
+
+def test_no_memory_left_is_a_bomb_and_never_an_exception(monkeypatch: pytest.MonkeyPatch) -> None:
+    """At the address space limit either Python or expat is refused its memory, wherever the
+    parsing is: both end as `bomb`, a code of the file, in the body, in a header and in the
+    relationship file (where another parse error only loses the header or the addresses)."""
+    data = fx.docx(fx.paragraph(fx.hyperlink("Here", "r1")), links={"r1": fx.LINK}, headers=["H"])
+
+    def no_memory(self: Any, *told: Any) -> None:
+        raise MemoryError
+
+    for where, method in ((docx.Walker, "data"), (docx.Walker, "start"), (docx._Links, "start")):
+        with monkeypatch.context() as patched:
+            patched.setattr(where, method, no_memory)
+            assert docx.handle(data, {}, Plenty()) == docx.failure("bomb")
+            assert refusal(data) == "bomb"
+    with monkeypatch.context() as patched:
+        patched.setattr(docx.ElementTree, "DefusedXMLParser", out_of_memory(1))
+        assert docx.handle(data, {}, Plenty()) == docx.failure("bomb")
+        assert refusal(fx.docx(fx.paragraph(fx.run("No link, no header.")))) == "bomb"
+    with monkeypatch.context() as patched:  # any other error of the parser stays what it was
+        patched.setattr(docx.ElementTree, "DefusedXMLParser", out_of_memory(2))
+        assert refusal(data) == "unreadable"
+
+
+def test_an_address_cannot_add_a_line_a_form_feed_or_turn_the_line_around() -> None:
+    def linked(target: str) -> pc.Parsed:
+        return read(fx.docx(fx.paragraph(fx.hyperlink("te", "r1")), links={"r1": target}))
+
+    odd = (
+        "https://x.example/&#8232;LINE&#9;SEP&#8233;PARA&#10;SEP&#13;&#x85;&#x202E;gnp&#x2066;"
+        "&#x200F;&#xA0;&#x7f; end"
+    )
+    assert linked(odd).text == "te (https://x.example/LINESEPPARASEPgnp\xa0end)"
+    # XML has no form feed and no NUL, written or as a reference: the relationship file does
+    # not parse, and the text is read without its addresses.
+    for refused in ("&#12;", "\x0c", "&#0;"):
+        assert linked(f"https://x.example/a{refused}b").text == "te"
+    longest = "https://x.example/" + "a" * (docx.LINK_MAX_CHARS - 18)
+    assert linked(longest).text == f"te ({longest})"
+    assert linked(longest + "a").text == "te"
+    # What is dropped is not counted.
+    assert linked("&#8232; &#9;" + longest).text == f"te ({longest})"

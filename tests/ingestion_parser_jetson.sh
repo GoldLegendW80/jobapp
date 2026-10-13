@@ -238,6 +238,27 @@ def export(count):
     )
 
 
+def names_docx(what):
+    """19 MiB of names that are each new, under every cap of the archive: one element each,
+    which the count of the walker refuses early, or the attributes of one start tag, which the
+    address space limit of the child stops (B1 of the review of PR #119)."""
+    space = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    if what == "element":
+        inside = "".join(f"<q{n:08x}/>" for n in range(19 * MIB // 12))
+    else:
+        names = " ".join(f'a{n:08x}=""' for n in range(19 * MIB // 13))
+        inside = f"<w:r {names}/>"
+    body = f"<w:document {space}><w:body>{inside}</w:body></w:document>"
+    return archive([("[Content_Types].xml", "<Types/>"), ("word/document.xml", body)])
+
+
+# (label, kind of parser job, the file): each must be answered file/bomb, and a server code
+# or a read is a PROBLEM.
+REFUSED = (
+    ("docx, a new element name each time", "docx", lambda: names_docx("element")),
+    ("docx, one tag of new names, at the memory limit", "docx", lambda: names_docx("one tag")),
+)
+
 # (label, kind of parser job, the file, rounds): the archives of G7.
 ARCHIVES = (
     ("docx, a CV", "docx", lambda: docx(60), 5),
@@ -305,6 +326,20 @@ async def main():
              "wall_ms": spread(wall), "child_cpu_ms": spread(cpu),
              "child_max_rss_mib": spread(rss), "child_max_vm_mib": spread(vm)}
         )
+    found["refused"] = []
+    for label, kind, make in REFUSED:
+        data = make()
+        started = time.monotonic()
+        try:
+            await pc.parse(kind, data, timeout_s=90)
+            answer = "read"
+        except pc.ParserRefusedError as refused:
+            answer = f"{refused.failure}/{refused.code}"
+        found["refused"].append(
+            {"job": label, "bytes": len(data), "answer": answer,
+             "wall_ms": round((time.monotonic() - started) * 1000)}
+        )
+    await pc.ping()  # the service is alive after them
     sandbox = report.sandbox
     found["sandbox"] = {
         "in_force": report.in_force,
@@ -383,6 +418,11 @@ print()
 print("%-16s %6s  %-26s %-26s %s" % ("job", "rounds", "wall ms (min med max)", "child CPU ms", "child peak RSS MiB"))
 for job in found["jobs"]:
     print("%-16s %6d  %-26s %-26s %s" % (job["job"], job["rounds"], job["wall_ms"], job["child_cpu_ms"], job["child_max_rss_mib"]))
+print()
+for job in found.get("refused", []):
+    print("%-48s %9d bytes  %6d ms  %s" % (job["job"], job["bytes"], job["wall_ms"], job["answer"]))
+    if job["answer"] != "file/bomb":
+        print("PROBLEM: %s was answered %s, not file/bomb" % (job["job"], job["answer"]))
 '
 )"
 

@@ -134,8 +134,10 @@ def test_a_20_mib_docx_of_images(stack: Stack) -> None:
 
 
 def test_19_mib_of_xml_in_one_part_is_read_or_stopped_inside_the_limits(stack: Stack) -> None:
-    """The heaviest thing a Word document can ask of the walker: a part of 19 MiB whose text is
-    short. It is parsed to its end or stopped by the time budget, with what was read."""
+    """The heaviest thing an honest Word document asks of the walker: a part of 19 MiB whose
+    text is short. It is parsed to its end or stopped by the time budget, with what was read.
+    What a hostile one asks is below: the rows of HOSTILE about names, and the test after
+    them."""
     runs = "".join(f'<w:r w:rsidR="{word}"/>' for word in fx.words(850_000, 5).split(" "))
     data = fx.docx(fx.paragraph(fx.run("The first line.")), fx.paragraph(runs))
     assert len(runs) > 18 * MIB
@@ -162,6 +164,15 @@ HOSTILE = [
     ("docx", "an entity bomb", fx.entity_bomb_docx, "bomb"),
     ("docx", "an external entity", fx.external_entity_docx, "bomb"),
     ("docx", "a docm", lambda: fx.docx(content_types=fx.MACRO_CONTENT_TYPES), "macros"),
+    # 19 MiB of XML each, under every cap of the archive. The parser keeps each distinct name
+    # and each open element: with no bound these cost it 544, 337 and 194 MiB (the Mac, no
+    # limit). The walker's count refuses the first three early. The fourth is one start tag,
+    # which the walker is told of when it is complete, 623 MiB later: the address space limit
+    # of the child is what stops that one.
+    ("docx", "a new element name each time", fx.distinct_names_docx, "bomb"),
+    ("docx", "a new attribute name each time", lambda: fx.distinct_names_docx("attribute"), "bomb"),
+    ("docx", "elements 900,000 deep", fx.deep_docx, "bomb"),
+    ("docx", "one tag of new names", lambda: fx.distinct_names_docx("one tag"), "bomb"),
     ("linkedin_zip", "a ratio bomb", fx.ratio_bomb, "bomb"),
     ("linkedin_zip", "201 entries", fx.too_many_entries, "bomb"),
     ("linkedin_zip", "a nested archive", fx.nested_archive, "nested_archive"),
@@ -179,6 +190,25 @@ def test_a_hostile_archive_ends_as_a_code_and_the_service_lives(
 ) -> None:
     assert refusal(stack, kind, make()) == ("file", code)
     stack.alive()
+
+
+def test_a_docx_that_meets_the_memory_limit_is_a_code_of_the_file_and_the_next_job_runs(
+    stack: Stack,
+) -> None:
+    """The one path the memory of the Jetson rests on for this reader. One start tag of 19 MiB
+    of new attribute names needs more than twice the 256 MiB of the child before the walker
+    can count anything, so the kernel refuses the memory, to Python or to expat. Either way
+    the answer is `bomb`, a code of the file: a server code would mean a retry and "add the
+    file again" for a file that will never be read. Then the service reads the next file."""
+    data = fx.distinct_names_docx("one tag")
+    assert len(data) < 20 * MIB, "an upload the API takes"
+    for _ in range(3):  # the same answer each time, not one that depends on where it broke
+        started = time.monotonic()
+        assert refusal(stack, "docx", data) == ("file", "bomb")
+        assert time.monotonic() - started < 30, "a code, long before any limit of time"
+    stack.alive()
+    parsed = read(stack, "docx", fx.cv_docx())
+    assert f"Find me on LinkedIn ({fx.LINK})" in (parsed.text or "")
 
 
 def test_nothing_was_extracted_anywhere_in_the_container(stack: Stack) -> None:

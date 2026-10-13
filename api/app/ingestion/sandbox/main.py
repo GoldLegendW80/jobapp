@@ -101,12 +101,19 @@ LIMITS = {kind: dict(DEFAULT_LIMITS) for kind in HANDLERS}
 # that asks for more ends as `bomb`, with the service untouched.
 LIMITS["pdf_text"]["as"] = 256 * MIB
 # The Word reader and the reader of a LinkedIn export (G7), measured in the service's container
-# on 2026-10-13 (tasks/ingestion/todo.md, G7, Measurements): the highest address space of a
-# child was 80 MiB (an export whose two CSV files hold 20 MiB), 64 MiB for 19 MiB of XML in one
-# part of a document, 45 MiB for a 20 MiB document of images, 40 MiB for a CV and for a small
-# export. Nothing is extracted and no tree is built, so the cost is the file, once, and the one
-# entry being read. 256 MiB is more than three times the worst; an archive that asks for more
-# ends as `bomb`.
+# on 2026-10-13 (tasks/ingestion/todo.md, G7, Measurements). Honest files: the highest address
+# space of a child was 80 MiB (an export whose two CSV files hold 20 MiB), 64 MiB for 19 MiB of
+# XML in one part of a document, 45 MiB for a 20 MiB document of images, 40 MiB for a CV and
+# for a small export. Nothing is extracted and no tree is built, but the XML parser keeps every
+# distinct name it meets and every open element, so a hostile document costs far more than its
+# bytes: 19 MiB of new element names took 544 MiB of resident memory with no bound, new
+# attribute names 337 MiB, elements nested without end 194 MiB (the Mac, no limit). docx.py
+# bounds what it can count (NAMES_MAX, DEPTH_MAX): those three end as `bomb` at 60 MiB. It
+# cannot count the names of one single start tag before the parser has kept them all (623 MiB
+# with no limit, 610 MiB of address space in this image): that file meets the 256 MiB below,
+# the kernel refuses the memory, and the answer is still `bomb`, with the service untouched
+# (test_archive_container.py runs it). So 256 MiB is three times the worst honest file, and
+# the limit, not the sizing, is what holds against a hostile one.
 LIMITS["docx"]["as"] = 256 * MIB
 LIMITS["linkedin_zip"]["as"] = 256 * MIB
 # The hard CPU limit is one second above the soft one. At the soft limit the kernel sends

@@ -178,6 +178,33 @@ def external_entity_docx() -> bytes:
     return docx(document=part("w:document", paragraph(run("&secret;")), prolog=EXTERNAL_ENTITY))
 
 
+def distinct_names_docx(what: str = "element", size: int = 19 * MIB) -> bytes:
+    """A body of `size` bytes in which every name is new: the parser keeps each distinct name
+    it meets for as long as it lives, so this is what a Word document can cost it most. It
+    packs about four times, so every cap of the archive passes. `what` is where the names
+    are: one "element" each, one "attribute" each on elements of one name, or all of them as
+    the attributes of "one tag" (which the walker is told of only when the tag is complete)."""
+    if what == "element":
+        body = "".join(f"<q{number:08x}/>" for number in range(size // 12))
+    elif what == "attribute":
+        body = "".join(f'<w:r a{number:08x}=""/>' for number in range(size // 19))
+    else:
+        names = " ".join(f'a{number:08x}=""' for number in range(size // 13))
+        body = f"<w:r {names}/>"
+    return docx(paragraph(run("The first line.")), body)
+
+
+def deep_docx(size: int = 19 * MIB, vocabulary: int = 2000) -> bytes:
+    """A body of `size` bytes of elements each inside the last, their names drawn from a small
+    vocabulary: well formed, under the ratio cap, and every open element is kept by the
+    parser until it ends."""
+    noise = random.Random(11)  # noqa: S311, a fixture, not a secret
+    names = noise.choices([f"w:n{number}" for number in range(vocabulary)], k=size // 20)
+    opened = "".join(f"<{name}>" for name in names)
+    closed = "".join(f"</{name}>" for name in reversed(names))
+    return docx(paragraph(run("The first line.")), opened + closed)
+
+
 # --- LinkedIn like exports ----------------------------------------------------------------------
 
 POSITIONS = (

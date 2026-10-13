@@ -40,8 +40,11 @@ What comes back for a file that was not read, `{"ok": false, "failure": "file", 
                     and never read; such a file is refused whole
     unreadable      a Word document without its `word/document.xml`, or with XML that does not
                     parse, and every `unreadable` of zipcaps.py
-    bomb            a DTD or an entity in the XML (an entity bomb, an external entity), the
-                    memory of the child, and every `bomb` of zipcaps.py
+    bomb            a DTD or an entity in the XML (an entity bomb, an external entity), a
+                    part with more than NAMES_MAX distinct names or open more than DEPTH_MAX
+                    deep (what grows the parser without growing the file), the memory of the
+                    child when a file met its limit all the same, and every `bomb` of
+                    zipcaps.py
     nested_archive, protected   as zipcaps.py says
     no_text         a document without a word: images only
     too_slow        the budget was spent before a first character was read
@@ -61,6 +64,13 @@ TEXT_MAX_CHARS = 500_000  # ingestion_documents.text
 LINK_MAX_CHARS = 2_000
 PARTS_MAX = 60  # headers and footers read; Word writes at most three of each per section
 FEED_BYTES = 64 * 1024  # how much XML is parsed between two looks at the budget
+# What a part may cost the parser beyond its own bytes. The parser keeps every distinct name it
+# meets (of an element, of an attribute) for as long as it lives, and every element that is
+# open: 19 MiB of new names cost it more than 500 MiB. Word writes a fixed vocabulary, a few
+# hundred names in a document, and nests a text box in a table in a text box some tens deep.
+NAMES_MAX = 4_096
+DEPTH_MAX = 512
+_NO_MEMORY = 1  # expat's XML_ERROR_NO_MEMORY, the `code` of the ParseError it becomes
 
 CONTENT_TYPES = "[Content_Types].xml"
 DOCUMENT = "word/document.xml"
@@ -93,7 +103,13 @@ _LINE_BREAKS = re.compile("\r\n?|[\x0b\x0c\x85\u2028\u2029]")
 # U+0000 (in the first range) and half a surrogate pair.
 _DROPPED = re.compile("[\x00-\x08\x0e-\x1f\x7f-\x9f\ud800-\udfff]")
 _BLANK_LINES = re.compile(r"\n{3,}")
-_ADDRESS_DROPPED = re.compile(r"[\x00-\x20\x7f-\x9f\ud800-\udfff]")
+# An address is written on the line of its text, "text (address)", so nothing in it may end a
+# line or turn the line around: no blank, no control character (the tab, the line feed and the
+# form feed are among them, and U+0085), no line or paragraph separator (which clean() would
+# make a line feed), no mark or override of direction, no half surrogate.
+_ADDRESS_DROPPED = re.compile(
+    "[\x00-\x20\x7f-\x9f\u2028\u2029\u200e\u200f\u202a-\u202e\u2066-\u2069\ud800-\udfff]"
+)
 
 
 class _Full(Exception):  # noqa: N818, an outcome, not an error of this program
@@ -121,17 +137,45 @@ def _split(tag: str) -> tuple[str, str]:
     return "", tag
 
 
-class Walker:
+class _Bounded:
+    """What both targets count of a part: its distinct names and how deep it is open. Past
+    NAMES_MAX or DEPTH_MAX the part is a `bomb` and the parsing stops there, so the parser's
+    tables stay small whatever the part holds. Only the hash of a name is kept, never the name:
+    two names sharing one only make the count lower."""
+
+    def __init__(self) -> None:
+        self.names: set[int] = set()
+        self.depth = 0
+
+    def opened(self, tag: str, attributes: dict[str, str]) -> None:
+        self.depth += 1
+        if len(attributes) > NAMES_MAX or self.depth > DEPTH_MAX:
+            raise zipcaps.Refused("bomb")
+        names = self.names
+        names.add(hash(tag))
+        for name in attributes:
+            names.add(hash(name))
+        if len(names) > NAMES_MAX:
+            raise zipcaps.Refused("bomb")
+
+    def start_ns(self, prefix: str, uri: str) -> None:
+        """A namespace declared: its prefix is one more name the parser keeps."""
+        self.names.add(hash(("prefix", prefix)))
+        if len(self.names) > NAMES_MAX:
+            raise zipcaps.Refused("bomb")
+
+
+class Walker(_Bounded):
     """The target of the parser for one part: it is told each start tag, each end tag and each
     run of characters, in the order of the document, and keeps the text. `links` maps the
     relationship ids of this part to the external addresses they stand for. `room` is how many
     characters may still be kept."""
 
     def __init__(self, links: dict[str, str], room: int) -> None:
+        super().__init__()
         self.links = links
         self.room = room
         self.pieces: list[str] = []
-        self.depth = 0
         self.skip_from = 0  # depth of the element being skipped, 0 when none is
         self.in_text = 0  # depth of the open w:t, 0 when none is
         self.choices: list[int] = []  # per open mc:AlternateContent: the choices seen so far
@@ -156,7 +200,7 @@ class Walker:
         self._emit(separator)
 
     def start(self, tag: str, attributes: dict[str, str]) -> None:
-        self.depth += 1
+        self.opened(tag, attributes)
         if self.skip_from:
             return
         namespace, name = _split(tag)
@@ -221,13 +265,15 @@ class Walker:
         return None
 
 
-class _Links:
+class _Links(_Bounded):
     """The target of the parser for a relationship file: id -> external address."""
 
     def __init__(self) -> None:
+        super().__init__()
         self.found: dict[str, str] = {}
 
     def start(self, tag: str, attributes: dict[str, str]) -> None:
+        self.opened(tag, attributes)
         if tag != _RELATIONSHIP or attributes.get("TargetMode") != "External":
             return
         address = _ADDRESS_DROPPED.sub("", attributes.get("Target", ""))
@@ -235,7 +281,7 @@ class _Links:
             self.found[attributes.get("Id", "")] = address
 
     def end(self, tag: str) -> None:
-        return None
+        self.depth -= 1
 
     def data(self, text: str) -> None:
         return None
@@ -246,16 +292,27 @@ class _Links:
 
 def parse(content: bytes, target, budget) -> bool:
     """Feed `content` to defusedxml's parser, which tells `target` what it finds. False when the
-    budget was spent before the end. Raises _Full from the target, and what the parser raises:
-    a DefusedXmlException for a DTD or an entity, a ParseError for XML that is not."""
+    budget was spent before the end. Raises what the target raises (_Full, a Refused past
+    NAMES_MAX or DEPTH_MAX) and what the parser raises: a DefusedXmlException for a DTD or an
+    entity, a ParseError for XML that is not, a MemoryError when the address space limit was
+    met, whichever of Python and expat met it. One start tag is told to the target only when
+    it is complete, so a single tag of 19 MiB of new attribute names is counted too late:
+    that one the limit stops."""
     parser = ElementTree.DefusedXMLParser(
         target=target, forbid_dtd=True, forbid_entities=True, forbid_external=True
     )
-    for at in range(0, len(content), FEED_BYTES):
-        if budget.spent():
-            return False
-        parser.feed(content[at : at + FEED_BYTES])
-    parser.close()
+    try:
+        for at in range(0, len(content), FEED_BYTES):
+            if budget.spent():
+                return False
+            parser.feed(content[at : at + FEED_BYTES])
+        parser.close()
+    except ElementTree.ParseError as error:
+        if getattr(error, "code", None) == _NO_MEMORY:
+            raise MemoryError from None
+        raise
+    finally:
+        del parser  # what it holds is given back before an answer is written
     return True
 
 
