@@ -46,8 +46,12 @@ gone in the next row and were not investigated. A sign in with a small body answ
 | opens, sends nothing | closed after 60.0s | closed after 10.0s |
 
 The first row is unchanged in time: Caddy's own rule for a silent body is left at its default
-minute (see the Caddyfile for why). What changed is what is held meanwhile, which the table above
-shows. With an earlier setting of this branch (`read_body_idle 15s 1024`, withdrawn) that row read
+(see the Caddyfile for why). What changed is what is held meanwhile, which the table above
+shows. The script reports only how the connection ended: the reviewer of the pull request saw
+that request answered 413 at 60.0s and then closed. The reviewer also found that Caddy's minute
+only ends a silent body when a large part of the declared length is missing (9,000,000 and
+300,000 declared: 504 at 60s; 60,000 and 1,000 declared: nothing for 130s and 240s), which this
+script, with its 9 MB, did not show. With an earlier setting of this branch (`read_body_idle 15s 1024`, withdrawn) that row read
 413 after 15.0s, and Caddy's log showed the request answered by Caddy itself with `bytes_read: 0`;
 that log line was not read again on the final configuration.
 

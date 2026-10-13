@@ -935,6 +935,33 @@ test("20 MiB is accepted on the upload route only: every other route keeps 10 Mi
   }
 });
 
+test("the sign in routes take 64 KiB through Caddy, and a body with no session is the api's 401", () => {
+  // Issue #100, through the real proxy and with no cookie at all. The routes under /api/auth/
+  // are the only ones that read a body from a caller with no session, and Caddy gives them
+  // their own small class.
+  const nobody = "";
+  const publicMax = 64 * 1024;
+  const login = "/api/auth/login";
+  // One byte over, declared: Caddy's own refusal, before the api sees anything.
+  expect(
+    fromCaddy(curl(login, nobody, Buffer.alloc(publicMax + 1, 0x61))),
+  ).toBe(true);
+  // Without a Content-Length it is cut at the same limit.
+  expect(
+    curl(login, nobody, Buffer.alloc(publicMax + 1, 0x61), CHUNKED).status,
+  ).toBe(413);
+  // 64 KiB exactly reaches the api: the answer is the api's JSON (the body is no sign in).
+  const atLimit = curl(login, nobody, Buffer.alloc(publicMax, 0x61));
+  expect(atLimit.status).not.toBe(413);
+  expect(atLimit.type).toContain("application/json");
+  // A route that is not public: 200 KB passes Caddy (10 MiB there), and the api answers 401
+  // without reading it: no session, no body.
+  const gated = curl("/api/jobs/import", nobody, Buffer.alloc(200_000, 0x61));
+  expect(gated.status).toBe(401);
+  expect(gated.type).toContain("application/json");
+  expect(gated.body).toContain("Sign in to continue");
+});
+
 test("two uploads of 20 MiB at once, by two users, stay far inside the api's memory limit", async () => {
   test.skip(!project, "needs the Compose project (E2E_COMPOSE_PROJECT)");
   test.setTimeout(300_000);

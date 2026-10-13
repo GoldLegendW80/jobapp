@@ -31,14 +31,23 @@
 	#                     60s (default 5m). An event stream is a response being written, not an
 	#                     idle connection.
 	# Left at Caddy's defaults on purpose:
-	#   read_body_idle    1m without a byte of request body ends the request. Not shortened: the
-	#                     document upload and the paste answer a stalled body themselves, after
-	#                     30s and 60s (SPEC-ingestion.md), and their sentence must reach the user
-	#                     first. Not given a minimum rate either: with a rate Caddy replaces the
-	#                     idle window by a budget counted from the start (the time plus one second
-	#                     per that many bytes), so a body that sends much and then stalls would
-	#                     stay far longer than a minute. The small bodies of the public routes
-	#                     are timed by the api (api/app/body_limit.py).
+	#   read_body_idle    1m. Not shortened: the document upload and the paste answer a stalled
+	#                     body themselves, after 30s and 60s (SPEC-ingestion.md), and their
+	#                     sentence must reach the user first. Not given a minimum rate either:
+	#                     with a rate Caddy replaces the idle window by a budget counted from the
+	#                     start (the time plus one second per that many bytes), so a body that
+	#                     sends much and then stalls would stay far longer than a minute.
+	#                     What this minute does NOT do (measured in the review of pull request
+	#                     #106, a lone Caddy in front of an upstream that waits): it ended a
+	#                     silent body, with 504 at 60s, only when a large part of the declared
+	#                     length was still missing (9,000,000 and 300,000 bytes declared); with
+	#                     60,000 or 1,000 declared, Caddy did nothing for the 130s and 240s the
+	#                     client stayed. So for the small bodies of the public class nothing at
+	#                     Caddy ends a silent or trickling body: the api's own times release the
+	#                     api (api/app/body_limit.py), and the client's connection to Caddy
+	#                     stays for as long as the client likes. A hard ceiling (`read_body`)
+	#                     could bound that; it also bounds uploads and must be tried against an
+	#                     event stream first, so it is not set here.
 	#   write_idle        1m, no rate: an event stream writes a heartbeat every 15s.
 	# These are set per server: a `servers` block with an address replaces the global one, it
 	# does not merge with it (seen in the adapted config), so the same timeouts are repeated in

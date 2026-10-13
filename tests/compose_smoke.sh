@@ -245,8 +245,12 @@ ok "X-Request-ID kept when sent, a UUID from caddy otherwise"
 big() { head -c "$1" /dev/zero; }
 [[ "$(curl_c /api/health -X POST --data-binary @<(big 10485761))" == "413" ]] || fail "10 MiB + 1 not refused"
 [[ "$(curl_c / -X POST --data-binary @<(big 20000000))" == "413" ]] || fail "20 MB to / not refused"
-[[ "$(curl_c /api/health -X POST --data-binary @<(big 10485760))" == "405" ]] || fail "10 MiB exactly did not reach the api"
-ok "bodies over 10 MiB refused with 413, 10 MiB exactly reaches the api (405 from FastAPI)"
+# 10 MiB exactly passes caddy and is answered by the api: its 401, since a body with no session
+# is refused unread on every route that is not public (it was a 405 before issue #100, and a 403
+# without the CSRF header).
+[[ "$(curl_c /api/health -X POST -H 'X-Requested-With: jobapp' --data-binary @<(big 10485760))" == "401" ]] \
+  && grep -q 'Sign in to continue' "$CURL_DIR/b" || fail "10 MiB exactly did not reach the api"
+ok "bodies over 10 MiB refused with 413, 10 MiB exactly reaches the api (its 401, no session)"
 # --- public route body limit and timeouts (issue #100) ---------------------------------------
 # A caller with no session reaches only the public routes under /api/auth/, whose bodies are a
 # few hundred bytes. Caddy caps them at 64 KiB; every other route keeps 10 MiB (above). The CSRF

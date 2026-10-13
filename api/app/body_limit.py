@@ -15,26 +15,35 @@ does two things, in this order.
    (once per request, kept on the request's state), and a request without the cookie costs no
    database call. So the only bodies a caller with no session can make the api read are those
    of the public routes, which are small (below).
-2. A size limit by route class, and a time limit on the read. It never makes a second copy, and
-   it leaves alone the routes that read their own raw body with their own limit:
+2. A size limit by route class, and a time limit on the read, for the routes whose body the
+   framework would read (the routes that read their own raw body keep their own rules and are
+   neither capped nor read here: SELF_LIMITED):
    - routes under /api/auth/ (sign in, sign out, link check and accept, and the account
-     routes): PUBLIC_MAX_BYTES, a few hundred bytes of sign in or acceptance with wide margin;
-   - every other JSON route under /api: DEFAULT_MAX_BYTES, well under Caddy's 10 MiB;
-   - the routes that take a larger body and read it themselves, each with its own limit, are
-     in SELF_LIMITED and are not capped here: the profile photo (PUT, 2 MiB) and profile import
-     (POST, 2 MiB), the jobs import (POST, 10 MiB), and the ingestion document upload and paste
-     of pull request #98 (POST, its own limits and slots).
+     routes): PUBLIC_MAX_BYTES, a few hundred bytes of sign in or acceptance with wide margin,
+     and the short times;
+   - a route whose schema allows more than the default: its own size, from the schema (SIZED);
+   - every other route under /api: DEFAULT_MAX_BYTES, well under Caddy's 10 MiB.
 
-How it caps: a declared Content-Length over the limit is refused with 413 before a byte of body
-is read; otherwise the body is counted as it streams and, at the first byte past the limit, the
-app is told the body ended, so it reads and buffers no more, and whatever it then answers is
-replaced by the 413. A body that brings nothing for BODY_READ_IDLE_S, or is not whole after
-BODY_READ_TOTAL_S, is ended the same way and answered 408.
+How it caps. A request that announces no body is passed on untouched. A declared Content-Length
+over the limit is refused with 413 before a byte of body is read. Otherwise the body is gathered
+here, into one buffer, before the app is started: at the first byte past the limit the answer is
+413, when nothing came for the idle time or the body is not whole after the total time it is
+408, and the app never runs on a body that was refused. The app then receives the body as one
+message, so the buffer of the limit's size is all a body can occupy, in whatever small pieces it
+was sent (Starlette keeps one object per message it is given).
 
-The refusal is sent from here, not raised: of the exceptions that reach FastAPI
-while it reads a body, only its own HTTPException keeps its status, any other becomes a 400
-(routing.py, "There was an error parsing the body"). What the server then does with the
-connection and with the rest of the body is uvicorn's business and was not examined.
+The refusals are sent from here, not raised: of the exceptions that reach FastAPI while it reads
+a body, only its own HTTPException keeps its status, any other becomes a 400 (routing.py).
+
+What a refusal does to the connection (measured in the review of pull request #106, on uvicorn
+alone with raw sockets): after the 401, both 413 and the 408 as first written, uvicorn kept the
+connection, dropped the rest of the body as body, did not answer a request line hidden in it,
+and answered a real request sent after it. The 401 and the 413 keep the connection on purpose:
+closing one on which a body is still arriving makes Caddy answer 502 in place of the refusal
+(api/app/ingestion/documents_router.py). The 408, whose body will never be whole, now carries
+`Connection: close`, as the upload route's does. A refused body that never completes leaves a
+direct connection to uvicorn open with no timer; behind Caddy it holds nothing, Caddy closes the
+upstream connection of a request it has not finished writing.
 """
 
 from __future__ import annotations
@@ -44,6 +53,8 @@ import json
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
 from typing import Any
+
+from app.jobs.schemas import POSTING_MAX
 
 Scope = MutableMapping[str, Any]
 Message = MutableMapping[str, Any]
@@ -55,45 +66,69 @@ PUBLIC_PREFIX = "/api/auth/"
 PUBLIC_MAX_BYTES = 64 * 1024  # a login or an invite acceptance is a few hundred bytes
 DEFAULT_MAX_BYTES = 1024 * 1024  # other JSON routes; well under Caddy's 10 MiB edge limit
 
-# Routes that read their own raw body with their own limit (module docstring). The middleware
-# returns None for them and does not touch their body. Matched by method and exact path.
+# Routes whose schema allows more than DEFAULT_MAX_BYTES, each sized from that schema with four
+# bytes per character (the longest UTF-8 encoding) plus room for the other fields. A session is
+# required before any of it is read. tests/identity/test_body_limit_api.py walks every route
+# with a JSON body and fails when a schema can describe more than its class takes.
+SIZED: dict[tuple[str, str], int] = {
+    # A posting added by hand: posting_text up to POSTING_MAX characters (jobs/schemas.py).
+    ("POST", "/api/jobs"): 4 * POSTING_MAX + 64 * 1024,
+}
+
+# Routes that read their own raw body with their own limit (module docstring). They are not
+# capped and not read here. Matched by method and exact path.
 SELF_LIMITED: frozenset[tuple[str, str]] = frozenset(
     {
         ("PUT", "/api/profile/photo"),
         ("POST", "/api/profile/import"),
         ("POST", "/api/jobs/import"),
-        ("POST", "/api/ingestion/documents"),  # PR #98: 20 MiB, upload slots
-        ("POST", "/api/ingestion/documents/text"),  # PR #98: paste, its own limit
+        ("POST", "/api/ingestion/documents"),  # 20 MiB, upload slots
+        ("POST", "/api/ingestion/documents/text"),  # the paste, its own limit
     }
 )
 
 TOO_LARGE = "The request body is too large."
 TOO_SLOW = "The request body stopped arriving."
 
-# The time a capped body (JSON, at most DEFAULT_MAX_BYTES) has to arrive: it must bring a chunk
-# at least every BODY_READ_IDLE_S, and be whole within BODY_READ_TOTAL_S, else the read is
-# abandoned with 408. The second bound is for a body sent a byte now and then, which no idle
-# rule ends. Both are far above an honest body, which arrives at once. Caddy in front ends a
-# request after a minute without a byte; these come first. The routes of SELF_LIMITED keep
-# their own rules. Read at call time so a test can lower them.
+# The time a capped body has to arrive: it must bring something at least every *_IDLE_S and be
+# whole within *_TOTAL_S, else 408. The total is for a body sent a byte now and then, which no
+# idle rule ends. Both are far above an honest body, which arrives at once. The routes under
+# /api/auth/ get the short pair: their body is a few hundred bytes, one packet, and they are the
+# only bodies a caller with no session can make the api wait for, so this is how long such a
+# caller holds one of uvicorn's connections (--limit-concurrency). The routes of SELF_LIMITED
+# keep their own rules. Read at call time so a test can lower them.
+PUBLIC_READ_IDLE_S = 5.0
+PUBLIC_READ_TOTAL_S = 10.0
 BODY_READ_IDLE_S = 20.0
 BODY_READ_TOTAL_S = 60.0
 
 
-def limit_for(method: str, path: str) -> int | None:
-    """The body limit in bytes for this request, or None when the middleware must not cap it
-    (a route that reads its own body, or a path the api does not serve)."""
-    if not is_api_path(path):
-        return None
-    if (method, path) in SELF_LIMITED:
-        return None
-    if path.startswith(PUBLIC_PREFIX):
-        return PUBLIC_MAX_BYTES
-    return DEFAULT_MAX_BYTES
+@dataclass(frozen=True)
+class BodyClass:
+    max_bytes: int
+    idle_s: float
+    total_s: float
 
 
 def is_api_path(path: str) -> bool:
     return path == "/api" or path.startswith("/api/")
+
+
+def class_for(method: str, path: str) -> BodyClass | None:
+    """The size and the times of this request's body, or None when it is not capped here (a
+    route that reads its own body, or a path the api does not serve)."""
+    if not is_api_path(path) or (method, path) in SELF_LIMITED:
+        return None
+    if path.startswith(PUBLIC_PREFIX):
+        return BodyClass(PUBLIC_MAX_BYTES, PUBLIC_READ_IDLE_S, PUBLIC_READ_TOTAL_S)
+    size = SIZED.get((method, path), DEFAULT_MAX_BYTES)
+    return BodyClass(size, BODY_READ_IDLE_S, BODY_READ_TOTAL_S)
+
+
+def limit_for(method: str, path: str) -> int | None:
+    """The body limit in bytes for this request, or None when it is not capped here."""
+    found = class_for(method, path)
+    return found.max_bytes if found else None
 
 
 @dataclass(frozen=True)
@@ -127,19 +162,16 @@ def announces_body(scope: Scope) -> bool:
     return False
 
 
-async def _send_error(send: Send, status: int, detail: str) -> None:
+async def _send_error(send: Send, status: int, detail: str, close: bool = False) -> None:
     body = json.dumps({"detail": detail}).encode()
-    await send(
-        {
-            "type": "http.response.start",
-            "status": status,
-            "headers": [
-                (b"content-type", b"application/json"),
-                (b"content-length", str(len(body)).encode()),
-                (b"cache-control", b"no-store"),
-            ],
-        }
-    )
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode()),
+        (b"cache-control", b"no-store"),
+    ]
+    if close:
+        headers.append((b"connection", b"close"))
+    await send({"type": "http.response.start", "status": status, "headers": headers})
     await send({"type": "http.response.body", "body": body, "more_body": False})
 
 
@@ -152,7 +184,8 @@ class LimitRequestBodyMiddleware:
         self.gate = gate
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] != "http" or not announces_body(scope):
+            # Nothing announced, nothing to bound: an event stream, any GET, goes straight on.
             await self.app(scope, receive, send)
             return
         method, path = scope.get("method", ""), scope.get("path", "")
@@ -160,75 +193,56 @@ class LimitRequestBodyMiddleware:
         if (
             gate is not None
             and is_api_path(path)
-            and announces_body(scope)
             and gate.needs_session(method, path)
             and not await gate.has_session(scope)
         ):
             # Before anything is read: the body of this request never enters the process.
             await _send_error(send, 401, gate.detail)
             return
-        limit = limit_for(method, path)
-        if limit is None:
+        limits = class_for(method, path)
+        if limits is None:
             await self.app(scope, receive, send)
             return
-
         declared = _declared_length(scope)
-        if declared is not None and declared > limit:
+        if declared is not None and declared > limits.max_bytes:
             await _send_error(send, 413, TOO_LARGE)  # refuse before reading a byte of body
             return
 
+        # The body is gathered here, whole, before the app runs: into one buffer that never
+        # passes the limit, however small the pieces it arrives in, and the app is not started
+        # on a body that is then refused.
+        buffer = bytearray()
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + BODY_READ_TOTAL_S
-        received = 0
-        over_size = False
-        over_time = False
-        body_done = False
-        sent = False
-
-        async def capped_receive() -> Message:
-            nonlocal received, over_size, over_time, body_done
-            if body_done:
-                # The body is read (or already cut): a later receive is the app waiting for a
-                # disconnect, never more body, so it must not carry the idle timeout.
-                return await receive()
-            left = min(BODY_READ_IDLE_S, deadline - loop.time())
+        deadline = loop.time() + limits.total_s
+        while True:
+            left = min(limits.idle_s, deadline - loop.time())
             try:
                 if left <= 0:
                     raise TimeoutError
                 message = await asyncio.wait_for(receive(), left)
             except TimeoutError:
-                over_time = True
-                body_done = True
-                return {"type": "http.request", "body": b"", "more_body": False}
-            kind = message.get("type")
-            if kind == "http.request":
-                received += len(message.get("body", b""))
-                if not message.get("more_body", False):
-                    body_done = True
-                if received > limit:
-                    # Cut the body short so the app stops reading and buffers no more; its answer
-                    # is replaced by the 413 below.
-                    over_size = True
-                    body_done = True
-                    return {"type": "http.request", "body": b"", "more_body": False}
-            elif kind == "http.disconnect":
-                body_done = True
-            return message
-
-        async def capped_send(message: Message) -> None:
-            nonlocal sent
-            if not (over_size or over_time):
-                await send(message)
+                # A body that will never be whole: the connection goes with the answer.
+                await _send_error(send, 408, TOO_SLOW, close=True)
                 return
-            # The body broke a rule: swallow whatever the app answers and send the refusal once.
-            if message["type"] == "http.response.start" and not sent:
-                sent = True
-                if over_size:
-                    await _send_error(send, 413, TOO_LARGE)
-                else:
-                    await _send_error(send, 408, TOO_SLOW)
+            if message.get("type") != "http.request":
+                first = message  # the client went away: the app is told, as it was before
+                break
+            chunk = message.get("body", b"")
+            if len(buffer) + len(chunk) > limits.max_bytes:
+                await _send_error(send, 413, TOO_LARGE)
+                return
+            buffer += chunk
+            if not message.get("more_body", False):
+                first = {"type": "http.request", "body": bytes(buffer), "more_body": False}
+                break
+        del buffer
+        handed = False
 
-        await self.app(scope, capped_receive, capped_send)
-        if (over_size or over_time) and not sent:
-            sent = True
-            await _send_error(send, 413 if over_size else 408, TOO_LARGE if over_size else TOO_SLOW)
+        async def gathered() -> Message:
+            nonlocal handed
+            if not handed:
+                handed = True
+                return first
+            return await receive()  # after the body: the app waiting for a disconnect
+
+        await self.app(scope, gathered, send)

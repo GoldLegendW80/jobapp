@@ -3,22 +3,27 @@ middleware stack, and over a real socket served by uvicorn, on a public route an
 authenticated one, plus the size and time limits and that the routes with their own larger limit
 still work. The unit-level behaviour of the middleware is in tests/test_body_limit.py."""
 
+import json
 import re
 import socket
 import threading
 import time
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
 import uvicorn
 from fastapi import FastAPI
 from fastapi.routing import APIRoute, iter_route_contexts
+from pydantic import TypeAdapter
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.body_limit as bl
-from app.body_limit import DEFAULT_MAX_BYTES, PUBLIC_MAX_BYTES
+from app.body_limit import DEFAULT_MAX_BYTES, PUBLIC_MAX_BYTES, SELF_LIMITED, SIZED, limit_for
 from app.identity.deps import PUBLIC_ROUTES, UNAUTHORIZED, is_public_request
+from app.jobs.schemas import POSTING_MAX
 from tests.conftest import free_port
 from tests.identity.api_helpers import Api, make_user, session_cookie
 
@@ -163,6 +168,153 @@ def test_self_limited_photo_route_keeps_its_own_larger_limit(
     assert response.status_code == 415, response.text
 
 
+def test_a_chunked_body_cut_at_the_limit_is_not_acted_on(
+    api: Api, factory: sessionmaker[Session]
+) -> None:
+    # The first chunk is a whole JSON document, the rest pads it past the limit. The client
+    # reads 413, so nothing may have been done with what came first.
+    make_user(factory, email="harald@example.org", name="Harald")
+    token = api.login_token("harald@example.org")
+
+    def body() -> Iterator[bytes]:
+        yield b'{"name": "Changed"}'
+        yield from (b" " * 16384 for _ in range(PUBLIC_MAX_BYTES // 16384 + 1))
+
+    response = api.request(
+        "PATCH",
+        "/api/auth/me",
+        token=token,
+        content=body(),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 413, response.text
+    assert api.me(token).json()["name"] == "Harald"
+
+
+# --- every class fits what its route's schema allows -------------------------------------------
+
+
+def schema_bound(schema: dict[str, Any], defs: dict[str, Any], depth: int = 0) -> tuple[int, bool]:
+    """The most bytes a JSON value of this schema can take with four bytes per character (the
+    longest UTF-8 encoding), and whether the schema bounds it at all. A string without a
+    maxLength, a list without maxItems or an open object is not bounded: its part counts 0."""
+    if depth > 12:
+        return 0, False
+    if "$ref" in schema:
+        return schema_bound(defs[schema["$ref"].split("/")[-1]], defs, depth + 1)
+    for key in ("anyOf", "oneOf"):
+        if key in schema:
+            parts = [schema_bound(sub, defs, depth + 1) for sub in schema[key]]
+            return max(part[0] for part in parts), all(part[1] for part in parts)
+    kind = schema.get("type")
+    if "enum" in schema or "const" in schema or kind in ("boolean", "integer", "number", "null"):
+        return 32, True
+    if kind == "string":
+        if "maxLength" in schema:
+            return 4 * schema["maxLength"] + 2, True
+        return (40, True) if schema.get("format") in ("uuid", "date", "date-time") else (0, False)
+    if kind == "array":
+        item, bounded = schema_bound(schema.get("items", {}), defs, depth + 1)
+        if "maxItems" in schema:
+            return schema["maxItems"] * (item + 1) + 2, bounded
+        return item, False
+    if kind == "object" or "properties" in schema:
+        total, bounded = 2, schema.get("additionalProperties") is False
+        for name, sub in schema.get("properties", {}).items():
+            size, sub_bounded = schema_bound(sub, defs, depth + 1)
+            total += size + len(name) + 4
+            bounded = bounded and sub_bounded
+        return total, bounded
+    return 0, False
+
+
+# Routes whose schema does not bound its own size, so the class is the bound: each with what
+# does limit it. A new one must be looked at and added here.
+UNBOUNDED_SCHEMAS = {
+    ("POST", "/api/agents/runs"): "input is free JSON, at most 16 KiB (runs_router)",
+    ("POST", "/api/proposals/{proposal_id}/accept"): "the edited fields are free JSON",
+    ("PUT", "/api/profile/{section}"): "data is validated per section; facts at most 200,000 bytes",
+}
+
+
+def test_no_schema_allows_more_than_the_class_of_its_route_takes(app: FastAPI) -> None:
+    # The body limits are set by route class, the schemas by their modules. A schema that grows
+    # past its class would turn valid input into 413: this walks every route with a JSON body.
+    unbounded = set()
+    walked = 0
+    for context in iter_route_contexts(app.routes):
+        route = context.original_route
+        if not isinstance(route, APIRoute) or route.body_field is None:
+            continue
+        schema = TypeAdapter(route.body_field.field_info.annotation).json_schema()
+        size, bounded = schema_bound(schema, schema.get("$defs", {}))
+        for method in context.methods or ():
+            walked += 1
+            limit = limit_for(method, sample_path(context.path or ""))
+            assert limit is not None, (method, context.path, "a JSON body on a route not capped")
+            assert size <= limit, (method, context.path, size, limit)
+            if not bounded:
+                unbounded.add((method, context.path))
+    assert walked >= 15, walked
+    assert unbounded == set(UNBOUNDED_SCHEMAS), unbounded ^ set(UNBOUNDED_SCHEMAS)
+
+
+def test_the_hand_kept_lists_name_routes_that_exist(app: FastAPI) -> None:
+    served = set(served_routes(app))
+    assert set(SIZED) <= served, set(SIZED) - served
+    assert served >= SELF_LIMITED, SELF_LIMITED - served
+
+
+def test_a_posting_at_the_schema_maximum_in_four_byte_characters_is_saved(
+    api: Api, factory: sessionmaker[Session]
+) -> None:
+    # POSTING_MAX characters is what the schema and the form accept: 4 MB of body when each
+    # character takes four bytes, far over the default class, inside the class of this route.
+    make_user(factory, email="harald@example.org")
+    token = api.login_token("harald@example.org")
+    posting = "\U0001f4bc" * POSTING_MAX
+    body = json.dumps(
+        {"company": "A", "title": "B", "posting_text": posting}, ensure_ascii=False
+    ).encode()
+    assert DEFAULT_MAX_BYTES < len(body) <= SIZED[("POST", "/api/jobs")]
+    response = api.post(
+        "/api/jobs", token=token, content=body, headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == 201, response.text[:300]
+    over = api.post(
+        "/api/jobs",
+        token=token,
+        content=body + b" " * (SIZED[("POST", "/api/jobs")] - len(body) + 1),
+        headers={"Content-Type": "application/json"},
+    )
+    assert over.status_code == 413
+
+
+# --- the deploy's smoke check ------------------------------------------------------------------
+
+
+def test_the_smoke_check_of_deploy_sh_expects_what_the_api_answers(api: Api) -> None:
+    # ./deploy.sh smoke posts 5 MB to /api/health with the CSRF header and no session, and
+    # fails the deploy's check when the answer is not the one it names. No CI step runs the
+    # smoke, so its expectation is read here and the same request is sent to the app.
+    script = (Path(__file__).resolve().parents[3] / "deploy.sh").read_text(encoding="utf-8")
+    found = re.search(
+        r"head -c (\d+) /dev/zero \| pcurl \"\$url/api/health\" -X POST --data-binary @- "
+        r"-H 'Content-Type: application/octet-stream' -H 'X-Requested-With: jobapp'\)\"\n"
+        r"\s+if \[\[ \"\$code\" == \"(\d+)\" \]\] && grep -q '([^']+)'",
+        script,
+    )
+    assert found, "the 5 MB check of deploy.sh smoke is not where this test reads it"
+    size, status, sentence = int(found.group(1)), int(found.group(2)), found.group(3)
+    response = api.post(
+        "/api/health",
+        content=b"\0" * size,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    assert response.status_code == status, response.text
+    assert sentence in response.text
+
+
 # --- over a real socket ------------------------------------------------------------------------
 
 
@@ -254,7 +406,7 @@ def test_socket_small_login_body_reaches_the_handler(server: Server) -> None:
 
 
 def test_socket_stalled_body_is_408(server: Server, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bl, "BODY_READ_IDLE_S", 0.3)
+    monkeypatch.setattr(bl, "PUBLIC_READ_IDLE_S", 0.3)
     sock = socket.create_connection(("127.0.0.1", server.port), timeout=10)
     try:
         # A body under the size limit that then stops arriving: the api aborts it with 408 on its

@@ -14,67 +14,106 @@ import app.body_limit as bl
 from app.body_limit import (
     DEFAULT_MAX_BYTES,
     PUBLIC_MAX_BYTES,
+    SIZED,
     LimitRequestBodyMiddleware,
     SessionGate,
+    class_for,
     limit_for,
 )
 
 Message = dict[str, Any]
+CHUNKED = [(b"transfer-encoding", b"chunked")]
 
 
 def scope(method: str, path: str, headers: list[tuple[bytes, bytes]] | None = None) -> dict:
     return {"type": "http", "method": method, "path": path, "headers": headers or []}
 
 
-async def echo_app(
-    scope: dict,
-    receive: Callable[[], Awaitable[Message]],
-    send: Callable[[Message], Awaitable[None]],
-) -> None:
-    """Read the whole body, then answer 200 with the number of bytes read, so a test can tell how
-    much the app actually saw."""
-    read = 0
-    while True:
-        message = await receive()
-        if message["type"] == "http.request":
+def length(size: int) -> list[tuple[bytes, bytes]]:
+    return [(b"content-length", str(size).encode())]
+
+
+class Echo:
+    """An app that reads the whole body, then answers 200 with what it saw: how many bytes, in
+    how many messages. `started` tells whether it was run at all."""
+
+    def __init__(self) -> None:
+        self.started = False
+
+    async def __call__(
+        self,
+        scope: dict,
+        receive: Callable[[], Awaitable[Message]],
+        send: Callable[[Message], Awaitable[None]],
+    ) -> None:
+        self.started = True
+        read = messages = 0
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                break
+            messages += 1
             read += len(message.get("body", b""))
             if not message.get("more_body", False):
                 break
-        else:
-            break
-    body = json.dumps({"read": read}).encode()
-    await send({"type": "http.response.start", "status": 200, "headers": []})
-    await send({"type": "http.response.body", "body": body})
+        body = json.dumps({"read": read, "messages": messages}).encode()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": body})
 
 
-async def drive(scope: dict, chunks: list[Message]) -> list[Message]:
-    """Run the middleware over `echo_app`, feeding `chunks` then an endless disconnect."""
-    index = 0
-    sent: list[Message] = []
+class Run:
+    """One request through the middleware: what was sent back, whether the app ran, how often
+    the body was asked for."""
 
-    async def receive() -> Message:
-        nonlocal index
-        if index < len(chunks):
-            message = chunks[index]
-            index += 1
-            return message
-        return {"type": "http.disconnect"}
+    def __init__(self, gate: SessionGate | None = None) -> None:
+        self.app = Echo()
+        self.middleware = LimitRequestBodyMiddleware(self.app, gate=gate)
+        self.sent: list[Message] = []
+        self.reads = 0
 
-    async def send(message: Message) -> None:
-        sent.append(message)
+    def go(
+        self, request: dict, chunks: list[Message], pause_s: float = 0.0, timeout_s: float = 10
+    ) -> "Run":
+        queue = list(chunks)
 
-    await LimitRequestBodyMiddleware(echo_app)(scope, receive, send)
-    return sent
+        async def receive() -> Message:
+            self.reads += 1
+            if pause_s:
+                await asyncio.sleep(pause_s)
+            return queue.pop(0) if queue else {"type": "http.disconnect"}
+
+        async def send(message: Message) -> None:
+            self.sent.append(message)
+
+        asyncio.run(asyncio.wait_for(self.middleware(request, receive, send), timeout_s))
+        return self
+
+    @property
+    def status(self) -> int:
+        starts = [m for m in self.sent if m["type"] == "http.response.start"]
+        assert len(starts) == 1, starts  # one answer, never a second one on top
+        return int(starts[0]["status"])
+
+    @property
+    def headers(self) -> dict[bytes, bytes]:
+        return dict(next(m for m in self.sent if m["type"] == "http.response.start")["headers"])
+
+    @property
+    def body(self) -> dict:
+        raw = b"".join(m.get("body", b"") for m in self.sent if m["type"] == "http.response.body")
+        return json.loads(raw) if raw else {}
 
 
-def status_of(sent: list[Message]) -> int:
-    return next(m["status"] for m in sent if m["type"] == "http.response.start")
+def pieces(total: int, size: int) -> list[Message]:
+    """A body of `total` bytes in messages of `size`, the last one ending it."""
+    count = total // size
+    return [
+        {"type": "http.request", "body": b"x" * size, "more_body": index < count - 1}
+        for index in range(count)
+    ]
 
 
-def body_of(sent: list[Message]) -> dict:
-    raw = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
-    return json.loads(raw) if raw else {}
-
+WHOLE = [{"type": "http.request", "body": b"{}", "more_body": False}]
 
 # --- the policy --------------------------------------------------------------------------------
 
@@ -89,6 +128,9 @@ def body_of(sent: list[Message]) -> dict:
         ("GET", "/api/health", DEFAULT_MAX_BYTES),
         ("POST", "/api/agents/runs", DEFAULT_MAX_BYTES),
         ("PATCH", "/api/auth/me", PUBLIC_MAX_BYTES),
+        ("POST", "/api/jobs", SIZED[("POST", "/api/jobs")]),
+        ("PUT", "/api/jobs", DEFAULT_MAX_BYTES),  # the size belongs to the method too
+        ("POST", "/api/jobs/bulk", DEFAULT_MAX_BYTES),
         ("PUT", "/api/profile/photo", None),
         ("POST", "/api/profile/import", None),
         ("POST", "/api/jobs/import", None),
@@ -103,113 +145,104 @@ def test_policy_by_route_class(method: str, path: str, expected: int | None) -> 
     assert limit_for(method, path) == expected
 
 
+def test_the_routes_under_auth_get_the_short_times() -> None:
+    public = class_for("POST", "/api/auth/login")
+    other = class_for("POST", "/api/agents/runs")
+    assert public is not None
+    assert other is not None
+    assert (public.idle_s, public.total_s) == (5.0, 10.0)
+    assert (other.idle_s, other.total_s) == (20.0, 60.0)
+
+
 # --- size limit --------------------------------------------------------------------------------
 
 
 def test_declared_length_over_limit_is_413_before_the_body_is_read() -> None:
-    # A huge chunk is queued, but the declared Content-Length alone must trigger 413 and the app
-    # must never run (so the body is never read).
-    chunks = [{"type": "http.request", "body": b"x" * 1000, "more_body": False}]
-    sent = asyncio.run(
-        drive(scope("POST", "/api/auth/login", [(b"content-length", b"100000")]), chunks)
-    )
-    assert status_of(sent) == 413
-    assert body_of(sent) == {"detail": bl.TOO_LARGE}
+    run = Run().go(scope("POST", "/api/auth/login", length(100_000)), pieces(1000, 1000))
+    assert run.status == 413
+    assert run.body == {"detail": bl.TOO_LARGE}
+    assert run.reads == 0
+    assert not run.app.started
 
 
-def test_streamed_body_over_limit_is_413_and_app_sees_no_more_than_the_limit() -> None:
-    # No Content-Length (chunked): the body is counted as it streams and cut at the limit.
-    chunk = b"x" * (16 * 1024)
-    n = PUBLIC_MAX_BYTES // len(chunk) + 4
-    chunks = [{"type": "http.request", "body": chunk, "more_body": True} for _ in range(n)]
-    chunks.append({"type": "http.request", "body": b"", "more_body": False})
-    sent = asyncio.run(drive(scope("POST", "/api/auth/login"), chunks))
-    assert status_of(sent) == 413
+def test_streamed_body_over_limit_is_413_and_the_app_never_runs_on_it() -> None:
+    # No Content-Length (chunked): the body is counted as it is gathered. What came before the
+    # limit could be a whole JSON document: the app must not act on it while the client reads
+    # 413.
+    chunks = pieces(PUBLIC_MAX_BYTES + 64 * 1024, 16 * 1024)
+    run = Run().go(scope("POST", "/api/auth/login", CHUNKED), chunks)
+    assert run.status == 413
+    assert not run.app.started
+    assert run.reads == PUBLIC_MAX_BYTES // (16 * 1024) + 1  # it stopped reading at the limit
 
 
 def test_default_limit_applies_to_an_authenticated_route_body() -> None:
-    chunk = b"y" * (128 * 1024)
-    n = DEFAULT_MAX_BYTES // len(chunk) + 2
-    chunks = [{"type": "http.request", "body": chunk, "more_body": True} for _ in range(n)]
-    chunks.append({"type": "http.request", "body": b"", "more_body": False})
-    sent = asyncio.run(drive(scope("POST", "/api/agents/runs"), chunks))
-    assert status_of(sent) == 413
+    chunks = pieces(DEFAULT_MAX_BYTES + 256 * 1024, 128 * 1024)
+    run = Run().go(scope("POST", "/api/agents/runs", CHUNKED), chunks)
+    assert run.status == 413
+    assert not run.app.started
 
 
 def test_body_at_the_limit_reaches_the_app() -> None:
-    body = b"z" * PUBLIC_MAX_BYTES
-    chunks = [{"type": "http.request", "body": body, "more_body": False}]
-    sent = asyncio.run(
-        drive(
-            scope("POST", "/api/auth/login", [(b"content-length", str(len(body)).encode())]), chunks
-        )
-    )
-    assert status_of(sent) == 200
-    assert body_of(sent) == {"read": PUBLIC_MAX_BYTES}
+    chunks = pieces(PUBLIC_MAX_BYTES, PUBLIC_MAX_BYTES)
+    run = Run().go(scope("POST", "/api/auth/login", length(PUBLIC_MAX_BYTES)), chunks)
+    assert run.status == 200
+    assert run.body == {"read": PUBLIC_MAX_BYTES, "messages": 1}
 
 
-def test_self_limited_route_is_not_capped_by_the_middleware() -> None:
-    # A body well over DEFAULT reaches the app untouched: the route reads it with its own limit.
-    chunk = b"p" * (256 * 1024)
-    chunks = [{"type": "http.request", "body": chunk, "more_body": True} for _ in range(8)]
-    chunks.append({"type": "http.request", "body": b"", "more_body": False})
-    sent = asyncio.run(drive(scope("PUT", "/api/profile/photo"), chunks))
-    assert status_of(sent) == 200
-    assert body_of(sent) == {"read": 8 * 256 * 1024}
+def test_a_body_in_tiny_pieces_reaches_the_app_as_one_message() -> None:
+    # Starlette keeps one object per message it is given: 64 KiB in two byte messages held
+    # megabytes. Gathered here, it is one buffer of at most the limit and one message.
+    run = Run().go(scope("POST", "/api/auth/login", CHUNKED), pieces(PUBLIC_MAX_BYTES, 2))
+    assert run.status == 200
+    assert run.body == {"read": PUBLIC_MAX_BYTES, "messages": 1}
+
+
+def test_self_limited_route_is_not_capped_and_not_read_by_the_middleware() -> None:
+    # A body well over the default reaches the app as it came: the route reads it itself.
+    run = Run().go(scope("PUT", "/api/profile/photo", CHUNKED), pieces(8 * 256 * 1024, 256 * 1024))
+    assert run.status == 200
+    assert run.body == {"read": 8 * 256 * 1024, "messages": 8}
 
 
 def test_non_api_path_is_not_capped() -> None:
-    chunk = b"q" * (256 * 1024)
-    chunks = [{"type": "http.request", "body": chunk, "more_body": True} for _ in range(8)]
-    chunks.append({"type": "http.request", "body": b"", "more_body": False})
-    sent = asyncio.run(drive(scope("GET", "/assets/app.js"), chunks))
-    assert status_of(sent) == 200
+    run = Run().go(scope("POST", "/assets/app.js", CHUNKED), pieces(8 * 256 * 1024, 256 * 1024))
+    assert run.status == 200
+
+
+def test_a_request_that_announces_no_body_is_passed_on_untouched() -> None:
+    # A GET, an event stream: the app gets the server's own receive, with no timer on it.
+    run = Run().go(scope("GET", "/api/agents/runs/x/stream"), WHOLE)
+    assert run.status == 200
+    assert run.body == {"read": 2, "messages": 1}
+
+
+def test_a_client_that_leaves_while_its_body_is_gathered_is_passed_on_as_such() -> None:
+    chunks = [{"type": "http.request", "body": b"ab", "more_body": True}]  # then a disconnect
+    run = Run().go(scope("POST", "/api/auth/login", CHUNKED), chunks)
+    assert run.app.started
+    assert run.body == {"read": 0, "messages": 0}  # the app saw the disconnect, not half a body
 
 
 # --- time limit --------------------------------------------------------------------------------
 
 
-def test_a_body_that_stalls_is_408(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bl, "BODY_READ_IDLE_S", 0.05)
-    sent: list[Message] = []
-
-    async def run() -> None:
-        async def receive() -> Message:
-            await asyncio.sleep(10)  # a chunk that never arrives in time
-            return {"type": "http.request", "body": b"", "more_body": False}
-
-        async def send(message: Message) -> None:
-            sent.append(message)
-
-        await LimitRequestBodyMiddleware(echo_app)(scope("POST", "/api/auth/login"), receive, send)
-
-    asyncio.run(asyncio.wait_for(run(), 5))
-    assert status_of(sent) == 408
-    assert body_of(sent) == {"detail": bl.TOO_SLOW}
+def test_a_body_that_stalls_is_408_and_the_connection_goes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bl, "PUBLIC_READ_IDLE_S", 0.05)
+    run = Run().go(scope("POST", "/api/auth/login", length(2000)), WHOLE, pause_s=10)
+    assert run.status == 408
+    assert run.body == {"detail": bl.TOO_SLOW}
+    assert run.headers[b"connection"] == b"close"
+    assert not run.app.started
 
 
 def test_a_slow_but_progressing_body_is_not_cut(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bl, "BODY_READ_IDLE_S", 0.2)
-    sent: list[Message] = []
-
-    async def run() -> None:
-        state = {"left": 3}
-
-        async def receive() -> Message:
-            await asyncio.sleep(0.05)  # each chunk arrives well within the idle window
-            if state["left"] > 0:
-                state["left"] -= 1
-                return {"type": "http.request", "body": b"ab", "more_body": state["left"] > 0}
-            return {"type": "http.disconnect"}
-
-        async def send(message: Message) -> None:
-            sent.append(message)
-
-        await LimitRequestBodyMiddleware(echo_app)(scope("POST", "/api/auth/login"), receive, send)
-
-    asyncio.run(asyncio.wait_for(run(), 5))
-    assert status_of(sent) == 200
-    assert body_of(sent) == {"read": 6}
+    # Each piece comes 10 ms after the last, the idle window is 5 seconds: no load on the
+    # machine turns that into a timeout.
+    monkeypatch.setattr(bl, "PUBLIC_READ_IDLE_S", 5.0)
+    run = Run().go(scope("POST", "/api/auth/login", CHUNKED), pieces(6, 2), pause_s=0.01)
+    assert run.status == 200
+    assert run.body == {"read": 6, "messages": 1}
 
 
 def test_a_body_sent_a_byte_now_and_then_is_408_after_the_total_time(
@@ -218,24 +251,22 @@ def test_a_body_sent_a_byte_now_and_then_is_408_after_the_total_time(
     # Every byte comes well inside the idle window, so only the total time can end it.
     monkeypatch.setattr(bl, "BODY_READ_IDLE_S", 5.0)
     monkeypatch.setattr(bl, "BODY_READ_TOTAL_S", 0.2)
-    sent: list[Message] = []
-    chunks = 0
+    endless = [{"type": "http.request", "body": b"a", "more_body": True}] * 5000
+    run = Run().go(scope("POST", "/api/agents/runs", CHUNKED), endless, pause_s=0.02)
+    assert run.status == 408
+    assert 1 <= run.reads < 100  # it was being read, and was ended long before the idle time
+    assert not run.app.started
 
-    async def run() -> None:
-        async def receive() -> Message:
-            nonlocal chunks
-            await asyncio.sleep(0.02)
-            chunks += 1
-            return {"type": "http.request", "body": b"a", "more_body": True}
 
-        async def send(message: Message) -> None:
-            sent.append(message)
-
-        await LimitRequestBodyMiddleware(echo_app)(scope("POST", "/api/auth/login"), receive, send)
-
-    asyncio.run(asyncio.wait_for(run(), 5))
-    assert status_of(sent) == 408
-    assert 1 <= chunks < 100  # it was being read, and it was ended long before the idle time
+def test_a_declared_body_on_a_stream_that_never_comes_is_one_408_not_a_second_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A GET that declares a body and sends none: the refusal comes before the app has begun to
+    # answer, so there is never a second response start on top of a started stream.
+    monkeypatch.setattr(bl, "BODY_READ_IDLE_S", 0.05)
+    run = Run().go(scope("GET", "/api/agents/runs/x/stream", length(10)), WHOLE, pause_s=10)
+    assert run.status == 408  # `status` also checks that there is exactly one response start
+    assert not run.app.started
 
 
 # --- no session, no body -----------------------------------------------------------------------
@@ -260,34 +291,13 @@ class Gate:
         return SessionGate(self.needs_session, self.has_session, "sign in first")
 
 
-async def drive_gated(gate: Gate, scope: dict, chunks: list[Message]) -> tuple[list[Message], int]:
-    """Run the middleware with `gate` over `echo_app`; also how often the body was asked for."""
-    sent: list[Message] = []
-    reads = 0
-    queue = list(chunks)
-
-    async def receive() -> Message:
-        nonlocal reads
-        reads += 1
-        return queue.pop(0) if queue else {"type": "http.disconnect"}
-
-    async def send(message: Message) -> None:
-        sent.append(message)
-
-    await LimitRequestBodyMiddleware(echo_app, gate=gate.gate())(scope, receive, send)
-    return sent, reads
-
-
-BODY = [{"type": "http.request", "body": b"{}", "more_body": False}]
-LENGTH = [(b"content-length", b"2")]
-
-
 def test_without_a_session_the_body_is_never_read() -> None:
     gate = Gate(signed_in=False)
-    sent, reads = asyncio.run(drive_gated(gate, scope("POST", "/api/agents/runs", LENGTH), BODY))
-    assert status_of(sent) == 401
-    assert body_of(sent) == {"detail": "sign in first"}
-    assert reads == 0
+    run = Run(gate.gate()).go(scope("POST", "/api/agents/runs", length(2)), WHOLE)
+    assert run.status == 401
+    assert run.body == {"detail": "sign in first"}
+    assert run.reads == 0
+    assert not run.app.started
     assert gate.asked == ["/api/agents/runs"]
 
 
@@ -297,33 +307,33 @@ def test_without_a_session_the_body_is_never_read() -> None:
         [(b"content-length", b"9000000")],
         [(b"transfer-encoding", b"chunked")],
         [(b"content-length", b"abc")],  # not a number still announces a body
+        [(b"content-length", b"00")],  # only the one spelling "0" announces none
     ],
 )
 def test_every_way_of_announcing_a_body_is_refused_without_a_session(
     headers: list[tuple[bytes, bytes]],
 ) -> None:
-    sent, reads = asyncio.run(
-        drive_gated(Gate(signed_in=False), scope("PUT", "/api/profile/photo", headers), BODY)
-    )
-    assert status_of(sent) == 401  # a route that reads its own body is behind the gate too
-    assert reads == 0
+    run = Run(Gate(signed_in=False).gate()).go(scope("PUT", "/api/profile/photo", headers), WHOLE)
+    assert run.status == 401  # a route that reads its own body is behind the gate too
+    assert run.reads == 0
 
 
 def test_with_a_session_the_request_goes_on_to_the_limits() -> None:
     gate = Gate(signed_in=True)
-    sent, _ = asyncio.run(drive_gated(gate, scope("POST", "/api/agents/runs", LENGTH), BODY))
-    assert status_of(sent) == 200
-    assert body_of(sent) == {"read": 2}
-    over = [(b"content-length", str(DEFAULT_MAX_BYTES + 1).encode())]
-    sent, reads = asyncio.run(drive_gated(gate, scope("POST", "/api/agents/runs", over), BODY))
-    assert status_of(sent) == 413
-    assert reads == 0
+    run = Run(gate.gate()).go(scope("POST", "/api/agents/runs", length(2)), WHOLE)
+    assert run.status == 200
+    assert run.body == {"read": 2, "messages": 1}
+    over = Run(gate.gate()).go(
+        scope("POST", "/api/agents/runs", length(DEFAULT_MAX_BYTES + 1)), WHOLE
+    )
+    assert over.status == 413
+    assert over.reads == 0
 
 
 def test_a_public_route_is_not_asked_for_a_session() -> None:
     gate = Gate(signed_in=False, public=frozenset({("POST", "/api/auth/login")}))
-    sent, _ = asyncio.run(drive_gated(gate, scope("POST", "/api/auth/login", LENGTH), BODY))
-    assert status_of(sent) == 200
+    run = Run(gate.gate()).go(scope("POST", "/api/auth/login", length(2)), WHOLE)
+    assert run.status == 200
     assert gate.asked == []
 
 
@@ -339,8 +349,8 @@ def test_the_session_is_only_looked_up_for_a_body_under_api(
     method: str, path: str, headers: list[tuple[bytes, bytes]]
 ) -> None:
     gate = Gate(signed_in=False)
-    sent, _ = asyncio.run(drive_gated(gate, scope(method, path, headers), BODY))
-    assert status_of(sent) == 200
+    run = Run(gate.gate()).go(scope(method, path, headers), WHOLE)
+    assert run.status == 200
     assert gate.asked == []
 
 
