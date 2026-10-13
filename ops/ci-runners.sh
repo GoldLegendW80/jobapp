@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# The CI runners on the Mac (issue #83; README, Continuous delivery). Run on the Mac, no sudo:
+# The CI runners on the Mac (issue #83; README, Continuous delivery). Run on the Mac, no sudo.
+# Optional and stopped by default since issue #116: what a merge waits for is ops/local-check.sh,
+# which runs natively and needs no runner. The runners serve a run of ci.yml started by hand
+# (gh workflow run ci.yml --ref <branch>): start them for it, stop them after.
 #
 #   ops/ci-runners.sh install [count]   build the image, register and start `count` runners
 #                                       (default: as many as exist, 3 on a Mac that has none;

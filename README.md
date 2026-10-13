@@ -107,14 +107,73 @@ generated on the first deploy into the git-ignored `.env.jetson` (random `POSTGR
 `--env`; `--env` refuses to change `POSTGRES_PASSWORD` once the `pgdata` volume exists. If
 `.env.jetson` is lost, the next deploy copies the Jetson's `.env` back. Caddy listens on the
 Jetson's loopback only; from the Mac, open it with `ssh -N -L 18080:127.0.0.1:80 jetson` and browse
-http://127.0.0.1:18080. `DEPLOY_HOST` and `DEPLOY_DIR` override the target. Every green push to
-`main` also deploys by itself (next section); `./deploy.sh` stays for the first deploy, a new
-`.env`, and deploying by hand.
+http://127.0.0.1:18080. `DEPLOY_HOST` and `DEPLOY_DIR` override the target. A checked `main` is
+deployed with `ops/deploy-checked.sh` (next section); `./deploy.sh` stays for the first deploy, a
+new `.env`, and deploying from the Mac's own files.
 
 ## Continuous delivery
 
-Every change goes through a branch and a pull request ([CONTRIBUTING.md](CONTRIBUTING.md)). CI
-(`.github/workflows/ci.yml`) runs on each pull request and push to `main`, in three jobs of about
+**Since 2026-10-13 (issue #116): one batch check on the Mac, then a deploy on demand.** No CI
+run per pull request and none per push to `main` any more: a run took about ten minutes on the
+Mac's runners and runs queued behind each other, so five approved pull requests meant an hour of
+waiting. Approved pull requests now merge back to back, after one full check of the tree they
+produce together, run natively on the Mac with all its cores:
+
+```bash
+ops/local-check.sh --merge 121 --merge 118     # origin/main, then each pull request merged in that order, then every check
+gh pr merge 121 --merge --delete-branch        # the same order
+gh pr merge 118 --merge --delete-branch
+git fetch origin && git rev-parse 'origin/main^{tree}'    # must print the tree sha of the line LOCAL CHECK: PASS <tree sha> <seconds>s
+ops/deploy-checked.sh                          # deploys origin/main on the Jetson's runner, only if that tree passed
+ops/deploy-checked.sh --dry-run                # what it would start
+```
+
+`ops/local-check.sh` makes a throwaway worktree of `origin/main` under a temporary folder, merges
+the refs it is given in order (a conflict is exit 2 and names the ref), and runs there every step
+of the three jobs of `.github/workflows/ci.yml`, always the full set: the api lint, the whole
+pytest suite with the 95 percent coverage floor, the docker marked tests, the scoring timing
+test; pre-commit, the secret scan of the commits between `main` and the merged head, shellcheck,
+the guards and every `tests/*_test.sh` that `ci.yml` runs; the web lint, type check, Vitest and
+build; and the four Playwright journey groups, each on a scratch Compose stack of its own. Four
+lanes start together (api with its own Postgres and Redis containers, web, the image build,
+the checks), and the journey groups start when the images and the web install are done, side by
+side on their own ports. It prints one line per step with its seconds, the end of the log of a
+failed step, the folder that keeps the full logs, and as its last line
+`LOCAL CHECK: PASS <tree sha> <seconds>s` or `LOCAL CHECK: FAIL <tree sha> <failed steps>`.
+Exit 0 passed, 1 a check failed, 2 a merge conflict, 3 the lock or the disk.
+
+On a pass of the full set it writes `.local-check/<tree sha>.json` in the main checkout (git
+ignored): the tree, the base, the merged refs with their commits, the steps and their seconds,
+the versions of the tools, the date. The tree sha is the key: after the pull requests are merged
+on GitHub in the same order, `git rev-parse 'origin/main^{tree}'` equals it exactly when what
+was checked is what is on `main`. `ops/deploy-checked.sh` refuses a commit whose tree has no such
+record, or one that is not on `origin/main`; then it runs
+`gh workflow run deploy.yml -f ref=<full sha>`, waits for the run on the Jetson's runner, prints
+its conclusion and asks `https://jobapp.taild83d16.ts.net/api/health`.
+
+The machine is protected: one check at a time (a lock in `.local-check/`; a second call says who
+holds it and exits 3); no start under 12 GiB free on `/System/Volumes/Data`; every container,
+volume, network and image of a check carries the check's own id in its name and is removed by a
+trap on success, on failure and on Ctrl+C, with the temporary worktree; the images are built
+under the check's own names, never over the shared `jobapp-*:latest` tags; containers of anything
+else, the `jobapp-ci-*` runners included, are never touched. `--only api`, `--only checks` or
+`--only journeys` runs one job's steps and writes no record; `--jobs N` sets the pytest
+processes (default: the cores minus 2); `LOCAL_CHECK_STACKS` the journey stacks side by side
+(default: one per 4 GiB of Docker memory, at most 4).
+
+What it does not give: no check per pull request (a failure belongs to the batch, and is found by
+running again with fewer `--merge` refs), nothing while the Mac is asleep, and no status on
+GitHub (the record and the last line are the proof). `tests/compose_smoke.sh`,
+`tests/migrate_test.sh` and the live start of `tests/tailscale_test.sh` stay tests run by hand,
+as they were under CI.
+
+`ci.yml` keeps its three jobs as the definition of the steps and starts by hand only
+(`gh workflow enable ci.yml` once, then `gh workflow run ci.yml --ref <branch>`, with a runner
+started: CI runners on the Mac, below). The rest of this section describes such a run, and the
+deploy workflow, which nothing starts by itself any more.
+
+Every change goes through a branch and a pull request ([CONTRIBUTING.md](CONTRIBUTING.md)). A run of CI
+(`.github/workflows/ci.yml`), started by hand since issue #116, has three jobs of about
 the same length (What a CI run does, below): `api` (ruff, the whole pytest suite against
 Postgres and Redis in one run, the 95 percent coverage floor on that run's data, the docker
 marked tests), `checks` (pre-commit, shellcheck and the shell test scripts, then the e2e groups
@@ -123,12 +182,12 @@ sweep); each
 e2e group runs on a Compose stack of its own built on its runner, the Playwright journeys with
 throwaway accounts and a synthetic jobs import, never Harald's data. The run is green when the
 three jobs are. A pull request that changes documentation only runs pre-commit alone (and the
-shell tests when it touches this README, which they check); every push to `main` runs
-everything. Since 2026-10-10 the jobs run on self-hosted
+shell tests when it touches this README, which they check); that narrowing needs a pull
+request event, which no longer starts a run, so a run started by hand runs everything. Since 2026-10-10 the jobs run on self-hosted
 runners on Harald's Mac (CI runners on the Mac, below), because the free minutes of GitHub's own
 machines were used up; the Jetson's runner keeps the deploys and nothing uses paid minutes. When
-CI is green for a push to `main`, `.github/workflows/deploy.yml` runs on the
-Jetson's self-hosted runner, under the Jetson's deploy lock (`flock` on
+`ops/deploy-checked.sh` dispatches it for a checked commit, `.github/workflows/deploy.yml` runs on
+the Jetson's self-hosted runner, under the Jetson's deploy lock (`flock` on
 `~/jobapp-backups/.deploy.lock`, which `./deploy.sh` takes too, so the two never overlap; the Jetson
 lets go of the Mac's hold after `DEPLOY_LOCK_MAX_S`, an hour by default, so a Mac that sleeps mid
 deploy cannot block GitHub's deploys for hours): rsync of
@@ -237,8 +296,10 @@ token on the Jetson, a larger secret than the runner's own repository-scoped cre
 root on the Jetson for whatever job runs on it. It is registered to this private repository only,
 and its job-started hook (`ops/runner/job-guard.sh`, set in the image as
 `ACTIONS_RUNNER_HOOK_JOB_STARTED`, so no commit can turn it off) fails every job before its first
-step unless it is this repository's `deploy.yml` from `refs/heads/main`, run by `workflow_run` or
-`workflow_dispatch`. A pull request, a push to a branch or another workflow that targets
+step unless it is this repository's `deploy.yml` from `refs/heads/main`, run by
+`workflow_dispatch` (the runner on the Jetson takes that stricter rule at its next
+`./deploy.sh runner install`; the image it runs today also accepts `workflow_run`, an event
+`deploy.yml` no longer has). A pull request, a push to a branch or another workflow that targets
 `[self-hosted, jetson]` is refused. Never add the runner to a public repository or allow fork
 workflows. Dispatching a branch deploys and runs that branch's code on the Jetson (its compose
 file and images), so dispatch only reviewed branches. Anyone with write access to the repository can run code on the Jetson.
@@ -369,7 +430,8 @@ rules are a short list in that script, first match wins:
 | anything else, or a mix with anything else | all four | a path no rule names runs everything |
 
 A push to `main`, a manual run, a pull request whose base is not `main` and any run where the
-changed files cannot be read for certain run everything: a green run on `main` is what deploys.
+changed files cannot be read for certain run everything. (Until issue #116 a green run on `main`
+was what deployed; a run deploys nothing now.)
 Each job ends with `ci_plan.py verify`,
 which fails it when a step the plan needed was skipped, or one it left out ran, so a wrong
 condition in the workflow cannot pass for a test that did not run (and it fails on a job status
@@ -437,7 +499,11 @@ commit is the base as it is now plus the branch, then closes and reopens; `--che
 
 ### CI runners on the Mac
 
-CI runs on self-hosted runners on the Mac (issue #83), `mac-ci-1` to `mac-ci-3`, labels
+Optional and stopped by default since issue #116: the batch check (`ops/local-check.sh`) runs
+natively and needs no runner. The runners serve a run of `ci.yml` started by hand, and are
+started for it with `ops/ci-runners.sh start`. What follows describes them when they are up.
+
+CI ran on self-hosted runners on the Mac (issue #83), `mac-ci-1` to `mac-ci-3`, labels
 `self-hosted, Linux, ARM64, mac-ci`: three, one per job of a run (the workflow is the same with
 one or two, the jobs then queue). Every job of `ci.yml` targets `[self-hosted, mac-ci]`, never
 `self-hosted` alone, so a CI job cannot land on the Jetson's runner, and `deploy.yml` keeps
@@ -534,8 +600,8 @@ without `-v` keeps its named volumes on purpose; finish with `down -v`.
 **When the Mac is off, asleep or Docker Desktop is closed.** The runners are offline and CI
 waits: jobs stay queued (GitHub keeps a queued job for 24 hours, then fails it) and start when
 the Mac is back. A job that was running when the Mac went to sleep can fail with a lost runner:
-rerun it (`gh run rerun <id> --failed`). Nothing deploys meanwhile, since the deploy waits for a
-green CI on `main`. No power setting was changed; for a long unattended session, `caffeinate -s`
+rerun it (`gh run rerun <id> --failed`). A deploy does not depend on them: it is dispatched to
+the Jetson's runner by `ops/deploy-checked.sh`. No power setting was changed; for a long unattended session, `caffeinate -s`
 in a terminal keeps a Mac on mains power awake while it runs.
 
 **When a runner is recreated** (`update`, `install` on an existing set): one at a time, each
