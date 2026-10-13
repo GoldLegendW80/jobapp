@@ -20,6 +20,15 @@ describe("kindLabel", () => {
     expect(kindLabel(fakeDocument({ source: "pasted" }))).toBe("Pasted text");
     expect(kindLabel(fakeDocument({ kind: "pdf" }))).toBe("PDF");
     expect(kindLabel(fakeDocument({ kind: "archive" }))).toBe("Word or ZIP");
+    // Once read, a ZIP that was a Word document says so (a CSV of an export is a text).
+    expect(
+      kindLabel(
+        fakeDocument({
+          kind: "archive",
+          mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        }),
+      ),
+    ).toBe("Word");
     expect(kindLabel(fakeDocument({ kind: "image" }))).toBe("Image");
     expect(kindLabel(fakeDocument({ kind: "other" }))).toBe("File");
   });

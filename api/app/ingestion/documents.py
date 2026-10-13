@@ -11,11 +11,14 @@ What an upload is, decided from its bytes alone (`sniff`), never from its name o
   Text is complete at once: decoded, cleaned (`clean_text`), cut at TEXT_MAX_CHARS, scanned for
   secrets, stored `done`. Its bytes are never stored. A pasted text takes the same path.
 
-READABLE_KINDS says which kinds have a reader in this version: text since G1, and since G2b
-the PDF, whose upload queues a parse job (jobs.py: the worker sends the file to the parser
-service and stores the text it gets back). An archive or an image is kept and waits: G7 adds
-`Kind.archive`, G8 `Kind.image`; the list tells the user which documents wait for a later
-version, and the reaper of jobs.py which waiting rows to queue.
+READABLE_KINDS says which kinds have a reader in this version: text since G1, since G2b the
+PDF, whose upload queues a parse job (jobs.py: the worker sends the file to the parser service
+and stores the text it gets back), and since G7 the archive: a ZIP that the parser finds to be
+a Word document becomes its text (the row then carries DOCX_MIME), and one it finds to be a
+LinkedIn export becomes one document per CSV it knows (`store_export`: the row of the archive
+is deleted in the same transaction). An image is kept and waits for G8 (`Kind.image`); the
+list tells the user which documents wait for a later version, and the reaper of jobs.py which
+waiting rows to queue.
 
 Storing (`store_file`, `store_paste`), in one transaction that the caller commits:
 1. The same file already there for this user (`unique(user_id, sha256)`): it is returned and
@@ -57,7 +60,7 @@ import re
 import struct
 import unicodedata
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
@@ -104,12 +107,13 @@ class Kind(enum.StrEnum):
     other = "other"  # a type this module does not know: shown as a file, never readable
 
 
+CSV_MIME = "text/csv"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 # Every type a document may carry. A task that stores another one adds it here (G7: the CSV
 # files of a LinkedIn export are text/csv, a ZIP found to be a DOCX is DOCX_MIME).
 KIND_OF_MIME: dict[str, Kind] = {
     TEXT_MIME: Kind.text,
-    "text/csv": Kind.text,
+    CSV_MIME: Kind.text,
     "application/pdf": Kind.pdf,
     "application/zip": Kind.archive,
     DOCX_MIME: Kind.archive,
@@ -118,7 +122,7 @@ KIND_OF_MIME: dict[str, Kind] = {
 }
 
 # The kinds a reader exists for in this version (module docstring).
-READABLE_KINDS: frozenset[Kind] = frozenset({Kind.text, Kind.pdf})
+READABLE_KINDS: frozenset[Kind] = frozenset({Kind.text, Kind.pdf, Kind.archive})
 
 TOO_LARGE = f"The file is larger than {FILE_MAX_BYTES // (1024 * 1024)} MB."
 EMPTY = "The file is empty."
@@ -135,6 +139,10 @@ QUOTA = (
 )
 TOO_MANY = (
     f"You already keep {USER_MAX_DOCUMENTS} documents, the most allowed. Delete one to add another."
+)
+EXPORT_TOO_MANY = (
+    f"This export would take you past the {USER_MAX_DOCUMENTS} documents you can keep here. "
+    "Delete some documents, then add the export again."
 )
 TRUNCATED_NOTE = f"Only the first {TEXT_MAX_CHARS:,} characters were read."
 UNSUPPORTED = (
@@ -609,6 +617,78 @@ def store_file(
         )
 
     return _guarded(store, db, user_id, digest)
+
+
+@dataclass(frozen=True)
+class ExportEntry:
+    """One CSV of a LinkedIn export, ready to store: `name` is a name of the parser's closed
+    list (parser_client.LINKEDIN_FILES), `digest` and `size` those of the file in the archive."""
+
+    name: str
+    digest: bytes
+    size: int
+    content: _Content
+
+
+def export_content(text: str, truncated: bool) -> _Content | None:
+    """The text of one CSV of an export as it is stored, None when it holds no text."""
+    try:
+        return _content(text, truncated, NO_TEXT)
+    except DocumentError:
+        return None
+
+
+def export_name(archive: str, file: str) -> str:
+    """ "<archive name>: <file name>", the archive's name cut so that the file's is whole."""
+    room = max(NAME_MAX_CHARS - len(file) - 2, 0)
+    return clean_name(f"{archive[:room].strip()}: {file}")
+
+
+def store_export(
+    db: Session,
+    user_id: uuid.UUID,
+    archive: IngestionDocument,
+    entries: Sequence[ExportEntry],
+    now: datetime,
+) -> list[Stored]:
+    """The CSV files of a LinkedIn export, each a document of its own, and the row of the
+    archive gone, in the caller's transaction. The caller holds the user's advisory lock and
+    the archive's row.
+
+    Each file is found again by its own hash: one that is already a document of this user is
+    left as it is (the same export added twice makes no second copy), unless that row is
+    replaceable. Raises DocumentError when the files do not fit the user's document count or
+    quota, counted as if the archive were already gone; the caller then rolls back, so nothing
+    of the export is kept and the archive's row stays."""
+    fresh = cost = 0
+    for entry in entries:
+        existing = _by_hash(db, user_id, entry.digest)
+        fresh += existing is None
+        if existing is None or replaceable(existing):
+            cost += entry.content.stored_bytes
+    used = usage(db, user_id)
+    if used.documents - 1 + fresh > USER_MAX_DOCUMENTS:
+        raise DocumentError(422, EXPORT_TOO_MANY, "too-many-documents")
+    if used.bytes - archive.size + cost > USER_MAX_BYTES:
+        raise DocumentError(413, QUOTA, "quota")
+    name = archive.name
+    _log("document unpacked", archive, files=len(entries), new=fresh)
+    db.delete(archive)
+    db.flush()
+    return [
+        _store(
+            db,
+            user_id,
+            name=export_name(name, entry.name),
+            mime=CSV_MIME,
+            source=TextSource.parsed,
+            size=entry.size,
+            digest=entry.digest,
+            payload=entry.content,
+            now=now,
+        )
+        for entry in entries
+    ]
 
 
 def store_paste(

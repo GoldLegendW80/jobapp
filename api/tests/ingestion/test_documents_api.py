@@ -144,7 +144,8 @@ def test_the_name_never_decides_the_type(
     [
         # Since G2b a PDF has a reader: it waits for its job, not for a later version.
         (pdf(), "pdf", "application/pdf", "parsed", True),
-        (archive(), "archive", "application/zip", "parsed", False),
+        # Since G7 an archive too: the parser tells a Word document from an export.
+        (archive(), "archive", "application/zip", "parsed", True),
         (png(), "image", "image/png", "transcribed", False),
         (jpeg(), "image", "image/jpeg", "transcribed", False),
     ],

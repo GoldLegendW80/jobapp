@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # A fresh CI run of an open pull request, tested against the base branch as it is now
 # (issue #91).
+# Since issue #116 ci.yml has no pull request trigger, so the close and reopen done here starts
+# no run: the script is kept for the day that trigger comes back. What a merge waits for is
+# ops/local-check.sh.
 #
 #   ops/ci-rerun.sh <pull request number>            wait for the fresh merge commit, close, reopen
 #   ops/ci-rerun.sh <pull request number> --check    only say whether the merge commit is fresh

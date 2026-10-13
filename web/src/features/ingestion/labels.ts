@@ -1,6 +1,10 @@
 /** The words the documents list uses for a document's type, size, state and pages. */
 import type { IngestionDocument } from "./documents-api";
 
+/** The type a ZIP carries once the parser has found it to be a Word document. */
+const DOCX_MIME =
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 export function kindLabel(document: IngestionDocument): string {
   switch (document.kind) {
     case "text":
@@ -8,7 +12,8 @@ export function kindLabel(document: IngestionDocument): string {
     case "pdf":
       return "PDF";
     case "archive":
-      return "Word or ZIP";
+      // Until it is read, only the parser knows which of the two a ZIP is.
+      return document.mime === DOCX_MIME ? "Word" : "Word or ZIP";
     case "image":
       return "Image";
     case "other":

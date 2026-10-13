@@ -764,10 +764,10 @@ def test_jobs_sent_at_once_run_one_at_a_time(stack: Stack) -> None:
 
 
 def test_the_kinds_without_a_handler_answer_not_supported_yet(stack: Stack) -> None:
-    """linkedin_zip and image have no file yet (pdf_render and docx are the tests' own here;
-    pdf_text is the image's since G2b, and test_pdf_container.py is about it). Every kind
-    answers through the whole chain."""
-    for kind in ("linkedin_zip", "image"):
+    """image has no file yet (pdf_render and docx are the tests' own here; pdf_text is the
+    image's since G2b, linkedin_zip since G7: test_pdf_container.py and
+    test_archive_container.py are about them). Every kind answers through the whole chain."""
+    for kind in ("image",):
         answer = stack.raw({}, size=1024, kind=kind)
         assert answer["body"] == {"ok": False, "failure": "server", "code": "not_supported"}
         found = stack.parse({}, size=1024, kind=kind)

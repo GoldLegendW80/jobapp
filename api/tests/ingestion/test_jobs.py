@@ -122,9 +122,12 @@ def test_only_a_stored_file_that_waits_for_a_reader_is_queued(
 ) -> None:
     uploaded(api, alice, b"plain text", "notes.txt")
     uploaded(api, alice, png(), "shot.png")
-    uploaded(api, alice, archive(), "export.zip")
     assert upload(api, alice, b"GIF89a....", "a.gif").status_code == 415
     assert jobs_queue.jobs == []
+    # An archive has a reader since G7 (tests/ingestion/test_jobs_archive.py).
+    export = uploaded(api, alice, archive(), "export.zip")
+    assert [job["args"] for job in jobs_queue.jobs] == [(export["id"],)]
+    jobs_queue.jobs.clear()
     first = uploaded(api, alice, pdf(), "cv.pdf")
     assert len(jobs_queue.jobs) == 1
     # The same file again: nothing is stored, nothing is queued.
@@ -293,8 +296,11 @@ def test_a_note_is_written_in_plain_words(
 
 def test_every_code_of_the_parser_has_a_sentence_without_a_dash() -> None:
     written = {**jobs.FILE_SENTENCES, "server": jobs.SERVER_FAILED, "quota": jobs.OVER_QUOTA}
+    written.update({f"archive {code}": text for code, text in jobs.ARCHIVE_SENTENCES.items()})
     # too_many_pixels is the image reader's (G8): until its sentence exists, the fallback.
-    assert set(jobs.FILE_SENTENCES) == pc.FILE_CODES - {"too_many_pixels"}
+    assert set(jobs.FILE_SENTENCES) | set(jobs.ARCHIVE_SENTENCES) == pc.FILE_CODES - {
+        "too_many_pixels"
+    }
     assert jobs.file_sentence("too_many_pixels") == jobs.FILE_FALLBACK
     for code in pc.NOTE_CODES:
         written[code] = jobs.note_sentence(pc.Note(code, {"from": 2, "to": 3, "count": 4}))
@@ -720,11 +726,10 @@ def test_the_reaper_takes_the_kinds_that_have_a_reader_and_no_other(
     kept = [
         stored_before(factory, owner, png(), "image/png", long_ago),
         stored_before(factory, owner, png(300), "image/jpeg", long_ago),
-        stored_before(factory, owner, archive(), "application/zip", long_ago),
-        stored_before(factory, owner, archive(b"word/x"), documents.DOCX_MIME, long_ago),
         stored_before(factory, owner, b"other", "application/x-later", long_ago),
     ]
-    assert jobs.readable_mimes() == ["application/pdf"]
+    # The archives have a reader since G7: tests/ingestion/test_jobs_archive.py.
+    assert jobs.readable_mimes() == ["application/pdf", documents.DOCX_MIME, "application/zip"]
     parser = Parser(parsed())
     for _ in range(10):
         found = jobs.reap(factory, clock.now)
@@ -985,6 +990,6 @@ def test_the_job_holds_one_document_at_most_and_frees_it_before_it_writes(
     assert isinstance(claim, jobs._Claim)
     assert len(claim.data) == 2 * MIB
     assert (claim.kind, claim.size, claim.attempts) == (documents.Kind.pdf, 2 * MIB, 1)
-    assert {documents.Kind.pdf: "pdf_text"} == jobs.PARSER_KIND
+    assert {documents.Kind.pdf: "pdf_text", documents.Kind.archive: "docx"} == jobs.PARSER_KIND
     assert jobs.JOB_TIMEOUT_S > pc.TIMEOUT_S + 30
     assert timedelta(seconds=jobs.JOB_TIMEOUT_S) < jobs.STALE_AFTER
