@@ -116,10 +116,19 @@ LIMITS["pdf_text"]["as"] = 256 * MIB
 # the limit, not the sizing, is what holds against a hostile one.
 LIMITS["docx"]["as"] = 256 * MIB
 LIMITS["linkedin_zip"]["as"] = 256 * MIB
-# The image reader and the renderer (G8). Set from the measurements of the plan (G8,
-# Measurements); until those are written here both keep the 512 MiB every kind starts with.
-IMAGE_AS = 512 * MIB
-PDF_RENDER_AS = 512 * MIB
+# The image reader and the renderer (G8), set from the highest address space of the child for
+# the worst inputs its guards let through, measured in the parser container on the Mac
+# (arm64, 2026-10-13; plan, G8, Measurements; tests/ingestion/parser/test_image_container.py
+# measures them again on every run and holds each under 80 % of its limit):
+#   image       203 MiB  25 megapixels of progressive JPEG (160 MiB for 25 megapixels of RGBA
+#                        PNG, 147 MiB for a PNG of 20,000 by 1,250, 116 MiB for a baseline JPEG)
+#   pdf_render  147 MiB  a page whose picture inflates to 1.7 GiB: PDFium gives the picture up
+#                        and draws the page without it (105 MiB for six pages of 600 dpi
+#                        scans, 17.5 MiB of file; 64 MiB for eight ordinary scanned pages)
+# About one and a half times the worst figure each, in steps of 64 MiB. The Jetson's own
+# figures are taken after the merge with tests/ingestion_parser_jetson.sh.
+IMAGE_AS = 320 * MIB
+PDF_RENDER_AS = 256 * MIB
 LIMITS["image"]["as"] = IMAGE_AS
 LIMITS["pdf_render"]["as"] = PDF_RENDER_AS
 # The hard CPU limit is one second above the soft one. At the soft limit the kernel sends

@@ -160,7 +160,10 @@ def test_the_largest_image_the_guard_lets_through_is_read_inside_the_limit(
     assert len(data) <= 20 * MIB, "an upload the API takes"
     parsed = read(stack, "image", data, name=name)
     (stored,) = parsed.images
-    assert max(stored.width, stored.height) == 1568
+    # 1568 on its longest side, or under it for a picture that stays over 300,000 bytes at
+    # the last quality and is shrunk a step at a time (25 megapixels of noise).
+    assert 0 < max(stored.width, stored.height) <= 1568
+    assert len(stored.jpeg) <= 300_000
     # With room to spare: the limit is not what an honest picture meets.
     assert MEASURED[name]["max_vm_kb"] * 1024 < main.LIMITS["image"]["as"] * 0.8
     stack.alive()
@@ -247,10 +250,11 @@ def test_an_input_that_meets_the_memory_limit_is_a_code_and_the_next_job_runs(
     assert (stored.width, stored.height) == (1200, 800)
 
 
-# What an input over the memory of the child may end as: a result (PDFium gave up on the
-# picture and drew the page without it), the file's `bomb`, or the death of the child, which
-# the server reports and the job counts as a try that failed.
-MEMORY_OUTCOMES = {"ok", "file/bomb", "server/memory_limit", "server/crashed"}
+# What an input over the memory of the child ends as: a result (PDFium gave up on the picture
+# and drew the page without it) or the file's `bomb`. Never a code of the server: the death of
+# the child would cost the user a try and the service a restart of nothing, and it is not what
+# was measured at these limits (2026-10-13).
+MEMORY_OUTCOMES = {"ok", "file/bomb"}
 
 
 def test_nothing_was_written_anywhere_in_the_container(stack: Stack) -> None:
