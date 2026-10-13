@@ -10,6 +10,7 @@ import contextlib
 import itertools
 import json
 import os
+import signal
 import socket
 import sys
 import time
@@ -74,6 +75,32 @@ async def job(port: int, data: bytes = b"", kind: str = "pdf_text", **options: A
         return header
     assert header == {"ok": True, "failure": None, "code": "ok", "length": len(body)}
     return json.loads(body)
+
+
+def outcomes_of(instance: Any) -> list[Any]:
+    """Every Outcome of the server's run_child from now on: what no answer carries, how the
+    child of a job ended (`status`) and how much of its output the service read (`read`)."""
+    seen: list[Any] = []
+    run_child = instance.run_child
+
+    async def noted(*args: Any, **kwargs: Any) -> Any:
+        outcome = await run_child(*args, **kwargs)
+        seen.append(outcome)
+        return outcome
+
+    instance.run_child = noted
+    return seen
+
+
+def killed_at_the_cap(outcome: Any, max_answer: int) -> None:
+    """The proof of the kill. The flood of these tests has no end, so nothing but a kill ends
+    the child, and the service waits for its death before it reads on: with the kill taken
+    away the job never answers (tried on PR #156: each of these tests then fails on its bound
+    of time). And the child ended by SIGKILL, with at most this read of what it wrote: the
+    cap, the piece that passed it, and what a dead child leaves in its pipe."""
+    assert outcome.code == "output_cap"
+    assert outcome.status == -signal.SIGKILL
+    assert outcome.read <= max_answer + (1 << 16) + server.DRAIN_MAX
 
 
 def no_child_left() -> bool:
@@ -454,13 +481,46 @@ def test_a_child_that_outlives_the_wall_clock_is_killed_and_reaped() -> None:
     run(test)
 
 
+def test_a_child_killed_with_output_left_unread_is_reaped_and_the_job_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child past the cap is killed while it still writes, and a kill is not instant: until it
+    lands the pipe fills with what nobody reads any more. Past its buffer limit asyncio stops
+    reading such a pipe, so it never sees its end, and Process.wait(), which waits for the pipes
+    too, waited for ever: the job never answered, the client gave up at its own deadline, and
+    asyncio wrote "Task was destroyed but it is pending!" in the log of the service (issue
+    #104, on a loaded machine). Here the kill lands a fifth of a second late every time. The
+    answer has to come long before any limit of time: the bound below only turns a job that
+    hangs into a failure."""
+    kill = asyncio.subprocess.Process.kill
+
+    def late_kill(process: asyncio.subprocess.Process) -> None:
+        asyncio.get_running_loop().call_later(0.2, kill, process)
+
+    async def test() -> None:
+        async with serving(max_answer=200_000) as (instance, port):
+            outcomes = outcomes_of(instance)
+            monkeypatch.setattr(asyncio.subprocess.Process, "kill", late_kill)
+            header = await asyncio.wait_for(job(port, b"x", act="flood"), 10)
+            monkeypatch.undo()
+            assert header == {**REFUSED, "code": "output_cap"}
+            # Nothing was read while the kill was on its way: the pipe filled, as it did when
+            # the job hung, and the read stays at the cap plus what was left in the pipe.
+            killed_at_the_cap(outcomes[-1], 200_000)
+            assert no_child_left()
+            assert (await job(port, b"abc"))["received"] == 3
+
+    run(test)
+
+
 def test_a_child_that_writes_more_than_the_cap_is_killed() -> None:
     async def test() -> None:
-        async with serving(max_answer=200_000) as (_, port):
-            started = time.monotonic()
-            header = await job(port, b"x", act="flood", blocks=100_000)
+        async with serving(max_answer=200_000) as (instance, port):
+            outcomes = outcomes_of(instance)
+            # A flood without end. The bound only turns a child nobody killed into a failure.
+            header = await asyncio.wait_for(job(port, b"x", act="flood"), 10)
             assert header == {**REFUSED, "code": "output_cap"}
-            assert time.monotonic() - started < 10, "killed at the cap, not at its 6 GB"
+            killed_at_the_cap(outcomes[-1], 200_000)
             assert no_child_left()
             # Under the cap by a block: it arrives whole.
             header, body, _ = await exchange(port, line_of(options={"act": "flood", "blocks": 3}))
@@ -629,8 +689,24 @@ def test_the_log_holds_kinds_sizes_and_codes_and_nothing_of_a_document(
     lines = [json.loads(line) for line in captured.err.splitlines()]
     events = [{key: line[key] for key in line if key not in ("ts", "ms")} for line in lines]
     assert events == [
-        {"event": "job", "kind": "docx", "size": 2800, "code": "ok", "out": events[0]["out"]},
-        {"event": "job", "kind": "pdf_text", "size": 28, "code": "wall_limit", "out": 0},
+        {
+            "event": "job",
+            "kind": "docx",
+            "size": 2800,
+            "code": "ok",
+            "out": events[0]["out"],
+            "status": 0,
+            "read": events[0]["out"],
+        },
+        {
+            "event": "job",
+            "kind": "pdf_text",
+            "size": 28,
+            "code": "wall_limit",
+            "out": 0,
+            "status": -signal.SIGKILL,
+            "read": 0,
+        },
         {"event": "refused", "code": "unknown_kind"},
         {"event": "refused", "code": "bad_request"},
     ], "a ping that worked is not logged: the healthcheck sends one every 15 s"

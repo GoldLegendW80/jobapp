@@ -35,10 +35,10 @@
 # and build side by side), images (api, worker and caddy built by compose under this
 # check's own image names), checks (the tests/*_test.sh side by side). The journey groups start
 # when the images and the web install are done, each on a scratch stack of its own (own project,
-# own port, own database), LOCAL_CHECK_STACKS of them side by side (default: one per 4 GiB of
+# own port, own database; the ports are claimed once up front, and a start that fails on a port is retried on another, three starts at most), LOCAL_CHECK_STACKS of them side by side (default: one per 4 GiB of
 # Docker memory, at most 4), with one Playwright worker each, as in CI. When every lane has
-# ended, the tests that measure time run in a quiet phase: Vitest next to the docker marked
-# tests, then alone, one after the other, the test of the suite that measures its own speed, the
+# ended, the tests that measure time run in a quiet phase, one at a time: Vitest, the docker
+# marked tests, the test of the suite that measures its own speed, the
 # coverage floor and the scoring test. Before the result, the steps that ran are compared with
 # the list of the set (expected_steps): one that did not run fails the check.
 #
@@ -397,7 +397,35 @@ interruptible() {
   python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
 }
 
-free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+# The ports of the journey stacks. Each stack publishes its caddy on a loopback port that the
+# check chooses (HTTP_PORT). They are claimed once, up front, from 20000 to 29999 (under the
+# ephemeral ranges of macOS and Linux, which outgoing connections take at random): a claim is a
+# folder in $WORK/ports, so no two stacks of one check can hold the same number, and a number is
+# bound for a moment to see that it is free now.
+port_free() { python3 -c 'import socket, sys; socket.socket().bind(("127.0.0.1", int(sys.argv[1])))' "$1" 2>/dev/null; }
+
+claim_port() { # prints a port that is free and that no stack of this check holds
+  local port tries=0
+  mkdir -p "$WORK/ports"
+  while ((tries++ < 500)); do
+    port=$((20000 + RANDOM % 10000))
+    if mkdir "$WORK/ports/$port" 2>/dev/null && port_free "$port"; then
+      printf '%s\n' "$port"
+      return 0
+    fi
+  done
+  echo "no free loopback port found" >&2
+  return 1
+}
+
+pick_journey_ports() { # pick_journey_ports <group ...>: one claimed port per group, in $WORK/ports/<group>
+  local group port
+  mkdir -p "$WORK/ports"
+  for group in "$@"; do
+    port="$(claim_port)" || return 1
+    printf '%s\n' "$port" >"$WORK/ports/$group"
+  done
+}
 
 # --- the steps: api --------------------------------------------------------------------------------
 s_api_install() {
@@ -502,19 +530,18 @@ passed() { # passed <step>: true when that step ran and passed
 # Measured on 2026-10-13, next to the suite and four journey stacks (load 15 on 12 cores): Vitest
 # failed in 2 runs of 4, two CPU limit tests and two `docker run` of the docker marked tests'
 # own Postgres failed in 1 run; alone they passed every time.
-# Since the review of pull request #121 (N17) Vitest and the docker marked tests run side by
-# side: three Vitest workers next to one serial pytest is far from that load. That pairing has
-# not been measured on a full run yet; LOCAL_CHECK_QUIET_SERIAL=1 puts the two back one after the
-# other. The rest runs alone, one after the other.
+# Pull request #121 ran Vitest next to the docker marked tests; the second full run showed that
+# cannot work (two parser tests got wall_limit for cpu_limit), so they run one after the other
+# again and every step of the phase has the machine to itself.
 quiet_phase() {
   local api=0
   if wanted api && [[ -f "$WORK/api.env" ]]; then api=1; fi
   if wanted journeys && [[ "$(cat "$WORK/web.done" 2>/dev/null)" == 0 ]]; then
-    run_step vitest s_vitest &
-    [[ -z "${LOCAL_CHECK_QUIET_SERIAL:-}" ]] || wait
+    run_step vitest s_vitest || true
   fi
+  # Alone: two parser tests burn 45 s of CPU within 60 s of wall time by construction, which
+  # needs most of a core for a minute; beside Vitest they end on wall_limit.
   if ((api)); then run_step pytest-docker s_pytest_docker || true; fi
-  wait
   ((api)) || return 0
   if passed pytest; then
     run_step pytest-alone s_pytest_alone || true
@@ -623,11 +650,34 @@ journey_play() { # journey_play <group> <Playwright arguments>
   cd web && pnpm exec playwright test $2 --reporter=list --output="test-results/$1"
 }
 
+# Starts a stack on the port picked for its group. The port is bound once more just before the
+# start; when the start still fails on a port (another program took it in between), this stack,
+# and only this one, is taken down and started again on another port, three starts at most.
+stack_up() { # stack_up <group> <project> <compose file arguments>
+  local group="$1" project="$2" port="" out attempt=1 rc
+  shift 2
+  out="$WORK/up-$group.log"
+  [[ ! -s "$WORK/ports/$group" ]] || port="$(cat "$WORK/ports/$group")"
+  while :; do
+    if [[ -z "$port" ]] || ! port_free "$port"; then port="$(claim_port)" || return 1; fi
+    export HTTP_PORT="$port" E2E_CADDY_URL="http://127.0.0.1:$port"
+    echo "stack $project on $E2E_CADDY_URL"
+    rc=0
+    docker compose -p "$project" "$@" up -d --no-build --wait --wait-timeout 300 >"$out" 2>&1 || rc=$?
+    cat "$out"
+    ((rc != 0)) || return 0
+    if ((attempt >= 3)) || ! grep -qiE 'failed to bind|address already in use|port is already allocated' "$out"; then return "$rc"; fi
+    echo "retry $attempt of 2: port $port was taken before $project started, taking it down, picking another port"
+    docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
+    port=""
+    attempt=$((attempt + 1))
+  done
+}
+
 s_journey() {
-  local group="$1" project="$PREFIX-$1" rc=0 files=() port specs one
+  local group="$1" project="$PREFIX-$1" rc=0 files=() specs one
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
-  port="$(free_port)"
-  export HTTP_PORT="$port" E2E_CADDY_URL="http://127.0.0.1:$port" E2E_COMPOSE_PROJECT="$project" E2E_EVIDENCE=ci
+  export E2E_COMPOSE_PROJECT="$project" E2E_EVIDENCE=ci
   case "$group" in
   apps)
     python3 .github/scripts/synthetic_jobs.py "$WORK/synthetic/data"
@@ -637,8 +687,7 @@ s_journey() {
   sweep) export E2E_SKIP_REAL_SWEEP=1 ;;
   esac
   specs="$(journey_specs "$group")"
-  echo "stack $project on $E2E_CADDY_URL"
-  docker compose -p "$project" "${files[@]}" up -d --no-build --wait --wait-timeout 300 &&
+  stack_up "$group" "$project" "${files[@]}" &&
     docker compose -p "$project" -f compose.yml exec -T api alembic upgrade head &&
     journey_play "$group" "$specs" || rc=$?
   docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color >"$LOGS/stack-$group.log" 2>&1 || true
@@ -659,6 +708,10 @@ lane_journeys() {
     for group in "${groups[@]}"; do not_run "journeys-$group" "$why"; done
     return 0
   fi
+  pick_journey_ports "${groups[@]}" || {
+    for group in "${groups[@]}"; do not_run "journeys-$group" "no free loopback port for the stacks"; done
+    return 0
+  }
   for group in "${groups[@]}"; do
     run_step "journeys-$group" s_journey "$group" &
     running=$((running + 1))

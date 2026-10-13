@@ -219,6 +219,8 @@ class DocumentOut(BaseModel):
 class StoredOut(DocumentOut):
     # True: the same file was already among the user's documents; this is that document.
     duplicate: bool
+    # The sentence to show when the upload was meant to replace that document and could not.
+    refused: str | None = None
 
 
 class UsageOut(BaseModel):
@@ -314,7 +316,9 @@ def _refused(exc: documents.DocumentError, user: User, size: int) -> NoReturn:
 def _stored(stored: documents.Stored, response: Response) -> StoredOut:
     if not stored.created:
         response.status_code = status.HTTP_200_OK
-    return StoredOut(**_fields(stored.document), duplicate=not stored.created)
+    return StoredOut(
+        **_fields(stored.document), duplicate=not stored.created, refused=stored.refused
+    )
 
 
 # --- who may send a body now ---------------------------------------------------------------

@@ -1,0 +1,8 @@
+Alex Martin
+Email: alex.martin@example.org
+Nantes, France
+
+Experience
+
+Example Freight, Backend Engineer, March 2020 to June 2023, Nantes
+Rebuilt the made up parcel tracking service.

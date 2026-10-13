@@ -323,8 +323,11 @@ def handle(data: bytes, options: dict, budget) -> dict:
             return {"ok": True, "text": "went on after MemoryError"}
     elif act == "flood":  # more than the answer may be, straight into the pipe
         block = b"x" * 65536
-        for _ in range(int(options["blocks"])):
+        blocks = options.get("blocks")  # without it: for ever, only a kill ends this child
+        written = 0
+        while blocks is None or written < int(blocks):
             os.write(1, block)
+            written += 1
     elif act == "text":  # an answer of that many characters, one of them given
         return {"ok": True, "text": options.get("char", "x") * int(options["chars"])}
     elif act == "stderr":  # words for the log of the service

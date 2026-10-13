@@ -18,11 +18,13 @@ The run's input holds exactly four keys (`ExtractInput`): `ingestion_run_id`, `s
 `token_budget` (read by the runner for every agent) and `script` (the fake backend's stream,
 written only when the fake backend is on).
 
-Importing this module registers the agent and its tools. The worker and the api both import it
+Importing this module registers the agent, and its tools where the Claude Agent SDK is installed
+(the worker; the api's image has none and runs no tool). The worker and the api both import it
 (task G10 adds those imports with its engine and its router); until then no process knows the
 agent, and no route starts it.
 """
 
+import importlib.util
 import logging
 import uuid
 from collections.abc import Mapping
@@ -35,7 +37,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import definitions
 from app.agents.models import AgentRun, CredentialKind
-from app.ingestion import plan, tools
+from app.ingestion import plan, tool_names
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import (
     IngestionRun,
@@ -46,6 +48,12 @@ from app.ingestion.runs_models import (
 )
 
 logger = logging.getLogger("app.ingestion.agents")
+
+if importlib.util.find_spec("claude_agent_sdk") is not None:
+    # The worker, which runs the tools: importing them registers them with the runner. The api
+    # image holds no Claude Agent SDK (api/Dockerfile, the `runtime` target): it registers the
+    # definition below, which names the tools, and never builds one.
+    from app.ingestion import tools as _tools  # noqa: F401
 
 EXTRACT_NAME = "profile_extract"
 EXTRACT_MODEL = "claude-opus-5-5"
@@ -142,7 +150,7 @@ EXTRACT = definitions.register(
         name=EXTRACT_NAME,
         description="Reads one part of one uploaded document and stores checked profile items.",
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
-        tools=(tools.READ_DOCUMENT, tools.PROPOSE),
+        tools=(tool_names.READ_DOCUMENT, tool_names.PROPOSE),
         input_model=ExtractInput,
         model=EXTRACT_MODEL,
         model_by_credential={CredentialKind.anthropic_api_key.value: EXTRACT_MODEL_API_KEY},

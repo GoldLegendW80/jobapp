@@ -38,18 +38,25 @@ Ingestion queue (app.queue.INGESTION, ingestion G2b, app/ingestion/jobs.py):
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
 cancelled agent run likewise (runner.execute), its scratch directory removed. Every Worker is
-then closed (close_worker), even when a job was cancelled while still being picked up.
+then closed (close_worker), even when a job was cancelled while still being picked up, and only
+once the end of every job that was finishing is written (QueueWorker).
 """
 
 import argparse
 import asyncio
+import contextlib
+import functools
 import logging
+import math
 import os
 import re
 import signal
 import sys
+import threading
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections import Counter
+from collections.abc import Awaitable, Callable, Collection, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -89,10 +96,55 @@ SWEEP_JOB_TIMEOUT_S = sweep.SWEEP_TIMEOUT_S + 60
 MAX_AGENT_RUNS = 2
 # The runner stops a run at its wall time and gives the stream its grace to end; arq's own timeout
 # only catches a runner stuck beyond that.
-LONGEST_AGENT_S = max(agent.wall_time_s for agent in definitions.AGENTS.values())
-AGENT_JOB_TIMEOUT_S = LONGEST_AGENT_S + 120
-AGENT_STALE_RUNNING = timedelta(seconds=LONGEST_AGENT_S + 300)
+AGENT_JOB_MARGIN_S = 120
+AGENT_STALE_MARGIN_S = 300
 AGENT_STALE_QUEUED = timedelta(hours=6)
+# What a stop waits, in all, for the cancelled jobs, the job ends being written and the threads
+# of asyncio.to_thread, before it disposes of the engine and returns whatever is left. Compose
+# kills the worker 20 s after SIGTERM (`stop_grace_period: 20s` of the worker in compose.yml):
+# 20 - 12 leaves 8 s for what comes after the wait and has timeouts of its own, the Redis pools
+# to close, the engine to dispose of, the last log lines and the exit. A statement is ended by
+# Postgres at 15 s (statement_timeout), so a thread stuck in one would outlast any bound that
+# still lets the worker say why it stopped: that is the case the bound exists for.
+STOP_WAIT_S = 12.0
+INGESTION_ADVANCE_SECOND = 20  # the tick of the ingestion chain, once a minute
+
+
+class AgentTooLongError(RuntimeError):
+    """A registered agent may run longer than the job timeout of the agents queue."""
+
+
+def register_ingestion_agents() -> None:
+    """Make this process know the ingestion agents and the engine that chains them (ingestion
+    G10): the import registers `profile_extract`, its tools and the `on_final` hook. Called
+    where the agents queue is built and where a run's context is made, not at the top of this
+    file: `python -m app.worker --check` must not need the SDK."""
+    from app.ingestion import engine  # noqa: F401
+
+
+def longest_agent_s() -> float:
+    """The longest wall time of any registered agent. Computed when it is asked, never as a
+    module constant: an agent registered after this file was imported counts too."""
+    return max(agent.wall_time_s for agent in definitions.AGENTS.values())
+
+
+def agent_job_timeout_s() -> float:
+    return longest_agent_s() + AGENT_JOB_MARGIN_S
+
+
+def agent_stale_running() -> timedelta:
+    return timedelta(seconds=longest_agent_s() + AGENT_STALE_MARGIN_S)
+
+
+def check_agents_fit(job_timeout_s: float) -> None:
+    """Refuse to start when a registered agent can outlive the job timeout: arq would cut its
+    run as `STOPPED`, no hook would be called, and the step would run and be paid twice."""
+    for agent in definitions.AGENTS.values():
+        if agent.wall_time_s > job_timeout_s:
+            raise AgentTooLongError(
+                f"agent {agent.name} may run {agent.wall_time_s:.0f} s, "
+                f"longer than the job timeout of {job_timeout_s:.0f} s"
+            )
 
 
 # --- job context ------------------------------------------------------------------------------
@@ -199,8 +251,13 @@ def agent_context(ctx: dict[str, Any]) -> Any:
     """The runner's view of the job context. Imported here, not at the top: the SDK lives in the
     worker image only, and `python -m app.worker --check` must not need it."""
     from app.agents import backend, live, runner
+    from app.ingestion import engine as ingestion_engine
 
     settings: Settings = ctx["settings"]
+    # What the `on_final` hook of the ingestion agents needs to start the next step.
+    services: dict[str, Any] = {}
+    if ctx.get("redis") is not None:
+        services[ingestion_engine.ENQUEUE_SERVICE] = ingestion_engine.pool_enqueue(ctx["redis"])
     factory = ctx.get("agent_backend") or backend.for_settings(settings)
     # The answer being written goes to Redis for the api's run stream (issue #33): arq puts its
     # pool in the job context. Without one, or with AGENTS_LIVE_TEXT off, no live text.
@@ -218,6 +275,7 @@ def agent_context(ctx: dict[str, Any]) -> Any:
         interrupt_grace_s=ctx.get("agent_interrupt_grace_s", runner.INTERRUPT_GRACE_S),
         agents=ctx.get("agent_definitions"),
         live_store=store if settings.agents_live_text else None,
+        services=services,
     )
 
 
@@ -233,7 +291,7 @@ def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: b
         if at_start:
             count = agent_runs.reap_orphans(db, now)
         else:
-            count = agent_runs.reap_stale(db, now, AGENT_STALE_RUNNING, AGENT_STALE_QUEUED)
+            count = agent_runs.reap_stale(db, now, agent_stale_running(), AGENT_STALE_QUEUED)
         db.commit()
     return count
 
@@ -292,22 +350,38 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
 
 
 def agents_queue() -> QueueSpec:
+    # The limits are computed here, after the import that registers the ingestion agents: a
+    # 15 minute step under a timeout computed before it would be cut at 12 minutes.
+    register_ingestion_agents()
+    job_timeout_s = agent_job_timeout_s()
+    check_agents_fit(job_timeout_s)
     return QueueSpec(
         name=queue.AGENTS,
         functions=[
-            func(run_agent, name="run_agent", timeout=AGENT_JOB_TIMEOUT_S, max_tries=1),
+            func(run_agent, name="run_agent", timeout=job_timeout_s, max_tries=1),
             func(reap_agent_runs, name="reap_agent_runs", timeout=60, max_tries=1),
         ],
         cron_jobs=[cron(reap_agent_runs, name="cron:reap_agent_runs", second=45, timeout=60)],
         # Two jobs at once: a third run waits in the queue (the reaper cron, a few milliseconds,
         # waits for a free slot too).
         max_jobs=MAX_AGENT_RUNS,
-        job_timeout_s=AGENT_JOB_TIMEOUT_S,
+        job_timeout_s=job_timeout_s,
         on_start=reap_agent_runs_at_start,
     )
 
 
 # --- ingestion queue (G2b; G10 adds its `advance` cron to the same block) ----------------------
+
+
+async def advance_ingestion_runs(ctx: dict[str, Any]) -> int:
+    """The tick of the ingestion chain (G10): every run that is not final is advanced. It is the
+    only guarantee that a chain moves: the `on_final` hook of a step is a shortcut that is not
+    called for a run a reaper failed, nor when the worker dies. Answers a count, nothing else."""
+    from app.ingestion import engine as ingestion_engine
+
+    pool = ctx.get("redis")
+    enqueue = ingestion_engine.pool_enqueue(pool) if pool is not None else None
+    return await ingestion_engine.tick(sessions_of(ctx), enqueue, clock_of(ctx), ctx["settings"])
 
 
 def ingestion_queue() -> QueueSpec:
@@ -330,8 +404,22 @@ def ingestion_queue() -> QueueSpec:
                 max_tries=1,
                 keep_result=0,
             ),
+            func(
+                advance_ingestion_runs,
+                name="advance_ingestion_runs",
+                timeout=120,
+                max_tries=1,
+                keep_result=0,
+            ),
         ],
         cron_jobs=[
+            cron(
+                advance_ingestion_runs,
+                name="cron:advance_ingestion_runs",
+                second=INGESTION_ADVANCE_SECOND,
+                timeout=120,
+                keep_result=0,
+            ),
             cron(
                 ingestion_jobs.reap_documents,
                 name="cron:reap_documents",
@@ -340,7 +428,7 @@ def ingestion_queue() -> QueueSpec:
                 # The first tick comes with the worker: the documents that waited for this
                 # version are read at the deploy, not a quarter of a minute later.
                 run_at_startup=True,
-            )
+            ),
         ],
         # One document at a time; the reaper's tick waits its turn behind a reading.
         max_jobs=1,
@@ -354,8 +442,50 @@ def queues(settings: Settings | None = None) -> list[QueueSpec]:
     return [sweeps_queue(fast=fast), agents_queue(), ingestion_queue()]
 
 
-def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> Worker:
-    return Worker(
+class QueueWorker(Worker):
+    """arq's Worker, which also knows the job ends it is still writing.
+
+    arq writes the end of a job (its result, its in progress key, its place in the queue) in a
+    task of its own, shielded from the job's cancellation, and keeps no reference to it. A stop
+    that cancels a job during that write ends the job's task at once and leaves the write
+    running: closing the Redis pool then cuts it, or it reconnects on the closed pool and its
+    socket is never closed, and the job stays "in progress" in Redis until that key expires.
+    `endings` holds those writes so that close_worker can wait for them."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.endings: set[asyncio.Task[Any]] = set()
+
+    async def _ending(self, write: Awaitable[None]) -> None:
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover, a coroutine always runs in a task
+            await write
+            return
+        self.endings.add(task)
+        try:
+            await write
+        finally:
+            self.endings.discard(task)
+
+    async def finish_job(self, *args: Any, **kwargs: Any) -> None:
+        await self._ending(super().finish_job(*args, **kwargs))
+
+    async def finish_failed_job(self, *args: Any, **kwargs: Any) -> None:
+        await self._ending(super().finish_failed_job(*args, **kwargs))
+
+
+def checked_queues(settings: Settings | None = None) -> list[QueueSpec]:
+    """The queues the worker serves, or `AgentTooLongError`: the worker refuses to start when an
+    agent registered since the agents queue was built can outlive its job timeout."""
+    specs = queues(settings)
+    for spec in specs:
+        if spec.name == queue.AGENTS:
+            check_agents_fit(spec.job_timeout_s)
+    return specs
+
+
+def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> QueueWorker:
+    return QueueWorker(
         functions=list(spec.functions),
         queue_name=spec.name,
         cron_jobs=list(spec.cron_jobs),
@@ -378,6 +508,102 @@ def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> Wo
 # --- process ----------------------------------------------------------------------------------
 
 
+def _function_name(call: Callable[..., Any]) -> str:
+    """The function a piece of work runs, by module and name, never its arguments.
+    asyncio.to_thread submits partial(Context.run, function, *args): the function is the
+    first argument of that partial."""
+    while isinstance(call, functools.partial):
+        inner = call.args[0] if call.args else None
+        call = (
+            inner if callable(inner) and getattr(call.func, "__name__", "") == "run" else call.func
+        )
+    name = getattr(call, "__qualname__", type(call).__qualname__)
+    return f"{getattr(call, '__module__', None) or '?'}.{name}"
+
+
+class JobThreads(ThreadPoolExecutor):
+    """The executor of asyncio.to_thread while serve() runs, which knows what has not ended.
+
+    A job that is cancelled stops waiting for its thread, and the thread goes on: it holds a
+    session, so a connection of the pool. serve() used to dispose of the engine under it, and
+    the connection then came back to a pool nobody closes any more: it stayed open until the
+    garbage collector found it (issue #104). Every job of every module reaches its threads
+    through asyncio.to_thread, so through the default executor of the loop: serve() makes it
+    this one and joins it before the engine goes, whatever module submitted the work. The
+    names it keeps are those of the functions submitted and not yet ended, for the one line
+    logged when the wait reaches its bound."""
+
+    def __init__(self) -> None:
+        super().__init__(thread_name_prefix="worker-job")
+        self._names_lock = threading.Lock()
+        self._names: Counter[str] = Counter()
+
+    def submit[**P, T](self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+        name = _function_name(fn)
+        future = super().submit(fn, *args, **kwargs)
+        with self._names_lock:
+            self._names[name] += 1
+        future.add_done_callback(lambda _future: self._ended(name))
+        return future
+
+    def _ended(self, name: str) -> None:
+        with self._names_lock:
+            self._names[name] -= 1
+
+    def left(self) -> dict[str, int]:
+        """What was submitted and has not ended (or been cancelled before it began)."""
+        with self._names_lock:
+            return {name: count for name, count in sorted(self._names.items()) if count > 0}
+
+    async def join(self, within: float) -> dict[str, int]:
+        """Take no more work, then wait for every thread to end, `within` seconds at most.
+        Returns what is left by then: nothing after a whole join."""
+        loop = asyncio.get_running_loop()
+        joined: asyncio.Future[None] = loop.create_future()
+        self.shutdown(wait=False)
+
+        def done() -> None:
+            if not joined.done():
+                joined.set_result(None)
+
+        def join() -> None:
+            self.shutdown(wait=True)
+            with contextlib.suppress(RuntimeError):  # the loop is closed: nobody waits any more
+                loop.call_soon_threadsafe(done)
+
+        # A daemon: at the bound it waits on a thread that may never end, and must not hold
+        # the exit of the process itself.
+        threading.Thread(target=join, name="worker-stop", daemon=True).start()
+        try:
+            async with asyncio.timeout(within):
+                await joined
+        except TimeoutError:
+            self.shutdown(wait=False, cancel_futures=True)
+        return self.left()
+
+
+def _retrieved(task: asyncio.Future[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def _ended(tasks: Collection[asyncio.Future[Any]], deadline: float | None) -> int:
+    """Wait for every task, until `deadline` (a time of the loop) when one is given. Returns
+    how many had not ended by then. Like gather(return_exceptions=True) it raises nothing of
+    theirs and leaves no exception unretrieved, even for a task that ends after the bound."""
+    if not tasks:
+        return 0
+    timeout = None
+    if deadline is not None:
+        timeout = max(0.0, deadline - asyncio.get_running_loop().time())
+    done, pending = await asyncio.wait(tasks, timeout=timeout)
+    for task in done:
+        _retrieved(task)
+    for task in pending:
+        task.add_done_callback(_retrieved)
+    return len(pending)
+
+
 def make_context(settings: Settings, clock: Callable[[], datetime] = utcnow) -> dict[str, Any]:
     from app.main import credentials_keyring
 
@@ -392,24 +618,38 @@ def make_context(settings: Settings, clock: Callable[[], datetime] = utcnow) -> 
     }
 
 
-async def close_worker(worker: Worker) -> None:
-    """Stop one Worker: cancel its jobs still in flight, wait for them, then close it.
+async def close_worker(worker: QueueWorker, deadline: float | None = None) -> tuple[int, int]:
+    """Stop one Worker: stop its poll, cancel its jobs still in flight, wait for them and for
+    the job ends being written, then close it. The waits end at `deadline` (a time of the
+    loop) when one is given: the jobs and the job ends that had not ended by then are counted
+    in the result and left behind, so that the Worker is closed all the same.
 
-    arq's Worker.close() cancels them itself, then awaits them with a plain asyncio.gather. A job
-    cancelled inside its function is caught by arq (run_job records it), but one cancelled while
-    run_job still awaits Redis (a job just picked up) re-raises CancelledError from that gather:
-    close() then stops before deleting the health key and closing the Redis pool, and serve()
-    never reaches the next Worker. Draining the tasks here, with return_exceptions, leaves
-    close() nothing to raise. Done tasks are dropped from `tasks` as arq's own poll does."""
+    arq's Worker.close() cancels the jobs itself, then awaits them with a plain asyncio.gather. A
+    job cancelled inside its function is caught by arq (run_job records it), but one cancelled
+    while run_job still awaits Redis (a job just picked up) re-raises CancelledError from that
+    gather: close() then stops before deleting the health key and closing the Redis pool, and
+    serve() never reaches the next Worker. Draining the tasks here, with return_exceptions,
+    leaves close() nothing to raise. The poll is stopped first, so that no job is picked up
+    while the others are drained, and the ends still being written (QueueWorker) are awaited
+    last: a job that finished as the stop arrived is recorded as finished, and nothing uses
+    the pool once close() has closed it. Done tasks are dropped from `tasks` as arq's own poll
+    does."""
+    poll = worker.main_task
+    if poll is not None:
+        poll.cancel()
+        await asyncio.gather(poll, return_exceptions=True)
     in_flight = list(worker.tasks.values())
     for task in in_flight:
         if not task.done():
             task.cancel()
-    await asyncio.gather(*in_flight, return_exceptions=True)
+    jobs_left = await _ended(in_flight, deadline)
+    ends_left = await _ended(list(worker.endings), deadline)
     for job_id, task in list(worker.tasks.items()):
-        if task.done():
+        # A job given up at the bound goes too: arq's close() awaits what is left, unbounded.
+        if task.done() or jobs_left:
             del worker.tasks[job_id]
     await worker.close()
+    return jobs_left, ends_left
 
 
 async def serve(
@@ -419,13 +659,22 @@ async def serve(
     stop: asyncio.Event | None = None,
     ctx: dict[str, Any] | None = None,
     on_ready: Callable[[list[Worker]], Awaitable[None]] | None = None,
-) -> None:
-    """Run one Worker per queue until `stop` is set (SIGTERM or SIGINT when not given)."""
+) -> int:
+    """Run one Worker per queue until `stop` is set (SIGTERM or SIGINT when not given).
+
+    The stop is bounded by STOP_WAIT_S. It returns how many jobs, job ends and threads were
+    still running when that bound was reached: 0 after a clean stop, which is every stop that
+    finds nothing stuck."""
     skip_sdk_version_probe()
     ctx = ctx if ctx is not None else make_context(settings)
     ctx.setdefault("body_gate", asyncio.Semaphore(BODIES_IN_FLIGHT))
     stop = stop or asyncio.Event()
     loop = asyncio.get_running_loop()
+    # Every asyncio.to_thread of every job, in every module, runs on this executor from here.
+    threads = JobThreads()
+    loop.set_default_executor(threads)
+    deadline = math.inf  # no stop yet
+    jobs_left = ends_left = 0
     installed = []
     for signum in (signal.SIGTERM, signal.SIGINT):
         try:
@@ -458,10 +707,12 @@ async def serve(
         stopper = asyncio.create_task(stop.wait())
         await asyncio.wait([stopper, *runs], return_when=asyncio.FIRST_COMPLETED)
         stopper.cancel()
+        deadline = loop.time() + STOP_WAIT_S  # one bound for every wait of the stop
         for worker in workers:
             # One Worker failing to close must not leave the others' Redis pools open.
             try:
-                await close_worker(worker)
+                jobs, ends = await close_worker(worker, deadline)
+                jobs_left, ends_left = jobs_left + jobs, ends_left + ends
             except Exception:
                 logger.exception("queue worker close failed", extra={"queue": worker.queue_name})
         for run in runs:
@@ -473,9 +724,32 @@ async def serve(
     finally:
         for signum in installed:
             loop.remove_signal_handler(signum)
-        if "engine" in ctx:
-            ctx["engine"].dispose()
-        logger.info("worker stopped")
+        threads_left: dict[str, int] = {}
+        try:
+            # The jobs are cancelled, their threads are not: each still holds a connection
+            # until its session ends. The process waited for them anyway, when asyncio.run()
+            # closes the executor, but after the engine was disposed of.
+            bound = min(deadline, loop.time() + STOP_WAIT_S)
+            threads_left = await threads.join(max(0.0, bound - loop.time()))
+        finally:
+            # The loop goes on after serve() for some callers (the tests): it gets an executor
+            # that takes work, and asyncio.run() does not join again a thread given up here.
+            loop.set_default_executor(ThreadPoolExecutor(thread_name_prefix="asyncio"))
+            if jobs_left or ends_left or threads_left:
+                # By function and count, nothing else: no argument, no id, no user data.
+                logger.warning(
+                    "worker stop bound reached",
+                    extra={
+                        "bound_s": STOP_WAIT_S,
+                        "jobs": jobs_left,
+                        "job_ends": ends_left,
+                        "threads": threads_left,
+                    },
+                )
+            if "engine" in ctx:
+                ctx["engine"].dispose()
+            logger.info("worker stopped")
+    return jobs_left + ends_left + sum(threads_left.values())
 
 
 async def check(settings: Settings, specs: Sequence[QueueSpec] | None = None) -> int:
@@ -530,7 +804,13 @@ def main(argv: list[str] | None = None) -> int:
     skip_sdk_version_probe()
     dropped = drop_secrets_from_environ()
     logger.info("secrets dropped from the environment", extra={"names": dropped})
-    asyncio.run(serve(settings))
+    if asyncio.run(serve(settings, checked_queues(settings))):
+        # Something was still running at the bound of the stop, and the interpreter joins
+        # every thread of an executor before it exits: it would wait here until Compose kills
+        # the process. All is said and the engine is disposed of, so leave now. The
+        # transaction of a thread cut this way rolls back, and arq runs its job again.
+        logging.shutdown()
+        os._exit(0)
     return 0
 
 

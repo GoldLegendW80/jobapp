@@ -4,6 +4,7 @@ import { delay, http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_TIMEOUT_MS } from "@/lib/api";
+import { waitForOnFakeClock } from "@/test/clock";
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -94,10 +95,9 @@ describe("HealthDot", () => {
   });
 
   it('shows "API unavailable" after the timeout when the api hangs', async () => {
-    vi.useFakeTimers({
-      shouldAdvanceTime: true,
-      toFake: ["setTimeout", "clearTimeout"],
-    });
+    // The clock of the timeout is the test's alone (issue #104: with shouldAdvanceTime the
+    // 100 ms before the limit were real ones, and a loaded machine spent them).
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     healthSequence(async () => {
       await delay("infinite");
       return ok();
@@ -111,7 +111,9 @@ describe("HealthDot", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
-    expect(await screen.findByText("API unavailable")).toBeInTheDocument();
+    await waitForOnFakeClock(() => {
+      expect(screen.getByText("API unavailable")).toBeInTheDocument();
+    });
     expect(status()).toHaveTextContent("The API did not answer in time.");
   });
 

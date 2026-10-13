@@ -194,10 +194,17 @@ class DeleteRefusedError(Exception):
         self.message = message
 
 
+REPLACEMENT_REFUSED = (
+    "This file is already among your documents and a run has read it, so this upload did not "
+    "replace it. Replacing a document that a run has read arrives with a coming update."
+)
+
+
 @dataclass(frozen=True)
 class Stored:
     document: IngestionDocument
     created: bool  # False: the same file was already there and is returned as it is
+    refused: str | None = None  # the sentence, when a guard kept the upload from replacing it
 
 
 @dataclass(frozen=True)
@@ -531,7 +538,7 @@ def _store(
     if document is not None:
         if any(guard(db, document) for guard in _delete_guards):
             _log("document replacement refused", document)
-            return Stored(document, created=False)
+            return Stored(document, created=False, refused=REPLACEMENT_REFUSED)
         # The row starts over: what the failed or partial read left goes first, so the quota
         # below counts the user's other documents only.
         db.execute(sa.delete(IngestionImage).where(IngestionImage.document_id == document.id))

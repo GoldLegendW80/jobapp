@@ -167,6 +167,16 @@ class IngestionRun(Base):
         sa.Boolean, nullable=False, server_default=sa.text("false")
     )
     paused_reason: Mapped[str | None] = mapped_column(sa.Text)
+    # When the current pause began, null when the run is not paused. A stored fact: the 24 hours
+    # of a pause and the move of `deadline_at` at a Resume or a Continue are counted from it.
+    paused_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # How many times in a row `advance` raised for this run at the cron; back to zero when it
+    # moves. At `engine.ADVANCE_FAILURES` the run is closed `failed` with `closed_reason`.
+    advance_failures: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
+    # When the last counted failure happened, null when the run moves: failures closer than
+    # `engine.ADVANCE_FAILURE_GAP` count once, so ticks that pile up cannot close a run.
+    advance_failed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    closed_reason: Mapped[str | None] = mapped_column(sa.Text)
     # Why a running chain is not moving ("slots"), null when it is.
     waiting: Mapped[str | None] = mapped_column(sa.Text)
     deadline_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
@@ -252,6 +262,10 @@ class IngestionRunStep(Base):
     attempt: Mapped[int] = mapped_column(sa.SmallInteger, nullable=False, server_default="0")
     # What the step may spend, written when its agent run is created (estimate.budget).
     token_budget: Mapped[int | None] = mapped_column(sa.BigInteger)
+    # The largest budget on which the ceiling cut this step, null when it never did. A stored
+    # fact that outlives every attempt: the step never starts again on that budget or on less,
+    # whatever ended the attempt before (a cut, a restart of the worker, a provider failure).
+    cut_budget: Mapped[int | None] = mapped_column(sa.BigInteger)
     # Refused items that count toward the step's budget of 20 (a `setting` refusal does not).
     refused_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
     # Dates refused because the document writes their year in two digits, counted apart.
@@ -321,4 +335,20 @@ class IngestionItem(Base):
     citations: Mapped[list[dict[str, Any]]] = mapped_column(pg.JSONB, nullable=False)
     flags: Mapped[list[str]] = mapped_column(
         pg.ARRAY(sa.Text), nullable=False, default=list, server_default=sa.text("'{}'::text[]")
+    )
+
+
+def of_stored_text() -> sa.ColumnElement[bool]:
+    """A condition on `ingestion_items`: true for an item whose step was planned on the text its
+    document stores now. An item read without it may cite a text that was replaced since: its
+    offsets and its excerpt are then those of a text that is no longer stored."""
+    return (
+        sa.exists()
+        .where(
+            IngestionRunStep.id == IngestionItem.step_id,
+            IngestionDocument.id == IngestionItem.document_id,
+            IngestionDocument.user_id == IngestionItem.user_id,
+            IngestionRunStep.text_sha256 == stored_text_sha256(),
+        )
+        .correlate(IngestionItem)
     )

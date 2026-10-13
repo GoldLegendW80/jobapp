@@ -44,6 +44,12 @@ TOKEN_LIMIT = "The run reached its token budget and was stopped."  # noqa: S105,
 NO_RESULT = "The agent stopped without a result."
 REFUSED = "Anthropic refused the credential: it is wrong, revoked or has no access."
 BUSY = "Anthropic is busy or rate limiting this credential. Try again later."
+# The credential is valid and has nothing left to pay with. Claude Code marks the assistant
+# message `billing_error`; the HTTP status does not say it: the API documents 402 for
+# `billing_error` (platform.claude.com/docs/en/api/errors, read on 2026-10-13) and a credit
+# balance that is too low was measured as a 400 (review of PR #95), which is a content status.
+# So the runner reads the mark, not the status.
+NO_CREDIT = "This credential has no credit left at Anthropic. Add credit, then try again."
 API_ERROR = "The model API failed (HTTP {status})."
 FAILED = "The agent failed ({reason})."
 NO_CLI = "Claude Code is not installed in the worker."
@@ -55,7 +61,9 @@ INTERNAL = "The run failed on an internal error."
 # same content again fails the same way, whatever the credential.
 CONTENT_STATUSES = frozenset({400, 413, 422})
 _API_ERROR = re.compile(re.escape(API_ERROR).replace(re.escape("{status}"), r"(\d{3})"))
-_PROVIDER = frozenset({NO_CREDENTIAL, UNREADABLE, UNUSABLE, REFUSED, BUSY, runs.QUEUE_DOWN})
+_PROVIDER = frozenset(
+    {NO_CREDENTIAL, UNREADABLE, UNUSABLE, REFUSED, BUSY, NO_CREDIT, runs.QUEUE_DOWN}
+)
 # The worker could not run the agent: Claude Code is missing, did not start or died, the runner
 # itself failed, or this worker does not know the agent (an older worker during a deploy).
 _BOX = frozenset({NO_CLI, NO_START, INTERNAL, UNKNOWN_AGENT})
@@ -64,8 +72,9 @@ _PROCESS = re.compile(re.escape(PROCESS).replace(re.escape("{code}"), r"(-?\d+|u
 
 def is_provider_failure(error: str | None) -> bool:
     """Whether a run's stored `error` says the credential or the provider failed, not the run's
-    own content: no credential, one the server cannot read, one Anthropic refused, Anthropic busy
-    or rate limiting, the agent queue down, or the model API failing with any status other than
+    own content: no credential, one the server cannot read, one Anthropic refused, one without
+    credit (`NO_CREDIT`, whatever its HTTP status), Anthropic busy or rate limiting, the agent
+    queue down, or the model API failing with any status other than
     400, 413 and 422. A caller that chains runs (the ingestion engine) stops and lets the user
     fix the credential and resume. False for a run that did not fail (`error` is None) and for
     any text this module did not write."""
