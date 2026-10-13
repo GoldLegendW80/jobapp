@@ -297,12 +297,16 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
                 stored[name] = None  # no longer fits its form: nothing is proposed for it
         return stored[name]
 
-    refused = {
-        (one.payload.get("section"), one.payload.get("key"), one.payload.get("value_hash"))
-        for one in item_proposals.list_items(
-            db, user_id, statuses=(ProposalStatus.rejected,), limit=DECIDED_MAX
-        )
-    }
+    # Rejecting a conflict rejects each value it showed, not only the first one.
+    refused: set[tuple[Any, Any, Any]] = set()
+    for one in item_proposals.list_items(
+        db, user_id, statuses=(ProposalStatus.rejected,), limit=DECIDED_MAX
+    ):
+        at = (one.payload.get("section"), one.payload.get("key"))
+        refused.add((*at, one.payload.get("value_hash")))
+        for other in one.payload.get("conflict") or ():
+            if isinstance(other, Mapping):
+                refused.add((*at, other.get("value_hash")))
     written = conflicts = equal = rejected = removals = 0
     employers: list[tuple[items.Item, list[dict[str, Any]]]] = []
     for (section, key), variants in sorted(groups.items()):

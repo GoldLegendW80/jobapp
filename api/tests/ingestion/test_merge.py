@@ -204,6 +204,27 @@ def test_a_value_the_user_rejected_is_not_proposed_again(
     assert mh.proposals_of(factory, alice, second, status=None) == []
 
 
+def test_a_rejected_conflict_is_not_proposed_again_with_either_of_its_values(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    first, documents = mh.merged(
+        factory,
+        alice,
+        settings,
+        [mh.CV, mh.LETTER],
+        [[name_fact()], [name_fact(value="Alice B. Martin")]],
+    )
+    (one,) = mh.proposals_of(factory, alice, first)
+    assert one.payload["flags"] == [items.FLAG_CONFLICT]
+    with factory() as db, db.begin():
+        proposals.reject(db, alice, one.id, now())
+    # The same documents again: neither value of the refused conflict comes back, flagged or not.
+    second = eh.start(factory, alice, documents)
+    eh.advance(factory, second, settings)
+    assert eh.run_of(factory, second).status is RunStatus.done
+    assert mh.proposals_of(factory, alice, second, status=None) == []
+
+
 def test_the_older_pending_items_are_superseded_in_id_order(
     factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
 ) -> None:
