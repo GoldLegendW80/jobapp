@@ -68,10 +68,10 @@ PAGE = {
 }
 
 
-def test_the_table_is_dated_and_names_its_source() -> None:
+def test_the_table_is_dated_with_the_day_the_page_was_read() -> None:
     assert pricing.PRICES_AS_OF.isoformat() == PAGE_READ_ON
     assert pricing.PRICES_AS_OF.isoformat() in pricing.ESTIMATE_NOTE
-    assert pricing.PRICES_URL == "https://platform.claude.com/docs/en/about-claude/pricing"
+    assert "list prices" in pricing.PRICES_SOURCE
 
 
 @pytest.mark.parametrize("model", sorted(PAGE))

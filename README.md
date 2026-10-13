@@ -1079,8 +1079,8 @@ for consent the first time (ingestion G16; the page that shows it is G11's).
   to the cent, with the date of the prices. The third, named `ceiling`, is the token ceiling
   priced as input tokens. It is not the most a run can cost, because output tokens cost more.
 - **Prices are a dated table in `api/app/ingestion/pricing.py`**, not a live feed. To update it,
-  read the provider's pricing page (`PRICES_URL`) and change `PRICES` and `PRICES_AS_OF` in one
-  commit, with the same figures in `api/tests/ingestion/test_pricing.py`, which asserts every
+  read the provider's pricing page (its address is in the comment above `PRICES_AS_OF`) and
+  change `PRICES` and `PRICES_AS_OF` in one commit, with the same figures in `api/tests/ingestion/test_pricing.py`, which asserts every
   price of every model as written on the page. A test also fails when a model a run can choose
   has no price.
 - **Consent** is one row of `ingestion_consents` per user and version of the text. The texts
