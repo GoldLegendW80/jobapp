@@ -279,6 +279,71 @@ describe("the start of a run", () => {
     ]);
   });
 
+  it("a new consent text under a ticked box: the tick does not carry over, nothing is recorded for the new words", async () => {
+    const { runs, user, dialog } = await openDialog();
+    const shown = within(dialog);
+    await user.click(
+      await shown.findByRole("checkbox", { name: /I have read this/ }),
+    );
+    expect(startButton(dialog)).toBeEnabled();
+    // The text changes after the tick; the click on Start still carries version 1.
+    runs.consent = {
+      version: 2,
+      text: "The new words of the consent.",
+      reminder: REMINDER,
+      accepted: false,
+      accepted_at: null,
+    };
+    await user.click(startButton(dialog));
+    expect(await shown.findByTestId("consent-text")).toHaveTextContent(
+      "The new words of the consent.",
+    );
+    expect(
+      shown.getByRole("checkbox", { name: /I have read this/ }),
+    ).not.toBeChecked();
+    expect(startButton(dialog)).toBeDisabled();
+    expect(shown.getByTestId("consent-changed")).toHaveTextContent(
+      "The text changed after you ticked the box.",
+    );
+    expect(shown.getByTestId("consent-changed").textContent).not.toMatch(DASH);
+    expect(runs.sent("POST", CONSENT).map((call) => call.body)).toEqual([
+      { version: 1 },
+    ]);
+    expect(runs.sent("POST", RUNS)).toEqual([]);
+    expect(runs.runs).toEqual([]);
+  });
+
+  it("a refetch that brings a new consent text unticks the box and disables the start", async () => {
+    const { app, runs, user, dialog } = await openDialog();
+    const shown = within(dialog);
+    await user.click(
+      await shown.findByRole("checkbox", { name: /I have read this/ }),
+    );
+    runs.consent = {
+      version: 2,
+      text: "The new words of the consent.",
+      reminder: REMINDER,
+      accepted: false,
+      accepted_at: null,
+    };
+    // Something else refetches the consent while the box is ticked.
+    await app.client.invalidateQueries({ queryKey: ["ingestion", "consent"] });
+    expect(await shown.findByTestId("consent-text")).toHaveTextContent(
+      "The new words of the consent.",
+    );
+    expect(
+      shown.getByRole("checkbox", { name: /I have read this/ }),
+    ).not.toBeChecked();
+    expect(startButton(dialog)).toBeDisabled();
+    expect(shown.getByTestId("consent-changed")).toBeVisible();
+    expect(runs.sent("POST", CONSENT)).toEqual([]);
+    expect(runs.sent("POST", RUNS)).toEqual([]);
+    // Ticking again under the new words is what enables the start.
+    await user.click(shown.getByRole("checkbox", { name: /I have read this/ }));
+    expect(startButton(dialog)).toBeEnabled();
+    expect(shown.queryByTestId("consent-changed")).toBeNull();
+  });
+
   it("says what is missing without a credential, with a link to the account page", async () => {
     const { dialog } = await openDialog({
       estimate: fakeEstimate({

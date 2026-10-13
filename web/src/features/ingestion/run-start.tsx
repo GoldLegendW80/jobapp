@@ -238,7 +238,8 @@ function StartDialog({
   const [failure, setFailure] = useState<string>();
   /** Reasons the start itself gave for documents, by id. */
   const [refused, setRefused] = useState<Record<string, string>>({});
-  const [ticked, setTicked] = useState(false);
+  /** The version of the consent text the box was ticked for, never a bare yes. */
+  const [tickedVersion, setTickedVersion] = useState<number | null>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
   const started = useRef(false);
 
@@ -329,7 +330,7 @@ function StartDialog({
           void consent.refetch();
           break;
         case "consent_required":
-          setTicked(false);
+          setTickedVersion(null);
           say(refusal.sentence);
           void consent.refetch();
           break;
@@ -357,6 +358,12 @@ function StartDialog({
 
   const estimate = shown?.estimate;
   const text = consent.data;
+  const ticked = text !== undefined && tickedVersion === text.version;
+  /** A text other than the one the box was ticked for: the tick no longer counts. */
+  const changed =
+    text !== undefined &&
+    tickedVersion !== null &&
+    tickedVersion !== text.version;
   const agreed = text !== undefined && (text.accepted || ticked);
   const ready =
     estimate !== undefined &&
@@ -462,6 +469,12 @@ function StartDialog({
             <p className="text-sm" data-testid="consent-text">
               {text.text}
             </p>
+            {changed ? (
+              <p className="text-sm font-medium" data-testid="consent-changed">
+                The text changed after you ticked the box. Read it again and
+                tick the box if you agree.
+              </p>
+            ) : null}
             <label
               htmlFor={boxId}
               className="flex items-start gap-3 text-sm font-medium"
@@ -473,7 +486,7 @@ function StartDialog({
                 checked={ticked}
                 disabled={start.isPending}
                 onChange={(event) => {
-                  setTicked(event.target.checked);
+                  setTickedVersion(event.target.checked ? text.version : null);
                 }}
               />
               I have read this and I agree to send the selected documents
