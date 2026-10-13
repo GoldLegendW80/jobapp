@@ -100,6 +100,15 @@ LIMITS = {kind: dict(DEFAULT_LIMITS) for kind in HANDLERS}
 # of 1 to 200 pages printed by a browser. 256 MiB is more than twice the worst of them; a file
 # that asks for more ends as `bomb`, with the service untouched.
 LIMITS["pdf_text"]["as"] = 256 * MIB
+# The Word reader and the reader of a LinkedIn export (G7), measured in the service's container
+# on 2026-10-13 (tasks/ingestion/todo.md, G7, Measurements): the highest address space of a
+# child was 80 MiB (an export whose two CSV files hold 20 MiB), 64 MiB for 19 MiB of XML in one
+# part of a document, 45 MiB for a 20 MiB document of images, 40 MiB for a CV and for a small
+# export. Nothing is extracted and no tree is built, so the cost is the file, once, and the one
+# entry being read. 256 MiB is more than three times the worst; an archive that asks for more
+# ends as `bomb`.
+LIMITS["docx"]["as"] = 256 * MIB
+LIMITS["linkedin_zip"]["as"] = 256 * MIB
 # The hard CPU limit is one second above the soft one. At the soft limit the kernel sends
 # SIGXCPU, whose default action ends the process, and the server reports `cpu_limit`. The
 # kernel looks at the hard limit first, though: with both at 45 it would send SIGKILL straight

@@ -48,6 +48,9 @@ import zipcaps
 
 TEXT_MAX_CHARS = 500_000  # ingestion_documents.text
 EXPORT_MAX_CHARS = 900_000  # every text of one answer: under 4 MiB at four bytes a character
+# How much of one file is decoded: TEXT_MAX_CHARS characters are four bytes each at most, and a
+# byte order mark. A longer file is cut there, so a CSV of 20 MiB costs the memory of 2 MiB.
+DECODE_MAX_BYTES = 4 * TEXT_MAX_CHARS + 4
 
 # The files of an export that describe the member's own profile, by the names LinkedIn gives
 # them. parser_client.LINKEDIN_FILES is the same list (a test keeps the two in step).
@@ -83,20 +86,24 @@ def failure(code: str) -> dict:
     return {"ok": False, "failure": "file", "code": code}
 
 
-def decode(content: bytes) -> str:
-    """`content` as text: UTF-8 (a byte order mark accepted), or UTF-16 with its mark. Raises
-    _NotText for anything else, and for a NUL, which no text holds."""
+def decode(content: bytes) -> tuple[str, bool]:
+    """The first DECODE_MAX_BYTES of `content` as text, and whether there was more: UTF-8 (a
+    byte order mark accepted), or UTF-16 with its mark. Raises _NotText for anything else, and
+    for a NUL, which no text holds."""
     if content.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
         encoding = "utf-16"
     else:
         encoding = "utf-8-sig"
+    more = len(content) > DECODE_MAX_BYTES
     try:
-        text = content.decode(encoding)
+        # Not final when the file was cut: a character cut in two at the end is left out.
+        decoder = codecs.getincrementaldecoder(encoding)()
+        text = decoder.decode(content[:DECODE_MAX_BYTES], final=not more)
     except UnicodeDecodeError as error:
         raise _NotText from error
     if "\x00" in text:
         raise _NotText
-    return text
+    return text, more
 
 
 def clean(text: str) -> str:
@@ -130,7 +137,8 @@ def handle(data: bytes, options: dict, budget) -> dict:
             if budget.spent():
                 return failure("too_slow")
             content = archive.read(name)
-            text = clean(decode(content))
+            decoded, more = decode(content)
+            text = clean(decoded)
             digest = hashlib.sha256(content).hexdigest()
             # The same bytes under two names are one document.
             if not text or digest in seen:
@@ -146,7 +154,7 @@ def handle(data: bytes, options: dict, budget) -> dict:
                     "text": kept,
                     "sha256": digest,
                     "size": len(content),
-                    "truncated": len(kept) < len(text),
+                    "truncated": more or len(kept) < len(text),
                 }
             )
     except zipcaps.Refused as refused:
