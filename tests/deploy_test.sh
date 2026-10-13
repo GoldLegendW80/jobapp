@@ -246,7 +246,8 @@ guard() { # guard <exit> <repository> <workflow ref> <event>
     ops/runner/job-guard.sh
 }
 main_ref="GoldLegendW80/jobapp/.github/workflows/deploy.yml@refs/heads/main"
-guard 0 GoldLegendW80/jobapp "$main_ref" workflow_run
+guard 1 GoldLegendW80/jobapp "$main_ref" workflow_run
+out_has "refused: event workflow_run"
 guard 0 GoldLegendW80/jobapp "$main_ref" workflow_dispatch
 guard 1 GoldLegendW80/jobapp "$main_ref" push
 out_has "refused: event push"
@@ -258,7 +259,7 @@ guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/deploy.yml@
 guard 1 someone/fork "someone/fork/.github/workflows/deploy.yml@refs/heads/main" workflow_dispatch
 out_has "refused: repository"
 guard 1 "" "" ""
-ok "hook set in the image; allowed: deploy.yml@main on workflow_run and workflow_dispatch; refused: push, pull_request, another branch, another workflow, a fork, no context"
+ok "hook set in the image; allowed: deploy.yml@main on workflow_dispatch; refused: workflow_run (issue #116), push, pull_request, another branch, another workflow, a fork, no context"
 
 step "runner install and remove against a fake Jetson and a fake gh: the token never shows"
 # A canary token: install and remove must pass it to the container on stdin only, never on a

@@ -88,4 +88,4 @@ repos:
     rev: v0.11.0.1
     hooks:
       - id: shellcheck
-        files: ^(deploy\.sh|ops/(db|previous|migrate|env_check)\.sh|ops/runner/(entrypoint|job-guard)\.sh|ops/ci-(runners|rerun)\.sh|ops/ci-runner/(entrypoint|job-started|job-completed|ci-clean)\.sh|\.github/scripts/(ci_env|secret_scan)\.sh|tests/(ci_runners_test|secret_scan_test|deploy_test|migrate_test|env_check_test|jetson_smoke|backup_test|crash_check|reboot_check|e2e_jetson|tailscale_test|ingestion_parser_jetson)\.sh)$
+        files: ^(deploy\.sh|ops/(db|previous|migrate|env_check|local-check|deploy-checked)\.sh|ops/runner/(entrypoint|job-guard)\.sh|ops/ci-(runners|rerun)\.sh|ops/ci-runner/(entrypoint|job-started|job-completed|ci-clean)\.sh|\.github/scripts/(ci_env|secret_scan)\.sh|tests/(local_check_test|ci_runners_test|secret_scan_test|deploy_test|migrate_test|env_check_test|jetson_smoke|backup_test|crash_check|reboot_check|e2e_jetson|tailscale_test|ingestion_parser_jetson)\.sh)$
