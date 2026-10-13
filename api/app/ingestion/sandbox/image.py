@@ -32,6 +32,11 @@ What is done, in this order:
 5. The EXIF orientation is applied to the pixels, then the image is rebuilt from its pixels
    alone: no EXIF (so no GPS position), no ICC profile, no comment, no thumbnail reach the
    answer. Colours are not converted through the profile: the page is read for its text.
+   Pillow never parses a metadata block. Its EXIF reader loads every tag of a directory at
+   once, and each tag may point at the same bytes: 64 KB of file cost 356 MiB (review of
+   PR #157). So the orientation is read here by hand (`exif_orientation`: one bounded walk of
+   the first directory, nothing followed), and while a JPEG is opened Pillow skips its APP1
+   (EXIF, XMP), APP2 (profile, multi picture index) and APP13 segments unread (`_unread`).
 6. `encode`: a baseline JPEG of at most JPEG_MAX bytes: quality 80, 70, 60, 50, then the
    size reduced by 15 percent a step until it fits.
 
@@ -50,10 +55,11 @@ Only main.py may import this file in production (and pdf_render.py, for `encode`
 """
 
 import base64
+import contextlib
 import io
 import struct
 
-from PIL import Image, ImageFile, PngImagePlugin
+from PIL import Image, ImageFile, JpegImagePlugin, PngImagePlugin
 
 PIXELS_MAX = 25_000_000  # width times height, as the header declares them
 SIDE_MAX = 20_000  # one side; Pillow keeps a pointer per row, and a row of every band
@@ -63,6 +69,9 @@ QUALITIES = (80, 70, 60, 50)
 SHRINK = 0.85  # then the size, a step at a time, at the last quality
 BAND_PIXELS = 2_000_000  # what is converted at once
 SEGMENTS_MAX = 2_000  # segments of a JPEG looked at before its size is found
+CHUNKS_MAX = 4_096  # chunks of a PNG looked at for its EXIF block
+EXIF_MAX = 65_536  # bytes of an EXIF block looked at: a JPEG segment holds no more
+EXIF_ENTRIES_MAX = 256  # entries of its first directory looked at; a camera writes a dozen
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 JPEG_MAGIC = b"\xff\xd8\xff"
@@ -236,14 +245,98 @@ def entry(position: int, image: Image.Image) -> dict:
     }
 
 
-def _orientation(opened: Image.Image) -> int | None:
-    try:
-        value = opened.getexif().get(_ORIENTATION)
-    except MemoryError:
-        raise
-    except Exception:  # a broken EXIF block costs the orientation, never the image
+def _jpeg_exif(data: bytes) -> bytes:
+    # The content of the first APP1 segment that says "Exif", before the first scan.
+    at, end = 2, len(data)
+    for _ in range(SEGMENTS_MAX):
+        if at + 4 > end or data[at] != 0xFF:
+            break
+        code = data[at + 1]
+        if code == 0xFF:  # a fill byte
+            at += 1
+            continue
+        at += 2
+        if code == 0x01 or 0xD0 <= code <= 0xD8:
+            continue
+        if code in (0xD9, 0xDA):
+            break
+        (length,) = struct.unpack(">H", data[at : at + 2])
+        if length < 2:
+            break
+        if code == 0xE1 and data[at + 2 : at + 8] == b"Exif\x00\x00":
+            return data[at + 8 : min(at + length, end)]
+        at += length
+    return b""
+
+
+def _png_exif(data: bytes) -> bytes:
+    # The content of the first eXIf chunk: a length, a name, the content, a checksum.
+    at, end = len(PNG_MAGIC), len(data)
+    for _ in range(CHUNKS_MAX):
+        if at + 8 > end:
+            break
+        length, name = struct.unpack(">I4s", data[at : at + 8])
+        if name == b"eXIf":
+            return data[at + 8 : min(at + 8 + length, at + 8 + EXIF_MAX, end)]
+        if name == b"IEND":
+            break
+        at += 12 + length
+    return b""
+
+
+def exif_orientation(block: bytes) -> int | None:
+    """The orientation (1 to 8) an EXIF block declares, None when it declares none or is odd
+    in any way. `block` starts at the byte order mark. Only the entries of the first directory
+    are looked at, EXIF_ENTRIES_MAX of them at most, twelve bytes each: no offset is followed
+    (the value of this tag lies in its entry), no other directory is opened, nothing is
+    copied. So the cost is the same whatever the block claims."""
+    if block[:4] == b"II*\x00":
+        order = "<"
+    elif block[:4] == b"MM\x00*":
+        order = ">"
+    else:
         return None
-    return value if isinstance(value, int) else None
+    if len(block) < 8:
+        return None
+    (at,) = struct.unpack(order + "I", block[4:8])
+    if at < 8 or at + 2 > len(block):
+        return None
+    (entries,) = struct.unpack(order + "H", block[at : at + 2])
+    at += 2
+    for _ in range(min(entries, EXIF_ENTRIES_MAX)):
+        if at + 12 > len(block):
+            break
+        tag, kind, count, value = struct.unpack(order + "HHIH", block[at : at + 10])
+        if tag == _ORIENTATION:
+            # One unsigned short, as the standard says, and one of the eight it names.
+            return value if kind == 3 and count == 1 and 1 <= value <= 8 else None
+        at += 12
+    return None
+
+
+def orientation_of(data: bytes, kind: str) -> int | None:
+    """The EXIF orientation of a PNG or a JPEG, read from its bytes without any decoder."""
+    return exif_orientation(_jpeg_exif(data) if kind == "JPEG" else _png_exif(data))
+
+
+# The segments of a JPEG Pillow would read into `info` and parse: APP1 (EXIF: it asks the
+# directory for the resolution when the file names none, and loads every tag for it; XMP),
+# APP2 (the colour profile, and the multi picture index, a second directory read the same
+# way), APP13 (Photoshop's blocks). APP0 and APP14 stay: the second says how four components
+# are to be read.
+_UNREAD = (0xFFE1, 0xFFE2, 0xFFED)
+
+
+@contextlib.contextmanager
+def _unread():
+    """While a JPEG is opened, Pillow skips the segments of _UNREAD without looking inside."""
+    kept = {marker: JpegImagePlugin.MARKER[marker] for marker in _UNREAD}
+    for marker, (name, description, _) in kept.items():
+        JpegImagePlugin.MARKER[marker] = (name, description, JpegImagePlugin.Skip)
+    try:
+        yield
+    finally:
+        JpegImagePlugin.MARKER.update(kept)
 
 
 def normalise(data: bytes, budget=None) -> Image.Image:
@@ -253,14 +346,15 @@ def normalise(data: bytes, budget=None) -> Image.Image:
     if kind is None:
         raise Refused("unreadable")
     guard(*declared_size(data, kind))
+    orientation = orientation_of(data, kind)
     try:
-        opened = Image.open(io.BytesIO(data), formats=[kind])
+        with _unread():
+            opened = Image.open(io.BytesIO(data), formats=[kind])
         guard(*opened.size)  # what the decoder will allocate
         if kind == "JPEG":
             opened.draft(None, target_size(*opened.size))
         opened.load()  # the first frame only: nothing here ever seeks another
         guard(*opened.size)
-        orientation = _orientation(opened)
         image = shrink(opened, budget)
         opened.close()
     except (Refused, MemoryError):

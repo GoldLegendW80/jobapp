@@ -234,3 +234,101 @@ def test_nothing_is_ever_enlarged_and_one_pixel_is_a_picture() -> None:
     assert (stored.width, stored.height) == (1, 1)
     wide, _ = picture(fx.blank_png(20_000, 4))
     assert (wide.width, wide.height) == (1568, 1)
+
+
+# --- the EXIF orientation, read by hand (review of PR #157, B1) ---------------------------------
+
+
+@pytest.mark.parametrize("orientation", range(1, 9))
+@pytest.mark.parametrize("kind", ["PNG", "JPEG"])
+def test_each_exif_orientation_gives_the_pixels_pillow_gives(kind: str, orientation: int) -> None:
+    from PIL import ImageOps
+
+    data = fx.oriented(orientation, kind)
+    assert image.orientation_of(data, kind) == orientation
+    with Image.open(io.BytesIO(data)) as opened:
+        expected = ImageOps.exif_transpose(opened).convert("RGB")
+    upright = image.normalise(data)
+    assert upright.size == expected.size == ((300, 200) if orientation < 5 else (200, 300))
+    assert upright.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        b"",
+        b"II*\x00",
+        b"II*\x00\x08\x00\x00\x00",  # the header and no directory
+        b"MM\x00*\x00\x00\x00\x08\xff\xff",  # 65,535 entries declared, none there
+        fx.exif_block([(0x0112, 3, 1, 6)], first=4),  # a directory inside the header
+        fx.exif_block([(0x0112, 3, 1, 6)], first=4000)[:64],  # a directory past the end
+        fx.exif_block([(0x0112, 3, 1, 0)]),  # not one of the eight
+        fx.exif_block([(0x0112, 3, 1, 9)]),
+        fx.exif_block([(0x0112, 3, 2, 6)]),  # two values: an offset would have to be followed
+        fx.exif_block([(0x0112, 7, 60_000, 0)]),  # the tag of the review, as bytes at offset 0
+        fx.exif_block([(0x0112, 4, 1, 6)]),  # not the type the standard gives it
+        fx.exif_block([(0x8769, 4, 1, 8), (0x8825, 4, 1, 8)]),  # only directories, all itself
+        fx.exif_block([(0x9000 + n, 7, 60_000, 0) for n in range(256)] + [(0x0112, 3, 1, 6)]),
+        b"ZZ*\x00" + fx.exif_block([(0x0112, 3, 1, 6)])[4:],
+    ],
+)
+def test_an_odd_exif_block_declares_no_orientation(block: bytes) -> None:
+    assert image.exif_orientation(block) is None
+
+
+def test_the_orientation_is_found_in_either_byte_order_among_other_tags() -> None:
+    little = fx.exif_block([(0x010F, 2, 60_000, 0), (0x0112, 3, 1, 8), (0x8769, 4, 1, 8)])
+    assert image.exif_orientation(little) == 8
+    big = b"MM\x00*\x00\x00\x00\x08\x00\x01" + bytes.fromhex("0112 0003 00000001 0003 0000")
+    assert image.exif_orientation(big) == 3
+    for kind in ("JPEG", "PNG"):
+        assert image.orientation_of(fx.with_exif(little, kind), kind) == 8
+        assert image.orientation_of(fx.saved(fx.page(64, 64), kind), kind) is None
+
+
+@pytest.mark.parametrize(("name", "make"), fx.HOSTILE_READ, ids=[row[0] for row in fx.HOSTILE_READ])
+def test_hostile_metadata_is_never_parsed_and_the_picture_is_read(name: str, make: Any) -> None:
+    """Fails without the fix: Pillow's EXIF reader copied 318 MB for the first file."""
+    import tracemalloc
+
+    data = make()
+    tracemalloc.start()
+    try:
+        answer = image.handle(data, {}, Plenty())
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert answer["ok"] is True, answer
+    assert (answer["images"][0]["width"], answer["images"][0]["height"]) == (64, 64)
+    assert peak < 8 * 1024 * 1024, peak
+
+
+def test_pillow_never_loads_a_directory_of_tags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """EXIF, the multi picture index and the profile of a JPEG, the eXIf chunk of a PNG: none
+    is handed to the reader that loads every tag, neither on opening nor after."""
+    from PIL import TiffImagePlugin
+
+    loaded: list[int] = []
+    load = TiffImagePlugin.ImageFileDirectory_v2.load
+
+    def counted(self: Any, fp: Any) -> None:
+        loaded.append(1)
+        load(self, fp)
+
+    monkeypatch.setattr(TiffImagePlugin.ImageFileDirectory_v2, "load", counted)
+    with Image.open(io.BytesIO(fx.rotated_jpeg())) as opened:
+        opened.getexif()
+    assert loaded, "the counter sees what Pillow does on its own"
+    del loaded[:]
+    for data in (
+        fx.rotated_jpeg(),
+        fx.multi_picture_jpeg(),
+        fx.icc_jpeg(),
+        fx.oriented(6, "PNG"),
+        fx.exif_bomb(),
+    ):
+        assert image.handle(data, {}, Plenty())["ok"] is True
+    assert loaded == []
+    # And Pillow is itself again outside: the table of its JPEG reader is as it was.
+    with Image.open(io.BytesIO(fx.rotated_jpeg())) as opened:
+        assert opened.getexif()[0x0112] == 6

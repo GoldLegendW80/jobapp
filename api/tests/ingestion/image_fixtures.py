@@ -191,6 +191,58 @@ def gif() -> bytes:
     return saved(page(200, 100), "GIF")
 
 
+def oriented(orientation: int, kind: str = "PNG") -> bytes:
+    """A small picture with nothing symmetric in it, stored with this EXIF orientation."""
+    return saved(page(300, 200), kind, exif=exif_bytes(orientation))
+
+
+def exif_block(entries: list[tuple[int, int, int, int]], first: int = 8, size: int = 0) -> bytes:
+    """An EXIF block written by hand, little endian: the byte order mark, the offset of the
+    first directory, its entries (tag, type, count, value or offset), the offset of the next
+    directory (the first again: a loop), then zeros up to `size` bytes."""
+    block = b"II*\x00" + struct.pack("<I", first) + bytes(max(0, first - 8))
+    block += struct.pack("<H", len(entries))
+    block += b"".join(struct.pack("<HHII", *entry) for entry in entries)
+    block += struct.pack("<I", first)
+    return block + bytes(max(0, size - len(block)))
+
+
+def with_exif(block: bytes, kind: str = "JPEG") -> bytes:
+    """A 64 by 64 picture carrying this EXIF block: an APP1 segment, or an eXIf chunk."""
+    data = saved(page(64, 64), kind)
+    if kind == "JPEG":
+        content = b"Exif\x00\x00" + block
+        return data[:2] + b"\xff\xe1" + struct.pack(">H", len(content) + 2) + content + data[2:]
+    return data[:33] + _chunk(b"eXIf", block) + data[33:]
+
+
+def exif_bomb(kind: str = "JPEG") -> bytes:
+    """The file of the review of PR #157 (B1): every tag of the directory is 60,000 bytes of
+    type 7 at offset 0, the same bytes each time. 5,300 tags fill one JPEG segment and made
+    Pillow's EXIF reader copy 318 MB out of a 64 KB file. A PNG chunk has no such ceiling:
+    60,000 tags over one megabyte each."""
+    if kind == "JPEG":
+        return with_exif(exif_block([(0x9000 + n, 7, 60_000, 0) for n in range(5300)]))
+    tags = [(0x1000 + n, 7, MIB, 0) for n in range(60_000)]
+    return with_exif(exif_block(tags, size=MIB), "PNG")
+
+
+def exif_loop(kind: str = "JPEG") -> bytes:
+    """An EXIF block that refers to itself: its EXIF, GPS and interoperability directories
+    and its next directory are all the first one again."""
+    loop = [(0x8769, 4, 1, 8), (0x8825, 4, 1, 8), (0xA005, 4, 1, 8)]
+    return with_exif(exif_block(loop), kind)
+
+
+# Hostile files that are simply read: (name, the file). What made them hostile is metadata,
+# and no metadata is parsed. Run by the handler in the test process and by the real child.
+HOSTILE_READ: list[tuple[str, Callable[[], bytes]]] = [
+    ("a JPEG whose 5,300 EXIF tags are the same 60,000 bytes", exif_bomb),
+    ("a PNG whose 60,000 EXIF tags are the same megabyte", lambda: exif_bomb("PNG")),
+    ("a JPEG whose EXIF directories are one another", exif_loop),
+    ("a PNG whose EXIF directories are one another", lambda: exif_loop("PNG")),
+]
+
 # (name, the file, the code it must end as), run by the handler in the test process and by the
 # real child in the container of the service.
 HOSTILE: list[tuple[str, Callable[[], bytes], str]] = [
