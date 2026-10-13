@@ -91,7 +91,7 @@ def test_signed_out_answers_401_on_every_route(api: Api) -> None:
         api.get(f"{RUNS}/{some}"),
         api.post(f"{RUNS}/{some}/cancel"),
         api.post(f"{RUNS}/{some}/resume"),
-        api.post(f"{RUNS}/{some}/continue"),
+        api.post(f"{RUNS}/{some}/continue", json={"adds": 1}),
     ]
     for response in calls:
         assert response.status_code == 401, response.request.url
@@ -108,7 +108,7 @@ def test_user_b_reading_cancelling_resuming_or_continuing_as_run_answers_404(
             api.get(f"{RUNS}/{run_id}", token=bob),
             api.post(f"{RUNS}/{run_id}/cancel", token=bob),
             api.post(f"{RUNS}/{run_id}/resume", token=bob),
-            api.post(f"{RUNS}/{run_id}/continue", token=bob),
+            api.post(f"{RUNS}/{run_id}/continue", token=bob, json={"adds": 1}),
         ]
         # Another user's run answers exactly like one that does not exist.
         assert [(one.status_code, one.json()) for one in answers] == [
@@ -412,7 +412,8 @@ def test_cancel_while_queued_then_again(
     again = api.post(f"{RUNS}/{run['id']}/cancel", token=alice)
     assert (again.status_code, again.json()) == (409, {"detail": runs_router.ENDED})
     for action in ("resume", "continue"):
-        assert api.post(f"{RUNS}/{run['id']}/{action}", token=alice).status_code == 409
+        again = api.post(f"{RUNS}/{run['id']}/{action}", token=alice, json={"adds": 1})
+        assert again.status_code == 409
 
 
 def test_cancel_mid_step_is_honoured_when_the_step_has_ended(
@@ -435,7 +436,7 @@ def test_resume_and_continue_on_a_running_run_are_refused(
     run = started(api, alice, ready)
     resumed = api.post(f"{RUNS}/{run['id']}/resume", token=alice)
     assert (resumed.status_code, resumed.json()) == (409, {"detail": runs_router.NOT_RESUMABLE})
-    continued = api.post(f"{RUNS}/{run['id']}/continue", token=alice)
+    continued = api.post(f"{RUNS}/{run['id']}/continue", token=alice, json={"adds": 1})
     assert (continued.status_code, continued.json()) == (
         409,
         {"detail": runs_router.NOT_CONTINUABLE},
@@ -451,7 +452,9 @@ def test_a_provider_failure_pauses_and_resume_runs_the_failed_step(
     assert (paused["status"], paused["paused_reason"]) == ("paused", failures.REFUSED)
     assert paused["steps"][0]["error"] == failures.REFUSED
     # Continue is for the ceiling only.
-    assert api.post(f"{RUNS}/{run['id']}/continue", token=alice).status_code == 409
+    assert (
+        api.post(f"{RUNS}/{run['id']}/continue", token=alice, json={"adds": 1}).status_code == 409
+    )
     resumed = api.post(f"{RUNS}/{run['id']}/resume", token=alice).json()
     assert (resumed["status"], resumed["paused_reason"]) == ("running", None)
     assert resumed["steps"][0]["status"] == "running"
@@ -470,7 +473,7 @@ def test_continue_raises_the_ceiling_by_h_and_the_history_holds_one_entry(
     assert paused["tokens"]["continue_adds"] == high
     assert run["tokens"]["continue_adds"] is None
     assert api.post(f"{RUNS}/{run['id']}/resume", token=alice).status_code == 409
-    response = api.post(f"{RUNS}/{run['id']}/continue", token=alice)
+    response = api.post(f"{RUNS}/{run['id']}/continue", token=alice, json={"adds": high})
     assert response.status_code == 200
     body = response.json()
     assert (body["status"], body["tokens"]["ceiling"]) == ("running", ceiling + high)
@@ -478,7 +481,99 @@ def test_continue_raises_the_ceiling_by_h_and_the_history_holds_one_entry(
     (entry,) = body["tokens"]["history"]
     assert (entry["spent"], entry["from"], entry["to"]) == (ceiling, ceiling, ceiling + high)
     assert body["steps"][1]["status"] == "running"
-    assert api.post(f"{RUNS}/{run['id']}/continue", token=alice).status_code == 409
+    assert (
+        api.post(f"{RUNS}/{run['id']}/continue", token=alice, json={"adds": 1}).status_code == 409
+    )
+
+
+def agents_started(factory: sessionmaker[Session]) -> int:
+    with factory() as db:
+        return int(db.scalar(sa.select(sa.func.count()).select_from(AgentRun)) or 0)
+
+
+def test_a_continue_from_a_stale_page_is_refused_and_adds_nothing(
+    app: FastAPI, factory: sessionmaker[Session], api: Api, alice: str, ready: list[str]
+) -> None:
+    """B1 of the second review of PR #148, the reviewer's two tab probe: both tabs show what one
+    Continue adds at the first pause, the first tab clicks, the step is cut again and the figure
+    grows. The second tab's click carries the old figure: it is refused, nothing is added, no
+    agent run starts, and the answer holds the figure of now."""
+    run = started(api, alice, ready)
+    url = f"{RUNS}/{run['id']}"
+    ceiling, high = run["tokens"]["ceiling"], run["tokens"]["high"]
+    end_step(app, factory, run, tokens=ceiling)
+    first = api.get(url, token=alice).json()["tokens"]["continue_adds"]
+    assert first == high  # what both tabs show
+
+    tab_a = api.post(f"{url}/continue", token=alice, json={"adds": first})
+    assert tab_a.status_code == 200
+    budget = eh.running(factory, uuid.UUID(run["id"])).token_budget
+    end_step(
+        app, factory, run, status=AgentStatus.failed, error=failures.TOKEN_LIMIT, tokens=budget
+    )
+    paused = api.get(url, token=alice).json()
+    now = paused["tokens"]["continue_adds"]
+    assert paused["paused_reason"] == "token_ceiling"
+    assert now == 2 * budget > first  # the step that was cut starts again on twice its budget
+
+    before = agents_started(factory)
+    for stale in (first, now - 1, now + 1):  # the other tab, then a figure under and one over
+        tab_b = api.post(f"{url}/continue", token=alice, json={"adds": stale})
+        assert tab_b.status_code == 409
+        body = tab_b.json()
+        assert (body["detail"], body["code"]) == (runs_router.CONTINUE_CHANGED, "continue_changed")
+        assert body["continue_adds"] == now
+        assert body["run"] == paused  # the run as it is: nothing was written
+        assert api.get(url, token=alice).json() == paused
+        assert agents_started(factory) == before
+    assert " - " not in runs_router.CONTINUE_CHANGED
+
+    agreed = api.post(f"{url}/continue", token=alice, json={"adds": now})
+    assert agreed.status_code == 200
+    body = agreed.json()
+    assert body["tokens"]["ceiling"] == paused["tokens"]["ceiling"] + now  # exactly that figure
+    assert [(one["from"], one["to"]) for one in body["tokens"]["history"]] == [
+        (ceiling, ceiling + first),
+        (ceiling + first, ceiling + first + now),
+    ]
+    assert agents_started(factory) == before + 1
+    # The same click sent again (a client that retries after a timeout): the run is running.
+    again = api.post(f"{url}/continue", token=alice, json={"adds": now})
+    assert (again.status_code, again.json()) == (409, {"detail": runs_router.NOT_CONTINUABLE})
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,
+        {},
+        {"adds": None},
+        {"adds": "88110"},
+        {"adds": 88110.5},
+        {"adds": 88110.0},
+        {"adds": True},
+        {"adds": 0},
+        {"adds": -1},
+        {"adds": runs_router.ADDS_MAX + 1},
+        {"adds": 10**400},
+        {"adds": [88110]},
+        [88110],
+    ],
+)
+def test_a_continue_without_its_figure_or_with_a_malformed_one_is_422_and_adds_nothing(
+    app: FastAPI, factory: sessionmaker[Session], api: Api, alice: str, ready: list[str], body: Any
+) -> None:
+    run = started(api, alice, ready)
+    url = f"{RUNS}/{run['id']}"
+    end_step(app, factory, run, tokens=run["tokens"]["ceiling"])
+    paused = api.get(url, token=alice).json()
+    response = (
+        api.post(f"{url}/continue", token=alice)
+        if body is None
+        else api.post(f"{url}/continue", token=alice, json=body)
+    )
+    assert response.status_code == 422
+    assert api.get(url, token=alice).json() == paused
 
 
 # --- deleting a document ----------------------------------------------------------------------

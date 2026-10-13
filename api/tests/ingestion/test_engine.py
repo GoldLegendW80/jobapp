@@ -78,6 +78,11 @@ def bob(factory: sessionmaker[Session], keyring: Keyring) -> uuid.UUID:
     return user
 
 
+def minute(number: int) -> Any:
+    """The clock of the cron's tick number `number`: one minute after the tick before."""
+    return lambda: now() + timedelta(minutes=number)
+
+
 def started(
     factory: sessionmaker[Session], user: uuid.UUID, settings: Settings, count: int = 3
 ) -> uuid.UUID:
@@ -411,7 +416,7 @@ def test_a_ceiling_pause_right_after_a_resume_is_a_pause_of_its_own(
         assert (closed.status, closed.paused_at) == (RunStatus.failed, None)
         return
     with factory() as db, db.begin():
-        engine.continue_(db, alice, run_id, start + timedelta(hours=34))
+        engine.continue_(db, alice, run_id, start + timedelta(hours=34), shown(db, run_id))
     going = eh.run_of(factory, run_id)
     # Paused 10 hours, then 24: the clock stopped for 34 hours, counted once.
     assert (going.status, going.paused_at) == (RunStatus.running, None)
@@ -466,7 +471,7 @@ def test_the_ceiling_reached_between_two_steps_and_reached_twice(
     assert eh.statuses(factory, run_id) == ["done", "planned", "planned"]
 
     with factory() as db, db.begin():
-        engine.continue_(db, alice, run_id, now())
+        engine.continue_(db, alice, run_id, now(), shown(db, run_id))
     run = eh.run_of(factory, run_id)
     assert run.token_ceiling == ceiling + high
     assert run.status is RunStatus.running
@@ -478,7 +483,7 @@ def test_the_ceiling_reached_between_two_steps_and_reached_twice(
     eh.finish_step(factory, run_id, settings, tokens=high)  # at the raised ceiling again
     assert eh.run_of(factory, run_id).paused_reason == engine.TOKEN_CEILING
     with factory() as db, db.begin():
-        engine.continue_(db, alice, run_id, now())
+        engine.continue_(db, alice, run_id, now(), shown(db, run_id))
     run = eh.run_of(factory, run_id)
     assert len(run.ceiling_history) == 2
     assert run.token_ceiling == ceiling + 2 * high
@@ -507,7 +512,7 @@ def test_the_ceiling_reached_inside_a_step(
     assert adds == 2 * run.token_ceiling + 9 > paused.estimate_high
 
     with factory() as db, db.begin():
-        engine.continue_(db, alice, run_id, now())
+        engine.continue_(db, alice, run_id, now(), shown(db, run_id))
     eh.advance(factory, run_id, settings)
     again = eh.running(factory, run_id)
     assert again.id == step.id
@@ -521,6 +526,13 @@ def test_the_ceiling_reached_inside_a_step(
     ]
     assert eh.items_of(factory, run_id) == 1  # stored once: the step row is the same
     assert eh.steps_of(factory, run_id)[0].items_count == 1
+
+
+def shown(db: Session, run_id: uuid.UUID) -> int:
+    """What the page shows before the click (`tokens.continue_adds` of now): the click sends it
+    back, and the engine applies that figure or nothing."""
+    run = db.get_one(IngestionRun, run_id)
+    return engine.continue_adds(db, run, engine._steps(db, run_id))
 
 
 def cut_and_continue(
@@ -543,7 +555,7 @@ def cut_and_continue(
             assert run.paused_reason == engine.TOKEN_CEILING
             spent, agents = run.tokens_spent, len(eh.agent_runs_of(factory, user))
             with factory() as db, db.begin():
-                engine.continue_(db, user, run_id, now())
+                engine.continue_(db, user, run_id, now(), shown(db, run_id))
             clicks += 1
             eh.advance(factory, run_id, settings)
             # The click itself spends nothing and always starts the step.
@@ -604,6 +616,119 @@ def test_any_sequence_of_continues_on_one_step_is_bounded_and_ends(
     assert ended.tokens_spent == sum(budgets) + over
     assert sum(budgets) < 3 * backstop
     assert clicks == len(ended.ceiling_history) == len(budgets) - 1
+
+
+def click(
+    factory: sessionmaker[Session], user: uuid.UUID, settings: Settings, run_id: uuid.UUID
+) -> int:
+    """One Continue on the figure the page shows, then the engine moves. That figure."""
+    with factory() as db, db.begin():
+        adds = shown(db, run_id)
+        engine.continue_(db, user, run_id, now(), adds)
+    eh.advance(factory, run_id, settings)
+    return adds
+
+
+def test_the_floor_of_a_cut_step_survives_a_worker_restart_and_a_provider_failure(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """N1 of the second review of PR #148, the reviewer's sequence: cut, worker restart, cut,
+    provider failure, cut. The floor was read from the step's last agent run, so any other
+    failure reset it to the low estimate: the step ran again on 52,440 and 104,880 after a cut
+    at 176,220, six cuts against a stated three. The largest budget the ceiling cut a step on is
+    now a stored fact of the step, and every attempt starts above it or does not start."""
+    run_id = started(factory, alice, settings, count=1)
+    backstop = estimate.extraction(len(eh.text_of(1))).backstop
+    cuts: list[int] = []
+    others: list[int] = []
+
+    def budget() -> int:
+        value = eh.running(factory, run_id).token_budget
+        assert value is not None
+        # Never on a budget the ceiling already cut it on, nor on less.
+        assert all(value > cut for cut in cuts), (value, cuts)
+        return value
+
+    def cut() -> None:
+        cuts.append(budget())
+        eh.finish_step(
+            factory, run_id, settings, AgentStatus.failed, failures.TOKEN_LIMIT, cuts[-1]
+        )
+
+    def on_the_ceiling() -> None:
+        run = eh.run_of(factory, run_id)
+        assert (run.status, run.paused_reason) == (RunStatus.paused, engine.TOKEN_CEILING)
+        assert eh.steps_of(factory, run_id)[0].cut_budget == cuts[-1]
+
+    cut()  # 1. cut on its first budget
+    on_the_ceiling()
+    assert click(factory, alice, settings, run_id) == 2 * cuts[0]
+
+    # 2. The worker restarts under the second attempt. The engine runs the step again with no
+    # click, and what remains under the ceiling is less than the budget that already failed.
+    agents_before = len(eh.agent_runs_of(factory, alice))
+    others.append(budget() - 52_440)
+    eh.finish_step(
+        factory, run_id, settings, AgentStatus.failed, agent_runs.INTERRUPTED, others[-1]
+    )
+    on_the_ceiling()  # no agent run on 52,440: a pause that says what the step needs
+    assert len(eh.agent_runs_of(factory, alice)) == agents_before
+    assert click(factory, alice, settings, run_id) == 2 * cuts[0] - 52_440
+
+    cut()  # 3. cut again, on twice the first cut
+    on_the_ceiling()
+    assert click(factory, alice, settings, run_id) == backstop
+
+    # 4. A provider failure under the attempt at the backstop, then Resume.
+    assert budget() == backstop
+    others.append(70_000)
+    eh.finish_step(factory, run_id, settings, AgentStatus.failed, failures.BUSY, others[-1])
+    assert eh.run_of(factory, run_id).paused_reason == failures.BUSY
+    with factory() as db, db.begin():
+        engine.resume(db, alice, run_id, now())
+    eh.advance(factory, run_id, settings)
+    on_the_ceiling()  # the remainder is under the floor: again no agent run
+    assert len(eh.agent_runs_of(factory, alice)) == agents_before + 2
+    click(factory, alice, settings, run_id)
+
+    cut()  # 5. cut at its backstop: the step's own failure, the run is over
+    ended = eh.run_of(factory, run_id)
+    assert (ended.status, eh.statuses(factory, run_id)) == (RunStatus.failed, ["failed"])
+    # The bound as stated: the budgets that were cut at least double and stop at the backstop.
+    assert cuts == [cuts[0], 2 * cuts[0], backstop]
+    assert len(cuts) == 1 + math.ceil(math.log2(backstop / cuts[0]))
+    assert sum(cuts) < 3 * backstop
+    # Each attempt that something else ended adds what it spent, under one backstop each.
+    assert ended.tokens_spent == sum(cuts) + sum(others) < (3 + len(others)) * backstop
+    assert len(ended.ceiling_history) == 4  # every raise was a click on a figure that was shown
+
+
+def test_a_continue_applies_the_figure_the_click_carried_or_nothing(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """B1 of the second review of PR #148: the figure is compared under the run's row lock and a
+    click that carries another one, lower or higher, writes nothing."""
+    run_id = started(factory, alice, settings, count=1)
+    budget = eh.running(factory, run_id).token_budget
+    assert budget is not None
+    eh.finish_step(factory, run_id, settings, AgentStatus.failed, failures.TOKEN_LIMIT, budget)
+    paused = eh.run_of(factory, run_id)
+    with factory() as db:
+        current = shown(db, run_id)
+    assert current == 2 * budget > paused.estimate_high
+    for stale in (paused.estimate_high, current - 1, current + 1):
+        with factory() as db, db.begin(), pytest.raises(engine.ContinueChangedError) as refused:
+            engine.continue_(db, alice, run_id, now(), stale)
+        assert refused.value.adds == current
+        same = eh.run_of(factory, run_id)
+        assert (same.status, same.paused_reason) == (RunStatus.paused, engine.TOKEN_CEILING)
+        assert (same.token_ceiling, same.ceiling_history) == (paused.token_ceiling, [])
+        assert same.paused_at == paused.paused_at
+    with factory() as db, db.begin():
+        engine.continue_(db, alice, run_id, now(), current)
+    raised = eh.run_of(factory, run_id)
+    assert raised.token_ceiling == paused.token_ceiling + current
+    assert raised.status is RunStatus.running
 
 
 def test_a_cut_step_whose_floor_the_remainder_does_not_reach_pauses_without_a_model_call(
@@ -674,12 +799,14 @@ def test_continue_on_a_run_paused_for_another_reason_and_by_another_user(
 ) -> None:
     run_id = started(factory, alice, settings)
     with factory() as db, db.begin(), pytest.raises(engine.WrongStateError):
-        engine.continue_(db, alice, run_id, now())  # running
+        engine.continue_(db, alice, run_id, now(), shown(db, run_id))  # running
     eh.finish_step(factory, run_id, settings, AgentStatus.failed, failures.BUSY)
     with factory() as db, db.begin(), pytest.raises(engine.WrongStateError):
-        engine.continue_(db, alice, run_id, now())  # paused, but not on its ceiling
+        engine.continue_(
+            db, alice, run_id, now(), shown(db, run_id)
+        )  # paused, but not on its ceiling
     with factory() as db, db.begin():
-        assert engine.continue_(db, bob, run_id, now()) is None
+        assert engine.continue_(db, bob, run_id, now(), shown(db, run_id)) is None
         assert engine.resume(db, bob, run_id, now()) is None
         assert engine.request_cancel(db, bob, run_id, now()) is None
     run = eh.run_of(factory, run_id)
@@ -1194,12 +1321,14 @@ def test_a_run_whose_advance_keeps_raising_is_closed_and_frees_the_user(
     monkeypatch.setattr(engine, "_record", broken)
     with caplog.at_level("INFO", logger="app.ingestion.engine"):
         for number in range(1, engine.ADVANCE_FAILURES):
-            assert asyncio.run(engine.tick(factory, None, now, settings)) == 0
+            assert asyncio.run(engine.tick(factory, None, minute(number), settings)) == 0
             run = eh.run_of(factory, run_id)
             assert (run.status, run.advance_failures) == (RunStatus.running, number)
-        asyncio.run(engine.tick(factory, None, now, settings))
+        asyncio.run(engine.tick(factory, None, minute(engine.ADVANCE_FAILURES), settings))
     closed = eh.run_of(factory, run_id)
     assert (closed.status, closed.closed_reason) == (RunStatus.failed, engine.STUCK)
+    # The step that was running had spent 1,000 tokens: the closed run says so.
+    assert closed.tokens_spent == 1_000
     assert closed.finished_at is not None
     assert eh.statuses(factory, run_id) == ["cancelled", "cancelled"]
     with factory() as db:
@@ -1230,14 +1359,86 @@ def test_an_advance_that_succeeds_forgets_the_failures_before_it(
         raise RuntimeError
 
     monkeypatch.setattr(engine, "_record", broken)
-    for _ in range(engine.ADVANCE_FAILURES - 1):
-        asyncio.run(engine.tick(factory, None, now, settings))
+    for number in range(1, engine.ADVANCE_FAILURES):
+        asyncio.run(engine.tick(factory, None, minute(number), settings))
     assert eh.run_of(factory, run_id).advance_failures == engine.ADVANCE_FAILURES - 1
     monkeypatch.setattr(engine, "_record", record)
     assert asyncio.run(engine.tick(factory, None, now, settings)) == 1
     run = eh.run_of(factory, run_id)
     assert (run.status, run.advance_failures) == (RunStatus.running, 0)
+    assert run.advance_failed_at is None
     assert eh.statuses(factory, run_id) == ["done", "running"]
+
+
+def test_ticks_that_pile_up_after_a_stall_count_as_one_failure(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N2 (a) of the second review of PR #148: the exit counted five ticks, and ticks that had
+    waited behind a long job ran back to back, so five failures at one instant closed a run.
+    Failures closer than `ADVANCE_FAILURE_GAP` count once."""
+    run_id = started(factory, alice, settings, count=2)
+    eh.end_agent(factory, eh.running(factory, run_id).agent_run_id, tokens=1_000)
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError
+
+    monkeypatch.setattr(engine, "_record", broken)
+    for _ in range(2 * engine.ADVANCE_FAILURES):
+        asyncio.run(engine.tick(factory, None, now, settings))
+    run = eh.run_of(factory, run_id)
+    assert (run.status, run.advance_failures) == (RunStatus.running, 1)
+    just_under = engine.ADVANCE_FAILURE_GAP - timedelta(seconds=1)
+    asyncio.run(engine.tick(factory, None, lambda: now() + just_under, settings))
+    assert eh.run_of(factory, run_id).advance_failures == 1
+    asyncio.run(engine.tick(factory, None, lambda: now() + engine.ADVANCE_FAILURE_GAP, settings))
+    run = eh.run_of(factory, run_id)
+    assert (run.status, run.advance_failures) == (RunStatus.running, 2)
+    # The cron ticks every minute: real ticks are always further apart than the gap.
+    assert timedelta(seconds=30) <= engine.ADVANCE_FAILURE_GAP < timedelta(seconds=45)
+
+
+def test_a_run_closed_as_stuck_records_the_tokens_of_a_step_that_ends_afterwards(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N2 (b) of the second review of PR #148: the run was closed while its step's agent run was
+    at work, the agent run ended on 70,000 tokens and the run recorded none of them."""
+    run_id = started(factory, alice, settings, count=2)
+    agent_id = eh.running(factory, run_id).agent_run_id
+    eh.set_agent(factory, agent_id, status=AgentStatus.running, started_at=now())
+
+    def broken(*args: object, **kwargs: object) -> engine.Moved:
+        raise RuntimeError
+
+    with monkeypatch.context() as patched:
+        patched.setattr(engine, "advance", broken)
+        for number in range(1, engine.ADVANCE_FAILURES + 1):
+            asyncio.run(engine.tick(factory, None, minute(number), settings))
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.closed_reason) == (RunStatus.failed, engine.STUCK)
+    assert closed.tokens_spent == 0
+    # Asked to stop and still at work: its step stays `running` until its end is known.
+    assert eh.statuses(factory, run_id) == ["running", "cancelled"]
+    with factory() as db:
+        assert db.get_one(AgentRun, agent_id).cancel_requested_at is not None
+        assert engine.active_run_id(db, alice) is None  # and a new run can start meanwhile
+    finished = closed.finished_at
+
+    eh.end_agent(factory, agent_id, AgentStatus.cancelled, tokens=70_000)
+    assert asyncio.run(engine.tick(factory, None, minute(9), settings)) == 1  # the cron finds it
+    late = eh.run_of(factory, run_id)
+    assert (late.status, late.tokens_spent) == (RunStatus.failed, 70_000)
+    assert (late.finished_at, late.closed_reason) == (finished, engine.STUCK)
+    assert eh.statuses(factory, run_id) == ["cancelled", "cancelled"]
+    # Once, whoever calls again: the hook and the cron both may.
+    eh.advance(factory, run_id, settings)
+    assert asyncio.run(engine.tick(factory, None, minute(10), settings)) == 0
+    assert eh.run_of(factory, run_id).tokens_spent == 70_000
 
 
 def test_the_merge_path_imports_without_the_sdk() -> None:

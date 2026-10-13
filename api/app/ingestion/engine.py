@@ -94,13 +94,19 @@ ENQUEUE_SERVICE = "enqueue_agent_run"
 # What G6 measured: a run can pass its ceiling by the request in flight when the count crosses
 # it, and by one more when the CLI had already sent the next one.
 OVERSHOOT_REQUESTS = 2
-# A step the ceiling cut starts again from its first request, so it is never started on the
-# budget that already failed or on less: its next budget is at least this many times the last
-# one, and never above its backstop. A step cut at its backstop is the step's own failure.
+# A step the ceiling cut starts again from its first request, so it is never started on a
+# budget that already failed or on less: every later budget is at least this many times the
+# largest one the ceiling cut it on (`cut_budget`, stored on the step), and never above its
+# backstop. A step cut at its backstop is the step's own failure.
 CUT_GROWTH = 2
 # `advance` raising this many times in a row at the cron (about as many minutes) closes the run:
 # a run that cannot move must not stay the user's one active run for ever.
 ADVANCE_FAILURES = 5
+# Two failures closer than this count once: ticks that waited behind a long job run back to
+# back and must not close a run in one instant. The cron ticks every minute and a statement
+# times out after 15 seconds, so two real ticks are never this close; the five failures that
+# close a run therefore span at least four gaps, two minutes.
+ADVANCE_FAILURE_GAP = timedelta(seconds=30)
 STUCK = (
     "This run was closed because an error on our side kept it from going on. The documents it "
     "had finished reading are kept, and a new run does not read them again."
@@ -121,6 +127,15 @@ class ActiveRunError(Exception):
 
 class TextChangedError(Exception):
     """A document's text changed between the quote and the creation of the steps."""
+
+
+class ContinueChangedError(Exception):
+    """The figure the click carried is not what one Continue adds now (`adds`): nothing is
+    written, the page shows the new figure and asks again."""
+
+    def __init__(self, adds: int) -> None:
+        super().__init__()
+        self.adds = adds
 
 
 class WrongStateError(Exception):
@@ -294,9 +309,11 @@ def advance(db: Session, run_id: uuid.UUID, now: datetime, settings: Settings) -
     if run is None:
         return Moved(None)
     if run.status not in ACTIVE:
+        _record_late(db, run)
         return Moved(run.status)
     if run.advance_failures:
         run.advance_failures = 0  # it moves again; committed only when this call succeeds
+        run.advance_failed_at = None
     steps = _steps(db, run.id)
     current = _running(steps)
     if current is not None:
@@ -317,6 +334,25 @@ def advance(db: Session, run_id: uuid.UUID, now: datetime, settings: Settings) -
         _record(db, run, current, agent, now)
         steps = _steps(db, run.id)
     return _next(db, run, steps, now, settings)
+
+
+def _record_late(db: Session, run: IngestionRun) -> bool:
+    """A run closed with a step still at work (`advance_failed`) keeps that step `running`
+    until its agent run has ended: its tokens are then added to the run, once, and the step is
+    `cancelled`. Nothing else of a closed run changes. True when no step is left at work."""
+    current = _running(_steps(db, run.id))
+    if current is None:
+        return True
+    agent = _agent(db, current.agent_run_id)
+    if agent is not None and agent.status in (AgentStatus.queued, AgentStatus.running):
+        return False
+    db.execute(
+        sa.select(IngestionRunStep.id).where(IngestionRunStep.id == current.id).with_for_update()
+    )
+    if agent is not None:
+        run.tokens_spent += int(agent.input_tokens or 0) + int(agent.output_tokens or 0)
+    current.status = StepStatus.cancelled
+    return True
 
 
 def _record(
@@ -375,7 +411,10 @@ def _after(
             run.cancel_requested_at = now
         return StepStatus.cancelled
     if error == failures.TOKEN_LIMIT and _on_the_remainder(step):
-        _pause(run, TOKEN_CEILING, now)  # cut by the ceiling: it keeps its items, runs again
+        # Cut by the ceiling: it keeps its items and runs again, above the largest budget that
+        # was not enough, which is kept on the step whatever happens to its later attempts.
+        step.cut_budget = max(step.cut_budget or 0, step.token_budget or 0)
+        _pause(run, TOKEN_CEILING, now)
         return StepStatus.planned
     if failures.is_provider_failure(error) or (
         # The API never answered (a closed port): the CLI retried in silence up to the time
@@ -422,25 +461,20 @@ def _on_the_remainder(step: IngestionRunStep) -> bool:
     return step.token_budget < estimate.of_step(_plan_step(step)).backstop
 
 
-def _cut_by_ceiling(db: Session, step: IngestionRunStep) -> bool:
-    """Whether the last agent run of the step was interrupted by what remained under the
-    ceiling: the step then needs more than `step.token_budget`."""
-    if step.agent_run_id is None or not _on_the_remainder(step):
-        return False
-    agent = _agent(db, step.agent_run_id)
-    return agent is not None and agent.error == failures.TOKEN_LIMIT
-
-
-def _floor(db: Session, step: IngestionRunStep) -> int:
-    """The smallest budget the step may start on. Its low estimate when the ceiling never cut
-    it. After a cut, `CUT_GROWTH` times the budget that failed, or its backstop when that is
-    less: the budgets of one step grow at each cut and stop at the backstop, where a cut is the
-    step's own failure and the chain goes on. So a step is cut by the ceiling at most
-    `1 + ceil(log2(backstop / first budget))` times and its attempts spend under three
-    backstops in all, whatever the number of Continues."""
+def _floor(step: IngestionRunStep) -> int:
+    """The smallest budget the step may start on, whatever ended its attempt before. Its low
+    estimate when the ceiling never cut it. Once it did, `CUT_GROWTH` times the largest budget
+    it was cut on (`cut_budget`, a stored fact that a restart of the worker or a provider
+    failure does not erase), or its backstop when that is less. So the budgets the ceiling
+    cuts a step on at least double each time and stop at the backstop, where a cut is the
+    step's own failure and the chain goes on: a step is cut on its budget at most
+    `1 + ceil(log2(backstop / first budget))` times, the cut at the backstop included, and
+    those attempts spend under three backstops in all, whatever the number of Continues. An
+    attempt that something else ended (one restart of the worker per step, a provider failure
+    per Resume) adds what it spent, under one backstop each, and never lowers the floor."""
     one = estimate.of_step(_plan_step(step))
-    if step.token_budget is not None and _cut_by_ceiling(db, step):
-        return min(one.backstop, CUT_GROWTH * step.token_budget)
+    if step.cut_budget is not None:
+        return min(one.backstop, CUT_GROWTH * step.cut_budget)
     return math.ceil(one.low)
 
 
@@ -451,7 +485,7 @@ def continue_adds(db: Session, run: IngestionRun, steps: Sequence[IngestionRunSt
     step = next((one for one in steps if one.status is StepStatus.planned), None)
     if step is None:
         return run.estimate_high
-    need = _floor(db, step) - (run.token_ceiling - run.tokens_spent)
+    need = _floor(step) - (run.token_ceiling - run.tokens_spent)
     return max(run.estimate_high, need)
 
 
@@ -488,8 +522,8 @@ def _next(
         return Moved(run.status)
     remaining = run.token_ceiling - run.tokens_spent
     budget = estimate.budget(_plan_step(step), remaining) if remaining > 0 else None
-    if budget is None or budget < _floor(db, step):
-        # Under the step's low estimate, or not above the budget that already cut it: no agent
+    if budget is None or budget < _floor(step):
+        # Under the step's low estimate, or not above a budget that already cut it: no agent
         # run, no token. Continue raises the ceiling by what this step needs (`continue_adds`).
         _pause(run, TOKEN_CEILING, now)
         return Moved(run.status)
@@ -739,18 +773,24 @@ def resume(
 
 
 def continue_(
-    db: Session, user_id: uuid.UUID, run_id: uuid.UUID, now: datetime
+    db: Session, user_id: uuid.UUID, run_id: uuid.UUID, now: datetime, adds: int
 ) -> IngestionRun | None:
-    """A run paused on its ceiling gets `continue_adds` more (one `H`, or what the step the
-    ceiling cut needs to start on more than the budget that failed), recorded in its history,
-    and runs again. Raises `WrongStateError` for any other state. None for a run that is not
-    this user's."""
+    """A run paused on its ceiling gets `adds` more, recorded in its history, and runs again.
+    `adds` is the echo of what the page showed: it must equal `continue_adds` as computed here,
+    under the run's row lock (one `H`, or what the step the ceiling cut needs to start above the
+    budget that failed). Any other figure, lower or higher, raises `ContinueChangedError` with
+    the figure of now and writes nothing: a stale page never raises the ceiling by an amount
+    its user did not see. Raises `WrongStateError` for any other state. None for a run that is
+    not this user's."""
     run = _lock(db, run_id, user_id)
     if run is None:
         return None
     if run.status is not RunStatus.paused or run.paused_reason != TOKEN_CEILING:
         raise WrongStateError
-    raised = run.token_ceiling + continue_adds(db, run, _steps(db, run.id))
+    current = continue_adds(db, run, _steps(db, run.id))
+    if adds != current:
+        raise ContinueChangedError(current)
+    raised = run.token_ceiling + adds
     _restart(run, now)
     run.ceiling_history = [
         *run.ceiling_history,
@@ -792,7 +832,11 @@ def advance_failed(db: Session, run_id: uuid.UUID, now: datetime) -> bool:
     run = _lock(db, run_id)
     if run is None or run.status not in ACTIVE:
         return False
+    last = run.advance_failed_at
+    if last is not None and now - last < ADVANCE_FAILURE_GAP:
+        return False  # the same stall, seen again by a tick that had piled up behind it
     run.advance_failures += 1
+    run.advance_failed_at = now
     if run.advance_failures < ADVANCE_FAILURES:
         return False
     current = _running(_steps(db, run.id))
@@ -809,11 +853,15 @@ def advance_failed(db: Session, run_id: uuid.UUID, now: datetime) -> bool:
         sa.update(IngestionRunStep)
         .where(
             IngestionRunStep.ingestion_run_id == run.id,
-            IngestionRunStep.status.in_((StepStatus.planned, StepStatus.running)),
+            IngestionRunStep.status == StepStatus.planned,
         )
         .values(status=StepStatus.cancelled)
         .execution_options(synchronize_session=False)
     )
+    # The step that was running: the tokens of its agent run are the user's money and are
+    # recorded here when it has ended. One still at work stays `running` on the closed run
+    # until it ends, and `advance` (the hook, or the cron through `_due`) records it then.
+    _record_late(db, run)
     run.status = RunStatus.failed
     run.partial = True
     run.waiting = None
@@ -933,7 +981,16 @@ def _due(sessions: sessionmaker[Session]) -> list[uuid.UUID]:
         return list(
             db.scalars(
                 sa.select(IngestionRun.id)
-                .where(IngestionRun.status.in_(ACTIVE))
+                .where(
+                    sa.or_(
+                        IngestionRun.status.in_(ACTIVE),
+                        # closed by `advance_failed` with a step whose tokens are still due
+                        sa.exists().where(
+                            IngestionRunStep.ingestion_run_id == IngestionRun.id,
+                            IngestionRunStep.status == StepStatus.running,
+                        ),
+                    )
+                )
                 .order_by(IngestionRun.created_at)
             )
         )

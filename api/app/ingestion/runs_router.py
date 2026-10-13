@@ -5,7 +5,7 @@
     GET  /api/ingestion/runs/{id}
     POST /api/ingestion/runs/{id}/cancel
     POST /api/ingestion/runs/{id}/resume     a run paused for anything but its ceiling
-    POST /api/ingestion/runs/{id}/continue   a run paused on its token ceiling: `continue_adds`
+    POST /api/ingestion/runs/{id}/continue {adds}   a run paused on its token ceiling
 
 The start checks, in this order and in one transaction: the consent (409 `consent_required`),
 the selection through `estimate_router.quote` (404, 422), the echo of the estimate the dialog
@@ -26,13 +26,14 @@ import logging
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from functools import partial
 from typing import Annotated, Any
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.models import AgentRun, CredentialKind
@@ -66,6 +67,11 @@ NOT_FOUND = "Run not found."
 ENDED = "This run has ended."
 NOT_RESUMABLE = "Only a paused run can be resumed. A run paused on its token ceiling is continued."
 NOT_CONTINUABLE = "Only a run paused on its token ceiling can be continued."
+CONTINUE_CHANGED = (
+    "What Continue adds has changed since this page was loaded. Nothing was added. Read the "
+    "new figure, then continue again."
+)
+ADDS_MAX = 2**53 - 1  # the largest whole number every JSON client holds exactly
 CONSENT_REQUIRED = "Read and accept the consent text before a run sends documents to Anthropic."
 ACTIVE_RUN = "A run is already in progress. Wait for it, or cancel it."
 OVERSHOOT = (
@@ -130,6 +136,13 @@ class CeilingEntryOut(BaseModel):
     to: int
 
 
+class ContinueIn(BaseModel):
+    # The echo of `tokens.continue_adds` as the page showed it: the click agrees to that
+    # figure and to no other. A strict whole number, so a string, a float or a boolean is a
+    # 422 here and never reaches the comparison.
+    adds: StrictInt = Field(ge=1, le=ADDS_MAX)
+
+
 class TokensOut(BaseModel):
     spent: int = Field(description="As recorded, the running step included.")
     ceiling: int
@@ -139,7 +152,8 @@ class TokensOut(BaseModel):
     continue_adds: int | None = Field(
         description="For a run paused on `token_ceiling`: what one Continue adds to the ceiling "
         "now. One `high`, or more when the step the ceiling interrupted needs it: that step "
-        "starts again from its first request, on at least twice the budget that was not enough."
+        "starts again from its first request, on at least twice the budget that was not enough. "
+        "The click sends this figure back as `adds`."
     )
     overshoot_requests: int
     overshoot: str
@@ -180,6 +194,15 @@ class RunLine(BaseModel):
 class RunList(BaseModel):
     runs: list[RunLine]
     active_run_id: uuid.UUID | None
+
+
+class ContinueChangedOut(BaseModel):
+    """409 of a Continue whose `adds` is not what one Continue adds now: nothing was written."""
+
+    detail: str
+    code: str = "continue_changed"
+    continue_adds: int = Field(description="What one Continue adds now: show it, ask again.")
+    run: RunOut
 
 
 class _RefusedError(Exception):
@@ -553,6 +576,38 @@ async def resume_run(run_id: str, user: CurrentUser, request: Request) -> RunOut
     return await _action(request, user, run_id, engine.resume, NOT_RESUMABLE)
 
 
-@router.post("/runs/{run_id}/continue", response_model=RunOut, responses=_ACTION)
-async def continue_run(run_id: str, user: CurrentUser, request: Request) -> RunOut:
-    return await _action(request, user, run_id, engine.continue_, NOT_CONTINUABLE)
+@router.post(
+    "/runs/{run_id}/continue",
+    response_model=RunOut,
+    responses={
+        **_ACTION,
+        409: {
+            "description": (
+                "Not paused on its token ceiling, or `continue_changed`: `adds` is not what one "
+                "Continue adds now (the answer holds the figure of now and the run; nothing "
+                "was added)"
+            )
+        },
+        422: {"description": "No `adds`, or not a whole number in range"},
+    },
+)
+async def continue_run(run_id: str, body: ContinueIn, user: CurrentUser, request: Request) -> Any:
+    action = partial(engine.continue_, adds=body.adds)
+    try:
+        return await _action(request, user, run_id, action, NOT_CONTINUABLE)
+    except engine.ContinueChangedError as changed:
+        # The transaction rolled back: the ceiling, its history and the run's state are as
+        # they were. The page shows the new figure and asks again.
+        logger.info(
+            "ingestion_continue_refused",
+            extra={"user_id": str(user.id), "rule": "continue_changed"},
+        )
+        answer = ContinueChangedOut(
+            detail=CONTINUE_CHANGED,
+            continue_adds=changed.adds,
+            run=await _answer(request, user.id, _id(run_id)),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=answer.model_dump(mode="json", by_alias=True),
+        )

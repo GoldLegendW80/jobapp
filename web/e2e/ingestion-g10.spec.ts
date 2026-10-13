@@ -121,6 +121,7 @@ interface Run {
     low: number;
     high: number;
     history: { at: string; spent: number; from: number; to: number }[];
+    continue_adds: number | null;
     overshoot_requests: number;
     overshoot: string;
   };
@@ -224,8 +225,18 @@ async function until(
   return last;
 }
 
-const act = (id: string, action: string, as: BrowserContext = context) =>
-  as.request.post(`${RUNS}/${id}/${action}`, { headers: CSRF });
+// Continue carries the figure the page showed (`tokens.continue_adds`) as `adds`: the engine
+// applies that figure or nothing. The other actions take no body and ignore one.
+const act = (
+  id: string,
+  action: string,
+  as: BrowserContext = context,
+  adds = 1,
+) =>
+  as.request.post(`${RUNS}/${id}/${action}`, {
+    headers: CSRF,
+    data: { adds },
+  });
 
 test("the fixtures are the ones the recorded streams are named after", () => {
   for (const [name, hash] of Object.entries(HASHES))
@@ -424,7 +435,18 @@ test("a run pauses on its ceiling between two steps and one Continue finishes it
   });
   expect((await act(run.id, "resume")).status()).toBe(409);
 
-  const continued = await act(run.id, "continue");
+  // What one Continue adds, as the page would show it: one `H` here. A click that carries
+  // another figure is refused with the figure of now and adds nothing.
+  const shown = paused.tokens.continue_adds;
+  expect(shown).toBe(high);
+  const refused = await act(run.id, "continue", context, high + 1);
+  expect(refused.status()).toBe(409);
+  expect(await refused.json()).toMatchObject({
+    code: "continue_changed",
+    continue_adds: high,
+  });
+  expect((await read(run.id)).tokens.ceiling).toBe(2 * high);
+  const continued = await act(run.id, "continue", context, high);
   expect(continued.status()).toBe(200);
   const raised = (await continued.json()) as Run;
   expect(raised.tokens.ceiling).toBe(3 * high);
@@ -451,7 +473,7 @@ test("a run pauses on its ceiling between two steps and one Continue finishes it
   expect(done.tokens.history).toHaveLength(1);
   expect(done.counts).toMatchObject({ done: 2, failed: 0, items: 1 });
   // A second Continue has nothing to continue.
-  expect((await act(run.id, "continue")).status()).toBe(409);
+  expect((await act(run.id, "continue", context, high)).status()).toBe(409);
 });
 
 test("a run that reads a document again is cancelled while its step runs", async () => {
