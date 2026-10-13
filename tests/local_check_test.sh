@@ -38,6 +38,8 @@ run() { # run <expected exit> <command ...>: output in $WORK/out
   shift
   "$@" >"$WORK/out" 2>&1 || got=$?
   [[ "$got" == "$want" ]] || fail "exit $got, expected $want: $* -- $(tail -c 800 "$WORK/out")"
+  # Every check of this file runs stub steps: none may print the line that proves a real, full pass.
+  ! grep -q '^LOCAL CHECK: PASS' "$WORK/out" || fail "a run with stub steps printed LOCAL CHECK: PASS: $*"
 }
 out_has() { grep -qF -- "$1" "$WORK/out" || fail "output lacks '$1': $(tail -c 800 "$WORK/out")"; }
 out_lacks() { ! grep -qF -- "$1" "$WORK/out" || fail "output holds '$1': $(tail -c 800 "$WORK/out")"; }
@@ -245,9 +247,14 @@ want_tree="$(git -C "$GITHUB" rev-parse 'HEAD^{tree}')"
 run 0 env LOCAL_CHECK_STUB="$WORK/pass.sh" "$CHECK" --only api --merge origin/feature-a --merge origin/feature-b
 out_has "a partial run (--only api): no record is written"
 [[ "$(records)" == 0 ]] || fail "a partial run wrote a record"
+[[ "$(last_line)" =~ ^LOCAL\ CHECK:\ STUB\ PARTIAL\ PASS\ $want_tree\ [0-9]+s,\ only\ api,\ no\ record ]] || fail "last line of a partial run: $(last_line)"
+run 0 env LOCAL_CHECK_STUB="$WORK/pass.sh" "$CHECK" --only api --only checks
+[[ "$(last_line)" == *"PARTIAL PASS $base_tree "*", only api,checks, no record: not a proof for a merge or a deploy"* ]] || fail "last line of a run of two jobs: $(last_line)"
+[[ "$(records)" == 0 ]] || fail "a run of two jobs wrote a record"
+ok "a partial run (--only) ends with LOCAL CHECK: ... PARTIAL PASS, names its jobs and writes no record"
 
 run 0 env LOCAL_CHECK_STUB="$WORK/pass.sh" "$CHECK" --merge origin/feature-a --merge origin/feature-b
-[[ "$(last_line)" =~ ^LOCAL\ CHECK:\ PASS\ $want_tree\ [0-9]+s$ ]] || fail "last line of a pass: $(last_line), expected the tree $want_tree"
+[[ "$(last_line)" =~ ^LOCAL\ CHECK:\ STUB\ PASS\ $want_tree\ [0-9]+s,\ stub\ steps:\ not\ a\ check$ ]] || fail "last line of a pass with stub steps: $(last_line), expected the tree $want_tree"
 [[ -f "$RECORDS/$want_tree.json" ]] || fail "no record $RECORDS/$want_tree.json"
 python3 - "$RECORDS/$want_tree.json" "$want_tree" "$(git -C "$REPO" rev-parse origin/main)" \
   "$(git -C "$REPO" rev-parse origin/feature-a)" "$(git -C "$REPO" rev-parse origin/feature-b)" <<'PY' || fail "the record is not what was checked"
@@ -267,6 +274,7 @@ assert all(isinstance(step["seconds"], int) for step in record["steps"])
 assert record["stub"] is True and record["date"].endswith("Z") and "git" in record["tools"], record
 PY
 nothing_left "a pass"
+ok "a pass with stub steps ends with LOCAL CHECK: STUB PASS, never LOCAL CHECK: PASS, and its record says stub"
 ok "a pass writes .local-check/<tree sha>.json: the tree GitHub gets from the same merges, base, merged commits, steps, tools, date"
 
 # --- the lock --------------------------------------------------------------------------------------

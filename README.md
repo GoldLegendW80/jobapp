@@ -140,7 +140,14 @@ the checks), and the journey groups start when the images and the web install ar
 side on their own ports. It prints one line per step with its seconds, the end of the log of a
 failed step, the folder that keeps the full logs, and as its last line
 `LOCAL CHECK: PASS <tree sha> <seconds>s` or `LOCAL CHECK: FAIL <tree sha> <failed steps>`.
-Exit 0 passed, 1 a check failed, 2 a merge conflict, 3 the lock or the disk.
+Exit 0 every step that ran passed, 1 a check failed, 2 a merge conflict, 3 the lock or the disk.
+
+Only a last line that begins with exactly `LOCAL CHECK: PASS ` is the proof for a merge, with the
+record below: it is printed by a run of the full set with the real steps and by nothing else. A
+run with `--only` ends with `LOCAL CHECK: PARTIAL PASS <tree sha> <seconds>s, only <jobs>, no
+record: not a proof for a merge or a deploy`, and the script's own tests, which replace the steps
+with stubs, end with `LOCAL CHECK: STUB PASS ...`. Both exit 0, so the exit status alone proves
+nothing.
 
 On a pass of the full set it writes `.local-check/<tree sha>.json` in the main checkout (git
 ignored): the tree, the base, the merged refs with their commits, the steps and their seconds,

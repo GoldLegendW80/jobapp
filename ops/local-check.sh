@@ -48,9 +48,13 @@
 #   never builds or retags the shared jobapp-*:latest images.
 #
 # Output: one line per step (name, PASS or FAIL, seconds), the last 40 lines of the log of each
-# failed step, the folder that keeps the full logs, then as the last line
-#   LOCAL CHECK: PASS <tree sha> <seconds>s      or      LOCAL CHECK: FAIL <tree sha> <failed steps>
-# On a PASS of the full set, a record .local-check/<tree sha>.json in the main checkout: the
+# failed step, the folder that keeps the full logs, then as the last line one of
+#   LOCAL CHECK: PASS <tree sha> <seconds>s                       the full set, real steps: the only proof
+#   LOCAL CHECK: PARTIAL PASS <tree sha> <seconds>s, only <jobs>, no record: not a proof for a merge or a deploy
+#   LOCAL CHECK: STUB PASS <tree sha> <seconds>s, stub steps: not a check    (STUB PARTIAL PASS with --only)
+#   LOCAL CHECK: FAIL <tree sha> <failed steps>
+# A line that begins with exactly "LOCAL CHECK: PASS " is printed only by a run of the full set
+# with the real steps, next to the record it wrote. On a PASS of the full set, a record .local-check/<tree sha>.json in the main checkout: the
 # tree, the base, the merged refs with their commits, the steps and their seconds, the versions of
 # the tools and the date. The tree sha is the key (git rev-parse HEAD^{tree} of what was checked):
 # once the pull requests are merged on GitHub in the same order, git rev-parse origin/main^{tree}
@@ -750,8 +754,18 @@ if [[ -n "$failed" ]]; then
   exit 1
 fi
 
+# The last line says what ran: "LOCAL CHECK: PASS" is kept for the full set with the real steps
+# (review of pull request #121, B2: a partial run and a stubbed run ended with that same line).
 say "logs: $LOGS"
+kind="" note=""
+if [[ -n "${LOCAL_CHECK_STUB:-}" ]]; then
+  kind="STUB "
+  note=", stub steps: not a check"
+fi
 if ((${#ONLY[@]})); then
+  kind="${kind}PARTIAL "
+  only="${ONLY[*]}"
+  note=", only ${only// /,}, no record: not a proof for a merge or a deploy$note"
   say "a partial run (--only ${ONLY[*]}): no record is written, and ops/deploy-checked.sh will not deploy this tree on it"
 else
   tool_versions >"$WORK/versions"
@@ -787,4 +801,4 @@ out.write_text(json.dumps(record, indent=2) + "\n")
 PY
   say "record: $RECORDS/$tree_sha.json"
 fi
-say "LOCAL CHECK: PASS $tree_sha ${total}s"
+say "LOCAL CHECK: ${kind}PASS $tree_sha ${total}s$note"

@@ -77,7 +77,7 @@ in the job folder that holds this repository (it is not part of the repository).
    on that order.** No run in between:
 
    ```bash
-   ops/local-check.sh --merge <n1> --merge <n2> --merge <n3>   # main, then each head merged in that order. Last line: LOCAL CHECK: PASS <tree sha> <seconds>s
+   ops/local-check.sh --merge <n1> --merge <n2> --merge <n3>   # main, then each head merged in that order. The proof is the last line, exactly: LOCAL CHECK: PASS <tree sha> <seconds>s
    gh pr merge <n1> --merge --delete-branch                    # the same order, back to back
    gh pr merge <n2> --merge --delete-branch
    gh pr merge <n3> --merge --delete-branch
@@ -91,16 +91,26 @@ in the job folder that holds this repository (it is not part of the repository).
    was checked is what is on `main`. When it differs (another order, a head pushed after the
    check, something merged in between), `main` is checked again before any deploy:
    `ops/local-check.sh` with no argument checks `origin/main` as it is. Exit status of the
-   check: 0 passed, 1 a check failed (the failed steps are named on the last line, the end of
+   check: 0 every step that ran passed (a proof only with the `LOCAL CHECK: PASS` line,
+   below), 1 a check failed (the failed steps are named on the last line, the end of
    their logs is shown, the full logs are kept in the folder it prints), 2 a merge conflict (it
    names the ref: that branch is updated first, which is a new head and so a new review
    confirmation), 3 another check holds the lock or the disk is under 12 GiB free.
 
+   What counts as proof. Only a last line that begins with exactly `LOCAL CHECK: PASS `,
+   followed by the tree sha, and the record `.local-check/<tree sha>.json` written next to it.
+   That line is printed by a run of the full set with the real steps and by nothing else. A
+   run with `--only` ends with `LOCAL CHECK: PARTIAL PASS <tree sha> ...` and writes no
+   record: it is a tool for the author, never a proof for a merge or a deploy. A run of the
+   script's own tests ends with `LOCAL CHECK: STUB PASS ...`. Exit status 0 alone proves
+   nothing, a partial run has it too. Before the record is written the check compares the
+   steps that ran with the list of the full set, and a step that did not run fails the check.
+
    What the batch check does not give. There is no check per pull request: a failure belongs
    to the batch, and is bisected by running the check again with fewer `--merge` refs. It runs
    only while the Mac is awake and Docker Desktop is open, one check at a time. Nothing on
-   GitHub shows its result: the record on the Mac and the last line of its output are the
-   proof, so the orchestrator quotes that line when it merges.
+   GitHub shows its result: the record on the Mac and the `LOCAL CHECK: PASS` line are the
+   proof, so the orchestrator quotes that whole line when it merges.
 7. Only a checked tree is deployed, through `ops/deploy-checked.sh`. It refuses a commit whose
    tree has no PASS record, and a commit that is not on `origin/main`. Then it starts
    `.github/workflows/deploy.yml` on the Jetson's own runner for the full sha
