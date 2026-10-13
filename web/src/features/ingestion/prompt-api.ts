@@ -21,7 +21,8 @@ export type Prompt = z.infer<typeof promptSchema>;
 export const promptKey = ["ingestion", "prompt"] as const;
 
 export function getPrompt(signal?: AbortSignal): Promise<Prompt> {
-  return request("/api/ingestion/prompt", {
+  // `request` adds the /api in front.
+  return request("/ingestion/prompt", {
     signal,
     timeoutMs: 15_000,
     validate: (body) => promptSchema.parse(body),

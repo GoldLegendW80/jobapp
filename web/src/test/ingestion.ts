@@ -224,12 +224,16 @@ export const PROMPT: Prompt = {
     "You are Codex, running in a terminal on my own computer.\n\nMy name: Zoë Ångström\n\nWrite exactly one file: `~/jobapp-dossier/dossier.md`.\n",
 };
 
-/** Install the handler of the prompt; `calls.count` is how many times it was asked. */
-export function fakePrompt(prompt: Prompt = PROMPT): { count: number } {
-  const calls = { count: 0 };
+/** Install the handler of the prompt; the answer says how many times it was asked, and where. */
+export function fakePrompt(prompt: Prompt = PROMPT): {
+  count: number;
+  paths: string[];
+} {
+  const calls = { count: 0, paths: [] as string[] };
   server.use(
-    http.get("*/api/ingestion/prompt", () => {
+    http.get("*/api/ingestion/prompt", ({ request }) => {
       calls.count += 1;
+      calls.paths.push(new URL(request.url).pathname);
       return HttpResponse.json(prompt);
     }),
   );

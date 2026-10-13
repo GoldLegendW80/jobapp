@@ -12,12 +12,29 @@ import {
 
 const takeShots = makeShots("ingestion-g3", "ingestion-g3");
 
-/** Screenshots once every toast is gone, so none covers the page. */
+/**
+ * Screenshots once every toast is gone, so none covers the page. A full page is taken from its
+ * top with the header in the flow: a sticky header is painted where the page was scrolled to,
+ * across whatever is there.
+ */
 async function shots(page: Page, name: string) {
   await expect(page.locator("[data-sonner-toast]")).toHaveCount(0, {
     timeout: 15_000,
   });
-  await takeShots(page, name, true);
+  await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    const style = document.createElement("style");
+    style.id = "e2e-header-in-flow";
+    style.textContent = "header.sticky { position: static !important; }";
+    document.head.append(style);
+  });
+  try {
+    await takeShots(page, name, true);
+  } finally {
+    await page.evaluate(() => {
+      document.getElementById("e2e-header-in-flow")?.remove();
+    });
+  }
 }
 
 /**

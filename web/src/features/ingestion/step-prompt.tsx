@@ -158,7 +158,7 @@ export function StepPrompt({ goTo }: StepProps) {
                   </li>
                   <li>
                     Read the file it writes,{" "}
-                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-all">
+                    <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-words">
                       {query.data.output_folder}/dossier.md
                     </code>
                     , then add it in step 2.

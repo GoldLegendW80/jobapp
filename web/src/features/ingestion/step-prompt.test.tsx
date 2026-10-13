@@ -104,8 +104,9 @@ describe("step 1 of /profile/fill, the prompt", () => {
     );
     await user.click(screen.getByRole("tab", { name: "Claude Code" }));
     expect(promptBox("Claude Code")).toHaveValue(PROMPT.claude_code);
-    // Both texts came with the one answer.
+    // Both texts came with the one answer, asked at the route's own address.
     expect(calls.count).toBe(1);
+    expect(calls.paths).toEqual(["/api/ingestion/prompt"]);
   });
 
   it("copies exactly the text the api sent, and says so", async () => {
