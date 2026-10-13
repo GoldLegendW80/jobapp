@@ -689,6 +689,56 @@ rules and a start without a key, locally and without joining the tailnet.
 The service sits in the Compose profile `tunnel`, which `deploy.sh` enables on the Jetson. Neither
 the dev stack nor a plain `docker compose -f compose.yml up` on the Mac joins the tailnet.
 
+### Request limits (issue #100)
+
+The app is on the internet through Funnel. FastAPI reads a JSON body before a route's
+dependencies run, so on `main` a caller with no session could make the api hold a body on any
+JSON route, the ones that answer 401 included: thirty stalled 9 MiB sign ins took the api from
+115 to 375 MiB of its 512. What bounds it now, by layer:
+
+- **Caddy** (`caddy/Caddyfile`). Three body classes, each request in exactly one: the routes
+  under `/api/auth/` **64 KiB**, the document upload `POST /api/ingestion/documents` **20 MiB**,
+  everything else **10 MiB**. Over a declared length is Caddy's own 413, nothing proxied; a body
+  streamed past its limit is cut. Request headers must arrive within **10s** (`read_header`), and
+  an idle keep-alive connection is closed after **60s** (`idle`). Caddy's rule for a request body that
+  goes silent is left at its default, so that the upload and the paste, which answer a stalled
+  body themselves after 30s and 60s, speak first. That default does not cover small bodies:
+  measured in the review, Caddy ended a silent body after a minute only when some hundreds of
+  KiB of the declared length were still missing, and did nothing at all for a sign in body.
+- **api** (`api/app/body_limit.py`, before any body is parsed). **No session, no body**: under
+  `/api`, a request that announces a body on a route that is not public is answered 401 before a
+  byte of it is read. Then a size by class: `/api/auth/` 64 KiB, other JSON routes **1 MiB**; the
+  routes that read their own body keep their own limit and are not read twice (profile photo and
+  import 2 MiB, jobs import 10 MiB, document upload 20 MiB and paste). Over the size is 413. A
+  body the api caps must bring something every 20s and be whole within 60s, on `/api/auth/`
+  every 5s and within 10s, else 408. `POST /api/jobs` has a size of its own, from its schema (a
+  posting of 1,000,000 characters at four bytes each).
+- **uvicorn** (`api/Dockerfile`). `--limit-concurrency 256`: with 256 connections open, the next
+  request is answered 503. `--timeout-keep-alive 5`.
+
+What remains possible, for a small private app (measured once each, on a scratch stack by the
+author, `tasks/evidence/platform-100/`, or by the reviewer of pull request #106 where said):
+
+- **Sign ins at once are not bounded by any of this: issue #108, the next thing to do.** Each
+  password check takes 64 MiB by design; four at once took the api from 116 to a peak of 378 MiB,
+  and the sign in limit admits 20 checks per address in 15 minutes without stopping them from
+  running together. It is now the cheapest way for a caller with no session to exhaust the api's
+  memory. Not changed here.
+- **256 slow connections stop the app answering while they last.** That is the price of the
+  uvicorn limit, which keeps memory bounded: 260 connections each holding a sign in body just
+  under 64 KiB cost about 42 MiB at the api and 35 MiB at Caddy, and every other request, the
+  health check included, was answered 503 until they were released. A silent sign in holds its
+  place for 5s and a trickling one for 10s (20s and 60s when that was measured), so the caller
+  must keep opening them. The container's own health check shares the limit: during such a flood
+  it reads unhealthy, and a deploy started then would fail and roll back.
+- **A small body that goes silent or trickles keeps its connection to Caddy for as long as the
+  client likes** (reviewer: 240s with no answer for a sign in body of 1,000 declared bytes). The
+  api lets go at its own times; Caddy, with 128 MiB and no limit on connections, does not, and
+  has no limit per client address without a third party module (through Funnel every visitor
+  reaches it from the same peer anyway). The reviewer saw 2,000 connections with unfinished
+  headers take Caddy from 22 to 63 MiB for the 10s they are allowed. This was so before; it is
+  not bounded now either.
+
 **Bringing the Cloudflare quick tunnel back** (it was the public entry point until 2026-10-10:
 free, no account, but a random `*.trycloudflare.com` URL on every start): restore the
 `cloudflared` service of compose.yml (`cloudflare/cloudflared` running `tunnel --no-autoupdate

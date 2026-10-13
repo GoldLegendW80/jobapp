@@ -13,7 +13,8 @@ are not done here: handlers and dependencies record what the cookie should becom
 only place that knows the flags. Nothing here logs a token or a cookie value.
 """
 
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+import re
+from collections.abc import Awaitable, Callable, Iterable, MutableMapping, Sequence
 from datetime import datetime
 from typing import Any
 
@@ -49,6 +50,27 @@ PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
 
 UNAUTHORIZED = "Sign in to continue."
 CSRF_REFUSED = "Missing or invalid X-Requested-With header."
+
+
+def _path_pattern(template: str) -> re.Pattern[str]:
+    """A route's path template as a pattern over a request path: `{name}` is one segment."""
+    parts = re.split(r"(\{[^}]*\})", template)
+    return re.compile("".join("[^/]+" if p.startswith("{") else re.escape(p) for p in parts))
+
+
+_PUBLIC_PATTERNS = tuple(
+    (method, _path_pattern(template)) for method, template in sorted(PUBLIC_ROUTES)
+)
+
+
+def is_public_request(method: str, path: str) -> bool:
+    """Is this request one of PUBLIC_ROUTES, told from its method and path alone, before any
+    routing. Used where the route is not known yet (app.body_limit, which refuses the body of a
+    request without a session on every other route). Anything this does not recognise counts
+    as needing a session, which is the safe side; tests/identity/test_body_limit_api.py checks
+    it against every route the app serves."""
+    return any(method == known and pattern.fullmatch(path) for known, pattern in _PUBLIC_PATTERNS)
+
 
 # request.state keys
 _AUTH = "identity_auth"
@@ -156,6 +178,14 @@ def _resolve(request: Request) -> service.ActiveSession | None:
 
 async def resolve(request: Request) -> service.ActiveSession | None:
     return await run_in_threadpool(_resolve, request)
+
+
+async def scope_has_session(scope: MutableMapping[str, Any]) -> bool:
+    """Does the request of this ASGI scope carry a valid session. For the code that runs before
+    routing (app.body_limit). The lookup is the routes' own and is kept on the request's state,
+    which lives in the scope, so `default_deny` and `current_user` find it there afterwards and
+    the database is asked once. Nothing of the body is read."""
+    return await resolve(Request(scope)) is not None
 
 
 def unauthorized() -> HTTPException:

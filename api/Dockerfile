@@ -87,4 +87,15 @@ USER app:app
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD ["python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"]
-CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]
+# --limit-concurrency 256 (issue #100): once 256 connections are open, a connection counting as
+# soon as it is open, uvicorn answers the next request 503. Measured once on a scratch stack:
+# 260 slow connections cost about 42 MiB here, and while they were held every other request,
+# the health check included, got 503. So this number bounds memory and is also how many slow
+# connections stop the api answering while they last; raising it trades one for the other
+# (SPEC-platform.md, Request limits by layer). An event stream holds one connection, and so
+# does the container's own health check, which reads unhealthy while the limit is reached.
+# --timeout-keep-alive 5 keeps an idle keep-alive connection short (uvicorn's default, made
+# explicit). Request headers are bounded in front, by caddy (about 20 KiB: its default of
+# 16 KiB plus the 4,096 bytes Go adds): the api is reached from caddy only. The request body is bounded per route class by
+# LimitRequestBodyMiddleware and, at the edge, by caddy/Caddyfile.
+CMD ["uvicorn", "app.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*", "--limit-concurrency", "256", "--timeout-keep-alive", "5"]

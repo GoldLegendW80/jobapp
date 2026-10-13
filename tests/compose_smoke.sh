@@ -323,10 +323,46 @@ ok "X-Request-ID kept when sent, a UUID from caddy otherwise"
 big() { head -c "$1" /dev/zero; }
 [[ "$(curl_c /api/health -X POST --data-binary @<(big 10485761))" == "413" ]] || fail "10 MiB + 1 not refused"
 [[ "$(curl_c / -X POST --data-binary @<(big 20000000))" == "413" ]] || fail "20 MB to / not refused"
-# With the header the api's CSRF check asks of every write: without it the api answers 403 before
-# it looks at the route, and this line read that as a body Caddy had stopped.
-[[ "$(curl_c /api/health -X POST -H 'X-Requested-With: jobapp' --data-binary @<(big 10485760))" == "405" ]] || fail "10 MiB exactly did not reach the api"
-ok "bodies over 10 MiB refused with 413, 10 MiB exactly reaches the api (405 from FastAPI)"
+# 10 MiB exactly passes caddy and is answered by the api: its 401, since a body with no session
+# is refused unread on every route that is not public (issue #100; a 405 before). With the header
+# the api's CSRF check asks of every write: without it the api answers 403 before anything else.
+[[ "$(curl_c /api/health -X POST -H 'X-Requested-With: jobapp' --data-binary @<(big 10485760))" == "401" ]] \
+  && grep -q 'Sign in to continue' "$CURL_DIR/b" || fail "10 MiB exactly did not reach the api"
+ok "bodies over 10 MiB refused with 413, 10 MiB exactly reaches the api (its 401, no session)"
+# --- public route body limit and timeouts (issue #100) ---------------------------------------
+# A caller with no session reaches only the public routes under /api/auth/, whose bodies are a
+# few hundred bytes. Caddy caps them at 64 KiB; every other route keeps 10 MiB (above). The CSRF
+# header lets a small body reach the api; an over-limit body is Caddy's 413 before that.
+csrf=(-H 'X-Requested-With: jobapp' -H 'Content-Type: application/json')
+[[ "$(curl_c /api/auth/login -X POST "${csrf[@]}" --data-binary @<(big 65537))" == "413" ]] \
+  || fail "64 KiB + 1 to a public route not refused"
+[[ "$(curl_c /api/auth/login -X POST "${csrf[@]}" --data-binary @<(big 65536))" != "413" ]] \
+  || fail "64 KiB exactly to a public route was refused by caddy"
+# 200 KB on a route outside /api/auth/ passes caddy. The api answers it 401 without reading it:
+# no session, no body (api/app/body_limit.py).
+[[ "$(curl_c /api/jobs/import -X POST "${csrf[@]}" --data-binary @<(big 200000))" == "401" ]] \
+  && grep -q 'Sign in to continue' "$CURL_DIR/b" || fail "200 KB to a route outside /api/auth/ did not reach the api"
+ok "public /api/auth/ routes capped at 64 KiB, other routes keep 10 MiB"
+# Request headers that never finish are dropped by caddy after read_header (10s), not after its
+# default minute. (A stalled body is left to caddy's default of one minute and, before that, to
+# the api's own rules.)
+python3 - "$HTTP_PORT" <<'PY' || fail "caddy did not drop a request whose headers never finish within 20s"
+import socket, sys, time
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5)
+s.settimeout(30)
+s.sendall(b"POST /api/auth/login HTTP/1.1\r\nHost: x\r\nX-Partial")
+start = time.monotonic()
+try:
+    s.recv(32)
+except OSError:
+    pass
+finally:
+    s.close()
+held = time.monotonic() - start
+assert held < 20, f"held {held:.1f}s"
+PY
+ok "unfinished request headers are dropped within caddy's read_header timeout"
+# --- end public route body limit and timeouts ------------------------------------------------
 # The upload of a document is the one route that takes 20 MiB (SPEC-ingestion.md, task G1).
 # No session here: a body that Caddy lets through reaches the api, which answers 401; a body
 # over the limit is Caddy's own 413.

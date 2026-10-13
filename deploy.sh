@@ -934,12 +934,16 @@ cmd_smoke() {
     pass "the api logs the public address $logged and none of the forged ones (this machine's own IPv4 could not be looked up to compare)"
   fi
 
-  # A 5 MB body, half the caddy limit, crosses Funnel and reaches the api, which answers 405
-  # (POST on a GET route) rather than caddy's 413 or a proxy error. It carries the CSRF header
-  # every non-GET api request needs (identity), else the api would answer 403 first.
+  # A 5 MB body, half the caddy limit, crosses Funnel and caddy and is answered by the api, not
+  # by caddy's 413 or a proxy error. The api's answer is its 401: a body with no session is
+  # refused before it is read on every route that is not public (api/app/body_limit.py, issue
+  # #100; it was the 405 of a POST on a GET route before). It carries the CSRF header every
+  # non-GET api request needs (identity), else the api would answer 403 first.
+  # The status and the sentence expected here are read by api/tests/identity/
+  # test_body_limit_api.py, which sends the same request to the app: change both together.
   code="$(head -c 5000000 /dev/zero | pcurl "$url/api/health" -X POST --data-binary @- -H 'Content-Type: application/octet-stream' -H 'X-Requested-With: jobapp')"
-  if [[ "$code" == "405" ]] && grep -q 'Method Not Allowed' "$PDIR/b"; then
-    pass "5 MB upload reaches the api through Funnel (405 from FastAPI)"
+  if [[ "$code" == "401" ]] && grep -q 'Sign in to continue' "$PDIR/b"; then
+    pass "5 MB upload reaches the api through Funnel (the api's 401: no session, no body)"
   else
     flunk "5 MB upload answered $code: $(pbrief)"
   fi
