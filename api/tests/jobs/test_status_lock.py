@@ -20,10 +20,11 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import proposals
-from app.agents.models import ProposalStatus
+from app.agents.models import Proposal, ProposalStatus
 from app.jobs import service
 from app.jobs.models import Job, JobEvent, JobStatus
 from tests.agents.run_helpers import add_job
+from tests.agents.test_proposals_api import accept as accept_route
 from tests.agents.test_proposals_service import STATUS, propose
 from tests.agents.test_proposals_service import row as proposal_row
 from tests.identity.api_helpers import Api
@@ -82,6 +83,17 @@ def holding(factory: sessionmaker[Session], owner: uuid.UUID, job_id: uuid.UUID)
         assert job is not None
         try:
             yield job
+        finally:
+            holder.rollback()
+
+
+@contextmanager
+def holding_proposal(factory: sessionmaker[Session], proposal_id: uuid.UUID) -> Iterator[None]:
+    """Another connection holds a proposal's row lock until the block ends."""
+    with factory() as holder:
+        holder.execute(sa.select(Proposal).where(Proposal.id == proposal_id).with_for_update())
+        try:
+            yield
         finally:
             holder.rollback()
 
@@ -461,6 +473,48 @@ def test_a_lock_wait_over_the_timeout_answers_409_on_each_route(
         api.post("/api/jobs/bulk/undo", token=alice.token, json={"token": undo_token}).status_code
         == 409  # the job changed since the bulk: "nothing to undo", the old 409, not the busy one
     )
+
+
+def test_a_bulk_change_with_one_row_held_answers_409_and_changes_none(
+    api: Api, alice: Signed, factory: sessionmaker[Session], short_lock: int
+) -> None:
+    ids = [new_job(factory, alice.id, slug=f"job-{i}") for i in range(3)]
+    with holding(factory, alice.id, ids[1]):
+        response = bulk(api, alice, ids, status="applied")
+    assert response.status_code == 409, response.text
+    assert response.json() == {"detail": service.BUSY}
+    assert {status_of(factory, i) for i in ids} == {JobStatus.found}
+    assert bulk(api, alice, ids, status="applied").status_code == 200  # released: it works
+
+
+def test_accept_on_a_busy_job_answers_409_and_the_proposal_stays_pending(
+    api: Api, alice: Signed, factory: sessionmaker[Session], short_lock: int
+) -> None:
+    """The accept route locks the job: a lock wait over the timeout is the same 409 as the jobs
+    routes give (the handler of the app), not a 500."""
+    job_id = add_job(factory, alice.id)
+    pid = propose(factory, alice.id, job_id)
+    with holding(factory, alice.id, job_id):
+        response = accept_route(api, alice.token, pid)
+    assert response.status_code == 409, response.text
+    assert response.json() == {"detail": service.BUSY}
+    assert proposal_row(factory, pid).status is ProposalStatus.pending
+    assert accept_route(api, alice.token, pid).status_code == 200  # released: it goes through
+
+
+def test_accept_with_the_proposal_row_held_answers_409_too(
+    api: Api, alice: Signed, factory: sessionmaker[Session], short_lock: int
+) -> None:
+    """The other lock of that path: the proposal's own row, taken after the job's, under the same
+    transaction local timeout. The error is a raw SQLSTATE 55P03, not a JobBusyError."""
+    job_id = add_job(factory, alice.id)
+    pid = propose(factory, alice.id, job_id)
+    with holding_proposal(factory, pid):
+        response = accept_route(api, alice.token, pid)
+    assert response.status_code == 409, response.text
+    assert response.json() == {"detail": service.BUSY}
+    assert proposal_row(factory, pid).status is ProposalStatus.pending
+    assert accept_route(api, alice.token, pid).status_code == 200
 
 
 def test_the_lock_timeout_is_left_on_no_pooled_connection(

@@ -11,6 +11,7 @@ from datetime import datetime
 from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError
 
 from app import health
 from app.agents import chat_router, proposals_router
@@ -32,6 +33,7 @@ from app.identity.router import router as auth_router
 from app.ingestion.routers import no_store as ingestion_no_store
 from app.ingestion.routers import private as ingestion_private
 from app.ingestion.routers import routers as ingestion_routers
+from app.jobs import service as jobs_service
 from app.jobs.router import router as jobs_router
 from app.jobs.sweep_router import router as sweeps_router
 from app.logging_config import configure_logging
@@ -193,6 +195,23 @@ def create_app(
         return JSONResponse(
             status_code=500, content={"detail": "internal server error"}, headers=headers
         )
+
+    async def job_busy(_: Request, exc: Exception) -> JSONResponse:
+        """The one mapping from a lock wait that outlasted the lock timeout to 409 BUSY, for every
+        route: JobBusyError (lock_job, lock_jobs, undo_bulk) and a raw SQLSTATE 55P03 from any
+        later statement of the same transaction (the proposal row an accept locks after the job).
+        Nothing is rolled back here: the session is closed, so rolled back, as the error leaves
+        the request's dependencies. Every other database error goes on to `unhandled`."""
+        if not isinstance(exc, jobs_service.JobBusyError) and not jobs_service.is_lock_timeout(exc):
+            raise exc
+        return JSONResponse(
+            status_code=409,
+            content={"detail": jobs_service.BUSY},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    app.add_exception_handler(jobs_service.JobBusyError, job_busy)
+    app.add_exception_handler(DBAPIError, job_busy)
 
     @app.exception_handler(HashBusyError)
     async def hash_busy(_: Request, exc: HashBusyError) -> JSONResponse:

@@ -35,12 +35,10 @@ Caddy) at most, 413 above. Larger imports (Harald's ~18 MB) go through the CLI i
 container: `./deploy.sh jobs import <email>`.
 """
 
-import functools
 import re
 import secrets
 import time
 import uuid
-from collections.abc import Callable
 from datetime import date
 from typing import Annotated, Any
 
@@ -48,7 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_session, read_snapshot
@@ -380,25 +378,6 @@ _409 = {
 }
 
 
-def _409_when_busy[**P, R](route: Callable[P, R]) -> Callable[P, R]:
-    """A route that locks job rows answers 409 BUSY when a lock wait outlasts the lock timeout
-    (SQLSTATE 55P03, at the lock itself or at a later statement of the same transaction), after
-    rolling the transaction back. Every other database error goes on as it did."""
-
-    @functools.wraps(route)
-    def guarded(*args: P.args, **kwargs: P.kwargs) -> R:
-        try:
-            return route(*args, **kwargs)
-        except (service.JobBusyError, DBAPIError) as exc:
-            if not isinstance(exc, service.JobBusyError) and not service.is_lock_timeout(exc):
-                raise
-            db: Session = kwargs["db"]  # type: ignore[assignment]
-            db.rollback()
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=service.BUSY) from None
-
-    return guarded
-
-
 def _duplicate(job: Job) -> JSONResponse:
     body = DuplicateOut(detail=DUPLICATE, existing_id=job.id, existing_slug=job.slug)
     return JSONResponse(status_code=409, content=body.model_dump(mode="json"), headers=NO_STORE)
@@ -469,7 +448,6 @@ def add_job(body: JobCreateIn, user: CurrentUser, request: Request, db: Db) -> A
     responses={**_401, **_404, **_409, **_422},
     dependencies=[Depends(_no_store)],
 )
-@_409_when_busy
 def edit_job(job_id: str, body: JobPatchIn, user: CurrentUser, request: Request, db: Db) -> Any:
     """Change a job's status, notes, fit (a number sets it by hand, null goes back to the
     computed one) or details. Each change is recorded as an event with its before and after.
@@ -525,7 +503,6 @@ def edit_job(job_id: str, body: JobPatchIn, user: CurrentUser, request: Request,
     },
     dependencies=[Depends(_no_store)],
 )
-@_409_when_busy
 def bulk(body: BulkIn, user: CurrentUser, request: Request, db: Db) -> Any:
     """Set the status of and/or append a note to up to 500 jobs, in one transaction: when one
     id is not the caller's, nothing changes and the 404 lists the missing ids. A status change
@@ -569,7 +546,6 @@ def bulk(body: BulkIn, user: CurrentUser, request: Request, db: Db) -> Any:
     },
     dependencies=[Depends(_no_store)],
 )
-@_409_when_busy
 def bulk_undo(body: UndoIn, user: CurrentUser, request: Request, db: Db) -> UndoOut:
     """Put back the statuses a bulk change replaced, for the jobs not changed since. A token
     works once."""
