@@ -1,9 +1,16 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { delay, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
+import { waitForOnFakeClock } from "@/test/clock";
 import { fakeEditableJob, makeDetail } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 
@@ -145,12 +152,14 @@ describe("status", () => {
 
 describe("notes", () => {
   it("autosaves once after a pause in typing, with a saved indicator", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const api = fakeEditableJob(makeDetail({ notes: "" }));
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await openDetail();
     const notes = screen.getByRole("textbox", { name: "Notes" });
-    await user.type(notes, "Called the recruiter");
+    // From here the clock of the pause is the test's alone (issue #104: with shouldAdvanceTime
+    // the 100 ms before the end of the pause were real ones, and a loaded machine spent them
+    // while the keys were typed). The text arrives in two changes, which need no timer.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    fireEvent.change(notes, { target: { value: "Called" } });
     expect(screen.getByTestId("notes-status")).toHaveTextContent(
       "Unsaved changes",
     );
@@ -158,10 +167,16 @@ describe("notes", () => {
       await vi.advanceTimersByTimeAsync(NOTES_DEBOUNCE_MS - 100);
     });
     expect(api.patches).toEqual([]);
+    // Typing again starts the pause again: nothing is saved where the first one would end.
+    fireEvent.change(notes, { target: { value: "Called the recruiter" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NOTES_DEBOUNCE_MS - 100);
+    });
+    expect(api.patches).toEqual([]);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(200);
     });
-    await waitFor(() => {
+    await waitForOnFakeClock(() => {
       expect(screen.getByTestId("notes-status")).toHaveTextContent("Saved");
     });
     expect(api.patches).toEqual([
