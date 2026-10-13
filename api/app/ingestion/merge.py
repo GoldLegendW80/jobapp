@@ -2,7 +2,8 @@
 
 `engine.advance` calls `run` once, under the run's row lock, in the transaction that closes the
 run, after it has deleted the items of a replaced text. The real merge (G12) reads the run's
-items (`reuse.source_steps` with `tools.of_stored_text()`), turns them into proposals and
+items (`reuse.source_steps` with `stored_items.of_stored_text()`, never `tools`: this module
+is imported by the api, whose image holds no Claude Agent SDK), turns them into proposals and
 answers how many it wrote. Until then a run ends `done` with zero proposals.
 """
 

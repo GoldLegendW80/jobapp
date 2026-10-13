@@ -98,6 +98,13 @@ OVERSHOOT_REQUESTS = 2
 # budget that already failed or on less: its next budget is at least this many times the last
 # one, and never above its backstop. A step cut at its backstop is the step's own failure.
 CUT_GROWTH = 2
+# `advance` raising this many times in a row at the cron (about as many minutes) closes the run:
+# a run that cannot move must not stay the user's one active run for ever.
+ADVANCE_FAILURES = 5
+STUCK = (
+    "This run was closed because an error on our side kept it from going on. The documents it "
+    "had finished reading are kept, and a new run does not read them again."
+)
 
 Enqueue = Callable[[uuid.UUID], Awaitable[Any]]
 # The recorded streams of the fake backend (app/agents/fake_backend.py), found without importing it.
@@ -288,6 +295,8 @@ def advance(db: Session, run_id: uuid.UUID, now: datetime, settings: Settings) -
         return Moved(None)
     if run.status not in ACTIVE:
         return Moved(run.status)
+    if run.advance_failures:
+        run.advance_failures = 0  # it moves again; committed only when this call succeeds
     steps = _steps(db, run.id)
     current = _running(steps)
     if current is not None:
@@ -673,6 +682,7 @@ def _close(
     )
     run.status = status
     run.waiting = None
+    run.paused_reason = None  # a closed run is not paused: the reason ends with the pause
     run.paused_at = None
     run.finished_at = now
     logger.info(
@@ -771,6 +781,60 @@ def queue_failed(db: Session, run_id: uuid.UUID, agent_run_id: uuid.UUID, now: d
 
 
 # --- callers: the routes, the hook and the cron ------------------------------------------------
+
+
+def advance_failed(db: Session, run_id: uuid.UUID, now: datetime) -> bool:
+    """`advance` raised for this run at the cron. Counted in the run's row, in a transaction of
+    its own (the caller's); at `ADVANCE_FAILURES` in a row the run is closed `failed` with
+    `STUCK`, whatever it had read, without a merge (the merge may be what raises): the user can
+    start a new run, which reuses the steps that ended `done`. True when it closed the run.
+    The close uses as little as it can: no item is read, no event deleted."""
+    run = _lock(db, run_id)
+    if run is None or run.status not in ACTIVE:
+        return False
+    run.advance_failures += 1
+    if run.advance_failures < ADVANCE_FAILURES:
+        return False
+    current = _running(_steps(db, run.id))
+    if current is not None and current.agent_run_id is not None:
+        try:
+            with db.begin_nested():  # an agent run still at work is asked to stop
+                agent_runs.request_cancel(db, run.user_id, current.agent_run_id, now)
+        except Exception as error:
+            logger.warning(
+                "ingestion_stuck_cancel_failed",
+                extra={"ingestion_run_id": str(run.id), "error_type": type(error).__name__},
+            )
+    db.execute(
+        sa.update(IngestionRunStep)
+        .where(
+            IngestionRunStep.ingestion_run_id == run.id,
+            IngestionRunStep.status.in_((StepStatus.planned, StepStatus.running)),
+        )
+        .values(status=StepStatus.cancelled)
+        .execution_options(synchronize_session=False)
+    )
+    run.status = RunStatus.failed
+    run.partial = True
+    run.waiting = None
+    run.paused_reason = None
+    run.paused_at = None
+    run.closed_reason = STUCK
+    run.finished_at = now
+    logger.error(
+        "ingestion_run_closed_stuck",
+        extra={
+            "ingestion_run_id": str(run.id),
+            "user_id": str(run.user_id),
+            "failures": run.advance_failures,
+        },
+    )
+    return True
+
+
+def _advance_failed(sessions: sessionmaker[Session], run_id: uuid.UUID, now: datetime) -> bool:
+    with sessions() as db, db.begin():
+        return advance_failed(db, run_id, now)
 
 
 def _advance(
@@ -900,6 +964,10 @@ def _purge(sessions: sessionmaker[Session], now: datetime) -> int:
         return purge(db, now)
 
 
+def _log_failure(event: str, run_id: uuid.UUID, error: Exception) -> None:
+    logger.error(event, extra={"ingestion_run_id": str(run_id), "error_type": type(error).__name__})
+
+
 async def tick(
     sessions: sessionmaker[Session],
     enqueue: Enqueue | None,
@@ -907,14 +975,19 @@ async def tick(
     settings: Settings,
 ) -> int:
     """The cron, every minute: every run that is not final is advanced, one after the other. A
-    run that fails here does not stop the others."""
+    run that fails here does not stop the others; its failure is counted (`advance_failed`) and
+    logged by its type only, since the message of an error may quote what it was handling."""
     moved = 0
     for run_id in await asyncio.to_thread(_due, sessions):
         try:
             await drive(sessions, enqueue, run_id, clock, settings)
             moved += 1
-        except Exception:
-            logger.exception("ingestion_advance_failed", extra={"ingestion_run_id": str(run_id)})
+        except Exception as error:
+            _log_failure("ingestion_advance_failed", run_id, error)
+            try:
+                await asyncio.to_thread(_advance_failed, sessions, run_id, clock())
+            except Exception as again:
+                _log_failure("ingestion_advance_count_failed", run_id, again)
     await asyncio.to_thread(_purge, sessions, clock())
     return moved
 

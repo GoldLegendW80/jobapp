@@ -9,10 +9,13 @@ real runner on the fake backend, through the `on_final` hook."""
 import asyncio
 import itertools
 import math
+import subprocess
+import sys
 import threading
 import uuid
 from collections.abc import Sequence
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -1114,6 +1117,151 @@ def test_deleting_a_document_read_by_a_step_and_one_no_step_has_read(
         assert delete_guard.read_by_a_run(db, read) == delete_guard.READ_BY_A_RUN
         assert delete_guard.read_by_a_run(db, planned) is None  # only planned: nothing read
         assert delete_guard.read_by_a_run(db, unread) is None
+
+
+def guarded(factory: sessionmaker[Session], document_id: uuid.UUID) -> str | None:
+    with factory() as db:
+        return delete_guard.read_by_a_run(db, db.get_one(IngestionDocument, document_id))
+
+
+def test_a_run_that_ended_without_one_token_holds_no_document_back(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """N1 of the review of PR #148: a step that failed at once on a missing credential has an
+    agent run and has read nothing. Its run still holds the document while it is the user's
+    active run, and no longer once it is cancelled."""
+    (document_id,) = eh.documents(factory, alice, 1)
+    run_id = eh.start(factory, alice, [document_id])
+    eh.advance(factory, run_id, settings)
+    eh.finish_step(factory, run_id, settings, AgentStatus.failed, failures.NO_CREDENTIAL)
+    assert eh.run_of(factory, run_id).status is RunStatus.paused
+    assert guarded(factory, document_id) == delete_guard.READ_BY_A_RUN
+    cancel(factory, alice, run_id)
+    eh.advance(factory, run_id, settings)
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.tokens_spent) == (RunStatus.cancelled, 0)
+    assert guarded(factory, document_id) is None
+
+
+def test_a_failed_run_that_spent_tokens_still_holds_its_document(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """No item kept, but the events of the step quote the document until G15 deletes them."""
+    (document_id,) = eh.documents(factory, alice, 1)
+    run_id = eh.start(factory, alice, [document_id])
+    eh.advance(factory, run_id, settings)
+    eh.finish_step(
+        factory, run_id, settings, AgentStatus.failed, "A made-up failure of the step.", 5_000
+    )
+    assert eh.run_of(factory, run_id).status is RunStatus.failed
+    assert eh.items_of(factory, run_id) == 0
+    assert guarded(factory, document_id) == delete_guard.READ_BY_A_RUN
+    assert " - " not in delete_guard.READ_BY_A_RUN
+
+
+def test_a_run_closed_from_a_pause_keeps_no_pause_reason(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    run_id = at_step(factory, alice, settings, 1)
+    eh.finish_step(factory, run_id, settings, AgentStatus.failed, failures.BUSY)
+    assert eh.run_of(factory, run_id).paused_reason == failures.BUSY
+    cancel(factory, alice, run_id)
+    eh.advance(factory, run_id, settings)
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.paused_reason, closed.paused_at) == (
+        RunStatus.cancelled,
+        None,
+        None,
+    )
+
+
+def test_a_run_whose_advance_keeps_raising_is_closed_and_frees_the_user(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """N5 of the review of PR #148: `advance` raising in `_record` (or in the merge) left the run
+    active for ever, and the unique index refused every new start."""
+    run_id = started(factory, alice, settings, count=2)
+    eh.end_agent(factory, eh.running(factory, run_id).agent_run_id, tokens=1_000)
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("a made-up value of an item")
+
+    monkeypatch.setattr(engine, "_record", broken)
+    with caplog.at_level("INFO", logger="app.ingestion.engine"):
+        for number in range(1, engine.ADVANCE_FAILURES):
+            assert asyncio.run(engine.tick(factory, None, now, settings)) == 0
+            run = eh.run_of(factory, run_id)
+            assert (run.status, run.advance_failures) == (RunStatus.running, number)
+        asyncio.run(engine.tick(factory, None, now, settings))
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.closed_reason) == (RunStatus.failed, engine.STUCK)
+    assert closed.finished_at is not None
+    assert eh.statuses(factory, run_id) == ["cancelled", "cancelled"]
+    with factory() as db:
+        assert engine.active_run_id(db, alice) is None  # a new run can start
+    # Logged by its type only: the message of an error may quote what it was handling.
+    failed = [one for one in caplog.records if one.getMessage() == "ingestion_advance_failed"]
+    assert len(failed) == engine.ADVANCE_FAILURES
+    assert {one.__dict__["error_type"] for one in failed} == {"RuntimeError"}
+    assert all(one.exc_info is None for one in caplog.records)
+    assert "made-up value" not in caplog.text
+    assert " - " not in engine.STUCK
+    # A closed run is left alone by the next tick.
+    assert asyncio.run(engine.tick(factory, None, now, settings)) == 0
+    assert eh.run_of(factory, run_id).advance_failures == engine.ADVANCE_FAILURES
+
+
+def test_an_advance_that_succeeds_forgets_the_failures_before_it(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = started(factory, alice, settings, count=2)
+    eh.end_agent(factory, eh.running(factory, run_id).agent_run_id, tokens=1_000)
+    record = engine._record
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError
+
+    monkeypatch.setattr(engine, "_record", broken)
+    for _ in range(engine.ADVANCE_FAILURES - 1):
+        asyncio.run(engine.tick(factory, None, now, settings))
+    assert eh.run_of(factory, run_id).advance_failures == engine.ADVANCE_FAILURES - 1
+    monkeypatch.setattr(engine, "_record", record)
+    assert asyncio.run(engine.tick(factory, None, now, settings)) == 1
+    run = eh.run_of(factory, run_id)
+    assert (run.status, run.advance_failures) == (RunStatus.running, 0)
+    assert eh.statuses(factory, run_id) == ["done", "running"]
+
+
+def test_the_merge_path_imports_without_the_sdk() -> None:
+    """N3 of the review of PR #148: the merge runs inside `advance`, and `advance` runs in the
+    api, whose image holds no Claude Agent SDK. What the merge reads its items with
+    (`stored_items`) imports with the SDK absent and loads no module that builds a tool."""
+    code = (
+        "import sys\n"
+        "sys.modules['claude_agent_sdk'] = None  # as in the api image: the import fails\n"
+        "from app.ingestion import engine, merge, stored_items\n"
+        "assert engine.advance and merge.run\n"
+        "assert stored_items.as_item and stored_items.as_citations\n"
+        "assert stored_items.of_stored_text() is not None\n"
+        "loaded = [name for name in ('app.ingestion.tools', 'app.agents.tools', "
+        "'app.agents.runner', 'claude_agent_sdk') if sys.modules.get(name) is not None]\n"
+        "assert loaded == [], loaded\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+    assert done.returncode == 0, done.stderr
 
 
 def test_the_events_of_a_step_whose_document_was_deleted_are_purged_again(

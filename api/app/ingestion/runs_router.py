@@ -99,7 +99,10 @@ class StepOut(BaseModel):
     refused: int
     two_digit_year: int
     agent_run_id: uuid.UUID | None
-    tokens: int | None = Field(description="Input and output tokens of the step's agent run.")
+    tokens: int | None = Field(
+        description="Input and output tokens of the step's last agent run only. A step that ran "
+        "twice counts both attempts in the run's `tokens.spent`, so the steps do not add up to it."
+    )
     cost_usd: str | None = Field(
         description="Only for a step that ran on an Anthropic API key, when the cost is known."
     )
@@ -148,6 +151,10 @@ class RunOut(BaseModel):
     partial: bool
     paused_reason: str | None = Field(
         description="`token_ceiling`, or the sentence of the failure that paused the run."
+    )
+    closed_reason: str | None = Field(
+        description="The sentence of a run the engine closed `failed` because it could not move "
+        "it. Null for every other end."
     )
     waiting: str | None = Field(description="`slots` while the user has four agent runs active.")
     cancel_requested: bool
@@ -280,6 +287,7 @@ def run_out(db: Session, run: IngestionRun) -> RunOut:
         status=run.status,
         partial=run.partial,
         paused_reason=run.paused_reason if run.status is RunStatus.paused else None,
+        closed_reason=run.closed_reason,
         waiting=run.waiting,
         cancel_requested=run.cancel_requested_at is not None,
         document_ids=list(run.document_ids),

@@ -170,6 +170,10 @@ class IngestionRun(Base):
     # When the current pause began, null when the run is not paused. A stored fact: the 24 hours
     # of a pause and the move of `deadline_at` at a Resume or a Continue are counted from it.
     paused_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # How many times in a row `advance` raised for this run at the cron; back to zero when it
+    # moves. At `engine.ADVANCE_FAILURES` the run is closed `failed` with `closed_reason`.
+    advance_failures: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
+    closed_reason: Mapped[str | None] = mapped_column(sa.Text)
     # Why a running chain is not moving ("slots"), null when it is.
     waiting: Mapped[str | None] = mapped_column(sa.Text)
     deadline_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)

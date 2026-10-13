@@ -36,6 +36,8 @@ RUN_COLUMNS = {
     "partial": ("BOOLEAN", False),
     "paused_reason": ("TEXT", True),
     "paused_at": ("TIMESTAMP", True),
+    "advance_failures": ("INTEGER", False),
+    "closed_reason": ("TEXT", True),
     "waiting": ("TEXT", True),
     "deadline_at": ("TIMESTAMP", False),
     "cancel_requested_at": ("TIMESTAMP", True),

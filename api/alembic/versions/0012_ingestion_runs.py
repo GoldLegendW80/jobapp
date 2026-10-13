@@ -1,7 +1,9 @@
 """Ingestion G9: ingestion_runs, ingestion_run_steps, ingestion_items and their three enums.
 
 Amended in place by G10 (review of PR #148, 2026-10-13), before this migration was deployed
-anywhere (production stops at 0011): `ingestion_runs.paused_at`, the start of the current pause.
+anywhere (production stops at 0011): `ingestion_runs.paused_at`, the start of the current pause,
+`advance_failures`, how many times in a row the cron failed to move the run, and `closed_reason`,
+the sentence of a run the engine closed for that.
 
 The second half of the DDL of SPEC-ingestion.md (Documents); the first half (documents, images,
 consents) is migration 0011, task G1. These three tables hold every column a later task stores
@@ -95,6 +97,8 @@ def upgrade() -> None:
         sa.Column("partial", sa.Boolean(), nullable=False, server_default=_false()),
         sa.Column("paused_reason", sa.Text(), nullable=True),
         sa.Column("paused_at", _tz(), nullable=True),
+        sa.Column("advance_failures", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("closed_reason", sa.Text(), nullable=True),
         sa.Column("waiting", sa.Text(), nullable=True),
         sa.Column("deadline_at", _tz(), nullable=False),
         sa.Column("cancel_requested_at", _tz(), nullable=True),
