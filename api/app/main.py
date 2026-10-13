@@ -147,6 +147,7 @@ def create_app(
             needs_session=lambda method, path: not identity_deps.is_public_request(method, path),
             has_session=identity_deps.scope_has_session,
             detail=identity_deps.UNAUTHORIZED,
+            owner=identity_deps.scope_session_owner,
         ),
     )
     app.middleware("http")(identity_deps.session_cookie_middleware)

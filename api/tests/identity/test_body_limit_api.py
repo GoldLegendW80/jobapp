@@ -452,3 +452,62 @@ def test_socket_limit_concurrency_counts_open_connections_and_answers_503(app: F
         for sock in held:
             sock.close()
         server.close()
+
+
+# --- bodies in flight per user (issue #108) ----------------------------------------------------
+
+
+def test_one_user_cannot_hold_more_than_six_bodies_in_flight(
+    server: Server, factory: sessionmaker[Session]
+) -> None:
+    base = f"http://127.0.0.1:{server.port}"
+    cookies = {}
+    for email in ("e2e-bodies-a@example.org", "e2e-bodies-b@example.org"):
+        make_user(factory, email=email)
+        signed_in = httpx.post(
+            f"{base}/api/auth/login",
+            json={"email": email, "password": "correct horse battery 42"},
+            headers={"X-Requested-With": "jobapp"},
+        )
+        assert signed_in.status_code == 200, signed_in.text
+        (cookie,) = signed_in.headers.get_list("set-cookie")
+        cookies[email] = cookie.split(";", 1)[0]
+    mine, theirs = cookies.values()
+
+    def stalled(cookie: str) -> socket.socket:
+        # A body of 1000 bytes is announced, 10 arrive, then nothing more.
+        sock = socket.create_connection(("127.0.0.1", server.port), timeout=10)
+        send_head(
+            sock, "POST", "/api/jobs", server.port, f"Cookie: {cookie}\r\nContent-Length: 1000\r\n"
+        )
+        sock.sendall(b"x" * 10)
+        return sock
+
+    held = [stalled(mine) for _ in range(bl.USER_BODIES_IN_FLIGHT)]
+    extra = [stalled(mine) for _ in range(3)]
+    other = stalled(theirs)
+    try:
+        # The seventh and later are answered at once, before their body: 429, come back soon.
+        for sock in extra:
+            sock.settimeout(10)
+            head = b""
+            while b"\r\n\r\n" not in head:
+                head += sock.recv(4096)
+            assert head.startswith(b"HTTP/1.1 429 "), head[:80]
+            assert b"retry-after: 1\r\n" in head.lower()
+        # The first six, and the other user's, are still being read: no answer yet.
+        for sock in [*held, other]:
+            sock.settimeout(0.3)
+            with pytest.raises(TimeoutError):
+                sock.recv(1)
+        # One of the six completes (not valid JSON, so 422): its place is free again.
+        held[0].sendall(b"x" * 990)
+        assert read_status(held[0]) == 422
+        again = stalled(mine)
+        extra.append(again)
+        again.settimeout(0.3)
+        with pytest.raises(TimeoutError):
+            again.recv(1)
+    finally:
+        for sock in [*held, *extra, other]:
+            sock.close()
