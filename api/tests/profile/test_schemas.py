@@ -529,6 +529,31 @@ def test_every_date_valid_before_is_still_valid_and_unchanged() -> None:
         assert [stored_date(field, value) for value in months] == months
 
 
+def test_every_pair_of_months_valid_before_is_still_valid_and_unchanged() -> None:
+    """The order rule too: the month only model compared a start and an end as text, so every
+    pair it accepted (end not before start as text) is still accepted, the years written in the
+    digits of other scripts included, where the order of the text is not the order of the
+    months. A stored section like that is validated on every read of the profile."""
+    months = ["1900-01", "2019-12", "2020-01", "2020-12", "2021-01", "2021-03", "2100-12"]
+    months += ["٢٠٢٠-01", "٢٠٢١-03", "２０２０-01", "２０２１-12"]
+    assert all(_month_only(value) for value in months)
+    pairs = [(start, end) for start in months for end in months if end >= start]
+    assert ("2021-03", "٢٠٢٠-01") in pairs  # 2020 in Arabic-Indic digits, after "2" as text
+    for kind in ("employers", "education"):
+        for start, end in pairs:
+            entry = validate_section("experience", dated(f"{kind}.end", end, start=start))[kind][0]
+            assert (entry["start"], entry["end"]) == (start, end)
+    # In ASCII the text and the months agree, so nothing the old rule refused is accepted now.
+    ascii_months = [value for value in months if value.isascii()]
+    for start in ascii_months:
+        for end in ascii_months:
+            if end < start:
+                assert first("experience", dated("employers.end", end, start=start)) == (
+                    "employers.0",
+                    "Value error, end must not be before start",
+                )
+
+
 def test_a_profile_saved_before_the_change_loads_and_saves_unchanged() -> None:
     """The stored form of a month only section is what comes back, and it still reads as
     complete (completeness validates the stored section on every read of the profile)."""

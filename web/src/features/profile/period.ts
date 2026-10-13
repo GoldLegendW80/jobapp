@@ -1,6 +1,6 @@
 /**
  * The start and the end of an employer and of a school are a period: a month, "2021-03", or a
- * year alone, "2021", when that is all the user knows. The value is kept exactly as written:
+ * year alone, "2021", when that is all the user knows. The value is kept as written (spaces around it removed):
  * nothing here pads a year into a month or shortens a month to a year.
  *
  * Twin of the period helpers of api/app/profile/schemas.py (parse_period, period_key,
@@ -9,7 +9,8 @@
  *
  * - `periodKey`: the order of a list. [year, month], month 0 for a year alone, so a year alone
  *   comes before every month of its year and "newest first" lists it after them. Two different
- *   periods never share a key, so a sort by it is stable and defined.
+ *   periods never share a key here, where a year is ASCII digits only (the api also takes the
+ *   digits of other scripts, as it always did), so a sort by it is stable and defined.
  * - `periodSpan`: the first and the last month a period can mean. `endsBeforeStart` reads the
  *   start at its first month and the end at its last, and so refuses only what is certain:
  *   "2023-05" to "2023" and "2021" to "2021-03" are in order, "2023" to "2022-12" is not.

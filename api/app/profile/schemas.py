@@ -155,19 +155,22 @@ OptUrl = Annotated[OptText(URL_MAX), AfterValidator(_url)]
 # year alone, "2021", when that is all the user or the document says (owner's decision of
 # 2026-10-10: nobody ever assumes a month). The value is stored exactly as written, never padded
 # into a month and never shortened to a year, so save, export, import and history give it back
-# character for character. Every value the earlier month only type accepted is still accepted,
-# so stored profiles stay valid untouched (no data migration).
+# character for character (surrounding spaces removed, as for every field). Every section the
+# earlier month only model accepted is still accepted, value by value and start with end, so
+# stored profiles stay valid untouched (no data migration).
 #
 # One reading of a period for each use, all from `parse_period`:
 # - `period_key`: the order of a list. (year, month), month 0 for a year alone, so a year alone
-#   comes before every month of its year and "newest first" lists it after them. It is a total
-#   order (two different values never share a key), chosen to be stable, not a claim about when
-#   in the year the period fell.
+#   comes before every month of its year and "newest first" lists it after them. Two different
+#   values written in ASCII digits never share a key (the same year in the digits of two scripts
+#   does), so the order is stable; it is a convention, not a claim about when in the year the
+#   period fell.
 # - `period_span`: the first and the last month a period can mean. A rule that must be certain
 #   reads a start at its first month and an end at its last: that is how "end must not be before
 #   start" is judged, so "2023-05" to "2023" and "2021" to "2021-03" are accepted, "2023" to
-#   "2022-12" is refused. A duration that must not invent precision reads the other way round (a
-#   start at its last month, an end at its first, never below zero); no code computes one today.
+#   "2022-12" is refused (one exception, kept from the month only model: see `_Dated`). A
+#   duration that must not invent precision reads the other way round (a start at its last
+#   month, an end at its first, never below zero); no code computes one today.
 # - `format_period`: the words shown to a person, "2021" or "March 2021". A year alone is printed
 #   as the year: no month is ever made up for it.
 
@@ -238,7 +241,7 @@ def _period(value: str) -> str:
 
 _PERIOD_DOC = (
     "A month, YYYY-MM, or a year alone, YYYY, when the month is not known. Years "
-    f"{PERIOD_MIN_YEAR} to {PERIOD_MAX_YEAR}. Stored and returned exactly as sent."
+    f"{PERIOD_MIN_YEAR} to {PERIOD_MAX_YEAR}. Stored as sent, surrounding spaces removed."
 )
 Period = Annotated[
     Text(20),
@@ -572,6 +575,11 @@ class _Dated(_Section):
         if self.start is None or self.end is None:
             return self
         if period_span(self.end)[1] < period_span(self.start)[0]:
+            # Two months were compared as text before P7, which differs from their order only
+            # when a year is written in the digits of another script: what that accepted stays
+            # accepted, so no stored section stops validating.
+            if "-" in self.start and "-" in self.end and self.end >= self.start:
+                return self
             raise ValueError("end must not be before start")
         return self
 

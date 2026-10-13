@@ -54,8 +54,15 @@ const field = (page: Page, label: string) =>
 const tab = (page: Page, name: string) =>
   page.getByRole("tab", { name: new RegExp(`^${name}, \\d+% complete$`) });
 
+/** Click Save and wait for the answer of that save itself, not for a toast of an earlier one. */
 async function save(page: Page) {
+  const saved = page.waitForResponse(
+    (r) =>
+      r.request().method() === "PUT" &&
+      new URL(r.url()).pathname === "/api/profile/experience",
+  );
   await page.getByRole("button", { name: "Save experience" }).click();
+  expect((await saved).status()).toBe(200);
   await expect(page.getByText("Experience saved.").first()).toBeVisible();
 }
 
@@ -271,6 +278,5 @@ test("export, change, import the export back: the year alone comes back as writt
   await expect(field(page, "Start of school 1")).toHaveAccessibleDescription(
     "Read as the year 2019.",
   );
-  await shots(page, "experience-after-import");
   expect(errors).toEqual([]);
 });
