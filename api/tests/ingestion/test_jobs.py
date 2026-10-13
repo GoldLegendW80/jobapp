@@ -9,10 +9,11 @@ tests/ingestion/parser/test_pdf_container.py.
 """
 
 import asyncio
+import contextlib
 import json
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -607,6 +608,62 @@ def test_a_claim_older_than_the_longest_job_is_taken_over(
     assert run(factory, clock, Parser(parsed("second try")), body["id"]) == jobs.DONE
     assert jobs._store_text(factory, dead, parsed("from the dead job"), 0.0) == jobs.SUPERSEDED
     assert row(factory, body["id"]).text == "second try"
+
+
+@contextlib.contextmanager
+def the_bytes_cannot_be_read(factory: sessionmaker[Session]) -> Iterator[None]:
+    """While it is open, the statement of the claim that reads the bytes of a document raises,
+    as a database that refuses that row would. Every other statement runs on Postgres."""
+
+    def refuse(_c: Any, _cursor: Any, statement: str, *_: Any) -> None:
+        if statement.startswith("SELECT ingestion_documents.bytes "):
+            raise RuntimeError("words of the database about this row")
+
+    engine = factory.kw["bind"]
+    sa.event.listen(engine, "before_cursor_execute", refuse)
+    try:
+        yield
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", refuse)
+
+
+def test_a_claim_that_raises_is_a_try_that_counts_and_the_reaper_does_not_queue_it_for_ever(
+    api: Api,
+    alice: str,
+    factory: sessionmaker[Session],
+    clock: Clock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Note N4 of the review of PR #110. A claim that raised before its commit left `attempts`
+    at 0: the job answered `error` and the reaper queued the row again at every tick, without
+    end. The try is now counted in a transaction of its own, so the row follows the path of a
+    failure of the server: once more after RETRY_AFTER, then failed for good."""
+    body = uploaded(api, alice, pdf(), "cv.pdf")
+    parser = Parser(parsed())
+    clock.advance(seconds=1)
+    with the_bytes_cannot_be_read(factory), caplog.at_level("DEBUG"):
+        assert run(factory, clock, parser, body["id"]) == jobs.RETRY
+    error = next(r for r in caplog.records if r.getMessage() == "document claim failed")
+    assert (error.error, error.document_id) == ("RuntimeError", body["id"])
+    assert "words of the database" not in caplog.text
+    stored = row(factory, body["id"])
+    assert (stored.text_status, stored.failed_kind) == (TextStatus.pending, FailedKind.server)
+    assert (stored.raw, stored.attempts, stored.pending_since) == (pdf(), 1, clock.now)
+    # The reaper leaves it alone until RETRY_AFTER, then queues it once, under a new job id.
+    assert jobs.reap(factory, clock.now).queue == []
+    clock.advance(seconds=jobs.RETRY_AFTER.total_seconds())
+    due = jobs.reap(factory, clock.now).queue
+    assert due == [(stored.id, queues.document_job_id(stored.id, 1, stored.pending_since))]
+    with the_bytes_cannot_be_read(factory):
+        assert run(factory, clock, parser, body["id"]) == jobs.FAILED
+    stored = row(factory, body["id"])
+    assert (stored.text_status, stored.failed_kind) == (TextStatus.failed, FailedKind.server)
+    assert (stored.failed_reason, stored.raw, stored.attempts) == (jobs.SERVER_FAILED, None, 2)
+    assert parser.calls == [], "the parser was never sent anything"
+    clock.advance(hours=1)
+    assert jobs.reap(factory, clock.now) == jobs.Reaped(queue=[], failed=0)
+    with the_bytes_cannot_be_read(factory):
+        assert run(factory, clock, parser, body["id"]) == jobs.SKIPPED
 
 
 def test_a_document_whose_last_try_never_came_back_is_failed_by_the_reaper(

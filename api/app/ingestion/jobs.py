@@ -10,6 +10,10 @@ is stored `pending` with its bytes. Then:
 2. The job claims the row (`attempts` + 1, `pending_since` = now), reads the bytes, sends them
    to the parser service (parser_client.parse: the worker itself parses nothing) and gets back
    a result that was checked as hostile data, or an error that says whose failure it is.
+   A claim that raises before its commit (the database refuses something about this row) is
+   counted as a try that failed for the server, in a transaction of its own that does not
+   read the bytes (`_count_lost_claim`): otherwise `attempts` would stay 0 and the reaper
+   would queue the row at every tick, without end.
 3. One transaction writes the outcome, under the user's advisory lock and then the row's own:
    - a text: `text`, the page counts, `truncated`, `note`, `text_status = done`, the secret
      warning of secrets.scan, and the bytes set to NULL;
@@ -291,28 +295,38 @@ def _claimable(document: IngestionDocument, now: datetime) -> bool:
     )
 
 
+def _take(db: Session, document_id: uuid.UUID, now: datetime) -> IngestionDocument | str:
+    """The row, locked under its user's documents lock, when a job may try it now. Otherwise
+    the word that says why not."""
+    user_id = db.execute(
+        sa.select(IngestionDocument.user_id).where(IngestionDocument.id == document_id)
+    ).scalar_one_or_none()
+    if user_id is None:
+        return GONE
+    documents.lock_user(db, user_id)
+    document = db.execute(
+        sa.select(IngestionDocument)
+        .where(IngestionDocument.id == document_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if document is None:
+        return GONE
+    if not queueable(document):
+        return SKIPPED
+    if document.attempts >= MAX_ATTEMPTS or not _claimable(document, now):
+        return BUSY
+    return document
+
+
 def _claim(sessions: sessionmaker[Session], document_id: uuid.UUID, now: datetime) -> _Claim | str:
     """Take the row for one try and read its bytes, or the word that says why not."""
     with sessions() as db:
-        user_id = db.execute(
-            sa.select(IngestionDocument.user_id).where(IngestionDocument.id == document_id)
-        ).scalar_one_or_none()
-        if user_id is None:
-            return GONE
-        documents.lock_user(db, user_id)
-        document = db.execute(
-            sa.select(IngestionDocument)
-            .where(IngestionDocument.id == document_id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).scalar_one_or_none()
-        if document is None:
-            return GONE
+        document = _take(db, document_id, now)
+        if isinstance(document, str):
+            return document
+        user_id = document.user_id
         kind = documents.kind_of(document.mime)
-        if not queueable(document):
-            return SKIPPED
-        if document.attempts >= MAX_ATTEMPTS or not _claimable(document, now):
-            return BUSY
         data = db.execute(
             sa.select(IngestionDocument.raw).where(IngestionDocument.id == document_id)
         ).scalar_one()
@@ -335,6 +349,38 @@ def _claim(sessions: sessionmaker[Session], document_id: uuid.UUID, now: datetim
             pending_since=now,
             data=bytes(data),
         )
+
+
+def _count_lost_claim(
+    sessions: sessionmaker[Session], document_id: uuid.UUID, now: datetime
+) -> str:
+    """The claim raised before its commit, so nothing says that a try took place. Count it, as
+    a try that failed for the server: the row stays `pending` with the mark the reaper waits
+    RETRY_AFTER on, and at MAX_ATTEMPTS it is failed for good. Same locks and same conditions
+    as the claim, without reading the bytes, which may be what the database refused."""
+    with sessions() as db:
+        document = _take(db, document_id, now)
+        if isinstance(document, str):
+            return document
+        document.attempts += 1
+        if document.attempts >= MAX_ATTEMPTS:
+            _fail(db, document, FailedKind.server, SERVER_FAILED)
+            outcome = FAILED
+        else:
+            document.pending_since = now
+            document.failed_kind = FailedKind.server
+            db.flush()
+            outcome = RETRY
+        _log(
+            "document parse failed",
+            document,
+            failure="server",
+            code="claim",
+            attempts=document.attempts,
+            outcome=outcome,
+        )
+        db.commit()
+    return outcome
 
 
 def _store_text(
@@ -433,7 +479,20 @@ async def _parse(ctx: dict[str, Any], document_id: uuid.UUID) -> str:
     clock: Callable[[], datetime] = ctx["clock"]
     parse: Parse = ctx.get("ingestion_parse") or parser_client.parse
     started = time.monotonic()
-    claim = await asyncio.to_thread(_claim, sessions, document_id, clock())
+    now = clock()
+    try:
+        claim = await asyncio.to_thread(_claim, sessions, document_id, now)
+    except Exception as error:
+        # No traceback: it would print the message.
+        logger.error(
+            "document claim failed",
+            extra={
+                "document_id": str(document_id),
+                "error": type(error).__name__,
+                "where": _where(error),
+            },
+        )
+        return await asyncio.to_thread(_count_lost_claim, sessions, document_id, now)
     if isinstance(claim, str):
         return claim
     data, claim.data = claim.data, b""
