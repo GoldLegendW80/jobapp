@@ -303,16 +303,25 @@ head_sha="$(git -C "$TREE" rev-parse HEAD)"
 tree_sha="$(git -C "$TREE" rev-parse 'HEAD^{tree}')"
 
 # --- running steps ---------------------------------------------------------------------------------
-# run_step <name> <command ...>: the command in a subshell of its own with set -e, in the tree, its
-# output in the step's log; one line when it ends. A step that runs longer than STEP_TIMEOUT is
-# stopped and fails.
+# run_step <name> <command ...>: the command in a bash process of its own, started in the tree with
+# errexit, nounset and pipefail, its output in the step's log; one line when it ends. A step that
+# runs longer than STEP_TIMEOUT is stopped and fails.
+#
+# Why a process and not a subshell. Bash ignores errexit in everything it executes below a command
+# whose status is tested (`run_step x s_x || true`, `if run_step x s_x`), through the function
+# call and into its subshells, whatever `set -e` says there: a step of two commands then passed
+# when the first failed and the last succeeded (review of pull request #121, B1; the same on bash
+# 3.2 and 5). A new bash inherits nothing of that state, so the status of a step is the same
+# however run_step is called. The step is given every function of this script (declare -f) and the
+# variables named in STEP_ENV; a name it lacks stops it (nounset) and the step fails.
+STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha)
 run_step() {
   local name="$1" start=$SECONDS rc=0 pid watcher
   shift
   (
-    set -e
     cd "$TREE"
-    "$@"
+    export "${STEP_ENV[@]}"
+    exec "$BASH" -c "$(declare -f)"$'\n''set -euo pipefail; "$@"' "$PROG" "$@"
   ) >"$LOGS/$name.log" 2>&1 </dev/null &
   pid=$!
   (
@@ -536,9 +545,9 @@ journey_specs() { # the Playwright arguments of a group, as ci.yml has them
 }
 
 journey_play() { # journey_play <group> <Playwright arguments>
-  cd web
+  # Called below `&&` in s_journey, where errexit is off: the two commands are chained.
   # shellcheck disable=SC2086
-  pnpm exec playwright test $2 --reporter=list --output="test-results/$1"
+  cd web && pnpm exec playwright test $2 --reporter=list --output="test-results/$1"
 }
 
 s_journey() {
@@ -605,7 +614,9 @@ s_secret_scan() {
 shellcheck_files() { # the list of the "Shellcheck" step of ci.yml
   awk '/koalaman\/shellcheck:/ { on = 1; next } on && /^ *(#|- )/ { exit } on { print }' .github/workflows/ci.yml
 }
-shellcheck_image() { sed -n 's/.* \(koalaman\/shellcheck:[^ ]*\).*/\1/p' .github/workflows/ci.yml | head -n 1; }
+shellcheck_image() { # no `| head -n 1`: under pipefail a writer cut short by head fails the step
+  awk 'match($0, /koalaman\/shellcheck:[^ ]*/) { print substr($0, RSTART, RLENGTH); exit }' .github/workflows/ci.yml
+}
 
 s_shellcheck() {
   local files image

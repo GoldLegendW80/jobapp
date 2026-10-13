@@ -64,6 +64,7 @@ git -C "$REPO" branch -M main
 git -C "$REPO" push -q origin main
 branch() { # branch <name> <file> <content>: a branch of main with one commit, pushed
   git -C "$REPO" checkout -q -b "$1" main
+  mkdir -p "$(dirname "$REPO/$2")"
   printf '%s\n' "$3" >"$REPO/$2"
   git -C "$REPO" add -A
   git -C "$REPO" commit -q -m "$1"
@@ -74,6 +75,8 @@ branch feature-a a.txt "a"
 branch feature-b b.txt "b"
 branch conflict-a file.txt "two"
 branch conflict-b file.txt "three"
+# The folders the real step functions enter (s_ruff does `cd api`).
+branch shape api/.keep ""
 
 CHECK="$REPO/ops/local-check.sh"
 DEPLOY="$REPO/ops/deploy-checked.sh"
@@ -168,6 +171,67 @@ nothing_left "a failing step"
 logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
 grep -q "the reason it broke" "$logs/broken.log" || fail "the full log of the failed step is not kept in $logs"
 ok "a failing step is exit 1 with the step named, the end of its log shown, its log kept, and no record"
+
+# --- a step of several commands --------------------------------------------------------------------
+# Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
+# it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded
+# (review of pull request #121, B1). Each step now runs in a bash of its own: the same function
+# fails however run_step is called, on the bash of PATH and on /bin/bash (3.2 on macOS).
+cat >"$WORK/two.sh" <<'EOF'
+s_two() {
+  sh -c 'echo "the first command failed"; exit 1'
+  sh -c 'echo "the second command passed"'
+}
+s_pipe() {
+  sh -c 'echo "the writer of the pipe failed"; exit 1' | cat
+  echo "the command after the pipe ran"
+}
+stub_plan() {
+  run_step or-true s_two || true
+  if run_step in-if s_two; then :; fi
+  ! run_step negated s_two || true
+  run_step plain s_two &
+  wait
+  run_step piped s_pipe || true
+}
+EOF
+mkdir -p "$WORK/fakeuv"
+cat >"$WORK/fakeuv/uv" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in *"ruff check"*)
+  echo "F821 undefined name"
+  exit 1
+  ;;
+esac
+echo "fake uv, clean: $*"
+EOF
+chmod +x "$WORK/fakeuv/uv"
+cat >"$WORK/ruff.sh" <<'EOF'
+stub_plan() { run_step ruff s_ruff || true; }
+EOF
+shells=("")
+[[ ! -x /bin/bash ]] || shells+=(/bin/bash)
+for shell in "${shells[@]}"; do
+  # shellcheck disable=SC2086
+  run 1 env LOCAL_CHECK_STUB="$WORK/two.sh" $shell "$CHECK"
+  for name in or-true in-if negated plain piped; do
+    grep -qE "^$name +FAIL" "$WORK/out" || fail "${shell:-bash of PATH}: the step $name, whose first command fails, is not FAIL: $(cat "$WORK/out")"
+  done
+  out_has "the first command failed"
+  out_lacks "the second command passed"
+  out_lacks "the command after the pipe ran"
+  [[ "$(last_line)" == "LOCAL CHECK: FAIL $base_tree or-true,in-if,negated,plain,piped" ]] || fail "last line of the multi command steps: $(last_line)"
+  [[ "$(records)" == 0 ]] || fail "a step whose first command failed left a record"
+  # The real s_ruff, with a uv whose `ruff check` fails and whose `ruff format --check` passes.
+  # shellcheck disable=SC2086
+  run 1 env LOCAL_CHECK_STUB="$WORK/ruff.sh" PATH="$WORK/fakeuv:$PATH" $shell "$CHECK" --merge origin/shape
+  out_has "F821 undefined name"
+  out_lacks "ruff format --check"
+  [[ "$(last_line)" =~ ^LOCAL\ CHECK:\ FAIL\ [0-9a-f]{40}\ ruff$ ]] || fail "last line of a failing ruff check: $(last_line)"
+  [[ "$(records)" == 0 ]] || fail "a failing ruff check left a record"
+done
+nothing_left "the multi command steps"
+ok "a step whose first command fails and whose last passes is FAIL, exit 1, no record, called with || true, if, ! or alone, a pipe included; the real s_ruff too (bash of PATH: $(bash -c 'echo $BASH_VERSION'); /bin/bash: $(/bin/bash -c 'echo $BASH_VERSION' 2>/dev/null || echo none))"
 
 # --- a pass: the record and its key ----------------------------------------------------------------
 # What GitHub will make of the same merges in the same order, computed apart from the script.
