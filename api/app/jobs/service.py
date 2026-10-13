@@ -20,8 +20,8 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, undefer
+from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.orm import Session, SessionTransaction, undefer
 
 from app.agents.models import Proposal, ProposalDecider, ProposalStatus
 from app.jobs import scoring
@@ -315,7 +315,14 @@ def set_status(
     first time only. Returns False (and records nothing) when the status is unchanged. `extra`
     joins the event's data (an accepted agent proposal records its id). `supersede=False` leaves
     the job's pending status proposals to the caller, which supersedes those of many jobs at
-    once (supersede_status_proposals)."""
+    once (supersede_status_proposals). The job must have been read under the row lock in this
+    transaction (lock_job, lock_jobs, undo_bulk), else UnlockedJobError: two changes racing on
+    an unlocked row would each record an event from a status the other had already moved."""
+    if job.id not in _locked_ids(db):
+        raise UnlockedJobError(
+            f"job {job.id} was not read under the lock in this transaction: "
+            "read it with lock_job before set_status"
+        )
     if job.status == status:
         return False
     data: dict[str, Any] = {"from": job.status.value, "to": status.value}
@@ -875,16 +882,84 @@ EDITABLE_FIELDS = ("company", "title", "location", "contract_type", "url")
 NOTE_COALESCE = timedelta(minutes=2)
 
 
+# --- the row lock: what it marks, how long it waits (J8) ----------------------------------------
+
+LOCK_TIMEOUT_MS = 5_000  # how long a lock on a job row waits, per transaction (SET LOCAL)
+BUSY = "This job is being changed. Try again."
+_LOCK_NOT_AVAILABLE = "55P03"  # Postgres' lock_not_available, what lock_timeout raises
+_LOCKED_KEY = "jobs.locked_ids"
+
+
+class JobBusyError(Exception):
+    """Another transaction holds a job's row lock longer than LOCK_TIMEOUT_MS. The caller rolls
+    back and answers 409 BUSY; the caller of a retry may try again."""
+
+
+class UnlockedJobError(RuntimeError):
+    """A programming error: set_status was given a job that was not read with lock_job, lock_jobs
+    or undo_bulk in this transaction, so two changes could race on it."""
+
+
+def is_lock_timeout(exc: BaseException) -> bool:
+    """Whether `exc` is Postgres refusing to wait any longer for a lock (SQLSTATE 55P03) and
+    nothing else: every other database error keeps its behaviour."""
+    return (
+        isinstance(exc, DBAPIError) and getattr(exc.orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE
+    )
+
+
+def _locked_ids(db: Session) -> set[uuid.UUID]:
+    """The ids of the jobs this session read under the lock in its current transaction. Kept on
+    the session itself, so two sessions never share it."""
+    ids: set[uuid.UUID] = db.info.setdefault(_LOCKED_KEY, set())
+    return ids
+
+
+def _forget_locks(session: Session, *_: Any) -> None:
+    session.info.pop(_LOCKED_KEY, None)
+
+
+def _forget_at_end(session: Session, transaction: SessionTransaction) -> None:
+    if transaction.parent is None:  # the outermost transaction: commit, rollback or close
+        _forget_locks(session)
+
+
+# Registered once, for every session: the row locks are gone when the transaction ends (commit
+# or rollback, a savepoint's rollback included: Postgres releases the locks taken inside it), so
+# the mark goes with them and a pooled session starts the next transaction with none.
+sa.event.listen(Session, "after_transaction_end", _forget_at_end)
+sa.event.listen(Session, "after_soft_rollback", _forget_locks)
+
+
+def _begin_locking(db: Session) -> None:
+    """Make a wait for a row lock fail after LOCK_TIMEOUT_MS instead of the statement timeout.
+    Transaction scoped (set_config with is_local): nothing is left on the pooled connection."""
+    db.execute(
+        sa.text("select set_config('lock_timeout', :ms, true)"), {"ms": f"{LOCK_TIMEOUT_MS}ms"}
+    )
+
+
+def _lock(db: Session, query: sa.Select[tuple[Job]]) -> list[Job]:
+    """Run a `FOR UPDATE` select under the lock timeout and mark the rows it returns as read
+    under the lock. A lock wait over the timeout raises JobBusyError."""
+    _begin_locking(db)
+    try:
+        jobs = list(
+            db.execute(query.with_for_update().execution_options(populate_existing=True)).scalars()
+        )
+    except DBAPIError as exc:
+        if is_lock_timeout(exc):
+            raise JobBusyError(BUSY) from exc
+        raise
+    _locked_ids(db).update(job.id for job in jobs)
+    return jobs
+
+
 def lock_job(db: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> Job | None:
     """One of the user's jobs, its row locked until the transaction ends, fresh from the
-    database (with its posting text)."""
-    return db.execute(
-        jobs_of(user_id)
-        .where(Job.id == job_id)
-        .options(undefer(Job.posting_text))
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).scalar_one_or_none()
+    database (with its posting text). Raises JobBusyError when the lock is not free in time."""
+    jobs = _lock(db, jobs_of(user_id).where(Job.id == job_id).options(undefer(Job.posting_text)))
+    return jobs[0] if jobs else None
 
 
 def _jsonable(value: Any) -> Any:
@@ -1046,15 +1121,10 @@ def lock_jobs(db: Session, user_id: uuid.UUID, ids: Sequence[uuid.UUID]) -> list
     """The user's jobs with these ids, in the order given (duplicates once), all locked.
     Raises MissingJobsError naming every id that is not one of them."""
     wanted = list(dict.fromkeys(ids))
+    # One lock order for every caller (by id): no deadlock between two bulks.
     found = {
         job.id: job
-        for job in db.execute(
-            jobs_of(user_id)
-            .where(Job.id.in_(wanted))
-            .order_by(Job.id)  # one lock order for every caller: no deadlock between two bulks
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).scalars()
+        for job in _lock(db, jobs_of(user_id).where(Job.id.in_(wanted)).order_by(Job.id))
     }
     missing = [job_id for job_id in wanted if job_id not in found]
     if missing:
@@ -1132,14 +1202,7 @@ def undo_bulk(
     same token restores nothing the second time."""
     ids = [p.job_id for p in previous]
     jobs = {
-        job.id: job
-        for job in db.execute(
-            jobs_of(user_id)
-            .where(Job.id.in_(ids))
-            .order_by(Job.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).scalars()
+        job.id: job for job in _lock(db, jobs_of(user_id).where(Job.id.in_(ids)).order_by(Job.id))
     }
     restored: list[uuid.UUID] = []
     skipped: list[uuid.UUID] = []

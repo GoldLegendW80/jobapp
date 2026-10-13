@@ -35,10 +35,12 @@ Caddy) at most, 413 above. Larger imports (Harald's ~18 MB) go through the CLI i
 container: `./deploy.sh jobs import <email>`.
 """
 
+import functools
 import re
 import secrets
 import time
 import uuid
+from collections.abc import Callable
 from datetime import date
 from typing import Annotated, Any
 
@@ -46,7 +48,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_session, read_snapshot
@@ -370,7 +372,31 @@ RESCORE_BUDGET_S = 20.0  # per call, checked between batches
 NO_SKILLS = "Your profile has no skills to score with yet. Add them in Profile, then rescore."
 DUPLICATE = "This posting is already in your list."
 STALE = "This job changed since you loaded it. Reload it and try again."
-_409 = {409: {"model": DuplicateOut, "description": "Duplicate posting, or stale version"}}
+_409 = {
+    409: {
+        "model": DuplicateOut,
+        "description": "Duplicate posting, stale version, or the job is being changed",
+    }
+}
+
+
+def _409_when_busy[**P, R](route: Callable[P, R]) -> Callable[P, R]:
+    """A route that locks job rows answers 409 BUSY when a lock wait outlasts the lock timeout
+    (SQLSTATE 55P03, at the lock itself or at a later statement of the same transaction), after
+    rolling the transaction back. Every other database error goes on as it did."""
+
+    @functools.wraps(route)
+    def guarded(*args: P.args, **kwargs: P.kwargs) -> R:
+        try:
+            return route(*args, **kwargs)
+        except (service.JobBusyError, DBAPIError) as exc:
+            if not isinstance(exc, service.JobBusyError) and not service.is_lock_timeout(exc):
+                raise
+            db: Session = kwargs["db"]  # type: ignore[assignment]
+            db.rollback()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=service.BUSY) from None
+
+    return guarded
 
 
 def _duplicate(job: Job) -> JSONResponse:
@@ -443,6 +469,7 @@ def add_job(body: JobCreateIn, user: CurrentUser, request: Request, db: Db) -> A
     responses={**_401, **_404, **_409, **_422},
     dependencies=[Depends(_no_store)],
 )
+@_409_when_busy
 def edit_job(job_id: str, body: JobPatchIn, user: CurrentUser, request: Request, db: Db) -> Any:
     """Change a job's status, notes, fit (a number sets it by hand, null goes back to the
     computed one) or details. Each change is recorded as an event with its before and after.
@@ -490,9 +517,15 @@ def edit_job(job_id: str, body: JobPatchIn, user: CurrentUser, request: Request,
 @router.post(
     "/bulk",
     response_model=BulkOut,
-    responses={**_401, 404: {"model": MissingOut, "description": "Ids not found"}, **_422},
+    responses={
+        **_401,
+        404: {"model": MissingOut, "description": "Ids not found"},
+        409: {"model": ErrorOut, "description": "A job is being changed"},
+        **_422,
+    },
     dependencies=[Depends(_no_store)],
 )
+@_409_when_busy
 def bulk(body: BulkIn, user: CurrentUser, request: Request, db: Db) -> Any:
     """Set the status of and/or append a note to up to 500 jobs, in one transaction: when one
     id is not the caller's, nothing changes and the 404 lists the missing ids. A status change
@@ -531,11 +564,12 @@ def bulk(body: BulkIn, user: CurrentUser, request: Request, db: Db) -> Any:
     responses={
         **_401,
         400: {"model": ErrorOut, "description": "Invalid token"},
-        409: {"model": ErrorOut, "description": "Nothing left to undo"},
+        409: {"model": ErrorOut, "description": "Nothing left to undo, or a job is being changed"},
         410: {"model": ErrorOut, "description": "The undo window has passed"},
     },
     dependencies=[Depends(_no_store)],
 )
+@_409_when_busy
 def bulk_undo(body: UndoIn, user: CurrentUser, request: Request, db: Db) -> UndoOut:
     """Put back the statuses a bulk change replaced, for the jobs not changed since. A token
     works once."""
