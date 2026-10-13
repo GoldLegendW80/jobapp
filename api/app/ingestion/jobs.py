@@ -521,7 +521,7 @@ def _store_export(
                 "user_id": str(claim.user_id),
                 "size": claim.size,
                 "files": len(entries),
-                "created": sum(1 for one in stored if one.created),
+                "new_files": sum(1 for one in stored if one.created),
                 "characters": sum(len(entry.content.text) for entry in entries),
                 "secret_rules": sorted(secret_rules),
                 "attempts": claim.attempts,

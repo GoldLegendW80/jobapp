@@ -32,7 +32,7 @@ from app.main import create_app
 from tests.conftest import make_settings
 from tests.identity.api_helpers import Api, make_user
 from tests.ingestion.conftest import ALICE, BOB
-from tests.ingestion.helpers import archive, delete, listing, pdf, png, row, rows, uploaded, user_id
+from tests.ingestion.helpers import delete, listing, pdf, png, row, rows, uploaded, user_id
 from tests.ingestion.test_jobs import Parser, parsed, stored_before
 from tests.jobs.test_worker import flush_redis, redis_url, serve_until, wait_for
 
@@ -231,14 +231,13 @@ def test_what_was_stored_before_this_version_is_read_when_the_worker_starts(
     settings: Settings, served: tuple[Api, str, str], factory: sessionmaker[Session]
 ) -> None:
     """Rows as G1 left them, never queued: the PDF is read on the reaper's first tick, without
-    a new upload; the image and the archives still wait after ten ticks, bytes and all, and
-    the parser never saw them."""
+    a new upload; the image still waits after ten ticks, bytes and all, and the parser never
+    saw it (an archive has a reader since G7: tests/ingestion/test_jobs_archive.py)."""
     api, alice, _ = served
     owner = user_id(factory, ALICE)
     weeks_ago = datetime.now(UTC).replace(microsecond=0) - timedelta(days=20)
     old_pdf = stored_before(factory, owner, pdf(1200), "application/pdf", weeks_ago)
     image = stored_before(factory, owner, png(), "image/png", weeks_ago)
-    export = stored_before(factory, owner, archive(), "application/zip", weeks_ago)
     parser = Parser(parsed("read at the deploy"))
     ticks = 0
 
@@ -254,7 +253,7 @@ def test_what_was_stored_before_this_version_is_read_when_the_worker_starts(
     assert ticks >= 10
     assert row(factory, str(old_pdf)).text == "read at the deploy"
     assert parser.calls == [("pdf_text", pdf(1200))]
-    for document_id, data in ((image, png()), (export, archive())):
+    for document_id, data in ((image, png()),):
         waiting = row(factory, str(document_id))
         assert (waiting.text_status, waiting.raw) == (TextStatus.pending, data)
         assert (waiting.attempts, waiting.failed_kind, waiting.failed_reason) == (0, None, None)
