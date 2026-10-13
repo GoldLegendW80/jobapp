@@ -137,7 +137,8 @@ def test_upgrade_creates_the_three_tables_with_every_column_of_the_plan(
     assert columns(at_head, "ingestion_documents") == DOCUMENT_COLUMNS
     assert columns(at_head, "ingestion_images") == IMAGE_COLUMNS
     assert columns(at_head, "ingestion_consents") == CONSENT_COLUMNS
-    assert enum_labels(at_head) == ENUMS
+    # The enums of 0011; those of 0012 are checked by test_runs_migration.py.
+    assert {name: enum_labels(at_head)[name] for name in ENUMS} == ENUMS
 
     documents = {c["name"]: c for c in inspector.get_columns("ingestion_documents")}
     assert "gen_random_uuid()" in documents["id"]["default"]

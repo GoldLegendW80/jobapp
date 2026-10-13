@@ -53,26 +53,38 @@ ingestion_images(id, document_id, user_id fk cascade, position int, jpeg bytea,
 ingestion_consents(user_id fk cascade, text_version int, accepted_at,
                    primary key (user_id, text_version))
 
-ingestion_runs(id uuid, user_id fk cascade, document_ids uuid[], base_revision int,
+ingestion_runs(id uuid, user_id fk cascade, document_ids uuid[] (1 to 30), base_revision int,
                status enum(running, paused, done, failed, cancelled), partial bool,
                paused_reason text null, waiting text null, deadline_at, cancel_requested_at null,
                estimate_low bigint, estimate_high bigint, token_ceiling bigint,
                tokens_spent bigint, ceiling_history jsonb,
-               created_at, finished_at,
-               unique(user_id) where status in (running, paused))
-ingestion_run_steps(id, ingestion_run_id fk cascade, position int, kind enum(transcribe, extract),
-                    document_id uuid, sha256 bytea, part int, range_start int, range_end int,
-                    image_positions int[], identity_hash,
+               created_at, finished_at null,
+               unique(user_id) where status in (running, paused),
+               index(user_id, created_at))
+ingestion_run_steps(id uuid, ingestion_run_id fk cascade, position int,
+                    kind enum(transcribe, extract), document_id uuid, sha256 bytea,
+                    part int null, range_start int null, range_end int null,
+                    image_positions int[] null, identity_hash text (64 hexadecimal characters),
+                    text_sha256 bytea null,
                     status enum(planned, running, done, failed, cancelled, reused),
-                    agent_run_id fk agent_runs null, attempt smallint, token_budget bigint,
+                    agent_run_id fk agent_runs on delete set null, null,
+                    attempt smallint, token_budget bigint null,
                     refused_count int, two_digit_year_count int, items_count int,
-                    purge_events bool, unique(ingestion_run_id, position))
-ingestion_items(id, user_id fk cascade, document_id fk cascade, step_id fk cascade, section, key,
-                action, value jsonb, value_hash, citations jsonb, flags text[],
-                unique(step_id, section, key, value_hash))
+                    purge_events bool, unique(ingestion_run_id, position),
+                    index(agent_run_id), index(document_id))
+ingestion_items(id bigserial, user_id fk cascade, document_id, step_id fk cascade,
+                section text, key text, action text in (add, replace, remove),
+                value jsonb null, value_hash text (64 hexadecimal characters),
+                citations jsonb, flags text[],
+                foreign key (document_id, user_id) references ingestion_documents (id, user_id)
+                on delete cascade,
+                unique(step_id, section, key, value_hash),
+                index(document_id), index(user_id))
 ```
 
-The first three tables are one migration (task G1), the last three another (task G9); each holds every column a later task stores into, so no other ingestion task adds a migration. **Pages:** `ingestion_documents.text` holds the pages of a PDF in order, joined with a form feed (U+000C); a page that waits for its transcription is the empty string between two form feeds; `ingestion_images.position` is the zero based page index of a PDF page, and 0 for an uploaded image. `note` says what was not read on a document that is not failed ("pages 31 to 44 were not read"), and `pages_text` and `pages_image` are shown per document. `transcribed_pages` keeps the page indexes whose text came from a transcription, since the images themselves are deleted once transcribed. `pending_since` is when the document last started to wait for its reader (upload, replacement, a new try): a replaced row keeps its `created_at`. An image is tied to the user of its document by the foreign key on `(document_id, user_id)`.
+**The last three tables, as migration 0012 builds them** (corrected after the review of PR #118; where this text and the migration differ, the migration is right). A column is `not null` unless it is marked `null`. `deadline_at`, `estimate_low`, `estimate_high`, `token_ceiling` and `base_revision` have no default: whoever creates a run gives them. An item references its document together with its user, as `ingestion_images` does, so an item filed under another user than its document's cannot exist. A step keeps the id and the hash of its document without a foreign key, so the step row stays when the document is deleted. `agent_run_id` is set to null if that agent run is ever deleted: the step row outlives it, and a step without an agent run is refused by the tools. `range_start` and `range_end` are both null for a document read whole. `action` is text with a CHECK, not an enum; `value` is null for a removal and only then. The CHECK constraints are backstops and the rules live in code: counts and tokens not negative, a range in order, the shape of each kind of step, the lengths of the hashes, of `section` and of `key`, `ceiling_history` and `citations` arrays, and 1 to 30 documents per run. That last one repeats the limit of 30 documents (Limits): raising the limit later takes a migration.
+
+The first three tables are one migration (task G1), the last three another (task G9); each holds every column a later task stores into, so no other ingestion task adds a migration. **Pages:** `ingestion_documents.text` holds the pages of a PDF in order, joined with a form feed (U+000C); a page that waits for its transcription is the empty string between two form feeds; `ingestion_images.position` is the zero based page index of a PDF page, and 0 for an uploaded image. `note` says what was not read on a document that is not failed ("pages 31 to 44 were not read"), and `pages_text` and `pages_image` are shown per document. `transcribed_pages` keeps the page indexes whose text came from a transcription, since the images themselves are deleted once transcribed. `pending_since` is when the document last started to wait for its reader (upload, replacement, a new try): a replaced row keeps its `created_at`. An image is tied to the user of its document by the foreign key on `(document_id, user_id)`. **A step and its text:** a document keeps its id and its `sha256` (the hash of the file) when its text is replaced, so a step also carries `text_sha256`, the SHA-256 of the stored text it was planned on. A step reads and stores only while that is still the text stored, and an item counts only while the text of its step is.
 
 As planned against the merged runner (tasks/ingestion/todo.md): the runner executes one SDK session per `agent_runs` row with fixed limits and has no sub-runs, so an ingestion run is a chain of steps, each an ordinary agent run, and the merge is code. Steps store checked candidates in `ingestion_items`; the merge turns them into proposals.
 
@@ -91,7 +103,7 @@ As planned against the merged runner (tasks/ingestion/todo.md): the runner execu
 
 ## Extraction agent
 
-- Runs on the `agents` runtime with the user's credential. **Model by credential** (decided 2026-10-10): `claude-opus-5-5` on a subscription credential, `claude-sonnet-5-5` on an API key credential, chosen automatically. One agent run per step: a transcription step per range of at most 8 images, an extraction step per document part of at most 100,000 characters (40 turns and 15 minutes each, 60 minutes for the whole ingestion run), then a merge done in code. No built-in tool at all. Each step is bound in code to one document part, so no tool takes a document id: the extraction agent has `read_document(offset)`, `get_profile_section` and one write tool `propose_profile_changes(section, items[])` with a strict schema; the transcription agent has `view_image(position)` and `store_transcription(position, text)`. Both agents are internal: they cannot be started through `POST /api/agents/runs`. Each item has:
+- Runs on the `agents` runtime with the user's credential. **Model by credential** (decided 2026-10-10): `claude-opus-5-5` on a subscription credential, `claude-sonnet-5-5` on an API key credential, chosen automatically. One agent run per step: a transcription step per range of at most 8 images, an extraction step per document part of at most 100,000 characters (40 turns and 15 minutes each, 60 minutes for the whole ingestion run), then a merge done in code. No built-in tool at all. Each step is bound in code to one document part, so no tool takes a document id: the extraction agent has `read_document(offset)` and one write tool `propose_profile_changes(section, items[])` with a strict schema, and nothing else: it reads only the document, never the profile, and the comparison with the profile is done in code by the merge (task G12) (corrected after the review of PR #118, where an earlier text also gave it `get_profile_section`; awaiting the owner's confirmation); the transcription agent has `view_image(position)` and `store_transcription(position, text)`. Both agents are internal: they cannot be started through `POST /api/agents/runs`. Each item has:
   - a **stable key**: the employer `key`, the school name and start, the facts block `title`, the skills category `name`, the board `org`, the answers field name; never an array index;
   - the action (`add`, `replace`, `remove`), the proposed value (validated against the section's Pydantic model before it is stored), and one or more citations `{excerpt}` into the step's document (code attaches the document id).
 - **Citation check** (server side, before storing; the normative tables are in tasks/ingestion/todo.md, "Citations", were first executed on 108 examples, `tasks/evidence/ingestion-g0/citation_rules.py`, and are since G4 generated from the test data of the module, `api/tests/ingestion/citation_examples.py`, one test per example, 274 after the two reviews of PR #97): the excerpt and the document text go through the folding of curly apostrophes, quotes and dashes, the removal of invisible characters (soft hyphen, zero width and bidi controls), NFKC, case folding and whitespace collapsing, in that order; the match then ignores spaces and hyphens on both sides, which handles hyphenation at line breaks, and the cited span is extended so that it never cuts a word or a number. The excerpt must be 20 to 600 characters (or the whole document, if shorter). Values are then checked against the cited text by type:
