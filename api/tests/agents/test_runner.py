@@ -417,6 +417,7 @@ def test_backend_ignoring_interrupt_is_cancelled_after_grace(
         ("crash", "The Claude Code process failed (exit code 1)."),
         ("missing_cli", runner.NO_CLI),
         ("refused", runner.REFUSED),
+        ("no_credit", runner.NO_CREDIT),
     ],
 )
 def test_failures_are_recorded_and_scratch_removed(
@@ -613,6 +614,16 @@ def test_outcome_of_api_errors_and_missing_result() -> None:
     for status, message in ((429, runner.BUSY), (529, runner.BUSY), (500, "HTTP 500")):
         state.result = result(api_error_status=status)
         assert message in (runner.outcome_of(state, definitions.ECHO, None).error or "")
+    # A key without credit: the mark of the assistant message decides, whatever the status,
+    # and the failure is the provider's, so a chain pauses instead of failing each document.
+    for status in (400, 402, None):
+        broke = runner._State(no_credit=True)
+        broke.result = result(api_error_status=status)
+        error = runner.outcome_of(broke, definitions.ECHO, None).error
+        assert error == runner.NO_CREDIT
+        assert runner.is_provider_failure(error) is True
+        assert runner.is_box_failure(error) is False
+    assert runner.is_provider_failure(runner.API_ERROR.format(status=400)) is False
     state.result = result(subtype="error_during_execution")
     assert runner.outcome_of(state, definitions.ECHO, None).error == (
         "The agent failed (error_during_execution)."

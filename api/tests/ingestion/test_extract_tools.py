@@ -805,8 +805,17 @@ def upload_again(factory: sessionmaker[Session], step: Step, body: bytes) -> str
     """The same file uploaded again, through the application's own path. Returns the text the row
     holds afterwards: the row, its id and its hash are the ones it had."""
     digest = hashlib.sha256(body).digest()
+    # Since G10 a guard keeps a document a step has read as it is, on this path too, until G15
+    # deletes it with what was drawn from it. The other paths that write `text` again (a newer
+    # parser, the transcription of G14) take no guard, so the guard is lifted for this upload.
+    guards = list(documents._delete_guards)
+    documents._delete_guards[:] = []
+    try:
+        with factory() as db, db.begin():
+            stored = documents.store_file(db, step.user_id, "document.txt", body, digest, now())
+    finally:
+        documents._delete_guards[:] = guards
     with factory() as db, db.begin():
-        stored = documents.store_file(db, step.user_id, "document.txt", body, digest, now())
         assert stored.created
         assert stored.document.id == step.document_id
     with factory() as db:
@@ -1176,9 +1185,10 @@ def test_final_hooks_are_called_in_turn_and_registered_once() -> None:
 
     before = list(agents._final_hooks)
     try:
+        agents._final_hooks[:] = []  # without the engine's hook of G10, which reads a real run
         for hook in (first, second, first):
             agents.register_final_hook(hook)
-        assert agents._final_hooks[len(before) :] == [first, second]
+        assert agents._final_hooks == [first, second]
         assert agents.EXTRACT.on_final is not None
         asyncio.run(agents.EXTRACT.on_final("run"))  # type: ignore[arg-type]
         assert seen == ["first run", "second run"]

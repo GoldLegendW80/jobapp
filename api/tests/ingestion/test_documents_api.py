@@ -84,6 +84,7 @@ def test_a_text_file_is_read_at_once_and_its_bytes_are_never_stored(
         "secret_confirmed_at": None,
         "created_at": body["created_at"],
         "duplicate": False,
+        "refused": None,
     }
     stored = row(factory, body["id"])
     assert stored.user_id == user_id(factory, ALICE)
@@ -754,7 +755,9 @@ def test_the_list_is_newest_first_and_carries_no_content(
     body = response.json()
     assert [item["id"] for item in body["items"]] == [third["id"], second["id"], first["id"]]
     for item, stored in zip(body["items"], (third, second, first), strict=True):
-        assert item == {key: value for key, value in stored.items() if key != "duplicate"}
+        assert item == {
+            key: value for key, value in stored.items() if key not in ("duplicate", "refused")
+        }
         assert "text" not in item
         assert "bytes" not in item
         assert "sha256" not in item
@@ -894,7 +897,7 @@ def test_a_text_that_looks_like_it_holds_a_key_carries_a_warning_until_confirmed
     assert confirmed.status_code == 200
     assert confirmed.headers["cache-control"] == "no-store"
     assert confirmed.json() == {
-        **{key: value for key, value in body.items() if key != "duplicate"},
+        **{key: value for key, value in body.items() if key not in ("duplicate", "refused")},
         "secret_confirmed_at": clock.now.isoformat().replace("+00:00", "Z"),
     }
     # Idempotent: the first date stays.
@@ -1343,6 +1346,10 @@ def test_a_replacement_asks_the_delete_guards(
     assert (again.status_code, again.json()["duplicate"]) == (200, True)
     assert (again.json()["id"], again.json()["name"]) == (first["id"], "scan.pdf")
     assert [str(document_id) for document_id in asked] == [first["id"]]
+    # The refusal speaks: the page has a sentence to show, not a silent duplicate.
+    assert again.json()["refused"] == documents.REPLACEMENT_REFUSED
+    assert first["refused"] is None
+    assert " - " not in documents.REPLACEMENT_REFUSED
     stored = row(factory, first["id"])
     assert (stored.text_status, stored.text, stored.raw) == (
         TextStatus.failed,

@@ -64,7 +64,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import tools as app_tools
 from app.agents.tools import Scope, text_result
-from app.ingestion import citations, items, plan
+from app.ingestion import citations, items, plan, stored_items
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import (
     IngestionItem,
@@ -75,11 +75,14 @@ from app.ingestion.runs_models import (
     stored_text_sha256,
     text_sha256,
 )
+from app.ingestion.runs_models import (
+    of_stored_text as of_stored_text,  # its readers know it under this module's name too
+)
+from app.ingestion.tool_names import PROPOSE as PROPOSE
+from app.ingestion.tool_names import READ_DOCUMENT as READ_DOCUMENT
 
 logger = logging.getLogger("app.ingestion.tools")
 
-READ_DOCUMENT = "read_document"
-PROPOSE = "propose_profile_changes"
 
 READ_MAX_CHARS = 30_000  # one tool result stays inline up to 49,000 characters (plan, G0)
 READ_MAX_BYTES = 40_000  # and this many UTF-8 bytes (assumption A6)
@@ -574,41 +577,9 @@ def _log_failure(name: str, scope: Scope, failure: str) -> None:
 # --- for the merge (G12) --------------------------------------------------------------------------
 
 
-def of_stored_text() -> sa.ColumnElement[bool]:
-    """A condition on `ingestion_items`: true for an item whose step was planned on the text its
-    document stores now. An item read without it may cite a text that was replaced since: its
-    offsets and its excerpt are then those of a text that is no longer stored."""
-    return (
-        sa.exists()
-        .where(
-            IngestionRunStep.id == IngestionItem.step_id,
-            IngestionDocument.id == IngestionItem.document_id,
-            IngestionDocument.user_id == IngestionItem.user_id,
-            IngestionRunStep.text_sha256 == stored_text_sha256(),
-        )
-        .correlate(IngestionItem)
-    )
-
-
-def as_item(row: IngestionItem) -> items.Item:
-    """The stored row as the item G5's `item_proposals.propose` takes (origin `agent`, the
-    default of `items.build`). The stored value is the cleaned one, so the key and the hash come
-    out as stored."""
-    return items.build(row.section, row.key, row.action, row.value)
-
-
-def as_citations(row: IngestionItem) -> list[dict[str, Any]]:
-    """The stored citations with their document, as `item_proposals.propose` takes them:
-    `{document_id, excerpt, start, end}`. The merge adds `transcribed` where it applies."""
-    return [
-        {
-            "document_id": str(row.document_id),
-            "excerpt": one["excerpt"],
-            "start": one["start"],
-            "end": one["end"],
-        }
-        for one in row.citations
-    ]
+# Defined in `stored_items`, which imports without the SDK: the merge runs in the api too.
+as_item = stored_items.as_item
+as_citations = stored_items.as_citations
 
 
 app_tools.register(READ_DOCUMENT, _read_document)
