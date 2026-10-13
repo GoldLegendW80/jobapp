@@ -369,6 +369,15 @@ class Server:
                 chunks.append(chunk)
             return b"".join(chunks)
 
+        async def reap() -> None:
+            # What a killed child wrote is still in the pipe. Past its buffer limit asyncio
+            # stops reading a pipe nobody reads and never sees its end, and Process.wait()
+            # waits for the pipes as well as for the process: it would wait for ever, the job
+            # with it. So the pipe is read to its end first, and nothing of it is kept.
+            while await stdout.read(1 << 16):
+                pass
+            await proc.wait()
+
         feeding = asyncio.ensure_future(feed())
         code, body = "wall_limit", b""
         try:
@@ -388,7 +397,7 @@ class Server:
                     proc.kill()
             feeding.cancel()
             await asyncio.gather(feeding, return_exceptions=True)
-            await asyncio.shield(proc.wait())
+            await asyncio.shield(reap())
         status = proc.returncode
         if code == "ok" and status != 0:
             body = b""

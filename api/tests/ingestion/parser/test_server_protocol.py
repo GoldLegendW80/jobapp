@@ -454,6 +454,34 @@ def test_a_child_that_outlives_the_wall_clock_is_killed_and_reaped() -> None:
     run(test)
 
 
+def test_a_child_killed_with_output_left_unread_is_reaped_and_the_job_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child past the cap is killed while it still writes, and a kill is not instant: until it
+    lands the pipe fills with what nobody reads any more. Past its buffer limit asyncio stops
+    reading such a pipe, so it never sees its end, and Process.wait(), which waits for the pipes
+    too, waited for ever: the job never answered, the client gave up at its own deadline, and
+    asyncio wrote "Task was destroyed but it is pending!" in the log of the service (issue
+    #104, on a loaded machine). Here the kill lands a fifth of a second late every time. The
+    answer has to come long before any limit of time: the bound below only turns a job that
+    hangs into a failure."""
+    kill = asyncio.subprocess.Process.kill
+
+    def late_kill(process: asyncio.subprocess.Process) -> None:
+        asyncio.get_running_loop().call_later(0.2, kill, process)
+
+    async def test() -> None:
+        async with serving(max_answer=200_000) as (_, port):
+            monkeypatch.setattr(asyncio.subprocess.Process, "kill", late_kill)
+            header = await asyncio.wait_for(job(port, b"x", act="flood", blocks=100_000), 10)
+            monkeypatch.undo()
+            assert header == {**REFUSED, "code": "output_cap"}
+            assert no_child_left()
+            assert (await job(port, b"abc"))["received"] == 3
+
+    run(test)
+
+
 def test_a_child_that_writes_more_than_the_cap_is_killed() -> None:
     async def test() -> None:
         async with serving(max_answer=200_000) as (_, port):

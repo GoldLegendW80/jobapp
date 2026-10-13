@@ -38,6 +38,10 @@ server = sandbox_module("server")
 MIB = 1024 * 1024
 OK = {"ok": True, "failure": None, "code": "ok"}
 REFUSED = {"ok": False, "failure": "server", "length": 0}
+# The wall clock of a child, and what killing and reaping it may add on a loaded machine: the
+# duration the service reports ends once the child is reaped.
+WALL_MS = int(server.WALL_S * 1000)
+REAP_MS = 10_000
 
 
 class Stack:
@@ -215,6 +219,26 @@ def attempts(stack: Stack) -> dict[str, str]:
 @pytest.fixture(scope="module")
 def state(stack: Stack) -> dict[str, Any]:
     return stack.raw({"act": "state"}, size=5)["body"]["state"]
+
+
+# compose.yml: the probe of the parser (`server.py --check`, and the ping child it asks the
+# service for) is given 8 s, every 15 s.
+PROBE_TIMEOUT_S = 8
+
+
+def left_over(stack: Stack, seen: dict, host: str = "parser") -> set[int]:
+    """The processes a child saw besides the server and itself that are still there at a later
+    look. The health probe of the container is a process of the same namespace for the moment
+    it lasts, and so is the ping child it asks for: on a loaded machine a look falls on one
+    now and then (issue #104: `[1, 62, 63]`, where 63 is younger than the child that looked,
+    so not what the job before it left). What a job leaves behind stays; a probe is over
+    within its timeout."""
+    others = set(seen["processes"]) - {1, seen["pid"]}
+    if others:
+        time.sleep(PROBE_TIMEOUT_S + 1)
+        later = stack.raw({"act": "state"}, host=host)["body"]["state"]
+        others &= set(later["processes"])
+    return others
 
 
 def alive(stack: Stack, service: str = "parser") -> None:
@@ -544,9 +568,12 @@ def test_the_child_is_isolated_with_an_empty_environment_and_three_pipes(
     assert state["argv_kind"] == "pdf_render"
 
 
-def test_the_child_sees_the_server_and_itself_and_no_other_process(state: dict[str, Any]) -> None:
+def test_the_child_sees_the_server_and_itself_and_no_other_process(
+    stack: Stack, state: dict[str, Any]
+) -> None:
     assert state["parent"] == 1
-    assert state["processes"] == [1, state["pid"]]
+    assert {1, state["pid"]} <= set(state["processes"])
+    assert left_over(stack, state) == set()
 
 
 def test_the_limits_of_the_table_hold_in_the_child(state: dict[str, Any]) -> None:
@@ -593,7 +620,9 @@ def test_a_parser_that_swallows_the_memory_error_goes_on(stack: Stack) -> None:
 def test_a_child_that_floods_its_output_is_killed_at_the_cap(stack: Stack) -> None:
     answer = stack.raw({"act": "flood", "blocks": 100_000})  # 6.5 GB, if anyone let it
     assert answer["header"] == {**REFUSED, "code": "output_cap"}
-    assert answer["ms"] < 10_000
+    # The code says the cap ended it. The duration only has to stay under the first limit
+    # of time (45 s of CPU): seconds, on a machine that has none to spare.
+    assert answer["ms"] < 45_000
     found = stack.parse({"act": "flood", "blocks": 100_000})
     assert (found["error"], found["code"], found["failure"]) == (
         "ParserRefusedError",
@@ -737,7 +766,7 @@ def test_a_client_that_closes_mid_document_or_mid_job_leaves_the_service_free(
     found = stack.driver("clumsy", "parser", "leaves_during_job")
     served_after(found)
     after = stack.raw({"act": "state"})["body"]["state"]
-    assert after["processes"] == [1, after["pid"]]
+    assert left_over(stack, after) == set()
 
 
 def test_a_ping_is_answered_at_once_during_a_job(stack: Stack) -> None:
@@ -947,7 +976,9 @@ def test_the_worker_reaches_the_parser_and_nothing_of_the_default_network_does(
 def test_the_cpu_limit_ends_a_busy_child_at_45_s_of_cpu(stack: Stack, slow: dict) -> None:
     spin = slow["wait"]("spin")["spin"]
     assert spin["header"] == {**REFUSED, "code": "cpu_limit"}
-    assert 44_000 <= spin["ms"] <= 58_000, "SIGXCPU at 45 s of CPU, before the wall clock"
+    # 45 s of CPU take 45 s of wall clock or more, and the code says the wall clock (60 s) did
+    # not end it: how much more is what the machine gave the child, which no bound here knows.
+    assert 44_000 <= spin["ms"] <= WALL_MS + REAP_MS, "SIGXCPU at 45 s of CPU"
     alive(stack, "parser-cpu")
 
 
@@ -958,7 +989,7 @@ def test_a_child_that_ignores_the_cpu_signal_is_killed_a_second_later(
     is one second above the soft one, and its SIGKILL cannot be."""
     deaf = slow["wait"]("deaf")["deaf"]
     assert deaf["header"] == {**REFUSED, "code": "crashed"}
-    assert 45_000 <= deaf["ms"] <= 59_000
+    assert 45_000 <= deaf["ms"] <= WALL_MS + REAP_MS  # issue #104: 59 002 on a loaded machine
     alive(stack, "parser-kill")
 
 
@@ -967,10 +998,10 @@ def test_the_wall_clock_ends_a_sleeping_child_at_60_s_and_reaps_it(
 ) -> None:
     sleep = slow["wait"]("sleep")["sleep"]
     assert sleep["header"] == {**REFUSED, "code": "wall_limit"}
-    assert 59_000 <= sleep["ms"] <= 70_000
+    assert WALL_MS - 1_000 <= sleep["ms"] <= WALL_MS + REAP_MS
     # Reaped: the next child sees the server and itself, and no process left over.
     after = stack.raw({"act": "state"}, host="parser-wall")["body"]["state"]
-    assert after["processes"] == [1, after["pid"]]
+    assert left_over(stack, after, host="parser-wall") == set()
     alive(stack, "parser-wall")
 
 
