@@ -151,9 +151,11 @@ class TokensOut(BaseModel):
     history: list[CeilingEntryOut]
     continue_adds: int | None = Field(
         description="For a run paused on `token_ceiling`: what one Continue adds to the ceiling "
-        "now. One `high`, or more when the step the ceiling interrupted needs it: that step "
-        "starts again from its first request, on at least twice the budget that was not enough. "
-        "The click sends this figure back as `adds`."
+        "now. One `high`, or more when the step that runs next needs it: a step the ceiling "
+        "interrupted starts again from its first request, on at least twice the budget that was "
+        "not enough. The click sends this figure back as `adds`. Zero when no step would run "
+        "(what was left to read was deleted): no raise is asked, the run closes by itself "
+        "within a minute, and a Continue sent meanwhile adds nothing and closes it at once."
     )
     overshoot_requests: int
     overshoot: str

@@ -151,6 +151,21 @@ class Moved:
     enqueue: uuid.UUID | None = None
 
 
+@dataclass(frozen=True)
+class NextStep:
+    """What `next_step` answers: the step that would run next and the smallest budget it may
+    start on (`step` None and `needs` zero: nothing would run, the run would close). The rest
+    is what `_next` writes before it starts that step, listed here and not done: the steps that
+    cannot run (`failed`), the planned parts of a replaced text (`removed`) and the parts of
+    the text stored now (`added`, rows no session holds yet). `step` can be one of `added`."""
+
+    step: IngestionRunStep | None
+    needs: int
+    failed: tuple[IngestionRunStep, ...] = ()
+    removed: tuple[IngestionRunStep, ...] = ()
+    added: tuple[IngestionRunStep, ...] = ()
+
+
 # --- start ------------------------------------------------------------------------------------
 
 
@@ -480,13 +495,15 @@ def _floor(step: IngestionRunStep) -> int:
 
 def continue_adds(db: Session, run: IngestionRun, steps: Sequence[IngestionRunStep]) -> int:
     """What one Continue adds to the ceiling now: one `H`, or what the next step needs to start
-    on its floor when one `H` is not enough (a step the ceiling cut on more than half an `H`).
-    The page shows this figure before the click."""
-    step = next((one for one in steps if one.status is StepStatus.planned), None)
-    if step is None:
-        return run.estimate_high
-    need = _floor(step) - (run.token_ceiling - run.tokens_spent)
-    return max(run.estimate_high, need)
+    on its floor when one `H` is not enough (a step the ceiling cut on more than half an `H`, or
+    a part planned again from a longer text). The step is the one `next_step` names, the one
+    `_next` starts after the click, so the figure shown, the figure added and the step started
+    cannot disagree. Zero when nothing would run: no raise is asked, and the run closes at its
+    next `advance`. The page shows this figure before the click."""
+    chosen = next_step(db, run, steps)
+    if chosen.step is None:
+        return 0
+    return max(run.estimate_high, chosen.needs - (run.token_ceiling - run.tokens_spent), 1)
 
 
 def _pause(run: IngestionRun, reason: str, now: datetime) -> None:
@@ -512,19 +529,30 @@ def _next(
     if run.status is RunStatus.paused:
         if now - _paused_at(run) >= PAUSE_MAX:
             _merge(db, run, steps, now)
+        elif run.paused_reason == TOKEN_CEILING:
+            # A pause on the ceiling waits for a raise, and a raise pays for a step. When
+            # nothing would run (the documents left to read were deleted during the pause)
+            # there is nothing to pay for: the run closes here, on the ceiling it has.
+            chosen = next_step(db, run, steps)
+            if chosen.step is None:
+                _settle(db, run, steps, chosen)
+                _merge(db, run, steps, now)
         return Moved(run.status)
     if now >= run.deadline_at:
         _merge(db, run, steps, now)
         return Moved(run.status)
-    step = _first_runnable(db, run, steps)
+    chosen = next_step(db, run, steps)
+    _settle(db, run, steps, chosen)
+    step = chosen.step
     if step is None:
         _merge(db, run, _steps(db, run.id), now)
         return Moved(run.status)
     remaining = run.token_ceiling - run.tokens_spent
     budget = estimate.budget(_plan_step(step), remaining) if remaining > 0 else None
-    if budget is None or budget < _floor(step):
+    if budget is None or budget < chosen.needs:
         # Under the step's low estimate, or not above a budget that already cut it: no agent
-        # run, no token. Continue raises the ceiling by what this step needs (`continue_adds`).
+        # run, no token. Continue raises the ceiling by what this step needs (`continue_adds`,
+        # which reads the same `next_step`).
         _pause(run, TOKEN_CEILING, now)
         return Moved(run.status)
     if agent_runs.count_active(db, run.user_id) >= agent_runs.ACTIVE_PER_USER:
@@ -562,66 +590,101 @@ def _next(
     return Moved(run.status, created.id)
 
 
-def _first_runnable(
-    db: Session, run: IngestionRun, steps: list[IngestionRunStep]
-) -> IngestionRunStep | None:
-    """The first planned step that can run, after the steps that cannot have been dealt with: a
-    part whose text is not the one stored now is planned again from that text, a step whose
-    document is gone or whose agent no process knows has failed."""
+def next_step(db: Session, run: IngestionRun, steps: Sequence[IngestionRunStep]) -> NextStep:
+    """The step that would run next and the budget it needs: the one place that decides it.
+    `continue_adds` (the figure the page shows and the click adds) and `_next` (the step that
+    starts) both ask here, so they cannot name two steps.
+
+    It is the first planned step that can run, once the steps before it that cannot are out of
+    the way: a step whose agent no process knows, or whose document is gone or has no text,
+    fails; a part whose text is not the one stored now is planned again from that text, its
+    new parts placed after every other step, and a part of that document which already ran
+    fails with the text it ran on.
+
+    Read only: it reads the hash of the stored texts, and for a replaced text the text and the
+    steps that finished in earlier runs. It changes no row and no object of the session: what
+    it would write is listed in its answer, and `_settle` writes exactly that list, with no
+    decision of its own. That is what makes the page's figure a prediction of `_next`."""
+    rows = list(steps)
+    failed: list[IngestionRunStep] = []
+    removed: list[IngestionRunStep] = []
+    added: list[IngestionRunStep] = []
+    out: set[int] = set()  # the rows of `failed`, by identity: a row of `added` has no id yet
     handled: set[uuid.UUID] = set()
+
+    def answer(step: IngestionRunStep | None) -> NextStep:
+        needs = _floor(step) if step is not None else 0
+        return NextStep(step, needs, tuple(failed), tuple(removed), tuple(added))
+
+    def planned(one: IngestionRunStep) -> bool:
+        return one.status is StepStatus.planned and id(one) not in out
+
     while True:
-        step = next((one for one in steps if one.status is StepStatus.planned), None)
+        step = next((one for one in rows if planned(one)), None)
         if step is None:
-            return None
-        if AGENT_OF[step.kind] not in definitions.AGENTS:
-            step.status = StepStatus.failed
-            continue
-        if step.kind is not plan.StepKind.extract:
-            return step
-        stored = db.execute(
-            sa.select(stored_text_sha256()).where(
-                IngestionDocument.id == step.document_id,
-                IngestionDocument.user_id == run.user_id,
-                IngestionDocument.sha256 == step.sha256,
-            )
-        ).first()
-        now_stored = bytes(stored[0]) if stored is not None and stored[0] is not None else None
+            return answer(None)
+        runnable = AGENT_OF[step.kind] in definitions.AGENTS
+        if runnable and step.kind is not plan.StepKind.extract:
+            return answer(step)
+        now_stored = _stored_text_hash(db, run, step) if runnable else None
         planned_on = bytes(step.text_sha256) if step.text_sha256 is not None else None
         if now_stored is not None and now_stored == planned_on:
-            return step
+            return answer(step)
         if now_stored is None or step.document_id in handled:
-            step.status = StepStatus.failed  # the document is gone or has no text
+            failed.append(step)  # no agent for it, or the document is gone or has no text
+            out.add(id(step))
             continue
         handled.add(step.document_id)
-        _plan_again(db, run, step.document_id)
-        steps[:] = _steps(db, run.id)
+        old = _never_ran([one for one in rows if planned(one)], step.document_id)
+        gone = {id(one) for one in old}
+        rows = [one for one in rows if id(one) not in gone]
+        new = _planned_again(db, run, step.document_id, rows)
+        removed += old
+        added += new
+        rows += new
 
 
-def _plan_again(db: Session, run: IngestionRun, document_id: uuid.UUID) -> None:
-    """Plan a document's extraction from the text stored now: its transcription has finished,
-    or its text was replaced. The planned parts of the old text, which never ran, are removed;
-    a step that ran keeps its row. The 60 step rule: when the new parts do not fit, the
-    document is left unread and the run ends partial."""
-    step = IngestionRunStep
-    db.flush()
-    db.execute(
-        sa.delete(step).where(
-            step.ingestion_run_id == run.id,
-            step.document_id == document_id,
-            step.kind == plan.StepKind.extract,
-            step.status == StepStatus.planned,
-            step.agent_run_id.is_(None),
+def _never_ran(
+    planned: Sequence[IngestionRunStep], document_id: uuid.UUID
+) -> list[IngestionRunStep]:
+    """Among planned steps, the parts of a document that no agent run ever read: the rows a new
+    plan of its text replaces."""
+    return [
+        one
+        for one in planned
+        if one.document_id == document_id
+        and one.kind is plan.StepKind.extract
+        and one.agent_run_id is None
+    ]
+
+
+def _stored_text_hash(db: Session, run: IngestionRun, step: IngestionRunStep) -> bytes | None:
+    """The hash of the text stored now for the step's document; None when the document is gone
+    or has no text."""
+    stored = db.execute(
+        sa.select(stored_text_sha256()).where(
+            IngestionDocument.id == step.document_id,
+            IngestionDocument.user_id == run.user_id,
+            IngestionDocument.sha256 == step.sha256,
         )
-    )
-    db.flush()
+    ).first()
+    return bytes(stored[0]) if stored is not None and stored[0] is not None else None
+
+
+def _planned_again(
+    db: Session, run: IngestionRun, document_id: uuid.UUID, kept: Sequence[IngestionRunStep]
+) -> list[IngestionRunStep]:
+    """The rows of a document's extraction planned from the text stored now (its transcription
+    has finished, or its text was replaced), placed after `kept`, the steps the run keeps. Rows
+    only: nothing is added to the session. The 60 step rule: when the new parts do not fit
+    there are none, the document is left unread and the run ends partial."""
     document = db.execute(
         sa.select(IngestionDocument.sha256, IngestionDocument.text).where(
             IngestionDocument.id == document_id, IngestionDocument.user_id == run.user_id
         )
     ).first()
     if document is None or not document.text:
-        return
-    kept = _steps(db, run.id)
+        return []
     text = document.text
     digest = text_sha256(text)
     credential = credentials.get(db, run.user_id)
@@ -633,10 +696,47 @@ def _plan_again(db: Session, run: IngestionRun, document_id: uuid.UUID) -> None:
         [described], model=model, finished=reuse.finished(db, run.user_id, [described], model)
     ).steps
     if len(kept) + len(planned) > plan.RUN_MAX_STEPS:
-        return
+        return []
     position = max((one.position for one in kept), default=-1) + 1
-    for offset, one in enumerate(planned):
-        db.add(_row_of(run.id, position + offset, one, bytes(document.sha256), digest))
+    return [
+        _row_of(run.id, position + offset, one, bytes(document.sha256), digest)
+        for offset, one in enumerate(planned)
+    ]
+
+
+def _settle(
+    db: Session, run: IngestionRun, steps: list[IngestionRunStep], chosen: NextStep
+) -> None:
+    """Write what `next_step` listed, and nothing else, under the run's row lock: the planned
+    parts of a replaced text are removed (they never ran; a step that ran keeps its row), the
+    parts of the text stored now are added, the steps that cannot run have failed. `steps` is
+    read again when rows came or went."""
+    _swap(db, chosen.removed, chosen.added)
+    for one in chosen.failed:
+        one.status = StepStatus.failed
+    if chosen.removed or chosen.added:
+        steps[:] = _steps(db, run.id)
+
+
+def _swap(
+    db: Session, removed: Sequence[IngestionRunStep], added: Sequence[IngestionRunStep]
+) -> None:
+    if removed:
+        db.flush()
+        for one in removed:
+            db.delete(one)
+        db.flush()  # before the new rows, which may take the positions of the removed ones
+    db.add_all(added)
+
+
+def _plan_again(db: Session, run: IngestionRun, document_id: uuid.UUID) -> None:
+    """Plan a document's extraction from the text stored now, at once: the step that just ended
+    found its text replaced. The same rows `next_step` would list for that document."""
+    steps = _steps(db, run.id)
+    old = _never_ran([one for one in steps if one.status is StepStatus.planned], document_id)
+    gone = {id(one) for one in old}
+    kept = [one for one in steps if id(one) not in gone]
+    _swap(db, old, _planned_again(db, run, document_id, kept))
     db.flush()
 
 
@@ -777,17 +877,22 @@ def continue_(
 ) -> IngestionRun | None:
     """A run paused on its ceiling gets `adds` more, recorded in its history, and runs again.
     `adds` is the echo of what the page showed: it must equal `continue_adds` as computed here,
-    under the run's row lock (one `H`, or what the step the ceiling cut needs to start above the
-    budget that failed). Any other figure, lower or higher, raises `ContinueChangedError` with
-    the figure of now and writes nothing: a stale page never raises the ceiling by an amount
-    its user did not see. Raises `WrongStateError` for any other state. None for a run that is
-    not this user's."""
+    under the run's row lock (one `H`, or what the step that would run needs to start on its
+    floor). Any other figure, lower or higher, raises `ContinueChangedError` with the figure of
+    now and writes nothing: a stale page never raises the ceiling by an amount its user did not
+    see. When nothing would run (`continue_adds` is zero) nothing is added and nothing raised,
+    whatever `adds` is: the run is returned as it is, for `advance` to close. Raises
+    `WrongStateError` for any other state. None for a run that is not this user's."""
     run = _lock(db, run_id, user_id)
     if run is None:
         return None
     if run.status is not RunStatus.paused or run.paused_reason != TOKEN_CEILING:
         raise WrongStateError
     current = continue_adds(db, run, _steps(db, run.id))
+    if current == 0:
+        # Nothing would run: there is no raise to agree to, whatever the page showed. The run
+        # stays as it is, and `advance`, which every caller runs next, closes it.
+        return run
     if adds != current:
         raise ContinueChangedError(current)
     raised = run.token_ceiling + adds
@@ -861,7 +966,14 @@ def advance_failed(db: Session, run_id: uuid.UUID, now: datetime) -> bool:
     # The step that was running: the tokens of its agent run are the user's money and are
     # recorded here when it has ended. One still at work stays `running` on the closed run
     # until it ends, and `advance` (the hook, or the cron through `_due`) records it then.
-    _record_late(db, run)
+    try:
+        with db.begin_nested():  # this exit is for the days when reads fail: it closes anyway
+            _record_late(db, run)
+    except Exception as error:
+        logger.warning(
+            "ingestion_stuck_record_failed",
+            extra={"ingestion_run_id": str(run.id), "error_type": type(error).__name__},
+        )
     run.status = RunStatus.failed
     run.partial = True
     run.waiting = None
