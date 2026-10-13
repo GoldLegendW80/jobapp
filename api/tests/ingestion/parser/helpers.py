@@ -106,3 +106,33 @@ class BackgroundServer:
 
     def __exit__(self, *_: object) -> None:
         self.stop()
+
+
+def sandbox_handler(name: str) -> ModuleType:
+    """A handler of sandbox/ that imports a helper from beside it (docx.py and linkedin_zip.py
+    import zipcaps.py), loaded as main.py loads it: with that directory on the path."""
+    if name not in _loaded:
+        sys.path.insert(0, str(SANDBOX))
+        try:
+            _loaded[name] = sandbox_module(name)
+        finally:
+            sys.path.remove(str(SANDBOX))
+    return _loaded[name]
+
+
+class Plenty:
+    """A budget that is never spent."""
+
+    def spent(self) -> bool:
+        return False
+
+
+class SpentAfter:
+    """A budget that is spent from its `calls`th question on."""
+
+    def __init__(self, calls: int) -> None:
+        self.left = calls
+
+    def spent(self) -> bool:
+        self.left -= 1
+        return self.left < 0

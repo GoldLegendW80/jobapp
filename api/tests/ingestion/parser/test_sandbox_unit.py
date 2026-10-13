@@ -346,9 +346,11 @@ def test_usage_is_the_cpu_time_and_the_two_peaks_of_this_process_alone() -> None
 
 def test_the_pdf_reader_has_half_the_address_space_of_the_other_kinds() -> None:
     """Set from the measurements of G2b (tasks/ingestion/todo.md): 256 MiB, where the worst
-    child of every fixture reached 95. The ping keeps the 512 MiB the healthcheck expects."""
-    assert main.LIMITS["pdf_text"] == {**main.DEFAULT_LIMITS, "as": 256 * main.MIB}
-    for kind in ("ping", "docx", "linkedin_zip", "image", "pdf_render"):
+    child of every fixture reached 95. The two readers of an archive have the same since G7,
+    from their own measurements. The ping keeps the 512 MiB the healthcheck expects."""
+    for kind in ("pdf_text", "docx", "linkedin_zip"):
+        assert main.LIMITS[kind] == {**main.DEFAULT_LIMITS, "as": 256 * main.MIB}
+    for kind in ("ping", "image", "pdf_render"):
         assert main.LIMITS[kind] == main.DEFAULT_LIMITS
     assert main.LIMITS["pdf_text"] is not main.LIMITS["ping"]
 

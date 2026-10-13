@@ -119,9 +119,47 @@ CHILD_SERVER_CODES = frozenset(
 # G2b (sandbox/pdf_text.py, sentences in app/ingestion/jobs.py): `encryption` is a PDF protected
 # with AES, which the parser cannot open without `cryptography`; `too_slow` one whose first page
 # was not read when the time budget ended.
+# G7 (sandbox/zipcaps.py, docx.py and linkedin_zip.py): `not_docx` is a ZIP that is not a Word
+# document (the worker then asks for the export), `not_export` one that is not an export either,
+# `macros` a document carrying macros, `nested_archive` an archive inside the archive,
+# `not_utf8` an export whose CSV is not UTF-8 text.
 FILE_CODES = frozenset(
-    {"unreadable", "protected", "encryption", "no_text", "bomb", "too_slow", "too_many_pixels"}
+    {
+        "unreadable",
+        "protected",
+        "encryption",
+        "no_text",
+        "bomb",
+        "too_slow",
+        "too_many_pixels",
+        "not_docx",
+        "not_export",
+        "macros",
+        "nested_archive",
+        "not_utf8",
+    }
 )
+# The files of a LinkedIn export that become documents (sandbox/linkedin_zip.py, FILES: a test
+# keeps the two lists in step). A closed list: the name of a stored document never comes from
+# the archive.
+LINKEDIN_FILES = (
+    "Profile.csv",
+    "Profile Summary.csv",
+    "Positions.csv",
+    "Education.csv",
+    "Skills.csv",
+    "Languages.csv",
+    "Certifications.csv",
+    "Courses.csv",
+    "Projects.csv",
+    "Honors.csv",
+    "Publications.csv",
+    "Patents.csv",
+    "Organizations.csv",
+    "Volunteering.csv",
+    "Test Scores.csv",
+)
+MAX_EXPORT_CHARS = 900_000  # every text of one export together (linkedin_zip.EXPORT_MAX_CHARS)
 # What was not read, on a document that was. Each comes with integers named in NOTE_VALUES.
 # `pages_not_read` is the page cap, `text_limit` the character cap (G2b), `time_limit` the time
 # budget: each names the pages left out (from, to); `scans_not_read` counts the image pages.
@@ -251,6 +289,18 @@ class PageImage:
 
 
 @dataclass(frozen=True)
+class ExportFile:
+    """One CSV of a LinkedIn export: a name of LINKEDIN_FILES, its text, and the SHA-256 and
+    the size of the file as the archive held it."""
+
+    name: str
+    text: str
+    sha256: bytes
+    size: int
+    truncated: bool
+
+
+@dataclass(frozen=True)
 class Parsed:
     """A result that passed every check: it fits the columns it is stored in."""
 
@@ -261,6 +311,8 @@ class Parsed:
     truncated: bool = False
     notes: tuple[Note, ...] = ()
     images: tuple[PageImage, ...] = ()
+    # The files of a LinkedIn export, each a document of its own (kind `linkedin_zip` only).
+    documents: tuple[ExportFile, ...] = ()
     # What the child said its run cost (CPU milliseconds, highest resident memory and highest
     # address space in kB), None when it said nothing. For the log and the measurements only.
     usage: Mapping[str, int] | None = None
@@ -391,9 +443,12 @@ _RESULT_KEYS = frozenset(
         "truncated",
         "notes",
         "images",
+        "documents",
         "usage",
     }
 )
+_EXPORT_KEYS = frozenset({"name", "text", "sha256", "size", "truncated"})
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 _USAGE_KEYS = frozenset({"cpu_ms", "max_rss_kb", "max_vm_kb"})
 _IMAGE_KEYS = frozenset({"position", "width", "height", "jpeg"})
 # Base64 of MAX_IMAGE_BYTES: checked on the text before anything is decoded.
@@ -470,6 +525,37 @@ def _images(value: Any) -> tuple[PageImage, ...]:
     return tuple(images)
 
 
+def _documents(value: Any) -> tuple[ExportFile, ...]:
+    """The files of an export: each name of LINKEDIN_FILES at most once, each hash once, a
+    text that fits its column and holds no form feed (a CSV has no pages)."""
+    if not isinstance(value, list) or not 1 <= len(value) <= len(LINKEDIN_FILES):
+        _bad("documents")
+    files: list[ExportFile] = []
+    for item in value:
+        if not isinstance(item, dict):
+            _bad("documents")
+        _keys(item, _EXPORT_KEYS, "document_keys")
+        name, digest, truncated = item.get("name"), item.get("sha256"), item.get("truncated")
+        if not isinstance(name, str) or name not in LINKEDIN_FILES:
+            _bad("document_name")
+        if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+            _bad("document_hash")
+        if type(truncated) is not bool:
+            _bad("truncated")
+        text = _text(item.get("text"))
+        if not text or PAGE_BREAK in text:
+            _bad("document_text")
+        size = _integer(item.get("size"), 1, MAX_SIZE, "document_size")
+        files.append(ExportFile(name, text, bytes.fromhex(digest), size, truncated))
+    if len({file.name for file in files}) != len(files):
+        _bad("document_name")
+    if len({file.sha256 for file in files}) != len(files):
+        _bad("document_hash")
+    if sum(len(file.text) for file in files) > MAX_EXPORT_CHARS:
+        _bad("text_too_long")
+    return tuple(files)
+
+
 def _usage(value: Any) -> Mapping[str, int] | None:
     if value is None:
         return None
@@ -489,6 +575,15 @@ def check_parsed(answer: Any, kind: str) -> Parsed:
     if answer.get("kind", kind) != kind:
         _bad("kind")
     text = _text(answer["text"]) if answer.get("text") is not None else None
+    # An export is its files and nothing else; no other kind may answer with files.
+    if kind == "linkedin_zip":
+        if (_RESULT_KEYS - {"ok", "kind", "documents", "usage"}) & answer.keys():
+            _bad("keys")
+        documents = _documents(answer.get("documents"))
+    elif "documents" in answer:
+        _bad("keys")
+    else:
+        documents = ()
     truncated = answer.get("truncated", False)
     if type(truncated) is not bool:
         _bad("truncated")
@@ -520,6 +615,7 @@ def check_parsed(answer: Any, kind: str) -> Parsed:
         truncated=truncated,
         notes=_notes(answer.get("notes", [])),
         images=_images(answer.get("images", [])),
+        documents=documents,
         usage=_usage(answer.get("usage")),
     )
 

@@ -140,10 +140,13 @@ sampler=$!
 # The jobs, from the worker's container through the application's own client.
 docker exec -i "$worker" python - "$rounds" >"$work/jobs.json" 2>"$work/jobs.err" <<'PY' || echo "PROBLEM: the jobs failed: $(tail -n 3 "$work/jobs.err" | head -c 600)"
 import asyncio
+import io
 import json
+import random
 import statistics
 import sys
 import time
+import zipfile
 
 from app.ingestion import parser_client as pc
 
@@ -200,6 +203,71 @@ PDFS = (
 )
 
 
+def archive(entries):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as out:
+        for name, content in entries:
+            out.writestr(name, content)
+    return buffer.getvalue()
+
+
+def words(count, seed):
+    noise = random.Random(seed)
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    return ["".join(noise.choices(letters, k=noise.randint(2, 9))) for _ in range(count)]
+
+
+def docx(paragraphs, filler=0):
+    """A Word document of `paragraphs` lines, and `filler` empty runs that are parsed for
+    nothing: 850,000 of them are 19 MiB of XML in one part."""
+    space = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    lines = "".join(f"<w:p><w:r><w:t>{SENTENCE} Line {n}.</w:t></w:r></w:p>" for n in range(paragraphs))
+    runs = "".join(f'<w:r w:rsidR="{word}"/>' for word in words(filler, 5))
+    body = f"<w:document {space}><w:body>{lines}<w:p>{runs}</w:p></w:body></w:document>"
+    return archive([("[Content_Types].xml", "<Types/>"), ("word/document.xml", body)])
+
+
+def export(count):
+    """A LinkedIn like export: two known CSV files of `count` words each, one nobody reads."""
+    return archive(
+        [
+            ("Profile.csv", "Headline\r\n" + " ".join(words(count, 8))),
+            ("Positions.csv", "Title\r\n" + " ".join(words(count, 9))),
+            ("Connections.csv", "First Name\r\nnever read\r\n"),
+        ]
+    )
+
+
+def names_docx(what):
+    """19 MiB of names that are each new, under every cap of the archive: one element each,
+    which the count of the walker refuses early, or the attributes of one start tag, which the
+    address space limit of the child stops (B1 of the review of PR #119)."""
+    space = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    if what == "element":
+        inside = "".join(f"<q{n:08x}/>" for n in range(19 * MIB // 12))
+    else:
+        names = " ".join(f'a{n:08x}=""' for n in range(19 * MIB // 13))
+        inside = f"<w:r {names}/>"
+    body = f"<w:document {space}><w:body>{inside}</w:body></w:document>"
+    return archive([("[Content_Types].xml", "<Types/>"), ("word/document.xml", body)])
+
+
+# (label, kind of parser job, the file): each must be answered file/bomb, and a server code
+# or a read is a PROBLEM.
+REFUSED = (
+    ("docx, a new element name each time", "docx", lambda: names_docx("element")),
+    ("docx, one tag of new names, at the memory limit", "docx", lambda: names_docx("one tag")),
+)
+
+# (label, kind of parser job, the file, rounds): the archives of G7.
+ARCHIVES = (
+    ("docx, a CV", "docx", lambda: docx(60), 5),
+    ("docx, 19 MiB of XML in one part", "docx", lambda: docx(60, filler=850_000), 3),
+    ("export, two small files", "linkedin_zip", lambda: export(300), 5),
+    ("export, 20 MiB in two files", "linkedin_zip", lambda: export(1_600_000), 3),
+)
+
+
 def spread(values):
     return [round(min(values), 1), round(statistics.median(values), 1), round(max(values), 1)]
 
@@ -239,6 +307,39 @@ async def main():
              "wall_ms": spread(wall), "child_cpu_ms": spread(cpu),
              "child_max_rss_mib": spread(rss), "child_max_vm_mib": spread(vm)}
         )
+    for label, kind, make, rounds in ARCHIVES:
+        data = make()
+        wall, cpu, rss, vm = [], [], [], []
+        parsed = None
+        for _ in range(rounds):
+            started = time.monotonic()
+            parsed = await pc.parse(kind, data, timeout_s=90)
+            wall.append((time.monotonic() - started) * 1000)
+            used = parsed.usage or {}
+            cpu.append(used.get("cpu_ms", 0))
+            rss.append(used.get("max_rss_kb", 0) / 1024)
+            vm.append(used.get("max_vm_kb", 0) / 1024)
+        characters = len(parsed.text or "") + sum(len(one.text) for one in parsed.documents)
+        found["jobs"].append(
+            {"job": label, "bytes": len(data), "rounds": rounds, "files": len(parsed.documents),
+             "characters": characters, "truncated": parsed.truncated,
+             "wall_ms": spread(wall), "child_cpu_ms": spread(cpu),
+             "child_max_rss_mib": spread(rss), "child_max_vm_mib": spread(vm)}
+        )
+    found["refused"] = []
+    for label, kind, make in REFUSED:
+        data = make()
+        started = time.monotonic()
+        try:
+            await pc.parse(kind, data, timeout_s=90)
+            answer = "read"
+        except pc.ParserRefusedError as refused:
+            answer = f"{refused.failure}/{refused.code}"
+        found["refused"].append(
+            {"job": label, "bytes": len(data), "answer": answer,
+             "wall_ms": round((time.monotonic() - started) * 1000)}
+        )
+    await pc.ping()  # the service is alive after them
     sandbox = report.sandbox
     found["sandbox"] = {
         "in_force": report.in_force,
@@ -317,6 +418,11 @@ print()
 print("%-16s %6s  %-26s %-26s %s" % ("job", "rounds", "wall ms (min med max)", "child CPU ms", "child peak RSS MiB"))
 for job in found["jobs"]:
     print("%-16s %6d  %-26s %-26s %s" % (job["job"], job["rounds"], job["wall_ms"], job["child_cpu_ms"], job["child_max_rss_mib"]))
+print()
+for job in found.get("refused", []):
+    print("%-48s %9d bytes  %6d ms  %s" % (job["job"], job["bytes"], job["wall_ms"], job["answer"]))
+    if job["answer"] != "file/bomb":
+        print("PROBLEM: %s was answered %s, not file/bomb" % (job["job"], job["answer"]))
 '
 )"
 

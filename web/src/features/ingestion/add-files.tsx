@@ -114,7 +114,9 @@ export function AddFiles({
         <p id={hintId} className="max-w-prose text-sm text-muted-foreground">
           A CV, a cover letter, notes on your projects, your LinkedIn export
           (the ZIP). PDF, Word, text, Markdown, JSON, CSV, PNG or JPEG, up to{" "}
-          {megabytes(limits.file_bytes)} MB each.
+          {megabytes(limits.file_bytes)} MB each. From a LinkedIn export, your
+          own profile files are the only ones read: connections, messages,
+          contacts and invitations are ignored.
         </p>
         <input
           ref={input}

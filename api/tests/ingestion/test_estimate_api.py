@@ -34,6 +34,7 @@ from tests.ingestion.helpers import (
     confirm,
     paste,
     pdf,
+    png,
     secret_like,
     set_columns,
     uploaded,
@@ -267,7 +268,8 @@ def test_documents_that_cannot_be_read_are_named_left_out_and_counted(
 ) -> None:
     credential(factory, ALICE)
     good = text_file(api, alice, "a", 30_000, "good.md")
-    waiting = str(uploaded(api, alice, pdf(), "scan.pdf")["id"])  # no reader in this version
+    # An image has no reader until G8 (a PDF has one since G2b, an archive since G7).
+    waiting = str(uploaded(api, alice, png(), "scan.png")["id"])
     being_read = text_file(api, alice, "b", 500, "being-read.md")
     set_columns(factory, being_read, text_status=TextStatus.pending)
     failed = text_file(api, alice, "c", 500, "failed.md")
@@ -279,7 +281,7 @@ def test_documents_that_cannot_be_read_are_named_left_out_and_counted(
 
     body = answer(api, alice, [waiting, good, being_read, failed, secret, images])
     assert [(one["name"], one["code"]) for one in body["unreadable"]] == [
-        ("scan.pdf", "not_readable_yet"),
+        ("scan.png", "not_readable_yet"),
         ("being-read.md", "pending"),
         ("failed.md", "failed"),
         ("secret.md", "secret_unconfirmed"),
