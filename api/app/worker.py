@@ -44,13 +44,19 @@ once the end of every job that was finishing is written (QueueWorker).
 
 import argparse
 import asyncio
+import contextlib
+import functools
 import logging
+import math
 import os
 import re
 import signal
 import sys
+import threading
 import uuid
-from collections.abc import Awaitable, Callable, Sequence
+from collections import Counter
+from collections.abc import Awaitable, Callable, Collection, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
@@ -94,6 +100,14 @@ LONGEST_AGENT_S = max(agent.wall_time_s for agent in definitions.AGENTS.values()
 AGENT_JOB_TIMEOUT_S = LONGEST_AGENT_S + 120
 AGENT_STALE_RUNNING = timedelta(seconds=LONGEST_AGENT_S + 300)
 AGENT_STALE_QUEUED = timedelta(hours=6)
+# What a stop waits, in all, for the cancelled jobs, the job ends being written and the threads
+# of asyncio.to_thread, before it disposes of the engine and returns whatever is left. Compose
+# kills the worker 20 s after SIGTERM (`stop_grace_period: 20s` of the worker in compose.yml):
+# 20 - 12 leaves 8 s for what comes after the wait and has timeouts of its own, the Redis pools
+# to close, the engine to dispose of, the last log lines and the exit. A statement is ended by
+# Postgres at 15 s (statement_timeout), so a thread stuck in one would outlast any bound that
+# still lets the worker say why it stopped: that is the case the bound exists for.
+STOP_WAIT_S = 12.0
 
 
 # --- job context ------------------------------------------------------------------------------
@@ -138,24 +152,6 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
         await sweep.run_sweep(sessions_of(ctx), uuid.UUID(sweep_id), client, clock_of(ctx))
 
 
-async def in_thread[T](ctx: dict[str, Any], call: Callable[..., T], *args: Any) -> T:
-    """asyncio.to_thread for the work of a job, known to the stop.
-
-    A job that is cancelled stops waiting for its thread, and the thread goes on: it holds a
-    session, so a connection of the pool. serve() used to dispose of the engine under it, and
-    the connection then came back to a pool nobody closes any more: it stayed open until the
-    garbage collector found it (issue #104). The work is shielded from the cancellation of
-    the job and kept in ctx["threads"], which serve() waits for before it disposes of the
-    engine. Without that set (a job called outside serve()) this is asyncio.to_thread."""
-    threads: set[asyncio.Future[Any]] | None = ctx.get("threads")
-    if threads is None:
-        return await asyncio.to_thread(call, *args)
-    work = asyncio.ensure_future(asyncio.to_thread(call, *args))
-    threads.add(work)
-    work.add_done_callback(threads.discard)
-    return await asyncio.shield(work)
-
-
 def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
     with sessions() as db:
         count = sweep.reap_stale(db, now)
@@ -164,7 +160,7 @@ def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
 
 
 async def reap_sweeps(ctx: dict[str, Any]) -> int:
-    count = await in_thread(ctx, _reap, sessions_of(ctx), clock_of(ctx)())
+    count = await asyncio.to_thread(_reap, sessions_of(ctx), clock_of(ctx)())
     if count:
         logger.warning("stale sweeps failed", extra={"count": count})
     return count
@@ -193,7 +189,7 @@ def _start_scheduled(
 
 async def scheduled_sweeps(ctx: dict[str, Any]) -> int:
     sessions, clock = sessions_of(ctx), clock_of(ctx)
-    started = await in_thread(ctx, _start_scheduled, sessions, clock())
+    started = await asyncio.to_thread(_start_scheduled, sessions, clock())
     redis: ArqRedis = ctx["redis"]
     for sweep_id, item in started:
         try:
@@ -205,7 +201,7 @@ async def scheduled_sweeps(ctx: dict[str, Any]) -> int:
             )
         except Exception:
             logger.exception("scheduled sweep not queued", extra={"sweep_id": str(sweep_id)})
-            await in_thread(ctx, sweep.fail_sweep, sessions, sweep_id, sweep.QUEUE_DOWN, clock())
+            await asyncio.to_thread(sweep.fail_sweep, sessions, sweep_id, sweep.QUEUE_DOWN, clock())
     if started:
         logger.info("scheduled sweeps queued", extra={"count": len(started)})
     return len(started)
@@ -258,7 +254,7 @@ def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: b
 
 
 async def reap_agent_runs(ctx: dict[str, Any], at_start: bool = False) -> int:
-    count = await in_thread(ctx, _reap_agent_runs, sessions_of(ctx), clock_of(ctx)(), at_start)
+    count = await asyncio.to_thread(_reap_agent_runs, sessions_of(ctx), clock_of(ctx)(), at_start)
     if count:
         logger.warning("agent runs failed by the reaper", extra={"count": count, "start": at_start})
     return count
@@ -429,6 +425,102 @@ def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> Qu
 # --- process ----------------------------------------------------------------------------------
 
 
+def _function_name(call: Callable[..., Any]) -> str:
+    """The function a piece of work runs, by module and name, never its arguments.
+    asyncio.to_thread submits partial(Context.run, function, *args): the function is the
+    first argument of that partial."""
+    while isinstance(call, functools.partial):
+        inner = call.args[0] if call.args else None
+        call = (
+            inner if callable(inner) and getattr(call.func, "__name__", "") == "run" else call.func
+        )
+    name = getattr(call, "__qualname__", type(call).__qualname__)
+    return f"{getattr(call, '__module__', None) or '?'}.{name}"
+
+
+class JobThreads(ThreadPoolExecutor):
+    """The executor of asyncio.to_thread while serve() runs, which knows what has not ended.
+
+    A job that is cancelled stops waiting for its thread, and the thread goes on: it holds a
+    session, so a connection of the pool. serve() used to dispose of the engine under it, and
+    the connection then came back to a pool nobody closes any more: it stayed open until the
+    garbage collector found it (issue #104). Every job of every module reaches its threads
+    through asyncio.to_thread, so through the default executor of the loop: serve() makes it
+    this one and joins it before the engine goes, whatever module submitted the work. The
+    names it keeps are those of the functions submitted and not yet ended, for the one line
+    logged when the wait reaches its bound."""
+
+    def __init__(self) -> None:
+        super().__init__(thread_name_prefix="worker-job")
+        self._names_lock = threading.Lock()
+        self._names: Counter[str] = Counter()
+
+    def submit[**P, T](self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
+        name = _function_name(fn)
+        future = super().submit(fn, *args, **kwargs)
+        with self._names_lock:
+            self._names[name] += 1
+        future.add_done_callback(lambda _future: self._ended(name))
+        return future
+
+    def _ended(self, name: str) -> None:
+        with self._names_lock:
+            self._names[name] -= 1
+
+    def left(self) -> dict[str, int]:
+        """What was submitted and has not ended (or been cancelled before it began)."""
+        with self._names_lock:
+            return {name: count for name, count in sorted(self._names.items()) if count > 0}
+
+    async def join(self, within: float) -> dict[str, int]:
+        """Take no more work, then wait for every thread to end, `within` seconds at most.
+        Returns what is left by then: nothing after a whole join."""
+        loop = asyncio.get_running_loop()
+        joined: asyncio.Future[None] = loop.create_future()
+        self.shutdown(wait=False)
+
+        def done() -> None:
+            if not joined.done():
+                joined.set_result(None)
+
+        def join() -> None:
+            self.shutdown(wait=True)
+            with contextlib.suppress(RuntimeError):  # the loop is closed: nobody waits any more
+                loop.call_soon_threadsafe(done)
+
+        # A daemon: at the bound it waits on a thread that may never end, and must not hold
+        # the exit of the process itself.
+        threading.Thread(target=join, name="worker-stop", daemon=True).start()
+        try:
+            async with asyncio.timeout(within):
+                await joined
+        except TimeoutError:
+            self.shutdown(wait=False, cancel_futures=True)
+        return self.left()
+
+
+def _retrieved(task: asyncio.Future[Any]) -> None:
+    if not task.cancelled():
+        task.exception()
+
+
+async def _ended(tasks: Collection[asyncio.Future[Any]], deadline: float | None) -> int:
+    """Wait for every task, until `deadline` (a time of the loop) when one is given. Returns
+    how many had not ended by then. Like gather(return_exceptions=True) it raises nothing of
+    theirs and leaves no exception unretrieved, even for a task that ends after the bound."""
+    if not tasks:
+        return 0
+    timeout = None
+    if deadline is not None:
+        timeout = max(0.0, deadline - asyncio.get_running_loop().time())
+    done, pending = await asyncio.wait(tasks, timeout=timeout)
+    for task in done:
+        _retrieved(task)
+    for task in pending:
+        task.add_done_callback(_retrieved)
+    return len(pending)
+
+
 def make_context(settings: Settings, clock: Callable[[], datetime] = utcnow) -> dict[str, Any]:
     from app.main import credentials_keyring
 
@@ -443,9 +535,11 @@ def make_context(settings: Settings, clock: Callable[[], datetime] = utcnow) -> 
     }
 
 
-async def close_worker(worker: QueueWorker) -> None:
+async def close_worker(worker: QueueWorker, deadline: float | None = None) -> tuple[int, int]:
     """Stop one Worker: stop its poll, cancel its jobs still in flight, wait for them and for
-    the job ends being written, then close it.
+    the job ends being written, then close it. The waits end at `deadline` (a time of the
+    loop) when one is given: the jobs and the job ends that had not ended by then are counted
+    in the result and left behind, so that the Worker is closed all the same.
 
     arq's Worker.close() cancels the jobs itself, then awaits them with a plain asyncio.gather. A
     job cancelled inside its function is caught by arq (run_job records it), but one cancelled
@@ -465,12 +559,14 @@ async def close_worker(worker: QueueWorker) -> None:
     for task in in_flight:
         if not task.done():
             task.cancel()
-    await asyncio.gather(*in_flight, return_exceptions=True)
-    await asyncio.gather(*worker.endings, return_exceptions=True)
+    jobs_left = await _ended(in_flight, deadline)
+    ends_left = await _ended(list(worker.endings), deadline)
     for job_id, task in list(worker.tasks.items()):
-        if task.done():
+        # A job given up at the bound goes too: arq's close() awaits what is left, unbounded.
+        if task.done() or jobs_left:
             del worker.tasks[job_id]
     await worker.close()
+    return jobs_left, ends_left
 
 
 async def serve(
@@ -480,15 +576,22 @@ async def serve(
     stop: asyncio.Event | None = None,
     ctx: dict[str, Any] | None = None,
     on_ready: Callable[[list[Worker]], Awaitable[None]] | None = None,
-) -> None:
-    """Run one Worker per queue until `stop` is set (SIGTERM or SIGINT when not given)."""
+) -> int:
+    """Run one Worker per queue until `stop` is set (SIGTERM or SIGINT when not given).
+
+    The stop is bounded by STOP_WAIT_S. It returns how many jobs, job ends and threads were
+    still running when that bound was reached: 0 after a clean stop, which is every stop that
+    finds nothing stuck."""
     skip_sdk_version_probe()
     ctx = ctx if ctx is not None else make_context(settings)
     ctx.setdefault("body_gate", asyncio.Semaphore(BODIES_IN_FLIGHT))
-    # One set for every Worker: arq hands each job a copy of this dict, with the same set in it.
-    threads: set[asyncio.Future[Any]] = ctx.setdefault("threads", set())
     stop = stop or asyncio.Event()
     loop = asyncio.get_running_loop()
+    # Every asyncio.to_thread of every job, in every module, runs on this executor from here.
+    threads = JobThreads()
+    loop.set_default_executor(threads)
+    deadline = math.inf  # no stop yet
+    jobs_left = ends_left = 0
     installed = []
     for signum in (signal.SIGTERM, signal.SIGINT):
         try:
@@ -521,10 +624,12 @@ async def serve(
         stopper = asyncio.create_task(stop.wait())
         await asyncio.wait([stopper, *runs], return_when=asyncio.FIRST_COMPLETED)
         stopper.cancel()
+        deadline = loop.time() + STOP_WAIT_S  # one bound for every wait of the stop
         for worker in workers:
             # One Worker failing to close must not leave the others' Redis pools open.
             try:
-                await close_worker(worker)
+                jobs, ends = await close_worker(worker, deadline)
+                jobs_left, ends_left = jobs_left + jobs, ends_left + ends
             except Exception:
                 logger.exception("queue worker close failed", extra={"queue": worker.queue_name})
         for run in runs:
@@ -536,15 +641,32 @@ async def serve(
     finally:
         for signum in installed:
             loop.remove_signal_handler(signum)
+        threads_left: dict[str, int] = {}
         try:
-            # The jobs are cancelled, their threads are not (in_thread): each still holds a
-            # connection until its session ends. The process waited for them anyway, when
-            # asyncio.run() closes the executor, but after the engine was disposed of.
-            await asyncio.gather(*list(threads), return_exceptions=True)
+            # The jobs are cancelled, their threads are not: each still holds a connection
+            # until its session ends. The process waited for them anyway, when asyncio.run()
+            # closes the executor, but after the engine was disposed of.
+            bound = min(deadline, loop.time() + STOP_WAIT_S)
+            threads_left = await threads.join(max(0.0, bound - loop.time()))
         finally:
+            # The loop goes on after serve() for some callers (the tests): it gets an executor
+            # that takes work, and asyncio.run() does not join again a thread given up here.
+            loop.set_default_executor(ThreadPoolExecutor(thread_name_prefix="asyncio"))
+            if jobs_left or ends_left or threads_left:
+                # By function and count, nothing else: no argument, no id, no user data.
+                logger.warning(
+                    "worker stop bound reached",
+                    extra={
+                        "bound_s": STOP_WAIT_S,
+                        "jobs": jobs_left,
+                        "job_ends": ends_left,
+                        "threads": threads_left,
+                    },
+                )
             if "engine" in ctx:
                 ctx["engine"].dispose()
             logger.info("worker stopped")
+    return jobs_left + ends_left + sum(threads_left.values())
 
 
 async def check(settings: Settings, specs: Sequence[QueueSpec] | None = None) -> int:
@@ -599,7 +721,13 @@ def main(argv: list[str] | None = None) -> int:
     skip_sdk_version_probe()
     dropped = drop_secrets_from_environ()
     logger.info("secrets dropped from the environment", extra={"names": dropped})
-    asyncio.run(serve(settings))
+    if asyncio.run(serve(settings)):
+        # Something was still running at the bound of the stop, and the interpreter joins
+        # every thread of an executor before it exits: it would wait here until Compose kills
+        # the process. All is said and the engine is disposed of, so leave now. The
+        # transaction of a thread cut this way rolls back, and arq runs its job again.
+        logging.shutdown()
+        os._exit(0)
     return 0
 
 

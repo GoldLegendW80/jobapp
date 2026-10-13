@@ -5,6 +5,7 @@ start, a stop interrupting a running sweep cleanly, and a Redis that is down."""
 
 import asyncio
 import gc
+import logging
 import os
 import threading
 import time
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app import worker
 from app.config import Settings
+from app.ingestion import jobs as ingestion_jobs
 from app.jobs import sweep
 from app.jobs.models import Job, Sweep, SweepStatus, SweepTrigger
 from tests.conftest import make_settings
@@ -100,10 +102,11 @@ def serve_until(
     ctx: dict[str, Any],
     scenario: Callable[[list[Worker]], Awaitable[None]],
     timeout: float = 60,
-) -> None:
-    """Run the worker, play `scenario` once it is ready, then stop it."""
+) -> int:
+    """Run the worker, play `scenario` once it is ready, then stop it: what serve() returned,
+    the number of jobs, job ends and threads it left running at its bound (0: a clean stop)."""
 
-    async def go() -> None:
+    async def go() -> int:
         stop = asyncio.Event()
         failure: list[BaseException] = []
 
@@ -118,11 +121,14 @@ def serve_until(
 
             asyncio.get_running_loop().create_task(play())
 
-        await asyncio.wait_for(worker.serve(settings, stop=stop, ctx=ctx, on_ready=ready), timeout)
+        left = await asyncio.wait_for(
+            worker.serve(settings, stop=stop, ctx=ctx, on_ready=ready), timeout
+        )
         if failure:
             raise failure[0]
+        return left
 
-    asyncio.run(go())
+    return asyncio.run(go())
 
 
 async def wait_for(predicate: Callable[[], bool], within: float = 30) -> None:
@@ -289,16 +295,19 @@ def test_stop_while_a_job_writes_its_end_waits_for_the_write(
     gc.collect()
 
 
+@pytest.mark.parametrize("job", ["reap_sweeps", "reap_documents"])
 def test_stop_while_a_job_works_in_a_thread_waits_for_the_thread_before_the_engine_goes(
-    settings: Settings, fake_ats: FakeAts, monkeypatch: pytest.MonkeyPatch
+    job: str, settings: Settings, fake_ats: FakeAts, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A job that is cancelled stops waiting for its thread (asyncio.to_thread), and the thread
     goes on with its session. serve() used to dispose of the engine while that thread still
     held a connection: it came back to a pool already disposed of, which nobody closes, and was
     found open by the garbage collector during a later test (the `BaseConnection.__del__`
-    warning of issue #104, from the reap_sweeps cron of second 30). The pause below does not
-    bound anything of the fixed code, which waits for the thread however long it takes: it
-    only gives the code without the fix the time to dispose of the engine too early."""
+    warning of issue #104). One job of each module that owns a cron, both through plain
+    asyncio.to_thread: `reap_sweeps` of worker.py, queued here, and `reap_documents` of
+    ingestion/jobs.py, the cron every worker runs when it starts and four times a minute (PR
+    #156, B1). The pause below bounds nothing of the fixed code, which waits for the thread:
+    it only gives the code without the fix the time to dispose of the engine too early."""
     ctx = context(settings, fake_ats)
     engine = ctx["engine"]
     made: list[Any] = []
@@ -309,13 +318,22 @@ def test_stop_while_a_job_works_in_a_thread_waits_for_the_thread_before_the_engi
     close = Worker.close
     dispose = engine.dispose
 
-    def held(db: Session, _now: datetime) -> int:
+    def hold(db: Session) -> None:
         db.execute(sa.text("SELECT 1"))  # from here the thread holds a connection of the pool
         holding.set()
         closing.wait(30)  # the stop has cancelled the job, and closes the Workers
         time.sleep(THREAD_PAUSE_S)
         order.append("the thread ends")
+
+    def held_sweeps(db: Session, _now: datetime) -> int:
+        hold(db)
         return 0
+
+    def held_documents(sessions: sessionmaker[Session], _now: datetime) -> ingestion_jobs.Reaped:
+        if not holding.is_set():  # the first run only: the cron of the start
+            with sessions() as db:
+                hold(db)
+        return ingestion_jobs.Reaped(queue=[], failed=0)
 
     async def closing_close(self: Worker) -> None:
         closing.set()
@@ -326,21 +344,135 @@ def test_stop_while_a_job_works_in_a_thread_waits_for_the_thread_before_the_engi
         checked_out.append(engine.pool.checkedout())  # type: ignore[attr-defined]
         dispose(*args, **kwargs)
 
+    monkeypatch.setattr(Worker, "close", closing_close)
+    monkeypatch.setattr(engine, "dispose", watched_dispose)
+    if job == "reap_documents":
+        monkeypatch.setattr(ingestion_jobs, "reap", held_documents)
+
     async def scenario(workers: list[Worker]) -> None:
-        # Not before: the start of the worker reaps too, and waits for it.
-        monkeypatch.setattr(sweep, "reap_stale", held)
-        monkeypatch.setattr(Worker, "close", closing_close)
-        monkeypatch.setattr(engine, "dispose", watched_dispose)
-        await workers[0].pool.enqueue_job("reap_sweeps", _queue_name=queues.SWEEPS)
+        if job == "reap_sweeps":
+            # Not before: the start of the worker reaps too, and waits for it.
+            monkeypatch.setattr(sweep, "reap_stale", held_sweeps)
+            await workers[0].pool.enqueue_job("reap_sweeps", _queue_name=queues.SWEEPS)
         await wait_for(holding.is_set)
 
-    serve_until(settings, ctx, scenario)
-    assert order[-2:] == ["the thread ends", "the engine is disposed of"]
+    left = serve_until(settings, ctx, scenario)
+    assert order == ["the thread ends", "the engine is disposed of"]
     # Nothing was checked out of the pool when it was disposed of, and no connection the
     # engine ever made is left open.
     assert checked_out == [0]
     assert made
     assert [connection.closed for connection in made] == [True] * len(made)
+    assert left == 0  # a clean stop: nothing was given up at the bound
+
+
+def test_a_stop_is_bounded_when_a_thread_never_returns(
+    settings: Settings,
+    fake_ats: FakeAts,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every deploy stops the worker, and Compose kills it at the end of its grace period. A
+    thread that does not return must not hold the stop until that kill: at the bound serve()
+    says what it leaves, by function and count and nothing else, disposes of the engine, logs
+    "worker stopped" and returns (PR #156, N1). The bound is set to half a second here and the
+    thread would hold thirty: the margin is what a loaded machine adds, not part of the rule."""
+    bound, margin = 0.5, 10.0
+    monkeypatch.setattr(worker, "STOP_WAIT_S", bound)
+    ctx = context(settings, fake_ats)
+    holding, release, ended = threading.Event(), threading.Event(), threading.Event()
+    disposed: list[bool] = []
+    stopped_at: list[float] = []
+    dispose = ctx["engine"].dispose
+
+    def never(_db: Session, _now: datetime) -> int:  # no statement: no connection is held
+        holding.set()
+        release.wait(30)
+        ended.set()
+        return 0
+
+    def watched_dispose(*args: Any, **kwargs: Any) -> None:
+        disposed.append(ended.is_set())
+        dispose(*args, **kwargs)
+
+    async def scenario(workers: list[Worker]) -> None:
+        monkeypatch.setattr(sweep, "reap_stale", never)
+        monkeypatch.setattr(ctx["engine"], "dispose", watched_dispose)
+        await workers[0].pool.enqueue_job("reap_sweeps", _queue_name=queues.SWEEPS)
+        await wait_for(holding.is_set)
+        stopped_at.append(time.monotonic())
+
+    try:
+        with caplog.at_level(logging.INFO, logger="app.worker"):
+            left = serve_until(settings, ctx, scenario)
+        took = time.monotonic() - stopped_at[0]
+        assert not ended.is_set()  # serve() returned under a thread still running
+        assert bound <= took < bound + margin
+        assert left == 1
+        assert disposed == [False]  # disposed of anyway, the thread still there
+        said = [r for r in caplog.records if r.getMessage() == "worker stop bound reached"]
+        assert len(said) == 1
+        assert said[0].levelno == logging.WARNING
+        assert (said[0].bound_s, said[0].jobs, said[0].job_ends) == (bound, 0, 0)  # type: ignore[attr-defined]
+        assert said[0].threads == {"app.worker._reap": 1}  # type: ignore[attr-defined]
+        messages = [r.getMessage() for r in caplog.records]
+        assert messages[-2:] == ["worker stop bound reached", "worker stopped"]
+    finally:
+        release.set()
+        assert ended.wait(30)
+
+
+def test_a_clean_stop_leaves_the_loop_an_executor_and_names_nothing(
+    settings: Settings, fake_ats: FakeAts, caplog: pytest.LogCaptureFixture
+) -> None:
+    """serve() gives asyncio.to_thread an executor of its own and joins it at the stop. The
+    loop that called it goes on afterwards (the tests, a caller that serves twice): it must
+    find an executor that still takes work, and a clean stop logs no bound."""
+
+    async def go() -> tuple[int, int]:
+        stop = asyncio.Event()
+
+        async def ready(_workers: list[Worker]) -> None:
+            assert await asyncio.to_thread(lambda: 1) == 1
+            stop.set()
+
+        ctx = context(settings, fake_ats)
+        left = await asyncio.wait_for(
+            worker.serve(settings, stop=stop, ctx=ctx, on_ready=ready), 60
+        )
+        return left, await asyncio.to_thread(lambda: 2)
+
+    with caplog.at_level(logging.INFO, logger="app.worker"):
+        assert asyncio.run(go()) == (0, 2)
+    messages = [r.getMessage() for r in caplog.records]
+    assert "worker stop bound reached" not in messages
+    assert messages[-1] == "worker stopped"
+
+
+def test_main_exits_at_once_when_the_stop_left_threads(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The interpreter joins every thread of an executor before it exits: with one left at the
+    bound, a plain return would hold the process until Compose kills it. main() flushes the
+    logs and exits without that join; after a clean stop it returns as before."""
+    events: list[Any] = []
+    left = [2]
+
+    async def served(_settings: Settings) -> int:
+        return left[0]
+
+    monkeypatch.setattr(worker, "load_settings", lambda: settings)
+    monkeypatch.setattr(worker, "configure_logging", lambda _level: None)
+    monkeypatch.setattr(worker, "drop_secrets_from_environ", lambda: [])
+    monkeypatch.setattr(worker, "serve", served)
+    monkeypatch.setattr(worker.logging, "shutdown", lambda: events.append("logs flushed"))
+    monkeypatch.setattr(worker.os, "_exit", lambda code: events.append(("exit", code)))
+    assert worker.main([]) == 0
+    assert events == ["logs flushed", ("exit", 0)]
+    events.clear()
+    left[0] = 0
+    assert worker.main([]) == 0
+    assert events == []
 
 
 def test_stale_sweeps_are_reaped_when_the_worker_starts(
