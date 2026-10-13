@@ -132,10 +132,11 @@ def finish_step(
     status: AgentStatus = AgentStatus.done,
     error: str | None = None,
     tokens: int = 0,
+    at: datetime | None = None,
 ) -> engine.Moved:
-    """End the running step's agent run, then advance."""
-    end_agent(factory, running(factory, run_id).agent_run_id, status, error, tokens)
-    return advance(factory, run_id, settings)
+    """End the running step's agent run, then advance (at `at` when the clock is moved)."""
+    end_agent(factory, running(factory, run_id).agent_run_id, status, error, tokens, at)
+    return advance(factory, run_id, settings, at)
 
 
 def run_to_the_end(

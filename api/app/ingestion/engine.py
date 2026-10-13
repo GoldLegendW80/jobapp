@@ -429,7 +429,8 @@ def _after(
         # Cut by the ceiling: it keeps its items and runs again, above the largest budget that
         # was not enough, which is kept on the step whatever happens to its later attempts.
         step.cut_budget = max(step.cut_budget or 0, step.token_budget or 0)
-        _pause(run, TOKEN_CEILING, now)
+        if not _past_deadline(run, now):  # a run out of time asks for no raise: `_next` closes it
+            _pause(run, TOKEN_CEILING, now)
         return StepStatus.planned
     if failures.is_provider_failure(error) or (
         # The API never answered (a closed port): the CLI retried in silence up to the time
@@ -493,14 +494,16 @@ def _floor(step: IngestionRunStep) -> int:
     return math.ceil(one.low)
 
 
-def continue_adds(db: Session, run: IngestionRun, steps: Sequence[IngestionRunStep]) -> int:
+def continue_adds(
+    db: Session, run: IngestionRun, steps: Sequence[IngestionRunStep], now: datetime
+) -> int:
     """What one Continue adds to the ceiling now: one `H`, or what the next step needs to start
     on its floor when one `H` is not enough (a step the ceiling cut on more than half an `H`, or
     a part planned again from a longer text). The step is the one `next_step` names, the one
     `_next` starts after the click, so the figure shown, the figure added and the step started
-    cannot disagree. Zero when nothing would run: no raise is asked, and the run closes at its
-    next `advance`. The page shows this figure before the click."""
-    chosen = next_step(db, run, steps)
+    cannot disagree. Zero when nothing would run, a run out of time included: no raise is asked,
+    and the run closes at its next `advance`. The page shows this figure before the click."""
+    chosen = next_step(db, run, steps, now)
     if chosen.step is None:
         return 0
     return max(run.estimate_high, chosen.needs - (run.token_ceiling - run.tokens_spent), 1)
@@ -513,6 +516,18 @@ def _pause(run: IngestionRun, reason: str, now: datetime) -> None:
     run.paused_at = now
     run.paused_reason = reason
     run.waiting = None
+
+
+def _past_deadline(run: IngestionRun, now: datetime) -> bool:
+    """Whether the run's time is over, as `_next` judges it: the one rule of the deadline. A
+    pause stops the clock (`_restart` moves the deadline by the length of the pause), so a
+    paused run is judged at the deadline it will have right after its Continue or Resume, and
+    the time spent paused never counts: it is over only if it paused at or after its deadline.
+    A run that paused before it can be continued however late the click comes."""
+    deadline = run.deadline_at
+    if run.status is RunStatus.paused:
+        deadline += now - _paused_at(run)
+    return now >= deadline
 
 
 def _next(
@@ -533,15 +548,15 @@ def _next(
             # A pause on the ceiling waits for a raise, and a raise pays for a step. When
             # nothing would run (the documents left to read were deleted during the pause)
             # there is nothing to pay for: the run closes here, on the ceiling it has.
-            chosen = next_step(db, run, steps)
+            chosen = next_step(db, run, steps, now)
             if chosen.step is None:
                 _settle(db, run, steps, chosen)
                 _merge(db, run, steps, now)
         return Moved(run.status)
-    if now >= run.deadline_at:
+    if _past_deadline(run, now):
         _merge(db, run, steps, now)
         return Moved(run.status)
-    chosen = next_step(db, run, steps)
+    chosen = next_step(db, run, steps, now)
     _settle(db, run, steps, chosen)
     step = chosen.step
     if step is None:
@@ -590,7 +605,9 @@ def _next(
     return Moved(run.status, created.id)
 
 
-def next_step(db: Session, run: IngestionRun, steps: Sequence[IngestionRunStep]) -> NextStep:
+def next_step(
+    db: Session, run: IngestionRun, steps: Sequence[IngestionRunStep], now: datetime
+) -> NextStep:
     """The step that would run next and the budget it needs: the one place that decides it.
     `continue_adds` (the figure the page shows and the click adds) and `_next` (the step that
     starts) both ask here, so they cannot name two steps.
@@ -604,7 +621,12 @@ def next_step(db: Session, run: IngestionRun, steps: Sequence[IngestionRunStep])
     Read only: it reads the hash of the stored texts, and for a replaced text the text and the
     steps that finished in earlier runs. It changes no row and no object of the session: what
     it would write is listed in its answer, and `_settle` writes exactly that list, with no
-    decision of its own. That is what makes the page's figure a prediction of `_next`."""
+    decision of its own. That is what makes the page's figure a prediction of `_next`.
+
+    A run out of time (`_past_deadline`) has no next step: `_next` closes it, so no figure is
+    shown and no raise is asked for a step that could not start."""
+    if _past_deadline(run, now):
+        return NextStep(None, 0)
     rows = list(steps)
     failed: list[IngestionRunStep] = []
     removed: list[IngestionRunStep] = []
@@ -880,20 +902,17 @@ def continue_(
     under the run's row lock (one `H`, or what the step that would run needs to start on its
     floor). Any other figure, lower or higher, raises `ContinueChangedError` with the figure of
     now and writes nothing: a stale page never raises the ceiling by an amount its user did not
-    see. When nothing would run (`continue_adds` is zero) nothing is added and nothing raised,
-    whatever `adds` is: the run is returned as it is, for `advance` to close. Raises
+    see. When nothing would run (`continue_adds` is zero: the documents left were deleted, or
+    the run is out of time) every click is such a stale one: it raises `ContinueChangedError(0)`,
+    and the route closes the run. Raises
     `WrongStateError` for any other state. None for a run that is not this user's."""
     run = _lock(db, run_id, user_id)
     if run is None:
         return None
     if run.status is not RunStatus.paused or run.paused_reason != TOKEN_CEILING:
         raise WrongStateError
-    current = continue_adds(db, run, _steps(db, run.id))
-    if current == 0:
-        # Nothing would run: there is no raise to agree to, whatever the page showed. The run
-        # stays as it is, and `advance`, which every caller runs next, closes it.
-        return run
-    if adds != current:
+    current = continue_adds(db, run, _steps(db, run.id), now)
+    if current == 0 or adds != current:  # a figure now zero: no click is answered as accepted
         raise ContinueChangedError(current)
     raised = run.token_ceiling + adds
     _restart(run, now)

@@ -9,7 +9,7 @@ reaches. Each test fails on the engine as merged with PR #148."""
 import asyncio
 import random
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -71,7 +71,7 @@ def rows_of(factory: sessionmaker[Session], run_id: uuid.UUID) -> list[tuple[Any
     ]
 
 
-def shown(factory: sessionmaker[Session], run_id: uuid.UUID) -> int:
+def shown(factory: sessionmaker[Session], run_id: uuid.UUID, at: datetime | None = None) -> int:
     """`tokens.continue_adds` as the read route computes it: without the run's lock, and without
     one write. The session holds nothing to flush afterwards and the rows are as they were."""
     before = rows_of(factory, run_id), eh.run_of(factory, run_id).token_ceiling
@@ -84,17 +84,25 @@ def shown(factory: sessionmaker[Session], run_id: uuid.UUID) -> int:
                 .order_by(IngestionRunStep.position)
             )
         )
-        figure = engine.continue_adds(db, run, steps)
-        assert engine.continue_adds(db, run, steps) == figure  # asked twice, one answer
+        figure = engine.continue_adds(db, run, steps, at or now())
+        assert (
+            engine.continue_adds(db, run, steps, at or now()) == figure
+        )  # asked twice, one answer
         assert (list(db.new), list(db.dirty), list(db.deleted)) == ([], [], [])
         db.commit()  # even committed, the read route's session would have written nothing
     assert (rows_of(factory, run_id), eh.run_of(factory, run_id).token_ceiling) == before
     return figure
 
 
-def click(factory: sessionmaker[Session], user: uuid.UUID, run_id: uuid.UUID, adds: int) -> None:
+def click(
+    factory: sessionmaker[Session],
+    user: uuid.UUID,
+    run_id: uuid.UUID,
+    adds: int,
+    at: datetime | None = None,
+) -> None:
     with factory() as db, db.begin():
-        engine.continue_(db, user, run_id, now(), adds)
+        engine.continue_(db, user, run_id, at or now(), adds)
 
 
 def remaining(factory: sessionmaker[Session], run_id: uuid.UUID) -> int:
@@ -218,7 +226,8 @@ def test_a_continue_with_nothing_left_to_run_adds_nothing_and_the_run_closes(
     factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
 ) -> None:
     """The same state, and a click from a page that still shows one `H` before the cron came:
-    it used to add that `H` only for the run to close. It adds nothing, whatever it carries."""
+    it used to add that `H` only for the run to close. It adds nothing, and it is refused with
+    the figure of now, zero (the route answers 409 `continue_changed` and closes the run)."""
     selected = eh.documents(factory, alice, 2)
     run_id = eh.start(factory, alice, selected)
     eh.advance(factory, run_id, settings)
@@ -228,7 +237,9 @@ def test_a_continue_with_nothing_left_to_run_adds_nothing_and_the_run_closes(
     stale = shown(factory, run_id)
     delete_by_sql(factory, selected[1])
     for adds in (stale, 0, 1):
-        click(factory, alice, run_id, adds)
+        with pytest.raises(engine.ContinueChangedError) as refused:
+            click(factory, alice, run_id, adds)  # never answered as accepted: the figure is 0
+        assert refused.value.adds == 0
         same = eh.run_of(factory, run_id)
         assert (same.status, same.paused_reason) == (RunStatus.paused, engine.TOKEN_CEILING)
         assert (same.token_ceiling, same.ceiling_history) == (paused.token_ceiling, [])
@@ -237,6 +248,92 @@ def test_a_continue_with_nothing_left_to_run_adds_nothing_and_the_run_closes(
     assert (closed.status, closed.partial) == (RunStatus.done, True)
     assert (closed.token_ceiling, closed.ceiling_history) == (paused.token_ceiling, [])
     assert closed.tokens_spent == paused.tokens_spent
+
+
+# --- the deadline (B1 of the review of PR #165) --------------------------------------------------
+
+
+def test_a_cut_recorded_after_the_deadline_pauses_nothing_and_asks_no_raise(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """The reviewer's probe: two small documents, the first step cut on its budget of the whole
+    ceiling, its end recorded 5 seconds after `deadline_at`. It paused the run on the ceiling, the
+    page showed 500,550, the click was accepted and raised the ceiling, and the next `advance`
+    closed the run on the deadline with nothing started. A run out of time asks for no raise: the
+    cut ends the run as the deadline rule says, with the ceiling and its history as they were."""
+    run_id = started(factory, alice, settings, count=2)
+    run = eh.run_of(factory, run_id)
+    step = eh.running(factory, run_id)
+    assert step.token_budget == run.token_ceiling  # cut by the ceiling, not by its backstop
+    agents_before = len(eh.agent_runs_of(factory, alice))
+    late = run.deadline_at + timedelta(seconds=5)
+    eh.finish_step(
+        factory,
+        run_id,
+        settings,
+        AgentStatus.failed,
+        failures.TOKEN_LIMIT,
+        run.token_ceiling,
+        at=late,
+    )
+    closed = eh.run_of(factory, run_id)
+    assert closed.status not in engine.ACTIVE
+    assert (closed.paused_at, closed.paused_reason) == (None, None)  # it never asked for a raise
+    assert (closed.token_ceiling, closed.ceiling_history) == (run.token_ceiling, [])
+    assert closed.tokens_spent == run.token_ceiling
+    assert len(eh.agent_runs_of(factory, alice)) == agents_before
+    with pytest.raises(engine.WrongStateError):
+        click(factory, alice, run_id, 500_550, late)  # a click meanwhile adds nothing
+    assert eh.run_of(factory, run_id).token_ceiling == run.token_ceiling
+
+
+def test_a_run_paused_on_the_ceiling_at_or_after_its_deadline_shows_no_figure_and_closes(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """A row paused that way before this fix (the state of the probe above): the figure is 0
+    whatever the clock, a click is refused with that figure and adds nothing, and the next
+    `advance` closes the run on the ceiling it has."""
+    run_id = started(factory, alice, settings, count=2)
+    run = eh.run_of(factory, run_id)
+    eh.finish_step(factory, run_id, settings, tokens=run.token_ceiling - 1_000)
+    paused = eh.run_of(factory, run_id)
+    assert paused.paused_at is not None
+    assert shown(factory, run_id) == paused.estimate_high
+    eh.set_run(factory, run_id, deadline_at=paused.paused_at - timedelta(seconds=5))
+    for at in (paused.paused_at, paused.paused_at + timedelta(hours=2)):
+        assert shown(factory, run_id, at) == 0
+        with pytest.raises(engine.ContinueChangedError) as refused:
+            click(factory, alice, run_id, paused.estimate_high, at)
+        assert refused.value.adds == 0
+    agents_before = len(eh.agent_runs_of(factory, alice))
+    eh.advance(factory, run_id, settings, at=paused.paused_at + timedelta(minutes=1))
+    closed = eh.run_of(factory, run_id)
+    assert closed.status not in engine.ACTIVE
+    assert (closed.token_ceiling, closed.ceiling_history) == (paused.token_ceiling, [])
+    assert len(eh.agent_runs_of(factory, alice)) == agents_before
+
+
+def test_a_run_paused_before_its_deadline_is_continued_after_the_deadline_passed(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """A pause stops the clock: the Continue moves the deadline by the length of the pause, so a
+    run that paused with time left still has that time left when it resumes, hours later. The
+    figure is judged as the engine will judge it right after the click, by the same function
+    as `_next`, and is shown; the click starts a step and the deadline moved by the pause."""
+    run_id = started(factory, alice, settings, count=2)
+    run = eh.run_of(factory, run_id)
+    eh.finish_step(factory, run_id, settings, tokens=run.token_ceiling - 1_000)
+    paused = eh.run_of(factory, run_id)
+    assert paused.paused_at is not None
+    later = run.deadline_at + timedelta(hours=3)  # the deadline passed while the run was paused
+    assert shown(factory, run_id, later) == paused.estimate_high
+    click(factory, alice, run_id, paused.estimate_high, later)
+    moved = eh.advance(factory, run_id, settings, at=later)
+    after = eh.run_of(factory, run_id)
+    assert moved.enqueue is not None
+    assert after.status is RunStatus.running
+    assert after.deadline_at == run.deadline_at + (later - paused.paused_at)
+    assert after.token_ceiling == paused.token_ceiling + paused.estimate_high
 
 
 # --- every state a seeded walk reaches --------------------------------------------------------
@@ -266,15 +363,21 @@ def _disturb(factory: sessionmaker[Session], run_id: uuid.UUID, rng: random.Rand
 
 
 def _end_running_step(
-    factory: sessionmaker[Session], run_id: uuid.UUID, settings: Settings, rng: random.Random
+    factory: sessionmaker[Session],
+    run_id: uuid.UUID,
+    settings: Settings,
+    rng: random.Random,
+    at: datetime,
 ) -> None:
     budget = eh.running(factory, run_id).token_budget or 0
     how = rng.choice(["cheap", "to the ceiling", "cut", "cut"])
     if how == "cheap":
-        eh.finish_step(factory, run_id, settings, tokens=1_000)
+        eh.finish_step(factory, run_id, settings, tokens=1_000, at=at)
     elif how == "to the ceiling":
         left = remaining(factory, run_id)
-        eh.finish_step(factory, run_id, settings, tokens=max(left - rng.randrange(20_000), 1))
+        eh.finish_step(
+            factory, run_id, settings, tokens=max(left - rng.randrange(20_000), 1), at=at
+        )
     else:
         eh.finish_step(
             factory,
@@ -283,7 +386,14 @@ def _end_running_step(
             AgentStatus.failed,
             failures.TOKEN_LIMIT,
             budget + rng.randrange(50),
+            at,
         )
+
+
+# How long a step takes and how long a pause lasts in the walk, in minutes. The run has 60: a
+# deadline is reached while a step works, and while the run is paused (a pause stops the clock).
+_WORK = (0, 1, 5, 20, 45)
+_PAUSES = (0, 5, 70, 180)
 
 
 @pytest.mark.parametrize("seed", range(40))
@@ -294,37 +404,49 @@ def test_at_every_pause_one_continue_is_exactly_what_starts_the_next_step(
     every pause on the ceiling documents are deleted or their texts replaced at random. In every
     such state, the figure shown is zero and the run closes with no raise, or it is the amount
     after which the next step starts without a second pause: one `H`, or to the token what that
-    step's floor needs when one `H` is not enough."""
+    step's floor needs when one `H` is not enough. The clock moves: a step ends minutes later, a
+    pause lasts up to hours, so deadlines are reached while a step works (a cut recorded out of
+    time pauses nothing) and while the run is paused (a pause stops the clock, and the run
+    continues). Whatever the time, a figure shown is a figure that starts a step."""
     rng = random.Random(seed)  # noqa: S311 (test data, not a secret)
     texts = [
         eh.text_of(number, rng.choice([200, 600, 4_000])) for number in range(rng.randint(2, 4))
     ]
-    run_id = eh.start(factory, alice, [add_document(factory, alice, text) for text in texts])
-    eh.advance(factory, run_id, settings)
+    clock = now()  # moves: steps take minutes, pauses last up to hours
+    run_id = eh.start(
+        factory, alice, [add_document(factory, alice, text) for text in texts], at=clock
+    )
+    eh.advance(factory, run_id, settings, at=clock)
     pauses = 0
     for _ in range(80):
         run = eh.run_of(factory, run_id)
         if run.status not in engine.ACTIVE:
             break
         if run.status is RunStatus.running:
-            _end_running_step(factory, run_id, settings, rng)
+            clock += timedelta(minutes=rng.choice(_WORK))
+            _end_running_step(factory, run_id, settings, rng, clock)
+            if clock >= run.deadline_at:  # the step ended out of time: no raise is asked
+                assert eh.run_of(factory, run_id).status not in engine.ACTIVE, (seed, clock)
             continue
         assert run.paused_reason == engine.TOKEN_CEILING
+        assert run.paused_at is not None, seed
+        assert run.paused_at < run.deadline_at, seed
         pauses += 1
-        state = (seed, pauses, _disturb(factory, run_id, rng))
+        clock += timedelta(minutes=rng.choice(_PAUSES))  # the deadline may pass during the pause
+        state = (seed, pauses, clock, _disturb(factory, run_id, rng))
         left = remaining(factory, run_id)
         agents_before = len(eh.agent_runs_of(factory, alice))
-        figure = shown(factory, run_id)
+        figure = shown(factory, run_id, clock)
         if figure == 0:
-            eh.advance(factory, run_id, settings)
+            eh.advance(factory, run_id, settings, at=clock)
             closed = eh.run_of(factory, run_id)
             assert closed.status not in engine.ACTIVE, state
             assert closed.token_ceiling == run.token_ceiling, state
             assert closed.ceiling_history == run.ceiling_history, state
             assert len(eh.agent_runs_of(factory, alice)) == agents_before, state
             break
-        click(factory, alice, run_id, figure)
-        moved = eh.advance(factory, run_id, settings)
+        click(factory, alice, run_id, figure, clock)
+        moved = eh.advance(factory, run_id, settings, at=clock)
         after = eh.run_of(factory, run_id)
         assert moved.enqueue is not None, state
         assert after.status is RunStatus.running, state

@@ -154,8 +154,9 @@ class TokensOut(BaseModel):
         "now. One `high`, or more when the step that runs next needs it: a step the ceiling "
         "interrupted starts again from its first request, on at least twice the budget that was "
         "not enough. The click sends this figure back as `adds`. Zero when no step would run "
-        "(what was left to read was deleted): no raise is asked, the run closes by itself "
-        "within a minute, and a Continue sent meanwhile adds nothing and closes it at once."
+        "(what was left to read was deleted, or the run is out of time): no raise is asked, "
+        "the run closes by itself within a minute, and a Continue sent meanwhile adds nothing, "
+        "closes it at once and is answered 409 `continue_changed` with `continue_adds` 0."
     )
     overshoot_requests: int
     overshoot: str
@@ -239,7 +240,7 @@ def _cost(agent: Any) -> str | None:
     return str(Decimal(agent.cost_usd).quantize(Decimal("0.0001")))
 
 
-def run_out(db: Session, run: IngestionRun) -> RunOut:
+def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
     step = IngestionRunStep
     rows = db.execute(
         sa.select(
@@ -324,7 +325,7 @@ def run_out(db: Session, run: IngestionRun) -> RunOut:
             low=run.estimate_low,
             high=run.estimate_high,
             history=[CeilingEntryOut.model_validate(entry) for entry in run.ceiling_history],
-            continue_adds=engine.continue_adds(db, run, [row[0] for row in rows])
+            continue_adds=engine.continue_adds(db, run, [row[0] for row in rows], now)
             if run.status is RunStatus.paused and run.paused_reason == engine.TOKEN_CEILING
             else None,
             overshoot_requests=engine.OVERSHOOT_REQUESTS,
@@ -345,18 +346,22 @@ def run_out(db: Session, run: IngestionRun) -> RunOut:
     )
 
 
-def _read(sessions: sessionmaker[Session], user_id: uuid.UUID, run_id: uuid.UUID) -> RunOut | None:
+def _read(
+    sessions: sessionmaker[Session], user_id: uuid.UUID, run_id: uuid.UUID, now: datetime
+) -> RunOut | None:
     with sessions() as db:
         run = db.execute(
             sa.select(IngestionRun).where(
                 IngestionRun.id == run_id, IngestionRun.user_id == user_id
             )
         ).scalar_one_or_none()
-        return run_out(db, run) if run is not None else None
+        return run_out(db, run, now) if run is not None else None
 
 
 async def _answer(request: Request, user_id: uuid.UUID, run_id: uuid.UUID) -> RunOut:
-    found = await run_in_threadpool(_read, sessions_of(request), user_id, run_id)
+    found = await run_in_threadpool(
+        _read, sessions_of(request), user_id, run_id, deps.clock(request)
+    )
     if found is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
     return found
@@ -599,7 +604,10 @@ async def continue_run(run_id: str, body: ContinueIn, user: CurrentUser, request
         return await _action(request, user, run_id, action, NOT_CONTINUABLE)
     except engine.ContinueChangedError as changed:
         # The transaction rolled back: the ceiling, its history and the run's state are as
-        # they were. The page shows the new figure and asks again.
+        # they were. The page shows the new figure and asks again. A figure now zero means
+        # nothing would run: the run closes here, as it would at the next minute.
+        if changed.adds == 0:
+            await _drive(request, _id(run_id))
         logger.info(
             "ingestion_continue_refused",
             extra={"user_id": str(user.id), "rule": "continue_changed"},
