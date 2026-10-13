@@ -38,8 +38,11 @@ def main() -> int:
         time.sleep(float(options["s"]))
     elif act == "flood":
         block = b"x" * 65536
-        for _ in range(int(options["blocks"])):
+        blocks = options.get("blocks")  # without it: for ever, only a kill ends this child
+        written = 0
+        while blocks is None or written < int(blocks):
             sys.stdout.buffer.write(block)
+            written += 1
         sys.stdout.buffer.flush()
         return 0
     elif act == "exit":

@@ -16,6 +16,7 @@ PARSER_TEST_IMAGE names one. About a minute: the two limits that take one (60 s 
 
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -618,17 +619,30 @@ def test_a_parser_that_swallows_the_memory_error_goes_on(stack: Stack) -> None:
 
 
 def test_a_child_that_floods_its_output_is_killed_at_the_cap(stack: Stack) -> None:
-    answer = stack.raw({"act": "flood", "blocks": 100_000})  # 6.5 GB, if anyone let it
+    """The flood has no end: nothing but a kill ends this child, and the service waits for its
+    death before it reads on, so with the kill taken away the job never answers (tried on PR
+    #156 with an image whose server does not kill: this test fails on its bound of time). The
+    service's own record then says how the child ended and how much of its output was read:
+    SIGKILL, and the cap plus what a dead child leaves in its pipe, not what it wrote."""
+    answer = stack.raw({"act": "flood"})
     assert answer["header"] == {**REFUSED, "code": "output_cap"}
-    # The code says the cap ended it. The duration only has to stay under the first limit
-    # of time (45 s of CPU): seconds, on a machine that has none to spare.
-    assert answer["ms"] < 45_000
-    found = stack.parse({"act": "flood", "blocks": 100_000})
+    # A kill and its reaping: REAP_MS, the rule of every other kill of this file. The time is
+    # printed for whoever has to judge the bound: pytest shows it with -rP, or when this fails.
+    print(f"flood_ms={answer['ms']}")
+    assert answer["ms"] < REAP_MS
+    found = stack.parse({"act": "flood"})
     assert (found["error"], found["code"], found["failure"]) == (
         "ParserRefusedError",
         "output_cap",
         "server",
     )
+    log = stack.run("logs", "--no-log-prefix", "--no-color", "parser")
+    lines = [json.loads(line) for line in log.splitlines() if line.strip()]
+    capped = [line for line in lines if line["event"] == "job" and line["code"] == "output_cap"]
+    assert len(capped) >= 2  # the two jobs above are the last two
+    for line in capped[-2:]:
+        assert line["status"] == -signal.SIGKILL
+        assert line["read"] <= server.MAX_ANSWER + (1 << 16) + server.DRAIN_MAX
     alive(stack)
 
 
@@ -1036,6 +1050,7 @@ def test_zz_the_log_of_the_service_holds_no_word_of_a_child_or_of_a_document(
             "port",
             "uid",
             "status",
+            "read",
         }
         assert line.get("code", "ok") in server.CODES
         assert line.get("kind", "ping") in server.KINDS
