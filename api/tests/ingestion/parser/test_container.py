@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import threading
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -44,6 +45,7 @@ class Stack:
 
     def __init__(self, project: str, image: str) -> None:
         self.project, self.image = project, image
+        self.containers: dict[str, str] = {}
         self.compose = ["docker", "compose", "-p", project, "-f", str(HERE / "compose.sandbox.yml")]
         # Compose interpolates the whole of compose.yml to read its `parser` service.
         self.env = {
@@ -67,11 +69,24 @@ class Stack:
             raise AssertionError(f"compose {arguments[:4]} failed:\n{done.stdout}\n{done.stderr}")
         return done.stdout
 
-    def driver(self, *arguments: str, timeout: float = 300) -> Any:
-        out = self.run(
-            "exec", "-T", "client", "python", "/driver/driver.py", *arguments, timeout=timeout
+    def execute(
+        self, service: str, *command: str, stdin: str | None = None, timeout: float = 300
+    ) -> subprocess.CompletedProcess:
+        """A command in a running container. By `docker exec`, not through Compose: a hundred
+        of these, and Compose reads and interpolates its files for each one."""
+        return subprocess.run(
+            ["docker", "exec", "-i", self.container(service), *command],
+            input=stdin,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
         )
-        return json.loads(out)
+
+    def driver(self, *arguments: str, timeout: float = 300) -> Any:
+        done = self.execute("client", "python", "/driver/driver.py", *arguments, timeout=timeout)
+        assert done.returncode == 0, f"driver {arguments[:3]} failed:\n{done.stderr[-2000:]}"
+        return json.loads(done.stdout)
 
     def raw(self, options: dict, size: int = 1, kind: str = "pdf_render", host: str = "parser"):
         return self.driver("raw", host, kind, json.dumps(options), str(size))
@@ -80,7 +95,9 @@ class Stack:
         return self.driver("parse", host, kind, json.dumps(options), str(size))
 
     def container(self, service: str) -> str:
-        return self.run("ps", "-q", service).strip()
+        if service not in self.containers:
+            self.containers[service] = self.run("ps", "-q", service).strip()
+        return self.containers[service]
 
     def inspect(self, service: str) -> dict:
         out = subprocess.run(
@@ -92,13 +109,7 @@ class Stack:
         return json.loads(out.stdout)[0]
 
     def inside(self, service: str, code: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            [*self.compose, "exec", "-T", service, "python", "-I", "-c", code],
-            env=self.env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return self.execute(service, "python", "-I", "-c", code)
 
 
 @pytest.fixture(scope="module")
@@ -132,12 +143,18 @@ def stack() -> Iterator[Stack]:
 
 @pytest.fixture(scope="module")
 def slow(stack: Stack) -> Iterator[dict]:
-    """The two jobs that take a minute, started together on instances of their own as soon as
-    the stack is up. A test that needs one waits for it."""
+    """Everything that only time ends, started together on instances of their own as soon as
+    the stack is up: the three jobs that take a minute, and the two clients the service gives
+    up after 10 s of silence (they hold no job slot, so they share an instance with a job; the
+    service is then shown alive by a ping, which a running job does not delay). A test that
+    needs one waits for it."""
     found: dict[str, Any] = {}
 
     def job(name: str, host: str, options: dict) -> None:
         found[name] = stack.raw(options, host=host)
+
+    def clumsy(name: str, host: str) -> None:
+        found[name] = stack.driver("clumsy", host, name, "ping")
 
     threads = [
         threading.Thread(target=job, args=("spin", "parser-cpu", {"act": "spin"})),
@@ -145,14 +162,17 @@ def slow(stack: Stack) -> Iterator[dict]:
             target=job, args=("deaf", "parser-kill", {"act": "spin", "ignore_sigxcpu": True})
         ),
         threading.Thread(target=job, args=("sleep", "parser-wall", {"act": "sleep", "s": 600})),
+        threading.Thread(target=clumsy, args=("silent", "parser-cpu")),
+        threading.Thread(target=clumsy, args=("half_a_document", "parser-kill")),
     ]
     for thread in threads:
         thread.start()
 
-    def wait() -> dict:
-        for thread in threads:
-            thread.join(180)
-        assert set(found) == {"spin", "deaf", "sleep"}, f"a slow job is missing: {sorted(found)}"
+    def wait(*names: str) -> dict:
+        deadline = time.monotonic() + 180
+        while not set(names) <= set(found) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        assert set(names) <= set(found), f"did not come back: {sorted(set(names) - set(found))}"
         return found
 
     yield {"wait": wait}
@@ -226,6 +246,36 @@ def test_the_container_runs_as_compose_yml_hardens_it(stack: Stack) -> None:
     assert all(mount["RW"] is False for mount in found["Mounts"])
 
 
+def test_the_judge_of_the_smoke_scripts_agrees_on_the_real_container(stack: Stack) -> None:
+    """tests/parser_check.py is what tests/compose_smoke.sh and tests/jetson_smoke.sh judge the
+    running container with. On this stack it must find the two handler files the tests mount,
+    and nothing else."""
+    inspected = subprocess.run(
+        ["docker", "inspect", stack.container("parser")],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    done = subprocess.run(
+        [
+            "python3",
+            str(ROOT / "tests" / "parser_check.py"),
+            "inspect",
+            "--secret-name",
+            "SECRET_KEY",
+        ],
+        input=inspected,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 1
+    assert sorted(done.stderr.splitlines()) == [
+        "parser: mount at /app/app/ingestion/sandbox/docx.py (writable: False)",
+        "parser: mount at /app/app/ingestion/sandbox/pdf_render.py (writable: False)",
+    ]
+
+
 def test_the_environment_holds_the_port_and_what_the_image_sets_and_no_secret(
     stack: Stack,
 ) -> None:
@@ -262,22 +312,8 @@ def test_the_network_it_sits_on_is_internal(stack: Stack) -> None:
 
 
 def test_the_healthcheck_passes_and_proves_the_sandbox(stack: Stack) -> None:
-    done = subprocess.run(
-        [
-            *stack.compose,
-            "exec",
-            "-T",
-            "parser",
-            "python",
-            "-I",
-            "/app/app/ingestion/sandbox/server.py",
-            "--check",
-        ],
-        env=stack.env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    check = "/app/app/ingestion/sandbox/server.py"
+    done = stack.execute("parser", "python", "-I", check, "--check")
     assert (done.returncode, done.stdout, done.stderr) == (0, "", "")
     # The same ping through the worker's client, with what the child reported.
     ping = stack.driver("ping", "parser")
@@ -647,18 +683,18 @@ def test_a_size_of_20_mib_and_one_byte_is_refused_before_any_byte_is_read(stack:
     assert stack.raw({"act": "echo"}, size=20 * MIB)["body"] == {"ok": True, "received": 20 * MIB}
 
 
-def test_a_client_that_sends_nothing_is_given_up_after_10_s(stack: Stack) -> None:
-    found = stack.driver("clumsy", "parser", "silent")
+def test_a_client_that_sends_nothing_is_given_up_after_10_s(slow: dict) -> None:
+    found = slow["wait"]("silent")["silent"]
     assert found["first"]["header"] == {**REFUSED, "code": "read_timeout"}
     assert 9_500 <= found["first"]["ms"] <= 15_000
-    served_after(found)
+    assert found["after"]["header"]["ok"] is True, "the service answers a ping right after"
 
 
-def test_a_document_that_stops_arriving_is_given_up_after_10_s(stack: Stack) -> None:
-    found = stack.driver("clumsy", "parser", "half_a_document")
+def test_a_document_that_stops_arriving_is_given_up_after_10_s(slow: dict) -> None:
+    found = slow["wait"]("half_a_document")["half_a_document"]
     assert found["first"]["header"] == {**REFUSED, "code": "read_timeout"}
     assert 9_500 <= found["first"]["ms"] <= 15_000
-    served_after(found)
+    assert found["after"]["header"]["ok"] is True
 
 
 @pytest.mark.parametrize(
@@ -683,14 +719,14 @@ def test_a_client_that_closes_mid_document_or_mid_job_leaves_the_service_free(
 
 
 def test_a_ping_is_answered_at_once_during_a_job(stack: Stack) -> None:
-    found = stack.driver("during", "parser", "8")
+    found = stack.driver("during", "parser", "6")
     assert len(found["pings"]) == 5
     for ping in found["pings"]:
         assert ping["ok"] is True
         assert ping["ms"] < 2000
     assert found["job_still_running"] is True, "the pings came back while the job ran"
     assert found["job"]["body"] == {"ok": True, "received": 1}
-    assert found["job"]["ms"] >= 8000
+    assert found["job"]["ms"] >= 6000
 
 
 def test_jobs_sent_at_once_run_one_at_a_time(stack: Stack) -> None:
@@ -800,22 +836,8 @@ def test_without_the_filter_the_child_does_nothing_and_the_service_is_unhealthy(
     filter, as a kernel without CONFIG_SECCOMP_FILTER would. The child exits before it imports
     a handler or reads a byte; the job is a failure of the server; the healthcheck fails, which
     is what stops a deploy on such a kernel."""
-    done = subprocess.run(
-        [
-            *stack.compose,
-            "exec",
-            "-T",
-            "parser-unfiltered",
-            "python",
-            "-I",
-            "/app/app/ingestion/sandbox/server.py",
-            "--check",
-        ],
-        env=stack.env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    check = "/app/app/ingestion/sandbox/server.py"
+    done = stack.execute("parser-unfiltered", "python", "-I", check, "--check")
     assert (done.returncode, done.stderr) == (1, "unhealthy: refused:sandbox\n")
     for options in ({"act": "attempts"}, {"act": "echo"}):
         answer = stack.raw(options, size=4096, host="parser-unfiltered")
@@ -839,14 +861,9 @@ def test_without_the_filter_the_child_does_nothing_and_the_service_is_unhealthy(
 def reach(stack: Stack, service: str, host: str, port: int) -> dict:
     """Resolve and connect from inside a service (the parser has no driver mounted: the same
     code goes in on standard input)."""
-    done = subprocess.run(
-        [*stack.compose, "exec", "-T", service, "python", "-I", "-", "reach", host, str(port)],
-        env=stack.env,
-        input=(HERE / "driver.py").read_text(encoding="utf-8"),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
+    code = (HERE / "driver.py").read_text(encoding="utf-8")
+    done = stack.execute(service, "python", "-I", "-", "reach", host, str(port), stdin=code)
+    assert done.returncode == 0, done.stderr[-2000:]
     return json.loads(done.stdout)
 
 
@@ -905,7 +922,7 @@ def test_the_worker_reaches_the_parser_and_nothing_of_the_default_network_does(
 
 
 def test_the_cpu_limit_ends_a_busy_child_at_45_s_of_cpu(stack: Stack, slow: dict) -> None:
-    spin = slow["wait"]()["spin"]
+    spin = slow["wait"]("spin")["spin"]
     assert spin["header"] == {**REFUSED, "code": "cpu_limit"}
     assert 44_000 <= spin["ms"] <= 58_000, "SIGXCPU at 45 s of CPU, before the wall clock"
     alive(stack, "parser-cpu")
@@ -916,7 +933,7 @@ def test_a_child_that_ignores_the_cpu_signal_is_killed_a_second_later(
 ) -> None:
     """SIGXCPU can be ignored, and a child that was taken over would ignore it. The hard limit
     is one second above the soft one, and its SIGKILL cannot be."""
-    deaf = slow["wait"]()["deaf"]
+    deaf = slow["wait"]("deaf")["deaf"]
     assert deaf["header"] == {**REFUSED, "code": "crashed"}
     assert 45_000 <= deaf["ms"] <= 59_000
     alive(stack, "parser-kill")
@@ -925,7 +942,7 @@ def test_a_child_that_ignores_the_cpu_signal_is_killed_a_second_later(
 def test_the_wall_clock_ends_a_sleeping_child_at_60_s_and_reaps_it(
     stack: Stack, slow: dict
 ) -> None:
-    sleep = slow["wait"]()["sleep"]
+    sleep = slow["wait"]("sleep")["sleep"]
     assert sleep["header"] == {**REFUSED, "code": "wall_limit"}
     assert 59_000 <= sleep["ms"] <= 70_000
     # Reaped: the next child sees the server and itself, and no process left over.

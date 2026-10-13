@@ -11,7 +11,8 @@ redis and the api. Every command prints one line of JSON and exits 0: the test j
     driver.py ping HOST [SIZE]               a ping through the client
     driver.py during HOST SECONDS            pings while a job of SECONDS runs
     driver.py together HOST SECONDS COUNT    COUNT jobs of SECONDS sent at once
-    driver.py clumsy HOST WHAT               a client that breaks the protocol, then a job
+    driver.py clumsy HOST WHAT [ping]        a client that breaks the protocol, then a job
+                                             (or a ping, where the job slot is taken)
 """
 
 import asyncio
@@ -144,9 +145,10 @@ async def together(host: str, seconds: float, count: int) -> dict:
     return {"jobs": sorted(jobs, key=lambda job: job["at"])}
 
 
-async def clumsy(host: str, what: str) -> dict:
+async def clumsy(host: str, what: str, then: str = "job") -> dict:
     """A client that breaks the protocol in one way, then an ordinary job: the service must
-    answer the first as it says and serve the second."""
+    answer the first as it says and serve the second. `then` "ping": a ping instead of the
+    job, for an instance whose one job slot is taken on purpose."""
     if what == "header_5k":
         first = await exchange(host, line_of("docx", 0, {"pad": "x" * 5000}))
     elif what == "size_over":
@@ -178,7 +180,10 @@ async def clumsy(host: str, what: str) -> dict:
     else:
         raise SystemExit(f"unknown: {what}")
     started = time.monotonic()
-    after = await raw(host, "pdf_render", {"act": "echo"}, 3)
+    if then == "ping":
+        after = await raw(host, "ping", {})
+    else:
+        after = await raw(host, "pdf_render", {"act": "echo"}, 3)
     return {"first": first, "after": after, "after_ms": int((time.monotonic() - started) * 1000)}
 
 
@@ -225,7 +230,7 @@ def main(argv: list[str]) -> int:
     elif command == "together":
         found = asyncio.run(together(arguments[0], float(arguments[1]), int(arguments[2])))
     elif command == "clumsy":
-        found = asyncio.run(clumsy(arguments[0], arguments[1]))
+        found = asyncio.run(clumsy(*arguments[:3]))
     else:
         raise SystemExit(__doc__)
     print(json.dumps(found))

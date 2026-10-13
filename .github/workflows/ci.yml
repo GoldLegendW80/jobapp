@@ -206,9 +206,13 @@ jobs:
         run: |
           total="$(uv run --frozen coverage report --format=total --fail-under=0)"
           { echo "### api coverage"; echo; echo "- total: ${total} percent (floor: 95)"; } >> "$GITHUB_STEP_SUMMARY"
-      # Serial, without -n: these stop, restart and pause Postgres containers of their own. No
-      # --cov: they add nothing to the coverage figure (and never did).
-      - name: Pytest, docker-marked (own Postgres containers stopped, restarted, paused)
+      # Serial, without -n: these stop, restart and pause Postgres containers of their own, and
+      # run the parser service in its real container against a handler that tries to get out
+      # (tests/ingestion/parser/test_container.py: the worker image built here from the
+      # runner's layer cache, a stack of its own, about 70 s, of which 60 are the wall clock
+      # limit at its real value). No --cov: they add nothing to the coverage figure (and never
+      # did).
+      - name: Pytest, docker-marked (own Postgres containers; the parser in its container)
         id: docker_tests
         if: ${{ !cancelled() && steps.api_install.outcome == 'success' }}
         working-directory: api
@@ -368,7 +372,7 @@ jobs:
           ops/ci-runner/job-completed.sh ops/ci-runner/ci-clean.sh tests/ci_runners_test.sh
           tests/deploy_test.sh tests/migrate_test.sh tests/jetson_smoke.sh tests/backup_test.sh tests/crash_check.sh
           tests/reboot_check.sh tests/e2e_jetson.sh tests/tailscale_test.sh tests/agents_real_run_jetson.sh
-          tests/agents_real_run_test.sh
+          tests/agents_real_run_test.sh tests/ingestion_parser_jetson.sh
           ops/env_check.sh tests/env_check_test.sh
       # Issue #18: the .env syntax check and where it runs (deploy.sh, deploy.yml, the smoke).
       - name: tests/env_check_test.sh
