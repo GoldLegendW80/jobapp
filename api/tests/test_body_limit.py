@@ -15,6 +15,7 @@ from app.body_limit import (
     DEFAULT_MAX_BYTES,
     PUBLIC_MAX_BYTES,
     LimitRequestBodyMiddleware,
+    SessionGate,
     limit_for,
 )
 
@@ -209,6 +210,112 @@ def test_a_slow_but_progressing_body_is_not_cut(monkeypatch: pytest.MonkeyPatch)
     asyncio.run(asyncio.wait_for(run(), 5))
     assert status_of(sent) == 200
     assert body_of(sent) == {"read": 6}
+
+
+# --- no session, no body -----------------------------------------------------------------------
+
+
+class Gate:
+    """A SessionGate whose answers a test chooses, and which records what it was asked."""
+
+    def __init__(self, signed_in: bool, public: frozenset[tuple[str, str]] = frozenset()) -> None:
+        self.signed_in = signed_in
+        self.public = public
+        self.asked: list[str] = []
+
+    def needs_session(self, method: str, path: str) -> bool:
+        return (method, path) not in self.public
+
+    async def has_session(self, scope: Any) -> bool:
+        self.asked.append(scope["path"])
+        return self.signed_in
+
+    def gate(self) -> SessionGate:
+        return SessionGate(self.needs_session, self.has_session, "sign in first")
+
+
+async def drive_gated(gate: Gate, scope: dict, chunks: list[Message]) -> tuple[list[Message], int]:
+    """Run the middleware with `gate` over `echo_app`; also how often the body was asked for."""
+    sent: list[Message] = []
+    reads = 0
+    queue = list(chunks)
+
+    async def receive() -> Message:
+        nonlocal reads
+        reads += 1
+        return queue.pop(0) if queue else {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    await LimitRequestBodyMiddleware(echo_app, gate=gate.gate())(scope, receive, send)
+    return sent, reads
+
+
+BODY = [{"type": "http.request", "body": b"{}", "more_body": False}]
+LENGTH = [(b"content-length", b"2")]
+
+
+def test_without_a_session_the_body_is_never_read() -> None:
+    gate = Gate(signed_in=False)
+    sent, reads = asyncio.run(drive_gated(gate, scope("POST", "/api/agents/runs", LENGTH), BODY))
+    assert status_of(sent) == 401
+    assert body_of(sent) == {"detail": "sign in first"}
+    assert reads == 0
+    assert gate.asked == ["/api/agents/runs"]
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [(b"content-length", b"9000000")],
+        [(b"transfer-encoding", b"chunked")],
+        [(b"content-length", b"abc")],  # not a number still announces a body
+    ],
+)
+def test_every_way_of_announcing_a_body_is_refused_without_a_session(
+    headers: list[tuple[bytes, bytes]],
+) -> None:
+    sent, reads = asyncio.run(
+        drive_gated(Gate(signed_in=False), scope("PUT", "/api/profile/photo", headers), BODY)
+    )
+    assert status_of(sent) == 401  # a route that reads its own body is behind the gate too
+    assert reads == 0
+
+
+def test_with_a_session_the_request_goes_on_to_the_limits() -> None:
+    gate = Gate(signed_in=True)
+    sent, _ = asyncio.run(drive_gated(gate, scope("POST", "/api/agents/runs", LENGTH), BODY))
+    assert status_of(sent) == 200
+    assert body_of(sent) == {"read": 2}
+    over = [(b"content-length", str(DEFAULT_MAX_BYTES + 1).encode())]
+    sent, reads = asyncio.run(drive_gated(gate, scope("POST", "/api/agents/runs", over), BODY))
+    assert status_of(sent) == 413
+    assert reads == 0
+
+
+def test_a_public_route_is_not_asked_for_a_session() -> None:
+    gate = Gate(signed_in=False, public=frozenset({("POST", "/api/auth/login")}))
+    sent, _ = asyncio.run(drive_gated(gate, scope("POST", "/api/auth/login", LENGTH), BODY))
+    assert status_of(sent) == 200
+    assert gate.asked == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "headers"),
+    [
+        ("GET", "/api/agents/runs", []),  # no body announced: the route's own check answers
+        ("POST", "/api/agents/runs", [(b"content-length", b"0")]),
+        ("POST", "/assets/app.js", [(b"content-length", b"2")]),  # not the api
+    ],
+)
+def test_the_session_is_only_looked_up_for_a_body_under_api(
+    method: str, path: str, headers: list[tuple[bytes, bytes]]
+) -> None:
+    gate = Gate(signed_in=False)
+    sent, _ = asyncio.run(drive_gated(gate, scope(method, path, headers), BODY))
+    assert status_of(sent) == 200
+    assert gate.asked == []
 
 
 # --- passthrough -------------------------------------------------------------------------------

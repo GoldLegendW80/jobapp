@@ -6,24 +6,33 @@ no session can make the api hold a body on any JSON route (the public ones, and 
 answer 401, whose body is read before the 401). Caddy caps bodies at the edge, but the api must
 not depend on the proxy being in front of it.
 
-`LimitRequestBodyMiddleware` is a pure ASGI middleware: it runs before the body is parsed, caps
-it by route class, and answers 413 without buffering past the limit. It never makes a second
-copy and it leaves alone the routes that read their own raw body with their own limit, so it
-does not double read them:
+`LimitRequestBodyMiddleware` is a pure ASGI middleware that runs before the body is parsed. It
+does two things, in this order.
 
-- public routes under /api/auth/ (sign in, sign out, link check and accept): PUBLIC_MAX_BYTES,
-  a few hundred bytes of login or acceptance with wide margin;
-- every other JSON route under /api: DEFAULT_MAX_BYTES, well under Caddy's 10 MiB edge limit;
-- the routes that legitimately take a large body and read it themselves, each with its own
-  limit, are in SELF_LIMITED and pass through untouched: the profile photo (PUT, 2 MiB) and
-  profile import (POST, 2 MiB), the jobs import (POST, 10 MiB), and the ingestion document
-  upload and paste of pull request #98 (POST, its own 20 MiB and slots).
+1. No session, no body (`SessionGate`, given by app.main): a request under /api that announces
+   a body, on a route that is not public, is answered 401 before a byte of its body is read
+   when it carries no valid session. The session is looked up the way the routes look it up
+   (once per request, kept on the request's state), and a request without the cookie costs no
+   database call. So the only bodies a caller with no session can make the api read are those
+   of the public routes, which are small (below).
+2. A size limit by route class, and a time limit on the read. It never makes a second copy, and
+   it leaves alone the routes that read their own raw body with their own limit:
+   - routes under /api/auth/ (sign in, sign out, link check and accept, and the account
+     routes): PUBLIC_MAX_BYTES, a few hundred bytes of sign in or acceptance with wide margin;
+   - every other JSON route under /api: DEFAULT_MAX_BYTES, well under Caddy's 10 MiB;
+   - the routes that take a larger body and read it themselves, each with its own limit, are
+     in SELF_LIMITED and are not capped here: the profile photo (PUT, 2 MiB) and profile import
+     (POST, 2 MiB), the jobs import (POST, 10 MiB), and the ingestion document upload and paste
+     of pull request #98 (POST, its own limits and slots).
 
-How it caps: a declared Content-Length over the limit is refused before a byte of body is read;
-otherwise the body is counted as it streams and, at the first byte past the limit, the body is
-cut short so the app stops reading and buffers no more, and whatever the app would answer is
-replaced by a 413. The answer is cheap (`{"detail": ...}`, no-store) and the server closes the
-connection, having not consumed the rest of the body.
+How it caps: a declared Content-Length over the limit is refused with 413 before a byte of body
+is read; otherwise the body is counted as it streams and, at the first byte past the limit, the
+app is told the body ended, so it reads and buffers no more, and whatever it then answers is
+replaced by the 413. A body that brings nothing for BODY_READ_IDLE_S is ended the same way and
+answered 408. The refusal is sent from here, not raised: of the exceptions that reach FastAPI
+while it reads a body, only its own HTTPException keeps its status, any other becomes a 400
+(routing.py, "There was an error parsing the body"). What the server then does with the
+connection and with the rest of the body is uvicorn's business and was not examined.
 """
 
 from __future__ import annotations
@@ -31,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable, MutableMapping
+from dataclasses import dataclass
 from typing import Any
 
 Scope = MutableMapping[str, Any]
@@ -68,13 +78,28 @@ BODY_READ_IDLE_S = 20.0
 def limit_for(method: str, path: str) -> int | None:
     """The body limit in bytes for this request, or None when the middleware must not cap it
     (a route that reads its own body, or a path the api does not serve)."""
-    if path != "/api" and not path.startswith("/api/"):
+    if not is_api_path(path):
         return None
     if (method, path) in SELF_LIMITED:
         return None
     if path.startswith(PUBLIC_PREFIX):
         return PUBLIC_MAX_BYTES
     return DEFAULT_MAX_BYTES
+
+
+def is_api_path(path: str) -> bool:
+    return path == "/api" or path.startswith("/api/")
+
+
+@dataclass(frozen=True)
+class SessionGate:
+    """Who may send a body at all (module docstring, 1). `needs_session(method, path)` says
+    whether the route is one that answers only with a session; `has_session(scope)` looks the
+    session of this request up; `detail` is the sentence of the 401."""
+
+    needs_session: Callable[[str, str], bool]
+    has_session: Callable[[Scope], Awaitable[bool]]
+    detail: str
 
 
 def _declared_length(scope: Scope) -> int | None:
@@ -84,6 +109,17 @@ def _declared_length(scope: Scope) -> int | None:
             text = value.decode("latin-1").strip()
             return int(text) if text.isdigit() else None
     return None
+
+
+def announces_body(scope: Scope) -> bool:
+    """Does this request say it carries a body: a Content-Length that is not 0 (a value that
+    is not a number counts), or a Transfer-Encoding. Without either there is no body to read."""
+    for name, value in scope.get("headers", ()):
+        if name == b"transfer-encoding":
+            return True
+        if name == b"content-length" and value.strip() != b"0":
+            return True
+    return False
 
 
 async def _send_error(send: Send, status: int, detail: str) -> None:
@@ -103,16 +139,30 @@ async def _send_error(send: Send, status: int, detail: str) -> None:
 
 
 class LimitRequestBodyMiddleware:
-    """Cap the request body by route class before it is parsed (module docstring)."""
+    """No session, no body; then a size and a time limit by route class (module docstring).
+    Without a `gate` only the limits apply."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, gate: SessionGate | None = None) -> None:
         self.app = app
+        self.gate = gate
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        limit = limit_for(scope.get("method", ""), scope.get("path", ""))
+        method, path = scope.get("method", ""), scope.get("path", "")
+        gate = self.gate
+        if (
+            gate is not None
+            and is_api_path(path)
+            and announces_body(scope)
+            and gate.needs_session(method, path)
+            and not await gate.has_session(scope)
+        ):
+            # Before anything is read: the body of this request never enters the process.
+            await _send_error(send, 401, gate.detail)
+            return
+        limit = limit_for(method, path)
         if limit is None:
             await self.app(scope, receive, send)
             return

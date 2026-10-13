@@ -3,6 +3,7 @@ middleware stack, and over a real socket served by uvicorn, on a public route an
 authenticated one, plus the size and time limits and that the routes with their own larger limit
 still work. The unit-level behaviour of the middleware is in tests/test_body_limit.py."""
 
+import re
 import socket
 import threading
 import time
@@ -12,11 +13,14 @@ import httpx
 import pytest
 import uvicorn
 from fastapi import FastAPI
+from fastapi.routing import APIRoute, iter_route_contexts
+from sqlalchemy.orm import Session, sessionmaker
 
 import app.body_limit as bl
 from app.body_limit import DEFAULT_MAX_BYTES, PUBLIC_MAX_BYTES
+from app.identity.deps import PUBLIC_ROUTES, UNAUTHORIZED, is_public_request
 from tests.conftest import free_port
-from tests.identity.api_helpers import Api, make_user
+from tests.identity.api_helpers import Api, make_user, session_cookie
 
 
 def _chunks(total: int, size: int = 16 * 1024) -> Iterator[bytes]:
@@ -57,26 +61,96 @@ def test_public_login_small_body_reaches_the_handler(api: Api) -> None:
     assert response.json()["detail"] != bl.TOO_LARGE
 
 
-def test_authenticated_route_body_is_capped_even_without_a_session(api: Api) -> None:
-    # FastAPI reads the body before the 401, so a caller with no session could make the api buffer
-    # it. The middleware caps it: a body over the default limit answers 413, not 401.
+def sample_path(template: str) -> str:
+    """A request path for a route's template: every parameter becomes one plain segment."""
+    return re.sub(r"\{[^}]*\}", "x", template)
+
+
+def served_routes(app: FastAPI) -> list[tuple[str, str]]:
+    """Every (method, path template) the app serves, included routers flattened."""
+    found = set()
+    for context in iter_route_contexts(app.routes):
+        if isinstance(context.original_route, APIRoute):
+            found.update((method, context.path or "") for method in context.methods or ())
+    return sorted(found)
+
+
+def test_public_requests_are_told_from_method_and_path_as_the_router_tells_them(
+    app: FastAPI,
+) -> None:
+    # The body limits run before routing and decide from the method and the path alone which
+    # requests need a session. That must agree with PUBLIC_ROUTES for every route there is.
+    routes = served_routes(app)
+    assert len(routes) > 20, routes
+    for method, template in routes:
+        expected = (method, template) in PUBLIC_ROUTES
+        assert is_public_request(method, sample_path(template)) is expected, (method, template)
+    for method, path in (
+        ("GET", "/api/auth/login"),  # another method
+        ("POST", "/api/auth/login/"),  # another spelling
+        ("POST", "/api/auth/invites/a/b/accept"),  # a parameter is one segment
+        ("POST", "/api/auth/invites//accept"),
+        ("POST", "/API/AUTH/LOGIN"),
+        ("POST", "/api/nope"),
+    ):
+        assert not is_public_request(method, path), (method, path)
+
+
+def test_no_session_no_body_on_every_route_that_is_not_public(app: FastAPI, api: Api) -> None:
+    # FastAPI reads a JSON body before the 401. So the 401 is given first, for any request that
+    # announces a body, on every route but the public ones, the ones that read their own body
+    # included. The body is declared as JSON and is not JSON: FastAPI decodes such a body and
+    # answers 422 before it runs the session check (routing.py), so on a route with a JSON
+    # body a 401 means the body was not looked at. With the gate taken out, this test fails.
+    refused = 0
+    for method, template in served_routes(app):
+        if (method, template) in PUBLIC_ROUTES or not template.startswith("/api/"):
+            continue
+        response = api.request(
+            method,
+            sample_path(template),
+            content=b"{",
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 401, (method, template, response.text)
+        assert response.json() == {"detail": UNAUTHORIZED}, (method, template)
+        refused += 1
+    assert refused > 20, refused
+
+
+def test_a_cookie_that_names_no_session_is_refused_the_same_way_and_cleared(api: Api) -> None:
+    response = api.post("/api/agents/runs", token="A" * 43, json={"anything": True})
+    assert response.status_code == 401
+    morsel = session_cookie(response)
+    assert morsel is not None
+    assert morsel.value == ""  # the stale cookie is dropped
+
+
+def test_with_a_session_a_json_body_over_the_default_limit_is_413(
+    api: Api, factory: sessionmaker[Session]
+) -> None:
+    make_user(factory, email="harald@example.org")
+    token = api.login_token("harald@example.org")
     body = b"y" * (DEFAULT_MAX_BYTES + 1)
     response = api.post(
-        "/api/agents/runs", content=body, headers={"Content-Type": "application/json"}
+        "/api/agents/runs",
+        token=token,
+        content=body,
+        headers={"Content-Type": "application/json"},
     )
     assert response.status_code == 413, response.text
+    assert response.json() == {"detail": bl.TOO_LARGE}
+    small = api.post("/api/agents/runs", token=token, json={"agent": "nope", "input": {}})
+    assert small.status_code == 422, small.text  # the route itself answered
 
 
-def test_authenticated_route_small_body_without_a_session_is_401(api: Api) -> None:
-    response = api.post("/api/agents/runs", json={"anything": True})
-    assert response.status_code == 401  # default deny, body was small enough to pass the cap
-
-
-def test_self_limited_photo_route_keeps_its_own_larger_limit(api: Api, factory: object) -> None:
+def test_self_limited_photo_route_keeps_its_own_larger_limit(
+    api: Api, factory: sessionmaker[Session]
+) -> None:
     # A signed-in user uploads 1.5 MiB (over the 1 MiB default) of non-image bytes to the photo
     # route. The middleware must not cap it: the route reads it with its own 2 MiB limit and
     # answers 415 (not a PNG or JPEG), proving the body reached the handler.
-    make_user(factory, email="harald@example.org")  # type: ignore[arg-type]
+    make_user(factory, email="harald@example.org")
     token = api.login_token("harald@example.org")
     body = b"\x00" * (DEFAULT_MAX_BYTES + 512 * 1024)
     response = api.request(
@@ -96,10 +170,17 @@ class Server:
     """The app on a real uvicorn on a loopback port, for raw-socket tests that the ASGI
     TestClient cannot express (a declared length with no body, a body that stalls)."""
 
-    def __init__(self, app: FastAPI) -> None:
+    def __init__(self, app: FastAPI, limit_concurrency: int | None = None) -> None:
         self.port = free_port()
         self.server = uvicorn.Server(
-            uvicorn.Config(app, host="127.0.0.1", port=self.port, log_config=None, ws="none")
+            uvicorn.Config(
+                app,
+                host="127.0.0.1",
+                port=self.port,
+                log_config=None,
+                ws="none",
+                limit_concurrency=limit_concurrency,
+            )
         )
         self.thread = threading.Thread(target=self.server.run, daemon=True)
         self.thread.start()
@@ -149,16 +230,16 @@ def test_socket_declared_length_over_public_limit_is_413(server: Server) -> None
         sock.close()
 
 
-def test_socket_declared_length_over_default_limit_on_authenticated_route_is_413(
-    server: Server,
-) -> None:
-    sock = socket.create_connection(("127.0.0.1", server.port), timeout=10)
-    try:
-        send_head(sock, "POST", "/api/agents/runs", server.port, "Content-Length: 9000000\r\n")
-        sock.sendall(b"y" * 1000)
-        assert read_status(sock) == 413
-    finally:
-        sock.close()
+def test_socket_no_session_is_401_before_any_body_arrives(server: Server) -> None:
+    # A route that needs a session, a large body announced, and not one byte of it sent: the
+    # answer comes all the same, so it did not wait for the body, and there was none to keep.
+    for announced in ("Content-Length: 9000000\r\n", "Transfer-Encoding: chunked\r\n"):
+        sock = socket.create_connection(("127.0.0.1", server.port), timeout=10)
+        try:
+            send_head(sock, "POST", "/api/agents/runs", server.port, announced)
+            assert read_status(sock) == 401, announced
+        finally:
+            sock.close()
 
 
 def test_socket_small_login_body_reaches_the_handler(server: Server) -> None:
@@ -191,3 +272,31 @@ def test_socket_health_still_works(server: Server) -> None:
     with httpx.Client(timeout=10) as client:
         response = client.get(f"http://127.0.0.1:{server.port}/api/health")
     assert response.status_code == 200
+
+
+def health_status(port: int) -> int:
+    with httpx.Client(timeout=10) as client:
+        return client.get(f"http://127.0.0.1:{port}/api/health").status_code
+
+
+def test_socket_limit_concurrency_counts_open_connections_and_answers_503(app: FastAPI) -> None:
+    # What --limit-concurrency does (api/Dockerfile), shown with a small number: the request
+    # that finds as many connections open as the limit is answered 503, and a connection counts
+    # as soon as it is open, before it has sent anything. So the limit is both the bound on
+    # what the api holds and the number of slow connections at which it stops answering.
+    server = Server(app, limit_concurrency=3)
+    held: list[socket.socket] = []
+    try:
+        assert health_status(server.port) == 200  # one connection: under the limit
+        held = [socket.create_connection(("127.0.0.1", server.port), timeout=10) for _ in range(2)]
+        assert health_status(server.port) == 503  # the third connection reaches the limit
+        for sock in held:
+            sock.close()
+        held = []
+        deadline = time.monotonic() + 10
+        while (status := health_status(server.port)) != 200:  # once the server saw them close
+            assert time.monotonic() < deadline, f"still {status} after the connections closed"
+    finally:
+        for sock in held:
+            sock.close()
+        server.close()

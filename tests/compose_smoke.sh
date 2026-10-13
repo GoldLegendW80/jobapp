@@ -256,8 +256,10 @@ csrf=(-H 'X-Requested-With: jobapp' -H 'Content-Type: application/json')
   || fail "64 KiB + 1 to a public route not refused"
 [[ "$(curl_c /api/auth/login -X POST "${csrf[@]}" --data-binary @<(big 65536))" != "413" ]] \
   || fail "64 KiB exactly to a public route was refused by caddy"
-[[ "$(curl_c /api/health -X POST "${csrf[@]}" --data-binary @<(big 200000))" == "405" ]] \
-  || fail "200 KB to a non-auth route did not reach the api"
+# 200 KB on a route outside /api/auth/ passes caddy. The api answers it 401 without reading it:
+# no session, no body (api/app/body_limit.py).
+[[ "$(curl_c /api/jobs/import -X POST "${csrf[@]}" --data-binary @<(big 200000))" == "401" ]] \
+  && grep -q 'Sign in to continue' "$CURL_DIR/b" || fail "200 KB to a route outside /api/auth/ did not reach the api"
 ok "public /api/auth/ routes capped at 64 KiB, other routes keep 10 MiB"
 # A connection that stalls is cut by caddy's shortened timeouts, not held for a minute. A stalled
 # body on a public route is answered 413 (its declared length is over 64 KiB) within ~15s

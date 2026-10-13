@@ -20,7 +20,7 @@ from app.agents.crypto import Keyring
 from app.agents.live import RedisLiveStore
 from app.agents.ratelimit import RateLimiter
 from app.agents.verify import Verifier
-from app.body_limit import LimitRequestBodyMiddleware
+from app.body_limit import LimitRequestBodyMiddleware, SessionGate
 from app.config import Settings, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity import deps as identity_deps
@@ -132,10 +132,19 @@ def create_app(
     app.state.credential_checks = RateLimiter(agents_router.VERIFY_LIMIT, agents_router.WINDOW_S)
 
     # Middleware added last runs first: request_log, then CSRF, then the cookie writer, then the
-    # body-size limit closest to the router. The body limit is added first so it is the innermost
-    # user middleware: it wraps the request body read that the router does (before any dependency
-    # runs, issue #100), yet its 413 still passes out through request_log and is logged.
-    app.add_middleware(LimitRequestBodyMiddleware)
+    # body limits closest to the router (app.body_limit, issue #100). Added first so that it is
+    # the innermost: it stands around the read of the body that the router does before any
+    # dependency runs, its refusals still pass out through request_log, and the cookie writer
+    # outside it still clears a stale cookie on its 401. No session, no body: on every route
+    # that is not public a request without a valid session is answered before its body is read.
+    app.add_middleware(
+        LimitRequestBodyMiddleware,
+        gate=SessionGate(
+            needs_session=lambda method, path: not identity_deps.is_public_request(method, path),
+            has_session=identity_deps.scope_has_session,
+            detail=identity_deps.UNAUTHORIZED,
+        ),
+    )
     app.middleware("http")(identity_deps.session_cookie_middleware)
     app.middleware("http")(identity_deps.csrf_middleware)
 
