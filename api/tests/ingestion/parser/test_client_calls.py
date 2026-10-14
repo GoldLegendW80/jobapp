@@ -461,23 +461,34 @@ def test_through_the_real_server_a_result_a_refusal_and_a_malformed_answer() -> 
 
 
 def test_through_the_real_server_every_way_a_child_ends_is_its_error() -> None:
-    with BackgroundServer(wall_s=0.5, max_answer=100_000) as background:
-
-        async def test() -> None:
-            port = background.port
-            for options, kind, code in (
-                ({"act": "sleep", "s": 30}, pc.ParserTimeoutError, "wall_limit"),
+    # The wall limit is the only bound a child meets by time alone, so it has a server of its own
+    # with a short one. The other children end by themselves, on a server whose wall limit no
+    # busy machine reaches: with 0.5 s for all of them, a loaded CPU started the crashing or
+    # flooding child too late and its end was read as wall_limit (issue #280).
+    cases = (
+        (0.5, [({"act": "sleep", "s": 30}, pc.ParserTimeoutError, "wall_limit")]),
+        (
+            60.0,
+            [
                 ({"act": "signal", "name": "SIGXCPU"}, pc.ParserTimeoutError, "cpu_limit"),
                 ({"act": "signal", "name": "SIGSEGV"}, pc.ParserRefusedError, "crashed"),
                 ({"act": "exit", "status": 70}, pc.ParserRefusedError, "sandbox"),
                 ({"act": "flood", "blocks": 100}, pc.ParserRefusedError, "output_cap"),
-            ):
-                error = await error_of(port, options=options)
-                assert (type(error), error.code, error.failure) == (kind, code, "server")
-            answer = json.dumps({"ok": True, "text": "still here"})
-            assert (await parse(port, options=raw_answer(answer))).text == "still here"
+            ],
+        ),
+    )
+    for wall_s, ends in cases:
+        with BackgroundServer(wall_s=wall_s, max_answer=100_000) as background:
 
-        run(test)
+            async def test(port: int = background.port, ends: list = ends) -> None:
+                for options, kind, code in ends:
+                    error = await error_of(port, options=options)
+                    assert (type(error), error.code, error.failure) == (kind, code, "server")
+                # The server answers the next job after each of those ends.
+                answer = json.dumps({"ok": True, "text": "still here"})
+                assert (await parse(port, options=raw_answer(answer))).text == "still here"
+
+            run(test)
 
 
 def test_through_the_real_server_a_second_job_waits_and_a_late_one_is_busy() -> None:

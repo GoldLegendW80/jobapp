@@ -196,7 +196,7 @@ class CheckTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        self.assertIn("5 specs run in CI, 4 excluded", ran.stdout)
+        self.assertIn("5 specs run in CI, 5 excluded", ran.stdout)
 
 
 class LocalCheckGroupTest(unittest.TestCase):

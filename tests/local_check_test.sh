@@ -352,6 +352,285 @@ done < <(grep -o '[a-z0-9-]*\.spec\.ts' "$STUB_CALLS.specs")
 grep -vxF -- "-c e2e/zeta-all.config.ts" "$STUB_CALLS.specs" >"$WORK/gate-specs" # this repository's groups only
 ok "every web/e2e/<group>-all.config.ts is a journey group of its own step, and every group has its config or its spec files"
 
+# --- the journey stacks: longest first, a freed slot starts the next one (issue #280) ---------------
+# Four groups on two slots. timings.csv says long took 300 s and apps 100 s, short 10 s (its last
+# line); fresh was never timed. The order must be fresh, long, apps, short, and long waits until
+# short has started: with batches of STACKS (start two, wait for both, as before) short never
+# starts while long runs, and long gives up after 20 s and fails.
+cat >"$WORK/pool.sh" <<'EOF'
+s_chromium() { true; }
+journey_groups() { [[ "$1" != checks ]] || printf '%s\n' apps short long fresh; }
+s_journey() {
+  echo "$1" >>"$STUB_CALLS.started"
+  [[ "$1" == long ]] || return 0
+  local tries=0
+  until grep -qx short "$STUB_CALLS.started"; do
+    ((tries++ < 200)) || return 1
+    sleep 0.1
+  done
+}
+stub_plan() {
+  STACKS=2
+  echo 0 >"$WORK/images.done"
+  echo 0 >"$WORK/web.done"
+  lane_journeys
+}
+EOF
+printf '%s\n' x,t,journeys-short,500,PASS x,t,journeys-long,300,PASS x,t,journeys-apps,100,PASS x,t,journeys-short,10,FAIL >>"$RECORDS/timings.csv"
+: >"$STUB_CALLS.started"
+run 0 env LOCAL_CHECK_STUB="$WORK/pool.sh" "$CHECK" --only checks
+# fresh and long start together on the two slots: which one writes its line first is a race.
+[[ "$({ head -n 2 "$STUB_CALLS.started" | sort; tail -n +3 "$STUB_CALLS.started"; } | tr '\n' ' ')" == "fresh long apps short " ]] ||
+  fail "the journey stacks started in the order $(tr '\n' ' ' <"$STUB_CALLS.started"), expected fresh long apps short"
+out_has "journeys-long              PASS"
+ok "the journey stacks start longest first by their last time (an untimed one first), and a freed slot starts the next at once"
+
+# --- timings.csv -----------------------------------------------------------------------------------
+check_id_of_out() { sed -n 's/^local check \(lc[0-9]*-[0-9]*\):.*/\1/p' "$WORK/out"; }
+tree_of_out() { sed -n 's/^local check .*, tree \([0-9a-f]*\)$/\1/p' "$WORK/out"; }
+check_id="$(check_id_of_out)"
+tree="$(tree_of_out)"
+[[ -n "$check_id" && -n "$tree" ]] || fail "no check id or tree in the output"
+[[ "$(head -n 1 "$RECORDS/timings.csv")" == "check,tree,step,seconds,result" ]] || fail "timings.csv has no header: $(head -n 1 "$RECORDS/timings.csv")"
+for step in journeys-fresh journeys-long journeys-apps journeys-short total; do
+  grep -qE "^$check_id,$tree,$step,[0-9]+,PASS\$" "$RECORDS/timings.csv" || fail "timings.csv has no PASS line for $step of $check_id: $(grep "^$check_id," "$RECORDS/timings.csv")"
+done
+run 1 env LOCAL_CHECK_STUB="$WORK/fail.sh" "$CHECK"
+check_id="$(check_id_of_out)"
+tree="$(tree_of_out)"
+grep -qE "^$check_id,$tree,broken,[0-9]+,FAIL\$" "$RECORDS/timings.csv" || fail "the failed step is not a FAIL line of timings.csv"
+grep -qE "^$check_id,$tree,good,[0-9]+,PASS\$" "$RECORDS/timings.csv" || fail "the passed step is not a PASS line of timings.csv"
+grep -qE "^$check_id,$tree,total,[0-9]+,FAIL\$" "$RECORDS/timings.csv" || fail "the failed run has no total line"
+[[ "$(grep -c '^check,' "$RECORDS/timings.csv")" == 1 ]] || fail "timings.csv has its header more than once"
+ok "timings.csv: one line per step and one for the total (check id, tree, step, seconds, PASS or FAIL), across runs"
+
+# --- the docker marked tests run on the images the step images built (issue #280) -----------------
+# The real s_pytest_docker with a fake uv that writes what it was given: the three image names
+# when the images were built, none when they were not (the tests then build their own), and two
+# processes, one file each.
+mkdir -p "$WORK/fakeuv"
+cat >"$WORK/fakeuv/uv" <<'EOF'
+#!/usr/bin/env bash
+printf 'parser=%s renderer=%s browser=%s args=%s\n' "${PARSER_TEST_IMAGE:-}" "${RENDERER_TEST_IMAGE:-}" "${BROWSER_TEST_IMAGE:-}" "$*"
+EOF
+chmod +x "$WORK/fakeuv/uv"
+cat >"$WORK/docker-tests.sh" <<'EOF'
+stub_plan() {
+  mkdir -p "$TREE/api"
+  : >"$WORK/api.env"
+  echo 0 >"$WORK/images.done"
+  run_step docker-built s_pytest_docker || true
+  echo 1 >"$WORK/images.done"
+  run_step docker-own s_pytest_docker || true
+}
+EOF
+run 0 env PATH="$WORK/fakeuv:$PATH" LOCAL_CHECK_STUB="$WORK/docker-tests.sh" "$CHECK" --only api
+check_id="$(check_id_of_out)"
+built="$(cat "$RECORDS/logs/$check_id/docker-built.log")"
+[[ "$built" == "parser=jobapp-$check_id-worker:latest renderer=jobapp-$check_id-renderer:latest browser=jobapp-$check_id-browser:latest args=run --frozen pytest -m docker -p no:cacheprovider -n 2 --dist loadfile --durations=10" ]] ||
+  fail "the docker marked tests were not given the images of the check: $built"
+own="$(cat "$RECORDS/logs/$check_id/docker-own.log")"
+[[ "$own" == "parser= renderer= browser= args=run --frozen pytest -m docker -p no:cacheprovider -n 2 --dist loadfile --durations=10" ]] ||
+  fail "with no images built, the docker marked tests should build their own: $own"
+grep -q '^  browser:$' <(sed -n '/^s_images()/,/^}/p' "$ROOT/ops/local-check.sh") || fail "images.yml names no browser image"
+grep -qE 'build api worker caddy renderer browser$' "$ROOT/ops/local-check.sh" || fail "the step images does not build the browser"
+ok "the docker marked tests use the images the check built (worker, renderer, browser), else their own, on -n 2 by file"
+
+# --- the networks of the journey stacks: subnets of their own (issue #280) -------------------------
+# Twelve stacks claim slots: their 60 networks get distinct /27 subnets of 10.213.0.0/16, outside
+# Docker's predefined pools, and a slot freed by a stack that ended is taken again.
+cat >"$WORK/nets.sh" <<'EOF'
+docker() { return 0; } # no network of the daemon is in use
+stub_plan() {
+  local group slot
+  for group in a b c d e f g h i j k l; do
+    slot="$(claim_net_slot)"
+    stack_networks "$group" "$slot" >/dev/null
+  done
+  cat "$WORK"/networks-*.yml >"$STUB_CALLS.nets"
+  rmdir "$WORK/nets/3"
+  claim_net_slot >"$STUB_CALLS.reused"
+  run_step nets true || true
+}
+EOF
+run 0 env LOCAL_CHECK_STUB="$WORK/nets.sh" "$CHECK" --only checks
+subnets="$(sed -n 's/^ *- subnet: //p' "$STUB_CALLS.nets")"
+[[ "$(wc -l <<<"$subnets" | tr -d ' ')" == 60 ]] || fail "not five subnets per stack: $subnets"
+[[ "$(sort -u <<<"$subnets" | wc -l | tr -d ' ')" == 60 ]] || fail "two networks share a subnet: $(sort <<<"$subnets" | uniq -d)"
+if grep -vE '^10\.213\.([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9])\.0/27$' <<<"$subnets"; then fail "a subnet outside 10.213.0.0/16"; fi
+[[ "$(grep -c '^  [a-z]*:$' "$STUB_CALLS.nets")" == 60 ]] || fail "the overrides do not name the five networks of each stack"
+[[ "$(cat "$STUB_CALLS.reused")" == 3 ]] || fail "a freed slot was not taken again: $(cat "$STUB_CALLS.reused")"
+ok "each journey stack's networks get /27 subnets of their own out of 10.213.0.0/16, a freed slot is reused"
+
+# --- the network slots of the journey stacks --------------------------------------------------------
+# The real s_journey and journey_play, with a fake docker and a fake pnpm that note the folder they
+# run in. Like the real one, the fake `docker compose` needs compose.yml in that folder. Two groups
+# run one after the other, so the second shows which slot the first left claimed.
+cat >"$WORK/slots.sh" <<'EOF2'
+docker() {
+  local f
+  echo "docker $PWD $*" >>"$STUB_CALLS"
+  case " $* " in
+  *" network ls "*) [[ -z "${STUB_SUBNETS:-}" ]] || echo net-a ;;
+  *" network inspect "*) printf '%s \n' "${STUB_SUBNETS:-}" ;;
+  *" compose "*)
+    if [[ ! -f compose.yml ]]; then
+      echo "open $PWD/compose.yml: no such file or directory" >&2
+      return 1
+    fi
+    case " $* " in
+    *" up "*)
+      for f in "$@"; do [[ "$f" != */networks-*.yml ]] || echo "up $(sed -n 's/.*subnet: //p' "$f" | head -n 1)" >>"$STUB_CALLS"; done
+      if [[ "$(grep -c '^up ' "$STUB_CALLS")" -le "${STUB_POOL_FAILS:-0}" ]]; then
+        echo "Error response from daemon: invalid pool request: Pool overlaps with other one on this address space" >&2
+        return 1
+      fi
+      ;;
+    *" down "*) [[ -z "${STUB_DOWN_FAILS:-}" ]] || return 1 ;;
+    esac
+    ;;
+  esac
+  return 0
+}
+pnpm() { echo "pnpm $PWD $*" >>"$STUB_CALLS"; }
+stub_plan() {
+  : >"$TREE/compose.yml"
+  mkdir -p "$TREE/web"
+  run_step journeys-sweep s_journey sweep || true
+  run_step journeys-identity s_journey identity || true
+  find "$WORK/nets" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ' >"$STUB_CALLS.nets"
+}
+EOF2
+NET0=10.213.0.0/27 NET1=10.213.5.0/27
+subnets_up() { grep '^up ' "$STUB_CALLS" | awk '{print $2}' | tr '\n' ' '; }
+nets_left() { cat "$STUB_CALLS.nets"; }
+
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" "$CHECK" --only journeys
+out_has "journeys-sweep             PASS"
+out_has "journeys-identity          PASS"
+logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
+root="$(awk '$1 == "docker" && / up / { print $2; exit }' "$STUB_CALLS")"
+[[ -n "$root" && "$(awk '$1 == "pnpm" { print $2; exit }' "$STUB_CALLS")" == "$root/web" ]] || fail "Playwright did not run in web/ of the tree ($root)"
+after="$(awk '$1 == "pnpm" { on = 1; next } on && $1 == "docker" && (/ logs / || / down /) { print $2 }' "$STUB_CALLS" | sort -u)"
+[[ "$after" == "$root" ]] || fail "the logs and the teardown after Playwright ran from $after, not from the tree root $root"
+[[ "$(awk '$1 == "docker" && / down /' "$STUB_CALLS" | wc -l | tr -d ' ')" == 2 ]] || fail "each stack is taken down once"
+! grep -q 'no such file' "$logs/stack-sweep.log" || fail "the stack log holds: $(cat "$logs/stack-sweep.log")"
+[[ "$(subnets_up)" == "$NET0 $NET0 " && -z "$(nets_left)" ]] || fail "a stack taken down frees its slot: subnets $(subnets_up), slots left $(nets_left)"
+
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_DOWN_FAILS=1 "$CHECK" --only journeys
+[[ "$(subnets_up)" == "$NET0 $NET1 " && "$(nets_left)" == "0 1 " ]] || fail "a stack that could not be taken down kept no slot: subnets $(subnets_up), slots left $(nets_left)"
+logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
+grep -q 'network slot 0 stays claimed' "$logs/journeys-sweep.log" || fail "the step does not say its slot stays claimed"
+ok "Playwright runs in a subshell, the stack is taken down from the tree root, and only a stack taken down frees its network slot"
+
+# A check that died without its trap left its networks: the slots they use are skipped, and a start
+# that still meets "Pool overlaps" is taken down and started on another slot.
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_POOL_FAILS=1 "$CHECK" --only journeys
+out_has "journeys-sweep             PASS"
+logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
+[[ "$(subnets_up)" == "$NET0 $NET1 $NET1 " && "$(nets_left)" == "0 " ]] ||
+  fail "Pool overlaps once: subnets $(subnets_up), slots left $(nets_left) (expected $NET0 $NET1 $NET1, slot 0 left)"
+[[ "$(grep -c '^retry 1 of 2: a network already uses the subnets of slot 0' "$logs/journeys-sweep.log")" == 1 ]] || fail "the retry on another slot is not said once"
+[[ "$(awk '$1 == "docker" && / down /' "$STUB_CALLS" | wc -l | tr -d ' ')" == 3 ]] || fail "the stack that met Pool overlaps was not taken down before its new start"
+
+: >"$STUB_CALLS"
+run 1 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_POOL_FAILS=9 "$CHECK" --only journeys
+out_has "journeys-sweep             FAIL"
+out_has "journeys-identity          FAIL"
+[[ "$(grep -c '^up ' "$STUB_CALLS")" == 6 ]] || fail "Pool overlaps every time: $(grep -c '^up ' "$STUB_CALLS") starts for two groups, expected 3 each"
+
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_SUBNETS="172.17.0.0/16 $NET0" "$CHECK" --only journeys
+[[ "$(subnets_up)" == "$NET1 $NET1 " ]] || fail "10.213.0.0/27 in use: subnets $(subnets_up), expected slot 1 twice"
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_SUBNETS="$NET0 10.213.9.0/27 192.168.0.0/20" "$CHECK" --only journeys
+[[ "$(subnets_up)" == "10.213.10.0/27 10.213.10.0/27 " ]] || fail "slots 0 and 1 in use: subnets $(subnets_up), expected slot 2 twice"
+ok "a slot whose subnets a network already holds is skipped, and Pool overlaps moves the stack to another slot, three starts at most"
+
+# --- flaky tests of the parallel suite: run again alone ---------------------------------------------
+# A fake uv on PATH stands for pytest: the parallel run (with xdist) fails the tests named in
+# STUB_FAILED, with STUB_ERROR one error too; the run again (-p no:xdist) fails those in STUB_AGAIN.
+mkdir -p "$WORK/fakeuv"
+cat >"$WORK/fakeuv/uv" <<'EOF'
+#!/usr/bin/env bash
+printf 'uv %s\n' "$*" >>"$STUB_CALLS"
+case " $* " in
+*" no:xdist "*)
+  failed=0
+  for id in "$@"; do
+    [[ " ${STUB_AGAIN:-} " != *" $id "* ]] || { echo "FAILED $id - assert 4.237 < 3.0 + 1.0"; failed=$((failed + 1)); }
+  done
+  if ((failed)); then echo "===== $failed failed in 3.10s ====="; exit 1; fi
+  echo "===== $(($# - 6)) passed in 3.10s ====="
+  ;;
+*" -m not docker "*)
+  failed=0
+  for id in ${STUB_FAILED:-}; do echo "FAILED $id - assert 4.237 < 3.0 + 1.0"; failed=$((failed + 1)); done
+  if [[ -n "${STUB_ERROR:-}" ]]; then
+    echo "ERROR tests/c_test.py - ImportError: no module"
+    echo "===== $failed failed, 9 passed, 1 error in 12.00s ====="
+    exit 1
+  fi
+  if ((failed)); then echo "===== $failed failed, 9 passed in 12.00s ====="; exit 1; fi
+  echo "===== 9 passed in 12.00s ====="
+  ;;
+esac
+exit 0
+EOF
+chmod +x "$WORK/fakeuv/uv"
+cat >"$WORK/flaky.sh" <<'EOF'
+stub_plan() {
+  : >"$WORK/api.env"
+  mkdir -p "$TREE/api"
+  run_step pytest s_pytest || true
+  quiet_phase
+}
+EOF
+A="tests/a_test.py::test_burst[ten]" B="tests/b_test.py::test_scrub"
+flaky_run() { # flaky_run <expected exit> <env ...>
+  local want="$1"
+  shift
+  : >"$STUB_CALLS"
+  run "$want" env PATH="$WORK/fakeuv:$PATH" LOCAL_CHECK_STUB="$WORK/flaky.sh" "$@" "$CHECK"
+}
+ALONE="$(sed -n 's/^ALONE_TEST="\(.*\)"$/\1/p' "$CHECK")"
+[[ -n "$ALONE" ]] || fail "ALONE_TEST not found in $CHECK"
+rerun() { grep ' no:xdist ' "$STUB_CALLS" || true; }
+
+flaky_run 0 STUB_FAILED="$A $B"
+out_has "pytest-flaky               PASS"
+out_has "flaky: $A $B"
+[[ "$(last_line)" == "LOCAL CHECK: STUB PASS "* ]] || fail "flaky tests that passed alone: $(last_line)"
+[[ "$(rerun)" == "uv run --frozen pytest -p no:cacheprovider -p no:xdist $A $B" ]] || fail "the run again: $(rerun)"
+grep -qF "uv run --frozen pytest $ALONE " "$STUB_CALLS" || fail "pytest-alone did not run after the flaky tests passed"
+record="$(sed -n 's/^record: //p' "$WORK/out")"
+python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); assert r["flaky"] == sys.argv[2:], r["flaky"]' "$record" "$A" "$B" ||
+  fail "the record does not list the flaky tests"
+rm -f "$record"
+
+flaky_run 0 STUB_FAILED="$A"
+out_has "flaky: $A"
+rm -f "$(sed -n 's/^record: //p' "$WORK/out")"
+
+flaky_run 1 STUB_FAILED="$A $B" STUB_AGAIN="$B"
+out_has "pytest                     FAIL"
+out_has "pytest-flaky               FAIL"
+out_lacks "flaky: $A"
+[[ "$(last_line)" == *" pytest,pytest-flaky" ]] || fail "a test that failed again: $(last_line)"
+! grep -qF "uv run --frozen pytest $ALONE " "$STUB_CALLS" || fail "pytest-alone ran after a failed pytest"
+
+flaky_run 1 STUB_FAILED="$A $B tests/c_test.py::test_c tests/d_test.py::test_d"
+[[ -z "$(rerun)" ]] || fail "four failed tests were run again"
+[[ "$(last_line)" == *" pytest" ]] || fail "four failed tests: $(last_line)"
+
+flaky_run 1 STUB_FAILED="$A" STUB_ERROR=1
+[[ -z "$(rerun)" ]] || fail "a run with an error was run again"
+[[ "$(last_line)" == *" pytest" ]] || fail "a failed test and an error: $(last_line)"
+ok "at most 3 failed tests and no error: run again alone, PASS and listed under flaky (summary and record) when they pass, FAIL when one fails again; more, or an error, are not run again"
+
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
 # it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded
