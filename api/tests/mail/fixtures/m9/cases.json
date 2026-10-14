@@ -2633,5 +2633,1614 @@
     "We run 3 rounds and 2 calls."
    ]
   }
+ },
+ {
+  "name": "r1_phone_in_the_mail_00_415__555_2671",
+  "body": "You can reach me on (415) 555-2671 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "(415) 555-2671"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on (415) 555-2671 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_01_415__555_2671",
+  "body": "You can reach me on (415) 555 2671 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "(415) 555 2671"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on (415) 555 2671 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_02_415_555_2671",
+  "body": "You can reach me on (415)555-2671 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "(415)555-2671"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on (415)555-2671 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_03_415__555_2671",
+  "body": "You can reach me on [415] 555 2671 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "[415] 555 2671"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on [415] 555 2671 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_04_415_555_2671",
+  "body": "You can reach me on 415/555/2671 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "415/555/2671"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on 415/555/2671 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_05_020__7946_0958",
+  "body": "You can reach me on (020) 7946 0958 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "(020) 7946 0958"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on (020) 7946 0958 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_06_030__1234_5678",
+  "body": "You can reach me on (030) 1234 5678 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "(030) 1234 5678"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on (030) 1234 5678 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_07_9123_4567",
+  "body": "You can reach me on 9123 4567 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "9123 4567"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on 9123 4567 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_08_1234_5678",
+  "body": "You can reach me on 1234 5678 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "1234 5678"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on 1234 5678 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_09_2345_6789",
+  "body": "You can reach me on 2345 6789 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "2345 6789"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on 2345 6789 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_10_07911_123456",
+  "body": "You can reach me on 07911 123456 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "07911 123456"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on 07911 123456 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_11_44_7911_123456",
+  "body": "You can reach me on 44 7911 123456 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "44 7911 123456"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on 44 7911 123456 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_12_0171_1234567",
+  "body": "You can reach me on 0171 1234567 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "0171 1234567"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on 0171 1234567 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_phone_in_the_mail_13_347_1234567",
+  "body": "You can reach me on 347 1234567 any time.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "347 1234567"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "You can reach me on 347 1234567 any time."
+   ]
+  }
+ },
+ {
+  "name": "r1_range_3000_4000_euros_stays_a_range",
+  "body": "The range is 3000-4000 euros.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "The range is 3000-4000 euros."
+   ]
+  }
+ },
+ {
+  "name": "r1_range_3000_4000_euros_unsourced_is_flagged",
+  "body": "The range is 3000-4000 euros.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "3000-4000 euros"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We run 3 rounds."
+   ]
+  }
+ },
+ {
+  "name": "r1_years_range_2021_2024_from_the_profile",
+  "body": "I worked there from 2021-2024.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Worked 2021-2024 at DevForge Studio."
+   ]
+  }
+ },
+ {
+  "name": "r1_amount_copied_from_the_mail_1_234_567",
+  "body": "The budget is 1 234 567 euros.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "The budget is 1 234 567 euros."
+   ]
+  }
+ },
+ {
+  "name": "r1_date_still_a_date",
+  "body": "Meeting on 14/10/2026.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "Meeting on 14/10/2026."
+   ]
+  }
+ },
+ {
+  "name": "r1_own_phone_grouping_00_33_6_12_34_56_78",
+  "body": "Call me on +33 6 12 34 56 78.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_01_33612345678",
+  "body": "Call me on +33612345678.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_02_06_12_34_56_78",
+  "body": "Call me on 06 12 34 56 78.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_03_0612345678",
+  "body": "Call me on 0612345678.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_04_06_12_34_56_78",
+  "body": "Call me on 06.12.34.56.78.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_05_06_12_34_56_78",
+  "body": "Call me on 06-12-34-56-78.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_06_0612_345_678",
+  "body": "Call me on 0612-345-678.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_07_33__0_6_12_34_56_78",
+  "body": "Call me on +33 (0)6 12 34 56 78.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_08_0033_6_12_34_56_78",
+  "body": "Call me on 0033 6 12 34 56 78.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_09_0033612345678",
+  "body": "Call me on 0033612345678.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_10_33_612_345_678",
+  "body": "Call me on +33 612 345 678.",
+  "expect": []
+ },
+ {
+  "name": "r1_own_phone_grouping_11_06_1234_5678",
+  "body": "Call me on 06 1234 5678.",
+  "expect": []
+ },
+ {
+  "name": "known_false_issue_own_phone_grouping_12_33_612_345_678",
+  "body": "Call me on 33 612 345 678.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "33 612 345 678"
+   ]
+  ]
+ },
+ {
+  "name": "known_false_issue_own_phone_grouping_13_612_345_678",
+  "body": "Call me on 612 345 678.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "612 345 678"
+   ]
+  ]
+ },
+ {
+  "name": "known_false_issue_own_phone_grouping_14_06__12_34_56_78",
+  "body": "Call me on (06) 12 34 56 78.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "06"
+   ],
+   [
+    "address",
+    "phone_not_in_profile",
+    "12 34 56 78"
+   ]
+  ]
+ },
+ {
+  "name": "r2_85_k_euro_sign",
+  "body": "My salary is 85 k\u20ac.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "85 k\u20ac"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_85_capital_k_euro_sign",
+  "body": "My salary is 85 K\u20ac.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "85 K\u20ac"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_85_k_euros_word",
+  "body": "Mon salaire est de 85 k euros.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "85 k euros"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_50_k_euro_sign",
+  "body": "My target is 50 k\u20ac.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "50 k\u20ac"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_m_euro_sign",
+  "body": "J'ai g\u00e9r\u00e9 un budget de 3 M\u20ac.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "3 M\u20ac"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_dollar_3_m",
+  "body": "I managed $3 M.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "$3 M"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_euro_sign_3_m",
+  "body": "I managed \u20ac3 M.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "\u20ac3 M"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_dollar_3bn",
+  "body": "I managed $3bn.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "$3bn"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_dollar_3_bn",
+  "body": "I managed $3 bn.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "$3 bn"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_dollar_3_capital_b",
+  "body": "I managed $3B.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "$3B"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_md_euro_sign",
+  "body": "J'ai g\u00e9r\u00e9 3 Md\u20ac.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "3 Md\u20ac"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_m_d_euros",
+  "body": "J'ai g\u00e9r\u00e9 3 M d'euros.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "3 M"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_m_users",
+  "body": "I served 3 M users.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "3 M"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_2bn",
+  "body": "I served 2bn requests.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "2bn"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_2_capital_b_users",
+  "body": "I served 2B users.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "2B"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_mds",
+  "body": "J'ai g\u00e9r\u00e9 3 Mds d'euros.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "3 Mds"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_mrd",
+  "body": "J'ai g\u00e9r\u00e9 3 Mrd d'euros.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "3 Mrd"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_2_trillion",
+  "body": "I served 2 trillion tokens.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "trillion"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_2_trillions_fr",
+  "body": "J'ai servi 2 trillions de tokens.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "trillions"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_un_millier",
+  "body": "Nous avons un millier d'utilisateurs.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "un millier"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_1bn_must_not_pass_on_one_year",
+  "body": "I managed $1bn.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "$1bn"
+   ]
+  ]
+ },
+ {
+  "name": "r2_1_md_must_not_pass_on_one_year",
+  "body": "J'ai g\u00e9r\u00e9 1 Md\u20ac.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "1 Md\u20ac"
+   ]
+  ]
+ },
+ {
+  "name": "r2_3_m_is_three_million_not_a_bare_three",
+  "body": "I served 3 M users.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "3 M"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We have 3 rounds and 3 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_85_k_euro_sign_from_the_mail",
+  "body": "My salary is 85 k\u20ac.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "Salary 85 k\u20ac."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_m_euro_sign_from_the_mail",
+  "body": "J'ai g\u00e9r\u00e9 3 M\u20ac.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "Budget 3 M\u20ac."
+   ]
+  }
+ },
+ {
+  "name": "r2_dollar_3bn_from_the_profile",
+  "body": "I managed $3bn.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Managed $3bn of volume."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_m_users_from_the_profile_glued",
+  "body": "I served 3 M users.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Served 3M users."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_m_metre_is_no_scale",
+  "body": "The room is 3 m wide.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "We have 3 rounds."
+   ]
+  }
+ },
+ {
+  "name": "r2_3m_glued_metre_guard_unchanged",
+  "body": "The room is 3 km wide.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "We have 3 rounds."
+   ]
+  }
+ },
+ {
+  "name": "r2_apartment_2b_is_no_scale",
+  "body": "I live in apartment 2B, Bordeaux.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "We have 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_k_no_scale_word_after_kg",
+  "body": "It weighs 3 kg.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "We have 3 rounds."
+   ]
+  }
+ },
+ {
+  "name": "r2_3_no_break_space_m_euro",
+  "body": "J'ai g\u00e9r\u00e9 3\u00a0M\u20ac.",
+  "expect": [
+   [
+    "amount",
+    "amount_not_in_sources",
+    "3\u00a0M\u20ac"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 85 in the team, with 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "n1_title_of_the_posting_after_the_opportunity_at_initrode",
+  "body": "Thank you for the GenAI Engineer opportunity at Initrode.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "n1_applying_for_the_senior_data_engineer_position",
+  "body": "I am applying for the Senior Data Engineer position.",
+  "expect": [],
+  "replace": {
+   "titles": [
+    "GenAI Engineer",
+    "Freelance Developer",
+    "Senior Data Engineer"
+   ]
+  }
+ },
+ {
+  "name": "n1_thank_you_for_considering_me_for_the_role",
+  "body": "Thank you for considering me for the Senior Data Engineer role.",
+  "expect": [],
+  "replace": {
+   "titles": [
+    "GenAI Engineer",
+    "Freelance Developer",
+    "Senior Data Engineer"
+   ]
+  }
+ },
+ {
+  "name": "n1_a_good_fit_for_a_role",
+  "body": "I would be a good fit for a Senior Data Engineer role.",
+  "expect": [],
+  "replace": {
+   "titles": [
+    "GenAI Engineer",
+    "Freelance Developer",
+    "Senior Data Engineer"
+   ]
+  }
+ },
+ {
+  "name": "n1_applying_for_a_bare_title",
+  "body": "I am applying for Senior Data Engineer.",
+  "expect": [],
+  "replace": {
+   "titles": [
+    "GenAI Engineer",
+    "Freelance Developer",
+    "Senior Data Engineer"
+   ]
+  }
+ },
+ {
+  "name": "n1_title_in_the_mail_only_is_still_a_title_issue",
+  "body": "I am applying for the Principal Data Engineer position.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Principal Data Engineer"
+   ],
+   [
+    "title",
+    "title_not_in_profile",
+    "Principal Data Engineer"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are hiring a Principal Data Engineer."
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_then",
+  "body": "I worked at Orbital Labs, Then I moved to freelance work.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_before",
+  "body": "I worked at Orbital Labs, Before that I was a freelance developer.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_after",
+  "body": "I worked at Orbital Labs, After that I went freelance.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_since",
+  "body": "I worked at Orbital Labs, Since then I lead GenAI work.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_however",
+  "body": "I worked at Orbital Labs, However I am free from 3 November 2026.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_i",
+  "body": "I worked at Orbital Labs, I enjoyed it.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_we",
+  "body": "I worked with Orbital Labs, We shipped a lot.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_my",
+  "body": "I worked at Orbital Labs, My role was GenAI Engineer.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_thanks",
+  "body": "I would be glad to work with Initrode, Thanks again.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_puis",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs, Puis chez DevForge Studio.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_ensuite",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs, Ensuite j'ai \u00e9t\u00e9 freelance.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_avant",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs, Avant j'\u00e9tais freelance.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_depuis",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs, Depuis janvier 2023.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_je",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs, Je suis disponible.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_capital_opener_after_comma_merci",
+  "body": "J'ai travaill\u00e9 pour Orbital Labs, Merci encore.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_signature_after_signature_marie_comma_newline",
+  "body": "I look forward to speaking with Marie,\nJane Roe",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_signature_after_signature_initrode_comma_newline",
+  "body": "I would be glad to work with Initrode,\nJane",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_signature_after_signature_orbital_comma_newline",
+  "body": "I worked at Orbital Labs,\nJane Roe",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_signature_after_signature_fr_comma_newline",
+  "body": "Ravie d'\u00e9changer avec Marie,\nJane Roe",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_signature_after_signature_two_newlines",
+  "body": "I worked at Orbital Labs,\n\nJane Roe",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_signature_after_signature_and_newline",
+  "body": "I worked at Orbital Labs and\nJane Roe",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "list_still_flags_a_name_after_a_comma",
+  "body": "I worked at Orbital Labs, Google.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ]
+  ]
+ },
+ {
+  "name": "list_still_checks_all_three_names",
+  "body": "I worked at Acme, Globex, and Initech.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Acme"
+   ],
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Globex"
+   ],
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Initech"
+   ]
+  ],
+  "replace": {
+   "participants": []
+  }
+ },
+ {
+  "name": "list_joiner_and_still_works",
+  "body": "I worked at Orbital Labs and Google.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ]
+  ]
+ },
+ {
+  "name": "list_joiner_slash_still_works",
+  "body": "I worked at Orbital Labs / Google.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ]
+  ]
+ },
+ {
+  "name": "list_comma_then_a_plain_name_is_still_a_second_name",
+  "body": "I worked at Orbital Labs, Globex.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Globex"
+   ]
+  ]
+ },
+ {
+  "name": "true_draft_thanks_and_position_en",
+  "body": "Hello Marie,\n\nThank you for your message and for the GenAI Engineer opportunity at Acme Corp. I am available from 3 November 2026.\n\nBest regards,\nJane Roe",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_thanks_and_position_fr",
+  "body": "Bonjour Marie,\n\nMerci pour votre message et pour le poste de GenAI Engineer chez Acme Corp. Je suis disponible \u00e0 partir du 3 novembre 2026.\n\nCordialement,\nJane Roe",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_tenure_en",
+  "body": "I have about 3.5 years of professional engineering and about 1 year in a GenAI title.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_tenure_fr",
+  "body": "J'ai environ 3,5 ans d'exp\u00e9rience professionnelle et environ 1 an dans un poste GenAI.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_employers_list_and_en",
+  "body": "I have worked at Orbital Labs and DevForge Studio.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_employers_list_comma_and_en",
+  "body": "I worked at DevForge Studio, Orbital Labs and Acme Corp.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_employers_list_fr_et",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs et DevForge Studio.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_employers_list_then_en",
+  "body": "I worked at Orbital Labs, then at DevForge Studio.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_employers_list_puis_fr",
+  "body": "J'ai travaill\u00e9 chez DevForge Studio, puis chez Orbital Labs.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_employers_list_slash",
+  "body": "I worked at Orbital Labs / DevForge Studio.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_employers_list_with_the",
+  "body": "I have worked for the Orbital Labs team and with DevForge Studio.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_school_en",
+  "body": "I have a Bachelor in Computer Science from Universit\u00e9 de Bordeaux, 2022.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_salary_from_the_mail",
+  "body": "Thanks for sharing the 90k euros range, I am open to discuss.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_interview_slot_from_the_mail",
+  "body": "The interview on Tuesday 14 October at 10:30 works for me.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_call_week_from_the_instructions",
+  "body": "Could we speak during the week of 20 October?",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_notice_period_en",
+  "body": "My notice period is 1 month.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_notice_period_fr",
+  "body": "Mon pr\u00e9avis est de 1 mois.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_contact_en",
+  "body": "You can reach me at jane.roe@example.org or on +33 6 12 34 56 78.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_links_en",
+  "body": "My portfolio is at https://janeroe.example.net/portfolio and linkedin.com/in/jane-roe.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_address_en",
+  "body": "I live at 12 rue de la Paix, 33000 Bordeaux.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_applying_for_the_position",
+  "body": "I am applying for the GenAI Engineer position at Acme Corp.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_considering_me_for_the_role",
+  "body": "Thank you for considering me for the Freelance Developer role.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_good_fit_for_a_role",
+  "body": "I would be a good fit for a GenAI Engineer role.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_signature_after_marie",
+  "body": "I look forward to speaking with Marie,\nJane Roe",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_signature_after_initrode_closing",
+  "body": "I would be glad to work with Initrode.\n\nKind regards,\nJane",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_tools_en",
+  "body": "I use Python and FastAPI every day at Orbital Labs.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_start_date_en",
+  "body": "Thanks for the mail, Marie. I can start on 3 November 2026.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_join_acme_en",
+  "body": "Hello Marie,\n\nI would be glad to join Acme Corp as GenAI Engineer.\n\nKind regards,\nJane",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_with_employer_comma_fr",
+  "body": "Avec Orbital Labs, je travaille comme GenAI Engineer depuis janvier 2023.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "true_draft_freelance_period_en",
+  "body": "I was a freelance developer at DevForge Studio from 2021 to 2022.",
+  "expect": [],
+  "replace": {
+   "participants": [
+    "Marie Martin",
+    "Acme Corp",
+    "Initrode"
+   ]
+  }
+ },
+ {
+  "name": "known_false_issue_true_draft_zoom_link_after_an_article",
+  "body": "Thank you for the Zoom link.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Zoom"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We will send a Zoom link. Marie Martin."
+   ]
+  }
  }
 ]

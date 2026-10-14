@@ -234,10 +234,16 @@ def _scan_run(n: str, i: int) -> int:
         while k < size and n[k] in _DIGITS:
             k += 1
         last = k - j
+        first_group = j == i
         j = k
         if j >= size:
             return j
         ch = n[j]
+        if first_group and i > 0 and 2 <= last <= 5 and _bracketed(n, i, j):
+            # Deliberate: "(415) 555-2671", "(020) 7946 0958" are one number: a bracket around
+            # the first group of 2 to 5 digits is stepped over when 3 digits follow it.
+            j += 2 if n[j + 1] == " " else 1
+            continue
         if ch in ".,:/-" and j + 1 < size and n[j + 1] in _DIGITS:
             j += 1
             continue
@@ -246,12 +252,10 @@ def _scan_run(n: str, i: int) -> int:
             while m < size and n[m] in _DIGITS:
                 m += 1
             following = m - (j + 1)
-            # Deliberate: a space joins "06 12 34 56 78", "+33 7 89", "3 500", "415 555 2671" but
-            # not "2022 2023" (two years), so the group after it is at most 3 digits, or 4 after
-            # a short group.
-            if following <= 3 or (
-                following == 4 and not (last == 4 and n[j + 1 : j + 3] in ("19", "20"))
-            ):
+            # Deliberate: a space joins "06 12 34 56 78", "+33 7 89", "3 500", "415 555 2671",
+            # "07911 123456" but not "2022 2023" (two years): a group of 4 or more digits after
+            # a group of 4 is joined unless it reads as a year.
+            if following <= 3 or not (last == 4 and n[j + 1 : j + 3] in ("19", "20")):
                 j += 1
                 continue
             return j
@@ -261,6 +265,14 @@ def _scan_run(n: str, i: int) -> int:
                 j = trunk.end()
                 continue
         return j
+
+
+def _bracketed(n: str, start: int, end: int) -> bool:
+    """Is n[start:end] a group of digits in brackets, followed by a blank or not and 3 digits?"""
+    if n[start - 1] + n[end] not in ("()", "[]"):
+        return False
+    after = end + 2 if n[end + 1 : end + 2] == " " else end + 1
+    return n[after : after + 3].isdigit() and len(n[after : after + 3]) == 3
 
 
 def _tokenize(n: str) -> list[_Tok]:
@@ -408,8 +420,14 @@ def _classify_run(text: str, plus: bool) -> tuple[str, tuple[tuple[str | None, .
     number = _shape_number(groups, seps)
     if number is not None:
         return "num", number
-    year_range = len(groups) == 2 and all(len(g) == 4 for g in groups)  # "2021-2024"
-    if 8 <= total <= 15 and not year_range and all(not sep.strip(" .-()") for sep in seps):
+    # "2021-2024" and "2021/2022" are ranges; "9123 4567" and "9123.4567" are not years: a
+    # range of two groups of 4 joined by anything but a dash must read as two years
+    year_range = (
+        len(groups) == 2
+        and all(len(g) == 4 for g in groups)
+        and (seps[0] == "-" or all(g[:2] in ("19", "20") for g in groups))
+    )
+    if 8 <= total <= 15 and not year_range and all(not sep.strip(" .-()[]/") for sep in seps):
         return "phone", ((_phone_key("".join(groups)),),)
     # Deliberate: anything else ("2022-2023", "3-6", "1.2.3") is a list of numbers, each one of
     # which must be sourced.
@@ -433,8 +451,9 @@ _TENS = _table(
 # Deliberate: "billion" and "milliard" are scale words too, so "2 billion requests" is a claim
 # of its own and not the small number "2".
 _BIG = _table(
-    "mille=1000 thousand=1000 million=1000000 millions=1000000 billion=1000000000"
-    " billions=1000000000 milliard=1000000000 milliards=1000000000"
+    "mille=1000 millier=1000 milliers=1000 thousand=1000 million=1000000 millions=1000000"
+    " billion=1000000000 billions=1000000000 milliard=1000000000 milliards=1000000000"
+    " trillion=1000000000000 trillions=1000000000000"
 )
 
 
@@ -464,7 +483,7 @@ def _parse_words(n: str, ts: list[_Tok], i: int) -> tuple[int, int] | None:
     total = group = 0
     prev = ""
     prev_word = ""
-    last_big = 10**12  # above every scale word, billion included
+    last_big = 10**15  # above every scale word, trillion included
     quatre_vingt = False
     last = -1
     k = i
@@ -654,8 +673,49 @@ def _after_blank(n: str, pos: int) -> int:
     return pos + 1 if pos < len(n) and n[pos] == " " else pos
 
 
+def _scale_after(norm: _Norm, ts: list[_Tok], nxt: int, end: int, money: bool) -> int:
+    """The factor of the scale suffix at token `nxt`, 0 if none. A suffix touches the digits or
+    stands after one blank (a no-break space folds to one): "3M", "3 M", "85 k€", "$3bn", "2B
+    users", "3 Md€". Deliberate: a lone "m" after a blank is a million only as a capital "M" or
+    before a currency sign ("3 m" is a distance), "Md", "Mds", "Mrd" only capitalised ("3 md
+    files"), and "B" only after a currency sign or glued to the digits before a plain word
+    ("2B users" but not "apartment 2B, Bordeaux" or "2B is free")."""
+    n = norm.text
+    if nxt >= len(ts) or ts[nxt].kind != "w":
+        return 0
+    tok = ts[nxt]
+    glued = tok.start == end
+    if not (glued or (tok.start == end + 1 and n[end] == " ")):
+        return 0
+    word = tok.text
+    capital = norm.orig[norm.starts[tok.start]].isupper()
+    if word == "k":
+        return 10**3
+    if word == "m":
+        currency = tok.end < len(n) and n[tok.end] in _CURRENCY_SYMBOLS
+        return 10**6 if glued or capital or currency else 0
+    if word == "bn":
+        return 10**9
+    if word in ("md", "mds", "mrd", "mrds"):
+        return 10**9 if capital else 0
+    if word == "b" and capital:
+        if money:
+            return 10**9
+        if glued and nxt + 1 < len(ts):
+            after = ts[nxt + 1]
+            plain = (
+                after.kind == "w"
+                and after.start == tok.end + 1
+                and n[tok.end] == " "
+                and not norm.orig[norm.starts[after.start]].isupper()
+                and after.text not in _NOT_FILLER
+            )
+            return 10**9 if plain else 0
+    return 0
+
+
 def _quantity(
-    n: str,
+    norm: _Norm,
     ts: list[_Tok],
     first: int,
     last: int,
@@ -664,22 +724,19 @@ def _quantity(
 ) -> tuple[_Claim | None, int]:
     """Turn the number at tokens first..last into a claim by what surrounds it: a percentage, an
     amount, a duration in years or months, or a bare number. Returns (claim, next token)."""
+    n = norm.text
     size = len(n)
     start = ts[first].start
     end = ts[last].end
     nxt = last + 1
     factor = 1
-    # 90k, 1.2M euros, 3M users: a glued "k" is a thousand, a glued "m" a million (also without
-    # a currency, so that "3M users" is not the small number 3)
-    if (
-        nxt < len(ts)
-        and ts[nxt].kind == "w"
-        and ts[nxt].start == end
-        and ts[nxt].text in ("k", "m")
-    ):
-        suffix = ts[nxt]
-        factor = 1000 if suffix.text == "k" else 10**6
-        end = suffix.end
+    # 90k, 1.2M euros, 3 M users, $3bn: a scaled value is its own number, sourced only by the
+    # same value ("3 M" is three million, never the bare 3), also without a currency
+    pre = start - 2 if start >= 2 and n[start - 1] == " " else start - 1
+    money = pre >= 0 and n[pre] in _CURRENCY_SYMBOLS
+    factor = 1 if word else _scale_after(norm, ts, nxt, end, money) or 1
+    if factor != 1:
+        end = ts[nxt].end
         nxt += 1
     if factor != 1:
         readings = tuple(tuple(_scale(v, factor) if v else v for v in r) for r in readings)
@@ -836,7 +893,8 @@ def _hour(n: str, ts: list[_Tok], i: int) -> tuple[_Claim | None, int]:
     return _Claim("time", ts[i].start, end, ((f"{hours:02d}:{minutes}",),)), j
 
 
-def _quantities(n: str, ts: list[_Tok], mask: bytearray) -> list[_Claim]:
+def _quantities(norm: _Norm, ts: list[_Tok], mask: bytearray) -> list[_Claim]:
+    n = norm.text
     claims: list[_Claim] = []
     i = 0
     count = len(ts)
@@ -852,7 +910,13 @@ def _quantities(n: str, ts: list[_Tok], mask: bytearray) -> list[_Claim]:
             plus = tok.start > 0 and n[tok.start - 1] == "+"
             kind, readings = _classify_run(tok.text, plus)
             if kind in ("time", "date", "phone"):
-                begin = tok.start - 1 if plus and kind == "phone" else tok.start
+                # the "+" or the bracket that opens the number belongs to the claim
+                opening = plus or (
+                    tok.start > 0
+                    and n[tok.start - 1] in "(["
+                    and tok.text.lstrip(_DIGITS)[:1] in (")", "]")
+                )
+                begin = tok.start - 1 if opening and kind == "phone" else tok.start
                 claims.append(_Claim(kind, begin, tok.end, readings))
                 i += 1
                 continue
@@ -871,7 +935,7 @@ def _quantities(n: str, ts: list[_Tok], mask: bytearray) -> list[_Claim]:
                     claims.append(found)
                     i = nxt
                     continue
-            found, nxt = _quantity(n, ts, i, i, readings, word=False)
+            found, nxt = _quantity(norm, ts, i, i, readings, word=False)
             if found is not None:
                 claims.append(found)
             i = nxt
@@ -887,7 +951,7 @@ def _quantities(n: str, ts: list[_Tok], mask: bytearray) -> list[_Claim]:
                 i += 1
                 continue
             value, last = parsed
-            found, nxt = _quantity(n, ts, i, last, ((str(value),),), word=True)
+            found, nxt = _quantity(norm, ts, i, last, ((str(value),),), word=True)
             if found is not None:
                 claims.append(found)
             i = max(nxt, last + 1)
@@ -1115,6 +1179,22 @@ _SCHOOL_WORDS = _set(
 
 
 _LIST_WORDS = _set("and et or ou")
+# Deliberate: after a bare comma a capitalised word is a second organisation unless it opens a
+# sentence or a closing ("Acme, Then I moved", "Acme, Thanks"); the joiners and, et, or, ou, "/"
+# and "&" need no such check.
+_SENTENCE_OPENERS = (
+    _set(
+        "then before after since while when however thank thanks best kind regards sincerely"
+        " yours cheers also later now today there this that these here so but and yet still"
+        " finally first next meanwhile currently recently previously overall in on at for to"
+        " with by from as if once during puis ensuite avant apres depuis pendant lorsque quand"
+        " cela ceci cet cette ces voici voila bien tres cordialement amicalement sincerement"
+        " respectueusement salutations bonne bon merci mais donc alors aussi desormais ainsi"
+        " actuellement finalement enfin et ou je tu il elle on nous vous ils elles mon ma mes"
+        " notre nos votre vos son sa ses leur leurs"
+    )
+    | _NOT_ORGANISATIONS
+)
 
 
 def _organisations(norm: _Norm, ts: list[_Tok]) -> list[_Claim]:
@@ -1154,8 +1234,13 @@ def _organisations(norm: _Norm, ts: list[_Tok]) -> list[_Claim]:
         if j >= len(ts):
             return None
         gap = n[ts[last].end : ts[j].start]
+        if "\n" in gap:
+            return None  # a list never continues across a line break ("Acme,\nJane Roe")
         if ts[j].text in _LIST_WORDS and gap in (" ", ", ") and j + 1 < len(ts):
-            return j + 1 if blank(ts[j], ts[j + 1]) else None
+            between = n[ts[j].end : ts[j + 1].start]
+            return j + 1 if blank(ts[j], ts[j + 1]) and "\n" not in between else None
+        if len(gap) <= 3 and gap.strip() == "," and ts[j].text in _SENTENCE_OPENERS:
+            return None
         return j if len(gap) <= 3 and gap.strip() in (",", "/", "&") else None
 
     resume = 0
@@ -1229,7 +1314,7 @@ def _extract(norm: _Norm, *, organisations: bool) -> list[_Claim]:
     take(_links(n))
     ts = _tokenize(n)
     take(_streets(n, ts))
-    claims.extend(_quantities(n, ts, mask))
+    claims.extend(_quantities(norm, ts, mask))
     claims.extend(_titles(n, ts))
     if organisations:
         claims.extend(_organisations(norm, ts))
@@ -1393,6 +1478,7 @@ def check(draft_body: str, sources: Sources) -> list[Issue]:
     organisations = _corpus(
         [*sources.employers, *sources.schools, *sources.participants, *sources.known_terms]
     )
+    titles = _corpus(sources.titles)
     recipients = {_clean_address(address) for address in sources.recipients}
     memo: dict[tuple[bool, str], bool] = {}
 
@@ -1428,7 +1514,11 @@ def check(draft_body: str, sources: Sources) -> list[Issue]:
             org = kind in ("employer", "school")
             key = (org, phrase)
             if key not in memo:
-                memo[key] = f" {phrase} " in (organisations if org else phrases)
+                # A job title after an article ("for the GenAI Engineer role") is read as an
+                # organisation too; one that is in the titles of the posting is sourced.
+                memo[key] = f" {phrase} " in (organisations if org else phrases) or (
+                    org and f" {phrase} " in titles
+                )
             sourced = memo[key]
         if not sourced:
             issue_kind, code = _RULES[kind]
