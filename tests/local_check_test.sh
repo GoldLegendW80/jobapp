@@ -298,6 +298,60 @@ done < <(grep '^up ' "$STUB_CALLS")
 grep -q 'tests/ats-forms-stub.compose.yml' "$STUB_CALLS" || fail "the apply stack did not include the fake forms server"
 ok "the retry of the apply stack takes a new port for the fake forms server too"
 
+# --- the journey groups are found in web/e2e (issue #279) -------------------------------------------
+# A tree whose web/e2e holds the names of this repository's group configs and spec files (empty
+# files), one group config more (zeta) and files that are no group config. The real lane_journeys
+# and expected_steps run on it, with stub steps for Chromium and the stacks.
+git -C "$REPO" checkout -q -b groups origin/shape
+mkdir -p "$REPO/web/e2e/sub"
+for path in "$ROOT"/web/e2e/*-all.config.ts "$ROOT"/web/e2e/*.spec.ts; do : >"$REPO/web/e2e/${path##*/}"; done
+: >"$REPO/web/e2e/zeta-all.config.ts"
+for decoy in other.config.ts zeta-all.config.ts.bak sub/inner-all.config.ts all.config.ts; do : >"$REPO/web/e2e/$decoy"; done
+git -C "$REPO" add -A
+git -C "$REPO" commit -q -m "groups"
+git -C "$REPO" push -q origin groups
+git -C "$REPO" checkout -q main
+cat >"$WORK/groups.sh" <<'EOF'
+s_chromium() { true; }
+s_journey() { journey_specs "$1" >>"$STUB_CALLS.specs"; }
+stub_plan() {
+  STACKS=2
+  echo 0 >"$WORK/images.done"
+  echo 0 >"$WORK/web.done"
+  lane_journeys
+  { journey_groups checks; echo --; journey_groups journeys; } >"$STUB_CALLS.groups"
+  LOCAL_CHECK_STUB="" expected_steps >"$STUB_CALLS.expected"
+}
+EOF
+: >"$STUB_CALLS.specs"
+run 0 env LOCAL_CHECK_STUB="$WORK/groups.sh" "$CHECK" --base origin/groups --only checks --only journeys
+real_groups="$(for path in "$ROOT"/web/e2e/*-all.config.ts; do name="${path##*/}"; echo "${name%-all.config.ts}"; done)"
+[[ -n "$real_groups" ]] || fail "this repository has no web/e2e/*-all.config.ts"
+want_checks="$(printf '%s\n' apps; printf '%s\nzeta\n' "$real_groups" | grep -vxF identity | LC_ALL=C sort)"
+want_journeys="$(printf '%s\n' "$real_groups" | grep -xF identity || true; echo sweep)"
+[[ "$(cat "$STUB_CALLS.groups")" == "$want_checks"$'\n--\n'"$want_journeys" ]] ||
+  fail "the journey groups found: $(tr '\n' ' ' <"$STUB_CALLS.groups"), expected $(printf '%s -- %s' "$want_checks" "$want_journeys" | tr '\n' ' ')"
+while IFS= read -r group; do
+  [[ "$group" == -- ]] && continue
+  out_has "journeys-$group"
+  grep -qxF "journeys-$group" "$STUB_CALLS.expected" || fail "journeys-$group is not a step of the set"
+  case "$group" in apps | sweep) ;; *)
+    grep -qxF -- "-c e2e/$group-all.config.ts" "$STUB_CALLS.specs" || fail "the group $group does not run its config"
+    git -C "$REPO" cat-file -e "groups:web/e2e/$group-all.config.ts" || fail "the group $group has no config"
+    ;;
+  esac
+done <"$STUB_CALLS.groups"
+[[ "$(grep -c '^journeys-' "$STUB_CALLS.expected")" == "$(grep -cvxF -- -- "$STUB_CALLS.groups")" ]] ||
+  fail "the set holds journey steps of no group: $(grep '^journeys-' "$STUB_CALLS.expected" | tr '\n' ' ')"
+[[ "$(wc -l <"$STUB_CALLS.specs" | tr -d ' ')" == "$(grep -cvxF -- -- "$STUB_CALLS.groups")" ]] || fail "not one stack per group: $(tr '\n' ' ' <"$STUB_CALLS.specs")"
+# The decoys (other.config.ts, a .bak, a config in a subfolder) are no group: the list above is exact.
+# Each spec a group names one by one (apps, sweep) is a file of web/e2e.
+while IFS= read -r spec; do
+  [[ -f "$ROOT/web/e2e/$spec" ]] || fail "a journey group runs $spec, which is not in web/e2e"
+done < <(grep -o '[a-z0-9-]*\.spec\.ts' "$STUB_CALLS.specs")
+grep -vxF -- "-c e2e/zeta-all.config.ts" "$STUB_CALLS.specs" >"$WORK/gate-specs" # this repository's groups only
+ok "every web/e2e/<group>-all.config.ts is a journey group of its own step, and every group has its config or its spec files"
+
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
 # it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded
@@ -589,19 +643,21 @@ ok "the secret scan of main as it is starts after the last commit whose tree has
 
 # --- the files of the repository -------------------------------------------------------------------
 cd "$ROOT"
-specs_of() { grep -v '^ *#' "$1" | grep -o '[a-z0-9-]*\.spec\.ts\|e2e/[a-z-]*\.config\.ts' | sort -u; }
+specs_of() { grep -v '^ *#' "$1" | grep -o '[a-z0-9-]*\.spec\.ts\|e2e/[a-z0-9-]*\.config\.ts' | sort -u; }
 [[ -n "$(specs_of .github/workflows/ci.yml)" ]] || fail "no journey spec found in ci.yml"
-# A group that only the local check runs is listed, with its reason, in LOCAL_CHECK_CONFIGS of
-# .github/scripts/e2e_groups.py (the mail module's: its stack also runs a fake Google; the apply module's: its stack also
-# runs a fake ATS forms server). Nothing
-# else may differ.
-local_only="$(python3 -c 'import sys; sys.path.insert(0, ".github/scripts"); import e2e_groups; print("\n".join(sorted(e2e_groups.LOCAL_CHECK_CONFIGS)))')"
-[[ "$local_only" == $'e2e/apply-all.config.ts\ne2e/mail-all.config.ts' ]] || fail "the groups of the local check alone are no longer the apply and mail groups: $local_only"
+# The groups that only the local check runs are the group configs that ci.yml does not run
+# (local_check_configs of .github/scripts/e2e_groups.py: mail, with its fake Google, apply, with
+# its fake ATS forms server, and the groups added since). Nothing else may differ: the specs and
+# configs the gate ran above, on this repository's names, are those of ci.yml plus those.
+local_only="$(python3 -c 'import sys; sys.path.insert(0, ".github/scripts"); import e2e_groups; print("\n".join(e2e_groups.local_check_configs(__import__("pathlib").Path("."))))')"
+[[ -n "$local_only" ]] || fail "the local check runs no group config of its own (mail and apply had one)"
 expected_specs() { { specs_of .github/workflows/ci.yml; printf '%s\n' "$local_only"; } | sort -u; }
-[[ "$(expected_specs)" == "$(specs_of ops/local-check.sh)" ]] ||
-  fail "the journey groups of ops/local-check.sh (journey_specs) differ from those of ci.yml plus the local check's own: $(diff <(expected_specs) <(specs_of ops/local-check.sh) | tr '\n' ' ')"
-! specs_of .github/workflows/ci.yml | grep -qxF "$local_only" || fail "$local_only is also run by ci.yml: remove it from LOCAL_CHECK_CONFIGS"
-ok "ops/local-check.sh runs the journey specs and configs that ci.yml names, and the mail and apply groups of their own"
+[[ "$(expected_specs)" == "$(specs_of "$WORK/gate-specs")" ]] ||
+  fail "the journey groups of ops/local-check.sh differ from those of ci.yml plus the local check's own: $(diff <(expected_specs) <(specs_of "$WORK/gate-specs") | tr '\n' ' ')"
+while IFS= read -r config; do
+  ! grep -qxF -- "$config" <(specs_of .github/workflows/ci.yml) || fail "$config is run by ci.yml and counted as the local check's own"
+done <<<"$local_only"
+ok "ops/local-check.sh runs the journey specs and configs that ci.yml names, and the group configs that ci.yml does not run"
 
 listed="$(awk '/koalaman\/shellcheck:/ { on = 1; next } on && /^ *(#|- )/ { exit } on { print }' .github/workflows/ci.yml | tr '\n' ' ')"
 for script in ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh; do
