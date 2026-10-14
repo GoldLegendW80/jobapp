@@ -614,7 +614,7 @@ def _judge(question: agent.Question, value: str | None, source: str = "facts") -
     return verdict
 
 
-TEXT = agent.Question("q", "Tell us something", "text")
+TEXT = agent.Question("q", "Tell us about a project", "text")
 CHOICE = agent.Question("c", "Which team?", "select", ("Ops", "Research"))
 YES_NO = agent.Question("y", "Do you enjoy puzzles?", "yes_no")
 YES_NO_SELECT = agent.Question("s", "Kubernetes in production", "select", ("Yes", "No"))
