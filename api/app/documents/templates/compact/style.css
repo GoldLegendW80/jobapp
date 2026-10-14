@@ -1,0 +1,114 @@
+/* compact: one column in Carlito (narrow, so more words per line), small type and a tight
+   rhythm for long careers, no photo. The page margin and the density come from the step on
+   :root; the sections are separated by thin rules, the lists run in lines. */
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Carlito", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #20242b;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p { overflow-wrap: anywhere; }
+
+.head {
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 3pt;
+  margin-bottom: var(--section-gap);
+}
+.headtext { display: block; }
+.name {
+  font-size: 2em;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+}
+.headline {
+  font-size: 1.12em;
+  font-weight: 700;
+  color: var(--accent);
+}
+.contact {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10pt;
+  margin-top: 2pt;
+  color: #444b57;
+}
+
+.block { margin-bottom: var(--section-gap); }
+.block:last-child { margin-bottom: 0; }
+.label {
+  font-size: 0.86em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  border-bottom: 0.5px solid #b9bfc8;
+  margin-bottom: var(--item-gap);
+}
+
+.block ul { padding-left: 1em; }
+.block li { margin-bottom: 0.5pt; }
+.block li::marker { color: var(--accent); }
+.block ul.competencies, .block ul.languages {
+  list-style: none;
+  padding-left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8pt;
+}
+.block .competencies li, .block .languages li { margin: 0; }
+.block .competencies li + li::before { content: "\00b7\00a0"; color: var(--accent); font-weight: 700; }
+
+.entry { margin-bottom: var(--item-gap); }
+.entry:last-child { margin-bottom: 0; }
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8pt;
+  align-items: baseline;
+}
+.entry-title { font-size: 1.02em; font-weight: 700; }
+.org { font-weight: 700; }
+.entry .org { color: var(--accent); }
+.period, .place { color: #555c68; font-size: 0.94em; }
+.entry-head .period { flex: 0 0 auto; text-align: right; }
+
+.schools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--item-gap) 16pt;
+}
+.school {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6pt;
+  align-items: baseline;
+}
+.skills { display: block; }
+.skill-group {
+  display: flex;
+  gap: 5pt;
+  align-items: baseline;
+  margin-bottom: 0.5pt;
+}
+.group-label {
+  flex: 0 0 auto;
+  font-size: 1em;
+  font-weight: 700;
+}
+.items { flex: 1 1 auto; }
+
+.letter-body { padding-top: 10pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; color: #444b57; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; }
+.paragraph { text-align: justify; white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); }
