@@ -29,8 +29,8 @@
 #    known text, after runs of spaces are folded. With them: the model, the tokens, the tool
 #    calls and errors, the duration. Numbers and names only, never a text.
 # 6. After: the document is done and its image deleted, the ingestion run is closed, and no
-#    item was stored for it. The line to copy under "Measurements" of tasks/ingestion/todo.md
-#    (the paragraph headed G14) is printed.
+#    item was stored for it. The line to copy under "Measurements" of the ingestion plan (the
+#    paragraph headed G14) is printed.
 #
 # What it leaves: the document g14-dense-a4<label>.jpg in the owner's list and one closed run
 # with no proposal. Nothing is deleted by hand in production: delete the document from the app.
@@ -548,12 +548,12 @@ jq . "$METRICS"
 [[ "$(jq -r '.error_class // empty' "$METRICS")" == "" ]] || die "the measure failed ($(jq -r .error_class "$METRICS"))"
 
 step "After"
-[[ "$(jq -r .agent_status "$METRICS")" == done ]] || die "the agent run ended $(jq -r .agent_status "$METRICS"): $(jq -r .agent_error "$METRICS")"
-[[ "$(jq -r .document_status "$METRICS")" == done && "$(jq -r .images_left "$METRICS")" == 0 ]] ||
+[[ "$(jq -r .agent_status "$METRICS")" == "done" ]] || die "the agent run ended $(jq -r .agent_status "$METRICS"): $(jq -r .agent_error "$METRICS")"
+[[ "$(jq -r .document_status "$METRICS")" == "done" && "$(jq -r .images_left "$METRICS")" == 0 ]] ||
   die "the document is not done or its image is still stored"
 [[ "$(jq -r .items_stored "$METRICS")" == 0 ]] || die "items were stored for a made up page: reject them in the app"
 info "run status: $(jq -r .run_status "$METRICS") (the chain closes at the latest on the next tick of the worker)"
-step "The line for Measurements (tasks/ingestion/todo.md, paragraph G14)"
+step "The line for Measurements (the ingestion plan, paragraph G14)"
 jq -r --arg label "${RAW_LABEL:-unlabelled}" --arg day "$(date +%Y-%m-%d)" \
   '"Jetson, \($day), run \($label): a dense A4 page (\(.page.width) by \(.page.height) px, \(.known_characters) known characters on \(.lines) lines) transcribed by \(.model): character error rate \(.character_error_rate) (\(.character_edits) edits), word error rate \(.word_error_rate) (\(.word_edits) of \(.known_words) words), \(.lines_exact) of \(.lines) lines exact; \(.input_tokens) input and \(.output_tokens) output tokens under a budget of \(.token_budget); \(.duration_s) s."' \
   "$METRICS"
