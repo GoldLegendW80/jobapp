@@ -137,8 +137,9 @@ class AgentTooLongError(RuntimeError):
 # The files of a module package (app/<module>/) that register something when they are imported:
 # its agents and their tools (`agents`), the hook that chains its agents (`engine`, ingestion
 # G10: `profile_extract`, its tools and the `on_final` hook), its arq jobs (`jobs`), its document
-# writers (`writers`, documents D7). A module adds its file, not a line to this one (issue #279).
-REGISTRATION_MODULES = ("agents", "engine", "jobs", "writers")
+# writers (`writers`, documents D7), its status callbacks on the jobs service (`freeze`, documents
+# D14). A module adds its file, not a line to this one (issue #279).
+REGISTRATION_MODULES = ("agents", "engine", "freeze", "jobs", "writers")
 APP_DIR = Path(__file__).resolve().parent
 
 

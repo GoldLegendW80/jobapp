@@ -243,7 +243,7 @@ No mail task is needed: M1's `canary.py` and M9's `factcheck_rules.py` are on ma
 Measured on 2026-10-14. The fake server answers a page in a few milliseconds; the slow variant answers after 10 s on purpose and the journey waits for it. The invisible check's dwell threshold is 3 s of the page's own clock (`Date.now()`), so the journey moves Playwright's clock (`page.clock`) instead of sleeping. The journey group `apply` (`-c e2e/apply-all.config.ts`) is a group of the local check only, like `mail`: it starts the fake forms server beside the stack on a loopback port of its own, and holds `apply-a1` and `apply-a3` (A3's journey left the identity group). The compose file declares the `egress` network the browser container of B2 joins; B2 attaches it to its service when it merges.
 
 ### A2
-Nothing yet.
+Measured on 2026-10-14. The accept and refuse tables of `api/tests/apply/test_a2_guardrails.py` hold 364 cases (never apply, form address, same role, the whole state table). Of the 28 titles the owner's rule must refuse, the sweep's whole word match alone refuses 21: it misses "Cybersecurity Engineer", "CyberSecurity Lead", "AppSecurity Lead", "Pentester", "cyber_security analyst", "Ingénieur Cybersécurité" and a full width "Security Engineer"; the guardrail refuses all 28 and keeps the 12 neighbours that are not security roles ("Securities Trading Engineer" among them). A start is one transaction under the posting's row lock and the person's advisory lock; the match is one regular expression per rule over the folded company and title, with no nested repetition (a 200,000 character title is matched in the test).
 
 ### A3
 Nothing yet.

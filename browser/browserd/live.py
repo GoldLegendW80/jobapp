@@ -57,25 +57,15 @@ log = logging.getLogger("browserd.live")
 PORT = 6080
 PATH = "/vnc/websockify"
 GRANT_HEADER = "x-live-grant"
-GRANT_TTL_S = (
-    10  # the api signs a grant this long; one more minute of clock skew at most
-)
-TAKEOVER_S = (
-    900  # the person holds the input this long at most, then the agent has it back
-)
-HOLDER_GRACE_S = (
-    10  # the holder's last viewer may be away this long (a reload) before Give back
-)
+GRANT_TTL_S = 10  # the api signs a grant this long; one more minute of clock skew at most
+TAKEOVER_S = 900  # the person holds the input this long at most, then the agent has it back
+HOLDER_GRACE_S = 10  # the holder's last viewer may be away this long (a reload) before Give back
 PERSON_USED = "The person used the browser"
-VIEWERS_MAX = (
-    3  # open views of one lease: two tabs and a reload, each one an x11vnc of its own
-)
+VIEWERS_MAX = 3  # open views of one lease: two tabs and a reload, each one an x11vnc of its own
 TOO_MANY = "Too many open views of your browser. Close one."
 HEAD_MAX = 8 * 1024
 FRAME_MAX = 1024 * 1024  # one websocket frame from a viewer
-CUT_MAX = (
-    256 * 1024
-)  # a clipboard message (always dropped) longer than this closes the viewer
+CUT_MAX = 256 * 1024  # a clipboard message (always dropped) longer than this closes the viewer
 READ_CHUNK = 64 * 1024
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -102,7 +92,9 @@ def _grant_mac(secret: bytes, lease_id: str, viewer: str, exp: int, nonce: str) 
 
 def sign_grant(secret: bytes, lease_id: str, viewer: str, exp: int, nonce: str) -> str:
     """The api's signature, here for the tests; app/browser/live_router.py holds the same."""
-    return f"v1.{lease_id}.{viewer}.{exp}.{nonce}.{_grant_mac(secret, lease_id, viewer, exp, nonce)}"
+    return (
+        f"v1.{lease_id}.{viewer}.{exp}.{nonce}.{_grant_mac(secret, lease_id, viewer, exp, nonce)}"
+    )
 
 
 @dataclass(frozen=True)
@@ -132,7 +124,7 @@ def read_grant(secret: bytes, raw: str, now: float) -> Grant | None:
 # --- the client's half of the RFB stream ---------------------------------------------------------
 
 
-class Refused(Exception):
+class Refused(Exception):  # noqa: N818 - a refusal of the stream, not an error
     """The viewer sent something the filter does not accept: the viewer is closed."""
 
 
@@ -141,18 +133,14 @@ class Refused(Exception):
 PASS, INPUT, DROP = "pass", "input", "drop"
 
 
-def _set_encodings(
-    buf: bytes | bytearray | memoryview, at: int, have: int
-) -> int | None:
+def _set_encodings(buf: bytes | bytearray | memoryview, at: int, have: int) -> int | None:
     return None if have < 4 else 4 + 4 * struct.unpack_from(">H", buf, at + 2)[0]
 
 
 def _cut_text(buf: bytes | bytearray | memoryview, at: int, have: int) -> int | None:
     if have < 8:
         return None
-    length = abs(
-        struct.unpack_from(">i", buf, at + 4)[0]
-    )  # extended clipboard: negative
+    length = abs(struct.unpack_from(">i", buf, at + 4)[0])  # extended clipboard: negative
     if length > CUT_MAX:
         raise Refused("clipboard too long")
     return 8 + length
@@ -162,9 +150,7 @@ def _fence(buf: bytes | bytearray | memoryview, at: int, have: int) -> int | Non
     return None if have < 9 else 9 + buf[at + 8]
 
 
-def _desktop_size(
-    buf: bytes | bytearray | memoryview, at: int, have: int
-) -> int | None:
+def _desktop_size(buf: bytes | bytearray | memoryview, at: int, have: int) -> int | None:
     return None if have < 8 else 8 + 16 * buf[at + 6]
 
 
@@ -255,7 +241,7 @@ class RfbFilter:
 # --- websocket framing (RFC 6455, the server's side) ---------------------------------------------
 
 
-class Closed(Exception):
+class Closed(Exception):  # noqa: N818 - the peer closed, not an error
     """The viewer closed the websocket, or sent a frame that ends it."""
 
 
@@ -296,12 +282,15 @@ def frame(opcode: int, payload: bytes) -> bytes:
 
 
 def accept_key(key: str) -> str:
-    return base64.b64encode(hashlib.sha1(key.encode() + WS_GUID).digest()).decode()
+    return base64.b64encode(hashlib.sha1(key.encode() + WS_GUID).digest()).decode()  # noqa: S324 - RFC 6455 fixes it
 
 
 # --- x11vnc --------------------------------------------------------------------------------------
 
 Vnc = tuple[asyncio.StreamReader, asyncio.StreamWriter, Callable[[], Awaitable[None]]]
+
+
+HOME = "/tmp"  # noqa: S108 - the display user's scratch home
 
 
 async def spawn_x11vnc() -> Vnc:
@@ -312,7 +301,7 @@ async def spawn_x11vnc() -> Vnc:
             *X11VNC,
             stdin=theirs.fileno(), stdout=theirs.fileno(), stderr=asyncio.subprocess.DEVNULL,
             user=c.DISPLAY_UID, group=c.DISPLAY_UID, extra_groups=[], start_new_session=True,
-            env={"PATH": "/usr/bin:/bin", "DISPLAY": c.DISPLAY, "HOME": "/tmp"}, cwd="/",
+            env={"PATH": "/usr/bin:/bin", "DISPLAY": c.DISPLAY, "HOME": HOME}, cwd="/",
         )  # fmt: skip
     finally:
         theirs.close()
@@ -322,9 +311,7 @@ async def spawn_x11vnc() -> Vnc:
         writer.close()
         with contextlib.suppress(Exception):
             await asyncio.wait_for(proc.wait(), 2)
-        if (
-            proc.returncode is None
-        ):  # browserd has no CAP_KILL: a child of that uid stops it
+        if proc.returncode is None:  # browserd has no CAP_KILL: a child of that uid stops it
             from browserd.chromium import as_uid
 
             await as_uid(
@@ -379,14 +366,10 @@ class Live:
         self.input_viewer: str | None = None
         self.input_until = 0.0
         self.absent_since: float | None = None  # when the holder's last viewer went
-        self.used: set[str] = (
-            set()
-        )  # leases the person used since the agent's last call
+        self.used: set[str] = set()  # leases the person used since the agent's last call
         self.given_back = asyncio.Event()
         self.given_back.set()
-        self.starting: dict[
-            str, int
-        ] = {}  # viewers admitted whose x11vnc is not up yet, by lease
+        self.starting: dict[str, int] = {}  # viewers admitted whose x11vnc is not up yet, by lease
         self.watcher: asyncio.Task[None] | None = None
 
     # The input ------------------------------------------------------------------------------------
@@ -450,10 +433,7 @@ class Live:
             if (
                 self.input_lease != current
                 or now >= self.input_until
-                or (
-                    self.absent_since is not None
-                    and now - self.absent_since >= HOLDER_GRACE_S
-                )
+                or (self.absent_since is not None and now - self.absent_since >= HOLDER_GRACE_S)
             ):
                 self.give_back()
         self.used &= {current} if current else set()
@@ -463,8 +443,7 @@ class Live:
     def holder_here(self) -> bool:
         """The holder of the input has an open view."""
         return any(
-            v.lease_id == self.input_lease and v.viewer == self.input_viewer
-            for v in self.viewers
+            v.lease_id == self.input_lease and v.viewer == self.input_viewer for v in self.viewers
         )
 
     # A viewer -------------------------------------------------------------------------------------
@@ -479,9 +458,7 @@ class Live:
         self.nonces[grant.nonce] = grant.exp
         return grant
 
-    async def handle(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             try:
                 head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 10)
@@ -518,9 +495,7 @@ class Live:
 
     def open_views(self, lease_id: str) -> int:
         """The views of that lease, those whose x11vnc is still starting included."""
-        return self.starting.get(lease_id, 0) + sum(
-            v.lease_id == lease_id for v in self.viewers
-        )
+        return self.starting.get(lease_id, 0) + sum(v.lease_id == lease_id for v in self.viewers)
 
     async def refuse_view(
         self,
@@ -533,12 +508,8 @@ class Live:
         security type gives a reason), that there are too many views: the page shows TOO_MANY."""
         writer.write(upgrade(key, headers))
         writer.write(frame(0x2, b"RFB 003.008\n"))
-        with contextlib.suppress(
-            Closed, asyncio.IncompleteReadError, TimeoutError, OSError
-        ):
-            await asyncio.wait_for(
-                read_frame(reader), 5
-            )  # noVNC's version, then its wait
+        with contextlib.suppress(Closed, asyncio.IncompleteReadError, TimeoutError, OSError):
+            await asyncio.wait_for(read_frame(reader), 5)  # noVNC's version, then its wait
             reason = TOO_MANY.encode()
             writer.write(frame(0x2, b"\x00" + struct.pack(">I", len(reason)) + reason))
         writer.write(frame(0x8, struct.pack(">H", 1000)))
@@ -597,9 +568,7 @@ class Live:
                     vnc_writer.write(data)
                     await vnc_writer.drain()
 
-        async def downstream() -> (
-            None
-        ):  # x11vnc's bytes to the viewer, as binary frames
+        async def downstream() -> None:  # x11vnc's bytes to the viewer, as binary frames
             while True:
                 data = await vnc_reader.read(READ_CHUNK)
                 if not data:
@@ -683,9 +652,7 @@ async def set_input(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
     viewer, giver = body.get("viewer"), body.get("from")
     live = live_of(svc)
     for value in (viewer, giver):
-        if value is not None and (
-            not isinstance(value, str) or not re.fullmatch(UUID, value)
-        ):
+        if value is not None and (not isinstance(value, str) or not re.fullmatch(UUID, value)):
             raise LeaseError(400, "bad_viewer")
     if viewer is None:
         if match["lease_id"] != live._lease_id():
@@ -710,7 +677,7 @@ LEASE_ID = r"(?P<lease_id>[0-9a-f-]{36})"
 ROUTES = [Route("POST", re.compile(rf"/leases/{LEASE_ID}/live/input"), set_input)]
 
 
-async def serve(live: Live, host: str = "0.0.0.0", port: int = PORT) -> asyncio.Server:
+async def serve(live: Live, host: str = "0.0.0.0", port: int = PORT) -> asyncio.Server:  # noqa: S104 - in the container
     """The viewers' listener on the `browsing` network (Caddy only reaches it), and the watcher
     that closes the viewers of an ended lease within a second."""
 

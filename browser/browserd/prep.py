@@ -1,7 +1,8 @@
 """Run as the profile's own uid, never as root: `python -m browserd.prep prepare <profile dir>
-<lease dir> <languages>`, `killpg <pgid>`, `kill <pid ...>`, `rmtree <lease dir>`. browserd is root with SETUID and
-SETGID only (no DAC_OVERRIDE, no CHOWN, no KILL), so it cannot read or write a profile nor signal
-its Chromium itself; this child does it under the profile's uid, then exits.
+<lease dir> <languages>`, `killpg <pgid>`, `kill <pid ...>`, `rmtree <lease dir>`. browserd is
+root with SETUID and SETGID only (no DAC_OVERRIDE, no CHOWN, no KILL), so it cannot read or
+write a profile nor signal its Chromium itself; this child does it under the profile's uid,
+then exits.
 
 - the profile directory, created with mode 0700 by its uid (/profiles is 1733: anyone may create
   an entry, nobody may list it, only the owner may remove theirs);
@@ -45,10 +46,8 @@ def prepare(profile: str, lease: str, languages: str) -> None:
         os.makedirs(path, mode=0o700, exist_ok=True)
     os.chmod(profile, 0o700)  # an existing directory too: never readable by another uid
     for name in LOCKS:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.unlink(f"{profile}/data/{name}")
-        except FileNotFoundError:
-            pass
     path = f"{profile}/data/Default/Preferences"
     try:
         with open(path, encoding="utf-8") as handle:

@@ -282,6 +282,7 @@ describe("search tab: terms and preferences", () => {
         times: ["06:17"],
         timezone: "Europe/Paris",
       },
+      documents: { auto: true, min_fit: 70, daily_ceiling: 100 },
     });
   });
 });
