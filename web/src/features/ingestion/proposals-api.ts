@@ -125,3 +125,73 @@ export async function getFinishedRunId(
   });
   return list.runs.find((run) => run.status === "done")?.id ?? null;
 }
+
+// --- deciding (task G13) -----------------------------------------------------------------------
+
+const decidedSchema = z.object({
+  decided: z.array(z.string()),
+  skipped: z.array(z.object({ id: z.string(), reason: z.string() })),
+  left_out: z.record(z.string(), z.number()),
+  revision: z.number().nullable(),
+  profile_revision: z.number(),
+});
+export type SectionDecided = z.infer<typeof decidedSchema>;
+
+/**
+ * Accept one proposal. `edited_value` is the user's own value, or the value chosen among those
+ * of a conflict; `profile_revision` is the revision of the profile the list was showing, which
+ * lets an item marked "check again" apply onto what the profile holds now.
+ */
+export async function acceptProposal(
+  id: string,
+  body: { edited_value?: unknown; profile_revision?: number },
+): Promise<void> {
+  await request(`/proposals/${encodeURIComponent(id)}/accept`, {
+    method: "POST",
+    body,
+    timeoutMs: TIMEOUT_MS,
+  });
+}
+
+export async function rejectProposal(id: string): Promise<void> {
+  await request(`/proposals/${encodeURIComponent(id)}/reject`, {
+    method: "POST",
+    timeoutMs: TIMEOUT_MS,
+  });
+}
+
+/** "Accept all in this section" and "Reject the rest of this section", for the ids shown. */
+export function decideSection(
+  runId: string,
+  what: "accept" | "reject",
+  section: string,
+  ids: string[],
+): Promise<SectionDecided> {
+  return request(
+    `/ingestion/runs/${encodeURIComponent(runId)}/${what}-section`,
+    {
+      method: "POST",
+      body: { section, proposal_ids: ids },
+      timeoutMs: TIMEOUT_MS,
+      validate: (body) => decidedSchema.parse(body),
+    },
+  );
+}
+
+/**
+ * How complete the profile is, for the bar above the list. Its key sits under the profile's own
+ * key, so everything that refreshes the profile refreshes the bar.
+ */
+export const completenessKey = ["profile", "completeness"] as const;
+const completenessSchema = z.object({
+  completeness: z.object({ overall: z.number() }),
+});
+
+export async function getCompleteness(signal?: AbortSignal): Promise<number> {
+  const profile = await request("/profile", {
+    signal,
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => completenessSchema.parse(body),
+  });
+  return profile.completeness.overall;
+}
