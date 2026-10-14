@@ -21,7 +21,7 @@ from app.agents.crypto import Keyring
 from app.agents.models import AgentRun
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
-from app.ingestion import documents, engine
+from app.ingestion import deletion, engine
 from app.ingestion.models import IngestionDocument, TextStatus
 from app.ingestion.runs_models import IngestionRun, IngestionRunStep, RunStatus, StepStatus
 from tests.agents.run_helpers import add_user, now, save_credential
@@ -219,7 +219,7 @@ def test_the_last_planned_document_deleted_during_a_pause_closes_the_run_without
     assert (paused.status, paused.paused_reason) == (RunStatus.paused, engine.TOKEN_CEILING)
     assert shown(factory, run_id) == paused.estimate_high
     with factory() as db, db.begin():
-        assert documents.delete_document(db, alice, selected[1])
+        assert deletion.delete(db, alice, selected[1], now())
 
     assert shown(factory, run_id) == 0  # no raise is asked
     agents_before = len(eh.agent_runs_of(factory, alice))

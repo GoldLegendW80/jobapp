@@ -79,7 +79,7 @@ const MIB = 1024 * 1024;
 const FILE_MAX = 20 * MIB;
 const UPLOAD = "/api/ingestion/documents";
 const DELETE_PROMISE =
-  "Gone from the app now. The server's backups still hold a copy for a while, until newer backups replace them.";
+  "Gone from the app now, and from the server's backups within 7 days.";
 const STOPPED = "stopped on its way.pdf";
 // Words that must never reach a log, unique to this run.
 const MARKER_NAME = `zq-name-${run}`;
@@ -680,7 +680,7 @@ test("deleting asks first, says what it means, and the document is gone for good
   });
   await expect(dialog).toContainText("cover letter.txt");
   await expect(dialog).toContainText(
-    "will be deleted for good, with its text.",
+    "will be deleted for good, with its text, its page images and its transcriptions.",
   );
   await expect(dialog).toContainText(DELETE_PROMISE);
   await shots(page, "05-delete", false);

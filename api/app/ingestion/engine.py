@@ -24,7 +24,8 @@ Rules that hold everywhere in this file:
 
 * Every change of a run happens under its row lock (`FOR UPDATE`), in the plan's lock order: the
   run row (3), the step row (5), the user's advisory lock of `runs.create_run` (6), the
-  `agent_runs` row (7). A document row is only read, never locked.
+  `agent_runs` row (7). A document row is only read, never locked, except by `create`, which
+  holds the documents of the new run `FOR KEY SHARE` (4) so that a delete cannot pass it.
 * The `agent_runs` row of a step is read without a lock and written only by the short update of
   a cancel request: a lock held on it would hold back that run's event writes.
 * A step gets its final status only once its agent run has ended (the tools of G9 answer "not
@@ -189,18 +190,6 @@ def create(
     found = active_run_id(db, user_id)
     if found is not None:
         raise ActiveRunError(found)
-    doc = IngestionDocument
-    stored = {
-        row.id: row
-        for row in db.execute(
-            sa.select(
-                doc.id,
-                doc.sha256,
-                stored_text_sha256().label("text_hash"),
-                sa.func.coalesce(sa.func.char_length(doc.text), 0).label("characters"),
-            ).where(doc.user_id == user_id, doc.id.in_(quote.plan.planned_documents))
-        )
-    }
     figures = quote.estimate
     run = IngestionRun(
         user_id=user_id,
@@ -221,6 +210,24 @@ def create(
             db.flush()
     except IntegrityError:
         raise ActiveRunError(active_run_id(db, user_id)) from None
+    # The documents `FOR KEY SHARE` (4), after the run row (3): a start waits for the delete of
+    # one of them in flight and then finds it gone, and a delete that comes after the start
+    # finds the run and its steps (G15, `deletion`).
+    doc = IngestionDocument
+    stored = {
+        row.id: row
+        for row in db.execute(
+            sa.select(
+                doc.id,
+                doc.sha256,
+                stored_text_sha256().label("text_hash"),
+                sa.func.coalesce(sa.func.char_length(doc.text), 0).label("characters"),
+            )
+            .where(doc.user_id == user_id, doc.id.in_(quote.plan.planned_documents))
+            .order_by(doc.id)
+            .with_for_update(key_share=True)
+        )
+    }
     ends: dict[uuid.UUID, int] = {}
     for position, step in enumerate(quote.plan.steps):
         row = stored.get(step.document_id)

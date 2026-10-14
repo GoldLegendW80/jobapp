@@ -22,7 +22,7 @@ from app.agents.crypto import Keyring
 from app.agents.models import Proposal, ProposalStatus
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
-from app.ingestion import delete_guard, documents, engine, items
+from app.ingestion import deletion, engine, items
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun, RunStatus
 from app.profile.models import Profile
@@ -162,31 +162,37 @@ def test_the_merge_does_not_wait_for_the_profile_row(
 def test_a_merge_racing_a_document_delete(
     factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
 ) -> None:
-    """The delete takes its document row (4) and the merge takes none, so neither waits for the
-    other. While the merge is in flight, the delete of a document the run has read is refused
-    by the guard (until G15), so every proposal cites a document that is still stored; the
-    delete in flight of a document no step has read does not hold the merge back."""
+    """Since G15 the delete takes the user's active run row (3) before its document (4). So a
+    delete waits for a merge in flight and then strips what the merge wrote, and a merge waits
+    for a delete in flight and then reads without the document."""
     unread = add_document(factory, alice, "A document no run has read.")
     run_id, read = about_to_merge(factory, alice, settings)
 
     def delete(document_id: uuid.UUID) -> bool:
         with factory() as other, other.begin():
-            return documents.delete_document(other, alice, document_id)
+            return deletion.delete(other, alice, document_id, now())
 
     with factory() as db:
         assert engine.advance(db, run_id, now(), settings).status is RunStatus.done
-        with pytest.raises(documents.DeleteRefusedError, match=delete_guard.READ_BY_A_RUN):
-            Path(lambda: delete(read)).ends()
+        path = Path(lambda: delete(read))
+        path.waits()  # for the run row the merge holds
         db.commit()
-    (one,) = mh.proposals_of(factory, alice, run_id)
+    assert path.ends() is True
+    # The only item cited the deleted document alone: pending, it is deleted with it.
+    assert mh.proposals_of(factory, alice, run_id) == []
     with factory() as db:
-        kept = set(db.scalars(sa.select(IngestionDocument.id)))
-    assert {uuid.UUID(cited["document_id"]) for cited in one.payload["citations"]} <= kept
+        assert db.get(IngestionDocument, read) is None
 
-    again = eh.start(factory, alice, [read])  # every step reused: this `advance` merges
+    again, (cited,) = mh.begin(factory, alice, settings, [mh.LETTER])
+    step = eh.running(factory, again)
+    mh.store(factory, alice, step, *HEADLINE)
+    eh.end_agent(factory, step.agent_run_id, AgentStatus.done, None, 0, None)
     with factory() as db:
-        assert documents.delete_document(db, alice, unread) is True
-        assert merging(factory, again, settings).ends() is RunStatus.done
+        assert deletion.delete(db, alice, unread, now()) is True  # holds the run row of `again`
+        path = merging(factory, again, settings)
+        path.waits()
         db.commit()
-    assert [p.payload["key"] for p in mh.proposals_of(factory, alice, again)] == ["headline"]
+    assert path.ends() is RunStatus.done
+    (one,) = mh.proposals_of(factory, alice, again)
+    assert {uuid.UUID(c["document_id"]) for c in one.payload["citations"]} == {cited}
     assert one.kind == items.KIND

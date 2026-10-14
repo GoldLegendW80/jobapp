@@ -29,7 +29,7 @@ from app.agents.crypto import Keyring
 from app.agents.models import AgentRun
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
-from app.ingestion import agents, delete_guard, engine, estimate, estimate_router, plan
+from app.ingestion import agents, deletion, engine, estimate, estimate_router, plan
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun, RunStatus, text_sha256
 from tests.agents.g6_helpers import run_context
@@ -1232,7 +1232,7 @@ def test_a_document_deleted_before_its_step_fails_that_step_without_an_agent_run
     assert (run.status, run.partial) == (RunStatus.done, True)
 
 
-def test_deleting_a_document_read_by_a_step_and_one_no_step_has_read(
+def test_replacing_a_document_read_by_a_step_and_one_no_step_has_read(
     factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
 ) -> None:
     selected = eh.documents(factory, alice, 2)
@@ -1242,14 +1242,14 @@ def test_deleting_a_document_read_by_a_step_and_one_no_step_has_read(
         read, planned, unread = (
             db.get_one(IngestionDocument, one) for one in (selected[0], selected[1], never)
         )
-        assert delete_guard.read_by_a_run(db, read) == delete_guard.READ_BY_A_RUN
-        assert delete_guard.read_by_a_run(db, planned) is None  # only planned: nothing read
-        assert delete_guard.read_by_a_run(db, unread) is None
+        assert deletion.read_by_a_run(db, read) == deletion.REPLACEMENT_REFUSED
+        assert deletion.read_by_a_run(db, planned) is None  # only planned: nothing read
+        assert deletion.read_by_a_run(db, unread) is None
 
 
 def guarded(factory: sessionmaker[Session], document_id: uuid.UUID) -> str | None:
     with factory() as db:
-        return delete_guard.read_by_a_run(db, db.get_one(IngestionDocument, document_id))
+        return deletion.read_by_a_run(db, db.get_one(IngestionDocument, document_id))
 
 
 def test_a_run_that_ended_without_one_token_holds_no_document_back(
@@ -1263,7 +1263,7 @@ def test_a_run_that_ended_without_one_token_holds_no_document_back(
     eh.advance(factory, run_id, settings)
     eh.finish_step(factory, run_id, settings, AgentStatus.failed, failures.NO_CREDENTIAL)
     assert eh.run_of(factory, run_id).status is RunStatus.paused
-    assert guarded(factory, document_id) == delete_guard.READ_BY_A_RUN
+    assert guarded(factory, document_id) == deletion.REPLACEMENT_REFUSED
     cancel(factory, alice, run_id)
     eh.advance(factory, run_id, settings)
     closed = eh.run_of(factory, run_id)
@@ -1274,7 +1274,7 @@ def test_a_run_that_ended_without_one_token_holds_no_document_back(
 def test_a_failed_run_that_spent_tokens_still_holds_its_document(
     factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
 ) -> None:
-    """No item kept, but the events of the step quote the document until G15 deletes them."""
+    """No item kept, but the events of the step quote the document until a delete removes them."""
     (document_id,) = eh.documents(factory, alice, 1)
     run_id = eh.start(factory, alice, [document_id])
     eh.advance(factory, run_id, settings)
@@ -1283,8 +1283,8 @@ def test_a_failed_run_that_spent_tokens_still_holds_its_document(
     )
     assert eh.run_of(factory, run_id).status is RunStatus.failed
     assert eh.items_of(factory, run_id) == 0
-    assert guarded(factory, document_id) == delete_guard.READ_BY_A_RUN
-    assert " - " not in delete_guard.READ_BY_A_RUN
+    assert guarded(factory, document_id) == deletion.REPLACEMENT_REFUSED
+    assert " - " not in deletion.REPLACEMENT_REFUSED
 
 
 def test_a_run_closed_from_a_pause_keeps_no_pause_reason(

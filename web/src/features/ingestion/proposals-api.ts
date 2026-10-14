@@ -23,6 +23,8 @@ const citationSchema = z.object({
   start: z.number(),
   end: z.number(),
   transcribed: z.boolean().default(false),
+  /** The delete took the excerpt too (an accepted item, G15): there is no quote to show. */
+  source_deleted: z.boolean().default(false),
 });
 export type Citation = z.infer<typeof citationSchema>;
 

@@ -118,7 +118,7 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.ingestion import documents, jobs
+from app.ingestion import deletion, documents, jobs
 from app.ingestion.models import (
     FILE_MAX_BYTES,
     NAME_MAX_CHARS,
@@ -153,6 +153,9 @@ PREVIEW_DEFAULT = 20_000
 PREVIEW_MAX = 50_000
 
 NOT_FOUND = "Document not found."
+DELETE_BUSY = (
+    "This document is being read or changed right now. Nothing was deleted. Try again in a moment."
+)
 NO_TEXT_YET = "This document has no text yet."
 STALLED = (
     "The upload stopped arriving, or arrives too slowly. Check your connection and add it again."
@@ -773,17 +776,20 @@ def confirm_document(document_id: str, user: CurrentUser, request: Request, db: 
     responses={
         **_401,
         **_404,
-        409: {"model": ErrorOut, "description": "The document cannot be deleted yet"},
+        409: {"model": ErrorOut, "description": "A run or a decision holds it: try again"},
     },
 )
-def delete_document(document_id: str, user: CurrentUser, db: Db) -> Response:
-    """Delete a document for good: its file, its text and its page images."""
+def delete_document(document_id: str, user: CurrentUser, request: Request, db: Db) -> Response:
+    """Delete a document for good: its file, its text, its page images and transcriptions, its
+    citations in proposals and the events of the steps that read it (`deletion`). What the user
+    accepted into the profile stays."""
     try:
-        found = documents.delete_document(db, user.id, _id(document_id))
-    except documents.DeleteRefusedError as exc:
+        found = deletion.delete(db, user.id, _id(document_id), deps.clock(request))
+    except deletion.DeletionBusyError:
         db.rollback()
-        raise _error(status.HTTP_409_CONFLICT, exc.message) from None
+        raise _error(status.HTTP_409_CONFLICT, DELETE_BUSY) from None
     if not found:
+        db.rollback()
         raise _error(status.HTTP_404_NOT_FOUND, NOT_FOUND)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT, headers=NO_STORE)
