@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { LoaderCircle, RotateCw } from "lucide-react";
-import { useState, type ComponentType } from "react";
+import { useEffect, useRef, useState, type ComponentType } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -20,16 +20,13 @@ import * as compare from "./compare-panel";
 import * as edit from "./edit-panel";
 import { SeePanel } from "./see-panel";
 import * as template from "./template-panel";
-import { isOpen, templateLabel } from "./labels";
+import { isOpen, pollInterval, templateLabel } from "./labels";
 
 /** What every panel is given: the document as the api last answered, and its generation if known. */
 export interface PanelProps {
   document: DocumentOut;
   generation: Generation | GenerationBrief | null;
 }
-
-/** How often an open document is read again while something is being written or rendered. */
-export const POLL_MS = 1500;
 
 interface View {
   id: "see" | "edit" | "chat" | "template" | "compare";
@@ -71,7 +68,8 @@ const VIEWS: View[] = [
  * One document, a base CV or a posting's CV or letter: its header and its views. The same
  * component serves /profile/cv/:id and (D12) /jobs/:id/documents/:kind. `generation` is what the
  * caller knows of the document's latest generation (the list of base CVs, or the posting's
- * card); while it is open the document is read again every POLL_MS.
+ * card); while it is open the document is read again every POLL_MS (WAITING_POLL_MS while it waits for the
+ * person), and once more when it ends.
  */
 export function DocumentView({
   documentId,
@@ -85,11 +83,18 @@ export function DocumentView({
     queryKey: documentKey(documentId),
     queryFn: ({ signal }) => getDocument(documentId, signal),
     refetchInterval: (current) =>
-      isOpen(generation) ||
-      (current.state.data?.render.state ?? "idle") !== "idle"
-        ? POLL_MS
-        : false,
+      pollInterval(current.state.data?.render.state ?? "idle", generation),
   });
+
+  // The generation prop comes from another poll than the document's own: when it ends between two
+  // reads of the document, the pending timer is dropped with the last read kept. Read once more.
+  const wasOpen = useRef(isOpen(generation));
+  const { refetch } = query;
+  const open = isOpen(generation);
+  useEffect(() => {
+    if (wasOpen.current && !open) void refetch();
+    wasOpen.current = open;
+  }, [open, refetch]);
 
   if (query.isPending) {
     return (

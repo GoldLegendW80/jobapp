@@ -1,4 +1,5 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
@@ -12,8 +13,11 @@ import {
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
-import { DocumentView, POLL_MS } from "./document-view";
+import { createQueryClient } from "@/lib/query";
+
+import { DocumentView } from "./document-view";
 import type { Generation } from "./documents-api";
+import { pollInterval, POLL_MS, WAITING_POLL_MS } from "./labels";
 
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
 const SEPARATOR = /[–—]| - /;
@@ -81,6 +85,13 @@ describe("the document view", () => {
     expect(
       await screen.findByRole("img", { name: "Page 1 of version 1" }),
     ).toBeVisible();
+    // The label of a button holds its visible text, "Shown" or "Open".
+    expect(
+      within(history).getByRole("button", { name: "Shown, version 1" }),
+    ).toHaveTextContent("Shown");
+    expect(
+      within(history).getByRole("button", { name: "Open version 2" }),
+    ).toHaveTextContent("Open");
     // Version 1 has no corrections: the section goes with it.
     expect(
       screen.queryByRole("region", { name: /Corrected by the fact check/ }),
@@ -197,6 +208,78 @@ describe("the document view", () => {
     ).toBeVisible();
     expect(screen.queryByText("A newer page is being drawn")).toBeNull();
   });
+
+  it("reads the document once more when the generation ends between two polls", async () => {
+    const api = fakeDocuments();
+    const cv = fakeCv({ id: "a", last_version_at: null });
+    api.documents.set("a", fakeDocumentOf(cv));
+    const client = createQueryClient();
+    const ui = (generation: Generation) => (
+      <QueryClientProvider client={client}>
+        <DocumentView documentId="a" generation={generation} />
+      </QueryClientProvider>
+    );
+    const view = render(ui(open("running")));
+    expect(
+      await screen.findByText("Your first CV is being built from your profile"),
+    ).toBeVisible();
+    // The writer finishes; the list that owns the generation says so before the document's own
+    // timer fires.
+    api.documents.set(
+      "a",
+      fakeDocumentOf(cv, { latest: fakeVersion({ number: 1 }) }),
+    );
+    api.versions.set("a", [fakeVersion({ number: 1 })]);
+    view.rerender(ui(open("done")));
+    expect(
+      await screen.findByRole("img", { name: "Page 1 of version 1" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("Nothing has been written for this document yet."),
+    ).toBeNull();
+  });
+
+  it("reads the document once more when the generation fails", async () => {
+    const api = fakeDocuments();
+    const cv = fakeCv({ id: "a", last_version_at: null });
+    api.documents.set("a", fakeDocumentOf(cv));
+    const client = createQueryClient();
+    const ui = (generation: Generation) => (
+      <QueryClientProvider client={client}>
+        <DocumentView documentId="a" generation={generation} />
+      </QueryClientProvider>
+    );
+    const view = render(ui(open("running")));
+    expect(
+      await screen.findByText("Your first CV is being built from your profile"),
+    ).toBeVisible();
+    api.documents.set(
+      "a",
+      fakeDocumentOf(cv, { latest: fakeVersion({ number: 1 }) }),
+    );
+    api.versions.set("a", [fakeVersion({ number: 1 })]);
+    view.rerender(ui({ ...open("failed"), error: "run_failed" }));
+    expect(
+      await screen.findByRole("img", { name: "Page 1 of version 1" }),
+    ).toBeVisible();
+  });
+
+  it.each([
+    ["idle", null, false],
+    ["idle", open("done"), false],
+    ["idle", open("failed"), false],
+    ["idle", open("queued"), POLL_MS],
+    ["idle", open("running"), POLL_MS],
+    ["idle", open("waiting", "consent"), WAITING_POLL_MS],
+    ["idle", open("waiting", "daily_ceiling"), WAITING_POLL_MS],
+    ["rendering", null, POLL_MS],
+    ["rendering", open("waiting", "consent"), POLL_MS],
+  ] as const)(
+    "polls %s with %j every %j",
+    (renderState, generation, expected) => {
+      expect(pollInterval(renderState, generation)).toBe(expected);
+    },
+  );
 
   it("says a render that failed, with the api's own sentence", async () => {
     const api = fakeDocuments();

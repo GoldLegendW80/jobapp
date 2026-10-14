@@ -18,6 +18,7 @@ import {
   versionPdfUrl,
   versionsKey,
   type Correction,
+  type Kind,
   type VersionSummary,
 } from "./documents-api";
 import {
@@ -63,6 +64,7 @@ export function SeePanel({ document, generation }: PanelProps) {
         rendering={rendering}
         generation={generation}
         renderMessage={document.render.message}
+        kind={document.kind}
         hasVersion={shown !== undefined}
       />
       {shown === undefined ? (
@@ -98,12 +100,14 @@ function Status({
   rendering,
   generation,
   renderMessage,
+  kind,
   hasVersion,
 }: {
   open: boolean;
   rendering: boolean;
   generation: PanelProps["generation"];
   renderMessage: string | null;
+  kind: Kind;
   hasVersion: boolean;
 }) {
   if (open && generation !== null) {
@@ -136,7 +140,10 @@ function Status({
       <Alert variant="destructive">
         <AlertTitle>The last attempt failed</AlertTitle>
         <AlertDescription>
-          {failedSentence("error" in generation ? generation.error : null)}
+          {failedSentence(
+            "error" in generation ? generation.error : null,
+            kind,
+          )}
         </AlertDescription>
       </Alert>
     );
@@ -359,7 +366,11 @@ function History({
                 variant={one.number === shown ? "secondary" : "outline"}
                 size="sm"
                 aria-pressed={one.number === shown}
-                aria-label={`Open version ${String(one.number)}`}
+                aria-label={
+                  one.number === shown
+                    ? `Shown, version ${String(one.number)}`
+                    : `Open version ${String(one.number)}`
+                }
                 onClick={() => {
                   onChoose(one.number);
                 }}
