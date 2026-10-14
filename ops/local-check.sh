@@ -571,7 +571,9 @@ flaky_candidates() { # prints the failed node ids of the step pytest when a reru
   summary="$(grep -E '^=+ .* in [0-9.]+s' "$log" | tail -n 1)"
   [[ "$summary" =~ ([0-9]+)\ failed ]] || return 1
   n="${BASH_REMATCH[1]}"
-  ((n <= FLAKY_MAX)) && [[ "$summary" != *error* ]] && ! grep -q '^ERROR ' "$log" || return 1
+  # A pytest error line names a test file ("ERROR tests/x.py::test - ..."); a captured log line
+  # of the app ("ERROR    app:main.py:207 unhandled error") is not one.
+  ((n <= FLAKY_MAX)) && [[ "$summary" != *error* ]] && ! grep -qE '^ERROR [^ ]+\.py' "$log" || return 1
   ids="$(sed -n 's/^FAILED \([^ ]*\).*/\1/p' "$log" | sort -u)"
   [[ "$(grep -c . <<<"$ids")" == "$n" ]] || return 1
   printf '%s\n' "$ids"
