@@ -46,7 +46,8 @@
 # a group never timed first of all), so the longest group does not start last. When every lane has
 # ended, the tests that measure time run in a quiet phase, one at a time: Vitest, the docker
 # marked tests, the test of the suite that measures its own speed, the
-# coverage floor and the scoring test. Before the result, the steps that ran are compared with
+# coverage floor and the scoring test. The docker marked tests run on two processes there, on the
+# images the step images built. Before the result, the steps that ran are compared with
 # the list of the set (expected_steps): one that did not run fails the check.
 #
 # Safety of this machine:
@@ -516,11 +517,21 @@ s_coverage() {
   return "${PIPESTATUS[0]}"
 }
 
+# The docker marked tests build the worker, renderer and browser images under tags of their own
+# unless PARSER_TEST_IMAGE, RENDERER_TEST_IMAGE and BROWSER_TEST_IMAGE name them: the step images
+# built the same Dockerfiles and targets (compose.yml) in the parallel lanes, so the quiet phase
+# no longer builds them again, file after file (issue #280). Two processes, one test file each
+# (--dist loadfile, a file's stack is a module fixture): measured on 2026-10-14, the 448 tests
+# passed on -n 2 beside other agents' suites, the parser's CPU and wall clock limits included.
 s_pytest_docker() {
   cd api
   # shellcheck disable=SC1091
   . "$WORK/api.env"
-  interruptible uv run --frozen pytest -m docker -p no:cacheprovider --durations=10
+  if [[ "$(cat "$WORK/images.done" 2>/dev/null)" == 0 ]]; then
+    export PARSER_TEST_IMAGE="$PREFIX-worker:latest" RENDERER_TEST_IMAGE="$PREFIX-renderer:latest" \
+      BROWSER_TEST_IMAGE="$PREFIX-browser:latest"
+  fi
+  interruptible uv run --frozen pytest -m docker -p no:cacheprovider -n 2 --dist loadfile --durations=10
 }
 
 s_scoring() {
@@ -636,6 +647,8 @@ services:
     image: $PREFIX-worker:latest
   renderer:
     image: $PREFIX-renderer:latest
+  browser:
+    image: $PREFIX-browser:latest
 EOF
   # CI built with `docker buildx bake -f compose.yml`. The bake of Docker Desktop on this Mac
   # refuses that file ("service worker refers to undefined network default", measured on
@@ -643,7 +656,8 @@ EOF
   # which starts them below, under this check's names: the shared jobapp-*:latest tags are not
   # written.
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
-  docker compose --progress plain -p "$PREFIX-build" "${files[@]}" build api worker caddy renderer
+  # The browser image is for the docker marked tests only (BROWSER_TEST_IMAGE): no stack runs it.
+  docker compose --progress plain -p "$PREFIX-build" "${files[@]}" build api worker caddy renderer browser
 }
 
 lane_images() {

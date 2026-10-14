@@ -403,6 +403,38 @@ grep -qE "^$check_id,$tree,total,[0-9]+,FAIL\$" "$RECORDS/timings.csv" || fail "
 [[ "$(grep -c '^check,' "$RECORDS/timings.csv")" == 1 ]] || fail "timings.csv has its header more than once"
 ok "timings.csv: one line per step and one for the total (check id, tree, step, seconds, PASS or FAIL), across runs"
 
+# --- the docker marked tests run on the images the step images built (issue #280) -----------------
+# The real s_pytest_docker with a fake uv that writes what it was given: the three image names
+# when the images were built, none when they were not (the tests then build their own), and two
+# processes, one file each.
+mkdir -p "$WORK/fakeuv"
+cat >"$WORK/fakeuv/uv" <<'EOF'
+#!/usr/bin/env bash
+printf 'parser=%s renderer=%s browser=%s args=%s\n' "${PARSER_TEST_IMAGE:-}" "${RENDERER_TEST_IMAGE:-}" "${BROWSER_TEST_IMAGE:-}" "$*"
+EOF
+chmod +x "$WORK/fakeuv/uv"
+cat >"$WORK/docker-tests.sh" <<'EOF'
+stub_plan() {
+  mkdir -p "$TREE/api"
+  : >"$WORK/api.env"
+  echo 0 >"$WORK/images.done"
+  run_step docker-built s_pytest_docker || true
+  echo 1 >"$WORK/images.done"
+  run_step docker-own s_pytest_docker || true
+}
+EOF
+run 0 env PATH="$WORK/fakeuv:$PATH" LOCAL_CHECK_STUB="$WORK/docker-tests.sh" "$CHECK" --only api
+check_id="$(check_id_of_out)"
+built="$(cat "$RECORDS/logs/$check_id/docker-built.log")"
+[[ "$built" == "parser=jobapp-$check_id-worker:latest renderer=jobapp-$check_id-renderer:latest browser=jobapp-$check_id-browser:latest args=run --frozen pytest -m docker -p no:cacheprovider -n 2 --dist loadfile --durations=10" ]] ||
+  fail "the docker marked tests were not given the images of the check: $built"
+own="$(cat "$RECORDS/logs/$check_id/docker-own.log")"
+[[ "$own" == "parser= renderer= browser= args=run --frozen pytest -m docker -p no:cacheprovider -n 2 --dist loadfile --durations=10" ]] ||
+  fail "with no images built, the docker marked tests should build their own: $own"
+grep -q '^  browser:$' <(sed -n '/^s_images()/,/^}/p' "$ROOT/ops/local-check.sh") || fail "images.yml names no browser image"
+grep -qE 'build api worker caddy renderer browser$' "$ROOT/ops/local-check.sh" || fail "the step images does not build the browser"
+ok "the docker marked tests use the images the check built (worker, renderer, browser), else their own, on -n 2 by file"
+
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
 # it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded
