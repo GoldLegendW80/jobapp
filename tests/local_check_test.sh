@@ -568,13 +568,16 @@ case " $* " in
   ;;
 *" -m not docker "*)
   failed=0
-  for id in ${STUB_FAILED:-}; do echo "FAILED $id - assert 4.237 < 3.0 + 1.0"; failed=$((failed + 1)); done
+  red="" off=""
+  [[ -z "${STUB_COLOR:-}" ]] || { red=$'\e[31m' off=$'\e[0m'; }
+  for id in ${STUB_FAILED:-}; do echo "${red}FAILED${off} $id - assert 4.237 < 3.0 + 1.0"; failed=$((failed + 1)); done
+  [[ -z "${STUB_LOGLINE:-}" ]] || echo "ERROR    app:main.py:207 unhandled error"
   if [[ -n "${STUB_ERROR:-}" ]]; then
     echo "ERROR tests/c_test.py - ImportError: no module"
     echo "===== $failed failed, 9 passed, 1 error in 12.00s ====="
     exit 1
   fi
-  if ((failed)); then echo "===== $failed failed, 9 passed in 12.00s ====="; exit 1; fi
+  if ((failed)); then echo "${red}===== ${off}${red}$failed failed${off}, 9 passed in 12.00s ${red}=====${off}"; exit 1; fi
   echo "===== 9 passed in 12.00s ====="
   ;;
 esac
@@ -626,10 +629,18 @@ flaky_run 1 STUB_FAILED="$A $B tests/c_test.py::test_c tests/d_test.py::test_d"
 [[ -z "$(rerun)" ]] || fail "four failed tests were run again"
 [[ "$(last_line)" == *" pytest" ]] || fail "four failed tests: $(last_line)"
 
+flaky_run 0 STUB_FAILED="$A" STUB_LOGLINE=1
+out_has "flaky: $A"
+rm -f "$(sed -n 's/^record: //p' "$WORK/out")"
+
+flaky_run 0 STUB_FAILED="$A $B" STUB_COLOR=1
+out_has "flaky: $A $B"
+rm -f "$(sed -n 's/^record: //p' "$WORK/out")"
+
 flaky_run 1 STUB_FAILED="$A" STUB_ERROR=1
 [[ -z "$(rerun)" ]] || fail "a run with an error was run again"
 [[ "$(last_line)" == *" pytest" ]] || fail "a failed test and an error: $(last_line)"
-ok "at most 3 failed tests and no error: run again alone, PASS and listed under flaky (summary and record) when they pass, FAIL when one fails again; more, or an error, are not run again"
+ok "at most 3 failed tests and no error: run again alone, PASS and listed under flaky (summary and record) when they pass, FAIL when one fails again; more, or an error, are not run again; a captured ERROR log line of the app is not a pytest error; a coloured log reads the same"
 
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call

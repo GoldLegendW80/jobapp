@@ -13,6 +13,10 @@ a run at another document, posting or person.
 - `get_base_cv()`: the base CV the generation is written from, with its `fixed` block.
 - `get_draft()`: the document's current draft (what a `shorten` generation shortens).
 - `submit_cv(...)`: the CV, as D2's content JSON; `submit.handle` checks and corrects it.
+- `get_document("cv")` (the letter writer): the draft of the CV of the run's own posting, read by
+  the posting the run is bound to, so no id is chosen by the model; "no CV yet" while that CV is
+  empty.
+- `submit_letter(...)`: the letter, as D2's content JSON, through the same `submit.handle`.
 """
 
 from __future__ import annotations
@@ -28,16 +32,21 @@ from claude_agent_sdk import SdkMcpTool, tool
 from app.agents import tools as app_tools
 from app.documents import content as c
 from app.documents import store, submit
+from app.documents.models import Kind
 from app.profile.models import Profile
 
 READ_PROFILE_SECTION = "read_profile_section"
 GET_BASE_CV = "get_base_cv"
 GET_DRAFT = "get_draft"
 SUBMIT_CV = "submit_cv"
+GET_DOCUMENT = "get_document"
+SUBMIT_LETTER = "submit_letter"
 SECTIONS = ("facts", "experience", "skills", "answers")
 NOT_AVAILABLE = "Not available: read facts, experience, skills or answers."
 NO_BASE = "No base CV: write from the profile alone."
 GONE = "This document no longer exists."
+NOT_AVAILABLE_DOCUMENT = 'Not available: read the "cv" of this posting.'
+NO_CV = "No CV for this posting yet: write the letter from the profile and the base CV alone."
 
 
 def _binding(scope: app_tools.Scope, key: str) -> uuid.UUID | None:
@@ -122,6 +131,47 @@ def _get_draft(scope: app_tools.Scope) -> SdkMcpTool[Any]:
     return get_draft
 
 
+def _posting_cv_json(scope: app_tools.Scope) -> str | None:
+    """The draft of the bound posting's CV, None while it has no text (not written yet)."""
+    posting_id = _binding(scope, "posting_id")
+    if posting_id is None:
+        return None
+    with scope.sessions() as db:
+        found = next(
+            (
+                document
+                for document in store.posting_documents(db, scope.user_id, posting_id)
+                if document.kind == Kind.cv
+            ),
+            None,
+        )
+        if found is None:
+            return None
+        written = any(text.strip() for _, text in c.text_fields(c.parse("cv", found.draft)))
+        return json.dumps(found.draft, ensure_ascii=False) if written else None
+
+
+def _get_document(scope: app_tools.Scope) -> SdkMcpTool[Any]:
+    @tool(
+        GET_DOCUMENT,
+        "Read the CV already written for this posting, so the letter tells the same story. "
+        "The CV is the person's own words, a source of claims like the profile.",
+        {
+            "type": "object",
+            "properties": {"kind": {"type": "string", "enum": ["cv"]}},
+            "required": ["kind"],
+            "additionalProperties": False,
+        },
+    )
+    async def get_document(args: dict[str, Any]) -> dict[str, Any]:
+        if args.get("kind") != "cv":
+            return app_tools.text_result(NOT_AVAILABLE_DOCUMENT, error=True)
+        found = await asyncio.to_thread(_posting_cv_json, scope)
+        return app_tools.text_result(found if found is not None else NO_CV)
+
+    return get_document
+
+
 def _context(scope: app_tools.Scope, kind: c.Kind) -> submit.WriterContext | None:
     if scope.binding is None:
         return None
@@ -154,7 +204,28 @@ def _submit_cv(scope: app_tools.Scope) -> SdkMcpTool[Any]:
     return submit_cv
 
 
+# The letter as the tool's arguments: D2's schema, unknown fields refused.
+LETTER_SCHEMA = c.LetterContent.model_json_schema(by_alias=True)
+
+
+def _submit_letter(scope: app_tools.Scope) -> SdkMcpTool[Any]:
+    @tool(
+        SUBMIT_LETTER,
+        "Submit the whole letter once it is written: one to five paragraphs, four or five asked "
+        "for. The date, the name and the contact lines are printed by the template, not "
+        "written. The answer says what to fix, if anything.",
+        LETTER_SCHEMA,
+    )
+    async def submit_letter(args: dict[str, Any]) -> dict[str, Any]:
+        text, error = await asyncio.to_thread(_submit, scope, "letter", args)
+        return app_tools.text_result(text, error=error)
+
+    return submit_letter
+
+
 app_tools.register(READ_PROFILE_SECTION, _read_profile_section)
 app_tools.register(GET_BASE_CV, _get_base_cv)
 app_tools.register(GET_DRAFT, _get_draft)
 app_tools.register(SUBMIT_CV, _submit_cv)
+app_tools.register(GET_DOCUMENT, _get_document)
+app_tools.register(SUBMIT_LETTER, _submit_letter)
