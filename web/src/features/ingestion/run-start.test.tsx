@@ -503,4 +503,28 @@ describe("the start of a run", () => {
     ).toBeDisabled();
     expect(screen.getByText(/it cannot be read yet/)).toBeVisible();
   });
+
+  it("a document whose page images wait for the agent can be chosen", async () => {
+    fakeSession(member);
+    fakeDocuments([
+      ...DOCUMENTS,
+      fakeDocument({
+        id: "d3",
+        name: "scan.pdf",
+        kind: "pdf",
+        status: "awaiting_transcription",
+      }),
+    ]);
+    fakePrompt();
+    fakeRuns();
+    renderApp("/profile/fill?step=review");
+    const box = await screen.findByRole("checkbox", { name: /scan\.pdf/ });
+    expect(box).toBeEnabled();
+    expect(screen.queryByText(/it cannot be read yet/)).toBeNull();
+    await userEvent.click(box);
+    expect(box).toBeChecked();
+    expect(
+      screen.getByRole("button", { name: "See the estimate" }),
+    ).toBeEnabled();
+  });
 });

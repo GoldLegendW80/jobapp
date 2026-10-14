@@ -4,6 +4,7 @@ the tokens counted once, a failure in the middle, the extraction planned from th
 wrote). No model is called: every request is a recorded message."""
 
 import base64
+import hashlib
 import json
 import math
 import subprocess
@@ -20,7 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import failures, fake_backend, runner
 from app.agents import runs as agent_runs
 from app.agents.crypto import Keyring
-from app.agents.models import AgentRun, RunStatus
+from app.agents.models import AgentRun, Proposal, RunStatus
 from app.config import Settings
 from app.ingestion import agents, engine, estimate
 from app.ingestion.models import IngestionDocument, IngestionImage, TextStatus
@@ -37,6 +38,7 @@ from tests.agents.run_helpers import (
     save_credential,
 )
 from tests.conftest import make_settings
+from tests.ingestion import journey_streams
 from tests.ingestion.engine_helpers import (
     advance,
     agent_runs_of,
@@ -514,6 +516,48 @@ def test_a_document_deleted_under_its_step_fails_it_before_any_model_call(
     assert run_row(factory, first.enqueue).error == failures.BINDING_GONE
     assert run_row(factory, first.enqueue).input_tokens in (None, 0)
     assert [backend.seen_requests for backend in backends.made] in ([], [[]])
+
+
+@pytest.mark.parametrize("fixture", sorted(journey_streams.TRANSCRIPTIONS))
+def test_a_journey_image_is_transcribed_then_its_items_cite_the_transcription(
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    fixture: str,
+) -> None:
+    """The streams of the G14 journey (web/e2e/ingestion-g14.spec.ts), replayed through the
+    engine as the stack replays them: named after the hash of the uploaded file, the first
+    stores the pages, the second cites them, and every proposal is flagged `transcribed`."""
+    raw = (journey_streams.FIXTURES / fixture).read_bytes()
+    pages = journey_streams.transcribed(fixture)
+    document = add_scan(factory, alice_id, [None] * len(pages), digest=hashlib.sha256(raw).digest())
+    run_id = start(factory, alice_id, [document])
+    spent = 0
+    for kind in ("transcribe", "extract"):
+        moved = advance(factory, run_id, settings)
+        name = f"ingest_{kind}_{journey_streams.digest_of(fixture)}_p0"
+        assert run_row(factory, moved.enqueue).input["script"] == name
+        assert run_agent(settings, factory, keyring, moved.enqueue)[0] is RunStatus.done
+        assert (run_row(factory, moved.enqueue).output or {})["tool_errors"] == 0
+        spent += sum(reported_by(stored_stream(name)))
+    assert advance(factory, run_id, settings).enqueue is None
+    closed = run_of(factory, run_id)
+    assert (closed.status, closed.partial, closed.tokens_spent) == (ChainStatus.done, False, spent)
+    assert document_of(factory, document).text == "\f".join(pages)
+    with factory() as db:
+        payloads = db.scalars(sa.select(Proposal.payload).where(Proposal.user_id == alice_id)).all()
+    proposed = sum(
+        len(block["input"]["items"])
+        for step in journey_streams.STREAMS[fixture]["steps"]
+        if step.get("message", {}).get("type") == "assistant"
+        for block in step["message"]["message"]["content"]
+        if block["type"] == "tool_use" and "items" in block["input"]
+    )
+    assert len(payloads) == proposed > 0
+    for payload in payloads:
+        assert "transcribed" in payload["flags"]
+        assert all(citation["transcribed"] is True for citation in payload["citations"])
 
 
 # --- the api registers the agent too ------------------------------------------------------------

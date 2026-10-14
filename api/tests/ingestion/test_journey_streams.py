@@ -1,6 +1,8 @@
-"""The recorded streams of the G10 journey against their fixtures (tests/ingestion/
+"""The recorded streams of the journeys against their fixtures (tests/ingestion/
 journey_streams.py): every stream named after a hash has its fixture, the files are the ones
-written from their source, and the large one keeps the run of the journey between two steps."""
+written from their source, an extraction cites only words of its document (for an image, of
+what its transcription stream stores), and the large one keeps the run of the journey between
+two steps."""
 
 from __future__ import annotations
 
@@ -20,7 +22,9 @@ from tests.ingestion.journey_streams import (
     LARGE_TOKENS,
     PLAIN,
     STREAMS,
+    TRANSCRIPTIONS,
     path_of,
+    transcription_path_of,
 )
 
 NAMED = re.compile(r"^ingest_[a-z]+_([0-9a-f]{12})_p\d+$")
@@ -41,13 +45,18 @@ def test_every_stream_named_after_a_hash_has_its_fixture_file() -> None:
         if path.is_file()
     }
     named = {
-        found.group(1): path.name
+        path.name: found.group(1)
         for path in fake_backend.STREAMS.glob("ingest_*.json")
         if (found := NAMED.match(path.stem)) is not None
     }
     assert named, "the journey's streams are missing"
-    assert {digest: name for digest, name in named.items() if digest not in fixtures} == {}
-    assert set(named.values()) == {path_of(name).name for name in STREAMS}
+    assert {name: digest for name, digest in named.items() if digest not in fixtures} == {}
+    assert set(named) == {path_of(name).name for name in STREAMS} | {
+        transcription_path_of(name).name for name in TRANSCRIPTIONS
+    }
+    # An image has no text of its own: its extraction has a transcription before it.
+    images = {name for name in STREAMS if not name.endswith(".txt")}
+    assert images == set(TRANSCRIPTIONS)
     # The plain fixture replays the default stream: no file is named after it.
     assert journey_streams.digest_of(PLAIN) not in named
 
@@ -58,9 +67,20 @@ def test_the_journey_streams_are_the_ones_written_from_their_source(name: str) -
     assert path_of(name).read_text(encoding="utf-8") == journey_streams.written(name)
 
 
+@pytest.mark.parametrize("name", sorted(TRANSCRIPTIONS))
+def test_the_transcription_streams_are_the_ones_written_from_their_source(name: str) -> None:
+    path = transcription_path_of(name)
+    assert json.loads(path.read_text(encoding="utf-8")) == TRANSCRIPTIONS[name]
+    assert path.read_text(encoding="utf-8") == journey_streams.transcription_written(name)
+    assert all(journey_streams.transcribed(name))
+
+
 @pytest.mark.parametrize("name", sorted(STREAMS))
 def test_a_journey_stream_cites_only_words_of_its_fixture(name: str) -> None:
-    text = (FIXTURES / name).read_text(encoding="utf-8")
+    if name in TRANSCRIPTIONS:  # the document's text is what its transcription stream stored
+        text = "\f".join(journey_streams.transcribed(name))
+    else:
+        text = (FIXTURES / name).read_text(encoding="utf-8")
     excerpts = [
         citation["excerpt"]
         for step in STREAMS[name]["steps"]
