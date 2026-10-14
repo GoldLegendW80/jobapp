@@ -107,6 +107,7 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
             "secret_scan_test",
             "tailscale_test",
             "local_check_test",
+            "agent_test_test",
             "ship_test",
         ),
         # ingestion: every web/e2e/ingestion-*.spec.ts through one config, so a task of that
