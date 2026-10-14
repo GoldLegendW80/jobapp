@@ -1449,25 +1449,42 @@ def _option_span(option: str, unit: str) -> tuple[float, float] | None:
     return low / scale, high / scale
 
 
+# What an option may say besides its numbers and its time unit to still be a time span (a level
+# word such as Junior is fine). Anything else (a currency, k or M, people, employees, a percent sign, any other noun) is not one.
+_SPAN_WORDS = re.compile(
+    r"(?<![a-z])(?:less than|fewer than|under|below|moins de|inferieur(?:e)?(?: a)?|up to|at most"
+    r"|or less|ou moins|jusqu'?(?: a)?|maximum|max|more than|over|plus de|superieur(?:e)?(?: a)?"
+    r"|or more|ou plus|et plus|and more|and over|at least|au moins|minimum|min|between|entre|from"
+    r"|to|and|et|de|d|a|of experience|d'experience|experience|years?|yrs?|ans?|annees?"
+    r"|months?|mos?|mois"
+    r"|junior|mid|senior|entry|level|intermediate|intermediaire|expert|beginner|debutant|confirme)"
+    r"(?![a-z])"
+)
+
+
+def _is_time_span(option: str) -> bool:
+    """Whether an option with a number speaks of nothing but a count of years or months."""
+    rest = _SPAN_WORDS.sub(" ", re.sub(r"\d+(?:[.,]\d+)?", " ", fold(option)))
+    return not re.sub(r"[\s\-\u2010-\u2015+<>\u2264\u2265.,/()'~]", "", rest)
+
+
 def _range_option(options: tuple[str, ...], low: float, high: float, label: str) -> str | None:
-    """The one option whose span holds the person's whole span. Every option is read in years:
-    in its own unit, a bare number in the label's unit, else in the unit all the options that
-    name one share. Weeks, days, two units at once, or a bare number that the label and the
-    other options place differently or not at all, leave the whole list unread."""
+    """The one option whose span holds the person's whole span. A numbered option counts only if
+    it is a time span: it names years or months itself, or it is a bare number or range and the
+    label names years and every numbered option is bare in the same way. A currency, a count of
+    people, a percent, weeks, days, two units at once, or one bare option among named ones leave
+    the whole list unread."""
     numbered = [o for o in options if re.search(r"\d", o)]
-    named = {_unit(fold(o)) for o in numbered}
-    from_label = _unit(fold(label))
-    if "x" in named or from_label == "x":
+    if not all(_is_time_span(o) for o in numbered):
         return None
-    others = named - {None}
-    shared = next(iter(others)) if len(others) == 1 else None
-    unit = from_label or shared
-    if None in named and (unit is None or (others and others != {unit})):
+    named = [_unit(fold(o)) for o in numbered]
+    if "x" in named or _unit(fold(label)) == "x":
         return None
-    unit = unit or "y"  # no bare number in the list, so the unit is never used
+    if None in named and (any(n is not None for n in named) or _unit(fold(label)) != "y"):
+        return None
     hits = []
     for option in options:
-        span = _option_span(option, unit)
+        span = _option_span(option, "y")
         if span is not None and span[0] <= low and high < span[1] + (1e-9 if low != high else 0):
             hits.append(option)
     return hits[0] if len(hits) == 1 else None

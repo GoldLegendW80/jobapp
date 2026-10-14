@@ -2416,6 +2416,392 @@ def test_round5_has_the_review_cases_and_enough_of_them() -> None:
     assert len({c.name for c in ROUND5}) == len(ROUND5)
 
 
+ROUND6: list[Case] = [
+    # F1 an option is a time span only if it names years or months, or all options are bare under a years label
+    R(
+        "F level words answered",
+        "Years of experience",
+        "select",
+        ("Entry level (0-2 years)", "Mid-level (3-5 years)", "Senior (6+ years)"),
+        expected="Mid-level (3-5 years)",
+        origin="trap6",
+    ),
+    R(
+        "F salary euro k",
+        "Years of experience",
+        "select",
+        (
+            "Under €40k",
+            "€40k-€60k",
+            "€60k+",
+        ),
+        origin="review5",
+    ),
+    R(
+        "F team people mixed",
+        "Years of experience",
+        "select",
+        (
+            "1-5 people",
+            "6-10",
+            "11-50",
+            "51+",
+        ),
+        origin="review5",
+    ),
+    R(
+        "F salary k only",
+        "Years of experience",
+        "select",
+        (
+            "0-5k",
+            "5-10k",
+            "10k+",
+        ),
+        origin="review5",
+    ),
+    R(
+        "F bare sizes label without years",
+        "Experience",
+        "select",
+        (
+            "1-5",
+            "6-10",
+            "11-50",
+            "51+",
+        ),
+        origin="review5",
+    ),
+    R(
+        "F size employees",
+        "Years of experience",
+        "select",
+        (
+            "1-10 employees",
+            "11-50 employees",
+            "51-200 employees",
+        ),
+        origin="review5",
+    ),
+    R(
+        "F salary eur words",
+        "Years of experience",
+        "select",
+        (
+            "Less than 30,000 EUR",
+            "30,000-50,000 EUR",
+            "50,000+ EUR",
+        ),
+        origin="review5",
+    ),
+    R(
+        "F salary dollar",
+        "Years of experience",
+        "select",
+        (
+            "Under $40k",
+            "$40k-$60k",
+            "$60k+",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F salary pound spaced",
+        "Years of experience",
+        "select",
+        (
+            "£20,000 - £30,000",
+            "£30,000 - £45,000",
+            "£45,000 +",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F salary code prefix",
+        "Years of experience",
+        "select",
+        (
+            "USD 20000-40000",
+            "USD 40000-60000",
+            "USD 60000+",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F salary french suffix",
+        "Years of experience",
+        "select",
+        (
+            "20 000 - 40 000 €",
+            "40 000 - 60 000 €",
+            "60 000 € et plus",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F salary k euro suffix",
+        "Years of experience",
+        "select",
+        (
+            "0-50 K€",
+            "50-80 K€",
+            "80+ K€",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F size people only",
+        "Years of experience",
+        "select",
+        (
+            "1-5 people",
+            "6-10 people",
+            "11-50 people",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F size persons",
+        "Years of experience",
+        "select",
+        (
+            "1 to 5 persons",
+            "6 to 10 persons",
+            "11 to 50 persons",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F size salaries",
+        "Années d'expérience",
+        "select",
+        (
+            "1-5 salariés",
+            "6-10 salariés",
+            "11-50 salariés",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F size staff and fte",
+        "Years of experience",
+        "select",
+        (
+            "Less than 5 FTE",
+            "5-20 FTE",
+            "20+ staff",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F percent bands",
+        "Years of experience",
+        "select",
+        (
+            "0-25%",
+            "25-50%",
+            "50-100%",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F revenue millions",
+        "Years of experience",
+        "select",
+        (
+            "1-5M",
+            "5-10M",
+            "10M+",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F bare ranges plus money",
+        "Years of experience",
+        "select",
+        (
+            "0-1",
+            "3-5",
+            "€40k+",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F bare ranges plus people",
+        "Years of experience",
+        "select",
+        (
+            "0-1",
+            "3-5",
+            "6-10 people",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F projects noun",
+        "Years of experience",
+        "select",
+        (
+            "1-2 projects",
+            "3-5 projects",
+            "6+ projects",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F years at other noun",
+        "Years of experience",
+        "select",
+        (
+            "0-2 years at Google",
+            "3-5 years at Google",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F bare one among named years",
+        "Years of experience",
+        "select",
+        (
+            "0-2",
+            "3-5 years",
+            "6+ years",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F bare label experience",
+        "Experience",
+        "select",
+        (
+            "0-2",
+            "3-5",
+            "6+",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F bare label level",
+        "Level of experience",
+        "select",
+        (
+            "0-2",
+            "3-5",
+            "6+",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F bare label months",
+        "Months of experience",
+        "select",
+        (
+            "0-12",
+            "13-36",
+            "37-60",
+            "61+",
+        ),
+        origin="trap6",
+    ),
+    R(
+        "F bare years answered",
+        "Years of experience",
+        "select",
+        (
+            "0-2",
+            "3-5",
+            "6+",
+        ),
+        expected="3-5",
+        origin="trap6",
+    ),
+    R(
+        "F bare less than answered",
+        "Years of experience",
+        "select",
+        (
+            "Less than 1",
+            "1-3",
+            "3-5",
+            "5+",
+        ),
+        expected="3-5",
+        origin="trap6",
+    ),
+    R(
+        "F bare french answered",
+        "Années d'expérience",
+        "select",
+        (
+            "Moins de 2",
+            "2-4",
+            "5 et plus",
+        ),
+        expected="2-4",
+        origin="trap6",
+    ),
+    R(
+        "F bare between answered",
+        "Years of experience",
+        "select",
+        (
+            "Between 0 and 2",
+            "Between 3 and 5",
+            "Between 6 and 10",
+        ),
+        expected="Between 3 and 5",
+        origin="trap6",
+    ),
+    R(
+        "F named of experience answered",
+        "Years of experience",
+        "select",
+        (
+            "0-2 years of experience",
+            "3-5 years of experience",
+            "6+ years of experience",
+        ),
+        expected="3-5 years of experience",
+        origin="trap6",
+    ),
+    R(
+        "F named french answered",
+        "Combien d'années d'expérience avez-vous ?",
+        "select",
+        (
+            "Moins de 2 ans",
+            "De 2 à 4 ans",
+            "5 ans et plus",
+        ),
+        expected="De 2 à 4 ans",
+        origin="trap6",
+    ),
+    R(
+        "F named label long answered",
+        "How many years of professional experience do you have?",
+        "select",
+        (
+            "0-2 yrs",
+            "3-5 yrs",
+            "6+ yrs",
+        ),
+        expected="3-5 yrs",
+        origin="trap6",
+    ),
+]
+
+
+@pytest.mark.parametrize("case", ROUND6, ids=[c.name for c in ROUND6])
+def test_round6_question(case: Case) -> None:
+    test_question(case)
+
+
+def test_round6_has_the_review_cases_and_enough_of_them() -> None:
+    assert sum(c.origin == "review5" for c in ROUND6) == 6
+    assert len(ROUND6) >= 20
+    assert len({c.name for c in ROUND6}) == len(ROUND6)
+
+
 BARE = ("0-12", "12-36", "36-60", "60+")
 
 
@@ -2424,10 +2810,10 @@ BARE = ("0-12", "12-36", "36-60", "60+")
     [
         ("Experience", ("0-1", "2-3", "4-5", "6+"), None),
         ("Experience", BARE, None),
-        ("Experience in months", BARE, "36-60"),
+        ("Experience in months", BARE, None),
         ("Experience in years", BARE, "0-12"),
         ("Experience in months", ("0-2 years", "3-5 years", "6+ years"), "3-5 years"),
-        ("Experience", ("0-2", "3-5", "6+ years"), "3-5"),
+        ("Experience", ("0-2", "3-5", "6+ years"), None),
         ("Experience", ("0-2", "3-5 years", "60+ months"), None),
         ("Experience in years", ("0-12", "12-36 months", "36-60 months", "60+"), None),
     ],
