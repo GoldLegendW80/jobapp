@@ -1,0 +1,28 @@
+{
+  "jane": {
+    "profile": [
+      "Jane Roe, GenAI Engineer. About 3.5 years of professional engineering, about 1 year in a GenAI title. Phone +33 6 12 34 56 78. Email jane.roe@example.org. Website https://janeroe.example.net/portfolio and linkedin.com/in/jane-roe. Lives at 12 rue de la Paix, 33000 Bordeaux.",
+      "Orbital Labs (Bordeaux), GenAI Engineer, since January 2023. DevForge Studio, freelance developer, 2021 to 2022.",
+      "Bachelor in Computer Science, Université de Bordeaux, 2022."
+    ],
+    "answers": [
+      "Available from 3 November 2026. Notice period: 1 month. Salary policy: open to discuss."
+    ],
+    "thread": [
+      "Hi Jane, we are Acme Corp. As discussed, salary 90k euros. Call me on +33 1 98 76 54 32 or apply at https://acme-careers.example.com/apply?ref=77 . The interview is on Tuesday 14 October at 10:30. We expect 4 years of experience. Write to hr-archive@acme.example.com. I am Head of Talent at Acme Corp. Marie Martin."
+    ],
+    "instructions": [
+      "Offer a call during the week of 20 October."
+    ],
+    "employers": ["Orbital Labs", "DevForge Studio"],
+    "schools": ["Université de Bordeaux"],
+    "titles": ["GenAI Engineer", "Freelance Developer"],
+    "participants": ["Marie Martin", "Acme Corp"],
+    "recipients": ["recruiter@acme.example.org"],
+    "known_terms": ["Python", "FastAPI"]
+  },
+  "years_three": {
+    "profile": ["About 3 years of professional engineering. 1 year as GenAI engineer."]
+  },
+  "empty": {}
+}
