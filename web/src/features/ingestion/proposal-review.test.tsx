@@ -616,13 +616,73 @@ describe("the review of a run's proposals", () => {
       within(facts).getByRole("button", { name: "Show 50 more: Facts" }),
     );
     expect(screen.getAllByTestId("proposal")).toHaveLength(2 * PAGE);
+    // Not all of it is shown: the button says how many it decides, and the outcome what is left.
+    expect(
+      within(facts).queryByRole("button", { name: /Reject the rest/ }),
+    ).toBeNull();
     await user.click(
-      within(facts).getByRole("button", { name: /Reject the rest/ }),
+      within(facts).getByRole("button", {
+        name: "Reject the 100 shown: Facts",
+      }),
     );
-    expect(await within(facts).findByText("Rejected 100.")).toBeInTheDocument();
+    expect(
+      await within(facts).findByText(
+        "Rejected 100. 200 more in this section are not shown yet and still undecided. Show more brings them.",
+      ),
+    ).toBeInTheDocument();
     const body = api.calls[0]?.body as { proposal_ids: string[] };
     expect(body.proposal_ids).toHaveLength(2 * PAGE);
     expect(api.count("pending")).toBe(200);
+  });
+
+  it("says how many a bulk accept takes when the section holds more than is shown", async () => {
+    const many = Array.from({ length: 120 }, (_, index) =>
+      item(
+        `blocks:fact-${String(index).padStart(3, "0")}`,
+        { title: `Fact ${String(index)}`, body: "A fact." },
+        { section: "facts" },
+      ),
+    );
+    // Three of the fifty shown are accepted one by one, so the button takes 47.
+    for (const one of many.slice(0, 3)) {
+      one.bulk = "locked";
+      one.locked = true;
+    }
+    const api = fakeApi(many);
+    const user = userEvent.setup();
+    show();
+    const facts = await screen.findByRole("region", { name: "Facts" });
+    expect(
+      within(facts).queryByRole("button", { name: /Accept all/ }),
+    ).toBeNull();
+    const accept = within(facts).getByRole("button", {
+      name: "Accept the 47 shown: Facts",
+    });
+    expect(accept).toHaveTextContent("Accept the 47 shown");
+    await user.click(accept);
+    expect(
+      await within(facts).findByText(
+        "Accepted 47. 3 left for you to accept one by one. 70 more in this section are not shown yet and still undecided. Show more brings them.",
+      ),
+    ).toBeInTheDocument();
+    expect(api.count("accepted")).toBe(47);
+    // Everything shown: the labels are the section's own again.
+    await user.click(
+      within(facts).getByRole("button", { name: "Show 50 more: Facts" }),
+    );
+    await user.click(
+      within(facts).getByRole("button", { name: "Show 20 more: Facts" }),
+    );
+    expect(
+      within(facts).getByRole("button", {
+        name: "Accept all in this section: Facts",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(facts).getByRole("button", {
+        name: "Reject the rest of this section: Facts",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("is usable with the keyboard alone and keeps the focus on the proposal decided", async () => {

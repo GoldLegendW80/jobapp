@@ -525,6 +525,19 @@ function Section({
     (item) => item.bulk !== "invalid" && item.bulk !== "profile_conflict",
   );
   const takes = asked.some((item) => item.bulk === null);
+  // What the section holds beyond the page: the two buttons do not decide it, and say so.
+  const behind = section.items
+    .slice(shown)
+    .filter((item) => item.status === "pending").length;
+  const acceptable = asked.filter((item) => item.bulk === null).length;
+  const accepting =
+    behind > 0
+      ? `Accept the ${String(acceptable)} shown`
+      : "Accept all in this section";
+  const rejecting =
+    behind > 0
+      ? `Reject the ${String(pending.length)} shown`
+      : "Reject the rest of this section";
   const decide = useMutation({
     mutationFn: (what: "accept" | "reject") =>
       decideSection(
@@ -541,13 +554,19 @@ function Section({
       const count = done.decided.length;
       const left = pending.length - count;
       setOutcome(
-        what === "reject"
-          ? `Rejected ${String(count)}.`
-          : `Accepted ${String(count)}.${
-              left > 0
-                ? ` ${String(left)} left for you to accept one by one.`
-                : ""
-            }`,
+        `${
+          what === "reject"
+            ? `Rejected ${String(count)}.`
+            : `Accepted ${String(count)}.${
+                left > 0
+                  ? ` ${String(left)} left for you to accept one by one.`
+                  : ""
+              }`
+        }${
+          behind > 0
+            ? ` ${String(behind)} more in this section are not shown yet and still undecided. Show more brings them.`
+            : ""
+        }`,
       );
       refresh();
     },
@@ -574,27 +593,27 @@ function Section({
           {takes ? (
             <Button
               size="sm"
-              aria-label={`Accept all in this section: ${name}`}
+              aria-label={`${accepting}: ${name}`}
               disabled={decide.isPending}
               onClick={() => {
                 decide.mutate("accept");
               }}
             >
               <Check aria-hidden="true" />
-              Accept all in this section
+              {accepting}
             </Button>
           ) : null}
           <Button
             variant="outline"
             size="sm"
-            aria-label={`Reject the rest of this section: ${name}`}
+            aria-label={`${rejecting}: ${name}`}
             disabled={decide.isPending}
             onClick={() => {
               decide.mutate("reject");
             }}
           >
             <X aria-hidden="true" />
-            Reject the rest of this section
+            {rejecting}
           </Button>
           {takes ? null : (
             <p className="text-sm text-muted-foreground">
