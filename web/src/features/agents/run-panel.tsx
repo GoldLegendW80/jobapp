@@ -136,6 +136,10 @@ function Metric({
   );
 }
 
+function plural(count: number, noun: string): string {
+  return `${count.toLocaleString("en-US")} ${noun}${count === 1 ? "" : "s"}`;
+}
+
 function text(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value ?? "");
 }
@@ -193,21 +197,45 @@ function describeStep(
       return {
         icon: Wrench,
         title: `Tool call: ${name}`,
-        body: args.length ? (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 text-xs">
-            {args.map(([key, value]) => (
-              <div key={key} className="contents">
-                <dt className="text-muted-foreground">{key}</dt>
-                <dd className="font-mono break-all">{text(value)}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : undefined,
+        // A private run stores the size of the arguments, never the arguments.
+        body:
+          !args.length && typeof data.input_size === "number" ? (
+            <span className="text-xs text-muted-foreground">
+              {`${plural(data.input_size, "character")} of arguments`}
+            </span>
+          ) : args.length ? (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 text-xs">
+              {args.map(([key, value]) => (
+                <div key={key} className="contents">
+                  <dt className="text-muted-foreground">{key}</dt>
+                  <dd className="font-mono break-all">{text(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : undefined,
       };
     }
     case "tool_result": {
-      const content = text(data.content);
       const failed = data.is_error === true;
+      if (data.content === undefined && typeof data.size === "number") {
+        // A private run stores the size of a result and its non-text blocks, never the
+        // content: show them, and no box for a content that is not there.
+        const blocks =
+          typeof data.blocks === "number" && data.blocks > 0
+            ? `, ${plural(data.blocks, "other block")}`
+            : "";
+        return {
+          icon: failed ? CircleAlert : CircleCheck,
+          title: failed ? "Tool error" : "Tool result",
+          tone: failed ? "error" : undefined,
+          body: (
+            <span className="text-xs text-muted-foreground">
+              {`${plural(data.size, "character")}${blocks}`}
+            </span>
+          ),
+        };
+      }
+      const content = text(data.content);
       return {
         icon: failed ? CircleAlert : CircleCheck,
         title: failed ? "Tool error" : "Tool result",
