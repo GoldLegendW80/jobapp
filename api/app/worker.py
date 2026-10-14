@@ -35,10 +35,6 @@ Ingestion queue (app.queue.INGESTION, ingestion G2b, app/ingestion/jobs.py):
   no job holds (a lost job, a document stored before its kind had a reader), queues again the
   ones whose try failed for the server, and fails the ones whose last try never came back.
 
-Registration: every module package of app/ that has a registration module (REGISTRATION_MODULES:
-its agents, the hook that chains them, its arq jobs, its writers) is imported by
-register_modules(), found on disk, wherever the queues are built (issue #279).
-
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
 cancelled agent run likewise (runner.execute), its scratch directory removed. Every Worker is
@@ -50,7 +46,6 @@ import argparse
 import asyncio
 import contextlib
 import functools
-import importlib
 import logging
 import math
 import os
@@ -64,6 +59,7 @@ from collections.abc import Awaitable, Callable, Collection, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -146,7 +142,7 @@ def register_modules() -> None:
     (registration_modules). Called where the queues are built, not at the top of this file:
     `python -m app.worker --check` must not need the SDK. A second call imports nothing anew."""
     for name in registration_modules():
-        importlib.import_module(name)
+        import_module(name)
 
 
 def longest_agent_s() -> float:
@@ -465,8 +461,8 @@ def ingestion_queue() -> QueueSpec:
 
 def queues(settings: Settings | None = None) -> list[QueueSpec]:
     """Every queue this worker consumes (TEST_FAST_TIMERS shortens the schedule tick)."""
-    fast = bool(settings is not None and settings.test_fast_timers)
     register_modules()
+    fast = bool(settings is not None and settings.test_fast_timers)
     return [sweeps_queue(fast=fast), agents_queue(), ingestion_queue()]
 
 
