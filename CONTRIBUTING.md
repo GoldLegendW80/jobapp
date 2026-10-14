@@ -125,16 +125,23 @@ in the job folder that holds this repository (it is not part of the repository).
    ops/ship.sh 281 279             # these, in this order; one that is not approved on its head stops the run
    ```
 
-   A pull request that changes `ops/local-check.sh` goes first and the batch is checked with
-   its own version of the script, from a detached worktree of its head (a second one waits for
-   the next run). A failed batch is bisected: the pull request that makes it fail is dropped
-   and gets a comment with the failing step and the end of its log (each line that may hold a
+   A pull request whose body has a line beginning `Depends on #N` or `Stacked on #N` ships only
+   after #N: once #N is merged, or after it in the same batch; otherwise it waits (and so do the
+   pull requests that depend on it). A pull request that changes `ops/local-check.sh` goes first
+   and the batch is checked with its own version of the script, from a detached worktree of its
+   head (a second one, or one that depends on another pull request of the batch, waits for the
+   next run). A failed batch is checked again once: a PASS ships (the first failure is named
+   flaky), other failing steps stop the run (`SHIP: FAIL flaky gate`), the same failure is
+   bisected: the pull request that makes it fail is dropped with its dependents and gets a
+   comment with the step blamed and the last 30 lines of its log (each line that may hold a
    secret withheld), and the rest is checked again; a main that fails alone stops the run.
    It merges only when main and every head are still what the PASS record lists (`gh pr merge
-   --match-head-commit`), pulls the main checkout (which must be clean and on `main`), deploys
-   only when its tree is the gate's tree, then checks the Jetson over ssh (compose health,
-   `alembic current` at head, memory, no error line in the last 10 minutes) and moves the
-   issues the merged pull requests close to Done on the board. The last line is `SHIP: OK`,
+   --repo <owner/repo> --match-head-commit`), and moves the issues the merged pull requests
+   close to Done on the board right after the merges. Then it pulls the main checkout (which
+   must be clean and on `main`), deploys only when its tree is the gate's tree, and checks the
+   Jetson over ssh with the deploy's compose profile (every service running and healthy, a
+   stopped or missing one counts, `alembic current` at head, memory, no error line in the last
+   10 minutes, JSON `"level": "error"` lines included). The last line is `SHIP: OK`,
    `SHIP: PLAN, nothing was done`, `SHIP: NOTHING TO SHIP` or `SHIP: FAIL <reason>` (exit 1);
    the gate and deploy logs of the last 10 runs stay in `.local-check/ship/`.
 7. Only a checked tree is deployed, through `ops/deploy-checked.sh`. It refuses a commit whose

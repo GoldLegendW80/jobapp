@@ -13,28 +13,46 @@
 #    of its current head commit on line 2. --approved takes every open pull request so approved
 #    and skips, with the reason, drafts and those GitHub does not call MERGEABLE; a pull request
 #    named on the command line that fails one of these stops the run before anything is done.
+#    Dependencies: every #N on a line of the body that begins with "Depends on" or "Stacked on"
+#    (any case). A pull request ships only after each of them: N is MERGED already, or N ships
+#    before it in the same batch. Otherwise --approved skips it "waits for #N" (and so, in turn,
+#    every pull request that depends on it), and a named one stops the run.
 # 2. Order. A pull request that changes ops/local-check.sh first, then the given order (ascending
-#    numbers with --approved). The gate of a batch that begins with it is that pull request's own
-#    ops/local-check.sh, run from a detached worktree of its head (the record still lands in
-#    .local-check/ of the main checkout, see the header of local-check.sh). A second one that
-#    changes the gate is deferred to a later run: one gate script per batch.
+#    numbers with --approved, each dependency before its dependents). The gate of a batch that
+#    begins with it is that pull request's own ops/local-check.sh, run from a detached worktree of
+#    its head (the record still lands in .local-check/ of the main checkout, see the header of
+#    local-check.sh). A second one that changes the gate, or one that depends on another pull
+#    request of the batch, is deferred to a later run: one gate script per batch.
 # 3. Gate. ops/local-check.sh --merge <n> ... once for the batch. On a merge conflict the pull
-#    request it names is dropped. On a failed step the batch is bisected: the shortest failing
-#    prefix names the pull request to drop (when it is the first one alone, main is checked alone,
-#    and a main that fails stops the run). A dropped pull request gets a comment with the failing
-#    steps and the end of their log, each line that may hold a secret withheld (redact below);
-#    then the rest is checked again. A lock or disk refusal of the gate stops the run.
+#    request it names is dropped. A failed step counts once it repeats: the batch is checked again
+#    as it is, a PASS then ships (the first failure is named "flaky" in the summary) and another
+#    list of failed steps stops the run ("flaky gate"), nothing dropped. The same failure twice is
+#    bisected: the shortest prefix that fails at the same steps names the pull request to drop (a
+#    prefix that fails at other steps counts as passing and is named flaky; when the culprit is the
+#    first one alone, main is checked alone, and a main that fails stops the run). A dropped pull
+#    request gets a comment with the step the bisect blamed and the last 30 lines of its log, each
+#    line that may hold a secret withheld (redact below); every pull request that depends on it
+#    leaves the batch too, without a comment; then the rest is checked again. A lock or disk
+#    refusal of the gate stops the run.
 # 4. Merge. Only when origin/main is still the base the gate checked and each head is still the
-#    commit the PASS record lists: gh pr merge --merge --delete-branch --match-head-commit <sha>,
-#    in the checked order. A head that moved stops the run before the first merge.
-# 5. The main checkout (checked clean and on main before the gate, and again here) gets
+#    commit the PASS record lists: gh pr merge --repo <owner/repo> --merge --delete-branch
+#    --match-head-commit <sha>, in the checked order (with --repo gh leaves local branches alone,
+#    so a branch checked out in a worktree cannot fail it). The state is read after each call:
+#    MERGED counts as merged whatever gh exited with. A head that moved stops the run before the
+#    first merge; a stop between two merges names what merged and what did not.
+# 5. The issues the merged pull requests close (GitHub's closingIssuesReferences, the "Closes #N"
+#    of their bodies) move to Done on the project board (project 1 of GoldLegendW80) right after
+#    the merges, since GitHub closes them then; also after a stop between two merges. A card that
+#    does not move is named and makes the exit status 1, but stops nothing.
+# 6. The main checkout (checked clean and on main before the gate, and again here) gets
 #    git pull --ff-only; its tree must equal the gate's tree, then ops/deploy-checked.sh <commit>.
-# 6. The Jetson over ssh, in ~/jobapp: every compose service running and healthy, alembic current
-#    at (head), the memory used, and the count of lines matching " error " or "traceback" (any
-#    case) in the last 10 minutes of the compose logs, which must be 0. Only these figures come
-#    back: no log line, no environment value.
-# 7. The issues the merged pull requests close (GitHub's closingIssuesReferences, the "Closes #N"
-#    of their bodies) move to Done on the project board (project 1 of GoldLegendW80).
+# 7. The Jetson over ssh, in ~/jobapp, with the compose files and profile of its deploy
+#    (docker compose -f compose.yml --profile tunnel): every service of the compose file has a
+#    container (ps -a, so a stopped one shows) that is running and healthy, alembic current at
+#    (head), the memory used, and the count of error lines in the last 10 minutes of the compose
+#    logs, which must be 0: a JSON line at level error or critical (the api and the worker, see
+#    api/app/logging_config.py, and caddy), " error " or "traceback" (any case). Only these figures
+#    come back: no log line, no environment value.
 #
 # Output: one line per action, then a summary block whose last line is "SHIP: OK", "SHIP: PLAN",
 # "SHIP: NOTHING TO SHIP" or "SHIP: FAIL <reason>"; on a failure the same reason goes to stderr.
@@ -97,11 +115,19 @@ joined() { # joined <word ...>: the words separated by ", ", or "none"
 # --- redact: a log tail that goes into a pull request comment --------------------------------------
 # A line goes through only when nothing in it looks like a secret; otherwise it is replaced by a
 # marker. Fail closed, by shape rather than by a list of known secrets: a word of the family of
-# secrets (token, password, auth but not author, cookie, key names), a known key prefix, a password in a URL, a
-# run of 32 or more hex digits, or a run of 32 or more token characters that mixes upper case,
-# lower case and digits. Stated cost: a line that merely mentions a token, or holds a commit sha,
-# is withheld too. Lines are cut at 400 characters.
-SECRET_WORDS='secret|token|passw|pwd|api[_-]?key|apikey|(^|[^[:alnum:]])auth([^o]|$)|authorization:|oauth|bearer|credential|cookie|private[ _-]?key|signature|dsn|-----begin|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|(^|[^[:alnum:]])sk-[[:alnum:]]|xox[abprs]-|akia[[:alnum:]]{8}|aiza[[:alnum:]_-]{8}|ya29\.|gocspx-|eyj[[:alnum:]_-]{8,}\.'
+# secrets (token, password, auth but not author, cookie, key names), an identifier that holds
+# key, keys, access or creds (as a whole part, at its end, or before "id") followed by "=" or
+# ":", the key prefixes gitleaks knows, a password in a URL, a run of 32 or more hex digits, or a
+# run of 32 or more token characters that mixes upper case, lower case and digits. Stated cost:
+# a line that merely mentions a token, holds a commit sha, or reads "monkey: " or
+# "primary_key=True", is withheld too. Lines are cut at 400 characters.
+B='(^|[^[:alnum:]])' # the start of a word, so that msg.send or hf_ratio stay
+SECRET_WORDS='secret|token|passw|pwd|api[_-]?key|apikey|'"${B}"'auth([^o]|$)|authorization:|oauth|bearer|credential|cookie|private[ _-]?key|signature|dsn|-----begin'
+SECRET_WORDS+='|(keys?|access|creds)(ids?)?([_.-][[:alnum:]_.-]*)?["'"'"']?[[:space:]]*[=:]'
+SECRET_WORDS+='|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|'"${B}"'sk-[[:alnum:]]|'"${B}"'[rs]k_(live|test)_|xox[abprs]-|xapp-[[:alnum:]]'
+SECRET_WORDS+='|akia[[:alnum:]]{8}|'"${B}"'(asia|abia|acca|a3t[[:alnum:]])[[:alnum:]]{8}|aiza[[:alnum:]_-]{8}|ya29\.|gocspx-|eyj[[:alnum:]_-]{8,}\.'
+SECRET_WORDS+='|'"${B}"'hf_[[:alnum:]]{10,}|'"${B}"'npm_[[:alnum:]]{10,}|'"${B}"'sg\.[[:alnum:]_-]{8,}\.|dop_v1_|'"${B}"'pypi-[[:alnum:]]{10,}'
+SECRET_WORDS+='|shp(at|ss|ca|pa)_|lin_api_|accountkey=|tskey-'
 URL_PASSWORD='://[^/@[:space:]]*:[^/@[:space:]]*@'
 HEX_RUN='[[:xdigit:]]{32,}'
 TOKEN_RUN='[[:alnum:]+/=_-]{32,}'
@@ -175,26 +201,30 @@ main_refusal() { # prints why the main checkout cannot be pulled, nothing when i
 }
 
 # --- what GitHub says of a pull request -------------------------------------------------------------
-# One line: state, draft, head, mergeable, the verdict of the latest "REVIEW VERDICT:" review and
-# the sha its line 2 names ("-" for an empty field).
-# shellcheck disable=SC2016 # a jq program: $r and $l are jq variables
+# One line: state, draft, head, mergeable, the verdict of the latest "REVIEW VERDICT:" review, the
+# sha its line 2 names and the dependencies of the body, numbers separated by spaces ("-" for an
+# empty field). A line of dependencies may begin with list or quote marks ("- Depends on #12").
+# shellcheck disable=SC2016 # a jq program: $r, $l and $d are jq variables
 FACTS_JQ='([.reviews[] | select(.body | startswith("REVIEW VERDICT:"))] | last) as $r
 | (($r.body // "") | gsub("\r"; "") | split("\n")) as $l
+| ((.body // "") | split("\n") | map(select(test("^[\\s>*_-]*(depends|stacked) on"; "i")) | [scan("#([0-9]+)") | .[0]])
+   | flatten | join(" ")) as $d
 | [.state, (.isDraft | tostring), .headRefOid, .mergeable,
    (($l[0] // "") | ltrimstr("REVIEW VERDICT:") | gsub("^ +| +$"; "")),
-   (($l[1] // "") | ltrimstr("Head:") | gsub("^ +| +$"; ""))]
+   (($l[1] // "") | ltrimstr("Head:") | gsub("^ +| +$"; "")), $d]
 | map(if . == "" or . == null then "-" else . end) | @tsv'
 WHY=""
-F_STATE="" F_DRAFT="" F_HEAD="" F_MERGEABLE="" F_VERDICT="" F_VHEAD=""
+F_STATE="" F_DRAFT="" F_HEAD="" F_MERGEABLE="" F_VERDICT="" F_VHEAD="" F_DEPS=""
 check_pr() { # check_pr <n>: WHY is empty when it may ship, else the reason; F_* hold the facts
   local tries=0 out
   WHY=""
   while :; do
-    if ! out="$(gh pr view "$1" --json state,isDraft,headRefOid,mergeable,reviews --jq "$FACTS_JQ" 2>/dev/null)"; then
+    if ! out="$(gh pr view "$1" --json state,isDraft,headRefOid,mergeable,reviews,body --jq "$FACTS_JQ" 2>/dev/null)"; then
       WHY="gh cannot read it"
       return 0
     fi
-    IFS=$'\t' read -r F_STATE F_DRAFT F_HEAD F_MERGEABLE F_VERDICT F_VHEAD <<<"$out"
+    IFS=$'\t' read -r F_STATE F_DRAFT F_HEAD F_MERGEABLE F_VERDICT F_VHEAD F_DEPS <<<"$out"
+    if [[ "$F_DEPS" == - ]]; then F_DEPS=""; fi
     [[ "$F_MERGEABLE" == UNKNOWN && $tries -lt 5 ]] || break
     tries=$((tries + 1))
     sleep "$POLL_SECONDS"
@@ -225,10 +255,45 @@ issues_of() { # issues_of <n>: "<number> <url>" of each issue the pull request c
   gh pr view "$1" --json closingIssuesReferences --jq '.closingIssuesReferences[] | "\(.number) \(.url)"'
 }
 
+# --- 5. the board: move_cards runs right after the merges (GitHub closes the issues then) ---------
+STUCK=()
+move_cards() { # move_cards <n ...>: the issues these merged pull requests close, to Done
+  local n number url item moved=() seen=" " issues
+  for n in "$@"; do
+    issues="$(issues_of "$n")" || {
+      STUCK+=("the issues of #$n")
+      continue
+    }
+    while read -r number url; do
+      [[ -n "$number" && "$seen" != *" $number "* ]] || continue
+      seen="$seen$number "
+      if item="$(gh project item-add "$BOARD_NUMBER" --owner "$BOARD_OWNER" --url "$url" --format json --jq .id 2>/dev/null)" &&
+        [[ -n "$item" ]] &&
+        gh project item-edit --project-id "$BOARD_ID" --id "$item" --field-id "$STATUS_FIELD" \
+          --single-select-option-id "$STATUS_DONE" >/dev/null 2>&1; then
+        moved+=("#$number")
+      else
+        STUCK+=("#$number")
+      fi
+    done <<<"$issues"
+  done
+  note cards "Done: $(joined ${moved[@]+"${moved[@]}"})$( ((${#STUCK[@]} == 0)) || printf '; not moved: %s' "$(joined "${STUCK[@]}")")"
+}
+
 # --- 1. selection -----------------------------------------------------------------------------------
 SEL=()
 SEL_HEAD=()
+SEL_DEPS=()
 SKIPPED=()
+select_pr() {
+  SEL+=("$1")
+  SEL_HEAD+=("$F_HEAD")
+  SEL_DEPS+=("$F_DEPS")
+}
+skip() { # skip <n> <why>
+  say "skip   #$1: $2"
+  SKIPPED+=("#$1 ($2)")
+}
 if ((APPROVED)); then
   open="$(gh pr list --state open --limit 200 --json number --jq '.[].number')" ||
     die "gh cannot list the open pull requests"
@@ -238,24 +303,98 @@ if ((APPROVED)); then
   done < <(sort -n <<<"$open")
   for n in ${numbers[@]+"${numbers[@]}"}; do
     check_pr "$n"
-    if [[ -n "$WHY" ]]; then
-      say "skip   #$n: $WHY"
-      SKIPPED+=("#$n ($WHY)")
-    else
-      SEL+=("$n")
-      SEL_HEAD+=("$F_HEAD")
-    fi
+    if [[ -n "$WHY" ]]; then skip "$n" "$WHY"; else select_pr "$n"; fi
   done
 else
   for n in "${GIVEN[@]}"; do
     check_pr "$n"
     [[ -z "$WHY" ]] || die "#$n cannot ship: $WHY"
-    SEL+=("$n")
-    SEL_HEAD+=("$F_HEAD")
+    select_pr "$n"
   done
 fi
+deps_of() { # deps_of <n>: the numbers its body depends on
+  local i
+  for i in "${!SEL[@]}"; do
+    if [[ "${SEL[i]}" == "$1" ]]; then
+      say "${SEL_DEPS[i]}"
+      return 0
+    fi
+  done
+}
+in_list() { # in_list <n> <word ...>
+  local m n="$1"
+  shift
+  for m in "$@"; do [[ "$m" != "$n" ]] || return 0; done
+  return 1
+}
+KNOWN_MERGED=" "
+KNOWN_OPEN=" ${SEL[*]-} "
+is_merged() { # is_merged <n>: GitHub says the pull request is MERGED (asked once; unreadable is not)
+  [[ "$KNOWN_MERGED" != *" $1 "* ]] || return 0
+  [[ "$KNOWN_OPEN" != *" $1 "* ]] || return 1
+  if [[ "$(gh pr view "$1" --json state --jq .state 2>/dev/null)" == MERGED ]]; then
+    KNOWN_MERGED+="$1 "
+    return 0
+  fi
+  KNOWN_OPEN+="$1 "
+  return 1
+}
+
+# --- dependencies: SEL in an order where each dependency comes before its dependents ------------------
+ORDERED=()
+if ((APPROVED)); then
+  # The smallest number whose dependencies are all merged or placed goes next; one that depends on
+  # a pull request neither merged nor selected is skipped, which may skip others in a later pass.
+  PENDING=(${SEL[@]+"${SEL[@]}"})
+  while ((${#PENDING[@]})); do
+    progress=0
+    for n in "${PENDING[@]}"; do
+      blocked="" waiting=0
+      for d in $(deps_of "$n"); do
+        in_list "$d" ${ORDERED[@]+"${ORDERED[@]}"} && continue
+        if in_list "$d" "${PENDING[@]}"; then
+          waiting=1
+        elif ! is_merged "$d"; then
+          blocked="$d"
+          break
+        fi
+      done
+      if [[ -n "$blocked" ]]; then
+        skip "$n" "waits for #$blocked"
+      elif ((waiting)); then
+        continue
+      else
+        ORDERED+=("$n")
+      fi
+      left=()
+      for m in "${PENDING[@]}"; do [[ "$m" == "$n" ]] || left+=("$m"); done
+      PENDING=(${left[@]+"${left[@]}"})
+      progress=1
+      break
+    done
+    if ((progress == 0)); then # a cycle: each waits for another
+      for n in "${PENDING[@]}"; do
+        for d in $(deps_of "$n"); do
+          if in_list "$d" "${PENDING[@]}"; then
+            skip "$n" "waits for #$d"
+            break
+          fi
+        done
+      done
+      PENDING=()
+    fi
+  done
+else
+  for i in "${!SEL[@]}"; do
+    n="${SEL[i]}"
+    for d in $(deps_of "$n"); do
+      in_list "$d" "${SEL[@]:0:i}" || is_merged "$d" || die "#$n cannot ship: waits for #$d"
+    done
+  done
+  ORDERED=("${SEL[@]}")
+fi
 note skipped "$(joined ${SKIPPED[@]+"${SKIPPED[@]}"})"
-if ((${#SEL[@]} == 0)); then
+if ((${#ORDERED[@]} == 0)); then
   summary
   say "SHIP: NOTHING TO SHIP"
   exit 0
@@ -266,13 +405,30 @@ GATE_PR=""
 ORDER=()
 REST=()
 DEFERRED=()
-for n in "${SEL[@]}"; do
-  if changes_gate "$n"; then
-    if [[ -z "$GATE_PR" ]]; then
-      GATE_PR="$n"
+OUT=() # deferred: their dependents wait too
+defer() { # defer <n> <why>
+  say "defer  #$1: $2"
+  DEFERRED+=("#$1 ($2)")
+  OUT+=("$1")
+}
+for n in "${ORDERED[@]}"; do
+  blocked="" inside=""
+  for d in $(deps_of "$n"); do
+    if in_list "$d" ${OUT[@]+"${OUT[@]}"}; then
+      blocked="$d"
+      break
+    fi
+    if [[ -z "$inside" ]] && in_list "$d" "${ORDERED[@]}"; then inside="$d"; fi
+  done
+  if [[ -n "$blocked" ]]; then
+    defer "$n" "waits for #$blocked"
+  elif changes_gate "$n"; then
+    if [[ -n "$GATE_PR" ]]; then
+      defer "$n" "it changes $GATE_SCRIPT as #$GATE_PR does, one gate script per batch"
+    elif [[ -n "$inside" ]]; then
+      defer "$n" "waits for #$inside (it changes $GATE_SCRIPT, so it would be checked first)"
     else
-      say "defer  #$n: it changes $GATE_SCRIPT as #$GATE_PR does, one gate script per batch"
-      DEFERRED+=("#$n (changes $GATE_SCRIPT as #$GATE_PR does)")
+      GATE_PR="$n"
     fi
   else
     REST+=("$n")
@@ -280,6 +436,12 @@ for n in "${SEL[@]}"; do
 done
 [[ -z "$GATE_PR" ]] || ORDER+=("$GATE_PR")
 ORDER+=(${REST[@]+"${REST[@]}"})
+((${#ORDER[@]})) || {
+  note deferred "$(joined ${DEFERRED[@]+"${DEFERRED[@]}"})"
+  summary
+  say "SHIP: NOTHING TO SHIP"
+  exit 0
+}
 head_of() {
   local i
   for i in "${!SEL[@]}"; do
@@ -309,15 +471,16 @@ if ((PLAN)); then
   else
     say "plan   gate: the $GATE_SCRIPT of the main checkout"
   fi
-  say "plan   $GATE_SCRIPT$(merge_args "${ORDER[@]}"); on a failure, bisect, drop and comment the failing pull request, check the rest again"
-  say "plan   then gh pr merge --merge --delete-branch --match-head-commit <checked head>, one by one in this order"
+  say "plan   $GATE_SCRIPT$(merge_args "${ORDER[@]}"); on a failure, check again once, then bisect, drop and comment the failing pull request (and drop its dependents), check the rest again"
+  say "plan   then gh pr merge --repo <owner/repo> --merge --delete-branch --match-head-commit <checked head>, one by one in this order"
   why="$(main_refusal)"
   if [[ -n "$why" ]]; then
     say "plan   git pull --ff-only in $MAIN: a real run would refuse now, $why"
   else
     say "plan   git pull --ff-only in $MAIN (clean, on main), its tree compared with the gate's tree"
   fi
-  [[ ! -d "$RECORDS/lock" ]] || say "plan   a batch check holds $RECORDS/lock now: the gate of a real run would refuse to start"
+  [[ ! -d "$RECORDS/lock" ]] ||
+    say "plan   a batch check holds $RECORDS/lock now ($(cat "$RECORDS/lock/holder" 2>/dev/null || echo "holder unknown")): the gate of a real run would refuse to start"
   say "plan   ops/deploy-checked.sh <that commit>, then ssh $SSH_HOST: compose health, alembic head, memory, error lines of 10 minutes"
   cards=()
   for n in "${ORDER[@]}"; do
@@ -326,7 +489,7 @@ if ((PLAN)); then
       [[ -n "$number" ]] && cards+=("#$number")
     done <<<"$issues"
   done
-  say "plan   move to Done on the board: $(joined ${cards[@]+"${cards[@]}"})"
+  say "plan   move to Done on the board right after the merges: $(joined ${cards[@]+"${cards[@]}"})"
   summary
   say "SHIP: PLAN, nothing was done"
   exit 0
@@ -347,7 +510,12 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
-mkdir "$LOCK" 2>/dev/null || die "another ops/ship.sh holds $LOCK (remove it if no ship is running)"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  alive="not running"
+  if [[ "$holder" =~ ^[0-9]+$ ]] && kill -0 "$holder" 2>/dev/null; then alive="running"; fi
+  die "another ops/ship.sh holds $LOCK (process ${holder:-unknown}, $alive; remove the folder if no ship is running)"
+fi
 HAVE_LOCK=1
 printf '%s\n' "$$" >"$LOCK/pid"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/jobapp-ship.XXXXXX")"
@@ -409,37 +577,55 @@ run_gate() { # run_gate [<n> ...]: the gate on main with these merged (none: mai
     G_KIND=broken
   fi
 }
-tail_of() { # tail_of <gate log>: the end of the failed steps' logs, or the conflict, redacted
-  awk '/^MERGE CONFLICT: /{on=1} /^--- /{on=1} /^logs: /{on=0} on' "$1" | tail -n 60 | redact
+tail_of() { # tail_of <gate log> <step>: the last 30 lines of that step's log (or the conflict), redacted
+  if [[ "$2" == merge-conflict ]]; then
+    awk '/^MERGE CONFLICT: /{on=1} /^LOCAL CHECK: /{next} on' "$1"
+  else
+    # The lines under "--- <step>: the last 40 lines of <path>" (the header, which names a local
+    # path, left out) up to the next "--- " or "logs: ", without the blank lines before it.
+    awk -v head="--- $2: " '
+      index($0, head) == 1 { on = 1; blanks = 0; next }
+      /^--- / || /^logs: / { on = 0 }
+      on && /^$/ { blanks++; next }
+      on { for (; blanks > 0; blanks--) print ""; print }' "$1"
+  fi | redact | tail -n 30
 }
 COMMENT_FAILED=()
 DROPPED=()
+FLAKY=()
 BATCH=("${ORDER[@]}")
-in_batch() {
-  local m
-  for m in "${BATCH[@]}"; do [[ "$m" != "$1" ]] || return 0; done
-  return 1
-}
-drop() { # drop <n> <failing steps> <gate log>: out of the batch, with a comment on the pull request
-  local n="$1" keep=() m before=() body="$WORK/comment-$1.md"
+in_batch() { in_list "$1" ${BATCH[@]+"${BATCH[@]}"}; }
+drop() { # drop <n> <failing steps> <gate log>: out of the batch, with a comment, and its dependents
+  local n="$1" keep=() m d before=() body="$WORK/comment-$1.md" out=("$1") blamed="${2%%,*}"
   for m in "${BATCH[@]}"; do
     if [[ "$m" == "$n" ]]; then
       before=(${keep[@]+"${keep[@]}"})
-    else
-      keep+=("$m")
+      continue
     fi
+    # The batch is in dependency order: a dependent comes after what it depends on.
+    for d in $(deps_of "$m"); do
+      if in_list "$d" "${out[@]}"; then
+        out+=("$m")
+        continue 2
+      fi
+    done
+    keep+=("$m")
   done
   BATCH=(${keep[@]+"${keep[@]}"})
   DROPPED+=("#$n ($2)")
   say "drop   #$n: $2"
+  for m in "${out[@]:1}"; do
+    DROPPED+=("#$m (waits for #$n)")
+    say "drop   #$m: waits for #$n"
+  done
   {
-    say "**ops/ship.sh took this pull request out of the batch:** the batch check (\`$GATE_SCRIPT\`) failed at \`$2\`."
+    say "**ops/ship.sh took this pull request out of the batch:** the batch check (\`$GATE_SCRIPT\`) failed at \`$blamed\`."
     say ""
     say "Checked: head $(head_of "$n") merged on main$( ((${#before[@]})) && printf ' after %s' "$(joined "${before[@]/#/#}")"), $(date -u '+%Y-%m-%d %H:%M UTC')."
-    say "The end of the log follows; each line that may hold a secret is withheld. The full logs stay on the Mac."
+    say "The last lines of the log of \`$blamed\` follow; each line that may hold a secret is withheld. The full logs stay on the Mac."
     say ""
     say '```text'
-    tail_of "$3"
+    tail_of "$3" "$blamed"
     say '```'
   } >"$body"
   if ! gh pr comment "$n" --body-file "$body" >/dev/null 2>&1; then
@@ -447,7 +633,15 @@ drop() { # drop <n> <failing steps> <gate log>: out of the batch, with a comment
     COMMENT_FAILED+=("#$n")
   fi
 }
+gate_notes() {
+  note dropped "$(joined ${DROPPED[@]+"${DROPPED[@]}"})"
+  ((${#COMMENT_FAILED[@]} == 0)) || note comments "not posted on $(joined "${COMMENT_FAILED[@]}")"
+  local flaky="" f
+  for f in ${FLAKY[@]+"${FLAKY[@]}"}; do flaky="${flaky:+$flaky; }$f"; done
+  [[ -z "$flaky" ]] || note flaky "$flaky"
+}
 gate_broken() {
+  gate_notes
   case "$G_STATUS" in
   3) die "the gate refused to start, a check holds the lock or the disk is short: $G_LAST" ;;
   *) die "the gate did not give a result (exit $G_STATUS, log $G_LOG): $G_LAST" ;;
@@ -456,7 +650,7 @@ gate_broken() {
 
 while :; do
   ((${#BATCH[@]})) || {
-    note dropped "$(joined ${DROPPED[@]+"${DROPPED[@]}"})"
+    gate_notes
     die "every pull request of the batch failed the gate"
   }
   run_gate "${BATCH[@]}"
@@ -469,20 +663,42 @@ while :; do
   fail) ;;
   *) gate_broken ;;
   esac
-  # The shortest failing prefix: the batch of length hi fails; prefixes shorter than lo pass.
+  # The flake guard: a failure counts once the same batch fails at the same steps again.
+  first="run $GATE_RUNS failed $G_STEPS"
+  fail_steps="$G_STEPS"
+  run_gate "${BATCH[@]}"
+  case "$G_KIND" in
+  pass)
+    FLAKY+=("$first")
+    break
+    ;;
+  fail | conflict)
+    if [[ "$G_STEPS" != "$fail_steps" ]]; then
+      FLAKY+=("$first, run $GATE_RUNS failed $G_STEPS")
+      gate_notes
+      die "flaky gate"
+    fi
+    ;;
+  *) gate_broken ;;
+  esac
+  fail_log="$G_LOG"
+  # The shortest failing prefix: the batch of length hi fails; prefixes shorter than lo pass. A
+  # prefix that fails at other steps than the batch does not reproduce it: it counts as passing.
   lo=1
   hi=${#BATCH[@]}
-  fail_log="$G_LOG"
-  fail_steps="$G_STEPS"
   while ((lo < hi)); do
     mid=$(((lo + hi) / 2))
     run_gate "${BATCH[@]:0:mid}"
     case "$G_KIND" in
     pass) lo=$((mid + 1)) ;;
     fail)
-      hi=$mid
-      fail_log="$G_LOG"
-      fail_steps="$G_STEPS"
+      if [[ "$G_STEPS" == "$fail_steps" ]]; then
+        hi=$mid
+        fail_log="$G_LOG"
+      else
+        FLAKY+=("run $GATE_RUNS failed $G_STEPS, a bisect prefix counted as passing")
+        lo=$((mid + 1))
+      fi
       ;;
     *) gate_broken ;;
     esac
@@ -493,15 +709,17 @@ while :; do
     run_gate
     case "$G_KIND" in
     pass) ;;
-    fail) die "main itself fails the gate at $G_STEPS (log $G_LOG): fix main first, nothing merged" ;;
+    fail)
+      gate_notes
+      die "main itself fails the gate at $G_STEPS (log $G_LOG): fix main first, nothing merged"
+      ;;
     *) gate_broken ;;
     esac
   fi
   drop "$culprit" "$fail_steps" "$fail_log"
 done
 TREE="$G_TREE"
-note dropped "$(joined ${DROPPED[@]+"${DROPPED[@]}"})"
-((${#COMMENT_FAILED[@]} == 0)) || note comments "not posted on $(joined "${COMMENT_FAILED[@]}")"
+gate_notes
 note gate "PASS $TREE after $GATE_RUNS run(s), batch $(labels "${BATCH[@]}")"
 
 # --- 4. merge -----------------------------------------------------------------------------------------
@@ -523,6 +741,8 @@ checked="$(tail -n +2 <<<"$facts" | cut -d' ' -f1 | tr '\n' ' ')"
 [[ "$checked" == "${BATCH[*]} " ]] || die "the record $RECORD lists the merges ${checked:-none}, the batch is ${BATCH[*]}"
 gated_head() { awk -v n="$1" '$1 == n { print $2 }' <<<"$(tail -n +2 <<<"$facts")"; }
 
+REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || REPO=""
+[[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "gh cannot name the repository of $MAIN: nothing merged"
 now="$(git -C "$MAIN" ls-remote origin refs/heads/main | cut -f1)" || die "cannot read main on origin"
 [[ "$now" == "$base" ]] || die "main moved since the gate (checked on $(short "$base"), now $(short "$now")): nothing merged, run ops/ship.sh again"
 for n in "${BATCH[@]}"; do
@@ -532,30 +752,46 @@ for n in "${BATCH[@]}"; do
   [[ "$F_HEAD" == "$gated" ]] ||
     die "the head of #$n moved since the gate ($(short "$gated") checked, $(short "$F_HEAD") now): nothing merged"
 done
+
 MERGED=()
-for n in "${BATCH[@]}"; do
+MERGE_WARNINGS=()
+stop_merging() { # stop_merging <index in the batch of the first one not merged> <reason>
+  local rest=("${BATCH[@]:$1}")
+  note merged "$(joined ${MERGED[@]+"${MERGED[@]/#/#}"})"
+  note "not merged" "$(joined "${rest[@]/#/#}")"
+  ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
+  ((${#MERGED[@]} == 0)) || move_cards "${MERGED[@]}"
+  die "$2: main is not the checked tree, nothing deployed"
+}
+for i in "${!BATCH[@]}"; do
+  n="${BATCH[i]}"
   gated="$(gated_head "$n")"
   if ((${#MERGED[@]})); then
     # GitHub recomputes the mergeable state after the merge before it; check_pr waits for it.
     check_pr "$n"
     [[ -z "$WHY" && "$F_HEAD" == "$gated" ]] ||
-      die "#$n changed during the merges (${WHY:-head $(short "$F_HEAD")}): merged $(joined "${MERGED[@]}"), main is not the checked tree, nothing deployed"
+      stop_merging "$i" "#$n changed during the merges (${WHY:-head $(short "$F_HEAD")})"
   fi
-  if ! (cd "$MAIN" && gh pr merge "$n" --merge --delete-branch --match-head-commit "$gated") >"$LOGS/merge-$n.log" 2>&1; then
-    note merged "$(joined ${MERGED[@]+"${MERGED[@]}"})"
-    die "gh pr merge #$n failed ($LOGS/merge-$n.log): main is not the checked tree, nothing deployed"
-  fi
-  state="$(gh pr view "$n" --json state --jq .state)" || state="unknown"
+  # From a folder outside the repository, with --repo: gh touches no local branch.
+  merge_status=0
+  (cd "$WORK" && gh pr merge "$n" --repo "$REPO" --merge --delete-branch --match-head-commit "$gated") >"$LOGS/merge-$n.log" 2>&1 ||
+    merge_status=$?
+  state="$(gh pr view "$n" --json state --jq .state 2>/dev/null)" || state="unknown"
   if [[ "$state" != MERGED ]]; then
-    note merged "$(joined ${MERGED[@]+"${MERGED[@]}"})"
-    die "#$n is $state after gh pr merge: main is not the checked tree, nothing deployed"
+    if ((merge_status)); then stop_merging "$i" "gh pr merge #$n failed ($LOGS/merge-$n.log)"; fi
+    stop_merging "$i" "#$n is $state after gh pr merge"
   fi
-  MERGED+=("#$n")
+  if ((merge_status)); then
+    MERGE_WARNINGS+=("gh pr merge #$n exited $merge_status after the merge ($LOGS/merge-$n.log)")
+  fi
+  MERGED+=("$n")
   say "merge  #$n $(short "$gated")"
 done
-note merged "$(joined "${MERGED[@]}")"
+note merged "$(joined "${MERGED[@]/#/#}")"
+((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
+move_cards "${MERGED[@]}"
 
-# --- 5. pull, compare, deploy -----------------------------------------------------------------------
+# --- 6. pull, compare, deploy -----------------------------------------------------------------------
 why="$(main_refusal)"
 [[ -z "$why" ]] || die "$why: not pulled, nothing deployed"
 git -C "$MAIN" pull --ff-only -q >"$LOGS/pull.log" 2>&1 || die "git pull --ff-only failed in $MAIN ($LOGS/pull.log): nothing deployed"
@@ -567,26 +803,30 @@ note main "$(short "$commit") tree $tree"
 say "deploy ops/deploy-checked.sh $commit"
 deploy_status=0
 "$MAIN/ops/deploy-checked.sh" "$commit" >"$LOGS/deploy.log" 2>&1 </dev/null || deploy_status=$?
+deploy_last="$(tail -n 1 "$LOGS/deploy.log" | redact)"
 if ((deploy_status)); then
   note deploy "FAIL, exit $deploy_status ($LOGS/deploy.log)"
-  die "ops/deploy-checked.sh failed (exit $deploy_status): $(tail -n 1 "$LOGS/deploy.log")"
+  die "ops/deploy-checked.sh failed (exit $deploy_status): $deploy_last"
 fi
-note deploy "ok ($(tail -n 1 "$LOGS/deploy.log"))"
+note deploy "ok ($deploy_last)"
 
-# --- 6. the Jetson ----------------------------------------------------------------------------------
-# Runs there; prints only tab separated figures, never a log line or an environment value.
+# --- 7. the Jetson ----------------------------------------------------------------------------------
+# Runs there; prints only tab separated figures and service names, never a log line or an
+# environment value. The compose files and profile are those of .github/workflows/deploy.yml.
 # shellcheck disable=SC2016 # expanded on the Jetson
 REMOTE='set -u
 cd ~/jobapp || exit 3
-docker compose ps --format "{{.Service}}\t{{.State}}\t{{.Health}}" 2>/dev/null |
+compose() { docker compose -f compose.yml --profile tunnel "$@"; }
+compose config --services 2>/dev/null | while IFS= read -r line; do printf "svc\t%s\n" "$line"; done
+compose ps -a --format "{{.Service}}\t{{.State}}\t{{.Health}}" 2>/dev/null |
   while IFS= read -r line; do printf "ps\t%s\n" "$line"; done
-rev="$(docker compose exec -T api alembic current 2>/dev/null |
+rev="$(compose exec -T api alembic current 2>/dev/null |
   sed -n "s/^\([0-9A-Za-z_][0-9A-Za-z_]*\) (head).*/\1/p" | head -n 1)"
 printf "alembic\t%s\n" "${rev:--}"
 free -m | awk "/^Mem:/ { printf \"memory\t%s\t%s\n\", \$3, \$2 }"
 logs="$(mktemp)"
-if docker compose logs --no-color --since 10m >"$logs" 2>&1; then
-  printf "errors\t%s\n" "$(grep -ciE " error |traceback" "$logs")"
+if compose logs --no-color --since 10m >"$logs" 2>&1; then
+  printf "errors\t%s\n" "$(grep -ciE "\"level\": ?\"(error|critical)\"| error |traceback" "$logs")"
 else
   printf "errors\t-\n"
 fi
@@ -594,6 +834,8 @@ rm -f "$logs"'
 say "check  ssh $SSH_HOST, ~/jobapp"
 jetson="$(ssh -o BatchMode=yes -o ConnectTimeout=20 "$SSH_HOST" bash -s <<<"$REMOTE" 2>"$LOGS/jetson.err")" ||
   die "ssh $SSH_HOST failed ($LOGS/jetson.err): deployed, the Jetson is not checked"
+declared=()
+running=" "
 services=0
 unwell=()
 rev="-"
@@ -602,8 +844,10 @@ mem_total="-"
 errors="-"
 while IFS=$'\t' read -r kind a b c; do
   case "$kind" in
+  svc) declared+=("$a") ;;
   ps)
     services=$((services + 1))
+    running="$running$a "
     [[ "$b" == running && "$c" == healthy ]] || unwell+=("$a ${c:-$b}")
     ;;
   alembic) rev="$a" ;;
@@ -614,37 +858,20 @@ while IFS=$'\t' read -r kind a b c; do
   errors) errors="$a" ;;
   esac
 done <<<"$jetson"
+missing=()
+for svc in ${declared[@]+"${declared[@]}"}; do
+  [[ "$running" == *" $svc "* ]] || missing+=("$svc")
+done
+services=$((services + ${#missing[@]}))
 problems=()
+((${#declared[@]} > 0)) || problems+=("compose lists no service")
 ((services > 0)) || problems+=("no compose service")
 ((${#unwell[@]} == 0)) || problems+=("not healthy: $(joined "${unwell[@]}")")
+((${#missing[@]} == 0)) || problems+=("missing: $(joined "${missing[@]}")")
 [[ "$rev" != - ]] || problems+=("alembic is not at head")
 [[ "$errors" == 0 ]] || problems+=("$errors error lines in 10 minutes")
-note jetson "$services services, $((services - ${#unwell[@]})) healthy; alembic $rev; memory $mem_used of $mem_total MB used; $errors error lines in 10 minutes"
-((${#problems[@]} == 0)) || die "the Jetson after the deploy: $(joined "${problems[@]}"); cards not moved"
-
-# --- 7. the board -------------------------------------------------------------------------------------
-moved=()
-stuck=()
-seen=" "
-for n in "${BATCH[@]}"; do
-  issues="$(issues_of "$n")" || {
-    stuck+=("the issues of #$n")
-    continue
-  }
-  while read -r number url; do
-    [[ -n "$number" && "$seen" != *" $number "* ]] || continue
-    seen="$seen$number "
-    if item="$(gh project item-add "$BOARD_NUMBER" --owner "$BOARD_OWNER" --url "$url" --format json --jq .id 2>/dev/null)" &&
-      [[ -n "$item" ]] &&
-      gh project item-edit --project-id "$BOARD_ID" --id "$item" --field-id "$STATUS_FIELD" \
-        --single-select-option-id "$STATUS_DONE" >/dev/null 2>&1; then
-      moved+=("#$number")
-    else
-      stuck+=("#$number")
-    fi
-  done <<<"$issues"
-done
-note cards "Done: $(joined ${moved[@]+"${moved[@]}"})"
-((${#stuck[@]} == 0)) || die "deployed and checked, but these cards did not move to Done: $(joined "${stuck[@]}")"
+note jetson "$services services, $((services - ${#unwell[@]} - ${#missing[@]})) healthy, ${#missing[@]} missing; alembic $rev; memory $mem_used of $mem_total MB used; $errors error lines in 10 minutes"
+((${#problems[@]} == 0)) || die "the Jetson after the deploy: $(joined "${problems[@]}")"
+((${#STUCK[@]} == 0)) || die "deployed and checked, but these cards did not move to Done: $(joined "${STUCK[@]}")"
 summary
 say "SHIP: OK"
