@@ -141,6 +141,14 @@ export interface SweepSchedule {
   timezone: string;
 }
 
+/** schemas.py DocumentsGeneration (documents D10): the automatic generation of a posting's CV
+ * and letter, on by default, at or above `min_fit`, at most `daily_ceiling` postings a day. */
+export interface DocumentsGeneration {
+  auto: boolean;
+  min_fit: number;
+  daily_ceiling: number;
+}
+
 export interface Board {
   company: string;
   ats: AtsName;
@@ -160,6 +168,8 @@ export interface Search {
   never_apply: string[];
   /** when the boards are swept automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;
+  /** the automatic generation of documents (D10), kept as is by this tab until D13's card */
+  documents: DocumentsGeneration;
 }
 
 export interface WorkAuthorization {
@@ -250,6 +260,7 @@ export const EMPTY: SectionData = {
       times: ["06:17"],
       timezone: "Europe/Paris",
     },
+    documents: { auto: true, min_fit: 70, daily_ceiling: 100 },
   },
   answers: {
     work_authorization: [],

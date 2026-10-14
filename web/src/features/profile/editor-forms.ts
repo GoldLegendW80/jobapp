@@ -319,6 +319,12 @@ export const searchSchema = z
       times: z.array(z.string()),
       timezone: z.string(),
     }),
+    // Not edited here either (documents D13's card owns it): carried through unchanged.
+    documents: z.object({
+      auto: z.boolean(),
+      min_fit: z.number(),
+      daily_ceiling: z.number(),
+    }),
   })
   .superRefine((values, ctx) => {
     uniqueBy(
@@ -356,6 +362,7 @@ export const toSearchForm = (search: Search): SearchForm => ({
     days: [...search.sweep_schedule.days],
     times: [...search.sweep_schedule.times],
   },
+  documents: { ...search.documents },
 });
 
 export const fromSearchForm = (values: SearchForm): Search => ({
@@ -381,4 +388,5 @@ export const fromSearchForm = (values: SearchForm): Search => ({
     days: [...values.sweep_schedule.days],
     times: [...values.sweep_schedule.times],
   },
+  documents: { ...values.documents },
 });
