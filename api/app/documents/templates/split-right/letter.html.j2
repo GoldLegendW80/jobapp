@@ -1,0 +1,33 @@
+{#- split-right, the letter: the CV's header across the page, then the letter in the main column
+    on the left (the date, the recipient, the subject, the salutation, the paragraphs, the
+    closing and the name) and the contact lines in the narrow column on the right. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+<header class="head">
+<div class="headtext">
+<h1 class="name">{{ name }}</h1>
+{% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+</div>
+{{ base.portrait() }}
+</header>
+<div class="cols">
+<main class="main letter-body">
+{{ base.letter_date() }}
+{% if content.recipient %}<p class="recipient">{{ content.recipient }}</p>{% endif %}
+{% if content.subject %}<p class="subject"><strong>{{ base.label("subject") }}</strong> {{ content.subject }}</p>{% endif %}
+{% if content.salutation %}<p class="salutation">{{ content.salutation }}</p>{% endif %}
+{{ base.paragraphs(content.paragraphs) }}
+{% if content.closing %}<p class="closing">{{ content.closing }}</p>{% endif %}
+<p class="signature">{{ name }}</p>
+</main>
+<aside class="side">
+{% if contact %}
+<section class="block">
+<h2 class="side-label">{{ base.label("contact") }}</h2>
+{{ base.contact_lines() }}
+</section>
+{% endif %}
+</aside>
+</div>
+{% endblock %}
