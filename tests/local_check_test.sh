@@ -435,6 +435,31 @@ grep -q '^  browser:$' <(sed -n '/^s_images()/,/^}/p' "$ROOT/ops/local-check.sh"
 grep -qE 'build api worker caddy renderer browser$' "$ROOT/ops/local-check.sh" || fail "the step images does not build the browser"
 ok "the docker marked tests use the images the check built (worker, renderer, browser), else their own, on -n 2 by file"
 
+# --- the networks of the journey stacks: subnets of their own (issue #280) -------------------------
+# Twelve stacks claim slots: their 60 networks get distinct /27 subnets of 10.213.0.0/16, outside
+# Docker's predefined pools, and a slot freed by a stack that ended is taken again.
+cat >"$WORK/nets.sh" <<'EOF'
+stub_plan() {
+  local group slot
+  for group in a b c d e f g h i j k l; do
+    slot="$(claim_net_slot)"
+    stack_networks "$group" "$slot" >/dev/null
+  done
+  cat "$WORK"/networks-*.yml >"$STUB_CALLS.nets"
+  rmdir "$WORK/nets/3"
+  claim_net_slot >"$STUB_CALLS.reused"
+  run_step nets true || true
+}
+EOF
+run 0 env LOCAL_CHECK_STUB="$WORK/nets.sh" "$CHECK" --only checks
+subnets="$(sed -n 's/^ *- subnet: //p' "$STUB_CALLS.nets")"
+[[ "$(wc -l <<<"$subnets" | tr -d ' ')" == 60 ]] || fail "not five subnets per stack: $subnets"
+[[ "$(sort -u <<<"$subnets" | wc -l | tr -d ' ')" == 60 ]] || fail "two networks share a subnet: $(sort <<<"$subnets" | uniq -d)"
+if grep -vE '^10\.213\.([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-4][0-9])\.0/27$' <<<"$subnets"; then fail "a subnet outside 10.213.0.0/16"; fi
+[[ "$(grep -c '^  [a-z]*:$' "$STUB_CALLS.nets")" == 60 ]] || fail "the overrides do not name the five networks of each stack"
+[[ "$(cat "$STUB_CALLS.reused")" == 3 ]] || fail "a freed slot was not taken again: $(cat "$STUB_CALLS.reused")"
+ok "each journey stack's networks get /27 subnets of their own out of 10.213.0.0/16, a freed slot is reused"
+
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
 # it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded

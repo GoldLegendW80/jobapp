@@ -369,7 +369,7 @@ fi
 # 3.2 and 5). A new bash inherits nothing of that state, so the status of a step is the same
 # however run_step is called. The step is given every function of this script (declare -f) and the
 # variables named in STEP_ENV; a name it lacks stops it (nounset) and the step fails.
-STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST)
+STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST NET_BASE STACK_NETWORKS)
 TIMINGS="$RECORDS/timings.csv"
 timing() { # timing <step> <exit status> <seconds>: one line of timings.csv
   local result=PASS
@@ -447,6 +447,40 @@ pick_journey_ports() { # pick_journey_ports <group ...>: one claimed port per gr
     port="$(claim_port)" || return 1
     printf '%s\n' "$port" >"$WORK/ports/$group"
   done
+}
+
+# The networks of the journey stacks. A stack has five (default, parsing, rendering, browsing,
+# egress), and Docker Desktop's predefined address pools hold about thirty: six stacks side by side
+# plus the stacks of agents ran out ("all predefined address pools have been fully subnetted",
+# check lc1014171255-32596). So each stack takes a slot, claimed like a port in $WORK/nets and
+# freed with the stack, and its networks get /27 subnets of that slot out of NET_BASE.0.0/16,
+# outside the pools Docker picks from: slot s, network j is NET_BASE.(5s + j).0/27.
+NET_BASE="${LOCAL_CHECK_NET_BASE:-10.213}"
+STACK_NETWORKS="default parsing rendering browsing egress"
+
+claim_net_slot() { # prints the first slot (0 to 49) that no stack of this check holds
+  local slot
+  mkdir -p "$WORK/nets"
+  for slot in $(seq 0 49); do
+    if mkdir "$WORK/nets/$slot" 2>/dev/null; then
+      printf '%s\n' "$slot"
+      return 0
+    fi
+  done
+  echo "no free network slot for a stack" >&2
+  return 1
+}
+
+stack_networks() { # stack_networks <group> <slot>: writes the compose override of its subnets, prints its path
+  local file="$WORK/networks-$1.yml" j=0 net
+  {
+    echo "networks:"
+    for net in $STACK_NETWORKS; do
+      printf '  %s:\n    ipam:\n      config:\n        - subnet: %s.%s.0/27\n' "$net" "$NET_BASE" "$(($2 * 5 + j))"
+      j=$((j + 1))
+    done
+  } >"$file"
+  printf '%s\n' "$file"
 }
 
 # --- the steps: api --------------------------------------------------------------------------------
@@ -746,8 +780,10 @@ stack_up() { # stack_up <group> <project> <compose file arguments>
 }
 
 s_journey() {
-  local group="$1" project="$PREFIX-$1" rc=0 files=() specs one
+  local group="$1" project="$PREFIX-$1" rc=0 files=() specs one slot
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
+  slot="$(claim_net_slot)" || return 1
+  files+=(-f "$(stack_networks "$group" "$slot")")
   export E2E_COMPOSE_PROJECT="$project" E2E_EVIDENCE=ci
   case "$group" in
   apps)
@@ -778,6 +814,7 @@ s_journey() {
     journey_play "$group" "$specs" || rc=$?
   docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color >"$LOGS/stack-$group.log" 2>&1 || true
   docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
+  rmdir "$WORK/nets/$slot" 2>/dev/null || true
   return "$rc"
 }
 
