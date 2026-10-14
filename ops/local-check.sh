@@ -23,15 +23,17 @@
 #             the rule of its range is below, at SCAN_FROM), the shell lint of the files ci.yml
 #             lists, the e2e groups and CI plan tests, every tests/*_test.sh that ci.yml runs
 #             (one that neither runs nor is left out with a reason fails the step shell-tests);
-#             the journey groups apps, ingestion, mail and apply (mail on a stack that also runs
+#             the journey group apps and one group per web/e2e/<group>-all.config.ts other than
+#             identity (today ingestion, mail and apply; mail on a stack that also runs
 #             the fake Google of tests/gmail-stub.compose.yml, never a real account; apply on a
 #             stack that also runs the fake ATS forms server of tests/ats-forms-stub.compose.yml,
 #             never a real job site).
 #   journeys  the web lint, type check, vitest and build; the journey groups identity and sweep.
 #
 # The lists that ci.yml holds (the files of its Shellcheck step, the tests/*_test.sh steps) are read from
-# ci.yml, so a step added there runs here. The six journey groups are written below, and
-# tests/local_check_test.sh fails when their spec files differ from those of ci.yml.
+# ci.yml, so a step added there runs here. The journey groups are found in web/e2e (journey_groups,
+# below), and tests/local_check_test.sh fails when they differ from the configs on disk, or
+# when their spec files differ from those of ci.yml plus the configs that ci.yml does not run.
 #
 # Arrangement. Four lanes start together: api (its own Postgres and Redis containers on free
 # loopback ports; ruff, the suite, the coverage floor), web (install, then lint, type check
@@ -639,16 +641,38 @@ s_chromium() {
   pnpm exec playwright install chromium
 }
 
+# The journey groups. Two name their spec files one by one, as ci.yml has them: apps and sweep.
+# Every other group is a Playwright config of the tree, web/e2e/<group>-all.config.ts, found
+# here: a module adds its group by adding that file, with no line of this script to edit
+# (issue #279). identity and sweep were the e2e groups of the CI job journeys and run in that
+# job here; every other group runs in the job checks. The order is apps, the configs by name,
+# then sweep: the stacks start in that order, LOCAL_CHECK_STACKS at a time.
+config_groups() { # the <group> of every web/e2e/<group>-all.config.ts of the tree, sorted
+  local config name
+  for config in "$TREE"/web/e2e/*-all.config.ts; do
+    [[ -f "$config" ]] || continue # no match leaves the pattern itself
+    name="${config##*/}"
+    printf '%s\n' "${name%-all.config.ts}"
+  done | LC_ALL=C sort
+}
+
+journey_groups() { # journey_groups <checks|journeys>: the groups of that CI job, in run order
+  local group
+  for group in apps $(config_groups) sweep; do
+    case "$group" in
+    identity | sweep) [[ "$1" != journeys ]] || printf '%s\n' "$group" ;;
+    *) [[ "$1" != checks ]] || printf '%s\n' "$group" ;;
+    esac
+  done
+}
+
 # One journey group on a scratch stack of its own, as the CI steps "Start the stack and migrate",
 # the group's Playwright command, "Stack logs" and "Tear down the scratch stack".
 journey_specs() { # the Playwright arguments of a group, as ci.yml has them
   case "$1" in
   apps) echo "jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts --workers=1" ;;
-  ingestion) echo "-c e2e/ingestion-all.config.ts" ;;
-  mail) echo "-c e2e/mail-all.config.ts" ;;
-  apply) echo "-c e2e/apply-all.config.ts" ;;
-  identity) echo "-c e2e/identity-all.config.ts" ;;
   sweep) echo "jobs-sweep.spec.ts --workers=1" ;;
+  *) echo "-c e2e/$1-all.config.ts" ;;
   esac
 }
 
@@ -729,8 +753,8 @@ s_journey() {
 
 lane_journeys() {
   local groups=() group running=0 why=""
-  if wanted checks; then groups+=(apps ingestion mail apply); fi
-  if wanted journeys; then groups+=(identity sweep); fi
+  if wanted checks; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups checks); fi
+  if wanted journeys; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups journeys); fi
   ((${#groups[@]})) || return 0
   while [[ ! -f "$WORK/images.done" || ! -f "$WORK/web.done" ]]; do sleep 1; done
   [[ "$(cat "$WORK/images.done")" == 0 ]] || why="the images were not built"
@@ -889,10 +913,14 @@ expected_steps() {
   fi
   if wanted checks || wanted journeys; then printf '%s\n' web-install images chromium; fi
   if wanted checks; then
-    printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests journeys-apps journeys-ingestion journeys-mail journeys-apply
+    printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests
+    journey_groups checks | sed 's/^/journeys-/'
     (cd "$TREE" && shell_tests) | sed 's/^tests\///; s/\.sh$//'
   fi
-  if wanted journeys; then printf '%s\n' lint typecheck build vitest journeys-identity journeys-sweep; fi
+  if wanted journeys; then
+    printf '%s\n' lint typecheck build vitest
+    journey_groups journeys | sed 's/^/journeys-/'
+  fi
 }
 
 tool_versions() {
