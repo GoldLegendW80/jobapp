@@ -20,12 +20,8 @@ EMBED = "?embed=js"
 class Ashby(base.Adapter):
     name = "ashby"
     hosts = HOSTS
-    submit_names = frozenset({"submit application", "envoyer la candidature"})
-    anchors = (
-        frozenset({"name", "full name", "nom", "nom complet"}),
-        frozenset({"email", "e-mail", "adresse e-mail"}),
-        frozenset({"resume", "cv", "resume/cv"}),
-    )
+    submit_names = base.SUBMIT_NAMES
+    anchors = (base.FULL_NAME, base.EMAIL, base.RESUME)
     traps = ("yes_no_buttons", "location_typeahead", "autofill_from_resume", "invisible_check")
 
     def form_url(self, posting_url: str) -> str | None:

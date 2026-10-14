@@ -106,15 +106,19 @@ def test_values_on_the_page_are_read_back() -> None:
     opened = base.discover_fields(base.parse_snapshot(snap("ashby-open")), Ashby.submit_names)
     pair = opened.find("yes_no:are you legally authorised to work in the european union?#1")
     assert pair is not None and (pair.value, pair.checked) == ("Yes", True)
-    assert opened.find("combobox:current location#1").value == "Par"  # type: ignore[union-attr]
+    location = opened.find("combobox:current location#1")
+    # The typed text is no choice: the menu is open, nothing is chosen yet.
+    assert location is not None and (location.value, location.typed) == ("", "Par")
     assert [o.name for o in base._options_outside_selects(opened.root or base.Node("x"))] == []
 
 
 def test_the_framed_embed_is_recognised_and_read_with_frame_refs() -> None:
     page = snap("greenhouse-site")
     adapter = adapter_for(f"{STUB}/sites/northwind-labs/careers/4012345", page, stub_base=STUB)
-    assert isinstance(adapter, Greenhouse)
-    found = base.discover_fields(base.parse_snapshot(page), Greenhouse.submit_names)
+    assert isinstance(adapter, Greenhouse) and adapter.framed
+    scope = adapter.scope(base.parse_snapshot(page))
+    assert scope is not None and scope.role == "iframe"
+    found = base.discover_fields(scope, Greenhouse.submit_names)
     assert all(f.ref.startswith("f1e") for f in found.fields if f.ref)
     assert found.submit_refs == ["f1e89"]
 
@@ -202,6 +206,12 @@ def test_lines_it_does_not_read_are_skipped() -> None:
         ("Required skills", "Required skills", False),
         ("Optional: portfolio", "Optional: portfolio", False),
         ("Email (required) (optional)", "Email", True),
+        ("* First Name", "First Name", True),  # a leading mark
+        ("*First Name", "First Name", True),
+        ("** Email", "Email", True),
+        ("✱ Nom", "Nom", True),
+        ("* Email *", "Email", True),
+        ("5 * 3", "5 * 3", False),
     ],
 )
 def test_label_marks(name: str, label: str, required: bool) -> None:
@@ -508,12 +518,61 @@ def test_closed_pages(text: str, is_closed: bool) -> None:
 @pytest.mark.parametrize(
     ("snapshot", "step"),
     [
+        # captcha: reCAPTCHA, hCaptcha, Cloudflare Turnstile, by a checkbox or button name, whole
         ('- button "I am not a robot" [ref=e1]', "captcha"),
         ('- checkbox "I\'m not a robot" [ref=e1]', "captcha"),
-        ('- iframe "reCAPTCHA" [ref=e1]', "captcha"),
+        ('- checkbox "I\u2019m not a robot" [ref=e1]', "captcha"),
+        ('- checkbox "I\'M NOT A ROBOT" [ref=e1]', "captcha"),
+        ('- checkbox "Je ne suis pas un robot" [ref=e1]', "captcha"),
+        ('- checkbox "I am human" [ref=e1]', "captcha"),
+        ('- checkbox "Je suis humain" [ref=e1]', "captcha"),
+        ('- checkbox "Verify you are human" [ref=e1]', "captcha"),
+        ('- checkbox "Verify you are human." [ref=e1]', "captcha"),
+        ('- checkbox "Vérifiez que vous êtes humain" [ref=e1]', "captcha"),
         ('- iframe "hCaptcha security challenge" [ref=e1]', "captcha"),
+        (
+            '- iframe "Widget containing checkbox for hCaptcha security challenge" [ref=e1]',
+            "captcha",
+        ),
+        ('- iframe "Main content of the hCaptcha challenge" [ref=e1]', "captcha"),
+        ('- iframe "recaptcha challenge expires in two minutes" [ref=e1]', "captcha"),
+        ('- iframe "Widget containing a Cloudflare security challenge" [ref=e1]', "captcha"),
+        (
+            '- generic [ref=e1]:\n  - iframe [ref=e2]:\n    - checkbox "I\'m not a robot" [ref=f1e1]',
+            "captcha",
+        ),
+        # no captcha: the invisible checks' badge, look alike names, a captcha word in a text
+        ('- iframe "reCAPTCHA" [ref=e1]', ""),
+        ("- iframe [ref=e1]", ""),
+        ('- iframe "Cloudflare" [ref=e1]', ""),
+        ('- iframe "Challenge accepted: our hiring quiz" [ref=e1]', ""),
         ('- button "Robots welcome" [ref=e1]', ""),
+        ('- checkbox "I am not a robotics engineer" [ref=e1]', ""),
+        ('- checkbox "I am human resources staff" [ref=e1]', ""),
+        ('- checkbox "Human" [ref=e1]', ""),
+        ('- textbox "I am not a robot" [ref=e1]', ""),
+        ('- link "I am not a robot" [ref=e1]', ""),
+        ('- heading "Verify you are human" [level=1] [ref=e1]', ""),
         ("- paragraph [ref=e1]: This site is protected by reCAPTCHA", ""),
+        ("- paragraph [ref=e1]: Verify you are human by completing the action below.", ""),
+        ('- checkbox "Are you human? Tell us about you" [ref=e1]', ""),
+        # sign in wall: a password box, its label whole
+        ('- textbox "Password" [ref=e1]', "signin"),
+        ('- textbox "Password *" [ref=e1]', "signin"),
+        ('- textbox "Enter your password" [ref=e1]', "signin"),
+        ('- textbox "Confirm password" [ref=e1]', "signin"),
+        ('- textbox "Re-enter password" [ref=e1]', "signin"),
+        ('- textbox "Mot de passe" [ref=e1]', "signin"),
+        ('- textbox "Mot de passe (obligatoire)" [ref=e1]', "signin"),
+        ('- textbox "Saisissez votre mot de passe" [ref=e1]', "signin"),
+        ('- textbox "Confirmer le mot de passe" [ref=e1]', "signin"),
+        ('- textbox "Password hint (do not share your password)" [ref=e1]', ""),
+        ('- textbox "Passwordless sign in email" [ref=e1]', ""),
+        ('- checkbox "Password" [ref=e1]', ""),
+        ('- button "Forgot password?" [ref=e1]', ""),
+        ('- link "Sign in" [ref=e1]', ""),
+        ('- textbox "Passport number" [ref=e1]', ""),
+        ("- paragraph [ref=e1]: Choose a strong password", ""),
         ('- textbox "Security code" [ref=e1]', "email_code"),
         ('- textbox "Verification code *" [ref=e1]', "email_code"),
         ('- textbox "Promo code" [ref=e1]', ""),
@@ -523,7 +582,7 @@ def test_closed_pages(text: str, is_closed: bool) -> None:
 )
 def test_pending_steps(snapshot: str, step: str) -> None:
     assert Greenhouse().pending_step(snapshot) == step
-    assert Ashby().pending_step(snapshot) == (step if step == "captcha" else "")
+    assert Ashby().pending_step(snapshot) == (step if step != "email_code" else "")
 
 
 # --- the fill ----------------------------------------------------------------------------------
@@ -678,7 +737,7 @@ def test_the_adapter_never_clicks_the_submit_element_nor_presses_enter() -> None
 
 def test_the_framed_form_is_filled_through_frame_refs() -> None:
     form = greenhouse_form(frame=True)
-    report = fill(Greenhouse(), form)
+    report = fill(Greenhouse(framed=True), form)
     assert report.stopped == "" and form.spec("Email").value == "e2e-a4@example.org"
     refs = [c[1]["ref"] for c in form.acted() if "ref" in c[1]]
     assert refs and all(r.startswith("f1e") for r in refs)
@@ -757,3 +816,396 @@ def test_the_submit_anchor(buttons: list[str], problem: str) -> None:
     lines += [f'    - button "{b}" [ref=e9{i}]' for i, b in enumerate(buttons)]
     found = base.discover_fields(base.parse_snapshot("\n".join(lines)), Greenhouse.submit_names)
     assert Greenhouse().anchor_problem(found) == problem
+
+
+# --- review of #310: framed forms, steps for the person, combobox read back, loose widgets ----
+
+
+def test_a_framed_fill_never_types_into_the_company_page_around_the_frame() -> None:
+    form = greenhouse_form(frame=True, newsletter=True)
+    page = asyncio.run(form.snapshot())["snapshot"]
+    adapter = adapter_for(f"{STUB}/sites/northwind-labs/careers/4012345", page, stub_base=STUB)
+    assert isinstance(adapter, Greenhouse) and adapter.framed
+    report = fill(adapter, form)
+    assert report.stopped == "" and form.spec("Email").value == "e2e-a4@example.org"
+    assert form.outside == []  # the newsletter "Email" box received nothing
+    refs = [c[1]["ref"] for c in form.acted() if "ref" in c[1]]
+    assert refs and all(r.startswith("f1e") for r in refs)
+
+
+def test_a_top_level_lookalike_on_another_host_gets_no_adapter() -> None:
+    assert adapter_for("https://careers.evil.example/apply", snap("greenhouse")) is None
+    assert adapter_for("https://careers.evil.example/apply", snap("ashby")) is None
+    for cls in ADAPTERS:
+        assert not cls().recognises(snap("greenhouse")) and not cls().recognises(snap("ashby"))
+
+
+def test_a_framed_adapter_whose_frame_is_gone_stops_before_anything_is_typed() -> None:
+    form = greenhouse_form()  # the form drawn at the top level, no iframe
+    report = fill(Greenhouse(framed=True), form)
+    assert report.stopped == "form_changed" and form.acted() == []
+
+
+def _frame(*inner: str, outer: tuple[str, ...] = ()) -> str:
+    lines = ["- generic [ref=e1]:", *[f"  {o}" for o in outer], "  - iframe [ref=e2]:"]
+    return "\n".join(lines + [f"    {i}" for i in inner])
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "framed"),
+    [
+        (_frame('- button "Submit application" [ref=f1e1]'), True),
+        (_frame('- button "Postuler" [ref=f1e1]'), True),
+        (
+            _frame(
+                '- button "Submit application" [ref=f1e1]', outer=('- button "Postuler" [ref=e9]',)
+            ),
+            True,
+        ),
+        (
+            _frame(
+                "- generic [ref=f1e2]:",
+                "  - iframe [ref=f1e3]:",
+                '    - checkbox "x" [ref=f2e1]',
+                '- button "Submit application" [ref=f1e1]',
+            ),
+            True,
+        ),
+        ('- generic [ref=e1]:\n  - button "Submit application" [ref=e2]', False),
+        (
+            _frame('- button "Send" [ref=f1e1]', outer=('- button "Submit application" [ref=e9]',)),
+            False,
+        ),
+        (
+            _frame('- button "Submit application" [ref=f1e1]')
+            + '\n  - iframe [ref=e5]:\n    - button "Submit application" [ref=f2e1]',
+            False,
+        ),
+        (_frame('- textbox "Email" [ref=f1e1]'), False),
+        ("", False),
+    ],
+)
+def test_the_form_frame_is_the_one_iframe_around_the_submit(snapshot: str, framed: bool) -> None:
+    frame = base.form_frame(base.parse_snapshot(snapshot), base.SUBMIT_NAMES)
+    assert (frame is not None and frame.role == "iframe") is framed
+
+
+def test_a_captcha_at_discovery_is_handed_to_the_person_not_form_changed() -> None:
+    for adapter, form in (
+        (Greenhouse(), greenhouse_form(captcha="instead")),
+        (Ashby(), ashby_form(captcha="instead")),
+        (Greenhouse(), greenhouse_form(captcha="beside")),
+    ):
+        report = fill(adapter, form)
+        assert (report.stopped, report.needs_person) == ("needs_person", "captcha")
+        assert form.acted() == [] and report.outcomes == []
+
+
+def test_a_captcha_that_appears_mid_fill_stops_it_and_nothing_more_is_done() -> None:
+    def robot(form: FakeForm, n: int) -> None:
+        if any(c[0] == "type" and c[1]["text"] == "Example" for c in form.calls):
+            form.captcha = "instead"  # the overlay hides the form: no field is there any more
+
+    form = greenhouse_form(on_call=robot)
+    report = fill(Greenhouse(), form)
+    assert (report.stopped, report.needs_person) == ("needs_person", "captcha")
+    assert report.outcomes[-1].filled == base.Filled("failed", "captcha")
+    acted = form.acted()
+    assert acted[[c[1].get("text") for c in acted].index("Example") + 1 :] == []
+
+
+def test_a_sign_in_wall_at_discovery_is_handed_to_the_person() -> None:
+    form = ashby_form()
+    form.fields.insert(0, Spec("Password", "text", True))
+    report = fill(Ashby(), form)
+    assert (report.stopped, report.needs_person) == ("needs_person", "signin")
+    assert form.acted() == []
+
+
+def test_a_react_select_whose_option_click_the_page_ignores_is_unverified() -> None:
+    form = greenhouse_form()
+    form.spec("Country").ignore_click = True
+    report = fill(Greenhouse(), form)
+    assert form.spec("Country").value == "" and form.spec("Country").typed == "France"
+    assert by_label(report)["Country"].filled.status == "unverified"
+
+
+def test_a_typeahead_whose_option_click_the_page_ignores_is_unverified() -> None:
+    form = ashby_form()
+    form.spec("Current location").options += ("Bordeaux, France",)
+    form.spec("Current location").ignore_click = True
+    report = fill(Ashby(), form)
+    assert form.spec("Current location").value == ""
+    assert by_label(report)["Current location"].filled.status == "unverified"
+
+
+def test_another_questions_list_holding_the_answer_is_never_clicked() -> None:
+    form = ashby_form()  # the location typeahead offers no Bordeaux; another question's list does
+    form.fields.insert(4, Spec("Preferred office", "listbox", False, ("Bordeaux, France",)))
+    report = fill(Ashby(), form)
+    assert by_label(report)["Current location"].filled == base.Filled("left", "option_missing")
+    assert form.spec("Preferred office").value == ""
+    assert ("Preferred office", "listbox", "unsupported_widget") in {
+        (s.label, s.role, s.reason) for s in report.skipped
+    }
+
+
+def test_another_questions_open_react_select_is_not_an_option_source() -> None:
+    form = greenhouse_form()  # "How did you hear" stays open, listing an option that reads "France"
+    hear = form.spec("How did you hear about this job?")
+    hear.options, hear.open = ("France",), True
+    form.spec("Country").options = ("Germany",)
+    report = fill(Greenhouse(), form)
+    country = by_label(report)["Country"]
+    assert country.field.options == ("Germany",)  # read from its own menu only
+    assert country.filled.status == "left" and form.spec("Country").value == ""
+    assert form.spec("How did you hear about this job?").value == ""
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "options"),
+    [
+        # its own group: the options beside it, or in a list box beside it
+        (
+            '- generic [ref=e1]:\n  - generic [ref=e2]: Country\n  - combobox "Country" [ref=e3]\n  - option "France" [ref=e4]',
+            ["France"],
+        ),
+        (
+            '- generic [ref=e1]:\n  - generic [ref=e2]: City\n  - combobox "City" [ref=e3]\n  - listbox [ref=e4]:\n    - option "Paris" [ref=e5]',
+            ["Paris"],
+        ),
+        # a named list box beside it is another question's
+        (
+            '- generic [ref=e1]:\n  - combobox "City" [ref=e3]\n  - listbox "Office" [ref=e4]:\n    - option "Paris" [ref=e5]',
+            [],
+        ),
+        # another field's group
+        (
+            '- generic [ref=e1]:\n  - generic [ref=e2]:\n    - combobox "City" [ref=e3]\n  - generic [ref=e6]:\n    - combobox "Office" [ref=e7]\n    - option "Paris" [ref=e5]',
+            [],
+        ),
+    ],
+)
+def test_a_comboboxs_own_options(snapshot: str, options: list[str]) -> None:
+    root = base.parse_snapshot(snapshot)
+    assert [o.name for o in base.field_options(root, "e3")] == options
+
+
+def test_a_menu_rendered_elsewhere_counts_only_when_it_is_new_and_alone() -> None:
+    field = '- generic [ref=e1]:\n  - generic [ref=e2]: City\n  - combobox "City" [ref=e3]'
+    menu = '- listbox [ref=e8]:\n  - option "Paris" [ref=e9]'
+    other = '- listbox "Office" [ref=e10]:\n  - option "Lyon" [ref=e11]'
+    before = base.parse_snapshot(f"{field}\n{other}")
+    after = base.parse_snapshot(f"{field}\n{other}\n{menu}")
+    assert [o.name for o in base.field_options(after, "e3", before)] == ["Paris"]
+    assert base.field_options(before, "e3", before) == []  # the old list is never new
+    assert base.field_options(after, "e3", None) == []  # nothing read before: own group only
+    two = base.parse_snapshot(f"{field}\n{menu}\n" + menu.replace("Paris", "Rome"))
+    assert base.field_options(two, "e3", before) == []  # two new lists: whose is it?
+    holds = base.parse_snapshot(
+        f'{field}\n- listbox [ref=e8]:\n  - option "Paris" [ref=e9]\n  - textbox "x" [ref=e12]'
+    )
+    assert base.field_options(holds, "e3", before) == []  # a list holding a field is no menu
+
+
+def test_a_typeahead_clear_that_fails_is_unverified_not_left() -> None:
+    class Sticky(FakeForm):
+        async def type(
+            self, ref: str, text: str, element: str = "", submit: bool = False
+        ) -> dict[str, Any]:
+            if text == "":
+                self._log("type", ref=ref, text=text, submit=submit)
+                return {"ok": True}  # the page keeps the typed text
+            return await super().type(ref, text, element, submit)
+
+    base_form = ashby_form()
+    form = Sticky(base_form.fields, submit=base_form.submit, title=base_form.title)
+    form.spec("Current location").options = ("Bordeaux, France (Gironde)",)
+    report = fill(Ashby(), form)
+    assert by_label(report)["Current location"].filled == base.Filled("unverified", "not_cleared")
+
+
+def _loose(*lines: str) -> str:
+    head = [
+        "- generic [ref=e1]:",
+        "  - generic [ref=e2]:",
+        "    - generic [ref=e3]: Do you need a visa?",
+    ]
+    return "\n".join(head + [f"    {line}" for line in lines])
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "skipped"),
+    [
+        # Yes and No each wrapped in a generic
+        (
+            _loose(
+                "- generic [ref=e4]:",
+                "  - generic [ref=e5]:",
+                '    - button "Yes" [ref=e6]',
+                "  - generic [ref=e7]:",
+                '    - button "No" [ref=e8]',
+            ),
+            [("Do you need a visa?", "button", "unsupported_widget")],
+        ),
+        # Yes, No, Maybe
+        (
+            _loose(
+                "- generic [ref=e4]:",
+                '  - button "Yes" [ref=e6]',
+                '  - button "No" [ref=e7]',
+                '  - button "Maybe" [ref=e8]',
+            ),
+            [("Do you need a visa?", "button", "unsupported_widget")],
+        ),
+        # a standalone list box question
+        (
+            _loose("- listbox [ref=e4]:", '  - option "Yes" [ref=e5]', '  - option "No" [ref=e6]'),
+            [("Do you need a visa?", "listbox", "unsupported_widget")],
+        ),
+        (
+            _loose('- listbox "Visa" [ref=e4]:', '  - option "Yes" [ref=e5]'),
+            [("Visa", "listbox", "unsupported_widget")],
+        ),
+        # a typeahead's open menu is its options, not a widget
+        (
+            _loose(
+                '- combobox "Visa" [ref=e4]: Ye', "- listbox [ref=e5]:", '  - option "Yes" [ref=e6]'
+            ),
+            [],
+        ),
+        # a true pair is a field
+        (
+            _loose("- generic [ref=e4]:", '  - button "Yes" [ref=e6]', '  - button "No" [ref=e7]'),
+            [],
+        ),
+        # buttons beside an upload are other ways to give the file
+        (
+            _loose(
+                '- button "Do you need a visa?" [ref=e4]',
+                '- button "Dropbox" [ref=e5]',
+                '- button "Enter manually" [ref=e6]',
+            ),
+            [],
+        ),
+        (
+            _loose('- button "Upload your resume to autofill" [ref=e4]'),
+            [("Do you need a visa?", "button", "autofill")],
+        ),
+        # a button outside any labelled group is nothing
+        ('- generic [ref=e1]:\n  - button "Yes" [ref=e2]', []),
+    ],
+)
+def test_loose_buttons_and_list_boxes_are_reported(
+    snapshot: str, skipped: list[tuple[str, str, str]]
+) -> None:
+    found = base.discover_fields(base.parse_snapshot(snapshot), base.SUBMIT_NAMES)
+    assert [(s.label, s.role, s.reason) for s in found.skipped] == skipped
+    if skipped:
+        assert found.fields == []
+
+
+def test_unsupported_shapes_are_reported_and_never_clicked() -> None:
+    form = ashby_form()
+    form.fields[6:6] = [
+        Spec("Do you hold a driving licence?", "buttons", True, ("Yes", "No"), wrapped=True),
+        Spec("Can you relocate?", "buttons", True, ("Yes", "No", "Maybe")),
+        Spec("Preferred team", "listbox", True, ("Platform", "Research")),
+    ]
+    report = fill(Ashby(), form)
+    assert report.stopped == ""
+    assert {(s.label, s.reason) for s in report.skipped} >= {
+        ("Do you hold a driving licence?", "unsupported_widget"),
+        ("Can you relocate?", "unsupported_widget"),
+        ("Preferred team", "unsupported_widget"),
+    }
+    for label in ("Do you hold a driving licence?", "Can you relocate?", "Preferred team"):
+        assert form.spec(label).value == ""
+        assert label not in by_label(report)
+
+
+def test_a_click_the_tool_layer_refuses_as_a_submit_stops_the_fill() -> None:
+    form = ashby_form()  # hostile: the sponsorship No button is the form's submit
+    sponsor = "Will you now or in the future require visa sponsorship?"
+    form.spec(sponsor).refused = "No"
+    report = fill(Ashby(), form)  # the profile answers No
+    assert by_label(report)[sponsor].filled == base.Filled("failed", "submit")
+    assert report.stopped == "submit"
+    assert report.outcomes[-1].field.label == sponsor  # nothing after it
+    assert form.spec("Why Example Robotics?").value == "" and form.submit_clicks == 0
+
+
+# Anchors in English and French: (label, the vocabulary it belongs to, or None).
+ANCHOR_LABELS = [
+    ("Email", "EMAIL"), ("E-mail", "EMAIL"), ("E-Mail", "EMAIL"), ("e mail", "EMAIL"),
+    ("Email address", "EMAIL"), ("E-mail address", "EMAIL"), ("Email Address *", "EMAIL"),
+    ("Adresse e-mail", "EMAIL"), ("Adresse email", "EMAIL"), ("Adresse électronique", "EMAIL"),
+    ("Courriel", "EMAIL"), ("Adresse courriel", "EMAIL"), ("* Email", "EMAIL"),
+    ("Your email", "EMAIL"), ("EMAIL (required)", "EMAIL"),
+    ("Confirm email", None), ("Email me job alerts", None), ("Secondary email", None),
+    ("Emails", None), ("Gmail", None), ("Email of your referrer", None), ("Mail", None),
+    ("CV / Résumé", "RESUME"), ("Resume / CV", "RESUME"), ("Resume/CV", "RESUME"),
+    ("Résumé", "RESUME"), ("CV", "RESUME"), ("cv/resume", "RESUME"), ("Curriculum vitae", "RESUME"),
+    ("Resume or CV", "RESUME"), ("* Resume", "RESUME"), ("Resume (required)", "RESUME"),
+    ("Cover letter", None), ("Resume link", None), ("CV / Cover letter", None), ("Résumé summary", None),
+    ("First Name", "FIRST_NAME"), ("* First Name", "FIRST_NAME"), ("First name *", "FIRST_NAME"),
+    ("Given name", "FIRST_NAME"), ("Prénom", "FIRST_NAME"), ("Firstname", "FIRST_NAME"),
+    ("Preferred first name", None), ("First name of your referrer", None), ("First", None),
+    ("Last Name", "LAST_NAME"), ("Family name", "LAST_NAME"), ("Surname", "LAST_NAME"),
+    ("Nom de famille", "LAST_NAME"), ("Nom", "LAST_NAME"), ("Last name (required)", "LAST_NAME"),
+    ("Maiden name", None), ("Nom d'usage", None), ("Last employer", None),
+    ("Name", "FULL_NAME"), ("Full name", "FULL_NAME"), ("Nom et prénom", "FULL_NAME"),
+    ("Prénom et nom", "FULL_NAME"), ("Nom complet", "FULL_NAME"), ("Your name", "FULL_NAME"),
+    ("Company name", None), ("Name of your school", None), ("Nickname", None), ("Name pronunciation", None),
+]  # fmt: skip
+
+
+@pytest.mark.parametrize(("label", "vocabulary"), ANCHOR_LABELS)
+def test_anchor_labels(label: str, vocabulary: str | None) -> None:
+    sets = {
+        n: getattr(base, n) for n in ("EMAIL", "RESUME", "FIRST_NAME", "LAST_NAME", "FULL_NAME")
+    }
+    key = base.anchor_key(label)
+    if vocabulary is None:
+        assert not any(key in v for v in sets.values()), key
+    else:
+        assert key in sets[vocabulary], key
+
+
+@pytest.mark.parametrize(
+    ("name", "is_submit"),
+    [
+        ("Submit application", True), ("Envoyer la candidature", True), ("Envoyer ma candidature", True),
+        ("Soumettre la candidature", True), ("Soumettre ma candidature", True), ("Postuler", True),
+        ("POSTULER", True), ("Submit  Application", True),
+        ("Postuler maintenant", False), ("Postuler à cette offre", False), ("Envoyer", False),
+        ("Soumettre", False), ("Submit", False), ("Apply", False), ("Apply now", False),
+        ("Envoyer la candidature plus tard", False), ("Sauvegarder la candidature", False),
+        ("Save application", False), ("Submit your application", False), ("Envoyer un e-mail", False),
+    ],
+)  # fmt: skip
+def test_submit_names_in_english_and_french(name: str, is_submit: bool) -> None:
+    assert (base.fold(name) in base.SUBMIT_NAMES) is is_submit
+
+
+@pytest.mark.parametrize(
+    ("labels", "adapter", "problem"),
+    [
+        (("Prénom", "Nom", "Adresse électronique", "CV / Résumé"), Greenhouse(), ""),
+        (("* First Name", "* Last Name", "* Email address", "* Resume/CV"), Greenhouse(), ""),
+        (("Given name", "Family name", "Courriel", "CV"), Greenhouse(), ""),
+        (("Nom et prénom", "Courriel", "Resume / CV"), Ashby(), ""),
+        (("Full name", "E-mail address", "CV / Résumé"), Ashby(), ""),
+        (("Prénom", "Nom", "Confirm email", "CV"), Greenhouse(), "anchor_missing"),
+        (("Company name", "Email", "Resume"), Ashby(), "anchor_missing"),
+    ],
+)
+def test_anchors_in_english_and_french(
+    labels: tuple[str, ...], adapter: base.Adapter, problem: str
+) -> None:
+    lines = ["- generic [ref=e1]:"]
+    for i, label in enumerate(labels):
+        lines.append(f'  - textbox "{label}" [ref=e{10 + i}]')
+    lines.append('  - button "Postuler" [ref=e99]')
+    found = base.discover_fields(base.parse_snapshot("\n".join(lines)), adapter.submit_names)
+    assert adapter.anchor_problem(found) == problem

@@ -4,7 +4,10 @@ Chrome (recorded in tests/ats_forms/a4/snapshots/) and is as hostile as the tool
 snapshot gives every element a new ref, so a ref kept from an earlier snapshot answers
 `stale_ref`; a react-select's options exist only while it is open; a typeahead shows none until
 two characters are typed, and only after `load_after` more snapshots; a document not given to the
-lease answers `file_not_given`. Every call is recorded (`calls`), the submit click included, so a
+lease answers `file_not_given`; a page may ignore an option click (`ignore_click`), a button may be
+one the tool layer refuses as a submit (`refused`), a captcha may show beside or instead of the
+form, and a framed form's company page may carry its own newsletter box (`newsletter`, every call
+on it recorded in `outside`). Every call is recorded (`calls`), the submit click included, so a
 test asserts what the adapter did and never did."""
 
 from __future__ import annotations
@@ -18,13 +21,16 @@ from typing import Any
 @dataclass
 class Spec:
     label: str
-    kind: str  # text select react typeahead yesno file checkbox
+    kind: str  # text select react typeahead yesno file checkbox, and unsupported: buttons listbox
     required: bool = False
     options: tuple[str, ...] = ()
     aria_only: bool = False  # a name from aria-label, no visible label text
     pressed_state: bool = True  # a yes or no group that shows aria-pressed (Ashby's may not)
     reject_upload: bool = False
     load_after: int = 0  # snapshots before a typeahead's options show
+    ignore_click: bool = False  # the page ignores a click on one of its options
+    wrapped: bool = False  # `buttons`: each button inside its own generic
+    refused: str = ""  # `yesno`: the button the tool layer refuses as a submit
     # state
     value: str = ""
     typed: str = ""
@@ -46,6 +52,9 @@ class FakeForm:
     calls: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     url: str = ""
     cut: bool = False
+    newsletter: bool = False  # the company page's own "Email" box, outside the frame
+    captcha: str = ""  # "beside" the form, or "instead" of it
+    outside: list[str] = field(default_factory=list)  # calls on the newsletter box
     _next: int = 0
     _refs: dict[str, tuple[str, int, str]] = field(default_factory=dict)
     _other: str | None = None
@@ -64,14 +73,28 @@ class FakeForm:
             return f'- heading "{self._other}" [level=1] [ref={self._ref("page")}]'
         pad = "      " if self.frame else "  "
         out = [f'{pad}- heading "{self.title}" [level=1] [ref={self._ref("page")}]']
-        out.append(f"{pad}- generic [ref={self._ref('form')}]:")
-        for i, spec in enumerate(self.fields):
-            out += [pad + "  " + line for line in self._field(i, spec)]
-        out.append(f'{pad}  - button "{self.submit}" [ref={self._ref("submit")}]')
+        robot = f'{pad}- checkbox "I\'m not a robot" [ref={self._ref("captcha")}]'
+        if self.captcha:
+            out.append(robot)
+        if self.captcha != "instead":
+            out.append(f"{pad}- generic [ref={self._ref('form')}]:")
+            for i, spec in enumerate(self.fields):
+                out += [pad + "  " + line for line in self._field(i, spec)]
+            out.append(f'{pad}  - button "{self.submit}" [ref={self._ref("submit")}]')
         if self.frame:
-            out = [
+            site = [
                 f"- generic [active] [ref={self._ref('site')}]:",
                 f'  - heading "Careers at Northwind Labs" [level=1] [ref={self._ref("page")}]',
+            ]
+            if self.newsletter:
+                site += [
+                    f"  - generic [ref={self._ref('site')}]:",
+                    f"    - generic [ref={self._ref('site')}]: Stay in touch",
+                    f'    - textbox "Email" [ref={self._ref("newsletter")}]',
+                    f'    - button "Subscribe" [ref={self._ref("newsletter")}]',
+                ]
+            out = [
+                *site,
                 f"  - iframe [ref={self._ref('iframe')}]:",
                 f"    - generic [ref={self._ref('frame')}]:",
                 *out,
@@ -136,7 +159,23 @@ class FakeForm:
             body.append(f"- generic [ref={self._ref('pair', i)}]:")
             for option in ("Yes", "No"):
                 mark = " [pressed]" if s.pressed_state and s.value == option else ""
-                body.append(f'  - button "{option}"{mark} [ref={self._ref("button", i, option)}]')
+                what = "refused" if s.refused == option else "button"
+                body.append(f'  - button "{option}"{mark} [ref={self._ref(what, i, option)}]')
+        elif s.kind == "buttons":
+            body.append(f"- generic [ref={self._ref('pair', i)}]:")
+            for option in s.options:
+                ref = self._ref("choice", i, option)
+                if s.wrapped:
+                    body.append(f"  - generic [ref={self._ref('wrap', i)}]:")
+                    body.append(f'    - button "{option}" [ref={ref}]')
+                else:
+                    body.append(f'  - button "{option}" [ref={ref}]')
+        elif s.kind == "listbox":
+            body.append(f"- listbox {json.dumps(s.label)} [ref={self._ref('listbox', i)}]:")
+            for option in s.options:
+                body.append(
+                    f"  - option {json.dumps(option)} [ref={self._ref('choice', i, option)}]"
+                )
         elif s.kind == "file":
             body.append(f"- button {name} [ref={self._ref('file', i)}]")
             if s.value:
@@ -173,12 +212,16 @@ class FakeForm:
         if what == "submit":
             self.submit_clicks += 1
             return {"ok": False, "error": "submit"}  # the tool layer's refusal
-        if what == "input" and self.fields[i].kind == "react":
+        if what == "refused":
+            return {"ok": False, "error": "submit"}
+        if what == "newsletter":
+            self.outside.append("click")
+        elif what == "input" and self.fields[i].kind == "react":
             self.fields[i].open = not self.fields[i].open
-        elif what == "option":
+        elif what == "option" and not self.fields[i].ignore_click:
             spec = self.fields[i]
             spec.value, spec.typed, spec.open = part, "", False
-        elif what == "button" and part in ("Yes", "No"):
+        elif what in ("button", "choice"):
             self.fields[i].value = part
         return {"ok": True}
 
@@ -190,6 +233,9 @@ class FakeForm:
         if target is None:
             return {"ok": False, "error": "stale_ref"}
         what, i, _ = target
+        if what == "newsletter":
+            self.outside.append("type")
+            return {"ok": True}
         if what != "input":
             return {"ok": False, "error": "not_editable"}
         spec = self.fields[i]
@@ -206,6 +252,9 @@ class FakeForm:
         target = self._target(ref)
         if target is None:
             return {"ok": False, "error": "stale_ref"}
+        if target[0] == "newsletter":
+            self.outside.append("set")
+            return {"ok": True}
         self.fields[target[1]].value = values[0]
         return {"ok": True, "selected": values}
 
@@ -214,6 +263,9 @@ class FakeForm:
         target = self._target(ref)
         if target is None:
             return {"ok": False, "error": "stale_ref"}
+        if target[0] == "newsletter":
+            self.outside.append("set")
+            return {"ok": True}
         self.fields[target[1]].checked = checked
         return {"ok": True}
 
@@ -224,6 +276,9 @@ class FakeForm:
         target = self._target(ref)
         if target is None:
             return {"ok": False, "error": "stale_ref"}
+        if target[0] == "newsletter":
+            self.outside.append("upload")
+            return {"ok": True, "uploaded": names}
         spec = self.fields[target[1]]
         if spec.reject_upload:
             spec.error = "This file type is not supported."
