@@ -2,8 +2,9 @@
 
 Queues are named lists in Redis, each consumed by its own arq Worker inside the `worker`
 container (app/worker.py): SWEEPS (jobs J5), AGENTS (agents A2, the user's agent runs) and
-INGESTION (ingestion G2b, the reading of uploaded documents, one at a time) and DOCUMENTS
-(documents D6, the renders of CVs and letters, one at a time, and the module's cron jobs). A
+INGESTION (ingestion G2b, the reading of uploaded documents, one at a time), DOCUMENTS
+(documents D6, the renders of CVs and letters, one at a time, and the module's cron jobs) and
+APPLY (apply A5, the fill of one application form at a time, and its tick). A
 later lane for automatic agent runs (mail triage, scheduled assessments) gets a queue name of its
 own here, consumed after the interactive one, so a batch never delays a run someone is watching.
 
@@ -28,6 +29,7 @@ SWEEPS = "jobapp:sweeps"
 AGENTS = "jobapp:agents"
 INGESTION = "jobapp:ingestion"
 DOCUMENTS = "jobapp:documents"
+APPLY = "jobapp:apply"
 CONNECT_TIMEOUT_S = 2
 
 
@@ -73,6 +75,12 @@ def document_job_id(document_id: object, attempts: int, pending_since: datetime 
 def render_job_id(document_id: object, revision: int) -> str:
     """One render per (document, draft revision): asking again while it waits is the same job."""
     return f"render:{document_id}:{revision}"
+
+
+def apply_fill_job_id(application_id: object) -> str:
+    """One fill per application at a time: the tick asking again while it waits or runs is the
+    same job (its result is not kept, so the next tick may queue it again once it ended)."""
+    return f"apply-fill:{application_id}"
 
 
 class Queue:
