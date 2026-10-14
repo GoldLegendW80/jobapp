@@ -1,6 +1,7 @@
 """GET /api/health against a real Postgres, and every way the database can be unavailable."""
 
 import gc
+import threading
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -9,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.engine import make_url
 
+from app import health
 from app.main import create_app
 from tests.conftest import make_settings
 from tests.pg import Postgres
@@ -54,10 +56,47 @@ def test_health_reuses_pooled_connections(client: TestClient) -> None:
     assert pool.checkedout() == 0
 
 
+def get_concurrently(client: TestClient, requests: int = 60, threads: int = 20) -> list[int]:
+    with ThreadPoolExecutor(max_workers=threads) as pool:
+        return list(pool.map(lambda _: client.get("/api/health").status_code, range(requests)))
+
+
 def test_health_concurrent_requests(client: TestClient) -> None:
-    with ThreadPoolExecutor(max_workers=20) as pool:
-        codes = list(pool.map(lambda _: client.get("/api/health").status_code, range(60)))
-    assert codes == [200] * 60
+    # Checks queue behind two health threads and, by design, time out with 503 when the machine
+    # is slow, so the count of 200s depends on load. What must hold on any machine: nothing
+    # crashes, nothing but 200 or 503 is answered, and no pooled connection stays checked out.
+    codes = get_concurrently(client)
+    assert set(codes) <= {200, 503}
+    assert 200 in codes
+    # Pings already running when a request timed out finish before the pool is inspected.
+    client.app.state.health.executor.shutdown(wait=True)  # type: ignore[attr-defined]
+    assert client.app.state.engine.pool.checkedout() == 0  # type: ignore[attr-defined]
+
+
+def test_health_concurrent_requests_all_ok_when_the_database_answers(
+    client_for, database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Generous deadlines (probe wait and statement timeout), so no request can be queued out.
+    monkeypatch.setattr(health, "HEALTH_STATEMENT_TIMEOUT_MS", 30_000)
+    client = client_for(database_url, health_timeout_s=30)
+    assert get_concurrently(client) == [200] * 60
+
+
+def test_health_queued_behind_busy_workers_is_503(client_for, database_url: str) -> None:
+    client = client_for(database_url, health_timeout_s=0.05)
+    checker = client.app.state.health  # type: ignore[attr-defined]
+    release = threading.Event()
+    # The queue is first in, first out: with both of the two workers held, a check can only wait.
+    blockers = [checker.executor.submit(release.wait) for _ in range(2)]
+    try:
+        status, body, _ = timed_get(client)
+        assert (status, body) == (503, DOWN)
+    finally:
+        release.set()
+        for blocker in blockers:
+            blocker.result()
+    # Once the workers are free again, health is ok again.
+    assert client.get("/api/health").status_code == 200
 
 
 def test_health_query_string_ignored(client: TestClient) -> None:
