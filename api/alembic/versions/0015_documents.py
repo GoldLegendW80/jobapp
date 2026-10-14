@@ -10,18 +10,28 @@ the partial unique index of open generations, the composite foreign key on `jobs
 Isolation is in the schema, as in 0013: a posting's document points at `jobs(id, user_id)`
 through `(posting_id, user_id)`, and a version, a generation and a message point at
 `documents(id, user_id)` through `(document_id, user_id)`, so no row belongs to one person and
-hangs under another's posting or document.
+hangs under another's posting or document. Every other reference between rows of two people is
+two columns too, `(<ref>_id, user_id)` against the `(id, user_id)` of what it names, with
+`ON DELETE SET NULL (<ref>_id)` (Postgres 15 and later), so the delete clears the pointer and
+keeps the owner: the base CV a posting CV or a generation is written from, the generation a
+version came from, the upload a base CV or a user template was read from, the base CV a
+template was captured from. `job_files` has no `user_id`: the trigger
+`document_versions_legacy_file` (BEFORE INSERT OR UPDATE OF legacy_file_id) refuses a legacy
+file that is not one of the files of the version's own posting, with SQLSTATE `23503` (a
+foreign key violation), so a base CV's version never holds one.
 
 The trigger `document_versions_frozen` (BEFORE UPDATE OR DELETE, per row) refuses on a frozen
 version any change of the content, its hash, schema, language, template, corrections, PDF, fit
-and identity, any change of `frozen_at` or `frozen_reason` (clearing them included), and any
-delete while its document still exists: a frozen version goes only with its document (the
-cascade of a document, a posting or a user). One referential action is let through: the legacy
-file's `SET NULL` when the posting itself is being deleted, since the file goes with it.
+and identity (`id`, `origin`, `created_at` included), any change of `frozen_at` or
+`frozen_reason` (clearing them included), and any delete while its document still exists: a
+frozen version goes only with its document (the cascade of a document, a posting or a user).
+One referential action is let through: the legacy file's `SET NULL` when the document has a
+posting and that posting row is being deleted, since the file goes with it.
 Its errors carry SQLSTATE `23000` and the message `document_version_frozen`.
 
-Revision 0014 is reserved for mail M8, which has not merged: this one chains on 0013, the head
-of main, and M8 chains after the newest head when it resumes.
+Revision 0014 was reserved for mail M8, which has not merged: this one chains on 0013, the head
+of main. M8 now takes 0019 (0016 to 0018 are browser B3's and apply's) and chains after the
+newest head when it resumes.
 
 Expand only: new types, new tables, a new function and trigger. The release before this one
 reads and writes none of it (CONTRIBUTING.md, Migrations).
@@ -74,11 +84,13 @@ ENUMS = {
 }
 
 # The columns a frozen version never changes (SPEC-documents.md, "Frozen means frozen"), with
-# its identity and the freeze itself.
+# its identity (`id` is what apply records as the version sent) and the freeze itself.
 PROTECTED = (
+    "id",
     "document_id",
     "user_id",
     "number",
+    "origin",
     "content",
     "content_schema",
     "content_hash",
@@ -94,6 +106,7 @@ PROTECTED = (
     "legacy_file_id",
     "frozen_at",
     "frozen_reason",
+    "created_at",
 )
 
 _old = ", ".join(f"OLD.{column}" for column in PROTECTED)
@@ -121,8 +134,10 @@ BEGIN
     IF NEW.legacy_file_id IS NULL AND OLD.legacy_file_id IS NOT NULL
         AND ({_unlinked}) IS NOT DISTINCT FROM ({_old})
         AND NOT EXISTS (
-            SELECT 1 FROM documents d JOIN jobs j ON j.id = d.posting_id
-            WHERE d.id = OLD.document_id
+            SELECT 1 FROM documents d
+            WHERE d.id = OLD.document_id AND (
+                d.posting_id IS NULL OR EXISTS (SELECT 1 FROM jobs j WHERE j.id = d.posting_id)
+            )
         ) THEN
         RETURN NEW;
     END IF;
@@ -134,6 +149,29 @@ $$
 FROZEN_TRIGGER = (
     "CREATE TRIGGER document_versions_frozen BEFORE UPDATE OR DELETE ON document_versions "
     "FOR EACH ROW EXECUTE FUNCTION document_versions_frozen()"
+)
+
+# `job_files` has no `user_id`, so no two-column key can say "a file of this person": the legacy
+# file must be one of the files of the version's own posting (a posting is one person's).
+LEGACY_FILE_FUNCTION = """
+CREATE FUNCTION document_versions_legacy_file() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.legacy_file_id IS NULL OR EXISTS (
+        SELECT 1 FROM documents d JOIN job_files f ON f.job_id = d.posting_id
+        WHERE d.id = NEW.document_id AND d.user_id = NEW.user_id AND f.id = NEW.legacy_file_id
+    ) THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION 'document_version_legacy_file' USING ERRCODE = '23503';
+END;
+$$
+"""
+
+LEGACY_FILE_TRIGGER = (
+    "CREATE TRIGGER document_versions_legacy_file "
+    "BEFORE INSERT OR UPDATE OF legacy_file_id ON document_versions "
+    "FOR EACH ROW EXECUTE FUNCTION document_versions_legacy_file()"
 )
 
 
@@ -177,6 +215,19 @@ def _set_null(table: str, column: str, target: str) -> sa.ForeignKeyConstraint:
     referred = target.split(".")[0]
     return sa.ForeignKeyConstraint(
         [column], [target], name=op.f(f"fk_{table}_{column}_{referred}"), ondelete="SET NULL"
+    )
+
+
+def _same_owner(
+    table: str, column: str, referred: str, name: str | None = None
+) -> sa.ForeignKeyConstraint:
+    """`(column, user_id)` points at `referred(id, user_id)`: the row and what it names always
+    have the same owner. A delete clears the pointer only, never the owner."""
+    return sa.ForeignKeyConstraint(
+        [column, "user_id"],
+        [f"{referred}.id", f"{referred}.user_id"],
+        name=name or f"fk_{table}_{column}_{referred}",
+        ondelete=f"SET NULL ({column})",
     )
 
 
@@ -233,8 +284,8 @@ def upgrade() -> None:
             name="fk_documents_posting_id_jobs",
             ondelete="CASCADE",
         ),
-        _set_null("documents", "base_document_id", "documents.id"),
-        _set_null("documents", "source_document_id", "ingestion_documents.id"),
+        _same_owner("documents", "base_document_id", "documents"),
+        _same_owner("documents", "source_document_id", "ingestion_documents"),
         sa.CheckConstraint(
             "(scope = 'base') = (posting_id IS NULL)", name=op.f("ck_documents_base_has_no_posting")
         ),
@@ -312,7 +363,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("id", "user_id", name="uq_document_generations_id_user_id"),
         _owned_by_document("document_generations"),
         _set_null("document_generations", "run_id", "agent_runs.id"),
-        _set_null("document_generations", "base_document_id", "documents.id"),
+        _same_owner("document_generations", "base_document_id", "documents"),
         sa.CheckConstraint(
             "token_ceiling >= 0 AND corrections >= 0",
             name=op.f("ck_document_generations_counts_not_negative"),
@@ -359,7 +410,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_document_versions")),
         sa.UniqueConstraint("document_id", "number", name="uq_document_versions_document_id"),
         _owned_by_document("document_versions"),
-        _set_null("document_versions", "generation_id", "document_generations.id"),
+        _same_owner("document_versions", "generation_id", "document_generations"),
         _set_null("document_versions", "legacy_file_id", "job_files.id"),
         sa.CheckConstraint(
             "(frozen_at IS NULL) = (frozen_reason IS NULL)",
@@ -386,6 +437,8 @@ def upgrade() -> None:
     _index("document_versions", "legacy_file_id")
     op.execute(FROZEN_FUNCTION)
     op.execute(FROZEN_TRIGGER)
+    op.execute(LEGACY_FILE_FUNCTION)
+    op.execute(LEGACY_FILE_TRIGGER)
 
     op.create_table(
         "document_messages",
@@ -450,8 +503,13 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_document_user_templates")),
         _user_fk("document_user_templates"),
         sa.UniqueConstraint("user_id", "slug", name="uq_document_user_templates_user_id_slug"),
-        _set_null("document_user_templates", "source_document_id", "ingestion_documents.id"),
-        _set_null("document_user_templates", "base_document_id", "documents.id"),
+        _same_owner(
+            "document_user_templates",
+            "source_document_id",
+            "ingestion_documents",
+            "fk_document_user_templates_source_document_id_ingestion",  # 63 characters at most
+        ),
+        _same_owner("document_user_templates", "base_document_id", "documents"),
         sa.CheckConstraint(
             "slug ~ '^upload-[a-z0-9]{8}$'", name=op.f("ck_document_user_templates_slug_is_upload")
         ),
@@ -468,6 +526,8 @@ def downgrade() -> None:
     op.drop_table("document_settings")
     op.drop_table("document_consents")
     op.drop_table("document_messages")
+    op.execute("DROP TRIGGER document_versions_legacy_file ON document_versions")
+    op.execute("DROP FUNCTION document_versions_legacy_file()")
     op.execute("DROP TRIGGER document_versions_frozen ON document_versions")
     op.execute("DROP FUNCTION document_versions_frozen()")
     op.drop_table("document_versions")

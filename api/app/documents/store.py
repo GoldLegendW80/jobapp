@@ -2,8 +2,10 @@
 
 Every function takes the user and reads or writes that user's rows only: a document, a version,
 a generation, a message or a template of another person is "not found" (`NotFoundError`, the
-api's 404), never read and never changed. The schema says the same thing again (the composite
-keys of 0015), so a bug here cannot cross users either.
+api's 404), never read and never changed. The schema says the same thing again: every reference
+between two rows of the module is a composite key `(<ref>_id, user_id)` in 0015, and the legacy
+file of a version is checked by a trigger against the version's own posting, so a bug here
+cannot cross users either.
 
 **Versions are append only.** `snapshot` adds one; nothing rewrites a version's content.
 `freeze` is the one function that sets `frozen_at`. A frozen version is never changed or
@@ -18,12 +20,19 @@ circle:
 2. the posting row (`jobs`), only when a status moves (the jobs service takes it; the freeze of
    D14 runs under it);
 3. the document row (`documents`, `FOR UPDATE`): every write of a draft, a version, a
-   generation or a message takes it first;
+   generation or a message takes it first. Between two documents, the posting documents come
+   before the base CV they name: `create_generation` holds its document and then needs a key
+   share lock on the base CV it names, so `delete_base`, whose `SET NULL` rewrites the posting
+   documents and generations written from the base, locks those documents first (by id) and
+   the base CV last;
 4. a version row (`document_versions`, `FOR UPDATE`).
 
 Every lock waits at most `LOCK_TIMEOUT_MS` (the jobs module's lock timeout, `SET LOCAL`), then
 raises `DocumentBusyError`, a `JobBusyError`: the caller rolls back and answers 409, as the jobs
-and ingestion modules do. Two saves on one revision: the second waits for the first, then finds
+and ingestion modules do. A deadlock Postgres breaks (SQLSTATE 40P01) is the same answer: every
+write here runs under `_busy`, so a wait at a statement, at a flush (a cascade, a `SET NULL`)
+or at the caller's `commit` (use `commit` below) raises `DocumentBusyError`, never a raw
+database error. Two saves on one revision: the second waits for the first, then finds
 the revision moved and gets `StaleDraftError` with the winner's draft. Two generations for one
 document: the second finds the first open (`GenerationOpenError`), and the partial unique index
 refuses it below the code. Two `get_or_create` at once insert with `ON CONFLICT DO NOTHING`, so
@@ -34,11 +43,12 @@ Logs carry ids, counts and codes, never a document's text.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import logging
 import re
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict
 from datetime import date, datetime
 from typing import Any
@@ -92,6 +102,8 @@ BUSY = "This document is being changed. Try again."
 NAME_MAX = 100
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _USER_SLUG = re.compile(r"^upload-[a-z0-9]{8}$")
+# lock_not_available (a lock wait over LOCK_TIMEOUT_MS) and deadlock_detected
+_BUSY_STATES = frozenset({"55P03", "40P01"})
 
 
 # --- errors -------------------------------------------------------------------------------------
@@ -157,13 +169,40 @@ def _wait(db: Session) -> None:
     )
 
 
+def is_busy(exc: BaseException) -> bool:
+    """Whether `exc` is Postgres giving up on a row lock: a wait over the lock timeout (55P03)
+    or a deadlock it broke (40P01). Every other database error keeps its behaviour."""
+    return isinstance(exc, DBAPIError) and getattr(exc.orig, "sqlstate", None) in _BUSY_STATES
+
+
+def _busy[**P, R](function: Callable[P, R]) -> Callable[P, R]:
+    """Every wait of `function`, at a statement or at a flush, ends in DocumentBusyError."""
+
+    @functools.wraps(function)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        try:
+            return function(*args, **kwargs)
+        except DBAPIError as exc:
+            if is_busy(exc):
+                raise DocumentBusyError(BUSY) from exc
+            raise
+
+    return wrapper
+
+
 def _execute(db: Session, statement: Any, params: Mapping[str, Any] | None = None) -> Any:
     try:
         return db.execute(statement, params) if params is not None else db.execute(statement)
     except DBAPIError as exc:
-        if jobs_service.is_lock_timeout(exc):
+        if is_busy(exc):
             raise DocumentBusyError(BUSY) from exc
         raise
+
+
+@_busy
+def commit(db: Session) -> None:
+    """The caller's commit, with a lock wait or a deadlock mapped to DocumentBusyError."""
+    db.commit()
 
 
 def _lock_person(db: Session, user_id: uuid.UUID) -> None:
@@ -173,6 +212,7 @@ def _lock_person(db: Session, user_id: uuid.UUID) -> None:
     _execute(db, sa.text("SELECT 1 FROM users WHERE id = :u FOR NO KEY UPDATE"), {"u": user_id})
 
 
+@_busy
 def lock_document(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> Document:
     """Lock 3: the user's document, fresh from the database, locked until the transaction ends."""
     _wait(db)
@@ -292,6 +332,7 @@ def settings(db: Session, user_id: uuid.UUID) -> DocumentSettings:
     )
 
 
+@_busy
 def save_settings(
     db: Session, user_id: uuid.UUID, value: DocumentSettings, at: datetime
 ) -> DocumentSettings:
@@ -306,6 +347,7 @@ def save_settings(
     return value
 
 
+@_busy
 def accept_consent(db: Session, user_id: uuid.UUID, text_version: int, at: datetime) -> None:
     statement = pg_insert(DocumentConsent).values(
         user_id=user_id, text_version=text_version, accepted_at=at
@@ -372,6 +414,7 @@ def _model(kind: c.Kind, data: object) -> c.CvContent | c.LetterContent:
     return c.parse(kind, c.dump(data) if isinstance(data, BaseModel) else data)
 
 
+@_busy
 def create_base(
     db: Session,
     user_id: uuid.UUID,
@@ -443,6 +486,7 @@ def _own_base(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> Docume
     return document
 
 
+@_busy
 def rename_base(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID, name: str, at: datetime
 ) -> Document:
@@ -455,6 +499,7 @@ def rename_base(
     return document
 
 
+@_busy
 def set_default(db: Session, user_id: uuid.UUID, document_id: uuid.UUID, at: datetime) -> Document:
     """Make this base CV the default; the one before loses the mark."""
     _lock_person(db, user_id)
@@ -472,6 +517,27 @@ def set_default(db: Session, user_id: uuid.UUID, document_id: uuid.UUID, at: dat
     return document
 
 
+def _lock_written_from(db: Session, user_id: uuid.UUID, base_id: uuid.UUID) -> None:
+    """Lock 3 on every document the delete of a base CV rewrites (its `SET NULL`): those written
+    from it and those with a generation written from it, by id, before the base CV itself."""
+    named = sa.select(DocumentGeneration.document_id).where(
+        DocumentGeneration.user_id == user_id, DocumentGeneration.base_document_id == base_id
+    )
+    query = (
+        sa.select(Document.id)
+        .where(
+            Document.user_id == user_id,
+            Document.id != base_id,
+            sa.or_(Document.base_document_id == base_id, Document.id.in_(named)),
+        )
+        .order_by(Document.id)
+        .with_for_update()
+    )
+    _wait(db)
+    _execute(db, query)
+
+
+@_busy
 def delete_base(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID, at: datetime
 ) -> Document | None:
@@ -479,6 +545,7 @@ def delete_base(
     becomes null). Deleting the default makes the oldest other one the default; deleting the
     last one is allowed. Returns the default after the delete."""
     _lock_person(db, user_id)
+    _lock_written_from(db, user_id, document_id)
     document = _own_base(db, user_id, document_id)
     was_default = document.is_default
     db.delete(document)
@@ -508,6 +575,7 @@ def _posting_document(
     return db.execute(query.execution_options(populate_existing=True)).scalar_one_or_none()
 
 
+@_busy
 def get_or_create(
     db: Session,
     user_id: uuid.UUID,
@@ -607,6 +675,7 @@ def _write_draft(
     return document
 
 
+@_busy
 def save_draft(
     db: Session,
     user_id: uuid.UUID,
@@ -630,6 +699,7 @@ def save_draft(
     return _write_draft(db, document, model, written_by, at, sources, today)
 
 
+@_busy
 def set_language(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID, language: Language, at: datetime
 ) -> Document:
@@ -640,6 +710,7 @@ def set_language(
     return document
 
 
+@_busy
 def restore(
     db: Session,
     user_id: uuid.UUID,
@@ -679,6 +750,7 @@ def _latest(db: Session, document: Document) -> DocumentVersion | None:
     return _execute(db, query).scalar_one_or_none()
 
 
+@_busy
 def snapshot(
     db: Session,
     user_id: uuid.UUID,
@@ -767,6 +839,7 @@ def _own_legacy_file(
         raise ValueError("pdf_sha256 is not the file's")
 
 
+@_busy
 def attach_pdf(
     db: Session,
     user_id: uuid.UUID,
@@ -794,6 +867,7 @@ def attach_pdf(
     return found
 
 
+@_busy
 def set_template(
     db: Session,
     user_id: uuid.UUID,
@@ -833,6 +907,7 @@ def _check_slug(db: Session, user_id: uuid.UUID, slug: str) -> DocumentUserTempl
     return owned
 
 
+@_busy
 def approve(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID, number: int, at: datetime
 ) -> DocumentVersion:
@@ -858,6 +933,7 @@ def approve(
     return found
 
 
+@_busy
 def prune(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID, *, keep: int | None = None
 ) -> int:
@@ -889,6 +965,7 @@ def prune(
     return int(gone or 0)
 
 
+@_busy
 def freeze(
     db: Session, user_id: uuid.UUID, version_id: uuid.UUID, reason: FreezeReason, at: datetime
 ) -> DocumentVersion:
@@ -917,6 +994,7 @@ def freeze(
     return target
 
 
+@_busy
 def delete_version(db: Session, user_id: uuid.UUID, document_id: uuid.UUID, number: int) -> None:
     """Delete one version that is not frozen."""
     document = lock_document(db, user_id, document_id)
@@ -941,6 +1019,7 @@ def open_generation(
     return db.execute(query.execution_options(populate_existing=True)).scalar_one_or_none()
 
 
+@_busy
 def create_generation(
     db: Session,
     user_id: uuid.UUID,
@@ -990,6 +1069,7 @@ def create_generation(
 # --- the chat -----------------------------------------------------------------------------------
 
 
+@_busy
 def add_message(
     db: Session,
     user_id: uuid.UUID,
@@ -1025,6 +1105,7 @@ def add_message(
     return made
 
 
+@_busy
 def prune_messages(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID, *, keep: int | None = None
 ) -> int:

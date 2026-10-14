@@ -50,12 +50,14 @@ NAMED = {
     "fk_document_versions_document_id_documents",
     "fk_document_generations_document_id_documents",
     "fk_document_messages_document_id_documents",
+    "fk_documents_base_document_id_documents",
+    "fk_document_versions_generation_id_document_generations",
     "ck_document_versions_frozen_is_whole",
     "ck_documents_base_has_no_posting",
 }
 
 
-def _state(engine: sa.Engine) -> tuple[set[str], set[str], set[str], bool]:
+def _state(engine: sa.Engine) -> tuple[set[str], set[str], set[str], int]:
     with engine.connect() as conn:
         tables = set(sa.inspect(conn).get_table_names())
         enums = set(
@@ -64,9 +66,12 @@ def _state(engine: sa.Engine) -> tuple[set[str], set[str], set[str], bool]:
         names = set(conn.execute(sa.text("SELECT conname FROM pg_constraint")).scalars())
         names |= set(conn.execute(sa.text("SELECT indexname FROM pg_indexes")).scalars())
         trigger = conn.execute(
-            sa.text("SELECT count(*) FROM pg_proc WHERE proname = 'document_versions_frozen'")
+            sa.text(
+                "SELECT count(*) FROM pg_proc WHERE proname IN "
+                "('document_versions_frozen', 'document_versions_legacy_file')"
+            )
         ).scalar_one()
-    return tables, enums, names, bool(trigger)
+    return tables, enums, names, trigger
 
 
 def test_0015_up_down_up(at_head: sa.Engine) -> None:
@@ -76,14 +81,14 @@ def test_0015_up_down_up(at_head: sa.Engine) -> None:
     assert tables >= TABLES
     assert enums >= ENUMS
     assert names >= NAMED
-    assert trigger
+    assert trigger == 2  # the frozen and the legacy file triggers' functions
     command.downgrade(alembic_config(), "0013")
     assert current_revision(url) == "0013"
     tables, enums, names, trigger = _state(at_head)
     assert not TABLES & tables
     assert not ENUMS & enums
     assert not NAMED & names
-    assert not trigger
+    assert trigger == 0
     assert "uq_jobs_id_user_id" in names  # 0013's, kept
     command.upgrade(alembic_config(), "head")
     assert current_revision(url) == HEAD

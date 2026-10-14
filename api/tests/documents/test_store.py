@@ -8,13 +8,14 @@ from __future__ import annotations
 import hashlib
 import itertools
 import logging
+import threading
 import uuid
 from datetime import timedelta
 from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.documents import content as c
@@ -25,6 +26,7 @@ from app.documents.models import (
     BaseSource,
     Channel,
     Document,
+    DocumentGeneration,
     DocumentUserTemplate,
     FitResult,
     FreezeReason,
@@ -627,6 +629,9 @@ def test_every_store_function_leaves_a_frozen_version_as_it_was(db: Session) -> 
 
 
 PROTECTED_CHANGES = {
+    "id": "gen_random_uuid()",
+    "origin": "'restored'",
+    "created_at": "now() - interval '1 day'",
     "content": "'{}'::jsonb",
     "content_hash": "decode(repeat('00', 32), 'hex')",
     "content_schema": "2",
@@ -728,6 +733,32 @@ def test_a_legacy_applied_version_points_at_its_file_and_goes_with_the_posting(
     assert store.versions(db, user, document.id) == []
 
 
+def test_a_frozen_version_keeps_its_legacy_file_once_its_document_has_no_posting(
+    db: Session,
+) -> None:
+    """The `SET NULL` of the legacy file is let through only when the posting row is gone, not
+    when the document simply has no posting."""
+    user = add_user(db, USER_A)
+    document = _posting_cv(db, user)
+    file_id = add_job_file(db, document.posting_id)  # type: ignore[arg-type]
+    made, _ = store.snapshot(db, user, document.id, Origin.legacy, at=AT, legacy_file_id=file_id)
+    store.freeze(db, user, made.id, FreezeReason.legacy_applied, AT)
+    db.execute(
+        sa.text(
+            "UPDATE documents SET scope = 'base', posting_id = NULL, name = 'Moved', "
+            "base_source = 'built' WHERE id = :d"
+        ),
+        {"d": document.id},
+    )
+    with pytest.raises(IntegrityError, match="document_version_frozen"), db.begin_nested():
+        db.execute(
+            sa.text("UPDATE document_versions SET legacy_file_id = NULL WHERE id = :v"),
+            {"v": made.id},
+        )
+    with pytest.raises(IntegrityError, match="document_version_frozen"), db.begin_nested():
+        db.execute(sa.text("DELETE FROM job_files WHERE id = :f"), {"f": file_id})
+
+
 def test_a_freeze_racing_a_render_is_decided_by_the_row_lock(
     factory: sessionmaker[Session], short_locks: None
 ) -> None:
@@ -821,6 +852,101 @@ def test_two_generations_at_once_one_is_made(
         with pytest.raises(store.GenerationOpenError) as refused:
             _generation(second, user, document)
         assert refused.value.generation.id == made.id
+
+
+def _wait_until_blocked(engine: sa.Engine, pid: int, thread: threading.Thread) -> None:
+    """Return once the backend `pid` waits for a lock another session holds (Postgres says so),
+    or once its thread has ended. Polls the lock table; no sleep, no clock."""
+    with engine.connect() as watcher:
+        blocked = sa.text("SELECT cardinality(pg_blocking_pids(:p)) > 0")
+        while thread.is_alive() and not watcher.execute(blocked, {"p": pid}).scalar_one():
+            watcher.rollback()
+
+
+def test_deleting_a_base_cv_waits_for_a_generation_written_from_it_never_deadlocks(
+    engine: sa.Engine, factory: sessionmaker[Session]
+) -> None:
+    """The interleaving of the review of D5: the generation holds its posting CV, the delete of
+    the base CV starts, then the generation names that base CV. The delete locks the posting CV
+    before the base CV, so it waits behind the generation instead of closing a circle."""
+    with factory() as setup:
+        user = add_user(setup, USER_A)
+        base = _base(setup, user)
+        document = _posting_cv(setup, user)
+        setup.commit()
+    assert document.base_document_id == base.id
+    outcome: dict[str, Any] = {}
+    with factory() as writer, factory() as deleter:
+        store.lock_document(writer, user, document.id)
+        pid = deleter.execute(sa.text("SELECT pg_backend_pid()")).scalar_one()
+
+        def delete() -> None:
+            try:
+                outcome["default"] = store.delete_base(deleter, user, base.id, AT)
+                store.commit(deleter)
+            except Exception as exc:  # the main thread asserts on it
+                outcome["error"] = exc
+                deleter.rollback()
+
+        thread = threading.Thread(target=delete)
+        thread.start()
+        _wait_until_blocked(engine, pid, thread)
+        made = store.create_generation(
+            writer,
+            user,
+            document.id,
+            GenerationMode.posting,
+            GenerationTrigger.click,
+            at=AT,
+            estimate={},
+            token_ceiling=1,
+            base_document_id=base.id,
+        )
+        store.commit(writer)
+        thread.join()
+    assert "error" not in outcome, outcome.get("error")
+    assert outcome["default"] is None
+    with factory() as check:
+        assert store.get(check, user, base.id) is None
+        assert store.get(check, user, document.id).base_document_id is None  # type: ignore[union-attr]
+        generation = check.get(DocumentGeneration, made.id)
+        assert generation is not None
+        assert generation.base_document_id is None
+
+
+def test_a_deadlock_and_a_lock_timeout_are_busy_and_nothing_else_is() -> None:
+    class OrigError(Exception):
+        def __init__(self, sqlstate: str) -> None:
+            super().__init__(sqlstate)
+            self.sqlstate = sqlstate
+
+    @store._busy
+    def fails(sqlstate: str) -> None:
+        raise OperationalError("SELECT 1", {}, OrigError(sqlstate))
+
+    for sqlstate in ("40P01", "55P03"):
+        assert store.is_busy(OperationalError("SELECT 1", {}, OrigError(sqlstate)))
+        with pytest.raises(store.DocumentBusyError):
+            fails(sqlstate)
+    with pytest.raises(OperationalError):
+        fails("57014")
+
+
+def test_a_lock_wait_at_a_flush_is_busy(factory: sessionmaker[Session], short_locks: None) -> None:
+    """Unmarking the old default happens at a flush, outside any explicit lock: it waits for the
+    rename that holds that row, and gives up as DocumentBusyError, not a raw database error."""
+    with factory() as setup:
+        user = add_user(setup, USER_A)
+        current = _base(setup, user, source=BaseSource.profile)
+        setup.commit()
+    with factory() as renamer, factory() as uploader:
+        store.rename_base(renamer, user, current.id, "Renamed", AT)
+        with pytest.raises(store.DocumentBusyError):
+            _base(uploader, user, "Upload", source=BaseSource.uploaded)
+        uploader.rollback()
+        store.commit(renamer)
+        made = _base(uploader, user, "Upload", source=BaseSource.uploaded)
+        assert made.is_default
 
 
 # --- the chat and the settings ------------------------------------------------------------------
@@ -961,7 +1087,10 @@ def test_a_posting_cv_cannot_name_another_persons_base_cv(db: Session) -> None:
 def test_the_schema_refuses_a_version_under_another_persons_document(db: Session) -> None:
     a, b = add_user(db, USER_A), add_user(db, USER_B)
     document = _posting_cv(db, a)
-    with pytest.raises(IntegrityError, match="fk_document_messages_document_id_documents"):
+    with (
+        pytest.raises(IntegrityError, match="fk_document_messages_document_id_documents"),
+        db.begin_nested(),
+    ):
         db.execute(
             sa.text(
                 "INSERT INTO document_messages (document_id, user_id, role, text, at) "
@@ -969,6 +1098,112 @@ def test_the_schema_refuses_a_version_under_another_persons_document(db: Session
             ),
             {"d": document.id, "u": b},
         )
+    with pytest.raises(IntegrityError, match="fk_document_versions_document_id_documents"):
+        db.execute(
+            sa.text(
+                "INSERT INTO document_versions (document_id, user_id, number, content, "
+                "content_schema, content_hash, language, template_slug, template_version, "
+                "origin) VALUES (:d, :u, 1, '{}', 1, decode(repeat('00', 32), 'hex'), 'en', "
+                "'classic', 1, 'edited')"
+            ),
+            {"d": document.id, "u": b},
+        )
+
+
+# Every reference from a row of A to a row of B, written by SQL past the store: (the statement,
+# the constraint or trigger that refuses it). `{a}` and `{b}` are the rows of `_everything`.
+CROSS_USER = {
+    "documents.base_document_id": (
+        "UPDATE documents SET base_document_id = :b_base WHERE id = :a_document",
+        "fk_documents_base_document_id_documents",
+    ),
+    "documents.source_document_id": (
+        "UPDATE documents SET source_document_id = :b_upload WHERE id = :a_base",
+        "fk_documents_source_document_id_ingestion_documents",
+    ),
+    "document_generations.base_document_id": (
+        "UPDATE document_generations SET base_document_id = :b_base WHERE id = :a_generation",
+        "fk_document_generations_base_document_id_documents",
+    ),
+    "document_versions.generation_id": (
+        "UPDATE document_versions SET generation_id = :b_generation WHERE id = :a_version",
+        "fk_document_versions_generation_id_document_generations",
+    ),
+    "document_versions.legacy_file_id": (
+        "UPDATE document_versions SET legacy_file_id = :b_file WHERE id = :a_version",
+        "document_version_legacy_file",
+    ),
+    "document_versions.legacy_file_id of a base CV": (
+        "INSERT INTO document_versions (document_id, user_id, number, content, content_schema, "
+        "content_hash, language, template_slug, template_version, origin, legacy_file_id) "
+        "VALUES (:a_base, :a, 1, '{}', 1, decode(repeat('00', 32), 'hex'), 'en', 'classic', 1, "
+        "'legacy', :a_file)",
+        "document_version_legacy_file",
+    ),
+    "document_user_templates.base_document_id": (
+        "UPDATE document_user_templates SET base_document_id = :b_base WHERE user_id = :a",
+        "fk_document_user_templates_base_document_id_documents",
+    ),
+    "document_user_templates.source_document_id": (
+        "UPDATE document_user_templates SET source_document_id = :b_upload WHERE user_id = :a",
+        "fk_document_user_templates_source_document_id_ingestion",
+    ),
+}
+
+
+@pytest.mark.parametrize("reference", sorted(CROSS_USER))
+def test_the_schema_refuses_every_reference_to_another_persons_row(
+    db: Session, reference: str
+) -> None:
+    a, b = add_user(db, USER_A), add_user(db, USER_B)
+    params: dict[str, Any] = {"a": a, "b": b}
+    for prefix, user, slug in (("a", a, "upload-aaaaaaaa"), ("b", b, "upload-bbbbbbbb")):
+        made = _everything(db, user, slug)
+        params[f"{prefix}_base"] = made["base"].id
+        params[f"{prefix}_document"] = made["document"].id
+        params[f"{prefix}_generation"] = made["generation"].id
+        params[f"{prefix}_version"] = made["version"].id
+        params[f"{prefix}_upload"] = add_upload(db, user)
+        params[f"{prefix}_file"] = add_job_file(db, made["document"].posting_id)
+    statement, refused_by = CROSS_USER[reference]
+    with pytest.raises(IntegrityError, match=refused_by) as refused:
+        db.execute(sa.text(statement), params)
+    assert refused.value.orig.sqlstate == "23503"  # type: ignore[union-attr]
+
+
+def test_the_same_owner_references_hold_for_ones_own_rows(db: Session) -> None:
+    a = add_user(db, USER_A)
+    made = _everything(db, a, "upload-aaaaaaaa")
+    upload = add_upload(db, a)
+    file_id = add_job_file(db, made["document"].posting_id)
+    params = {"a": a, "base": made["base"].id, "upload": upload, "file": file_id}
+    params |= {"generation": made["generation"].id, "version": made["version"].id}
+    for statement in (
+        "UPDATE documents SET source_document_id = :upload WHERE id = :base",
+        "UPDATE document_generations SET base_document_id = :base WHERE id = :generation",
+        "UPDATE document_versions SET generation_id = :generation, legacy_file_id = :file "
+        "WHERE id = :version",
+        "UPDATE document_user_templates SET base_document_id = :base, "
+        "source_document_id = :upload WHERE user_id = :a",
+    ):
+        db.execute(sa.text(statement), params)
+    db.execute(sa.text("DELETE FROM documents WHERE id = :base"), params)
+    db.execute(sa.text("DELETE FROM ingestion_documents WHERE id = :upload"), params)
+    generation = db.execute(
+        sa.text(
+            "SELECT base_document_id, user_id FROM document_generations WHERE id = :generation"
+        ),
+        params,
+    ).one()
+    template = db.execute(
+        sa.text(
+            "SELECT base_document_id, source_document_id, user_id FROM document_user_templates "
+            "WHERE user_id = :a"
+        ),
+        params,
+    ).one()
+    assert tuple(generation) == (None, a)  # SET NULL (base_document_id): the owner stays
+    assert tuple(template) == (None, None, a)
 
 
 def test_deleting_a_user_leaves_nothing_of_theirs(db: Session) -> None:

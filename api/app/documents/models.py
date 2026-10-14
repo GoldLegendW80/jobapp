@@ -18,7 +18,11 @@
 
 Ownership is in the schema: every row carries `user_id`, and a version, a generation and a
 message point at their document through `(document_id, user_id)`, so none can belong to one
-person and hang under another's document. Everything goes with its user: `users` cascades to
+person and hang under another's document. Every other pointer between two rows is two columns
+as well (`_same_owner`): a base CV, a generation or an upload named by another person's row is
+a foreign key violation. The legacy file of a version (`job_files` has no `user_id`) is checked
+by a trigger of 0015: it must be one of the files of the version's own posting. Everything goes
+with its user: `users` cascades to
 documents, consents, settings and user templates, a document to its versions, generations and
 messages, a posting to its documents. Deleting a base CV sets `base_document_id` to null on
 what was written from it; deleting an uploaded file (`ingestion_documents`) or an agent run
@@ -203,6 +207,19 @@ def _later() -> Mapped[datetime | None]:
     return mapped_column(sa.DateTime(timezone=True))
 
 
+def _same_owner(
+    table: str, column: str, referred: str, name: str | None = None
+) -> sa.ForeignKeyConstraint:
+    """`(column, user_id)` points at `referred(id, user_id)`: the row and what it names always
+    have the same owner. A delete sets `column` to null and leaves `user_id` alone."""
+    return sa.ForeignKeyConstraint(
+        [column, "user_id"],
+        [f"{referred}.id", f"{referred}.user_id"],
+        name=name or f"fk_{table}_{column}_{referred}",
+        ondelete=f"SET NULL ({column})",
+    )
+
+
 def _owned_by_document(table: str) -> sa.ForeignKeyConstraint:
     """`(document_id, user_id)` points at `documents(id, user_id)`: the row and its document
     always have the same owner, and the row goes with the document."""
@@ -224,6 +241,8 @@ class Document(Base):
             name="fk_documents_posting_id_jobs",
             ondelete="CASCADE",
         ),
+        _same_owner("documents", "base_document_id", "documents"),
+        _same_owner("documents", "source_document_id", "ingestion_documents"),
         sa.CheckConstraint("(scope = 'base') = (posting_id IS NULL)", name="base_has_no_posting"),
         sa.CheckConstraint("(scope = 'base') = (name IS NOT NULL)", name="base_has_a_name"),
         sa.CheckConstraint(
@@ -269,7 +288,7 @@ class Document(Base):
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
     base_source: Mapped[BaseSource | None] = mapped_column(BASE_SOURCE_ENUM)
-    base_document_id: Mapped[uuid.UUID | None] = _set_null_fk("documents.id")
+    base_document_id: Mapped[uuid.UUID | None] = _uuid(nullable=True)
     kind: Mapped[Kind] = mapped_column(KIND_ENUM, nullable=False)
     language: Mapped[Language] = mapped_column(LANGUAGE_ENUM, nullable=False)
     template_slug: Mapped[str] = mapped_column(sa.Text, nullable=False)
@@ -290,7 +309,7 @@ class Document(Base):
     )
     render_revision: Mapped[int | None] = mapped_column(sa.Integer)
     render_error: Mapped[str | None] = mapped_column(sa.Text)  # a code of a fixed list
-    source_document_id: Mapped[uuid.UUID | None] = _set_null_fk("ingestion_documents.id")
+    source_document_id: Mapped[uuid.UUID | None] = _uuid(nullable=True)
     created_at: Mapped[datetime] = _now()
     updated_at: Mapped[datetime] = _now()
 
@@ -300,6 +319,7 @@ class DocumentGeneration(Base):
     __table_args__ = (
         sa.UniqueConstraint("id", "user_id", name="uq_document_generations_id_user_id"),
         _owned_by_document("document_generations"),
+        _same_owner("document_generations", "base_document_id", "documents"),
         sa.CheckConstraint("token_ceiling >= 0 AND corrections >= 0", name="counts_not_negative"),
         sa.Index("ix_document_generations_document_id", "document_id"),
         sa.Index("ix_document_generations_user_id_ceiling_day", "user_id", "ceiling_day"),
@@ -321,7 +341,7 @@ class DocumentGeneration(Base):
     trigger: Mapped[GenerationTrigger] = mapped_column(TRIGGER_ENUM, nullable=False)
     message_id: Mapped[int | None] = mapped_column(sa.BigInteger)
     base_draft_revision: Mapped[int | None] = mapped_column(sa.Integer)
-    base_document_id: Mapped[uuid.UUID | None] = _set_null_fk("documents.id")
+    base_document_id: Mapped[uuid.UUID | None] = _uuid(nullable=True)
     estimate: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
     token_ceiling: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     status: Mapped[GenerationStatus] = mapped_column(STATUS_ENUM, nullable=False)
@@ -343,6 +363,7 @@ class DocumentVersion(Base):
     __table_args__ = (
         sa.UniqueConstraint("document_id", "number", name="uq_document_versions_document_id"),
         _owned_by_document("document_versions"),
+        _same_owner("document_versions", "generation_id", "document_generations"),
         sa.CheckConstraint("(frozen_at IS NULL) = (frozen_reason IS NULL)", name="frozen_is_whole"),
         sa.CheckConstraint("pdf IS NULL OR legacy_file_id IS NULL", name="one_pdf_source"),
         sa.CheckConstraint("number >= 1", name="number_positive"),
@@ -369,7 +390,7 @@ class DocumentVersion(Base):
     template_slug: Mapped[str] = mapped_column(sa.Text, nullable=False)
     template_version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     origin: Mapped[Origin] = mapped_column(ORIGIN_ENUM, nullable=False)
-    generation_id: Mapped[uuid.UUID | None] = _set_null_fk("document_generations.id")
+    generation_id: Mapped[uuid.UUID | None] = _uuid(nullable=True)
     profile_revision: Mapped[int | None] = mapped_column(sa.Integer)
     corrections: Mapped[list[dict[str, Any]]] = mapped_column(
         pg.JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
@@ -432,6 +453,13 @@ class DocumentUserTemplate(Base):
     __tablename__ = "document_user_templates"
     __table_args__ = (
         sa.UniqueConstraint("user_id", "slug", name="uq_document_user_templates_user_id_slug"),
+        _same_owner(
+            "document_user_templates",
+            "source_document_id",
+            "ingestion_documents",
+            "fk_document_user_templates_source_document_id_ingestion",  # 63 characters at most
+        ),
+        _same_owner("document_user_templates", "base_document_id", "documents"),
         sa.CheckConstraint("slug ~ '^upload-[a-z0-9]{8}$'", name="slug_is_upload"),
         sa.CheckConstraint("version >= 1", name="version_positive"),
         sa.Index("ix_document_user_templates_base_document_id", "base_document_id"),
@@ -451,7 +479,7 @@ class DocumentUserTemplate(Base):
     css: Mapped[str] = mapped_column(sa.Text, nullable=False, deferred=True)
     font_families: Mapped[list[str]] = mapped_column(pg.ARRAY(sa.Text), nullable=False)
     previous: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB, deferred=True)
-    source_document_id: Mapped[uuid.UUID | None] = _set_null_fk("ingestion_documents.id")
-    base_document_id: Mapped[uuid.UUID | None] = _set_null_fk("documents.id")
+    source_document_id: Mapped[uuid.UUID | None] = _uuid(nullable=True)
+    base_document_id: Mapped[uuid.UUID | None] = _uuid(nullable=True)
     created_at: Mapped[datetime] = _now()
     updated_at: Mapped[datetime] = _now()
