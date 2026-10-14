@@ -576,6 +576,34 @@ def test_a_letter_with_a_version_is_not_written_again_by_a_new_cv(alex: Person) 
     assert [g.id for g in _letter_generations(alex)] == [generation]
 
 
+def test_a_click_for_both_kinds_writes_the_letter_again_from_the_new_cv(alex: Person) -> None:
+    # "Write now" with both kinds: the letter follows the new CV even when it has a version.
+    document, first, _ = write_letter(alex, "documents_letter_valid")
+    _done(alex, document, first)
+    with alex.factory() as db:
+        cv = store.get_or_create(db, alex.user, alex.posting, Kind.cv, at=AT)
+        generation = generate.create(
+            db,
+            cv,
+            GenerationMode.posting,
+            GenerationTrigger.click,
+            None,
+            {"low": 1, "high": 2, generate.LETTER_FOLLOWS: True},
+            100_000,
+            at=AT,
+        )
+        run = generate.start(
+            db, generation, at=AT, script="documents_cv_valid", settings=alex.settings
+        )
+        db.commit()
+        run_id = run.id
+    assert [g.id for g in _letter_generations(alex)] == [first]  # nothing from the old CV
+    execute(alex, run_id)
+    [_, again] = sorted(_letter_generations(alex), key=lambda g: g.id != first)
+    assert again.status is GenerationStatus.running
+    assert again.estimate == {"low": 1, "high": 2}
+
+
 def test_no_letter_follows_a_chat_generation(alex: Person) -> None:
     with alex.factory() as db:
         cv = store.get_or_create(db, alex.user, alex.posting, Kind.cv, at=AT)

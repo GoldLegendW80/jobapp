@@ -41,7 +41,7 @@ from sqlalchemy.orm import Session
 
 from app import queue as queues
 from app.db import get_session
-from app.documents import consent, generate, render_job, store, writer_base
+from app.documents import consent, eligibility, generate, render_job, store, writer_base
 from app.documents.models import (
     Author,
     BaseSource,
@@ -273,7 +273,7 @@ def _estimate_out(found: RunEstimate, model: str | None, priced: bool) -> Estima
 
 def _consent_out(db: Session, user: User, at: datetime) -> ConsentOut:
     row = consent.current(db, user.id)
-    figures = consent.figures(db, user.id, at.date())
+    figures = consent.figures(db, user.id, eligibility.found_day(at))
     week = _estimate_out(figures.week, figures.model, figures.priced)
     return ConsentOut(
         version=consent.VERSION,
