@@ -89,8 +89,8 @@ def carol(factory: sessionmaker[Session], api: Api) -> str:
 
 
 @pytest.fixture(autouse=True)
-def no_delete_guard_left() -> Iterator[None]:
-    """A guard registered by one test never refuses the deletions of the next."""
-    before = list(documents._delete_guards)
+def no_replacement_check_left() -> Iterator[None]:
+    """A check registered by one test never refuses the replacements of the next."""
+    before = list(documents._checks)
     yield
-    documents._delete_guards[:] = before
+    documents._checks[:] = before

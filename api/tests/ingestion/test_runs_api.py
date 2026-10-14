@@ -19,7 +19,7 @@ from app.agents import runs as agent_runs
 from app.agents.models import AgentRun, CredentialKind
 from app.agents.models import RunStatus as AgentStatus
 from app.identity.deps import UNAUTHORIZED
-from app.ingestion import delete_guard, engine, estimate_router, runs_router
+from app.ingestion import engine, estimate_router, runs_router
 from app.ingestion.models import TextStatus
 from app.ingestion.runs_models import IngestionRun
 from tests.identity.api_helpers import Api
@@ -613,7 +613,7 @@ def test_deleting_a_document_read_by_a_step_and_one_no_step_has_read(
 ) -> None:
     other = document(api, alice, 7)
     started(api, alice, ready)
-    refused = delete(api, alice, ready[0])
-    assert (refused.status_code, refused.json()) == (409, {"detail": delete_guard.READ_BY_A_RUN})
-    assert delete(api, alice, other).status_code in (200, 204)
-    assert sorted(str(one.id) for one in rows(factory)) == sorted(ready)
+    # Since G15 a document a run reads is deleted too, with what was drawn from it.
+    assert delete(api, alice, ready[0]).status_code == 204
+    assert delete(api, alice, other).status_code == 204
+    assert sorted(str(one.id) for one in rows(factory)) == sorted(ready[1:])

@@ -28,7 +28,7 @@ from app.agents.crypto import Keyring
 from app.agents.models import AgentRun
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
-from app.ingestion import delete_guard, documents, engine, tools
+from app.ingestion import deletion, engine, tools
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRunStep, RunStatus
 from tests.agents.run_helpers import add_user, new_run, now, save_credential
@@ -209,18 +209,14 @@ def test_a_tool_call_in_flight_and_the_delete_of_its_document(
 
     def delete() -> bool:
         with factory() as other, other.begin():
-            return documents.delete_document(other, alice, document_id)
+            return deletion.delete(other, alice, document_id, now())
 
     with factory() as db, db.begin():
         tool_call_locks(db, row)
         path = Path(delete)
         path.waits()  # the delete waits for the tool call in flight
-    # Until G15 the guard then refuses: a step has read this document.
-    with pytest.raises(documents.DeleteRefusedError, match=delete_guard.READ_BY_A_RUN):
-        path.ends()
-    # With the document gone (what G15's delete will do), the next call finds nothing.
-    with factory() as db, db.begin():
-        db.execute(sa.delete(IngestionDocument).where(IngestionDocument.id == document_id))
+    assert path.ends() is True  # then deletes the document (G15)
+    # The next call finds nothing.
     assert call(made, "read_document", offset=0) == (tools.NOT_FOUND, True)
 
 
@@ -229,14 +225,17 @@ def test_the_delete_of_a_document_no_step_has_read_and_advance(
 ) -> None:
     selected = eh.documents(factory, alice, 2)
     run_id = eh.start(factory, alice, selected)
-    with factory() as db, db.begin():
+    with factory() as db:
         engine.advance(db, run_id, now(), settings)  # holds the run row, no document row
 
         def delete() -> bool:
             with factory() as other, other.begin():
-                return documents.delete_document(other, alice, selected[1])
+                return deletion.delete(other, alice, selected[1], now())
 
-        assert Path(delete).ends() is True  # the delete takes the document row (4) only
+        path = Path(delete)
+        path.waits()  # since G15 the delete takes the active run row (3) first
+        db.commit()
+    assert path.ends() is True
     eh.finish_step(factory, run_id, settings)
     assert eh.statuses(factory, run_id) == ["done", "failed"]  # its step finds no document
 

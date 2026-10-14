@@ -32,7 +32,7 @@ from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.identity.deps import COOKIE_NAME
-from app.ingestion import documents, documents_router
+from app.ingestion import deletion, documents, documents_router
 from app.ingestion.models import FILE_MAX_BYTES, IngestionDocument
 from tests.conftest import free_port
 from tests.identity.api_helpers import CSRF, Api
@@ -1050,7 +1050,9 @@ def test_a_delete_and_an_upload_of_the_same_file_at_once_never_fail(
     def remove() -> str:
         with factory() as db:
             barrier.wait(timeout=30)
-            found = documents.delete_document(db, owner, uuid.UUID(first["id"]))
+            found = deletion.delete(
+                db, owner, uuid.UUID(first["id"]), datetime(2026, 10, 14, tzinfo=UTC)
+            )
             db.commit()
             return "deleted" if found else "missing"
 

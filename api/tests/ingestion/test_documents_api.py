@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.identity.deps import CSRF_REFUSED, UNAUTHORIZED
 from app.identity.models import User
-from app.ingestion import documents, documents_router
+from app.ingestion import deletion, documents, documents_router
 from app.ingestion.models import (
     FILE_MAX_BYTES,
     TEXT_MAX_CHARS,
@@ -990,32 +990,6 @@ def test_a_deleted_file_can_be_added_again(api: Api, alice: str) -> None:
     assert again.json()["id"] != first["id"]
 
 
-def test_a_registered_guard_refuses_the_deletion_with_its_sentence(
-    api: Api, alice: str, factory: sessionmaker[Session]
-) -> None:
-    body = uploaded(api, alice, b"read by a run")
-    other = uploaded(api, alice, b"not read by any run")
-    seen: list[uuid.UUID] = []
-
-    def guard(db: Session, document: IngestionDocument) -> str | None:
-        seen.append(document.id)
-        if str(document.id) == body["id"]:
-            return "This document was read by a run and cannot be deleted yet."
-        return None
-
-    documents.register_delete_guard(guard)
-    documents.register_delete_guard(guard)  # registered once, whatever is imported twice
-    response = delete(api, alice, body["id"])
-    assert response.status_code == 409
-    assert response.json() == {
-        "detail": "This document was read by a run and cannot be deleted yet."
-    }
-    assert response.headers["cache-control"] == "no-store"
-    assert len(rows(factory)) == 2
-    assert delete(api, alice, other["id"]).status_code == 204
-    assert [str(seen_id) for seen_id in seen] == [body["id"], other["id"]]
-
-
 def test_deleting_the_account_leaves_nothing_behind(
     api: Api, alice: str, bob: str, factory: sessionmaker[Session]
 ) -> None:
@@ -1332,11 +1306,11 @@ def test_the_check_under_the_lock_still_decides(
     assert [doc.name for doc in rows(factory)] == ["other.pdf"]
 
 
-def test_a_replacement_asks_the_delete_guards(
+def test_a_replacement_asks_the_replacement_checks(
     api: Api, alice: str, factory: sessionmaker[Session], caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A replacement empties the old text and page images as a deletion does: what refuses the
-    one refuses the other, and the row is returned as it is."""
+    """A replacement empties the old text and page images: a registered check (G15: a run has
+    read the document) refuses it with its sentence, and the row is returned as it is."""
     first = uploaded(api, alice, pdf(), "scan.pdf")
     set_columns(
         factory,
@@ -1349,20 +1323,21 @@ def test_a_replacement_asks_the_delete_guards(
     add_image(factory, first["id"])
     asked: list[uuid.UUID] = []
 
-    def guard(db: Session, document: IngestionDocument) -> str | None:
+    def check(db: Session, document: IngestionDocument) -> str | None:
         asked.append(document.id)
-        return "This document was read by a run and cannot be deleted yet."
+        return deletion.REPLACEMENT_REFUSED
 
-    documents.register_delete_guard(guard)
+    documents.register_replacement_check(check)
+    documents.register_replacement_check(check)  # registered once, whatever is imported twice
     with caplog.at_level("INFO", logger="app.ingestion"):
         again = upload(api, alice, pdf(), "scan again.pdf")
     assert (again.status_code, again.json()["duplicate"]) == (200, True)
     assert (again.json()["id"], again.json()["name"]) == (first["id"], "scan.pdf")
     assert [str(document_id) for document_id in asked] == [first["id"]]
     # The refusal speaks: the page has a sentence to show, not a silent duplicate.
-    assert again.json()["refused"] == documents.REPLACEMENT_REFUSED
+    assert again.json()["refused"] == deletion.REPLACEMENT_REFUSED
     assert first["refused"] is None
-    assert " - " not in documents.REPLACEMENT_REFUSED
+    assert " - " not in deletion.REPLACEMENT_REFUSED
     stored = row(factory, first["id"])
     assert (stored.text_status, stored.text, stored.raw) == (
         TextStatus.failed,
@@ -1371,8 +1346,8 @@ def test_a_replacement_asks_the_delete_guards(
     )
     assert count(factory, IngestionImage) == 1
     assert "document replacement refused" in [record.getMessage() for record in caplog.records]
-    # Without the guard's objection the same upload takes the row over.
-    documents._delete_guards.clear()
+    # Without the check's objection the same upload takes the row over.
+    documents._checks.clear()
     assert upload(api, alice, pdf(), "scan again.pdf").status_code == 201
 
 

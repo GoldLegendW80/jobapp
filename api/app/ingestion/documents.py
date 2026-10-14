@@ -27,8 +27,9 @@ Storing (`store_file`, `store_paste`), in one transaction that the caller commit
 1. The same file already there for this user (`unique(user_id, sha256)`): it is returned and
    nothing is written, unless the row is replaceable (it failed, or an older parser left it
    `done` with a note): then the new upload takes the row over, same id, back to the start. A
-   replacement empties the old text and page images as a deletion does, so it asks the delete
-   guards first: a row a guard protects is returned as it is.
+   replacement empties the old text and page images, so it asks the replacement checks first:
+   a row a check protects (G15: a run has read it) is returned as it is, with the check's
+   sentence.
    For a new file the document count and the quota are checked here a first time, before a
    byte goes to Postgres: a user at the limit costs the database nothing. The check that
    decides is the one of step 3.
@@ -50,8 +51,8 @@ indistinguishable from one that does not exist. Lock order (plan, "Lock order"):
 documents advisory lock comes before a document row (4), and nothing that holds a document row
 takes it.
 
-Deleting is a hard delete: the row, its bytes, its text and its page images leave in one
-statement. `register_delete_guard` lets a later task refuse it (G10: a document a run has read).
+Deleting is a hard delete, done by `deletion.delete` (G15) together with what was drawn from the
+document: `lock_document` is the row lock it takes (4).
 
 Nothing here logs a file name, a text or a match: ids, sizes, types, statuses and rule names.
 """
@@ -97,8 +98,8 @@ PASTE_MAX_CHARS = 100_000
 # older version left with a note is then read again when the user uploads it again.
 # 2 since G8: the scanned pages of a PDF are rendered, so a PDF that version 1 left `done`
 # with "pages hold no text and wait for the image reader" is read again on a new upload. That
-# replacement empties the old text as a deletion does and so asks the delete guards first
-# (`_store`): a document whose text a later task protects is returned as it is.
+# replacement empties the old text and so asks the replacement checks first (`_store`): a
+# document whose text a later task protects is returned as it is.
 PARSER_VERSION = 2
 
 UNTITLED = "Untitled"
@@ -186,25 +187,11 @@ class NoTextError(Exception):
     """The document has no text yet (it waits for a parser, or it failed)."""
 
 
-class DeleteRefusedError(Exception):
-    """A delete guard refuses the deletion, with the sentence for the user."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
-
-REPLACEMENT_REFUSED = (
-    "This file is already among your documents and a run has read it, so this upload did not "
-    "replace it. Replacing a document that a run has read arrives with a coming update."
-)
-
-
 @dataclass(frozen=True)
 class Stored:
     document: IngestionDocument
     created: bool  # False: the same file was already there and is returned as it is
-    refused: str | None = None  # the sentence, when a guard kept the upload from replacing it
+    refused: str | None = None  # the sentence, when a check kept the upload from replacing it
 
 
 @dataclass(frozen=True)
@@ -536,9 +523,10 @@ def _store(
         return Stored(document, created=False)
     replaced = document is not None
     if document is not None:
-        if any(guard(db, document) for guard in _delete_guards):
+        refused = next((one for one in (check(db, document) for check in _checks) if one), None)
+        if refused:
             _log("document replacement refused", document)
-            return Stored(document, created=False, refused=REPLACEMENT_REFUSED)
+            return Stored(document, created=False, refused=refused)
         # The row starts over: what the failed or partial read left goes first, so the quota
         # below counts the user's other documents only.
         db.execute(sa.delete(IngestionImage).where(IngestionImage.document_id == document.id))
@@ -827,37 +815,26 @@ def confirm_secret(
     return document
 
 
-# --- deleting ------------------------------------------------------------------------------
+# --- replacing what a run has read ---------------------------------------------------------------
 
-# Returns the sentence that refuses the deletion, or None to let it through.
-DeleteGuard = Callable[[Session, IngestionDocument], str | None]
-_delete_guards: list[DeleteGuard] = []
-
-
-def register_delete_guard(guard: DeleteGuard) -> None:
-    """Called once at import by a later task's own module (G10's delete_guard.py), which the
-    api must import (from its router file), not the worker alone. A guard runs under the
-    document's row lock: it may read, and must take no lock that comes before a document row
-    in the lock order. It is asked before a deletion and before a replacement."""
-    if guard not in _delete_guards:
-        _delete_guards.append(guard)
+# Returns the sentence that refuses to replace the document's text, or None to let it through.
+ReplacementCheck = Callable[[Session, IngestionDocument], str | None]
+_checks: list[ReplacementCheck] = []
 
 
-def delete_document(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> bool:
-    """Remove the document for good: its row, bytes and text, and its page images through the
-    foreign key, in the caller's transaction. False when the user has no such document.
-    Raises DeleteRefusedError when a registered guard refuses."""
-    document = _locked(db, user_id, document_id)
-    if document is None:
-        return False
-    for guard in _delete_guards:
-        reason = guard(db, document)
-        if reason:
-            raise DeleteRefusedError(reason)
-    _log("document deleted", document)
-    db.delete(document)
-    db.flush()
-    return True
+def register_replacement_check(check: ReplacementCheck) -> None:
+    """Called once at import by a later task's own module (G15's deletion.py), which the api
+    imports from its router file. A check runs under the document's row lock: it may read, and
+    must take no lock that comes before a document row in the lock order."""
+    if check not in _checks:
+        _checks.append(check)
+
+
+def lock_document(
+    db: Session, user_id: uuid.UUID, document_id: uuid.UUID
+) -> IngestionDocument | None:
+    """The user's document, its row locked until the transaction ends (4), or None."""
+    return _locked(db, user_id, document_id)
 
 
 def _log(event: str, document: IngestionDocument, **extra: object) -> None:

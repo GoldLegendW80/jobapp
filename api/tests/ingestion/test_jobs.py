@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
 from app.agents.ratelimit import RateLimiter
-from app.ingestion import documents, documents_router, jobs, secrets
+from app.ingestion import deletion, documents, documents_router, jobs, secrets
 from app.ingestion import parser_client as pc
 from app.ingestion.models import (
     TEXT_MAX_CHARS,
@@ -582,7 +582,7 @@ def test_the_write_waits_for_a_deletion_in_flight_and_then_finds_no_row(
     body = uploaded(api, alice, pdf(), "cv.pdf")
     owner = user_id(factory, ALICE)
     deleting = factory()
-    assert documents.delete_document(deleting, owner, uuid.UUID(body["id"])) is True
+    assert deletion.delete(deleting, owner, uuid.UUID(body["id"]), clock.now) is True
     parser = Parser(parsed())
     # The claim happened before the deletion started: play the write alone.
     claim = jobs._Claim(
