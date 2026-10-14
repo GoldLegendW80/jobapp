@@ -4,6 +4,7 @@ so on any system). What each failure becomes for the engine, how fast, and what 
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import socket
@@ -746,23 +747,28 @@ def test_what_is_not_the_death_of_the_child_stays_a_failure_of_the_server(code: 
 
 
 def test_through_the_real_server_an_image_child_that_dies_is_the_files_failure() -> None:
-    with BackgroundServer(wall_s=0.5, max_answer=100_000) as background:
+    # Only the sleeping child is meant to meet the wall limit, so it gets a server of its
+    # own with a short one; the others get a limit no loaded machine reaches while a child
+    # starts, or a child that dies by a signal would read as too slow.
+    cases = {
+        30.0: (
+            ({"act": "signal", "name": "SIGSEGV"}, "file", "bomb"),
+            ({"act": "signal", "name": "SIGABRT"}, "file", "bomb"),
+            ({"act": "signal", "name": "SIGKILL"}, "file", "bomb"),
+            ({"act": "signal", "name": "SIGXCPU"}, "file", "too_slow"),
+            ({"act": "exit", "status": 70}, "server", "sandbox"),
+            ({"act": "flood", "blocks": 100}, "server", "output_cap"),
+        ),
+        0.5: (({"act": "sleep", "s": 30}, "file", "too_slow"),),
+    }
 
-        async def test() -> None:
-            for kind in ("image", "pdf_render"):
-                for options, failure, code in (
-                    ({"act": "signal", "name": "SIGSEGV"}, "file", "bomb"),
-                    ({"act": "signal", "name": "SIGABRT"}, "file", "bomb"),
-                    ({"act": "signal", "name": "SIGKILL"}, "file", "bomb"),
-                    ({"act": "signal", "name": "SIGXCPU"}, "file", "too_slow"),
-                    ({"act": "sleep", "s": 30}, "file", "too_slow"),
-                    ({"act": "exit", "status": 70}, "server", "sandbox"),
-                    ({"act": "flood", "blocks": 100}, "server", "output_cap"),
-                ):
-                    with pytest.raises(pc.ParserError) as raised:
-                        await pc.parse(
-                            kind, b"a file", options, host="127.0.0.1", port=background.port
-                        )
-                    assert (raised.value.failure, raised.value.code) == (failure, code), options
+    async def check(port: int, expected: tuple) -> None:
+        for kind in ("image", "pdf_render"):
+            for options, failure, code in expected:
+                with pytest.raises(pc.ParserError) as raised:
+                    await pc.parse(kind, b"a file", options, host="127.0.0.1", port=port)
+                assert (raised.value.failure, raised.value.code) == (failure, code), options
 
-        run(test)
+    for wall_s, expected in cases.items():
+        with BackgroundServer(wall_s=wall_s, max_answer=100_000) as background:
+            run(functools.partial(check, background.port, expected))
