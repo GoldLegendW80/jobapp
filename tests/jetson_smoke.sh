@@ -126,9 +126,9 @@ if rc exec -T api python -c "'import claude_agent_sdk'" >/dev/null 2>&1; then
 fi
 [[ "$(rc exec -T api id -u | tr -d '\r')" == "10001" ]] || fail "api does not run as uid 10001"
 ok "runtime image: no dev dependencies, runs as uid 10001"
-[[ "$(r "docker inspect -f '{{.Architecture}}' jobapp-api:latest jobapp-worker:latest jobapp-caddy:latest" | sort -u)" == "arm64" ]] ||
+[[ "$(r "docker inspect -f '{{.Architecture}}' jobapp-api:latest jobapp-worker:latest jobapp-caddy:latest jobapp-renderer:latest" | sort -u)" == "arm64" ]] ||
   fail "images are not arm64"
-ok "jobapp-api, jobapp-worker and jobapp-caddy images are arm64"
+ok "jobapp-api, jobapp-worker, jobapp-caddy and jobapp-renderer images are arm64"
 
 # --- parser (ingestion G2a) --------------------------------------------------------------------
 # Read only, a few seconds: what the container is (docker inspect, judged here by

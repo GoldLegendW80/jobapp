@@ -466,7 +466,7 @@ check_port() {
 build_images() {
   step "build on $HOST (native arm64, BuildKit cache)"
   local svc start
-  for svc in api worker caddy; do
+  for svc in api worker caddy renderer; do
     start=$SECONDS
     rcompose --progress=quiet build "$svc" || die "build of $svc failed"
     record "build $svc" "$start"
