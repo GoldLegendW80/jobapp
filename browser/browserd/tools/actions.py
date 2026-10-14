@@ -6,12 +6,14 @@ why. Arguments are checked before the page is touched; the page is then reached 
 is closed, and the tab acted on is taken back (the navigation that left the list is reported).
 
 Every tool runs through `run`: the tab's URL and its main frame's are checked against the list
-each time the tool reaches the page (before it acts or reads), and again before a result leaves, so no content of a page off the
-list is answered. A server side redirect (3xx) is not seen by the route guard (Playwright calls a
-route handler for the first URL of a chain only): the redirected request is caught by the context's
-request listener, which stops the load (`window.stop()`) and records it, and settle() takes the
-tab back. That request has left by then (declared open point: browserd cannot hold it, B6 egress
-can), but its page is never read nor acted on.
+each time the tool reaches the page (before it acts or reads), and again before a successful result
+leaves, so no content of a page off the list is answered. A server side redirect (3xx) is not seen
+by the route guard (Playwright calls a route handler for the first URL of a chain only): the
+redirected request is caught by the context's request listener, which stops the load
+(`window.stop()`) and records it, and settle() takes the tab back. That request has left by then
+(declared open point: browserd cannot hold it through Playwright; its egress proxy, proxy.py,
+could refuse a host off the lease's list, while B6's host rule drops private ranges only), but its
+page is never read nor acted on.
 
 Refs are those of the last `browser_snapshot` (Playwright's `aria-ref=eN` selector). A ref the
 page no longer has (a re-render) answers `stale_ref`: nothing is clicked elsewhere.
