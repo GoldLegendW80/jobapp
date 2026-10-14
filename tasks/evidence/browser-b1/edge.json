@@ -1,0 +1,135 @@
+{
+ "display_s": 0.05,
+ "start_s": 0.79,
+ "attach_s": 0.26,
+ "request_headers": {
+  "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "accept-language": "en-US,en;q=0.9"
+ },
+ "navigator": {
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "platform": "Linux x86_64",
+  "webdriver": false,
+  "languages": [
+   "en-US",
+   "en"
+  ],
+  "brands": null,
+  "high": null,
+  "tz": "Europe/Paris",
+  "webgl": null
+ },
+ "snapshot": {
+  "playwright_version": "1.55.0",
+  "channel snapshotForAI": {
+   "chars": 2675,
+   "has_refs": true
+  },
+  "locator('body').aria_snapshot()": {
+   "chars": 1779,
+   "has_refs": false
+  },
+  "page.accessibility.snapshot()": {
+   "chars": 3065,
+   "has_refs": false
+  }
+ },
+ "upload": {
+  "set_input_files": "b1-cv.pdf, 193 bytes, PDF",
+  "file_chooser": "b1-cv.pdf, 193 bytes, PDF",
+  "server_received": {
+   "bytes": 1953,
+   "pdf": 2,
+   "files": 2
+  },
+  "upload_s": 0.35
+ },
+ "killed": {
+  "noticed_s": 0.1,
+  "error": "TargetClosedError: Page.evaluate: Target page, context or browser has been closed"
+ },
+ "lock_after_kill": {
+  "singleton_lock_left": true,
+  "lock_target": "4b8ea5302a4b-21",
+  "restart_without_clearing": {
+   "started": true,
+   "start_s": 0.72
+  }
+ },
+ "restore": {
+  "close_s": 0.32,
+  "start_s": 0.69,
+  "restored_tab_s": 1.02,
+  "restored_urls": [
+   "http://b1spike-k7q2-pages:8000/form.html",
+   "about:blank"
+  ],
+  "session_cookie_kept": true,
+  "cookie_expires": -1
+ },
+ "foreign_lock": {
+  "started": false,
+  "start_s": 20.02,
+  "log": [
+   "[565:565:1014/105838.077198:ERROR:chrome/browser/process_singleton_posix.cc:365] The profile appears to be in use by another Chromium process (4242) on another computer (b1spike-gone). Chromium has locked the profile so that it doesn't get corrupted. If you are sure no other processes are using this profile, you can unlock the profile and relaunch Chromium.",
+   "Warning: Missing charsets in String to FontSet conversion"
+  ],
+  "after_clearing": {
+   "started": true,
+   "start_s": 0.63
+  }
+ },
+ "secure_context_headers": {
+  "sec-ch-ua": "\"Chromium\";v=\"155\", \"Not(A:Brand\";v=\"24\"",
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-arch": "\"arm\"",
+  "sec-ch-ua-platform": "\"Linux\"",
+  "sec-ch-ua-platform-version": "\"\"",
+  "sec-ch-ua-model": "\"\"",
+  "sec-ch-ua-full-version-list": "\"Chromium\";v=\"155.0.8059.39\", \"Not(A:Brand\";v=\"24.0.0.0\"",
+  "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36",
+  "accept-language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"
+ },
+ "secure_context_navigator": {
+  "platform": "Linux x86_64",
+  "brands": [
+   {
+    "brand": "Chromium",
+    "version": "155"
+   },
+   {
+    "brand": "Not(A:Brand",
+    "version": "24"
+   }
+  ],
+  "mobile": false,
+  "high": {
+   "architecture": "arm",
+   "bitness": "64",
+   "brands": [
+    {
+     "brand": "Chromium",
+     "version": "155"
+    },
+    {
+     "brand": "Not(A:Brand",
+     "version": "24"
+    }
+   ],
+   "fullVersionList": [
+    {
+     "brand": "Chromium",
+     "version": "155.0.8059.39"
+    },
+    {
+     "brand": "Not(A:Brand",
+     "version": "24.0.0.0"
+    }
+   ],
+   "mobile": false,
+   "model": "",
+   "platform": "Linux",
+   "platformVersion": ""
+  }
+ }
+}

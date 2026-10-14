@@ -1,0 +1,24 @@
+Browser B1, commands run on 2026-10-14 from the Mac (results in the JSON files of this folder).
+
+ops/browser-measure.sh --real --dir b1spike-k7q2 --seccomp <Docker default profile + seccomp-userns-rule.json> --step build
+ops/browser-measure.sh --real --dir b1spike-k7q2 --seccomp <same> --step sandbox          -> probe.json
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step matrix --pages blank,form,workday --tabs 1 --hold 120
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step matrix --pages slow,hog --tabs 1 --hold 120
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step matrix --pages form,workday --tabs 2 --hold 120
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step matrix --pages blank,slow,hog --tabs 2 --hold 120
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step matrix --pages workday,form --tabs 3 --hold 120
+    -> matrix-shared-profile.jsonl: these runs reused one profile per container, and the spec's
+       "continue where you left off" restored the previous row's tabs into the next row, so only
+       the first row of each run (and form after blank) is kept from it
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step matrix --pages workday,hog --tabs 1 --hold 120     (fresh profile per row from here)
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step matrix --pages workday,slow,hog --tabs 2 --hold 120 (first attempt: slow, 2 tabs, timed out; rerun passed)
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step matrix --pages form --tabs 3 --hold 120
+    -> matrix.jsonl; matrix-table.json is the table of the plan, from both files
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step edge                              -> edge.json, form-uploaded.png, snapshot-*.txt
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step hog                               -> hog.json (container limit 1152m)
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step fetch
+ops/browser-measure.sh --real --dir b1spike-k7q2 --step clean
+    -> docker images | grep -c b1spike: 0; no b1spike container, network or folder left;
+       debian:bookworm-slim (pulled by the build) removed.
+       Jetson at the end: Mem total 7619, used 1983, available 5319 MiB; swap used 577 of 3809;
+       / 116G, used 77G, 35G available (69 %).

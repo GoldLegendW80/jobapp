@@ -1,0 +1,20 @@
+{
+ "limit_mib": 1152.0,
+ "page_crashed_s": 11.41,
+ "oom_kill": 1,
+ "oom_events": 1,
+ "browser_alive": true,
+ "new_tab_after_crash": "Apply: Applied AI Engineer",
+ "cgroup_peak_mib": 1152.0,
+ "anon_peak_mib": 1120.4,
+ "shm_peak_mib": 0.0,
+ "pss_peak_mib": {
+  "all": 1470.8,
+  "chromium": 1381.0,
+  "driver": 106.7,
+  "websockify": 28.2,
+  "x11vnc": 9.7,
+  "xvfb": 51.1
+ },
+ "chromium_processes_peak": 12
+}

@@ -156,7 +156,48 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 ## Measurements
 
 ### B1
-Nothing yet.
+**2026-10-14, on the Jetson** (Tegra kernel 5.15.148, Docker 29.8.0, cgroup v2), with `ops/browser-measure.sh --real` (folder, containers, network and image `b1spike-*`, all removed afterwards). Image of `browser/Dockerfile`: Debian bookworm slim, `chromium 155.0.8059.39-1~deb12u1` (pinned), Xvfb 21.1.7, x11vnc 0.9.16, websockify 0.10.0, noVNC 1.3.0, Playwright 1.55.0; **1,358 MB**, built in 252 s. Evidence in `tasks/evidence/browser-b1/` (JSON of every run, screenshots, the three snapshots).
+
+**Pages.** Local static pages only, on an internal Docker network: the plan's public Workday page and LinkedIn's public search were **not** opened (the orchestrator forbade any request to a real job site for B1); `workday.html` is a heavy stand in (about 4 MB of generated script compiled at load, six steps of sixty fields, a 250 option combobox every sixth field, a mutation observer, an autosave timer, a spinner), `form.html` a Greenhouse and Ashby style form, `slow.html` a page whose load waits 6 s, `hog.html` capped at 320 MiB of touched typed arrays. Each row: a fresh profile, every tab loaded, the first tab acted on, then held 120 s with a VNC client asking x11vnc for Tight or ZRLE updates every 100 ms. Container limit 1,600 MiB, `--shm-size 128m`, `--cpus 3`, `--cap-drop ALL`, `no-new-privileges`.
+
+**Memory (MiB).** cgroup: the container's `memory.current` sampled every 0.2 s (kernel 5.15 has no `memory.peak`); anon: `memory.stat` anon; PSS: the proportional set size of each process group, which also counts the file pages of the Chromium binary and the fonts that the page cache had already charged to an earlier container, so it is the figure to size against after a reboot (cold cache).
+
+| Page | Tabs | cgroup peak | anon peak | PSS all | Chromium | Xvfb | x11vnc | websockify | Playwright driver | Load s | Act s |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| blank | 1 | 319 | 264 | 613 | 426 | 53 | 14 | 28 | 97 | 0.17 | |
+| blank | 2 | 320 | 284 | 625 | 437 | 53 | 15 | 28 | 100 | 0.14, 0.04 | |
+| form | 1 | 349 | 290 | 657 | 459 | 51 | 14 | 28 | 105 | 0.20 | fill 0.88, paced 17.4 |
+| form | 2 | 357 | 293 | 665 | 470 | 51 | 14 | 28 | 103 | 0.15, 0.14 | fill 5.9, paced 23.1 |
+| form | 3 | 374 | 298 | 681 | 489 | 53 | 14 | 28 | 100 | 0.18, 0.14, 0.13 | fill 5.9, paced 22.8 |
+| workday | 1 | 422 | 349 | 732 | 523 | 53 | 14 | 28 | 116 | 0.61 | fill 2.7 |
+| workday | 2 | 450 | 374 | 757 | 558 | 51 | 14 | 28 | 107 | 0.83, 0.57 | fill 3.2 |
+| workday | 3 | 499 | 417 | 807 | 602 | 53 | 14 | 28 | 113 | 0.58, 0.66, 0.54 | fill 3.5 |
+| slow | 1 | 325 | 279 | 632 | 441 | 50 | 13 | 28 | 100 | 6.11 | ready 7.8 later |
+| slow | 2 | 346 | 284 | 637 | 442 | 51 | 14 | 28 | 107 | 6.09, 6.09 | ready 7.9 later |
+| hog (320) | 1 | 654 | 600 | 956 | 757 | 51 | 14 | 28 | 105 | 0.19 | |
+| hog (320) | 2 | 993 | 934 | 1,291 | 1,092 | 51 | 14 | 28 | 105 | 0.18, 0.12 | |
+
+Form times: "fill" is `fill()` of seven fields, two selects, two yes or no buttons and a checkbox; "paced" types at 100 ms per character (the tool layer's pacing). With two or three tabs the form is filled in the first tab, which is then in the background: the same fill takes 5.9 s instead of 0.9 s (Chromium throttles background tabs), so the tool layer brings the tab it acts on to the front. `/dev/shm` stayed at 0 MiB in every row (Chromium uses memfd), so 128 MB of shm is never the limit. 12 to 16 Chromium processes. The live view costs about 43 MiB (x11vnc 10 to 15, websockify 28) with a raw RFB client on x11vnc; the websocket path through websockify and a noVNC page in a browser were not exercised (B4). Once in five runs the second tab of `slow.html` did not reach `load` within 60 s; it passed on the rerun (open).
+
+**Cold start.** Xvfb ready in 0.05 s, Chromium to a usable CDP 0.44 to 0.85 s, `connect_over_cdp` 0.17 to 0.54 s: about 1.5 s from the container's first process (container creation not counted). Idle with `about:blank`: cgroup 332, PSS 636.
+
+**Memory hog to the limit** (`--memory 1152m`, uncapped `hog.html`): the cgroup reached 1,152, the kernel killed the renderer after 11.4 s (`oom_kill` 1 in `memory.events`), Playwright got the page's `crash` event, the browser process stayed alive and a new tab opened the form. The Jetson was not touched (available memory 5.3 GB before and after). Docker's `--memory` without `--memory-swap` lets the container swap as much again (the Jetson has 3.8 GB of swap), which slows the kill: B2 sets `memswap_limit` equal to `mem_limit`.
+
+**Chromium killed under Playwright:** `SIGKILL` of the browser's process group, the next Playwright call fails with `TargetClosedError` after 0.1 s.
+
+**Profile lock.** After a kill the `SingletonLock` (`<host>-<pid>`) is left; a restart in the same container takes it over by itself (0.72 s). A lock left by another host name (a recreated container on a persisted profile) blocks the start: "The profile appears to be in use by another Chromium process on another computer", no CDP within 20 s; after removing `SingletonLock`, `SingletonSocket` and `SingletonCookie` it starts in 0.63 s. B2: browserd clears them before a start when it runs no Chromium on that profile itself (or the service gets a fixed `hostname`).
+
+**Close and start on a loaded profile** (`session.restore_on_startup = 1`): `Browser.close` over CDP 0.32 s to exit, start 0.69 s, restored tab present 1.0 s after the start; the session cookie (no expiry, `expires -1`) survived. A hand off (two of them) costs about 2 s.
+
+**Sandbox.** The kernel allows unprivileged user namespaces (`user.max_user_namespaces` 29365, no AppArmor restriction). Under Docker's default seccomp profile Chromium refuses to start ("No usable sandbox!"; Debian ships no setuid helper). Docker's default profile plus one rule allowing `clone`, `unshare`, `setns` and `chroot` without `CAP_SYS_ADMIN` works with `--cap-drop ALL` and `no-new-privileges`: renderers run in a new user namespace and `chrome://sandbox` says "You are adequately sandboxed" (namespace layer, PID and network namespaces, seccomp BPF with TSYNC). Without `chroot` in the rule Chromium dies on `sys_chroot("/proc/self/fdinfo/")`. `seccomp=unconfined` also works. So no `--no-sandbox` (unlike the documents renderer, which runs under Docker's default profile); the rule is in `tasks/evidence/browser-b1/seccomp-userns-rule.json` for B2's `seccomp.json`.
+
+**Uploads over the local CDP connection.** `set_input_files` on a visible file input and a file chooser (`expect_file_chooser` on an Attach button that clicks a hidden input) both work with a path inside the container: the page read "b1-cv.pdf, 193 bytes, PDF" for each, and the pages server received both PDFs in the multipart post. No transfer step is needed beyond the file being in the browser container.
+
+**Snapshot with refs.** Playwright 1.55's Python client has no public API for it: `locator("body").aria_snapshot()` gives the ARIA YAML without refs, `page.accessibility.snapshot()` (deprecated) a tree without refs. What Playwright MCP uses (`page._snapshotForAI()` in JavaScript) is the driver's protocol method `snapshotForAI`, which 1.55 has; from Python it is reached on the page's channel, `page._sync(page._impl_obj._channel.send("snapshotForAI", None, {"timeout": 10000}))`, and returns the MCP format (`- textbox "First name *" [ref=e8]`). It is private: B5 pins the version and tests it, or runs the tool layer on the Node client where `_snapshotForAI` is at least a named method.
+
+**User agent and client hints** (the fingerprint is not the spec's "Linux aarch64"): `User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36` (Chromium's reduced, frozen platform), `navigator.platform` "Linux x86_64", `navigator.webdriver` false; in a secure context `Sec-CH-UA: "Chromium";v="155", "Not(A:Brand";v="24"`, platform "Linux", architecture "arm", bitness 64, full version 155.0.8059.39. On plain http (not a secure context) there is no `navigator.userAgentData` and no `Sec-CH-UA`. No WebGL context at all (no GPU under Xvfb, and Chromium no longer falls back to SwiftShader by itself): a detection signal the owner may want B2 to look at. `--lang=fr-FR` is ignored on Linux (`Accept-Language: en-US`); the preference `intl.accept_languages` gives `fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7`, so B2 sets the language through the preference (or `LANGUAGE`). `TZ=Europe/Paris` is honoured.
+
+**Verdict.** Debian's Chromium works over CDP: no need for Playwright's build. **Container limit: 1,024 MB** (`mem_limit: 1024m`, `memswap_limit: 1024m`, `shm_size: 128m` inside it), not 1,152: the heaviest realistic row (the Workday stand in in three tabs, the spec's cap) peaks at 499 in the cgroup and 807 in PSS against the spec's assumed 950, and 1,024 leaves about 200 MB over the PSS for what local pages lack (cross site iframes such as reCAPTCHA, each its own renderer under site isolation, and larger real bundles); browserd's 90 % guard then closes a tab at about 920. **The stack:** compose's limits sum to 4,352 MB with the documents renderer (#262), so 5,376 with the browser, 256 over the 5G. Proposal for the owner (no other limit is changed here): (a) the renderer 384m to 256m (its measured peak is 134 MiB) and the parser 640m to 512m (a starting figure that ingestion's G2b and G8 settle), which makes exactly 5,120; or, if the parser needs its 640m, (b) a scheduling rule that a browser lease and a render never run at once (one lock the worker takes for both), which leaves 5,376 of limits but a concurrent worst case of 4,992. The public Workday page and LinkedIn's search remain to be measured once, by hand, at Checkpoint B or in B2, and the limit revisited if they pass 900 in PSS.
 
 ### B2
 Nothing yet.
