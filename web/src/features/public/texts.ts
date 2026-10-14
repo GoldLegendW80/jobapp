@@ -20,8 +20,18 @@ export const BACKUP_DAYS = 7;
 export const STORAGE_MAX_MESSAGES = 20_000;
 export const STORAGE_MAX_MEGABYTES = 300;
 
-/** Where the administrator is reached: the address of the owner, also the one he gives Google. */
-export const CONTACT_EMAIL = "hthautin@gmail.com";
+/**
+ * Where the administrator is reached, set at build time with `VITE_CONTACT_EMAIL`. No address is
+ * published until the owner has confirmed which one to show: unset or blank gives an empty string.
+ * A function and not a constant, so that a test can stub the value.
+ */
+export function contactEmail(): string {
+  const value: unknown = import.meta.env.VITE_CONTACT_EMAIL;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+/** The Contact section says this while no address is configured. */
+export const NO_CONTACT = "No contact address is published yet.";
 
 /**
  * The terms of the first sync's search. Gmail is asked for mail that contains one of the
@@ -94,6 +104,6 @@ export const TERMS_RESPONSIBILITY =
 
 /** The public home page. */
 export const HOME_INTRO =
-  "jobapp is a private tool to follow a job search: the postings you keep, the documents you prepare for them and, when you connect Gmail, the mail that answers them.";
+  "jobapp is a private tool to follow a job search: the postings it finds and tracks, your profile and, when you connect Gmail, the mail that answers them.";
 export const HOME_INVITE =
   "It is open by invitation only. If you have an account, sign in.";

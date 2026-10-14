@@ -1,13 +1,14 @@
 import {
   AFTER_DISCONNECT,
   ASSISTANT,
-  CONTACT_EMAIL,
+  contactEmail,
   DELETE_ACCOUNT,
   DISABLED_ACCOUNT,
   DISCONNECT,
   GOOGLE_POLICY_URL,
   HOW_LONG,
   LIMITED_USE,
+  NO_CONTACT,
   SEARCH_COMPANIES,
   SEARCH_KEYWORDS,
   SEARCH_SYSTEMS,
@@ -19,6 +20,7 @@ import { PublicLayout, Section } from "./public-layout";
 
 /** What the app does with a connected Gmail, in the words of ./texts. Public: no session. */
 export function PrivacyPage() {
+  const contact = contactEmail();
   return (
     <PublicLayout title="Privacy">
       <div className="flex flex-col gap-1">
@@ -63,12 +65,16 @@ export function PrivacyPage() {
       </Section>
       <Section id="contact" title="Contact">
         <p>
-          <a
-            className="underline underline-offset-4"
-            href={`mailto:${CONTACT_EMAIL}`}
-          >
-            {CONTACT_EMAIL}
-          </a>
+          {contact === "" ? (
+            NO_CONTACT
+          ) : (
+            <a
+              className="underline underline-offset-4"
+              href={`mailto:${contact}`}
+            >
+              {contact}
+            </a>
+          )}
         </p>
       </Section>
       <Section id="google" title="Google API Services User Data Policy">

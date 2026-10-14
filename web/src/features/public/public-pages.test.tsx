@@ -1,6 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
 import { renderApp } from "@/test/render";
@@ -50,11 +50,27 @@ describe("the sentences of /privacy", () => {
   });
 });
 
+describe("the contact address", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is empty when VITE_CONTACT_EMAIL is unset or blank", () => {
+    vi.stubEnv("VITE_CONTACT_EMAIL", "");
+    expect(texts.contactEmail()).toBe("");
+    vi.stubEnv("VITE_CONTACT_EMAIL", "   ");
+    expect(texts.contactEmail()).toBe("");
+  });
+
+  it("is the trimmed value of VITE_CONTACT_EMAIL", () => {
+    vi.stubEnv("VITE_CONTACT_EMAIL", "  contact@example.org ");
+    expect(texts.contactEmail()).toBe("contact@example.org");
+  });
+});
+
 describe.each([
   ["signed out", null],
   ["signed in", admin],
 ])("the public pages, %s", (_label, user) => {
-  it("shows /privacy with every sentence, the terms and the contact address", async () => {
+  it("shows /privacy with every sentence, the terms and the contact", async () => {
     fakeSession(user);
     const seen = watchRequests();
     renderApp("/privacy");
@@ -76,12 +92,41 @@ describe.each([
     const list = screen.getByRole("list", { name: "Search terms" });
     for (const term of [...texts.SEARCH_KEYWORDS, ...texts.SEARCH_SYSTEMS])
       expect(list).toHaveTextContent(term);
-    expect(
-      screen.getByRole("link", { name: texts.CONTACT_EMAIL }),
-    ).toHaveAttribute("href", `mailto:${texts.CONTACT_EMAIL}`);
     expect(document.title).toBe("Privacy · jobapp");
     // Static content: no session check, no api call.
     expect(seen).toEqual([]);
+  });
+
+  it("links the configured contact address in the Contact section", async () => {
+    vi.stubEnv("VITE_CONTACT_EMAIL", "contact@example.org");
+    fakeSession(user);
+    renderApp("/privacy");
+    const section = (
+      await screen.findByRole("heading", { level: 2, name: "Contact" })
+    ).closest("section") as HTMLElement;
+    expect(
+      within(section).getByRole("link", { name: "contact@example.org" }),
+    ).toHaveAttribute("href", "mailto:contact@example.org");
+    expect(within(section).queryByText(texts.NO_CONTACT)).toBeNull();
+    vi.unstubAllEnvs();
+  });
+
+  it("says that no contact address is published when none is configured", async () => {
+    vi.stubEnv("VITE_CONTACT_EMAIL", "");
+    fakeSession(user);
+    renderApp("/privacy");
+    const section = (
+      await screen.findByRole("heading", { level: 2, name: "Contact" })
+    ).closest("section") as HTMLElement;
+    expect(
+      within(section).getByText("No contact address is published yet."),
+    ).toBeInTheDocument();
+    expect(within(section).queryByRole("link")).toBeNull();
+    expect(document.body.textContent).not.toContain("@");
+    expect(document.querySelector('a[href^="mailto:"]')).toBeNull();
+    // The sentence the plan quotes stays, whatever the contact.
+    expect(screen.getByText(texts.DELETE_ACCOUNT)).toBeInTheDocument();
+    vi.unstubAllEnvs();
   });
 
   it("shows /terms and calls no api", async () => {
