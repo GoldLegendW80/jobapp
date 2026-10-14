@@ -115,7 +115,7 @@ CONTEXTS: dict[str, Any] = {
     "referral_bank": lambda: Context(
         USER, _sections(), Posting.at("Paris"), bank=_bank(Referrer_s_full_name="Ada Example")
     ),
-    "docs": lambda: Context(USER, _sections(), Posting.at("Paris"), documents=DOCS),
+    "documents": lambda: Context(USER, _sections(), Posting.at("Paris"), documents=DOCS),
     # The second review's invented profile: authorised in France and the EU, sponsorship needed
     # for the UK, the US, Switzerland, Canada and Singapore; a background check consent of yes.
     "probe": lambda: Context(USER, _probe(), Posting.at("Paris, France")),
@@ -186,8 +186,8 @@ QUESTIONS: list[Case] = [
         expected="French (Mother tongue), English (Advanced (C1))",
     ),
     C("comment connu", "Comment avez-vous connu notre entreprise ?", expected=A["heard_about"]),
-    C("cv file", "CV", "file", context="docs", expected="/x/cv.pdf"),
-    C("lettre file", "Lettre de motivation", "file", context="docs", expected="/x/letter.pdf"),
+    C("cv file", "CV", "file", context="documents", expected="/x/cv.pdf"),
+    C("lettre file", "Lettre de motivation", "file", context="documents", expected="/x/letter.pdf"),
     C("country of residence", "Country of residence", expected="France", origin="own"),
     # B8 third persons
     C("B8 referrer name", "Referrer's full name"),
@@ -680,8 +680,8 @@ QUESTIONS: list[Case] = [
         origin="own",
     ),
     # documents and free text
-    C("resume file", "Resume/CV", "file", context="docs", expected="/x/cv.pdf"),
-    C("letter file", "Cover letter", "file", context="docs", expected="/x/letter.pdf"),
+    C("resume file", "Resume/CV", "file", context="documents", expected="/x/cv.pdf"),
+    C("letter file", "Cover letter", "file", context="documents", expected="/x/letter.pdf"),
     C("why join", "Why do you want to join us?", "textarea"),
     C("anything else", "Anything else you'd like to share?", "textarea"),
     C("pourquoi", "Pourquoi ce poste ?", "textarea", origin="own"),
