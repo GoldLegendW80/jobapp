@@ -234,6 +234,14 @@ def schema_bound(schema: dict[str, Any], defs: dict[str, Any], depth: int = 0) -
 UNBOUNDED_SCHEMAS = {
     ("POST", "/api/agents/runs"): "input is free JSON, at most 16 KiB (runs_router)",
     ("POST", "/api/proposals/{proposal_id}/accept"): "the edited fields are free JSON",
+    ("PUT", "/api/documents/settings"): (
+        "free JSON validated as DocumentSettings (at most 50 phrases of 100 characters) for its "
+        "own 422 message; the 1 MiB default class bounds it"
+    ),
+    ("PUT", "/api/documents/{document_id}/draft"): (
+        "content is free JSON validated by app.documents.content, each field and list capped; "
+        "its real limit is the 1 MiB default class"
+    ),
     ("PUT", "/api/profile/{section}"): (
         "data is validated per section; facts at most 200,000 bytes. Its real limit is the "
         "1 MiB default class, below the 2 MiB the profile import takes"

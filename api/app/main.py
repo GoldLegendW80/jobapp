@@ -24,6 +24,7 @@ from app.agents.verify import Verifier
 from app.body_limit import BodiesInFlight, LimitRequestBodyMiddleware, SessionGate
 from app.config import Settings, get_settings
 from app.db import build_engine, build_sessionmaker
+from app.documents import routers as documents_routers
 from app.identity import deps as identity_deps
 from app.identity import service as identity_service
 from app.identity import throttle as identity_throttle
@@ -258,5 +259,7 @@ def create_app(
         app.include_router(ingestion_router)
     for mail_router in mail_routers.load():
         app.include_router(mail_router)
+    for documents_router in documents_routers.load():
+        app.include_router(documents_router)
     identity_deps.assert_default_deny(app)
     return app
