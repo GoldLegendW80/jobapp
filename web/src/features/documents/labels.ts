@@ -4,6 +4,9 @@
  */
 import type {
   BaseSource,
+  DocumentOut,
+  Generation,
+  Kind,
   GenerationBrief,
   Origin,
   VersionSummary,
@@ -44,14 +47,19 @@ export const WAIT_SENTENCES: Record<WaitReason, string> = {
     "Waiting for tomorrow: the safety ceiling of the day is reached.",
 };
 
-/** The sentence for a code of the writer's fixed list of failures. */
-export function failedSentence(code: string | null): string {
+/** The sentence for a code of the writer's fixed list of failures (`generate.ERRORS`). */
+export function failedSentence(code: string | null, kind: Kind = "cv"): string {
+  const noun = kind === "letter" ? "letter" : "CV";
   switch (code) {
     case "token_limit":
       return "The writer reached its limit before it finished. Try again.";
     case "invalid_output":
     case "no_result":
-      return "The writer did not return a usable CV. Try again.";
+      return `The writer did not return a usable ${noun}. Try again.`;
+    case "binding_gone":
+      return "The document this was written for no longer exists.";
+    case "run_failed":
+      return "The writer stopped before it finished. Try again.";
     default:
       return "The writer could not finish. Try again.";
   }
@@ -68,6 +76,22 @@ export function isOpen(
       generation.status === "queued" ||
       generation.status === "running")
   );
+}
+
+/** How often an open document is read again while something is being written or rendered. */
+export const POLL_MS = 1500;
+
+/** While a generation waits for the person (consent, credential, ceiling) nothing can change soon. */
+export const WAITING_POLL_MS = 10_000;
+
+/** How long until the document is read again; false when nothing is being written or rendered. */
+export function pollInterval(
+  renderState: DocumentOut["render"]["state"],
+  generation: Generation | GenerationBrief | null,
+): number | false {
+  if (renderState !== "idle") return POLL_MS;
+  if (!isOpen(generation)) return false;
+  return generation?.status === "waiting" ? WAITING_POLL_MS : POLL_MS;
 }
 
 /** The state of a version in a few words: one page, overflow, or not rendered yet. */

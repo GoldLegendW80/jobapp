@@ -17,7 +17,26 @@ import { fakeVersion } from "@/test/documents";
 
 const SEPARATOR = /[–—]| - /;
 
+/** `generate.ERRORS` of the api. */
+const FAILURE_CODES = [
+  "invalid_output",
+  "no_result",
+  "token_limit",
+  "binding_gone",
+  "run_failed",
+];
+
 describe("labels", () => {
+  it("names every failure code of the api, and the letter as a letter", () => {
+    const generic = failedSentence(null);
+    for (const code of FAILURE_CODES) {
+      expect(failedSentence(code)).not.toBe(generic);
+    }
+    expect(failedSentence("no_result", "cv")).toContain("usable CV");
+    expect(failedSentence("no_result", "letter")).toContain("usable letter");
+    expect(failedSentence("invalid_output", "letter")).not.toContain("CV");
+  });
+
   it("has a sentence for every code of the api, none with a dash as separator", () => {
     expect(Object.keys(WAIT_SENTENCES).sort()).toEqual(
       [...WAIT_REASONS].sort(),
@@ -28,9 +47,10 @@ describe("labels", () => {
       ...Object.values(WAIT_SENTENCES),
       ...Object.values(SOURCE_LABELS),
       ...Object.values(ORIGIN_LABELS),
-      ...["token_limit", "invalid_output", "no_result", "run_failed", null].map(
-        failedSentence,
-      ),
+      ...[...FAILURE_CODES, null].flatMap((code) => [
+        failedSentence(code),
+        failedSentence(code, "letter"),
+      ]),
       fitLabel(fakeVersion()),
       fitLabel(fakeVersion({ fit: "overflow" })),
       fitLabel(fakeVersion({ fit: null })),
