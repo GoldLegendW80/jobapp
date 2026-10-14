@@ -271,24 +271,31 @@ class ThisRepositoryTest(unittest.TestCase):
             self.assertTrue((self.ROOT / "web" / config).is_file(), config)
             self.assertIn(f"-c {config}", script)
             self.assertTrue(reason.strip(), config)
-        mail = set(e2e_groups.specs_in_local_check(self.ROOT))
-        self.assertIn("mail-m1.spec.ts", mail)
-        on_disk = {p.name for p in (self.ROOT / "web/e2e").glob("mail-*.spec.ts")}
-        self.assertEqual(mail, on_disk)
-        self.assertFalse(mail & set(e2e_groups.specs_in_ci(self.ROOT)))
+        # The local check's own groups: mail (mail-*.spec.ts) and apply (apply-*.spec.ts).
+        local = set(e2e_groups.specs_in_local_check(self.ROOT))
+        self.assertLessEqual(
+            {"mail-m1.spec.ts", "apply-a1.spec.ts", "apply-a3.spec.ts"}, local
+        )
+        on_disk = {
+            p.name
+            for prefix in ("mail-", "apply-")
+            for p in (self.ROOT / "web/e2e").glob(f"{prefix}*.spec.ts")
+        }
+        self.assertEqual(local, on_disk)
+        self.assertFalse(local & set(e2e_groups.specs_in_ci(self.ROOT)))
 
     def test_the_real_workflow_accounts_for_every_spec(self) -> None:
         self.assertEqual(e2e_groups.check(self.ROOT), [])
 
     def test_the_real_groups_are_the_known_ones(self) -> None:
-        # The identity chain (11: profile-dates.spec.ts joined it with issue #48, apply-a3.spec.ts
-        # with the A3 answer table), the sweep (1) and the apps group (6: agents-streaming.spec.ts
-        # joined it with issue #33), each named one by one; and the ingestion group, which takes
+        # The identity chain (10: profile-dates.spec.ts joined it with issue #48; apply-a3.spec.ts
+        # left it for the apply group of the local check with A1), the sweep (1) and the apps
+        # group (6: agents-streaming.spec.ts joined it with issue #33), each named one by one; and the ingestion group, which takes
         # every ingestion-*.spec.ts through its config, so its count grows with the module and is
         # not written here.
         ran = set(e2e_groups.specs_in_ci(self.ROOT))
         ingestion = {name for name in ran if name.startswith("ingestion-")}
-        self.assertEqual(len(ran - ingestion), 18)
+        self.assertEqual(len(ran - ingestion), 17)
         self.assertIn("ingestion-g1.spec.ts", ingestion)
         on_disk = {p.name for p in (self.ROOT / "web/e2e").glob("ingestion-*.spec.ts")}
         self.assertEqual(ingestion, on_disk)
