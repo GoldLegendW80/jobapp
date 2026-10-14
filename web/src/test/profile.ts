@@ -159,6 +159,7 @@ export function haraldLike(): SectionData {
         times: ["06:17"],
         timezone: "Europe/Paris",
       },
+      documents: { auto: true, min_fit: 70, daily_ceiling: 100 },
     },
     answers: {
       work_authorization: [
@@ -546,6 +547,7 @@ const EMPTY_SECTIONS: Record<SectionName, unknown> = {
       times: ["06:17"],
       timezone: "Europe/Paris",
     },
+    documents: { auto: true, min_fit: 70, daily_ceiling: 100 },
   },
   answers: {
     work_authorization: [],

@@ -720,6 +720,33 @@ class SweepSchedule(_Section):
         return value
 
 
+def _documents_default(name: str) -> int:
+    """A default of the documents module's settings (DOCUMENTS_MIN_FIT_DEFAULT,
+    DOCUMENTS_DAILY_CEILING_DEFAULT), the coded one where this process has no configuration."""
+    from app.config import ConfigError, Settings, get_settings
+
+    try:
+        return int(getattr(get_settings(), name))
+    except ConfigError:
+        return int(Settings.model_fields[name].default)
+
+
+class DocumentsGeneration(_Section):
+    """The automatic generation of a posting's CV and letter (documents D10, SPEC-documents.md
+    "Automatic generation"): on by default; a found posting whose fit is at or above `min_fit`
+    gets its documents without a click; `daily_ceiling` postings a day at most, in the time zone
+    of `sweep_schedule`, a backstop against a broken sweep. Kept under Advanced in the search
+    options; a section saved before this block existed reads the defaults."""
+
+    auto: bool = True
+    min_fit: Annotated[StrictInt, Field(ge=0, le=100)] = Field(
+        default_factory=lambda: _documents_default("documents_min_fit_default")
+    )
+    daily_ceiling: Annotated[StrictInt, Field(ge=1, le=500)] = Field(
+        default_factory=lambda: _documents_default("documents_daily_ceiling_default")
+    )
+
+
 class Board(_Section):
     company: Line
     ats: Ats
@@ -742,6 +769,8 @@ class SearchSection(_Section):
     # jobs). Off unless the user turns it on; a section saved before this field existed reads as
     # off.
     sweep_schedule: SweepSchedule = Field(default_factory=lambda: SweepSchedule())
+    # The automatic generation of documents (documents D10), defaulted when absent.
+    documents: DocumentsGeneration = Field(default_factory=lambda: DocumentsGeneration())
 
     @model_validator(mode="before")
     @classmethod
