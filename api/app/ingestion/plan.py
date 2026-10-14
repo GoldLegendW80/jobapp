@@ -23,8 +23,8 @@ Three things are decided here and nowhere else:
   three refuse the selection (`LimitError`). The fourth leaves out the documents that do not
   fit, in the order of the selection, and the run ends partial.
 
-Transcription is planned only when `TRANSCRIPTION` is on, which G14 turns on with the agent that
-does it. Until then a document that still holds images is refused, by name, and never planned.
+Transcription is planned only when `TRANSCRIPTION` is on, as it is since G14 shipped the agent
+that does it. With it off a document that still holds images is refused, by name, never planned.
 The characters a transcription will add are not known before it runs: they are counted at 3,000
 per image (assumption A10) and split into equal parts, since there is no text to cut yet.
 """

@@ -51,7 +51,7 @@ const SECTION_NAMES: Record<string, string> = {
 const FLAG_LABELS: Record<string, string> = {
   conflict: "Sources disagree",
   derived: "Calculated",
-  transcribed: "Read from an image",
+  transcribed: "Transcribed, check it",
   looks_like_instruction: "Reads like an instruction",
 };
 
