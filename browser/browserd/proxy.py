@@ -174,7 +174,7 @@ class Head(NamedTuple):
 def parse_head(head: bytes) -> Head | None:
     """The one request of a connection, or None when anything in it is not plain HTTP/1.x: the
     caller answers 400 and forwards nothing. A body is framed one way only (Content-Length, or
-    Transfer-Encoding exactly `chunked`), so the proxy and the upstream cannot disagree on where
+    Transfer-Encoding exactly `chunked`), so the proxy and a conforming upstream agree on where
     it ends."""
     lines = head[:-4].split(b"\r\n")
     if any(b"\r" in line or b"\n" in line or b"\0" in line for line in lines):

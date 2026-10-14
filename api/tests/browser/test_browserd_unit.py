@@ -823,7 +823,7 @@ def test_the_proxy_accepts_plain_requests(head: bytes, length: int | None) -> No
         b"GET http://ex\xc3\xa4mple.com/ HTTP/1.1\r\n\r\n",
         b"GET http://a@10.0.0.1/ HTTP/1.1\r\n\r\n",
         b"GET http://example.com:22x/ HTTP/1.1\r\n\r\n",
-        # One body, one framing: the proxy and the upstream never disagree on its end.
+        # One body, one framing, so the proxy and the upstream agree on its end.
         POST + b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n",
         POST + b"Transfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n",
         b"POST http://example.com/ HTTP/1.1\r\nTransfer-Encoding: xchunked\r\n\r\n",
