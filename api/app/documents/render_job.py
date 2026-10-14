@@ -177,7 +177,10 @@ def template_of(db: Session, user_id: uuid.UUID, slug: str) -> templates.Templat
 
 def _base_of(db: Session, document: Document, content: c.CvContent | c.LetterContent) -> Any:
     if document.scope == Scope.base:
-        return content
+        # Its fixed block only: a base CV's own sentences never source themselves, so a claim
+        # added by hand stays a note at every save (D9).
+        fixed = content.fixed if isinstance(content, c.BaseCvContent) else c.Fixed()
+        return c.BaseCvContent(fixed=fixed)
     if document.base_document_id is None:
         return None
     base = store.get(db, document.user_id, document.base_document_id)

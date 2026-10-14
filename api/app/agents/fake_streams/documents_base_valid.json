@@ -1,0 +1,221 @@
+{
+ "description": "D9: the base CV writer reads the profile and submits a base CV every claim of which the profile states; its fixed block is left empty for the app to copy.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__read_profile_section",
+     "mcp__app__submit_base"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_base_002",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read your profile first."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_base_001_facts",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "facts"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_base_001_experience",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "experience"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_base_001_skills",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "skills"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_base_001_answers",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "answers"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_base_003",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_base_003_submit_base",
+       "name": "mcp__app__submit_base",
+       "input": {
+        "schema": 1,
+        "target": "Platform engineering roles",
+        "headline": "Platform Engineer",
+        "summary": "Platform engineer with about 3.5 years of professional engineering. At Example Corp I run the deployment platform of the payments team and moved 40 services to Kubernetes.",
+        "highlights": [
+         "Moved 40 services to Kubernetes",
+         "Deployment platform of the payments team",
+         "Internal tools in Python and React"
+        ],
+        "competencies": [
+         "Kubernetes",
+         "Terraform",
+         "AWS",
+         "Python",
+         "FastAPI",
+         "PostgreSQL"
+        ],
+        "experience": [
+         {
+          "employer_key": "example-corp",
+          "bullets": [
+           "Run the deployment platform of the payments team.",
+           "Moved 40 services to Kubernetes with Terraform on AWS."
+          ]
+         },
+         {
+          "employer_key": "sample-labs",
+          "bullets": [
+           "Built internal tools in Python and React for the support team."
+          ]
+         }
+        ],
+        "skills": [
+         {
+          "label": "Cloud",
+          "items": [
+           "Kubernetes",
+           "Terraform",
+           "AWS"
+          ]
+         },
+         {
+          "label": "Backend",
+          "items": [
+           "Python",
+           "FastAPI",
+           "PostgreSQL"
+          ]
+         },
+         {
+          "label": "Frontend",
+          "items": [
+           "React",
+           "TypeScript"
+          ]
+         }
+        ],
+        "notes": "",
+        "fixed": {}
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_base_004",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "The base CV is stored."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 10,
+    "duration_api_ms": 5,
+    "num_turns": 3,
+    "session_id": "{session_id}",
+    "result": "The base CV is stored.",
+    "total_cost_usd": 0.05,
+    "usage": {
+     "input_tokens": 3000,
+     "output_tokens": 300
+    },
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}
