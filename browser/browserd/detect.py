@@ -33,7 +33,9 @@ Declared open points: a plain `<div>` whose script submits the form on click, wi
 in any name and no selector of the lease, is not marked (the adapters pass their selectors for
 that); nor is `<a href="javascript:...">`; Enter in a single text input outside any form is let
 through; a name written in another language than English or French is not read; a closed shadow
-root is not entered (its host is judged).
+root is not entered (its host is judged); a page script that moves or inserts a submit under
+the click point between the facts read and the click, or moves the focus between a typing and
+its Enter.
 """
 
 import re
@@ -164,6 +166,8 @@ FACTS_JS = r"""
     }
     const inner = Array.from(el.querySelectorAll("button, input, [type]")).slice(0, 300);
     if (inner.some(d => ["submit", "image"].includes(kindOf(d)))) holdsSubmit = true;
+    // A full slice may have cut a submit off: fail closed.
+    if (inner.length >= 300) holdsSubmit = true;
     let customSubmit = false;
     for (let at = el, i = 0; at && i < 1000; at = up(at), i++) {
       if (at.tagName && at.tagName.includes("-") && ["submit", "image"].includes(kindOf(at))) customSubmit = true;
@@ -306,8 +310,9 @@ def verdict(
 
     Facts read with the click point (`point`, FACTS_JS) are judged twice: the element named and
     the element a click at that point lands on, which a wrapper's centre makes a submit button.
-    A point that could not be read refuses, and a typing whose click lands inside the field
-    itself needs nothing more."""
+    A point that could not be read refuses. A typing whose click lands inside the field is still
+    judged there: the element hit must itself be a text entry (or a label's text over one), not a
+    submit button the field wraps."""
     code = _own(facts, action, profile_edit)
     if code or action not in POINTED or "point" not in facts:
         return code
@@ -315,7 +320,7 @@ def verdict(
     if not isinstance(point, dict):
         return "unreadable"
     if action == "type" and point.get("inside") is True:
-        return None
+        return _own(point, "type", profile_edit)
     return _own(point, "click" if action == "type" else action, profile_edit)
 
 

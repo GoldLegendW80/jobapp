@@ -310,6 +310,40 @@ def test_a_label_over_the_field_at_its_click_point_lets_it_type() -> None:
     assert call(page, "browser_type", {"ref": "e5", "text": "a"})["ok"] is True
 
 
+# Review of PR #297, round 2: a click that lands inside the named element is still judged where
+# it lands, so a submit button the field wraps is not typed into by a click.
+INSIDE_SUBMIT = [
+    pytest.param(
+        facts("Search", kind="search", holds_submit=True), id="label wrapping input and submit"
+    ),
+    pytest.param(
+        facts("", tag="div", kind="", editable=True, holds_submit=True),
+        id="contenteditable with a submit",
+    ),
+]
+
+
+@pytest.mark.parametrize("target", INSIDE_SUBMIT)
+def test_a_typing_whose_click_lands_on_a_submit_inside_the_target_is_refused(
+    target: dict[str, Any],
+) -> None:
+    page = Page()
+    page.add("e5", target, point={**SUBMIT, "inside": True})
+    result = call(page, "browser_type", {"ref": "e5", "text": "a"})
+    assert result["error"] == "not_editable"
+    assert acted(page) == []
+
+
+def test_a_label_text_over_its_field_and_a_text_inside_a_contenteditable_still_type() -> None:
+    page = Page()
+    page.add("e5", EMAIL, point={**EMAIL, "inside": True})
+    assert call(page, "browser_type", {"ref": "e5", "text": "a"})["ok"] is True
+    page = Page()
+    editable = facts("", tag="div", kind="", editable=True)
+    page.add("e5", editable, point={**editable, "tag": "span", "inside": True})
+    assert call(page, "browser_type", {"ref": "e5", "text": "a"})["ok"] is True
+
+
 def test_the_submit_flag_of_browser_type_is_enter_and_judged_as_one() -> None:
     page = Page()
     page.add("e5", EMAIL)
@@ -394,6 +428,17 @@ def test_enter_with_the_focus_in_a_field_inside_an_iframe_is_refused() -> None:
     page.focused = Element(page, facts("", tag="iframe", kind=""), tag="IFRAME",
                            frame=Frame(middle))  # fmt: skip
     assert press(page, "Enter")["error"] == "submit"
+
+
+@pytest.mark.parametrize("tag", ["OBJECT", "EMBED"])
+@pytest.mark.parametrize("key", ["Enter", "Space"])
+def test_a_key_with_the_focus_in_an_object_or_embed_is_refused(tag: str, key: str) -> None:
+    # content_frame() of these answers None: the focused field inside cannot be judged.
+    page = Page()
+    page.focused = Element(page, facts("", tag=tag.lower(), kind=""), tag=tag, frame=None)
+    result = press(page, key)
+    assert result["error"] == "unreadable"
+    assert acted(page) == []
 
 
 def test_space_with_the_focus_on_a_submit_in_a_shadow_root_is_refused() -> None:
@@ -500,6 +545,14 @@ def test_an_attach_button_whose_point_is_a_submit_is_refused() -> None:
     result = call(page, "browser_file_upload", {"ref": "e5", "paths": ["cv.pdf"]}, tab)
     assert result["error"] == "submit"
     assert acted(page) == []
+
+
+def test_browser_tabs_lists_only_the_tabs_on_the_list() -> None:
+    page, other = Page(), Page(OFF)
+    tab = tab_of(page)
+    tab.browser.browser.contexts[0].pages.append(other)  # a tab the context still holds
+    result = call(page, "browser_tabs", {}, tab)
+    assert [t["url"] for t in result["tabs"]] == [ON]
 
 
 # --- 5. nothing of a page off the list is read or acted on -------------------------------------

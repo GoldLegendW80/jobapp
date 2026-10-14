@@ -21,12 +21,21 @@
   <button type="button" id="delete">Delete application</button>
   <button type="button" id="icon" onclick="document.getElementById('application').requestSubmit()"><img alt="Submit" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></button>
   <div role="group" aria-label="Send block" id="send"><button type="submit" id="submit">Submit application</button></div>
+  <div role="group" aria-label="Long block" id="long" style="height:20px;position:relative"></div>
 </form>
 <p><a id="away" href="http://evil.example/">Away</a> <button type="button" id="popup" onclick="window.open('http://evil.example/')">Open partner site</button>
 <button type="button" id="rerender">Re-render</button> <a id="redirect" href="redirect.html">Redirect</a></p>
 <p id="result">Not submitted</p>
 <p id="pace">no keys</p>
 <script>
+// 300 typed fillers, then a submit past the 300 element slice of the facts (a wrapper that
+// holds a submit the slice cannot see): the group's click must still be refused.
+(function () {
+  const long = document.getElementById("long");
+  for (let i = 0; i < 300; i++) { const f = document.createElement("i"); f.setAttribute("type", "x"); long.appendChild(f); }
+  const go = document.createElement("button"); go.type = "submit"; go.textContent = "Go"; go.style.cssText = "position:absolute;left:-9999px";
+  long.appendChild(go);
+})();
   let count = 0;
   const shown = () => {
     const names = [...document.getElementById("resume").files, ...document.getElementById("letter").files].map((f) => f.name + ":" + f.size);

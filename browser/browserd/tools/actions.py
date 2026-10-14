@@ -479,14 +479,15 @@ async def press_key(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 
 async def focus_of(page: Any) -> tuple[Any, str]:
     """The element a key goes to and its tag: the active element, followed through open shadow
-    roots and into frames (a Greenhouse form framed by a company site). (None, "") when the chain
-    cannot be followed, so Enter and Space are refused (fail closed)."""
+    roots and into frames (a Greenhouse form framed by a company site). An iframe, a frame, an
+    object or an embed whose content frame is out of reach is unresolved: (None, "") when the
+    chain cannot be followed, so Enter and Space are refused (fail closed)."""
     frame: Any = page
     try:
         for _ in range(FRAME_DEPTH):
             handle = await frame.evaluate_handle(DEEP_FOCUS_JS)
             tag = await handle.evaluate(FOCUS_TAG_JS)
-            if tag not in ("IFRAME", "FRAME"):
+            if tag not in ("IFRAME", "FRAME", "OBJECT", "EMBED"):
                 return handle, str(tag)
             frame = await handle.content_frame()
             if frame is None:
