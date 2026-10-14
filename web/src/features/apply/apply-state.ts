@@ -97,13 +97,21 @@ const FAILURES: Record<string, string> = {
   form_changed: "the form changed while it was being filled",
 };
 
+/** What a queued application waits for: the api names it in `needs` while it waits. */
+function waitingLine(needs: string | null): string {
+  if (needs?.startsWith("documents:")) {
+    return "Waiting for your CV and letter to be written. The form is filled once they are ready.";
+  }
+  return "Waiting for a browser. Starting in a few seconds, and it can take up to a minute.";
+}
+
 /** The status line under the section's title. */
 export function statusLine(application: Application | null | undefined) {
   if (!application)
     return "No application yet. Nothing is sent without your approval.";
   switch (application.state) {
     case "queued":
-      return "Waiting for a browser. The form is filled within a minute.";
+      return waitingLine(application.needs);
     case "filling":
       return "Filling the form. You can leave this page: the fill goes on, and you will find the result here.";
     case "needs_person":
@@ -169,9 +177,20 @@ export const isOpenField = (answer: Answer) =>
 export const leftFields = (answers: readonly Answer[]) =>
   answers.filter(isOpenField);
 
-/** Left, required and still empty: the form cannot go without it, so Approve waits. */
+/** The kinds the api takes no value for: a file and a list of choices (`set_answer` of A6). */
+const NOT_TYPED_KINDS = new Set(["file", "multi"]);
+
+/**
+ * Whether the person can type this answer here. It mirrors the api's refusal: a skipped widget
+ * (`skipped:` key), a file and a list of choices answer 422 `unknown_field` or `wrong_type`, so
+ * no input is offered for them and they never block Approve; they are answered on the site.
+ */
+export const isEditable = (answer: Answer) =>
+  !answer.field_key.startsWith("skipped:") && !NOT_TYPED_KINDS.has(answer.kind);
+
+/** Left, required, still empty and answerable here: the form cannot go without it, so Approve waits. */
 export const blockingFields = (answers: readonly Answer[]) =>
-  leftFields(answers).filter((answer) => answer.required);
+  leftFields(answers).filter((answer) => answer.required && isEditable(answer));
 
 const YES_NO_KINDS = new Set(["yes_no", "boolean", "checkbox"]);
 

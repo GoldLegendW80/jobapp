@@ -169,17 +169,19 @@ export const retryApplication = (applicationId: string) =>
 
 /**
  * Type or correct one answer before the approval (saved to the person's answer bank). The answer
- * changes the form's hash, so the page reads the approval again after it.
+ * changes the form's hash; the api answers with the approval view as it is now, new hash and
+ * answers, which the page shows at once.
  */
 export const saveAnswer = (
   applicationId: string,
   fieldKey: string,
   value: string | boolean,
-): Promise<unknown> =>
+): Promise<Approval> =>
   request(`/applications/${id(applicationId)}/answers/${id(fieldKey)}`, {
     method: "PUT",
     body: { value },
     timeoutMs: TIMEOUT_MS,
+    validate: (body) => approvalSchema.parse(body),
   });
 
 /** The image is fetched by the browser with the session cookie. */

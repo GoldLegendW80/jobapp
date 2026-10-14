@@ -7,6 +7,7 @@ import {
   editorKind,
   hasForm,
   hasReport,
+  isEditable,
   isOpenField,
   phaseOf,
   pollInterval,
@@ -60,6 +61,41 @@ describe("the fields", () => {
     ];
     expect(blockingFields(answers).map((one) => one.field_key)).toEqual(["a"]);
     expect(answers.map(isOpenField)).toEqual([true, true, false, false, false]);
+  });
+
+  it.each([
+    ["city", "text", true],
+    ["why", "textarea", true],
+    ["start", "select", true],
+    ["start", "combobox", true],
+    ["role", "single", true],
+    ["day", "date", true],
+    ["ok", "checkbox", true],
+    ["ok", "yes_no", true],
+    ["resume", "file", false],
+    ["tags", "multi", false],
+    ["skipped:0:upload", "text", false],
+    ["skipped:", "text", false],
+    ["notskipped", "text", true],
+    ["a:skipped:b", "text", true],
+    ["Skipped:0", "text", true],
+    ["", "text", true],
+    ["x", "something_new", true],
+  ])(
+    "isEditable(%s, %s) is %s, as the api's set_answer takes it",
+    (key, kind, wanted) => {
+      expect(isEditable(leftAnswer(key, "L", { kind }))).toBe(wanted);
+    },
+  );
+
+  it("never blocks on a left required field that cannot be typed here", () => {
+    const answers = [
+      leftAnswer("skipped:0:x", "S", { required: true }),
+      leftAnswer("f", "F", { kind: "file", required: true }),
+      leftAnswer("m", "M", { kind: "multi", required: true }),
+      leftAnswer("t", "T", { required: true }),
+    ];
+    expect(blockingFields(answers).map((one) => one.field_key)).toEqual(["t"]);
   });
 
   it.each([

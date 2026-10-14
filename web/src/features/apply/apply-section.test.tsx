@@ -1,7 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { server } from "@/test/server";
 import { fakeSession, member } from "@/test/auth";
 import {
   fakeAnswer,
@@ -13,6 +15,7 @@ import { fakeJobDetail, makeDetail } from "@/test/jobs";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 
+import { approvalKey } from "./apply-api";
 import { APPLY_POLL_MS } from "./apply-state";
 
 const JOB_ID = "00000000-0000-4000-9000-000000000001";
@@ -39,6 +42,15 @@ async function openSection() {
   const heading = await screen.findByRole("heading", { name: "Apply" });
   const section = heading.closest("section") as HTMLElement;
   return { user, section, ...app };
+}
+
+/** The second click: the confirmation names the action and its button makes the call. */
+async function confirm(
+  user: ReturnType<typeof userEvent.setup>,
+  button: string,
+) {
+  const dialog = await screen.findByRole("alertdialog");
+  await user.click(within(dialog).getByRole("button", { name: button }));
 }
 
 const filled = () => [
@@ -278,6 +290,8 @@ describe("the review", () => {
     await user.click(
       await within(section).findByRole("button", { name: "Reject" }),
     );
+    expect(api.decisions).toEqual([]);
+    await confirm(user, "Reject the form");
     await waitFor(() => {
       expect(api.decisions).toEqual(["reject"]);
     });
@@ -303,6 +317,299 @@ describe("the review", () => {
     );
     await user.click(open);
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+});
+
+describe("the destructive buttons", () => {
+  it.each([
+    [
+      "ready",
+      "Reject",
+      "Reject this filled form?",
+      "Nothing is sent. You can start again.",
+    ],
+    [
+      "needs_person",
+      "Cancel application",
+      "Cancel this application?",
+      "Nothing is sent.",
+    ],
+    [
+      "submit_unknown",
+      "It was submitted",
+      "Mark this application as submitted?",
+      "It cannot be undone, and the app will refuse another application for this posting.",
+    ],
+    [
+      "submit_unknown",
+      "Try again",
+      "Fill and approve again?",
+      "the company may receive two applications",
+    ],
+  ])(
+    "%s: %s opens a confirmation with its own sentence and sends nothing until it is confirmed",
+    async (state, button, title, sentence) => {
+      const api = fakeApply({
+        application: fakeApplication(state, { needs: "captcha" }),
+        answers: filled().slice(0, 2),
+      });
+      const { user, section } = await openSection();
+      await user.click(
+        await within(section).findByRole("button", { name: button }),
+      );
+      const dialog = await screen.findByRole("alertdialog");
+      expect(dialog).toHaveTextContent(title);
+      expect(dialog).toHaveTextContent(sentence);
+      expect(dialog.textContent).not.toMatch(SEPARATOR);
+      expect(api.decisions).toEqual([]);
+      await user.click(within(dialog).getByRole("button", { name: "Not yet" }));
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).toBeNull();
+      });
+      expect(api.decisions).toEqual([]);
+      // Escape is a no too.
+      await user.click(within(section).getByRole("button", { name: button }));
+      await screen.findByRole("alertdialog");
+      await user.keyboard("{Escape}");
+      await waitFor(() => {
+        expect(screen.queryByRole("alertdialog")).toBeNull();
+      });
+      expect(api.decisions).toEqual([]);
+    },
+  );
+
+  it("reads the application again when a decision is refused, and shows where it stands", async () => {
+    const api = fakeApply({
+      application: fakeApplication("needs_person", { needs: "captcha" }),
+      answers: [],
+    });
+    const { user, section } = await openSection();
+    await user.click(
+      await within(section).findByRole("button", {
+        name: "Cancel application",
+      }),
+    );
+    api.application = fakeApplication("submitted");
+    api.decisionRefusal = {
+      detail: "The click already happened.",
+      code: "not_cancellable",
+      state: "submitted",
+    };
+    await confirm(user, "Cancel the application");
+    expect(
+      await within(section).findByText("The click already happened."),
+    ).toBeInTheDocument();
+    expect(await within(section).findByText(/Applied\./)).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+describe("what is shown and what can be typed", () => {
+  it("shows a long answer whole, never cut", async () => {
+    const long = Array.from(
+      { length: 150 },
+      (_, index) => `word${String(index).padStart(3, "0")}`,
+    ).join(" ");
+    expect(long.length).toBeGreaterThan(1000);
+    fakeApply({
+      application: fakeApplication("ready"),
+      answers: [
+        fakeAnswer("why", "Why do you want to join?", long, {
+          kind: "textarea",
+          source: "agent",
+        }),
+      ],
+    });
+    const { section } = await openSection();
+    const value = await within(section).findByText(long);
+    expect(value.textContent).toBe(long);
+    expect(value.className).not.toMatch(/line-clamp|truncate/);
+  });
+
+  it("offers no input for a skipped widget, a file or a list of choices, and never blocks Approve for them", async () => {
+    fakeApply({
+      application: fakeApplication("ready"),
+      answers: [
+        leftAnswer("skipped:0:upload", "Cover photo", { required: false }),
+        leftAnswer("resume", "Resume file", { kind: "file", required: true }),
+        leftAnswer("tags", "Languages spoken", {
+          kind: "multi",
+          required: true,
+        }),
+      ],
+    });
+    const { section } = await openSection();
+    const alert = await within(section).findByRole("alert");
+    expect(alert).toHaveTextContent("3 fields are left for you");
+    expect(alert).toHaveTextContent(
+      "Cover photo (optional), answer on the site",
+    );
+    expect(alert).toHaveTextContent(
+      "Resume file (required), answer on the site",
+    );
+    const rows = within(section)
+      .getAllByRole("listitem")
+      .filter((li) => li.dataset.left);
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(within(row).getByText("You answer")).toBeInTheDocument();
+      expect(within(row).queryByRole("textbox")).toBeNull();
+      expect(within(row).queryByRole("button")).toBeNull();
+      expect(row).toHaveTextContent("Not filled by the assistant.");
+    }
+    expect(rows[1]).toHaveTextContent("or reject this form");
+    expect(
+      within(section).getByRole("button", { name: "Approve and submit" }),
+    ).toBeEnabled();
+    expect(section.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it.each(["text", "textarea", "select", "combobox", "single", "date"])(
+    "gives a %s field a box to type in",
+    async (kind) => {
+      fakeApply({
+        application: fakeApplication("ready"),
+        answers: [leftAnswer("q", "Question", { kind, required: true })],
+      });
+      const { section } = await openSection();
+      expect(
+        await within(section).findByRole("textbox", {
+          name: "Answer for Question",
+        }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("does not offer Edit on a file or a skipped answer the assistant did fill", async () => {
+    fakeApply({
+      application: fakeApplication("ready"),
+      answers: [
+        fakeAnswer("resume", "Resume file", "cv.pdf", { kind: "file" }),
+        fakeAnswer("skipped:1:x", "Odd widget", "x"),
+        fakeAnswer("city", "City", "Bordeaux"),
+      ],
+    });
+    const { section } = await openSection();
+    await within(section).findByText("Bordeaux");
+    expect(
+      within(section).getAllByRole("button", { name: /^Edit: / }),
+    ).toHaveLength(1);
+  });
+
+  it("shows the approval the api answered with after a save, without reading it again", async () => {
+    const api = fakeApply({
+      application: fakeApplication("ready"),
+      answers: [leftAnswer("visa", "Work permit number", { required: true })],
+    });
+    const { user, section } = await openSection();
+    await user.type(
+      await within(section).findByRole("textbox", {
+        name: "Answer for Work permit number",
+      }),
+      "none needed",
+    );
+    await user.click(
+      within(section).getByRole("button", { name: "Save answer" }),
+    );
+    expect(await within(section).findByText("none needed")).toBeInTheDocument();
+    expect(
+      within(section).getByRole("button", { name: "Approve and submit" }),
+    ).toBeEnabled();
+    expect(api.reads).toBe(1);
+  });
+
+  it("keeps Approve disabled while the approval is being read again", async () => {
+    const api = fakeApply({
+      application: fakeApplication("ready"),
+      answers: filled().slice(0, 2),
+    });
+    const { client, section } = await openSection();
+    const approve = await within(section).findByRole("button", {
+      name: "Approve and submit",
+    });
+    expect(approve).toBeEnabled();
+    let release = () => {};
+    api.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    void client.invalidateQueries({
+      queryKey: approvalKey("00000000-0000-4000-9000-0000000000a1"),
+    });
+    await waitFor(() => {
+      expect(approve).toBeDisabled();
+    });
+    release();
+    await waitFor(() => {
+      expect(approve).toBeEnabled();
+    });
+  });
+
+  it("makes an open editor follow the server value when the form is replaced", async () => {
+    const api = fakeApply({
+      application: fakeApplication("ready"),
+      answers: [fakeAnswer("city", "City", "Bordeaux", { source: "agent" })],
+    });
+    const { client, user, section } = await openSection();
+    await user.click(
+      await within(section).findByRole("button", { name: "Edit: City" }),
+    );
+    const input = within(section).getByRole("textbox", {
+      name: "Answer for City",
+    });
+    await user.type(input, " centre");
+    expect(
+      within(section).getByRole("button", { name: "Approve and submit" }),
+    ).toBeDisabled();
+    api.answers = [fakeAnswer("city", "City", "Lyon", { source: "agent" })];
+    api.version += 1;
+    await client.invalidateQueries({
+      queryKey: approvalKey("00000000-0000-4000-9000-0000000000a1"),
+    });
+    await waitFor(() => {
+      expect(
+        within(section).getByRole("textbox", { name: "Answer for City" }),
+      ).toHaveValue("Lyon");
+    });
+    expect(
+      within(section).getByRole("button", { name: "Approve and submit" }),
+    ).toBeEnabled();
+  });
+});
+
+describe("a failing refresh", () => {
+  it("keeps the section and says so when one poll fails", async () => {
+    fakeApply({ application: fakeApplication("filling") });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText(/Filling the form/),
+    ).toBeInTheDocument();
+    server.use(
+      http.get("*/api/applications", () =>
+        HttpResponse.json({ detail: "boom" }, { status: 500 }),
+      ),
+    );
+    expect(
+      await within(section).findByText(
+        /Could not refresh just now/,
+        undefined,
+        {
+          timeout: 9000,
+        },
+      ),
+    ).toBeInTheDocument();
+    expect(within(section).getByText(/Filling the form/)).toBeInTheDocument();
+    expect(within(section).queryByText(/could not be loaded/)).toBeNull();
+  }, 15_000);
+
+  it("says what a queued application waits for", async () => {
+    fakeApply({
+      application: fakeApplication("queued", { needs: "documents:letter" }),
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText(/Waiting for your CV and letter/),
+    ).toBeInTheDocument();
+    expect(section.textContent).not.toMatch(/within a minute/);
   });
 });
 
@@ -363,6 +670,8 @@ describe("after the click", () => {
     await user.click(
       within(section).getByRole("button", { name: "It was submitted" }),
     );
+    expect(api.decisions).toEqual([]);
+    await confirm(user, "Mark as submitted");
     await waitFor(() => {
       expect(api.decisions).toEqual(["submitted"]);
     });
@@ -378,6 +687,8 @@ describe("after the click", () => {
     await user.click(
       await within(section).findByRole("button", { name: "Try again" }),
     );
+    expect(api.decisions).toEqual([]);
+    await confirm(user, "Fill and approve again");
     await waitFor(() => {
       expect(api.decisions).toEqual(["retry"]);
     });
@@ -403,6 +714,8 @@ describe("other states", () => {
     await user.click(
       within(section).getByRole("button", { name: "Cancel application" }),
     );
+    expect(api.decisions).toEqual([]);
+    await confirm(user, "Cancel the application");
     await waitFor(() => {
       expect(api.decisions).toEqual(["cancel"]);
     });

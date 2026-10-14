@@ -37,10 +37,49 @@ import {
   statusLine,
 } from "./apply-state";
 import { ApproveDialog } from "./approve-dialog";
+import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
 import { FieldsList } from "./fields-list";
 import { LiveViewSlot } from "./live-view-slot";
 import { RunReport } from "./run-report";
 import { ShotView } from "./shot-view";
+
+/** The decisions that need a second click, each with its own sentence and the call it makes. */
+const DECISIONS = {
+  reject: {
+    title: "Reject this filled form?",
+    sentence: "Nothing is sent. You can start again.",
+    confirm: "Reject the form",
+    call: rejectApplication,
+  },
+  cancel: {
+    title: "Cancel this application?",
+    sentence: "Nothing is sent.",
+    confirm: "Cancel the application",
+    call: cancelApplication,
+  },
+  submitted: {
+    title: "Mark this application as submitted?",
+    sentence:
+      "Only do this if you saw the confirmation. It cannot be undone, and the app will refuse another application for this posting.",
+    confirm: "Mark as submitted",
+    call: confirmSubmitted,
+  },
+  retry: {
+    title: "Fill and approve again?",
+    sentence:
+      "If the first one went through, the company may receive two applications.",
+    confirm: "Fill and approve again",
+    call: retryApplication,
+  },
+} satisfies Record<
+  string,
+  Confirmation & { call: (applicationId: string) => Promise<Application> }
+>;
+type DecisionKind = keyof typeof DECISIONS;
+
+/** A failed refresh keeps the section on screen after this many tries. */
+const POLL_RETRIES = 2;
+const POLL_RETRY_MS = 1000;
 
 const STALE_NOTICE =
   "The form or your documents changed since you looked. Check the answers shown now and approve again.";
@@ -57,11 +96,17 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [unsaved, setUnsaved] = useState(0);
+  const [asking, setAsking] = useState<DecisionKind | null>(null);
 
   const latest = useQuery({
     queryKey: applicationsKey(job.id),
     queryFn: ({ signal }) => latestApplication(job.id, signal),
     refetchInterval: (current) => pollInterval(current.state.data),
+    // A refresh that fails once is tried again; the first load is not, its error has a button.
+    retry: (failures) =>
+      queryClient.getQueryData(applicationsKey(job.id)) !== undefined &&
+      failures < POLL_RETRIES,
+    retryDelay: POLL_RETRY_MS,
   });
   const application = latest.data ?? null;
   const phase = phaseOf(application);
@@ -72,6 +117,10 @@ export function ApplySection({ job }: { job: JobDetail }) {
     queryFn: ({ signal }) => getApproval(id as string, signal),
     enabled: id !== undefined && hasForm(application),
     refetchInterval: pollInterval(application),
+    retry: (failures) =>
+      queryClient.getQueryData(approvalKey(id ?? "")) !== undefined &&
+      failures < POLL_RETRIES,
+    retryDelay: POLL_RETRY_MS,
   });
   const approval = approvalQuery.data;
   const detail = useQuery({
@@ -102,8 +151,18 @@ export function ApplySection({ job }: { job: JobDetail }) {
       void queryClient.invalidateQueries({ queryKey: applicationKey(id) });
     }
   };
+  // Whatever the api refused or whatever timed out, the server may have moved on: show its state.
   const failed = (error: unknown) => {
-    setNotice(refusalOf(error)?.detail ?? describeError(error));
+    const refusal = refusalOf(error);
+    setNotice(refusal?.detail ?? describeError(error));
+    const state = refusal?.state;
+    if (state) {
+      queryClient.setQueryData<Application | null>(
+        applicationsKey(job.id),
+        (old) => (old && old.state !== state ? { ...old, state } : old),
+      );
+    }
+    settle();
   };
 
   const start = useMutation({
@@ -117,15 +176,18 @@ export function ApplySection({ job }: { job: JobDetail }) {
     onError: failed,
   });
   const decision = useMutation({
-    mutationFn: (act: (applicationId: string) => Promise<Application>) =>
-      act(id as string),
+    mutationFn: (kind: DecisionKind) => DECISIONS[kind].call(id as string),
     onMutate: () => {
       setNotice(null);
     },
     onSuccess: (changed) => {
+      setAsking(null);
       settle(changed);
     },
-    onError: failed,
+    onError: (error) => {
+      setAsking(null);
+      failed(error);
+    },
   });
   const save = useMutation({
     mutationFn: ({
@@ -138,9 +200,11 @@ export function ApplySection({ job }: { job: JobDetail }) {
     onMutate: () => {
       setNotice(null);
     },
-    // The answer changes the form's hash: read the approval again before anything is approved.
-    onSuccess: () => {
-      settle();
+    // The answer changes the form's hash: show the approval the api answered with, so Approve
+    // never offers the old one, and read the state of the application again.
+    onSuccess: (changed) => {
+      queryClient.setQueryData(approvalKey(id as string), changed);
+      void queryClient.invalidateQueries({ queryKey: applicationsKey(job.id) });
     },
     onError: failed,
   });
@@ -173,6 +237,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
             : old,
         );
         setNotice(STALE_NOTICE);
+        void queryClient.invalidateQueries({
+          queryKey: applicationsKey(job.id),
+        });
         return;
       }
       failed(error);
@@ -184,8 +251,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
     decision.isPending ||
     approve.isPending ||
     save.isPending;
-  const act = (call: (applicationId: string) => Promise<Application>) => {
-    decision.mutate(call);
+  const ask = (kind: DecisionKind) => {
+    setAsking(kind);
   };
 
   return (
@@ -201,7 +268,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
           <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
           Loading the application
         </p>
-      ) : latest.isError ? (
+      ) : latest.isError && latest.data === undefined ? (
         <Alert variant="destructive">
           <AlertDescription className="flex flex-col gap-3">
             <p>
@@ -223,6 +290,12 @@ export function ApplySection({ job }: { job: JobDetail }) {
           <p role="status" className="text-sm text-muted-foreground">
             {statusLine(application)}
           </p>
+          {latest.isError || approvalQuery.isError ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              Could not refresh just now: this may be out of date. Reload the
+              page if it stays so.
+            </p>
+          ) : null}
           {notice ? (
             <Alert variant="destructive">
               <AlertDescription>{notice}</AlertDescription>
@@ -234,14 +307,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
           ) : null}
 
           {application && hasForm(application) ? (
-            approvalQuery.isError ? (
-              <Alert variant="destructive">
-                <AlertDescription>
-                  The filled form could not be loaded.{" "}
-                  {describeError(approvalQuery.error)}
-                </AlertDescription>
-              </Alert>
-            ) : approval ? (
+            approval ? (
               <FormPanel
                 application={application}
                 approval={approval}
@@ -257,6 +323,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 }}
                 onDirtyChange={setUnsaved}
               />
+            ) : approvalQuery.isError ? (
+              <Alert variant="destructive">
+                <AlertDescription>
+                  The filled form could not be loaded.{" "}
+                  {describeError(approvalQuery.error)}
+                </AlertDescription>
+              </Alert>
             ) : (
               <p
                 role="status"
@@ -304,13 +377,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
               <ReviewButtons
                 job={job}
                 approval={approval}
-                busy={busy}
+                busy={busy || approvalQuery.isFetching}
                 unsaved={unsaved}
                 onApprove={() => {
                   setConfirming(true);
                 }}
                 onReject={() => {
-                  act(rejectApplication);
+                  ask("reject");
                 }}
               />
             ) : null}
@@ -320,7 +393,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   className="w-full sm:w-fit"
                   disabled={busy}
                   onClick={() => {
-                    act(confirmSubmitted);
+                    ask("submitted");
                   }}
                 >
                   It was submitted
@@ -330,7 +403,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   className="w-full sm:w-fit"
                   disabled={busy}
                   onClick={() => {
-                    act(retryApplication);
+                    ask("retry");
                   }}
                 >
                   Try again
@@ -342,7 +415,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 className="w-full sm:w-fit"
                 disabled={busy}
                 onClick={() => {
-                  act(retryApplication);
+                  ask("retry");
                 }}
               >
                 Try again
@@ -354,7 +427,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 className="w-full sm:w-fit"
                 disabled={busy}
                 onClick={() => {
-                  act(cancelApplication);
+                  ask("cancel");
                 }}
               >
                 Cancel application
@@ -367,6 +440,17 @@ export function ApplySection({ job }: { job: JobDetail }) {
               then approve.
             </p>
           ) : null}
+
+          <ConfirmDialog
+            ask={asking ? DECISIONS[asking] : null}
+            pending={decision.isPending}
+            onCancel={() => {
+              setAsking(null);
+            }}
+            onConfirm={() => {
+              if (asking) decision.mutate(asking);
+            }}
+          />
 
           {approval && application && phase === "review" ? (
             <ApproveDialog

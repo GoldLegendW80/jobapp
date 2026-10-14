@@ -7,13 +7,21 @@ import { cn } from "@/lib/utils";
 
 import { AnswerEditor } from "./answer-editor";
 import type { Answer } from "./apply-api";
-import { isOpenField, leftFields, sourceLabel, valueText } from "./apply-state";
+import {
+  isEditable,
+  isOpenField,
+  leftFields,
+  sourceLabel,
+  valueText,
+} from "./apply-state";
 
 /**
  * The fields of the filled form: label, value and where the value came from. A field the app left
  * is the person's to answer: it sits in an amber frame with the words "You answer" and its input
  * open, and a banner above the list names how many there are, so none can be missed. Any other
- * answer can be corrected with Edit. One column on a phone.
+ * answer can be corrected with Edit. A field the api takes no value for (a file, a list of
+ * choices, a skipped widget) has no input: it keeps the frame and the banner line, and is
+ * answered on the site. A value is always shown whole. One column on a phone.
  */
 export function FieldsList({
   answers,
@@ -62,13 +70,15 @@ export function FieldsList({
             <p>
               The assistant did not answer {left.length === 1 ? "it" : "them"}.
               Type the answers below. A required one must be answered before you
-              can approve; an optional one is sent empty.
+              can approve; an optional one is sent empty. One marked "answer on
+              the site" cannot be typed here.
             </p>
             <ul className="list-disc pl-5">
               {left.map((answer) => (
                 <li key={answer.field_key}>
                   {answer.label}
                   {answer.required ? " (required)" : " (optional)"}
+                  {isEditable(answer) ? "" : ", answer on the site"}
                 </li>
               ))}
             </ul>
@@ -112,9 +122,10 @@ function FieldRow({
     [mark, key],
   );
   const open = isOpenField(answer);
+  const typed = isEditable(answer);
   const [editing, setEditing] = useState(false);
   const text = valueText(answer.value);
-  const typing = editable && (open || editing);
+  const typing = editable && typed && (open || editing);
   return (
     <li
       data-left={open ? "true" : undefined}
@@ -132,6 +143,7 @@ function FieldRow({
       </span>
       {typing ? (
         <AnswerEditor
+          key={`${answer.source}:${text}`}
           answer={answer}
           saving={saving}
           onSave={async (value) => {
@@ -141,10 +153,17 @@ function FieldRow({
           }}
           onDirtyChange={onDirtyChange}
         />
+      ) : open && !typed ? (
+        <span className="text-muted-foreground">
+          Not filled by the assistant.{" "}
+          {answer.required
+            ? "It cannot be answered here: answer it on the site, or reject this form."
+            : "Answer it on the site, or leave it empty."}
+        </span>
       ) : (
         <span
           className={cn(
-            "line-clamp-6 break-words whitespace-pre-wrap",
+            "break-words whitespace-pre-wrap",
             text === "" && "text-muted-foreground italic",
           )}
         >
@@ -161,7 +180,7 @@ function FieldRow({
             {sourceLabel(answer.source === "left" ? "person" : answer.source)}
           </Badge>
         )}
-        {editable && !open ? (
+        {editable && typed && !open ? (
           <Button
             type="button"
             variant="ghost"

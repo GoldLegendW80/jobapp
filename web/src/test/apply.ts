@@ -99,9 +99,27 @@ export function fakeApply(initial: {
     puts: [] as { field: string; body: unknown }[],
     approves: [] as string[],
     decisions: [] as string[],
+    /** How many times the approval was read, and a gate that holds its answer while set. */
+    reads: 0,
+    hold: null as Promise<void> | null,
+    /** The next decision (reject, cancel, submitted, retry) answers 409 with this refusal. */
+    decisionRefusal: null as {
+      detail: string;
+      code: string;
+      state?: string;
+    } | null,
     /** The next approve answers 409 stale with these answers. */
     stale: null as { answers: Answer[] } | null,
     hash: () => `hash-${state.version}`,
+    /** The approval view, as GET approval and PUT answers both answer it. */
+    view: () => ({
+      state: state.application?.state ?? "queued",
+      dry_run: false,
+      answers_hash: state.hash(),
+      answers: state.answers,
+      documents: state.documents,
+      screenshots: state.screenshots,
+    }),
   };
   server.use(
     http.get("*/api/applications", () =>
@@ -109,16 +127,11 @@ export function fakeApply(initial: {
         items: state.application ? [state.application] : [],
       }),
     ),
-    http.get("*/api/applications/:id/approval", () =>
-      HttpResponse.json({
-        state: state.application?.state ?? "queued",
-        dry_run: false,
-        answers_hash: state.hash(),
-        answers: state.answers,
-        documents: state.documents,
-        screenshots: state.screenshots,
-      }),
-    ),
+    http.get("*/api/applications/:id/approval", async () => {
+      state.reads += 1;
+      if (state.hold) await state.hold;
+      return HttpResponse.json(state.view());
+    }),
     http.get("*/api/applications/:id", () =>
       HttpResponse.json({ ...state.application, events: state.events }),
     ),
@@ -153,7 +166,7 @@ export function fakeApply(initial: {
             : one,
         );
         state.version += 1;
-        return HttpResponse.json({ answers_hash: state.hash() });
+        return HttpResponse.json(state.view());
       },
     ),
     http.post("*/api/applications/:id/approve", async ({ request }) => {
@@ -179,6 +192,11 @@ export function fakeApply(initial: {
     http.post("*/api/applications/:id/:action", ({ params }) => {
       const action = String(params.action);
       state.decisions.push(action);
+      if (state.decisionRefusal) {
+        const refusal = state.decisionRefusal;
+        state.decisionRefusal = null;
+        return HttpResponse.json(refusal, { status: 409 });
+      }
       const next: Record<string, string> = {
         reject: "cancelled",
         cancel: "cancelled",

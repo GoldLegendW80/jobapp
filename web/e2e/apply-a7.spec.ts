@@ -30,6 +30,7 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
 test.describe.configure({ mode: "serial", timeout: 240_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
+const TYPED = "Not applicable";
 const KEY = `sk-ant-api03-e2egood${"Dn9x".repeat(20)}Rn42`;
 
 let person: Person;
@@ -119,13 +120,20 @@ for (const ats of ["greenhouse", "ashby"] as const) {
       section.getByRole("img", { name: /before the click/ }),
     ).toBeVisible();
 
-    // Every field the assistant left is answered by the person.
-    const open = section.locator("li[data-left=true]");
-    while ((await open.count()) > 0) {
+    // Every field the assistant left that can be typed here is answered by the person. A row
+    // with no box (a file, a skipped widget) is answered on the site and is not part of the loop.
+    const open = section
+      .locator("li[data-left=true]")
+      .filter({ has: page.getByRole("textbox") });
+    let typed = 0;
+    for (;;) {
+      const before = await open.count();
+      if (before === 0) break;
       const row = open.first();
-      await row.getByRole("textbox").fill("Not applicable");
+      await row.getByRole("textbox").fill(TYPED);
       await row.getByRole("button", { name: "Save answer" }).click();
-      await expect(row).toHaveCount(0);
+      await expect(open).toHaveCount(before - 1);
+      typed += 1;
     }
 
     await section.getByRole("button", { name: "Approve and submit" }).click();
@@ -146,6 +154,10 @@ for (const ats of ["greenhouse", "ashby"] as const) {
       (one) => one.ats === ats && one.accepted,
     );
     expect(accepted).toHaveLength(1);
+    // Edit then approve: the value the person typed is what the form received.
+    if (typed > 0) {
+      expect(Object.values(accepted[0]!.fields).flat()).toContain(TYPED);
+    }
   });
 }
 
