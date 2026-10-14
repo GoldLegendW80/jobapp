@@ -24,7 +24,8 @@ so it refuses as a match would (`rules_unreadable`).
 - `same_form`: another posting of the person has a live application, or an applied status, on the
   same canonical form address (`canonical_key`; a second partial unique index holds the first);
 - `same_role`: another posting of the person, at the same company and with the same normalised
-  title (`company_key`, `title_key`), was submitted by the app, or has an applied status with its
+  title (`company_key`, `title_key`), was submitted by the app (or is `submitting`, its click under
+  way), or has an applied status with its
   `applied_on`, in the last 180 days, counted from `now`: at exactly 180 days it is still refused.
 
 **The form address** (`canonical_key`). Ashby, Greenhouse and Lever job ids are global, so the key
@@ -361,7 +362,8 @@ def duplicates(
         .where(
             Application.user_id == user_id,
             Job.id != posting.id,
-            Application.submitted_at >= since,
+            # `submitting` has no `submitted_at` yet, but its click is under way (A6).
+            sa.or_(Application.submitted_at >= since, Application.state == State.submitting),
         )
     ).all()
     recent = [(company, title) for company, title in clicked]

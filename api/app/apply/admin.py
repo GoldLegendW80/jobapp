@@ -4,7 +4,8 @@ in the api container. The gate reads it in `decide` (the approve route) and agai
 click (`submit.py`), beside the setting `APPLY_SUBMIT_ENABLED`.
 
 Reading fails closed: a Redis that cannot be read counts as paused, so nothing is clicked while
-the flag is unknown (test_a_redis_that_cannot_be_read_counts_as_paused).
+the flag is unknown (test_a_redis_that_cannot_be_read_counts_as_paused), and `status` then says
+"unknown, treated as paused" rather than a plain "paused".
 
     python -m app.apply.admin pause|resume|status
 """
@@ -44,6 +45,19 @@ async def resume(redis: Flags) -> None:
     await redis.delete(PAUSE_KEY)
 
 
+UNREADABLE = "unknown, treated as paused"
+
+
+async def status(redis: Flags) -> str:
+    """What `status` prints: `paused`, `running`, or UNREADABLE when the flag cannot be read (the
+    gate then counts it as paused, so the administrator is told both)."""
+    try:
+        return "paused" if await redis.get(PAUSE_KEY) else "running"
+    except Exception as exc:
+        logger.warning("apply.pause_unreadable", extra={"error": type(exc).__name__})
+        return UNREADABLE
+
+
 async def _command(action: str, url: str) -> str:
     from redis.asyncio import Redis
 
@@ -53,7 +67,7 @@ async def _command(action: str, url: str) -> str:
             await pause(redis)
         elif action == "resume":
             await resume(redis)
-        return "paused" if await paused(redis) else "running"
+        return await status(redis)
     finally:
         await redis.aclose()
 

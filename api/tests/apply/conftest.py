@@ -78,6 +78,14 @@ def _person(db: Session, email: str, name: str, url: str) -> Person:
         profile = profile_service.save_section(
             db, user, section, full(section), profile.revision, AT
         )
+    posting, versions = add_posting(db, user, url)
+    db.commit()
+    return Person(user, email, posting, versions[Kind.cv], versions[Kind.letter])
+
+
+def add_posting(db: Session, user: uuid.UUID, url: str) -> tuple[uuid.UUID, dict[Kind, uuid.UUID]]:
+    """A posting of Example Robotics' Applied AI Engineer at `url`, with a CV and a letter whose
+    versions have a one page PDF. The caller commits."""
     posting = db.execute(
         sa.text(
             "INSERT INTO jobs (user_id, slug, company, title, url, posting_text) "
@@ -111,8 +119,7 @@ def _person(db: Session, email: str, name: str, url: str) -> Person:
             pages=1,
         )
         versions[kind] = made.id
-    db.commit()
-    return Person(user, email, posting, versions[Kind.cv], versions[Kind.letter])
+    return posting, versions
 
 
 @pytest.fixture

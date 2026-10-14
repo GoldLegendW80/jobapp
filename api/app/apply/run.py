@@ -454,6 +454,16 @@ def finish(
     if application.state is not State.filling:
         _event(db, application, "fill_superseded", now, state=application.state.value)
         return "superseded"
+    # The person's own answers (A6, `gate.set_answer`) outlive a refill: the agent never
+    # replaces them, for a field the form still has.
+    mine = db.execute(
+        sa.select(ApplicationAnswer.field_key, ApplicationAnswer.value).where(
+            ApplicationAnswer.application_id == application.id,
+            ApplicationAnswer.user_id == application.user_id,
+            ApplicationAnswer.source == AnswerSource.person,
+        )
+    ).all()
+    theirs = {key: value for key, value in mine}
     db.execute(
         sa.delete(ApplicationAnswer).where(
             ApplicationAnswer.application_id == application.id,
@@ -461,6 +471,9 @@ def finish(
         )
     )
     rows = _answer_rows(application, result.report)
+    for row in rows:
+        if row.field_key in theirs and not row.field_key.startswith("skipped:"):
+            row.value, row.source = theirs[row.field_key], AnswerSource.person
     db.add_all(rows)
     counts = _counts(result.report)
     _event(db, application, "filled", now, **counts)

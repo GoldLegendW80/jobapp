@@ -25,7 +25,8 @@ Tightened by apply A6 (issue #296):
   unique indexes (cancelled, blocked, posting_closed, failed) as if nothing was sent; a crash
   after it is `submit_unknown` (`submit.py`).
 - A rehearsal (`dry_run`) never reaches `submitting`: the gate records `rehearsed` from
-  `approved` after the refill and the read back, before the click.
+  `approved` after the refill and the read back, before the click. `ready` has no move to
+  `rehearsed`: a rehearsal always passes the gate first.
 - Before the click the submit lease may stop: `approved` to `ready` (a difference on the read
   back, the approval spent), `needs_person` (a captcha on the refilled form), or an end.
 """
@@ -46,8 +47,9 @@ TRANSITIONS: dict[State, frozenset[State]] = {
     S.filling: frozenset({S.queued, S.needs_person, S.ready}) | _STOPS,
     S.needs_person: frozenset({S.queued, S.filling, S.ready}) | _STOPS,
     # filling: refilled (an edit, or the submit lease of an approval reopening the form).
-    S.ready: frozenset({S.queued, S.filling, S.needs_person, S.approved, S.held, S.rehearsed})
-    | _STOPS,
+    # Never `rehearsed` directly: a rehearsal ends only after the gate (A5 stops a dry run at
+    # `ready`, the submit lease records `rehearsed` from `approved` or `held`).
+    S.ready: frozenset({S.queued, S.filling, S.needs_person, S.approved, S.held}) | _STOPS,
     # ready: the approval no longer matches (form_changed on the refill), back to the queue.
     # needs_person: a captcha on the refilled form. cancelled: the kill switch, checked again
     # just before the click.
