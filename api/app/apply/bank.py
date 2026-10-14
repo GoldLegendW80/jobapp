@@ -2,7 +2,9 @@
 typed or corrected in a review, kept with its question and reused when the same question comes
 back. This module is the pure part: the normalised question key, the lookup and the update on a
 person's edit. The table that stores it is the apply tables' (A2); a bank belongs to one person
-and `Context` refuses a bank of another.
+and `Context` refuses a bank of another. The bank never overrides a policy: `answers.resolve`
+applies the EEO policy, the salary stance and its never answered fields (someone else's details,
+age, citizenship, current pay, free text) before it reads the bank.
 """
 
 import re

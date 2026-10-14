@@ -77,7 +77,8 @@ def test_a_french_form_is_read() -> None:
     assert value("Prénom") == first
     assert value("Nom") == last
     assert value("Nom de famille") == last
-    assert value("Ville") == f"{identity['city']}, {identity['country']}"
+    assert value("Ville") == identity["city"]
+    assert value("Localisation") == f"{identity['city']}, {identity['country']}"
     assert value("Pays") == identity["country"]
     assert value("Courriel") == identity["email"]
     assert value("Téléphone portable") == identity["phone"]
@@ -270,14 +271,17 @@ def test_years_when_the_profile_states_fewer_the_answer_is_no() -> None:
     secs = sections()
     secs["skills"] = {**secs["skills"], "years_experience": 3.5}
     context = ctx(sections=secs)
-    assert value("Do you have 8+ years of experience in Java?", "yes_no", context=context) is False
+    # Years with one technology are not stored: left, even when the overall years are fewer.
+    assert left(
+        "Do you have 8+ years of experience in Java?", "yes_no", context=context
+    ).reason == ("subject_years_not_stated")
     assert ask("Do you have 8+ years of experience?", "yes_no", context=context).source == (
         "skills.years_experience"
     )
     assert value("Do you have 3+ years of experience?", "yes_no", context=context) is True
     assert left(
         "Do you have 3+ years of experience with COBOL?", "yes_no", context=context
-    ).reason == ("subject_not_proven")
+    ).reason == ("subject_years_not_stated")
     assert value("Years of experience", "text", context=context) == "3.5"
 
 
