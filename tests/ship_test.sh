@@ -96,7 +96,7 @@ case "$1 $2" in
 "pr comment")
   d="$(pr_dir "$3")"
   [[ "$4" == --body-file ]] || exit 2
-  cp "$5" "$STATE/comment-$3.md"
+  cp "$5" "$STATE/comment-$3.txt"
   ;;
 "pr merge")
   d="$(pr_dir "$3")"
@@ -529,17 +529,17 @@ out_has "drop   #43: api-pytest"
 out_has "dropped:  #43 (api-pytest)"
 grep -c '^pr merge' "$STATE/gh.log" | grep -qx 3 || fail "three merges expected: $(grep '^pr merge' "$STATE/gh.log")"
 log_lacks gh.log "pr merge 43"
-[[ -f "$STATE/comment-43.md" ]] || fail "no comment on the dropped pull request"
-grep -qF "failed at \`api-pytest\`" "$STATE/comment-43.md" || fail "comment lacks the step: $(cat "$STATE/comment-43.md")"
-grep -qF "after #41, #42" "$STATE/comment-43.md" || fail "comment lacks the order: $(cat "$STATE/comment-43.md")"
-grep -qF "E   assert 1 == 2" "$STATE/comment-43.md" || fail "comment lacks the log tail"
-grep -qF "test_answer_table_refuses_another_country FAILED" "$STATE/comment-43.md" || fail "comment withheld a test name"
-[[ "$(grep -cF '[line withheld: it may hold a secret]' "$STATE/comment-43.md")" -ge 3 ]] || fail "the three secret lines should be withheld: $(cat "$STATE/comment-43.md")"
-! grep -qF "$CANARY" "$STATE/comment-43.md" || fail "the comment holds the planted secret"
-! grep -qF "Zx81Qp0LmN4vT7rKs2Yb6Hc9Wd3Fj5Ga" "$STATE/comment-43.md" || fail "the comment holds a token"
+[[ -f "$STATE/comment-43.txt" ]] || fail "no comment on the dropped pull request"
+grep -qF "failed at \`api-pytest\`" "$STATE/comment-43.txt" || fail "comment lacks the step: $(cat "$STATE/comment-43.txt")"
+grep -qF "after #41, #42" "$STATE/comment-43.txt" || fail "comment lacks the order: $(cat "$STATE/comment-43.txt")"
+grep -qF "E   assert 1 == 2" "$STATE/comment-43.txt" || fail "comment lacks the log tail"
+grep -qF "test_answer_table_refuses_another_country FAILED" "$STATE/comment-43.txt" || fail "comment withheld a test name"
+[[ "$(grep -cF '[line withheld: it may hold a secret]' "$STATE/comment-43.txt")" -ge 3 ]] || fail "the three secret lines should be withheld: $(cat "$STATE/comment-43.txt")"
+! grep -qF "$CANARY" "$STATE/comment-43.txt" || fail "the comment holds the planted secret"
+! grep -qF "Zx81Qp0LmN4vT7rKs2Yb6Hc9Wd3Fj5Ga" "$STATE/comment-43.txt" || fail "the comment holds a token"
 out_lacks "$CANARY"
-! grep -qF "the last 40 lines of" "$STATE/comment-43.md" || fail "the comment holds the local log header"
-for n in 41 42 44; do [[ ! -e "$STATE/comment-$n.md" ]] || fail "#$n got a comment"; done
+! grep -qF "the last 40 lines of" "$STATE/comment-43.txt" || fail "the comment holds the local log header"
+for n in 41 42 44; do [[ ! -e "$STATE/comment-$n.txt" ]] || fail "#$n got a comment"; done
 [[ "$(last_line)" == "SHIP: OK" ]] || fail "bisect then ship: $(last_line)"
 out_lacks "flaky:"
 ok "bisect: the same failure twice, then the shortest failing prefix drops #43 (5 gate runs), comment with step, order and a redacted tail, the rest shipped"
@@ -551,13 +551,13 @@ for i in $(seq 1 45); do printf 'api line %s\n' "$i"; done >"$STATE/fail_tail-ap
 printf 'web-lint said %s\n' "$CANARY" >"$STATE/fail_tail-web-lint"
 run 0 ship --approved
 out_has "drop   #42: api-pytest,web-lint"
-grep -qF "failed at \`api-pytest\`" "$STATE/comment-42.md" || fail "comment names another step: $(cat "$STATE/comment-42.md")"
-grep -qxF "api line 45" "$STATE/comment-42.md" || fail "comment lacks the last line"
-grep -qxF "api line 16" "$STATE/comment-42.md" || fail "comment lacks line 16"
-! grep -qxF "api line 15" "$STATE/comment-42.md" || fail "the comment holds more than 30 lines of the log"
-! grep -qF "web-lint said" "$STATE/comment-42.md" || fail "the comment holds the log of a step not blamed"
+grep -qF "failed at \`api-pytest\`" "$STATE/comment-42.txt" || fail "comment names another step: $(cat "$STATE/comment-42.txt")"
+grep -qxF "api line 45" "$STATE/comment-42.txt" || fail "comment lacks the last line"
+grep -qxF "api line 16" "$STATE/comment-42.txt" || fail "comment lacks line 16"
+! grep -qxF "api line 15" "$STATE/comment-42.txt" || fail "the comment holds more than 30 lines of the log"
+! grep -qF "web-lint said" "$STATE/comment-42.txt" || fail "the comment holds the log of a step not blamed"
 fence='```'
-[[ "$(sed -n "/^${fence}text\$/,/^${fence}\$/p" "$STATE/comment-42.md" | wc -l | tr -d ' ')" == 32 ]] || fail "30 lines expected between the fences: $(cat "$STATE/comment-42.md")"
+[[ "$(sed -n "/^${fence}text\$/,/^${fence}\$/p" "$STATE/comment-42.txt" | wc -l | tr -d ' ')" == 32 ]] || fail "30 lines expected between the fences: $(cat "$STATE/comment-42.txt")"
 ok "two steps fail: the comment holds the last 30 lines of the first step's log only, without the local header"
 
 fresh
@@ -567,7 +567,7 @@ printf '82 api-pytest\n' >"$STATE/gate_fail"
 run 0 ship --approved
 [[ "$(cat "$STATE/gate.log")" == "$(printf 'main 81 82 83\nmain 81 82 83\nmain 81 82\nmain 81\nmain 81')" ]] || fail "dependent bisect runs: $(cat "$STATE/gate.log")"
 out_has "dropped:  #82 (api-pytest), #83 (waits for #82)"
-[[ -f "$STATE/comment-82.md" && ! -e "$STATE/comment-83.md" ]] || fail "#82 alone gets a comment"
+[[ -f "$STATE/comment-82.txt" && ! -e "$STATE/comment-83.txt" ]] || fail "#82 alone gets a comment"
 grep '^pr merge' "$STATE/gh.log" | grep -qv '^pr merge 81 ' && fail "only #81 should merge: $(grep '^pr merge' "$STATE/gh.log")"
 log_has gh.log "pr merge 81 "
 [[ "$(last_line)" == "SHIP: OK" ]] || fail "dependent drop: $(last_line)"
@@ -582,7 +582,7 @@ run 1 ship --approved
 [[ "$(last_line)" == "ops/ship.sh: flaky gate" ]] || fail "flaky stderr: $(last_line)"
 out_has "flaky:    run 1 failed api-pytest, run 2 failed web-lint"
 [[ "$(wc -l <"$STATE/gate.log" | tr -d ' ')" == 2 ]] || fail "no bisect after a flaky gate: $(cat "$STATE/gate.log")"
-ls "$STATE"/comment-*.md >/dev/null 2>&1 && fail "a flaky gate commented"
+ls "$STATE"/comment-*.txt >/dev/null 2>&1 && fail "a flaky gate commented"
 log_lacks gh.log "pr merge"
 ok "the full batch fails at other steps on the second run: SHIP: FAIL flaky gate, both runs named, nothing dropped, commented or merged"
 
@@ -603,7 +603,7 @@ printf '89 api-pytest\n' >"$STATE/gate_fail"
 printf 'auto\nauto\nweb-lint\n' >"$STATE/gate_plan"
 run 0 ship --approved
 out_has "drop   #89: api-pytest"
-[[ ! -e "$STATE/comment-88.md" ]] || fail "#88 was blamed for a prefix that failed at another step"
+[[ ! -e "$STATE/comment-88.txt" ]] || fail "#88 was blamed for a prefix that failed at another step"
 out_has "run 3 failed web-lint, a bisect prefix counted as passing"
 ok "a bisect prefix that fails at another step counts as passing (flaky), the real culprit is dropped"
 
@@ -612,8 +612,8 @@ for n in 45 46 47; do mkpr "$n"; done
 echo 46 >"$STATE/conflict"
 run 0 ship --approved
 [[ "$(cat "$STATE/gate.log")" == "$(printf 'main 45 46 47\nmain 45 47')" ]] || fail "conflict runs: $(cat "$STATE/gate.log")"
-grep -qF "failed at \`merge-conflict\`" "$STATE/comment-46.md" || fail "conflict comment: $(cat "$STATE/comment-46.md")"
-grep -qxF "  file.txt" "$STATE/comment-46.md" || fail "conflict comment lacks the files: $(cat "$STATE/comment-46.md")"
+grep -qF "failed at \`merge-conflict\`" "$STATE/comment-46.txt" || fail "conflict comment: $(cat "$STATE/comment-46.txt")"
+grep -qxF "  file.txt" "$STATE/comment-46.txt" || fail "conflict comment lacks the files: $(cat "$STATE/comment-46.txt")"
 ok "a merge conflict drops the pull request it names, without bisecting"
 
 fresh
@@ -630,7 +630,7 @@ mkpr 53
 printf 'main api-pytest\n' >"$STATE/gate_fail"
 run 1 ship --approved
 out_has "SHIP: FAIL main itself fails the gate at api-pytest"
-[[ ! -e "$STATE/comment-53.md" ]] || fail "#53 was blamed for a broken main"
+[[ ! -e "$STATE/comment-53.txt" ]] || fail "#53 was blamed for a broken main"
 log_lacks gh.log "pr merge"
 ok "a main that fails the gate stops the run, nobody is blamed"
 
@@ -639,7 +639,7 @@ mkpr 54
 printf '54 api-pytest\n' >"$STATE/gate_fail"
 run 1 ship --approved
 out_has "SHIP: FAIL every pull request of the batch failed the gate"
-[[ -f "$STATE/comment-54.md" ]] || fail "#54 got no comment"
+[[ -f "$STATE/comment-54.txt" ]] || fail "#54 got no comment"
 ok "every pull request dropped: exit 1"
 
 fresh
