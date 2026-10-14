@@ -1,5 +1,7 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
@@ -177,6 +179,13 @@ describe("the steps built by later tasks", () => {
     ).toBeVisible();
     const panel = document.querySelector('[data-step="review"] > div');
     expect(panel?.childElementCount).toBe(1);
-    expect(render(<ProposalList />).container).toBeEmptyDOMElement();
+    // The list reads the last finished run, so it needs a query client.
+    const withClient = (ui: ReactElement) =>
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          {ui}
+        </QueryClientProvider>,
+      );
+    expect(withClient(<ProposalList />).container).toBeEmptyDOMElement();
   });
 });

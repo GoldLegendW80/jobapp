@@ -45,6 +45,7 @@ from app.ingestion import (
     delete_guard,
     engine,
     estimate_router,
+    merge,
     plan,
     reuse,
 )
@@ -340,7 +341,7 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
             items=items,
             refused=sum(one.refused for one in steps),
             two_digit_year=sum(one.two_digit_year for one in steps),
-            proposals=0,  # the merge of G12 writes them
+            proposals=merge.count_of_run(db, run.user_id, run.id),
             **by_status,
         ),
         steps=steps,

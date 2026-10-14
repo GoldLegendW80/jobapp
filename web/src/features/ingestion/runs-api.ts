@@ -4,11 +4,17 @@
  * actions. Shapes mirror the routers' response models. Every figure the page shows (tokens,
  * ceiling, amounts, what a Continue adds) is read from these answers and never computed here.
  */
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { z } from "zod";
 
 import { errorDetail, isApiError, request } from "@/lib/api";
+
+import { finishedRunKey } from "./proposals-api";
 
 const TIMEOUT_MS = 30_000;
 const RUNS = "/ingestion/runs";
@@ -228,6 +234,15 @@ export type RunList = z.infer<typeof runListSchema>;
 export const runsKey = ["ingestion", "runs"] as const;
 export const runKey = (id: string) => ["ingestion", "runs", id] as const;
 
+/**
+ * A run started or changed state: read the list of runs again, and the id of the latest finished
+ * run that the review list shows. The second key sits under the first but `exact` stops there.
+ */
+export function refreshRuns(client: QueryClient) {
+  void client.invalidateQueries({ queryKey: runsKey, exact: true });
+  void client.invalidateQueries({ queryKey: finishedRunKey });
+}
+
 export const PAUSED_ON_CEILING = "token_ceiling";
 
 export const isActive = (status: RunStatus) =>
@@ -323,7 +338,7 @@ export function useShownRun() {
     const before = seen.current;
     seen.current = { id, status };
     if (before !== undefined && before.id === id && before.status !== status)
-      void client.invalidateQueries({ queryKey: runsKey, exact: true });
+      refreshRuns(client);
   }, [client, id, status]);
   return { id, run, listed: runs };
 }

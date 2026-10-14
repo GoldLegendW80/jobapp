@@ -1,4 +1,5 @@
-"""The recorded streams of the G10 journey (web/e2e/ingestion-g10.spec.ts), written from here:
+"""The recorded streams of the G10 and G12 journeys (web/e2e/ingestion-g10.spec.ts and
+ingestion-g12.spec.ts), written from here:
 `python -m tests.ingestion.journey_streams` from api/ rewrites
 app/agents/fake_streams/ingest_extract_<first 12 hex digits of the fixture's sha256>_p0.json for
 each fixture below, and tests/ingestion/test_journey_streams.py fails when a file and this module
@@ -257,10 +258,105 @@ LARGE = stream(
 )
 
 
+def _person(number: int) -> dict[str, Any]:
+    return propose(
+        number,
+        "identity",
+        [item("full_name", "Sam Rivera", "Sam Rivera\nEmail: sam.rivera@example.org")],
+    )
+
+
+def _employer(organisation: str, title: str, start: str, end: str, city: str, excerpt: str) -> Any:
+    value = {
+        "organisation": organisation,
+        "title": title,
+        "start": start,
+        "end": end,
+        "location": city,
+    }
+    return item("employers", value, excerpt)
+
+
+# The G12 journey (web/e2e/ingestion-g12.spec.ts): two documents that agree on a name (one
+# proposal, two citations), disagree on a start date (one conflict, both sources), and one of
+# which names an employer of its own (the derived years are counted from it).
+G12_FIRST = stream(
+    "G12 journey, tests/ingestion/fixtures/g12_first.txt: reads the part, proposes a name and "
+    "one employer starting in March 2019.",
+    [
+        assistant(1, [read(1)], SMALL),
+        assistant(2, [_person(2)], SMALL),
+        assistant(
+            3,
+            [
+                propose(
+                    3,
+                    "experience",
+                    [
+                        _employer(
+                            "Example Rail",
+                            "Data Engineer",
+                            "2019-03",
+                            "2022-06",
+                            "Lyon",
+                            "Example Rail, Data Engineer, March 2019 to June 2022, Lyon",
+                        )
+                    ],
+                )
+            ],
+            SMALL,
+        ),
+        said(4, "Proposed 2 items."),
+    ],
+    "Proposed 2 items.",
+)
+
+G12_SECOND = stream(
+    "G12 journey, tests/ingestion/fixtures/g12_second.txt: reads the part, proposes the same "
+    "name, the same employer starting in May 2019, and an earlier employer.",
+    [
+        assistant(1, [read(1)], SMALL),
+        assistant(2, [_person(2)], SMALL),
+        assistant(
+            3,
+            [
+                propose(
+                    3,
+                    "experience",
+                    [
+                        _employer(
+                            "Example Rail",
+                            "Data Engineer",
+                            "2019-05",
+                            "2022-06",
+                            "Lyon",
+                            "Example Rail, Data Engineer, May 2019 to June 2022, Lyon",
+                        ),
+                        _employer(
+                            "Example Post",
+                            "Analyst",
+                            "2016-01",
+                            "2018-12",
+                            "Paris",
+                            "Example Post, Analyst, January 2016 to December 2018, Paris",
+                        ),
+                    ],
+                )
+            ],
+            SMALL,
+        ),
+        said(4, "Proposed 3 items."),
+    ],
+    "Proposed 3 items.",
+)
+
+
 STREAMS: dict[str, dict[str, Any]] = {
     "g10_first.txt": FIRST,
     "g10_second.txt": SECOND,
     LARGE_FIXTURE: LARGE,
+    "g12_first.txt": G12_FIRST,
+    "g12_second.txt": G12_SECOND,
 }
 
 

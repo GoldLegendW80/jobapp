@@ -372,7 +372,8 @@ test("a start is refused without the consent, then the run goes through both ste
     cancelled: 0,
     items: 4,
     refused: 0,
-    proposals: 0,
+    // The merge of G12: the name, the email, the employer, the fact, and the derived years.
+    proposals: 5,
   });
   // The tokens spent against the ceiling, and the measured overshoot for the page to state.
   expect(done.tokens.spent).toBe(FIRST_TOKENS + SECOND_TOKENS);
@@ -393,7 +394,13 @@ test("a second run over the same documents reuses both steps and calls no model"
     (now) => !ACTIVE.includes(now.status),
   );
   expect(done.status).toBe("done");
-  expect(done.counts).toMatchObject({ steps: 2, reused: 2, items: 4 });
+  // The same items and the same profile give the same proposals.
+  expect(done.counts).toMatchObject({
+    steps: 2,
+    reused: 2,
+    items: 4,
+    proposals: 5,
+  });
   expect(done.steps.map((step) => step.agent_run_id)).toEqual([null, null]);
   expect(done.tokens.spent).toBe(0);
 });
