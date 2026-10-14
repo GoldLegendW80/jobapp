@@ -466,6 +466,18 @@ def test_a_patch_that_changes_nothing_asks_for_no_render(
         (("", ""), "Letter", "Letter"),
         (("   ", "!!!"), "CV", "CV"),
         (("Alex Example", ""), "CV", "Alex_Example_CV"),
+        (("Ａｌｅｘ　Ｅｘａｍｐｌｅ", ""), "CV", "Alex_Example_CV"),
+        (("Nguyễn Văn An", "Đà Nẵng Co"), "CV", "Nguyen_Van_An_Da_Nang_Co_CV"),
+        (("Ce\u0301line", "Zoe\u0308"), "CV", "Celine_Zoe_CV"),
+        (("GROẞ", "MÆRSK"), "CV", "GROSS_MAERSK_CV"),
+        (("Al\u200dex", "Lu\u00admen"), "CV", "Alex_Lumen_CV"),
+        (("Alex 🚀", "Lumen\ufe0f"), "CV", "Alex_Lumen_CV"),
+        (("Αλέξης", "Lumen"), "CV", "Lumen_CV"),
+        (("Alex ٣", "Lumen ³"), "CV", "Alex_Lumen_3_CV"),
+        (("Alex", "../../etc/passwd"), "CV", "Alex_etc_passwd_CV"),
+        (('Alex"; x=1', "Lumen\r\nSet-Cookie"), "CV", "Alex_x_1_Lumen_Set_Cookie_CV"),
+        (("Bjørn Øster", "Fjærland"), "Letter", "Bjorn_Oster_Fjaerland_Letter"),
+        (("Paweł Wałęsa", ""), "CV", "Pawel_Walesa_CV"),
     ],
 )
 def test_the_file_name_spells_letters_in_ascii(
