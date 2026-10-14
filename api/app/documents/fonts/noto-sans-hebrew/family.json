@@ -1,20 +1,20 @@
 {
  "family": "Noto Sans Hebrew",
  "licence": "OFL-1.1",
- "source": "Fontsource @fontsource/noto-sans-hebrew 5.3.0 (Google Fonts files, unmodified)",
+ "source": "Fontsource @fontsource/noto-sans-hebrew 5.3.0 (Google Fonts files, unmodified); unicode_range: the subset's range limited to the glyphs the file holds",
  "fallback": true,
  "faces": [
   {
    "file": "hebrew-400-normal.woff2",
    "weight": 400,
    "style": "normal",
-   "unicode_range": "U+0307-0308,U+0590-05FF,U+200C-2010,U+20AA,U+25CC,U+FB1D-FB4F"
+   "unicode_range": "U+0307-0308,U+0591-05C7,U+05D0-05EA,U+05EF-05F4,U+200C-2010,U+20AA,U+25CC,U+FB1D-FB36,U+FB38-FB3C,U+FB3E,U+FB40-FB41,U+FB43-FB44,U+FB46-FB4F"
   },
   {
    "file": "hebrew-700-normal.woff2",
    "weight": 700,
    "style": "normal",
-   "unicode_range": "U+0307-0308,U+0590-05FF,U+200C-2010,U+20AA,U+25CC,U+FB1D-FB4F"
+   "unicode_range": "U+0307-0308,U+0591-05C7,U+05D0-05EA,U+05EF-05F4,U+200C-2010,U+20AA,U+25CC,U+FB1D-FB36,U+FB38-FB3C,U+FB3E,U+FB40-FB41,U+FB43-FB44,U+FB46-FB4F"
   }
  ]
 }

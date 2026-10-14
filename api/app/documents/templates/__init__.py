@@ -10,17 +10,23 @@ document's content into the HTML the renderer receives:
 
 - Jinja2's sandboxed environment with autoescape on, for every template: the content comes from
   the person's profile and from model output, and every value of it prints as text. Only code
-  marks text safe (the CSS of the template and of the fonts); a template file cannot (`|safe`,
-  `autoescape` and `Markup` are refused by the authoring rules);
+  marks text safe (the style); a template file cannot: `|safe`, `autoescape` and `Markup` are
+  refused by the authoring rules, and the filters that print markup (`UNESCAPING`) are removed
+  from the environment;
 - the fixed facts (name, contact lines, employers, schools, languages) from the profile view,
   never from the content; an experience entry prints only when its employer is in the view;
 - the step's density as custom properties on `:root` (`--body-size`, `--line-height`,
   `--section-gap`, `--item-gap`, `--margin`), read by the template's `style.css`;
 - the fonts of the bundled library (`documents/fonts/<family>/`) and the photo as `data:`
   addresses: nothing is ever fetched. Only the faces whose characters the page uses are
-  embedded, and a character none of the template's families has (Arabic, Hebrew, an emoji) is
-  drawn by a free fallback family of the library declared under the template's own family
-  names, so the renderer never falls back to a font the HTML did not ask for (D3's font check).
+  embedded. A character none of the template's families has (Greek, an arrow, Hebrew, an
+  emoji) is drawn by a free fallback family of the library, embedded once under its own name
+  and named in every `font-family` of the style, so the renderer never falls back to a font
+  the HTML did not ask for (D3's font check). A character no font of the library has (CJK) is
+  replaced by its closest printable form or dropped (`printable`, which also returns D2's
+  correction records for the person): a render never fails on a character;
+- the style goes in by a structured step, in place of a token drawn for each render, and the
+  built page is parsed once (`inspect`) before the renderer gets it.
 
 **The authoring rules** (`problems`), applied to a bundled folder at start and to a person's own
 template (D25b) alike: no script and no event handler, no outside address (`http`, `//`, a
@@ -42,11 +48,13 @@ import hashlib
 import html
 import json
 import re
+import secrets
 import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from datetime import date
 from functools import cache
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -58,6 +66,7 @@ from markupsafe import Markup
 from pydantic import BaseModel
 
 from app.documents import content as c
+from app.documents import corrections
 from app.documents.profile_view import ProfileView
 from app.documents.rules import SoftLimits
 
@@ -372,16 +381,25 @@ def registry() -> Mapping[str, Template]:
     return found
 
 
-def thumbnail_hash(folder: Path) -> str:
-    """The hash of a folder's files other than the thumbnails, the manifest without its
-    `thumbnail_of`: what `thumbnail_of` must equal."""
+def thumbnail_hash(folder: Path, base: Path = BASE, library: Path = FONTS) -> str:
+    """The hash of what a thumbnail is drawn from: the folder's files other than the
+    thumbnails, the manifest without its `thumbnail_of`, the files of `_base/` (the macros, the
+    labels, the sample) and the fonts of its families (each `family.json` and face file). What
+    `thumbnail_of` must equal: a change to any of them makes the thumbnails stale."""
     digest = hashlib.sha256()
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     manifest.pop("thumbnail_of", None)
-    parts = [("manifest.json", json.dumps(manifest, sort_keys=True, ensure_ascii=False))]
-    parts += [(name, (folder / name).read_text(encoding="utf-8")) for name in FILES]
-    for name, text in parts:
-        digest.update(name.encode() + b"\0" + text.encode("utf-8") + b"\0")
+    parts = [("manifest.json", json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode())]
+    parts += [(name, (folder / name).read_bytes()) for name in FILES]
+    parts += [(f"_base/{p.name}", p.read_bytes()) for p in sorted(base.iterdir()) if p.is_file()]
+    for family in manifest.get("fonts", []):
+        parts += [
+            (f"fonts/{family}/{p.name}", p.read_bytes())
+            for p in sorted((library / family).iterdir())
+            if p.is_file()
+        ]
+    for name, data in parts:
+        digest.update(name.encode() + b"\0" + hashlib.sha256(data).digest() + b"\0")
     return digest.hexdigest()
 
 
@@ -414,11 +432,11 @@ class Face:
     path: Path
     weight: int
     style: str
-    ranges: tuple[tuple[int, int], ...]
+    points: frozenset[int]  # the characters it draws: its unicode_range, which is truthful
     unicode_range: str
 
     def covers(self, codepoint: int) -> bool:
-        return any(low <= codepoint <= high for low, high in self.ranges)
+        return codepoint in self.points
 
 
 @dataclass(frozen=True)
@@ -430,21 +448,35 @@ class Family:
     faces: tuple[Face, ...]
 
     def covers(self, codepoint: int) -> bool:
-        return any(face.covers(codepoint) for face in self.faces)
+        return any(codepoint in face.points for face in self.faces)
 
 
-def _ranges(text: str) -> tuple[tuple[int, int], ...]:
-    out: list[tuple[int, int]] = []
+# The free fallback families, in the order a character missing from a template's families looks
+# for one (text before symbols, the large Math and Symbols 2 faces after the small ones).
+FALLBACKS = (
+    "noto-sans",
+    "noto-sans-math",
+    "noto-sans-symbols",
+    "noto-sans-symbols-2",
+    "noto-sans-hebrew",
+    "noto-sans-arabic",
+    "noto-emoji",
+)
+
+
+def _points(text: str) -> frozenset[int]:
+    out: set[int] = set()
     for part in text.split(","):
         bounds = part.strip().upper().removeprefix("U+").split("-")
-        low = int(bounds[0], 16)
-        out.append((low, int(bounds[-1], 16)))
-    return tuple(out)
+        out.update(range(int(bounds[0], 16), int(bounds[-1], 16) + 1))
+    return frozenset(out)
 
 
 @cache
 def fonts() -> Mapping[str, Family]:
-    """The bundled library: every `fonts/<family>/family.json`, with its licence file."""
+    """The bundled library: every `fonts/<family>/family.json`, with its licence file. A face's
+    `unicode_range` is the range of its subset limited to the glyphs the file holds, so a face
+    that claims a character draws it."""
     found: dict[str, Family] = {}
     for folder in sorted(FONTS.iterdir()):
         if not (folder / "family.json").is_file():
@@ -457,7 +489,7 @@ def fonts() -> Mapping[str, Family]:
                 folder / face["file"],
                 face["weight"],
                 face["style"],
-                _ranges(face["unicode_range"]),
+                _points(face["unicode_range"]),
                 face["unicode_range"],
             )
             for face in data["faces"]
@@ -465,7 +497,64 @@ def fonts() -> Mapping[str, Family]:
         found[folder.name] = Family(
             folder.name, data["family"], data["licence"], data["fallback"], faces
         )
+    if [key for key, family in found.items() if family.fallback] != sorted(FALLBACKS):
+        raise TemplateError("fonts", "the fallback families differ from FALLBACKS")
     return found
+
+
+@cache
+def _common(families: tuple[str, ...]) -> frozenset[int]:
+    """The characters every family of a template draws."""
+    library = fonts()
+    sets = [frozenset().union(*(f.points for f in library[key].faces)) for key in families]
+    return frozenset.intersection(*sets)
+
+
+@cache
+def _printable(families: tuple[str, ...]) -> frozenset[int]:
+    """The characters a template can print: those of all its families, and those of a fallback."""
+    library = fonts()
+    return _common(families).union(*(f.points for k in FALLBACKS for f in library[k].faces))
+
+
+# Characters that need no glyph: controls (a new line), format characters (a joiner, a mark of
+# direction), separators of lines and paragraphs.
+_NO_GLYPH = frozenset(("Cc", "Cf", "Zl", "Zp"))
+
+
+def printable_text(families: tuple[str, ...], text: str, tidy: bool = True) -> str:
+    """`text` with each character no font of the template draws (its own families and the
+    fallbacks) replaced by its compatibility form when that one prints (a full width
+    letter -> its plain letter, an ideographic space -> a space), else
+    removed; with `tidy`, runs of spaces left behind become one."""
+    if text.isascii():
+        return text
+    keep = _printable(families)
+    out: list[str] = []
+    for ch in text:
+        if ord(ch) in keep or unicodedata.category(ch) in _NO_GLYPH:
+            out.append(ch)
+            continue
+        near = unicodedata.normalize("NFKC", ch)
+        if near != ch and all(ord(x) in keep for x in near):
+            out.append(near)
+    fixed = "".join(out)
+    return fixed if fixed == text or not tidy else re.sub(r" {2,}", " ", fixed).strip()
+
+
+def printable(
+    template: Template, kind: str, content: BaseModel | Mapping[str, Any]
+) -> tuple[c.CvContent | c.LetterContent, list[corrections.Correction]]:
+    """The content with what the template cannot print replaced (`printable_text`), and one
+    correction record (`not_printable`, D2's record) per field changed, for the person to see.
+    The pipeline stores these records with the version; `build_html` applies the same
+    replacement itself, so a render never fails on a character (spec: never block)."""
+    parsed = content if isinstance(content, BaseModel) else c.MODELS[kind].model_validate(content)
+    return corrections.replace_unprintable(
+        kind,  # type: ignore[arg-type]
+        parsed,  # type: ignore[arg-type]
+        lambda text: printable_text(template.fonts, text),
+    )
 
 
 @cache
@@ -473,58 +562,92 @@ def _data_uri(path: Path) -> str:
     return "data:font/woff2;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
-def _face_rule(name: str, face: Face, weight: int | None = None, style: str | None = None) -> str:
+def _face_rule(name: str, face: Face, weight: str = "") -> str:
     return (
         f'@font-face{{font-family:"{name}";src:url({_data_uri(face.path)}) format("woff2");'
-        f"font-weight:{weight or face.weight};font-style:{style or face.style};"
+        f"font-weight:{weight or face.weight};font-style:{face.style};"
         f"unicode-range:{face.unicode_range}}}"
     )
 
 
-def _nearest(faces: list[Face], weight: int) -> Face:
-    """The face CSS would pick for `weight`: the same, else the nearest, heavier first above 500."""
-    heavier = weight > 500
-    return min(faces, key=lambda f: (abs(f.weight - weight), (f.weight < weight) == heavier))
+def font_css(families: tuple[str, ...], text: str) -> tuple[str, tuple[str, ...]]:
+    """The `@font-face` rules for the characters of `text`, and the fallback families they use.
 
-
-def font_css(families: tuple[str, ...], text: str) -> str:
-    """The `@font-face` rules of `families` for the characters of `text`: a face is embedded
-    when it covers one of them. A character none of the families covers takes the faces of the
-    fallback families that do, declared under each family's name before its own faces (so its
-    own win where they overlap) and once for every weight and style the family has (the browser
-    matches the weight and style first, then looks for the character only among those faces),
-    and the fallbacks are named on `:root` (the font check of D3 accepts only fonts the HTML
-    names)."""
+    A face of the template's families is embedded when it draws one of the characters. A
+    character that one of those families lacks is drawn by the first fallback family (in
+    FALLBACKS order) that has it: its faces holding that character are embedded once, under the
+    fallback's own name, whatever the number of families, weights and styles of the template;
+    `with_fallbacks` names them in every `font-family` of the style, before the generic family
+    (the font check of D3 accepts only fonts the HTML names). A character no family has is not
+    in the text (`printable_text`)."""
     library = fonts()
     used = {ord(ch) for ch in text if ord(ch) >= 0x20}
-    fallbacks = [family for family in library.values() if family.fallback]
-    rules: list[str] = []
-    named: list[str] = []
-    for family_id in families:
-        family = library[family_id]
-        missing = {cp for cp in used if not family.covers(cp)}
-        variants = sorted({(face.weight, face.style) for face in family.faces})
-        for other in fallbacks:
-            faces = [face for face in other.faces if any(face.covers(cp) for cp in missing)]
-            ranges = sorted({face.unicode_range for face in faces})
-            for unicode_range in ranges:
-                same = [face for face in faces if face.unicode_range == unicode_range]
-                rules += [
-                    _face_rule(family.name, _nearest(same, weight), weight, style)
-                    for weight, style in variants
-                ]
-            if faces and other.name not in named:
-                named.append(other.name)
-        rules += [
-            _face_rule(family.name, face)
-            for face in family.faces
-            if any(face.covers(cp) for cp in used)
-        ]
-    if named:
-        main = library[families[0]].name
-        stack = ",".join(f'"{name}"' for name in [main, *named])
-        rules.append(f":root{{font-family:{stack}}}")
-    return "".join(rules)
+    rules = [
+        _face_rule(library[key].name, face)
+        for key in families
+        for face in library[key].faces
+        if not face.points.isdisjoint(used)
+    ]
+    chosen: dict[str, set[Face]] = {}
+    for codepoint in sorted(used - _common(families)):
+        for key in FALLBACKS:
+            faces = {face for face in library[key].faces if codepoint in face.points}
+            if faces:
+                chosen.setdefault(key, set()).update(faces)
+                break
+    names: list[str] = []
+    for key in FALLBACKS:
+        if key in chosen:
+            family = library[key]
+            names.append(family.name)
+            # A family of one weight serves every weight as it is: a bold the renderer made up
+            # would print as a font without a name (a Type 3 font), which D3's check refuses.
+            weight = "100 900" if len({f.weight for f in family.faces}) == 1 else ""
+            rules += [_face_rule(family.name, f, weight) for f in family.faces if f in chosen[key]]
+    return "".join(rules), tuple(names)
+
+
+GENERIC = frozenset(
+    (
+        "serif",
+        "sans-serif",
+        "monospace",
+        "cursive",
+        "fantasy",
+        "system-ui",
+        "ui-serif",
+        "ui-sans-serif",
+        "ui-monospace",
+        "ui-rounded",
+        "emoji",
+        "math",
+        "fangsong",
+    )
+)
+_WIDE = frozenset(("inherit", "initial", "unset", "revert", "revert-layer"))
+_FONT_FAMILY = re.compile(r"(?<![\w-])(font-family\s*:)([^;}]*)", re.I)
+
+
+def with_fallbacks(css: str, names: tuple[str, ...]) -> str:
+    """`css` with the fallback families `names` in every `font-family` list, before its first
+    generic family (a generic name resolves to a system font, which would draw the character
+    first), else at its end."""
+    if not names:
+        return css
+    added = [f'"{name}"' for name in names]
+
+    def one(match: re.Match[str]) -> str:
+        value, important = match.group(2), ""
+        if "!" in value:
+            value, _, rest = value.partition("!")
+            important = "!" + rest
+        items = [item.strip() for item in value.split(",")]
+        if len(items) == 1 and items[0].lower() in _WIDE:
+            return match.group(0)
+        at = next((i for i, item in enumerate(items) if item.lower() in GENERIC), len(items))
+        return match.group(1) + ",".join(items[:at] + added + items[at:]) + important
+
+    return _FONT_FAMILY.sub(one, css)
 
 
 # --- dates and labels ---------------------------------------------------------------------------
@@ -632,18 +755,25 @@ def environment(template: Template) -> ImmutableSandboxedEnvironment:
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    for name in UNESCAPING:
+        env.filters.pop(name, None)
     _environments[id(template)] = (template, env)
     return env
 
 
 _environments: dict[int, tuple[Template, ImmutableSandboxedEnvironment]] = {}
-_FONTS_HERE = "/*fonts*/"
+# Jinja's filters that print markup unescaped, removed from every environment: `safe` (also
+# through `map('safe')`), `tojson` (Markup that leaves `"` alone inside an attribute), `urlize`
+# (links built from the text), `xmlattr` (attributes built from a dict, `onclick` included).
+UNESCAPING = ("safe", "tojson", "urlize", "xmlattr")
 
 
-def _content(kind: str, content: BaseModel | Mapping[str, Any]) -> dict[str, Any]:
+def _content(
+    template: Template, kind: str, content: BaseModel | Mapping[str, Any]
+) -> dict[str, Any]:
     model = c.MODELS[kind]
     parsed = content if isinstance(content, model) else model.model_validate(content)
-    return parsed.model_dump(mode="json")
+    return printable(template, kind, parsed)[0].model_dump(mode="json")
 
 
 def build_html(
@@ -667,7 +797,7 @@ def build_html(
         step = template.steps(kind)[step]
     if photo is not None and not PHOTO_URI.match(photo):
         raise ValueError("the photo is not a data: address of photo.embed")
-    data = _content(kind, content)
+    data = _content(template, kind, content)
     by_key = {employer.key: employer for employer in profile_view.employers}
     roles = [
         {
@@ -682,8 +812,10 @@ def build_html(
         for role in data.get("experience", [])
         if role["employer_key"] in by_key
     ]
-    accent = f":root{{--accent:{template.accent}}}"
-    style = Markup(_FONTS_HERE + step.css() + accent + template.files["style.css"])  # noqa: S704
+    # The style goes in after the render, in place of a token drawn for this render that no
+    # text can hold (content and profile print escaped, and cannot guess it).
+    token = f"/*{secrets.token_hex(16)}*/"
+    style = Markup(token)  # noqa: S704
     context = {
         "lang": language,
         "labels": labels()[language],
@@ -708,5 +840,71 @@ def build_html(
         "style": style,
     }
     page = environment(template).get_template(f"{kind}.html.j2").render(context)
-    faces = font_css(template.fonts, html.unescape(page))
-    return page.replace(_FONTS_HERE, faces, 1)
+    if page.count(token) != 1:
+        raise TemplateError(template.slug, "the style is not printed exactly once")
+    # The profile's own text (a name, a school) through the same replacement as the content.
+    page = printable_text(template.fonts, page, tidy=False)
+    css = step.css() + f":root{{--accent:{template.accent}}}" + template.files["style.css"]
+    faces, names = font_css(template.fonts, html.unescape(page.replace(token, "")) + css)
+    page = page.replace(token, faces + with_fallbacks(css, names), 1)
+    inspect(template.slug, page)
+    return page
+
+
+# --- the check of the built HTML ----------------------------------------------------------------
+
+_REFUSED_TAGS = frozenset(
+    ("script", "iframe", "frame", "frameset", "object", "embed", "applet", "link", "base", "form")
+)
+
+
+class _Inspector(HTMLParser):
+    """The first breach of the authoring rules in a built page, if any."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.breach: str | None = None
+        self._in_head = False
+
+    def _refuse(self, what: str) -> None:
+        self.breach = self.breach or what
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "head":
+            self._in_head = True
+        elif tag == "body":
+            self._in_head = False
+        if tag in _REFUSED_TAGS:
+            self._refuse(f"a <{tag}>")
+        if tag == "style" and not self._in_head:
+            self._refuse("a <style> outside the head")
+        for key, value in attrs:
+            address = "".join((value or "").split()).lower()
+            if key.startswith("on"):
+                self._refuse(f"an event handler {key}")
+            elif key == "http-equiv":
+                self._refuse("a meta refresh")
+            elif "javascript:" in address or "vbscript:" in address:
+                self._refuse("a javascript address")
+            elif key == "href" and not address.startswith(("https:", "mailto:")):
+                self._refuse("a link other than https: or mailto:")
+            elif key == "src" and not address.startswith("data:image/"):
+                self._refuse("a source other than a data: image")
+
+    handle_startendtag = handle_starttag
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "head":
+            self._in_head = False
+
+
+def inspect(slug: str, page: str) -> None:
+    """Parses a built page once, before the renderer gets it: no script, no event handler, no
+    `javascript:` address, no link but https: or mailto:, no source but a data: image, no
+    <style> outside the head. The authoring rules hold at load; this holds whatever a template
+    (a person's own, D25b) found to print, and a breach raises a TemplateError."""
+    inspector = _Inspector()
+    inspector.feed(page)
+    inspector.close()
+    if inspector.breach:
+        raise TemplateError(slug, f"the built page holds {inspector.breach}")

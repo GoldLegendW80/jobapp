@@ -17,6 +17,7 @@ import io
 import json
 import re
 import shutil
+import unicodedata
 from datetime import date
 from html.parser import HTMLParser
 from itertools import pairwise
@@ -24,11 +25,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from jinja2.exceptions import SecurityError
+from jinja2.exceptions import SecurityError, TemplateRuntimeError
 from PIL import Image
 
 from app.documents import content as c
-from app.documents import fit, photo, profile_view, render_client, templates
+from app.documents import corrections, fit, photo, profile_view, render_client, templates
 from app.documents.profile_view import Employer, Identity, Language, ProfileView, School
 from app.documents.render_client import Rendered
 from app.documents.templates import TemplateError, thumbnails
@@ -331,6 +332,225 @@ def test_the_sandbox_refuses_what_a_template_should_not_reach() -> None:
         templates.build_html(rogue, "cv", sample("cv"), thumbnails.sample_view(), "en", 0, ON)
 
 
+def test_no_filter_of_the_environment_prints_markup() -> None:
+    """Every filter left in the environment, tried on markup (alone, with an argument, on a
+    list): none prints a tag or an attribute unescaped. `safe` and the others are gone."""
+    env = templates.environment(template("classic"))
+    assert not set(templates.UNESCAPING) & set(env.filters)
+    hostile = '<b onmouseover="x">'
+    for name in sorted(env.filters):
+        for source in (
+            f"{{{{ v|{name} }}}}",
+            f"{{{{ v|{name}(1) }}}}",
+            f"{{{{ [v, v]|{name}|join }}}}",
+            f'<p title="{{{{ v|{name} }}}}">',
+        ):
+            try:
+                out = env.from_string(source).render(v=hostile)
+            # A filter that refuses the input prints nothing.
+            except Exception:  # noqa: S112
+                continue
+            assert "<b" not in out, (name, source, out)
+            assert 'onmouseover="x"' not in out, (name, source, out)
+
+
+def test_a_template_cannot_print_markup_through_a_filter() -> None:
+    manifest = json.loads((templates.ROOT / "classic" / "manifest.json").read_text())
+    files = dict(template("classic").files)
+    files["cv.html.j2"] = '<p title="{{ content.summary|tojson }}"></p>'
+    with pytest.raises(TemplateError, match="does not compile"):
+        templates.from_files(manifest, files)
+    files["cv.html.j2"] = "{{ content.highlights|map('safe')|join(',') }}"
+    rogue = templates.from_files(manifest, files)
+    content = sample("cv") | {"highlights": ['<img src=x onerror="alert(1)">']}
+    with pytest.raises(TemplateRuntimeError, match="safe"):
+        templates.build_html(rogue, "cv", content, thumbnails.sample_view(), "en", 0, ON)
+
+
+@pytest.mark.parametrize(
+    ("page", "breach"),
+    [
+        ("<html><head></head><body><script>x</script></body></html>", "a <script>"),
+        ('<body><p onclick="x">a</p></body>', "an event handler onclick"),
+        ('<body><a href="java\tscript:alert(1)">a</a></body>', "a javascript address"),
+        ('<body><a href="http://example.org">a</a></body>', "a link other than"),
+        ('<body><img src="https://example.org/x.png"></body>', "a source other than"),
+        ("<head></head><body><style>p{}</style></body>", "a <style> outside the head"),
+        ('<head><meta http-equiv="refresh" content="0"></head>', "a meta refresh"),
+        ("<body><iframe></iframe></body>", "a <iframe>"),
+    ],
+)
+def test_the_built_page_is_checked_before_the_renderer(page: str, breach: str) -> None:
+    with pytest.raises(TemplateError, match=re.escape(breach)):
+        templates.inspect("rogue", page)
+    templates.inspect("fine", '<head><style>p{}</style></head><body><a href="HTTPS://x.org">x</a>')
+
+
+def test_a_template_printing_a_handler_is_refused_at_build() -> None:
+    manifest = json.loads((templates.ROOT / "classic" / "manifest.json").read_text())
+    files = dict(template("classic").files)
+    # Past the authoring rules (no "on...=" in the file): the handler is built by the template.
+    files["cv.html.j2"] = (
+        "{% extends '_base/page.html.j2' %}{% block body %}"
+        "<p {{ 'o' ~ 'nclick' }}=x>a</p>{% endblock %}"
+    )
+    rogue = templates.from_files(manifest, files)
+    with pytest.raises(TemplateError, match="event handler"):
+        templates.build_html(rogue, "cv", sample("cv"), thumbnails.sample_view(), "en", 0, ON)
+
+
+FONTS_MARKER = "/*fonts*/"
+FORGED = "/*" + "0" * 32 + "*/"  # the shape of the token drawn for each render
+
+
+@pytest.mark.parametrize("marker", [FONTS_MARKER, FORGED])
+@pytest.mark.parametrize("kind", templates.KINDS)
+def test_text_shaped_like_the_style_token_stays_text(marker: str, kind: str) -> None:
+    """The review's input (`/*fonts*/` in the name) and the token's own shape in every field of
+    the content and of the profile: printed as written, the style in the <style> alone."""
+    found = template("classic")
+    content = hostile_cv() if kind == "cv" else hostile_letter()
+    content = json.loads(json.dumps(content).replace("<script>alert(1)</script>", marker))
+    view = hostile_view()
+    view = ProfileView(
+        revision=1,
+        employers=(Employer("acme", marker, marker, "2021-03", None, marker),),
+        schools=(School(marker, marker, None, None, ""),),
+        languages=(Language(marker, marker),),
+        identity=Identity(
+            full_name=marker, email="e2e-alex@example.org", phone=marker, city=marker
+        ),
+    )
+    html = templates.build_html(found, kind, content, view, "en", 0, ON)
+    page = Page(html)
+    title = html[html.index("<title>") : html.index("</title>")]
+    assert title == f"<title>{marker}"
+    style = "".join(page.style)
+    assert style.count("@font-face") >= 3
+    assert "--accent" in style
+    assert page.body.count(marker) >= 3
+
+
+# --- characters no font of the template has -----------------------------------------------------
+
+# The review's characters: arrows, check marks, maths, shapes, Greek, Vietnamese, then CJK.
+REVIEW_CHARS = "→ ← ⇒ ⟶ ➜ ✓ ≥ ≤ ≈ ∞ √ ★ ● ■ □ ◆ Δ λ ế"
+CJK = "東京 한글"
+
+
+def review_cv() -> dict[str, Any]:
+    return sample("cv") | {
+        "headline": f"Engineer {REVIEW_CHARS}",
+        "experience": [
+            {"employer_key": "example-corp", "bullets": [f"Cut it {REVIEW_CHARS} {CJK} done."]}
+        ],
+        "highlights": [f"Shipped {CJK} tools", CJK],
+    }
+
+
+def review_letter() -> dict[str, Any]:
+    return sample("letter") | {"paragraphs": [f"I built {REVIEW_CHARS} {CJK} things."]}
+
+
+@pytest.mark.parametrize("slug", SLUGS)
+@pytest.mark.parametrize("kind", templates.KINDS)
+def test_every_character_of_the_review_prints_with_a_named_font(slug: str, kind: str) -> None:
+    found = template(slug)
+    content = review_cv() if kind == "cv" else review_letter()
+    html = templates.build_html(found, kind, content, thumbnails.sample_view(), "en", 0, ON)
+    page = assert_authoring(html)
+    for ch in REVIEW_CHARS.split():
+        assert ch in page.body, ch
+    assert not set(CJK.replace(" ", "")) & set(html)
+    named = render_client.families_asked(html)
+    library = templates.fonts()
+    for ch in REVIEW_CHARS.replace(" ", ""):
+        drawn_by = [f for f in library.values() if f.covers(ord(ch))]
+        assert any(render_client._key(f.name) in named for f in drawn_by), ch
+
+
+def test_cjk_text_yields_a_recorded_correction_not_a_failure() -> None:
+    found = template("classic")
+    fixed, records = templates.printable(found, "cv", review_cv())
+    assert isinstance(fixed, c.CvContent)
+    by_path = {record.field_path: record for record in records}
+    assert set(by_path) == {"experience.0.bullets.0", "highlights.0", "highlights.1"}
+    bullet = by_path["experience.0.bullets.0"]
+    assert bullet.before == f"Cut it {REVIEW_CHARS} {CJK} done."
+    assert bullet.after == f"Cut it {REVIEW_CHARS} done."
+    assert bullet.code == corrections.NOT_PRINTABLE == "not_printable"
+    assert bullet.by == "code"
+    assert bullet.reason == corrections.NOT_PRINTABLE_REASON
+    assert by_path["highlights.1"].after == ""  # the highlight held nothing else: it goes
+    assert fixed.highlights == ["Shipped tools"]
+    assert fixed.experience[0].bullets == [f"Cut it {REVIEW_CHARS} done."]
+    # Nothing to replace: the same content, no record.
+    same = c.CvContent.model_validate(sample("cv"))
+    assert templates.printable(found, "cv", same) == (same, [])
+
+
+def test_a_character_takes_its_printable_compatibility_form() -> None:
+    assert templates.printable_text(("nunito-sans",), "ｆｕｌｌ\u3000stack") == "full stack"
+    assert templates.printable_text(("nunito-sans",), "a\u200db\u202ec") == "a\u200db\u202ec"
+    assert templates.printable_text(("nunito-sans",), "plain text") == "plain text"
+
+
+def every_fallback_face(families: tuple[str, ...]) -> tuple[str, dict[str, int]]:
+    """One character of each fallback face a page of `families` can reach (a character none of
+    the families has, nor an earlier fallback family): the page that embeds them all, and the
+    number of faces of each fallback family it embeds."""
+    library = templates.fonts()
+    taken = set(templates._common(families))
+    chars: list[str] = []
+    counts: dict[str, int] = {}
+    for key in templates.FALLBACKS:
+        for face in library[key].faces:
+            left = [cp for cp in face.points - taken if unicodedata.category(chr(cp))[0] in "LNPS"]
+            if left:
+                chars.append(chr(min(left)))
+                counts[key] = counts.get(key, 0) + 1
+        taken |= {cp for face in library[key].faces for cp in face.points}
+    return "".join(chars), counts
+
+
+@pytest.mark.parametrize("families", [("nunito-sans",), ("playfair-display", "inter", "lora")])
+def test_the_html_of_the_worst_case_stays_far_under_the_renderer_cap(
+    families: tuple[str, ...],
+) -> None:
+    """Each fallback face is embedded once, whatever the number of families and weights."""
+    manifest = json.loads((templates.ROOT / "classic" / "manifest.json").read_text())
+    found = templates.from_files(manifest | {"fonts": list(families)}, template("classic").files)
+    text, counts = every_fallback_face(families)
+    assert set(counts) == set(templates.FALLBACKS)
+    content = review_cv() | {"summary": text[: c.SUMMARY_MAX]}
+    content["experience"][0]["bullets"] = [text[i : i + 100] for i in range(0, len(text), 100)]
+    html = templates.build_html(found, "cv", content, thumbnails.sample_view(), "en", 0, ON)
+    style = "".join(Page(html).style)
+    for key in templates.FALLBACKS:
+        name = templates.fonts()[key].name
+        # A bold title takes the 700 face of a family that has one: at least the counted faces.
+        assert style.count(f'@font-face{{font-family:"{name}"') >= counts[key], key
+        assert style.count(f'@font-face{{font-family:"{name}"') <= len(templates.fonts()[key].faces)
+    assert len(html.encode()) < render_client.MAX_HTML // 2, len(html.encode())
+
+
+def test_the_thumbnail_hash_covers_the_base_and_the_fonts(tmp_path: Path) -> None:
+    folder = copy_classic(tmp_path / "templates", "classic")
+    base = tmp_path / "_base"
+    shutil.copytree(templates.BASE, base)
+    library = tmp_path / "fonts"
+    shutil.copytree(templates.FONTS / "nunito-sans", library / "nunito-sans")
+    first = templates.thumbnail_hash(folder, base, library)
+    assert first == templates.thumbnail_hash(folder, base, library)
+    macros = base / "macros.html.j2"
+    macros.write_text(macros.read_text() + "\n")
+    second = templates.thumbnail_hash(folder, base, library)
+    assert second != first
+    face = library / "nunito-sans" / "latin-400-normal.woff2"
+    face.write_bytes(face.read_bytes() + b"\0")
+    assert templates.thumbnail_hash(folder, base, library) != second
+
+
 # --- the registry refuses a broken folder at start ----------------------------------------------
 
 
@@ -574,7 +794,8 @@ def test_right_to_left_text_in_a_bullet_prints_with_its_fallback_font() -> None:
     }
     html = templates.build_html(template("classic"), "cv", content, view_of("alex"), "en", 0, ON)
     assert "Built שלום and مرحبا tools." in Page(html).body
-    assert ':root{font-family:"Nunito Sans","Noto Sans Arabic","Noto Sans Hebrew"}' in html
+    stack = 'font-family:"Nunito Sans","Noto Sans Hebrew","Noto Sans Arabic",sans-serif'
+    assert stack in html
 
 
 def test_latin_text_embeds_no_fallback_font() -> None:
@@ -742,6 +963,10 @@ def test_the_font_library_holds_the_fourteen_families_with_their_licences() -> N
             weights = {(face.weight, face.style) for face in family.faces}
             assert {(400, "normal"), (700, "normal")} <= weights, key
     assert {family.name for family in library.values() if family.fallback} == {
+        "Noto Sans",
+        "Noto Sans Math",
+        "Noto Sans Symbols",
+        "Noto Sans Symbols 2",
         "Noto Sans Hebrew",
         "Noto Sans Arabic",
         "Noto Emoji",
@@ -749,13 +974,47 @@ def test_the_font_library_holds_the_fourteen_families_with_their_licences() -> N
 
 
 def test_font_css_embeds_only_the_faces_the_text_uses() -> None:
-    latin = templates.font_css(("nunito-sans",), "Hello")
+    latin, names = templates.font_css(("nunito-sans",), "Hello")
     assert latin.count("@font-face") == 5  # 400, 400 italic, 600, 700, 700 italic of latin
     assert "Noto" not in latin
-    emoji = templates.font_css(("nunito-sans",), "Hello 😀")
-    assert ':root{font-family:"Nunito Sans","Noto Emoji"}' in emoji
-    extended = templates.font_css(("inter",), "Łódź")
+    assert names == ()
+    emoji, names = templates.font_css(("nunito-sans",), "Hello 😀")
+    assert names == ("Noto Emoji",)
+    assert emoji.count('font-family:"Noto Emoji"') == 1  # one face, declared once
+    extended, _ = templates.font_css(("inter",), "Łódź")
     assert extended.count("@font-face") == 10  # latin and latin-ext
+
+
+def test_each_face_of_the_library_claims_only_characters_it_has() -> None:
+    """A face's unicode_range is truthful (the subset's range limited to the glyphs the file
+    holds, written when the fonts were added): spot checks of what the files hold and lack."""
+    library = templates.fonts()
+    nunito = library["nunito-sans"]
+    assert nunito.covers(ord("é"))
+    assert nunito.covers(ord("Ł"))
+    for ch in "→≥✓■Δλế":
+        assert not nunito.covers(ord(ch)), ch
+    assert library["noto-sans"].covers(ord("Δ"))
+    assert library["noto-sans"].covers(ord("ế"))
+    assert library["noto-sans-math"].covers(ord("≥"))
+    assert library["noto-sans-math"].covers(0x2192)
+    # The Math font holds Arabic letters for formulas; a script that needs shaping never uses it.
+    assert not library["noto-sans-math"].covers(ord("م"))
+    assert library["noto-sans-symbols-2"].covers(ord("✓"))
+    for family in library.values():
+        assert not any(family.covers(ord(ch)) for ch in "東京한글"), family.id
+
+
+def test_with_fallbacks_names_them_before_the_generic_family_in_every_list() -> None:
+    css = (
+        'body{font-family:"Inter", sans-serif}h1{font-family: "Lora" !important}'
+        "p{font-family:inherit}--x{color:red}"
+    )
+    out = templates.with_fallbacks(css, ("Noto Sans", "Noto Emoji"))
+    assert 'font-family:"Inter","Noto Sans","Noto Emoji",sans-serif}' in out
+    assert 'font-family:"Lora","Noto Sans","Noto Emoji"!important}' in out
+    assert "font-family:inherit}" in out
+    assert templates.with_fallbacks(css, ()) == css
 
 
 # --- resolve --------------------------------------------------------------------------------------
@@ -885,6 +1144,23 @@ def test_hostile_text_is_inert_in_the_pdf(renderer: Any, slug: str, kind: str) -
     for marker in (b"/JavaScript", b"/JS ", b"/Launch", b"javascript:"):
         assert marker not in rendered.pdf, marker
     assert set(re.findall(rb"/URI\s*\(([^)]*)\)", rendered.pdf)) <= {b"mailto:e2e-alex@example.org"}
+
+
+@docker
+@pytest.mark.parametrize("slug", SLUGS)
+@pytest.mark.parametrize("kind", templates.KINDS)
+def test_every_character_of_the_review_renders_and_passes_the_font_check(
+    renderer: Any, slug: str, kind: str
+) -> None:
+    content = review_cv() if kind == "cv" else review_letter()
+    html = templates.build_html(template(slug), kind, content, d1_view(), "en", 0, ON)
+    rendered = renderer.render(html)  # the font check of D3 included: it raises on a fallback
+    text = pdf_text(rendered.pdf)
+    for ch in REVIEW_CHARS.split():
+        assert ch in text, ch
+    fonts = pdf_fonts(rendered.pdf)
+    assert any(font.startswith("NotoSansMath") for font in fonts), fonts
+    assert any(font.startswith("NotoSans-") for font in fonts), fonts
 
 
 def at_soft_limits(content: c.CvContent, limits: Any) -> c.CvContent:
