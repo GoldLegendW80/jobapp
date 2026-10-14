@@ -2,7 +2,8 @@
 
     python -m app.agents.cli rotate
 
-rotate re-encrypts with CREDENTIALS_KEY every model credential written by another key (the one
+rotate re-encrypts with CREDENTIALS_KEY every model credential and every Gmail refresh token
+(mail M4) written by another key (the one
 in CREDENTIALS_KEY_PREVIOUS during a rotation), in one transaction, and prints how many rows
 changed. Afterwards CREDENTIALS_KEY_PREVIOUS can be removed from .env.
 
@@ -21,6 +22,7 @@ from app.agents import credentials
 from app.agents.crypto import DecryptError
 from app.config import ConfigError, get_settings
 from app.db import build_engine, build_sessionmaker
+from app.mail import accounts as mail_accounts
 from app.main import credentials_keyring
 
 
@@ -41,6 +43,7 @@ def rotate() -> int:
     try:
         with build_sessionmaker(engine)() as session, session.begin():
             changed = credentials.rotate_all(session, keyring)
+            changed += mail_accounts.rotate_all(session, keyring)
     except DecryptError:
         print(
             "A credential was written by a key this server does not hold (set it as "

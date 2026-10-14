@@ -37,6 +37,10 @@ from app.jobs import service as jobs_service
 from app.jobs.router import router as jobs_router
 from app.jobs.sweep_router import router as sweeps_router
 from app.logging_config import configure_logging
+from app.mail import accounts as mail_accounts
+from app.mail import oauth as mail_oauth
+from app.mail import registry as mail_registry
+from app.mail import routers as mail_routers
 from app.profile.router import router as profile_router
 from app.queue import Queue
 
@@ -134,6 +138,13 @@ def create_app(
     if app.state.credentials_keyring is None:
         logger.warning("CREDENTIALS_KEY is not set: saving model credentials is disabled")
     app.state.model_verifier = Verifier(base_url=settings.model_api_base_url)
+    # Mail (mail M4): the one Google client of this process (None without an OAuth client, then
+    # Gmail cannot be connected), the key that signs the OAuth state, and where the PKCE
+    # verifier waits between the start and the callback (Redis, read once).
+    app.state.mail_google = mail_accounts.build_client(settings)
+    app.state.mail_state_key = mail_accounts.state_key(settings)
+    app.state.mail_verifiers = mail_oauth.RedisVerifiers(app.state.queue.pool)
+    mail_registry.load()
     app.state.credential_saves = RateLimiter(agents_router.SAVE_LIMIT, agents_router.WINDOW_S)
     app.state.credential_checks = RateLimiter(agents_router.VERIFY_LIMIT, agents_router.WINDOW_S)
 
@@ -159,6 +170,7 @@ def create_app(
     app.middleware("http")(identity_deps.csrf_middleware)
     # Around the two above, so the 401 and the 403 of an ingestion route are never cached.
     app.middleware("http")(ingestion_no_store)
+    app.middleware("http")(mail_routers.no_store)
 
     @app.middleware("http")
     async def request_log(
@@ -191,7 +203,9 @@ def create_app(
     async def unhandled(request: Request, exc: Exception) -> JSONResponse:
         logger.exception("unhandled error", extra={"path": request.url.path})
         # Built outside every middleware: the no-store of the ingestion routes is set here.
-        headers = {"Cache-Control": "no-store"} if ingestion_private(request.url.path) else None
+        path = request.url.path
+        private = ingestion_private(path) or mail_routers.private(path)
+        headers = {"Cache-Control": "no-store"} if private else None
         return JSONResponse(
             status_code=500, content={"detail": "internal server error"}, headers=headers
         )
@@ -241,5 +255,7 @@ def create_app(
     app.include_router(chat_router.router)
     for ingestion_router in ingestion_routers:
         app.include_router(ingestion_router)
+    for mail_router in mail_routers.load():
+        app.include_router(mail_router)
     identity_deps.assert_default_deny(app)
     return app

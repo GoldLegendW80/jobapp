@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # neither. Without them the mail routes answer that Gmail is not configured.
     google_oauth_client_id: str | None = None
     google_oauth_client_secret: SecretStr | None = None
+    # Mail M4: the address Google sends the browser back to after the consent screen. Exactly
+    # one of the redirect URIs registered on the OAuth client, and never built from a request
+    # (a forged Host header must not choose it). Without it Gmail cannot be connected.
+    google_oauth_redirect_uri: str | None = None
     # Tests only: where the fake Google is (api/tests/mail/fake_gmail.py, the service gmailstub
     # of tests/gmail-stub.compose.yml). GOOGLE_AUTH_URL is the consent page the browser is sent
     # to; the server calls GOOGLE_TOKEN_BASE_URL (/token, /revoke) and GOOGLE_API_BASE_URL (Gmail
@@ -221,6 +225,35 @@ class Settings(BaseSettings):
                     f"{name.upper()} points the mail module at a fake Google and must not be "
                     "set in production"
                 )
+        return self
+
+    @field_validator("google_oauth_redirect_uri", mode="after")
+    @classmethod
+    def _redirect_uri(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        parts = urlsplit(value)
+        if (
+            parts.scheme not in ("http", "https")
+            or not parts.hostname
+            or parts.path != "/api/mail/oauth/callback"
+            or parts.query
+            or parts.fragment
+            or parts.username
+            or parts.password
+        ):
+            raise ValueError(
+                "GOOGLE_OAUTH_REDIRECT_URI must be an http or https address whose path is "
+                "/api/mail/oauth/callback"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _google_redirect_is_https(self) -> "Settings":
+        uri = self.google_oauth_redirect_uri
+        if self.app_env == "production" and uri is not None and not uri.startswith("https://"):
+            raise ValueError("GOOGLE_OAUTH_REDIRECT_URI must be an https address in production")
         return self
 
     @model_validator(mode="after")
