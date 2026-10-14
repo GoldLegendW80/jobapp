@@ -167,6 +167,7 @@ def test_a_queued_sweep_runs_and_the_worker_reports_healthy(
             queues.SWEEPS,
             queues.AGENTS,
             queues.INGESTION,
+            queues.DOCUMENTS,
         ]
         assert await api_queue.enqueue(
             "run_sweep", str(sweep_id), queue=queues.SWEEPS, job_id=queues.sweep_job_id(sweep_id)
@@ -247,7 +248,7 @@ def test_stop_while_a_job_is_being_picked_up_closes_every_worker(
             )
 
     serve_until(settings, context(settings, fake_ats), scenario)
-    assert len(workers_seen) == 3
+    assert len(workers_seen) == 4  # sweeps, agents, ingestion, documents
     for item in workers_seen:
         assert item._pool is None  # closed, health key deleted
         assert all(task.done() for task in item.tasks.values())
@@ -470,7 +471,7 @@ def test_main_exits_at_once_when_the_stop_left_threads(
     async def served(_settings: Settings, _specs: Any) -> int:
         return left[0]
 
-    monkeypatch.setattr(worker, "load_settings", lambda: settings)
+    monkeypatch.setattr(worker, "get_settings", lambda: settings)
     monkeypatch.setattr(worker, "configure_logging", lambda _level: None)
     monkeypatch.setattr(worker, "drop_secrets_from_environ", lambda: [])
     monkeypatch.setattr(worker, "serve", served)

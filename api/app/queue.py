@@ -2,7 +2,8 @@
 
 Queues are named lists in Redis, each consumed by its own arq Worker inside the `worker`
 container (app/worker.py): SWEEPS (jobs J5), AGENTS (agents A2, the user's agent runs) and
-INGESTION (ingestion G2b, the reading of uploaded documents, one at a time). A
+INGESTION (ingestion G2b, the reading of uploaded documents, one at a time) and DOCUMENTS
+(documents D6, the renders of CVs and letters, one at a time, and the module's cron jobs). A
 later lane for automatic agent runs (mail triage, scheduled assessments) gets a queue name of its
 own here, consumed after the interactive one, so a batch never delays a run someone is watching.
 
@@ -26,6 +27,7 @@ from arq.connections import ArqRedis, RedisSettings, create_pool
 SWEEPS = "jobapp:sweeps"
 AGENTS = "jobapp:agents"
 INGESTION = "jobapp:ingestion"
+DOCUMENTS = "jobapp:documents"
 CONNECT_TIMEOUT_S = 2
 
 
@@ -66,6 +68,11 @@ def document_job_id(document_id: object, attempts: int, pending_since: datetime 
     another job; the same try asked for twice (by the upload and by the reaper) is one."""
     since = int(pending_since.timestamp() * 1_000_000) if pending_since is not None else 0
     return f"document:{document_id}:{attempts}:{since}"
+
+
+def render_job_id(document_id: object, revision: int) -> str:
+    """One render per (document, draft revision): asking again while it waits is the same job."""
+    return f"render:{document_id}:{revision}"
 
 
 class Queue:
