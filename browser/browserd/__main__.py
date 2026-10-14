@@ -41,14 +41,12 @@ def beat() -> None:
 async def main() -> None:
     cfg = c.Config.from_env()
     if not cfg.secret:
-        log.warning(
-            "BROWSER_CONTROL_SECRET is not set: every control request is refused"
-        )
+        log.warning("BROWSER_CONTROL_SECRET is not set: every control request is refused")
     os.makedirs(c.STATE_DIR, mode=0o700, exist_ok=True)
-    os.chmod(
-        c.PROFILES, 0o1733
-    )  # anyone creates an entry, nobody lists, owners remove theirs
-    os.chmod(c.LEASES, 0o1733)
+    # Anyone creates an entry, nobody lists, owners remove theirs.
+    os.chmod(c.PROFILES, 0o1733)  # noqa: S103
+    os.chmod(c.LEASES, 0o1733)  # noqa: S103
+    chromium.make_uid_records()
     killed = await chromium.reap_strays()
     if killed:
         log.warning("killed %d process(es) left under a profile uid", killed)
@@ -78,7 +76,7 @@ async def main() -> None:
     service = Service(manager, cfg.secret)
     service.display_ok = lambda: display.returncode is None
     egress = await proxy.serve(proxy.Proxy(cfg.proxy_allow), c.PROXY_PORT)
-    server = await asyncio.start_server(handler_for(service), "0.0.0.0", c.CONTROL_PORT)
+    server = await asyncio.start_server(handler_for(service), "0.0.0.0", c.CONTROL_PORT)  # noqa: S104 - `browsing` only
     stop = asyncio.Event()
     chromium.stop_signals(asyncio.get_running_loop(), stop)
     log.info("browserd ready on :%d", c.CONTROL_PORT)
@@ -105,7 +103,5 @@ async def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--check"]:
         sys.exit(check())
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     asyncio.run(main())

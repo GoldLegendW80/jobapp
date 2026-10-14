@@ -11,8 +11,10 @@ import contextlib
 import json
 import logging
 import os
+import secrets
 import signal
 import socket
+import stat
 import sys
 from typing import Any
 
@@ -40,7 +42,10 @@ def switches(request: Request, lease_dir: str, port: int) -> list[str]:
         "--start-maximized",
         f"--lang={request.languages[0]}",
         "--password-store=basic",
-        "--disable-features=Translate",
+        # WebRtcHideLocalIpsWithMdns: no mDNS responder (UDP 224.0.0.251:5353, review of PR
+        # #267); with no UDP outside the proxy there is no local candidate for it to hide.
+        # One --disable-features carries every feature: a repeated switch may replace it.
+        "--disable-features=Translate,WebRtcHideLocalIpsWithMdns",
         # No traffic of Chromium's own (component updates, GCM, variations): what leaves is
         # what a page asks for.
         "--disable-background-networking",
@@ -78,7 +83,7 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
-async def as_uid(uid: int, *argv: str, timeout: float = 15) -> int:
+async def as_uid(uid: int, *argv: str, timeout: float = 15) -> int:  # noqa: ASYNC109
     proc = await asyncio.create_subprocess_exec(
         *argv,
         user=uid,
@@ -92,9 +97,7 @@ async def as_uid(uid: int, *argv: str, timeout: float = 15) -> int:
     )
     _, err = await asyncio.wait_for(proc.communicate(), timeout)
     if proc.returncode:
-        log.warning(
-            "%s as uid %d: %s", argv[0], uid, err.decode(errors="replace")[-300:]
-        )
+        log.warning("%s as uid %d: %s", argv[0], uid, err.decode(errors="replace")[-300:])
     return proc.returncode or 0
 
 
@@ -116,32 +119,79 @@ def profile_uids() -> dict[int, list[int]]:
     return found
 
 
+def make_uid_records(root: str = c.UIDS) -> None:
+    """At start, before any lease: the record directory, browserd's own (root, 0700). It lives on
+    the profiles volume, which every profile uid may write (1733), so bind_uid checks it again."""
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(root, 0o700)
+
+
+def bind_uid(uid: int, profile_id: str, root: str = c.UIDS) -> None:
+    """One uid, one profile, for ever (review of PR #267): the first lease of a uid records its
+    profile, and a later lease of that uid for another profile is refused 409 `uid_in_use`, so a
+    new profile can never be created under a uid that another profile holds. B3 allocates the
+    uids from a sequence that is never reused; this is browserd's own check of it. The record is
+    written whole then linked into place, so a crash leaves no half written record. When the
+    directory is not browserd's own (a profile uid made it first, or it is a link) every lease
+    is refused 503 `uid_records_unsafe`: the check never runs on a record another uid wrote."""
+    try:
+        info = os.lstat(root)
+    except OSError:
+        raise LeaseError(503, "uid_records_unsafe") from None
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+        raise LeaseError(503, "uid_records_unsafe")
+    record = f"{root}/{uid}"
+    draft = f"{root}/.{uid}.{secrets.token_hex(8)}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    with open(os.open(draft, flags, 0o600), "w") as handle:
+        handle.write(profile_id)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.link(draft, record)
+    except FileExistsError:
+        try:
+            with open(os.open(record, os.O_RDONLY | os.O_NOFOLLOW)) as handle:
+                held = handle.read()
+        except OSError:
+            raise LeaseError(503, "uid_records_unsafe") from None
+        if held != profile_id:
+            raise LeaseError(409, "uid_in_use") from None
+    else:
+        directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        os.unlink(draft)
+
+
 async def reap_strays() -> int:
     """At start, and after a lease: any process left under a profile uid is killed (a Chromium
     that outlived a browserd restart). Returns how many were found."""
     strays = profile_uids()
     for uid, pids in strays.items():
-        await as_uid(
-            uid, sys.executable, "-m", "browserd.prep", "kill", *map(str, pids)
-        )
+        await as_uid(uid, sys.executable, "-m", "browserd.prep", "kill", *map(str, pids))
     return sum(len(p) for p in strays.values())
 
 
 async def start_display() -> asyncio.subprocess.Process:
-    os.makedirs("/tmp/.X11-unix", exist_ok=True)
-    os.chmod("/tmp/.X11-unix", 0o1777)
+    # X11's own socket directory, inside the container's private /tmp.
+    os.makedirs("/tmp/.X11-unix", exist_ok=True)  # noqa: S108
+    os.chmod("/tmp/.X11-unix", 0o1777)  # noqa: S103, S108
     proc = await asyncio.create_subprocess_exec(
         "Xvfb", c.DISPLAY, "-screen", "0", c.SCREEN, "-nolisten", "tcp", "-ac",
         user=c.DISPLAY_UID, group=c.DISPLAY_UID, extra_groups=[],
         stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL, env={"PATH": "/usr/bin:/bin"}, cwd="/",
     )  # fmt: skip
-    socket_path = f"/tmp/.X11-unix/X{c.DISPLAY[1:]}"
+    socket_path = f"/tmp/.X11-unix/X{c.DISPLAY[1:]}"  # noqa: S108
     for _ in range(100):
-        if os.path.exists(socket_path) or proc.returncode is not None:
+        if os.path.exists(socket_path) or proc.returncode is not None:  # noqa: ASYNC240
             break
         await asyncio.sleep(0.05)
-    if not os.path.exists(socket_path):
+    if not os.path.exists(socket_path):  # noqa: ASYNC240 - one stat at start
         raise RuntimeError("Xvfb did not start")
     return proc
 
@@ -156,9 +206,7 @@ async def cdp_ready(port: int, deadline_s: float) -> bool:
                 b"GET /json/version HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
             )
             data = b""
-            while (
-                b"webSocketDebuggerUrl" not in data
-            ):  # the server may keep the connection
+            while b"webSocketDebuggerUrl" not in data:  # the server may keep the connection
                 chunk = await asyncio.wait_for(reader.read(4096), 2)
                 if not chunk:
                     break
@@ -173,9 +221,7 @@ async def cdp_ready(port: int, deadline_s: float) -> bool:
 class Chromium:
     """One Chromium process for one lease, with its Playwright connection."""
 
-    def __init__(
-        self, request: Request, lease_id: str, playwright: Any, cfg: c.Config
-    ) -> None:
+    def __init__(self, request: Request, lease_id: str, playwright: Any, cfg: c.Config) -> None:
         self.request, self.lease_id, self.playwright, self.cfg = (
             request,
             lease_id,
@@ -187,9 +233,7 @@ class Chromium:
         self.browser: Any = None
         self.cdp: Any = None
         self.stopping = False
-        self.on_crash: Any = (
-            None  # set by the service: ends the lease `browser_crashed`
-        )
+        self.on_crash: Any = None  # set by the service: ends the lease `browser_crashed`
         self.on_event: Any = None
         self._tasks: list[asyncio.Task[Any]] = []
 
@@ -204,6 +248,7 @@ class Chromium:
             owner = os.stat(profile).st_uid
             if owner != request.uid:
                 raise LeaseError(409, "profile_uid_mismatch")
+        bind_uid(request.uid, request.profile_id)
         languages = ",".join(request.languages)
         if await as_uid(request.uid, sys.executable, "-m", "browserd.prep", "prepare", profile,
                         self.lease_dir, languages):  # fmt: skip
@@ -237,9 +282,7 @@ class Chromium:
         that runs inside the container (`docker compose exec`); root only, never served."""
         os.makedirs(c.STATE_DIR, mode=0o700, exist_ok=True)
         path = f"{c.STATE_DIR}/current.json"
-        with open(
-            os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w"
-        ) as handle:
+        with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as handle:
             json.dump({"port": self.port, "lease_id": self.lease_id}, handle)
 
     def _clear_state(self) -> None:
@@ -254,10 +297,11 @@ class Chromium:
         # At most TABS_MAX tabs per session: a further one opened by a page is closed.
         if len(page.context.pages) > c.TABS_MAX:
             self._event(event="tab_closed", reason="tabs_max")
-            asyncio.ensure_future(page.close())
+            self._tasks.append(asyncio.ensure_future(page.close()))
 
     async def _watch_exit(self) -> None:
-        assert self.proc is not None
+        if self.proc is None:
+            return
         await self.proc.wait()
         if not self.stopping and self.on_crash:
             await self.on_crash()
@@ -269,14 +313,10 @@ class Chromium:
         while not self.stopping:
             await asyncio.sleep(2)
             try:
-                await asyncio.wait_for(
-                    self.cdp.send("Browser.getVersion"), c.CDP_ANSWER_S
-                )
-            except Exception:  # noqa: BLE001 - no answer, a closed pipe: the same verdict
+                await asyncio.wait_for(self.cdp.send("Browser.getVersion"), c.CDP_ANSWER_S)
+            except Exception:
                 if not self.stopping and self.on_crash:
-                    log.warning(
-                        "lease %s: no CDP answer in %d s", self.lease_id, c.CDP_ANSWER_S
-                    )
+                    log.warning("lease %s: no CDP answer in %d s", self.lease_id, c.CDP_ANSWER_S)
                     await self.on_crash()
                 return
             with contextlib.suppress(Exception):
@@ -334,9 +374,7 @@ def memory() -> tuple[int, int] | None:
     return None if limit == "max" else (int(current), int(limit))
 
 
-async def guard_memory(
-    browser: Any, pct: int, event: Any, reader: Any = memory
-) -> bool:
+async def guard_memory(browser: Any, pct: int, event: Any, reader: Any = memory) -> bool:
     """Closes the newest tab when the container is past `pct` % of its limit (a blank tab is
     opened first when it was the only one). True when a tab was closed."""
     figures = reader()

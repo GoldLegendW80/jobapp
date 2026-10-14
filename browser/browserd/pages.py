@@ -7,6 +7,7 @@
   (B1: once in five runs a slow page's second tab never reached `load`).
 """
 
+import contextlib
 from typing import Any
 
 from browserd.config import NAVIGATION_S
@@ -17,7 +18,7 @@ SNAPSHOT_METHOD = "snapshotForAI"
 REF_MARKER = "[ref=e"
 
 
-class SnapshotUnavailable(RuntimeError):
+class SnapshotUnavailable(RuntimeError):  # noqa: N818 - an outcome, not an error
     """The pinned Playwright no longer gives the AI snapshot with refs."""
 
 
@@ -42,9 +43,7 @@ async def snapshot_for_ai(page: Any) -> str:
         ) from exc
     text = answer if isinstance(answer, str) else (answer or {}).get("snapshot", "")
     if REF_MARKER not in text:
-        raise SnapshotUnavailable(
-            f"{SNAPSHOT_METHOD} answered without any {REF_MARKER}N] ref"
-        )
+        raise SnapshotUnavailable(f"{SNAPSHOT_METHOD} answered without any {REF_MARKER}N] ref")
     return text
 
 
@@ -53,9 +52,7 @@ async def front(page: Any) -> Any:
     return page
 
 
-async def navigate(
-    page: Any, url: str, timeout_s: float = NAVIGATION_S
-) -> dict[str, Any]:
+async def navigate(page: Any, url: str, timeout_s: float = NAVIGATION_S) -> dict[str, Any]:
     """Navigates the tab (brought to the front first) and waits for `load`, at most timeout_s.
     Past it, or on a network error, the page is stopped and a failure result is returned."""
     from playwright.async_api import Error
@@ -65,10 +62,8 @@ async def navigate(
     try:
         response = await page.goto(url, wait_until="load", timeout=timeout_s * 1000)
     except PlaywrightTimeout:
-        try:
+        with contextlib.suppress(Error):
             await page.evaluate("window.stop()")
-        except Error:
-            pass
         return {
             "ok": False,
             "error": "navigation_timeout",
