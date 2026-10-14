@@ -1,6 +1,6 @@
 # Spec: browser
 
-Module of [CAPABILITY-MAP.md](CAPABILITY-MAP.md). Depends on `platform`; used by `apply` and by the jobs sweep for boards without an API. Umbrella issue: #67. Plan: [tasks/browser/todo.md](tasks/browser/todo.md). Draft for the owner: nothing is built.
+Module of [CAPABILITY-MAP.md](CAPABILITY-MAP.md). Depends on `platform`; used by `apply` and by the jobs sweep for boards without an API. Umbrella issue: #67. Plan: [tasks/browser/todo.md](tasks/browser/todo.md). The owner's decisions of 2026-10-14 are taken (below); nothing is built.
 
 ## Objective
 
@@ -11,6 +11,8 @@ User stories:
 - As a person, while the agent fills an application I watch it in the job page, and I click "Take over" to type myself; "Give back" lets the agent continue.
 - As a person, I am told when my browser needs me ("A captcha needs you on Example Robotics"), and the link opens the live view on that tab.
 - As a person, I click "Forget all logins" and my browser starts empty next time.
+- As a person, when the agent reaches a site that needs an account, I am told, I sign in or sign up myself in the live view, I click "I'm signed in", and the agent goes on where it was; the next time, the site already knows me.
+- As a person, I ask the agent to complete my profile on a site I use (Workday, LinkedIn, a company portal) from the profile of the app (SPEC-apply, "Complete my profile on a site").
 - As the owner, I know that one person can never see, drive or read another person's browser.
 
 ## What the command line teaches (read in `engine/stage.py`, `engine/vie.py` and `AGENTS.md` of the parent folder)
@@ -22,9 +24,10 @@ User stories:
 | Every browser action through Playwright (hard rule 8); plain HTTP from that network is scored as a bot | Every browser action through the tool layer of this module; the app never fetches an application page with plain HTTP |
 | The person watches the Chrome window on the Mac | The live view: noVNC in the app's page |
 
-## Owner decision
+## Owner decisions (taken on 2026-10-14)
 
-**LinkedIn, and the risk to the account** (shared with SPEC-apply). LinkedIn's User Agreement forbids software that scrapes, automates or "bots" the site, and LinkedIn restricts accounts it catches. Options: (a) never automated: LinkedIn postings reach the app only when the person pastes a link or from LinkedIn's job alert mails (mail module), and the agent then follows the posting's "Apply on company site" link; (b) the person opts in, per account, after reading the risk: a low volume search of LinkedIn from their own signed in session (at most one sweep a day, at most 5 result pages, human paced), and Easy Apply filled by the agent but always submitted after the person's approval, never in Full auto; (c) full use: sweeps and Easy Apply in every mode including Full auto. **Recommendation: (b), off by default.** It gives the owner the LinkedIn postings he cares about at the volume a person would browse, and the one action that could harm the account most (automatic submissions in volume) stays out. The opt in sentence: "LinkedIn does not allow automated use of its site. If LinkedIn notices, it may limit or close your account. The app keeps to the pace of a person, but the risk is yours."
+1. **Accounts on job sites: the person signs in, the browser profile remembers.** The owner's words: "The agent open playwright, user sign in or log in, we save all the playwright profile per user so next opening will be connected. User can ask to complete his profile on the website with all informations." Hence: the app never chooses a password and never creates an account by itself. When a site needs an account, the agent opens the page in the person's browser session on the Jetson, and the person signs in or signs up himself in the live view (the sign in hand off, below). The browser profile of each person (cookies, local storage) is persisted on the Jetson, so the next run is already connected. A new action, "Complete my profile on this site", lets the person ask the agent to fill the candidate profile of a site from the app's profile (SPEC-apply), with the guardrails of a form fill.
+2. **LinkedIn: full use.** The owner's words: "Full use". The app searches LinkedIn for jobs and submits Easy Apply from the person's own signed in session, in Review first and in Full auto too. Kept: human pacing, a low request rate (one sweep a day at most, 5 result pages, 10 to 30 seconds per page; one Easy Apply every 10 minutes and 15 a day at most) and the per company and per day guards of the apply module. LinkedIn stays a per person switch, off by default, since the app has several users. Turning it on shows one plain sentence, which the person accepts once: "LinkedIn's terms forbid automated use of its site, and your account may be limited or closed; the app keeps to the pace of a person, but the risk is yours." The acceptance is recorded with its date and the version of the sentence, and without it no LinkedIn work starts (search, Easy Apply, profile).
 
 ## Which browser runs on the Jetson
 
@@ -57,8 +60,8 @@ browser container (image jobapp-browser, arm64, Debian slim)
 ## How agents drive it
 
 - **Decision taken: a narrow tool layer, not the raw Playwright MCP server.** The capability map names "Playwright MCP endpoint". The official `@playwright/mcp` server exposes `browser_evaluate` and `browser_run_code` (arbitrary JavaScript and Playwright code), uploads by any path and every tab, which no agent of this app may have. So `browserd` implements a short list of tools with the same names, arguments and accessibility snapshot format as Playwright MCP, and the worker exposes them to an agent as tools of its in-process MCP server (the agents runtime pattern, `tools_mcp.py`), bound server side to the run's user and lease:
-  `browser_snapshot` (the accessibility snapshot with element refs, cut at 40,000 characters), `browser_navigate` (http and https only, to the hosts the lease allows), `browser_click`, `browser_type`, `browser_select_option`, `browser_check`, `browser_file_upload` (a document name the lease was given, never a path), `browser_press_key` (a short allow list), `browser_wait_for`, `browser_take_screenshot`, `browser_tabs` (list and select, no new tab to another host).
-- **What the tool layer enforces in code**, so no prompt can change it: human pacing (typing 60 to 140 ms per character with jitter, a scroll and a hover before every click, 1 to 3 s of dwell between actions, reading pauses on new pages); a host allow list per lease (the application's host, its ATS's asset and upload hosts, the identity providers the person signs in with); no `file:`, `chrome:`, `devtools:`, `view-source:` or `data:` navigation; refusal of a click on any element the submit detector of the apply module marks (submit, send, apply, postuler, envoyer, and the adapters' own selectors) unless the call comes from the apply gate's code path, which no agent can reach; refusal of buttons that delete, withdraw or pay. Page content is data, never instructions: every agent prompt that sees a snapshot says so.
+  `browser_snapshot` (the accessibility snapshot with element refs, cut at 40,000 characters), `browser_navigate` (http and https only, to the hosts the lease allows), `browser_click`, `browser_type`, `browser_select_option`, `browser_check`, `browser_file_upload` (a document name the lease was given, never a path), `browser_press_key` (a short allow list), `browser_wait_for`, `browser_take_screenshot`, `browser_tabs` (list and select, no new tab to another host), and `browser_request_signin` (not in Playwright MCP: asks the person to sign in or sign up, see "The sign in hand off"; it takes a site name and a reason, never a credential).
+- **What the tool layer enforces in code**, so no prompt can change it: human pacing (typing 60 to 140 ms per character with jitter, a scroll and a hover before every click, 1 to 3 s of dwell between actions, reading pauses on new pages); a host allow list per lease (the application's host, its ATS's asset and upload hosts, the identity providers the person signs in with); no `file:`, `chrome:`, `devtools:`, `view-source:` or `data:` navigation; refusal of a click on any element the submit detector of the apply module marks (submit, send, apply, postuler, envoyer, and the adapters' own selectors) unless the call comes from the apply gate's code path, which no agent can reach; refusal of buttons that delete, withdraw or pay. A lease flagged `profile_edit` (SPEC-apply, "Complete my profile on a site") has its detector extended to Save, Update, Enregistrer and Mettre à jour, and only the profile gate's code path may click them. Page content is data, never instructions: every agent prompt that sees a snapshot says so.
 - **Uploads:** the worker sends the frozen PDF bytes to `PUT /leases/{id}/files/{name}` (a tmpfs directory per lease, deleted with it) and the tool sets that file; file choosers (Google Careers' Browse button) are answered the same way. B1 records whether `set_input_files` over a local CDP connection needs this; the design does not depend on it.
 - **For development only,** the official Playwright MCP server or CLI can attach to a lease from inside the container (`docker compose exec`). It is never reachable from the network.
 
@@ -71,10 +74,11 @@ browser container (image jobapp-browser, arm64, Debian slim)
 
 ## Persistent profiles and logins
 
-- One profile directory per person (`browser_profiles` table: `user_id`, a random `profile_id`, the Linux uid that owns it, size, last used). On the volume `browserprofiles`, mode 0700, each directory owned by its own uid (20000 plus a counter); `browserd` keeps only the capabilities to start Chromium under that uid and drops them in the child. Logins persist as cookies and local storage in that directory, like a desktop browser.
-- **Sign in sessions run without automation:** "Sign in to a site" starts Chromium on the person's profile with no debugging port at all, so Google, LinkedIn or an ATS sees an ordinary browser while the person types a password. The next agent lease restarts it with CDP on the same profile.
-- **What is never stored:** passwords (the browser's password manager is off; the app has no password vault), payment cards (autofill of cards off).
-- **Cookies on Linux are protected by a fixed key** when no keyring exists, so the volume is as sensitive as the logins. It is excluded from the nightly backup (losing it costs the person their logins, nothing else), never mounted by another service, and deleted with the account. "Forget all logins" deletes the directory; the next lease starts empty. A profile over 1 GB is trimmed of its caches at lease end.
+- **One profile directory per person, persisted** (`browser_profiles` table: `user_id`, a random `profile_id`, the Linux uid that owns it, size, last used). On the volume `browserprofiles`, mode 0700, each directory owned by its own uid (20000 plus a counter); `browserd` keeps only the capabilities to start Chromium under that uid and drops them in the child. **Every lease of the person starts on that same directory**, whatever its purpose (apply, sweep, hand off, complete my profile, "Look at my browser"), and ends by closing Chromium cleanly so the profile is flushed. Logins persist as cookies and local storage in that directory, like a desktop browser, so the next opening is connected. Cookies without an expiry date (session cookies) are kept across restarts with the setting "continue where you left off" (`session.restore_on_startup`); B7 proves it with a fixture that sets a session cookie.
+- **The sign in hand off** (the way a person signs in, whoever needs it). An agent that reaches a login or sign up wall, or an adapter that sees one, calls `browser_request_signin(site, reason)`. Then: the lease keeps its place and waits for the person (`waiting_person: signin`, the idle timer suspended, 30 minutes at most); `browserd` notes the tab's address, closes Chromium and starts it again on the same profile, at that address, **without any debugging port** and with the live view in input mode, so Google, LinkedIn or an ATS sees an ordinary browser while the person types; the person is told ("Sign in to Example Portal, then click I'm signed in") with a link that opens the live view on that tab; he signs in or signs up himself, with a password, "Sign in with Google" or an e-mail code, and clicks **I'm signed in**; `browserd` closes Chromium, starts it again with CDP on the same profile at the same address, and the waiting tool call answers "The person signed in; the page is now <title>". The adapter then checks that the wall is gone, else it asks again. "Cancel" or 30 minutes without a click ends the hand off: the lease is released and the work waits as `needs_person` in the apply module's queue. The app never sees what is typed: keystrokes go from the viewer to the browser, nothing is logged.
+- **"Sign in to a site"** in Account is the same mechanism started by the person, without an agent: a session with no debugging port, at an address he types or picks.
+- **What is never stored:** passwords (the browser's password manager is off; the app has no password vault), payment cards (autofill of cards off). The app never chooses a password and never creates an account by itself.
+- **Cookies on Linux are protected by a fixed key** when no keyring exists, so the volume is as sensitive as the logins. It is excluded from the nightly backup (losing it costs the person their logins, nothing else), never mounted by another service, and deleted with the account. "Forget all logins" deletes the directory; the next lease starts empty and the sites ask again. A profile over 1 GB is trimmed of its caches at lease end.
 
 ## Isolation and network
 
@@ -93,7 +97,7 @@ browser container (image jobapp-browser, arm64, Debian slim)
 The jobs sweep (SPEC-jobs) covers Ashby, Greenhouse and Lever by API. Sources that need a browser become **browser sources**, declared in the person's `search` section beside the boards, swept in `sweep` leases at night or when the browser is idle, results upserted through the jobs module's own `add` path (status `found`, scored, never apply rules applied) with the posting text saved:
 - **Google Careers** and **Business France VIE** (mon-vie-via): public result pages read by deterministic extractors, no model.
 - **Company career sites** without a known ATS: the finder agent reads listing pages with the read only tools (`browser_navigate`, `browser_snapshot`), a budget of 20 pages per site per sweep, and returns postings as structured rows that code validates.
-- **LinkedIn:** only per the owner decision above.
+- **LinkedIn:** searched from the person's own signed in session after the opt in of owner decision 2, under the pacing of B10.
 Every sweep lease is low priority and ends at once when a person asks for their browser.
 
 ## API
@@ -105,10 +109,12 @@ Every sweep lease is low priority and ends at once when a person asks for their 
 | POST /api/browser/live/ticket ; GET /api/browser/live/auth (Caddy only) | one use ticket for the viewer, and its check |
 | POST /api/browser/takeover ; POST /api/browser/giveback | switch input between the agent and the person |
 | DELETE /api/browser/profile | forget all logins |
+| POST /api/browser/handoff/done ; POST /api/browser/handoff/cancel | "I'm signed in" (restarts Chromium with CDP at the same address) and "Cancel" of a sign in hand off; the state itself (`waiting_person: signin`, the site, the minutes left) is part of `GET /api/browser` |
+| GET and PUT /api/browser/linkedin | the LinkedIn switch of the person: off by default; turning it on records the acceptance of the sentence (date and version) |
 
 ## Frontend
 
-Account: "Your browser" card (status, Sign in to a site, Forget all logins with a confirmation that names what is lost). A live view component (`<LiveBrowser lease=... />`) used by Account and by the job page of the apply module: the screen, Take over and Give back, full screen, a status line ("The assistant is filling the form", "Waiting for you: a captcha"). The queue position while waiting. Mobile friendly.
+Account: "Your browser" card (status, Sign in to a site, a slot for "Complete my profile on a site" that the apply module fills, the LinkedIn switch with its sentence, Forget all logins with a confirmation that names what is lost). A hand off banner wherever a run waits for a sign in (the job page, the queue, the app shell): the site, "Open the live view", "I'm signed in", "Cancel". A live view component (`<LiveBrowser lease=... />`) used by Account and by the job page of the apply module: the screen, Take over and Give back, full screen, a status line ("The assistant is filling the form", "Waiting for you: a captcha"). The queue position while waiting. Mobile friendly.
 
 ## Testing strategy
 
@@ -121,7 +127,7 @@ Account: "Your browser" card (status, Sign in to a site, Forget all logins with 
 
 - **Always:** one session at a time; the person can watch and take over; the sandbox on; pacing in code.
 - **Ask first:** a second concurrent browser; any captcha service; LinkedIn beyond the owner's decision; giving an agent a tool outside the list above.
-- **Never:** CDP outside the container; `--no-sandbox` or `--headless`; storing a password; one person's profile, screen or files reachable by another; a fingerprint that lies.
+- **Never:** CDP outside the container; `--no-sandbox` or `--headless`; storing a password, choosing one or creating an account for a person; one person's profile, screen or files reachable by another; a fingerprint that lies.
 
 ## Success criteria
 
@@ -129,3 +135,4 @@ Account: "Your browser" card (status, Sign in to a site, Forget all logins with 
 2. An agent fills a fake form in the browser while he watches, he takes over, gives back, and the agent continues.
 3. The stack stays within 5G with the browser running a heavy page (measured).
 4. No person can reach another's browser, and the browser cannot reach the home network or the stack's databases (tests).
+5. A run that meets a login wall waits; the owner signs in himself in the live view, clicks "I'm signed in", the run goes on, and the next day's run is already connected to that site.
