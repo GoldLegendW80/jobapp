@@ -1,6 +1,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { crc32, deflateSync } from "node:zlib";
 
@@ -230,8 +231,20 @@ interface Answer {
 /**
  * A request with curl, which reads an answer that arrives while it is still sending (a refusal
  * of a large body), where an HTTP library gives up on the broken pipe.
+ *
+ * The body is a file that curl reads itself, and curl gets no stdin at all. It used to be piped
+ * on stdin by spawnSync (`--data-binary @-`), and on this Mac that hung between one request in
+ * 150 and one in 40, more under load (the gate of 2026-10-14, issue #104): curl reads all of
+ * `@-` before it opens a connection, and that read of the pipe Node fed waited for an end that
+ * never came, so `--max-time`, which counts only the transfer, never started (a sample of the
+ * hung curl: fread on fd 0, no socket open). Caddy and the api were never reached.
  */
-function curlArgs(target: string, cookie: string, extra: string[]): string[] {
+function curlArgs(
+  target: string,
+  cookie: string,
+  extra: string[],
+  file: string,
+): string[] {
   return [
     "-s",
     "--path-as-is",
@@ -251,9 +264,22 @@ function curlArgs(target: string, cookie: string, extra: string[]): string[] {
     "Expect:",
     ...extra,
     "--data-binary",
-    "@-",
+    `@${file}`,
     `${caddyUrl ?? ""}${target}`,
   ];
+}
+
+/** Writes a body to a file of its own for one curl, and gives the way to remove it. */
+function bodyFile(body: Buffer): { file: string; remove: () => void } {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), "jobapp-g1-body-"));
+  const file = path.join(folder, "body");
+  fs.writeFileSync(file, body);
+  return {
+    file,
+    remove: () => {
+      fs.rmSync(folder, { recursive: true, force: true });
+    },
+  };
 }
 
 function parse(output: string): Answer {
@@ -272,20 +298,25 @@ function curl(
   body: Buffer,
   extra: string[] = [],
 ): Answer {
-  const result = spawnSync("curl", curlArgs(target, cookie, extra), {
-    input: body,
-    encoding: "utf8",
-    maxBuffer: 16 * MIB,
-    // curl gives up by itself after 120 s (--max-time). This bound is for a curl that never
-    // gets that far: the journey then fails here, with the request named, instead of hanging.
-    timeout: 150_000,
-    killSignal: "SIGKILL",
-  });
-  if (result.error)
-    throw new Error(
-      `curl ${extra.join(" ")} ${target}: ${result.error.message}`,
-    );
-  return parse(result.stdout);
+  const { file, remove } = bodyFile(body);
+  try {
+    const result = spawnSync("curl", curlArgs(target, cookie, extra, file), {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      maxBuffer: 16 * MIB,
+      // curl gives up by itself after 120 s (--max-time). This bound is for a curl that never
+      // gets that far: the journey then fails here, with the request named, instead of hanging.
+      timeout: 150_000,
+      killSignal: "SIGKILL",
+    });
+    if (result.error)
+      throw new Error(
+        `curl ${extra.join(" ")} ${target}: ${result.error.message}`,
+      );
+    return parse(result.stdout);
+  } finally {
+    remove();
+  }
 }
 
 function curlAsync(
@@ -293,8 +324,11 @@ function curlAsync(
   cookie: string,
   body: Buffer,
 ): Promise<Answer> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("curl", curlArgs(target, cookie, []));
+  const { file, remove } = bodyFile(body);
+  return new Promise<Answer>((resolve, reject) => {
+    const child = spawn("curl", curlArgs(target, cookie, [], file), {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let output = "";
     child.stdout.on("data", (data: Buffer) => {
       output += data.toString("utf8");
@@ -303,9 +337,7 @@ function curlAsync(
     child.on("close", () => {
       resolve(parse(output));
     });
-    child.stdin.on("error", () => {}); // the server may answer before the body is through
-    child.stdin.end(body);
-  });
+  }).finally(remove);
 }
 
 const CHUNKED = ["-H", "Transfer-Encoding: chunked"];
@@ -921,6 +953,12 @@ test("20 MiB is accepted on the upload route only: every other route keeps 10 Mi
   expect(fromCaddy(curl(UPLOAD, cookie, bigPdf(FILE_MAX + 1)))).toBe(true);
   // Without a Content-Length: between the two limits it passes, over 20 MiB it is cut.
   kept(curl(UPLOAD, cookie, bigPdf(12 * MIB), CHUNKED));
+  // Both bodies arrived whole: curl sends the file it is given, and has no stdin to read from
+  // (an `@-` left anywhere would send nothing, and fail here at once instead of hanging).
+  const sizes = new Map(
+    (await listed(context)).map((item) => [item.id, item.size]),
+  );
+  expect(ids.map((id) => sizes.get(id))).toEqual([FILE_MAX, 12 * MIB]);
   expect(curl(UPLOAD, cookie, bigPdf(FILE_MAX + 1), CHUNKED).status).toBe(413);
 
   // Every other spelling and every other route: 10 MiB, as before.
