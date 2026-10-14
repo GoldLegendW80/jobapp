@@ -23,6 +23,7 @@ cancel them).
 import asyncio
 import hashlib
 import hmac
+import logging
 import re
 import secrets
 from typing import Any
@@ -30,6 +31,7 @@ from typing import Any
 from browserd.leases import Lease, LeaseEnded, LeaseError
 from browserd.tools import actions, pacing, policy
 
+log = logging.getLogger("browserd")
 GATE_PURPOSES = ("apply_submit", "profile_edit")
 LEASE_ID = r"(?P<lease_id>[0-9a-f-]{36})"
 LOCKS: dict[str, asyncio.Lock] = {}
@@ -101,6 +103,15 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
                 return await actions.TOOLS[name](tab, args)
             except ValueError as exc:
                 return actions.failure("bad_args", f"Bad argument: {exc}.")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - Playwright's errors: a result, the type only
+                log.warning(
+                    "lease %s: %s failed: %s", lease_id[:8], name, type(exc).__name__
+                )
+                return actions.failure(
+                    "page_error", "The page did not let this action finish."
+                )
 
     return 200, await _run(svc, lease_id, token, work)
 

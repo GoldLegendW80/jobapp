@@ -150,6 +150,7 @@ def test_a_form_is_filled_and_read_back_and_submit_is_refused(lease: Lease) -> N
         result = lease.tool("browser_click", ref=ref(after, "button", name))
         assert result["error"] == "submit", (name, result)
     assert lease.tool("browser_type", ref=email, text="x", submit=True)["error"] == "submit"
+    assert lease.tool("browser_type", ref=email, text="e2e-a@example.org")["ok"]  # focus there
     assert lease.tool("browser_press_key", key="Enter")["error"] == "submit"
     assert lease.tool("browser_click", ref=ref(after, "button", "Delete"))["error"] == "danger"
     final = lease.snapshot()
@@ -169,8 +170,11 @@ def test_the_page_never_leaves_the_list(lease: Lease) -> None:
     page = lease.snapshot()
     away = lease.tool("browser_click", ref=ref(page, "link", "Away"))
     assert away["error"] == "host_not_allowed"
+    assert away["url"] == FORM
+    page = lease.snapshot()  # the aborted navigation went back: a new document, new refs
     # A new tab the page opens to a host off the list: closed.
-    lease.tool("browser_click", ref=ref(page, "button", "Open partner site"))
+    popup = lease.tool("browser_click", ref=ref(page, "button", "Open partner site"))
+    assert popup["ok"] or popup["error"] == "host_not_allowed", popup
     lease.tool("browser_wait_for", time=2)
     tabs = lease.tool("browser_tabs", action="list")["tabs"]
     assert [t["url"] for t in tabs] == [FORM]
@@ -180,7 +184,8 @@ def test_the_page_never_leaves_the_list(lease: Lease) -> None:
     results = [lease.tool("browser_navigate", url=redirect), lease.tool("browser_wait_for", time=2)]
     assert "host_not_allowed" in [r.get("error") for r in results], results
     tabs = lease.tool("browser_tabs", action="list")["tabs"]
-    assert [t["url"] for t in tabs] == [redirect]
+    assert len(tabs) == 1
+    assert tabs[0]["url"].startswith("http://pages:8000/b5/")
 
 
 def test_a_stale_ref_clicks_nothing(lease: Lease) -> None:

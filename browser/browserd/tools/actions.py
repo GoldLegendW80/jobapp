@@ -185,9 +185,17 @@ async def close_off_list(tab: Any, hosts: tuple[str, ...], lease_tag: str) -> No
             await tab.close()
 
 
+async def title(page: Any) -> str:
+    # A navigation under way (a redirect the page started) destroys the context title() reads.
+    try:
+        return await page.title()
+    except Exception:  # noqa: BLE001 - that navigation: no title this time
+        return ""
+
+
 async def _here(tab: Tab) -> dict[str, Any]:
     page = await tab.page()
-    return {"ok": True, "url": page.url, "title": await page.title()}
+    return {"ok": True, "url": page.url, "title": await title(page)}
 
 
 async def snapshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
@@ -196,7 +204,7 @@ async def snapshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     return {
         "ok": True,
         "url": page.url,
-        "title": await page.title(),
+        "title": await title(page),
         "snapshot": text,
         "cut": cut,
     }
