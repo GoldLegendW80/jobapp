@@ -59,7 +59,7 @@ from app.agents.models import AgentEvent, AgentRun
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
 from app.ingestion import agents, estimate, estimate_router, merge, plan, reuse
-from app.ingestion.models import IngestionDocument
+from app.ingestion.models import IngestionDocument, IngestionImage, TextStatus
 from app.ingestion.runs_models import (
     IngestionItem,
     IngestionRun,
@@ -156,14 +156,16 @@ class NextStep:
     """What `next_step` answers: the step that would run next and the smallest budget it may
     start on (`step` None and `needs` zero: nothing would run, the run would close). The rest
     is what `_next` writes before it starts that step, listed here and not done: the steps that
-    cannot run (`failed`), the planned parts of a replaced text (`removed`) and the parts of
-    the text stored now (`added`, rows no session holds yet). `step` can be one of `added`."""
+    cannot run (`failed`), the planned parts of a replaced text (`removed`), the parts of the
+    text stored now (`added`, rows no session holds yet) and the transcription steps whose
+    images all hold their text already (`done`). `step` can be one of `added`."""
 
     step: IngestionRunStep | None
     needs: int
     failed: tuple[IngestionRunStep, ...] = ()
     removed: tuple[IngestionRunStep, ...] = ()
     added: tuple[IngestionRunStep, ...] = ()
+    done: tuple[IngestionRunStep, ...] = ()
 
 
 # --- start ------------------------------------------------------------------------------------
@@ -616,12 +618,17 @@ def next_step(
     the way: a step whose agent no process knows, or whose document is gone or has no text,
     fails; a part whose text is not the one stored now is planned again from that text, its
     new parts placed after every other step, and a part of that document which already ran
-    fails with the text it ran on.
+    fails with the text it ran on. A transcription step whose images all hold their text (a
+    second attempt of a step that had stored them all) is done: no agent run, no token. A part
+    of a document that still waits for its transcription fails (the transcription did not
+    finish in this run): no model reads empty pages, and a later run transcribes the pages
+    left and then reads the whole text.
 
-    Read only: it reads the hash of the stored texts, and for a replaced text the text and the
-    steps that finished in earlier runs. It changes no row and no object of the session: what
-    it would write is listed in its answer, and `_settle` writes exactly that list, with no
-    decision of its own. That is what makes the page's figure a prediction of `_next`.
+    Read only: it reads the hash of the stored texts, whether an image still waits, and for a
+    replaced text the text and the steps that finished in earlier runs. It changes no row and
+    no object of the session: what it would write is listed in its answer, and `_settle`
+    writes exactly that list, with no decision of its own. That is what makes the page's
+    figure a prediction of `_next`.
 
     A run out of time (`_past_deadline`) has no next step: `_next` closes it, so no figure is
     shown and no raise is asked for a step that could not start."""
@@ -631,12 +638,14 @@ def next_step(
     failed: list[IngestionRunStep] = []
     removed: list[IngestionRunStep] = []
     added: list[IngestionRunStep] = []
-    out: set[int] = set()  # the rows of `failed`, by identity: a row of `added` has no id yet
+    done: list[IngestionRunStep] = []
+    # The rows of `failed` and `done`, by identity: a row of `added` has no id yet.
+    out: set[int] = set()
     handled: set[uuid.UUID] = set()
 
     def answer(step: IngestionRunStep | None) -> NextStep:
         needs = _floor(step) if step is not None else 0
-        return NextStep(step, needs, tuple(failed), tuple(removed), tuple(added))
+        return NextStep(step, needs, tuple(failed), tuple(removed), tuple(added), tuple(done))
 
     def planned(one: IngestionRunStep) -> bool:
         return one.status is StepStatus.planned and id(one) not in out
@@ -647,7 +656,11 @@ def next_step(
             return answer(None)
         runnable = AGENT_OF[step.kind] in definitions.AGENTS
         if runnable and step.kind is not plan.StepKind.extract:
-            return answer(step)
+            if not _all_transcribed(db, run, step):
+                return answer(step)
+            done.append(step)
+            out.add(id(step))
+            continue
         now_stored = _stored_text_hash(db, run, step) if runnable else None
         planned_on = bytes(step.text_sha256) if step.text_sha256 is not None else None
         if now_stored is not None and now_stored == planned_on:
@@ -681,16 +694,45 @@ def _never_ran(
 
 
 def _stored_text_hash(db: Session, run: IngestionRun, step: IngestionRunStep) -> bytes | None:
-    """The hash of the text stored now for the step's document; None when the document is gone
-    or has no text."""
+    """The hash of the text stored now for the step's document; None when the document is gone,
+    has no text, or still waits for its transcription (its text is not whole yet)."""
     stored = db.execute(
         sa.select(stored_text_sha256()).where(
             IngestionDocument.id == step.document_id,
             IngestionDocument.user_id == run.user_id,
             IngestionDocument.sha256 == step.sha256,
+            IngestionDocument.text_status != TextStatus.awaiting_transcription,
         )
     ).first()
     return bytes(stored[0]) if stored is not None and stored[0] is not None else None
+
+
+def _all_transcribed(db: Session, run: IngestionRun, step: IngestionRunStep) -> bool:
+    """Whether a transcription step has nothing left to do: its document is there, read or
+    waiting for other images, and no image of the step's group waits for its text. False for a
+    document that is gone or is another file: the step's agent run finds that and fails."""
+    status = db.execute(
+        sa.select(IngestionDocument.text_status).where(
+            IngestionDocument.id == step.document_id,
+            IngestionDocument.user_id == run.user_id,
+            IngestionDocument.sha256 == step.sha256,
+        )
+    ).scalar_one_or_none()
+    if status is TextStatus.done:
+        return True
+    if status is not TextStatus.awaiting_transcription:
+        return False
+    waiting = db.execute(
+        sa.select(IngestionImage.position)
+        .where(
+            IngestionImage.document_id == step.document_id,
+            IngestionImage.user_id == run.user_id,
+            IngestionImage.position.in_(list(step.image_positions or ())),
+            IngestionImage.text.is_(None),
+        )
+        .limit(1)
+    ).first()
+    return waiting is None
 
 
 def _planned_again(
@@ -731,11 +773,14 @@ def _settle(
 ) -> None:
     """Write what `next_step` listed, and nothing else, under the run's row lock: the planned
     parts of a replaced text are removed (they never ran; a step that ran keeps its row), the
-    parts of the text stored now are added, the steps that cannot run have failed. `steps` is
-    read again when rows came or went."""
+    parts of the text stored now are added, the steps that cannot run have failed, the
+    transcription steps with nothing left to transcribe are done. `steps` is read again when
+    rows came or went."""
     _swap(db, chosen.removed, chosen.added)
     for one in chosen.failed:
         one.status = StepStatus.failed
+    for one in chosen.done:
+        one.status = StepStatus.done
     if chosen.removed or chosen.added:
         steps[:] = _steps(db, run.id)
 

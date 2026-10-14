@@ -116,9 +116,18 @@ def use_script(factory: sessionmaker[Session], agent_run_id: Any, name: str, **m
         run.input = {**run.input, "script": name, **more}
 
 
+def stored_stream(name: str) -> dict[str, Any]:
+    body: dict[str, Any] = json.loads((fake_backend.STREAMS / f"{name}.json").read_text("utf-8"))
+    return body
+
+
 def reported(name: str) -> tuple[int, int]:
     """What the result message of a recorded stream reports: the input side, the output."""
-    usage = STREAMS[name]["steps"][-1]["message"]["usage"]
+    return reported_by(STREAMS[name])
+
+
+def reported_by(body: dict[str, Any]) -> tuple[int, int]:
+    usage = body["steps"][-1]["message"]["usage"]
     return (
         usage["input_tokens"]
         + usage["cache_creation_input_tokens"]
@@ -308,9 +317,11 @@ def test_a_second_attempt_sends_only_the_pages_left_and_is_counted_once(
     assert run_of(factory, run_id).tokens_spent == 1234 + sum(reported("transcribe_clean"))
 
 
-def test_a_step_whose_pages_are_all_stored_fails_without_a_model_call(
+def test_a_step_whose_pages_are_all_stored_is_done_and_its_text_is_read_at_its_cost(
     settings: Settings, factory: sessionmaker[Session], keyring: Keyring, alice_id: uuid.UUID
 ) -> None:
+    """The second attempt has nothing to transcribe: the engine makes no agent run for it, so
+    no request leaves and nothing is charged, and the extraction replays its stream."""
     document = add_scan(factory, alice_id, [None])
     run_id = start(factory, alice_id, [document])
     first = advance(factory, run_id, settings)
@@ -319,16 +330,20 @@ def test_a_step_whose_pages_are_all_stored_fails_without_a_model_call(
     view_then_store(tools_for(factory, attempt), 0, "The whole page.")
     end_agent(factory, first.enqueue, RunStatus.failed, agent_runs.STOPPED, tokens=500)
     second = advance(factory, run_id, settings)
-    status, backends = run_agent(settings, factory, keyring, second.enqueue)
-    assert status is RunStatus.failed
-    assert run_row(factory, second.enqueue).error == failures.BINDING_GONE
-    assert [backend.seen_requests for backend in backends.made] in ([], [[]])  # no request left
-    third = advance(factory, run_id, settings)
+    kinds = [(one.kind, one.status) for one in steps_of(factory, run_id)]
+    assert kinds == [("transcribe", StepStatus.done), ("extract", StepStatus.running)]
     assert run_of(factory, run_id).tokens_spent == 500
-    # The text the first attempt completed is read: its extraction is planned and started.
-    assert running(factory, run_id).kind == "extract"
-    assert third.enqueue is not None
+    assert [one.agent for one in agent_runs_of(factory, alice_id)] == [
+        engine.TRANSCRIBE_NAME,
+        agents.EXTRACT_NAME,
+    ]
     assert document_of(factory, document).text == "The whole page."
+    assert run_agent(settings, factory, keyring, second.enqueue)[0] is RunStatus.done
+    advance(factory, run_id, settings)
+    closed = run_of(factory, run_id)
+    assert (closed.status, closed.partial) == (ChainStatus.done, False)
+    assert closed.tokens_spent == 500 + sum(reported_by(stored_stream("ingest_extract_default")))
+    assert [one.status for one in steps_of(factory, run_id)] == [StepStatus.done] * 2
 
 
 def test_five_of_eight_pages_then_a_failure_and_the_next_run_plans_the_other_three(
@@ -348,17 +363,40 @@ def test_five_of_eight_pages_then_a_failure_and_the_next_run_plans_the_other_thr
     assert images_of(factory, document) == {**kept, 5: None, 6: None, 7: None}
     assert document_of(factory, document).text_status is TextStatus.awaiting_transcription
     assert run_of(factory, run_id).tokens_spent == tokens_of(factory, first.enqueue)
-    # That run ends; the next one is planned on what is left.
-    set_run(factory, run_id, status=ChainStatus.done, paused_reason=None, finished_at=now())
+    # The process died: the box's failure, so the run paused and the step runs once more. It
+    # is sent the three pages left, and dies again before it stores one.
+    assert run_of(factory, run_id).status is ChainStatus.paused
     with factory() as db, db.begin():
-        db.execute(
-            sa.update(AgentRun)
-            .where(AgentRun.user_id == alice_id, AgentRun.finished_at.is_(None))
-            .values(status=RunStatus.cancelled, finished_at=now())
-        )
+        engine.resume(db, alice_id, run_id, now())
+    second = advance(factory, run_id, settings)
+    with factory() as db:
+        bound = agents.bind_transcription(db, db.get_one(AgentRun, second.enqueue))
+    assert bound is not None
+    assert bound["positions"] == [5, 6, 7]
+    dead = stream("The process dies at once.", "Never said.")
+    dead["steps"][-1] = {"raise": "process"}
+    use_script(factory, second.enqueue, streams.add("transcribe_dead", dead["steps"]))
+    assert run_agent(settings, factory, keyring, second.enqueue)[0] is RunStatus.failed
+    assert advance(factory, run_id, settings).enqueue is None
+    # The transcription did not finish in this run: its extraction is not run, no agent run is
+    # made for one, and the run is charged its two transcription attempts and nothing else.
+    kinds = [(one.kind, one.status) for one in steps_of(factory, run_id)]
+    assert kinds == [("transcribe", StepStatus.failed), ("extract", StepStatus.failed)]
+    assert [one.agent for one in agent_runs_of(factory, alice_id)] == [engine.TRANSCRIBE_NAME] * 2
+    closed = run_of(factory, run_id)
+    assert closed.status is ChainStatus.failed
+    assert closed.tokens_spent == sum(
+        tokens_of(factory, one) for one in (first.enqueue, second.enqueue)
+    )
+    assert closed.tokens_spent <= closed.token_ceiling
+    assert images_of(factory, document) == {**kept, 5: None, 6: None, 7: None}
+    # The next run is planned on what is left: one step for three pages, then the extraction.
     next_id = start(factory, alice_id, [document])
-    planned = [step for step in steps_of(factory, next_id) if step.kind == "transcribe"]
-    assert [list(step.image_positions or ()) for step in planned] == [[5, 6, 7]]
+    quoted = run_of(factory, next_id)
+    assert quoted.token_ceiling == 2 * quoted.estimate_high
+    assert quoted.estimate_high > math.ceil(estimate.transcription(3).high)
+    planned = [(step.kind, list(step.image_positions or ())) for step in steps_of(factory, next_id)]
+    assert planned == [("transcribe", [5, 6, 7]), ("extract", [])]
     moved = advance(factory, next_id, settings)
     rest = stream(
         "The three pages left.",
@@ -382,6 +420,24 @@ def test_five_of_eight_pages_then_a_failure_and_the_next_run_plans_the_other_thr
         if kind == "tool_result" and data.get("blocks")
     ]
     assert len(shown) == 3  # three images left this run, and no page was sent twice
+    # One extraction, of the whole text, and the run is charged what the two streams reported.
+    reading = advance(factory, next_id, settings)
+    assert run_of(factory, next_id).tokens_spent == sum(reported_by(rest))
+    extraction = running(factory, next_id)
+    assert (extraction.kind, extraction.range_start, extraction.range_end) == (
+        "extract",
+        0,
+        len(found.text),
+    )
+    assert run_agent(settings, factory, keyring, reading.enqueue)[0] is RunStatus.done
+    assert advance(factory, next_id, settings).enqueue is None
+    ended = run_of(factory, next_id)
+    assert (ended.status, ended.partial) == (ChainStatus.done, False)
+    assert ended.tokens_spent == sum(reported_by(rest)) + sum(
+        reported_by(stored_stream("ingest_extract_default"))
+    )
+    kinds = [(one.kind, one.status) for one in steps_of(factory, next_id)]
+    assert kinds == [("transcribe", StepStatus.done), ("extract", StepStatus.done)]
 
 
 def test_a_page_is_not_sent_when_the_step_would_cross_the_ceiling(

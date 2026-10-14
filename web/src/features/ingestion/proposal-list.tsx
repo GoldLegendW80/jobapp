@@ -173,7 +173,7 @@ function Source({
       </Button>{" "}
       {quote}
       {citation.transcribed ? (
-        <span className="text-muted-foreground"> (read from an image)</span>
+        <span className="text-muted-foreground"> (transcribed, check it)</span>
       ) : null}
     </li>
   );
