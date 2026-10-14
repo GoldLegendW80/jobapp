@@ -95,7 +95,9 @@ def test_health_queued_behind_busy_workers_is_503(client_for, database_url: str)
         release.set()
         for blocker in blockers:
             blocker.result()
-    # Once the workers are free again, health is ok again.
+    # Once the workers are free again, health is ok again. Only the queueing above is under
+    # test, so this check gets a timeout no loaded machine reaches.
+    checker.timeout_s = 30
     assert client.get("/api/health").status_code == 200
 
 
