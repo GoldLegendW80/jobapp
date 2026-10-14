@@ -388,6 +388,7 @@ jobs:
           tests/agents_real_run_test.sh tests/ingestion_parser_jetson.sh
           ops/env_check.sh tests/env_check_test.sh
           ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh
+          ops/ship.sh tests/ship_test.sh
       # Issue #18: the .env syntax check and where it runs (deploy.sh, deploy.yml, the smoke).
       - name: tests/env_check_test.sh
         id: env_check_test
@@ -443,6 +444,12 @@ jobs:
         id: local_check_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/local_check_test.sh
+      # Issue #278: approved pull requests to production (ops/ship.sh) against fake gh, ssh, gate
+      # and deploy: selection, order, bisect, a head that moved, refusals, a failed deploy.
+      - name: tests/ship_test.sh
+        id: ship_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
+        run: tests/ship_test.sh
 
       # --- unit: e2e (groups apps and ingestion) -------------------------------------------
       # Playwright comes with the web dependencies. The pnpm version comes from packageManager

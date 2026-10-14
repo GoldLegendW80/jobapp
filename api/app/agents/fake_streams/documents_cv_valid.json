@@ -1,0 +1,240 @@
+{
+ "description": "D7: the CV writer reads the profile, the base CV and the posting, and submits a CV every claim of which the sources state.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_job",
+     "mcp__app__read_profile_section",
+     "mcp__app__get_base_cv",
+     "mcp__app__get_draft",
+     "mcp__app__submit_cv"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_cv_002",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read your profile, your base CV and the posting first."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_cv_001_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "facts"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_cv_001_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "experience"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_cv_001_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "skills"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_cv_001_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "answers"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_cv_001_get_base_cv",
+       "name": "mcp__app__get_base_cv",
+       "input": {}
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_cv_001_get_job",
+       "name": "mcp__app__get_job",
+       "input": {
+        "job_id": "{job_id}"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_cv_003",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_cv_002_submit_cv",
+       "name": "mcp__app__submit_cv",
+       "input": {
+        "schema": 1,
+        "target": "Lumen Example, Senior Platform Engineer",
+        "headline": "Platform Engineer for teams that ship every day",
+        "summary": "Platform engineer with about 3.5 years of professional engineering. At Example Corp I run the deployment platform of the payments team and moved 40 services to Kubernetes.",
+        "highlights": [
+         "Moved 40 services to Kubernetes",
+         "Deployment platform of the payments team",
+         "Internal tools in Python and React"
+        ],
+        "competencies": [
+         "Kubernetes",
+         "Terraform",
+         "AWS",
+         "Python",
+         "FastAPI",
+         "PostgreSQL",
+         "CI/CD",
+         "Platform engineering"
+        ],
+        "experience": [
+         {
+          "employer_key": "example-corp",
+          "bullets": [
+           "Run the deployment platform of the payments team, from the first commit to production.",
+           "Moved 40 services to Kubernetes with Terraform on AWS.",
+           "Cut build times by 30% with a shared cache."
+          ]
+         },
+         {
+          "employer_key": "sample-labs",
+          "bullets": [
+           "Built internal tools in Python and React for the support team."
+          ]
+         }
+        ],
+        "skills": [
+         {
+          "label": "Cloud",
+          "items": [
+           "Kubernetes",
+           "Terraform",
+           "AWS"
+          ]
+         },
+         {
+          "label": "Backend",
+          "items": [
+           "Python",
+           "FastAPI",
+           "PostgreSQL"
+          ]
+         },
+         {
+          "label": "Frontend",
+          "items": [
+           "React",
+           "TypeScript"
+          ]
+         }
+        ],
+        "notes": "The posting asks for 5 years of Python; the profile states about 3.5 years of engineering."
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_cv_004",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "The CV is stored."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 10,
+    "duration_api_ms": 5,
+    "num_turns": 3,
+    "session_id": "{session_id}",
+    "result": "The CV is stored.",
+    "total_cost_usd": 0.05,
+    "usage": {
+     "input_tokens": 3000,
+     "output_tokens": 300
+    },
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}

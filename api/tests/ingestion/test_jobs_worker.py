@@ -109,7 +109,8 @@ def test_the_ingestion_queue_reads_one_document_at_a_time_and_keeps_no_result() 
     (cron,) = [one for one in spec.cron_jobs if one.name == "cron:reap_documents"]
     assert cron.run_at_startup is True
     assert cron.second == set(jobs.REAP_SECONDS)
-    assert [queue.name for queue in worker.queues()][-1] == queues.INGESTION
+    names = [queue.name for queue in worker.queues()]
+    assert names.index(queues.INGESTION) == len(names) - 2  # the documents queue comes after
 
 
 def test_an_upload_is_read_by_the_worker_and_redis_holds_nothing_of_it(
