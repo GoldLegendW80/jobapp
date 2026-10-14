@@ -253,8 +253,18 @@ def test_an_overflow_is_stored_moves_nothing_and_calls_the_hook_once(
     assert _status(factory, made["posting"]) == "found"
 
 
-def test_the_default_hook_is_a_no_op() -> None:
+def test_the_hook_does_nothing_for_ids_of_no_document(
+    factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D7's generate.py replaces D6's no op when the writers are imported: for ids that name no
+    # document's writer version, it starts nothing either.
+    from app.documents import generate
+
+    queue = RecordingQueue()
+    monkeypatch.setattr(generate, "RUNTIME", generate.Runtime(factory, lambda: AT, None, queue))
+    assert render_job.on_overflow is generate.on_overflow
     assert asyncio.run(render_job.on_overflow(uuid.uuid4(), uuid.uuid4())) is None
+    assert queue.jobs == []
 
 
 def test_the_status_moves_once_only_and_never_from_staged(factory: sessionmaker[Session]) -> None:
