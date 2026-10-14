@@ -224,8 +224,10 @@ def test_svg_and_mathml() -> None:
     holds_none(got, "svg", "math", "script", "alert", "xlink", "foreign object", "iframe")
     holds_none(got, "annotation", "mglyph", "mtext", "onerror", "evil.example", "style")
     holds_none(got, "svg words", "math words", "inside foreign")
-    assert got.text == "after the foreign content"
-    assert "<p>after the foreign content</p>" in got.html
+    # The `<style>` in the `<svg>` holds an `<img>`: markup for the tree builder there, text in
+    # HTML. The scan cannot tell which reading holds, so the page is cut at that `<style>`.
+    assert got.truncated is True
+    assert got.text == ""
     assert [found for _, found in Shape(got.html).tags if found] == []  # not one attribute
 
 
@@ -582,9 +584,9 @@ def test_inside_foreign_content_every_name_is_counted(
     [
         ("<svg>" + "<td>" * 62_500 + "</a>" * 62_500, "<td>", 2999),
         ("<math>" + "<th>" * 62_500 + "</a>" * 62_500, "<th>", 2999),
-        ("<svg><![CDATA[</svg>]]>" + "<td>" * 62_500 + "</a>" * 62_500, "<td>", 3000),
-        ("<svg><!--</svg>-->" + "<option>" * 41_000 + "</x>" * 41_000, "<option>", 3000),
-        ('<svg a="</svg>">' + "<wbr>" * 55_000 + "</div>" * 55_000, "<wbr>", 3000),
+        ("<svg><![CDATA[</svg>]]>" + "<td>" * 62_500 + "</a>" * 62_500, "<td>", 0),
+        ("<svg><!--</svg>-->" + "<option>" * 41_000 + "</x>" * 41_000, "<option>", 2999),
+        ('<svg a="</svg>">' + "<wbr>" * 55_000 + "</div>" * 55_000, "<wbr>", 2999),
     ],
     ids=["svg td", "math th", "svg closed in CDATA", "svg closed in a comment", "in a value"],
 )
@@ -594,8 +596,9 @@ def test_the_pages_of_the_review_are_cut_at_the_bound(
     given, _ = watched_sanitiser(monkeypatch)
     got = sanitised(page)
     assert got.truncated is True
-    # The bound, less the `svg` or `math` when it is still open for the scan: a `</svg>` that
-    # the scan reads (in CDATA, a comment, a value) ends the mark of foreign content no more.
+    # The bound, less the `svg` or `math` still open: a `</svg>` in a comment or a value is no
+    # end tag. A CDATA section whose first `>` is not its end is read one way in foreign content
+    # and another elsewhere: the page is cut there, before any `<td>`.
     assert given[0].count(name) == kept
 
 
@@ -645,7 +648,16 @@ def test_no_name_nests_ten_thousand_deep_past_the_scan(name: str) -> None:
     tree builder does not nest, shown by a real parse. A void element nested in another would
     hide what follows it (the library writes no child of a void), so all three must be there."""
     cut = mail_html.cut_at_depth
+    if name in mail_html._RAW_TEXT:
+        # What follows is text to the end tag: the scan reads no tag in it, nor does the library.
+        assert cut(f"<{name}>" + "<div>" * 10_000)[1] is False
+        written = mail_html.nh3.clean(
+            f"<{name}>" + "<div>0" * 3, tags={"div"}, clean_content_tags=set(), attributes={}
+        )
+        assert "<div>" not in written, (name, written)
     for before in ("", "<svg>", "<math>"):
+        if not before and name in mail_html._RAW_TEXT:
+            continue
         if cut(before + f"<{name}>" * 10_000)[1] and cut(before + f"<{name.upper()}>" * 10_000)[1]:
             continue
         found = in_the_library(name, before)
@@ -694,6 +706,124 @@ def test_tables_that_hold_their_content_in_cells_are_not_counted() -> None:
         assert cut(page) == (page, False)
 
 
+# --- end tags the tree builder ignores (review of PR #179, round 3, N2): counted, never timed ----
+
+# Each unit leaves at least one element open for the tree builder, whose stack it scans: an
+# end tag with a special element above its target, a formatting end tag across a block, or an
+# end tag that is no end tag (inside a tag, a comment, a value, raw text).
+NEVER_CLOSED = [
+    "<x>" + "<ul>" * 100 + "</x>",
+    "<x>" + "<ul>" * 1000 + "</x>",
+    "<x>" + "<ul>" * 2900 + "</x>",
+    "<x>" + "<div>" * 2900 + "</x>",
+    "<b>" + "<div>" * 2900 + "</b>",
+    "<x><div></x>",
+    "<b><div></b>",
+    "<div </div>",
+    "<span><div></span>",
+    "<div><!--</div>-->",
+    "<i><div></i>",
+    "<form><div></form>",
+    "<nobr><div></nobr>",
+    "<b><form><div></b>",
+    "<x><div><!--></x>",
+    "<x><table><td></x>",
+    "<font><div></font>",
+    "<p><span><div></p>",
+    '<div title="</div>">',
+    '<div =="></div>">',
+    "<div><![CDATA[</div>]]>",
+    "<div><style></div></style>",
+    "<div><textarea></div></textarea>",
+    "<div><script><!--<script></script></div></script>",
+    # A tag the tree builder ignores is no element an end tag of its name can close through.
+    "<span></caption><caption>",
+    # A formatting element closed by another end tag is opened again, and stays open.
+    "<button><b></button>",
+    "</style><a></button><button><font>",
+]
+
+
+@pytest.mark.parametrize("unit", NEVER_CLOSED)
+def test_end_tags_the_tree_builder_ignores_close_nothing(unit: str) -> None:
+    limit = mail_html.SCAN_DEPTH_MAX
+    kept_tags = []
+    for size in (250_000, 500_000, 1_000_000):  # the page grows, what is read does not
+        page = unit * (size // len(unit))
+        kept, was_cut = mail_html.cut_at_depth(page)
+        assert was_cut is True, size
+        kept_tags.append(tags(kept))
+    assert kept_tags[0] == kept_tags[1] == kept_tags[2]
+    # Every unit leaves one element open at least: no more units are read than the bound.
+    assert kept_tags[0] <= tags(unit) * limit
+
+
+@pytest.mark.parametrize("unit", [NEVER_CLOSED[0], "<x><div></x>", "<b><div></b>", "<div </div>"])
+def test_a_page_of_ignored_end_tags_hands_the_sanitiser_no_more_than_the_bound(
+    monkeypatch: pytest.MonkeyPatch, unit: str
+) -> None:
+    given, _ = watched_sanitiser(monkeypatch)
+    page = unit * (500_000 // len(unit))
+    kept, _ = mail_html.cut_at_depth(page)
+    got = sanitised(page)
+    assert got.truncated is True
+    assert given[0] == kept
+    assert tags(given[0]) <= tags(unit) * mail_html.SCAN_DEPTH_MAX
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "<div </div>",
+        "<div><!--</div>-->",
+        '<div title="</div>">',
+        "<div title='</div>'>",
+        '<div ="></div>">',
+        "<div><![CDATA[</div>]]>",
+        "<div><style></div></style>",
+        "<div><textarea></div></textarea>",
+        "<div><script><!--<script></script></div></script>",
+        "<div><!--></div>",
+        "<div><!---></div>",
+        "<div><!-- x --!></div>",
+        "<div title=a></div>",
+        '<div title="a>b"></div>',
+        "<div><? x ></div>",
+        "<div></ x></div>",
+        "<div><script>a<b</script></div>",
+        "<div><script><!--<script></script>--></script></div>",
+        "<div><STYLE>p > b {}</Style></div>",
+    ],
+)
+def test_the_scan_reads_tags_as_the_tokenizer_does(unit: str) -> None:
+    """A unit the scan reads as leaving no `div` open is one the library nests in nothing."""
+    closed = not mail_html.cut_at_depth(unit * 20_000)[1]
+    written = mail_html.nh3.clean(
+        "".join(unit.replace("</div>", f"{digit}</div>", 1) for digit in "012"),
+        tags={"div"},
+        clean_content_tags=set(),
+        attributes={},
+    )
+    assert closed is (Nesting("div", written).deepest <= 1), written
+
+
+def test_end_tags_that_close_through_inline_elements_keep_an_ordinary_page_whole() -> None:
+    words, units = [], []
+    for i in range(2500):
+        words += [f"Bold{i}", f"Span{i}", f"Cell{i}", f"Item{i}", f"Para{i}"]
+        units.append(
+            f"<b><div>Bold{i}</div></b><div><span>Span{i}</div>"
+            f"<table><tr><td><span>Cell{i}</td></tr></table>"
+            f"<ul><li><span>Item{i}</li></ul><p><span>Para{i}</p>"
+        )
+    page = "".join(units)
+    assert len(page) > 250_000
+    assert mail_html.cut_at_depth(page) == (page, False)
+    got = sanitised(page)
+    assert got.truncated is False
+    assert set(words) <= words_of(got.text)
+
+
 # Three ordinary large mails of the review, made here: each comes out whole.
 
 
@@ -739,7 +869,82 @@ def marketing() -> tuple[str, list[str]]:
     return "<table>" + "".join(cells) + "</table>", words
 
 
-@pytest.mark.parametrize("make", [newsletter, thread, marketing])
+def svg_logo() -> tuple[str, list[str]]:
+    """An inline `<svg>` logo of 2,000 paths with its title and style, then paragraphs."""
+    paths = "".join(f'<path class="a" d="M{i} 0L{i} 10Z"/>' for i in range(2000))
+    logo = (
+        '<div><svg width="120" height="30" viewBox="0 0 120 30"><title>Logo</title>'
+        f"<style>.a{{fill:#123456}} g > path {{stroke:none}}</style><g>{paths}</g></svg></div>"
+    )
+    words = [f"Paragraph{i}" for i in range(2800)]
+    body = "".join(
+        f"<p>{word}, a sentence of the letter that follows the logo.</p>" for word in words
+    )
+    return logo + body, words
+
+
+def math_formula() -> tuple[str, list[str]]:
+    """An inline `<math>` formula in each of 2,000 paragraphs."""
+    words, paragraphs = [], []
+    for i in range(2000):
+        words.append(f"Formula{i}")
+        paragraphs.append(
+            f"<p>Formula{i}: <math><mi>x</mi><mo>=</mo><mfrac><mn>{i}</mn><mn>2</mn></mfrac>"
+            "<msup><mi>y</mi><mn>2</mn></msup></math> as computed.</p>"
+        )
+    return "".join(paragraphs), words
+
+
+def outlook() -> tuple[str, list[str]]:
+    """Outlook's markup: a style sheet in a comment, conditional comments, and 3,000 unclosed
+    `<p class=MsoNormal>` each with an `<o:p>`, some written `<o:p/>`."""
+    words = [f"Outlook{i}" for i in range(3000)]
+    head = (
+        '<html xmlns:o="urn:schemas-microsoft-com:office:office"><head>'
+        '<meta http-equiv=Content-Type content="text/html; charset=utf-8">'
+        "<style><!-- p.MsoNormal {margin:0cm; font-family:Calibri} --></style>"
+        "<!--[if gte mso 9]><xml><o:shapedefaults v:ext=edit spidmax=1026 /></xml><![endif]-->"
+        "</head><body lang=EN-US link=blue><div class=WordSection1>"
+    )
+    lines = []
+    for i, word in enumerate(words):
+        close = "<o:p/>" if i % 3 == 0 else "<o:p></o:p>"
+        lists = "<![if !supportLists]><span>-</span><![endif]>" if i % 5 == 0 else ""
+        lines.append(
+            f"<p class=MsoNormal>{lists}<span style='font-size:11pt'>{word} text</span>{close}"
+        )
+    return head + "".join(lines) + "</div></body></html>", words
+
+
+def gmail() -> tuple[str, list[str]]:
+    """Gmail's `<div dir="ltr">` nesting: twelve replies, each quoting the one before."""
+    words, page = [], ""
+    for i in range(12):
+        lines = [f"Gmail{i}line{j}" for j in range(900)]
+        words += lines
+        page += '<div dir="ltr">' + "".join(f"<div>{line}<br></div>" for line in lines)
+        page += (
+            '<br><div class="gmail_quote"><div dir="ltr" class="gmail_attr">On a day, someone '
+            'wrote:<br></div><blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex">'
+        )
+    return page + "</blockquote></div></div>" * 12, words
+
+
+def unclosed_items() -> tuple[str, list[str]]:
+    """2,000 list items in each of four lists, none closed."""
+    words, lists = [], []
+    for n in range(4):
+        items = [f"List{n}item{i}" for i in range(2000)]
+        words += items
+        lists.append(
+            "<ul>" + "".join(f"<li>{item}, one line of the list" for item in items) + "</ul>"
+        )
+    return "".join(lists), words
+
+
+@pytest.mark.parametrize(
+    "make", [newsletter, thread, marketing, svg_logo, math_formula, outlook, gmail, unclosed_items]
+)
 def test_ordinary_large_mails_are_not_cut(make: Any) -> None:
     page, words = make()
     assert len(page) > 250_000

@@ -156,8 +156,47 @@ _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 # A tag and its name as the tokenizer reads them: the name runs to a space, a `/` or a `>`, so
 # `<p-x>` is an element of its own and not a paragraph. Only A to Z are lowered, as there: the
 # Kelvin sign is lowered to `k` by Python and by no tokenizer.
-_OPENING = re.compile(r"<(/?)([a-zA-Z][^\t\n\f\r />]*)")
+_NAME = re.compile(r"[a-zA-Z][^\t\n\f\r />]*+")
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+# The rest of a tag after its name, to the `>` that ends it, as the tokenizer reads it (review of
+# PR #179, N2): attributes, each a name (which may begin with `=` and hold quotes and `<`) and
+# perhaps a value, quoted or not. A `>` ends the tag anywhere but inside a quoted value, so
+# `<div </div>` is one start tag and `<div title="</div>">` another. Each piece is possessive and
+# begins with a character no other piece begins with: one pass, no backtracking.
+_TAG_REST = re.compile(
+    r"(?:[\t\n\f\r /]++"
+    r"|(?:=[^\t\n\f\r />=]*+|[^\t\n\f\r />=]++)"
+    r"(?:[\t\n\f\r ]*+=[\t\n\f\r ]*+"
+    r"""(?:"[^"]*+"|'[^']*+'|[^\t\n\f\r >"'][^\t\n\f\r >]*+|(?=>)))?+"""
+    r")*+>"
+)
+_COMMENT_END = re.compile(r"--!?>")
+_MARKUP = re.compile(r"<[a-zA-Z/!?]")
+# The elements whose content the tokenizer reads as text up to their own end tag, when the tree
+# builder opens them as HTML elements. In `<svg>` or `<math>` they are elements like any other
+# and their content is markup.
+_RAW_TEXT = frozenset(
+    [
+        "iframe",
+        "noembed",
+        "noframes",
+        "noscript",
+        "plaintext",
+        "script",
+        "style",
+        "textarea",
+        "title",
+        "xmp",
+    ]
+)
+_RAW_END = {
+    name: re.compile(rf"</{name}(?=[\t\n\f\r />])", re.IGNORECASE | re.ASCII) for name in _RAW_TEXT
+}
+# What moves the tokenizer between the states of a script's content: `<!--` escapes it, a
+# `<script` inside the escape escapes it twice, and `</script` ends it only outside the second.
+_SCRIPT_STATES = re.compile(
+    r"<!--(-*>)?|--+>|<(/?)script(?=[\t\n\f\r />])", re.IGNORECASE | re.ASCII
+)
 # What follows the name of a start tag written plainly, up to its `>`: attributes without a
 # value, or with one that holds no quote and no angle bracket. Two such tags written alike are
 # the same element to the tree builder; of any other tag nothing is assumed.
@@ -217,8 +256,73 @@ _KIND = {
     "thead": "section",
     "tfoot": "section",
 }
-_BUTTON_SCOPE = frozenset(
-    ["applet", "button", "caption", "html", "marquee", "object", "table", "td", "th", "template"]
+# The scope fences of the HTML standard: an end tag of a block closes nothing below one of them.
+# `select` is one here too, though not in the standard: what stands below a select is closed by
+# no end tag in the scan.
+_SCOPE = frozenset(
+    [
+        "applet",
+        "caption",
+        "html",
+        "marquee",
+        "object",
+        "table",
+        "td",
+        "th",
+        "template",
+        "select",
+        "mi",
+        "mo",
+        "mn",
+        "ms",
+        "mtext",
+        "annotation-xml",
+        "foreignobject",
+        "desc",
+        "title",
+    ]
+)
+_BUTTON_SCOPE = _SCOPE | {"button"}
+# The blocks whose start tag closes the nearest open `p` in button scope, as `<p>` does.
+_KIND.update(
+    dict.fromkeys(
+        [
+            "address",
+            "article",
+            "aside",
+            "blockquote",
+            "center",
+            "details",
+            "dialog",
+            "dir",
+            "div",
+            "dl",
+            "fieldset",
+            "figcaption",
+            "figure",
+            "footer",
+            "form",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "header",
+            "hgroup",
+            "listing",
+            "main",
+            "menu",
+            "nav",
+            "ol",
+            "pre",
+            "search",
+            "section",
+            "summary",
+            "ul",
+        ],
+        "block",
+    )
 )
 _CLOSES = {
     "p": ("p",),
@@ -228,10 +332,15 @@ _CLOSES = {
     "cell": ("p", "cell"),
     "row": ("p", "cell", "row"),
     "section": ("p", "cell", "row", "section"),
+    "block": ("p",),
 }
-# A cell, a row or a section outside a table (or a template) is ignored by the tree builder in
-# body: such a tag is not counted while the estimate holds no `table` and no `template` open.
-_TABLE_ONLY = frozenset({"td", "th", "tr", "tbody", "thead", "tfoot"})
+# A cell, a row, a section, a caption or a column group outside a table (or a template) is
+# ignored by the tree builder in body: such a tag is not counted while the estimate holds no
+# `table` and no `template` open. Nor is a `head` or a `frame`, which it ignores in HTML. An
+# element the estimate holds and the tree builder does not would let an end tag of its name
+# close, in the estimate, the elements opened above it (`<span></caption><caption>`).
+_TABLE_ONLY = frozenset({"td", "th", "tr", "tbody", "thead", "tfoot", "caption", "colgroup"})
+_IGNORED = frozenset({"head", "frame"})
 # What a table holds itself. Any other tag that stands directly in a table (a `table` open, no
 # cell, caption or template open in it) is moved in front of the table by the tree builder, and
 # the library inserts each such node in front of its sibling at a cost that grows with the
@@ -282,61 +391,337 @@ _FORMATTING = frozenset(
         "u",
     ]
 )
+# What an end tag closes in the estimate (review of PR #179, N2): never more than the tree
+# builder closes, so a page whose end tags close nothing for the tree builder grows the estimate
+# as it grows the tree. Each end tag closes the nearest open element of its name and all those
+# above it, and only when none of its fences stands above that element; else it closes nothing.
+# - the blocks, `dd`, `dt`, the headings (any level ends any), `applet`, `marquee`, `object`
+#   and `caption` are fenced by `_SCOPE`; `li` by `_SCOPE` and the lists; `p` by `_BUTTON_SCOPE`;
+# - the parts of a table by a table, a template, `html` and a select;
+# - every other name, the formatting elements among them, by the special elements of the HTML
+#   standard: the tree builder ignores `</x>` and `</span>` when a `div` stands above the `x` or
+#   the `span`, and it moves blocks rather than close them for a `</b>` with a block above it
+#   (the adoption agency), which the estimate does not follow;
+# - `colgroup` and `form` close only when they are the top of the estimate, `body`, `html`
+#   and `br` never (`</br>` is a `<br>`).
+_SPECIAL = _SCOPE | frozenset(
+    [
+        "address",
+        "area",
+        "article",
+        "aside",
+        "base",
+        "basefont",
+        "bgsound",
+        "blockquote",
+        "body",
+        "br",
+        "button",
+        "center",
+        "col",
+        "colgroup",
+        "dd",
+        "details",
+        "dir",
+        "div",
+        "dl",
+        "dt",
+        "embed",
+        "fieldset",
+        "figcaption",
+        "figure",
+        "footer",
+        "form",
+        "frame",
+        "frameset",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "head",
+        "header",
+        "hgroup",
+        "hr",
+        "iframe",
+        "img",
+        "input",
+        "keygen",
+        "li",
+        "link",
+        "listing",
+        "main",
+        "menu",
+        "meta",
+        "nav",
+        "noembed",
+        "noframes",
+        "noscript",
+        "ol",
+        "p",
+        "param",
+        "plaintext",
+        "pre",
+        "script",
+        "search",
+        "section",
+        "source",
+        "style",
+        "summary",
+        "tbody",
+        "textarea",
+        "tfoot",
+        "thead",
+        "tr",
+        "track",
+        "ul",
+        "wbr",
+        "xmp",
+    ]
+)
+_HEADINGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+_HEADING = "h1 to h6"  # the key of the headings in the estimate: no tag name holds a space
+_FENCES = {
+    "special": _SPECIAL,
+    "scope": _SCOPE,
+    "list": _SCOPE | {"ol", "ul"},
+    "table": frozenset({"html", "table", "template", "select"}),
+}
+_END_IN_SCOPE = frozenset(
+    {name for name, kind in _KIND.items() if kind in ("block", "dd") and name != "form"}
+    | {"applet", "marquee", "object", "caption"}
+)
+_END_IN_TABLE = frozenset({"table", "tbody", "thead", "tfoot", "tr", "td", "th"})
+_END_ON_TOP = frozenset({"colgroup", "form"})
+_END_NEVER = frozenset({"body", "html", "br"})
+# The start tags before which the tree builder does not open again the formatting elements it
+# holds: the blocks, the items, the parts of a table, and what belongs in a head.
+_NO_REOPEN = (
+    (frozenset(_KIND) - {"option"})
+    | _TABLE_PARTS
+    | _IGNORED
+    | frozenset(
+        [
+            "base",
+            "basefont",
+            "bgsound",
+            "body",
+            "frameset",
+            "hr",
+            "html",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "template",
+            "track",
+        ]
+    )
+)
+
+
+def _end_rule(name: str) -> str:
+    """The fence of an end tag of `name`, as `_FENCES` names them."""
+    if name in _END_IN_SCOPE:
+        return "scope"
+    if name == "li":
+        return "list"
+    if name in _END_IN_TABLE:
+        return "table"
+    return "special"
+
+
+def _comment_end(text: str, start: int) -> int:
+    """Where the comment that opens at `start` ends: `<!-->` and `<!--->` end at once."""
+    after = start + 4
+    if text.startswith(">", after):
+        return after + 1
+    if text.startswith("->", after):
+        return after + 2
+    found = _COMMENT_END.search(text, after)
+    return found.end() if found else len(text)
+
+
+def _script_end(text: str, start: int) -> int:
+    """Where the end tag of a script whose content begins at `start` stands."""
+    state = 0  # 0 its content, 1 escaped by `<!--`, 2 escaped twice by a `<script` in that
+    for found in _SCRIPT_STATES.finditer(text, start):
+        if found[0].startswith("<!--") and found[1] is None:
+            state = state or 1
+        elif found[0].startswith(("<!--", "-")):
+            state = 0
+        elif found[2]:
+            if state < 2:
+                return found.start()
+            state = 1
+        elif state == 1:
+            state = 2
+    return len(text)
+
+
+def _raw_end(text: str, name: str, start: int) -> int:
+    """Where the end tag of the raw text element `name` whose content begins at `start` stands,
+    or the end of `text`."""
+    if name == "script":
+        return _script_end(text, start)
+    found = None if name == "plaintext" else _RAW_END[name].search(text, start)
+    return found.start() if found else len(text)
+
+
+def _only_text(text: str, start: int, end: int) -> bool:
+    """Whether `text[start:end]` read as markup holds no tag: only text, and comments or CDATA
+    sections that end inside it. Then it is the same read as text or as markup."""
+    while found := _MARKUP.search(text, start, end):
+        at = found.start()
+        if text.startswith("<!--", at):
+            start = _comment_end(text, at)
+        elif text.startswith("<![CDATA[", at):
+            closing = text.find("]]>", at + 9, end)
+            start = closing + 3 if closing >= 0 else end + 1
+        else:
+            return False
+        if start > end:
+            return False
+    return True
 
 
 def cut_at_depth(text: str) -> tuple[str, bool]:
     """`text` up to the tag that would open more than SCAN_DEPTH_MAX elements at once, open
     again more than SCAN_REOPENED_MAX formatting elements, or be the tag past SCAN_FOSTERED_MAX
-    that stands directly in a table, and whether it was cut. A linear estimate: start tags are
-    counted but for the voids and the narrow rules of `_CLOSES` and `_TABLE_ONLY`, none of
-    which holds once `<svg>` or `<math>` was seen; an end tag closes the nearest open element
-    of its name and all those above it. A formatting element is held from its start tag to an
-    end tag of its name, and every tag in between may open again all those that are held. Of
+    that stands directly in a table, and whether it was cut. A linear estimate, read as the
+    tokenizer reads the page (`_TAG_REST`, comments, raw text): start tags are counted but for
+    the voids and the narrow rules of `_CLOSES` and `_TABLE_ONLY`, none of which holds once
+    `<svg>` or `<math>` was seen; an end tag closes what `_FENCES` lets it close, never more
+    than the tree builder. A formatting element is held from its start tag to an end tag of its
+    name that ends it, and every tag in between may open again all those that are held. Of
     start tags written alike three are held, as the tree builder holds three elements that are
-    alike: a page that never closes its `<b>` is not one that grows."""
+    alike: a page that never closes its `<b>` is not one that grows. After `<svg>` or `<math>`
+    the scan cannot tell whether a `<style>` or a `<![CDATA[` is read as text or as markup: the
+    page is cut there unless both readings hold the same tags."""
     open_names: list[str] = []
-    counts: dict[str, int] = {}
+    where: dict[str, list[int]] = {}  # per name: where in open_names its elements stand
+    fenced: dict[str, list[int]] = {rule: [] for rule in _FENCES}  # where the fences stand
     contexts: list[int] = []  # where in open_names a table, a cell, a caption, a template stand
     scopes: list[int] = []  # where in open_names a `p` or one of _BUTTON_SCOPE stands
-    held: dict[str, list[str | None]] = {}  # per name: the start tags held, as written if plain
+    # Per name: the start tags held, each as [written if plain, whether its element is open].
+    held: dict[str, list[list]] = {}
+    open_held: list[list | None] = []  # beside open_names: the held start tag of each, if any
     alike: dict[str, int] = {}
+    reopening: set[str] = set()  # the names of which some are held
     holding = reopened = fostered = 0
     foreign = False
 
+    def open_element(name: str, entry: list | None = None) -> None:
+        position = len(open_names)
+        if name in _TABLE_CONTEXT:
+            contexts.append(position)
+        if name == "p" or name in _BUTTON_SCOPE:
+            scopes.append(position)
+        for fence, names in _FENCES.items():
+            if name in names:
+                fenced[fence].append(position)
+        open_names.append(name)
+        open_held.append(entry)
+        where.setdefault(_HEADING if name in _HEADINGS else name, []).append(position)
+
     def close_top() -> None:
-        counts[open_names.pop()] -= 1
+        name = open_names.pop()
+        entry = open_held.pop()
+        if entry is not None:
+            entry[1] = False
+        where[_HEADING if name in _HEADINGS else name].pop()
+        for fence in fenced.values():
+            if fence and fence[-1] == len(open_names):
+                fence.pop()
         if contexts and contexts[-1] == len(open_names):
             contexts.pop()
         if scopes and scopes[-1] == len(open_names):
             scopes.pop()
 
-    for found in _OPENING.finditer(text):
-        name = found[2].translate(_ASCII_LOWER)
-        if found[1] and held.get(name):
-            ended = held[name].pop()
+    def fenced_off(key: str, rule: str) -> bool:
+        """Whether an element of `key` is open with a fence of `rule` above the nearest one."""
+        fence = fenced[rule]
+        return bool(where.get(key) and fence and fence[-1] > where[key][-1])
+
+    def close_to(key: str) -> None:
+        """Closes the nearest open element of `key` and all above it."""
+        bottom = where[key][-1]
+        while len(open_names) > bottom:
+            close_top()
+
+    at = 0
+    while (start := text.find("<", at)) >= 0:
+        after = start + 1
+        closing = text.startswith("/", after)
+        named = _NAME.match(text, after + closing)
+        if named is None:
+            if text.startswith("!--", after):
+                at = _comment_end(text, start)
+            elif text.startswith("![CDATA[", after) and foreign:
+                # Text to `]]>` in foreign content, a comment to the first `>` elsewhere.
+                ends = text.find("]]>", after), text.find(">", after)
+                if ends[1] >= 0 and ends[1] != ends[0] + 2:
+                    return text[:start], True
+                at = ends[1] + 1 if ends[1] >= 0 else len(text)
+            elif closing and text.startswith(">", after + 1):
+                at = after + 2
+            elif text.startswith(("!", "?", "/"), after):
+                ends = text.find(">", after)
+                at = ends + 1 if ends >= 0 else len(text)
+            else:
+                at = after
+            continue
+        rest = _TAG_REST.match(text, named.end())
+        if rest is None:  # a tag open to the end of the page: the tokenizer drops it
+            break
+        at = rest.end()
+        name = named[0].translate(_ASCII_LOWER)
+        key = _HEADING if name in _HEADINGS else name
+        rule = _end_rule(name)
+        if closing and held.get(name) and not fenced_off(name, "special"):
+            ended = held[name].pop()[0]
             if ended is not None:
                 alike[ended] -= 1
             holding -= 1
+            if not held[name]:
+                reopening.discard(name)
         reopened += holding
         if reopened > SCAN_REOPENED_MAX:
-            return text[: found.start()], True
+            return text[:start], True
         if contexts and open_names[contexts[-1]] == "table" and name not in _TABLE_PARTS:
             fostered += 1
             if fostered > SCAN_FOSTERED_MAX:
-                return text[: found.start()], True
-        if found[1]:
-            if counts.get(name):
-                while open_names:
-                    last = open_names[-1]
+                return text[:start], True
+        if closing:
+            if name in _END_NEVER or not where.get(key):
+                continue
+            if name in _END_ON_TOP:
+                if open_names[-1] == name:
                     close_top()
-                    if last == name:
-                        break
+            elif name == "p":
+                if open_names[scopes[-1]] == "p":
+                    close_to("p")
+            elif not fenced_off(key, rule):
+                close_to(key)
+            continue
+        if name in _RAW_TEXT:
+            ends = _raw_end(text, name, at)
+            # In foreign content the same characters are markup: both readings must agree.
+            if foreign and not _only_text(text, at, ends):
+                return text[:start], True
+            if (
+                ends == len(text)
+                or (end_tag := _TAG_REST.match(text, ends + 2 + len(name))) is None
+            ):
+                break
+            at = end_tag.end()
             continue
         foreign = foreign or name in _FOREIGN
         if not foreign:
-            if name in _VOID:
+            if name in _IGNORED:
                 continue
-            if name in _TABLE_ONLY and not (counts.get("table") or counts.get("template")):
+            if name in _TABLE_ONLY and not (where.get("table") or where.get("template")):
                 continue
             for kind in _CLOSES.get(_KIND.get(name, ""), ()):
                 if kind == "p" and scopes and open_names[scopes[-1]] == "p":
@@ -347,27 +732,39 @@ def cut_at_depth(text: str) -> tuple[str, bool]:
                     close_top()
         elif name in _ITEMS and open_names and _ITEMS.get(open_names[-1]) == _ITEMS[name]:
             close_top()
+        if name not in _NO_REOPEN:
+            # The held formatting elements that another end tag closed are opened again here,
+            # where the tree builder opens them again, and stay open as they do there. At most
+            # `holding` steps, which `reopened` counted: linear in its cap.
+            for formatting in reopening:
+                for entry in held[formatting]:
+                    if not entry[1]:
+                        entry[1] = True
+                        open_element(formatting, entry)
+            if len(open_names) > SCAN_DEPTH_MAX:
+                return text[:start], True
+        if not foreign and name in _VOID:
+            continue
+        entry = None
         # An `a` ends the `a` before it: one is held at a time.
         if name in _FORMATTING and not (name == "a" and held.get("a")):
-            rest = _PLAIN_REST.match(text, found.end(), found.end() + PLAIN_TAG_MAX)
-            written = text[found.start() : rest.end()] if rest else None
+            plain = _PLAIN_REST.match(text, named.end(), named.end() + PLAIN_TAG_MAX)
+            written = text[start : plain.end()] if plain else None
             if written is not None and alike.get(written) == ALIKE_MAX:
                 # The first of the three leaves. At most `holding` steps, and this tag has
                 # just added as much to `reopened`: the scan stays linear in its cap.
-                held[name].remove(written)
+                entries = held[name]
+                del entries[next(i for i, entry in enumerate(entries) if entry[0] == written)]
             else:
                 holding += 1
                 if written is not None:
                     alike[written] = alike.get(written, 0) + 1
-            held.setdefault(name, []).append(written)
-        if name in _TABLE_CONTEXT:
-            contexts.append(len(open_names))
-        if name == "p" or name in _BUTTON_SCOPE:
-            scopes.append(len(open_names))
-        open_names.append(name)
-        counts[name] = counts.get(name, 0) + 1
+            entry = [written, True]
+            held.setdefault(name, []).append(entry)
+            reopening.add(name)
+        open_element(name, entry)
         if len(open_names) > SCAN_DEPTH_MAX:
-            return text[: found.start()], True
+            return text[:start], True
     return text, False
 
 
