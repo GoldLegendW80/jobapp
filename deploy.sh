@@ -2,7 +2,8 @@
 # Ship the app to the Jetson and run it there (platform module, SPEC-platform.md).
 #
 #   ./deploy.sh [deploy] [--env]   rsync the tree, build on the Jetson, migrate (one off container of
-#                                  the new image, the previous release still serving), compose up,
+#                                  the new image, the previous release still serving), the browser
+#                                  behind its host firewall (ops/browser-egress.sh), compose up,
 #                                  health. A migration that fails stops the deploy before anything
 #                                  restarts (ops/migrate.sh, issue #81)
 #   ./deploy.sh logs <service>     follow the logs of one service (last 200 lines first)
@@ -471,6 +472,23 @@ build_images() {
     rcompose --progress=quiet build "$svc" || die "build of $svc failed"
     record "build $svc" "$start"
   done
+  # The browser too (behind the `browser` profile); browser_egress decides whether it starts.
+  start=$SECONDS
+  rcompose --profile browser --progress=quiet build browser || die "build of browser failed"
+  record "build browser" "$start"
+}
+
+# browser_egress (browser B6): the browser starts only behind the host firewall of its egress
+# network. ops/browser-egress.sh creates its networks, then applies and checks the rules through
+# the root owned copy the owner installed once (sudo bash ops/browser-egress.sh install);
+# otherwise it removes the browser container and the rest of the stack deploys without it.
+browser_egress() {
+  step "browser behind its host firewall (ops/browser-egress.sh)"
+  if remote "cd $RDIR_Q && COMPOSE=$(printf '%q' "$RCOMPOSE") bash ops/browser-egress.sh deploy"; then
+    RCOMPOSE="$RCOMPOSE --profile browser"
+  else
+    warn "the browser is not started (above); everything else deploys"
+  fi
 }
 
 # migrate: ops/migrate.sh of the tree just synced, on the Jetson, BEFORE start_stack (issue #81).
@@ -649,6 +667,7 @@ cmd_deploy() {
   check_port
   build_images
   migrate
+  browser_egress
   start_stack
   health
   step "public URL"

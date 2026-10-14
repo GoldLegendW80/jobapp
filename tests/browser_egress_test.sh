@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+# Tests of ops/browser-egress.sh (browser B6, issue #230) that need no Jetson.
+#
+#   tests/browser_egress_test.sh
+#
+# Covers: the rules printed for review (every private range, DNS to the given resolvers only,
+# IPv6 dropped whole, bad bridge and resolver names refused), the resolvers read as Docker reads
+# them (systemd-resolved's upstream file behind 127.0.0.53, IPv6 and loopback servers left out,
+# junk refused, none found means no DNS), `deploy` against a fake docker (not installed, apply or
+# check failing, compose create failing: the browser removed and exit 1; both passing: exit 0,
+# nothing removed), root refused for every root command, the nightly backup naming no volume
+# (pg_dump only, so `browserprofiles` is never in it), and, with Docker, the real iptables of a
+# throwaway container's own network namespace (never the host's): apply twice gives one jump per
+# chain and the same rules, a user rule of DOCKER-USER kept, a new bridge replaces the old jump,
+# check passes then fails on a removed rule, on a rule put above the jump and on a bridge that
+# moved, --boot applies the recorded bridge with no Docker, uninstall leaves nothing.
+# Set EGRESS_TEST_DOCKER=0 to skip the Docker part.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+SCRIPT=ops/browser-egress.sh
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+passed=0
+step() { printf '\n== %s\n' "$*"; }
+ok() {
+  passed=$((passed + 1))
+  printf '   ok: %s\n' "$*"
+}
+fail() {
+  printf '   FAIL: %s\n' "$*" >&2
+  exit 1
+}
+run() { # run <expected exit> <cmd...>: output in $WORK/out
+  local want="$1" got=0
+  shift
+  "$@" >"$WORK/out" 2>&1 || got=$?
+  [[ "$got" == "$want" ]] || fail "exit $got, expected $want: $* -> $(head -c 600 "$WORK/out")"
+}
+out_has() { grep -qF -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 600 "$WORK/out")"; }
+out_lacks() { if grep -qF -- "$1" "$WORK/out"; then fail "output has '$1'"; fi; }
+
+step "rules: what is printed for review"
+run 0 bash "$SCRIPT" rules br-0123456789ab 192.168.1.1 9.9.9.9
+for net in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 \
+  192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 198.18.0.0/15 198.51.100.0/24 203.0.113.0/24 \
+  224.0.0.0/4 240.0.0.0/4; do
+  out_has "-A JOBAPP-EGRESS -d $net -j DROP"
+done
+for r in 192.168.1.1 9.9.9.9; do
+  out_has "-A JOBAPP-EGRESS -d $r/32 -p udp -m udp --dport 53 -j RETURN"
+  out_has "-A JOBAPP-EGRESS -d $r/32 -p tcp -m tcp --dport 53 -j RETURN"
+done
+[[ "$(grep -c -- '--dport 53' "$WORK/out")" == 4 ]] || fail "DNS passes to more than the two resolvers"
+dns="$(grep -n -- '--dport 53' "$WORK/out" | tail -n 1 | cut -d: -f1)"
+udp="$(grep -n -- '-A JOBAPP-EGRESS -p udp -j DROP' "$WORK/out" | head -n 1 | cut -d: -f1)"
+first_net="$(grep -n -- '-d 0.0.0.0/8 -j DROP' "$WORK/out" | head -n 1 | cut -d: -f1)"
+((dns < udp && udp < first_net)) || fail "order is DNS $dns, UDP drop $udp, ranges $first_net"
+[[ "$(grep -c -- '^-I DOCKER-USER 1 -i br-0123456789ab -j JOBAPP-EGRESS$' "$WORK/out")" == 2 ]] ||
+  fail "one DOCKER-USER jump per family expected"
+[[ "$(grep -c -- '^-I INPUT 1 -i br-0123456789ab -j JOBAPP-EGRESS-IN$' "$WORK/out")" == 2 ]] ||
+  fail "one INPUT jump per family expected"
+[[ "$(grep -c -- '^-A JOBAPP-EGRESS-IN -j DROP$' "$WORK/out")" == 2 ]] || fail "INPUT is not dropped whole in both families"
+sed -n '/^# IPv6$/,$p' "$WORK/out" | grep -x -- '-A JOBAPP-EGRESS -j DROP' >/dev/null || fail "IPv6 is not dropped whole"
+sed -n '/^# IPv6$/,$p' "$WORK/out" | grep -- '--dport 53' >/dev/null && fail "IPv6 lets DNS through"
+grep -q -- '-j ACCEPT' "$WORK/out" && fail "a rule accepts: the chains only return or drop"
+ok "every non public IPv4 range dropped after DNS to the two resolvers and the UDP drop; INPUT and IPv6 dropped whole; nothing accepted"
+run 0 bash "$SCRIPT" rules br-x
+out_lacks "--dport 53"
+out_has "-A JOBAPP-EGRESS -p udp -j DROP"
+ok "no resolver: no DNS passes (fail closed)"
+for bad in "" "br-0123456789abcdef" "br x" 'br;id' "br/0" "../x"; do
+  run 1 bash "$SCRIPT" rules "$bad" 192.168.1.1
+  out_has "usage:"
+done
+for bad in 256.1.1.1 010.1.1.1 1.2.3 1.2.3.4.5 "1.2.3.4;id" ::1 fd00::1 " 1.2.3.4" 1.2.3.04x ""; do
+  run 1 bash "$SCRIPT" rules br-x "$bad"
+  out_has "bad resolver"
+done
+ok "bad bridge names (too long, spaces, shell, slash) and bad resolvers (out of range, IPv6, junk) refused"
+
+step "resolvers: as Docker reads them"
+funcs="$WORK/funcs.sh"
+sed '/^main "\$@"$/d' "$SCRIPT" >"$funcs"
+resolv() { # resolv <resolv.conf text> [systemd file text]: the resolvers found
+  printf '%b' "$1" >"$WORK/resolv"
+  if [[ $# -ge 2 ]]; then printf '%b' "$2" >"$WORK/sd"; else rm -f "$WORK/sd"; fi
+  EGRESS_RESOLV="$WORK/resolv" EGRESS_SYSTEMD_RESOLV="$WORK/sd" bash -c "source '$funcs'; resolvers" | tr '\n' ' '
+}
+check_resolv() { # check_resolv <expected> <args of resolv...>
+  local want="$1" got
+  shift
+  got="$(resolv "$@")"
+  [[ "$got" == "$want" ]] || fail "resolvers of $(printf '%q ' "$@"): '$got', expected '$want'"
+}
+check_resolv "192.168.1.1 " "nameserver 192.168.1.1\nsearch home\n"
+check_resolv "192.168.1.1 " "nameserver 127.0.0.53\nsearch home\n" "nameserver 192.168.1.1\nnameserver 2a01:cb19::1\nsearch home\n"
+check_resolv "192.168.1.1 1.1.1.1 " "nameserver 127.0.0.53\n" "# c\nnameserver 192.168.1.1\nnameserver 192.168.1.1\nnameserver 1.1.1.1\n"
+check_resolv "10.0.0.2 " "nameserver 127.0.0.1\nnameserver 10.0.0.2\n" "nameserver 192.168.1.1\n"
+check_resolv "" "nameserver 127.0.0.53\n"
+check_resolv "" "nameserver 127.0.0.53\n" "nameserver 127.0.0.1\nnameserver ::1\n"
+check_resolv "" "nameserver ::1\n" "nameserver fd00::1\n"
+check_resolv "8.8.4.4 " "nameserver 999.1.1.1\nnameserver 1.2.3\nnameserver 8.8.4.4\n"
+check_resolv "" ""
+check_resolv "192.168.1.1 " "#nameserver 10.9.9.9\n nameserver 192.168.1.1\n"
+ok "systemd-resolved's upstream behind 127.0.0.53, loopback and IPv6 servers out, duplicates once, junk refused, none found: none"
+
+step "root commands refuse a user"
+for cmd in apply check install uninstall; do
+  run 1 bash "$SCRIPT" "$cmd"
+  out_has "needs root: sudo bash ops/browser-egress.sh $cmd"
+done
+ok "apply, check, install and uninstall exit 1 for a user and name the sudo command"
+
+step "deploy: the browser starts only when apply and check pass"
+mkdir -p "$WORK/bin"
+cat >"$WORK/bin/docker" <<'EOF'
+#!/usr/bin/env bash
+# Fake docker: records each call; compose config answers a project name; `run` plays the
+# installed copy as FAKE_COPY says (missing, applyfail, checkfail, ok); create fails on FAKE_CREATE=fail.
+echo "docker $*" >>"$FAKE_CALLS"
+case "$*" in
+  *" config --format json") printf '{\n  "name": "jobapp",\n  "services": {}\n}\n' ;;
+  *" create browser") [[ "${FAKE_CREATE:-}" != fail ]] || { echo "create failed" >&2; exit 1; } ;;
+  "run "*)
+    case "${FAKE_COPY:-ok}:${*: -1}" in
+      missing:*) echo "nsenter: failed to execute /usr/local/sbin/jobapp-browser-egress: No such file or directory" >&2; exit 127 ;;
+      applyfail:apply) echo "iptables-restore: line 3 failed" >&2; exit 1 ;;
+      checkfail:check) echo "browser-egress: IPv4 INPUT does not start with the jump" >&2; exit 1 ;;
+      *:apply) echo "egress rules applied on br-0123456789ab" ;;
+      *:check) echo "egress rules in place on br-0123456789ab (network jobapp_egress)" ;;
+    esac
+    ;;
+esac
+EOF
+chmod +x "$WORK/bin/docker"
+dep() { # dep <expected exit> [env assignments]
+  local want="$1"
+  shift
+  : >"$WORK/calls"
+  run "$want" env PATH="$WORK/bin:$PATH" FAKE_CALLS="$WORK/calls" "$@" \
+    COMPOSE="docker compose -f compose.yml --profile tunnel" bash "$SCRIPT" deploy
+}
+removed() { grep -qx "docker compose -f compose.yml --profile tunnel --profile browser rm -s -f browser" "$WORK/calls"; }
+dep 0
+out_has "browser: egress rules in place on br-0123456789ab (network jobapp_egress)"
+removed && fail "the browser was removed although the rules passed"
+grep -q "^docker run --rm --privileged --pid=host --network=host --entrypoint nsenter jobapp-browser:latest -t 1 -m -u -i -n -p -- /usr/local/sbin/jobapp-browser-egress apply$" "$WORK/calls" ||
+  fail "apply not run through the installed copy in the host's namespaces: $(cat "$WORK/calls")"
+create="$(grep -n "create browser" "$WORK/calls" | cut -d: -f1)" apply="$(grep -n " apply$" "$WORK/calls" | cut -d: -f1)" chk="$(grep -n " check$" "$WORK/calls" | cut -d: -f1)"
+((create < apply && apply < chk)) || fail "order is create $create, apply $apply, check $chk"
+ok "create (the networks), then apply, then check, through the root owned copy; exit 0, nothing removed"
+dep 1 FAKE_COPY=missing
+out_has "not started, the host firewall is not installed. Once, on the Jetson: sudo bash ~/jobapp/ops/browser-egress.sh install jobapp_egress"
+removed || fail "the browser was not removed when the firewall is missing"
+grep -q " check$" "$WORK/calls" && fail "check ran after a failed apply"
+dep 1 FAKE_COPY=applyfail
+out_has "not started, apply failed: iptables-restore: line 3 failed"
+removed || fail "the browser was not removed after a failed apply"
+dep 1 FAKE_COPY=checkfail
+out_has "not started, check failed: browser-egress: IPv4 INPUT does not start with the jump"
+removed || fail "the browser was not removed after a failed check"
+dep 1 FAKE_CREATE=fail
+grep -q "^docker run" "$WORK/calls" && fail "apply ran after a failed create"
+run 1 bash "$SCRIPT" deploy
+out_has "set COMPOSE"
+ok "not installed, apply failing, check failing: the browser removed, exit 1 with the reason; create failing: nothing applied"
+
+step "backups: the browser profiles are never in them"
+# The nightly backup is pg_dump of the database only (ops/db.sh), never a volume: the profiles
+# (logins) are out by construction (SPEC-browser, "Persistent profiles and logins").
+grep -q "pg_dump" ops/db.sh || fail "ops/db.sh no longer backs up with pg_dump"
+grep -Eqi "browserprofiles|docker (volume|run)[^|]*-v |tar .*volumes" ops/db.sh &&
+  fail "ops/db.sh reads a volume: the browser profiles must stay out of every backup"
+grep -qi "browserprofiles" deploy.sh .github/workflows/deploy.yml ops/previous.sh &&
+  fail "a deploy or backup script names the browser profiles volume"
+ok "ops/db.sh backs up with pg_dump only and names no volume; no deploy script names browserprofiles"
+
+if [[ "${EGRESS_TEST_DOCKER:-1}" == 1 ]]; then
+  step "real iptables in a throwaway container's own network namespace"
+  # Never the host's: the container has its own namespace, NET_ADMIN there only. A fake docker
+  # answers `network inspect` with BRIDGE, read from a file the test rewrites.
+  cat >"$WORK/inner.sh" <<'EOF'
+set -euo pipefail
+apk add --no-cache -q bash iptables ip6tables >/dev/null
+mkdir -p /fake/bin
+for t in iptables ip6tables iptables-restore ip6tables-restore; do
+  ln -sf "/sbin/${t/tables/tables-legacy}" "/fake/bin/$t" 2>/dev/null || ln -sf "$(command -v "${t/tables/tables-legacy}")" "/fake/bin/$t"
+done
+cat >/fake/bin/docker <<'D'
+#!/bin/sh
+case "$*" in
+  "network inspect"*) [ -s /fake/bridge ] && printf '%s|0123456789abcdef\n' "$(cat /fake/bridge)" || exit 1 ;;
+  info) exit 0 ;;
+esac
+D
+cat >/fake/bin/install <<'D'
+#!/bin/sh
+cp "$7" "$8" && chmod 0755 "$8"
+D
+chmod +x /fake/bin/docker /fake/bin/install
+export PATH="/fake/bin:$PATH" EGRESS_ROOT=/fake/root EGRESS_RESOLV=/fake/resolv EGRESS_SYSTEMD_RESOLV=/fake/sd
+printf 'nameserver 127.0.0.53\n' >/fake/resolv
+printf 'nameserver 192.168.1.1\nnameserver 2a01:cb19::1\n' >/fake/sd
+S=/repo/ops/browser-egress.sh
+C=/fake/root/usr/local/sbin/jobapp-browser-egress
+say() { printf 'STEP %s\n' "$*"; }
+saved() { iptables-save -t filter | grep -v '^[#:]' | grep -v '^COMMIT'; ip6tables-save -t filter | grep -v '^[#:]' | grep -v '^COMMIT'; }
+jumps() { saved | grep -c -- '-j JOBAPP-EGRESS' || true; }
+
+iptables -N DOCKER-USER
+iptables -I FORWARD -j DOCKER-USER
+iptables -A DOCKER-USER -s 203.0.113.9/32 -j DROP   # the owner's own rule, kept
+printf '0123456789ab' | sed 's/^/br-/' >/fake/bridge
+bash "$S" install >/dev/null
+say "installed"
+"$C" check >/dev/null && say "check passes"
+first="$(saved)"
+"$C" apply >/dev/null
+[ "$(saved)" = "$first" ] && say "second apply identical"
+[ "$(jumps)" = 4 ] && say "four jumps"
+iptables -S DOCKER-USER | grep -- '-s 203.0.113.9/32 -j DROP' >/dev/null && say "user rule kept"
+[ "$(iptables -S DOCKER-USER | sed -n 2p)" = "-A DOCKER-USER -i br-0123456789ab -j JOBAPP-EGRESS" ] && say "jump first"
+ip6tables -S DOCKER-USER >/dev/null && say "ip6 DOCKER-USER made"
+iptables -D JOBAPP-EGRESS -d 192.168.0.0/16 -j DROP
+"$C" check >/dev/null 2>&1 || say "check fails on a removed rule"
+"$C" apply >/dev/null && "$C" check >/dev/null && say "apply repairs"
+iptables -I INPUT 1 -j ACCEPT
+"$C" check >/dev/null 2>&1 || say "check fails on a rule above the jump"
+"$C" apply >/dev/null && "$C" check >/dev/null && say "apply puts the jump first again"
+iptables -D INPUT -j ACCEPT
+printf 'br-ffffffffffff' >/fake/bridge
+"$C" check >/dev/null 2>&1 || say "check fails when the bridge moved"
+"$C" apply >/dev/null
+[ "$(jumps)" = 4 ] && ! saved | grep br-0123456789ab >/dev/null && say "new bridge replaces the old jumps"
+grep -qx 'BRIDGE=br-ffffffffffff' /fake/root/etc/jobapp-browser-egress.conf && grep -qx 'RESOLVERS=192.168.1.1' /fake/root/etc/jobapp-browser-egress.conf && say "recorded"
+grep -q 'Before=docker.service' /fake/root/etc/systemd/system/jobapp-browser-egress.service && say "boot unit"
+for t in iptables ip6tables; do
+  $t -D DOCKER-USER -i br-ffffffffffff -j JOBAPP-EGRESS; $t -D INPUT -i br-ffffffffffff -j JOBAPP-EGRESS-IN
+  $t -F JOBAPP-EGRESS; $t -X JOBAPP-EGRESS; $t -F JOBAPP-EGRESS-IN; $t -X JOBAPP-EGRESS-IN
+done
+: >/fake/bridge
+"$C" apply --boot >/dev/null
+[ "$(jumps)" = 4 ] && saved | grep 'br-ffffffffffff' >/dev/null && say "boot applies the recorded bridge without docker"
+"$C" uninstall >/dev/null
+[ "$(jumps)" = 0 ] && ! saved | grep JOBAPP >/dev/null && [ ! -e "$C" ] && [ ! -e /fake/root/etc/jobapp-browser-egress.conf ] && say "uninstall leaves nothing"
+iptables -S DOCKER-USER | grep -- '-s 203.0.113.9/32 -j DROP' >/dev/null && say "user rule kept after uninstall"
+EOF
+  docker run --rm --cap-add NET_ADMIN --network bridge --label jobapp-egress-test \
+    -v "$ROOT:/repo:ro" -v "$WORK/inner.sh:/inner.sh:ro" alpine:3.20 sh /inner.sh >"$WORK/out" 2>&1 ||
+    fail "the container run failed: $(tail -n 20 "$WORK/out")"
+  for s in "installed" "check passes" "second apply identical" "four jumps" "user rule kept" "jump first" \
+    "ip6 DOCKER-USER made" "check fails on a removed rule" "apply repairs" "check fails on a rule above the jump" \
+    "apply puts the jump first again" "check fails when the bridge moved" "new bridge replaces the old jumps" \
+    "recorded" "boot unit" "boot applies the recorded bridge without docker" "uninstall leaves nothing" \
+    "user rule kept after uninstall"; do
+    grep -qx "STEP $s" "$WORK/out" || fail "real iptables: '$s' missing: $(tail -n 30 "$WORK/out")"
+  done
+  ok "real iptables (legacy, as the Jetson): idempotent, user rule kept, check catches drift, bridge change, boot and uninstall"
+fi
+
+printf '\n%d checks passed\n' "$passed"

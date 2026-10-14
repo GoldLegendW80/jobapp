@@ -2334,7 +2334,7 @@ deploy_order() { # deploy_order <substring of the remote command that fails, or 
       echo "remote: $*" >>"$WORK/order"
       [[ -z "$failing" || "$*" != *"$failing"* ]]
     }
-    for stub in take_lock ssh_master preflight remote_lock sync_tree push_env check_port health warn_leftover_authkey; do
+    for stub in take_lock ssh_master preflight remote_lock sync_tree push_env check_port health warn_leftover_authkey browser_egress; do
       eval "$stub() { echo $stub >>\"\$WORK/order\"; }"
     done
     # shellcheck disable=SC2329 # called by the evaluated cmd_deploy
@@ -2353,9 +2353,13 @@ built="$(line_of "build renderer")" migrated="$(line_of "ops/migrate.sh")" upped
 [[ -n "$built" && -n "$migrated" && -n "$upped" && -n "$healthy" ]] || fail "a step is missing: $(cat "$WORK/order")"
 ((built < migrated && migrated < upped && upped < healthy)) ||
   fail "order is build $built, migrate $migrated, up $upped, health $healthy: $(cat "$WORK/order")"
+guarded="$(line_of "^browser_egress$")" browser_built="$(line_of "build browser")"
+[[ -n "$guarded" && -n "$browser_built" ]] || fail "the browser is not built or not guarded: $(cat "$WORK/order")"
+((browser_built < migrated && migrated < guarded && guarded < upped)) ||
+  fail "order is build browser $browser_built, migrate $migrated, browser_egress $guarded, up $upped"
 grep -q "exec -T api alembic" "$WORK/order" && fail "a migration still runs in the started api container"
 out_has "migrations: "
-ok "cmd_deploy: build api, worker, caddy, renderer, then ops/migrate.sh, then compose up --wait, then health"
+ok "cmd_deploy: build api, worker, caddy, renderer and browser, then ops/migrate.sh, then the browser's host firewall, then compose up --wait, then health"
 run 1 deploy_order "ops/migrate.sh"
 out_has "the migrations did not apply"
 out_has "the containers on fakejetson were not touched and still run the previous release"

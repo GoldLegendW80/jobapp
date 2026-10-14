@@ -11,7 +11,7 @@
 # Steps: record the boot id and the public URL; `sudo systemctl reboot`; wait for ssh to answer
 # with a new boot id (up to REBOOT_SSH_TIMEOUT_S, 300s); wait until api, caddy, db, redis and
 # tailscale are running and healthy (up to 300s more), noting the Jetson's uptime when they are;
-# run ./deploy.sh smoke; print the new URL, the boot time, the uptime when the stack was healthy
+# run ./deploy.sh smoke; check the browser's egress rules when installed (B6); print the new URL, the boot time, the uptime when the stack was healthy
 # and when the smoke passed. Pass: the stack healthy within REBOOT_LIMIT_S (120s) of boot and the
 # smoke green, the public URL unchanged. Exit 0 on pass, 1 otherwise.
 set -euo pipefail
@@ -100,6 +100,15 @@ smoke_ok=1
 ./deploy.sh smoke || smoke_ok=0
 smoke_at="$(uptime_s)"
 new_url="$(./deploy.sh url 2>/dev/null || echo none)"
+# The browser's host firewall (browser B6, ops/browser-egress.sh): once installed, its rules must
+# be back after a boot, before the browser runs. `check` runs as root through the installed copy,
+# in the host's namespaces, like the deploy runs it.
+egress="not installed"
+if r 'test -x /usr/local/sbin/jobapp-browser-egress'; then
+  egress="FAILED"
+  r 'docker run --rm --privileged --pid=host --network=host --entrypoint nsenter jobapp-browser:latest -t 1 -m -u -i -n -p -- /usr/local/sbin/jobapp-browser-egress check' &&
+    egress="in place"
+fi
 
 printf '\n== reboot check on %s\n' "$HOST"
 printf '   booted at          %s\n' "$booted"
@@ -107,6 +116,7 @@ printf '   stack healthy at   %ss after boot\n' "$healthy_at"
 printf '   smoke %s at    %ss after boot\n' "$( ((smoke_ok)) && echo passed || echo FAILED)" "$smoke_at"
 printf '   public URL before  %s\n' "$old_url"
 printf '   public URL now     %s\n' "$new_url"
+printf '   browser egress     %s\n' "$egress"
 printf '   memory             %s\n' "$(r "free -m | awk '/^Mem:/ {print \$3\"M used of \"\$2\"M, \"\$7\"M available\"}'")"
 if ((REBOOT == 0)); then
   ((smoke_ok)) || die "smoke failed"
@@ -114,6 +124,7 @@ if ((REBOOT == 0)); then
   exit 0
 fi
 ((smoke_ok)) || die "smoke failed after the reboot"
+[[ "$egress" != FAILED ]] || die "the browser's egress rules are not in place after the reboot"
 [[ "$new_url" == "$old_url" ]] || die "the public URL changed from $old_url to $new_url: the Funnel URL must survive a reboot"
 ((healthy_at <= LIMIT)) || die "the stack was healthy ${healthy_at}s after boot, over the ${LIMIT}s limit"
 say "PASS: the stack came back by itself, healthy ${healthy_at}s after boot (limit ${LIMIT}s), smoke green"

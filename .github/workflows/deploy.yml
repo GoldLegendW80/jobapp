@@ -172,6 +172,15 @@ jobs:
             fi
             echo "build $svc: $((SECONDS - start))s"
           done
+          # The browser (behind the `browser` profile) is built too; whether it starts is decided
+          # after the migrations, by its host firewall (ops/browser-egress.sh, browser B6).
+          start=$SECONDS
+          if ! $COMPOSE --profile browser --progress=plain build browser; then
+            echo "::error::build of browser failed: the running stack is untouched"
+            restore_previous
+            exit 1
+          fi
+          echo "build browser: $((SECONDS - start))s"
           echo "::endgroup::"
 
           echo "::group::backup before migrations"
@@ -233,6 +242,17 @@ jobs:
             fi
             exit 1
           }
+
+          # The browser starts only behind the host firewall of its egress network, installed once
+          # by the owner (sudo bash ops/browser-egress.sh install); otherwise it is removed and the
+          # rest deploys without it (browser B6).
+          echo "::group::browser behind its host firewall (ops/browser-egress.sh)"
+          if COMPOSE="$COMPOSE" bash ops/browser-egress.sh deploy; then
+            COMPOSE="$COMPOSE --profile browser"
+          else
+            echo "::warning::the browser is not started (above); everything else deploys"
+          fi
+          echo "::endgroup::"
 
           echo "::group::compose up --wait"
           $COMPOSE up -d --remove-orphans --wait --wait-timeout 180 || rollback "compose up did not become healthy"

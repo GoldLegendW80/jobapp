@@ -390,6 +390,7 @@ jobs:
           ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh
           ops/agent-test.sh tests/agent_test_test.sh
           ops/ship.sh tests/ship_test.sh
+          ops/browser-egress.sh tests/browser_egress_test.sh
       # Issue #18: the .env syntax check and where it runs (deploy.sh, deploy.yml, the smoke).
       - name: tests/env_check_test.sh
         id: env_check_test
@@ -457,6 +458,12 @@ jobs:
         id: ship_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/ship_test.sh
+      # Issue #230: the browser's host firewall (ops/browser-egress.sh): the rules, the resolvers,
+      # deploy against a fake docker, and real iptables in a throwaway container's own namespace.
+      - name: tests/browser_egress_test.sh
+        id: browser_egress_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
+        run: tests/browser_egress_test.sh
 
       # --- unit: e2e (groups apps and ingestion) -------------------------------------------
       # Playwright comes with the web dependencies. The pnpm version comes from packageManager

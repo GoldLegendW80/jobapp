@@ -1224,12 +1224,64 @@
 		},
 		{
 			"names": [
-				"clone",
-				"unshare",
-				"setns",
+				"clone"
+			],
+			"action": "SCMP_ACT_ALLOW",
+			"args": [
+				{
+					"index": 0,
+					"value": 235012096,
+					"op": "SCMP_CMP_MASKED_EQ"
+				}
+			],
+			"comment": "Chromium's namespace sandbox (B1, narrowed by B6): new user, PID and network namespaces without CAP_SYS_ADMIN; mount, cgroup, UTS and IPC namespaces stay refused",
+			"excludes": {
+				"arches": [
+					"s390",
+					"s390x"
+				]
+			}
+		},
+		{
+			"names": [
+				"clone"
+			],
+			"action": "SCMP_ACT_ALLOW",
+			"args": [
+				{
+					"index": 1,
+					"value": 235012096,
+					"op": "SCMP_CMP_MASKED_EQ"
+				}
+			],
+			"comment": "s390 parameter ordering for clone is different",
+			"includes": {
+				"arches": [
+					"s390",
+					"s390x"
+				]
+			}
+		},
+		{
+			"names": [
+				"unshare"
+			],
+			"action": "SCMP_ACT_ALLOW",
+			"args": [
+				{
+					"index": 0,
+					"value": 235012224,
+					"op": "SCMP_CMP_MASKED_EQ"
+				}
+			],
+			"comment": "Chromium's namespace sandbox (B1, narrowed by B6): new user, PID and network namespaces without CAP_SYS_ADMIN; mount, cgroup, UTS and IPC namespaces stay refused; time namespaces too"
+		},
+		{
+			"names": [
 				"chroot"
 			],
-			"action": "SCMP_ACT_ALLOW"
+			"action": "SCMP_ACT_ALLOW",
+			"comment": "Chromium's sandbox chroots to /proc/self/fdinfo/ inside its own user namespace (B1); outside one the kernel still asks for CAP_SYS_CHROOT, which the container lacks"
 		}
 	]
 }
