@@ -17,6 +17,7 @@ from app.ingestion import merge, review
 from app.profile import schemas
 from tests.agents.run_helpers import save_credential
 from tests.identity.api_helpers import Api
+from tests.ingestion import engine_helpers as eh
 from tests.ingestion import merge_helpers as mh
 from tests.ingestion.conftest import signed_in
 from tests.ingestion.extract_helpers import key, keyring, settings
@@ -450,3 +451,99 @@ def test_an_item_that_removes_something_is_accepted_on_its_own(
     assert accept(api, first, removal).status_code == 200
     assert stored(factory, me, "answers")["travel"] is None
     assert revisions(factory, me) == [(1, "answers"), (2, "answers")]
+
+
+# --- what the user already decided does not come back in a bulk accept ---------------------------
+
+
+def notice(text: str) -> tuple[str, str]:
+    """A document that says one notice period, and the fact a step stores for it."""
+    return f"My notice period is {text}.\n", text
+
+
+def read(
+    factory: Factory, me: uuid.UUID, settings: Settings, *values: str
+) -> tuple[uuid.UUID, list[uuid.UUID]]:
+    """A whole run over one document per value, each giving its value at `notice_period`."""
+    texts = [notice(value)[0] for value in values]
+    facts = [[("answers", "notice_period", value, value)] for value in values]
+    return mh.merged(factory, me, settings, texts, facts)
+
+
+def again(
+    factory: Factory, settings: Settings, me: uuid.UUID, documents: list[uuid.UUID]
+) -> uuid.UUID:
+    """The same documents read once more: the steps are reused, the merge runs again."""
+    run_id = eh.start(factory, me, documents)
+    eh.advance(factory, run_id, settings)
+    return run_id
+
+
+def test_a_value_the_user_replaced_at_accept_is_not_proposed_again(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    run_id, documents = read(factory, me, settings, "Three months")
+    (proposed,) = mh.proposals_of(factory, me, run_id)
+    done = accept(api, first, proposed.id, edited_value="One month")
+    assert done.status_code == 200
+    assert stored(factory, me, "answers")["notice_period"] == "One month"
+    before = revisions(factory, me)
+    second = again(factory, settings, me, documents)
+    assert mh.proposals_of(factory, me, second, status=None) == []
+    assert stored(factory, me, "answers")["notice_period"] == "One month"
+    assert revisions(factory, me) == before
+
+
+def test_the_losing_value_of_a_conflict_the_user_settled_is_not_proposed_again(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    run_id, documents = read(factory, me, settings, "Three months", "One month")
+    (proposed,) = mh.proposals_of(factory, me, run_id)
+    assert proposed.payload["conflict"]
+    assert accept(api, first, proposed.id, edited_value="One month").status_code == 200
+    before = revisions(factory, me)
+    second = again(factory, settings, me, documents)
+    assert mh.proposals_of(factory, me, second, status=None) == []
+    assert stored(factory, me, "answers")["notice_period"] == "One month"
+    assert revisions(factory, me) == before
+
+
+def test_neither_losing_value_of_a_three_value_conflict_comes_back(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    run_id, documents = read(factory, me, settings, "Three months", "One month", "Two months")
+    (proposed,) = mh.proposals_of(factory, me, run_id)
+    assert len(proposed.payload["conflict"]) == 2
+    assert accept(api, first, proposed.id, edited_value="Two months").status_code == 200
+    second = again(factory, settings, me, documents)
+    assert mh.proposals_of(factory, me, second, status=None) == []
+    assert stored(factory, me, "answers")["notice_period"] == "Two months"
+
+
+def test_a_new_value_for_a_key_the_user_decided_is_proposed_and_taken_in_bulk(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    run_id, _ = read(factory, me, settings, "Three months")
+    (proposed,) = mh.proposals_of(factory, me, run_id)
+    assert accept(api, first, proposed.id, edited_value="One month").status_code == 200
+    # Another document says something else: it is a new value, so it is proposed.
+    second, _ = read(factory, me, settings, "Two months")
+    (fresh,) = mh.proposals_of(factory, me, second)
+    assert fresh.payload["value"] == "Two months"
+    answer = bulk(api, first, second, "accept", "answers", [fresh.id])
+    assert answer.json()["decided"] == [str(fresh.id)]
+    assert stored(factory, me, "answers")["notice_period"] == "Two months"
+
+
+def test_a_rejected_value_and_a_rejected_conflict_still_do_not_come_back(
+    api: Api, first: str, me: uuid.UUID, factory: Factory, settings: Settings
+) -> None:
+    run_id, documents = read(factory, me, settings, "Three months")
+    (single,) = mh.proposals_of(factory, me, run_id)
+    assert api.post(f"/api/proposals/{single.id}/reject", token=first).status_code == 200
+    assert mh.proposals_of(factory, me, again(factory, settings, me, documents), status=None) == []
+    run_id, documents = read(factory, me, settings, "Four months", "Five months")
+    (conflict,) = mh.proposals_of(factory, me, run_id)
+    assert api.post(f"/api/proposals/{conflict.id}/reject", token=first).status_code == 200
+    assert mh.proposals_of(factory, me, again(factory, settings, me, documents), status=None) == []
+    assert stored(factory, me, "answers")["notice_period"] is None
