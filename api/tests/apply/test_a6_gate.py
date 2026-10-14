@@ -28,6 +28,7 @@ from app.apply.models import (
     ApplicationAnswer,
     ApplicationEvent,
     Authorisation,
+    ShotKind,
     State,
 )
 from app.documents import store
@@ -626,7 +627,7 @@ def test_a_cancelled_job_before_the_click_goes_back_to_ready(
     assert form.gate_clicks == []
 
 
-def test_a_failed_set_status_rolls_the_freeze_back_with_it(
+def test_a_failed_record_rolls_the_freeze_back_with_it(
     db: Session,
     factory: sessionmaker[Session],
     person_a: Person,
@@ -641,10 +642,10 @@ def test_a_failed_set_status_rolls_the_freeze_back_with_it(
         found.state = State.submitting  # as `arm` commits it
         s.commit()
 
-    def broken(*args: Any, **kwargs: Any) -> bool:
-        raise RuntimeError("set_status failed")
+    def broken(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("move failed")
 
-    monkeypatch.setattr(jobs_service, "set_status", broken)
+    monkeypatch.setattr(states, "move", broken)  # after the freeze, in the same transaction
     with factory() as s:
         with pytest.raises(RuntimeError):
             submit.record(s, app_id, State.submitted, AT)
@@ -662,11 +663,14 @@ def test_a_failed_record_ends_submit_unknown_with_the_versions_frozen(
 ) -> None:
     app_id = ready(db, factory, person_a, stub)
     assert approve(factory, person_a, app_id).passed
+    keep = shots.store
 
-    def broken(*args: Any, **kwargs: Any) -> bool:
-        raise RuntimeError("set_status failed")
+    def broken(s: Session, app: Any, kind: ShotKind, *rest: Any) -> Any:
+        if kind is ShotKind.after:  # the record's own screenshot, after the freeze
+            raise RuntimeError("store failed")
+        return keep(s, app, kind, *rest)
 
-    monkeypatch.setattr(jobs_service, "set_status", broken)
+    monkeypatch.setattr(shots, "store", broken)
     form = submit_ashby()
     assert run_submit(submit_services(factory, form, stub), app_id) == "submit_unknown"
     found = application(db, app_id)
@@ -982,6 +986,8 @@ def test_the_routes(
         assert api.post(f"{base}/retry", token=token_a).json()["code"] == "not_retryable"
         assert api.post(f"{base}/submitted", token=token_a).json()["code"] == "not_unknown"
         assert api.post(f"{base}/cancel", token=token_b).status_code == 404
+        for action in ("reject", "retry", "submitted"):
+            assert api.post(f"{base}/{action}", token=token_b).status_code == 404, action
         cancelled = api.post(f"{base}/cancel", token=token_a)
         assert cancelled.status_code == 200
         assert cancelled.json()["state"] == "cancelled"

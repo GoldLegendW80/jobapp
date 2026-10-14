@@ -10,6 +10,13 @@
   queued. 200 with the application `approved`; 409 `{detail, code}` for a refusal (the gate's
   codes), and for a stale hash `{detail, code: "stale", answers_hash, answers}` with the current
   fields.
+- PUT /api/applications/{id}/answers/{field_key} `{value}`: the person's own answer to one field
+  of the form (one left for them, `you_answer`, or one they override): source `person`, a new
+  hash, any approval void (`approved` goes back to `ready`); the submit lease refills and reads it
+  back, and a refill by the run keeps it. 200 with the approval view; 422 `{detail, code}` for an
+  unknown field (`unknown_field`: none, a file, a skipped widget) or a value that does not fit it
+  (`wrong_type`: a text for a text, select or combobox, at most 5000 characters; true or false for
+  a checkbox or a yes or no question); 409 `not_editable` once the app clicked or after an end.
 - POST /api/applications/{id}/reject, /cancel: `cancelled` (reject: the form as filled, before
   an approval; cancel: anything before the click).
 - POST /api/applications/{id}/submitted: "It was submitted" on `submit_unknown`.
@@ -61,6 +68,12 @@ class ApproveIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     answers_hash: str = Field(min_length=gate.HASH_HEX, max_length=gate.HASH_HEX)
+
+
+class AnswerIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: Annotated[str, Field(min_length=1, max_length=gate.ANSWER_MAX)] | bool
 
 
 class AnswerOut(BaseModel):
@@ -261,6 +274,40 @@ def approve(
         return _refusal(decision.code or "refused", state=decision.state.value)
     _enqueue_submit(request, wanted)
     return ApplicationOut.model_validate(_application(db, user, application_id))
+
+
+@router.put(
+    "/api/applications/{application_id}/answers/{field_key:path}",
+    response_model=ApprovalView,
+    responses={**_404, **_409, 422: {"model": GateRefusalOut, "description": "No such field"}},
+)
+def set_answer(
+    application_id: str,
+    field_key: str,
+    body: AnswerIn,
+    request: Request,
+    user: CurrentUser,
+    db: Db,
+) -> ApprovalView | JSONResponse:
+    """The person's own answer to one field; any approval of the form before it is void."""
+    wanted = _uuid_or_404(application_id)
+    try:
+        gate.set_answer(db, user.id, wanted, field_key, body.value, deps.clock(request))
+        db.commit()
+    except gate.NotFoundError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_APPLICATION) from None
+    except gate.InvalidAnswerError as exc:
+        db.rollback()
+        out = GateRefusalOut(detail=gate.SENTENCES[exc.code], code=exc.code)
+        return JSONResponse(status_code=422, content=out.model_dump(mode="json"), headers=NO_STORE)
+    except gate.RefusedError as exc:
+        db.rollback()
+        return _refusal(exc.code)
+    except jobs_service.JobBusyError:
+        db.rollback()
+        return _refusal("busy")
+    return read_approval(application_id, user, db)
 
 
 def _person(

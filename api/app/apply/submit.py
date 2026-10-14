@@ -4,9 +4,14 @@ application to `approved`. No model is called anywhere here.
 
 `submit` goes in this order; each step that stops ends the job before the click:
 
-1. Under the posting's row lock and the application's: still `approved`, and the hash of the
-   stored fields is still the one the gate approved (else back to `ready`, `stale`). The PDFs of
-   the versions the approval covered (never newer ones).
+1. Under the gate's locks (the posting's row, the person's apply lock, the application's row):
+   still `approved`; the gate's checks that can change after its decision pass again (`recheck`:
+   the approval not past its `APPLY_APPROVAL_TTL_S`, else back to `ready` with
+   `authorisation_expired`; never apply; duplicates, this application excluded, so a posting
+   applied or closed since, or the same role or form clicked since on another posting, ends
+   `blocked` or `posting_closed` as in `decide`; the caps); and the hash of the stored fields is
+   still the one the gate approved (else back to `ready`, `stale`). The PDFs of the versions the
+   approval covered (never newer ones).
 2. A lease of purpose `apply_submit` (the only one that carries the gate's capability, browser
    B5). Behind another person's lease it stays `approved`; the tick asks again.
 3. The form opened, read (`adapter.discover`, anchors and steps for the person first), and refilled
@@ -20,19 +25,24 @@ application to `approved`. No model is called anywhere here.
 4. The "before" screenshot again, the dwell (`DWELL_S`, the paced wait before a submit that the
    fake ATS's invisible check asks for), a fresh read checked the same way, whose submit ref is
    the one clicked.
-5. Under the locks again, just before the click: the kill switches (`APPLY_SUBMIT_ENABLED`, the
-   administrator's pause read from Redis just before): a switch off is `cancelled` with its code.
-   A rehearsal (`dry_run`) ends here as `rehearsed`. Otherwise `submitting` is committed, then
-   the one click: `gate_click` with the lease's capability on the adapter's submit element.
+5. Under the gate's locks again, just before the click: the kill switches
+   (`APPLY_SUBMIT_ENABLED`, the administrator's pause read from Redis just before): a switch off
+   is `cancelled` with its code. Then `recheck` again, as in step 1: the person's apply lock makes
+   two approved postings of one role go one at a time, and the second sees the first
+   `submitting` or `submitted`. A rehearsal (`dry_run`) ends here as `rehearsed`, so it reports
+   these refusals too. Otherwise `submitting` is committed, then the one click: `gate_click` with
+   the lease's capability on the adapter's submit element.
 6. The page is read every `POLL_S` until `CONFIRM_WAIT_S` (60 s, by the injected clock, and at
    most `MAX_POLLS` reads): the adapter's confirmation is `submitted`, the form's errors are
    `refused_by_site`, nothing is `submit_unknown`. Never a second click.
 7. `record`, in one transaction: for `submitted` and `submit_unknown` every sent version frozen
    (`documents.freeze(..., FreezeReason.apply, at)`, D14's contract, before `set_status`);
    for `submitted` the posting to `applied` through `set_status` (`via: "apply"`, `applied_on`
-   filled) unless it is already applied or later; the "after" screenshot; the event. If that
-   transaction fails (the freeze rolls back with it), a second one records `submit_unknown`
-   with `record_failed`, its freeze included.
+   filled) unless it is already applied or later, in a savepoint: if `set_status` fails, the
+   confirmed submission is still `submitted`, with the code `status_not_set` and an event, and
+   the posting keeps its status; the "after" screenshot; the event. If that transaction fails
+   (the freeze rolls back with it), a second one records `submit_unknown` with `record_failed`,
+   its freeze included.
 
 Once `submitting` is committed nothing moves the application to a state that frees its posting:
 a crash, a cancelled job or a failed record ends `submit_unknown` (shielded from the
@@ -42,6 +52,13 @@ application back to `ready` with `interrupted`: nothing was clicked.
 
 Nothing of an answer, a typed value, a screenshot, the token or the capability goes into a log,
 an event or the job's result: ids, codes and counts.
+
+Declared open points (each fails closed, toward not clicking):
+- a multi-select approved with more than one value never reads back as the same (`_shown` has
+  no single text to compare), so such a form ends `form_changed` and is never submitted by the
+  app; the person applies by hand;
+- `reset_interrupted` assumes one apply worker: it turns every `submitting` into
+  `submit_unknown`, including one a second live worker would still be clicking.
 """
 
 import asyncio
@@ -55,16 +72,16 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import gate, guardrails, run, shots, states
+from app.apply import caps, gate, guardrails, run, shots, states
 from app.apply.answers import Answer
 from app.apply.ats import adapter_for
 from app.apply.ats import base as ats_base
-from app.apply.models import Application, ShotKind, State
+from app.apply.models import Application, Authorisation, ShotKind, State
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.documents import freeze as documents
 from app.jobs import service as jobs_service
-from app.jobs.models import JobStatus
+from app.jobs.models import Job, JobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -161,14 +178,72 @@ def _stop(db: Session, application: Application, stop: Stop, now: datetime) -> N
     gate._event(db, application, "submit_stopped", now, state=stop.state.value, code=stop.code)
 
 
+def _locked(db: Session, application_id: uuid.UUID) -> tuple[Application, Job] | None:
+    """The application and its posting under the gate's locks, in its order (posting, person,
+    application), so the checks again before the click see what `decide` would see."""
+    user_id = db.execute(
+        sa.select(Application.user_id).where(Application.id == application_id)
+    ).scalar_one_or_none()
+    if user_id is None:
+        return None
+    try:
+        return gate.lock(db, user_id, application_id)
+    except gate.NotFoundError:
+        return None
+
+
+def _spent(db: Session, application: Application) -> Authorisation | None:
+    """The authorisation the gate spent on this approval: the latest one used."""
+    return db.execute(
+        sa.select(Authorisation)
+        .where(
+            Authorisation.application_id == application.id,
+            Authorisation.user_id == application.user_id,
+            Authorisation.used_at.is_not(None),
+        )
+        .order_by(Authorisation.used_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def recheck(db: Session, application: Application, posting: Job, now: datetime) -> Stop | None:
+    """The gate's checks that can change after its decision, again (the caller holds the gate's
+    locks): the approval still valid (else `ready`, `authorisation_expired`), never apply,
+    duplicates (this application excluded), the caps. A refusal ends as `decide`'s does,
+    `blocked` with its code (`posting_closed` for a closed posting), except that a code `decide`
+    keeps at `ready` goes back to `ready`: an approved application never waits on it."""
+    spent = _spent(db, application)
+    if spent is None or now >= spent.expires_at:
+        return Stop(State.ready, "authorisation_expired")
+    code = guardrails.never_apply(
+        posting,
+        gate._rules(db, application.user_id),
+        swept=guardrails.swept_never_apply(db, application.user_id, posting.id),
+        mode=application.mode,
+    )
+    if code is None:
+        duplicate = guardrails.duplicates(
+            db, application.user_id, posting, application.canonical_key, now, exclude=application.id
+        )
+        code = duplicate.code if duplicate is not None else caps.check(db, application, now)
+    if code is None:
+        return None
+    if code in gate.KEEP:
+        return Stop(State.ready, code)
+    return Stop(State.posting_closed if code == "posting_closed" else State.blocked, code)
+
+
 def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str:
     """Step 1: the plan, or the code of why there is none (the caller commits either way)."""
-    found = run._locked(db, application_id)
+    found = _locked(db, application_id)
     if found is None:
         return "gone"
-    application, _ = found
+    application, posting = found
     if application.state is not State.approved:
         return "not_approved"
+    if refused := recheck(db, application, posting, now):
+        _stop(db, application, refused, now)
+        return refused.code
     rows = gate.rows_of(db, application)
     if application.answers_hash is None or gate.answers_hash(
         rows, application.document_versions
@@ -212,12 +287,13 @@ def wait(db: Session, application_id: uuid.UUID, needs: str, now: datetime, **da
 def arm(
     db: Session, application_id: uuid.UUID, now: datetime, switches: gate.Switches, read: Read
 ) -> str:
-    """Step 5, before the click: the screenshot, the kill switches, then `rehearsed` or
-    `submitting` (committed by the caller before the click). Returns what was written."""
-    found = run._locked(db, application_id)
+    """Step 5, before the click, under the gate's locks: the screenshot, the kill switches, the
+    gate's checks again (`recheck`), then `rehearsed` or `submitting` (committed by the caller
+    before the click). Returns what was written."""
+    found = _locked(db, application_id)
     if found is None or found[0].state is not State.approved:
         return "superseded"
-    application = found[0]
+    application, posting = found
     if read.shot is not None:
         shot = shots.store(db, application, ShotKind.before, read.shot, now)
         gate._event(db, application, "screenshot", now, kind="before", id=str(shot.id))
@@ -228,6 +304,9 @@ def arm(
         application.error_code = code
         gate._event(db, application, "kill_switch", now, code=code)
         return "cancelled"
+    if refused := recheck(db, application, posting, now):
+        _stop(db, application, refused, now)
+        return refused.state.value
     if application.dry_run:
         states.move(application, State.rehearsed, now)
         gate._event(db, application, "rehearsed", now)
@@ -260,14 +339,20 @@ def record(
     if outcome in states.CLICKED:
         frozen = gate.freeze_sent(db, application, now)
     if outcome is State.submitted and JobStatus(posting.status) not in guardrails.APPLIED_STATUSES:
-        jobs_service.set_status(
-            db,
-            posting,
-            JobStatus.applied,
-            now,
-            via="apply",
-            extra={"application_id": str(application.id)},
-        )
+        try:
+            with db.begin_nested():
+                jobs_service.set_status(
+                    db,
+                    posting,
+                    JobStatus.applied,
+                    now,
+                    via="apply",
+                    extra={"application_id": str(application.id)},
+                )
+        except Exception as exc:  # the site confirmed it: never lose that for a posting status
+            logger.error("apply.status_not_set", extra={"error": type(exc).__name__})
+            code = "status_not_set"
+            gate._event(db, application, "status_not_set", now, error=type(exc).__name__)
     states.move(application, outcome, now)
     application.error_code = code
     if shot is not None:

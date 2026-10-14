@@ -32,6 +32,11 @@ freezes a document: the freeze is in the transaction that records the click (`su
 A refusal by a kill switch, the authorisation or the documents leaves the application `ready`; a
 refusal by never apply or a duplicate ends it `blocked` with the code (`posting_closed` for a
 closed posting), as at the start (A2).
+
+The decision is not the last word: the submit lease runs the checks that can change after it
+again under the same locks, when it starts and just before the click (`submit.recheck`: the
+approval's expiry, never apply, duplicates, caps), so an approval past its validity, a posting
+applied or closed since, or the same role clicked since on another posting is never clicked.
 """
 
 import hashlib
@@ -47,6 +52,7 @@ from sqlalchemy.orm import Session
 
 from app.apply import caps, guardrails, service, states
 from app.apply.models import (
+    AnswerSource,
     Application,
     ApplicationAnswer,
     ApplicationEvent,
@@ -88,6 +94,14 @@ SENTENCES = {
     "not_unknown": "This application is not waiting for you to confirm it.",
     "not_retryable": "Only an unconfirmed or refused application can be tried again.",
     "busy": "This posting is busy with another change. Try again in a moment.",
+    "not_editable": "The answers of this application can no longer be changed.",
+    "unknown_field": "This form has no such question to answer.",
+    "wrong_type": "This answer does not fit the question.",
+    # Not a refusal: the error code of a `submitted` application whose posting kept its status.
+    "status_not_set": (
+        "This application was sent, but the posting could not be marked as applied. Mark it "
+        "yourself."
+    ),
     **guardrails.SENTENCES,
     **caps.SENTENCES,
 }
@@ -535,6 +549,65 @@ def confirm_submitted(
     states.move(application, State.submitted, now)
     application.error_code = None
     _event(db, application, "person_confirmed", now)
+    return application
+
+
+# The person's own answer to a field (`set_answer`): before the click only, and never a file (the
+# documents) or a widget the app cannot fill (`skipped:`).
+EDITABLE = frozenset({State.needs_person, State.ready, State.approved})
+ANSWER_MAX = 5000
+TEXT_KINDS = frozenset({"text", "select", "combobox"})
+
+
+class InvalidAnswerError(ValueError):
+    """A 422: `unknown_field` (no such field, a file or a skipped widget) or `wrong_type`."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def set_answer(
+    db: Session,
+    user_id: uuid.UUID,
+    application_id: uuid.UUID,
+    field_key: str,
+    value: str | bool,
+    now: datetime,
+) -> Application:
+    """The person's own value for one field of the form (one left for them, or one they
+    override): stored with the source `person`, so the hash changes and any approval no longer
+    matches; an `approved` application goes back to `ready` (its approval spent, a new one
+    needed). The submit lease refills and reads back this value as any other; a refill by the
+    run keeps it (`run.finish`). Raises NotFoundError, RefusedError (`not_editable`) or
+    InvalidAnswerError. The caller commits. No value goes into the event."""
+    application, _ = lock(db, user_id, application_id)
+    if application.state not in EDITABLE:
+        raise RefusedError("not_editable")
+    row = db.execute(
+        sa.select(ApplicationAnswer)
+        .where(
+            ApplicationAnswer.application_id == application.id,
+            ApplicationAnswer.user_id == user_id,
+            ApplicationAnswer.field_key == field_key,
+        )
+        .with_for_update()
+    ).scalar_one_or_none()
+    if row is None or row.field_key.startswith("skipped:") or row.kind == "file":
+        raise InvalidAnswerError("unknown_field")
+    wanted: type = bool if row.kind in ("checkbox", "yes_no") else str
+    if not isinstance(value, wanted) or (isinstance(value, str) and not value.strip()):
+        raise InvalidAnswerError("wrong_type")
+    if isinstance(value, str) and (row.kind not in TEXT_KINDS or len(value) > ANSWER_MAX):
+        raise InvalidAnswerError("wrong_type")
+    row.value = value
+    row.source = AnswerSource.person
+    row.approved = False
+    if application.state is State.approved:
+        states.move(application, State.ready, now)
+        application.error_code = "stale"
+    application.updated_at = now
+    _event(db, application, "answer_set", now, field_key=field_key)
     return application
 
 
