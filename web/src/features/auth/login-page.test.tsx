@@ -50,12 +50,12 @@ async function fillAndSubmit(
 }
 
 describe("login page", () => {
-  it("is reached from / when signed out, with next=/", async () => {
-    const { location } = renderApp("/");
+  it("is reached from a protected page when signed out, with next set", async () => {
+    const { location } = renderApp("/jobs");
     expect(
       await screen.findByRole("heading", { name: "Sign in" }),
     ).toBeInTheDocument();
-    expect(location()).toBe("/login?next=/");
+    expect(location()).toBe("/login?next=/jobs");
     expect(document.title).toBe("Sign in · jobapp");
   });
 

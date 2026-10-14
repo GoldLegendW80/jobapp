@@ -1,5 +1,5 @@
-"""The recorded streams of the G10 and G12 journeys (web/e2e/ingestion-g10.spec.ts and
-ingestion-g12.spec.ts), written from here:
+"""The recorded streams of the G10, G12 and G13 journeys (web/e2e/ingestion-g10.spec.ts,
+ingestion-g12.spec.ts and ingestion-g13.spec.ts), written from here:
 `python -m tests.ingestion.journey_streams` from api/ rewrites
 app/agents/fake_streams/ingest_extract_<first 12 hex digits of the fixture's sha256>_p0.json for
 each fixture below, and tests/ingestion/test_journey_streams.py fails when a file and this module
@@ -350,6 +350,60 @@ G12_SECOND = stream(
     "Proposed 3 items.",
 )
 
+# The G13 journey (web/e2e/ingestion-g13.spec.ts) reads the two documents of G12 and this one,
+# which gives the review what a bulk accept may take: a headline and four answers, none of them
+# a locked fact.
+G13_NOTES = stream(
+    "G13 journey, tests/ingestion/fixtures/g13_notes.txt: reads the part, proposes a headline "
+    "and four answers.",
+    [
+        assistant(1, [read(1)], SMALL),
+        assistant(
+            2,
+            [
+                propose(
+                    2,
+                    "identity",
+                    [
+                        item(
+                            "headline",
+                            "Data engineer for public transport timetables",
+                            "Data engineer for public transport timetables",
+                        )
+                    ],
+                )
+            ],
+            SMALL,
+        ),
+        assistant(
+            3,
+            [
+                propose(
+                    3,
+                    "answers",
+                    [
+                        item("notice_period", "Two months", "Notice period: two months"),
+                        item(
+                            "earliest_start",
+                            "The first of March",
+                            "Earliest start: the first of March",
+                        ),
+                        item(
+                            "relocation",
+                            "Open to moving within France",
+                            "Relocation: open to moving within France",
+                        ),
+                        item("travel", "Up to two days a month", "Travel: up to two days a month"),
+                    ],
+                )
+            ],
+            SMALL,
+        ),
+        said(4, "Proposed 5 items."),
+    ],
+    "Proposed 5 items.",
+)
+
 
 STREAMS: dict[str, dict[str, Any]] = {
     "g10_first.txt": FIRST,
@@ -357,6 +411,7 @@ STREAMS: dict[str, dict[str, Any]] = {
     LARGE_FIXTURE: LARGE,
     "g12_first.txt": G12_FIRST,
     "g12_second.txt": G12_SECOND,
+    "g13_notes.txt": G13_NOTES,
 }
 
 

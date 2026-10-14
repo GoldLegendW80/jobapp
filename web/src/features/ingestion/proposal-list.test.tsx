@@ -192,10 +192,13 @@ describe("ProposalList", () => {
       within(proposal("headline")).getByText(FREE_TEXT_NOTE),
     ).toBeInTheDocument();
     expect(within(name).queryByText(FREE_TEXT_NOTE)).toBeNull();
-    // Read only: one read of this run's proposals, nothing written.
-    expect(calls.paths).toEqual(["GET /api/ingestion/runs/run-1/proposals"]);
-    expect(calls.bodies).toEqual([]);
-    expect(screen.queryByRole("button", { name: /accept|reject/i })).toBeNull();
+    // Showing the list reads this run's proposals once and the profile's completeness, and
+    // writes nothing (the decisions are in proposal-review.test.tsx).
+    expect([...calls.paths].sort()).toEqual([
+      "GET /api/ingestion/runs/run-1/proposals",
+      "GET /api/profile",
+    ]);
+    expect(calls.bodies).toEqual([""]);
   });
 
   it("shows a conflict as both values, each with its source", async () => {
@@ -228,7 +231,7 @@ describe("ProposalList", () => {
     show("run-1");
     const row = await screen.findByTestId("proposal");
     expect(within(row).getByText("Sources disagree")).toBeInTheDocument();
-    const values = within(row).getByRole("list", {
+    const values = within(row).getByRole("radiogroup", {
       name: "Values for Employers: Acme Group",
     });
     expect(within(values).getByText("2021-03")).toBeInTheDocument();
@@ -367,7 +370,8 @@ describe("ProposalList", () => {
     );
     show();
     expect(await screen.findByTestId("proposal")).toBeInTheDocument();
-    expect(calls.paths).toEqual([
+    // The profile is read too, for the completeness bar (task G13).
+    expect(calls.paths.filter((path) => path !== "GET /api/profile")).toEqual([
       "GET /api/ingestion/runs",
       "GET /api/ingestion/runs/run-2/proposals",
     ]);
