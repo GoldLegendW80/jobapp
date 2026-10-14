@@ -104,6 +104,20 @@ class Settings(BaseSettings):
     )
     # How long a row of the send log lives, in days.
     mail_sends_keep_days: int = Field(default=365, ge=30, le=3650)
+    # The browser module (SPEC-browser). browserd's control API on the internal `browsing` network,
+    # behind a shared secret only the api, the worker and the browser container hold. Empty: no
+    # browser (the api answers that it is not available).
+    browser_url: str = "http://browser:9300"
+    browser_control_secret: SecretStr | None = None
+    # Active seconds per lease purpose, "purpose=seconds,..." over browserd's table (900 for the
+    # apply purposes, 1800 for a person's session); empty keeps the table.
+    browser_lease_max_s: str = ""
+    # A lease without a tool call or input for this long ends; a person's wait (sign in) has its
+    # own deadline, BROWSER_SESSION_MAX_S, and suspends both timers.
+    browser_idle_s: int = Field(default=300, ge=30, le=3600)
+    browser_session_max_s: int = Field(default=1800, ge=60, le=7200)
+    # Past this share of the browser container's memory limit, browserd closes the newest tab.
+    browser_mem_guard_pct: int = Field(default=90, ge=50, le=99)
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod

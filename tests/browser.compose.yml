@@ -1,0 +1,64 @@
+# The browser test stack (browser B2, api/tests/browser/test_browser_container.py): the browser
+# exactly as compose.yml writes it (every hardening key comes from there through `extends`), its
+# pages server on the public side, and a client where the api and the worker stand. Run from the
+# repository root as the project directory (compose reads browser/seccomp.json from there):
+#   BROWSER_TEST_IMAGE=jobapp-browser:test BROWSER_CONTROL_SECRET=<hex> POSTGRES_USER=x \
+#   POSTGRES_PASSWORD=x POSTGRES_DB=x docker compose -p browser-b2-x --project-directory . \
+#   -f tests/browser.compose.yml \
+#   --profile browser up -d --wait --no-build
+#
+#   browser   the service; its egress proxy lets the pages server through although its address
+#             is private (BROWSER_PROXY_ALLOW_PRIVATE, never set in compose.yml)
+#   pages     tests/browser_pages/ served on `egress` alone: what a job site is in the test
+#   client    on `browsing` alone, where the api and the worker are; it also answers HTTP on 8000,
+#             which Chromium must not reach (an app service seen from a hostile page)
+#
+# POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB must be set to anything: Compose interpolates
+# the whole of compose.yml to read one service of it. Later tasks add pages under
+# tests/browser_pages/b<n>/ and keep this file.
+services:
+  browser:
+    extends:
+      file: compose.yml
+      service: browser
+    image: ${BROWSER_TEST_IMAGE:?set BROWSER_TEST_IMAGE}
+    environment:
+      BROWSER_PROXY_ALLOW_PRIVATE: pages
+
+  pages:
+    image: ${BROWSER_TEST_IMAGE:?set BROWSER_TEST_IMAGE}
+    profiles: [browser]
+    user: "1000:1000"
+    command: ["python", "-I", "/pages/server.py", "/pages"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./tests/browser_pages:/pages:ro
+    networks:
+      - egress
+    mem_limit: 128m
+
+  client:
+    image: ${BROWSER_TEST_IMAGE:?set BROWSER_TEST_IMAGE}
+    profiles: [browser]
+    user: "1000:1000"
+    command: ["python", "-I", "-m", "http.server", "8000", "--bind", "0.0.0.0", "--directory", "/opt/browserd"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - browsing
+    mem_limit: 128m
+
+networks:
+  browsing:
+    internal: true
+  # Internal here, unlike compose.yml: the test browser reaches the pages server and no real host.
+  egress:
+    internal: true
+
+volumes:
+  browserprofiles:

@@ -125,12 +125,17 @@ assert parser["environment"] == {"PARSER_PORT": "7070"} and "env_file" not in pa
 assert not parser.get("volumes") and not parser.get("tmpfs") and not parser.get("depends_on"), parser
 assert list(parser["networks"]) == ["parsing"], parser["networks"]
 assert cfg["networks"]["parsing"]["internal"] is True, cfg["networks"]
-assert sorted(worker["networks"]) == ["default", "parsing", "rendering"], worker["networks"]
+assert sorted(worker["networks"]) == ["browsing", "default", "parsing", "rendering"], worker["networks"]
 # renderer (documents D3): every key is held by api/tests/documents/test_compose_renderer.py.
 assert list(services["renderer"]["networks"]) == ["rendering"], services["renderer"]["networks"]
 assert cfg["networks"]["rendering"]["internal"] is True, cfg["networks"]
+# browser (browser B2): behind the `browser` profile, absent here; its keys are held by
+# api/tests/browser/test_compose_browser.py. The api and caddy reach it on `browsing`.
+assert cfg["networks"]["browsing"]["internal"] is True, cfg["networks"]
+for name in ("api", "caddy"):
+    assert sorted(services[name]["networks"]) == ["browsing", "default"], (name, services[name]["networks"])
 for name, svc in services.items():
-    if name not in ("parser", "renderer", "worker"):
+    if name not in ("parser", "renderer", "worker", "api", "caddy"):
         assert list(svc["networks"]) == ["default"], (name, svc["networks"])
 # tailscale: the full checks of the service are in tests/tailscale_test.sh.
 ts = services["tailscale"]

@@ -1,8 +1,12 @@
-# The browser container, first version (browser B1). Debian's own Chromium for arm64, headed on
-# a virtual display (Xvfb), the live view's pieces (x11vnc, websockify, noVNC), the fonts pages
-# expect on a desktop, and Python with Playwright pinned. Playwright never launches a browser
-# here: Chromium is started by the service and Playwright attaches to it over CDP on 127.0.0.1.
-# B1 runs it through ops/browser-measure.sh; B2 adds browserd and owns this file from then on.
+# The browser container (browser B1, then B2). Debian's own Chromium for arm64, headed on a
+# virtual display (Xvfb), the live view's pieces (x11vnc, websockify, noVNC; B4 starts them), the
+# fonts pages expect on a desktop, Python with Playwright pinned, and browserd (browserd/), the
+# service compose.yml starts under tini. Playwright never launches a browser here: browserd
+# starts Chromium for a lease and attaches Playwright to it over CDP on 127.0.0.1.
+#
+# Playwright is pinned exactly: browserd/pages.py calls its private `snapshotForAI` (the AI
+# snapshot with refs), which a release may drop; api/tests/browser/test_browser_container.py
+# fails loudly when it does. Bump PLAYWRIGHT_VERSION and browserd/pages.py together, on purpose.
 #
 # Chromium is pinned by Debian version (bookworm-security) and the image is rebuilt when Debian
 # publishes a security update: build with --build-arg CHROMIUM_VERSION=<new version>.
@@ -26,18 +30,20 @@ RUN apt-get update \
 RUN python3 -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}"
 
-# One unprivileged user runs everything. The X socket directory exists with the sticky mode X
-# expects, so Xvfb never needs root. /profiles holds the browser profiles (a volume from B2 on).
-RUN useradd --create-home --uid 1000 --shell /usr/sbin/nologin browser \
- && mkdir -p /profiles /tmp/.X11-unix \
- && chmod 1777 /tmp/.X11-unix \
- && chown browser:browser /profiles
+# Users: browserd runs as root with SETUID and SETGID only (compose.yml drops every other
+# capability), Xvfb as `browser` (uid 1000), each person's Chromium as the profile's own uid
+# (20000 and up, no passwd entry needed). /profiles is the volume `browserprofiles`, mode 1733:
+# every uid may create its own 0700 directory there, none may list it. /leases is a tmpfs.
+RUN useradd --no-create-home --home-dir /nonexistent --uid 1000 --shell /usr/sbin/nologin browser \
+ && mkdir -p /profiles /leases \
+ && chmod 1733 /profiles /leases
 
-USER browser
-WORKDIR /home/browser
+COPY browserd /opt/browserd/browserd
+WORKDIR /opt/browserd
 ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONPATH=/opt/browserd \
     DISPLAY=:1 \
     TZ=Europe/Paris
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sleep", "infinity"]
+CMD ["python", "-m", "browserd"]
