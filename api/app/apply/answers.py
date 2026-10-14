@@ -3,22 +3,24 @@
 "Answers to standard questions"). No model, no network, no clock, nothing invented.
 
 `resolve(field, context)` gives an `Answer` (a value and the source it came from) or a `Left`
-(why nothing was answered, and the options of the field so the person can choose). An answer is
-given only on a positive, unambiguous match of a question the module fully understands; anything
-else is left, because a left field costs the person one field and a wrong answer is a false
-statement in their name. Order: the person's policies first (leave blank, EEO, salary stance) and
-the fields no source may fill (someone else's details, age, citizenship, current pay, free text);
-then the person's answer bank; then the identity section, the documents, the `answers` section,
-the experience, education and skills sections. A required question no source holds is left.
+(why nothing was answered, and the options of the field so the person can choose).
 
-Work authorisation is answered for the country the question names, else the posting's, and only
-for a question made of known words; years of experience only for overall experience, with the
-question's comparison read as written.
+A closed world: a label is answered only when, normalised (case, accents, punctuation, required
+marks, a few filler words), it FULLY matches one of the canonical question templates below, each
+an anchored pattern in English and French with typed slots (a country, a place, a language, a
+currency, a years comparison) and its answer rule. Anything else is left as
+"not_a_known_question": no keyword or partial match ever answers, because a left field costs the
+person one field and a wrong answer is a false statement in their name. A label holding two
+questions is left; a negated or inverted one is left unless a template is written for that
+exact form ("without sponsorship").
 
-The patterns are English and French. A rule that matches but finds no value in the profile leaves
-the field; it never falls through to a guess. Option matching: exact, prefix, contains, and the
-families "Other" and "Prefer not to say". A context without a posting (the profile run of A18a)
-answers from the profile alone and leaves everything that needs the posting's country.
+Order: the person's policies first (leave blank, the EEO policy, the salary stance) and the fields
+no source may fill (someone else's details, age, citizenship and birthplace, a criminal record,
+pay received, free text); then the person's answer bank, for the exact question it was typed for;
+then the templates. A rule that matches but finds no value in the profile leaves the field.
+Work authorisation is answered for the country the question names, else the posting's; a member
+state of the EU with no entry of its own is answered from the person's EU entry. A context
+without a posting (the profile run of A18a) leaves everything that needs the posting's country.
 """
 
 import re
@@ -160,10 +162,12 @@ class Left:
 class Posting:
     countries: tuple[str, ...] = ()
     title: str | None = None
+    cities: tuple[str, ...] = ()  # folded, the gazetteer's cities the location names
 
     @classmethod
     def at(cls, location: str | None, title: str | None = None) -> "Posting":
-        return cls(posting_countries(location), title)
+        cities = tuple(fold(p.name) for p in places_of(location) if p.kind == "city")
+        return cls(posting_countries(location), title, cities)
 
 
 @dataclass(frozen=True)
@@ -299,9 +303,9 @@ def _family_option(family: tuple[str, ...], options: tuple[str, ...]) -> str | N
         return None
     hits = []
     for option in options:
-        folded = fold(option)
+        words = _option_words(option)  # "Decline to self-identify" reads "decline to self identify"
         if any(
-            folded == member or re.search(rf"\b{re.escape(member)}\b", folded) for member in family
+            words == member or re.search(rf"\b{re.escape(member)}\b", words) for member in family
         ):
             hits.append(option)
     return hits[0] if len(hits) == 1 else None
@@ -332,7 +336,233 @@ def _text(field: FormField, value: str, source: str) -> Answer | Left:
     return Answer(value, source)
 
 
-# --- rules -----------------------------------------------------------------------------------
+# --- normalising a label -------------------------------------------------------------------
+
+
+# A verb that only asks for the field ("Select your gender") is dropped with its "your".
+_LEAD_IN = re.compile(
+    r"^(?:(?:please|kindly|veuillez|merci de|merci d) )?(?:indicate|select|enter|provide|specify"
+    r"|state|choose|indiquer|preciser|renseigner|saisir|selectionner|indiquez|precisez|renseignez"
+    r"|selectionnez|saisissez) (?:your |votre |vos )?"
+)
+_FILLER = re.compile(r"\b(?:please|kindly|currently|actuellement|svp)\b")
+
+
+def normalise(label: str | None) -> str:
+    """A label as the templates read it: folded, its required marks, "(yes/no)", "(e)" and
+    punctuation gone (a decimal point and "+", "/", "€", "£", "$" kept), a few filler words and
+    a leading "Please select your" dropped. "Êtes-vous autorisé(e) à travailler en France ?"
+    reads "etes vous autorise a travailler en france"; "the US" in capitals reads "usa"."""
+    raw = re.sub(r"\bU\.S\.(?:A\.)?|\bU\.S\b|\bUSA\b|\bUS\b", " USA ", label or "")
+    text = fold(raw)
+    text = re.sub(r"\((?:required|optional|obligatoire|facultatif)\)|[*✱]", " ", text)
+    text = re.sub(r"\(?\b(?:yes ?/ ?no|oui ?/ ?non)\b\)?", " ", text)
+    text = re.sub(r"\((?:e|s|es|ne)\)", "", text)
+    text = re.sub(r"[^a-z0-9+€£$/. ]+", " ", text)
+    text = re.sub(r"(?<!\d)\.|\.(?!\d)", " ", text)
+    text = re.sub(r"\s*/\s*", " / ", text)
+    text = re.sub(r"\s+", " ", _FILLER.sub(" ", text)).strip()
+    return _LEAD_IN.sub("", text).strip()
+
+
+# Two questions in one label: never answered as one. The pairs below are one question each.
+_ONE_QUESTION_PAIRS = re.compile(
+    r"now or in the future|maintenant ou (?:a l avenir|dans le futur)|race / ethnicity"
+    r"|resume / cv|cv / resume|(?:portfolio|website) (?:/|or) (?:portfolio|website)|website blog (?:/|or) portfolio|hispanic (?:/|or) latino|\b(?:or|ou) (?:more|less|fewer|above|longer|plus|moins)\b"
+)
+_TWO_QUESTIONS = re.compile(
+    r"\bor\b| / |\band (?:do|are|have|will|would|can|did|is) you\b"
+    r"|\bet (?:avez|etes|pouvez|serez|aurez|parlez) vous\b"
+)
+
+
+def _two_questions(label: str, text: str) -> bool:
+    # "ou" is read before folding: "où" (where) is one question, "ou" (or) joins two.
+    lower = re.sub(r"maintenant ou", " ", _ONE_QUESTION_PAIRS.sub(" ", (label or "").lower()))
+    return (
+        label.count("?") > 1
+        or _TWO_QUESTIONS.search(_ONE_QUESTION_PAIRS.sub(" ", text)) is not None
+        or re.search(r"\bou\b", lower) is not None
+    )
+
+
+# A negated or inverted question. Only a template written for its exact negated form answers it.
+_NEGATED = re.compile(
+    r"\bnot\b|n t\b|\bwithout\b|\bunable\b|\bunwilling\b|\bcannot\b|\bnever\b|\bno longer\b"
+    r"|\bnone\b|\bproblem\b|\bdeal ?breaker\b|\bobject\b|\bsans\b|\bne\b|\bn\b(?! de\b)|\bpas\b"
+    r"|\bjamais\b|\baucune?\b|\bplus besoin\b"
+)
+
+
+# --- slots -------------------------------------------------------------------------------------
+
+# The countries and regions a question can name, as normalised phrases, English and French. A
+# profile entry's country is read through the same table, so "UK" and "United Kingdom" agree.
+EU = "European Union"
+EU_MEMBERS: dict[str, tuple[str, ...]] = {
+    "Austria": ("austria", "autriche"),
+    "Belgium": ("belgium", "belgique"),
+    "Bulgaria": ("bulgaria", "bulgarie"),
+    "Croatia": ("croatia", "croatie"),
+    "Cyprus": ("cyprus", "chypre"),
+    "Czechia": ("czechia", "czech republic", "republique tcheque", "tchequie"),
+    "Denmark": ("denmark", "danemark"),
+    "Estonia": ("estonia", "estonie"),
+    "Finland": ("finland", "finlande"),
+    "France": ("france",),
+    "Germany": ("germany", "allemagne"),
+    "Greece": ("greece", "grece"),
+    "Hungary": ("hungary", "hongrie"),
+    "Ireland": ("ireland", "irlande"),
+    "Italy": ("italy", "italie"),
+    "Latvia": ("latvia", "lettonie"),
+    "Lithuania": ("lithuania", "lituanie"),
+    "Luxembourg": ("luxembourg",),
+    "Malta": ("malta", "malte"),
+    "Netherlands": ("netherlands", "holland", "pays bas"),
+    "Poland": ("poland", "pologne"),
+    "Portugal": ("portugal",),
+    "Romania": ("romania", "roumanie"),
+    "Slovakia": ("slovakia", "slovaquie"),
+    "Slovenia": ("slovenia", "slovenie"),
+    "Spain": ("spain", "espagne"),
+    "Sweden": ("sweden", "suede"),
+}
+COUNTRIES: dict[str, tuple[str, ...]] = {
+    EU: (
+        "european union",
+        "eu",
+        "e u",
+        "eea",
+        "european economic area",
+        "europe",
+        "union europeenne",
+        "ue",
+        "espace economique europeen",
+        "europe",
+    ),
+    "United States": (
+        "united states",
+        "united states of america",
+        "usa",
+        "u s a",
+        "america",
+        "etats unis",
+        "etats unis d amerique",
+    ),
+    "United Kingdom": (
+        "united kingdom",
+        "uk",
+        "u k",
+        "great britain",
+        "britain",
+        "england",
+        "royaume uni",
+        "angleterre",
+        "grande bretagne",
+    ),
+    **EU_MEMBERS,
+    "Switzerland": ("switzerland", "suisse"),
+    "Norway": ("norway", "norvege"),
+    "Canada": ("canada",),
+    "Singapore": ("singapore", "singapour"),
+    "India": ("india", "inde"),
+    "Japan": ("japan", "japon"),
+    "Australia": ("australia", "australie"),
+    "South Korea": ("south korea", "korea", "coree du sud", "coree"),
+    "Israel": ("israel",),
+    "United Arab Emirates": ("united arab emirates", "uae", "emirats arabes unis"),
+    "China": ("china", "chine"),
+}
+_COUNTRY_OF = {phrase: name for name, phrases in COUNTRIES.items() for phrase in phrases}
+
+
+def _alternation(phrases: Any) -> str:
+    return "|".join(re.escape(p) for p in sorted(set(phrases), key=len, reverse=True))
+
+
+# The posting's own country, as a question names it.
+_HERE = (
+    r"this country|the country|ce pays|le pays du poste"
+    r"|the country (?:where|in which) (?:this|the) (?:job|role|position) is (?:located|based)"
+)
+C_SLOT = rf"(?:the |l |le |la |les )?(?P<country>{_HERE}|{_alternation(_COUNTRY_OF)})"
+
+
+def _country_key(name: str) -> str:
+    """The country a profile entry or a posting names: "the EU", "UK", "Royaume-Uni" each read
+    as their table name; anything else as its folded text."""
+    text = normalise(name)
+    text = re.sub(r"^(?:the|l|le|la|les) ", "", text)
+    if text in _COUNTRY_OF:
+        return _COUNTRY_OF[text]
+    found = {
+        country
+        for phrase, country in _COUNTRY_OF.items()
+        if re.search(rf"\b{re.escape(phrase)}\b", text)
+    }
+    return found.pop() if len(found) == 1 else text
+
+
+_PLACE_COUNTRY = {fold(city): country for city, country in CITY_COUNTRY.items()}
+P_SLOT = rf"(?:the |l |le |la )?(?P<place>{_alternation([*_PLACE_COUNTRY, *_COUNTRY_OF])})"
+
+# The languages a question can name, as normalised phrases, English and French.
+LANGUAGES: dict[str, tuple[str, ...]] = {
+    "english": ("english", "anglais"),
+    "french": ("french", "francais"),
+    "german": ("german", "allemand"),
+    "spanish": ("spanish", "espagnol", "castillan"),
+    "italian": ("italian", "italien"),
+    "portuguese": ("portuguese", "portugais"),
+    "dutch": ("dutch", "neerlandais"),
+    "mandarin": ("mandarin", "mandarin chinese"),
+    "chinese": ("chinese", "chinois"),
+    "japanese": ("japanese", "japonais"),
+    "arabic": ("arabic", "arabe"),
+    "russian": ("russian", "russe"),
+    "polish": ("polish", "polonais"),
+    "korean": ("korean", "coreen"),
+    "hindi": ("hindi",),
+    "swedish": ("swedish", "suedois"),
+    "danish": ("danish", "danois"),
+    "norwegian": ("norwegian", "norvegien"),
+    "finnish": ("finnish", "finnois"),
+    "greek": ("greek", "grec"),
+    "turkish": ("turkish", "turc"),
+    "romanian": ("romanian", "roumain"),
+    "czech": ("czech", "tcheque"),
+    "hebrew": ("hebrew", "hebreu"),
+    "catalan": ("catalan",),
+    "ukrainian": ("ukrainian", "ukrainien"),
+}
+_LANGUAGE_OF = {phrase: name for name, phrases in LANGUAGES.items() for phrase in phrases}
+L_SLOT = rf"(?:l )?(?P<language>{_alternation(_LANGUAGE_OF)})"
+
+
+def _language_key(name: str) -> str:
+    text = re.sub(r"\s*\(.*\)\s*$", "", fold(name)).strip()
+    return _LANGUAGE_OF.get(normalise(text), normalise(text))
+
+
+_CURRENCY = (
+    r"(?P<currency>eur|euros?|€|usd|us dollars?|dollars?|\$|gbp|pounds?|£|chf|cad|sgd|aud|sek"
+    r"|dkk|pln|jpy|inr)"
+)
+_N = r"(\d+(?:[.,]\d+)?)"
+_CMP = (
+    r"no more than|not more than|pas plus de|at most|up to|au plus|au maximum|maximum of|maximum"
+    r"|less than|fewer than|under|below|moins de|more than|over|greater than|plus de|at least"
+    r"|a minimum of|minimum of|minimum|au moins|au minimum|un minimum de"
+)
+Y_SLOT = (
+    rf"(?P<years>(?:(?:{_CMP}) )?\d+(?:[.,]\d+)?(?: ?\+)?"
+    r"(?: (?:or more|or above|or less|or fewer|ou plus|ou moins|et plus))? (?:years?|yrs|ans?)"
+    r"(?: (?:or more|or longer|or less|or fewer|ou plus|ou moins|et plus|minimum|maximum))?)"
+)
+
+
+# --- answering helpers ---------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -343,15 +573,21 @@ class Sections:
     answers: AnswersSection
 
 
-Handler = Callable[[FormField, Context, Sections, str], Answer | Left | None]
+Handler = Callable[[FormField, Context, Sections, re.Match[str]], Answer | Left]
 
 
 def _left(field: FormField, reason: str) -> Left:
     return Left(reason, field.options, field.required)
 
 
+def _boolean_form(field: FormField) -> bool:
+    return field.kind in ("yes_no", "checkbox") or (
+        field.kind in _CHOICES and _family_option(YES, field.options) is not None
+    )
+
+
 def _identity_value(attr: str) -> Handler:
-    def handler(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
+    def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
         value = getattr(s.identity, attr)
         return _text(field, value, f"identity.{attr}") if value else _left(field, f"no_{attr}")
 
@@ -359,7 +595,7 @@ def _identity_value(attr: str) -> Handler:
 
 
 def _name_part(part: Literal["first", "last", "full"]) -> Handler:
-    def handler(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
+    def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
         name = s.identity.full_name
         if not name:
             return _left(field, "no_full_name")
@@ -373,194 +609,115 @@ def _name_part(part: Literal["first", "last", "full"]) -> Handler:
     return handler
 
 
-def _preferred_name(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
-    if s.answers.preferred_name:
-        return Answer(s.answers.preferred_name, "answers.preferred_name")
-    return _left(field, "no_preferred_name")
+def _answers_value(attr: str, reason: str) -> Handler:
+    def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+        value = getattr(s.answers, attr)
+        return _text(field, value, f"answers.{attr}") if value else _left(field, reason)
+
+    return handler
 
 
-def _pronouns(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
-    return (
-        _text(field, s.answers.pronouns, "answers.pronouns")
-        if s.answers.pronouns
-        else _left(field, "no_pronouns")
-    )
+def _phone_code(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+    """The calling code of the person's phone ("+33 6 ..." gives +33), as the option that holds
+    it, or as text."""
+    code = re.match(r"^\+(\d{1,3})(?:[\s.\-()]|$)", (s.identity.phone or "").strip())
+    if not code:
+        return _left(field, "no_phone_country_code")
+    if field.kind in _CHOICES and field.options:
+        hits = [o for o in field.options if re.search(rf"\+\s?{code.group(1)}(?!\d)", o)]
+        if len(hits) != 1:
+            return _left(field, "no_matching_option")
+        return Answer(hits[0], "identity.phone", option=hits[0])
+    return _text(field, f"+{code.group(1)}", "identity.phone")
 
 
-def _link(field: FormField, ctx: Context, s: Sections, text: str) -> Answer | Left:
-    ident = s.identity
-    if "linkedin" in text:
-        url = ident.linkedin_url or next((k.url for k in ident.links if "linkedin" in k.url), None)
-        source = "identity.linkedin_url"
-    elif "github" in text:
-        url = next((k.url for k in ident.links if "github" in k.url.lower()), None)
-        source = "identity.links"
-    else:
-        url, source = ident.website, "identity.website"
-        if not url and ident.links:
-            url, source = ident.links[0].url, "identity.links"
-    return Answer(url, source) if url else _left(field, "no_link")
+def _location(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+    parts = [p for p in (s.identity.city, s.identity.country) if p]
+    if not parts:
+        return _left(field, "no_location")
+    return _text(field, ", ".join(parts), "identity.city")
 
 
-def _languages(field: FormField, ctx: Context, s: Sections, text: str) -> Answer | Left:
-    known = {fold(lang.name): lang for lang in s.identity.languages}
-    if field.kind in ("yes_no", "checkbox"):
-        for name in known:
-            if re.search(rf"\b{re.escape(name)}\b", text):
-                return _boolean(field, True, "identity.languages")
-        return _left(field, "language_not_in_profile")
-    if not known:
+def _link(kind: Literal["linkedin", "github", "website"]) -> Handler:
+    def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+        ident = s.identity
+        if kind == "linkedin":
+            url = ident.linkedin_url or next(
+                (k.url for k in ident.links if "linkedin" in k.url), None
+            )
+            source = "identity.linkedin_url"
+        elif kind == "github":
+            url = next((k.url for k in ident.links if "github" in k.url.lower()), None)
+            source = "identity.links"
+        else:
+            url, source = ident.website, "identity.website"
+        return Answer(url, source) if url else _left(field, "no_link")
+
+    return handler
+
+
+# A level too low to say the person speaks the language; a level that says they are fluent.
+_BEGINNER = re.compile(
+    r"\ba1\b|\ba2\b|beginner|basic|elementary|limited|notions?\b|debutant|elementaire|scolaire"
+)
+_FLUENT = re.compile(
+    r"native|mother tongue|maternelle|bilingu|fluent|courant|\bc1\b|\bc2\b|full professional"
+)
+
+
+def _spoken(s: Sections) -> list[Any]:
+    return [lang for lang in s.identity.languages if not _BEGINNER.search(fold(lang.level))]
+
+
+def _languages(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+    """The languages the person speaks: every one of them in a multi select, the one option a
+    single choice can hold only when the person speaks one, the stored list as text."""
+    spoken = _spoken(s)
+    if not spoken:
         return _left(field, "no_languages")
+    if field.kind in _CHOICES and field.options and field.kind != "yes_no":
+        names = {_language_key(lang.name) for lang in spoken}
+        picked = tuple(o for o in field.options if _language_key(o) in names)
+        if field.kind == "multi":
+            if not picked:
+                return _left(field, "no_matching_option")
+            return Answer(picked, "identity.languages", option=picked[0])
+        if len(spoken) != 1 or len(picked) != 1:
+            return _left(field, "several_languages_one_choice")
+        return Answer(picked[0], "identity.languages", option=picked[0])
+    if field.kind in ("yes_no", "checkbox", "file"):
+        return _left(field, "not_a_yes_or_no")
     listed = ", ".join(
         lang.name + (f" ({lang.level})" if lang.level else "") for lang in s.identity.languages
     )
-    return _text(field, listed, "identity.languages")
+    return Answer(listed, "identity.languages")
 
 
-def _words(*lines: str) -> frozenset[str]:
-    """A vocabulary written as lines of space separated words."""
-    return frozenset(word for line in lines for word in line.split())
+def _speaks(fluent: bool) -> Handler:
+    """Do you speak X (any level above a beginner's), are you fluent in X (a fluent level): a
+    yes when the profile says so, else left; a language missing from the profile is no "No"."""
+
+    def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+        if not _boolean_form(field):
+            return _left(field, "not_a_text_question")
+        want = _LANGUAGE_OF[m.group("language")]
+        for lang in _spoken(s):
+            if _language_key(lang.name) == want:
+                if fluent and not _FLUENT.search(fold(lang.level)):
+                    return _left(field, "fluency_not_stated")
+                return _boolean(field, True, "identity.languages")
+        return _left(field, "language_not_in_profile")
+
+    return handler
 
 
-# The countries and regions a question can name, English and French, nouns and adjectives. A
-# profile entry's country is read through the same table, so "UK" and "United Kingdom" agree.
-_COUNTRY_NAMES: tuple[tuple[str, str], ...] = (
-    (
-        "European Union",
-        r"\beu\b|\be\.u\.|european union|\beea\b|european economic area|\beurope\b|\beuropean\b"
-        r"|union europeenne|\bue\b|espace economique europeen|\beurope(?:en|enne)s?\b|schengen",
-    ),
-    (
-        "United States",
-        r"united states|\bthe us\b|\bu\.s\.(?:a\.?)?|\busa\b|\bamerica\b|\bamerican\b"
-        r"|etats-unis|etats unis|\bamericaine?s?\b",
-    ),
-    (
-        "United Kingdom",
-        r"united kingdom|\buk\b|\bu\.k\.|great britain|\bbritain\b|\bbritish\b|\bengland\b"
-        r"|\bscotland\b|\bwales\b|royaume-uni|royaume uni|\bbritanniques?\b|angleterre",
-    ),
-    ("France", r"\bfrance\b|\bfrench\b|\bfrancaise?s?\b"),
-    ("Germany", r"\bgermany\b|\bgerman\b|\ballemagne\b|\ballemande?s?\b"),
-    ("Spain", r"\bspain\b|\bspanish\b|\bespagne\b|\bespagnole?s?\b"),
-    ("Netherlands", r"netherlands|\bdutch\b|\bholland\b|pays-bas|pays bas|neerlandaise?s?"),
-    ("Belgium", r"\bbelgium\b|\bbelgian\b|\bbelgique\b|\bbelges?\b"),
-    ("Switzerland", r"switzerland|\bswiss\b|\bsuisses?\b"),
-    ("Italy", r"\bitaly\b|\bitalian\b|\bitalie\b|\bitalienne?s?\b"),
-    ("Portugal", r"\bportugal\b|\bportuguese\b|\bportugaise?s?\b"),
-    ("Ireland", r"\bireland\b|\birish\b|\birlande\b|\birlandaise?s?\b"),
-    ("Luxembourg", r"luxembourg"),
-    ("Poland", r"\bpoland\b|\bpolish\b|\bpologne\b|\bpolonaise?s?\b"),
-    ("Sweden", r"\bsweden\b|\bswedish\b|\bsuede\b|\bsuedoise?s?\b"),
-    ("Denmark", r"\bdenmark\b|\bdanish\b|\bdanemark\b|\bdanoise?s?\b"),
-    ("Austria", r"\baustria\b|\baustrian\b|\bautriche\b|\bautrichienne?s?\b"),
-    ("Canada", r"\bcanada\b|\bcanadian\b|\bcanadienne?s?\b|\bquebec\b"),
-    ("Singapore", r"\bsingapore\b|\bsingaporean\b|\bsingapour\b"),
-    ("India", r"\bindia\b|\bindian\b|\binde\b"),
-    ("Japan", r"\bjapan\b|\bjapanese\b|\bjapon\b"),
-    ("Australia", r"\baustralia\b|\baustralian\b|\baustralie\b"),
-    ("South Korea", r"\bkorea\b|\bkorean\b|\bcoree\b"),
-    ("Israel", r"\bisrael\b|\bisraeli\b"),
-    ("United Arab Emirates", r"united arab emirates|\buae\b|\bemirates\b|\bemirats\b|\bdubai\b"),
-    ("China", r"\bchina\b|\bchinese\b|\bchine\b"),
-)
-_COUNTRY_PATTERNS = tuple((name, re.compile(pattern)) for name, pattern in _COUNTRY_NAMES)
-
-
-def named_countries(label: str) -> tuple[tuple[str, ...], str]:
-    """The countries and regions a label names, and its folded text with those names blanked.
-    "US" counts only in capitals or after "the" ("join us" names no country)."""
-    text = fold(label)
-    if re.search(r"\bUS\b|\bU\.S\b", label or ""):
-        text = re.sub(r"\bus\b", " the us ", text)
-    names: list[str] = []
-    for name, pattern in _COUNTRY_PATTERNS:
-        if pattern.search(text):
-            names.append(name)
-            text = pattern.sub(" ", text)
-    return tuple(names), re.sub(r"\s+", " ", text).strip()
-
-
-def _country_key(name: str) -> str:
-    named, _ = named_countries(name)
-    return named[0] if len(named) == 1 else fold(name)
-
-
-# A plain work authorisation question is made of these words and a country, nothing else: any
-# other word ("other than", "your country of residence", "Quebec", "a spouse") is not understood.
-_WORK_WORDS = _words(
-    "a an any are be can could currently do does for future have hold in is legal legally lawful",
-    "lawfully",
-    "now of or right status the this to will would you your yes no country role position job",
-    "employment company location located based where which here work working authorized",
-    "authorised authorization authorisation authorizations eligible eligibility entitled able",
-    "permitted allowed permit permits valid require required requires requirement need needs",
-    "needed sponsor sponsored sponsorship visa visas immigration employer us time etes vous",
-    "actuellement legalement autorise autorisee autorises autorisees autorisation de a au aux",
-    "en dans le la les l d du des ce cet cette pays poste emploi travailler travail avez",
-    "besoin un une parrainage sponsoring permis titre valide disposez possedez beneficiez",
-    "droit necessitez necessiterez necessite aurez maintenant ou avenir futur pour etre",
-    "eligible pouvez pourriez oui non entreprise societe e",
-)
-_NEGATION = re.compile(
-    r"\bnot\b|n't\b|\bwithout\b|\bunable\b|\bcannot\b|\bnever\b|\bno longer\b|\bnone\b|\bexempt"
-    r"|\bsans\b|\bne\b|\bn'|\bpas\b|\bjamais\b|\baucune?\b|\bplus besoin\b"
-)
-# "Can you work in the UK without sponsorship?" is the one negated form read on purpose: it asks
-# whether the person is authorised with no sponsorship, the inverse of "do you need sponsorship".
-_WITHOUT_SPONSORSHIP = re.compile(
-    r"\b(?:without|sans)((?:\s+[a-z']+){0,4}?)\s+(?:sponsor\w*|parrainage)\b"
-)
-_WITHOUT_FILLER = _words(
-    "needing requiring the need for a an any visa employer company employment immigration",
-    "avoir besoin d' de un une du necessiter",
-)
-_NEEDS = re.compile(r"\brequir|\bneed|necessit|besoin|\bsponsor\w* (?:required|needed)")
-_SPONSOR_WORDS = re.compile(r"sponsor|parrain|\bvisas?\b")
-_AUTHORISED_WORDS = re.compile(
-    r"authori[sz]|eligib|entitled|permitted|allowed|right to work|able to work|can you work"
-    r"|work permit|autoris|permis de travail|droit de travailler|pouvez-vous travailler"
-    r"|pouvez vous travailler"
-)
-
-
-def _work_question(label: str) -> tuple[str, tuple[str, ...]] | str:
-    """What a work authorisation label asks, as (kind, countries named), or why it is not
-    understood. Kinds: "needs" (do you need sponsorship), "authorised" (may you work there)."""
-    countries, text = named_countries(label)
-    text = re.sub(r"\(?\byes ?/ ?no\b\)?|\(?\boui ?/ ?non\b\)?", " ", text)
-    inverted = False
-    without = _WITHOUT_SPONSORSHIP.search(text)
-    if without:
-        filler = re.sub(r"d'", "d' ", without.group(1)).split()
-        if any(word not in _WITHOUT_FILLER for word in filler):
-            return "negated_question"
-        text = text[: without.start()] + " " + text[without.end() :]
-        inverted = True
-    if _NEGATION.search(text):
-        return "negated_question"
-    if any(word not in _WORK_WORDS for word in re.findall(r"[a-z0-9]+", text)):
-        return "question_not_understood"
-    if len(countries) > 1:
-        return "several_countries_named"
-    if inverted:
-        if _SPONSOR_WORDS.search(text):
-            return "question_not_understood"
-        return "authorised", countries
-    if _SPONSOR_WORDS.search(text):
-        # "Visa status" is a sentence for a text box; as a yes or no it means nothing settled.
-        return ("needs" if _NEEDS.search(text) else "plain_status"), countries
-    if _AUTHORISED_WORDS.search(text):
-        return "authorised", countries
-    return "plain_status", countries
-
-
-def _countries_entries(
-    field: FormField, ctx: Context, s: Sections, named: tuple[str, ...]
+def _entries(
+    field: FormField, ctx: Context, s: Sections, named: str | None
 ) -> tuple[list[WorkAuthorization], Left | None]:
-    """The person's entries for the country the question names, else for the posting's."""
-    if named:
-        countries: tuple[str, ...] = named
+    """The person's entries for the country the question names, else for the posting's. A
+    member state of the EU with no entry of its own is answered from the person's EU entry."""
+    if named is not None and not re.fullmatch(_HERE, named):
+        countries: tuple[str, ...] = (_COUNTRY_OF[named],)
     elif ctx.posting is None or not ctx.posting.countries:
         return [], _left(field, "no_posting_country")
     else:
@@ -568,45 +725,36 @@ def _countries_entries(
     by_country = {_country_key(w.country): w for w in s.answers.work_authorization}
     entries = []
     for country in countries:
-        entry = by_country.get(_country_key(country))
+        key = _country_key(country)
+        entry = by_country.get(key)
+        if entry is None and key in EU_MEMBERS:
+            entry = by_country.get(EU)
         if entry is None:
             return [], _left(field, "country_not_in_work_authorization")
         entries.append(entry)
     return entries, None
 
 
-def _work_authorization(field: FormField, ctx: Context, s: Sections, text: str) -> Answer | Left:
-    """Work authorisation and sponsorship, for the country the question names, else for the
-    posting's. Answered only for a question made of known words: a negation other than
-    "without sponsorship", a second country or an unknown word leaves the field."""
-    asked = _work_question(field.label)
-    if isinstance(asked, str):
-        return _left(field, asked)
-    kind, named = asked
-    entries, problem = _countries_entries(field, ctx, s, named)
-    if problem:
-        return problem
-    needs = {e.needs_sponsorship for e in entries}
-    boolean_form = field.kind in ("yes_no", "checkbox") or (
-        field.kind in _CHOICES and _family_option(YES, field.options) is not None
-    )
-    if boolean_form:
-        if kind == "plain_status" or len(needs) != 1 or None in needs:
+def _work(kind: Literal["authorised", "needs", "status"]) -> Handler:
+    """Work authorisation ("may you work there"), sponsorship ("do you need it") and the status
+    sentence, for the country the question names, else for the posting's."""
+
+    def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+        entries, problem = _entries(field, ctx, s, m.groupdict().get("country"))
+        if problem:
+            return problem
+        if _boolean_form(field):
+            needs = {e.needs_sponsorship for e in entries}
+            if kind == "status" or len(needs) != 1 or None in needs:
+                return _left(field, "countries_disagree_or_unstated")
+            needed = bool(needs.pop())
+            return _boolean(
+                field, needed if kind == "needs" else not needed, "answers.work_authorization"
+            )
+        answers = {e.answer for e in entries}
+        if len(answers) != 1:
             return _left(field, "countries_disagree_or_unstated")
-        needed = bool(needs.pop())
-        return _boolean(
-            field, needed if kind == "needs" else not needed, "answers.work_authorization"
-        )
-    answers = {e.answer for e in entries}
-    if len(answers) != 1:
-        return _left(field, "countries_disagree_or_unstated")
-    return _text(field, answers.pop(), "answers.work_authorization")
-
-
-def _plain_answer(attr: str, reason: str) -> Handler:
-    def handler(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
-        value = getattr(s.answers, attr)
-        return _text(field, value, f"answers.{attr}") if value else _left(field, reason)
+        return _text(field, answers.pop(), "answers.work_authorization")
 
     return handler
 
@@ -614,7 +762,7 @@ def _plain_answer(attr: str, reason: str) -> Handler:
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
-def _start_date(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
+def _start_date(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
     value = s.answers.earliest_start
     if not value:
         return _left(field, "no_earliest_start")
@@ -623,14 +771,38 @@ def _start_date(field: FormField, ctx: Context, s: Sections, _: str) -> Answer |
     return _text(field, value, "answers.earliest_start")
 
 
+def _relocation(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+    """The person's relocation sentence; a question naming a place answers only for the
+    posting's own city or country."""
+    place = m.groupdict().get("place")
+    if place is not None:
+        posting = ctx.posting
+        country = _PLACE_COUNTRY.get(place) or _COUNTRY_OF.get(place)
+        here = posting is not None and (
+            place in posting.cities if place in _PLACE_COUNTRY else country in posting.countries
+        )
+        if not here:
+            return _left(field, "not_the_posting_location")
+    return _answers_value("relocation", "no_relocation")(field, ctx, s, m)
+
+
+def _flag(attr: str) -> Handler:
+    def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+        value = getattr(s.answers, attr)
+        if value is None:
+            return _left(field, f"no_{attr}")
+        if field.kind in ("text", "textarea"):
+            return _left(field, "not_a_yes_or_no")
+        return _boolean(field, value, f"answers.{attr}")
+
+    return handler
+
+
 # A currency the label names: a range in another currency is never given for it.
 _CURRENCY_SIGNS = (
     (r"€|\beuros?\b", "EUR"),
     (r"£|\bpounds?\b", "GBP"),
     (r"(?<![a-z])\$|\bdollars?\b", "USD"),
-    (r"\bc\$|\bca\$", "CAD"),
-    (r"\bs\$", "SGD"),
-    (r"\ba\$", "AUD"),
 )
 _CURRENCY_CODES = (
     "EUR",
@@ -648,7 +820,7 @@ _CURRENCY_CODES = (
 )
 
 
-def _salary(field: FormField, ctx: Context, s: Sections, text: str) -> Answer | Left:
+def _salary(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
     a = s.answers
     stance = a.salary_stance_of
     if stance == "leave_blank":
@@ -657,6 +829,7 @@ def _salary(field: FormField, ctx: Context, s: Sections, text: str) -> Answer | 
         if not a.salary_policy:
             return _left(field, "no_salary_sentence")
         return _text(field, a.salary_policy, "answers.salary_policy")
+    text = m.string
     wanted = {code for pattern, code in _CURRENCY_SIGNS if re.search(pattern, text)}
     words = set(re.findall(r"[a-z]+", text))
     wanted |= {code for code in _CURRENCY_CODES if code.lower() in words}
@@ -671,7 +844,7 @@ def _salary(field: FormField, ctx: Context, s: Sections, text: str) -> Answer | 
 
 _EEO_TOPICS: tuple[tuple[str, str], ...] = (
     ("sexual_orientation", r"sexual orientation|orientation sexuelle"),
-    ("gender", r"\bgender\b|\bsex\b|\bsexe\b|\bgenre\b|gender identity"),
+    ("gender", r"\bgender\b|\bsex\b|\bsexe\b|\bgenre\b"),
     ("ethnicity", r"ethnic|origine"),
     ("race", r"\brace\b|racial"),
     ("disability", r"disabilit|handicap"),
@@ -681,6 +854,8 @@ _EEO_TOPICS: tuple[tuple[str, str], ...] = (
 
 
 def eeo_topic(text: str) -> str | None:
+    """The EEO topic a label touches anywhere, for the policy stage: such a label never reads
+    the bank. Only a label that fully matches an EEO template is answered."""
     for topic, pattern in _EEO_TOPICS:
         if re.search(pattern, text):
             return topic
@@ -688,7 +863,7 @@ def eeo_topic(text: str) -> str | None:
 
 
 def _eeo(topic: str) -> Handler:
-    def handler(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
+    def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
         policy = s.answers.eeo_policy
         if policy == "leave":
             return _left(field, "eeo_policy_leave")
@@ -696,8 +871,7 @@ def _eeo(topic: str) -> Handler:
             stored = next((e.answer for e in s.answers.eeo_answers if e.topic == topic), None)
             if stored is None:
                 return _left(field, "eeo_not_stored")
-            result = _text(field, stored, f"answers.eeo_answers.{topic}")
-            return result
+            return _text(field, stored, f"answers.eeo_answers.{topic}")
         if not field.options:
             return _left(field, "eeo_no_decline_option")
         picked = _family_option(_DECLINE, field.options)
@@ -728,57 +902,33 @@ def _years(s: Sections) -> tuple[float, float] | None:
     return years, years
 
 
-# An overall years question is made of these words, a number and a comparison, nothing else. A
-# technology, a tool, a domain or a role ("with React", "relevant", "in management") is a subject
-# the profile stores no years for.
-_YEARS_WORDS = _words(
-    "how many years year yrs of total overall professional work working experience",
-    "experiences do you have has your the in number what is are yes no combien d annees annee",
-    "ans an experience experiences professionnelle professionnelles professionnel",
-    "professionnels avez vous au total nombre quel quelle est votre vos oui non",
-)
-_N = r"(\d+(?:[.,]\d+)?)"
-# Each comparison, its operator; the first that matches decides, and its words are taken out.
+# Each comparison of a years slot, its operator; the first that matches decides.
 _COMPARISONS: tuple[tuple[str, str], ...] = (
     (
-        rf"\b(?:no more than|not more than|pas plus de|at most|up to|au plus|au maximum|maximum(?: of)?|jusqu'a)\s+{_N}",
+        rf"\b(?:no more than|not more than|pas plus de|at most|up to|au plus|au maximum|maximum(?: of)?)\s+{_N}",
         "le",
     ),
-    (rf"\b(?:less than|fewer than|under|below|moins de|inferieure? a)\s+{_N}", "lt"),
-    (rf"\b(?:more than|over|greater than|in excess of|plus de|superieure? a)\s+{_N}", "gt"),
+    (rf"\b(?:less than|fewer than|under|below|moins de)\s+{_N}", "lt"),
+    (rf"\b(?:more than|over|greater than|plus de)\s+{_N}", "gt"),
     (
-        rf"\b(?:at least|a minimum of|minimum(?: of)?|min\.?|au moins|au minimum|un minimum de)\s+{_N}",
+        rf"\b(?:at least|a minimum of|minimum(?: of)?|au moins|au minimum|un minimum de)\s+{_N}",
         "ge",
     ),
+    (rf"{_N}\s*\+", "ge"),
     (rf"{_N}\s+(?:or more|or above|ou plus|et plus)\b", "ge"),
     (rf"{_N}\s+(?:or less|or fewer|ou moins)\b", "le"),
-    (rf"{_N}\s*\+", "ge"),
-    (rf"{_N}\s+(?:years?|ans?)\s+(?:or more|or longer|ou plus|et plus|minimum)\b", "ge_after"),
-    (rf"{_N}\s+(?:years?|ans?)\s+(?:or less|or fewer|ou moins|maximum)\b", "le_after"),
+    (rf"{_N}\s+(?:years?|yrs|ans?)\s+(?:or more|or longer|ou plus|et plus|minimum)\b", "ge"),
+    (rf"{_N}\s+(?:years?|yrs|ans?)\s+(?:or less|or fewer|ou moins|maximum)\b", "le"),
+    (rf"{_N}\s*(?:years?|yrs|ans?)\b", "ge"),  # "Do you have 5 years of experience?"
 )
 
 
-def _comparison(text: str) -> tuple[str, float, str] | str | None:
-    """The comparison a years question makes, as (operator, number, text without it); None for
-    a question with no number; a reason for one it cannot read (two numbers, a range)."""
-    if len(re.findall(r"\d+(?:[.,]\d+)?", text)) > 1:
-        return "two_numbers"
+def _comparison(slot: str) -> tuple[str, float]:
     for pattern, op in _COMPARISONS:
-        found = re.search(pattern, text)
+        found = re.search(pattern, slot)
         if found:
-            rest = text[: found.start()] + " " + text[found.end() :]
-            if op.endswith("_after"):
-                rest += " years"
-                op = op.removesuffix("_after")
-            return op, float(found.group(1).replace(",", ".")), rest
-    bare = re.search(rf"{_N}\s*(?:years?|ans?)\b", text)
-    if bare:  # "Do you have 5 years of experience?" reads as at least five
-        return (
-            "ge",
-            float(bare.group(1).replace(",", ".")),
-            text[: bare.start()] + " years " + text[bare.end() :],
-        )
-    return None
+            return op, float(found.group(1).replace(",", "."))
+    raise ValueError(slot)  # the years slot always holds one of the forms above
 
 
 def _holds(op: str, low: float, high: float, n: float) -> bool | None:
@@ -821,33 +971,25 @@ def _range_option(options: tuple[str, ...], low: float, high: float) -> str | No
     return hits[0] if len(hits) == 1 else None
 
 
-def _experience_years(field: FormField, ctx: Context, s: Sections, text: str) -> Answer | Left:
-    """Overall years of experience, and only those: the question must be about overall or
-    professional experience, every comparison is read with its operator, and a span that
-    straddles the threshold leaves the field."""
-    asked = _comparison(re.sub(r"\(?\byes ?/ ?no\b\)?|\(?\boui ?/ ?non\b\)?", " ", text))
-    if isinstance(asked, str):
-        return _left(field, asked)
-    rest = asked[2] if asked else text
-    if _NEGATION.search(rest):
-        return _left(field, "negated_question")
-    if any(word not in _YEARS_WORDS for word in re.findall(r"[a-z0-9]+", rest)):
-        return _left(field, "subject_years_not_stated")
+def _experience_years(
+    field: FormField, ctx: Context, s: Sections, m: re.Match[str]
+) -> Answer | Left:
+    """Overall years of experience: a number or a range option for "how many", a yes or no for
+    a threshold read with its operator; a span that straddles the threshold is left."""
+    slot = m.groupdict().get("years")
     years = _years(s)
-    boolean_form = field.kind in ("yes_no", "checkbox") or (
-        field.kind in _CHOICES and _family_option(YES, field.options) is not None
-    )
-    if boolean_form:
-        if asked is None:
-            return _left(field, "no_threshold")
+    if slot is not None:
+        if not _boolean_form(field):
+            return _left(field, "not_a_yes_or_no")
         if years is None:
             return _left(field, "years_not_stated")
-        held = _holds(asked[0], years[0], years[1], asked[1])
+        op, n = _comparison(slot)
+        held = _holds(op, years[0], years[1], n)
         if held is None:
             return _left(field, "years_too_close_to_call")
         return _boolean(field, held, "skills.years_experience")
-    if asked is not None:
-        return _left(field, "not_a_yes_or_no")
+    if field.kind in ("yes_no", "checkbox"):
+        return _left(field, "no_threshold")
     if years is None:
         return _left(field, "years_not_stated")
     if field.kind in _CHOICES and field.options:
@@ -868,7 +1010,7 @@ def _latest_school(s: Sections) -> Any:
     return schools[0] if schools else None
 
 
-def _education(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
+def _education(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
     degree, source = s.answers.highest_degree, "answers.highest_degree"
     if not degree:
         school = _latest_school(s)
@@ -876,7 +1018,9 @@ def _education(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | 
     return _text(field, degree, source) if degree else _left(field, "no_degree")
 
 
-def _graduation_year(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
+def _graduation_year(
+    field: FormField, ctx: Context, s: Sections, m: re.Match[str]
+) -> Answer | Left:
     if s.answers.highest_degree_year:
         return _text(field, str(s.answers.highest_degree_year), "answers.highest_degree_year")
     school = _latest_school(s)
@@ -886,14 +1030,14 @@ def _graduation_year(field: FormField, ctx: Context, s: Sections, _: str) -> Ans
     return _left(field, "no_graduation_year")
 
 
-def _school(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
+def _school(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
     school = _latest_school(s)
     return (
         _text(field, school.school, "experience.education") if school else _left(field, "no_school")
     )
 
 
-def _heard(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
+def _heard(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
     heard = s.answers.heard_about
     if not heard:
         return _left(field, "no_heard_about")
@@ -905,7 +1049,9 @@ def _heard(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left
     return _text(field, heard, "answers.heard_about")
 
 
-def _previously_applied(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
+def _previously_applied(
+    field: FormField, ctx: Context, s: Sections, m: re.Match[str]
+) -> Answer | Left:
     if ctx.applied_before:
         return _boolean(field, True, "applications")
     default = s.answers.previously_applied_default
@@ -914,21 +1060,9 @@ def _previously_applied(field: FormField, ctx: Context, s: Sections, _: str) -> 
     return _boolean(field, default, "answers.previously_applied_default")
 
 
-def _flag(attr: str) -> Handler:
-    def handler(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
-        value = getattr(s.answers, attr)
-        if value is None:
-            return _left(field, f"no_{attr}")
-        if field.kind in ("text", "textarea"):
-            return _left(field, "not_a_yes_or_no")
-        return _boolean(field, value, f"answers.{attr}")
-
-    return handler
-
-
-def _document(field: FormField, ctx: Context, s: Sections, text: str) -> Answer | Left:
+def _document(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
     docs = ctx.documents
-    letter = bool(re.search(r"cover|letter|lettre|motivation", text))
+    letter = bool(re.search(r"letter|lettre", m.string))
     if field.kind == "file":
         path = (docs.letter_path if letter else docs.cv_path) if docs else None
         return (
@@ -941,145 +1075,375 @@ def _document(field: FormField, ctx: Context, s: Sections, text: str) -> Answer 
     return _left(field, "free_text_for_the_agent")
 
 
-def _free_text(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
-    return _left(field, "free_text_for_the_agent")
+# --- the templates -------------------------------------------------------------------------
 
 
-def _city(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
-    city = s.identity.city
-    return _text(field, city, "identity.city") if city else _left(field, "no_city")
+@dataclass(frozen=True)
+class Template:
+    """One canonical question: anchored patterns over the normalised label, English and French,
+    with slots (a country, a place, a language, a currency, a years comparison), and the rule
+    that answers it. `negated` marks a template written for an exact negated form."""
+
+    name: str
+    patterns: tuple[str, ...]
+    handler: Handler
+    negated: bool = False
 
 
-def _location(field: FormField, ctx: Context, s: Sections, _: str) -> Answer | Left:
-    parts = [p for p in (s.identity.city, s.identity.country) if p]
-    if not parts:
-        return _left(field, "no_location")
-    return _text(field, ", ".join(parts), "identity.city")
+def _t(name: str, handler: Handler, *patterns: str, negated: bool = False) -> Template:
+    expanded = tuple(
+        p.replace("{C}", C_SLOT)
+        .replace("{P}", P_SLOT)
+        .replace("{L}", L_SLOT)
+        .replace("{Y}", Y_SLOT)
+        .replace("{CUR}", _CURRENCY)
+        for p in patterns
+    )
+    return Template(name, expanded, handler, negated)
 
 
-_SALARY = r"salary|compensation|remuneration|pay expectation|prtentions|pretentions|salaire|expected pay|rate expectation|tarif"
+_YOUR = r"(?:(?:what is |what s )?your |votre |quel est votre |quelle est votre )?"
+_IN = r"(?:in|en|au|aux|a|dans|pour)"
+_EXPERIENCE = r"(?:(?:professional|work|working|total|overall|industry) )*experience"
+_SPONSORSHIP = (
+    r"(?:visa |work visa |employment visa |immigration |employer )?sponsorship"
+    r"(?: for (?:an? )?(?:employment|work) visa(?: status)?| for employment visa status"
+    r"| for employment)?(?: e g h 1b(?: visa)?(?: status)?)?"
+)
+_SUBMIT = r"(?:have you |avez vous )"
 
-
-# Order matters: the first rule whose pattern matches the folded label decides the field.
-RULES: tuple[tuple[str, str, Handler], ...] = (
-    (
-        "preferred_name",
-        r"preferred (?:first )?name|nickname|prenom d'usage|nom d'usage|surnom",
-        _preferred_name,
+TEMPLATES: tuple[Template, ...] = (
+    _t(
+        "first_name",
+        _name_part("first"),
+        rf"{_YOUR}(?:legal )?(?:first|given) name|forename|prenom",
     ),
-    ("pronouns", r"pronoun|pronom", _pronouns),
-    (
-        "eeo_sexual_orientation",
-        r"sexual orientation|orientation sexuelle",
-        _eeo("sexual_orientation"),
-    ),
-    ("eeo_gender", r"\bgender\b|\bsex\b|\bsexe\b|\bgenre\b", _eeo("gender")),
-    ("eeo_ethnicity", r"ethnic|origine ethnique", _eeo("ethnicity")),
-    ("eeo_race", r"\brace\b|racial", _eeo("race")),
-    ("eeo_disability", r"disabilit|handicap", _eeo("disability")),
-    ("eeo_veteran", r"veteran|military service|ancien combattant", _eeo("veteran")),
-    ("eeo_age", r"\bage\b|date of birth|birth ?date|date de naissance|birthday", _eeo("age")),
-    ("first_name", r"first name|given name|forename|\bprenom\b", _name_part("first")),
-    (
+    _t(
         "last_name",
-        r"last name|surname|family name|nom de famille|^nom$|^nom \*?$",
         _name_part("last"),
+        rf"{_YOUR}(?:legal )?(?:last|family) name|surname|{_YOUR}nom(?: de famille)?",
     ),
-    (
+    _t(
         "full_name",
-        r"full name|legal name|nom complet|nom et prenom|prenom et nom|^name$|^your name$|^nom prenom$",
         _name_part("full"),
+        rf"{_YOUR}(?:full |legal |full legal |complete )?name|first and last name"
+        r"|nom complet|nom et prenom|prenom et nom|nom prenom|prenom nom",
     ),
-    ("email", r"e-?mail|courriel", _identity_value("email")),
-    ("phone", r"phone|mobile|telephone|portable|\btel\b", _identity_value("phone")),
-    ("linkedin", r"linkedin", _link),
-    ("links", r"github|portfolio|website|site web|personal (?:site|page)|\burl\b|\blien\b", _link),
-    (
-        "authorization",
-        r"authori[sz]ed to work|authori[sz]ation to work|right to work|legally (?:able|entitled|eligible)|eligible to work|work permit|work authori[sz]ation|autorisation de travail|autorise(?:\(e\)|e)?s? a travailler|permis de travail|droit de travailler",
-        _work_authorization,
+    _t(
+        "preferred_name",
+        _answers_value("preferred_name", "no_preferred_name"),
+        rf"{_YOUR}preferred (?:first )?name|nickname|prenom d usage|surnom",
     ),
-    ("sponsorship", r"sponsor|visa|parrain", _work_authorization),
-    (
-        "notice",
-        r"notice period|preavis|how soon can you|when can you (?:join|start)",
-        _plain_answer("notice_period", "no_notice_period"),
+    _t(
+        "pronouns",
+        _answers_value("pronouns", "no_pronouns"),
+        rf"{_YOUR}(?:preferred )?pronouns|{_YOUR}pronoms",
     ),
-    (
-        "start_date",
-        r"earliest start|start date|available (?:from|to start)|availability|date de debut|date de prise de poste|disponibilite|disponible a partir|date de demarrage",
-        _start_date,
+    _t(
+        "email",
+        _identity_value("email"),
+        rf"{_YOUR}(?:e mail|email|mail)(?: address)?"
+        r"|(?:votre )?adresse (?:e mail|email|mail|electronique|courriel)|(?:votre )?courriel",
     ),
-    (
-        "relocation",
-        r"relocat|demenag|mobilite geographique",
-        _plain_answer("relocation", "no_relocation"),
+    _t(
+        "phone_country_code",
+        _phone_code,
+        r"(?:phone |telephone |mobile )?country (?:calling )?code|(?:phone )?dial(?:l)?ing code"
+        r"|indicatif(?: pays| telephonique| du pays| international)?|code pays(?: telephonique)?",
     ),
-    (
-        "travel",
-        r"willing(?:ness)? to travel|travel(?:ling)? (?:required|requirement)|deplacements?",
-        _plain_answer("travel", "no_travel"),
+    _t(
+        "phone",
+        _identity_value("phone"),
+        rf"{_YOUR}(?:mobile |cell |contact )?(?:phone|telephone)(?: number)?"
+        rf"|{_YOUR}(?:mobile|cell)(?: phone)?(?: number)?|tel|{_YOUR}contact number"
+        r"|(?:votre )?(?:(?:numero|num|no|n) de )?(?:telephone|portable|mobile)(?: portable| mobile)?",
     ),
-    ("onsite", r"on-?site|in-?office|sur site|presentiel", _flag("willing_onsite")),
-    ("hybrid", r"hybrid|hybride", _flag("willing_hybrid")),
-    (
-        "background_check",
-        r"background check|criminal record|verification des antecedents|casier judiciaire",
-        _flag("background_check_consent"),
+    _t(
+        "city",
+        _identity_value("city"),
+        rf"{_YOUR}(?:current )?city(?: of residence)?|location city|{_YOUR}ville(?: de residence| actuelle)?",
     ),
-    (
-        "reference_check",
-        r"reference check|references? (?:check|contact)|contacter vos references",
-        _flag("reference_check_consent"),
-    ),
-    (
-        "salary",
-        _SALARY,
-        _salary,
-    ),
-    (
-        "previously_applied",
-        r"previously (?:applied|worked|employed)|applied (?:to|before|for a position)|(?:ever|already) (?:applied|worked)|deja (?:postule|travaille)|ancien(?:ne)? (?:salarie|employe)",
-        _previously_applied,
-    ),
-    (
-        "how_heard",
-        r"how did you (?:hear|find|learn)|where did you (?:hear|find)|source of application|comment avez-vous (?:entendu|connu|decouvert)|referral source",
-        _heard,
-    ),
-    (
-        "years_experience",
-        r"years? of (?:\w+ )*experience|(?:\d+) ?\+? ?years|annees? d'experience|ans d'experience|how many years|combien d'annees",
-        _experience_years,
-    ),
-    (
-        "highest_degree",
-        r"highest (?:level of )?(?:education|degree)|level of education|education level|niveau d'etudes|niveau de formation|diplome|^degree$",
-        _education,
-    ),
-    (
-        "graduation_year",
-        r"graduation (?:year|date)|year of graduation|annee d'obtention|annee de diplome",
-        _graduation_year,
-    ),
-    ("school", r"school|university|universite|ecole|institution|college", _school),
-    ("languages", r"language|langue|\bspeak\b|fluen|proficien|parlez", _languages),
-    ("cover_letter", r"cover letter|lettre de motivation|motivation letter", _document),
-    ("resume", r"resume|\bcv\b|curriculum", _document),
-    ("city", r"^(?:current |your )?(?:city|ville)(?: actuelle)?$", _city),
-    (
+    _t(
         "location",
-        r"current location|where are you (?:based|located)|\bcity\b|\bville\b|^location$|localisation|lieu de residence",
         _location,
+        rf"{_YOUR}(?:current )?location|where are you (?:based|located)|where do you live"
+        r"|localisation|lieu de residence|ou habitez vous|ou etes vous base",
     ),
-    ("country", r"\bcountry\b|\bpays\b|country of residence", _identity_value("country")),
-    (
-        "free_text",
-        r"why|pourquoi|tell us|motivation|describe|decrivez|racontez|cover|anything else|additional information|informations? complementaires?",
-        _free_text,
+    _t(
+        "country_of_residence",
+        _identity_value("country"),
+        rf"{_YOUR}(?:current )?country(?: of residence)?|(?:in )?which country do you (?:live|reside) in"
+        r"|(?:in )?which country do you (?:live|reside)|country you (?:live|reside) in"
+        rf"|{_YOUR}pays(?: de residence)?(?: actuel)?|dans quel pays residez vous",
+    ),
+    _t(
+        "linkedin",
+        _link("linkedin"),
+        rf"{_YOUR}linkedin(?: profile)?(?: url| link| page)?|(?:profil|lien|url|page) linkedin",
+    ),
+    _t("github", _link("github"), rf"{_YOUR}github(?: profile)?(?: url| link)?"),
+    _t(
+        "website",
+        _link("website"),
+        rf"{_YOUR}(?:personal )?(?:website|web site)(?: url| link)?"
+        rf"|{_YOUR}personal (?:site|page)(?: url)?|{_YOUR}portfolio(?: website)?(?: url| link)?"
+        r"|(?:votre )?site (?:web|internet)(?: personnel)?|(?:votre )?site personnel"
+        r"|(?:portfolio|website) (?:/|or) (?:portfolio|website)(?: url| link)?"
+        r"|website blog (?:/|or) portfolio",
+    ),
+    _t(
+        "authorised_to_work",
+        _work("authorised"),
+        rf"(?:are you )?(?:legally |lawfully )?(?:authori[sz]ed|eligible|entitled|permitted) to work {_IN} {{C}}",
+        r"(?:are you )?legally able to work in {C}",
+        r"do you have (?:the )?(?:legal )?right to work in {C}",
+        r"do you have (?:valid )?(?:legal )?work authori[sz]ation (?:for|in) {C}",
+        rf"(?:etes vous )?(?:legalement )?(?:autorise|eligible|habilite) a travailler {_IN} {{C}}",
+        rf"avez vous le droit de travailler {_IN} {{C}}",
+    ),
+    _t(
+        "authorised_without_sponsorship",
+        _work("authorised"),
+        r"(?:can you|are you (?:legally )?able to|are you (?:legally )?authori[sz]ed to"
+        r"|do you have the right to|are you eligible to) work in {C} without"
+        r" (?:needing |requiring |the need for )?(?:any |a |an )?(?:visa |work visa |employer |immigration )?sponsorship",
+        rf"pouvez vous travailler {_IN} {{C}} sans (?:avoir besoin d un |besoin d un |besoin de )?"
+        r"(?:parrainage|sponsoring)(?: de visa)?",
+        negated=True,
+    ),
+    _t(
+        "needs_sponsorship",
+        _work("needs"),
+        rf"(?:(?:will|would|do) you (?:now or in the future )?)?(?:require|need)s? {_SPONSORSHIP}"
+        rf"(?: now or in the future)?(?: to work {_IN} {{C}})?",
+        r"(?:will|would|do) you (?:now or in the future )?(?:require|need) (?:us |the company |an employer )?"
+        r"to sponsor (?:a |an |your )?(?:work |employment )?visa(?: to work in {C})?",
+        r"(?:visa )?sponsorship (?:required|needed)(?: to work in {C})?",
+        rf"(?:avez|aurez) vous (?:maintenant ou a l avenir )?besoin (?:maintenant ou a l avenir )?d (?:un |une )?(?:parrainage|sponsoring)"
+        rf"(?: de visa| pour un visa)?(?: maintenant ou a l avenir| maintenant ou dans le futur)?"
+        rf"(?: pour travailler {_IN} {{C}})?",
+        rf"(?:necessitez|necessiterez) vous un (?:parrainage|sponsoring)(?: de visa)?(?: pour travailler {_IN} {{C}})?",
+    ),
+    _t(
+        "work_authorisation_status",
+        _work("status"),
+        rf"{_YOUR}(?:work authori[sz]ation|visa status|immigration status)(?: status)?(?: (?:in|for) {{C}})?",
+        rf"(?:votre )?autorisation de travail(?: {_IN} {{C}})?",
+    ),
+    _t(
+        "notice_period",
+        _answers_value("notice_period", "no_notice_period"),
+        rf"{_YOUR}notice period|when (?:can|could) you (?:start|join)|how soon (?:can|could) you (?:start|join)(?: us)?",
+        r"(?:quel est votre |votre |duree de |delai de |duree du )?preavis",
+    ),
+    _t(
+        "earliest_start",
+        _start_date,
+        rf"{_YOUR}(?:earliest |earliest possible |possible |expected )?start date"
+        r"|when is your earliest start date|availability date|date (?:of availability|available)"
+        r"|when are you available to start|available to start",
+        rf"{_YOUR}date de (?:disponibilite|debut|demarrage|prise de poste)(?: souhaitee| possible)?"
+        r"|disponibilite|a partir de quand etes vous disponible",
+    ),
+    _t(
+        "relocation",
+        _relocation,
+        r"(?:are you |would you be )?(?:willing|open|ready) to relocate(?: to {P})?|willingness to relocate"
+        r"|(?:are you |would you be )?(?:willing|open) to relocation",
+        r"(?:etes vous )?(?:pret|ouvert|dispose)e? a demenager(?: (?:a|en|au|aux) {P})?"
+        r"|mobilite geographique|etes vous mobile(?: geographiquement)?",
+    ),
+    _t(
+        "travel",
+        _answers_value("travel", "no_travel"),
+        r"(?:are you )?willing to travel|willingness to travel|travel requirements?",
+        r"(?:etes vous )?(?:pret|dispose)e? a (?:vous deplacer|voyager)|deplacements",
+    ),
+    _t(
+        "willing_onsite",
+        _flag("willing_onsite"),
+        r"(?:are you |would you be |i am )?(?:willing|open|able|comfortable|happy) "
+        r"(?:to work|to working|working|with working) (?:on site|onsite|in (?:the )?office|in person"
+        r"|from (?:the|our) office)",
+        r"(?:etes vous )?(?:pret|ouvert|dispose)e? a travailler (?:sur site|en presentiel|au bureau)"
+        r"|acceptez vous (?:de travailler|le travail) (?:sur site|en presentiel)",
+    ),
+    _t(
+        "willing_hybrid",
+        _flag("willing_hybrid"),
+        r"(?:are you |would you be |i am )?(?:willing|open|able|comfortable|happy) "
+        r"(?:to work in|to working in|working in|to) (?:an? )?hybrid"
+        r"(?: (?:work|working|schedule|model|work model|working model|arrangement|setup|setting"
+        r"|environment|role|basis))?",
+        r"(?:etes vous )?(?:pret|ouvert|dispose)e? (?:a|au) (?:travailler en |un )?(?:mode |travail |rythme )?hybride",
+    ),
+    _t(
+        "background_check",
+        _flag("background_check_consent"),
+        r"(?:do you |would you )?(?:consent|agree) to (?:a |undergo a )?background checks?"
+        r"|background check consent|are you willing to undergo a background check",
+        r"(?:acceptez vous|consentez vous a) (?:une |la )?verification des antecedents",
+    ),
+    _t(
+        "reference_check",
+        _flag("reference_check_consent"),
+        r"(?:do you |would you )?(?:consent|agree) to (?:a )?reference checks?"
+        r"|reference check consent|may we contact your references(?: reference check)?",
+        r"acceptez vous que nous contactions vos references",
+    ),
+    _t(
+        "expected_salary",
+        _salary,
+        r"(?:what (?:are|is) your |your )?(?:(?:annual|yearly|gross|base|total) )*"
+        r"(?:salary expectations?|expected (?:(?:annual|yearly|gross|base) )*(?:salary|compensation|pay)"
+        r"|desired (?:(?:annual|yearly|gross|base) )*(?:salary|compensation|pay)|salary requirements?"
+        r"|compensation expectations?|pay expectations?)(?: (?:annual|gross|per year|per annum|annual gross))?"
+        r"(?: (?:in )?{CUR})?",
+        r"(?:vos |quelles sont vos )?(?:pretentions salariales|attentes salariales)"
+        r"(?: brut(?:es)? annuel(?:les)?| annuel(?:les)?)?(?: (?:en )?{CUR})?",
+        r"(?:salaire|remuneration) (?:souhaitee?|attendue?|envisagee?|demandee?)"
+        r"(?: brut(?:e)? annuel(?:le)?| annuel(?:le)?)?(?: (?:en )?{CUR})?",
+    ),
+    _t(
+        "eeo_gender",
+        _eeo("gender"),
+        rf"{_YOUR}(?:gender|gender identity|sex)|how do you (?:describe|identify) your gender",
+        rf"{_YOUR}(?:sexe|genre)",
+    ),
+    _t("eeo_race", _eeo("race"), rf"{_YOUR}race(?: / ethnicity)?|race and ethnicity"),
+    _t(
+        "eeo_ethnicity",
+        _eeo("ethnicity"),
+        rf"{_YOUR}(?:ethnicity|ethnic (?:origin|background|group))|{_YOUR}origine ethnique"
+        r"|(?:are you )?hispanic (?:/|or) latino",
+    ),
+    _t(
+        "eeo_disability",
+        _eeo("disability"),
+        rf"{_YOUR}disability(?: status)?|do you have a disability|are you a person with a disability"
+        r"|voluntary self identification of disability",
+        r"(?:etes vous en )?situation de handicap|avez vous un handicap|handicap",
+    ),
+    _t(
+        "eeo_veteran",
+        _eeo("veteran"),
+        rf"{_YOUR}(?:protected |military )?veteran status|are you a (?:protected )?veteran",
+        r"statut d ancien combattant",
+    ),
+    _t(
+        "eeo_sexual_orientation",
+        _eeo("sexual_orientation"),
+        rf"{_YOUR}sexual orientation|{_YOUR}orientation sexuelle",
+    ),
+    _t(
+        "eeo_age",
+        _eeo("age"),
+        rf"{_YOUR}age(?: range| group| bracket)?|{_YOUR}(?:date of birth|birth date|birthdate)",
+        rf"{_YOUR}(?:date de naissance|tranche d age|age)",
+    ),
+    _t(
+        "how_heard",
+        _heard,
+        r"how did you (?:hear|find out|learn) (?:about|of) (?:us|this (?:job|role|position|opportunity"
+        r"|offer|vacancy|posting)|the (?:job|role|position|opportunity)|our company|this company)"
+        r"|how did you find (?:us|this (?:job|role|position|opportunity))"
+        r"|where did you (?:hear|find out|learn) (?:about|of) (?:us|this (?:job|role|position|opportunity))"
+        r"|where did you find (?:us|this (?:job|role|position))|(?:referral |application )?source",
+        r"comment avez vous (?:connu|decouvert) (?:notre entreprise|notre societe|cette offre|ce poste|nous|l entreprise)"
+        r"|comment avez vous entendu parler (?:de nous|de cette offre|de ce poste|de notre entreprise)"
+        r"|ou avez vous (?:vu|trouve) cette offre",
+    ),
+    _t(
+        "previously_applied",
+        _previously_applied,
+        rf"{_SUBMIT}(?:previously |ever |already )?applied (?:to|at|with|for a (?:job|role|position) (?:at|with))"
+        r" (?:this company|us|our company|the company|this organi[sz]ation)(?: before| previously)?"
+        r"|have you (?:previously |ever |already )?applied (?:here|before|here before)",
+        r"avez vous deja postule (?:chez nous|dans notre (?:entreprise|societe)|aupres de nous)"
+        r"|avez vous deja candidate (?:chez nous|aupres de nous)",
+    ),
+    _t(
+        "years_of_experience",
+        _experience_years,
+        rf"how many years of {_EXPERIENCE} do you have(?: in total| overall)?",
+        rf"(?:total |overall )?(?:number of )?years of {_EXPERIENCE}(?: in total| overall)?",
+        rf"do you have {{Y}}(?: of)? {_EXPERIENCE}",
+        r"combien d annees d experience(?: professionnelle)? avez vous(?: au total)?",
+        r"(?:nombre d )?(?:annees|ans) d experience(?: professionnelle)?(?: au total)?"
+        r"|experience(?: professionnelle)? (?:en )?annees",
+        r"avez vous {Y} d experience(?: professionnelle)?",
+    ),
+    _t(
+        "highest_degree",
+        _education,
+        rf"{_YOUR}highest (?:level of )?(?:education|degree|qualification)(?: obtained| completed)?"
+        r"|level of education|education level|degree",
+        r"niveau d etudes|niveau de (?:formation|diplome)|(?:votre )?(?:dernier |plus haut )?diplome(?: obtenu)?",
+    ),
+    _t(
+        "graduation_year",
+        _graduation_year,
+        r"graduation (?:year|date)|year of graduation|(?:what )?year did you graduate",
+        r"annee d obtention(?: du diplome)?|annee de (?:diplome|diplomation|fin d etudes)",
+    ),
+    _t(
+        "school",
+        _school,
+        rf"{_YOUR}(?:name of (?:your )?)?(?:school|university|college|institution)(?: name| attended)?",
+        r"(?:votre )?(?:ecole|universite|etablissement)(?: d enseignement)?",
+    ),
+    _t(
+        "languages",
+        _languages,
+        rf"{_YOUR}languages(?: spoken| you speak)?|spoken languages|(?:which|what) languages do you speak"
+        r"|language skills",
+        r"(?:vos )?langues(?: parlees)?|quelles langues parlez vous|(?:vos )?competences linguistiques",
+    ),
+    _t("speaks", _speaks(False), r"(?:do|can) you speak {L}", r"parlez vous {L}"),
+    _t(
+        "fluent_in",
+        _speaks(True),
+        r"are you fluent in {L}",
+        r"parlez vous couramment {L}",
+        r"etes vous courant en {L}",
+    ),
+    _t(
+        "cover_letter",
+        _document,
+        r"(?:your |upload (?:your |a )?|attach (?:your |a )?)?(?:cover letter|motivation letter)",
+        r"(?:votre )?lettre de motivation",
+    ),
+    _t(
+        "resume",
+        _document,
+        r"(?:your |upload (?:your |a )?|attach (?:your |a )?)?(?:resume|cv|curriculum vitae|resume / cv|cv / resume)",
+        r"(?:votre )?(?:cv|curriculum vitae)",
     ),
 )
-_COMPILED = tuple((name, re.compile(pattern), handler) for name, pattern, handler in RULES)
+# One regex per pattern: two patterns of a template may hold the same slot.
+_COMPILED = tuple((t, re.compile(rf"^(?:{p})$")) for t in TEMPLATES for p in t.patterns)
+
+
+def match_template(label: str) -> tuple[Template, re.Match[str]] | str:
+    """The template a label fully matches, or why none does: "two_questions", "negated_question"
+    (a template matched, but the label is negated and the template is not written for that) or
+    "not_a_known_question"."""
+    text = normalise(label)
+    if _two_questions(label, text):
+        return "two_questions"
+    for template, pattern in _COMPILED:
+        found = pattern.match(text)
+        if found is None:
+            continue
+        if not template.negated:
+            rest = text
+            for slot in ("years",):
+                if found.groupdict().get(slot):
+                    rest = rest.replace(found.group(slot), " ")
+            if _NEGATED.search(rest):
+                return "negated_question"
+        return template, found
+    return "not_a_known_question"
 
 
 # --- policies first: what no source may answer, and the person's stated policies ------------
@@ -1091,20 +1455,29 @@ _THIRD_PERSON = re.compile(
     r"|\brecommand|\bconjoint|\bresponsable\b|superieur hierarchique|\bguardian|\btuteur"
 )
 _HOW_HEARD = r"how did you (?:hear|find|learn)|where did you (?:hear|find)|source of application|comment avez-vous (?:entendu|connu|decouvert)|referral source"
-_REFERENCE_CHECK = r"reference check|references? (?:check|contact)|contacter vos references"
+_REFERENCE_CHECK = r"reference check|references? (?:check|contact)|contacter vos references|contactions vos references"
 # A question about age: never read as years of experience, and the profile stores no age.
 _AGE = re.compile(
     r"\byears? old\b|\bold\b|\byears? of age\b|\bage of\b|legal age|age legal|age minimum"
     r"|\bmajeure?s?\b|\bmajorite\b|\b(?:16|18|21)\s*(?:\+|ans\b(?!\s*d))"
     r"|\b(?:over|at least|above|au moins|plus de)\s+(?:16|18|21)\b(?!\s*\+?\s*(?:years?|ans)\s+(?:of|d))"
 )
-_CITIZENSHIP = re.compile(r"citizen|nationalit|citoyen|passport|passeport")
-_CURRENT_PAY = re.compile(
-    r"\b(?:current|currently|present|previous|last|today'?s?|existing|actuel(?:le)?s?|dernier|derniere|precedente?)\b"
-    r"(?:\W+\w+){0,3}?\W+(?:salary|compensation|pay|remuneration|salaire|package|base|ctc|wage|earn\w*|gagne\w*)\b"
-    r"|\b(?:salary|compensation|remuneration|salaire|package|ctc|pay)\b(?:\W+\w+){0,3}?\W+(?:actuel(?:le)?|current|currently|today|now)\b"
+# Citizenship and birthplace: never the country of residence.
+_CITIZENSHIP = re.compile(
+    r"citizen|nationalit|citoyen|passport|passeport|\bborn\b|(?:country|place|city) of birth"
+    r"|birth ?place|(?:pays|lieu|ville) de naissance|\bnee?\(?e?\)? (?:a|en|au)\b"
+)
+_CRIMINAL = re.compile(r"criminal|casier|convict|condamn|felon|offen[cs]e|infraction|delit")
+# Pay received, not pay wanted: a pay word and a past or present qualifier, in either order.
+_PAY = re.compile(
+    r"\b(?:salary|salaries|compensation|pay|remuneration|salaire|package|ctc|wages?|earn\w*|gagne\w*)\b"
+)
+_PAID = re.compile(
+    r"\b(?:current|currently|present|previous|last|prior|past|former|history|historique|today'?s?"
+    r"|now|existing|drawn|earn\w*|gagne\w*|actuel(?:le)?s?|dernier|derniere|precedente?|ancien(?:ne)?)\b"
 )
 _PRONOUNS = r"pronoun|pronom"
+_SALARY_WORDS = r"salary|compensation|remuneration|pay expectation|pretentions|salaire|expected pay|rate expectation|tarif"
 
 
 # A long answer the question asks the person to write: the agent's, whatever keyword it holds.
@@ -1113,30 +1486,35 @@ _FREE_TEXT_OPENER = re.compile(
 )
 
 
-def _policies_first(field: FormField, ctx: Context, s: Sections, text: str) -> Answer | Left | None:
-    """What is settled before the answer bank is read: fields no source may fill (someone
-    else's details, age, citizenship, current pay) and the person's policies (EEO, salary
-    stance). A bank answer typed once never overrides a policy. None: go on to the bank."""
+def _policies_first(field: FormField, s: Sections, text: str) -> Left | bool:
+    """What is settled before the answer bank is read: the fields no source may fill (someone
+    else's details, age, citizenship and birthplace, a criminal record, pay received, free text)
+    are left; a label that touches an EEO topic or salary skips the bank, so a bank answer typed
+    once never overrides a policy. Returns the Left, else whether the bank may be read."""
     if _THIRD_PERSON.search(text) and not re.search(f"{_HOW_HEARD}|{_REFERENCE_CHECK}", text):
         return _left(field, "third_person")
     if _AGE.search(text):
         return _left(field, "age_not_stored")
     if _CITIZENSHIP.search(text):
         return _left(field, "citizenship_not_stored")
-    if _CURRENT_PAY.search(text):
+    if _CRIMINAL.search(text):
+        return _left(field, "criminal_record_not_stored")
+    if _PAY.search(text) and _PAID.search(text):
         return _left(field, "current_salary_not_stored")
-    if not re.search(_PRONOUNS, text):
-        for name, pattern, handler in _COMPILED:
-            if name.startswith("eeo_") and pattern.search(text):
-                return handler(field, ctx, s, text)
     if _FREE_TEXT_OPENER.search(text) and (
         field.kind == "textarea" or text.startswith(("why", "pourquoi"))
     ):
         # Written for one company: a banked answer is never replayed to another.
         return _left(field, "free_text_for_the_agent")
-    if re.search(_SALARY, text):
-        return _salary(field, ctx, s, text)
-    return None
+    if not re.search(_PRONOUNS, text) and eeo_topic(text):
+        if s.answers.eeo_policy == "leave":
+            return _left(field, "eeo_policy_leave")
+        return False
+    if re.search(_SALARY_WORDS, text):
+        if s.answers.salary_stance_of == "leave_blank":
+            return _left(field, "salary_leave_blank")
+        return False
+    return True
 
 
 def _leave_blank_hit(text: str, s: Sections) -> bool:
@@ -1147,7 +1525,7 @@ def _leave_blank_hit(text: str, s: Sections) -> bool:
     return False
 
 
-# A checkbox that asks about the person (a yes or no in disguise) goes by the rules below.
+# A checkbox that asks about the person (a yes or no in disguise) goes by the templates.
 _BOX_QUESTION = re.compile(r"relocat|on-?site|hybrid|authori[sz]ed|sponsor|willing|eligible")
 
 
@@ -1173,10 +1551,11 @@ def resolve(field: FormField, context: Context) -> Answer | Left:
         return _checkbox(field)  # a legal box, not a question about the person
     if _leave_blank_hit(text, sections):
         return Left("person_leave_blank", field.options, field.required)
-    settled = _policies_first(field, context, sections, text)
-    if settled is not None:
+    settled = _policies_first(field, sections, text)
+    if isinstance(settled, Left):
         return settled
-    bank = context.bank.lookup(field.label) if context.bank else None
+    # The bank answers the exact question it was typed for (its normalised key), nothing else.
+    bank = context.bank.lookup(field.label) if settled and context.bank else None
     if bank is not None and field.kind not in ("file", "checkbox"):
         if field.kind in _CHOICES and field.options and field.kind != "yes_no":
             picked = match_option(bank, field.options)
@@ -1186,11 +1565,10 @@ def resolve(field: FormField, context: Context) -> Answer | Left:
         if field.kind == "yes_no" and fold(bank) in (*YES, *NO):
             return _boolean(field, fold(bank) in YES, "bank")
         return Answer(bank, "bank")
-    for _name, pattern, handler in _COMPILED:
-        if pattern.search(text):
-            result = handler(field, context, sections, text)
-            if result is not None:
-                return result
-    if field.kind == "checkbox":
-        return _checkbox(field)
-    return Left("unknown_question", field.options, field.required)
+    matched = match_template(field.label)
+    if isinstance(matched, str):
+        if field.kind == "checkbox":
+            return _checkbox(field)
+        return Left(matched, field.options, field.required)
+    template, found = matched
+    return template.handler(field, context, sections, found)

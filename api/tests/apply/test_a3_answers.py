@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from app.apply.answers import (
+    EU_MEMBERS,
     Answer,
     Context,
     Documents,
@@ -14,6 +15,8 @@ from app.apply.answers import (
     Left,
     Posting,
     match_option,
+    match_template,
+    normalise,
     posting_countries,
     resolve,
 )
@@ -149,6 +152,65 @@ def test_a_profile_run_without_a_posting_leaves_the_country_questions() -> None:
     assert value("Email", context=nowhere) == full("identity")["email"]
 
 
+def test_an_eu_member_state_reads_the_eu_entry_and_nothing_else_does() -> None:
+    secs = sections(
+        work_authorization=[
+            {"country": "the EU", "answer": "EU citizen.", "needs_sponsorship": False},
+            {"country": "Switzerland", "answer": "Permit needed.", "needs_sponsorship": True},
+        ]
+    )
+    context = ctx(sections=secs)
+    for state in EU_MEMBERS:
+        label = f"Are you authorized to work in {state}?"
+        assert value(label, "yes_no", context=context) is True, state
+        assert ask(label, "yes_no", context=context).source == "answers.work_authorization"
+    assert value("Êtes-vous autorisé(e) à travailler en Allemagne ?", "yes_no", context=context)
+    assert (
+        value("Do you require sponsorship?", "yes_no", context=ctx("Berlin", sections=secs))
+        is False
+    )
+    # Switzerland has its own entry; Norway is in the EEA, not the EU, and has none.
+    assert value("Are you authorized to work in Switzerland?", "yes_no", context=context) is False
+    assert left("Are you authorized to work in Norway?", "yes_no", context=context).reason == (
+        "country_not_in_work_authorization"
+    )
+    # A member state's own entry wins over the EU entry.
+    own = sections(
+        work_authorization=[
+            {"country": "EU", "answer": "EU citizen.", "needs_sponsorship": False},
+            {"country": "Spain", "answer": "Visa needed.", "needs_sponsorship": True},
+        ]
+    )
+    spain = "Do you have the right to work in Spain?"
+    assert value(spain, "yes_no", context=ctx(sections=own)) is False
+
+
+def test_only_a_full_template_match_answers() -> None:
+    assert value("Are you authorized to work in France?", "yes_no") is True
+    for label, reason in [
+        ("Are you authorized to work in France or do you require sponsorship?", "two_questions"),
+        ("Do you require sponsorship now? Will you later?", "two_questions"),
+        ("Are you authorized to work in France as a contractor?", "not_a_known_question"),
+        ("Do you need a work permit to work in France?", "not_a_known_question"),
+        ("Have you previously worked for this company?", "not_a_known_question"),
+        ("Are you unwilling to work on-site?", "not_a_known_question"),
+    ]:
+        assert left(label, "yes_no").reason == reason, label
+    assert match_template("Will you not require sponsorship?") == "not_a_known_question"
+    assert normalise("Êtes-vous autorisé(e) à travailler aux US ?  (required)") == (
+        "etes vous autorise a travailler aux usa"
+    )
+
+
+def test_a_bank_answer_is_used_for_its_exact_question_only() -> None:
+    bank = AnswerBank(USER).with_answer("Do you play chess?", "yes")
+    assert value("Do you play chess? *", "yes_no", context=ctx(bank=bank)) is True
+    assert left("Do you play chess often?", "yes_no", context=ctx(bank=bank)).reason == (
+        "not_a_known_question"
+    )
+    assert left("Do you play chess?", "yes_no").reason == "not_a_known_question"
+
+
 # --- notice, start, relocation, travel -------------------------------------------------------
 
 
@@ -261,7 +323,7 @@ def test_every_eeo_topic_declines_and_none_is_inferred(label: str) -> None:
 
 
 def test_manage_and_page_are_not_eeo() -> None:
-    assert left("Do you manage a team of engineers?", "yes_no").reason == "unknown_question"
+    assert left("Do you manage a team of engineers?", "yes_no").reason == "not_a_known_question"
 
 
 # --- years of experience ---------------------------------------------------------------------
@@ -271,17 +333,18 @@ def test_years_when_the_profile_states_fewer_the_answer_is_no() -> None:
     secs = sections()
     secs["skills"] = {**secs["skills"], "years_experience": 3.5}
     context = ctx(sections=secs)
-    # Years with one technology are not stored: left, even when the overall years are fewer.
+    # Years with one technology are not stored: no template holds a technology, so the
+    # question is left, even when the overall years are fewer.
     assert left(
         "Do you have 8+ years of experience in Java?", "yes_no", context=context
-    ).reason == ("subject_years_not_stated")
+    ).reason == ("not_a_known_question")
     assert ask("Do you have 8+ years of experience?", "yes_no", context=context).source == (
         "skills.years_experience"
     )
     assert value("Do you have 3+ years of experience?", "yes_no", context=context) is True
     assert left(
         "Do you have 3+ years of experience with COBOL?", "yes_no", context=context
-    ).reason == ("subject_years_not_stated")
+    ).reason == ("not_a_known_question")
     assert value("Years of experience", "text", context=context) == "3.5"
 
 
@@ -340,7 +403,8 @@ def test_a_combobox_whose_options_do_not_contain_the_answer_is_left_with_the_opt
 def test_languages() -> None:
     names = [lang["name"] for lang in full("identity")["languages"]]
     assert value("Do you speak " + names[0] + "?", "yes_no") is True
-    assert left("Do you speak Klingon?", "yes_no").reason == "language_not_in_profile"
+    assert left("Do you speak German?", "yes_no").reason == "language_not_in_profile"
+    assert left("Do you speak Klingon?", "yes_no").reason == "not_a_known_question"
     assert names[0] in value("Languages", "textarea")
 
 
@@ -359,7 +423,10 @@ def test_how_heard_matches_an_option_or_falls_back_to_other() -> None:
 
 
 def test_previously_applied_uses_the_apps_own_applications_first() -> None:
-    label = "Have you previously applied to or worked at this company?"
+    label = "Have you previously applied to this company?"
+    # Applied or worked: two questions, and worked is employment history, never the default.
+    combined = "Have you previously applied to or worked at this company?"
+    assert left(combined, "yes_no").reason == "two_questions"
     assert value(label, "yes_no") is False
     assert value(label, "yes_no", context=ctx(applied_before=True)) is True
     none = ctx(sections=sections(previously_applied_default=None))
@@ -431,7 +498,7 @@ def test_an_empty_profile_leaves_everything_and_invents_nothing() -> None:
     ]:
         result = resolve(FormField(label, kind, (), True), empty)  # type: ignore[arg-type]
         assert isinstance(result, Left), (label, result)
-    assert resolve(FormField("Something odd", "text"), empty) == Left("unknown_question", ())
+    assert resolve(FormField("Something odd", "text"), empty) == Left("not_a_known_question", ())
 
 
 def test_a_stored_section_that_no_longer_validates_reads_as_empty() -> None:

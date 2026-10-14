@@ -107,7 +107,26 @@ CONTEXTS: dict[str, Any] = {
         USER, _sections(), Posting.at("Paris"), bank=_bank(Referrer_s_full_name="Ada Example")
     ),
     "docs": lambda: Context(USER, _sections(), Posting.at("Paris"), documents=DOCS),
+    # The second review's invented profile: authorised in France and the EU, sponsorship needed
+    # for the UK, the US, Switzerland, Canada and Singapore; a background check consent of yes.
+    "probe": lambda: Context(USER, _probe(), Posting.at("Paris, France")),
+    "probe_ny": lambda: Context(USER, _probe(), Posting.at("New York, United States")),
+    "probe_berlin": lambda: Context(USER, _probe(), Posting.at("Berlin, Germany")),
 }
+
+
+def _probe() -> dict[str, Any]:
+    return _sections(
+        work_authorization=[
+            {"country": "France", "answer": "EU citizen.", "needs_sponsorship": False},
+            {"country": "the EU", "answer": "EU citizen.", "needs_sponsorship": False},
+            *(
+                {"country": country, "answer": "Sponsorship needed.", "needs_sponsorship": True}
+                for country in ("UK", "United States", "Switzerland", "Canada", "Singapore")
+            ),
+        ],
+        background_check_consent=True,
+    )
 
 
 class Case(NamedTuple):
@@ -750,6 +769,686 @@ BOXES: list[tuple[str, bool, str]] = [
 ]
 
 
+SENTENCE = "Open to a fair package for the role."
+LANGS = ("English", "French", "German", "Spanish")
+
+# Round 3: every question the second review names (its fresh probe, findings N1 to N10, the plain
+# questions it found left and the right answers it quotes), origin "review2"; then our own, half
+# of them traps, origin "own3" or "trap3". All run on the second review's profile.
+ROUND3: list[Case] = [
+    # N1 a work permit is never read as authorisation
+    C(
+        "N1 need permit france",
+        "Do you need a work permit to work in France?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    C(
+        "N1 require permit uk",
+        "Would you require a work permit to work in the UK?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    C(
+        "N1 besoin permis",
+        "Avez-vous besoin d'un permis de travail pour travailler en France ?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    # N2 two questions in one label
+    C(
+        "N2 authorised or sponsorship",
+        "Are you authorized to work in France or do you require sponsorship?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    C(
+        "N2 right or sponsorship",
+        "Do you have the right to work in the UK, or will you need sponsorship?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    # N3 past pay
+    C(
+        "N3 previous role",
+        "What was your salary in your previous role?",
+        context="probe",
+        origin="review2",
+    ),
+    C(
+        "N3 earn last company",
+        "What salary did you earn at your last company?",
+        context="probe",
+        origin="review2",
+    ),
+    C("N3 salary history", "Please provide your salary history", context="probe", origin="review2"),
+    C("N3 last position", "Salary at your last position", context="probe", origin="review2"),
+    # N4 other platforms
+    C("N4 twitter", "Twitter URL", context="probe", origin="review2"),
+    C("N4 scholar", "Google Scholar profile URL", context="probe", origin="review2"),
+    # N5 birth
+    C(
+        "N5 country of birth",
+        "Country of birth",
+        "select",
+        ("France", "Germany", "Spain"),
+        context="probe",
+        origin="review2",
+    ),
+    C("N5 pays de naissance", "Pays de naissance", context="probe", origin="review2"),
+    # N6 criminal record
+    C(
+        "N6 criminal record",
+        "Do you have a criminal record?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    C("N6 casier", "Avez-vous un casier judiciaire ?", "yes_no", context="probe", origin="review2"),
+    # N7 worked, and a negated applied
+    C(
+        "N7 worked for acme",
+        "Have you previously worked for Acme Group?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    C(
+        "N7 never applied",
+        "Have you never applied to Acme before?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    # N8 inverted on-site and hybrid
+    C(
+        "N8 unwilling onsite",
+        "Are you unwilling to work on-site?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    C(
+        "N8 onsite a problem",
+        "Would a fully on-site role be a problem for you?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    C(
+        "N8 hybrid dealbreaker",
+        "Is a hybrid schedule a dealbreaker for you?",
+        "yes_no",
+        context="probe",
+        origin="review2",
+    ),
+    # N9 a preference
+    C(
+        "N9 city you would like",
+        "Which city would you like to work in?",
+        "select",
+        ("Paris", "Lyon", "Nantes"),
+        context="probe",
+        origin="review2",
+    ),
+    C(
+        "N9 with the home city listed",
+        "Which city would you like to work in?",
+        "select",
+        ("Paris", "Bordeaux", "Nantes"),
+        context="probe",
+        origin="review2",
+    ),
+    # N10 every language
+    C(
+        "N10 languages spoken",
+        "Languages spoken",
+        "multi",
+        LANGS,
+        context="probe",
+        expected=("English", "French"),
+        origin="review2",
+    ),
+    # the plain questions the review found left
+    C(
+        "adresse electronique",
+        "Adresse électronique",
+        context="probe",
+        expected=ID["email"],
+        origin="review2",
+    ),
+    C(
+        "phone country code",
+        "Phone country code",
+        "select",
+        ("Germany (+49)", "France (+33)", "United Kingdom (+44)"),
+        context="probe",
+        expected="France (+33)",
+        origin="review2",
+    ),
+    C(
+        "country code",
+        "Country code",
+        "select",
+        ("+44 United Kingdom", "+33 France"),
+        context="probe",
+        expected="+33 France",
+        origin="review2",
+    ),
+    C(
+        "race ethnicity hyphen",
+        "What is your race/ethnicity?",
+        "select",
+        ("White", "Asian", "Decline to self-identify"),
+        context="probe",
+        expected="Decline to self-identify",
+        origin="review2",
+    ),
+    C(
+        "germany from the eu entry",
+        "Are you legally eligible to work in Germany?",
+        "yes_no",
+        context="probe",
+        expected=True,
+        origin="review2",
+    ),
+    # the right answers it quotes
+    C(
+        "switzerland without sponsorship",
+        "Can you work in Switzerland without sponsorship?",
+        "yes_no",
+        context="probe",
+        expected=False,
+        origin="review2",
+    ),
+    C(
+        "no more than 5",
+        "Do you have no more than 5 years of experience?",
+        "yes_no",
+        context="probe",
+        expected=True,
+        origin="review2",
+    ),
+    # our own, plain
+    C("given name", "Given name", context="probe", expected="Ada", origin="own3"),
+    C("family name", "Family name", context="probe", expected="Example", origin="own3"),
+    C("nom complet", "Nom complet", context="probe", expected="Ada Example", origin="own3"),
+    C(
+        "email required mark",
+        "E-mail address *",
+        context="probe",
+        expected=ID["email"],
+        origin="own3",
+    ),
+    C("adresse courriel", "Adresse courriel", context="probe", expected=ID["email"], origin="own3"),
+    C(
+        "numero de telephone",
+        "Numéro de téléphone",
+        context="probe",
+        expected=ID["phone"],
+        origin="own3",
+    ),
+    C(
+        "mobile required",
+        "Mobile number (required)",
+        context="probe",
+        expected=ID["phone"],
+        origin="own3",
+    ),
+    C(
+        "indicatif pays",
+        "Indicatif pays",
+        "select",
+        ("Belgique (+32)", "France (+33)"),
+        context="probe",
+        expected="France (+33)",
+        origin="own3",
+    ),
+    C(
+        "city of residence",
+        "City of residence",
+        context="probe",
+        expected="Bordeaux",
+        origin="own3",
+    ),
+    C("pays de residence", "Pays de résidence", context="probe", expected="France", origin="own3"),
+    C(
+        "linkedin profile url",
+        "LinkedIn profile URL",
+        context="probe",
+        expected=ID["linkedin_url"],
+        origin="own3",
+    ),
+    C(
+        "personal website",
+        "Personal website",
+        context="probe",
+        expected=ID["website"],
+        origin="own3",
+    ),
+    C(
+        "authorised in france",
+        "Are you authorized to work in France?",
+        "yes_no",
+        context="probe",
+        expected=True,
+        origin="own3",
+    ),
+    C(
+        "eligible in the us",
+        "Are you legally eligible to work in the United States?",
+        "yes_no",
+        context="probe",
+        expected=False,
+        origin="own3",
+    ),
+    C(
+        "right to work in spain",
+        "Do you have the right to work in Spain?",
+        "yes_no",
+        context="probe",
+        expected=True,
+        origin="own3",
+    ),
+    C(
+        "autorise en allemagne",
+        "Êtes-vous autorisé(e) à travailler en Allemagne ?",
+        "yes_no",
+        context="probe",
+        expected=True,
+        origin="own3",
+    ),
+    C(
+        "berlin posting from the eu entry",
+        "Are you authorized to work in this country?",
+        "yes_no",
+        context="probe_berlin",
+        expected=True,
+        origin="own3",
+    ),
+    C(
+        "future sponsorship ny",
+        "Will you now or in the future require visa sponsorship?",
+        "yes_no",
+        context="probe_ny",
+        expected=True,
+        origin="own3",
+    ),
+    C(
+        "greenhouse sponsorship",
+        "Will you now, or in the future, require sponsorship for employment visa status (e.g., H-1B visa status)?",
+        "yes_no",
+        context="probe_ny",
+        expected=True,
+        origin="own3",
+    ),
+    C(
+        "sponsorship canada",
+        "Do you require visa sponsorship to work in Canada?",
+        "yes_no",
+        context="probe",
+        expected=True,
+        origin="own3",
+    ),
+    C(
+        "parrainage france",
+        "Aurez-vous besoin d'un parrainage de visa pour travailler en France ?",
+        "yes_no",
+        context="probe",
+        expected=False,
+        origin="own3",
+    ),
+    C(
+        "years professional text",
+        "How many years of professional experience do you have?",
+        context="probe",
+        expected="4",
+        origin="own3",
+    ),
+    C(
+        "years select ranges",
+        "Years of experience",
+        "select",
+        ("0-2 years", "3-5 years", "6+ years"),
+        context="probe",
+        expected="3-5 years",
+        origin="own3",
+    ),
+    C(
+        "au moins 2 ans",
+        "Avez-vous au moins 2 ans d'expérience professionnelle ?",
+        "yes_no",
+        context="probe",
+        expected=True,
+        origin="own3",
+    ),
+    C(
+        "what is your notice",
+        "What is your notice period?",
+        context="probe",
+        expected=A["notice_period"],
+        origin="own3",
+    ),
+    C(
+        "date de disponibilite question",
+        "Quelle est votre date de disponibilité ?",
+        context="probe",
+        expected=A["earliest_start"],
+        origin="own3",
+    ),
+    C(
+        "relocate to the posting city",
+        "Are you willing to relocate to Paris?",
+        "textarea",
+        context="probe",
+        expected=A["relocation"],
+        origin="own3",
+    ),
+    C(
+        "open to on-site",
+        "Are you open to working on-site?",
+        "yes_no",
+        context="probe",
+        expected=True,
+        origin="own3",
+    ),
+    C(
+        "salary expectations question",
+        "What are your salary expectations?",
+        context="probe",
+        expected=SENTENCE,
+        origin="own3",
+    ),
+    C(
+        "pretentions brut annuel",
+        "Prétentions salariales (brut annuel)",
+        context="probe",
+        expected=SENTENCE,
+        origin="own3",
+    ),
+    C(
+        "veteran decline",
+        "Veteran status",
+        "select",
+        ("I am a protected veteran", "I am not a protected veteran", "I don't wish to answer"),
+        context="probe",
+        expected="I don't wish to answer",
+        origin="own3",
+    ),
+    C(
+        "heard about this job",
+        "How did you hear about this job?",
+        context="probe",
+        expected=A["heard_about"],
+        origin="own3",
+    ),
+    C(
+        "which languages multi",
+        "Which languages do you speak?",
+        "multi",
+        ("French", "English", "Italian"),
+        context="probe",
+        expected=("French", "English"),
+        origin="own3",
+    ),
+    C(
+        "applied before plain",
+        "Have you applied to this company before?",
+        "yes_no",
+        context="probe",
+        expected=False,
+        origin="own3",
+    ),
+    C("contact number", "Contact number", context="probe", expected=ID["phone"], origin="own3"),
+    C(
+        "when could you start",
+        "When could you start?",
+        context="probe",
+        expected=A["notice_period"],
+        origin="own3",
+    ),
+    C(
+        "hispanic latino",
+        "Are you Hispanic/Latino?",
+        "select",
+        ("Yes", "No", "Decline to self-identify"),
+        context="probe",
+        expected="Decline to self-identify",
+        origin="own3",
+    ),
+    C("experience annees", "Expérience (années)", context="probe", expected="4", origin="own3"),
+    C(
+        "portfolio or website",
+        "Portfolio / Website",
+        context="probe",
+        expected=ID["website"],
+        origin="own3",
+    ),
+    C(
+        "website blog or portfolio",
+        "Website, blog or portfolio",
+        context="probe",
+        expected=ID["website"],
+        origin="own3",
+    ),
+    C("other website", "Other website", context="probe", origin="trap3"),
+    # our own, traps
+    C(
+        "previous employer number",
+        "Contact number of your previous employer",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "start and notice",
+        "When could you start, and what notice do you have?",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "hispanic and veteran",
+        "Are you Hispanic/Latino and a veteran?",
+        "select",
+        ("Yes", "No", "Decline to self-identify"),
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "experience management annees",
+        "Expérience en management (années)",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "besoin d'un visa",
+        "Avez-vous besoin d'un visa pour travailler en France ?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C("notice in weeks", "Notice period (weeks)", context="probe", origin="trap3"),
+    C("availability alone", "Availability", context="probe", origin="trap3"),
+    C(
+        "valid permit france",
+        "Do you have a valid work permit for France?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "authorised and id",
+        "Are you authorized to work in France and do you hold a valid ID?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "two question marks",
+        "Do you require sponsorship now? Will you in the future?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "norway not in the eu",
+        "Are you authorized to work in Norway?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "switzerland or the eu",
+        "Are you legally eligible to work in Switzerland or the EU?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "unable without sponsorship",
+        "Would you be unable to start without sponsorship?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "visa to visit",
+        "Do you need a visa to visit France?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "work at acme",
+        "Did you previously work at Acme Group?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "ever employed",
+        "Have you ever been employed by this company?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "deja travaille",
+        "Avez-vous déjà travaillé chez nous ?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C("felony", "Have you been convicted of a felony?", "yes_no", context="probe", origin="trap3"),
+    C("condamne", "Avez-vous déjà été condamné(e) ?", "yes_no", context="probe", origin="trap3"),
+    C(
+        "notice and current salary",
+        "What is your current notice period and current salary?",
+        context="probe",
+        origin="trap3",
+    ),
+    C("last drawn salary", "Last drawn salary", context="probe", origin="trap3"),
+    C("salaire precedent", "Salaire précédent", context="probe", origin="trap3"),
+    C(
+        "expected for previous role",
+        "Expected salary for your previous role",
+        context="probe",
+        origin="trap3",
+    ),
+    C("facebook url", "Facebook profile URL", context="probe", origin="trap3"),
+    C("company website", "Company website", context="probe", origin="trap3"),
+    C("ville de naissance", "Ville de naissance", context="probe", origin="trap3"),
+    C("where born", "Where were you born?", context="probe", origin="trap3"),
+    C(
+        "office you prefer",
+        "Which office would you prefer to work from?",
+        "select",
+        ("Paris", "London"),
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "preferred work location",
+        "Preferred work location",
+        "select",
+        ("Paris", "Lyon"),
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "not willing to relocate",
+        "Are you not willing to relocate?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "onsite five days a problem",
+        "Is working on-site five days a week a problem?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "ne souhaitez pas presentiel",
+        "Ne souhaitez-vous pas travailler en présentiel ?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "python and aws years",
+        "How many years of experience do you have with Python and AWS?",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "genai role bands",
+        "Years of experience in a GenAI role",
+        "select",
+        BANDS,
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "french or german",
+        "Do you speak French or German?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C("fluent german", "Are you fluent in German?", "yes_no", context="probe", origin="trap3"),
+    C(
+        "primary language select",
+        "Primary language",
+        "select",
+        ("French", "English"),
+        context="probe",
+        origin="trap3",
+    ),
+    C("gender of manager", "Gender of your manager", context="probe", origin="trap3"),
+    C("spouse nationality", "Spouse's nationality", context="probe", origin="trap3"),
+    C(
+        "disability accommodation",
+        "Do you have a disability that requires accommodation during the interview?",
+        "yes_no",
+        context="probe",
+        origin="trap3",
+    ),
+    C(
+        "relocate to london from paris",
+        "Are you willing to relocate to London?",
+        "textarea",
+        context="probe",
+        origin="trap3",
+    ),
+]
+
+
 def run(case: Case) -> Answer | Left:
     field = FormField(case.label, case.kind, case.options, True)  # type: ignore[arg-type]
     return resolve(field, CONTEXTS[case.context]())
@@ -781,3 +1480,22 @@ def test_the_table_has_our_own_cases_and_half_are_traps() -> None:
     traps = [c for c in QUESTIONS if c.origin == "trap"] + [b for b in BOXES if b[2] == "trap"]
     assert len(own) >= 40
     assert len(traps) * 2 >= len(own)
+
+
+@pytest.mark.parametrize("case", ROUND3, ids=[c.name for c in ROUND3])
+def test_round3_question(case: Case) -> None:
+    test_question(case)
+
+
+def test_round3_has_every_named_question_and_half_of_our_own_are_traps() -> None:
+    review = [c for c in ROUND3 if c.origin == "review2"]
+    own = [c for c in ROUND3 if c.origin in ("own3", "trap3")]
+    traps = [c for c in own if c.origin == "trap3"]
+    assert len(review) >= 29
+    assert len(own) >= 60
+    assert len(traps) * 2 >= len(own)
+    assert any(" fr" not in c.context and c.label.isascii() for c in own)
+    assert (
+        sum(not c.label.isascii() or c.label.startswith(("Avez", "Ne ", "Quelle")) for c in own)
+        >= 8
+    )
