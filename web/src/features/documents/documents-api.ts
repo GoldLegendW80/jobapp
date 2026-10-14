@@ -135,6 +135,8 @@ export type DocumentOut = z.infer<typeof documentSchema>;
 export const generationBriefSchema = z.object({
   status: statusSchema,
   wait_reason: waitSchema.nullable(),
+  /** Only on a failed one: a code of the api's fixed list. */
+  error: z.string().nullable().optional(),
 });
 export type GenerationBrief = z.infer<typeof generationBriefSchema>;
 

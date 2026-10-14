@@ -11,6 +11,7 @@ import { LoginPage } from "@/features/auth/login-page";
 import { HomePage } from "@/features/public/home-page";
 import { PrivacyPage } from "@/features/public/privacy-page";
 import { TermsPage } from "@/features/public/terms-page";
+import { PostingDocumentPage } from "@/features/documents/posting-document-page";
 import { FillPage } from "@/features/ingestion/fill-page";
 import { JobDetailPage } from "@/features/jobs/job-detail-page";
 import { JobsPage } from "@/features/jobs/jobs-page";
@@ -57,6 +58,10 @@ export const routes: RouteObject[] = [
           { path: "jobs", element: <JobsPage /> },
           { path: "jobs/map", element: <JobsMapPage /> },
           { path: "jobs/:id", element: <JobDetailPage /> },
+          {
+            path: "jobs/:id/documents/:kind",
+            element: <PostingDocumentPage />,
+          },
           { path: "account", element: <AccountPage /> },
           { path: "profile", element: <ProfilePage /> },
           { path: "profile/cv/:id?", element: <ProfilePage /> },

@@ -18,7 +18,14 @@ from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.documents import render_job, store
-from app.documents.models import Document, DocumentVersion, FreezeReason
+from app.documents.models import (
+    Document,
+    DocumentVersion,
+    FreezeReason,
+    GenerationMode,
+    GenerationStatus,
+    GenerationTrigger,
+)
 from app.documents.router import NAME_MAX, ascii_name
 from tests.documents.render_support import CV, FakeRenderer, RecordingQueue, give_profile
 from tests.identity.api_helpers import Api, make_user
@@ -147,6 +154,40 @@ def test_save_render_read_the_pdf_and_the_page_image(
             sa.text("SELECT status FROM jobs WHERE id = :j"), {"j": two["posting"]}
         ).scalar_one()
     assert status == "cv_ready"
+
+
+def test_posting_documents_name_a_failed_generation_until_a_later_one_replaces_it(
+    two: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    """D12: the card says why the last attempt failed; a later open or done one hides it."""
+    alex, document = two["alex"], two["document"]
+    url = f"/api/jobs/{two['posting']}/documents"
+    assert api.get(url, token=alex).json()["documents"][0]["generation"] is None
+    with factory() as db:
+        made = []
+        for status, error in (("failed", "token_limit"), ("done", None)):
+            made.append(
+                store.create_generation(
+                    db,
+                    two["alex_id"],
+                    document,
+                    GenerationMode.posting,
+                    GenerationTrigger.auto,
+                    at=clock(),
+                    estimate={},
+                    token_ceiling=1000,
+                    status=GenerationStatus(status),
+                ),
+            )
+            made[-1].error = error
+            db.commit()
+            if status == "failed":
+                shown = api.get(url, token=alex).json()["documents"][0]["generation"]
+                assert shown == {"status": "failed", "wait_reason": None, "error": "token_limit"}
+                clock.advance(seconds=1)
+    assert api.get(url, token=alex).json()["documents"][0]["generation"] is None
+    other = api.get(url, token=two["blake"])
+    assert other.status_code == 404
 
 
 def test_another_persons_document_does_not_exist(
