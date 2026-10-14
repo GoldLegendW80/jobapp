@@ -21,7 +21,10 @@ Sections and what they replace in the engine:
   have, adjacent, none (names unique across the three), gates with a penalty 0 to 100.
 - search: title include, title exclude and location terms, contract types, remote stance,
   min_fit, posting age window, boards, never-apply rules (`engine/boards.json`, hard rule 11).
-- answers: standard answers of application forms (`facts.md` PRACTICALITIES).
+- answers: standard answers of application forms (`facts.md` PRACTICALITIES), and the optional
+  fields the apply module reads: preferred name, pronouns, years as stated, highest degree and
+  year, on site and hybrid willingness, the previously applied default, background and reference
+  check consent, the EEO policy with its stored answers, the salary stance and ranges.
 
 Terms. A term is a plain word or phrase, matched later as a whole word, case-insensitive.
 Every term list carries `advanced_regex`; when true each term is a Python regular expression,
@@ -56,7 +59,7 @@ import zoneinfo
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from functools import partial
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 
 from pydantic import (
     AfterValidator,
@@ -769,6 +772,38 @@ class WorkAuthorization(_Section):
     needs_sponsorship: bool | None = None
 
 
+EeoPolicy = Literal["decline", "leave", "stored"]
+EeoTopic = Literal[
+    "gender", "ethnicity", "race", "disability", "veteran", "sexual_orientation", "age"
+]
+SalaryStance = Literal["leave_blank", "range", "sentence"]
+SalaryPeriod = Literal["year", "month", "day"]
+
+
+class EeoAnswer(_Section):
+    """An equal opportunity answer the person chose to store, used only under the `stored`
+    policy and only for its own topic. Never inferred."""
+
+    topic: EeoTopic
+    answer: Line
+
+
+class SalaryRange(_Section):
+    """A range the person wrote for one currency (ISO 4217 code, three capitals): never a figure
+    the person did not write. `maximum` may be left out."""
+
+    currency: Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
+    minimum: Annotated[StrictInt, Field(ge=0, le=100_000_000)]
+    maximum: Annotated[StrictInt, Field(ge=0, le=100_000_000)] | None = None
+    period: SalaryPeriod = "year"
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "SalaryRange":
+        if self.maximum is not None and self.maximum < self.minimum:
+            raise ValueError("the maximum is below the minimum")
+        return self
+
+
 class AnswersSection(_Section):
     work_authorization: Annotated[list[WorkAuthorization], Field(max_length=50)] = Field(
         default_factory=list
@@ -776,6 +811,26 @@ class AnswersSection(_Section):
     notice_period: OptParagraph = None
     earliest_start: OptLine = None
     salary_policy: OptParagraph = None
+    # Optional fields the apply module reads (task A3). A section saved before they existed is
+    # still valid: every one is empty, or at its default, when absent.
+    preferred_name: OptLine = None
+    pronouns: OptLine = None
+    years_experience_stated: OptLine = None  # as the person words it, e.g. "About 3.5 years"
+    highest_degree: OptLine = None
+    highest_degree_year: Annotated[StrictInt, Field(ge=1950, le=2100)] | None = None
+    willing_onsite: bool | None = None
+    willing_hybrid: bool | None = None
+    previously_applied_default: bool | None = None
+    background_check_consent: bool | None = None
+    reference_check_consent: bool | None = None
+    eeo_policy: EeoPolicy = "decline"
+    eeo_answers: Annotated[list[EeoAnswer], Field(max_length=len(get_args(EeoTopic)))] = Field(
+        default_factory=list
+    )
+    # None reads as `sentence` when `salary_policy` is filled and as `leave_blank` otherwise
+    # (`salary_stance_of`); the ranges are kept whatever the stance, so a switch loses nothing.
+    salary_stance: SalaryStance | None = None
+    salary_ranges: Annotated[list[SalaryRange], Field(max_length=10)] = Field(default_factory=list)
     relocation: OptParagraph = None
     travel: OptParagraph = None
     motivation: OptText(LONG_MAX, multiline=True) = None
@@ -786,6 +841,24 @@ class AnswersSection(_Section):
     @classmethod
     def _unique_countries(cls, value: list[WorkAuthorization]) -> list[WorkAuthorization]:
         return _unique(value, lambda w: w.country.casefold(), "country")
+
+    @field_validator("eeo_answers")
+    @classmethod
+    def _unique_topics(cls, value: list[EeoAnswer]) -> list[EeoAnswer]:
+        return _unique(value, lambda a: a.topic, "topic")
+
+    @field_validator("salary_ranges")
+    @classmethod
+    def _unique_currencies(cls, value: list[SalaryRange]) -> list[SalaryRange]:
+        return _unique(value, lambda r: r.currency, "currency")
+
+    @property
+    def salary_stance_of(self) -> SalaryStance:
+        """The stance in force: the stored one, else `sentence` for a filled `salary_policy`
+        and `leave_blank` for an empty one."""
+        if self.salary_stance is not None:
+            return self.salary_stance
+        return "sentence" if self.salary_policy else "leave_blank"
 
 
 # --- registry -----------------------------------------------------------------------------------

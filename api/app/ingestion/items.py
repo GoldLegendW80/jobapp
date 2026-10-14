@@ -80,11 +80,12 @@ start, and a school with no date at all last. Every other list appends.
 
 **Never proposable.** A setting is the user's choice about how the app behaves, not a claim a
 document supports: a gate's `penalty`, a board's `enabled` and `extra_exclude`, every
-`advanced_regex`, `search.min_fit`, `search.days`, `search.sweep_schedule`. They are typed
-`setting` in `FIELD_TYPES`, and `build` refuses them for an agent whatever is cited. The photo is
-not a section and has no key. `skills.years_experience` is computed by the merge, never read by
-the agent: only `Origin.derived` may build it. A user's edit (`Origin.user`) is validated by the
-section model alone and may set a setting inside the entry it edits.
+`advanced_regex`, `search.min_fit`, `search.days`, `search.sweep_schedule`, and the apply
+fields of `answers` (EEO, salary stance and ranges, consents, preferred name and the like).
+They are typed `setting` in `FIELD_TYPES`, and `build` refuses them for an agent whatever is
+cited. The photo is not a section and has no key. `skills.years_experience` is computed by the
+merge, never read by the agent: only `Origin.derived` may build it. A user's edit (`Origin.user`)
+is validated by the section model alone and may set a setting inside the entry it edits.
 
 **What is stored of a hostile value.** A value comes from a model that read a hostile document.
 Before the section model reads it: at most `VALUE_NODES_MAX` parts, `VALUE_CHARS_MAX` characters
@@ -321,6 +322,26 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "answers.motivation": _T.TEXT,
         "answers.heard_about": _T.TEXT,
         "answers.leave_blank[]": _T.TEXT,
+        # The apply module's choices (task A3): what a person decides about how applications
+        # are answered, not a claim a document supports, so none is ever proposed.
+        "answers.preferred_name": _T.SETTING,
+        "answers.pronouns": _T.SETTING,
+        "answers.years_experience_stated": _T.SETTING,
+        "answers.highest_degree": _T.SETTING,
+        "answers.highest_degree_year": _T.SETTING,
+        "answers.willing_onsite": _T.SETTING,
+        "answers.willing_hybrid": _T.SETTING,
+        "answers.previously_applied_default": _T.SETTING,
+        "answers.background_check_consent": _T.SETTING,
+        "answers.reference_check_consent": _T.SETTING,
+        "answers.eeo_policy": _T.SETTING,
+        "answers.eeo_answers[].topic": _T.SETTING,
+        "answers.eeo_answers[].answer": _T.SETTING,
+        "answers.salary_stance": _T.SETTING,
+        "answers.salary_ranges[].currency": _T.SETTING,
+        "answers.salary_ranges[].minimum": _T.SETTING,
+        "answers.salary_ranges[].maximum": _T.SETTING,
+        "answers.salary_ranges[].period": _T.SETTING,
     }
 )
 
@@ -442,6 +463,20 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             motivation=_K.scalar,
             heard_about=_K.scalar,
             leave_blank=_K.words,
+            preferred_name=_K.setting,
+            pronouns=_K.setting,
+            years_experience_stated=_K.setting,
+            highest_degree=_K.setting,
+            highest_degree_year=_K.setting,
+            willing_onsite=_K.setting,
+            willing_hybrid=_K.setting,
+            previously_applied_default=_K.setting,
+            background_check_consent=_K.setting,
+            reference_check_consent=_K.setting,
+            eeo_policy=_K.setting,
+            eeo_answers=_K.setting,
+            salary_stance=_K.setting,
+            salary_ranges=_K.setting,
         ),
     }
 )

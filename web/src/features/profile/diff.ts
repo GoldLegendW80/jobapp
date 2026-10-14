@@ -150,6 +150,25 @@ const FIELD_TITLES: Record<string, string> = {
   motivation: "Motivation",
   heard_about: "How you heard",
   leave_blank: "Leave blank",
+  preferred_name: "Preferred name",
+  pronouns: "Pronouns",
+  years_experience_stated: "Years of experience as you state them",
+  highest_degree: "Highest degree",
+  highest_degree_year: "Year of the highest degree",
+  willing_onsite: "Willing to work on site",
+  willing_hybrid: "Willing to work hybrid",
+  previously_applied_default: "Previously applied or worked there",
+  background_check_consent: "Background check consent",
+  reference_check_consent: "Reference check consent",
+  eeo_policy: "Equal opportunity questions",
+  eeo_answers: "Stored equal opportunity answers",
+  salary_stance: "Salary stance",
+  salary_ranges: "Salary ranges",
+  topic: "Topic",
+  currency: "Currency",
+  minimum: "Minimum",
+  maximum: "Maximum",
+  period: "Per",
 };
 
 /** What one item of a list is called ("Employer 2"). */
@@ -165,6 +184,8 @@ const ITEM_TITLES: Record<string, string> = {
   gates: "Gate",
   boards: "Board",
   work_authorization: "Work authorisation",
+  eeo_answers: "Equal opportunity answer",
+  salary_ranges: "Salary range",
 };
 
 export interface FieldRow {
