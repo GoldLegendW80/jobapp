@@ -97,6 +97,14 @@ async function card() {
   return within(found);
 }
 
+/** A consent ticked before leaving for Google, as the card keeps it; `change` alters a field. */
+function tick(change: { version?: number; user?: string; at?: number }) {
+  window.sessionStorage.setItem(
+    "jobapp.gmail.consent",
+    JSON.stringify({ version: 1, user: admin.id, at: Date.now(), ...change }),
+  );
+}
+
 afterEach(() => {
   window.sessionStorage.clear();
   vi.restoreAllMocks();
@@ -133,7 +141,14 @@ describe("the Gmail card, not connected", () => {
       dialog.getByRole("button", { name: "Continue to Google" }),
     );
     expect(go).toHaveBeenCalledExactlyOnceWith("/api/mail/oauth/start");
-    expect(window.sessionStorage.getItem("jobapp.gmail.consent")).toBe("1");
+    const kept = JSON.parse(
+      window.sessionStorage.getItem("jobapp.gmail.consent") ?? "null",
+    ) as { version: number; user: string; at: number };
+    expect([kept.version, kept.user, typeof kept.at]).toEqual([
+      1,
+      admin.id,
+      "number",
+    ]);
     expect(
       dialog.getByRole("button", { name: "Going to Google" }),
     ).toBeDisabled();
@@ -200,7 +215,7 @@ describe("the Gmail card, back from Google", () => {
   });
 
   it("records the consent that was ticked before leaving, once connected", async () => {
-    window.sessionStorage.setItem("jobapp.gmail.consent", "1");
+    tick({});
     const calls = gmail(connected);
     renderApp("/account?gmail=connected");
     const found = await card();
@@ -217,8 +232,29 @@ describe("the Gmail card, back from Google", () => {
     expect(window.sessionStorage.getItem("jobapp.gmail.consent")).toBeNull();
   });
 
+  it.each([
+    ["another user", { user: "00000000-0000-4000-8000-00000000ffff" }],
+    ["an expired tick", { at: Date.now() - 10 * 60 * 1000 - 1000 }],
+    ["an older text", { version: 0 }],
+  ])("drops a tick of %s, and sends no consent", async (_name, change) => {
+    tick(change);
+    const calls = gmail(connected);
+    renderApp("/account?gmail=connected");
+    const found = await card();
+    expect(await found.findByRole("status")).toHaveTextContent(
+      OUTCOME_TEXT.connected,
+    );
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("jobapp.gmail.consent")).toBeNull();
+    });
+    expect(
+      await found.findByRole("checkbox", { name: CONSENT_LABEL }),
+    ).not.toBeChecked();
+    expect(calls.consent).toEqual([]);
+  });
+
   it("says when that consent could not be saved, and records none for another outcome", async () => {
-    window.sessionStorage.setItem("jobapp.gmail.consent", "1");
+    tick({});
     const calls = gmail(connected, { consent: 409 });
     renderApp("/account?gmail=connected");
     const found = await card();

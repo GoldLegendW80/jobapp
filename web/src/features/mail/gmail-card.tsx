@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { message } from "@/features/admin/errors";
+import { useMe } from "@/features/auth/auth-context";
 
 import {
   disconnectMail,
@@ -58,24 +59,47 @@ export const CONSENT_NOT_SAVED =
 export const NOT_REVOKED =
   "Gmail is disconnected here and the stored mails are deleted, but Google did not confirm. Remove the access yourself in your Google account, under Security, then Third party access.";
 
-/** Kept across the trip to Google: the user ticked the consent before leaving. */
+/**
+ * Kept across the trip to Google: the user ticked the consent before leaving. It holds the
+ * version of the text, the user who ticked and the time, and counts only for that user, for that
+ * text and for as long as the state of the round trip lives, so a tick left by a Back from Google
+ * or by a sign out cannot be recorded later for someone else.
+ */
 const PENDING_CONSENT = "jobapp.gmail.consent";
+const PENDING_CONSENT_MS = 10 * 60 * 1000;
 
-function rememberConsent(ticked: boolean) {
+function rememberConsent(ticked: boolean, userId: string | undefined) {
   try {
-    if (ticked)
-      window.sessionStorage.setItem(PENDING_CONSENT, String(CONSENT_VERSION));
+    if (ticked && userId)
+      window.sessionStorage.setItem(
+        PENDING_CONSENT,
+        JSON.stringify({
+          version: CONSENT_VERSION,
+          user: userId,
+          at: Date.now(),
+        }),
+      );
     else window.sessionStorage.removeItem(PENDING_CONSENT);
   } catch {
     // Without storage the box on the card does the same job after connecting.
   }
 }
 
-function takePendingConsent(): boolean {
+function takePendingConsent(userId: string): boolean {
   try {
     const found = window.sessionStorage.getItem(PENDING_CONSENT);
     window.sessionStorage.removeItem(PENDING_CONSENT);
-    return found === String(CONSENT_VERSION);
+    if (!found) return false;
+    const kept: unknown = JSON.parse(found);
+    if (typeof kept !== "object" || kept === null) return false;
+    const { version, user, at } = kept as Record<string, unknown>;
+    return (
+      version === CONSENT_VERSION &&
+      user === userId &&
+      typeof at === "number" &&
+      Date.now() - at >= 0 &&
+      Date.now() - at <= PENDING_CONSENT_MS
+    );
   } catch {
     return false;
   }
@@ -105,6 +129,7 @@ const STATUS_LABEL: Record<MailAccount["status"], string> = {
 /** "Gmail" on the Account page: connect, the connected address, the consent, disconnect. */
 export function GmailCard() {
   const client = useQueryClient();
+  const userId = useMe().data?.id;
   const [params, setParams] = useSearchParams();
   // Back from Google: the word of the address, read once, becomes the first notice.
   const [arrival] = useState(() => readOutcome(params.get("gmail")));
@@ -163,9 +188,9 @@ export function GmailCard() {
   // Then the word leaves the address, and a consent ticked before leaving is recorded.
   const hasParam = params.has("gmail");
   useEffect(() => {
-    if (!hasParam || handled.current) return;
+    if (!hasParam || handled.current || !userId) return;
     handled.current = true;
-    const pending = takePendingConsent();
+    const pending = takePendingConsent(userId);
     if (arrival === "connected" && pending)
       saveConsentNow(true, {
         onError: () => {
@@ -180,10 +205,10 @@ export function GmailCard() {
       },
       { replace: true },
     );
-  }, [arrival, hasParam, saveConsentNow, setParams]);
+  }, [arrival, hasParam, saveConsentNow, setParams, userId]);
 
   const start = () => {
-    rememberConsent(ticked);
+    rememberConsent(ticked, userId);
     setLeaving(true);
     navigation.go(START_PATH);
   };
