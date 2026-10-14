@@ -1404,31 +1404,70 @@ def _holds(op: str, low: float, high: float, n: float) -> bool | None:
     return first if first == last else None
 
 
-def _option_span(option: str) -> tuple[float, float] | None:
-    """The years an option covers, as [low, high), or None when it names no years."""
+_YEAR_WORDS = r"(?<![a-z])(?:years?|yrs?|ans|annees?)\b|\d\s*an\b"
+_MONTH_WORDS = r"(?<![a-z])(?:months?|mos?|mois)\b"
+_OTHER_WORDS = r"(?<![a-z])(?:weeks?|wks?|days?|semaines?|jours?)\b"
+
+
+def _unit(text: str) -> str | None:
+    """The time unit a text names: "y", "m", "x" for weeks or days or two units at once, or None."""
+    found = {
+        unit
+        for unit, pattern in (("y", _YEAR_WORDS), ("m", _MONTH_WORDS), ("x", _OTHER_WORDS))
+        if re.search(pattern, text)
+    }
+    if len(found) > 1:
+        return "x"
+    return found.pop() if found else None
+
+
+def _option_span(option: str, unit: str) -> tuple[float, float] | None:
+    """The years an option covers, as [low, high), or None when it names no readable span.
+    `unit` ("y" or "m") is what a bare number means; a unit written in the option wins."""
     text = fold(option)
+    own = _unit(text) or unit
+    if own == "x":
+        return None
+    scale = 12.0 if own == "m" else 1.0
     numbers = [float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", text)]
     if len(numbers) == 2 and numbers[0] <= numbers[1]:
-        return numbers[0], numbers[1] + 1
-    if len(numbers) != 1:
+        low, high = numbers[0], numbers[1] + 1
+    elif len(numbers) != 1:
         return None
-    n = numbers[0]
-    if re.search(r"less than|fewer than|under|below|moins de|inferieur|<", text):
-        return 0.0, n
-    if re.search(r"up to|at most|or less|ou moins|jusqu|maximum|max\b", text):
-        return 0.0, n + 1
-    if re.search(r"more than|over|plus de|superieur|>", text):
-        return n + 1e-9, float("inf")
-    if re.search(r"\+|or more|ou plus|et plus|at least|au moins|minimum", text):
-        return n, float("inf")
-    return n, n + 1
+    else:
+        n = numbers[0]
+        if re.search(r"less than|fewer than|under|below|moins de|inferieur|<", text):
+            low, high = 0.0, n
+        elif re.search(r"up to|at most|or less|ou moins|jusqu|maximum|max\b", text):
+            low, high = 0.0, n + 1
+        elif re.search(r"more than|over|plus de|superieur|>", text):
+            low, high = n + 1e-9, float("inf")
+        elif re.search(r"\+|or more|ou plus|et plus|at least|au moins|minimum", text):
+            low, high = n, float("inf")
+        else:
+            low, high = n, n + 1
+    return low / scale, high / scale
 
 
-def _range_option(options: tuple[str, ...], low: float, high: float) -> str | None:
-    """The one option whose span holds the person's whole span."""
+def _range_option(options: tuple[str, ...], low: float, high: float, label: str) -> str | None:
+    """The one option whose span holds the person's whole span. Every option is read in years:
+    in its own unit, a bare number in the label's unit, else in the unit all the options that
+    name one share. Weeks, days, two units at once, or a bare number that the label and the
+    other options place differently or not at all, leave the whole list unread."""
+    numbered = [o for o in options if re.search(r"\d", o)]
+    named = {_unit(fold(o)) for o in numbered}
+    from_label = _unit(fold(label))
+    if "x" in named or from_label == "x":
+        return None
+    others = named - {None}
+    shared = next(iter(others)) if len(others) == 1 else None
+    unit = from_label or shared
+    if None in named and (unit is None or (others and others != {unit})):
+        return None
+    unit = unit or "y"  # no bare number in the list, so the unit is never used
     hits = []
     for option in options:
-        span = _option_span(option)
+        span = _option_span(option, unit)
         if span is not None and span[0] <= low and high < span[1] + (1e-9 if low != high else 0):
             hits.append(option)
     return hits[0] if len(hits) == 1 else None
@@ -1456,7 +1495,7 @@ def _experience_years(
     if years is None:
         return _left(field, "years_not_stated")
     if field.kind in _CHOICES and field.options:
-        picked = _range_option(field.options, *years)
+        picked = _range_option(field.options, *years, field.label)
         if picked is None:
             return _left(field, "no_matching_option")
         return Answer(

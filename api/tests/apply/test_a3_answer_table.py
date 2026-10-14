@@ -15,7 +15,16 @@ from typing import Any, NamedTuple
 
 import pytest
 
-from app.apply.answers import Answer, Context, Documents, FormField, Left, Posting, resolve
+from app.apply.answers import (
+    Answer,
+    Context,
+    Documents,
+    FormField,
+    Left,
+    Posting,
+    _range_option,
+    resolve,
+)
 from app.apply.bank import AnswerBank
 from app.apply.terms import classify
 from tests.profile.conftest import full
@@ -2174,3 +2183,257 @@ def test_round4_has_every_listed_probe_and_half_of_our_own_are_traps() -> None:
     assert len(own) >= 40
     assert len(traps) * 2 >= len(own)
     assert len({c.name for c in ROUND4}) == len(ROUND4)
+
+
+ROUND5: list[Case] = [
+    # B1 a range option is read in its own unit, the label's unit when it has none, else left
+    R(
+        "A months review 1",
+        "Years of work experience",
+        "select",
+        ("0-12 months", "12-36 months", "36-60 months", "60+ months"),
+        expected="36-60 months",
+        origin="trap5",
+    ),
+    R(
+        "A months review 2",
+        "Years of professional experience",
+        "select",
+        ("0-6 months", "6-18 months", "18-36 months", "36+ months"),
+        expected="36+ months",
+        origin="trap5",
+    ),
+    R(
+        "A months label years",
+        "Years of experience",
+        "select",
+        ("0-12 months", "12-24 months", "24-36 months", "36-72 months"),
+        expected="36-72 months",
+        origin="trap5",
+    ),
+    R(
+        "A months mo",
+        "Years of experience",
+        "select",
+        ("0-12 mo", "12-36 mo", "36-60 mo", "60+ mo"),
+        expected="36-60 mo",
+        origin="trap5",
+    ),
+    R(
+        "A months mois",
+        "Années d'expérience",
+        "select",
+        ("0-12 mois", "12-36 mois", "36-60 mois", "60 mois et plus"),
+        expected="36-60 mois",
+        origin="trap5",
+    ),
+    R(
+        "A months open top",
+        "Years of experience",
+        "select",
+        ("0-12 months", "12-36 months", "60+ months"),
+        origin="trap5",
+    ),
+    R(
+        "A years yrs",
+        "Years of experience",
+        "select",
+        ("0-2 yrs", "3-5 yrs", "6+ yrs"),
+        expected="3-5 yrs",
+        origin="trap5",
+    ),
+    R(
+        "A years ans",
+        "Années d'expérience",
+        "select",
+        ("Moins de 2 ans", "2-5 ans", "Plus de 5 ans"),
+        expected="2-5 ans",
+        origin="trap5",
+    ),
+    R(
+        "A years plus de",
+        "Années d'expérience",
+        "select",
+        ("Moins de 3 ans", "3-5 ans", "Plus de 5 ans"),
+        expected="3-5 ans",
+        origin="trap5",
+    ),
+    R(
+        "A mixed readable",
+        "Years of experience",
+        "select",
+        ("Less than 6 months", "2-5 years", "5+ years"),
+        expected="2-5 years",
+        origin="trap5",
+    ),
+    R(
+        "A mixed bare option",
+        "Years of experience",
+        "select",
+        ("0-12 months", "1-3", "3-5 years", "5+ years"),
+        origin="trap5",
+    ),
+    R(
+        "A mixed bare top",
+        "Years of experience",
+        "select",
+        ("0-12 months", "12-36 months", "36-60 months", "60+"),
+        origin="trap5",
+    ),
+    R(
+        "A mixed bare months first",
+        "Years of experience",
+        "select",
+        ("0-6 months", "6-18", "18-36", "36+"),
+        origin="trap5",
+    ),
+    R(
+        "A open less than months",
+        "Years of experience",
+        "select",
+        ("Less than 6 months", "6-12 months", "More than 12 months"),
+        expected="More than 12 months",
+        origin="trap5",
+    ),
+    R(
+        "A open under months",
+        "Years of experience",
+        "select",
+        ("Under 12 months", "12 months or more"),
+        expected="12 months or more",
+        origin="trap5",
+    ),
+    R(
+        "A open months only below",
+        "Years of experience",
+        "select",
+        ("Less than 6 months", "6-24 months"),
+        origin="trap5",
+    ),
+    R(
+        "A boundary 48 months",
+        "Years of experience",
+        "select",
+        ("0-24 months", "25-48 months", "49+ months"),
+        expected="25-48 months",
+        origin="trap5",
+    ),
+    R(
+        "A boundary 48 months twice",
+        "Years of experience",
+        "select",
+        ("0-48 months", "48-96 months"),
+        origin="trap5",
+    ),
+    R(
+        "A boundary 4 years",
+        "Years of experience",
+        "select",
+        ("0-3 years", "4 years", "5+ years"),
+        expected="4 years",
+        origin="trap5",
+    ),
+    R(
+        "A boundary 4 years closed",
+        "Years of experience",
+        "select",
+        ("0-4 years", "5+ years"),
+        expected="0-4 years",
+        origin="trap5",
+    ),
+    R(
+        "A boundary 4 years less than",
+        "Years of experience",
+        "select",
+        ("Less than 4 years", "4+ years"),
+        expected="4+ years",
+        origin="trap5",
+    ),
+    R(
+        "A weeks",
+        "Years of experience",
+        "select",
+        ("0-52 weeks", "53-156 weeks", "157+ weeks"),
+        origin="trap5",
+    ),
+    R("A jours", "Années d'expérience", "select", ("0-365 jours", "366+ jours"), origin="trap5"),
+    R(
+        "A both units in one option",
+        "Years of experience",
+        "select",
+        ("Up to 1 year 6 months", "2 years or more"),
+        origin="trap5",
+    ),
+    R(
+        "A both units in label",
+        "Experience in years or months",
+        "select",
+        ("0-12", "12-36", "36-60", "60+"),
+        origin="trap5",
+    ),
+    R(
+        "A months bare label years",
+        "Years of experience",
+        "select",
+        ("0-12", "12-36", "36-60", "60+"),
+        expected="0-12",
+        origin="trap5",
+    ),
+    R(
+        "A years bare label years",
+        "Years of experience",
+        "select",
+        ("0-1", "2-3", "4-5", "6+"),
+        expected="4-5",
+        origin="trap5",
+    ),
+    R(
+        "A months label long fr",
+        "Combien d'années d'expérience avez-vous ?",
+        "select",
+        ("0-12 mois", "12-36 mois", "36-60 mois", "60 mois et plus"),
+        expected="36-60 mois",
+        origin="trap5",
+    ),
+    R(
+        "A years label long",
+        "How many years of professional experience do you have?",
+        "select",
+        ("0-6 months", "6-18 months", "18-36 months", "36+ months"),
+        expected="36+ months",
+        origin="trap5",
+    ),
+]
+
+
+@pytest.mark.parametrize("case", ROUND5, ids=[c.name for c in ROUND5])
+def test_round5_question(case: Case) -> None:
+    test_question(case)
+
+
+def test_round5_has_the_review_cases_and_enough_of_them() -> None:
+    assert len(ROUND5) >= 20
+    assert len({c.name for c in ROUND5}) == len(ROUND5)
+
+
+BARE = ("0-12", "12-36", "36-60", "60+")
+
+
+@pytest.mark.parametrize(
+    ("label", "options", "expected"),
+    [
+        ("Experience", ("0-1", "2-3", "4-5", "6+"), None),
+        ("Experience", BARE, None),
+        ("Experience in months", BARE, "36-60"),
+        ("Experience in years", BARE, "0-12"),
+        ("Experience in months", ("0-2 years", "3-5 years", "6+ years"), "3-5 years"),
+        ("Experience", ("0-2", "3-5", "6+ years"), "3-5"),
+        ("Experience", ("0-2", "3-5 years", "60+ months"), None),
+        ("Experience in years", ("0-12", "12-36 months", "36-60 months", "60+"), None),
+    ],
+    ids=lambda v: str(v)[:40],
+)
+def test_range_option_units_come_from_the_option_then_the_label(
+    label: str, options: tuple[str, ...], expected: str | None
+) -> None:
+    assert _range_option(options, 4.0, 4.0, label) == expected
