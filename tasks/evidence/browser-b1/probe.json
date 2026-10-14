@@ -1,0 +1,33 @@
+{
+ "started": true,
+ "start_s": 0.79,
+ "new_user_namespace_by_process_type": {
+  "browser": [
+   false
+  ],
+  "zygote": [
+   false,
+   true
+  ],
+  "gpu-process": [
+   false
+  ],
+  "utility": [
+   false,
+   true
+  ],
+  "renderer": [
+   true
+  ]
+ },
+ "chrome_sandbox_page": "Sandbox Status\nLayer 1 Sandbox\tNamespace\nPID namespaces\tYes\nNetwork namespaces\tYes\nSeccomp-BPF sandbox\tYes\nSeccomp-BPF sandbox supports TSYNC\tYes\nPtrace Protection with Yama LSM (Broker)\tYes\nPtrace Protection with Yama LSM (Non-broker)\tNo\n\nYou are adequately sandboxed.",
+ "version": "155.0.8059.39",
+ "log": [
+  "[11:11:1014/101103.680314:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: ",
+  "[11:43:1014/101103.680483:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")",
+  "[11:11:1014/101103.793257:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: ",
+  "[11:43:1014/101103.793493:ERROR:dbus/bus.cc:405] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are \"tcp\" and on UNIX \"unix\")",
+  "[124:7:1014/101103.796359:ERROR:gpu/ipc/client/command_buffer_proxy_impl.cc:277] ContextResult::kTransientFailure: Failed to send GpuControl.CreateCommandBuffer.",
+  "[11:11:1014/101103.834443:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.NameHasOwner: object_path= /org/freedesktop/DBus: unknown error type: "
+ ]
+}

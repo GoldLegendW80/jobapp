@@ -1,0 +1,57 @@
+- banner:
+  - strong: Example Labs
+  - text: · Applied AI Engineer · Paris, France (hybrid)
+- main:
+  - heading "Apply for this job" [level=1]
+  - text: First name *
+  - textbox "First name *"
+  - text: Last name *
+  - textbox "Last name *"
+  - text: Email *
+  - textbox "Email *"
+  - text: Phone
+  - textbox "Phone"
+  - text: Location (city) *
+  - combobox "Location (city) *"
+  - text: Resume/CV *
+  - button "Resume/CV *"
+  - text: No file chosen Cover letter
+  - button "Attach"
+  - text: No file chosen LinkedIn profile
+  - textbox "LinkedIn profile"
+  - text: Website
+  - textbox "Website"
+  - text: Are you legally authorised to work in France?
+  - group "Are you legally authorised to work in France?":
+    - button "Yes"
+    - button "No"
+  - text: Will you now or in the future require sponsorship?
+  - group "Will you now or in the future require sponsorship?":
+    - button "Yes"
+    - button "No"
+  - text: How did you hear about us?
+  - combobox "How did you hear about us?":
+    - option "Select..." [selected]
+    - option "LinkedIn"
+    - option "Company website"
+    - option "Referral"
+    - option "Other"
+  - text: Notice period
+  - combobox "Notice period":
+    - option "Select..." [selected]
+    - option "Immediately"
+    - option "1 month"
+    - option "2 months"
+    - option "3 months"
+  - text: Why do you want to join Example Labs? *
+  - textbox "Why do you want to join Example Labs? *"
+  - text: Gender (voluntary)
+  - combobox "Gender (voluntary)":
+    - option "Decline to answer" [selected]
+    - option "Female"
+    - option "Male"
+    - option "Non-binary"
+  - checkbox "I agree to the processing of my data for this application."
+  - text: I agree to the processing of my data for this application.
+  - button "Submit application"
+  - status

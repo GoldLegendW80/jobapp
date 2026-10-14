@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- A slow page (browser B1): a script and an image the pages server holds back for 4 and 6
+     seconds, which delay the load event, then five autosave style requests of 1.5 s each after
+     it. The tools must wait for it without a fixed sleep. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slow careers page</title>
+<style>body { font-family: "Liberation Sans", sans-serif; margin: 40px; } li { margin: 4px 0; }</style>
+</head>
+<body>
+<h1>Open positions</h1>
+<p id="state">Loading...</p>
+<img src="/slow?ms=6000&amp;type=img" alt="" width="1" height="1">
+<ul id="polls"></ul>
+<script src="/slow?ms=4000&amp;type=js"></script>
+<script>
+  document.getElementById("state").textContent = "Loaded, scripts: " + (window.__slowLoaded || 0);
+  window.addEventListener("load", async () => {
+    for (let i = 1; i <= 5; i++) {
+      const answer = await fetch("/slow?ms=1500&type=json&i=" + i);
+      const item = document.createElement("li");
+      item.textContent = "Autosave " + i + ": " + (await answer.json()).ok;
+      document.getElementById("polls").appendChild(item);
+    }
+    document.getElementById("state").textContent = "Ready";
+    document.body.dataset.ready = "true";
+  });
+</script>
+</body>
+</html>

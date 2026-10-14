@@ -1,0 +1,111 @@
+<!doctype html>
+<!-- A simple ATS application form in the style of Greenhouse and Ashby (browser B1): the fields,
+     a visible resume input for set_input_files, a cover letter behind an Attach button that opens
+     a file chooser, Ashby's yes/no buttons, selects, a textarea and a submit that posts the form to
+     the pages server, which answers with the bytes it received. No external resource. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apply: Applied AI Engineer</title>
+<style>
+  body { font-family: "Liberation Sans", "Noto Sans", sans-serif; margin: 0; background: #f7f7f8; color: #1d1d1f; }
+  header { background: #fff; border-bottom: 1px solid #e3e3e6; padding: 24px 48px; }
+  main { max-width: 760px; margin: 32px auto; background: #fff; border-radius: 12px; padding: 32px 40px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  label { display: block; font-weight: 600; margin: 18px 0 6px; }
+  input[type=text], input[type=email], input[type=tel], input[type=url], select, textarea {
+    width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #c9c9cf; border-radius: 6px; font: inherit; }
+  textarea { min-height: 120px; }
+  .ashby-application-form-input-yesno { display: flex; gap: 8px; }
+  .ashby-application-form-input-yesno button { flex: 1; padding: 10px; border: 1px solid #c9c9cf; background: #fff; border-radius: 6px; cursor: pointer; }
+  .ashby-application-form-input-yesno button[aria-pressed=true] { background: #1d1d1f; color: #fff; }
+  .attach { padding: 8px 14px; border: 1px solid #c9c9cf; border-radius: 6px; background: #fff; cursor: pointer; }
+  .status { font-size: 13px; color: #555; margin-top: 6px; }
+  button[type=submit] { margin-top: 28px; padding: 12px 28px; border: 0; border-radius: 6px; background: #4f46e5; color: #fff; font-size: 16px; cursor: pointer; }
+</style>
+</head>
+<body>
+<header><strong>Example Labs</strong> · Applied AI Engineer · Paris, France (hybrid)</header>
+<main>
+  <h1>Apply for this job</h1>
+  <form id="application" novalidate>
+    <label for="first_name">First name *</label><input type="text" id="first_name" name="first_name" autocomplete="given-name" required>
+    <label for="last_name">Last name *</label><input type="text" id="last_name" name="last_name" autocomplete="family-name" required>
+    <label for="email">Email *</label><input type="email" id="email" name="email" autocomplete="email" required>
+    <label for="phone">Phone</label><input type="tel" id="phone" name="phone" autocomplete="tel">
+    <label for="location">Location (city) *</label>
+    <input type="text" id="location" name="location" list="cities" required>
+    <datalist id="cities"><option value="Paris, France"><option value="Bordeaux, France"><option value="Lyon, France"><option value="London, United Kingdom"></datalist>
+
+    <label for="resume">Resume/CV *</label>
+    <input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx">
+    <div class="status" id="resume-status">No file chosen</div>
+
+    <label>Cover letter</label>
+    <button type="button" class="attach" id="attach-cover">Attach</button>
+    <input type="file" id="cover_letter" name="cover_letter" accept=".pdf" hidden>
+    <div class="status" id="cover-status">No file chosen</div>
+
+    <label for="linkedin">LinkedIn profile</label><input type="url" id="linkedin" name="linkedin">
+    <label for="website">Website</label><input type="url" id="website" name="website">
+
+    <label id="auth-label">Are you legally authorised to work in France?</label>
+    <div class="ashby-application-form-input-yesno" role="group" aria-labelledby="auth-label" data-name="authorised">
+      <button type="button" data-option="yes" aria-pressed="false">Yes</button>
+      <button type="button" data-option="no" aria-pressed="false">No</button>
+    </div>
+    <label id="sponsor-label">Will you now or in the future require sponsorship?</label>
+    <div class="ashby-application-form-input-yesno" role="group" aria-labelledby="sponsor-label" data-name="sponsorship">
+      <button type="button" data-option="yes" aria-pressed="false">Yes</button>
+      <button type="button" data-option="no" aria-pressed="false">No</button>
+    </div>
+
+    <label for="source">How did you hear about us?</label>
+    <select id="source" name="source"><option value="">Select...</option><option>LinkedIn</option><option>Company website</option><option>Referral</option><option>Other</option></select>
+    <label for="notice">Notice period</label>
+    <select id="notice" name="notice"><option value="">Select...</option><option>Immediately</option><option>1 month</option><option>2 months</option><option>3 months</option></select>
+    <label for="why">Why do you want to join Example Labs? *</label>
+    <textarea id="why" name="why" required></textarea>
+
+    <label for="gender">Gender (voluntary)</label>
+    <select id="gender" name="gender"><option value="">Decline to answer</option><option>Female</option><option>Male</option><option>Non-binary</option></select>
+    <label><input type="checkbox" id="consent" name="consent"> I agree to the processing of my data for this application.</label>
+
+    <button type="submit">Submit application</button>
+    <div class="status" id="result" role="status"></div>
+  </form>
+</main>
+<script>
+  function describe(input, target) {
+    const file = input.files[0];
+    if (!file) { target.textContent = "No file chosen"; return; }
+    file.slice(0, 5).arrayBuffer().then((buf) => {
+      const magic = new TextDecoder().decode(buf);
+      target.textContent = file.name + ", " + file.size + " bytes, " + (magic === "%PDF-" ? "PDF" : "not a PDF");
+      target.dataset.ok = String(magic === "%PDF-");
+    });
+  }
+  const resume = document.getElementById("resume");
+  const cover = document.getElementById("cover_letter");
+  resume.addEventListener("change", () => describe(resume, document.getElementById("resume-status")));
+  cover.addEventListener("change", () => describe(cover, document.getElementById("cover-status")));
+  document.getElementById("attach-cover").addEventListener("click", () => cover.click());
+  document.querySelectorAll(".ashby-application-form-input-yesno").forEach((group) => {
+    group.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+      group.querySelectorAll("button").forEach((o) => o.setAttribute("aria-pressed", String(o === b)));
+      group.dataset.value = b.dataset.option;
+    }));
+  });
+  document.getElementById("application").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(event.target);
+    document.querySelectorAll(".ashby-application-form-input-yesno").forEach((g) => data.append(g.dataset.name, g.dataset.value || ""));
+    const answer = await fetch("/submit", { method: "POST", body: data });
+    const out = await answer.json();
+    const result = document.getElementById("result");
+    result.textContent = "Received " + out.bytes + " bytes, PDF " + out.pdf;
+    result.dataset.json = JSON.stringify(out);
+  });
+</script>
+</body>
+</html>
