@@ -17,20 +17,26 @@
 #
 # Service names reserved for later modules, so nothing else takes them:
 #   web          name kept free: the React build ships inside the caddy image
-#   browser      headed Chromium, Xvfb, noVNC (browser module)
 #
-# Networks: every service is on `default`, except `parser`, which is on `parsing` alone, and
-# `renderer`, which is on `rendering` alone: two internal networks (no gateway, no route out),
-# each shared with the worker and nobody else.
+# The browser (browser module) sits behind the `browser` profile, like tailscale behind `tunnel`:
+# a stack started without it has no headed Chromium. Its own stacks and tests start it with
+# --profile browser; deploy.sh enables it on the Jetson when the module is switched on (B6).
+#
+# Networks: every service is on `default`, except `parser`, which is on `parsing` alone,
+# `renderer`, which is on `rendering` alone (two internal networks, no gateway, no route out,
+# each shared with the worker and nobody else), and `browser`, which is on `browsing` (internal,
+# shared with the api, the worker and caddy, which reach its control API and live view) and
+# `egress` (its own, the one network with a route out that no other service joins).
 #
 # Memory budget, 5G for the whole stack on the 7.4G Jetson (each service sets mem_limit):
 #   api 512m, db 768m, redis 256m, caddy 128m, tailscale 128m, worker 1536m, parser 640m,
-#   renderer 384m                              this file: 4352m
-#   browser 1536m                              reserved for the browser module
-#   total 5888m with the browser module: over the 5G budget by 768m (384m before the renderer).
-#   The parser's 640m is a starting figure (ingestion G2a); G2b and G8 set it from the peaks they
-#   measure, and the browser module decides its own limit against what is left when it is built
-#   (SPEC-platform.md, SPEC-documents.md "Rendering on the Jetson").
+#   renderer 256m, browser 1024m              this file: 5248m
+#   5248m is 128m over the 5G budget (5120m). The renderer went from 384m to 256m with the
+#   browser (D3 measured a peak of 134 MiB on the Jetson); the parser's 640m is a starting figure
+#   (ingestion G2a) that G2b and G8 set from the peaks they measure: the parser at 512m brings
+#   the stack to 5120m. The browser's 1024m is B1's measure (a Workday stand in with 3 tabs
+#   peaked at 499 MiB in the cgroup, 807 MiB of PSS), so its memory guard closes a tab at about
+#   920 MiB. (SPEC-platform.md, SPEC-documents.md "Rendering on the Jetson", SPEC-browser.md.)
 
 name: jobapp
 
@@ -61,6 +67,10 @@ services:
     mem_limit: 128m
     expose:
       - "8080"
+    # `browsing`: the live view's websocket to the browser (B4, /vnc/).
+    networks:
+      - default
+      - browsing
 
   # --- tailscale (platform: Tailscale Funnel) ---------------------------------------------------
   # The public entry point: Tailscale Funnel, free, with a stable URL https://<TS_HOSTNAME>.<tailnet>
@@ -144,6 +154,10 @@ services:
     mem_limit: 512m
     expose:
       - "8000"
+    # `browsing`: the api is browserd's client for leases (app/browser/client.py, B3).
+    networks:
+      - default
+      - browsing
 
   # --- worker (jobs J5, agents A2) -----------------------------------------------------------
   # Queue consumer (app/worker.py): board sweeps and the users' sweep schedules, and Claude agent
@@ -182,10 +196,12 @@ services:
     # `parsing`: the only way to the parser. The worker sends it a document and writes the
     # result to the database itself (app/ingestion/parser_client.py).
     # `rendering`: the only way to the renderer (app/documents/render_client.py).
+    # `browsing`: browserd's tool API for agent runs (B5).
     networks:
       - default
       - parsing
       - rendering
+      - browsing
   # --- end of worker --------------------------------------------------------------------------
 
   # --- parser (ingestion G2a; decision of the owner of 2026-10-10) ----------------------------
@@ -250,8 +266,9 @@ services:
   #   seccomp profile and no-new-privileges refuse (D1). The container is the boundary. Never
   #   add a capability, `seccomp=unconfined` or `privileged` to start Chromium's sandbox;
   # - a 64m tmpfs on /tmp: Playwright and Chromium write there, and fail with EROFS without it;
-  # - at most 128 processes and threads (D1 measured a peak of 71; 32 kills it), 384m of memory
-  #   (D1's peak 157 MiB; D3 measured 50 renders on the Jetson, SPEC-documents.md).
+  # - at most 128 processes and threads (D1 measured a peak of 71; 32 kills it), 256m of memory
+  #   (D1's peak 157 MiB; D3 measured 50 renders on the Jetson, a peak of 134 MiB,
+  #   SPEC-documents.md; lowered from 384m for the browser's budget, B2).
   # A render longer than 30 s is stopped and its context closed, else the browser is killed and
   # launched again; a crash of the service is a restart.
   # Never give it an env_file, an environment, a volume, a second network or a published port.
@@ -278,10 +295,75 @@ services:
       timeout: 8s
       start_period: 20s
       retries: 3
-    mem_limit: 384m
+    mem_limit: 256m
     expose:
       - "7071"
   # --- end of renderer ------------------------------------------------------------------------
+
+  # --- browser (browser B2; B1 measured it on the Jetson) -------------------------------------
+  # One headed Chromium at a time for a person's lease, driven by browserd (browser/browserd/):
+  # the control API on :9300, the profile of each person on the volume `browserprofiles`. It
+  # loads real job sites, hostile JavaScript included, while holding the person's logins, so:
+  # - its own image; browserd is root with SETUID and SETGID only, to start each person's
+  #   Chromium under that profile's own uid (20000 and up, mode 0700 directories); every other
+  #   capability dropped, no new privilege, a read only root with tmpfs for /tmp and /leases;
+  # - Chromium's own sandbox stays on (never --no-sandbox): browser/seccomp.json is Docker's
+  #   default profile plus one rule allowing clone, unshare, setns and chroot, which Chromium's
+  #   user namespace sandbox needs (B1), no capability added; B6 narrows it;
+  # - no env_file: no SECRET_KEY, CREDENTIALS_KEY, database or Redis address, model credential.
+  #   Its environment is its own control secret and its timers;
+  # - `browsing` (internal) for its control API, and `egress`, its own network with a route out.
+  #   Every connection of Chromium goes through browserd's proxy, which refuses any address that
+  #   is not public (private, loopback, link local and metadata, CGNAT and the tailnet, ULA), so
+  #   a page cannot reach the app's services on `browsing`, the LAN or the Docker host; B6 adds
+  #   the host firewall rule on the `egress` subnet. Not on `default`: db, redis and the api's
+  #   name do not resolve there. No published port;
+  # - 1024m of memory and as much with swap (memswap_limit equal: no swap, a fast OOM kill),
+  #   128m of /dev/shm (B1: Chromium used none of it), 1024 processes and threads.
+  # SIGTERM releases the lease and closes Chromium cleanly (the profile is flushed) within 15 s.
+  # Never give it an env_file, a published port, `default`, a capability or `unconfined`.
+  browser:
+    <<: *restart
+    profiles: [browser]
+    build:
+      context: ./browser
+    image: jobapp-browser:latest
+    command: ["python", "-m", "browserd"]
+    user: "0:0"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /leases:size=64m,mode=1733
+    volumes:
+      - browserprofiles:/profiles
+    cap_drop: [ALL]
+    cap_add: [SETUID, SETGID]
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./browser/seccomp.json
+    pids_limit: 1024
+    environment:
+      BROWSER_CONTROL_SECRET: ${BROWSER_CONTROL_SECRET:-}
+      BROWSER_LEASE_MAX_S: ${BROWSER_LEASE_MAX_S:-}
+      BROWSER_IDLE_S: ${BROWSER_IDLE_S:-300}
+      BROWSER_SESSION_MAX_S: ${BROWSER_SESSION_MAX_S:-1800}
+      BROWSER_MEM_GUARD_PCT: ${BROWSER_MEM_GUARD_PCT:-90}
+    networks:
+      - browsing
+      - egress
+    healthcheck:
+      test: ["CMD", "python", "-m", "browserd", "--check"]
+      interval: 15s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    stop_grace_period: 15s
+    shm_size: 128m
+    mem_limit: 1024m
+    memswap_limit: 1024m
+    expose:
+      - "9300"
+  # --- end of browser -------------------------------------------------------------------------
 
   db:
     <<: *restart
@@ -337,6 +419,12 @@ networks:
   # The worker and the renderer, and nothing else, internal for the same reasons.
   rendering:
     internal: true
+  # browserd's control API and live view: the browser, the api, the worker and caddy.
+  browsing:
+    internal: true
+  # The browser's way out, its own: no other service joins it. B6 drops its traffic to private,
+  # link local and CGNAT ranges on the host (DOCKER-USER); browserd's proxy refuses them too.
+  egress: {}
 
 volumes:
   pgdata:
@@ -344,3 +432,7 @@ volumes:
   # tailscale: the node's login, key and Funnel certificate. Never delete it on the Jetson, or the
   # next start needs a fresh TS_AUTHKEY.
   tsstate:
+  # browser: one directory per person (mode 0700, the profile's uid): logins as cookies and local
+  # storage. Not encrypted at rest (SPEC-browser), kept out of the nightly backup (B6) and of any
+  # dump, deleted with the account or by "Forget all logins" (B3 queues it, B7 removes it).
+  browserprofiles:

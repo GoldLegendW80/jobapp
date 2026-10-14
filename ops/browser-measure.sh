@@ -79,7 +79,7 @@ TAG="b1spike-browser:${SUFFIX}"
 NET="${DIR}-net"
 PAGES_C="${DIR}-pages"
 PAGES_URL="http://${PAGES_C}:8000"
-COMMON="--network ${NET} --cpus 3 --shm-size 128m --cap-drop ALL --security-opt no-new-privileges \
+COMMON="--user 1000:1000 -e HOME=/tmp --network ${NET} --cpus 3 --shm-size 128m --cap-drop ALL --security-opt no-new-privileges \
  -e B1_PAGES_URL=${PAGES_URL} -v \$HOME/${DIR}/b1:/b1:ro -v \$HOME/${DIR}/out:/out"
 
 # r CMD: runs CMD on the Jetson with --real, prints it otherwise.
