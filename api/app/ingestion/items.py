@@ -80,12 +80,13 @@ start, and a school with no date at all last. Every other list appends.
 
 **Never proposable.** A setting is the user's choice about how the app behaves, not a claim a
 document supports: a gate's `penalty`, a board's `enabled` and `extra_exclude`, every
-`advanced_regex`, `search.min_fit`, `search.days`, `search.sweep_schedule`, and the apply
-fields of `answers` (EEO, salary stance and ranges, consents, preferred name and the like).
-They are typed `setting` in `FIELD_TYPES`, and `build` refuses them for an agent whatever is
-cited. The photo is not a section and has no key. `skills.years_experience` is computed by the
-merge, never read by the agent: only `Origin.derived` may build it. A user's edit (`Origin.user`)
-is validated by the section model alone and may set a setting inside the entry it edits.
+`advanced_regex`, `search.min_fit`, `search.days`, `search.sweep_schedule`, `search.documents`,
+and the apply fields of `answers` (EEO, salary stance and ranges, consents, preferred name and
+the like). They are typed `setting` in `FIELD_TYPES`, and `build` refuses them for an agent
+whatever is cited. The photo is not a section and has no key. `skills.years_experience` is
+computed by the merge, never read by the agent: only `Origin.derived` may build it. A user's edit
+(`Origin.user`) is validated by the section model alone and may set a setting inside the entry it
+edits.
 
 **What is stored of a hostile value.** A value comes from a model that read a hostile document.
 Before the section model reads it: at most `VALUE_NODES_MAX` parts, `VALUE_CHARS_MAX` characters
@@ -311,6 +312,9 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "search.sweep_schedule.days[]": _T.SETTING,
         "search.sweep_schedule.times[]": _T.SETTING,
         "search.sweep_schedule.timezone": _T.SETTING,
+        "search.documents.auto": _T.SETTING,
+        "search.documents.min_fit": _T.SETTING,
+        "search.documents.daily_ceiling": _T.SETTING,
         "answers.work_authorization[].country": _T.TEXT,
         "answers.work_authorization[].answer": _T.TEXT,
         "answers.work_authorization[].needs_sponsorship": _T.ENUM,
@@ -451,6 +455,7 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             boards=_K.entries,
             never_apply=_K.lines,
             sweep_schedule=_K.setting,
+            documents=_K.setting,
         ),
         "answers": _slots(
             "answers",
