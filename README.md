@@ -133,8 +133,9 @@ the refs it is given in order (a conflict is exit 2 and names the ref), and runs
 of the three jobs of `.github/workflows/ci.yml`, always the full set: the api lint, the whole
 pytest suite with the 95 percent coverage floor, the docker marked tests, the scoring timing
 test; pre-commit, the secret scan, shellcheck, the guards and every `tests/*_test.sh` that
-`ci.yml` runs; the web lint, type check, Vitest and build; and the four Playwright journey
-groups, each on a scratch Compose stack of its own. Four lanes start together (api with its own
+`ci.yml` runs; the web lint, type check, Vitest and build; and the Playwright journey groups
+(apps, sweep and one per `web/e2e/<group>-all.config.ts`), each on a scratch Compose stack of
+its own. Four lanes start together (api with its own
 Postgres and Redis containers, web, the image build, the checks), and the journey groups start
 when the images and the web install are done, side by side on their own ports. When every lane
 has ended, the tests that measure time run in a quiet phase: Vitest next to the docker marked

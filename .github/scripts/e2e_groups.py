@@ -10,12 +10,15 @@ This check reads the workflow and fails when a web/e2e/*.spec.ts file is neither
   workflow runs with `-c`: listed in its SPECS (web/e2e/identity-all.config.ts), or named with
   its SPEC_PREFIX (web/e2e/ingestion-all.config.ts runs every ingestion-*.spec.ts, so a task of
   that module adds a spec without touching the workflow), nor
-- covered by a config of LOCAL_CHECK_CONFIGS below that ops/local-check.sh names (a journey
-  group the local check runs and the workflow does not: web/e2e/mail-all.config.ts), nor
+- covered by a journey group that ops/local-check.sh finds on its own and the workflow does
+  not run: every web/e2e/<group>-all.config.ts is one (`journey_groups` of the script, issue
+  #279), so a module adds its group by adding that file, with no list to edit, nor
 - listed in NOT_IN_CI below, with the reason it is not run there.
 
-It also fails on a spec the workflow runs twice, on a spec that is both run and excluded, and on a
-name (run or excluded) that has no file any more. Exit status 0 when all is in order, 1 otherwise.
+It also fails on a spec the workflow runs twice, on a spec that is both run and excluded, on a
+name (run or excluded) that has no file any more, on a group config that runs no spec, and on a
+group config whose name the local check cannot use as a group (apps and sweep are taken, and a
+name is lower case letters, digits and hyphens). Exit status 0 when all is in order, 1 otherwise.
 Run by the shell unit of CI (job checks) and by pre-commit; tested by e2e_groups_test.py.
 """
 
@@ -44,19 +47,15 @@ NOT_IN_CI: dict[str, str] = {
     "real-api.spec.ts": "needs an api and database started by hand (E2E_REAL_API)",
 }
 
-# Playwright configs that the workflow does not run and the local check does, as a journey group
-# of its own (ops/local-check.sh, `journey_specs`), each with its reason. There is no CI run:
-# the local check gates a deploy. A config listed here accounts for the specs under its
-# SPEC_PREFIX only while ops/local-check.sh really names it with `-c`.
-LOCAL_CHECK_CONFIGS: dict[str, str] = {
-    # The mail journeys need the fake Google of tests/gmail-stub.compose.yml beside the stack
-    # (no journey may reach a real Google account), which the workflow's stacks do not start.
-    "e2e/mail-all.config.ts": "needs the fake Google, group mail of ops/local-check.sh",
-    # The apply journeys need the fake ATS forms server of tests/ats-forms-stub.compose.yml
-    # beside the stack (no journey may fill a real job site). apply-a3 ran in the identity group
-    # until A1 made this group.
-    "e2e/apply-all.config.ts": "needs the fake ATS forms server, group apply of ops/local-check.sh",
-}
+# The journey groups of ops/local-check.sh are found, not listed: every web/e2e/<group>-all.config.ts
+# is the group <group> (`journey_groups` of the script). There is no CI run: the local check
+# gates a deploy. The configs among them that the workflow does not run (mail: the fake Google
+# of tests/gmail-stub.compose.yml beside the stack; apply: the fake ATS forms server; the groups
+# added since) account for their specs here while ops/local-check.sh exists.
+GROUP_CONFIG = "-all.config.ts"
+GROUP_NAME = re.compile(r"[a-z0-9][a-z0-9-]*\Z")
+# The groups of ops/local-check.sh that name their specs one by one: no config may take them.
+NAMED_GROUPS = ("apps", "sweep")
 
 WORKFLOW = Path(".github/workflows/ci.yml")
 LOCAL_CHECK = Path("ops/local-check.sh")
@@ -104,17 +103,47 @@ def specs_in_ci(root: Path) -> list[str]:
     return ran
 
 
-def specs_in_local_check(root: Path) -> list[str]:
-    """The specs of the configs of LOCAL_CHECK_CONFIGS that ops/local-check.sh names."""
-    script = root / LOCAL_CHECK
-    if not script.is_file():
+def group_configs(root: Path) -> list[str]:
+    """Every journey group config the local check finds, as `e2e/<group>-all.config.ts`, sorted."""
+    return sorted(
+        f"e2e/{path.name}"
+        for path in (root / E2E_DIR).glob(f"*{GROUP_CONFIG}")
+        if path.is_file()
+    )
+
+
+def local_check_configs(root: Path) -> list[str]:
+    """The group configs that the local check runs and the workflow does not."""
+    if not (root / LOCAL_CHECK).is_file():
         return []
-    text = uncommented(script.read_text(encoding="utf-8"))
+    text = uncommented((root / WORKFLOW).read_text(encoding="utf-8"))
+    in_workflow = set(CONFIG.findall(text))
+    return [config for config in group_configs(root) if config not in in_workflow]
+
+
+def specs_in_local_check(root: Path) -> list[str]:
+    """The specs of the group configs that the local check runs and the workflow does not."""
     ran: list[str] = []
-    for config in CONFIG.findall(text):
-        if config in LOCAL_CHECK_CONFIGS and (root / "web" / config).is_file():
-            ran += config_specs(root / "web" / config)
+    for config in local_check_configs(root):
+        ran += config_specs(root / "web" / config)
     return ran
+
+
+def group_problems(root: Path) -> list[str]:
+    """The group configs that ops/local-check.sh, when there is one, cannot run as a group."""
+    problems: list[str] = []
+    if not (root / LOCAL_CHECK).is_file():
+        return problems
+    for config in group_configs(root):
+        group = config.removeprefix("e2e/").removesuffix(GROUP_CONFIG)
+        if not GROUP_NAME.match(group) or group in NAMED_GROUPS:
+            problems.append(
+                f"web/{config} cannot be a journey group of {LOCAL_CHECK}: rename it "
+                f"(lower case letters, digits, hyphens; not {' or '.join(NAMED_GROUPS)})"
+            )
+        elif not config_specs(root / "web" / config):
+            problems.append(f"web/{config} runs no spec: Playwright would find no test")
+    return problems
 
 
 def check(root: Path, not_in_ci: dict[str, str] | None = None) -> list[str]:
@@ -123,7 +152,7 @@ def check(root: Path, not_in_ci: dict[str, str] | None = None) -> list[str]:
     on_disk = {path.name for path in (root / E2E_DIR).glob("*.spec.ts")}
     ran = Counter(specs_in_ci(root))
     local = set(specs_in_local_check(root))
-    problems: list[str] = []
+    problems = group_problems(root)
     for name in sorted(set(ran) & local):
         problems.append(
             f"{name} is run by {WORKFLOW} and by a group of {LOCAL_CHECK} that the "
