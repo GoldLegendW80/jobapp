@@ -66,7 +66,12 @@ function logs(...services: string[]): string {
       "--no-color",
       ...services,
     ],
-    { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
   );
 }
 
