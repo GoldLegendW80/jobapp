@@ -60,7 +60,7 @@ import math
 import re
 import time
 import uuid
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -268,6 +268,8 @@ class Acquired:
     lease: Lease | None = None
     waiting: Waiting | None = None
     token: str | None = field(default=None, repr=False)
+    # B5: the gate's capability, on the starting call of an apply_submit or profile_edit lease.
+    capability: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)
@@ -326,9 +328,19 @@ class Leases:
 
     # --- the public calls ----------------------------------------------------------------------
 
-    async def acquire(self, user_id: str, purpose: str, automation: bool) -> Acquired:
+    async def acquire(
+        self,
+        user_id: str,
+        purpose: str,
+        automation: bool,
+        *,
+        hosts: Sequence[str] = (),
+        submit_selectors: Sequence[str] = (),
+    ) -> Acquired:
         """The caller's lease, started now or already held, or its place in the queue. Raises
-        BrowserError when browserd cannot start it, StoreUnavailableError without Redis."""
+        BrowserError when browserd cannot start it, StoreUnavailableError without Redis.
+        `hosts` and `submit_selectors` (B5) are given to browserd by the call that starts the
+        lease: the hosts its tools may open, the adapter's own submit elements."""
         if purpose not in TIERS:
             raise ValueError(purpose)
         try:
@@ -356,7 +368,7 @@ class Leases:
                 await r.set(TICKET + member, "1", ex=TICKET_TTL_S)
                 await r.zadd(QUEUES[TIERS[purpose]], {member: await r.incr(SEQ)}, nx=True)
                 if await r.eval(CLAIM, 1 + len(QUEUES), HOLDER, *QUEUES, member, raw, TICKET):
-                    return await self._start(r, turn, raw)
+                    return await self._start(r, turn, raw, hosts, submit_selectors)
                 mine = await self._own(r, user_id, purpose)
                 if mine is not None:
                     return Acquired(lease=mine)
@@ -425,6 +437,19 @@ class Leases:
             waiting=tuple(places),
         )
 
+    async def holds(self, user_id: str, lease_id: str) -> bool:
+        """Whether the person holds that lease now, as this store last knew it: one read, no
+        call to browserd (B5's tools ask it before each call; browserd then checks the token)."""
+        try:
+            r = await self._pool()
+            raw = _text(await r.get(HOLDER))
+        except (RedisError, OSError, TimeoutError):
+            raise StoreUnavailableError from None
+        if raw is None:
+            return False
+        lease = Lease.loads(raw)
+        return lease.user_id == user_id and lease.lease_id == lease_id and lease.state != "starting"
+
     async def touch(self, user_id: str, lease_id: str) -> Lease | None:
         """A tool call or an input on the lease: the idle timer starts again."""
         return await self._update(user_id, lease_id, lambda lease, now: lease.touch(now))
@@ -444,7 +469,14 @@ class Leases:
 
     # --- inside ----------------------------------------------------------------------------------
 
-    async def _start(self, r: Any, turn: Lease, raw: str) -> Acquired:
+    async def _start(
+        self,
+        r: Any,
+        turn: Lease,
+        raw: str,
+        hosts: Sequence[str] = (),
+        submit_selectors: Sequence[str] = (),
+    ) -> Acquired:
         try:
             profile = await self.profiles.ensure(turn.user_id)
             started = await self.client.start(
@@ -453,6 +485,8 @@ class Leases:
                 uid=profile.uid,
                 purpose=turn.purpose,
                 automation=turn.automation,
+                hosts=hosts,
+                submit_selectors=submit_selectors,
             )
         except BrowserError as exc:
             await r.eval(CAS, 1, HOLDER, raw, "")
@@ -484,7 +518,7 @@ class Leases:
             raise BrowserError("unavailable")
         await self.profiles.mark_used(turn.user_id, now)
         logger.info("browser lease started: purpose=%s", turn.purpose)
-        return Acquired(lease=lease, token=started.token)
+        return Acquired(lease=lease, token=started.token, capability=started.capability)
 
     async def _settle(self, r: Any, now: float) -> Lease | None:
         """The holder after ending an expired one or one browserd no longer holds."""

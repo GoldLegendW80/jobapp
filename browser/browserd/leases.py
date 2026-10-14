@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
 from browserd.config import PURPOSES, UID_MAX, UID_MIN, Config
+from browserd.tools import policy
 
 T = TypeVar("T")
 log = logging.getLogger("browserd")
@@ -62,6 +63,9 @@ class Request:
     automation: bool
     languages: tuple[str, ...]
     timezone: str
+    # B5: the hosts the tools may navigate to, and the apply adapter's own submit elements.
+    hosts: tuple[str, ...] = ()
+    submit_selectors: tuple[str, ...] = ()
 
     @classmethod
     def parse(cls, body: Any) -> "Request":
@@ -100,6 +104,11 @@ class Request:
             or ".." in timezone
         ):
             raise LeaseError(400, "bad_timezone")
+        try:
+            hosts = policy.parse_hosts(body.get("hosts"))
+            selectors = policy.parse_selectors(body.get("submit_selectors"))
+        except ValueError as exc:
+            raise LeaseError(400, f"bad_{exc}") from None
         return cls(
             user_id=user_id,
             profile_id=profile_id,
@@ -108,6 +117,8 @@ class Request:
             automation=bool(body.get("automation", True)),
             languages=tuple(languages),
             timezone=timezone,
+            hosts=hosts,
+            submit_selectors=selectors,
         )
 
 
@@ -129,6 +140,10 @@ class Lease:
     active_since: float = 0.0
     last_input: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
+    # B5: the hash of the gate's capability (empty: no call may click a submit element), and
+    # what the tool layer keeps for this lease (its documents, its tab), dropped with it.
+    gate_hash: bytes = b""
+    scratch: dict[str, Any] = field(default_factory=dict)
 
     def active_s(self, now: float) -> float:
         running = now - self.active_since if self.state == "active" else 0.0
