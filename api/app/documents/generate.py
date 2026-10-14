@@ -210,6 +210,8 @@ def start(
     settings = settings or get_settings()
     if generation.mode not in (GenerationMode.posting, GenerationMode.shorten):
         raise ValueError(f"not a mode of the CV writer: {generation.mode.value}")
+    if generation.status not in (GenerationStatus.queued, GenerationStatus.waiting):
+        raise ValueError(f"the generation is {generation.status.value}: it has its run")
     document = store.lock_document(db, generation.user_id, generation.document_id)
     if document.scope != Scope.posting or document.kind != Kind.cv:
         raise ValueError("the CV writer writes a posting's CV only")
@@ -454,6 +456,13 @@ def shorten(
         ).first()
         if later is not None or document.scope != Scope.posting or document.kind != Kind.cv:
             return None
+        if document.draft_written_by is not Author.writer or (
+            c.content_hash(document.kind, c.parse(document.kind, document.draft))
+            != version.content_hash
+        ):
+            return (
+                None  # saved by hand during the render: the person's draft is not ours to shorten
+            )
         template = render_job.template_of(db, owner, document.template_slug)
         fields = long_fields(c.parse("cv", version.content), template.kinds["cv"].soft_limits)
         try:

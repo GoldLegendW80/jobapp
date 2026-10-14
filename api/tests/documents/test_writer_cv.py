@@ -24,6 +24,7 @@ from app.documents import corrections, generate, render_job, store, submit, writ
 from app.documents.models import (
     Author,
     BaseSource,
+    DocumentGeneration,
     GenerationMode,
     GenerationOutcome,
     GenerationStatus,
@@ -419,6 +420,43 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
         "overflow",
         "overflow",
     ]
+
+
+def test_a_generation_already_running_is_not_started_twice(alex: Person) -> None:
+    _, generation, _ = start(alex, "documents_cv_valid")
+    with alex.factory() as db:
+        row = db.get(DocumentGeneration, generation)
+        with pytest.raises(ValueError, match="running"):
+            generate.start(db, row, at=AT, settings=alex.settings)
+
+
+def test_a_hand_edit_saved_during_the_render_is_never_shortened(
+    alex: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(generate, "RUNTIME", alex.runtime())
+    document, generation, _ = write(alex, "documents_cv_overflow")
+    _done(alex, document, generation)
+    [overflowing] = versions(alex.factory, document)
+    mine = {"schema": 1, "headline": "My own words"}
+    # The person saves by hand after the writer's draft, before D6 calls the hook.
+    with alex.factory() as db:
+        current = store.get_or_create(db, alex.user, alex.posting, Kind.cv, at=AT)
+        store.save_draft(
+            db, alex.user, current.id, mine, current.draft_revision, Author.user, at=AT
+        )
+        db.commit()
+    assert generate.shorten(alex.factory, document, overflowing.id, AT, alex.settings) is None
+    asyncio.run(generate.on_overflow(document, overflowing.id))
+    assert [job for job in alex.queue.jobs if job["function"] == "run_agent"] == []
+    row = document_row(alex.factory, document)
+    assert row.draft["headline"] == "My own words"
+    assert row.draft_written_by is Author.user
+    assert [v.id for v in versions(alex.factory, document)] == [overflowing.id]
+    with alex.factory() as db:
+        modes = db.scalars(
+            sa.select(DocumentGeneration.mode).where(DocumentGeneration.document_id == document)
+        ).all()
+    assert list(modes) == [GenerationMode.posting]
 
 
 def test_a_hand_edit_that_overflows_starts_no_writer(
