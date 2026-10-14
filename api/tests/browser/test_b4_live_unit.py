@@ -180,6 +180,19 @@ def test_the_apis_grant_is_the_one_browserd_reads() -> None:
         ("", WALL),
         ("v1." * 40, WALL),
     ],
+    ids=[  # the values are random: xdist's workers must collect the same names
+        "expired",
+        "too_far_ahead",
+        "other_secret",
+        "signature_changed",
+        "other_lease",
+        "other_viewer",
+        "upper_case",
+        "trailing_space",
+        "other_version",
+        "empty",
+        "garbage",
+    ],
 )
 def test_a_grant_that_does_not_hold_is_refused(raw: str, now: float) -> None:
     assert live.read_grant(SECRET, raw, now) is None

@@ -209,7 +209,7 @@ Form times: "fill" is `fill()` of seven fields, two selects, two yes or no butto
 Nothing yet.
 
 ### B4
-Nothing yet.
+**As built (PR of B4, 2026-10-14, on the Mac, no Docker run):** no VNC port and no websockify: browserd itself serves the websocket on :6080 (`browserd/live.py`) and starts one `x11vnc -inetd` per admitted viewer over a socket pair, as the display user, so no VNC password exists. Caddy's `forward_auth` (Upgrade removed, so the api answers plain HTTP) asks `GET /api/browser/live/auth`, which spends the ticket and answers a grant signed with `BROWSER_CONTROL_SECRET` (10 s, one use, naming the lease and the viewer); browserd admits it once for the current lease only. Take over is browserd's own filter of the viewer's RFB stream (keys and pointer forwarded from the one viewer that took over, clipboard, resize and power messages always dropped, an unknown message closes the viewer), not x11vnc's `-R viewonly`. `Live.agent_turn` is what B5's tool calls await. noVNC is the npm package `@novnc/novnc` 1.4.0, pinned, not a vendored directory. Not measured yet: the canvas journey `web/e2e/browser-b4.spec.ts` (no group starts the browser profile), traffic per second.
 
 ### B5
 Nothing yet.
