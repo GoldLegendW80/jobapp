@@ -1,4 +1,5 @@
-"""The review of a run's proposals (G12): what the page reads, and the undo of an accept.
+"""The review of a run's proposals (G12, G13): what the page reads, the undo of an accept, and
+the two bulk decisions.
 
 - GET /api/ingestion/runs/{id}/proposals: the profile items the merge wrote for this run,
   grouped by section in the profile's order, each with its value, what the profile holds at its
@@ -7,10 +8,20 @@
   profile as it is now (`item_proposals.review`), and for the derived years also against the
   employer items they were counted from.
 - POST /api/ingestion/proposals/{id}/undo: takes back an accepted item, as one revision.
+- POST /api/ingestion/runs/{id}/accept-section {section, proposal_ids[]}: "Accept all in this
+  section" (`review.accept_section`). The ids that are pending items of this run and section
+  and that a bulk accept may take are applied in one profile save, so one revision. It answers
+  what it accepted, what it left out with the reason of each (`locked`, `flagged`, `removal`,
+  `stale`, `not_pending`, `not_found`, `other_section`) and the count per reason. 409 when one
+  item stops the section: nothing is applied and `proposal_id` names it (`reason` is `invalid`
+  or `profile_conflict`), or when the profile is held by another request (`busy`).
+- POST /api/ingestion/runs/{id}/reject-section {section, proposal_ids[]}: "Reject the rest of
+  this section", with no exclusion. The profile is not touched.
 
-Accept and reject are the routes of `/api/proposals` (G5), unchanged. The bulk routes come with
-G13. Every id of another user answers 404 with the sentence of an unknown one. Every answer is
-`no-store` (the middleware of `routers.py`).
+Accept and reject of one item are the routes of `/api/proposals` (G5), unchanged. Every id of
+another user answers 404 with the sentence of an unknown one, and in a bulk call an id of
+another user or of another run is left out as `not_found`, like one that never existed. Every
+answer is `no-store` (the middleware of `routers.py`).
 
 What a document wrote reaches this answer as data only: a value, and an excerpt cut to
 `EXCERPT_MAX` characters. The page renders both as text.
@@ -18,12 +29,12 @@ What a document wrote reaches this answer as data only: a value, and an excerpt 
 
 import uuid
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 from sqlalchemy.orm import Session
 
 from app.agents import proposals
@@ -32,7 +43,7 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.ingestion import item_proposals, items
+from app.ingestion import item_proposals, items, review
 from app.ingestion.citations import FieldType
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun, RunStatus
@@ -56,6 +67,18 @@ UNDO_REFUSED = {
         "This one cannot be taken back exactly. Edit the profile by hand instead."
     ),
 }
+SECTION_STOPPED = {
+    item_proposals.INVALID: (
+        "Nothing was accepted. One proposal no longer fits your profile and was set aside: "
+        "{reason}. Accept the others again."
+    ),
+    item_proposals.PROFILE_CONFLICT: (
+        "Nothing was accepted. Your profile cannot take one of these as it is: {reason}. "
+        "Edit or reject that one, then accept the others again."
+    ),
+}
+BUSY = "Your profile is being changed from somewhere else. Try again in a moment."
+UNKNOWN_SECTION = "This is not a section of the profile."
 STALE_PROFILE = "profile_changed"
 STALE_DEPENDS = "depends_on_changed"
 
@@ -155,6 +178,80 @@ class UndoConflictOut(BaseModel):
     detail: str
     reason: Literal["not_accepted", "changed_since", "not_undoable"]
     status: ProposalStatus
+
+
+# The canonical text of a uuid, as the list gives it: a bound the body's schema can state.
+ProposalId = Annotated[
+    str,
+    StringConstraints(
+        min_length=36,
+        max_length=36,
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    ),
+]
+
+
+class SectionIn(BaseModel):
+    """The body of the two bulk routes: the section, and the ids the user was looking at (the
+    page sends the pending ones it shows, so nothing is decided that was not on the screen)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    section: Annotated[str, Field(max_length=32)]
+    proposal_ids: Annotated[list[ProposalId], Field(max_length=review.IDS_MAX)]
+
+    @field_validator("section")
+    @classmethod
+    def _known(cls, value: str) -> str:
+        if value not in items.SLOTS:
+            raise ValueError(UNKNOWN_SECTION)
+        return value
+
+    @property
+    def ids(self) -> list[uuid.UUID]:
+        return [uuid.UUID(one) for one in dict.fromkeys(self.proposal_ids)]
+
+
+class SkippedOut(BaseModel):
+    id: str
+    reason: str
+
+
+class SectionDecidedOut(BaseModel):
+    """What a bulk call did. `decided`: the ids accepted (or rejected). `skipped`: the ids left
+    out, each with its reason, and `left_out` their count per reason. `revision`: the one
+    profile revision an accept made, null when it changed nothing and for a reject."""
+
+    run_id: str
+    section: str
+    decided: list[str]
+    skipped: list[SkippedOut]
+    left_out: dict[str, int]
+    revision: int | None
+    profile_revision: int
+
+    @classmethod
+    def of(cls, run: IngestionRun, section: str, done: review.Decided, revision: int) -> Self:
+        return cls(
+            run_id=str(run.id),
+            section=section,
+            decided=[str(one) for one in done.done],
+            skipped=[
+                SkippedOut(id=str(one), reason=reason) for one, reason in done.skipped.items()
+            ],
+            left_out=done.left_out,
+            revision=done.revision,
+            profile_revision=revision,
+        )
+
+
+class SectionConflictOut(BaseModel):
+    """A bulk accept that applied nothing. `proposal_id` is the item that stopped it (null when
+    `reason` is `busy`)."""
+
+    detail: str
+    reason: Literal["invalid", "profile_conflict", "busy"]
+    proposal_id: str | None = None
 
 
 def _id(value: str, sentence: str) -> uuid.UUID:
@@ -381,5 +478,81 @@ def undo(proposal_id: str, user: CurrentUser, request: Request, db: Db) -> Any:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=PROPOSAL_NOT_FOUND)
     proposal, profile = done
     out = UndoOut(id=str(proposal.id), status=proposal.status, profile_revision=profile.revision)
+    db.commit()
+    return out
+
+
+def _run(db: Session, user: User, run_id: str) -> IngestionRun:
+    run = review.run_of(db, user.id, _id(run_id, RUN_NOT_FOUND))
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=RUN_NOT_FOUND)
+    return run
+
+
+def _refused(out: SectionConflictOut) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content=out.model_dump(mode="json"),
+        headers=NO_STORE,
+    )
+
+
+_409_BULK = {
+    409: {"model": SectionConflictOut, "description": "One item stopped the section, or busy"}
+}
+_422 = {422: {"model": ErrorOut, "description": "Unknown section or malformed id"}}
+
+
+@router.post(
+    "/runs/{run_id}/accept-section",
+    response_model=SectionDecidedOut,
+    responses={**_401, **_404, **_409_BULK, **_422},
+)
+def accept_section(
+    run_id: str, body: SectionIn, user: CurrentUser, request: Request, db: Db
+) -> Any:
+    run = _run(db, user, run_id)
+    now = deps.clock(request)
+    try:
+        done = review.accept_section(db, user.id, run.id, body.section, body.ids, now)
+    except review.SectionRefusedError as exc:
+        failure = exc.failure
+        if failure.reason == item_proposals.INVALID:
+            db.commit()  # keeps the one proposal marked invalid, and nothing else
+        else:
+            db.rollback()
+        return _refused(
+            SectionConflictOut(
+                detail=SECTION_STOPPED[failure.reason].format(reason=failure.message.rstrip(".")),
+                reason=failure.reason,  # type: ignore[arg-type]
+                proposal_id=str(failure.proposal_id),
+            )
+        )
+    except review.ReviewBusyError:
+        db.rollback()
+        return _refused(SectionConflictOut(detail=BUSY, reason="busy"))
+    revision = profile_service.get_profile(db, user.id, now).revision
+    out = SectionDecidedOut.of(run, body.section, done, revision)
+    db.commit()
+    return out
+
+
+@router.post(
+    "/runs/{run_id}/reject-section",
+    response_model=SectionDecidedOut,
+    responses={**_401, **_404, **_409_BULK, **_422},
+)
+def reject_section(
+    run_id: str, body: SectionIn, user: CurrentUser, request: Request, db: Db
+) -> Any:
+    run = _run(db, user, run_id)
+    now = deps.clock(request)
+    try:
+        done = review.reject_section(db, user.id, run.id, body.section, body.ids, now)
+    except review.ReviewBusyError:
+        db.rollback()
+        return _refused(SectionConflictOut(detail=BUSY, reason="busy"))
+    revision = profile_service.get_profile(db, user.id, now).revision
+    out = SectionDecidedOut.of(run, body.section, done, revision)
     db.commit()
     return out
