@@ -674,6 +674,11 @@ def next_step(
         gone = {id(one) for one in old}
         rows = [one for one in rows if id(one) not in gone]
         new = _planned_again(db, run, step.document_id, rows)
+        if new is None:  # over 60 steps: its predicted parts fail, so the run ends partial
+            failed += old
+            out |= {id(one) for one in old}
+            rows += old  # their rows stay, in the count of the 60
+            continue
         removed += old
         added += new
         rows += new
@@ -737,11 +742,12 @@ def _all_transcribed(db: Session, run: IngestionRun, step: IngestionRunStep) -> 
 
 def _planned_again(
     db: Session, run: IngestionRun, document_id: uuid.UUID, kept: Sequence[IngestionRunStep]
-) -> list[IngestionRunStep]:
+) -> list[IngestionRunStep] | None:
     """The rows of a document's extraction planned from the text stored now (its transcription
     has finished, or its text was replaced), placed after `kept`, the steps the run keeps. Rows
-    only: nothing is added to the session. The 60 step rule: when the new parts do not fit
-    there are none, the document is left unread and the run ends partial."""
+    only: nothing is added to the session. The 60 step rule: when the new parts do not fit the
+    answer is None, not an empty list (a text with nothing to read): the document is left unread
+    and the run ends partial."""
     document = db.execute(
         sa.select(IngestionDocument.sha256, IngestionDocument.text).where(
             IngestionDocument.id == document_id, IngestionDocument.user_id == run.user_id
@@ -760,7 +766,7 @@ def _planned_again(
         [described], model=model, finished=reuse.finished(db, run.user_id, [described], model)
     ).steps
     if len(kept) + len(planned) > plan.RUN_MAX_STEPS:
-        return []
+        return None
     position = max((one.position for one in kept), default=-1) + 1
     return [
         _row_of(run.id, position + offset, one, bytes(document.sha256), digest)
@@ -803,7 +809,9 @@ def _plan_again(db: Session, run: IngestionRun, document_id: uuid.UUID) -> None:
     old = _never_ran([one for one in steps if one.status is StepStatus.planned], document_id)
     gone = {id(one) for one in old}
     kept = [one for one in steps if id(one) not in gone]
-    _swap(db, old, _planned_again(db, run, document_id, kept))
+    new = _planned_again(db, run, document_id, kept)
+    if new is not None:  # over 60 steps: the rows stay, `next_step` fails them
+        _swap(db, old, new)
     db.flush()
 
 

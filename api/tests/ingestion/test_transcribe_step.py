@@ -27,6 +27,7 @@ from app.ingestion import agents, engine, estimate
 from app.ingestion.models import IngestionDocument, IngestionImage, TextStatus
 from app.ingestion.runs_models import IngestionItem, StepStatus
 from app.ingestion.runs_models import RunStatus as ChainStatus
+from app.ingestion.runs_router import run_out
 from tests.agents.g6_helpers import Streams, everything_stored, run_context, streams
 from tests.agents.run_helpers import (
     Backends,
@@ -58,6 +59,9 @@ from tests.ingestion.transcribe_helpers import (
     document_of,
     images_of,
     jpeg,
+    read_until_closed,
+    scanned_page,
+    sixty_steps,
     store_call,
     stream,
     tools_for,
@@ -605,3 +609,48 @@ def test_the_api_knows_the_agent_without_the_sdk_and_starts_its_step(
     assert (step.kind, step.status) == ("transcribe", StepStatus.running)
     assert step.agent_run_id is not None
     assert run_row(factory, step.agent_run_id).agent == engine.TRANSCRIBE_NAME
+
+
+def test_a_document_whose_transcribed_text_would_pass_60_steps_is_left_unread_and_named(
+    settings: Settings, factory: sessionmaker[Session], alice_id: uuid.UUID
+) -> None:
+    """29 scans of one image and a mixed PDF: 60 steps at the start. The mixed PDF's text is two
+    parts once its page is transcribed, which does not fit. The run ends done and partial, the
+    document is named as unread, no extraction is made or paid for it."""
+    run_id, mixed = sixty_steps(factory, alice_id)
+    read_until_closed(factory, settings, alice_id, run_id, mixed, scanned_page(6_000))
+    run = run_of(factory, run_id)
+    assert (run.status, run.partial) == (ChainStatus.done, True)
+    of_mixed = [one for one in steps_of(factory, run_id) if one.document_id == mixed]
+    assert [(one.kind, one.status) for one in of_mixed] == [
+        ("transcribe", StepStatus.done),
+        ("extract", StepStatus.failed),
+    ]
+    assert of_mixed[1].agent_run_id is None
+    # 30 transcriptions and the 29 scans' extractions, 10 tokens each; none for the dropped one.
+    assert len(agent_runs_of(factory, alice_id)) == 59
+    assert run.tokens_spent == 590
+    with factory() as db:
+        assert run_out(db, run, now()).unread_document_ids == [mixed]
+    assert document_of(factory, mixed).text_status is TextStatus.done  # its text is stored
+
+
+def test_a_document_whose_transcribed_text_fits_in_60_steps_is_read_normally(
+    settings: Settings, factory: sessionmaker[Session], alice_id: uuid.UUID
+) -> None:
+    """The control: the same run with a short scanned page. The text is one part, it is read, and
+    the run is complete."""
+    run_id, mixed = sixty_steps(factory, alice_id)
+    read_until_closed(factory, settings, alice_id, run_id, mixed, scanned_page(100))
+    run = run_of(factory, run_id)
+    assert (run.status, run.partial) == (ChainStatus.done, False)
+    of_mixed = [one for one in steps_of(factory, run_id) if one.document_id == mixed]
+    assert [(one.kind, one.status) for one in of_mixed] == [
+        ("transcribe", StepStatus.done),
+        ("extract", StepStatus.done),
+    ]
+    assert of_mixed[1].agent_run_id is not None
+    assert len(agent_runs_of(factory, alice_id)) == 60
+    assert run.tokens_spent == 600
+    with factory() as db:
+        assert run_out(db, run, now()).unread_document_ids == []

@@ -23,7 +23,7 @@ from app.ingestion import agents, plan
 from app.ingestion.models import IngestionDocument, IngestionImage, TextSource, TextStatus
 from app.ingestion.runs_models import IngestionRun, IngestionRunStep, StepStatus
 from tests.agents.run_helpers import now
-from tests.ingestion import extract_helpers
+from tests.ingestion import engine_helpers, extract_helpers
 from tests.ingestion.extract_helpers import Step
 
 VIEW = "mcp__app__view_image"
@@ -227,6 +227,80 @@ def document_of(factory: sessionmaker[Session], document_id: uuid.UUID) -> Any:
                 IngestionDocument.truncated,
             ).where(IngestionDocument.id == document_id)
         ).one()
+
+
+# --- a run planned at 60 steps ------------------------------------------------------------
+
+PARSED_CHARS = 96_000  # the parsed page of the mixed PDF: one part, under a part's limit
+LETTER = "A page of a made-up letter."
+
+
+def sixty_steps(factory: sessionmaker[Session], user_id: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
+    """A run planned at exactly 60 steps: a mixed PDF (parsed text and one scanned page) first,
+    then 29 scans of one image each. Each document is a transcription and a predicted
+    extraction. Returns the run and the mixed PDF."""
+    mixed = add_scan(factory, user_id, ["word " * (PARSED_CHARS // 5), None])
+    scans = [add_scan(factory, user_id, [None]) for _ in range(29)]
+    run_id = engine_helpers.start(factory, user_id, [mixed, *scans])
+    assert len(engine_helpers.steps_of(factory, run_id)) == plan.RUN_MAX_STEPS
+    return run_id, mixed
+
+
+def scanned_page(characters: int) -> str:
+    """The text of the mixed PDF's scanned page, `characters` long."""
+    return "word " * (characters // 5)
+
+
+def transcribed_at_once(
+    factory: sessionmaker[Session], run_id: uuid.UUID, mixed: uuid.UUID, page: str
+) -> None:
+    """Every transcription step of the run done and every document holding its whole text, as
+    if the transcriptions had run: for the reads of `next_step`, which writes nothing."""
+    with factory() as db, db.begin():
+        for step in db.scalars(
+            sa.select(IngestionRunStep).where(
+                IngestionRunStep.ingestion_run_id == run_id,
+                IngestionRunStep.kind == plan.StepKind.transcribe,
+            )
+        ):
+            step.status = StepStatus.done
+            whole = (
+                "word " * (PARSED_CHARS // 5) + "\f" + page if step.document_id == mixed else LETTER
+            )
+            db.execute(
+                sa.update(IngestionDocument)
+                .where(IngestionDocument.id == step.document_id)
+                .values(text=whole, text_status=TextStatus.done)
+            )
+
+
+def read_until_closed(
+    factory: sessionmaker[Session],
+    settings: Any,
+    user_id: uuid.UUID,
+    run_id: uuid.UUID,
+    mixed: uuid.UUID,
+    page: str,
+    *,
+    stop_at_extraction_of: uuid.UUID | None = None,
+) -> None:
+    """Drive the run by hand, with no model: a transcription step stores
+    its pages (`page` for the mixed PDF) and its agent run ends, an extraction step's agent run
+    ends, 10 tokens each. Stops when the run is no longer running, or when the extraction of
+    `stop_at_extraction_of` has started."""
+    moved = engine_helpers.advance(factory, run_id, settings)
+    while moved.enqueue is not None:
+        step = engine_helpers.running(factory, run_id)
+        if step.kind == plan.StepKind.extract:
+            if step.document_id == stop_at_extraction_of:
+                return
+        else:
+            attempt = Step(user_id, step.document_id, run_id, step.id, moved.enqueue)  # type: ignore[arg-type]
+            tools = tools_for(factory, attempt)
+            for position in step.image_positions or ():
+                transcribe(tools, position, page if step.document_id == mixed else LETTER)
+        engine_helpers.end_agent(factory, moved.enqueue, tokens=10)
+        moved = engine_helpers.advance(factory, run_id, settings)
 
 
 # --- fake streams ---------------------------------------------------------------------------------

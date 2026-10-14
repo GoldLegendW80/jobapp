@@ -27,7 +27,15 @@ from app.ingestion.runs_models import IngestionRun, IngestionRunStep, RunStatus,
 from tests.agents.run_helpers import add_user, now, save_credential
 from tests.ingestion import engine_helpers as eh
 from tests.ingestion.extract_helpers import Step, add_document, key, keyring, settings
-from tests.ingestion.transcribe_helpers import add_scan, document_of, images_of, tools_for
+from tests.ingestion.transcribe_helpers import (
+    add_scan,
+    document_of,
+    images_of,
+    scanned_page,
+    sixty_steps,
+    tools_for,
+    transcribed_at_once,
+)
 from tests.ingestion.transcribe_helpers import transcribe as view_then_store
 
 _FIXTURES = (key, keyring, settings)
@@ -640,3 +648,41 @@ def test_a_group_with_nothing_left_is_done_and_the_next_group_is_what_a_continue
     assert eh.statuses(factory, run_id) == ["done", "planned", "planned"]
     assert shown(factory, run_id) >= chosen.needs - 1
     assert len(eh.agent_runs_of(factory, alice)) == 1  # no agent run for the group that was done
+
+
+def asked(factory: sessionmaker[Session], run_id: uuid.UUID) -> Any:
+    with factory() as db:
+        steps = [db.merge(one) for one in eh.steps_of(factory, run_id)]
+        return engine.next_step(db, eh.run_of(factory, run_id), steps, now())
+
+
+def test_a_transcribed_text_that_takes_the_run_past_60_steps_fails_its_predicted_part(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """The run holds 60 steps and the mixed PDF's text, once transcribed, is two parts: it does
+    not fit. Its predicted extraction is listed as failed, not removed, so the run cannot close
+    as if that document had been read; the document that comes next is planned as usual."""
+    run_id, mixed = sixty_steps(factory, alice)
+    transcribed_at_once(factory, run_id, mixed, scanned_page(6_000))  # 102,001 characters
+    before = rows_of(factory, run_id)
+    chosen = asked(factory, run_id)
+    assert rows_of(factory, run_id) == before  # the prediction wrote nothing
+    assert [(one.document_id, one.kind) for one in chosen.failed] == [(mixed, "extract")]
+    assert all(one.document_id != mixed for one in chosen.removed + chosen.added)
+    # The scans are planned from their text, which fits; the run goes on with them.
+    assert len(chosen.removed) == len(chosen.added) == 29
+    assert chosen.step is not None
+    assert chosen.step.document_id != mixed
+
+
+def test_a_transcribed_text_that_fits_in_60_steps_is_planned_again_as_before(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """The control: the same run, the page transcribed is short, the text is one part."""
+    run_id, mixed = sixty_steps(factory, alice)
+    transcribed_at_once(factory, run_id, mixed, scanned_page(100))
+    chosen = asked(factory, run_id)
+    assert chosen.failed == ()
+    assert (mixed, "extract") in [(one.document_id, one.kind) for one in chosen.removed]
+    assert (mixed, "extract") in [(one.document_id, one.kind) for one in chosen.added]
+    assert len(chosen.removed) == len(chosen.added) == 30
