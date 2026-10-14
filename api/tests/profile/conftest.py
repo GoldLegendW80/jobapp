@@ -133,6 +133,7 @@ FULL: dict[str, dict[str, Any]] = {
             "times": ["06:17"],
             "timezone": "Europe/Paris",
         },
+        "documents": {"auto": True, "min_fit": 70, "daily_ceiling": 100},
     },
     "answers": {
         "work_authorization": [

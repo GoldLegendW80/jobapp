@@ -361,21 +361,24 @@ def start_ready(
     at: datetime,
     script: str | None = None,
     settings: Settings | None = None,
+    auto: bool = True,
 ) -> list[uuid.UUID]:
     """Start the person's open base generations that may start now, oldest first; the others
     keep (or get) their reason to wait. Returns the runs to enqueue after the caller's commit.
-    One that meets the person's limit of active runs stays `queued` for the next call."""
-    open_ids = list(
-        db.scalars(
-            sa.select(DocumentGeneration.id)
-            .where(
-                DocumentGeneration.user_id == user_id,
-                DocumentGeneration.mode == GenerationMode.base_profile,
-                DocumentGeneration.status.in_((GenerationStatus.waiting, GenerationStatus.queued)),
-            )
-            .order_by(DocumentGeneration.created_at, DocumentGeneration.id)
+    One that meets the person's limit of active runs stays `queued` for the next call. `auto`
+    False (the person turned automatic generation off): the automatic ones are left as they are."""
+    query = (
+        sa.select(DocumentGeneration.id)
+        .where(
+            DocumentGeneration.user_id == user_id,
+            DocumentGeneration.mode == GenerationMode.base_profile,
+            DocumentGeneration.status.in_((GenerationStatus.waiting, GenerationStatus.queued)),
         )
+        .order_by(DocumentGeneration.created_at, DocumentGeneration.id)
     )
+    if not auto:
+        query = query.where(DocumentGeneration.trigger != GenerationTrigger.auto)
+    open_ids = list(db.scalars(query))
     started: list[uuid.UUID] = []
     reason = wait_reason(db, user_id)
     for generation_id in open_ids:
