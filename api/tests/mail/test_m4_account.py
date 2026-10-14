@@ -268,10 +268,13 @@ def test_a_state_works_once_for_its_user_in_its_session_for_ten_minutes(
     late = decide(fake, start(api, token))
     app_clock.advance(minutes=10, seconds=1)
     assert outcome(api.get(late, token=token)) == "error"
-    # Forged: one character of the signature changed.
+    # Forged: one character of the signature changed, its first: the last one of 43 carries two
+    # padding bits, so changing it alone decodes to the same digest one time in sixteen.
     good = decide(fake, start(api, token))
     state = parse_qs(urlsplit(good).query)["state"][0]
-    forged = good.replace(state, state[:-1] + ("A" if state[-1] != "A" else "B"))
+    payload, signature = state.split(".")
+    changed = ("A" if signature[0] != "A" else "B") + signature[1:]
+    forged = good.replace(state, f"{payload}.{changed}")
     assert outcome(api.get(forged, token=token)) == "error"
     # No session at all: nothing is read, so the state stays good for its owner.
     assert outcome(api.get(good)) == "error"
