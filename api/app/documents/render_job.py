@@ -1,9 +1,10 @@
 """The render queue of the documents module (task D6; spec, "Rendering on the Jetson", "Versions
 and freezing", "Failure modes").
 
-A render turns a document's draft at one revision into a stored PDF. Who asks for one (a save,
-a restore, a language or template switch, "Render", D7's `generate.finish`) calls `mark_queued`
-in its own transaction, then `enqueue` after the commit, or `queue_render` for both. The job,
+A render turns a document's draft at one revision into a stored PDF. Who asks for one calls
+`mark_queued` ("Render", bounded per person) or `mark_edited` (a save, a restore, a language or
+template switch: never refused, so the edit is never lost) in its own transaction, then
+`enqueue` after the commit, or `queue_render` for both (D7's `generate.finish`). The job,
 `render_document(document_id, revision)` on the queue `jobapp:documents` (app/worker.py), takes
 ids only and returns None:
 
@@ -23,11 +24,14 @@ ids only and returns None:
    `too_large` or a `render_failed` is not, being the same on a second try.
 3. **Store** (one transaction): the PDF on the version with its fit, step and pages; the state
    back to `idle` unless a newer render was asked meanwhile (a save during a render: that one
-   stays `queued`). The first version of a posting's CV that fits one page moves the posting
-   from `found` or `shortlisted` to `cv_ready` in the same transaction (`lock_job` first, the
-   lock order of store.py, then `set_status` with `via: "documents"`). A posting locked by
-   another transaction is tried once more, then the PDF is stored without the move and the skip
-   is logged. An overflow stores its PDF all the same (never a refusal) and calls `on_overflow`.
+   stays `queued`; a language or template switch, which keeps the draft revision: `switch`
+   puts the state back to `queued` and the same job renders the switched version next, since
+   the job id of the revision is its own until it ends). The first version of a posting's CV
+   that fits one page moves the posting from `found` or `shortlisted` to `cv_ready` in the same
+   transaction (`lock_job` first, the lock order of store.py, then `set_status` with `via:
+   "documents"`). A posting locked by another transaction is tried once more, then the PDF is
+   stored without the move and the skip is logged. An overflow stores its PDF all the same
+   (never a refusal) and calls `on_overflow`.
 
 A render that fails puts the state back to `idle` with a code of `ERRORS` in `render_error`,
 which the api turns into a plain sentence (`MESSAGES`); nothing raises to arq. A worker stopped
@@ -82,12 +86,15 @@ FUNCTION = "render_document"
 # Renders waiting per person, across their documents (each document has one at most): the
 # queue is one renderer's, and one person's burst never fills it for everybody.
 QUEUED_PER_USER = 10
+BOUND_LOCK = "documents.render_bound"
 ATTEMPTS = 2  # for RETRIED only
+FOLLOW_UPS = 1  # renders of a version switched during the job's render, in the same job
 RETRIED = frozenset({"renderer_unavailable"})
 RETRY_AFTER_S = 2.0
 # The longest a job may take: a fit of eight steps walked one by one, each render at its
-# timeout plus the client's margin, tried twice, and the two transactions.
-JOB_TIMEOUT_S = 8 * ATTEMPTS * (30 + render_client.MARGIN_S) + 60
+# timeout plus the client's margin, tried twice, and the two transactions; then all of it once
+# more for a version switched during it (FOLLOW_UPS).
+JOB_TIMEOUT_S = (1 + FOLLOW_UPS) * (8 * ATTEMPTS * (30 + render_client.MARGIN_S) + 60)
 RESEND_BATCH = 100
 MOVES_FROM = frozenset({JobStatus.found, JobStatus.shortlisted})
 ERRORS = (*render_client.CODES, "interrupted")
@@ -223,7 +230,9 @@ def mark_queued(
     `fresh` says a job must be enqueued after the commit. The same revision asked again while
     it waits or renders is one render (not fresh); a later revision replaces a waiting one. A
     `revision` older than the draft asks for nothing. `bounded` refuses the QUEUED_PER_USER+1st
-    waiting render of a person (RenderQueueFullError); a writer's result is never refused."""
+    waiting render of a person (RenderQueueFullError), counted under the person's bound lock.
+    Only "Render" is bounded: an edit uses `mark_edited`, and a writer's result is never
+    refused."""
     document = store.lock_document(db, user_id, document_id)
     current = document.draft_revision
     if revision is not None and revision != current:
@@ -231,18 +240,57 @@ def mark_queued(
     if document.render_revision == current and document.render_state != RenderState.idle:
         return document, False
     if bounded and document.render_state == RenderState.idle:
-        waiting = db.execute(
-            sa.select(sa.func.count())
-            .select_from(Document)
-            .where(Document.user_id == user_id, Document.render_state == RenderState.queued)
-        ).scalar_one()
-        if waiting >= QUEUED_PER_USER:
+        _lock_bound(db, user_id)
+        if _others_waiting(db, user_id, document_id) >= QUEUED_PER_USER:
             raise RenderQueueFullError(document_id)
     document.render_state = RenderState.queued
     document.render_revision = current
     document.render_error = None
     db.flush()
     return document, True
+
+
+def mark_edited(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> tuple[Document, bool]:
+    """`mark_queued` for an edit (a save, a restore, a language or template switch), in the
+    edit's own transaction. Never refused, since a refusal would roll the edit back, and the
+    spec's one limit is one waiting render per document. When QUEUED_PER_USER renders of the
+    person already wait elsewhere, `fresh` is False: the render stays `queued` and
+    `resend_queued` sends it within a minute, behind the others, rather than now."""
+    full = _others_waiting(db, user_id, document_id) >= QUEUED_PER_USER
+    document, fresh = mark_queued(db, user_id, document_id, bounded=False)
+    if fresh and full:
+        logger.info("documents.render.deferred", extra={"document_id": str(document_id)})
+        return document, False
+    return document, fresh
+
+
+def _others_waiting(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> int:
+    query = (
+        sa.select(sa.func.count())
+        .select_from(Document)
+        .where(
+            Document.user_id == user_id,
+            Document.id != document_id,
+            Document.render_state == RenderState.queued,
+        )
+    )
+    return int(db.execute(query).scalar_one())
+
+
+def _lock_bound(db: Session, user_id: uuid.UUID) -> None:
+    """The person's render bound, held to the commit, so two asks on two documents count one
+    after the other. An advisory lock taken last (after lock 3 of store.py, the document), so
+    its holder never waits on another lock; it waits at most the lock timeout the document's
+    lock set, then raises store.DocumentBusyError."""
+    try:
+        db.execute(
+            sa.text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"{BOUND_LOCK}:{user_id}"},
+        )
+    except sa.exc.DBAPIError as exc:
+        if store.is_busy(exc):
+            raise store.DocumentBusyError(store.BUSY) from exc
+        raise
 
 
 async def enqueue(queue: Enqueuer, document_id: uuid.UUID, revision: int) -> bool:
@@ -314,6 +362,12 @@ def switch(
         origin = Origin.template
     if origin is None:
         return None
+    if document.render_state == RenderState.rendering:
+        # The render in progress is of this revision with the old look: back to `queued`, so
+        # its store leaves the state for the render of the new version, which the same job
+        # makes next (`_render`).
+        document.render_state = RenderState.queued
+        db.flush()
     context = read_context(db, document, at)
     version, _ = store.snapshot(
         db,
@@ -463,6 +517,7 @@ class _PostingBusyError(Exception):
 class Stored:
     outcome: str  # "one_page", "overflow", or a code of ERRORS
     moved: bool = False
+    again: bool = False  # a switch during the render: the same revision is queued again
 
 
 def _store_once(
@@ -477,7 +532,9 @@ def _store_once(
                 raise
             raise _PostingBusyError from None
     document = store.lock_document(db, claim.user_id, claim.document_id)
-    current = document.render_revision == claim.revision
+    mine = document.render_revision == claim.revision
+    current = mine and document.render_state == RenderState.rendering
+    again = mine and document.render_state == RenderState.queued
     try:
         version = store.attach_pdf(
             db,
@@ -493,13 +550,13 @@ def _store_once(
         if current:
             _idle(document, "too_large")
         store.commit(db)
-        return Stored("too_large")
+        return Stored("too_large", again=again)
     except (store.FrozenVersionError, store.NotFoundError):
         # Frozen or pruned while it rendered: the PDF of record stays what it was.
         if current:
             _idle(document)
         store.commit(db)
-        return Stored("replaced")
+        return Stored("replaced", again=again)
     if current:
         _idle(document)
     moved = False
@@ -516,7 +573,7 @@ def _store_once(
         if earlier == 0:
             moved = jobs_service.set_status(db, job, JobStatus.cv_ready, at, via="documents")
     store.commit(db)
-    return Stored("one_page" if fitted.fit else "overflow", moved)
+    return Stored("one_page" if fitted.fit else "overflow", moved, again)
 
 
 def _store(
@@ -537,27 +594,39 @@ def _store(
 
 
 def _fail(
-    sessions: sessionmaker[Session], document_id: uuid.UUID, revision: int, code: str
+    sessions: sessionmaker[Session],
+    document_id: uuid.UUID,
+    revision: int,
+    code: str,
+    *,
+    rendering_only: bool = False,
 ) -> None:
+    """The render of `revision` ends with `code`. `rendering_only` (a claimed render, or a stop
+    of the worker) keeps a `queued` state: a switch asked for another render meanwhile, or
+    the job never claimed it, and resend_queued sends it again."""
     with sessions() as db:
         owner = _owner(db, document_id)
         if owner is None:
             return
         document = store.lock_document(db, owner, document_id)
-        if document.render_revision == revision and document.render_state != RenderState.idle:
+        waiting = RenderState.queued if rendering_only else RenderState.idle
+        if document.render_revision == revision and document.render_state not in (
+            RenderState.idle,
+            waiting,
+        ):
             _idle(document, code)
         store.commit(db)
 
 
-async def _render(ctx: dict[str, Any], document_id: uuid.UUID, revision: int) -> str:
+async def _render_once(ctx: dict[str, Any], document_id: uuid.UUID, revision: int) -> Stored:
     sessions: sessionmaker[Session] = ctx["sessions"]
     clock: Callable[[], datetime] = ctx["clock"]
     try:
         claim = await asyncio.to_thread(_claim, sessions, document_id, revision, clock())
     except store.DocumentBusyError:
-        return "busy"  # still queued: resend_queued queues it again
+        return Stored("busy")  # still queued: resend_queued queues it again
     if isinstance(claim, str):
-        return claim
+        return Stored(claim)
     render = _retrying(
         ctx.get("documents_render") or render_client.render,
         ctx.get("documents_retry_after_s", RETRY_AFTER_S),
@@ -565,14 +634,30 @@ async def _render(ctx: dict[str, Any], document_id: uuid.UUID, revision: int) ->
     try:
         fitted = await fitting.fit(claim.steps, claim.build, render=render)
     except RenderError as error:
-        await asyncio.to_thread(_fail, sessions, document_id, revision, error.code)
-        return error.code
+        await asyncio.to_thread(
+            _fail, sessions, document_id, revision, error.code, rendering_only=True
+        )
+        return Stored(error.code)
     stored = await asyncio.to_thread(_store, sessions, claim, fitted, clock())
     if stored.outcome == "overflow":
         called = on_overflow(document_id, claim.version_id)
         if inspect.isawaitable(called):
             await called
-    return stored.outcome + (":moved" if stored.moved else "")
+    return stored
+
+
+async def _render(ctx: dict[str, Any], document_id: uuid.UUID, revision: int) -> str:
+    """One render, then, while a language or template switch during it left the same revision
+    `queued`, the render of the switched version (at most FOLLOW_UPS more, the rest is the
+    cron's): the job id of that revision is still this job's, so a new job could not be queued
+    before this one ends."""
+    outcomes = []
+    for _ in range(1 + FOLLOW_UPS):
+        stored = await _render_once(ctx, document_id, revision)
+        outcomes.append(stored.outcome + (":moved" if stored.moved else ""))
+        if not stored.again:
+            break
+    return ",".join(outcomes)
 
 
 async def render_document(ctx: dict[str, Any], document_id: str, revision: int) -> None:
@@ -584,7 +669,9 @@ async def render_document(ctx: dict[str, Any], document_id: str, revision: int) 
     except asyncio.CancelledError:
         # A stop of the worker, or arq's own timeout: the person sees an interrupted preview.
         await asyncio.shield(
-            asyncio.to_thread(_fail, ctx["sessions"], found, int(revision), "interrupted")
+            asyncio.to_thread(
+                _fail, ctx["sessions"], found, int(revision), "interrupted", rendering_only=True
+            )
         )
         raise
     except Exception as error:

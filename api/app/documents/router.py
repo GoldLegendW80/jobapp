@@ -296,10 +296,17 @@ def _enqueue(request: Request, document_id: uuid.UUID, revision: int) -> None:
         logger.warning("documents.render.enqueue_failed", extra={"document_id": str(document_id)})
 
 
-def _queue(request: Request, db: Session, user: User, document_id: uuid.UUID) -> Document:
-    """Ask for a render of the draft and commit; enqueue when it is a new one."""
+def _queue(
+    request: Request, db: Session, user: User, document_id: uuid.UUID, *, edit: bool
+) -> Document:
+    """Ask for a render of the draft and commit; enqueue when it is a new one. An edit (a save,
+    a restore, a switch) is committed with it and never refused (`mark_edited`); only "Render"
+    answers 429 when QUEUED_PER_USER renders of the person wait."""
     try:
-        document, fresh = render_job.mark_queued(db, user.id, document_id)
+        if edit:
+            document, fresh = render_job.mark_edited(db, user.id, document_id)
+        else:
+            document, fresh = render_job.mark_queued(db, user.id, document_id)
     except render_job.RenderQueueFullError:
         db.rollback()
         raise _error(status.HTTP_429_TOO_MANY_REQUESTS, QUEUE_FULL) from None
@@ -314,13 +321,28 @@ def _checked(db: Session, document: Document, at: datetime) -> Any:
     return render_job.sources_of(render_job.read_context(db, document, at), document)
 
 
-def ascii_name(*parts: str) -> str:
-    """Words of ASCII letters and digits joined by `_`: accents folded, the rest dropped."""
+# Letters NFKD leaves whole, by their ASCII spelling; every other letter is folded by NFKD.
+SPELLED = str.maketrans(
+    {
+        "ø": "o", "Ø": "O", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ß": "ss", "ẞ": "SS",
+        "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D", "þ": "th", "Þ": "Th",
+        "\u0131": "i", "ħ": "h", "Ħ": "H", "ŧ": "t", "Ŧ": "T",
+    }
+)  # fmt: skip
+
+
+def ascii_name(*parts: str, suffix: str = "") -> str:
+    """Words of ASCII letters and digits joined by `_`: accents folded, letters with no
+    decomposition spelled (ø as o, æ as ae, ß as ss), the rest dropped. The parts are cut to
+    NAME_MAX with room for `suffix`, which is never cut."""
     words: list[str] = []
     for part in parts:
-        folded = unicodedata.normalize("NFKD", part).encode("ascii", "ignore").decode()
+        spelled = part.translate(SPELLED)
+        folded = unicodedata.normalize("NFKD", spelled).encode("ascii", "ignore").decode()
         words += re.findall(r"[A-Za-z0-9]+", folded)
-    return "_".join(words)[:NAME_MAX].strip("_")
+    room = NAME_MAX - (len(suffix) + 1 if suffix else 0)
+    head = "_".join(words)[:room].strip("_")
+    return "_".join(word for word in (head, suffix) if word)
 
 
 def file_name(db: Session, document: Document, at: datetime) -> str:
@@ -339,7 +361,7 @@ def file_name(db: Session, document: Document, at: datetime) -> str:
             or ""
         )
     what = "Letter" if document.kind == Kind.letter else "CV"
-    return f"{ascii_name(full_name, where, what) or what}.pdf"
+    return f"{ascii_name(full_name, where, suffix=what)}.pdf"
 
 
 def _version(
@@ -444,7 +466,7 @@ def save_draft(
     except store.NotFoundError:
         db.rollback()
         raise _error(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
-    document = _queue(request, db, user, document_id)
+    document = _queue(request, db, user, document_id, edit=True)
     return _document_out(db, document)
 
 
@@ -453,10 +475,11 @@ def patch_document(
     document_id: uuid.UUID, change: DocumentPatch, user: CurrentUser, request: Request, db: Db
 ) -> DocumentOut:
     """Change the language or the template: a new version, rendered. A frozen version stays as
-    it is. An unknown template, or another person's own, is 422."""
+    it is. An unknown template, or another person's own, is 422. A change to what the document
+    already has asks for nothing, so it is never refused."""
     _own(db, user, document_id)
     try:
-        render_job.switch(
+        made = render_job.switch(
             db,
             user.id,
             document_id,
@@ -470,7 +493,10 @@ def patch_document(
     except store.NotFoundError:
         db.rollback()
         raise _error(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
-    document = _queue(request, db, user, document_id)
+    if made is None:
+        db.rollback()
+        return _document_out(db, _own(db, user, document_id))
+    document = _queue(request, db, user, document_id, edit=True)
     return _document_out(db, document)
 
 
@@ -483,7 +509,7 @@ def patch_document(
 def render(document_id: uuid.UUID, user: CurrentUser, request: Request, db: Db) -> QueuedOut:
     """Queue a render of the draft. Asked again before it ran, it is the same render."""
     _own(db, user, document_id)
-    document = _queue(request, db, user, document_id)
+    document = _queue(request, db, user, document_id, edit=False)
     return QueuedOut(render=_render_out(document))
 
 
@@ -583,7 +609,7 @@ def restore_version(
     except store.NotFoundError:
         db.rollback()
         raise _error(status.HTTP_404_NOT_FOUND, VERSION_NOT_FOUND) from None
-    document = _queue(request, db, user, document_id)
+    document = _queue(request, db, user, document_id, edit=True)
     return _document_out(db, document)
 
 

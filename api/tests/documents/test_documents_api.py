@@ -2,7 +2,8 @@
 404), the save with If-Match and its notes, the render request coalesced, the PDF and page image
 headers, versions with their corrections, restore and approve, language and template switches
 (unknown, another person's, a frozen latest), the templates and their thumbnails, the settings,
-and the literal paths before `/api/documents/{id}`."""
+the literal paths before `/api/documents/{id}`, an edit kept while the render queue is full, and
+the file name's ASCII spelling."""
 
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.documents import render_job, store
 from app.documents.models import Document, DocumentVersion, FreezeReason
+from app.documents.router import NAME_MAX, ascii_name
 from tests.documents.render_support import CV, FakeRenderer, RecordingQueue, give_profile
 from tests.identity.api_helpers import Api, make_user
 from tests.identity.conftest import api, app, clock, engine, factory, migrated_url
@@ -355,3 +357,130 @@ def test_the_render_queue_is_bounded_per_person(
     refused = api.post(f"/api/documents/{second}/render", token=two["alex"])
     assert refused.status_code == 429
     assert "waiting" in refused.json()["detail"]
+
+
+@pytest.fixture
+def full(
+    two: dict[str, Any],
+    api: Api,
+    factory: sessionmaker[Session],
+    queue: RecordingQueue,
+    monkeypatch: pytest.MonkeyPatch,
+    clock: Any,
+) -> dict[str, Any]:
+    """Alex's second document with a rendered version 1, and the queue full: a bound of one,
+    and a render waiting on the first document."""
+    second = _document(factory, two["alex_id"], _posting(factory, two["alex_id"]), clock)
+    assert _save(api, two["alex"], second, CV, 1).status_code == 200
+    _render(factory, queue, clock)
+    monkeypatch.setattr(render_job, "QUEUED_PER_USER", 1)
+    assert (
+        api.post(f"/api/documents/{two['document']}/render", token=two["alex"]).status_code == 202
+    )
+    assert api.post(f"/api/documents/{second}/render", token=two["alex"]).status_code == 429
+    return {**two, "second": second, "waiting": list(queue.jobs)}
+
+
+def _deferred(factory: sessionmaker[Session], queue: RecordingQueue, full: dict[str, Any]) -> None:
+    """The edit's render waits, not queued now: resend_queued sends it within a minute."""
+    with factory() as db:
+        state = db.execute(
+            sa.select(Document.render_state).where(Document.id == full["second"])
+        ).scalar_one()
+    assert state.value == "queued"
+    assert queue.jobs == full["waiting"]
+
+
+def test_a_save_is_stored_when_the_render_queue_is_full(
+    full: dict[str, Any], api: Api, factory: sessionmaker[Session], queue: RecordingQueue
+) -> None:
+    saved = _save(api, full["alex"], full["second"], {**CV, "headline": "Kept"}, 2)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["draft_revision"] == 3
+    assert saved.json()["draft"]["headline"] == "Kept"
+    _deferred(factory, queue, full)
+
+
+def test_a_restore_is_stored_when_the_render_queue_is_full(
+    full: dict[str, Any], api: Api, factory: sessionmaker[Session], queue: RecordingQueue
+) -> None:
+    restored = api.post(f"/api/documents/{full['second']}/versions/1/restore", token=full["alex"])
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["draft_revision"] == 3
+    assert restored.json()["draft_written_by"] == "restore"
+    _deferred(factory, queue, full)
+
+
+@pytest.mark.parametrize(
+    "change", [{"template_slug": "sidebar"}, {"language": "fr"}], ids=["template", "language"]
+)
+def test_a_switch_is_stored_when_the_render_queue_is_full(
+    full: dict[str, Any],
+    api: Api,
+    factory: sessionmaker[Session],
+    queue: RecordingQueue,
+    change: dict[str, str],
+) -> None:
+    switched = api.request(
+        "PATCH", f"/api/documents/{full['second']}", token=full["alex"], json=change
+    )
+    assert switched.status_code == 200, switched.text
+    for key, value in change.items():
+        assert switched.json()[key] == value
+    _deferred(factory, queue, full)
+
+
+def test_a_patch_that_changes_nothing_asks_for_no_render(
+    full: dict[str, Any], api: Api, factory: sessionmaker[Session], queue: RecordingQueue
+) -> None:
+    same = {"template_slug": "classic", "language": "en"}
+    for change in (same, {}):
+        kept = api.request(
+            "PATCH", f"/api/documents/{full['second']}", token=full["alex"], json=change
+        )
+        assert kept.status_code == 200, kept.text
+        assert kept.json()["render"]["state"] == "idle"
+        assert {key: kept.json()[key] for key in same} == same
+    assert queue.jobs == full["waiting"]
+    with factory() as db:
+        count = db.execute(
+            sa.select(sa.func.count())
+            .select_from(DocumentVersion)
+            .where(DocumentVersion.document_id == full["second"])
+        ).scalar_one()
+    assert count == 1
+
+
+@pytest.mark.parametrize(
+    ("parts", "suffix", "name"),
+    [
+        (("Søren Kierkegaard", "Lumen"), "CV", "Soren_Kierkegaard_Lumen_CV"),
+        (("Łukasz Żółć", "Ørsted"), "CV", "Lukasz_Zolc_Orsted_CV"),
+        (("Æsa Hæð", "Straße AG"), "Letter", "AEsa_Haed_Strasse_AG_Letter"),
+        (("Þóra Ðorđević", "Œuvre"), "CV", "Thora_Dordevic_OEuvre_CV"),
+        (("Hélène Müller", "Café Crème"), "CV", "Helene_Muller_Cafe_Creme_CV"),
+        (("Ana-María O'Neil", "R&D, Inc."), "CV", "Ana_Maria_O_Neil_R_D_Inc_CV"),
+        (("İlkay Işık", "Ħamrun Ŧech"), "CV", "Ilkay_Isik_Hamrun_Tech_CV"),
+        (("ﬁona", "①Two"), "CV", "fiona_1Two_CV"),
+        (("漢字", "Лумен"), "CV", "CV"),
+        (("", ""), "Letter", "Letter"),
+        (("   ", "!!!"), "CV", "CV"),
+        (("Alex Example", ""), "CV", "Alex_Example_CV"),
+    ],
+)
+def test_the_file_name_spells_letters_in_ascii(
+    parts: tuple[str, str], suffix: str, name: str
+) -> None:
+    assert ascii_name(*parts, suffix=suffix) == name
+
+
+@pytest.mark.parametrize("suffix", ["CV", "Letter"])
+@pytest.mark.parametrize(
+    "parts",
+    [("A" * 300, "Lumen"), ("Alex", "B" * 300), ("Ø" * 200, "Æ" * 200), ("a " * 200, "")],
+)
+def test_the_cut_at_the_name_limit_keeps_the_suffix(parts: tuple[str, str], suffix: str) -> None:
+    name = ascii_name(*parts, suffix=suffix)
+    assert len(name) <= NAME_MAX
+    assert name.endswith(f"_{suffix}")
+    assert "__" not in name

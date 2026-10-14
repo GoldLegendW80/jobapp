@@ -23,6 +23,7 @@ from app.documents.models import (
     DocumentVersion,
     FitResult,
     FreezeReason,
+    Language,
     RenderState,
 )
 from app.jobs import service as jobs_service
@@ -417,6 +418,77 @@ def test_a_person_waits_with_a_bounded_number_of_renders(
         db.commit()
         document_b = cv_draft(db, user_b, posting_b, AT)
         assert render_job.mark_queued(db, user_b, document_b)[1]
+
+
+def test_the_bound_counts_two_asks_on_two_documents_one_after_the_other(
+    factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch, short_locks: None
+) -> None:
+    # Without the person's bound lock, the second ask counts before the first commits and
+    # both wait: two renders over a bound of one.
+    monkeypatch.setattr(render_job, "QUEUED_PER_USER", 1)
+    made = _setup(factory)
+    with factory() as db:
+        other = add_posting(db, made["user"])
+        db.commit()
+        second = cv_draft(db, made["user"], other, AT)
+    with factory() as first:
+        assert render_job.mark_queued(first, made["user"], made["document"])[1]
+        with factory() as racing, pytest.raises(store.DocumentBusyError):
+            render_job.mark_queued(racing, made["user"], second)
+        first.commit()
+    with factory() as db, pytest.raises(render_job.RenderQueueFullError):
+        render_job.mark_queued(db, made["user"], second)
+    with factory() as db:  # an edit is never refused: its render waits for the cron
+        document, fresh = render_job.mark_edited(db, made["user"], second)
+        assert (document.render_state, fresh) == (RenderState.queued, False)
+
+
+def _switch_during_render(
+    factory: sessionmaker[Session], fail: str | None = None, **change: Any
+) -> tuple[dict[str, Any], RecordingQueue, FakeRenderer]:
+    made = _setup(factory)
+    queue = RecordingQueue()
+    revision = _ask(factory, made["user"], made["document"], queue)
+
+    def switch() -> None:
+        with factory() as db:
+            assert render_job.switch(db, made["user"], made["document"], at=AT, **change)
+            _, fresh = render_job.mark_edited(db, made["user"], made["document"])
+            db.commit()
+        assert not fresh  # the job that renders is the one that renders it next
+
+    renderer = FakeRenderer(during=switch, fail=fail)
+    _run(context(factory, renderer, AT), made["document"], revision)
+    return made, queue, renderer
+
+
+@pytest.mark.parametrize(
+    ("change", "looks"),
+    [
+        ({"template_slug": "sidebar"}, [("classic", "en"), ("sidebar", "en")]),
+        ({"language": Language.fr}, [("classic", "en"), ("classic", "fr")]),
+    ],
+)
+def test_a_switch_during_a_render_of_the_same_revision_is_rendered_next(
+    factory: sessionmaker[Session], change: dict[str, Any], looks: list[tuple[str, str]]
+) -> None:
+    made, queue, renderer = _switch_during_render(factory, **change)
+    versions = _versions(factory, made["document"])
+    assert [
+        (v.number, v.template_slug, v.language.value, v.pdf_sha256 is not None) for v in versions
+    ] == [(1, *looks[0], True), (2, *looks[1], True)]
+    document = _document(factory, made["document"])
+    assert (document.render_state, document.render_error) == (RenderState.idle, None)
+    assert len(queue.jobs) == 1
+    assert len(renderer.calls) == 2
+
+
+def test_a_failed_render_keeps_the_switch_queued_for_the_cron(
+    factory: sessionmaker[Session],
+) -> None:
+    made, _, _ = _switch_during_render(factory, fail="render_failed", template_slug="sidebar")
+    document = _document(factory, made["document"])
+    assert (document.render_state, document.render_error) == (RenderState.queued, None)
 
 
 def test_the_canary_never_reaches_logs_arq_arguments_or_redis(
