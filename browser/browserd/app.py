@@ -15,6 +15,7 @@ the standard library: one request per connection, JSON in and out, bodies capped
 """
 
 import asyncio
+import contextlib
 import hmac
 import json
 import logging
@@ -27,9 +28,7 @@ from browserd.leases import LeaseError, Manager, Request
 
 log = logging.getLogger("browserd")
 
-Handler = Callable[
-    ["Service", "HttpRequest", re.Match[str]], Awaitable[tuple[int, Any]]
-]
+Handler = Callable[["Service", "HttpRequest", re.Match[str]], Awaitable[tuple[int, Any]]]
 
 
 @dataclass(frozen=True)
@@ -62,25 +61,19 @@ class Service:
         self.display_ok: Callable[[], bool] = lambda: True
 
 
-async def create_lease(
-    svc: Service, req: HttpRequest, _: re.Match[str]
-) -> tuple[int, Any]:
+async def create_lease(svc: Service, req: HttpRequest, _: re.Match[str]) -> tuple[int, Any]:
     lease, token = await svc.manager.acquire(Request.parse(req.json()))
     now = svc.manager.clock()
     return 201, {**lease.public(now), "lease_token": token}
 
 
-async def delete_lease(
-    svc: Service, _: HttpRequest, match: re.Match[str]
-) -> tuple[int, Any]:
+async def delete_lease(svc: Service, _: HttpRequest, match: re.Match[str]) -> tuple[int, Any]:
     if not await svc.manager.release(match["lease_id"], "released"):
         raise LeaseError(404, "no_such_lease")
     return 204, None
 
 
-async def current_lease(
-    svc: Service, _: HttpRequest, __: re.Match[str]
-) -> tuple[int, Any]:
+async def current_lease(svc: Service, _: HttpRequest, __: re.Match[str]) -> tuple[int, Any]:
     lease = svc.manager.current()
     now = svc.manager.clock()
     return 200, {
@@ -115,7 +108,7 @@ ROUTES: list[Route] = [
 
 REASONS = {200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 401: "Unauthorized",
            403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 409: "Conflict",
-           413: "Payload Too Large", 500: "Internal Server Error", 503: "Service Unavailable"}  # fmt: skip
+           413: "Payload Too Large", 500: "Internal Server Error", 503: "Service Unavailable"}  # fmt: skip  # noqa: E501
 
 
 def authorized(secret: bytes, headers: dict[str, str]) -> bool:
@@ -152,9 +145,7 @@ async def read_request(
         return request, None, 405 if allowed else 404
     if length > route.body_max:
         return request, None, 413
-    request.body = (
-        await asyncio.wait_for(reader.readexactly(length), 30) if length else b""
-    )
+    request.body = await asyncio.wait_for(reader.readexactly(length), 30) if length else b""
     return request, route, match
 
 
@@ -170,9 +161,7 @@ def respond(writer: asyncio.StreamWriter, status: int, payload: Any) -> None:
 def handler_for(
     svc: Service,
 ) -> Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]]:
-    async def handle(
-        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             try:
                 request, route, match = await read_request(reader)
@@ -189,9 +178,7 @@ def handler_for(
                 respond(writer, 401, {"error": "unauthorized"})
                 return
             if route is None:
-                respond(
-                    writer, match, {"error": "not_found" if match == 404 else "refused"}
-                )
+                respond(writer, match, {"error": "not_found" if match == 404 else "refused"})
                 return
             try:
                 status, payload = await route.handler(svc, request, match)
@@ -202,10 +189,8 @@ def handler_for(
                 status, payload = 500, {"error": "internal"}
             respond(writer, status, payload)
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 await writer.drain()
-            except OSError:
-                pass
             writer.close()
 
     return handle

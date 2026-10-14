@@ -5,6 +5,7 @@ need Chromium are test_browser_container.py.
 """
 
 import asyncio
+import ipaddress
 import json
 import os
 import sys
@@ -309,6 +310,59 @@ def test_the_router_list_has_the_placeholders_of_b4_and_b5() -> None:
         ("2001:0:4136:e378:8000:63bf:3fff:fdd2", False),
         ("2001:db8::1", False),  # documentation, not Teredo: refused as not global
         ("2001:4860:4860::8888", True),  # a public address next to Teredo's prefix
+        # Issue #281: the rule names what it accepts (2000::/3 for IPv6, outside listed blocks
+        # for IPv4), whatever the Python version's is_global says.
+        ("::ffff:0:7f00:1", False),  # IPv4 translated (SIIT), loopback inside
+        ("::ffff:0:a9fe:a9fe", False),
+        ("::ffff:0:5db8:d70e", False),  # translated, public inside: refused all the same
+        ("::ffff:100.64.0.1", False),
+        ("::ffff:224.0.0.251", False),
+        ("::", False),
+        ("100::1", False),  # discard only
+        ("4000::1", False),  # outside 2000::/3
+        ("3fff::1", False),  # documentation
+        ("2001:1::1", False),  # IETF protocol assignments, global for Python 3.13 only
+        ("2001:3::1", False),
+        ("2001:20::1", False),
+        ("fc00::1", False),
+        ("ff02::1", False),
+        ("ff0e::1", False),
+        ("fe80::1%eth0", False),
+        ("2606:4700::1111%eth0", False),  # a scope id: never a public address
+        ("::1%lo", False),
+        ("0.1.2.3", False),
+        ("192.0.0.8", False),
+        ("192.0.0.9", False),
+        ("192.0.0.170", False),
+        ("192.88.99.1", False),
+        ("198.18.0.1", False),
+        ("198.19.255.255", False),
+        ("198.51.100.1", False),
+        ("203.0.113.1", False),
+        ("239.255.255.250", False),
+        ("240.0.0.1", False),
+        ("255.255.255.255", False),
+        ("100.127.255.255", False),
+        ("172.31.255.255", False),
+        ("", False),
+        ("garbage", False),
+        ("1.2.3", False),
+        ("127.1", False),
+        ("2130706433", False),
+        ("0177.0.0.1", False),
+        ("93.184.215.14 ", False),
+        ("1.1.1.1", True),
+        ("11.0.0.1", True),
+        ("100.63.255.255", True),
+        ("100.128.0.1", True),
+        ("172.15.255.255", True),
+        ("172.32.0.1", True),
+        ("192.0.1.1", True),
+        ("198.20.0.1", True),
+        ("223.255.255.254", True),
+        ("2a00:1450:4007:80e::200e", True),
+        ("2001:200::1", True),  # next to 2001::/23
+        ("2c0f:f248::1", True),
     ],
 )
 def test_the_proxy_refuses_every_address_that_is_not_public(address: str, allowed: bool) -> None:
@@ -334,8 +388,12 @@ def test_the_proxy_checks_every_resolved_address_and_its_ports() -> None:
         assert await egress.target("public.example", 22) is None
         assert await egress.target("mixed.example", 443) is None
         assert await egress.target("missing.example", 443) is None
-        assert await egress.target("pages", 8000) == "172.20.0.4"
-        assert await proxy.Proxy(frozenset(), resolver).target("pages", 8000) is None
+        # Issue #281: the allowed test name passes the port set too.
+        assert await egress.target("pages", 8080) == "172.20.0.4"
+        assert await egress.target("pages", 8000) is None
+        assert await egress.target("pages", 22) is None
+        assert await egress.target("pages", 5349) is None
+        assert await proxy.Proxy(frozenset(), resolver).target("pages", 8080) is None
 
     run(go())
 
@@ -468,6 +526,7 @@ class Upstream:
 async def started(egress: proxy.Proxy) -> tuple[asyncio.Server, int, Upstream, asyncio.Server]:
     upstream = Upstream()
     up_server = await asyncio.start_server(upstream.handle, "127.0.0.1", 0)
+    egress.ports = proxy.PORTS | {up_server.sockets[0].getsockname()[1]}
     server = await proxy.serve(egress, 0)
     return server, server.sockets[0].getsockname()[1], upstream, up_server
 
@@ -645,3 +704,268 @@ def test_the_connection_cap_and_the_idle_timeout() -> None:
         up_server.close()
 
     run(go())
+
+
+MAPPED = ipaddress.IPv6Address("::ffff:93.184.215.14").compressed
+
+
+# Issue #281: the request target's authority. The grammar names what it accepts (a DNS name in
+# ASCII, an IPv6 literal, an ASCII port 1 to 65535); every neighbour below is refused before
+# any resolution. Names that resolve to a refused address (localhost, 0x7f.1) pass the grammar
+# and are refused by the address rule.
+@pytest.mark.parametrize(
+    ("authority", "connect", "expected"),
+    [
+        ("example.com", False, ("example.com", 80, "example.com")),
+        ("Example.COM", False, ("example.com", 80, "example.com")),
+        ("example.com:8080", False, ("example.com", 8080, "example.com:8080")),
+        ("example.com:443", True, ("example.com", 443, "example.com:443")),
+        ("example.com:00443", True, ("example.com", 443, "example.com:443")),
+        ("example.com.", False, ("example.com.", 80, "example.com.")),
+        ("xn--bcher-kva.example", False, ("xn--bcher-kva.example", 80, "xn--bcher-kva.example")),
+        ("a_b.example:80", False, ("a_b.example", 80, "a_b.example:80")),
+        ("93.184.215.14:443", True, ("93.184.215.14", 443, "93.184.215.14:443")),
+        ("a" * 63 + ".example", False, ("a" * 63 + ".example", 80, "a" * 63 + ".example")),
+        ("localhost", False, ("localhost", 80, "localhost")),
+        ("0x7f.1:80", False, ("0x7f.1", 80, "0x7f.1:80")),
+        ("pages:8080", False, ("pages", 8080, "pages:8080")),
+        ("[2606:4700::1111]", False, ("2606:4700::1111", 80, "[2606:4700::1111]")),
+        ("[2606:4700:0:0::1111]:443", True, ("2606:4700::1111", 443, "[2606:4700::1111]:443")),
+        ("[2606:4700::ABCD]:443", True, ("2606:4700::abcd", 443, "[2606:4700::abcd]:443")),
+        # Python's own compressed form of a mapped address (it changed in 3.13).
+        ("[::ffff:93.184.215.14]:80", True, (MAPPED, 80, f"[{MAPPED}]:80")),
+        ("", False, None),
+        (":80", False, None),
+        ("example.com:", False, None),
+        ("example.com", True, None),  # CONNECT names its port
+        ("example.com:0", True, None),
+        ("example.com:65536", True, None),
+        ("example.com:99999999999999999999", True, None),
+        ("example.com:000443", True, None),
+        ("example.com:²", True, None),
+        ("example.com:٤٤٣", True, None),  # Arabic-Indic digits
+        ("example.com:+80", True, None),
+        ("example.com:-1", True, None),
+        ("example.com: 80", True, None),
+        ("example.com:80:80", True, None),
+        ("example.com:443\t", True, None),
+        ("user@example.com", False, None),
+        ("user:pass@example.com:80", False, None),
+        ("example.com@10.0.0.1", False, None),
+        ("exa mple.com", False, None),
+        ("exämple.com", False, None),
+        ("exampleK.com", False, None),  # the Kelvin sign lower cases to an ASCII k
+        ("１２７.0.0.1", False, None),  # full width digits
+        ("example..com", False, None),
+        (".example.com", False, None),
+        ("example.com..", False, None),
+        ("a" * 64 + ".example", False, None),
+        (("a" * 62 + ".") * 4 + "com", False, None),  # over 253 characters
+        ("example.com%2f", False, None),
+        ("example.com\x00", False, None),
+        ("example.com/:443", True, None),
+        ("[::1", False, None),
+        ("[::1]x", False, None),
+        ("[::1]:", False, None),
+        ("[::1]]:80", True, None),
+        ("[]", False, None),
+        ("[fe80::1%25eth0]:80", True, None),
+        ("[v1.x]:80", True, None),
+        ("[127.0.0.1]:80", True, None),
+        ("[::1:80", True, None),
+    ],
+)
+def test_the_proxy_reads_only_a_plain_authority(
+    authority: str, connect: bool, expected: tuple | None
+) -> None:
+    assert proxy.parse_authority(authority, port_required=connect) == expected
+
+
+GET = b"GET http://example.com/ HTTP/1.1\r\n"
+POST = b"POST http://example.com/ HTTP/1.1\r\n"
+
+
+@pytest.mark.parametrize(
+    ("head", "length"),
+    [
+        (GET + b"Host: example.com\r\n\r\n", 0),
+        (GET + b"\r\n", 0),
+        (b"GET http://example.com HTTP/1.1\r\n\r\n", 0),
+        (b"GET http://example.com/?q=a%20b HTTP/1.0\r\n\r\n", 0),
+        (b"POST http://example.com/ HTTP/1.1\r\nContent-Length: 5\r\n\r\n", 5),
+        (b"POST http://example.com/ HTTP/1.1\r\ncontent-length:5\r\n\r\n", 5),
+        (b"POST http://example.com/ HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\n", 5),
+        (b"POST http://example.com/ HTTP/1.1\r\nTransfer-Encoding: Chunked\r\n\r\n", None),
+        (b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n", 0),
+        (GET + b"X-A: a\tb\r\nCookie: c=1; d=2\r\n\r\n", 0),
+    ],
+)
+def test_the_proxy_accepts_plain_requests(head: bytes, length: int | None) -> None:
+    parsed = proxy.parse_head(head)
+    assert parsed is not None
+    assert parsed.length == length
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        b"GARBAGE\r\n\r\n",
+        b"\r\n\r\n",
+        b"GET /relative HTTP/1.1\r\n\r\n",
+        b"GET https://example.com/ HTTP/1.1\r\n\r\n",
+        b"GET HTTP://example.com/ HTTP/1.1\r\n\r\n",
+        b"GET http://example.com/ HTTP/2.0\r\n\r\n",
+        b"GET http://example.com/ http/1.1\r\n\r\n",
+        b"GET http://example.com/ HTTP/1.1 extra\r\n\r\n",
+        b"GET  http://example.com/ HTTP/1.1\r\n\r\n",
+        b"G(T http://example.com/ HTTP/1.1\r\n\r\n",
+        b"CONNECT example.com HTTP/1.1\r\n\r\n",
+        b"GET http://ex\xc3\xa4mple.com/ HTTP/1.1\r\n\r\n",
+        b"GET http://a@10.0.0.1/ HTTP/1.1\r\n\r\n",
+        b"GET http://example.com:22x/ HTTP/1.1\r\n\r\n",
+        # One body, one framing: the proxy and the upstream never disagree on its end.
+        POST + b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n",
+        POST + b"Transfer-Encoding: chunked\r\nContent-Length: 5\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nTransfer-Encoding: xchunked\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nTransfer-Encoding: chunked, identity\r\n\r\n",
+        POST + b"Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nTransfer-Encoding: identity\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nContent-Length: +5\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nContent-Length: -1\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nContent-Length: 5,5\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nContent-Length: \r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nContent-Length: 0x10\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nContent-Length: 1e3\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nContent-Length: \xef\xbc\x95\r\n\r\n",
+        b"POST http://example.com/ HTTP/1.1\r\nContent-Length: 1234567890123456\r\n\r\n",
+        # Header lines: a token name right before the colon, no folding, no bare CR or LF, no NUL.
+        GET + b"Host : evil.example\r\n\r\n",
+        GET + b"Transfer-Encoding : chunked\r\n\r\n",
+        GET + b"X-A: a\r\n b\r\n\r\n",
+        GET + b"X-A: a\r\n\tb\r\n\r\n",
+        GET + b"no colon here\r\n\r\n",
+        GET + b": empty name\r\n\r\n",
+        GET + b"X-A: a\nGET http://10.0.0.1/ HTTP/1.1\r\n\r\n",
+        GET + b"X-A: a\rb\r\n\r\n",
+        GET + b"X-A: a\x00b\r\n\r\n",
+    ],
+)
+def test_the_proxy_refuses_what_is_not_plain_http(head: bytes) -> None:
+    assert proxy.parse_head(head) is None
+
+
+def test_the_upstream_gets_the_checked_host_and_one_framing() -> None:
+    """Issue #281 item 6: the Host the upstream reads is the authority the proxy checked, never
+    the client's (one given, two given, or none). A refused head answers 400 and opens no
+    upstream connection."""
+    egress = proxy.Proxy(frozenset({"upstream"}), recording_resolver([]))
+    egress.idle_s = 0.2
+
+    async def go() -> None:
+        server, port, upstream, up_server = await started(egress)
+        up_port = up_server.sockets[0].getsockname()[1]
+        target = b"GET http://upstream:%d/h HTTP/1.1\r\n" % up_port
+        for extra in (b"Host: evil.example\r\n", b"Host: a\r\nHost: b\r\n", b""):
+            upstream.received = b""
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(target + extra + b"X-Kept: 1\r\n\r\n")
+            assert (await read_response(reader))[1] == b"ok"
+            writer.close()
+            for _ in range(1000):
+                if upstream.open == 0:
+                    break
+                await asyncio.sleep(0)
+            lines = upstream.received.split(b"\r\n")
+            assert lines[0] == b"GET /h HTTP/1.1"
+            assert [h for h in lines if h.lower().startswith(b"host:")] == [
+                b"Host: upstream:%d" % up_port
+            ]
+            assert b"X-Kept: 1" in lines
+            assert b"evil" not in upstream.received
+        upstream.received = b""
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(
+            b"POST http://upstream:%d/ HTTP/1.1\r\nContent-Length: 5\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\nGET /smuggled HTTP/1.1\r\n\r\n" % up_port
+        )
+        assert (await reader.read()).startswith(b"HTTP/1.1 400")
+        writer.close()
+        assert upstream.received == b""
+        server.close()
+        up_server.close()
+
+    run(go())
+
+
+def test_a_chunked_body_is_written_again_and_ends_at_its_last_chunk() -> None:
+    """Chunk sizes are forwarded from their value (an extension is dropped), trailers are not
+    forwarded, nothing after the last chunk is, and a chunk that does not end with CRLF closes
+    the connection."""
+    egress = proxy.Proxy(frozenset({"upstream"}), recording_resolver([]))
+    egress.idle_s = 0.2
+
+    async def go() -> None:
+        server, port, upstream, up_server = await started(egress)
+        up_port = up_server.sockets[0].getsockname()[1]
+        head = b"POST http://upstream:%d/ HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n" % up_port
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(
+            head + b"5;ext=GET /x\r\nhello\r\n0\r\nX-Trailer: t\r\n\r\n"
+            b"GET http://10.0.0.1/ HTTP/1.1\r\n\r\n"
+        )
+        assert (await read_response(reader))[1] == b"ok"
+        assert await asyncio.wait_for(reader.read(), 10) == b""
+        writer.close()
+        for _ in range(1000):
+            if upstream.open == 0:
+                break
+            await asyncio.sleep(0)
+        assert upstream.received.endswith(b"\r\n\r\n5\r\nhello\r\n0\r\n\r\n")
+        assert b"ext" not in upstream.received
+        assert b"X-Trailer" not in upstream.received
+        assert b"10.0.0.1" not in upstream.received
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(head + b"5\r\nhelloXX0\r\n\r\n")
+        assert b"200 OK" not in await asyncio.wait_for(reader.read(), 10)
+        writer.close()
+        server.close()
+        up_server.close()
+
+    run(go())
+
+
+def test_one_uid_one_profile_for_ever(tmp_path: Path) -> None:
+    """Issue #281 item 8: browserd's own record. The first lease of a uid binds its profile; the
+    same uid for another profile is refused 409, again after any number of tries; another uid
+    is free; a record directory that is not browserd's own refuses every lease 503."""
+    root = tmp_path / "uids"
+    chromium.make_uid_records(str(root))
+    chromium.make_uid_records(str(root))  # a second start keeps what is there
+    assert oct(root.stat().st_mode & 0o777) == "0o700"
+    other = "0b7e1c1e-9d43-4c55-8c1a-6f0f3c7f1a00"
+    chromium.bind_uid(20001, PROFILE, str(root))
+    chromium.bind_uid(20001, PROFILE, str(root))
+    for _ in range(3):
+        with pytest.raises(LeaseError) as refused:
+            chromium.bind_uid(20001, other, str(root))
+        assert (refused.value.status, refused.value.code) == (409, "uid_in_use")
+    chromium.bind_uid(20002, other, str(root))
+    assert (root / "20001").read_text() == PROFILE
+    assert sorted(p.name for p in root.iterdir()) == ["20001", "20002"]  # no draft left
+
+    (root / "20003").symlink_to(root / "20001")  # a planted link is never read through
+    with pytest.raises(LeaseError) as unsafe:
+        chromium.bind_uid(20003, PROFILE, str(root))
+    assert unsafe.value.code == "uid_records_unsafe"
+
+    for bad in ("open", "link", "missing"):
+        path = tmp_path / bad
+        if bad == "open":
+            path.mkdir(mode=0o755)
+            path.chmod(0o755)
+        elif bad == "link":
+            path.symlink_to(root)
+        with pytest.raises(LeaseError) as unsafe:
+            chromium.bind_uid(20009, PROFILE, str(path))
+        assert (unsafe.value.status, unsafe.value.code) == (503, "uid_records_unsafe")
