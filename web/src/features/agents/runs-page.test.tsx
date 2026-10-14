@@ -335,6 +335,70 @@ describe("/runs/:id, the run panel", () => {
     expect(await within(panel).findByText("Live")).toBeInTheDocument();
   });
 
+  it("shows the size of a private tool call and result, with no content box, and leaves a stored one as it was", async () => {
+    agentsApi();
+    renderApp(`/runs/${ID}`);
+    const panel = await screen.findByTestId("run-panel");
+    const source = FakeEventSource.last!;
+    source.open();
+    source.emit(
+      "step",
+      step(1, "tool_call", {
+        id: "p1",
+        name: "mcp__app__read",
+        input_size: 42,
+      }),
+    );
+    source.emit(
+      "step",
+      step(2, "tool_result", {
+        id: "p1",
+        is_error: false,
+        size: 1234,
+        blocks: 2,
+      }),
+    );
+    source.emit(
+      "step",
+      step(3, "tool_call", { id: "p2", name: "[not stored]", input_size: 1 }),
+    );
+    source.emit(
+      "step",
+      step(4, "tool_result", { id: "p2", is_error: true, size: 0, blocks: 0 }),
+    );
+    source.emit(
+      "step",
+      step(5, "tool_result", {
+        id: "s1",
+        is_error: false,
+        content: "stored text",
+      }),
+    );
+    const steps = await within(panel).findByRole("list", { name: "Steps" });
+    await waitFor(() => {
+      expect(within(steps).getAllByRole("listitem")).toHaveLength(5);
+    });
+    const [call, result, hidden, failed, stored] = within(steps).getAllByRole(
+      "listitem",
+    ) as [HTMLElement, HTMLElement, HTMLElement, HTMLElement, HTMLElement];
+    expect(call).toHaveTextContent("Tool call: read");
+    expect(call).toHaveTextContent("42 characters of arguments");
+    expect(result).toHaveTextContent("1,234 characters, 2 other blocks");
+    expect(hidden).toHaveTextContent("Tool call: [not stored]");
+    expect(hidden).toHaveTextContent("1 character of arguments");
+    expect(failed).toHaveTextContent("0 characters");
+    expect(failed).toHaveTextContent("Tool error");
+    for (const item of [call, result, hidden, failed]) {
+      expect(item.querySelector("details")).toBeNull();
+      expect(item.querySelector("pre")).toBeNull();
+      expect(within(item).queryByText("Show")).toBeNull();
+    }
+    // A stored result keeps its disclosure and its text.
+    expect(stored.querySelector("details")).not.toBeNull();
+    expect(within(stored).getByText("Show")).toBeInTheDocument();
+    expect(stored.querySelector("pre")).toHaveTextContent("stored text");
+  });
+
   it("keeps the panel and its steps when a refresh fails", async () => {
     agentsApi();
     renderApp(`/runs/${ID}`);

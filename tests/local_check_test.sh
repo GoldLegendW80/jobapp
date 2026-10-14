@@ -250,6 +250,39 @@ out_has "journeys-sweep             FAIL"
 [[ "$(ups)" == 3 ]] || fail "a port that is always taken: $(ups) starts, expected 3"
 ok "a stack that cannot bind its port is taken down and started on another, three starts at most, and four stacks hold four different ports"
 
+# The mail group also publishes the fake Google on a port of its own: when that one is taken, the
+# retry changes it too, instead of failing the three starts on the same stub port.
+cat >"$WORK/ports-mail.sh" <<'EOF'
+docker() {
+  echo "docker $*" >>"$STUB_CALLS"
+  case " $* " in
+  *" up "*)
+    echo "up $HTTP_PORT $GMAIL_STUB_PORT $E2E_GMAIL_STUB_URL" >>"$STUB_CALLS"
+    if [[ "$(grep -c '^up ' "$STUB_CALLS")" -le "$STUB_UP_FAILS" ]]; then
+      echo "Error response from daemon: driver failed programming external connectivity on endpoint x: failed to bind port 127.0.0.1:$GMAIL_STUB_PORT/tcp: address already in use" >&2
+      return 1
+    fi
+    ;;
+  esac
+  return 0
+}
+journey_play() { true; }
+stub_plan() {
+  pick_journey_ports mail
+  run_step journeys-mail s_journey mail || true
+}
+EOF
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports-mail.sh" STUB_UP_FAILS=1 "$CHECK" --only journeys
+out_has "journeys-mail              PASS"
+[[ "$(ups)" == 2 ]] || fail "mail, one failed start: $(ups) starts, expected 2"
+[[ "$(grep '^up ' "$STUB_CALLS" | awk '{print $2}' | sort -u | wc -l | tr -d ' ')" == 2 ]] || fail "the mail stack kept its port"
+[[ "$(grep '^up ' "$STUB_CALLS" | awk '{print $3}' | sort -u | wc -l | tr -d ' ')" == 2 ]] || fail "the retry of the mail stack kept the port of the fake Google"
+while read -r _ _ stub url; do
+  [[ "$url" == "http://127.0.0.1:$stub" ]] || fail "the address of the fake Google ($url) does not follow its port ($stub)"
+done < <(grep '^up ' "$STUB_CALLS")
+ok "the retry of the mail stack takes a new port for the fake Google too"
+
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
 # it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded
@@ -543,9 +576,16 @@ ok "the secret scan of main as it is starts after the last commit whose tree has
 cd "$ROOT"
 specs_of() { grep -v '^ *#' "$1" | grep -o '[a-z0-9-]*\.spec\.ts\|e2e/[a-z-]*\.config\.ts' | sort -u; }
 [[ -n "$(specs_of .github/workflows/ci.yml)" ]] || fail "no journey spec found in ci.yml"
-[[ "$(specs_of .github/workflows/ci.yml)" == "$(specs_of ops/local-check.sh)" ]] ||
-  fail "the journey groups of ops/local-check.sh (journey_specs) and of ci.yml differ: $(diff <(specs_of .github/workflows/ci.yml) <(specs_of ops/local-check.sh) | tr '\n' ' ')"
-ok "ops/local-check.sh runs the journey specs and configs that ci.yml names"
+# A group that only the local check runs is listed, with its reason, in LOCAL_CHECK_CONFIGS of
+# .github/scripts/e2e_groups.py (the mail module's: its stack also runs a fake Google). Nothing
+# else may differ.
+local_only="$(python3 -c 'import sys; sys.path.insert(0, ".github/scripts"); import e2e_groups; print("\n".join(sorted(e2e_groups.LOCAL_CHECK_CONFIGS)))')"
+[[ "$local_only" == "e2e/mail-all.config.ts" ]] || fail "the groups of the local check alone are no longer the mail group only: $local_only"
+expected_specs() { { specs_of .github/workflows/ci.yml; printf '%s\n' "$local_only"; } | sort -u; }
+[[ "$(expected_specs)" == "$(specs_of ops/local-check.sh)" ]] ||
+  fail "the journey groups of ops/local-check.sh (journey_specs) differ from those of ci.yml plus the local check's own: $(diff <(expected_specs) <(specs_of ops/local-check.sh) | tr '\n' ' ')"
+! specs_of .github/workflows/ci.yml | grep -qxF "$local_only" || fail "$local_only is also run by ci.yml: remove it from LOCAL_CHECK_CONFIGS"
+ok "ops/local-check.sh runs the journey specs and configs that ci.yml names, and the mail group of its own"
 
 listed="$(awk '/koalaman\/shellcheck:/ { on = 1; next } on && /^ *(#|- )/ { exit } on { print }' .github/workflows/ci.yml | tr '\n' ' ')"
 for script in ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh; do

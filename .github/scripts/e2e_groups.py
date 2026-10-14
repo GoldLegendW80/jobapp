@@ -10,6 +10,8 @@ This check reads the workflow and fails when a web/e2e/*.spec.ts file is neither
   workflow runs with `-c`: listed in its SPECS (web/e2e/identity-all.config.ts), or named with
   its SPEC_PREFIX (web/e2e/ingestion-all.config.ts runs every ingestion-*.spec.ts, so a task of
   that module adds a spec without touching the workflow), nor
+- covered by a config of LOCAL_CHECK_CONFIGS below that ops/local-check.sh names (a journey
+  group the local check runs and the workflow does not: web/e2e/mail-all.config.ts), nor
 - listed in NOT_IN_CI below, with the reason it is not run there.
 
 It also fails on a spec the workflow runs twice, on a spec that is both run and excluded, and on a
@@ -42,7 +44,18 @@ NOT_IN_CI: dict[str, str] = {
     "real-api.spec.ts": "needs an api and database started by hand (E2E_REAL_API)",
 }
 
+# Playwright configs that the workflow does not run and the local check does, as a journey group
+# of its own (ops/local-check.sh, `journey_specs`), each with its reason. There is no CI run:
+# the local check gates a deploy. A config listed here accounts for the specs under its
+# SPEC_PREFIX only while ops/local-check.sh really names it with `-c`.
+LOCAL_CHECK_CONFIGS: dict[str, str] = {
+    # The mail journeys need the fake Google of tests/gmail-stub.compose.yml beside the stack
+    # (no journey may reach a real Google account), which the workflow's stacks do not start.
+    "e2e/mail-all.config.ts": "needs the fake Google, group mail of ops/local-check.sh",
+}
+
 WORKFLOW = Path(".github/workflows/ci.yml")
+LOCAL_CHECK = Path("ops/local-check.sh")
 E2E_DIR = Path("web/e2e")
 SPEC = re.compile(
     r"(?<![\w-])([\w-]+\.spec\.ts)\b"
@@ -87,17 +100,40 @@ def specs_in_ci(root: Path) -> list[str]:
     return ran
 
 
+def specs_in_local_check(root: Path) -> list[str]:
+    """The specs of the configs of LOCAL_CHECK_CONFIGS that ops/local-check.sh names."""
+    script = root / LOCAL_CHECK
+    if not script.is_file():
+        return []
+    text = uncommented(script.read_text(encoding="utf-8"))
+    ran: list[str] = []
+    for config in CONFIG.findall(text):
+        if config in LOCAL_CHECK_CONFIGS and (root / "web" / config).is_file():
+            ran += config_specs(root / "web" / config)
+    return ran
+
+
 def check(root: Path, not_in_ci: dict[str, str] | None = None) -> list[str]:
     """The problems found, one sentence each; empty when every spec is accounted for."""
     excluded = NOT_IN_CI if not_in_ci is None else not_in_ci
     on_disk = {path.name for path in (root / E2E_DIR).glob("*.spec.ts")}
     ran = Counter(specs_in_ci(root))
+    local = set(specs_in_local_check(root))
     problems: list[str] = []
+    for name in sorted(set(ran) & local):
+        problems.append(
+            f"{name} is run by {WORKFLOW} and by a group of {LOCAL_CHECK} that the "
+            "workflow does not have: pick one"
+        )
+    for name in sorted(set(excluded) & local):
+        problems.append(
+            f"{name} is run by a group of {LOCAL_CHECK} and also listed in NOT_IN_CI: pick one"
+        )
     if not ran:
         problems.append(
             f"{WORKFLOW} names no spec at all: this check no longer reads it right"
         )
-    for name in sorted(on_disk - set(ran) - set(excluded)):
+    for name in sorted(on_disk - set(ran) - set(excluded) - local):
         problems.append(
             f"{E2E_DIR / name} is in no e2e group of {WORKFLOW}: add it to a group, or to "
             "NOT_IN_CI in .github/scripts/e2e_groups.py with the reason"
@@ -128,8 +164,10 @@ def main(argv: list[str]) -> int:
     if problems:
         return 1
     ran = set(specs_in_ci(root))
+    local = set(specs_in_local_check(root))
     print(
-        f"e2e_groups: {len(ran)} specs run in CI, {len(NOT_IN_CI)} excluded with a reason"
+        f"e2e_groups: {len(ran)} specs run in CI, {len(NOT_IN_CI)} excluded with a reason, "
+        f"{len(local)} run by a group of the local check only"
     )
     return 0
 

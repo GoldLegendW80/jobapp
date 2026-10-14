@@ -1,0 +1,7 @@
+Sam Rivera
+Email: sam.rivera@example.org
+
+A made up letter of a fictitious person, written for the tests of this application.
+
+Example Rail, Data Engineer, May 2019 to June 2022, Lyon
+Example Post, Analyst, January 2016 to December 2018, Paris
