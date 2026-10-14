@@ -472,6 +472,13 @@ class QueueWorker(Worker):
         iteration.add_done_callback(self.endings.discard)
         await asyncio.shield(iteration)
 
+    async def start_jobs(self, job_ids: list[bytes]) -> None:
+        # arq reads allow_pick_jobs once, before the queue read: a stop since then starts nothing.
+        for job_id in job_ids:
+            if not self.allow_pick_jobs:
+                return
+            await super().start_jobs([job_id])
+
     async def _ending(self, write: Awaitable[None]) -> None:
         task = asyncio.current_task()
         if task is None:  # pragma: no cover, a coroutine always runs in a task
