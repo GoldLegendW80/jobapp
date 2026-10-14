@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind
-from app.documents import consent, store, tick
+from app.documents import consent, generate, store, tick
 from app.documents.models import (
     BaseSource,
     Document,
@@ -136,6 +136,26 @@ def test_a_click_under_the_threshold_writes_the_cv_and_the_letter_follows(
     assert alex.generations(job) == [
         (Kind.cv, GenerationStatus.running, GenerationTrigger.click, alex.base)
     ]
+
+
+def test_a_click_for_both_kinds_marks_the_cv_so_the_letter_follows_it_and_one_kind_does_not(
+    alex: Who, api: Api, factory: sessionmaker[Session]
+) -> None:
+    both, one = alex.posting(40), alex.posting(41)
+    for job, kinds in ((both, ["letter", "cv"]), (one, ["cv"])):
+        response = api.request("POST", write(job), token=alex.token, json={"kinds": kinds})
+        assert response.status_code == 202, response.text
+    with factory() as db:
+        marks = dict(
+            db.execute(
+                sa.select(Document.posting_id, DocumentGeneration.estimate)
+                .join(Document, Document.id == DocumentGeneration.document_id)
+                .where(DocumentGeneration.user_id == alex.user)
+            ).all()
+        )
+    assert marks[both].get(generate.LETTER_FOLLOWS) is True
+    assert generate.LETTER_FOLLOWS not in marks[one]
+    assert [g[0] for g in alex.generations(both)] == [Kind.cv]  # the letter waits for the CV
 
 
 def test_a_click_with_the_ceiling_reached_is_written_and_never_counted(

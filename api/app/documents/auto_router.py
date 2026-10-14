@@ -7,12 +7,14 @@
   An automatic generation of the same document that has not started gives way to it (cancelled,
   never counted). Started at once when the consent and a credential are there, else `waiting`
   with `consent` or `credential` (nothing spends without both; the tick starts it once they
-  exist). With both kinds, the CV is written now and the letter follows it (D8's chain) when
-  the letter has no version yet; a letter that has one is written again now, beside the CV.
+  exist). With both kinds, the CV is written now and the letter follows it once the new CV is
+  final (D8's chain, `generate.start_letter`), even when the letter has a version: it is never
+  written from the old CV. An automatic letter that has not started gives way the same.
   `base_document_id` names another of the person's base CVs to write the CV from. 202 with the
   generations; 404 for another person's posting or base CV; 409 while one is running.
 - `GET /api/documents/spend?min_fit=`: postings written today against the safety ceiling (in the
-  time zone of `sweep_schedule`), postings waiting, the postings of the last 30 days at or
+  time zone of `sweep_schedule`), postings waiting, the postings of the last
+  `DOCUMENTS_AUTO_LOOKBACK_DAYS` (30) days at or
   above the threshold (the one asked, else the person's) and how many of them have no CV yet
   with the estimate of writing them, and the tokens and cost of the module's runs today and
   over the last 30 days, from `agent_runs` joined through `document_generations.run_id`.
@@ -26,7 +28,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 import anyio.from_thread
 import sqlalchemy as sa
@@ -63,7 +65,6 @@ POSTING_NOT_FOUND = "Posting not found."
 BASE_NOT_FOUND = "CV not found."
 RUNNING = "This document is being written. Wait for it to finish."
 BUSY = "This posting is busy. Try again in a moment."
-LOOKBACK_DAYS = 30
 
 
 def _private(response: Response) -> None:
@@ -107,13 +108,19 @@ def _has_version(db: Session, document_id: uuid.UUID) -> bool:
     return found is not None
 
 
-def _give_way(db: Session, document: Document, at: datetime) -> None:
+def _give_way(db: Session, document: Document, at: datetime, *, follows: bool = False) -> None:
     """An open generation of the document: an automatic one not started gives way to the click
-    (cancelled, never started, so never counted); a running one, or another click, is a 409."""
+    (cancelled, never started, so never counted); a running one, or another click, is a 409,
+    unless the document `follows` the CV (a letter of both kinds: then it is left as it is).
+    The document is locked first, the lock the tick takes before it starts a generation, so the
+    read below is never older than a start the tick committed."""
+    store.lock_document(db, document.user_id, document.id)
     current = store.open_generation(db, document.user_id, document.id)
     if current is None:
         return
     if current.status is GenerationStatus.running or current.trigger is not GenerationTrigger.auto:
+        if follows:
+            return
         raise _error(status.HTTP_409_CONFLICT, RUNNING)
     current.status = GenerationStatus.cancelled
     current.wait_reason = None
@@ -140,6 +147,7 @@ def write_now(
     made: list[tuple[Kind, DocumentGeneration]] = []
     reason = writer_base.wait_reason(db, user.id)
     runs: list[uuid.UUID] = []
+    both = Kind.cv in kinds and Kind.letter in kinds
     try:
         cv_base = body.base_document_id
         for kind in kinds:
@@ -151,8 +159,9 @@ def write_now(
                 at=at,
                 base_document_id=cv_base if kind == Kind.cv else None,
             )
-            if kind == Kind.letter and Kind.cv in kinds and not _has_version(db, document.id):
-                continue  # the letter follows the CV (generate.start_letter)
+            if kind == Kind.letter and both:
+                _give_way(db, document, at, follows=True)
+                continue  # the letter follows the new CV (generate.start_letter)
             _give_way(db, document, at)
             base_id = cv_base if kind == Kind.cv else None
             if kind == Kind.letter:
@@ -166,13 +175,16 @@ def write_now(
                 )
                 base_id = cv.base_document_id if cv is not None else None
             figures = estimate.for_posting(db, user.id, job_id, base_id)
+            stored: dict[str, Any] = dict(estimate.as_json(figures))
+            if kind == Kind.cv and both:
+                stored[generate.LETTER_FOLLOWS] = True
             generation = generate.create(
                 db,
                 document,
                 GenerationMode.posting,
                 GenerationTrigger.click,
                 base_id,
-                estimate.as_json(figures),
+                stored,
                 figures.ceiling,
                 at=at,
                 status=GenerationStatus.waiting if reason else GenerationStatus.queued,
@@ -294,7 +306,8 @@ def spend(
     today = eligibility.ceiling_day(at, timezone)
     threshold = setting.min_fit if min_fit is None else min_fit
     asked = eligibility.Setting(True, threshold, setting.daily_ceiling)
-    candidates = tick.eligible(db, user.id, asked, search, today, LOOKBACK_DAYS)
+    lookback = request.app.state.settings.documents_auto_lookback_days
+    candidates = tick.eligible(db, user.id, asked, search, today, lookback)
     docs = tick.posting_docs(db, user.id)
     to_write = sum(
         1 for found in candidates if docs.ids.get((found.id, Kind.cv)) not in docs.written
@@ -318,6 +331,6 @@ def spend(
         cost_note=pricing.ESTIMATE_NOTE if figures.priced else pricing.QUOTA_NOTE,
         today=_spent(db, user.id, zone_start.astimezone(UTC)),
         last_30_days=_spent(
-            db, user.id, (zone_start - timedelta(days=LOOKBACK_DAYS - 1)).astimezone(UTC)
+            db, user.id, (zone_start - timedelta(days=lookback - 1)).astimezone(UTC)
         ),
     )

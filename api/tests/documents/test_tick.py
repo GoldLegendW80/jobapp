@@ -7,7 +7,14 @@ by a sweep and by hand both picked up; the threshold at, under, without a fit, l
 rule; `auto` off; the consent and the credential (waiting, nothing counted, then started); the
 safety ceiling in America/New_York while the server is in UTC; one automatic run at a time; a
 posting skipped or fallen under the threshold while waiting (cancelled); the retry once; the
-default base CV changed; legacy files; the tick lock held by another pass; and the canary."""
+default base CV changed; legacy files; the tick lock held by another pass; and the canary.
+
+Never two starts: a click that read the open generation before the tick started it, and a click
+committed between the tick's read and its start (one run either way, no exception, the next
+person still handled). A run that ended without its final hook (reaped, killed, cancelled while
+queued): untouched within the grace, then settled, the next posting started and the posting
+retried once. One person's failure never ends the pass; a start that raised is never counted; a
+waiting automatic base CV with `auto` off; no base CV and no employer still cancels."""
 
 from __future__ import annotations
 
@@ -21,10 +28,18 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import credentials
+from app.agents import credentials, failures, runner
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind
-from app.documents import consent, store, tick, writers  # noqa: F401 (registers the writers)
+from app.documents import (  # noqa: F401 (writers registers the writers)
+    auto_router,
+    consent,
+    estimate,
+    generate,
+    store,
+    tick,
+    writers,
+)
 from app.documents.models import (
     BaseSource,
     Document,
@@ -52,10 +67,11 @@ from tests.documents.store_support import (
     engine,
     factory,
     migrated_url,
+    short_locks,
 )
 from tests.documents.writer_support import Person, execute
 
-__all__ = ["engine", "factory", "migrated_url"]
+__all__ = ["engine", "factory", "migrated_url", "short_locks"]
 
 TODAY = AT.date()
 POSTING = load("posting_lumen.json")["text"]
@@ -587,3 +603,320 @@ def test_the_cron_job_takes_ids_only_and_queues_the_runs(world: World) -> None:
     assert asyncio.run(tick.run(ctx)) == 1
     assert [function for function, _ in sent] == ["run_agent"]
     assert all(isinstance(arg, str) and uuid.UUID(arg) for _, args in sent for arg in args)
+
+
+# --- never two starts: a click and the tick -----------------------------------------------------
+
+
+def click(who: World, posting: uuid.UUID) -> None:
+    """A "Write now" of the posting's CV, as `auto_router.write_now` does it, in its own session."""
+    with who.factory() as db:
+        document = store.get_or_create(db, who.user, posting, Kind.cv, at=AT)
+        auto_router._give_way(db, document, AT)
+        figures = estimate.for_posting(db, who.user, posting, None)
+        made = generate.create(
+            db,
+            document,
+            GenerationMode.posting,
+            GenerationTrigger.click,
+            None,
+            estimate.as_json(figures),
+            figures.ceiling,
+            at=AT,
+        )
+        generate.start(db, made, at=AT, settings=who.settings)
+        store.commit(db)
+
+
+def runs_of(who: World, posting: uuid.UUID) -> int:
+    with who.factory() as db:
+        return int(
+            db.execute(
+                sa.text("SELECT count(*) FROM agent_runs WHERE user_id = :u AND job_id = :j"),
+                {"u": who.user, "j": posting},
+            ).scalar_one()
+        )
+
+
+def triggers(
+    who: World, posting: uuid.UUID
+) -> set[tuple[GenerationTrigger, GenerationStatus, bool]]:
+    # one frozen clock: the rows share created_at, so compare them as a set
+    return {
+        (g["trigger"], g["status"], g["run_id"] is not None)
+        for g in posting_cv(who.generations(posting))
+    }
+
+
+def test_a_tick_during_a_clicks_read_is_held_off_and_one_run_starts(
+    factory: sessionmaker[Session],
+    migrated_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    short_locks: None,
+) -> None:
+    who = World(factory, migrated_url, USER_A, credential=False)
+    posting = who.posting(80)
+    who.tick()  # waiting with `credential`
+    who.credential()
+    with factory() as db:
+        cv_id = store.get_or_create(db, who.user, posting, Kind.cv, at=AT).id
+        db.commit()
+    real = store.open_generation
+    meanwhile: list[list[uuid.UUID]] = []
+
+    def read_then_tick(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> Any:
+        found = real(db, user_id, document_id)
+        if document_id == cv_id and not meanwhile:
+            meanwhile.append(who.tick())  # the cron, in its own transaction, between read and write
+        return found
+
+    monkeypatch.setattr(store, "open_generation", read_then_tick)
+    click(who, posting)
+    assert meanwhile == [[]]  # the click holds the document: the tick leaves it to the next pass
+    assert runs_of(who, posting) == 1
+    assert triggers(who, posting) == {
+        (GenerationTrigger.auto, GenerationStatus.cancelled, False),
+        (GenerationTrigger.click, GenerationStatus.running, True),
+    }
+    assert who.tick() == []
+
+
+def test_a_tick_that_started_first_makes_the_click_a_409(world: World) -> None:
+    posting = world.posting(80)
+    assert len(world.tick()) == 1
+    with pytest.raises(auto_router.HTTPException) as refused:
+        click(world, posting)
+    assert refused.value.status_code == 409
+    assert runs_of(world, posting) == 1
+
+
+@pytest.mark.parametrize("state", ["waiting", "queued"])
+def test_a_click_committed_between_the_ticks_read_and_its_start_wins_and_the_pass_goes_on(
+    factory: sessionmaker[Session],
+    migrated_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    state: str,
+) -> None:
+    alex = World(factory, migrated_url, USER_A, credential=state == "queued")
+    blake = World(factory, migrated_url, USER_B)
+    settings = alex.settings.model_copy(update={"documents_auto_at_once": 1})
+    if state == "waiting":  # waiting with `credential`; the credential arrives before the pass
+        posting = alex.posting(80)
+        alex.tick()
+        alex.credential()
+    else:  # queued behind one running; that one fails, so the slot is free for this pass
+        alex.posting(90)
+        posting = alex.posting(80)
+        tick.tick(factory, AT, settings, only=[alex.user])
+        alex.finish("failed", "run_failed")
+    assert {g["status"].value for g in posting_cv(alex.generations(posting))} == {state}
+    blake_posting = blake.posting(85)
+    real = tick.not_started
+    clicked: list[uuid.UUID] = []
+
+    def read_then_click(db: Session, user_id: uuid.UUID) -> list[tick.Waiting]:
+        found = real(db, user_id)
+        if user_id == alex.user and not clicked:
+            click(alex, posting)  # committed after the tick's read, before its start
+            clicked.append(posting)
+        return found
+
+    monkeypatch.setattr(tick, "not_started", read_then_click)
+    with caplog.at_level(logging.INFO, logger="app.documents.tick"):
+        runs = tick.tick(factory, AT, settings, only=[alex.user, blake.user])
+    assert clicked == [posting]
+    # alex's pass skipped the cancelled generation and committed: no error, nothing held
+    held = ("documents.tick.person_failed", "documents.tick.busy")
+    assert not [r for r in caplog.records if r.getMessage() in held]
+    assert runs_of(alex, posting) == 1
+    assert triggers(alex, posting) == {
+        (GenerationTrigger.auto, GenerationStatus.cancelled, False),
+        (GenerationTrigger.click, GenerationStatus.running, True),
+    }
+    blake_cv = posting_cv(blake.generations(blake_posting))
+    assert [g["status"] for g in blake_cv] == [GenerationStatus.running]
+    assert runs == [blake_cv[0]["run_id"]]
+
+
+# --- a run that ended without its final hook ----------------------------------------------------
+
+
+def end_runs(who: World, status: str, error: str | None, finished: datetime | None) -> None:
+    """The person's runs end as the reaper, a killed worker or a cancel leave them: no hook."""
+    with who.factory() as db:
+        db.execute(
+            sa.text(
+                "UPDATE agent_runs SET status = CAST(:s AS agent_run_status), error = :e, "
+                "finished_at = :f WHERE user_id = :u"
+            ),
+            {"s": status, "e": error, "f": finished, "u": who.user},
+        )
+        db.commit()
+
+
+def test_the_grace_is_over_the_runners_final_hook_timeout() -> None:
+    assert runner.FINAL_HOOK_TIMEOUT_S < tick.HOOK_GRACE_S
+
+
+def test_a_reaped_run_is_settled_after_the_grace_the_next_posting_starts_and_it_is_retried_once(
+    world: World,
+) -> None:
+    first = world.posting(90)
+    world.tick()
+    ended = AT + timedelta(seconds=10)
+    end_runs(world, "failed", "The run stopped reporting.", ended)
+    second = world.posting(85)
+    grace = timedelta(seconds=tick.HOOK_GRACE_S)
+    assert world.tick(ended + grace) == []  # a hook merely late still settles its own run
+    assert [g["status"] for g in posting_cv(world.generations(first))] == [GenerationStatus.running]
+    started = world.tick(ended + grace + timedelta(seconds=1))
+    [failed] = posting_cv(world.generations(first))
+    assert failed["status"] is GenerationStatus.failed
+    with world.factory() as db:
+        row = db.get(DocumentGeneration, failed["id"])
+        assert row is not None
+        assert (row.error, row.finished_at) == ("run_failed", ended)
+    [running] = posting_cv(world.generations(second))
+    assert running["status"] is GenerationStatus.running
+    assert started == [running["run_id"]]
+    world.finish("failed", "run_failed", at=ended + grace)  # the second fails too
+    assert world.tick(ended + timedelta(seconds=599)) == []
+    assert len(world.tick(ended + timedelta(seconds=600))) == 1  # 600 s after the run ended
+    assert [g["status"] for g in posting_cv(world.generations(first))] == [
+        GenerationStatus.failed,
+        GenerationStatus.running,
+    ]
+
+
+def test_a_killed_run_without_a_finish_time_is_recovered_on_the_next_pass(world: World) -> None:
+    first = world.posting(90)
+    world.tick()
+    end_runs(world, "failed", "stale", None)  # its start time stands in for the end
+    second = world.posting(85)
+    started = world.tick(AT + timedelta(seconds=tick.HOOK_GRACE_S + 1))
+    assert [g["status"] for g in posting_cv(world.generations(first))] == [GenerationStatus.failed]
+    assert [g["run_id"] for g in posting_cv(world.generations(second))] == started
+    assert len(started) == 1
+
+
+@pytest.mark.parametrize(
+    ("run", "error", "status", "code"),
+    [
+        ("failed", failures.TOKEN_LIMIT, GenerationStatus.failed, "token_limit"),
+        ("failed", "The worker stopped.", GenerationStatus.failed, "run_failed"),
+        ("done", None, GenerationStatus.failed, "run_failed"),
+        ("cancelled", None, GenerationStatus.cancelled, None),
+        ("running", None, GenerationStatus.running, None),
+        ("queued", None, GenerationStatus.running, None),
+    ],
+)
+def test_a_run_settled_by_the_tick_takes_the_runs_outcome_and_a_live_run_is_never_touched(
+    world: World, run: str, error: str | None, status: GenerationStatus, code: str | None
+) -> None:
+    posting = world.posting(90)
+    world.tick()
+    end_runs(world, run, error, AT if run in ("failed", "done", "cancelled") else None)
+    world.tick(AT + timedelta(seconds=tick.HOOK_GRACE_S + 1))
+    found = posting_cv(world.generations(posting))[0]  # a stop at the ceiling retries at once
+    with world.factory() as db:
+        row = db.get(DocumentGeneration, found["id"])
+        assert row is not None
+        assert (row.status, row.error) == (status, code)
+
+
+def test_a_base_cv_build_that_ended_without_its_hook_is_settled_too(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    who = World(factory, migrated_url, USER_A, base=False)
+    who.tick()
+    end_runs(who, "failed", "stale", AT)
+    who.tick(AT + timedelta(days=1))
+    base = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
+    assert [g["status"] for g in base] == [GenerationStatus.failed]
+
+
+# --- one person's failure, a start that raised, auto off, nothing to write from -----------------
+
+
+def test_an_unexpected_error_for_one_person_never_ends_the_pass_for_the_next(
+    factory: sessionmaker[Session],
+    migrated_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    alex = World(factory, migrated_url, USER_A)
+    blake = World(factory, migrated_url, USER_B)
+    alex.posting(90)
+    blake_posting = blake.posting(80)
+    planted = marker()
+    real = tick.eligible
+
+    def broken(db: Session, user_id: uuid.UUID, *args: Any) -> list[tick.Candidate]:
+        if user_id == alex.user:
+            raise RuntimeError(planted)
+        return real(db, user_id, *args)
+
+    monkeypatch.setattr(tick, "eligible", broken)
+    with caplog.at_level(logging.INFO, logger="app.documents.tick"):
+        runs = tick.tick(factory, AT, alex.settings, only=[alex.user, blake.user])
+    assert alex.generations() == []  # rolled back
+    assert [g["run_id"] for g in posting_cv(blake.generations(blake_posting))] == runs
+    assert len(runs) == 1
+    failed = [r for r in caplog.records if r.getMessage() == "documents.tick.person_failed"]
+    assert [(r.user_id, r.error) for r in failed] == [(str(alex.user), "RuntimeError")]  # type: ignore[attr-defined]
+    assert planted not in caplog.text
+
+
+def test_a_start_that_raised_is_never_counted_against_the_ceiling(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    posting = world.posting(90)
+
+    def refuse(*_: Any, **__: Any) -> Any:
+        raise ValueError("refused")
+
+    monkeypatch.setattr(tick.generate, "start", refuse)
+    assert world.tick() == []
+    [found] = posting_cv(world.generations(posting))
+    assert (found["status"], found["ceiling_day"]) == (GenerationStatus.queued, None)
+    with world.factory() as db:
+        assert tick.started_today(db, world.user, TODAY) == 0
+
+
+def test_with_auto_off_a_waiting_automatic_base_cv_build_does_not_start(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    who = World(factory, migrated_url, USER_A, base=False, credential=False)
+    who.tick()
+    [base] = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
+    assert (base["status"], base["wait_reason"]) == (
+        GenerationStatus.waiting,
+        GenerationWait.credential,
+    )
+    who.search(auto=False)
+    who.credential()
+    assert who.tick() == []
+    [base] = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
+    assert base["status"] is GenerationStatus.waiting
+    who.search(auto=True)
+    started = who.tick()
+    [base] = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
+    assert (base["status"], started) == (GenerationStatus.running, [base["run_id"]])
+
+
+def test_without_a_base_cv_or_an_employer_what_waits_is_still_cancelled(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    who = World(factory, migrated_url, USER_A, profile=False, credential=False)
+    posting = who.posting(80)
+    who.tick()  # a base CV exists: the posting waits for the credential
+    assert [g["status"] for g in posting_cv(who.generations(posting))] == [GenerationStatus.waiting]
+    with factory() as db:  # every base CV deleted, and the profile has no employer
+        store.delete_base(db, who.user, who.base, AT)
+        db.commit()
+    who.set_job(posting, status="skipped")
+    assert who.tick() == []
+    assert [g["status"] for g in posting_cv(who.generations(posting))] == [
+        GenerationStatus.cancelled
+    ]
