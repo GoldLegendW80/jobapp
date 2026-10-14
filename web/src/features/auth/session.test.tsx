@@ -20,7 +20,7 @@ async function openMenu(
 
 describe("protected routes", () => {
   it.each([
-    ["/", "/login?next=/"],
+    ["/jobs", "/login?next=/jobs"],
     ["/admin/users", "/login?next=/admin/users"],
     ["/jobs?status=found#top", "/login?next=/jobs%3Fstatus%3Dfound%23top"],
     ["/some/unknown/page", "/login?next=/some/unknown/page"],
@@ -78,7 +78,7 @@ describe("protected routes", () => {
           : HttpResponse.json(member);
       }),
     );
-    const { location } = renderApp("/");
+    const { location } = renderApp("/jobs");
     expect(
       await screen.findByRole("heading", {
         name: "jobapp cannot reach its server",
@@ -87,7 +87,7 @@ describe("protected routes", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "The API answered 500: boom.",
     );
-    expect(location()).toBe("/");
+    expect(location()).toBe("/jobs");
     await userEvent
       .setup()
       .click(screen.getByRole("button", { name: "Retry" }));
