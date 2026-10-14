@@ -1,0 +1,26 @@
+{
+  "_about": "Invented fixed facts for the render fixtures of D1 (no real person). The photo is generated at render time as a placeholder.",
+  "identity": {
+    "name": "Alex Example",
+    "email": "e2e-alex@example.org",
+    "phone": "+33 6 00 00 00 00",
+    "location": "Lyon, France",
+    "links": ["example.org/alex", "code.example.org/alex"]
+  },
+  "fixed": {
+    "employers": [
+      {"key": "example-corp", "organisation": "Example Corp", "title": "Senior Software Engineer", "start": "2023-02", "end": null, "location": "Lyon, France"},
+      {"key": "sample-labs", "organisation": "Sample Labs", "title": "Software Engineer", "start": "2020-09", "end": "2023-01", "location": "Grenoble, France"},
+      {"key": "demo-industries", "organisation": "Demo Industries", "title": "Engineering Intern", "start": "2020-02", "end": "2020-07", "location": "Annecy, France"}
+    ],
+    "schools": [
+      {"name": "Université Exemple", "degree": "MSc Computer Science", "start": "2018", "end": "2020"},
+      {"name": "Institut Échantillon", "degree": "BSc Mathematics", "start": "2015", "end": "2018"}
+    ],
+    "languages": [
+      {"name": "French", "level": "native"},
+      {"name": "English", "level": "fluent"},
+      {"name": "German", "level": "intermediate"}
+    ]
+  }
+}

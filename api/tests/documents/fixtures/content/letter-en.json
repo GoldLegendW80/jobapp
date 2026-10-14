@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "kind": "letter",
+  "language": "en",
+  "content": {
+    "target": "Platform Engineer at Sample Labs (invented posting)",
+    "headline": "Platform engineer",
+    "recipient": "Hiring team, Sample Labs",
+    "subject": "Calm releases and observable services for your platform team",
+    "salutation": "Dear hiring team,",
+    "paragraphs": [
+      "Your posting asks for someone who can make releases boring and incidents rare. That is the work I have done for the last three years at Example Corp, where I designed the deployment pipeline every product team now uses.",
+      "You list observability, PostgreSQL and on call experience. I built the metrics stack at my previous company, moved the billing services to managed Postgres, and ran the reviews after each outage, turning every finding into a tracked change.",
+      "I work in small steps that can be reviewed and rolled back, and I write the runbook before the incident rather than after it. I would rather name a gap plainly than round it up: I have used Kubernetes in production for two years, not more.",
+      "I live in Lyon, speak French and English, and can work from your office two days a week.",
+      "I would welcome a conversation about your platform roadmap."
+    ],
+    "closing": "Kind regards,"
+  }
+}

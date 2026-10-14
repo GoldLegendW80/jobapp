@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "kind": "cv",
+  "language": "en",
+  "content": {
+    "target": "Platform Engineer at Sample Labs (invented posting)",
+    "headline": "Platform engineer: reliable services, clear operations, calm releases",
+    "summary": "Platform engineer who designs, ships and operates the services other teams build on. Known for turning fragile manual steps into automated, observable pipelines, and for writing the runbook before the incident rather than after it.",
+    "highlights": [
+      "Cut release preparation from days to an hour",
+      "Owned the on call rotation of three services",
+      "Introduced typed contracts between teams"
+    ],
+    "competencies": ["Service design", "CI and CD", "Observability", "PostgreSQL", "Kubernetes", "Incident response", "Python", "Technical writing"],
+    "experience": [
+      {"employer_key": "example-corp", "bullets": [
+        "Designed the internal deployment pipeline used by every product team, with staged rollouts, automatic rollback and a release note generated from the merged changes.",
+        "Led the move of the billing services to managed Postgres, rehearsed twice on copies of production before the cut over weekend.",
+        "Wrote the incident playbook and ran the reviews after each outage, turning each finding into a tracked change.",
+        "Published the service catalogue at Example-Corp-Platform-Service-Catalogue-https://catalogue.internal.example.org/platform/services/overview/with/a/very/long/path/that/never/breaks so every team finds its owners."
+      ]},
+      {"employer_key": "sample-labs", "bullets": [
+        "Built the metrics stack with dashboards per team and alerts that page only on user impact.",
+        "Maintained the shared Python libraries and their release process.",
+        "Automated the onboarding of new engineers from a script and a checklist."
+      ]},
+      {"employer_key": "demo-industries", "bullets": [
+        "Wrote a test harness for the factory floor data collectors."
+      ]}
+    ],
+    "skills": [
+      {"label": "Languages", "items": ["Python", "Go", "SQL", "Bash"]},
+      {"label": "Platform", "items": ["Kubernetes", "Docker", "Terraform", "GitHub Actions"]},
+      {"label": "Data", "items": ["PostgreSQL", "Redis", "Kafka"]},
+      {"label": "Practice", "items": ["Code review", "Runbooks", "Postmortems"]}
+    ],
+    "notes": "The fourth bullet holds a very long word (an address) that must wrap, not overflow."
+  }
+}

@@ -1,0 +1,9 @@
+{
+ "engine": "chromium",
+ "tag": "nosandbox-pids32",
+ "chromium_sandbox": false,
+ "launch": {
+  "ok": false,
+  "detail": "TargetClosedError: BrowserType.launch: Target page, context or browser has been closed\nBrowser logs:\n\n<launching> /ms-playwright/chromium_headless_shell-1187/chrome-linux/headless_shell --disable-fiel [...] reading/platform_thread_posix.cc:158] pthread_create: Resource temporarily unavailable (11)\n  - [pid=19][err] [1014/071026.411148:ERROR:content/browser/gpu/gpu_process_host.cc:958] GPU process launch failed: error_code=1002\n  - [pid=19][err] [1014/071026.411165:WARNING:content/browser/gpu/gpu_process_host.cc:1405] The GPU process has crashed 1 time(s)\n  - [pid=19][err] [1014/071026.412804:ERROR:content/browser/network_service_instance_impl.cc:595] Network service crashed, restarting service.\n  - [pid=19] <process did exit: exitCode=null, signal=SIGKILL>\n  - [pid=19] starting temporary directories cleanup\n  - [pid=19] finished temporary directories cleanup\n  - [pid=19] <gracefully close end>\n"
+ }
+}
