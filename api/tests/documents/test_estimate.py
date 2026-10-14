@@ -93,6 +93,7 @@ def test_the_worked_figures_of_the_plan() -> None:
     costs = pricing.costs(base, "claude-sonnet-5-5")
     assert (costs.low, costs.high) == (Decimal("0.05"), Decimal("0.51"))
     pair = estimate.posting(1_396, 1_503, 6_000, turns=10, submits=4)
+    assert estimate.prompt_chars("letter") == 3_789
     assert (pair.low, pair.high, pair.ceiling) == (71_773, 451_773, 903_546)
     costs = pricing.costs(pair, "claude-sonnet-5-5")
     assert (costs.low, costs.high) == (Decimal("0.13"), Decimal("1.15"))
