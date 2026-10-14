@@ -1,0 +1,69 @@
+# Scratch stacks of the mail module only: a fake Google, so no journey and no test ever reaches a
+# real Google account (tasks/mail/todo.md, decision 9).
+#   GMAIL_STUB_PORT=8098 docker compose -p jobapp-m1 -f compose.yml -f tests/ats-stub.compose.yml \
+#     -f tests/gmail-stub.compose.yml up -d --build --wait
+# - gmailstub (api/tests/mail/fake_gmail.py, the same code pytest runs in process): the consent
+#   page, the token, revoke and userinfo endpoints, the Gmail calls, and a control API under
+#   /__control/ that the helpers of web/e2e/mail-helpers.ts use to seed, fail and read back. It
+#   starts with the three seed mailboxes of api/tests/mail/fixtures/mailboxes.
+# - The api and the worker call it by its service name (GOOGLE_TOKEN_BASE_URL,
+#   GOOGLE_API_BASE_URL). The browser of a journey is sent to its consent page, so that one
+#   address is on the host: GOOGLE_AUTH_URL names the loopback port the service is published on
+#   (GMAIL_STUB_PORT, 8098 when unset; the local check claims a free one).
+# - The OAuth client is the fake's own, never the real one: that one lives on the Jetson only.
+# The api refuses the three GOOGLE_*_URL variables when APP_ENV is production (app/config.py),
+# and app/mail/google.py refuses a real Google address when APP_ENV is test.
+x-fake-google: &fake-google
+  GOOGLE_AUTH_URL: http://127.0.0.1:${GMAIL_STUB_PORT:-8098}/o/oauth2/v2/auth
+  GOOGLE_TOKEN_BASE_URL: http://gmailstub:8098
+  GOOGLE_API_BASE_URL: http://gmailstub:8098
+  GOOGLE_OAUTH_CLIENT_ID: fake-client-id.apps.fake-google.test
+  GOOGLE_OAUTH_CLIENT_SECRET: fake-client-secret-0123456789
+
+services:
+  api:
+    environment: *fake-google
+    depends_on:
+      gmailstub:
+        condition: service_healthy
+
+  worker:
+    environment: *fake-google
+    depends_on:
+      gmailstub:
+        condition: service_healthy
+
+  gmailstub:
+    # Standard library only: the same pinned base image as the other stubs.
+    image: python:3.12.15-slim-trixie
+    # -I: nothing but the standard library is importable. --hold 30: a `timeout` failure keeps
+    # the connection open far past the client's 10 s.
+    command:
+      - python
+      - -I
+      - /fake/fake_gmail.py
+      - --port
+      - "8098"
+      - --seed
+      - /fake/fixtures/mailboxes
+      - --hold
+      - "30"
+    volumes:
+      # Relative to the project directory, the folder of compose.yml.
+      - ./api/tests/mail:/fake:ro
+    ports:
+      - "127.0.0.1:${GMAIL_STUB_PORT:-8098}:8098"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8098/healthz', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+    mem_limit: 256m
+    expose:
+      - "8098"

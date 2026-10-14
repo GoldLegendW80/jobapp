@@ -202,7 +202,7 @@ Every change goes through a branch and a pull request ([CONTRIBUTING.md](CONTRIB
 the same length (What a CI run does, below): `api` (ruff, the whole pytest suite against
 Postgres and Redis in one run, the 95 percent coverage floor on that run's data, the docker
 marked tests), `checks` (pre-commit, shellcheck and the shell test scripts, then the e2e groups
-apps and ingestion) and `journeys` (eslint, tsc, build, Vitest, then the e2e groups identity and
+apps, ingestion and mail) and `journeys` (eslint, tsc, build, Vitest, then the e2e groups identity and
 sweep); each
 e2e group runs on a Compose stack of its own built on its runner, the Playwright journeys with
 throwaway accounts and a synthetic jobs import, never Harald's data. The run is green when the

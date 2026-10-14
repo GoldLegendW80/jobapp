@@ -73,6 +73,33 @@ class Settings(BaseSettings):
     # the worker asks Claude Code for partial messages and publishes the text to Redis, the
     # api's run stream relays it. Off: the answer arrives when it is complete, as before.
     agents_live_text: bool = True
+    # Mail (mail M1, app/mail/google.py). The OAuth client of the Google Cloud project: both or
+    # neither. Without them the mail routes answer that Gmail is not configured.
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: SecretStr | None = None
+    # Tests only: where the fake Google is (api/tests/mail/fake_gmail.py, the service gmailstub
+    # of tests/gmail-stub.compose.yml). GOOGLE_AUTH_URL is the consent page the browser is sent
+    # to; the server calls GOOGLE_TOKEN_BASE_URL (/token, /revoke) and GOOGLE_API_BASE_URL (Gmail
+    # and userinfo). Unset, the real Google addresses apply. All three refused in production.
+    google_auth_url: str | None = None
+    google_token_base_url: str | None = None
+    google_api_base_url: str | None = None
+    # A status change or a link concluded from a mail applies by itself at this confidence or
+    # above, and only under the binding rule; under it, it is a proposal.
+    mail_auto_apply_confidence: float = Field(default=0.90, ge=0.5, le=1.0)
+    # Sends per user and per day, and per user, company and day. Empty: no limit (the owner's
+    # decision of 2026-10-13: Gmail's own quota is the ceiling). The gate checks them.
+    mail_send_daily_limit: int | None = Field(default=None, ge=1, le=2000)
+    mail_send_company_daily_limit: int | None = Field(default=None, ge=1, le=2000)
+    # Automatic model runs (triage, classification, drafts) per user and per day. 0: none.
+    mail_auto_runs_per_day: int = Field(default=100, ge=0, le=1000)
+    # The storage ceiling per user: stored messages, and bytes of mail text.
+    mail_storage_max_messages: int = Field(default=20_000, ge=100, le=200_000)
+    mail_storage_max_bytes: int = Field(
+        default=300 * 1024 * 1024, ge=1024 * 1024, le=5 * 1024 * 1024 * 1024
+    )
+    # How long a row of the send log lives, in days.
+    mail_sends_keep_days: int = Field(default=365, ge=30, le=3650)
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod
@@ -99,7 +126,33 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_URL needs a host and a database name")
         return SecretStr(url.render_as_string(hide_password=False))
 
-    @field_validator("ats_base_url", "model_api_base_url", mode="after")
+    @field_validator(
+        "mail_send_daily_limit",
+        "mail_send_company_daily_limit",
+        "google_oauth_client_id",
+        mode="before",
+    )
+    @classmethod
+    def _blank_is_unset(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+    @field_validator("google_oauth_client_secret", mode="after")
+    @classmethod
+    def _blank_secret_is_unset(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None or not value.get_secret_value().strip():
+            return None
+        return SecretStr(value.get_secret_value().strip())
+
+    @field_validator(
+        "ats_base_url",
+        "model_api_base_url",
+        "google_auth_url",
+        "google_token_base_url",
+        "google_api_base_url",
+        mode="after",
+    )
     @classmethod
     def _http_base(cls, value: str | None, info: ValidationInfo) -> str | None:
         if value is None or not value.strip():
@@ -161,6 +214,21 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AGENTS_FAKE_BACKEND replaces the model with recorded streams and must not be "
                 "set in production"
+            )
+        for name in ("google_auth_url", "google_token_base_url", "google_api_base_url"):
+            if self.app_env == "production" and getattr(self, name) is not None:
+                raise ValueError(
+                    f"{name.upper()} points the mail module at a fake Google and must not be "
+                    "set in production"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _google_client_pair(self) -> "Settings":
+        if (self.google_oauth_client_id is None) != (self.google_oauth_client_secret is None):
+            raise ValueError(
+                "GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are set together or "
+                "not at all"
             )
         return self
 

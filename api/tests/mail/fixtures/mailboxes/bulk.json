@@ -1,0 +1,78 @@
+{
+ "email": "e2e-bulk@example.org",
+ "historyId": "20000",
+ "messages": [],
+ "generate": [
+  {
+   "count": 300,
+   "seed": 2026,
+   "prefix": "g",
+   "days": 200,
+   "to": "e2e-bulk@example.org",
+   "companies": [
+    {
+     "name": "Northwind Robotics",
+     "domain": "northwind-robotics.example"
+    },
+    {
+     "name": "Lumen Labs",
+     "domain": "lumen-labs.example"
+    },
+    {
+     "name": "Atelier Quanta",
+     "domain": "atelier-quanta.example"
+    },
+    {
+     "name": "Harbor Analytics",
+     "domain": "harbor-analytics.example"
+    },
+    {
+     "name": "Kestrel Systems",
+     "domain": "kestrel-systems.example"
+    },
+    {
+     "name": "Orchard AI",
+     "domain": "orchard-ai.example"
+    }
+   ],
+   "people": [
+    "Camille Roux",
+    "Jonas Weber",
+    "Claire Dubois",
+    "Tomas Novak",
+    "Ines Moreau",
+    "Felix Brandt"
+   ],
+   "templates": [
+    {
+     "subject": "Thank you for applying to {company}",
+     "text": "Hello,\n\nWe have received your application to {company} and will review it shortly.\n\n{person}\n{company}"
+    },
+    {
+     "subject": "Your application at {company}",
+     "text": "Hello,\n\nThank you for the time you put into your application. After careful consideration we will not move forward with your candidacy.\n\n{person}"
+    },
+    {
+     "subject": "Interview invitation, {company}",
+     "text": "Hello,\n\nWe would like to invite you to a first interview. Which of these slots suits you: Tuesday 10:00 or Thursday 15:00?\n\n{person}\n{company}"
+    },
+    {
+     "subject": "Votre candidature chez {company}",
+     "text": "Bonjour,\n\nNous avons bien reçu votre candidature et revenons vers vous sous deux semaines.\n\n{person}\n{company}"
+    },
+    {
+     "subject": "Invitation à un entretien, {company}",
+     "text": "Bonjour,\n\nNous souhaitons vous rencontrer pour un premier entretien. Quelles sont vos disponibilités la semaine prochaine ?\n\n{person}"
+    },
+    {
+     "subject": "{company} monthly newsletter {n}",
+     "text": "What is new at {company} this month: a new office, three talks and a product update. Unsubscribe at any time."
+    },
+    {
+     "subject": "Your receipt {n}",
+     "text": "Thank you for your order {n}. This mail has nothing to do with a job."
+    }
+   ]
+  }
+ ]
+}

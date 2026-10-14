@@ -1,0 +1,207 @@
+{
+ "email": "e2e-bob@example.org",
+ "historyId": "9000",
+ "messages": [
+  {
+   "id": "b-mistral-1",
+   "threadId": "b-t-mistral",
+   "labelIds": [
+    "INBOX"
+   ],
+   "internalDate": "2026-09-30T09:12:00Z",
+   "gmail": {
+    "domain": "ashbyhq.com"
+   },
+   "headers": [
+    [
+     "From",
+     "Mistral AI Hiring Team <no-reply@ashbyhq.com>"
+    ],
+    [
+     "To",
+     "e2e-bob@example.org"
+    ],
+    [
+     "Subject",
+     "Thanks for applying to Mistral AI"
+    ],
+    [
+     "Date",
+     "Wed, 30 Sep 2026 09:12:00 +0000"
+    ],
+    [
+     "Message-ID",
+     "<b-mistral-1@ashbyhq.com>"
+    ]
+   ],
+   "text": "Hi Bob,\n\nThank you for applying to the Applied AI Engineer role at Mistral AI. We have received your application.\n\nMistral AI Hiring Team"
+  },
+  {
+   "id": "b-mistral-2",
+   "threadId": "b-t-mistral",
+   "labelIds": [
+    "INBOX"
+   ],
+   "internalDate": "2026-10-06T17:20:00Z",
+   "gmail": {
+    "domain": "mistral.ai"
+   },
+   "headers": [
+    [
+     "From",
+     "Camille Roux <camille.roux@mistral.ai>"
+    ],
+    [
+     "To",
+     "e2e-bob@example.org"
+    ],
+    [
+     "Subject",
+     "Re: Thanks for applying to Mistral AI"
+    ],
+    [
+     "Date",
+     "Tue, 06 Oct 2026 17:20:00 +0000"
+    ],
+    [
+     "Message-ID",
+     "<b-mistral-2@mistral.ai>"
+    ]
+   ],
+   "text": "Hi Bob,\n\nUnfortunately we will not move forward with your application for Applied AI Engineer at this time.\n\nCamille"
+  },
+  {
+   "id": "b-ambiguous-1",
+   "threadId": "b-t-ambiguous",
+   "labelIds": [
+    "INBOX"
+   ],
+   "internalDate": "2026-10-04T09:12:00Z",
+   "gmail": {
+    "domain": "northwind-robotics.example"
+   },
+   "headers": [
+    [
+     "From",
+     "Northwind Robotics Talent <talent@northwind-robotics.example>"
+    ],
+    [
+     "To",
+     "e2e-bob@example.org"
+    ],
+    [
+     "Subject",
+     "Your application at Northwind Robotics"
+    ],
+    [
+     "Date",
+     "Sun, 04 Oct 2026 09:12:00 +0000"
+    ],
+    [
+     "Message-ID",
+     "<b-ambiguous-1@northwind-robotics.example>"
+    ]
+   ],
+   "text": "Hello Bob,\n\nThank you for your interest in Northwind Robotics. Your application is under review.\n\nThe Talent team"
+  },
+  {
+   "id": "b-invitation-1",
+   "threadId": "b-t-invitation",
+   "labelIds": [
+    "SENT"
+   ],
+   "internalDate": "2026-10-05T10:00:00Z",
+   "headers": [
+    [
+     "From",
+     "Bob Keller <e2e-bob@example.org>"
+    ],
+    [
+     "To",
+     "Jonas Weber <jonas.weber@lumen-labs.example>"
+    ],
+    [
+     "Subject",
+     "Application, Applied AI Engineer"
+    ],
+    [
+     "Date",
+     "Mon, 05 Oct 2026 10:00:00 +0000"
+    ],
+    [
+     "Message-ID",
+     "<b-invitation-1@mail.gmail.com>"
+    ]
+   ],
+   "text": "Hello Jonas,\n\nPlease find my application for the Applied AI Engineer role at Lumen Labs.\n\nBob Keller"
+  },
+  {
+   "id": "b-invitation-2",
+   "threadId": "b-t-invitation",
+   "labelIds": [
+    "INBOX"
+   ],
+   "internalDate": "2026-10-08T09:12:00Z",
+   "gmail": {
+    "domain": "lumen-labs.example"
+   },
+   "headers": [
+    [
+     "From",
+     "Jonas Weber <jonas.weber@lumen-labs.example>"
+    ],
+    [
+     "To",
+     "e2e-bob@example.org"
+    ],
+    [
+     "Subject",
+     "Re: Application, Applied AI Engineer"
+    ],
+    [
+     "Date",
+     "Thu, 08 Oct 2026 09:12:00 +0000"
+    ],
+    [
+     "Message-ID",
+     "<b-invitation-2@lumen-labs.example>"
+    ]
+   ],
+   "text": "Hello Bob,\n\nWe would like to invite you to a first interview. Would Wednesday 9:00 suit you?\n\nJonas Weber\nLumen Labs"
+  },
+  {
+   "id": "m-shared-id",
+   "threadId": "t-shared-id",
+   "labelIds": [
+    "INBOX"
+   ],
+   "internalDate": "2026-10-01T09:12:00Z",
+   "gmail": {
+    "domain": "orchard-ai.example"
+   },
+   "headers": [
+    [
+     "From",
+     "Orchard AI <talent@orchard-ai.example>"
+    ],
+    [
+     "To",
+     "e2e-bob@example.org"
+    ],
+    [
+     "Subject",
+     "Your application at Orchard AI"
+    ],
+    [
+     "Date",
+     "Thu, 01 Oct 2026 09:12:00 +0000"
+    ],
+    [
+     "Message-ID",
+     "<m-shared-id@orchard-ai.example>"
+    ]
+   ],
+   "text": "Hello Bob, this mail belongs to the second mailbox only."
+  }
+ ]
+}
