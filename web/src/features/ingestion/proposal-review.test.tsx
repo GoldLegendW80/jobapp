@@ -537,7 +537,7 @@ describe("the review of a run's proposals", () => {
     expect(
       within(broken)
         .getAllByRole("button", { name: /Accept|Edit|Reject/ })
-        .map((one) => one.textContent),
+        .map((one) => one.getAttribute("aria-label")),
     ).toEqual(["Reject: Links"]);
     const set = proposal("headline");
     expect(set).toHaveClass("text-muted-foreground");
@@ -550,7 +550,7 @@ describe("the review of a run's proposals", () => {
     expect(
       within(proposal("city"))
         .getAllByRole("button", { name: /Accept|Edit|Reject/ })
-        .map((one) => one.textContent),
+        .map((one) => one.getAttribute("aria-label")),
     ).toEqual(["Edit: City", "Reject: City"]);
   });
 

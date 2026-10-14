@@ -424,7 +424,6 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
         <EditForm
           title={title}
           value={picked ? picked.value : item.value}
-          freeText={item.free_text}
           busy={busy}
           refused={refused}
           onSubmit={(value) => {
@@ -442,6 +441,7 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
           {blocked ? null : (
             <Button
               size="sm"
+              aria-label={`${item.action === "remove" ? "Accept the removal" : "Accept"}: ${title}`}
               disabled={busy || (choices.length > 0 && picked === undefined)}
               onClick={() => {
                 accept.mutate(picked ? { value: picked.value } : undefined);
@@ -453,7 +453,6 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
                 <Check aria-hidden="true" />
               )}
               {item.action === "remove" ? "Accept the removal" : "Accept"}
-              <span className="sr-only">: {title}</span>
             </Button>
           )}
           {invalid ||
@@ -462,6 +461,7 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
             <Button
               variant="outline"
               size="sm"
+              aria-label={`Edit: ${title}`}
               disabled={busy}
               onClick={() => {
                 setProblem(undefined);
@@ -470,12 +470,12 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
             >
               <Pencil aria-hidden="true" />
               Edit
-              <span className="sr-only">: {title}</span>
             </Button>
           )}
           <Button
             variant="outline"
             size="sm"
+            aria-label={`Reject: ${title}`}
             disabled={busy}
             onClick={() => {
               reject.mutate();
@@ -483,7 +483,6 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
           >
             <X aria-hidden="true" />
             Reject
-            <span className="sr-only">: {title}</span>
           </Button>
         </div>
       ) : null}
@@ -573,6 +572,7 @@ function Section({
           {takes ? (
             <Button
               size="sm"
+              aria-label={`Accept all in this section: ${name}`}
               disabled={decide.isPending}
               onClick={() => {
                 decide.mutate("accept");
@@ -580,12 +580,12 @@ function Section({
             >
               <Check aria-hidden="true" />
               Accept all in this section
-              <span className="sr-only">: {name}</span>
             </Button>
           ) : null}
           <Button
             variant="outline"
             size="sm"
+            aria-label={`Reject the rest of this section: ${name}`}
             disabled={decide.isPending}
             onClick={() => {
               decide.mutate("reject");
@@ -593,7 +593,6 @@ function Section({
           >
             <X aria-hidden="true" />
             Reject the rest of this section
-            <span className="sr-only">: {name}</span>
           </Button>
           {takes ? null : (
             <p className="text-sm text-muted-foreground">
@@ -624,12 +623,12 @@ function Section({
           <Button
             variant="outline"
             size="sm"
+            aria-label={`Show ${String(Math.min(PAGE, section.items.length - shown))} more: ${name}`}
             onClick={() => {
               setShown(shown + PAGE);
             }}
           >
             Show {Math.min(PAGE, section.items.length - shown)} more
-            <span className="sr-only">: {name}</span>
           </Button>
         </div>
       ) : null}

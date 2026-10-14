@@ -5,7 +5,7 @@
 
 /** The name of the only field of a value that is not a record. */
 const WHOLE = "";
-/** A string longer than this is edited in a text area. */
+/** A string longer than this is edited in a text area: a line stays a line, so Enter accepts. */
 const LINE_MAX = 80;
 
 type Kind = "line" | "text" | "number" | "lines" | "flag";
@@ -26,13 +26,10 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function kindOf(name: string, held: unknown, long: boolean): Kind | null {
+function kindOf(name: string, held: unknown): Kind | null {
   if (held === null || typeof held === "string") {
     const text = typeof held === "string" ? held : "";
-    return long ||
-      name === "body" ||
-      text.includes("\n") ||
-      text.length > LINE_MAX
+    return name === "body" || text.includes("\n") || text.length > LINE_MAX
       ? "text"
       : "line";
   }
@@ -43,25 +40,21 @@ function kindOf(name: string, held: unknown, long: boolean): Kind | null {
   return null;
 }
 
-export function fieldsOf(
-  value: unknown,
-  title: string,
-  freeText: boolean,
-): Field[] {
+export function fieldsOf(value: unknown, title: string): Field[] {
   if (!isRecord(value)) {
-    const kind = kindOf(WHOLE, value, freeText);
+    const kind = kindOf(WHOLE, value);
     return kind ? [{ name: WHOLE, label: title, kind, held: value }] : [];
   }
   return Object.entries(value).flatMap(([name, held]) => {
     // The key of an entry is the server's: it is computed from the value again.
-    const kind = name === "key" ? null : kindOf(name, held, false);
+    const kind = name === "key" ? null : kindOf(name, held);
     return kind ? [{ name, label: words(name), kind, held }] : [];
   });
 }
 
 /** Whether the value has at least one part this form can edit. */
 export function editable(value: unknown): boolean {
-  return fieldsOf(value, "", false).length > 0;
+  return fieldsOf(value, "").length > 0;
 }
 
 export function draftOf(field: Field): Draft {

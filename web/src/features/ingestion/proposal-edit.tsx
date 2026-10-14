@@ -34,7 +34,6 @@ const HINTS: Record<string, string> = {
 export function EditForm({
   title,
   value,
-  freeText,
   busy,
   refused,
   onSubmit,
@@ -42,7 +41,6 @@ export function EditForm({
 }: {
   title: string;
   value: unknown;
-  freeText: boolean;
   busy: boolean;
   /** The sentence of the server's last refusal of this form, if any. */
   refused?: string;
@@ -50,7 +48,7 @@ export function EditForm({
   onCancel: () => void;
 }) {
   const id = useId();
-  const fields = fieldsOf(value, title, freeText);
+  const fields = fieldsOf(value, title);
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() =>
     Object.fromEntries(fields.map((field) => [field.name, draftOf(field)])),
   );
