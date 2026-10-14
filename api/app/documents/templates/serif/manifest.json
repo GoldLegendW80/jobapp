@@ -1,0 +1,144 @@
+{
+  "slug": "serif",
+  "version": 1,
+  "name": {
+    "en": "Serif",
+    "fr": "Empattements"
+  },
+  "description": {
+    "en": "One column in a book serif, the name centred, each section under a centred heading between two hairlines. Reads well for applicant tracking systems.",
+    "fr": "Une colonne dans un caractère à empattements de livre, le nom centré, chaque section sous un titre centré entre deux filets. Se lit bien par un logiciel de recrutement."
+  },
+  "tags": [
+    "one column",
+    "serif",
+    "no photo",
+    "ats friendly",
+    "colour"
+  ],
+  "photo": "none",
+  "fonts": [
+    "eb-garamond"
+  ],
+  "accent": "#2c5530",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 11.0,
+        "line_height": 1.36,
+        "section_gap": 10.0,
+        "item_gap": 5.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 10.8,
+        "line_height": 1.33,
+        "section_gap": 9.0,
+        "item_gap": 4.5,
+        "margin": 15.0
+      },
+      {
+        "body_size": 10.5,
+        "line_height": 1.3,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 10.3,
+        "line_height": 1.27,
+        "section_gap": 7.0,
+        "item_gap": 3.5,
+        "margin": 13.0
+      },
+      {
+        "body_size": 10.1,
+        "line_height": 1.23,
+        "section_gap": 6.0,
+        "item_gap": 3.0,
+        "margin": 12.0
+      },
+      {
+        "body_size": 9.9,
+        "line_height": 1.2,
+        "section_gap": 5.0,
+        "item_gap": 2.5,
+        "margin": 11.0
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.17,
+        "section_gap": 4.0,
+        "item_gap": 2.0,
+        "margin": 10.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.14,
+        "section_gap": 3.0,
+        "item_gap": 1.5,
+        "margin": 9.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 12.2,
+        "line_height": 1.45,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 20.0
+      },
+      {
+        "body_size": 11.8,
+        "line_height": 1.41,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 11.4,
+        "line_height": 1.37,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 11.0,
+        "line_height": 1.33,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 10.6,
+        "line_height": 1.29,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 12.0
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.25,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "cea3155aa96439b3936fda4ad8975a55ad5b28fe9bfc8a4773f54b3968196477"
+}

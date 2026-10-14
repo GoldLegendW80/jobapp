@@ -1,0 +1,144 @@
+{
+  "slug": "timeline",
+  "version": 1,
+  "name": {
+    "en": "Timeline",
+    "fr": "Frise"
+  },
+  "description": {
+    "en": "One column, the experience and the education along a thin line, the dates in a rail on its left and a dot for each entry.",
+    "fr": "Une colonne, l'expérience et la formation le long d'un trait fin, les dates dans une marge à sa gauche et un point pour chaque étape."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "photo",
+    "colour",
+    "ats friendly"
+  ],
+  "photo": "optional",
+  "fonts": [
+    "work-sans"
+  ],
+  "accent": "#7a2c6c",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 9.8,
+        "line_height": 1.42,
+        "section_gap": 11.0,
+        "item_gap": 5.0,
+        "margin": 15.0
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.38,
+        "section_gap": 9.9,
+        "item_gap": 4.5,
+        "margin": 13.9
+      },
+      {
+        "body_size": 9.3,
+        "line_height": 1.34,
+        "section_gap": 8.7,
+        "item_gap": 4.0,
+        "margin": 12.9
+      },
+      {
+        "body_size": 9.1,
+        "line_height": 1.3,
+        "section_gap": 7.6,
+        "item_gap": 3.5,
+        "margin": 11.8
+      },
+      {
+        "body_size": 8.8,
+        "line_height": 1.26,
+        "section_gap": 6.4,
+        "item_gap": 3.0,
+        "margin": 10.7
+      },
+      {
+        "body_size": 8.6,
+        "line_height": 1.22,
+        "section_gap": 5.3,
+        "item_gap": 2.5,
+        "margin": 9.6
+      },
+      {
+        "body_size": 8.3,
+        "line_height": 1.18,
+        "section_gap": 4.1,
+        "item_gap": 2.0,
+        "margin": 8.6
+      },
+      {
+        "body_size": 8.1,
+        "line_height": 1.14,
+        "section_gap": 3.0,
+        "item_gap": 1.5,
+        "margin": 7.5
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.0,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 20.0
+      },
+      {
+        "body_size": 10.6,
+        "line_height": 1.46,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.41,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.37,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.32,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 12.0
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "79b422089b4199df68436702b5df0a8e278f1f86973c147a102bf68d99ff16f7"
+}
