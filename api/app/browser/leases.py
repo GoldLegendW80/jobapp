@@ -12,6 +12,9 @@ second one. The keys, all under `jobapp:browser:`:
                     each time the waiter asks again; a member whose ticket is gone leaves the queue
     durations       the lengths of the last ten leases, for the estimated wait
     synced          set once this Redis has read browserd's current lease (below)
+    seen:<lease id> when browserd last answered that it still holds that lease (`held`), and
+                    since when it has not answered (`unanswered`, cleared by the next answer)
+    ending          the leases ended here whose end browserd has not confirmed yet
 
 `acquire(user_id, purpose, automation)` is idempotent per person and purpose, also for two calls
 at once (two tabs): the one that loses the turn to the other answers that same lease, and leaves no
@@ -27,13 +30,21 @@ Time (SPEC-browser, "Leases"): the purpose's maximum counts active time only, an
 `waiting_person` (B12 sets it, with a reason, a site and a deadline of BROWSER_SESSION_MAX_S)
 neither runs, and `resume` gives the lease back the active time it had left. browserd applies the
 same rules to its own copy and sees every tool call and every input, so while it answers and still
-holds the lease, it alone decides idle and maximum (nobody has to `touch` this copy in step); the
-timers of this copy end the turn only when browserd cannot be asked (a holder whose process died
-expires here after BROWSER_IDLE_S without a `touch`). Every call first settles the holder: one that
-browserd no longer holds (its own idle or maximum, a crash) is dropped, and, while browserd cannot
-be asked, an expired one is ended (browserd is told when it can be). When Redis has lost its
-keys (a restart), the first call reads browserd's `GET /leases/current` and takes its lease back
-as the holder.
+holds the lease, it decides idle and maximum (nobody has to `touch` this copy in step). Two
+timers of this copy still apply:
+- whatever browserd answers, a lease ends MAX_GRACE_S after its maximum of active time, or after
+  the deadline of its wait for the person (a browserd that answers "held" forever never keeps the
+  browser forever);
+- when browserd cannot be asked, the idle timer counts from the latest of the last `touch`, the
+  last answer of browserd that it still held the lease, and the first call it did not answer: so
+  one failed or slow call never ends a busy lease, and BROWSER_IDLE_S without an answer from
+  browserd does (a holder whose process died expires here).
+Every call first settles the holder: one that browserd no longer holds (its own idle or maximum, a
+crash) is dropped, and an expired one is ended. An end browserd could not be told is kept in
+`ending` and told on every later call until browserd confirms it, and a lease of that list is
+never taken back from browserd, so the api and browserd agree again as soon as it answers. When
+Redis has lost its keys (a restart), the first call reads browserd's `GET /leases/current` and
+takes its lease back as the holder.
 
 `current(user_id)` answers the person's own lease, whether someone else holds the browser (never
 who, nor why), and the person's places in the queue. The estimated wait is rounded up to whole
@@ -69,6 +80,8 @@ SEQ = PREFIX + "seq"
 DURATIONS = PREFIX + "durations"
 SYNCED = PREFIX + "synced"
 TICKET = PREFIX + "ticket:"
+SEEN = PREFIX + "seen:"
+ENDING = PREFIX + "ending"
 
 # Active seconds per purpose: browserd's table (browser/browserd/config.py, the test compares).
 LEASE_MAX_S = {
@@ -93,6 +106,8 @@ TIERS = {
 QUEUES = tuple(f"{PREFIX}queue:{tier}" for tier in range(4))
 TICKET_TTL_S = 60  # a waiter that has not asked again for this long leaves the queue
 START_GRACE_S = 60  # a turn still starting after this is dropped (the caller died mid start)
+MAX_GRACE_S = 60  # past the maximum or the wait deadline, the api ends a lease browserd still holds
+SEEN_TTL_S = 86400  # a sighting nobody refreshed for a day is forgotten (renewed on every call)
 HISTORY = 10
 DEFAULT_LEASE_S = 300  # the estimate's lease length while no lease has ended yet
 UPDATE_ATTEMPTS = 5
@@ -125,6 +140,19 @@ CAS = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
 if ARGV[2] == '' then redis.call('DEL', KEYS[1]) else redis.call('SET', KEYS[1], ARGV[2]) end
 return 1
+"""
+
+# What browserd answered about one lease. ARGV: 'held' (it holds it) or 'unanswered', the time,
+# the TTL. Answers the hash's `held` and `unanswered` (nil when unset).
+SIGHT = """
+if ARGV[1] == 'held' then
+  redis.call('HSET', KEYS[1], 'held', ARGV[2])
+  redis.call('HDEL', KEYS[1], 'unanswered')
+else
+  redis.call('HSETNX', KEYS[1], 'unanswered', ARGV[2])
+end
+redis.call('EXPIRE', KEYS[1], ARGV[3])
+return redis.call('HMGET', KEYS[1], 'held', 'unanswered')
 """
 
 Clock = Callable[[], float]
@@ -191,8 +219,9 @@ class Lease:
         )
         self.active_since = self.last_input = now
 
-    def expired(self, now: float) -> str | None:
-        """Why the turn must end now, or None."""
+    def expired(self, now: float, alive_at: float = 0.0) -> str | None:
+        """Why the turn must end now, or None. `alive_at`: the last time the lease was known to
+        be in use other than by `touch` (the idle timer counts from the later of the two)."""
         if self.state == "starting":
             return "start_failed" if now - self.started_at >= START_GRACE_S else None
         if self.state == "waiting_person":
@@ -201,8 +230,19 @@ class Lease:
             return None
         if self.active_s(now) >= self.max_s:
             return "lease_max"
-        if now - self.last_input >= self.idle_s:
+        if now - max(self.last_input, alive_at) >= self.idle_s:
             return "idle"
+        return None
+
+    def overdue(self, now: float) -> str | None:
+        """Why the turn must end now whatever browserd answers: MAX_GRACE_S past the maximum of
+        active time, or past the deadline of the wait for the person."""
+        if self.state == "waiting_person":
+            if self.wait_deadline is not None and now >= self.wait_deadline + MAX_GRACE_S:
+                return "person_timeout"
+            return None
+        if self.state == "active" and self.active_s(now) >= self.max_s + MAX_GRACE_S:
+            return "lease_max"
         return None
 
     def dumps(self) -> str:
@@ -440,7 +480,7 @@ class Leases:
         )
         if not await r.eval(CAS, 1, HOLDER, raw, lease.dumps()):
             # The turn was dropped while Chromium started (START_GRACE_S): nobody wants it now.
-            await self._tell_end(started.lease_id)
+            await self._tell_end(r, started.lease_id)
             raise BrowserError("unavailable")
         await self.profiles.mark_used(turn.user_id, now)
         logger.info("browser lease started: purpose=%s", turn.purpose)
@@ -448,6 +488,7 @@ class Leases:
 
     async def _settle(self, r: Any, now: float) -> Lease | None:
         """The holder after ending an expired one or one browserd no longer holds."""
+        await self._tell_ending(r)
         raw = _text(await r.get(HOLDER))
         if raw is None:
             if await r.exists(SYNCED):
@@ -459,10 +500,17 @@ class Leases:
         if lease.state == "starting":
             reason = lease.expired(now)
         else:
-            # browserd decides while it answers; this copy's timers only when it cannot.
-            reason = await self._gone_in_browserd(lease)
-            if reason == _CANNOT_ASK:
-                reason = lease.expired(now)
+            # browserd decides while it answers, within this copy's bound; this copy's idle
+            # timer only when it cannot be asked, counted from browserd's last sign of the lease.
+            reason = lease.overdue(now)
+            if reason is None:
+                reason = await self._gone_in_browserd(lease)
+            if reason is None or reason == _CANNOT_ASK:
+                answer = "held" if reason is None else "unanswered"
+                seen = await r.eval(SIGHT, 1, SEEN + lease.lease_id, answer, now, SEEN_TTL_S)
+                if reason == _CANNOT_ASK:
+                    alive_at = max((float(_text(x) or 0.0) for x in seen), default=0.0)
+                    reason = lease.expired(now, alive_at)
         if reason is None:
             return lease
         await self._end(r, raw, lease, reason, now)
@@ -492,6 +540,10 @@ class Leases:
                     last_input=now,
                 )
             except (KeyError, TypeError, ValueError):
+                lease = None
+            if lease is not None and await r.sismember(ENDING, lease.lease_id):
+                # The api ended it while browserd could not be told: end it, never take it back.
+                await self._tell_end(r, lease.lease_id)
                 lease = None
             if lease is not None and lease.purpose in TIERS:
                 if found.get("state") == "waiting_person":
@@ -540,15 +592,30 @@ class Leases:
         if lease.state != "starting":
             await r.lpush(DURATIONS, max(0, int(now - lease.started_at)))
             await r.ltrim(DURATIONS, 0, HISTORY - 1)
-            await self._tell_end(lease.lease_id)
+            await r.delete(SEEN + lease.lease_id)
+            await self._tell_end(r, lease.lease_id)
         logger.info("browser lease ended: purpose=%s reason=%s", lease.purpose, reason)
         return True
 
-    async def _tell_end(self, lease_id: str) -> None:
+    async def _tell_end(self, r: Any, lease_id: str) -> None:
+        """Ends the lease in browserd; when it does not confirm, the end waits in ENDING."""
         try:
             await self.client.end(lease_id)
         except BrowserError as exc:
             logger.warning("browserd did not confirm the end of a lease: %s", exc.code)
+            await r.sadd(ENDING, lease_id)
+            await r.expire(ENDING, SEEN_TTL_S)
+
+    async def _tell_ending(self, r: Any) -> None:
+        """Tells browserd the ends it did not confirm yet, until it does (or no longer knows)."""
+        for member in await r.smembers(ENDING):
+            lease_id = _text(member) or ""
+            try:
+                await self.client.end(lease_id)
+            except BrowserError:
+                return  # still not answering: told on a later call
+            await r.srem(ENDING, lease_id)
+            logger.info("browserd confirmed the end of a lease it held while it did not answer")
 
     async def _place(self, r: Any, user_id: str, purpose: str, now: float) -> Waiting | None:
         tier = TIERS[purpose]
