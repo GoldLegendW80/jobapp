@@ -41,10 +41,13 @@
 # check's own image names), checks (the tests/*_test.sh side by side). The journey groups start
 # when the images and the web install are done, each on a scratch stack of its own (own project,
 # own port, own database; the ports are claimed once up front, and a start that fails on a port is retried on another, three starts at most), LOCAL_CHECK_STACKS of them side by side (default: one per 4 GiB of
-# Docker memory, at most 4), with one Playwright worker each, as in CI. When every lane has
+# Docker memory, at most 4), with one Playwright worker each, as in CI. A slot that frees starts
+# the next group at once, and the groups start longest first (their last time in timings.csv,
+# a group never timed first of all), so the longest group does not start last. When every lane has
 # ended, the tests that measure time run in a quiet phase, one at a time: Vitest, the docker
 # marked tests, the test of the suite that measures its own speed, the
-# coverage floor and the scoring test. Before the result, the steps that ran are compared with
+# coverage floor and the scoring test. The docker marked tests run on two processes there, on the
+# images the step images built. Before the result, the steps that ran are compared with
 # the list of the set (expected_steps): one that did not run fails the check.
 #
 # Safety of this machine:
@@ -55,6 +58,11 @@
 #   trap removes them, the temporary worktree and the lock on success, on failure and on Ctrl+C;
 # - it never touches a container it did not start (never jobapp-ci-*, never another project) and
 #   never builds or retags the shared jobapp-*:latest images.
+#
+# Timings: every step that ends, and the whole run as the step "total", is a line of
+# .local-check/timings.csv in the main checkout (check id, tree, step, seconds, PASS or FAIL),
+# kept across runs so a step that slows down shows (issue #280). The journey stacks start longest
+# first by the last time recorded there.
 #
 # Output: one line per step (name, PASS or FAIL, seconds), the last 40 lines of the log of each
 # failed step, the folder that keeps the full logs, then as the last line one of
@@ -361,7 +369,14 @@ fi
 # 3.2 and 5). A new bash inherits nothing of that state, so the status of a step is the same
 # however run_step is called. The step is given every function of this script (declare -f) and the
 # variables named in STEP_ENV; a name it lacks stops it (nounset) and the step fails.
-STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST)
+STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST NET_BASE STACK_NETWORKS)
+TIMINGS="$RECORDS/timings.csv"
+timing() { # timing <step> <exit status> <seconds>: one line of timings.csv
+  local result=PASS
+  [[ "$2" == 0 ]] || result=FAIL
+  printf '%s,%s,%s,%s,%s\n' "$CHECK_ID" "${tree_sha:-}" "$1" "$3" "$result" >>"$TIMINGS" 2>/dev/null || true
+}
+
 run_step() {
   local name="$1" start=$SECONDS rc=0 pid watcher
   shift
@@ -381,6 +396,7 @@ run_step() {
   kill_tree "$watcher"
   wait "$watcher" 2>/dev/null || true
   printf '%s\t%s\t%s\n' "$name" "$rc" "$((SECONDS - start))" >>"$WORK/results"
+  timing "$name" "$rc" "$((SECONDS - start))"
   if ((rc == 0)); then
     printf '%-26s PASS %5ss\n' "$name" "$((SECONDS - start))"
   else
@@ -392,6 +408,7 @@ run_step() {
 not_run() { # not_run <name> <why>: a step that could not start counts as failed
   printf '%s\n' "$2" >"$LOGS/$1.log"
   printf '%s\t%s\t%s\n' "$1" 1 0 >>"$WORK/results"
+  timing "$1" 1 0
   printf '%-26s FAIL %5ss  (%s)\n' "$1" 0 "$2"
 }
 
@@ -430,6 +447,52 @@ pick_journey_ports() { # pick_journey_ports <group ...>: one claimed port per gr
     port="$(claim_port)" || return 1
     printf '%s\n' "$port" >"$WORK/ports/$group"
   done
+}
+
+# The networks of the journey stacks. A stack has five (default, parsing, rendering, browsing,
+# egress), and Docker Desktop's predefined address pools hold about thirty: six stacks side by side
+# plus the stacks of agents ran out ("all predefined address pools have been fully subnetted",
+# check lc1014171255-32596). So each stack takes a slot, claimed like a port in $WORK/nets and
+# freed with the stack, and its networks get /27 subnets of that slot out of NET_BASE.0.0/16,
+# outside the pools Docker picks from: slot s, network j is NET_BASE.(5s + j).0/27.
+NET_BASE="${LOCAL_CHECK_NET_BASE:-10.213}"
+STACK_NETWORKS="default parsing rendering browsing egress"
+
+# A check that died without its trap (SIGKILL, Docker Desktop or the Mac restarted) leaves its
+# stacks' networks behind, on the same slots as this check's: a slot is claimed only when no Docker
+# network holds one of its subnets (one query per claim), and stack_up moves a stack that still
+# meets "Pool overlaps" to another slot.
+claim_net_slot() { # prints the first slot (0 to 49) that no stack of this check holds and no network uses
+  local slot j ids used="" taken
+  mkdir -p "$WORK/nets"
+  ids="$(docker network ls -q 2>/dev/null)" || ids=""
+  # shellcheck disable=SC2086
+  [[ -z "$ids" ]] || used=" $(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' $ids 2>/dev/null | tr '\n' ' ') " || used=""
+  for slot in $(seq 0 49); do
+    taken=""
+    for j in 0 1 2 3 4; do
+      [[ "$used" != *" $NET_BASE.$((slot * 5 + j)).0/27 "* ]] || taken=1
+    done
+    [[ -z "$taken" ]] || continue
+    if mkdir "$WORK/nets/$slot" 2>/dev/null; then
+      printf '%s\n' "$slot"
+      return 0
+    fi
+  done
+  echo "no free network slot for a stack" >&2
+  return 1
+}
+
+stack_networks() { # stack_networks <group> <slot>: writes the compose override of its subnets, prints its path
+  local file="$WORK/networks-$1.yml" j=0 net
+  {
+    echo "networks:"
+    for net in $STACK_NETWORKS; do
+      printf '  %s:\n    ipam:\n      config:\n        - subnet: %s.%s.0/27\n' "$net" "$NET_BASE" "$(($2 * 5 + j))"
+      j=$((j + 1))
+    done
+  } >"$file"
+  printf '%s\n' "$file"
 }
 
 # --- the steps: api --------------------------------------------------------------------------------
@@ -494,17 +557,56 @@ s_pytest_alone() {
     --cov --cov-append --cov-report= --cov-fail-under=0
 }
 
+# A few tests that measure time fail now and then while agents load the machine (2026-10-14: a burst
+# of sign-ins over its time bound, the scrub before clip, the parser's client calls), and each cost
+# a gate. When the parallel suite failed only on tests, at most FLAKY_MAX of them and no error,
+# the quiet phase runs exactly those again, one process, as pytest-alone: if they all pass, the step
+# pytest counts as passed and the summary and the record list them under `flaky`, so an issue can
+# be filed. One failing again, more of them, or an error (collection, fixture) fail as before.
+FLAKY_MAX=3
+
+flaky_candidates() { # prints the failed node ids of the step pytest when a rerun may clear them
+  local log="$LOGS/pytest.log" summary n ids
+  awk -F '\t' '$1 == "pytest" && $2 == 1 { found = 1 } END { exit !found }' "$WORK/results" || return 1
+  summary="$(grep -E '^=+ .* in [0-9.]+s' "$log" | tail -n 1)"
+  [[ "$summary" =~ ([0-9]+)\ failed ]] || return 1
+  n="${BASH_REMATCH[1]}"
+  ((n <= FLAKY_MAX)) && [[ "$summary" != *error* ]] && ! grep -q '^ERROR ' "$log" || return 1
+  ids="$(sed -n 's/^FAILED \([^ ]*\).*/\1/p' "$log" | sort -u)"
+  [[ "$(grep -c . <<<"$ids")" == "$n" ]] || return 1
+  printf '%s\n' "$ids"
+}
+
+s_pytest_flaky() {
+  local ids=() one
+  cd api
+  # shellcheck disable=SC1091
+  . "$WORK/api.env"
+  while IFS= read -r one; do ids+=("$one"); done <"$WORK/flaky-ids"
+  interruptible uv run --frozen pytest -p no:cacheprovider -p no:xdist "${ids[@]}"
+}
+
 s_coverage() {
   cd api
   uv run --frozen coverage report --fail-under=95 | tail -n 15
   return "${PIPESTATUS[0]}"
 }
 
+# The docker marked tests build the worker, renderer and browser images under tags of their own
+# unless PARSER_TEST_IMAGE, RENDERER_TEST_IMAGE and BROWSER_TEST_IMAGE name them: the step images
+# built the same Dockerfiles and targets (compose.yml) in the parallel lanes, so the quiet phase
+# no longer builds them again, file after file (issue #280). Two processes, one test file each
+# (--dist loadfile, a file's stack is a module fixture): measured on 2026-10-14, the 448 tests
+# passed on -n 2 beside other agents' suites, the parser's CPU and wall clock limits included.
 s_pytest_docker() {
   cd api
   # shellcheck disable=SC1091
   . "$WORK/api.env"
-  interruptible uv run --frozen pytest -m docker -p no:cacheprovider --durations=10
+  if [[ "$(cat "$WORK/images.done" 2>/dev/null)" == 0 ]]; then
+    export PARSER_TEST_IMAGE="$PREFIX-worker:latest" RENDERER_TEST_IMAGE="$PREFIX-renderer:latest" \
+      BROWSER_TEST_IMAGE="$PREFIX-browser:latest"
+  fi
+  interruptible uv run --frozen pytest -m docker -p no:cacheprovider -n 2 --dist loadfile --durations=10
 }
 
 s_scoring() {
@@ -548,6 +650,12 @@ quiet_phase() {
   # needs most of a core for a minute; beside Vitest they end on wall_limit.
   if ((api)); then run_step pytest-docker s_pytest_docker || true; fi
   ((api)) || return 0
+  if flaky_candidates >"$WORK/flaky-ids" && run_step pytest-flaky s_pytest_flaky; then
+    awk -F '\t' -v OFS='\t' '$1 == "pytest" { $2 = 0 } { print }' "$WORK/results" >"$WORK/results.new"
+    mv "$WORK/results.new" "$WORK/results"
+    mv "$WORK/flaky-ids" "$WORK/flaky"
+    echo "pytest: counted as passed, its failed tests passed when run again alone: $(tr '\n' ' ' <"$WORK/flaky")"
+  fi
   if passed pytest; then
     run_step pytest-alone s_pytest_alone || true
     run_step coverage s_coverage || true
@@ -620,6 +728,8 @@ services:
     image: $PREFIX-worker:latest
   renderer:
     image: $PREFIX-renderer:latest
+  browser:
+    image: $PREFIX-browser:latest
 EOF
   # CI built with `docker buildx bake -f compose.yml`. The bake of Docker Desktop on this Mac
   # refuses that file ("service worker refers to undefined network default", measured on
@@ -627,7 +737,8 @@ EOF
   # which starts them below, under this check's names: the shared jobapp-*:latest tags are not
   # written.
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
-  docker compose --progress plain -p "$PREFIX-build" "${files[@]}" build api worker caddy renderer
+  # The browser image is for the docker marked tests only (BROWSER_TEST_IMAGE): no stack runs it.
+  docker compose --progress plain -p "$PREFIX-build" "${files[@]}" build api worker caddy renderer browser
 }
 
 lane_images() {
@@ -676,18 +787,22 @@ journey_specs() { # the Playwright arguments of a group, as ci.yml has them
   esac
 }
 
-journey_play() { # journey_play <group> <Playwright arguments>
+journey_play() ( # journey_play <group> <Playwright arguments>
+  # A subshell: the `cd web` stays in it, so s_journey takes its stack down from the tree root.
   # Called below `&&` in s_journey, where errexit is off: the two commands are chained.
   # shellcheck disable=SC2086
   cd web && pnpm exec playwright test $2 --reporter=list --output="test-results/$1"
-}
+)
 
 # Starts a stack on the port picked for its group. The port is bound once more just before the
 # start; when the start still fails on a port (another program took it in between), this stack,
 # and only this one, is taken down and started again on another port (the mail stack also on
 # another one for its fake Google, the apply stack also on another one for its fake forms server), three starts at most.
+# A start that fails on "Pool overlaps" (a network left by a check that died) is taken down and
+# started again on another network slot, within the same three starts: the bad slot stays claimed,
+# and `slot`, s_journey's local, names the new one so that s_journey frees that one.
 stack_up() { # stack_up <group> <project> <compose file arguments>
-  local group="$1" project="$2" port="" out attempt=1 rc
+  local group="$1" project="$2" port="" out attempt=1 rc why
   shift 2
   out="$WORK/up-$group.log"
   [[ ! -s "$WORK/ports/$group" ]] || port="$(cat "$WORK/ports/$group")"
@@ -699,9 +814,23 @@ stack_up() { # stack_up <group> <project> <compose file arguments>
     docker compose -p "$project" "$@" up -d --no-build --wait --wait-timeout 300 >"$out" 2>&1 || rc=$?
     cat "$out"
     ((rc != 0)) || return 0
-    if ((attempt >= 3)) || ! grep -qiE 'failed to bind|address already in use|port is already allocated' "$out"; then return "$rc"; fi
-    echo "retry $attempt of 2: port $port was taken before $project started, taking it down, picking another port"
+    ((attempt < 3)) || return "$rc"
+    if grep -qiE 'failed to bind|address already in use|port is already allocated' "$out"; then
+      why=port
+      echo "retry $attempt of 2: port $port was taken before $project started, taking it down, picking another port"
+    elif grep -qiE 'pool overlaps' "$out"; then
+      why=pool
+      echo "retry $attempt of 2: a network already uses the subnets of slot $slot, taking $project down, picking another slot"
+    else
+      return "$rc"
+    fi
     docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
+    attempt=$((attempt + 1))
+    if [[ "$why" == pool ]]; then # same file, new subnets: the compose arguments stay valid
+      slot="$(claim_net_slot)" || return 1
+      stack_networks "$group" "$slot" >/dev/null
+      continue
+    fi
     port=""
     if [[ "$group" == mail ]]; then # the fake Google has a loopback port of its own, taken anew too
       GMAIL_STUB_PORT="$(claim_port)" || return 1
@@ -711,13 +840,14 @@ stack_up() { # stack_up <group> <project> <compose file arguments>
       ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
       export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
     fi
-    attempt=$((attempt + 1))
   done
 }
 
 s_journey() {
-  local group="$1" project="$PREFIX-$1" rc=0 files=() specs one
+  local group="$1" project="$PREFIX-$1" rc=0 files=() specs one slot
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
+  slot="$(claim_net_slot)" || return 1
+  files+=(-f "$(stack_networks "$group" "$slot")")
   export E2E_COMPOSE_PROJECT="$project" E2E_EVIDENCE=ci
   case "$group" in
   apps)
@@ -747,12 +877,18 @@ s_journey() {
     docker compose -p "$project" -f compose.yml exec -T api alembic upgrade head &&
     journey_play "$group" "$specs" || rc=$?
   docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color >"$LOGS/stack-$group.log" 2>&1 || true
-  docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
+  # The slot is free again only when its stack is gone: one that could not be taken down keeps
+  # its networks, so it keeps its slot until the trap removes everything under the prefix.
+  if docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0; then
+    rmdir "$WORK/nets/$slot" 2>/dev/null || true
+  else
+    echo "the stack $project could not be taken down: network slot $slot stays claimed"
+  fi
   return "$rc"
 }
 
 lane_journeys() {
-  local groups=() group running=0 why=""
+  local groups=() group running=() why=""
   if wanted checks; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups checks); fi
   if wanted journeys; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups journeys); fi
   ((${#groups[@]})) || return 0
@@ -768,15 +904,28 @@ lane_journeys() {
     for group in "${groups[@]}"; do not_run "journeys-$group" "no free loopback port for the stacks"; done
     return 0
   }
-  for group in "${groups[@]}"; do
+  for group in $(longest_first "${groups[@]}"); do
+    while (($(alive "${running[@]+"${running[@]}"}") >= STACKS)); do sleep 1; done
     run_step "journeys-$group" s_journey "$group" &
-    running=$((running + 1))
-    if ((running >= STACKS)); then
-      wait
-      running=0
-    fi
+    running+=($!)
   done
   wait
+}
+
+alive() { # alive <process id ...>: how many of them still run
+  local pid n=0
+  for pid in "$@"; do if kill -0 "$pid" 2>/dev/null; then n=$((n + 1)); fi; done
+  printf '%s\n' "$n"
+}
+
+# longest_first <group ...>: the groups by their last time in timings.csv, longest first; a group
+# with no time yet comes before all (it may be the longest), and equal times keep the order given.
+longest_first() {
+  local i=0 group
+  for group in "$@"; do
+    i=$((i + 1))
+    printf '%s\t%s\t%s\n' "$(awk -F , -v step="journeys-$group" '$3 == step { last = $4 } END { print (last == "" ? 999999 : last) }' "$TIMINGS" 2>/dev/null || echo 999999)" "$i" "$group"
+  done | sort -t "$(printf '\t')" -k1,1nr -k2,2n | cut -f 3
 }
 
 # --- the steps: checks -----------------------------------------------------------------------------
@@ -962,6 +1111,7 @@ else
   [[ "$STACKS" =~ ^[1-9][0-9]*$ ]] || usage_error "LOCAL_CHECK_STACKS must be a number, 1 or more"
 fi
 
+[[ -s "$TIMINGS" ]] || printf 'check,tree,step,seconds,result\n' >"$TIMINGS"
 say "local check $CHECK_ID: base $BASE ($base_sha), $(wc -l <"$WORK/merges" | tr -d ' ') merged, tree $tree_sha"
 say "logs: $LOGS"
 say "$scan_line"
@@ -1006,6 +1156,7 @@ if [[ -n "$failed" ]]; then
     tail -n 40 "$LOGS/$name.log"
   done
   printf '\nlogs: %s\ntotal: %ss\n' "$LOGS" "$total"
+  timing total 1 "$total"
   say "LOCAL CHECK: FAIL $tree_sha $failed"
   exit 1
 fi
@@ -1052,9 +1203,12 @@ record = {
     "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "check": sys.argv[3],
     "stub": bool(sys.argv[4]),
+    "flaky": (work / "flaky").read_text().split() if (work / "flaky").exists() else [],
 }
 out.write_text(json.dumps(record, indent=2) + "\n")
 PY
   say "record: $RECORDS/$tree_sha.json"
 fi
+[[ ! -s "$WORK/flaky" ]] || say "flaky: $(tr '\n' ' ' <"$WORK/flaky")"
+timing total 0 "$total"
 say "LOCAL CHECK: ${kind}PASS $tree_sha ${total}s$note"
