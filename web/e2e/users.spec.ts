@@ -187,7 +187,7 @@ test("disabling the friend sends their next navigation to the sign in page", asy
   await shots(admin, "admin-users-disabled");
 
   // The friend's browser still shows the app; its very next page load lands on /login.
-  await friend.goto("/");
+  await friend.goto("/jobs");
   await expect(friend).toHaveURL(/\/login/);
   await expect(friend.getByRole("heading", { name: "Sign in" })).toBeVisible();
   await signIn(friend, FRIEND, FRIEND_PASSWORD);
@@ -207,7 +207,7 @@ test("re-enabling lets the friend sign in again, and the old browser stays signe
   const stale = await adminContext.browser()!.newContext({ baseURL: caddyUrl });
   await stale.addCookies(friendCookiesBeforeDisable);
   const old = await stale.newPage();
-  await old.goto("/");
+  await old.goto("/jobs");
   await expect(old).toHaveURL(/\/login/);
   await stale.close();
 

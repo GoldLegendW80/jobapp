@@ -184,7 +184,7 @@ test("changing the password signs the other browser out and keeps this one", asy
   await expect(here).toHaveURL(/\/account$/);
 
   // The other one lands on the sign in page at its next navigation.
-  await there.goto("/");
+  await there.goto("/jobs");
   await expect(there).toHaveURL(/\/login/);
   await expect(there.getByRole("heading", { name: "Sign in" })).toBeVisible();
 

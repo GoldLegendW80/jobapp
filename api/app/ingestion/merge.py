@@ -20,8 +20,9 @@ The rules, in the order they apply:
    where a document gives a value is dropped: a value with a checked citation wins over the
    absence of one.
 4. **Against the profile.** A value the profile already holds at that key is dropped, and so is
-   a value the user rejected before at that key. This is decided here, by applying the item to
-   the stored section in code (`items.apply`), and again by `propose`.
+   a value the user rejected before at that key, or turned down by writing their own (an edit at
+   accept, or the other values of a conflict they settled). This is decided here, by applying the
+   item to the stored section in code (`items.apply`), and again by `propose`.
 5. **Conflicts.** When several different values are left at one key, they become one proposal
    flagged `conflict`: the first value by hash order as the item, the others beside it, each with
    its own citations. A year alone and a month of that year are different values, so a conflict.
@@ -300,13 +301,19 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
     # Rejecting a conflict rejects each value it showed, not only the first one.
     refused: set[tuple[Any, Any, Any]] = set()
     for one in item_proposals.list_items(
-        db, user_id, statuses=(ProposalStatus.rejected,), limit=DECIDED_MAX
+        db, user_id, statuses=(ProposalStatus.rejected, ProposalStatus.accepted), limit=DECIDED_MAX
     ):
         at = (one.payload.get("section"), one.payload.get("key"))
-        refused.add((*at, one.payload.get("value_hash")))
-        for other in one.payload.get("conflict") or ():
-            if isinstance(other, Mapping):
-                refused.add((*at, other.get("value_hash")))
+        if one.status is ProposalStatus.accepted and one.edited_value is None:
+            continue  # accepted as proposed: the profile holds it, and a later change is the user's
+        # An accepted item that carries the user's own value (an edit, or the pick of a conflict)
+        # turned down the values the documents gave: all but the one the user kept.
+        kept = items.value_hash(one.edited_value) if one.edited_value is not None else None
+        hashes = [one.payload.get("value_hash")]
+        hashes += [
+            o.get("value_hash") for o in one.payload.get("conflict") or () if isinstance(o, Mapping)
+        ]
+        refused.update((*at, one_hash) for one_hash in hashes if one_hash != kept)
     written = conflicts = equal = rejected = removals = 0
     employers: list[tuple[items.Item, list[dict[str, Any]]]] = []
     for (section, key), variants in sorted(groups.items()):

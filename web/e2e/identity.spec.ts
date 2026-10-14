@@ -184,11 +184,13 @@ test.afterAll(() => {
   clearAttempts([EMAIL.toLowerCase(), UNKNOWN]);
 });
 
-test("signed out, / goes to the sign in page with next=/", async ({ page }) => {
+test("signed out, /jobs goes to the sign in page with next=/jobs", async ({
+  page,
+}) => {
   const errors = watchErrors(page);
-  await page.goto("/");
+  await page.goto("/jobs");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
-  await expect(page).toHaveURL(/\/login\?next=\/$/);
+  await expect(page).toHaveURL(/\/login\?next=\/jobs$/);
   await expect(page).toHaveTitle("Sign in · jobapp");
   await shots(page, "login");
   expect(errors).toEqual([]);
@@ -322,11 +324,11 @@ test("sign in with a mixed case email, reload keeps the session, deep link as ad
   // Another browser without the cookie is not signed in.
   const other = await freshPage(browser);
   try {
-    await other.page.goto("/");
+    await other.page.goto("/jobs");
     await expect(
       other.page.getByRole("heading", { name: "Sign in" }),
     ).toBeVisible();
-    await expect(other.page).toHaveURL(/\/login\?next=\/$/);
+    await expect(other.page).toHaveURL(/\/login\?next=\/jobs$/);
   } finally {
     await other.context.close();
   }
