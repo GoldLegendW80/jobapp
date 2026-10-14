@@ -1,27 +1,25 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { http, HttpResponse } from "msw";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
 import { fakeDocuments, fakePrompt } from "@/test/ingestion";
+import { fakeRuns } from "@/test/ingestion-runs";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
-import { server } from "@/test/server";
 
 import { ProposalList } from "./proposal-list";
-import { RunProgress } from "./run-progress";
-import { RunStart } from "./run-start";
 import { PROMPT_READY } from "./step-prompt";
-import { REVIEW_READY, StepReview } from "./step-review";
+import { REVIEW_READY } from "./step-review";
 import { isStepId, STEP_IDS } from "./steps";
 
 async function open(path = "/profile/fill") {
   fakeSession(member);
   fakeDocuments();
   fakePrompt();
+  fakeRuns();
   const app = renderApp(path);
   await screen.findByRole("heading", {
     level: 1,
@@ -56,20 +54,16 @@ describe("/profile/fill", () => {
     ).not.toHaveAttribute("aria-current");
   });
 
-  it("lists a step that is not built yet as Soon, and it is not a control", async () => {
-    // What G1 and G3 ship: the review belongs to later tasks.
-    expect([PROMPT_READY, REVIEW_READY]).toEqual([true, false]);
+  it("lists the three steps as controls, none of them as Soon", async () => {
+    // G1, G3 and G11 shipped: the three steps can be opened.
+    expect([PROMPT_READY, REVIEW_READY]).toEqual([true, true]);
     await open();
-    expect(within(steps()).getAllByRole("button")).toHaveLength(2);
-    const [prepare, documents, review] =
-      within(steps()).getAllByRole("listitem");
-    expect(prepare).not.toHaveTextContent("Soon");
-    expect(documents).not.toHaveTextContent("Soon");
-    expect(review).toHaveTextContent("Soon");
-    expect(within(review as HTMLElement).queryByRole("button")).toBeNull();
+    expect(within(steps()).getAllByRole("button")).toHaveLength(3);
+    for (const step of within(steps()).getAllByRole("listitem"))
+      expect(step).not.toHaveTextContent("Soon");
   });
 
-  it.each(["review", "nothing", ""])(
+  it.each(["proposals", "nothing", ""])(
     "opens the first step for ?step=%s, a step that cannot be opened",
     async (step) => {
       await open(`/profile/fill?step=${step}`);
@@ -82,6 +76,7 @@ describe("/profile/fill", () => {
   it.each([
     ["prompt", "Step 1: Prepare a dossier with a coding assistant"],
     ["documents", "Step 2: Add your documents"],
+    ["review", "Step 3: Review what the agent proposes"],
   ])("opens the step named by ?step=%s", async (step, heading) => {
     await open(`/profile/fill?step=${step}`);
     expect(
@@ -176,22 +171,21 @@ describe("the steps built by later tasks", () => {
     expect(isStepId(null)).toBe(false);
   });
 
-  it("the review step lays out the start, the progress and the proposals", () => {
-    // The list of proposals asks which run finished last: none has.
-    server.use(
-      http.get("*/api/ingestion/runs", () =>
-        HttpResponse.json({ runs: [], active_run_id: null }),
-      ),
-    );
-    const client = new QueryClient();
+  it("the review step lays out the start, the progress and the proposals", async () => {
+    await open("/profile/fill?step=review");
+    // No run yet and nothing proposed: only the start takes room.
+    expect(
+      await screen.findByRole("heading", { level: 3, name: "Start a run" }),
+    ).toBeVisible();
+    const panel = document.querySelector('[data-step="review"] > div');
+    expect(panel?.childElementCount).toBe(1);
+    // The list reads the last finished run, so it needs a query client.
     const withClient = (ui: ReactElement) =>
-      render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
-    const { container } = withClient(<StepReview />);
-    expect(screen.getByText(/the app will show what is sent/)).toBeVisible();
-    // Nothing runs and nothing is proposed yet: the two other parts take no room.
-    expect(container.firstElementChild?.childElementCount).toBe(1);
-    expect(render(<RunProgress />).container).toBeEmptyDOMElement();
+      render(
+        <QueryClientProvider client={new QueryClient()}>
+          {ui}
+        </QueryClientProvider>,
+      );
     expect(withClient(<ProposalList />).container).toBeEmptyDOMElement();
-    expect(render(<RunStart />).container).not.toBeEmptyDOMElement();
   });
 });
