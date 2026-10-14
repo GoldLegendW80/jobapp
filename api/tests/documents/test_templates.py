@@ -378,12 +378,27 @@ def test_a_template_cannot_print_markup_through_a_filter() -> None:
         ("<head></head><body><style>p{}</style></body>", "a <style> outside the head"),
         ('<head><meta http-equiv="refresh" content="0"></head>', "a meta refresh"),
         ("<body><iframe></iframe></body>", "a <iframe>"),
+        ('<body><img srcset="https://evil.example/x.png 2x"></body>', "a srcset"),
+        ('<body><img src="data:image/png;base64,AA" srcset="data:x"></body>', "a srcset"),
+        ('<body><p style="background:url(https://evil.example/x)">a</p></body>', "a style"),
+        ("<body><p style='background:URL( \"//evil.example/x\" )'>a</p></body>", "a style"),
+        ('<body><p style="background:u\\72l(https://evil.example/x)">a</p></body>', "a style"),
+        ('<body><p style="background:url(&#104;ttps://e.example/x)">a</p></body>', "a style"),
+        (
+            '<body><p style="background:image-set(&quot;https://e.example/x&quot; 1x)">a</p>',
+            "a style",
+        ),
     ],
 )
 def test_the_built_page_is_checked_before_the_renderer(page: str, breach: str) -> None:
     with pytest.raises(TemplateError, match=re.escape(breach)):
         templates.inspect("rogue", page)
     templates.inspect("fine", '<head><style>p{}</style></head><body><a href="HTTPS://x.org">x</a>')
+    templates.inspect(
+        "fine",
+        '<body><p style="color:red;background:url(data:image/png;base64,AA);'
+        "font-family:'Noto Sans'\">x</p></body>",
+    )
 
 
 def test_a_template_printing_a_handler_is_refused_at_build() -> None:
@@ -493,6 +508,208 @@ def test_a_character_takes_its_printable_compatibility_form() -> None:
     assert templates.printable_text(("nunito-sans",), "ｆｕｌｌ\u3000stack") == "full stack"
     assert templates.printable_text(("nunito-sans",), "a\u200db\u202ec") == "a\u200db\u202ec"
     assert templates.printable_text(("nunito-sans",), "plain text") == "plain text"
+
+
+# Round 2 of the review: what phones type after an emoji, and the characters that NFKC would
+# turn into markup or merge into the digits next to them.
+SELECTED = "❤️ ✔️ ⚠️ ➡️ ☑️ ▶️ ©️ ™️ ✈️ ☎️"  # each one followed by U+FE0F
+KEYCAPS = "1️⃣ #️⃣ *️⃣"
+JOINED = {"❤️\u200d🔥": "❤🔥", "✌🏽": "✌", "👍🏽": "👍🏽", "👩\u200d💻": "👩\u200d💻"}
+
+
+@pytest.mark.parametrize("slug", SLUGS)
+def test_a_presentation_selector_goes_and_its_character_stays(slug: str) -> None:
+    families = template(slug).fonts
+    for sample_ in SELECTED.split():
+        assert templates.printable_text(families, sample_) == sample_[0], sample_
+        assert templates.printable_text(families, sample_[0] + "︎") == sample_[0]
+    assert templates.printable_text(families, "a︀b\U000e0100c") == "abc"
+    assert templates.printable_text(families, KEYCAPS) == "1 # *"
+    # A joiner or a skin tone stays only between characters one family draws: `❤` and `✌` are
+    # drawn by Noto Sans Symbols 2, before Noto Emoji, so they part from what follows.
+    for joined, printed in JOINED.items():
+        assert templates.printable_text(families, joined) == printed, joined
+
+
+def test_an_emoji_with_its_selector_is_a_recorded_correction() -> None:
+    content = sample("cv") | {"headline": f"Engineer {SELECTED}", "highlights": [KEYCAPS]}
+    _, records = templates.printable(template("classic"), "cv", content)
+    by_path = {record.field_path: record for record in records}
+    assert by_path["headline"].after == "Engineer " + " ".join(s[0] for s in SELECTED.split())
+    assert by_path["highlights.0"].after == "1 # *"
+    assert by_path["headline"].code == corrections.NOT_PRINTABLE
+
+
+SCRIPTS = [
+    ("10⁶ users", "10^6 users"),
+    ("x⁻¹", "x^−1"),
+    ("H₂O", "H_2O"),
+    ("10¹⁰", "10^10"),
+    ("2⁸ and 2⁹", "2^8 and 2^9"),
+    ("E = mc²", "E = mc²"),  # the template's own font draws ²: it stays
+    ("50 ㎡", "50 m²"),
+    ("⅓", "1⁄3"),
+]
+
+
+@pytest.mark.parametrize(("text", "printed"), SCRIPTS)
+def test_a_superscript_never_merges_with_its_digits(text: str, printed: str) -> None:
+    families = template("classic").fonts
+    assert templates.printable_text(families, text) == printed
+    # Those the fonts draw stay, those they lack print with an explicit mark and are recorded.
+    content = sample("cv") | {"headline": f"Scale {text}"}
+    _, records = templates.printable(template("classic"), "cv", content)
+    assert [(r.before, r.after) for r in records] == (
+        [] if text == printed else [(f"Scale {text}", f"Scale {printed}")]
+    )
+
+
+def test_printable_runs_before_the_dash_rule() -> None:
+    """A full width hyphen minus becomes `-`, which the dash rule then corrects."""
+    from app.documents.settings import DocumentSettings
+
+    content = sample("cv") | {"headline": "Data Engineer － Platform"}
+    fixed, records = templates.printable(template("classic"), "cv", content)
+    assert fixed.headline == "Data Engineer - Platform"
+    dashed, dash_records = corrections.fix_separators(
+        "cv", fixed, DocumentSettings(no_dash_separators=True)
+    )
+    assert dashed.headline == "Data Engineer, Platform"
+    assert [r.code for r in records + dash_records] == ["not_printable", "dash_separator"]
+
+
+# Every full width and small form punctuation character: NFKC maps some to `< > " & '`.
+WIDE_PUNCT = "".join(
+    chr(cp)
+    for block in (
+        (0xFF01, 0xFF0F),
+        (0xFF1A, 0xFF20),
+        (0xFF3B, 0xFF40),
+        (0xFF5B, 0xFF65),
+        (0xFE50, 0xFE6B),
+    )
+    for cp in range(block[0], block[1] + 1)
+    if unicodedata.category(chr(cp)) != "Cn"
+)
+WIDE_MARKUP = (
+    "＜b＞b＜/b＞﹤i﹥＜a href=＂https://evil.example＂＞l＜/a＞＜span style=＂color:red＂＞"
+)
+
+
+def wide_document(kind: str, long: str, short: str) -> dict[str, Any]:
+    if kind == "letter":
+        return {
+            "schema": 1,
+            "headline": short,
+            "recipient": short,
+            "subject": short,
+            "salutation": short,
+            "paragraphs": [long, long],
+            "closing": short,
+        }
+    return {
+        "schema": 1,
+        "headline": short,
+        "summary": long,
+        "highlights": [short, short],
+        "competencies": [short] * 3,
+        "experience": [{"employer_key": "acme", "bullets": [long, long]}],
+        "skills": [{"label": short, "items": [short, short]}],
+    }
+
+
+def wide_view(text: str, website: str, email: str) -> ProfileView:
+    return ProfileView(
+        revision=1,
+        employers=(Employer("acme", text, text, "2021-03", None, text),),
+        schools=(School(text, text, "2015", "2018", text),),
+        languages=(Language(text, text),),
+        identity=Identity(
+            full_name=text,
+            email=email,
+            phone=text,
+            city=text,
+            country=text,
+            linkedin_url=website,
+            website=website,
+            links=((text, website),),
+        ),
+    )
+
+
+def structure(html: str) -> list[tuple[str, tuple[str, ...]]]:
+    return [(tag, tuple(sorted(attrs))) for tag, attrs in Page(html).tags]
+
+
+@pytest.mark.parametrize("slug", SLUGS)
+@pytest.mark.parametrize("kind", templates.KINDS)
+def test_wide_punctuation_never_becomes_markup(slug: str, kind: str) -> None:
+    """build_html never changes its text after the escape: every field, the profile's own
+    included, holds every full width and small form punctuation character and markup written
+    with them; the page has the elements and attributes of a plain page, no outside address,
+    and each character prints as itself or as its plain form, escaped."""
+    found = template(slug)
+    long, short = f"{WIDE_MARKUP} {WIDE_PUNCT}", WIDE_PUNCT
+    outside = "https://x.org/＂style=＂background:url(https://evil.example/x)"
+    html = templates.build_html(
+        found,
+        kind,
+        wide_document(kind, long, short),
+        wide_view(long[:120], outside, "e2e-alex＠example.org"),
+        "en",
+        0,
+        ON,
+    )
+    plain = templates.build_html(
+        found,
+        kind,
+        wide_document(kind, "plain words", "plain"),
+        wide_view("plain", "x.org/plain", "e2e-alex@example.org"),
+        "en",
+        0,
+        ON,
+    )
+    assert structure(html) == structure(plain)
+    page = assert_authoring(html)
+    assert "evil" not in "".join(v or "" for _, attrs in page.tags for v in attrs.values())
+    for raw in ("<b>", "<i>", "<span style", '<a href="https://evil'):
+        assert raw not in html, raw
+    hrefs = [attrs["href"] for tag, attrs in page.tags if tag == "a"]
+    assert hrefs == ["mailto:e2e-alex@example.org"], hrefs
+    body = page.body
+    for ch in WIDE_PUNCT:
+        # Printed as itself, else as its plain form; a form no font draws (`｡` -> `。`) goes.
+        printed = templates.printable_text(found.fonts, ch)
+        assert printed in (ch, unicodedata.normalize("NFKC", ch), ""), hex(ord(ch))
+        assert printed in body, hex(ord(ch))
+    assert "<b>b</b>" in body
+
+
+def test_profile_text_replaced_for_the_template_is_recorded() -> None:
+    view = ProfileView(
+        revision=1,
+        employers=(Employer("acme", "Ｋestrel 東京", "Engineer", "2021-03", None, "Paris"),),
+        schools=(School("Université ＡＢＣ", "BSc", "2015", "2018", ""),),
+        languages=(Language("日本語 Japanese", "native"),),
+        identity=Identity(full_name="Alex ＜Example＞", email="e2e-alex@example.org"),
+    )
+    fixed, records = templates.printable_profile(template("classic"), view)
+    assert [(r.field_path, r.before, r.after) for r in records] == [
+        ("profile.identity.full_name", "Alex ＜Example＞", "Alex <Example>"),
+        ("profile.employers.0.organisation", "Ｋestrel 東京", "Kestrel"),
+        ("profile.schools.0.school", "Université ＡＢＣ", "Université ABC"),
+        ("profile.languages.0.name", "日本語 Japanese", "Japanese"),
+    ]
+    assert {(r.code, r.by, r.reason) for r in records} == {
+        (corrections.NOT_PRINTABLE, "code", corrections.NOT_PRINTABLE_REASON)
+    }
+    assert fixed.identity.full_name == "Alex <Example>"
+    assert fixed.employers[0].organisation == "Kestrel"
+    assert fixed.employers[0].key == "acme"
+    # The page prints the replaced text, escaped.
+    html = templates.build_html(template("classic"), "cv", sample("cv"), view, "en", 0, ON)
+    assert "Alex &lt;Example&gt;" in html
+    assert templates.printable_profile(template("classic"), fixed) == (fixed, [])
 
 
 def every_fallback_face(families: tuple[str, ...]) -> tuple[str, dict[str, int]]:
@@ -1161,6 +1378,35 @@ def test_every_character_of_the_review_renders_and_passes_the_font_check(
     fonts = pdf_fonts(rendered.pdf)
     assert any(font.startswith("NotoSansMath") for font in fonts), fonts
     assert any(font.startswith("NotoSans-") for font in fonts), fonts
+
+
+# Round 2 of the review: each of these failed the whole render (a font without a name).
+EMOJI_SAMPLES = [*SELECTED.split(), *KEYCAPS.split(), *JOINED]
+
+
+@docker
+@pytest.mark.parametrize("slug", SLUGS)
+@pytest.mark.parametrize("sample_", EMOJI_SAMPLES)
+def test_an_emoji_as_phones_type_it_renders(renderer: Any, slug: str, sample_: str) -> None:
+    """One sample a page, in the content and in the profile's name, through D3's font check."""
+    content = sample("cv") | {"headline": f"Engineer {sample_} done"}
+    view = d1_view()
+    view = ProfileView(
+        revision=view.revision,
+        employers=view.employers,
+        schools=view.schools,
+        languages=view.languages,
+        identity=Identity(full_name=f"Alex {sample_} Example", email="e2e-alex@example.org"),
+    )
+    html = templates.build_html(template(slug), "cv", content, view, "en", 0, ON)
+    rendered = renderer.render(html)  # raises on a font the HTML did not name
+    text = "".join(pdf_text(rendered.pdf).split())
+    printed = templates.printable_text(template(slug).fonts, sample_)
+    assert printed[:1] == sample_[0]
+    assert "Engineer" in text
+    if len(printed) == 1:  # a ligature of a sequence (`👍🏽`) maps to no text in the PDF
+        assert "AlexExample" not in text  # the name kept its character
+        assert printed in text, sample_
 
 
 def at_soft_limits(content: c.CvContent, limits: Any) -> c.CvContent:

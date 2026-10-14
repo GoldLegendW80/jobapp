@@ -23,8 +23,9 @@ document's content into the HTML the renderer receives:
   emoji) is drawn by a free fallback family of the library, embedded once under its own name
   and named in every `font-family` of the style, so the renderer never falls back to a font
   the HTML did not ask for (D3's font check). A character no font of the library has (CJK) is
-  replaced by its closest printable form or dropped (`printable`, which also returns D2's
-  correction records for the person): a render never fails on a character;
+  replaced by its closest printable form or dropped, in the content (`printable`) and in the
+  profile's own text (`printable_profile`) before the render, never in the HTML; both return
+  D2's correction records for the person: a render never fails on a character;
 - the style goes in by a structured step, in place of a token drawn for each render, and the
   built page is parsed once (`inspect`) before the renderer gets it.
 
@@ -51,7 +52,7 @@ import re
 import secrets
 import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from datetime import date
 from functools import cache
 from html.parser import HTMLParser
@@ -522,22 +523,123 @@ def _printable(families: tuple[str, ...]) -> frozenset[int]:
 _NO_GLYPH = frozenset(("Cc", "Cf", "Zl", "Zp"))
 
 
+# Presentation selectors (U+FE0E text, U+FE0F emoji, the other variation selectors): a hint a
+# monochrome PDF has no use for. Left after a character that one family draws, they send the
+# renderer to a font the page does not name (D3's font check refuses the render), so they go.
+_SELECTORS = frozenset((*range(0xFE00, 0xFE10), *range(0xE0100, 0xE01F0)))
+_KEYCAP = "\u20e3"  # `1️⃣`: a digit, U+FE0F, the keycap; printed as the digit
+_ZWJ = "\u200d"
+_SKIN = frozenset(chr(cp) for cp in range(0x1F3FB, 0x1F400))  # the skin tone modifiers
+
+
+@cache
+def _scripts() -> Mapping[str, str]:
+    """Each superscript or subscript character of the basic plane: `^` or `_`."""
+    marks = {"<super>": "^", "<sub>": "_"}
+    out: dict[str, str] = {}
+    for codepoint in range(0x80, 0x10000):
+        tag = unicodedata.decomposition(chr(codepoint)).partition(" ")[0]
+        if tag in marks:
+            out[chr(codepoint)] = marks[tag]
+    return out
+
+
+@cache
+def _drawn_by(families: tuple[str, ...], codepoint: int) -> str | None:
+    """Who draws a character on a page of `families` (as `font_css` chooses): "" for the
+    template's own families, else the first fallback family that has it, else None."""
+    if codepoint in _common(families):
+        return ""
+    library = fonts()
+    return next((key for key in FALLBACKS if library[key].covers(codepoint)), None)
+
+
+def _near(ch: str, keep: frozenset[int]) -> str | None:
+    """The printable form of a character no font draws: its compatibility decomposition, each
+    part printed as it is or decomposed in turn (a full width letter -> its letter, `㎡` -> `m²`
+    or `m^2`, `⅓` -> 1, a fraction slash, 3), else None. A superscript or subscript the fonts
+    lack takes an explicit mark (`⁶` -> `^6`), so it never merges with the digits next to it."""
+    tag, _, rest = unicodedata.decomposition(ch).partition(" ")
+    if not tag:
+        return None
+    codes = rest.split() if tag.startswith("<") else [tag, *rest.split()]
+    out = ""
+    for code in codes:
+        part = chr(int(code, 16))
+        if ord(part) in keep:
+            out += part
+            continue
+        found = _near(part, keep)
+        if found is None:
+            return None
+        out += found
+    return _scripts().get(ch, "") + out
+
+
+def _script_runs(text: str, keep: frozenset[int]) -> list[tuple[str, bool]]:
+    """`text` cut into pieces `(text, done)`: a run of superscripts (or of subscripts) is one
+    piece, done: as it is when every character of it prints (`²`), else written with one mark
+    (`10⁻¹²` -> `10^` and the minus sign and `12`, recorded as any replacement); every other
+    character is a piece of its own, left to `printable_text`."""
+    pieces: list[tuple[str, bool]] = []
+    scripts = _scripts()
+    at = 0
+    while at < len(text):
+        mark = scripts.get(text[at])
+        if not mark:
+            pieces.append((text[at], False))
+            at += 1
+            continue
+        end = at + 1
+        while end < len(text) and scripts.get(text[end]) == mark:
+            end += 1
+        run = text[at:end]
+        if not all(ord(x) in keep for x in run):
+            plain = "".join(found[1:] for x in run if (found := _near(x, keep)))
+            run = mark + plain if plain else ""
+        pieces.append((run, True))
+        at = end
+    return pieces
+
+
 def printable_text(families: tuple[str, ...], text: str, tidy: bool = True) -> str:
     """`text` with each character no font of the template draws (its own families and the
-    fallbacks) replaced by its compatibility form when that one prints (a full width
-    letter -> its plain letter, an ideographic space -> a space), else
-    removed; with `tidy`, runs of spaces left behind become one."""
+    fallbacks) replaced by its compatibility form when that one prints (a full width letter ->
+    its plain letter, an ideographic space -> a space, `⁶` -> `^6`), else removed; with `tidy`,
+    runs of spaces left behind become one. An emoji as phones type it prints as its character:
+    the presentation selector goes (`❤️` -> `❤`), a keycap prints its digit (`1️⃣` -> `1`), and a
+    joiner or a skin tone stays only between characters one family draws (`👩‍💻` stays, `❤️‍🔥`
+    -> `❤🔥`).
+
+    Applied to the text before the render (the content: `printable`; the profile:
+    `printable_profile`), never to the HTML: a full width less-than sign becomes `<`, which the
+    render escapes."""
     if text.isascii():
         return text
     keep = _printable(families)
     out: list[str] = []
-    for ch in text:
+    for ch, done in _script_runs(text, keep):
+        if done:
+            out.extend(ch)
+            continue
+        if ord(ch) in _SELECTORS:
+            continue
+        if ch == _KEYCAP and out and out[-1] in "0123456789#*":
+            continue
         if ord(ch) in keep or unicodedata.category(ch) in _NO_GLYPH:
             out.append(ch)
             continue
-        near = unicodedata.normalize("NFKC", ch)
-        if near != ch and all(ord(x) in keep for x in near):
-            out.append(near)
+        near = _near(ch, keep)
+        if near is not None:
+            out.extend(near)
+    # A joiner or a skin tone between two families would make one cluster of two fonts.
+    for at in range(len(out) - 1, 0, -1):
+        ch = out[at]
+        if ch == _ZWJ and at + 1 < len(out):
+            if _drawn_by(families, ord(out[at - 1])) != _drawn_by(families, ord(out[at + 1])):
+                del out[at]
+        elif ch in _SKIN and _drawn_by(families, ord(out[at - 1])) != _drawn_by(families, ord(ch)):
+            del out[at]
     fixed = "".join(out)
     return fixed if fixed == text or not tidy else re.sub(r" {2,}", " ", fixed).strip()
 
@@ -547,14 +649,70 @@ def printable(
 ) -> tuple[c.CvContent | c.LetterContent, list[corrections.Correction]]:
     """The content with what the template cannot print replaced (`printable_text`), and one
     correction record (`not_printable`, D2's record) per field changed, for the person to see.
-    The pipeline stores these records with the version; `build_html` applies the same
-    replacement itself, so a render never fails on a character (spec: never block)."""
+    The pipeline runs it before D2's dash rule (`corrections.fix_separators`: a full width hyphen
+    becomes `-`, which the rule then corrects) and stores these records with the version, with
+    those of `printable_profile`; `build_html` applies both replacements itself, before the
+    render, so a render never fails on a character (spec: never block)."""
     parsed = content if isinstance(content, BaseModel) else c.MODELS[kind].model_validate(content)
     return corrections.replace_unprintable(
         kind,  # type: ignore[arg-type]
         parsed,  # type: ignore[arg-type]
         lambda text: printable_text(template.fonts, text),
     )
+
+
+# The profile's strings a template prints, by part of the view.
+_PRINTED = {
+    "employers": ("organisation", "title", "location"),
+    "schools": ("school", "degree", "location"),
+    "languages": ("name", "level"),
+}
+_IDENTITY = ("full_name", "email", "phone", "city", "country", "linkedin_url", "website")
+
+
+def printable_profile(
+    template: Template, view: ProfileView
+) -> tuple[ProfileView, list[corrections.Correction]]:
+    """The profile view with what the template cannot print replaced in every string it prints
+    (`printable_text`: a name, an organisation, a school, a language, the contact lines), and
+    one `not_printable` record per string changed, its path under `profile.` (for instance
+    `profile.employers.0.organisation`), for the person to see like those of `printable`."""
+    records: list[corrections.Correction] = []
+
+    def fix(path: str, text: str) -> str:
+        fixed = printable_text(template.fonts, text)
+        if fixed != text:
+            records.append(
+                corrections.Correction(
+                    f"profile.{path}",
+                    text,
+                    fixed,
+                    corrections.NOT_PRINTABLE,
+                    "code",
+                    corrections.reason_for(corrections.NOT_PRINTABLE),
+                )
+            )
+        return fixed
+
+    identity = view.identity
+    identity = replace(
+        identity,
+        **{key: fix(f"identity.{key}", getattr(identity, key)) for key in _IDENTITY},
+        links=tuple(
+            (fix(f"identity.links.{i}.label", label), fix(f"identity.links.{i}.url", url))
+            for i, (label, url) in enumerate(identity.links)
+        ),
+    )
+    parts = {
+        part: tuple(
+            replace(item, **{key: fix(f"{part}.{i}.{key}", getattr(item, key)) for key in keys})
+            for i, item in enumerate(getattr(view, part))
+        )
+        for part, keys in _PRINTED.items()
+    }
+    if not records:
+        return view, []
+    return replace(view, identity=identity, **parts), records
 
 
 @cache
@@ -798,6 +956,9 @@ def build_html(
     if photo is not None and not PHOTO_URI.match(photo):
         raise ValueError("the photo is not a data: address of photo.embed")
     data = _content(template, kind, content)
+    # The profile's own text (a name, a school) through the same replacement, before the render:
+    # never on the HTML, where a full width less-than sign would become a live `<`.
+    profile_view = printable_profile(template, profile_view)[0]
     by_key = {employer.key: employer for employer in profile_view.employers}
     roles = [
         {
@@ -842,8 +1003,6 @@ def build_html(
     page = environment(template).get_template(f"{kind}.html.j2").render(context)
     if page.count(token) != 1:
         raise TemplateError(template.slug, "the style is not printed exactly once")
-    # The profile's own text (a name, a school) through the same replacement as the content.
-    page = printable_text(template.fonts, page, tidy=False)
     css = step.css() + f":root{{--accent:{template.accent}}}" + template.files["style.css"]
     faces, names = font_css(template.fonts, html.unescape(page.replace(token, "")) + css)
     page = page.replace(token, faces + with_fallbacks(css, names), 1)
@@ -856,6 +1015,24 @@ def build_html(
 _REFUSED_TAGS = frozenset(
     ("script", "iframe", "frame", "frameset", "object", "embed", "applet", "link", "base", "form")
 )
+
+
+_CSS_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})\s?|(.))", re.S)
+_CSS_ADDRESS = re.compile(r"url\(['\"]?(?!data:)|['\"](?!data:)(?:[a-z][a-z0-9+.-]*:|//)")
+
+
+def _outside(style: str) -> bool:
+    """Whether a style attribute names an address other than `data:`: in `url(...)`, or as a
+    string (`image-set("https://...")`), CSS escapes and comments read first."""
+
+    def unescape(match: re.Match[str]) -> str:
+        if match.group(1):
+            codepoint = int(match.group(1), 16)
+            return chr(codepoint) if 0 < codepoint <= 0x10FFFF else "\ufffd"
+        return match.group(2)
+
+    text = _CSS_ESCAPE.sub(unescape, re.sub(r"/\*.*?\*/", "", style, flags=re.S))
+    return bool(_CSS_ADDRESS.search("".join(text.split()).lower()))
 
 
 class _Inspector(HTMLParser):
@@ -882,6 +1059,10 @@ class _Inspector(HTMLParser):
             address = "".join((value or "").split()).lower()
             if key.startswith("on"):
                 self._refuse(f"an event handler {key}")
+            elif key == "srcset":
+                self._refuse("a srcset")
+            elif key == "style" and _outside(value or ""):
+                self._refuse("a style attribute with an outside address")
             elif key == "http-equiv":
                 self._refuse("a meta refresh")
             elif "javascript:" in address or "vbscript:" in address:
@@ -901,8 +1082,9 @@ class _Inspector(HTMLParser):
 def inspect(slug: str, page: str) -> None:
     """Parses a built page once, before the renderer gets it: no script, no event handler, no
     `javascript:` address, no link but https: or mailto:, no source but a data: image, no
-    <style> outside the head. The authoring rules hold at load; this holds whatever a template
-    (a person's own, D25b) found to print, and a breach raises a TemplateError."""
+    `srcset`, no address but `data:` in a style attribute, no <style> outside the head. The
+    authoring rules hold at load; this holds whatever a template (a person's own, D25b) found
+    to print, and a breach raises a TemplateError."""
     inspector = _Inspector()
     inspector.feed(page)
     inspector.close()
