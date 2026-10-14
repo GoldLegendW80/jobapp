@@ -3,7 +3,13 @@
  * test: the request and its abort are covered in lib/api-upload.test.ts, the queue in
  * use-uploads.test.ts.
  */
-import { screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +17,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import { fakeSession, member } from "@/test/auth";
 import { fakeDocument, fakeDocuments } from "@/test/ingestion";
+import { waitForOnFakeClock } from "@/test/clock";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -120,27 +127,35 @@ describe("documents: an upload cancelled on its way", () => {
   });
 
   it("looks once more a moment later, for a file stored after the first look", async () => {
-    vi.useFakeTimers({
-      toFake: ["setTimeout", "clearTimeout"],
-      shouldAdvanceTime: true,
+    const { user, state, input, asked } = await open();
+    await user.upload(input, new File(["on its way"], "late.md"));
+    const cancel = await screen.findByRole("button", {
+      name: "Cancel late.md",
     });
+    const before = asked();
+    // From the click on, the clock of the second look is the test's alone (issue #104): with
+    // shouldAdvanceTime the fake clock also ran with the real one, so on a loaded machine the
+    // second look could pass before the file below was stored, and nothing listed it any more.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const { user, state, input, asked } = await open();
-      await user.upload(input, new File(["on its way"], "late.md"));
-      const before = asked();
-      await user.click(
-        await screen.findByRole("button", { name: "Cancel late.md" }),
-      );
-      await waitFor(() => {
+      fireEvent.click(cancel);
+      // Steps of 1 ms: at most 200 ms of the fake clock, far from the second look.
+      await waitForOnFakeClock(() => {
         expect(asked()).toBe(before + 1);
-      });
-      await waitFor(() => {
         expect(screen.queryByText("late.md")).toBeNull();
-      });
+      }, 1);
       // The server finishes storing it after the page's first look.
       state.items.unshift(fakeDocument({ name: "late.md" }));
-      await vi.advanceTimersByTimeAsync(CANCEL_RECHECK_MS);
-      await listed("late.md");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CANCEL_RECHECK_MS);
+      });
+      await waitForOnFakeClock(() => {
+        expect(
+          within(
+            screen.getByRole("list", { name: "Your documents" }),
+          ).getByText("late.md"),
+        ).toBeVisible();
+      });
       expect(asked()).toBe(before + 2);
     } finally {
       vi.useRealTimers();

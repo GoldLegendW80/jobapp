@@ -1,0 +1,18 @@
+{#- timeline, the letter: the CV's header, then the date, the recipient and the subject, and the
+    salutation, the paragraphs and the closing along the CV's thin vertical line. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+{{ base.header(content.headline) }}
+<div class="letter-body">
+{{ base.letter_date() }}
+{% if content.recipient %}<p class="recipient">{{ content.recipient }}</p>{% endif %}
+{% if content.subject %}<p class="subject"><strong>{{ base.label("subject") }}</strong> {{ content.subject }}</p>{% endif %}
+<div class="letter-text">
+{% if content.salutation %}<p class="salutation">{{ content.salutation }}</p>{% endif %}
+{{ base.paragraphs(content.paragraphs) }}
+{% if content.closing %}<p class="closing">{{ content.closing }}</p>{% endif %}
+<p class="signature">{{ name }}</p>
+</div>
+</div>
+{% endblock %}

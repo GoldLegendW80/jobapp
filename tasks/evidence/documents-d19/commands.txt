@@ -1,0 +1,16 @@
+Task D19, 2026-10-14, on the Mac (renderer image of D3 built under its own tag jobapp-renderer:d19-test, removed afterwards).
+
+docker build -q -t jobapp-renderer:d19-test renderer
+cd api
+python -m app.documents.templates.thumbnails <slug>, run through the test stack's renderer for serif, timeline, split-right, minimal
+  every thumbnail fits at step 0 except minimal's CV sample (step 1)
+RENDERER_TEST_IMAGE=jobapp-renderer:d19-test uv --native-tls run pytest -q tests/documents/test_templates.py tests/documents/test_template_reading_order.py tests/documents/test_templates_d19.py -m docker -k "serif or timeline or split-right or minimal or d19"
+  138 passed, 410 deselected
+uv --native-tls run pytest -q -n 2 tests/documents -m "not docker"
+  1028 passed
+uv --native-tls run ruff check app tests        All checks passed!
+uv --native-tls run ruff format --check app tests   420 files already formatted
+
+Files: <slug>-cv-typical.pdf (D1's cv-typical, English, at its fitted step) and <slug>-letter-en.pdf.
+
+Review round 2026-10-14 (renderer image jobapp-renderer:d19b, removed afterwards): timeline's rail is a grid per entry and prints the period only; minimal on a left margin; the thumbnails and the PDFs above were made again; timeline-long-locations-fr.pdf is timeline in French at its loosest step with three schools dated by month with a city and a country (test_timeline_dates_of_a_school_never_reach_the_next_entry).

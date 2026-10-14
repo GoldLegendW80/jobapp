@@ -401,24 +401,40 @@ def hashes_of(payload: dict[str, Any]) -> list[str]:
     return [payload["value_hash"], *(other["value_hash"] for other in payload.get("conflict", []))]
 
 
-@pytest.mark.parametrize("how", ["edit", "pick"])
+def turned_down(side: str) -> tuple[str, tuple[str, str, str, str]]:
+    """A random token and the name that carries it, drawn until that name falls on `side` of a
+    conflict with RENAMED: the merge shows the first value by hash order as the item and the
+    others beside it (merge.py, rule 5), so the token alone decides where it lands."""
+    while True:
+        token = f"tok{secrets.token_hex(8)}"
+        down = named_as(token)
+        first = items.value_hash(down[2]) < items.value_hash(RENAMED[2])
+        if first == (side == "item"):
+            return token, down
+
+
+@pytest.mark.parametrize(
+    ("how", "side"), [("edit", "item"), ("pick", "item"), ("pick", "conflict")]
+)
 def test_a_value_the_user_turned_down_loses_its_text_with_its_only_source(
     factory: Factory,
     alice: uuid.UUID,
     settings: Settings,
     caplog: pytest.LogCaptureFixture,
     how: str,
+    side: str,
 ) -> None:
     """The user accepted with a value of their own, by an edit or by the pick of the other value
     of a conflict. The value they turned down was drawn from one document; once that is deleted
-    its text is nowhere, its hash stays so that a rerun does not propose it again."""
-    token = f"tok{secrets.token_hex(8)}"
-    down = named_as(token)
+    its text is nowhere, its hash stays so that a rerun does not propose it again, and its
+    citation says "source deleted", whether it was the item's value or one beside it."""
+    token, down = turned_down(side)
+    letter = None
     if how == "edit":
         run_id, (cv,) = mh.merged(factory, alice, settings, [mh.CV], [[down, EMAIL]])
         own = "Alicia Q"
     else:
-        run_id, (cv, _) = mh.merged(
+        run_id, (cv, letter) = mh.merged(
             factory, alice, settings, [mh.CV, mh.LETTER], [[down], [RENAMED]]
         )
         own = "Alice Marie Martin"
@@ -436,8 +452,17 @@ def test_a_value_the_user_turned_down_loses_its_text_with_its_only_source(
     with factory() as db:
         kept = db.get_one(Proposal, named.id)
         assert kept.edited_value == own
-        assert kept.payload["citations"][0] == {"document_id": str(cv), "source_deleted": True}
         assert hashes_of(kept.payload) == hashes
+        values = [kept.payload, *kept.payload.get("conflict", [])]
+        (gone,) = [one for one in values if one["value_hash"] == items.value_hash(down[2])]
+        assert (gone is kept.payload) == (side == "item")
+        assert gone["citations"] == [{"document_id": str(cv), "source_deleted": True}]
+        assert "value" not in gone
+        if letter is not None:
+            (picked,) = [one for one in values if one is not gone]
+            assert picked["value"] == own
+            assert [one["document_id"] for one in picked["citations"]] == [str(letter)]
+            assert picked["citations"][0]["excerpt"] == "Alice Martin"
         shown = review_router._item(kept, None, {}, set())
     assert shown.value == own
     assert all(other.value != down[2] for other in shown.conflict)

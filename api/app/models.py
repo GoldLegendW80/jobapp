@@ -4,6 +4,7 @@ Alembic's env.py imports this module before comparing metadata with the database
 """
 
 from app.agents import models as agents_models
+from app.browser import models as browser_models  # noqa: F401, registers the tables
 from app.documents import models as documents_models  # noqa: F401, registers the tables
 from app.identity import models as identity_models
 from app.ingestion import models as ingestion_models
