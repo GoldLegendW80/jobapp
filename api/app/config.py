@@ -146,6 +146,35 @@ class Settings(BaseSettings):
     # The chat of a document: characters of one message, messages kept per document.
     documents_chat_max_chars: int = Field(default=2000, ge=200, le=10_000)
     documents_messages_kept: int = Field(default=200, ge=20, le=2000)
+    # Apply (SPEC-apply.md, app/apply/). Every setting of the module, added at once by task A2 so
+    # that no later task edits this file. The kill switch of every submission (the administrator's
+    # pause in Redis is the other one); how long a person's approval is valid; Full auto's hold
+    # before each submit.
+    apply_submit_enabled: bool = True
+    apply_approval_ttl_s: int = Field(default=86_400, ge=300, le=7 * 86_400)
+    apply_hold_s: int = Field(default=900, ge=60, le=86_400)
+    # Full auto's guarded defaults (owner decisions 1 and 2): the runaway backstop of
+    # submissions per day (no fixed daily number), the default fit threshold offered when the
+    # person turns it on, one application per company in this many days, the rehearsals first.
+    apply_full_auto_safety_ceiling: int = Field(default=30, ge=1, le=100)
+    apply_full_auto_min_fit_default: int = Field(default=80, ge=0, le=100)
+    apply_full_auto_company_days: int = Field(default=30, ge=1, le=365)
+    apply_rehearsals: int = Field(default=3, ge=1, le=20)
+    # The pace per ATS host across all people (the Jetson's one address), and LinkedIn's own.
+    apply_host_min_interval_s: int = Field(default=180, ge=10, le=86_400)
+    apply_host_daily_max: int = Field(default=20, ge=1, le=500)
+    apply_linkedin_min_interval_s: int = Field(default=600, ge=60, le=86_400)
+    apply_linkedin_daily_max: int = Field(default=15, ge=1, le=100)
+    # Failures before the click: the waits before each retry, in seconds, comma separated (two
+    # retries); how long a person is waited for (captcha, sign in) before the lease ends; how many
+    # days step and error screenshots are kept.
+    apply_retry_delays_s: str = "600,3600"
+    apply_needs_person_wait_s: int = Field(default=1800, ge=60, le=86_400)
+    apply_step_shots_keep_days: int = Field(default=30, ge=1, le=365)
+    # Tests only: the base address of the fake ATS forms server (tests/ats_forms_stub.py); a form
+    # address under it is read as the Ashby, Greenhouse or Lever form its path names. Refused in
+    # production.
+    apply_stub_base_url: str | None = None
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod
@@ -193,6 +222,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "ats_base_url",
+        "apply_stub_base_url",
         "model_api_base_url",
         "google_auth_url",
         "google_token_base_url",
@@ -226,6 +256,17 @@ class Settings(BaseSettings):
             raise ValueError(f"{(info.field_name or '').upper()} {exc}") from None
         return SecretStr(value.get_secret_value().strip())
 
+    @field_validator("apply_retry_delays_s", mode="after")
+    @classmethod
+    def _retry_delays(cls, value: str) -> str:
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        if not 1 <= len(parts) <= 5 or not all(part.isascii() and part.isdigit() for part in parts):
+            raise ValueError("APPLY_RETRY_DELAYS_S must be 1 to 5 whole numbers of seconds")
+        delays = [int(part) for part in parts]
+        if not all(60 <= delay <= 86_400 for delay in delays):
+            raise ValueError("APPLY_RETRY_DELAYS_S values must be between 60 and 86400 seconds")
+        return ",".join(str(delay) for delay in delays)
+
     @field_validator("ats_base_url_org_prefix", mode="after")
     @classmethod
     def _org_prefix(cls, value: str | None) -> str | None:
@@ -245,6 +286,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "ATS_BASE_URL points the board check at a test stub and must not be set "
                 "in production"
+            )
+        if self.app_env == "production" and self.apply_stub_base_url is not None:
+            raise ValueError(
+                "APPLY_STUB_BASE_URL points the apply module at a test forms server and must not "
+                "be set in production"
             )
         if self.app_env == "production" and self.test_fast_timers:
             raise ValueError(
