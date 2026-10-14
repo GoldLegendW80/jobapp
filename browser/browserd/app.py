@@ -23,6 +23,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
+from browserd import live
 from browserd.leases import LeaseError, Manager, Request
 
 log = logging.getLogger("browserd")
@@ -109,7 +110,7 @@ CONTROL = [
 # The router list. B4 and B5 each add one line here, nothing else of this file.
 ROUTES: list[Route] = [
     *CONTROL,
-    # *live.ROUTES,  # B4: browserd/live.py, the live view's ticket check and take over
+    *live.ROUTES,  # B4: browserd/live.py, who holds the live view's keyboard and mouse
     # *tools.ROUTES,  # B5: browserd/tools/, POST /leases/{id}/tools/{name}, PUT .../files/{name}
 ]
 

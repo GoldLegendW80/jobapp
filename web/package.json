@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@hookform/resolvers": "5.9.1",
+    "@novnc/novnc": "1.4.0",
     "@tanstack/react-query": "5.104.1",
     "@tanstack/react-virtual": "3.14.13",
     "class-variance-authority": "0.7.1",

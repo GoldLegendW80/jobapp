@@ -63,6 +63,16 @@ export const handlers = [
       consent: { granted: false, at: null, version: null, current_version: 1 },
     }),
   ),
+  // The browser free, no session of the person (the Account page's Your browser card).
+  http.get("*/api/browser", () =>
+    HttpResponse.json({
+      available: true,
+      profile: { exists: false, size_bytes: 0, last_used_at: null },
+      lease: null,
+      holder: null,
+      queue: [],
+    }),
+  ),
   // No agent run and no proposal yet (job detail's Agent assessment section).
   http.get("*/api/agents/runs", () => HttpResponse.json({ items: [] })),
   http.get("*/api/proposals", () => HttpResponse.json({ items: [] })),

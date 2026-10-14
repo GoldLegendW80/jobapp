@@ -6,6 +6,7 @@ network, behind BROWSER_CONTROL_SECRET. Nothing else of the application speaks t
     start(...)  POST /leases            the lease's id, its token and browserd's view of it
     end(id)     DELETE /leases/{id}     True, or False when it is no longer the current lease
     current()   GET /leases/current     {lease: {...} | None, last_end: {...} | None}
+    live_input(id, viewer)  POST /leases/{id}/live/input   who holds the live view's input (B4)
 
 Every failure is a BrowserError whose `code` is one of CODES, never browserd's text:
 
@@ -23,6 +24,7 @@ not store it. One log line per call: the route, the status and the duration.
 """
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -34,6 +36,7 @@ logger = logging.getLogger("app.browser.client")
 TIMEOUT_S = 5.0
 START_TIMEOUT_S = 35.0  # browserd's START_S of 30 s, plus a margin
 CODES = ("unavailable", "busy", "refused")
+LEASE_IN_PATH = re.compile(r"/leases/[0-9a-f-]{36}")
 
 
 class BrowserError(Exception):
@@ -116,6 +119,19 @@ class BrowserdClient:
             }
         raise self._failure(status, payload)
 
+    async def live_input(self, lease_id: str, viewer: str | None) -> str:
+        """The viewer `viewer` takes the keyboard and the mouse of the lease's live view, or
+        (None) the agent has them back. Answers who holds them: "person" or "agent"."""
+        path = f"/leases/{lease_id}/live/input"
+        status, payload = await self._call("POST", path, TIMEOUT_S, {"viewer": viewer})
+        if (
+            status == 200
+            and isinstance(payload, dict)
+            and payload.get("input") in ("person", "agent")
+        ):
+            return str(payload["input"])
+        raise self._failure(status, payload)
+
     @staticmethod
     def _failure(status: int, payload: Any) -> BrowserError:
         if status == 409:
@@ -130,7 +146,7 @@ class BrowserdClient:
     ) -> tuple[int, Any]:
         if not self._secret:
             raise BrowserError("unavailable")
-        route = "/leases/{id}" if method == "DELETE" else path
+        route = LEASE_IN_PATH.sub("/leases/{id}", path)
         began = time.monotonic()
         try:
             async with httpx.AsyncClient(
