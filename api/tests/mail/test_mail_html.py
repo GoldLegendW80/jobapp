@@ -325,6 +325,180 @@ def test_the_estimate_of_the_nesting() -> None:
     assert cut("<div><span></div>" * 20_000)[1] is False
 
 
+# --- the work one page may cost (review of PR #179, B2 to B4): counted, never timed ---------------
+
+
+def watched_sanitiser(monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[str]]:
+    """What the sanitiser is handed and what it writes, call after call."""
+    given: list[str] = []
+    written: list[str] = []
+    clean = mail_html.nh3.clean
+
+    def watching(markup: str, **options: Any) -> str:
+        given.append(markup)
+        written.append(clean(markup, **options))
+        return written[-1]
+
+    monkeypatch.setattr(mail_html.nh3, "clean", watching)
+    return given, written
+
+
+class Counted(list):
+    """A list that counts the items read from it one after the other."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.read = 0
+
+    def __iter__(self):
+        for item in super().__iter__():
+            self.read += 1
+            yield item
+
+
+def watched_walkers(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    """The walkers `handle` makes, each with a stack of open tags that counts its readers."""
+    made: list[Any] = []
+
+    class Watched(mail_html._Walker):
+        def __init__(self, *given: Any) -> None:
+            super().__init__(*given)
+            self.open = Counted()
+            made.append(self)
+
+    monkeypatch.setattr(mail_html, "_Walker", Watched)
+    return made
+
+
+class Asked:
+    """A budget that is never spent and counts its questions."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def spent(self) -> bool:
+        self.calls += 1
+        return False
+
+
+def test_list_items_that_nest_through_each_other_are_counted() -> None:
+    cut = mail_html.cut_at_depth
+    limit = mail_html.SCAN_DEPTH_MAX
+    # `li` and `dd` each stop the other's "close the one before": they nest without end.
+    for unit in ("<li><dd>", "<dd><li><dt><li>", "<li><dt>", "<LI><Dd>"):
+        kept, was_cut = cut(unit * 62_500)
+        assert was_cut is True, unit
+        assert kept.count("<") == limit, unit
+    # What the tree builder keeps flat is not counted: an item closes the item before it.
+    for flat in (
+        "<li>a",
+        "<dt>a<dd>b",
+        "<dd>a<dd>b<dt>c",
+        "<li><p>a",
+        "<ul><li>a</li><li><p>b</li></ul>",
+        "<dl><dt>a</dt><dd>b</dd></dl>",
+    ):
+        assert cut(flat * 20_000) == (flat * 20_000, False), flat
+
+
+def test_list_items_nested_without_end_are_cut_before_they_are_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    given, _ = watched_sanitiser(monkeypatch)
+    got = sanitised("<p>before</p>" + "<li><dd>" * 62_000 + "never read")
+    assert got.truncated is True
+    assert got.text == "before"
+    # The sanitiser was never handed the 124,000 levels.
+    assert given[0].count("<li>") + given[0].count("<dd>") == mail_html.SCAN_DEPTH_MAX
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        "<div>" * 2000 + "<p>" * 3000,
+        "<div>" * 2000 + "<li>" * 3000,
+        "<div>" * 2000 + "</p>" * 3000,
+        "<div>" * 2000 + "<b></b>" * 3000,
+        "<table><td>" * 700 + "<p>" * 3000,  # four open tags a table, of which the scan counts one
+    ],
+    ids=["paragraphs", "items", "end tags alone", "pairs", "under tables"],
+)
+def test_an_end_tag_never_reads_the_whole_stack_of_open_tags(
+    monkeypatch: pytest.MonkeyPatch, page: str
+) -> None:
+    made = watched_walkers(monkeypatch)
+    got = sanitised(page)
+    assert got.truncated is True  # deeper than the stored HTML may be
+    (walker,) = made
+    assert walker.open.read == 0
+
+
+def test_the_budget_is_asked_while_the_page_is_walked(monkeypatch: pytest.MonkeyPatch) -> None:
+    page = "<p>x</p>" * 20_000
+    asked = Asked()
+    assert sanitised(page, asked).truncated is False
+    assert asked.calls > 2  # after pass 1, after the walk, and during it
+    small = Asked()
+    sanitised("<p>x</p>", small)
+    assert small.calls == 2
+    # A budget that ends during the walk ends the walk: most of the page is never written.
+    made = watched_walkers(monkeypatch)
+    assert refused(page, SpentAfter(1)) == "too_slow"
+    assert len(made[0].markup) < 30_000  # 60,000 pieces when the whole page is walked
+
+
+def formatting(count: int) -> str:
+    """`count` open formatting elements the tree builder holds apart: no two are alike."""
+    return "".join(f"<b a={i}>" for i in range(count))
+
+
+def test_formatting_reopened_under_every_block_is_cut_before_it_is_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cut = mail_html.cut_at_depth
+    # Every `<p>` closes the paragraph before it, and the 1,000 `b` are opened again under it.
+    page = "<p>" + formatting(1000) + "<p>x" * 1000
+    assert cut(page)[1] is True
+    _, written = watched_sanitiser(monkeypatch)
+    got = sanitised(page)
+    assert got.truncated is True
+    assert len(written[0]) <= 8 * len(page)  # never the product of the two counts
+    # The same with the tags of the standard, no attribute at all: three of each stay open.
+    names = ("a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong")
+    names = (*names, "tt", "u")
+    plain = "<p>" + "".join(f"<{name}>" * 3 for name in names) + "<p>x" * 100_000
+    kept, was_cut = cut(plain)
+    assert was_cut is True
+    # An `a` closes the `a` before it: thirteen names stay open three times, and one once.
+    assert kept.count("<p>") * 13 * 3 <= mail_html.SCAN_REOPENED_MAX
+    # Closed where it was opened, formatting costs nothing: an ordinary page is never cut.
+    for ordinary in (
+        "<p><b>bold</b> and <i><u>both</u></i> <a href=http://a.example>link</a></p>" * 6000,
+        "<font face=Arial><b>" + "<div><p>line</p></div>" * 20_000 + "</b></font>",
+        "<p><b><i>crossed</b></i></p>" * 15_000,
+        # Never closed, written alike: the tree builder holds three of them, whatever their number.
+        "<p><b>title<br>text" * 2500,
+        '<p><font color="#333333" size=2><i class=x>title<br>text' * 1400,
+    ):
+        assert cut(ordinary) == (ordinary, False)
+    # Alike only to the eye is not alike: a value that could hold the end of the tag is not read.
+    for apart in ("<b a='>'>", "<b a=1 / >", "<b\ta = 1>"):
+        assert cut("<p>" + apart * 1000 + "<p>x" * 1000)[1] is True, apart
+
+
+def test_a_first_pass_that_wrote_many_times_its_input_ends_the_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    made = watched_walkers(monkeypatch)
+    # One open tag the scan weighs as one, written again under each of 5,000 paragraphs.
+    page = f"<p><b title={'t' * 500}>" + "<p>x" * 5000
+    assert refused(page) == "too_slow"
+    assert made == []  # the walker was never given the 2.5 MB
+    # Honest growth passes: each of these is written as five or six characters.
+    for honest in ("&" * 100_000, "<img alt='" + '"' * 100_000 + "'>"):
+        assert sanitised(honest).html
+
+
 def test_five_hundred_kilobytes_of_one_unclosed_tag() -> None:
     for page in (
         "<div " + "a" * 499_995,

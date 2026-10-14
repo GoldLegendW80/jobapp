@@ -43,12 +43,19 @@ written in a mail come out as the words they are.
 an estimate of the nesting made before pass 1, which cuts the document where it passes
 `SCAN_DEPTH_MAX` open tags (the HTML5 tree builder is quadratic in the depth: 100,000 nested
 `div` take 10 s on an M4, 3,000 take 10 ms; the estimate is not a proof, and the CPU limit of
-the child is what holds if it is fooled); `HTML_MAX_BYTES` and `TEXT_MAX_CHARS` of output; and
-the whole answer under `ANSWER_MAX` bytes. Each cut sets `truncated`.
+the child is what holds if it is fooled); in the same scan, an estimate of the formatting
+elements the tree builder opens again (it reopens every open `b`, `i`, `font`... under each
+block that follows, so n of them before m blocks are written n times m times), which cuts the
+document where it passes `SCAN_REOPENED_MAX`; `GROWTH_MAX`, what pass 1 may write in times what
+it read, beyond which the page is refused before the walker reads it; `HTML_MAX_BYTES` and
+`TEXT_MAX_CHARS` of output; and the whole answer under `ANSWER_MAX` bytes. Each cut sets
+`truncated`. The walker answers an end tag without reading its stack of open tags, and looks
+at the budget every `WALK_BUDGET_EVERY` steps.
 
 A failure is `{"ok": false, "failure": "file", "code": ...}`: `unreadable` (the sanitiser gave
-up), `too_slow` (the budget was spent). The worker then stores the mail with its plain text
-part and no HTML: a mail is never lost because its HTML is hostile.
+up), `too_slow` (the budget was spent, or pass 1 wrote more than `GROWTH_MAX` times its input).
+The worker then stores the mail with its plain text part and no HTML: a mail is never lost
+because its HTML is hostile.
 
 Only main.py may import this file in production. The tests import it too.
 """
@@ -130,6 +137,12 @@ TEXT_MAX_CHARS = 500_000
 ANSWER_MAX = 1_499_000  # the worker reads 1.5 MB; main.py adds `usage` to the answer
 DEPTH_MAX = 100  # nesting of the stored HTML
 SCAN_DEPTH_MAX = 3000  # nesting of the input, estimated, beyond which it is cut
+SCAN_REOPENED_MAX = 300_000  # formatting elements opened again, estimated, beyond which it is cut
+ALIKE_MAX = 3  # elements alike the tree builder holds open for reopening (its "Noah's Ark")
+PLAIN_TAG_MAX = 200  # characters of a start tag beyond which it is alike to no other
+GROWTH_MAX = 8  # what pass 1 may write, in times what it read: escaping alone writes six
+GROWTH_FLOOR = 10_000  # characters a short page is counted as, for that bound
+WALK_BUDGET_EVERY = 4096  # tags and pieces of text the walker reads between two looks at the budget
 ADDRESS_MAX = 2000
 ALT_MAX = 500
 
@@ -138,6 +151,10 @@ _PASS_3 = {"a": {"href"}, "img": {"alt", "width", "height", "data-src"}}
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _OPENING = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)")
+# What follows the name of a start tag written plainly, up to its `>`: attributes without a
+# value, or with one that holds no quote and no angle bracket. Two such tags written alike are
+# the same element to the tree builder; of any other tag nothing is assumed.
+_PLAIN_REST = re.compile(r"""(?:\s+[^\s"'<>=/`]+(?:=(?:[^\s"'<>=`]+|"[^"<>]*"|'[^'<>]*'))?)*\s*>""")
 _LINK = re.compile(r"(?:https?://|mailto:)[^\s<>\"']+", re.IGNORECASE)
 _REMOTE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _NUMBER = re.compile(r"[0-9]{1,4}")
@@ -147,12 +164,9 @@ _BLANK_LINES = re.compile(r"\n{3,}")
 _NOT_NESTING = frozenset(
     [
         "p",
-        "li",
         "td",
         "th",
         "tr",
-        "dt",
-        "dd",
         "option",
         "thead",
         "tbody",
@@ -193,19 +207,73 @@ _BLOCKS = frozenset(
     ]
 )
 _CELLS = frozenset({"td", "th"})
+# A list item closes the item before it only when nothing the tree builder calls special stands
+# between the two: `<li><li>` is two items side by side, `<li><dd><li><dd>` nests without end.
+# The estimate closes the item that is right above, of the same kind, and counts every other.
+_ITEMS = {"li": "li", "dd": "dd", "dt": "dd"}
+# The formatting elements of the HTML standard: closed by a block's end, the tree builder opens
+# them again under whatever follows.
+_FORMATTING = frozenset(
+    [
+        "a",
+        "b",
+        "big",
+        "code",
+        "em",
+        "font",
+        "i",
+        "nobr",
+        "s",
+        "small",
+        "strike",
+        "strong",
+        "tt",
+        "u",
+    ]
+)
 
 
 def cut_at_depth(text: str) -> tuple[str, bool]:
-    """`text` up to the tag that would open more than SCAN_DEPTH_MAX elements at once, and
-    whether it was cut. A linear estimate: start tags are counted, an end tag closes the
-    nearest open element of its name and all those above it, as the tree builder does."""
+    """`text` up to the tag that would open more than SCAN_DEPTH_MAX elements at once, or
+    open again more than SCAN_REOPENED_MAX formatting elements, and whether it was cut. A
+    linear estimate: start tags are counted, an end tag closes the nearest open element of its
+    name and all those above it, as the tree builder does. A formatting element is held from
+    its start tag to an end tag of its name, and every tag in between may open again all those
+    that are held. Of start tags written alike three are held, as the tree builder holds
+    three elements that are alike: a page that never closes its `<b>` is not one that grows."""
     open_names: list[str] = []
     counts: dict[str, int] = {}
+    held: dict[str, list[str | None]] = {}  # per name: the start tags held, as written if plain
+    alike: dict[str, int] = {}
+    holding = reopened = 0
     for found in _OPENING.finditer(text):
         name = found[2].lower()
+        if found[1] and held.get(name):
+            ended = held[name].pop()
+            if ended is not None:
+                alike[ended] -= 1
+            holding -= 1
+        reopened += holding
+        if reopened > SCAN_REOPENED_MAX:
+            return text[: found.start()], True
         if name in _NOT_NESTING:
             continue
         if not found[1]:
+            # An `a` ends the `a` before it: one is held at a time.
+            if name in _FORMATTING and not (name == "a" and held.get("a")):
+                rest = _PLAIN_REST.match(text, found.end(), found.end() + PLAIN_TAG_MAX)
+                written = text[found.start() : rest.end()] if rest else None
+                if written is not None and alike.get(written) == ALIKE_MAX:
+                    # The first of the three leaves. At most `holding` steps, and this tag
+                    # has just added as much to `reopened`: the scan stays linear in its cap.
+                    held[name].remove(written)
+                else:
+                    holding += 1
+                    if written is not None:
+                        alike[written] = alike.get(written, 0) + 1
+                held.setdefault(name, []).append(written)
+            if name in _ITEMS and open_names and _ITEMS.get(open_names[-1]) == _ITEMS[name]:
+                counts[open_names.pop()] -= 1
             open_names.append(name)
             counts[name] = counts.get(name, 0) + 1
             if len(open_names) > SCAN_DEPTH_MAX:
@@ -238,21 +306,36 @@ def _clean(markup: str, attributes: dict, link_rel: str | None) -> str | None:
         return None
 
 
+class _TooSlowError(Exception):
+    """The budget was spent while the walker read."""
+
+
 class _Walker(HTMLParser):
     """Reads the output of pass 1 and writes two things: the same markup with `src` moved to
-    `data-src` and every value checked, and the text version."""
+    `data-src` and every value checked, and the text version. Raises _TooSlowError when `budget` is
+    spent: it is asked every WALK_BUDGET_EVERY tags and pieces of text."""
 
-    def __init__(self) -> None:
+    def __init__(self, budget) -> None:
         super().__init__(convert_charrefs=True)
+        self.budget = budget
+        self.steps = 0
         self.markup: list[str] = []
         self.text: list[str] = []
         self.open: list[tuple[str, bool]] = []  # (tag, whether its start tag was written)
+        # How many of each name are open: an end tag is answered without reading `open`, which
+        # is as deep as the scan allows.
+        self.open_names: dict[str, int] = {}
         self.links: list[
             tuple[str, int] | None
         ] = []  # per open `a`: (address, where its label starts)
         self.preformatted = 0
         self.remote_images = 0
         self.truncated = False
+
+    def _step(self) -> None:
+        self.steps += 1
+        if self.steps % WALK_BUDGET_EVERY == 0 and self.budget.spent():
+            raise _TooSlowError
 
     # --- markup ---
 
@@ -281,6 +364,7 @@ class _Walker(HTMLParser):
         ), address
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._step()
         if tag not in TAGS:
             return
         written, address = self._attributes(tag, attrs)
@@ -294,6 +378,7 @@ class _Walker(HTMLParser):
         fits = len(self.open) < DEPTH_MAX
         self.truncated = self.truncated or not fits
         self.open.append((tag, fits))
+        self.open_names[tag] = self.open_names.get(tag, 0) + 1
         if fits:
             self.markup.append(f"<{tag}{written}>")
         if tag == "a":
@@ -308,10 +393,12 @@ class _Walker(HTMLParser):
             self.handle_endtag(tag)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag in VOID or not any(name == tag for name, _ in self.open):
+        self._step()
+        if tag in VOID or not self.open_names.get(tag):
             return
         while self.open:
             name, fits = self.open.pop()
+            self.open_names[name] -= 1
             if fits:
                 self.markup.append(f"</{name}>")
             self._closed(name)
@@ -345,6 +432,7 @@ class _Walker(HTMLParser):
             self.text.append(f" ({shown})")
 
     def handle_data(self, data: str) -> None:
+        self._step()
         # A character reference can still name a control character: none is kept.
         data = _CONTROL.sub("", data)
         self.markup.append(html.escape(data, quote=False))
@@ -377,11 +465,15 @@ def handle(data: bytes, options: dict, budget) -> dict:
     first = _clean(markup, _PASS_1, None)
     if first is None:
         return unreadable
-    if budget.spent():
+    # What the scan did not foresee: a page the tree builder wrote many times over is not read.
+    if len(first) > GROWTH_MAX * max(len(markup), GROWTH_FLOOR) or budget.spent():
         return slow
-    walker = _Walker()
-    walker.feed(first)
-    walker.finish()
+    walker = _Walker(budget)
+    try:
+        walker.feed(first)
+        walker.finish()
+    except _TooSlowError:
+        return slow
     truncated = truncated or walker.truncated
     if budget.spent():
         return slow
