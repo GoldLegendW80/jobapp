@@ -21,6 +21,7 @@ from app.agents.crypto import Keyring
 from app.agents.live import RedisLiveStore
 from app.agents.ratelimit import RateLimiter
 from app.agents.verify import Verifier
+from app.apply import registry as apply_registry
 from app.body_limit import BodiesInFlight, LimitRequestBodyMiddleware, SessionGate
 from app.browser import registry as browser_registry
 from app.config import Settings, get_settings
@@ -261,6 +262,7 @@ def create_app(
     for mail_router in mail_routers.load():
         app.include_router(mail_router)
     browser_registry.include(app)
+    apply_registry.include(app)
     for documents_router in documents_routers.load():
         app.include_router(documents_router)
     identity_deps.assert_default_deny(app)
