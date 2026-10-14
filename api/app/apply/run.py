@@ -24,14 +24,18 @@ before any decision. One job at a time (the queue's concurrency is 1, the browse
    one when the fill stopped).
 5. Under the locks again: the fields with their sources (`application_answers`), the screenshot,
    the cost and the duration, and the state: `ready`; `needs_person` with what is needed (a
-   captcha, a required field left, `form_changed`, `no_adapter`); `posting_closed`; or `failed`
+   captcha, a sign in or an e-mail code seen at any point of the fill, the agent's fields
+   included, a required field left, `form_changed`, `no_adapter`); `posting_closed`; or `failed`
    with the tool's code (A10 adds the retries). The posting moves to `staged` through
    `set_status` (`via: "apply"`) only from `found`, `shortlisted` or `cv_ready`, so a status the
    person set during the fill (skipped, closed, applied by a mail) is never moved back
    (test_a_status_the_person_set_during_the_fill_is_kept). An application the person cancelled
    during the fill keeps its state, and nothing of the fill is stored over it.
 
-The lease is released whatever happens. A dry run ends `ready` like any other: SPEC-apply has every
+The lease is released whatever happens, and no application stays `filling`: a fill cancelled (a
+stop, the job's timeout) or whose step 5 raised ends `failed` with `interrupted` (`interrupt`,
+shielded from the cancellation), and the queue's start ends those a killed worker left
+(`reset_interrupted`). A dry run ends `ready` like any other: SPEC-apply has every
 rehearsal go through the whole gate, and the gate (A6) is the one that stops it as `rehearsed`
 before the click; this run never moves an application past `ready`, so never to `submitting`.
 
@@ -88,6 +92,8 @@ SUBMIT_SELECTORS = ('button[type="submit"]', 'input[type="submit"]')
 # The statuses a fill moves to `staged`: earlier in the pipeline only, never back.
 STAGE_FROM = frozenset({JobStatus.found, JobStatus.shortlisted, JobStatus.cv_ready})
 FILLED = frozenset({"filled", "unverified"})
+INTERRUPTED = "interrupted"
+DUE_LIMIT = 200
 
 
 class RunTools(ats_base.Tools, Protocol):
@@ -503,6 +509,34 @@ def finish(
     return result.state.value
 
 
+def interrupt(db: Session, application_id: uuid.UUID, now: datetime) -> str:
+    """A fill that could not end (cancelled by a stop or its timeout, or `finish` raised):
+    `failed` with `interrupted` when the application is still `filling`, so it never stays
+    there (A10's retries start from `failed`). Locks the application's row alone: the posting's
+    may be the one held."""
+    application = db.execute(
+        sa.select(Application)
+        .where(Application.id == application_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+    if application is None or application.state is not State.filling:
+        return "superseded"
+    _end(db, application, State.failed, INTERRUPTED, now)
+    return State.failed.value
+
+
+def reset_interrupted(db: Session, now: datetime) -> int:
+    """At the worker's start no fill runs: every application left `filling` by a dead process
+    ends `failed` with `interrupted`. Answers a count."""
+    ids = (
+        db.execute(sa.select(Application.id).where(Application.state == State.filling))
+        .scalars()
+        .all()
+    )
+    return sum(interrupt(db, application_id, now) == State.failed.value for application_id in ids)
+
+
 def _in_db[T](sessions: sessionmaker[Session], step: Callable[[Session], T]) -> T:
     with sessions() as db:
         try:
@@ -535,11 +569,16 @@ def _needs(report: ats_base.Report) -> str | None:
     return None
 
 
-def _stopped(code: str) -> tuple[State, str | None, str | None]:
-    """The state a stopped fill ends in: (state, needs, error)."""
+def _stopped(code: str, step: str = "") -> tuple[State, str | None, str | None]:
+    """The state a stopped fill ends in: (state, needs, error). A step for the person (A4's
+    `needs_person`, the step in `Report.needs_person`: captcha, signin, email_code) and a page
+    the adapter cannot read as discovered need the person; a click the tool layer refused
+    (`submit`, `danger`) and a tool's failure end `failed`."""
     if code == "posting_closed":
         return State.posting_closed, None, code
-    if code in ("form_changed", "no_adapter", "snapshot_cut", "captcha", "email_code"):
+    if code == "needs_person":
+        return State.needs_person, step or code, None
+    if code in ("form_changed", "no_adapter", "snapshot_cut", *ats_base.PENDING_STEPS):
         return State.needs_person, code, None
     return State.failed, None, code or "failed"
 
@@ -589,6 +628,9 @@ async def _answer_left(
         item = report.outcomes[index].field
         filled = await adapter.fill(tools, item, verdict.answer)
         report.outcomes[index] = ats_base.Outcome(item, verdict.answer, filled)
+        if filled.status == "failed" and filled.code in ats_base.PENDING_STEPS:
+            report.stopped, report.needs_person = "needs_person", filled.code
+            break
         if filled.status == "failed" and filled.code in ats_base.STOPPING:
             report.stopped = filled.code
             break
@@ -621,7 +663,7 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
     if not report.stopped:
         cost = await _answer_left(services, plan, adapter, tools, report)
     if report.stopped:
-        state, needs, error = _stopped(report.stopped)
+        state, needs, error = _stopped(report.stopped, report.needs_person)
     else:
         needs = _needs(report)
         state, error = (State.needs_person if needs else State.ready), None
@@ -671,6 +713,10 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         # Ours, from a job that died: nothing can drive it. Let the next tick start a fresh one.
         await services.leases.release(user, lease_id, "apply_restart")
         return "lease_restarted"
+
+    def interrupted(db: Session) -> str:
+        return interrupt(db, application_id, services.clock())
+
     try:
         began = await asyncio.to_thread(
             _in_db, services.sessions, lambda db: begin(db, application_id, services.clock())
@@ -687,11 +733,19 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
         except Exception as exc:  # never leave an application `filling`
             logger.error("apply.fill_crashed", extra={"error": type(exc).__name__})
             result = Result(State.failed, error="internal_error")
-        written = await asyncio.to_thread(
-            _in_db,
-            services.sessions,
-            lambda db: finish(db, application_id, result, services.clock(), started),
-        )
+        try:
+            written = await asyncio.to_thread(
+                _in_db,
+                services.sessions,
+                lambda db: finish(db, application_id, result, services.clock(), started),
+            )
+        except Exception as exc:  # the posting's row held past the lock timeout, the store gone
+            logger.error("apply.finish_failed", extra={"error": type(exc).__name__})
+            written = await asyncio.to_thread(_in_db, services.sessions, interrupted)
+    except asyncio.CancelledError:
+        # docker stop, or the job's timeout: the application never stays `filling`.
+        await asyncio.shield(asyncio.to_thread(_in_db, services.sessions, interrupted))
+        raise
     finally:
         try:
             await services.leases.release(user, lease_id, "apply_fill_done")
@@ -705,12 +759,37 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
 
 
 def due(db: Session) -> list[uuid.UUID]:
-    """The applications a fill should be asked for: `queued`, not Apply myself, oldest first."""
+    """The applications a fill should be asked for: `queued`, not Apply myself, at most one per
+    person, and none for a person whose fill runs (`filling`), so one person's backlog never
+    keeps another's out of the one-at-a-time queue: each tick queues the next of every person
+    in turn. A person's next is their oldest application ready to fill; those waiting for their
+    documents come after, the one asked longest ago first (each ask touches `updated_at`), so a
+    document finished for a later one is not stuck behind an earlier one still being written.
+    Oldest person's turn first, the limit after the ranking."""
+    waits = sa.case((Application.needs.like("documents:%"), 1), else_=0)
+    rank = sa.func.row_number().over(
+        partition_by=Application.user_id,
+        order_by=(
+            waits,
+            sa.case((waits == 1, Application.updated_at), else_=Application.created_at),
+            Application.id,
+        ),
+    )
+    filling = sa.select(Application.user_id).where(Application.state == State.filling)
+    ranked = (
+        sa.select(Application.id, Application.created_at, rank.label("rank"))
+        .where(
+            Application.state == State.queued,
+            Application.mode != Mode.manual,
+            Application.user_id.not_in(filling),
+        )
+        .subquery()
+    )
     return list(
         db.execute(
-            sa.select(Application.id)
-            .where(Application.state == State.queued, Application.mode != Mode.manual)
-            .order_by(Application.created_at, Application.id)
-            .limit(200)
+            sa.select(ranked.c.id)
+            .where(ranked.c.rank == 1)
+            .order_by(ranked.c.created_at, ranked.c.id)
+            .limit(DUE_LIMIT)
         ).scalars()
     )

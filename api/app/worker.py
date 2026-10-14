@@ -52,15 +52,20 @@ Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
   (max_jobs 1: the browser is one); tried once by arq, its result not kept, so the tick can queue
   it again under the same id once it ended.
 - apply_submit(application_id): the submit lease of one `approved` application (apply A6,
-  app/apply/submit.py): refill, read back, the one click through the gate. At start, every
-  `submitting` left by a dead process is `submit_unknown` (apply_reset_at_start).
-- apply_tick: cron every 30 seconds: asks a fill for every `queued` application (a new one, one
-  waiting for its documents or behind another person's lease, whose ticket lives 60 s), and the
-  submit of every `approved` one.
+  app/apply/submit.py): refill, read back, the one click through the gate.
+- apply_tick: cron every 30 seconds: asks a fill for the next `queued` application of every
+  person whose fill is not running (a new one, one waiting for its documents or behind another
+  person's lease, whose ticket lives 60 s), one per person so people take turns; and the submit
+  of every `approved` application (A6).
+  The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus a margin, the
+  submit's the `apply_submit` lease's. At start, every application left `filling` by a dead
+  process ends `failed` as `interrupted`, and every one left `submitting` ends `submit_unknown`:
+  the click may have gone through (reset_fills_at_start).
 
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
-cancelled agent run likewise (runner.execute), its scratch directory removed. Every Worker is
+cancelled agent run likewise (runner.execute), its scratch directory removed, a cancelled fill
+likewise (apply run.fill, its lease released). Every Worker is
 then closed (close_worker), even when a job was cancelled while still being picked up, and only
 once the end of every job that was finishing is written (QueueWorker).
 """
@@ -616,17 +621,6 @@ async def apply_submit(ctx: dict[str, Any], application_id: str) -> None:
     await apply_submit_run.submit(services, uuid.UUID(application_id))
 
 
-async def apply_reset_at_start(ctx: dict[str, Any]) -> int:
-    """A `submitting` left by a killed worker is `submit_unknown` (apply A6): the click may have
-    gone through, so it is never submitted again and never freed."""
-    from app.apply import submit as apply_submit_run
-
-    with sessions_of(ctx)() as db:
-        moved = apply_submit_run.reset_interrupted(db, clock_of(ctx)())
-        db.commit()
-    return moved
-
-
 async def apply_tick(ctx: dict[str, Any]) -> int:
     """Queues a fill for every application waiting for one, and the submit of every approved
     one (apply A6). Answers a count, nothing else."""
@@ -659,11 +653,33 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     return queued
 
 
-def apply_queue() -> QueueSpec:
-    from app.browser.leases import LEASE_MAX_S
+async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
+    """No fill runs when the apply queue starts: an application left `filling` by a killed
+    worker ends `failed` with `interrupted`."""
+    from app.apply import run as apply_run
+    from app.apply import submit as apply_submit_run
 
-    fill_timeout_s = LEASE_MAX_S["apply_fill"] + APPLY_JOB_MARGIN_S
-    submit_timeout_s = LEASE_MAX_S["apply_submit"] + APPLY_JOB_MARGIN_S
+    clock = clock_of(ctx)
+
+    def step(db: Session) -> int:
+        # A6: a `submitting` left by a killed worker is `submit_unknown`, never freed.
+        return apply_run.reset_interrupted(db, clock()) + apply_submit_run.reset_interrupted(
+            db, clock()
+        )
+
+    count = await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)
+    if count:
+        logger.info("apply.fill.reset", extra={"count": count})
+    return count
+
+
+def apply_queue(settings: Settings | None = None) -> QueueSpec:
+    from app.browser.leases import LEASE_MAX_S, lease_max_table
+
+    # The lease's own ceiling, BROWSER_LEASE_MAX_S included, and a margin to write the end.
+    table = lease_max_table(settings.browser_lease_max_s) if settings is not None else LEASE_MAX_S
+    fill_timeout_s = table["apply_fill"] + APPLY_JOB_MARGIN_S
+    submit_timeout_s = table["apply_submit"] + APPLY_JOB_MARGIN_S
     return QueueSpec(
         name=queue.APPLY,
         functions=[
@@ -679,7 +695,6 @@ def apply_queue() -> QueueSpec:
             ),
             func(apply_tick, name="apply_tick", timeout=60, max_tries=1, keep_result=0),
         ],
-        on_start=apply_reset_at_start,
         cron_jobs=[
             cron(
                 apply_tick,
@@ -692,6 +707,7 @@ def apply_queue() -> QueueSpec:
         # One fill at a time: there is one browser. The tick waits its turn behind a fill.
         max_jobs=1,
         job_timeout_s=max(fill_timeout_s, submit_timeout_s),
+        on_start=reset_fills_at_start,
     )
 
 
@@ -704,7 +720,7 @@ def queues(settings: Settings | None = None) -> list[QueueSpec]:
         agents_queue(),
         ingestion_queue(),
         documents_queue(),
-        apply_queue(),
+        apply_queue(settings),
     ]
 
 

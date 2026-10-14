@@ -836,7 +836,7 @@ def test_a_submitting_left_by_a_dead_worker_is_submit_unknown_at_start(
     db.execute(sa.update(Application).where(Application.id == app_a).values(state="submitting"))
     db.commit()
     ctx = {"sessions": factory, "clock": lambda: AT}
-    assert asyncio.run(worker.apply_reset_at_start(ctx)) == 1
+    assert asyncio.run(worker.reset_fills_at_start(ctx)) == 1
     found = application(db, app_a)
     assert (found.state, found.error_code) == (State.submit_unknown, "interrupted")
     assert frozen(db, person_a.cv_version_id) == ["apply"]
@@ -847,7 +847,7 @@ def test_the_queue_serves_the_submit_and_the_tick_asks_for_approved_ones() -> No
     spec = worker.apply_queue()
     names = {f.name for f in spec.functions}
     assert {"apply_fill", "apply_submit", "apply_tick"} <= names
-    assert spec.on_start is worker.apply_reset_at_start
+    assert spec.on_start is worker.reset_fills_at_start
     assert queues.apply_submit_job_id("x") == "apply-submit:x"
 
 

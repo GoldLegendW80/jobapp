@@ -43,7 +43,7 @@ _PERSON = re.compile(
     r"|communaute|vivier|futur|other (?:job|role|position|opening|opportunit|vacanc)s?"
     r"|\bopenings?\b|opportunit|autres? (?:postes?|offres?|recrutements?)|recrutements"
     r"|retain|retention|retenu|conserv|keep my (?:data|information)|\d"
-    r"|background|reference|verif|antecedent|criminal|drug|credit check|third part|tiers"
+    r"|background|\breferenc|verif|antecedent|criminal|drug|credit check|third part|tiers"
     r"|partenaires|affiliate|sms|text message|whatsapp|stay in touch|keep in touch|updates?\b"
     r"|receive (?:e-?mail|communication)|recevoir|share|partag|sensitive|sensible|biometric"
     r"|non-?compete|non-?disclosure|confidential\b|contract|contrat|binding|waive|release|indemn"
@@ -83,6 +83,15 @@ _ALLOWED_WORDS = frozenset(
     )
     for word in line.split()
 )
+
+
+def legal_reading(label: str) -> bool:
+    """Whether the label reads as a box of legal weight at all: a commitment or consent beyond
+    the application, the privacy notice or the accuracy statement. Such a question is never put
+    to a model in any widget, a box ticked or a text typed (`agent.eligible`), whatever this
+    module would let the agent tick: those two boxes are code's, from the person's rules."""
+    text = _fold(label)
+    return bool(_PERSON.search(text) or _PRIVACY.search(text) or _ACCURACY.search(text))
 
 
 def classify(label: str) -> Box:

@@ -556,7 +556,7 @@ def _outcome(label: str, kind: str, reason: str, options: tuple[str, ...] = ()) 
         ("Why Example Robotics?", "text", "free_text_for_the_agent", (), True),
         ("What is your favourite robot?", "text", "not_a_known_question", (), True),
         ("Which team interests you?", "select", "not_a_known_question", ("Ops", "Research"), True),
-        ("Do you enjoy puzzles?", "yes_no", "not_a_known_question", (), True),
+        ("Do you enjoy puzzles?", "yes_no", "not_a_known_question", (), False),  # a yes or no
         ("Team preference", "combobox", "not_a_known_question", ("Ops", "Research"), True),
         ("Team preference", "combobox", "not_a_known_question", (), False),  # options unknown
         ("Gender", "select", "not_a_known_question", ("Male", "Female"), False),  # EEO
@@ -615,7 +615,8 @@ def _judge(question: agent.Question, value: str | None, source: str = "facts") -
 TEXT = agent.Question("q", "Tell us something", "text")
 CHOICE = agent.Question("c", "Which team?", "select", ("Ops", "Research"))
 YES_NO = agent.Question("y", "Do you enjoy puzzles?", "yes_no")
-YEARS = agent.Question("g", "Do you have 12+ years of Go?", "yes_no")
+YES_NO_SELECT = agent.Question("s", "Kubernetes in production", "select", ("Yes", "No"))
+CLEARANCE = agent.Question("k", "Security clearance level", "text")
 
 
 @pytest.mark.parametrize(
@@ -636,11 +637,16 @@ YEARS = agent.Question("g", "Do you have 12+ years of Go?", "yes_no")
         (CHOICE, "ops", "answers", "accepted"),
         (CHOICE, "Operations", "answers", "no_matching_option"),
         (CHOICE, "Research and Ops", "answers", "no_matching_option"),
-        (YES_NO, "Yes", "skills", "accepted"),
-        (YES_NO, "No", "skills", "accepted"),
-        (YES_NO, "Maybe", "skills", "not_a_yes_or_no"),
-        (YEARS, "Yes", "experience", "fact_check"),
-        (YEARS, "No", "experience", "accepted"),
+        # a yes or no is the person's, in any widget; so are claims and credentials
+        (YES_NO, "Yes", "skills", "yes_or_no"),
+        (YES_NO, "No", "skills", "yes_or_no"),
+        (YES_NO_SELECT, "Yes", "skills", "yes_or_no"),
+        (CLEARANCE, "None", "facts", "unproven"),
+        (TEXT, "Yes", "facts", "yes_or_no"),
+        (TEXT, "Yes, I am.", "facts", "yes_or_no"),
+        (TEXT, "Non.", "facts", "yes_or_no"),
+        (TEXT, "Nothing excites me more than agents.", "facts", "accepted"),
+        (TEXT, "Nonetheless I like building agents.", "facts", "accepted"),
     ],
 )
 def test_what_is_kept_of_the_agents_reply(
