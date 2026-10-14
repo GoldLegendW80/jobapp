@@ -115,11 +115,13 @@ def test_the_environment_is_the_port_alone(parser: dict) -> None:
 def test_the_parser_is_on_the_internal_network_and_only_the_worker_shares_it() -> None:
     document = compose()
     services = document["services"]
-    assert document["networks"] == {"parsing": {"internal": True}}
+    # `rendering` is the renderer's own (documents D3, tests/documents/test_compose_renderer.py).
+    assert document["networks"] == {"parsing": {"internal": True}, "rendering": {"internal": True}}
     assert services["parser"]["networks"] == ["parsing"]
-    assert services["worker"]["networks"] == ["default", "parsing"]
+    assert services["worker"]["networks"] == ["default", "parsing", "rendering"]
+    assert services["renderer"]["networks"] == ["rendering"]
     for name, service in services.items():
-        if name not in ("parser", "worker"):
+        if name not in ("parser", "renderer", "worker"):
             assert "networks" not in service, f"{name} must stay on the default network alone"
             assert "network_mode" not in service, name
 
@@ -198,8 +200,9 @@ def test_the_memory_limits_of_the_stack_stay_within_the_budget_of_the_jetson() -
         "parser": "640m",
         "db": "768m",
         "redis": "256m",
+        "renderer": "384m",
     }
-    assert sum(int(limit[:-1]) for limit in limits.values()) == 3968 < 5 * 1024
+    assert sum(int(limit[:-1]) for limit in limits.values()) == 4352 < 5 * 1024
 
 
 def test_the_test_stack_takes_the_service_from_compose_yml_and_adds_no_privilege() -> None:

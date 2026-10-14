@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # What a failed deploy rolls back to (.github/workflows/deploy.yml, issue #3).
 #
-#   ops/previous.sh tag-running            tag the image each running api, worker and caddy
+#   ops/previous.sh tag-running            tag the image each running api, worker, caddy and renderer
 #                                          container was started from as jobapp-<service>:previous
 #   ops/previous.sh save-tree <app> <dir>  copy the deployed tree <app> to <dir> before the sync
 #   ops/previous.sh restore-tree <dir> <app>
@@ -20,7 +20,7 @@
 # restore-tree on a missing copy (first deploy) does nothing and says so.
 set -euo pipefail
 
-IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy)
+IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy renderer:jobapp-renderer)
 
 die() {
   printf 'ops/previous.sh: %s\n' "$*" >&2

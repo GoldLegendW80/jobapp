@@ -1,35 +1,34 @@
 #!/usr/bin/env bash
-# D1 of the documents plan: the renderer, measured on the Jetson (WeasyPrint against Chromium).
+# D3 of the documents plan: the renderer service on the Jetson, for real.
 #
 #   tests/documents_render_jetson.sh            dry: prints every command, runs nothing
-#   tests/documents_render_jetson.sh --run      runs the measurement on the Jetson
-#   options: --host <ssh host> (jetson), --dir <remote folder name>, --keep (no clean up)
+#   tests/documents_render_jetson.sh --run      runs it on the Jetson
+#   options: --host <ssh host> (jetson), --dir <remote folder> (d3spike-..., a name, never a
+#            path), --renders N (50), --keep (no clean up)
 #
-# What it does, in the Jetson's home, in a folder of its own (d1-spike-<random>), with images
-# tagged d1spike-* and containers named d1spike-*, each --rm with --memory and --cpus limits:
-# 1. builds d1spike-weasy FROM jobapp-worker:latest (WeasyPrint added; the sandbox's main.py of
-#    this checkout with one HANDLERS line for render_pdf) and d1spike-chromium (Playwright's
-#    headless shell on the worker's Python base);
-# 2. turns the fixtures of api/tests/documents/fixtures/content/ into HTML (make_html.py);
-# 3. WeasyPrint: every render a child of the parser sandbox (main.py: rlimits, seccomp filter),
-#    in a container with the parser service's settings of compose.yml;
-# 4. Chromium: launched with its own sandbox under the same settings, then with what it needs;
-# 5. both again, quickly, while two busy cores and 300 MB stand in for an agent run;
-# 6. page 1 side by side, the CSS probes, the font check: tests/../tasks/evidence/documents-d1/.
-# It never runs docker compose, never touches ~/jobapp, and waits while the Jetson has under
+# What it does, in the Jetson's home, in a folder of its own, with an image tagged
+# d3spike-renderer, containers named d3spike-*, and an internal network d3spike-net-*:
+# 1. builds the renderer's image from renderer/ of this checkout;
+# 2. starts it as compose.yml does (uid 10003, read only root, 64m tmpfs on /tmp, no capability,
+#    no new privilege, ipc none, 128 pids, 384m, two CPUs, no environment, the internal network
+#    alone), and samples its cgroup's memory every 0.2 s;
+# 3. runs tests/documents_render_jetson.py in a container of jobapp-worker:latest (read only,
+#    never retagged) with this checkout's render_client.py and fit.py: the command line's build
+#    table (file, step, pages, status) for D1's fixtures through the real fit loop, then N renders
+#    of the typical CV, the worker side's memory before and after;
+# 4. prints the renderer's memory: after the first render, after the N renders, and the peak.
+# It never runs docker compose and never touches ~/jobapp; it waits while the Jetson has under
 # 2,500 MiB available (once a minute, at most 10 times), then stops.
-# Remote commands are built on this side on purpose ($DIR, $PARSER): SC2029 is expected.
+# Remote commands are built on this side on purpose ($DIR, $NET): SC2029 is expected.
 # shellcheck disable=SC2029
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SPIKE="$HERE/ops/spikes/documents-render"
-FIXTURES="$HERE/api/tests/documents/fixtures/content"
-EVIDENCE="$HERE/tasks/evidence/documents-d1"
 HOST=jetson
 RUN=0
 KEEP=0
-DIR="d1-spike-$RANDOM$RANDOM"
+RENDERS=50
+DIR="d3spike-$RANDOM$RANDOM"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -37,18 +36,19 @@ while [ $# -gt 0 ]; do
     --keep) KEEP=1 ;;
     --host) HOST="$2"; shift ;;
     --dir) DIR="$2"; shift ;;
+    --renders) RENDERS="$2"; shift ;;
     *) echo "unknown option: $1" >&2; exit 64 ;;
   esac
   shift
 done
-case "$DIR" in d1-spike-*) ;; *) echo "--dir must start with d1-spike-" >&2; exit 64 ;; esac
+# The folder is a name in the Jetson's home, never a path: the clean up removes it.
+case "$DIR" in */* | *..*) echo "--dir is a folder name: no / and no .." >&2; exit 64 ;; esac
+[[ "$DIR" =~ ^d3spike-[A-Za-z0-9_-]+$ ]] || { echo "--dir must match d3spike-[A-Za-z0-9_-]+" >&2; exit 64; }
+[[ "$RENDERS" =~ ^[0-9]+$ ]] || { echo "--renders is a number" >&2; exit 64; }
+NET="d3spike-net-${DIR#d3spike-}"
 
-# The parser service's settings (compose.yml), with no network for the internal one.
-PARSER="--user 10002:10002 --read-only --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 32 --network none --memory 640m --cpus 2"
-# What Chromium needs beyond them (measured): a tmpfs for /tmp (Playwright and Chromium write
-# there) and more than 32 processes and threads. Its own sandbox never starts (see the evidence).
-RELAXED="${PARSER/10002:10002/10003:10003} --memory 1500m --tmpfs /tmp:size=64m --pids-limit 256"
-MOUNTS="-v \$HOME/$DIR/spike:/spike:ro -v \$HOME/$DIR/work:/work"
+# compose.yml's renderer, flag by flag (api/tests/documents/test_compose_renderer.py holds them).
+RENDERER="--user 10003:10003 --read-only --tmpfs /tmp:size=64m,mode=1777 --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 128 --memory 384m --cpus 2 --network $NET --network-alias renderer"
 
 say() { printf '\n== %s\n' "$*"; }
 remote() {
@@ -71,63 +71,35 @@ wait_memory() {
 
 cleanup() {
   [ "$RUN" = 1 ] || return 0
-  [ "$KEEP" = 1 ] && { echo "kept: $HOST:~/$DIR and the d1spike images"; return 0; }
+  [ "$KEEP" = 1 ] && { echo "kept: $HOST:~/$DIR, d3spike-renderer, $NET"; return 0; }
   say "clean up"
-  ssh "$HOST" "docker rm -f d1spike-load >/dev/null 2>&1 || true; docker run --rm --name d1spike-clean --memory 256m --cpus 1 --network none -v \"\$HOME/$DIR\":/d python:3.12.15-slim-trixie rm -rf /d/work; docker rmi d1spike-weasy d1spike-chromium >/dev/null 2>&1 || true; rm -rf \"\$HOME/$DIR\"; docker images | grep d1spike || echo 'no d1spike image left'; free -m; df -h /"
+  ssh "$HOST" "docker rm -f d3spike-renderer d3spike-driver >/dev/null 2>&1 || true; docker network rm $NET >/dev/null 2>&1 || true; docker rmi d3spike-renderer >/dev/null 2>&1 || true; rm -rf \"\$HOME/$DIR\"; docker images | grep d3spike || echo 'no d3spike image left'; docker network ls | grep d3spike || echo 'no d3spike network left'; free -m; df -h /"
 }
 trap cleanup EXIT
 
-say "stage the build context ($DIR)"
+say "stage ($DIR)"
 STAGE="$(mktemp -d)"
-cp "$SPIKE"/*.py "$SPIKE"/Dockerfile.* "$STAGE/"
-mkdir -p "$STAGE/fixtures"
-cp "$FIXTURES"/*.json "$STAGE/fixtures/"
-# Two kinds on the same handler: render_pdf_strict keeps every limit of main.py (no new thread,
-# which Pango needs), render_pdf allows threads up to the container's pids_limit of 32.
-perl -pe 's/^(    "pdf_render": "pdf_render",\n)/$1    "render_pdf": "render_pdf",\n    "render_pdf_strict": "render_pdf",\n/; s/^(LIMITS\["pdf_render"\]\["as"\] = PDF_RENDER_AS\n)/$1LIMITS["render_pdf"]["nproc"] = 32\n/' \
-  "$HERE/api/app/ingestion/sandbox/main.py" >"$STAGE/main.py"
-[ "$(grep -c '"render_pdf\(_strict\)\?": "render_pdf"\|LIMITS\["render_pdf"\]\["nproc"\] = 32' "$STAGE/main.py")" = 3 ] || { echo "main.py: patch not applied" >&2; exit 70; }
-echo "+ rsync $STAGE/ $HOST:~/$DIR/spike/"
+mkdir -p "$STAGE/renderer" "$STAGE/documents" "$STAGE/d3/tests/documents/fixtures"
+cp "$HERE/renderer/Dockerfile" "$HERE/renderer/server.py" "$STAGE/renderer/"
+cp "$HERE/api/app/documents/render_client.py" "$HERE/api/app/documents/fit.py" "$STAGE/documents/"
+cp "$HERE/tests/documents_render_jetson.py" "$STAGE/d3/"
+cp "$HERE/api/tests/documents/render_html.py" "$STAGE/d3/tests/documents/"
+touch "$STAGE/d3/tests/__init__.py" "$STAGE/d3/tests/documents/__init__.py"
+cp -R "$HERE/api/tests/documents/fixtures/content" "$STAGE/d3/tests/documents/fixtures/"
+echo "+ rsync $STAGE/ $HOST:~/$DIR/"
 if [ "$RUN" = 1 ]; then
-  ssh "$HOST" "mkdir -p \"\$HOME/$DIR/work\" && chmod 777 \"\$HOME/$DIR/work\""
-  rsync -a "$STAGE/" "$HOST:$DIR/spike/"
-  ssh "$HOST" "chmod -R a+rX \"\$HOME/$DIR/spike\""
+  rsync -a "$STAGE/" "$HOST:$DIR/"
+  ssh "$HOST" "chmod -R a+rX \"\$HOME/$DIR\""
 fi
 rm -rf "$STAGE"
 
-say "build the images"
+say "build the renderer's image"
 wait_memory
-remote "cd \$HOME/$DIR/spike && docker build -q -t d1spike-weasy -f Dockerfile.weasy . && docker build -q -t d1spike-chromium -f Dockerfile.chromium ."
-remote "docker image inspect -f '{{.Size}}' jobapp-worker:latest d1spike-weasy python:3.12.15-slim-trixie d1spike-chromium | tr '\n' ' ' > \$HOME/$DIR/work/sizes.txt; cat \$HOME/$DIR/work/sizes.txt"
+remote "cd \$HOME/$DIR/renderer && docker build -q -t d3spike-renderer . && docker image inspect -f '{{.Size}}' d3spike-renderer"
 
-say "fixtures to HTML"
-remote "docker run --rm --name d1spike-make --memory 1500m --cpus 2 --network none $MOUNTS -v \$HOME/$DIR/spike/fixtures:/fixtures:ro d1spike-weasy python /spike/make_html.py /fixtures /work"
+say "the renderer as compose.yml starts it, on an internal network of its own"
+remote "docker network create --internal $NET >/dev/null && docker run -d --rm --name d3spike-renderer $RENDERER d3spike-renderer >/dev/null && for i in \$(seq 1 60); do docker exec d3spike-renderer python -I /renderer/server.py --check && break; sleep 1; done && docker inspect -f '{{.Config.User}} ro={{.HostConfig.ReadonlyRootfs}} pids={{.HostConfig.PidsLimit}} mem={{.HostConfig.Memory}} ipc={{.HostConfig.IpcMode}} caps={{.HostConfig.CapDrop}} env={{len .Config.Env}}' d3spike-renderer"
 
-say "WeasyPrint inside the parser sandbox, alone"
+say "memory sampler, the build table, $RENDERS renders"
 wait_memory
-remote "docker run --rm --name d1spike-weasy-run $PARSER $MOUNTS d1spike-weasy python /spike/weasy_bench.py /work/html /work full alone"
-
-say "Chromium: its own sandbox under the parser's settings, then relaxed, then without it"
-wait_memory
-remote "docker run --rm --name d1spike-chromium-a ${PARSER/10002:10002/10003:10003} --memory 1500m $MOUNTS d1spike-chromium python /spike/chromium_bench.py /work/html /work sandbox sandbox-parser || true"
-remote "docker run --rm --name d1spike-chromium-b $RELAXED $MOUNTS d1spike-chromium python /spike/chromium_bench.py /work/html /work sandbox sandbox-relaxed || true"
-remote "docker run --rm --name d1spike-chromium-c ${PARSER/10002:10002/10003:10003} --memory 1500m --tmpfs /tmp:size=64m $MOUNTS d1spike-chromium python /spike/chromium_bench.py /work/html /work sandbox nosandbox-pids32 --no-sandbox || true"
-remote "docker run --rm --name d1spike-chromium-run $RELAXED $MOUNTS d1spike-chromium python /spike/chromium_bench.py /work/html /work full alone --no-sandbox"
-
-say "both again while a stand in for an agent run is busy (two cores, 300 MB)"
-wait_memory
-remote "docker run -d --rm --name d1spike-load --memory 600m --cpus 2 --network none python:3.12.15-slim-trixie sh -c 'python -c \"x = bytearray(300 * 2**20); exec(\\\"while 1: pass\\\")\" & python -c \"while 1: pass\"'"
-remote "docker run --rm --name d1spike-weasy-load $PARSER $MOUNTS d1spike-weasy python /spike/weasy_bench.py /work/html /work quick load"
-remote "docker run --rm --name d1spike-chromium-load $RELAXED $MOUNTS d1spike-chromium python /spike/chromium_bench.py /work/html /work quick load --no-sandbox"
-remote "docker rm -f d1spike-load"
-
-say "side by side, probes, font check"
-remote "docker run --rm --name d1spike-compare --memory 1500m --cpus 2 --network none $MOUNTS d1spike-weasy python /spike/compare.py /work /work/evidence"
-
-say "bring the evidence back"
-echo "+ rsync $HOST:~/$DIR/work/{evidence,*.json,sizes.txt} $EVIDENCE/"
-if [ "$RUN" = 1 ]; then
-  mkdir -p "$EVIDENCE"
-  rsync -a "$HOST:$DIR/work/evidence/" "$EVIDENCE/"
-  rsync -a "$HOST:$DIR/work/sizes.txt" "$HOST:$DIR/work/*.json" "$EVIDENCE/"
-fi
+remote "cg=\$(find /sys/fs/cgroup -maxdepth 3 -type d -name \"*\$(docker inspect -f '{{.Id}}' d3spike-renderer)*\" | head -n 1); echo \"cgroup: \$cg\"; echo \"renderer at rest: \$((\$(cat \$cg/memory.current) / 1048576)) MiB\"; (while [ -e \$cg/memory.current ]; do cat \$cg/memory.current; sleep 0.2; done > \$HOME/$DIR/samples.txt 2>/dev/null </dev/null &) ; docker run --rm --name d3spike-driver --network $NET --user 10001:10001 --read-only --cap-drop ALL --security-opt no-new-privileges:true --memory 512m --cpus 2 -v \$HOME/$DIR/documents:/app/app/documents:ro -v \$HOME/$DIR/d3:/d3:ro jobapp-worker:latest python -I /d3/documents_render_jetson.py $RENDERS; echo \"renderer after: \$((\$(cat \$cg/memory.current) / 1048576)) MiB\"; sort -n \$HOME/$DIR/samples.txt | tail -n 1 | awk '{printf \"renderer peak (0.2 s samples): %d MiB\\n\", \$1 / 1048576}'; [ -e \$cg/memory.peak ] && echo \"renderer memory.peak: \$((\$(cat \$cg/memory.peak) / 1048576)) MiB\"; grep -E '^(anon|file) ' \$cg/memory.stat; docker exec d3spike-renderer sh -c 'ls /proc | grep -c \"^[0-9]\"' | sed 's/^/processes in the container: /'; docker logs d3spike-renderer 2>&1 | grep -c '\"outcome\": \"ok\"' | sed 's/^/renders answered ok: /'"

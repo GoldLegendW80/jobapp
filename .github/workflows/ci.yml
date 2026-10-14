@@ -483,7 +483,7 @@ jobs:
       - name: Build the images (buildx bake, the runner's own layer cache)
         id: images
         if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment != 'github-hosted' }}
-        run: docker buildx bake --progress=plain -f compose.yml --load api worker caddy
+        run: docker buildx bake --progress=plain -f compose.yml --load api worker caddy renderer
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         id: buildx
         if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment == 'github-hosted' }}
@@ -494,7 +494,7 @@ jobs:
         with:
           source: .
           files: compose.yml
-          targets: api,worker,caddy
+          targets: api,worker,caddy,renderer
           load: true
           set: |
             api.cache-from=type=gha,scope=e2e-api
@@ -743,7 +743,7 @@ jobs:
       - name: Build the images (buildx bake, the runner's own layer cache)
         id: images
         if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment != 'github-hosted' }}
-        run: docker buildx bake --progress=plain -f compose.yml --load api worker caddy
+        run: docker buildx bake --progress=plain -f compose.yml --load api worker caddy renderer
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         id: buildx
         if: ${{ !cancelled() && steps.e2e_env.outcome == 'success' && runner.environment == 'github-hosted' }}
@@ -755,7 +755,7 @@ jobs:
         with:
           source: .
           files: compose.yml
-          targets: api,worker,caddy
+          targets: api,worker,caddy,renderer
           load: true
           set: |
             api.cache-from=type=gha,scope=e2e-api
