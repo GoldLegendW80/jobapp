@@ -41,7 +41,9 @@
 # check's own image names), checks (the tests/*_test.sh side by side). The journey groups start
 # when the images and the web install are done, each on a scratch stack of its own (own project,
 # own port, own database; the ports are claimed once up front, and a start that fails on a port is retried on another, three starts at most), LOCAL_CHECK_STACKS of them side by side (default: one per 4 GiB of
-# Docker memory, at most 4), with one Playwright worker each, as in CI. When every lane has
+# Docker memory, at most 4), with one Playwright worker each, as in CI. A slot that frees starts
+# the next group at once, and the groups start longest first (their last time in timings.csv,
+# a group never timed first of all), so the longest group does not start last. When every lane has
 # ended, the tests that measure time run in a quiet phase, one at a time: Vitest, the docker
 # marked tests, the test of the suite that measures its own speed, the
 # coverage floor and the scoring test. Before the result, the steps that ran are compared with
@@ -55,6 +57,11 @@
 #   trap removes them, the temporary worktree and the lock on success, on failure and on Ctrl+C;
 # - it never touches a container it did not start (never jobapp-ci-*, never another project) and
 #   never builds or retags the shared jobapp-*:latest images.
+#
+# Timings: every step that ends, and the whole run as the step "total", is a line of
+# .local-check/timings.csv in the main checkout (check id, tree, step, seconds, PASS or FAIL),
+# kept across runs so a step that slows down shows (issue #280). The journey stacks start longest
+# first by the last time recorded there.
 #
 # Output: one line per step (name, PASS or FAIL, seconds), the last 40 lines of the log of each
 # failed step, the folder that keeps the full logs, then as the last line one of
@@ -362,6 +369,13 @@ fi
 # however run_step is called. The step is given every function of this script (declare -f) and the
 # variables named in STEP_ENV; a name it lacks stops it (nounset) and the step fails.
 STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST)
+TIMINGS="$RECORDS/timings.csv"
+timing() { # timing <step> <exit status> <seconds>: one line of timings.csv
+  local result=PASS
+  [[ "$2" == 0 ]] || result=FAIL
+  printf '%s,%s,%s,%s,%s\n' "$CHECK_ID" "${tree_sha:-}" "$1" "$3" "$result" >>"$TIMINGS" 2>/dev/null || true
+}
+
 run_step() {
   local name="$1" start=$SECONDS rc=0 pid watcher
   shift
@@ -381,6 +395,7 @@ run_step() {
   kill_tree "$watcher"
   wait "$watcher" 2>/dev/null || true
   printf '%s\t%s\t%s\n' "$name" "$rc" "$((SECONDS - start))" >>"$WORK/results"
+  timing "$name" "$rc" "$((SECONDS - start))"
   if ((rc == 0)); then
     printf '%-26s PASS %5ss\n' "$name" "$((SECONDS - start))"
   else
@@ -392,6 +407,7 @@ run_step() {
 not_run() { # not_run <name> <why>: a step that could not start counts as failed
   printf '%s\n' "$2" >"$LOGS/$1.log"
   printf '%s\t%s\t%s\n' "$1" 1 0 >>"$WORK/results"
+  timing "$1" 1 0
   printf '%-26s FAIL %5ss  (%s)\n' "$1" 0 "$2"
 }
 
@@ -752,7 +768,7 @@ s_journey() {
 }
 
 lane_journeys() {
-  local groups=() group running=0 why=""
+  local groups=() group running=() why=""
   if wanted checks; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups checks); fi
   if wanted journeys; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups journeys); fi
   ((${#groups[@]})) || return 0
@@ -768,15 +784,28 @@ lane_journeys() {
     for group in "${groups[@]}"; do not_run "journeys-$group" "no free loopback port for the stacks"; done
     return 0
   }
-  for group in "${groups[@]}"; do
+  for group in $(longest_first "${groups[@]}"); do
+    while (($(alive "${running[@]+"${running[@]}"}") >= STACKS)); do sleep 1; done
     run_step "journeys-$group" s_journey "$group" &
-    running=$((running + 1))
-    if ((running >= STACKS)); then
-      wait
-      running=0
-    fi
+    running+=($!)
   done
   wait
+}
+
+alive() { # alive <process id ...>: how many of them still run
+  local pid n=0
+  for pid in "$@"; do if kill -0 "$pid" 2>/dev/null; then n=$((n + 1)); fi; done
+  printf '%s\n' "$n"
+}
+
+# longest_first <group ...>: the groups by their last time in timings.csv, longest first; a group
+# with no time yet comes before all (it may be the longest), and equal times keep the order given.
+longest_first() {
+  local i=0 group
+  for group in "$@"; do
+    i=$((i + 1))
+    printf '%s\t%s\t%s\n' "$(awk -F , -v step="journeys-$group" '$3 == step { last = $4 } END { print (last == "" ? 999999 : last) }' "$TIMINGS" 2>/dev/null || echo 999999)" "$i" "$group"
+  done | sort -t "$(printf '\t')" -k1,1nr -k2,2n | cut -f 3
 }
 
 # --- the steps: checks -----------------------------------------------------------------------------
@@ -962,6 +991,7 @@ else
   [[ "$STACKS" =~ ^[1-9][0-9]*$ ]] || usage_error "LOCAL_CHECK_STACKS must be a number, 1 or more"
 fi
 
+[[ -s "$TIMINGS" ]] || printf 'check,tree,step,seconds,result\n' >"$TIMINGS"
 say "local check $CHECK_ID: base $BASE ($base_sha), $(wc -l <"$WORK/merges" | tr -d ' ') merged, tree $tree_sha"
 say "logs: $LOGS"
 say "$scan_line"
@@ -1006,6 +1036,7 @@ if [[ -n "$failed" ]]; then
     tail -n 40 "$LOGS/$name.log"
   done
   printf '\nlogs: %s\ntotal: %ss\n' "$LOGS" "$total"
+  timing total 1 "$total"
   say "LOCAL CHECK: FAIL $tree_sha $failed"
   exit 1
 fi
@@ -1057,4 +1088,5 @@ out.write_text(json.dumps(record, indent=2) + "\n")
 PY
   say "record: $RECORDS/$tree_sha.json"
 fi
+timing total 0 "$total"
 say "LOCAL CHECK: ${kind}PASS $tree_sha ${total}s$note"

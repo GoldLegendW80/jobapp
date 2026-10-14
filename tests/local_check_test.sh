@@ -352,6 +352,57 @@ done < <(grep -o '[a-z0-9-]*\.spec\.ts' "$STUB_CALLS.specs")
 grep -vxF -- "-c e2e/zeta-all.config.ts" "$STUB_CALLS.specs" >"$WORK/gate-specs" # this repository's groups only
 ok "every web/e2e/<group>-all.config.ts is a journey group of its own step, and every group has its config or its spec files"
 
+# --- the journey stacks: longest first, a freed slot starts the next one (issue #280) ---------------
+# Four groups on two slots. timings.csv says long took 300 s and apps 100 s, short 10 s (its last
+# line); fresh was never timed. The order must be fresh, long, apps, short, and long waits until
+# short has started: with batches of STACKS (start two, wait for both, as before) short never
+# starts while long runs, and long gives up after 20 s and fails.
+cat >"$WORK/pool.sh" <<'EOF'
+s_chromium() { true; }
+journey_groups() { [[ "$1" != checks ]] || printf '%s\n' apps short long fresh; }
+s_journey() {
+  echo "$1" >>"$STUB_CALLS.started"
+  [[ "$1" == long ]] || return 0
+  local tries=0
+  until grep -qx short "$STUB_CALLS.started"; do
+    ((tries++ < 200)) || return 1
+    sleep 0.1
+  done
+}
+stub_plan() {
+  STACKS=2
+  echo 0 >"$WORK/images.done"
+  echo 0 >"$WORK/web.done"
+  lane_journeys
+}
+EOF
+printf '%s\n' x,t,journeys-short,500,PASS x,t,journeys-long,300,PASS x,t,journeys-apps,100,PASS x,t,journeys-short,10,FAIL >>"$RECORDS/timings.csv"
+: >"$STUB_CALLS.started"
+run 0 env LOCAL_CHECK_STUB="$WORK/pool.sh" "$CHECK" --only checks
+[[ "$(tr '\n' ' ' <"$STUB_CALLS.started")" == "fresh long apps short " ]] ||
+  fail "the journey stacks started in the order $(tr '\n' ' ' <"$STUB_CALLS.started"), expected fresh long apps short"
+out_has "journeys-long              PASS"
+ok "the journey stacks start longest first by their last time (an untimed one first), and a freed slot starts the next at once"
+
+# --- timings.csv -----------------------------------------------------------------------------------
+check_id_of_out() { sed -n 's/^local check \(lc[0-9]*-[0-9]*\):.*/\1/p' "$WORK/out"; }
+tree_of_out() { sed -n 's/^local check .*, tree \([0-9a-f]*\)$/\1/p' "$WORK/out"; }
+check_id="$(check_id_of_out)"
+tree="$(tree_of_out)"
+[[ -n "$check_id" && -n "$tree" ]] || fail "no check id or tree in the output"
+[[ "$(head -n 1 "$RECORDS/timings.csv")" == "check,tree,step,seconds,result" ]] || fail "timings.csv has no header: $(head -n 1 "$RECORDS/timings.csv")"
+for step in journeys-fresh journeys-long journeys-apps journeys-short total; do
+  grep -qE "^$check_id,$tree,$step,[0-9]+,PASS\$" "$RECORDS/timings.csv" || fail "timings.csv has no PASS line for $step of $check_id: $(grep "^$check_id," "$RECORDS/timings.csv")"
+done
+run 1 env LOCAL_CHECK_STUB="$WORK/fail.sh" "$CHECK"
+check_id="$(check_id_of_out)"
+tree="$(tree_of_out)"
+grep -qE "^$check_id,$tree,broken,[0-9]+,FAIL\$" "$RECORDS/timings.csv" || fail "the failed step is not a FAIL line of timings.csv"
+grep -qE "^$check_id,$tree,good,[0-9]+,PASS\$" "$RECORDS/timings.csv" || fail "the passed step is not a PASS line of timings.csv"
+grep -qE "^$check_id,$tree,total,[0-9]+,FAIL\$" "$RECORDS/timings.csv" || fail "the failed run has no total line"
+[[ "$(grep -c '^check,' "$RECORDS/timings.csv")" == 1 ]] || fail "timings.csv has its header more than once"
+ok "timings.csv: one line per step and one for the total (check id, tree, step, seconds, PASS or FAIL), across runs"
+
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
 # it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded
