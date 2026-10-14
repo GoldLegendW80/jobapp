@@ -22,7 +22,10 @@ def adapter_for(
     url: str, snapshot: str | None = None, *, stub_base: str | None = None
 ) -> Adapter | None:
     """The adapter of a posting address, else of the page it shows; None when no adapter knows
-    it (the generic strategy of A8, or the person)."""
+    it (the generic strategy of A8, or the person). An adapter chosen by the page is `framed`:
+    the page must frame the form in one iframe, and the fill reads only that iframe. The
+    frame's host cannot be checked from the snapshot (see `base`), so a caller deciding about
+    Full auto reads `adapter.framed`."""
     adapters = [cls(stub_base) for cls in ADAPTERS]
     for adapter in adapters:
         if adapter.form_url(url) is not None:
@@ -30,5 +33,5 @@ def adapter_for(
     if snapshot is not None:
         for adapter in adapters:
             if adapter.recognises(snapshot):
-                return adapter
+                return type(adapter)(stub_base, framed=True)
     return None

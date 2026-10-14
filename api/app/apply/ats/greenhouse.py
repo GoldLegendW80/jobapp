@@ -7,8 +7,8 @@ reported as `needs_person: email_code` (apply A10 hands it to the person).
 Addresses it takes (anything else is not Greenhouse's, fail closed):
     https://{job-boards,boards}[.eu].greenhouse.io/<org>/jobs/<digits>       the hosted form
     https://{job-boards,boards}[.eu].greenhouse.io/embed/job_app?for=<org>&token=<digits>
-A company page carrying `gh_jid` frames the embed page: it is recognised by the page (the form's
-anchors, inside the frame), and filled in the frame.
+A company page carrying `gh_jid` frames the embed page: it is recognised by the page (the submit
+and the form's anchors inside one iframe) and filled in that frame only (`base.Adapter.framed`).
 """
 
 import re
@@ -33,13 +33,8 @@ _CODE_LABELS = frozenset(
 class Greenhouse(base.Adapter):
     name = "greenhouse"
     hosts = HOSTS
-    submit_names = frozenset({"submit application", "envoyer la candidature"})
-    anchors = (
-        frozenset({"first name", "prenom"}),
-        frozenset({"last name", "nom", "nom de famille"}),
-        frozenset({"email", "e-mail", "adresse e-mail"}),
-        frozenset({"resume/cv", "resume", "cv", "resume / cv", "cv/resume"}),
-    )
+    submit_names = base.SUBMIT_NAMES
+    anchors = (base.FIRST_NAME, base.LAST_NAME, base.EMAIL, base.RESUME)
     traps = ("react_select", "eeo_block", "email_code")
 
     def form_url(self, posting_url: str) -> str | None:
@@ -72,11 +67,12 @@ class Greenhouse(base.Adapter):
     def _stub(self, url: str) -> bool:
         return self.stub_base is not None and url.startswith(self.stub_base + "/")
 
-    def pending_step(self, snapshot: str) -> str:
-        """After the submit: a code sent by e-mail is asked for (a text field labelled as a
-        security or verification code, shown with a button to send it)."""
-        root = base.parse_snapshot(snapshot)
+    def pending_at(self, root: base.Node) -> str:
+        """Also, after the submit: a code sent by e-mail is asked for (a text field labelled as
+        a security or verification code, shown with a button to send it)."""
+        if step := super().pending_at(root):
+            return step
         found = base.discover_fields(root, self.submit_names)
         if any(f.kind == "text" and base.fold(f.label) in _CODE_LABELS for f in found.fields):
             return "email_code"
-        return super().pending_step(snapshot)
+        return ""
