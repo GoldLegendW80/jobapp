@@ -174,7 +174,7 @@ def test_the_container_runs_as_compose_writes_it(stack: Stack) -> None:
     assert not host["CapAdd"]
     assert host["SecurityOpt"] == ["no-new-privileges:true"], "Docker's default seccomp profile"
     assert host["PidsLimit"] == 128
-    assert host["Memory"] == 384 * 1024 * 1024
+    assert host["Memory"] == 256 * 1024 * 1024
     assert host["IpcMode"] == "none"
     assert host["Privileged"] is False
     assert not host["PortBindings"]
