@@ -283,6 +283,21 @@ while read -r _ _ stub url; do
 done < <(grep '^up ' "$STUB_CALLS")
 ok "the retry of the mail stack takes a new port for the fake Google too"
 
+# The apply group publishes the fake ATS forms server on a port of its own, taken anew too.
+sed -e 's/GMAIL_STUB_PORT/ATS_FORMS_STUB_PORT/g' -e 's/E2E_GMAIL_STUB_URL/E2E_ATS_FORMS_URL/g' \
+  -e 's/journeys-mail/journeys-apply/' -e 's/pick_journey_ports mail/pick_journey_ports apply/' \
+  -e 's/s_journey mail/s_journey apply/' "$WORK/ports-mail.sh" >"$WORK/ports-apply.sh"
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports-apply.sh" STUB_UP_FAILS=1 "$CHECK" --only journeys
+out_has "journeys-apply             PASS"
+[[ "$(ups)" == 2 ]] || fail "apply, one failed start: $(ups) starts, expected 2"
+[[ "$(grep '^up ' "$STUB_CALLS" | awk '{print $3}' | sort -u | wc -l | tr -d ' ')" == 2 ]] || fail "the retry of the apply stack kept the port of the fake forms server"
+while read -r _ _ stub url; do
+  [[ "$url" == "http://127.0.0.1:$stub" ]] || fail "the address of the fake forms server ($url) does not follow its port ($stub)"
+done < <(grep '^up ' "$STUB_CALLS")
+grep -q 'tests/ats-forms-stub.compose.yml' "$STUB_CALLS" || fail "the apply stack did not include the fake forms server"
+ok "the retry of the apply stack takes a new port for the fake forms server too"
+
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
 # it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded
@@ -577,15 +592,16 @@ cd "$ROOT"
 specs_of() { grep -v '^ *#' "$1" | grep -o '[a-z0-9-]*\.spec\.ts\|e2e/[a-z-]*\.config\.ts' | sort -u; }
 [[ -n "$(specs_of .github/workflows/ci.yml)" ]] || fail "no journey spec found in ci.yml"
 # A group that only the local check runs is listed, with its reason, in LOCAL_CHECK_CONFIGS of
-# .github/scripts/e2e_groups.py (the mail module's: its stack also runs a fake Google). Nothing
+# .github/scripts/e2e_groups.py (the mail module's: its stack also runs a fake Google; the apply module's: its stack also
+# runs a fake ATS forms server). Nothing
 # else may differ.
 local_only="$(python3 -c 'import sys; sys.path.insert(0, ".github/scripts"); import e2e_groups; print("\n".join(sorted(e2e_groups.LOCAL_CHECK_CONFIGS)))')"
-[[ "$local_only" == "e2e/mail-all.config.ts" ]] || fail "the groups of the local check alone are no longer the mail group only: $local_only"
+[[ "$local_only" == $'e2e/apply-all.config.ts\ne2e/mail-all.config.ts' ]] || fail "the groups of the local check alone are no longer the apply and mail groups: $local_only"
 expected_specs() { { specs_of .github/workflows/ci.yml; printf '%s\n' "$local_only"; } | sort -u; }
 [[ "$(expected_specs)" == "$(specs_of ops/local-check.sh)" ]] ||
   fail "the journey groups of ops/local-check.sh (journey_specs) differ from those of ci.yml plus the local check's own: $(diff <(expected_specs) <(specs_of ops/local-check.sh) | tr '\n' ' ')"
 ! specs_of .github/workflows/ci.yml | grep -qxF "$local_only" || fail "$local_only is also run by ci.yml: remove it from LOCAL_CHECK_CONFIGS"
-ok "ops/local-check.sh runs the journey specs and configs that ci.yml names, and the mail group of its own"
+ok "ops/local-check.sh runs the journey specs and configs that ci.yml names, and the mail and apply groups of their own"
 
 listed="$(awk '/koalaman\/shellcheck:/ { on = 1; next } on && /^ *(#|- )/ { exit } on { print }' .github/workflows/ci.yml | tr '\n' ' ')"
 for script in ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh; do

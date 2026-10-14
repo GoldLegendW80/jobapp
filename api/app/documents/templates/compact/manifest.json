@@ -1,0 +1,144 @@
+{
+  "slug": "compact",
+  "version": 1,
+  "name": {
+    "en": "Compact",
+    "fr": "Compact"
+  },
+  "description": {
+    "en": "One column in small type with a tight rhythm and no photo, to keep a long career on a single page.",
+    "fr": "Une colonne en petits caractères au rythme serré, sans photo, pour tenir une longue carrière sur une page."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "no photo",
+    "compact",
+    "ats friendly"
+  ],
+  "photo": "none",
+  "fonts": [
+    "carlito"
+  ],
+  "accent": "#8c2f39",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 9.8,
+        "line_height": 1.34,
+        "section_gap": 8.0,
+        "item_gap": 3.5,
+        "margin": 12.0
+      },
+      {
+        "body_size": 9.46,
+        "line_height": 1.3,
+        "section_gap": 7.1,
+        "item_gap": 3.1,
+        "margin": 11.1
+      },
+      {
+        "body_size": 9.11,
+        "line_height": 1.27,
+        "section_gap": 6.3,
+        "item_gap": 2.6,
+        "margin": 10.3
+      },
+      {
+        "body_size": 8.77,
+        "line_height": 1.23,
+        "section_gap": 5.4,
+        "item_gap": 2.2,
+        "margin": 9.4
+      },
+      {
+        "body_size": 8.43,
+        "line_height": 1.19,
+        "section_gap": 4.6,
+        "item_gap": 1.8,
+        "margin": 8.6
+      },
+      {
+        "body_size": 8.09,
+        "line_height": 1.15,
+        "section_gap": 3.7,
+        "item_gap": 1.4,
+        "margin": 7.7
+      },
+      {
+        "body_size": 7.74,
+        "line_height": 1.12,
+        "section_gap": 2.9,
+        "item_gap": 0.9,
+        "margin": 6.9
+      },
+      {
+        "body_size": 7.4,
+        "line_height": 1.08,
+        "section_gap": 2.0,
+        "item_gap": 0.5,
+        "margin": 6.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 120,
+      "summary": 450,
+      "highlight": 80,
+      "competency": 40,
+      "main_bullet": 240,
+      "bullet": 130,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 10.6,
+        "line_height": 1.45,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 10.28,
+        "line_height": 1.41,
+        "section_gap": 9.2,
+        "item_gap": 5.4,
+        "margin": 14.8
+      },
+      {
+        "body_size": 9.96,
+        "line_height": 1.37,
+        "section_gap": 8.4,
+        "item_gap": 4.8,
+        "margin": 13.6
+      },
+      {
+        "body_size": 9.64,
+        "line_height": 1.34,
+        "section_gap": 7.6,
+        "item_gap": 4.2,
+        "margin": 12.4
+      },
+      {
+        "body_size": 9.32,
+        "line_height": 1.3,
+        "section_gap": 6.8,
+        "item_gap": 3.6,
+        "margin": 11.2
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.26,
+        "section_gap": 6.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 100,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "a0240d027ca2a31218df77ef5b0990e5543640eb0a8788c1fd99d7838bb0d9fe"
+}

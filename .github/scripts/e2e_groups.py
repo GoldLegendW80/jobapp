@@ -52,6 +52,10 @@ LOCAL_CHECK_CONFIGS: dict[str, str] = {
     # The mail journeys need the fake Google of tests/gmail-stub.compose.yml beside the stack
     # (no journey may reach a real Google account), which the workflow's stacks do not start.
     "e2e/mail-all.config.ts": "needs the fake Google, group mail of ops/local-check.sh",
+    # The apply journeys need the fake ATS forms server of tests/ats-forms-stub.compose.yml
+    # beside the stack (no journey may fill a real job site). apply-a3 ran in the identity group
+    # until A1 made this group.
+    "e2e/apply-all.config.ts": "needs the fake ATS forms server, group apply of ops/local-check.sh",
 }
 
 WORKFLOW = Path(".github/workflows/ci.yml")

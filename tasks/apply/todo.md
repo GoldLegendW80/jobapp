@@ -240,7 +240,7 @@ No mail task is needed: M1's `canary.py` and M9's `factcheck_rules.py` are on ma
 ## Measurements
 
 ### A1
-Nothing yet.
+Measured on 2026-10-14. The fake server answers a page in a few milliseconds; the slow variant answers after 10 s on purpose and the journey waits for it. The invisible check's dwell threshold is 3 s of the page's own clock (`Date.now()`), so the journey moves Playwright's clock (`page.clock`) instead of sleeping. The journey group `apply` (`-c e2e/apply-all.config.ts`) is a group of the local check only, like `mail`: it starts the fake forms server beside the stack on a loopback port of its own, and holds `apply-a1` and `apply-a3` (A3's journey left the identity group). The compose file declares the `egress` network the browser container of B2 joins; B2 attaches it to its service when it merges.
 
 ### A2
 Nothing yet.

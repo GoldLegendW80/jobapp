@@ -1,0 +1,47 @@
+# Scratch stacks of the apply module only: the fake ATS forms server, so no test and no journey
+# ever fills a real job site (tasks/apply/todo.md, A1).
+#   ATS_FORMS_STUB_PORT=8100 docker compose -p jobapp-a1 -f compose.yml -f tests/ats-stub.compose.yml \
+#     -f tests/ats-forms-stub.compose.yml up -d --build --wait
+# - atsforms (tests/ats_forms_stub.py and the pages of tests/ats_forms/, the same code pytest
+#   runs in process): Ashby and Greenhouse forms of invented companies, their variants, and
+#   GET /_stub/submissions, which the helpers of web/e2e/apply-helpers.ts read. It is on the
+#   `egress` network, the side the browser container of the browser module joins, so a browser
+#   reaches it and nothing else of the stack; it is also published on a loopback port of its
+#   own (ATS_FORMS_STUB_PORT, 8100 when unset; the local check claims a free one) for the
+#   Playwright of a journey, which is not a container.
+# - It starts with APP_ENV unset: the server refuses to run under APP_ENV=production, and
+#   APPLY_STUB_BASE_URL (the app's own setting) is refused in production by the api.
+networks:
+  egress: {}
+
+services:
+  atsforms:
+    # Standard library only: the same pinned base image as the other stubs.
+    image: python:3.12.15-slim-trixie
+    command:
+      - python
+      - -I
+      - /fake/ats_forms_stub.py
+      - --port
+      - "8100"
+    volumes:
+      # Relative to the project directory, the folder of compose.yml.
+      - ./tests:/fake:ro
+    networks:
+      - egress
+    ports:
+      - "127.0.0.1:${ATS_FORMS_STUB_PORT:-8100}:8100"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+    mem_limit: 128m
+    expose:
+      - "8100"

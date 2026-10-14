@@ -1,0 +1,143 @@
+{
+  "slug": "banner",
+  "version": 1,
+  "name": {
+    "en": "Banner",
+    "fr": "Bandeau"
+  },
+  "description": {
+    "en": "A coloured band across the top with the name, the headline and a round photo, then one column below under clear headings.",
+    "fr": "Un bandeau coloré en haut avec le nom, le titre et une photo ronde, puis une seule colonne dessous sous des intitulés bien visibles."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "photo",
+    "colour"
+  ],
+  "photo": "optional",
+  "fonts": [
+    "dm-sans"
+  ],
+  "accent": "#0f6b63",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 9.8,
+        "line_height": 1.4,
+        "section_gap": 10.0,
+        "item_gap": 5.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.37,
+        "section_gap": 9.0,
+        "item_gap": 4.5,
+        "margin": 13.1
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.34,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 12.3
+      },
+      {
+        "body_size": 9.2,
+        "line_height": 1.31,
+        "section_gap": 7.0,
+        "item_gap": 3.5,
+        "margin": 11.4
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.27,
+        "section_gap": 6.0,
+        "item_gap": 3.0,
+        "margin": 10.6
+      },
+      {
+        "body_size": 8.8,
+        "line_height": 1.24,
+        "section_gap": 5.0,
+        "item_gap": 2.5,
+        "margin": 9.7
+      },
+      {
+        "body_size": 8.6,
+        "line_height": 1.21,
+        "section_gap": 4.0,
+        "item_gap": 2.0,
+        "margin": 8.9
+      },
+      {
+        "body_size": 8.4,
+        "line_height": 1.18,
+        "section_gap": 3.0,
+        "item_gap": 1.5,
+        "margin": 8.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.0,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 10.6,
+        "line_height": 1.46,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 14.8
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.41,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 13.6
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.37,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 12.4
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.32,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 11.2
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "bf24dd5cabb11f84358ac9fec4698566997bbba52d3b83634c405858bfd57ed9"
+}

@@ -116,12 +116,20 @@ def test_the_parser_is_on_the_internal_network_and_only_the_worker_shares_it() -
     document = compose()
     services = document["services"]
     # `rendering` is the renderer's own (documents D3, tests/documents/test_compose_renderer.py).
-    assert document["networks"] == {"parsing": {"internal": True}, "rendering": {"internal": True}}
+    assert document["networks"] == {
+        "parsing": {"internal": True},
+        "rendering": {"internal": True},
+        "browsing": {"internal": True},  # browser B2
+        "egress": {},  # browser B2: the browser's own way out
+    }
     assert services["parser"]["networks"] == ["parsing"]
-    assert services["worker"]["networks"] == ["default", "parsing", "rendering"]
+    assert services["worker"]["networks"] == ["default", "parsing", "rendering", "browsing"]
     assert services["renderer"]["networks"] == ["rendering"]
+    # browser B2: the api and caddy also join `browsing`, the browser is on `browsing` and `egress`.
+    assert services["api"]["networks"] == services["caddy"]["networks"] == ["default", "browsing"]
+    assert services["browser"]["networks"] == ["browsing", "egress"]
     for name, service in services.items():
-        if name not in ("parser", "renderer", "worker"):
+        if name not in ("parser", "renderer", "worker", "api", "caddy", "browser"):
             assert "networks" not in service, f"{name} must stay on the default network alone"
             assert "network_mode" not in service, name
 
@@ -190,7 +198,8 @@ def test_the_ci_stack_probes_the_parser_as_soon_as_it_starts() -> None:
 
 
 def test_the_memory_limits_of_the_stack_stay_within_the_budget_of_the_jetson() -> None:
-    """5 GiB for the whole stack on the 7.4 GiB Jetson (SPEC-platform, Target host)."""
+    """5 GiB for the whole stack on the 7.4 GiB Jetson (SPEC-platform, Target host), 128m over
+    it with the browser until the parser is sized (the budget decision of B2)."""
     limits = {name: service["mem_limit"] for name, service in compose()["services"].items()}
     assert limits == {
         "caddy": "128m",
@@ -200,9 +209,12 @@ def test_the_memory_limits_of_the_stack_stay_within_the_budget_of_the_jetson() -
         "parser": "640m",
         "db": "768m",
         "redis": "256m",
-        "renderer": "384m",
+        "renderer": "256m",
+        "browser": "1024m",
     }
-    assert sum(int(limit[:-1]) for limit in limits.values()) == 4352 < 5 * 1024
+    # 128m over the 5G budget with the browser (B2) until G8 sets the parser's limit from its
+    # Jetson peaks: the parser at 512m brings the stack to 5120m (compose.yml, budget comment).
+    assert sum(int(limit[:-1]) for limit in limits.values()) == 5248 == 5 * 1024 + 128
 
 
 def test_the_test_stack_takes_the_service_from_compose_yml_and_adds_no_privilege() -> None:
