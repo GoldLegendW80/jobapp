@@ -9,6 +9,7 @@ import asyncio
 import logging
 import secrets
 from collections.abc import Awaitable, Callable, Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -191,13 +192,42 @@ def test_documents_go_with_the_lease(world: World) -> None:
         tools, got = await tools_of(world, A)
         await tools.put_file("cv.pdf", PDF)
         lease = world.browserd.manager.lease
+        state = lease.scratch["tools"]
         await world.store.release(A, got.lease.lease_id)
         assert world.browserd.manager.lease is None
+        # Dropped at the end, not when the old context's route handler is collected.
+        assert state.files == {}
         second, _ = await tools_of(world, A)
         assert "tools" not in world.browserd.manager.lease.scratch
         assert lease is not world.browserd.manager.lease
         result = await second.upload("e3", ["cv.pdf"])
         assert result["error"] == "file_not_given"
+
+    run(world, go)
+
+
+def test_the_cap_of_documents_holds_under_concurrent_puts(world: World) -> None:
+    # Straight on browserd's route, so both PUTs pass the first check before either is held.
+    from browserd.leases import LeaseError
+    from browserd.tools import routes
+
+    async def go() -> None:
+        tools, got = await tools_of(world, A)
+        await tools.put_file("a.pdf", PDF)
+        await tools.put_file("b.pdf", PDF)
+        svc = SimpleNamespace(manager=world.browserd.manager)
+
+        def put(name: str) -> Awaitable[Any]:
+            req = SimpleNamespace(headers={"x-lease-token": got.token}, body=PDF)
+            return routes.put_file(svc, req, {"name": name, "lease_id": got.lease.lease_id})
+
+        answers = await asyncio.gather(put("c.pdf"), put("d.pdf"), return_exceptions=True)
+        refused = [a for a in answers if isinstance(a, LeaseError)]
+        assert len(refused) == 1, answers
+        assert (refused[0].status, refused[0].code) == (400, "too_many_files")
+        state = world.browserd.manager.lease.scratch["tools"]
+        assert len(state.files) == 3
+        assert {"a.pdf", "b.pdf"} < set(state.files)
 
     run(world, go)
 

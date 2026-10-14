@@ -32,8 +32,9 @@ def facts(
     form_fields: tuple[str, ...] = (),
     selector_hit: bool = False,
     selector_error: bool = False,
+    **more: Any,
 ) -> dict[str, Any]:
-    """What FACTS_JS answers for an element."""
+    """What FACTS_JS answers for an element (`more`: holds_submit, custom_submit, editable)."""
     return {
         "tag": tag,
         "type": kind,
@@ -44,6 +45,7 @@ def facts(
         "selector_error": selector_error,
         "field": field,
         "form_fields": list(form_fields),
+        **more,
     }
 
 
@@ -174,6 +176,118 @@ def test_a_bad_selector_and_an_unreadable_element_fail_closed() -> None:
     assert detect.verdict(facts("Next", selector_error=True)) == "bad_selector"
     for broken in (None, {}, {"names": "Submit"}, []):
         assert detect.verdict(broken) == "unreadable"
+
+
+# --- the click point, containers, shadow roots, typing (review of PR #297) ----------------------
+
+SUBMIT_BUTTON = facts("Continue", kind="submit")
+CONTAINERS = [
+    facts("Continue", tag="div", kind="", holds_submit=True),
+    facts("Application", tag="form", kind="", holds_submit=True),
+    facts("Your details", tag="fieldset", kind="", holds_submit=True),
+    facts("", tag="section", kind="", in_form=False, holds_submit=True),
+    facts("Card", tag="li", kind="", holds_submit=True),
+]
+
+
+@pytest.mark.parametrize("wrapper", CONTAINERS)
+def test_a_container_holding_a_submit_is_marked(wrapper: dict[str, Any]) -> None:
+    for action in ("click", "check", "key"):
+        assert detect.verdict(wrapper, action=action) == "submit"
+    no_submit = {**wrapper, "holds_submit": False}
+    assert detect.verdict(no_submit) is None
+    # Its click point is the submit: marked by the point too.
+    assert detect.verdict({**no_submit, "point": {**SUBMIT_BUTTON, "inside": True}}) == "submit"
+
+
+@pytest.mark.parametrize(
+    "point",
+    [
+        {**facts("Continue", kind="submit"), "inside": False},
+        {**facts("Delete", kind="button"), "inside": True},
+        {**facts("", tag="span", kind="", selector_hit=True), "inside": True},
+        {**facts("Go", tag="sl-button", kind="submit", custom_submit=True), "inside": False},
+        {**facts("Next", tag="button", kind="button", form_fields=("cc-number",)), "inside": False},
+        None,
+        "button",
+        {},
+    ],
+    ids=["submit over it", "delete inside", "lease selector", "sl-button", "card form", "none",
+         "not facts", "empty"],
+)  # fmt: skip
+def test_the_element_at_the_click_point_is_judged(point: Any) -> None:
+    target = facts("Next", tag="div", kind="")
+    assert detect.verdict({**target, "point": point}, action="click") is not None
+    assert detect.verdict({**target, "point": point}, action="check") is not None
+
+
+def test_a_point_inside_a_text_field_lets_it_type_and_one_elsewhere_is_judged() -> None:
+    field = facts("Email", tag="input", kind="email", field="email")
+    assert detect.verdict({**field, "point": {**field, "inside": True}}, action="type") is None
+    covered = {**field, "point": {**SUBMIT_BUTTON, "inside": False}}
+    assert detect.verdict(covered, action="type") == "submit"
+    assert detect.verdict({**field, "point": None}, action="type") == "unreadable"
+    # Enter (key) does not click: the point is not read for it.
+    assert detect.verdict({**field, "point": None, "in_form": False}, action="key") is None
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        # A span in a shadow root under a submit button: FACTS_JS walks up across the shadow
+        # root, so the control read is the button.
+        facts("", tag="button", kind="submit", in_form=True),
+        # <sl-button type="submit">: a form associated custom element, or the element inside its
+        # shadow root (custom_submit is set by the walk over the composed ancestors).
+        facts("Continue", tag="sl-button", kind="submit", custom_submit=True),
+        facts("Continue", tag="button", kind="button", custom_submit=True),
+        facts("Continue", tag="md-filled-button", kind="image", custom_submit=True),
+    ],
+)
+def test_shadow_roots_and_custom_submit_elements_are_marked(shape: dict[str, Any]) -> None:
+    for action in ("click", "key", "check", "type"):
+        assert detect.verdict(shape, action=action) in ("submit", "not_editable"), action
+    assert detect.verdict(shape) == "submit"
+
+
+@pytest.mark.parametrize(
+    ("shape", "entry"),
+    [
+        (facts("Email", tag="input", kind="email"), True),
+        (facts("", tag="input", kind=""), True),
+        (facts("When", tag="input", kind="datetime-local"), True),
+        (facts("Pw", tag="input", kind="password"), True),
+        (facts("Letter", tag="textarea", kind="textarea"), True),
+        (facts("Letter", tag="div", kind="", editable=True), True),
+        (facts("Letter", tag="p", kind="", editable=True), True),
+        (facts("City", tag="div", kind="", role="combobox"), True),
+        (facts("Q", tag="span", kind="", role="searchbox"), True),
+        (facts("Name", tag="div", kind="", role="textbox"), True),
+        (facts("Submit", tag="input", kind="submit"), False),
+        (facts("Go", tag="input", kind="image"), False),
+        (facts("Go", tag="input", kind="button"), False),
+        (facts("Reset", tag="input", kind="reset"), False),
+        (facts("Yes", tag="input", kind="checkbox"), False),
+        (facts("Yes", tag="input", kind="radio"), False),
+        (facts("CV", tag="input", kind="file"), False),
+        (facts("", tag="input", kind="hidden"), False),
+        (facts("Color", tag="input", kind="color"), False),
+        (facts("Level", tag="input", kind="range"), False),
+        (facts("Weird", tag="input", kind="unknown-kind"), False),
+        (facts("Next", tag="button", kind="button"), False),
+        (facts("Next", tag="button", kind="button", editable=True), False),
+        (facts("Link", tag="a", kind=""), False),
+        (facts("Link", tag="a", kind="", role="textbox"), False),
+        (facts("Pays", tag="select", kind="select-one"), False),
+        (facts("Email", tag="label", kind=""), False),
+        (facts("Frame", tag="iframe", kind=""), False),
+        (facts("Box", tag="div", kind=""), False),
+        (facts("Box", tag="div", kind="", role="button"), False),
+    ],
+)  # fmt: skip
+def test_typing_goes_into_a_text_entry_only(shape: dict[str, Any], entry: bool) -> None:
+    assert detect.text_entry(shape) is entry
+    assert detect.verdict(shape, action="type") == (None if entry else "not_editable")
 
 
 def test_huge_names_stay_bounded() -> None:

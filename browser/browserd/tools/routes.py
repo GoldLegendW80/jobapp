@@ -8,7 +8,8 @@
   PUT  /leases/{id}/files/{name}   a document for browser_file_upload: a PDF by its magic bytes,
                                    at most 20 MB (413 past it, before a byte is read), at most
                                    FILES_MAX per lease, held in memory with the lease and gone
-                                   with it (never on a disk, never readable by Chromium's uid)
+                                   with it (never on a disk, never readable by Chromium's uid;
+                                   State.end drops them when the lease ends)
 
 The gate's capability: a random value made for a lease of a purpose in GATE_PURPOSES when it is
 created, answered once to the api in POST /leases (`gate_capability`), kept here as its hash
@@ -100,7 +101,7 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
     async def work() -> dict[str, Any]:
         async with _lock(lease):
             try:
-                return await actions.TOOLS[name](tab, args)
+                return await actions.run(tab, name, args)
             except ValueError as exc:
                 return actions.failure("bad_args", f"Bad argument: {exc}.")
             except asyncio.CancelledError:
@@ -126,7 +127,13 @@ async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
         raise LeaseError(413 if code == "file_too_large" else 400, code)
 
     async def work() -> dict[str, Any]:
-        state.files[name] = req.body
+        async with _lock(lease):
+            # Again under the lease's lock: two PUTs of new names at FILES_MAX - 1 both passed
+            # the check above, and only one may be held.
+            again = policy.file_verdict(name, req.body, state.files)
+            if again:
+                raise LeaseError(413 if again == "file_too_large" else 400, again)
+            state.files[name] = req.body
         return {"ok": True, "name": name, "size": len(req.body)}
 
     return 200, await _run(svc, lease_id, token, work)

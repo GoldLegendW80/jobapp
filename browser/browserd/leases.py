@@ -307,6 +307,12 @@ class Manager:
         self.last_end = {"lease_id": lease.lease_id, "reason": reason}
         for task in list(self._calls):
             task.cancel()
+        for (
+            kept
+        ) in lease.scratch.values():  # the tools' state: documents dropped now (B5)
+            end = getattr(kept, "end", None)
+            if callable(end):
+                end()
         if browser is not None:
             if reason == "browser_crashed":
                 await browser.kill()
