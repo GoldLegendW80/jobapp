@@ -68,6 +68,9 @@ def prepare(profile: str, lease: str, languages: str) -> None:
                 "prompt_for_download": False,
             },
             "translate": {"enabled": False},
+            # No WebRTC UDP outside the proxy: Debian's Chromium ignores the switch
+            # --force-webrtc-ip-handling-policy; the image's managed policy says it too.
+            "webrtc": {"ip_handling_policy": "disable_non_proxied_udp"},
         },
     )
     tmp = f"{path}.browserd"

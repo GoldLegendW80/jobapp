@@ -9,9 +9,11 @@
 #
 #   browser   the service; its egress proxy lets the pages server through although its address
 #             is private (BROWSER_PROXY_ALLOW_PRIVATE, never set in compose.yml)
-#   pages     tests/browser_pages/ served on `egress` alone: what a job site is in the test
-#   client    on `browsing` alone, where the api and the worker are; it also answers HTTP on 8000,
-#             which Chromium must not reach (an app service seen from a hostile page)
+#   pages     tests/browser_pages/ served on `egress` alone: what a job site is in the test, on
+#             8000 and 8080, and a UDP listener on 3478 that counts what WebRTC sends it
+#   client    on `browsing` alone, where the api and the worker are; it also answers HTTP on 8080
+#             (a port the proxy allows, as Caddy's), which Chromium must not reach: an app
+#             service seen from a hostile page, refused for its address
 #
 # POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB must be set to anything: Compose interpolates
 # the whole of compose.yml to read one service of it. Later tasks add pages under
@@ -44,7 +46,7 @@ services:
     image: ${BROWSER_TEST_IMAGE:?set BROWSER_TEST_IMAGE}
     profiles: [browser]
     user: "1000:1000"
-    command: ["python", "-I", "-m", "http.server", "8000", "--bind", "0.0.0.0", "--directory", "/opt/browserd"]
+    command: ["python", "-I", "-m", "http.server", "8080", "--bind", "0.0.0.0", "--directory", "/opt/browserd"]
     read_only: true
     cap_drop: [ALL]
     security_opt:

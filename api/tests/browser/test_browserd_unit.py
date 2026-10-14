@@ -6,6 +6,7 @@ need Chromium are test_browser_container.py.
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -287,6 +288,27 @@ def test_the_router_list_has_the_placeholders_of_b4_and_b5() -> None:
         ("fe80::1", False),
         ("::ffff:10.0.0.1", False),
         ("224.0.0.1", False),
+        # IPv6 carrying an IPv4 (review of PR #267): mapped addresses are checked as their
+        # IPv4; IPv4 compatible, NAT64, 6to4 and Teredo are refused whatever they carry.
+        ("::ffff:127.0.0.1", False),
+        ("::ffff:169.254.169.254", False),
+        ("::ffff:93.184.215.14", True),
+        ("::127.0.0.1", False),
+        ("::a9fe:a9fe", False),
+        ("::93.184.215.14", False),
+        ("64:ff9b::7f00:1", False),
+        ("64:ff9b::a9fe:a9fe", False),
+        ("64:ff9b::a00:1", False),
+        ("64:ff9b::5db8:d70e", False),
+        ("64:ff9b:1::a00:1", False),
+        ("64:ff9b:1:ffff::5db8:d70e", False),
+        ("2002:7f00:1::1", False),
+        ("2002:a9fe:a9fe::1", False),
+        ("2002:5db8:d70e::1", False),
+        ("2001:0:7f00:1::1", False),
+        ("2001:0:4136:e378:8000:63bf:3fff:fdd2", False),
+        ("2001:db8::1", False),  # documentation, not Teredo: refused as not global
+        ("2001:4860:4860::8888", True),  # a public address next to Teredo's prefix
     ],
 )
 def test_the_proxy_refuses_every_address_that_is_not_public(address: str, allowed: bool) -> None:
@@ -386,6 +408,7 @@ def test_prepare_clears_stale_locks_and_writes_the_languages(tmp_path: Path) -> 
     assert prefs["credentials_enable_service"] is False
     assert prefs["bookmark_bar"] == {"x": 1}
     assert prefs["download"]["default_directory"] == f"{lease}/downloads"
+    assert prefs["webrtc"] == {"ip_handling_policy": "disable_non_proxied_udp"}
     assert (profile.stat().st_mode & 0o777) == 0o700
 
 
@@ -396,5 +419,229 @@ def test_switches_keep_the_sandbox_the_proxy_and_the_real_user_agent() -> None:
     assert not any(s.startswith("--user-agent") for s in switches)
     assert "--proxy-server=http://127.0.0.1:3128" in switches
     assert "--proxy-bypass-list=<-loopback>" in switches
+    assert "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1" in switches
+    assert "--disable-quic" in switches
     assert f"--user-data-dir=/profiles/{PROFILE}/data" in switches
     assert "--remote-debugging-address=127.0.0.1" in switches
+
+
+def test_the_image_installs_the_managed_webrtc_policy() -> None:
+    """Review of PR #267, blocking 1: Debian's Chromium ignores the WebRTC switch, so the
+    image ships the policy, which no profile state can undo (the container test reads it back
+    from chrome://policy)."""
+    policy = json.loads((ROOT / "browser/policies/browserd.json").read_text())
+    assert policy == {"WebRtcIPHandling": "disable_non_proxied_udp", "QuicAllowed": False}
+    dockerfile = (ROOT / "browser/Dockerfile").read_text()
+    assert "COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json" in dockerfile
+
+
+ANSWERS = {"upstream": ["127.0.0.1"], "other.example": ["93.184.215.14"]}
+
+
+class Upstream:
+    """A hostile plain http server: it answers `Connection: keep-alive` and keeps reading."""
+
+    def __init__(self) -> None:
+        self.received = b""
+        self.open = 0
+
+    async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.open += 1
+        try:
+            answered = False
+            while data := await reader.read(65536):
+                self.received += data
+                if not answered and b"\r\n\r\n" in self.received:
+                    answered = True
+                    writer.write(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n"
+                        b"Keep-Alive: timeout=60\r\n\r\nok"
+                    )
+                    await writer.drain()
+        except OSError:
+            pass
+        finally:
+            writer.close()
+            self.open -= 1
+
+
+async def started(egress: proxy.Proxy) -> tuple[asyncio.Server, int, Upstream, asyncio.Server]:
+    upstream = Upstream()
+    up_server = await asyncio.start_server(upstream.handle, "127.0.0.1", 0)
+    server = await proxy.serve(egress, 0)
+    return server, server.sockets[0].getsockname()[1], upstream, up_server
+
+
+def recording_resolver(calls: list[str]):
+    async def resolver(host: str, port: int) -> list[str]:
+        calls.append(host)
+        host.encode("idna")  # what getaddrinfo does first: a label over 63 characters raises
+        if host not in ANSWERS:
+            raise OSError("no such host")
+        return ANSWERS[host]
+
+    return resolver
+
+
+async def read_response(reader: asyncio.StreamReader) -> tuple[bytes, bytes]:
+    head = await reader.readuntil(b"\r\n\r\n")
+    length = int(
+        next(
+            line.split(b":")[1]
+            for line in head.split(b"\r\n")
+            if line.lower().startswith(b"content-length")
+        )
+    )
+    return head, await reader.readexactly(length)
+
+
+@pytest.mark.parametrize("second", ["other.example", "10.0.0.1"])
+def test_a_kept_alive_connection_carries_one_request_only(second: str) -> None:
+    """Review of PR #267, non-blocking 1: Chromium is told `Connection: close`, whatever the
+    upstream says, and a second request on the same proxy connection (to another host or to a
+    private address) is never read, never resolved and never forwarded."""
+    calls: list[str] = []
+    egress = proxy.Proxy(frozenset({"upstream"}), recording_resolver(calls))
+    egress.idle_s = 0.2  # the hostile upstream never closes: the idle timeout ends it
+
+    async def go() -> None:
+        server, port, upstream, up_server = await started(egress)
+        up_port = up_server.sockets[0].getsockname()[1]
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(
+            b"GET http://upstream:%d/first HTTP/1.1\r\nHost: upstream\r\n"
+            b"Proxy-Connection: keep-alive\r\n\r\n" % up_port
+        )
+        head, body = await read_response(reader)
+        assert body == b"ok"
+        assert b"Connection: close" in head
+        assert b"keep-alive" not in head.lower()
+        writer.write(
+            b"GET http://%s/second HTTP/1.1\r\nHost: %s\r\nCookie: c=1\r\n\r\n"
+            % (second.encode(), second.encode())
+        )
+        assert await asyncio.wait_for(reader.read(), 10) == b""
+        writer.close()
+        await writer.wait_closed()
+        assert upstream.received.count(b"GET ") == 1
+        assert b"/first" in upstream.received
+        assert b"Connection: close" in upstream.received
+        assert b"second" not in upstream.received
+        assert b"Cookie" not in upstream.received
+        assert calls == ["upstream"]
+        server.close()
+        up_server.close()
+
+    run(go())
+
+
+def test_pipelined_requests_forward_the_first_and_its_body_only() -> None:
+    calls: list[str] = []
+    egress = proxy.Proxy(frozenset({"upstream"}), recording_resolver(calls))
+    egress.idle_s = 0.2
+
+    async def go() -> None:
+        server, port, upstream, up_server = await started(egress)
+        up_port = up_server.sockets[0].getsockname()[1]
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(
+            b"POST http://upstream:%d/a HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello"
+            b"GET http://10.0.0.1/b HTTP/1.1\r\n\r\n" % up_port
+        )
+        assert (await read_response(reader))[1] == b"ok"
+        assert await asyncio.wait_for(reader.read(), 10) == b""
+        writer.close()
+        assert upstream.received.endswith(b"\r\n\r\nhello")
+        assert b"10.0.0.1" not in upstream.received
+        assert calls == ["upstream"]
+        server.close()
+        up_server.close()
+
+    run(go())
+
+
+def open_descriptors() -> int:
+    return len(os.listdir("/dev/fd"))
+
+
+def test_malformed_requests_leak_no_socket() -> None:
+    """Review of PR #267, non-blocking 3: inputs that raised in the handler (an IDNA label over
+    63 characters, a port `²`, a huge port, a bad body) answer or close, and after 100 of them
+    the process holds exactly the descriptors it held before."""
+    egress = proxy.Proxy(frozenset({"upstream"}), recording_resolver([]))
+
+    async def go() -> None:
+        server, port, upstream, up_server = await started(egress)
+        up_port = b"%d" % up_server.sockets[0].getsockname()[1]
+        inputs = [
+            b"GARBAGE\r\n\r\n",
+            b"GET http://upstream:\xb2/ HTTP/1.1\r\n\r\n",
+            b"CONNECT upstream:99999999999999999999 HTTP/1.1\r\n\r\n",
+            b"CONNECT upstream:0 HTTP/1.1\r\n\r\n",
+            b"CONNECT " + b"a" * 70 + b".example:443 HTTP/1.1\r\n\r\n",
+            b"GET http://" + b"b" * 64 + b".example/ HTTP/1.1\r\n\r\n",
+            b"GET http://upstream:" + up_port + b"/ HTTP/1.1\r\nContent-Length: zz\r\n\r\n",
+            b"POST http://upstream:" + up_port + b"/ HTTP/1.1\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\nzz\r\n",
+            b"\x00\x01 \x02 \x03\r\n\r\n",
+            b"CONNECT [::1 HTTP/1.1\r\n\r\n",
+            b"GET http://upstream/",  # closed before the end of the head
+        ]
+        before = open_descriptors()
+        for n in range(100):
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(inputs[n % len(inputs)])
+            if n % len(inputs) == len(inputs) - 1:
+                writer.write_eof()
+            answer = await asyncio.wait_for(reader.read(), 10)
+            assert not answer.startswith(b"HTTP/1.1 200"), (n, answer)
+            writer.close()
+            await writer.wait_closed()
+        for _ in range(1000):  # yields to the loop until the upstream's side has closed too
+            if upstream.open == 0 and egress.open == 0 and open_descriptors() == before:
+                break
+            await asyncio.sleep(0)
+        assert (egress.open, upstream.open) == (0, 0)
+        assert open_descriptors() == before
+        # And the proxy still answers.
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"CONNECT 10.0.0.1:443 HTTP/1.1\r\n\r\n")
+        assert (await reader.read()).startswith(b"HTTP/1.1 403")
+        writer.close()
+        server.close()
+        up_server.close()
+
+    run(go())
+
+
+def test_the_connection_cap_and_the_idle_timeout() -> None:
+    egress = proxy.Proxy(frozenset({"upstream"}), recording_resolver([]))
+    egress.connections_max, egress.idle_s = 2, 0.2
+
+    async def go() -> None:
+        server, port, _, up_server = await started(egress)
+        up_port = up_server.sockets[0].getsockname()[1]
+        held = [await asyncio.open_connection("127.0.0.1", port) for _ in range(2)]
+        for _ in range(1000):
+            if egress.open == 2:
+                break
+            await asyncio.sleep(0)
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        assert (await reader.read()).startswith(b"HTTP/1.1 503")
+        writer.close()
+        for _, w in held:
+            w.close()
+        for _ in range(1000):
+            if egress.open == 0:
+                break
+            await asyncio.sleep(0)
+        # A tunnel with no byte either way is closed by the proxy.
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"CONNECT upstream:%d HTTP/1.1\r\n\r\n" % up_port)
+        assert await reader.readuntil(b"\r\n\r\n") == b"HTTP/1.1 200 Connection established\r\n\r\n"
+        assert await asyncio.wait_for(reader.read(), 10) == b""
+        writer.close()
+        server.close()
+        up_server.close()
+
+    run(go())

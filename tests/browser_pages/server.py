@@ -2,15 +2,30 @@
 pages of this folder, a resource held back for `?ms=` milliseconds (slow.html) and an echo of the
 request headers (the Accept-Language the profile's preferences give). Run with the browser image's
 Python, read only, as an unprivileged user, on the `egress` network: the public side of the test.
+
+It answers HTTP on 8000 and on 8080 (a port the egress proxy allows: by its private address the
+proxy must refuse it for the address alone), and counts the UDP datagrams that reach it on 3478
+(STUN and TURN): GET /udp answers the count, which the WebRTC test expects to stay 0.
 """
 
 import http.server
 import json
+import socket
 import sys
+import threading
 import time
 import urllib.parse
 
 ROOT = sys.argv[1]
+DATAGRAMS = {"count": 0}
+
+
+def count_datagrams() -> None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("0.0.0.0", 3478))
+    while True:
+        sock.recvfrom(65536)
+        DATAGRAMS["count"] += 1
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -39,6 +54,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     "text/javascript",
                 )
             return self.send(json.dumps({"ok": True}))
+        if url.path == "/udp":
+            return self.send(json.dumps(DATAGRAMS))
         if url.path == "/headers":
             return self.send(
                 json.dumps({k.lower(): v for k, v in self.headers.items()})
@@ -46,4 +63,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
 
+threading.Thread(target=count_datagrams, daemon=True).start()
+threading.Thread(
+    target=http.server.ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever,
+    daemon=True,
+).start()
 http.server.ThreadingHTTPServer(("0.0.0.0", 8000), Handler).serve_forever()

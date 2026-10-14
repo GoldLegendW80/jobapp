@@ -38,6 +38,12 @@ RUN useradd --no-create-home --home-dir /nonexistent --uid 1000 --shell /usr/sbi
  && mkdir -p /profiles /leases \
  && chmod 1733 /profiles /leases
 
+# Chromium's managed policy, which no profile state can undo: WebRTC sends no UDP outside the
+# proxy (WebRtcIPHandling; Debian's Chromium ignores the switch of the same name) and no QUIC.
+# WebRtcUdpPortRange stays unset on purpose. The profile's preferences (browserd/prep.py) say
+# the same again.
+COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json
+
 COPY browserd /opt/browserd/browserd
 WORKDIR /opt/browserd
 ENV PATH=/opt/venv/bin:$PATH \

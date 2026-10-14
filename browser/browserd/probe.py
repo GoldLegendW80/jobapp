@@ -9,6 +9,9 @@ no agent ever runs it (SPEC-browser: CDP never leaves the container). It prints 
   env <url>                navigator.languages, the user agent, the client hints, WebGL, zone
   front <url>              a second tab opened by the page, then the first acted on: its
                            visibility and focus after pages.front
+  webrtc <url> <servers>   on that page, an RTCPeerConnection with the ICE servers given as
+                           JSON, an offer, the gathering to its end: the candidates gathered
+  policy                   how often chrome://policy shows our policies' names and value
 """
 
 import asyncio
@@ -84,6 +87,35 @@ async def run(action: str, args: list[str]) -> dict:
             )
             await second.close()
             return {"visibility": after[0], "focus": after[1]}
+        if action == "webrtc":
+            await pages.navigate(page, args[0])
+            return await page.evaluate(
+                """async servers => {
+                  const pc = new RTCPeerConnection({iceServers: servers});
+                  const candidates = [];
+                  const errors = [];
+                  pc.onicecandidate = e => e.candidate && candidates.push(e.candidate.candidate);
+                  pc.onicecandidateerror = e => errors.push(`${e.errorCode} ${e.url}`);
+                  const done = new Promise(resolve => {
+                    pc.onicegatheringstatechange = () =>
+                      pc.iceGatheringState === "complete" && resolve(true);
+                    setTimeout(() => resolve(false), 15000);
+                  });
+                  pc.createDataChannel("probe");
+                  await pc.setLocalDescription(await pc.createOffer());
+                  const complete = await done;
+                  pc.close();
+                  return {complete, candidates, errors};
+                }""",
+                json.loads(args[1]),
+            )
+        if action == "policy":
+            await page.goto("chrome://policy")
+            # The page is built of shadow roots, which inner_text does not enter and
+            # get_by_text does: how many times each policy name and value is shown.
+            await page.get_by_text("WebRtcIPHandling").first.wait_for(timeout=10000)
+            shown = ["WebRtcIPHandling", "disable_non_proxied_udp", "QuicAllowed"]
+            return {t: await page.get_by_text(t, exact=True).count() for t in shown}
         raise SystemExit(f"unknown action {action}")
 
 

@@ -8,9 +8,11 @@ swap as the kernel applies them); the secret; one lease at a time; a new profile
 (chrome://sandbox); the AI snapshot with refs of the pinned Playwright; the languages from the
 profile's preferences; the tab acted on brought to the front; a navigation timeout answered as
 a failure; the egress proxy (the pages server reached, the app's client, loopback, metadata and
-private addresses refused); two profiles (B's Chromium cannot read A's directory); a stale lock
-of another host cleared; a crash and a hang ending the lease `browser_crashed`; processes left
-under a profile uid killed; idle timeout; no lease across a restart; SIGTERM within 10 s.
+private addresses refused, by port and by address on ports it allows); WebRTC sending no
+UDP outside the proxy (a STUN and TURN listener receives nothing); two profiles (B's Chromium
+cannot read A's directory); a stale lock of another host cleared; a crash and a hang ending the
+lease `browser_crashed`; processes left under a profile uid killed; idle timeout; no lease
+across a restart; SIGTERM within 10 s.
 
 The test path into Chromium is browserd.probe, run with `docker exec` inside the container: CDP
 never leaves it. Marked `docker`; the image is built under a tag of its own unless
@@ -307,20 +309,75 @@ def test_a_navigation_timeout_is_a_failure_result(stack: Stack) -> None:
 @pytest.mark.parametrize(
     "url",
     [
-        "http://client:8000/",
+        # Refused for the port alone.
         "http://127.0.0.1:9300/healthz",
+        "http://pages-ip:8000/",
+        # Refused for the address: every port here is one the proxy allows, and an answer of
+        # 403 (not 502, not a page) is the address rule's own.
+        "http://client:8080/",
+        "http://pages-ip:8080/form.html",
+        "http://127.0.0.1:8080/",
+        "http://localhost:8080/",
         "http://169.254.169.254/latest/meta-data/",
         "http://10.0.0.1/",
         "http://100.100.100.100/",
         "http://192.168.1.1/",
         "https://172.17.0.1/",
+        "https://pages-ip:8443/",
     ],
 )
 def test_the_egress_proxy_refuses_what_is_not_public(stack: Stack, url: str) -> None:
+    url = url.replace("pages-ip", pages_ip(stack))
     result = stack.probe("navigate", url, "20")
-    assert result.get("status") == 403 or result.get("error") == "navigation_failed", result
+    if url.startswith("http://"):
+        assert result.get("status") == 403, result
+    else:  # a refused CONNECT: Chromium shows its own tunnel error
+        assert result.get("error") == "navigation_failed", result
     assert "Directory listing" not in result.get("text", "")
     assert "browserd" not in result.get("text", "")
+    assert "First name" not in result.get("text", "")
+
+
+def test_the_pages_server_answers_on_8080_by_its_allowed_name(stack: Stack) -> None:
+    """The control of the address cases above: the same port answers by the allowed name."""
+    assert stack.probe("navigate", "http://pages:8080/form.html", "20")["status"] == 200
+
+
+def pages_ip(stack: Stack) -> str:
+    return stack.python("import socket; print(socket.gethostbyname('pages'))").strip()
+
+
+def datagrams(stack: Stack) -> int:
+    code = "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/udp').read().decode())"
+    return json.loads(stack.execute("pages", "python", "-I", "-c", code))["count"]
+
+
+def test_webrtc_sends_no_udp_outside_the_proxy(stack: Stack) -> None:
+    """Review of PR #267, blocking 1: a page's RTCPeerConnection with STUN and TURN servers over
+    UDP, by the pages server's private address and by its name. Not one datagram reaches the
+    listener (the managed policy and the profile's preference, disable_non_proxied_udp), no UDP
+    candidate is gathered, and Chromium resolves no name itself (--host-resolver-rules), so the
+    STUN name causes no DNS query outside the proxy. Then the control: a datagram the container
+    itself sends to the same listener arrives, so the route and the count are real."""
+    address = pages_ip(stack)
+    servers = [
+        {"urls": f"stun:{address}:3478"},
+        {"urls": "stun:pages:3478"},
+        {"urls": f"turn:{address}:3478?transport=udp", "username": "u", "credential": "p"},
+        {"urls": "turn:pages:3478?transport=udp", "username": "u", "credential": "p"},
+    ]
+    result = stack.probe("webrtc", f"{PAGES}/form.html", json.dumps(servers))
+    assert result["complete"] is True, result
+    assert not [c for c in result["candidates"] if " udp " in c.lower()], result
+    assert datagrams(stack) == 0
+    policy = stack.probe("policy")
+    assert all(policy.values()), policy
+    send = "import socket, sys; socket.socket(2, 2).sendto(b'x', (sys.argv[1], 3478))"
+    stack.python(send, address, user="1000")
+    for _ in range(50):  # each read is a docker exec round trip, no sleep
+        if datagrams(stack):
+            break
+    assert datagrams(stack) == 1
 
 
 def test_the_client_reaches_the_control_api_but_chromium_reaches_only_pages(stack: Stack) -> None:

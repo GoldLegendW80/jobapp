@@ -50,6 +50,10 @@ def switches(request: Request, lease_dir: str, port: int) -> list[str]:
         f"--proxy-server=http://127.0.0.1:{c.PROXY_PORT}",
         "--proxy-bypass-list=<-loopback>",
         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        # Chromium resolves no name itself (the proxy resolves every one), so a page cannot send
+        # a DNS query out of the proxy, a WebRTC STUN server's name for instance.
+        "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
+        "--disable-quic",
         "about:blank",
     ]
 
