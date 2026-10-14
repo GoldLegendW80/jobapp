@@ -409,6 +409,90 @@ def test_addresses_and_references_are_capped() -> None:
     assert (kept[0], kept[-1]) == ("<r0@example.org>", "<r199@example.org>")
 
 
+# --- message ids: what the pattern is handed (review of PR #179, round 2) -------------------------
+
+
+class WatchedIds:
+    """The pattern of a message id, counting the characters it is handed."""
+
+    def __init__(self, real: Any) -> None:
+        self.real = real
+        self.handed = 0
+
+    def findall(self, value: str) -> list[str]:
+        self.handed += len(value)
+        return self.real.findall(value)
+
+    def search(self, value: str) -> Any:
+        self.handed += len(value)
+        return self.real.search(value)
+
+
+def watched_ids(monkeypatch: pytest.MonkeyPatch) -> WatchedIds:
+    watched = WatchedIds(parse._MESSAGE_ID)
+    monkeypatch.setattr(parse, "_MESSAGE_ID", watched)
+    return watched
+
+
+def test_the_id_headers_hand_the_pattern_no_more_than_their_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    watched = watched_ids(monkeypatch)
+    hostile = ("<" + "@" * 600) * 27  # the review's value, 16,227 characters
+    cap = parse.MAX_REFERENCES_HEADER + parse.MAX_ID_HEADER * 3
+    for count in (1, 10, 300):  # headers of each name: what is read does not grow with them
+        headers = [["From", "ada@example.com"]]
+        for name in ("References", "Message-ID", "In-Reply-To"):
+            headers += [[name, hostile]] * count
+        watched.handed = 0
+        got = parse.parse(fx.simple(headers), fx.ME)
+        assert watched.handed <= cap, count
+        assert (got.references_header, got.message_id_header, got.in_reply_to) == ("", None, None)
+        assert got.truncated is True
+    # Before, every `References` was read up to 16,384 characters: 300 of them, 4.9 million.
+    assert cap < 16_384 * 3
+
+
+def test_a_long_references_keeps_the_root_and_the_nearest_ancestors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    watched = watched_ids(monkeypatch)
+    ids = [f"<r{i}.{'x' * 40}@example.org>" for i in range(3000)]
+    sender = ["From", "ada@example.com"]
+    got = parse.parse(fx.simple([sender, ["References", " ".join(ids)]]), fx.ME)
+    assert got.references_header.split(" ") == [ids[0], *ids[-(parse.MAX_REFERENCES - 1) :]]
+    assert got.truncated is True
+    assert watched.handed <= parse.MAX_REFERENCES_HEADER + parse.MAX_ID_HEADER
+    # Under the cap nothing is cut; a second `References` is not read, and that is said.
+    short = " ".join(ids[:40])
+    got = parse.parse(fx.simple([sender, ["References", short]]), fx.ME)
+    assert (got.references_header, got.truncated) == (short, False)
+    later = ["References", "<late@example.org>"]
+    got = parse.parse(fx.simple([sender, ["References", short], later]), fx.ME)
+    assert (got.references_header, got.truncated) == (short, True)
+
+
+@pytest.mark.parametrize(
+    ("value", "read"),
+    [
+        ("<a.1@example.org>", "<a.1@example.org>"),
+        ("<a@b@example.org>", "<a@b@example.org>"),
+        (" (comment) <ok.2@example.org> trailing", "<ok.2@example.org>"),
+        ("<@example.org>", None),
+        ("<" + "@" * 600 + ">", None),
+        ("<" + "a" * 301 + "@example.org>", None),
+    ],
+)
+def test_a_message_id_has_no_at_before_its_at(value: str, read: str | None) -> None:
+    for name in ("Message-ID", "In-Reply-To"):
+        got = parse.parse(fx.simple([["From", "ada@example.com"], [name, value]]), fx.ME)
+        assert (got.message_id_header if name == "Message-ID" else got.in_reply_to) == read
+        assert got.truncated is False
+    long = " " * parse.MAX_ID_HEADER + "<late@example.org>"
+    got = parse.parse(fx.simple([["From", "ada@example.com"], ["Message-ID", long]]), fx.ME)
+    assert (got.message_id_header, got.truncated) == (None, True)
+
+
 # --- address headers: what the library is handed (review of PR #179, B1) --------------------------
 
 

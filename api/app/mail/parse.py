@@ -19,7 +19,10 @@ its ids, its labels and its date was written by a stranger, so:
   is handed little: the one `From`, the first `Reply-To`, the first `To` and the first `Cc`,
   each up to `MAX_ADDRESS_HEADER` characters. A longer list of recipients is cut at its last
   comma within the cap, and that cut, like a second `To` or `Cc`, sets `truncated`; a longer
-  `From` is not read. A subject or a name keeps its accents and its emoji and loses every
+  `From` is not read. The message ids are read from the first `Message-ID`, `In-Reply-To` and
+  `References` only, each up to a cap of its own (`References` at both ends: the root of the
+  thread at its start, the nearest ancestors at its end), and a longer or a second one of these
+  sets `truncated` too. A subject or a name keeps its accents and its emoji and loses every
   control character, line break and direction override;
 - **`suspicious`** is set by two `From` headers (or none), a `From` with several addresses or a
   group, a `From` that cannot be read or is longer than is read, a display name that contains
@@ -59,6 +62,11 @@ MAX_SUBJECT = 1000
 MAX_DISPLAY_NAME = 300
 MAX_SNIPPET = 1000
 MAX_REFERENCES = 50
+MAX_ID = 603  # characters of one message id as _MESSAGE_ID reads it: "<", 300, "@", 300, ">"
+MAX_ID_HEADER = 1000  # characters of `Message-ID` and `In-Reply-To` read: one id and its folds
+# Characters of `References` read from its end: the most that the MAX_REFERENCES stored ids, a
+# space after each, can fill. A long thread names its nearest ancestors last.
+MAX_REFERENCES_HEADER = MAX_REFERENCES * (MAX_ID + 1)
 MAX_LABELS = 100
 MAX_FILE_NAME = 255
 MAX_SIZE = 2**40
@@ -83,7 +91,9 @@ _SINGLE_BYTE = frozenset({"cp1252", "iso-8859-15"})
 
 _CHARSET = re.compile(r"""charset\s*=\s*["']?([A-Za-z0-9._:-]{1,40})""", re.IGNORECASE)
 _LOCAL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}")
-_MESSAGE_ID = re.compile(r"<[!-;=?-~]{1,300}@[!-;=?-~]{1,300}>")
+# No `@` before the `@`: the two quantifiers never share a character, so a value of `<@@@...`
+# costs one step per character and not one per pair of them.
+_MESSAGE_ID = re.compile(r"<[!-;=?A-~]{1,300}@[!-;=?-~]{1,300}>")
 _INSIDE_NAME = re.compile(r"""[^\s<>()\[\]"',;:@]+@([^\s<>()\[\]"',;:@]+)""")
 _MIME = re.compile(r"[a-z0-9][a-z0-9!#$&^_.+-]{0,60}/[a-z0-9][a-z0-9!#$&^_.+-]{0,60}")
 _PART_ID = re.compile(r"[0-9]{1,4}(?:\.[0-9]{1,4}){0,20}")
@@ -358,8 +368,32 @@ def _walk(payload: Mapping[str, Any]) -> tuple[str | None, str | None, list[Atta
 # --- the message ---------------------------------------------------------------------------------
 
 
-def _message_ids(values: list[str]) -> list[str]:
-    return [found for value in values for found in _MESSAGE_ID.findall(value[:MAX_HEADER_VALUE])]
+def _first_id(values: list[str]) -> tuple[str | None, bool]:
+    """The first message id of the first of the headers `values`, read within MAX_ID_HEADER
+    characters, and whether something was left unread: a second header, or a longer one."""
+    if not values:
+        return None, False
+    found = _MESSAGE_ID.search(values[0][:MAX_ID_HEADER])
+    return (found[0] if found else None), len(values) > 1 or len(values[0]) > MAX_ID_HEADER
+
+
+def _references(values: list[str]) -> tuple[list[str], bool]:
+    """The ids of the first of the `References` headers `values`: the root of the thread, then
+    its nearest ancestors, MAX_REFERENCES at most, and whether something was left unread. A
+    header over MAX_REFERENCES_HEADER characters is read at its two ends: the root within its
+    first MAX_ID_HEADER characters, the others within its last MAX_REFERENCES_HEADER."""
+    if not values:
+        return [], False
+    value, cut = values[0], len(values) > 1
+    if len(value) <= MAX_REFERENCES_HEADER:
+        found = _MESSAGE_ID.findall(value)
+    else:
+        cut = True
+        start = max(len(value) - MAX_REFERENCES_HEADER, MAX_ID_HEADER)
+        found = _MESSAGE_ID.findall(value[:MAX_ID_HEADER])[:1] + _MESSAGE_ID.findall(value[start:])
+    if len(found) > MAX_REFERENCES:
+        found = [found[0], *found[-(MAX_REFERENCES - 1) :]]
+    return found, cut
 
 
 def parse(gmail_message_json: Mapping[str, Any], own_address: str) -> ParsedMessage:
@@ -395,11 +429,10 @@ def parse(gmail_message_json: Mapping[str, Any], own_address: str) -> ParsedMess
         "outbound" if "SENT" in labels and from_addr is not None and from_addr == own else "inbound"
     )
 
-    references = _message_ids(_named(headers, "references"))
-    if len(references) > MAX_REFERENCES:  # the root of the thread, then its nearest ancestors
-        references = [references[0], *references[-(MAX_REFERENCES - 1) :]]
-    message_ids = _message_ids(_named(headers, "message-id")[:1])
-    in_reply_to = _message_ids(_named(headers, "in-reply-to")[:1])
+    references, cut_references = _references(_named(headers, "references"))
+    message_id_header, cut_message_id = _first_id(_named(headers, "message-id"))
+    in_reply_to, cut_in_reply_to = _first_id(_named(headers, "in-reply-to"))
+    cut_ids = cut_references or cut_message_id or cut_in_reply_to
     reply_to, cut_reply_to = _address_list(_named(headers, "reply-to")[:1])
     to_addrs, cut_to = _address_list(_named(headers, "to"))
     cc_addrs, cut_cc = _address_list(_named(headers, "cc"))
@@ -410,9 +443,9 @@ def parse(gmail_message_json: Mapping[str, Any], own_address: str) -> ParsedMess
     return ParsedMessage(
         gmail_message_id=message_id,
         gmail_thread_id=thread_id,
-        message_id_header=message_ids[0] if message_ids else None,
+        message_id_header=message_id_header,
         references_header=" ".join(references),
-        in_reply_to=in_reply_to[0] if in_reply_to else None,
+        in_reply_to=in_reply_to,
         from_addr=from_addr,
         from_name=from_name,
         reply_to=reply_to[0] if reply_to else None,
@@ -425,7 +458,7 @@ def parse(gmail_message_json: Mapping[str, Any], own_address: str) -> ParsedMess
         else "",
         body_text=text or "",
         raw_html=markup,
-        truncated=cut or cut_reply_to or cut_to or cut_cc,
+        truncated=cut or cut_reply_to or cut_to or cut_cc or cut_ids,
         trusted=verdict.trusted,
         from_domain=verdict.from_domain,
         suspicious=suspicious,
