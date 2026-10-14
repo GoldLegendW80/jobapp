@@ -7,16 +7,22 @@ from typing import Any
 import pytest
 
 from app.apply.answers import (
+    AUTHORISATION_OPTION_TEXTS,
+    EEO_YES_NO_OPTION_TEXTS,
     EU_MEMBERS,
+    NO_OPTION_TEXTS,
+    YES_OPTION_TEXTS,
     Answer,
     Context,
     Documents,
     FormField,
     Left,
     Posting,
+    language_level,
     match_option,
     match_template,
     normalise,
+    option_key,
     posting_countries,
     resolve,
 )
@@ -230,8 +236,28 @@ def test_a_start_date_that_is_not_a_date_is_left_for_a_date_field() -> None:
     assert value("Start date", context=ctx(sections=secs)) == "As soon as possible"
 
 
-def test_a_relocation_sentence_is_not_a_yes() -> None:
-    assert left("Willing to relocate?", "yes_no").reason == "not_a_yes_or_no"
+def test_a_relocation_sentence_is_a_yes_only_for_a_place_it_names() -> None:
+    # "Open to Paris.": a yes for a Paris posting, nothing for Lyon or London, never a prefix.
+    assert value("Willing to relocate?", "yes_no") is True
+    assert left("Willing to relocate?", "yes_no", context=ctx("Lyon, France")).reason == (
+        "relocation_does_not_cover_the_posting"
+    )
+    assert left("Willing to relocate?", "select", YES_NO, context=ctx("London")).reason == (
+        "relocation_does_not_cover_the_posting"
+    )
+    assert left("Willing to relocate?", "yes_no", context=ctx(None)).reason == "no_posting_location"
+    only = ctx("London", sections=sections(relocation="Yes, within France only."))
+    assert value("Willing to relocate?", "select", YES_NO, context=only) == "No"
+    vague = ctx(sections=sections(relocation="Yes, but it depends on the role."))
+    assert left("Willing to relocate?", "select", YES_NO, context=vague).reason == (
+        "relocation_does_not_cover_the_posting"
+    )
+    bare = ctx(sections=sections(relocation="Yes"))
+    assert isinstance(ask("Willing to relocate?", "select", YES_NO, context=bare), Left)
+    anywhere = ctx("London", sections=sections(relocation="Yes, anywhere."))
+    assert value("Willing to relocate?", "select", YES_NO, context=anywhere) == "Yes"
+    eu = ctx("Berlin, Germany", sections=sections(relocation="Open to the EU only."))
+    assert value("Willing to relocate?", "select", YES_NO, context=eu) == "Yes"
 
 
 def test_onsite_hybrid_background_and_reference_checks_are_the_persons_choices() -> None:
@@ -408,12 +434,15 @@ def test_languages() -> None:
     assert names[0] in value("Languages", "textarea")
 
 
-def test_how_heard_matches_an_option_or_falls_back_to_other() -> None:
+def test_how_heard_matches_only_the_option_that_reads_the_same() -> None:
     assert value("How did you hear about us?", "text") == "The company's careers page."
-    assert (
-        value("How did you hear about us?", "select", ("Careers page", "Other")) == "Careers page"
+    # Round 4: neither a part of the sentence nor "Other" by default.
+    assert left("How did you hear about us?", "select", ("Careers page", "Other")).reason == (
+        "no_matching_option"
     )
-    assert value("How did you hear about us?", "select", ("Friend", "Other")) == "Other"
+    assert left("How did you hear about us?", "select", ("Friend", "Other")).reason == (
+        "no_matching_option"
+    )
     assert value(
         "How did you hear about us?", "select", ("The company's careers page", "Other")
     ) == ("The company's careers page")
@@ -513,8 +542,13 @@ def test_a_stored_section_that_no_longer_validates_reads_as_empty() -> None:
     ("text", "options", "expected"),
     [
         ("Yes", ("yes", "no"), "yes"),
-        ("French", ("French (Français)", "English"), "French (Français)"),
-        ("Linked", ("LinkedIn", "Friend"), "LinkedIn"),
+        ("French", ("French (Français)", "English"), None),  # round 4: never a prefix
+        ("Linked", ("LinkedIn", "Friend"), None),  # round 4: never a part
+        ("linkedin.", ("LinkedIn", "Friend"), "LinkedIn"),
+        ("Yes", ("Yes, I am", "No"), "Yes, I am"),
+        ("Yes", ("I am a US citizen", "No"), None),
+        ("Yes, within France only.", ("Yes", "No"), None),
+        ("EU citizen, no sponsorship needed.", ("Sponsorship needed", "Other"), None),
         ("other", ("LinkedIn", "Other (please specify)"), "Other (please specify)"),
         ("autre", ("LinkedIn", "Other"), "Other"),
         ("prefer not to say", ("Man", "Decline to self identify"), "Decline to self identify"),
@@ -527,3 +561,35 @@ def test_a_stored_section_that_no_longer_validates_reads_as_empty() -> None:
 )
 def test_match_option(text: str, options: tuple[str, ...], expected: str | None) -> None:
     assert match_option(text, options) == expected
+
+
+def test_the_option_vocabularies_never_share_an_option() -> None:
+    seen: dict[str, str] = {}
+    vocabularies = [("yes", YES_OPTION_TEXTS), ("no", NO_OPTION_TEXTS)]
+    vocabularies += list(AUTHORISATION_OPTION_TEXTS.items())
+    for topic, words in EEO_YES_NO_OPTION_TEXTS.items():
+        vocabularies += [(f"{topic} {said}", texts) for said, texts in words.items()]
+    for name, texts in vocabularies:
+        for text in texts:
+            key = option_key(text)
+            assert seen.setdefault(key, name) == name, (text, seen[key], name)
+
+
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [
+        ("C1", ("c1", "fluent")),
+        ("Advanced (C1)", ("c1", "fluent")),
+        ("Mother tongue", (None, "native")),
+        ("Langue maternelle", (None, "native")),
+        ("Native or bilingual proficiency", (None, "native")),
+        ("Courant", (None, "fluent")),
+        ("Intermediate level", (None, "intermediate")),
+        ("Basic (C2)", None),
+        ("B2 / C1", None),
+        ("Professional working", None),
+        ("", None),
+    ],
+)
+def test_a_level_reads_as_a_grade_and_a_band(level: str, expected: object) -> None:
+    assert language_level(level) == expected

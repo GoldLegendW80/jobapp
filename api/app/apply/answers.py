@@ -14,12 +14,20 @@ person one field and a wrong answer is a false statement in their name. A label 
 questions is left; a negated or inverted one is left unless a template is written for that
 exact form ("without sponsorship").
 
+Options too are a closed world: an answer picks an option only when the option's whole text is in
+that answer's vocabulary (the yes and no options, the work authorisation status options by
+category, the language levels) or reads exactly as the stored value. No option is ever picked
+because it starts with or holds a word of the answer. A free value (a notice period, a salary or
+relocation sentence) goes into text fields only. The field's kind has the last word: a file field
+takes only a document, a date field only a stored date.
+
 Order: the person's policies first (leave blank, the EEO policy, the salary stance) and the fields
 no source may fill (someone else's details, age, citizenship and birthplace, a criminal record,
 pay received, free text); then the person's answer bank, for the exact question it was typed for;
 then the templates. A rule that matches but finds no value in the profile leaves the field.
 Work authorisation is answered for the country the question names, else the posting's; a member
-state of the EU with no entry of its own is answered from the person's EU entry. A context
+state of the EU with no entry of its own is answered from the person's EU entry; Europe, the EEA,
+Schengen and EFTA read only an entry of their own. A context
 without a posting (the profile run of A18a) leaves everything that needs the posting's country.
 """
 
@@ -210,8 +218,219 @@ def fold(text: str | None) -> str:
     return re.sub(r"\s+", " ", re.sub("[̀-ͯ]", "", plain)).strip()
 
 
-YES = ("yes", "oui", "y", "true", "i do", "i am", "j'accepte")
-NO = ("no", "non", "n", "false", "i do not", "i don't", "i am not")
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def option_key(text: str | None) -> str:
+    """An option or a stored value as the vocabularies read it: folded, every mark but letters
+    and digits gone. "Yes, I don't" reads "yes i don t"."""
+    return re.sub(r"\s+", " ", re.sub(r"[^\w]+", " ", fold(text))).strip()
+
+
+# --- option vocabularies -----------------------------------------------------------------------
+# A closed world for options too: an answer picks an option only when the option's whole text,
+# read by `option_key`, is in the vocabulary of that answer. No option is ever picked because it
+# starts with a word or holds a phrase ("I am a US citizen" is not a yes; "Sponsorship needed" is
+# not chosen because a stored sentence holds it).
+
+# The options that say yes, and no, in full, English and French.
+YES_OPTION_TEXTS = (
+    "Yes",
+    "Oui",
+    "Y",
+    "True",
+    "Yes, I am",
+    "Yes, I do",
+    "Yes, I will",
+    "Yes, I would",
+    "Yes, I can",
+    "Yes, I have",
+    "I am",
+    "I do",
+    "I will",
+    "I would",
+    "I can",
+    "I have",
+    "Oui, je le suis",
+    "Oui, tout à fait",
+)
+NO_OPTION_TEXTS = (
+    "No",
+    "Non",
+    "N",
+    "False",
+    "No, I am not",
+    "No, I'm not",
+    "No, I do not",
+    "No, I don't",
+    "No, I will not",
+    "No, I won't",
+    "No, I would not",
+    "No, I wouldn't",
+    "No, I cannot",
+    "No, I can't",
+    "No, I have not",
+    "No, I haven't",
+    "I am not",
+    "I'm not",
+    "I do not",
+    "I don't",
+    "I will not",
+    "I won't",
+    "I would not",
+    "I wouldn't",
+    "I cannot",
+    "I can't",
+    "I have not",
+    "I haven't",
+    "Non, je ne le suis pas",
+    "Non, pas du tout",
+)
+YES_OPTIONS = frozenset(option_key(t) for t in YES_OPTION_TEXTS)
+NO_OPTIONS = frozenset(option_key(t) for t in NO_OPTION_TEXTS)
+
+# The options that state a work authorisation status, by category. An option is chosen only
+# when its whole text is in one category AND that category is true for the person in the country
+# asked: "authorised" when their entry needs no sponsorship, "requires_sponsorship" and
+# "not_authorised" when it does.
+# The profile stores no citizenship, residence permit or visa, so the last three categories are
+# never true: such an option is known, and never chosen.
+AUTHORISATION_OPTION_TEXTS: dict[str, tuple[str, ...]] = {
+    "authorised": (
+        "Authorized to work",
+        "Authorised to work",
+        "I am authorized to work",
+        "I am authorised to work",
+        "Authorized to work without sponsorship",
+        "Authorised to work without sponsorship",
+        "No sponsorship needed",
+        "No sponsorship required",
+        "Sponsorship not needed",
+        "Sponsorship not required",
+        "I do not need sponsorship",
+        "I don't need sponsorship",
+        "I do not require sponsorship",
+        "I don't require sponsorship",
+        "I will not need sponsorship",
+        "I won't need sponsorship",
+        "I will not require sponsorship",
+        "I won't require sponsorship",
+        "Autorisé à travailler",
+        "Je suis autorisé à travailler",
+        "Pas besoin de parrainage",
+        "Aucun parrainage nécessaire",
+        "Sans parrainage",
+        "Yes, I am authorized",
+        "Yes, I am authorised",
+        "Yes, I am authorized to work",
+        "Yes, I am authorised to work",
+        "No, I do not require sponsorship",
+        "No, I don't require sponsorship",
+        "No, I do not need sponsorship",
+        "No, I don't need sponsorship",
+        "No, I will not require sponsorship",
+        "No, I will not need sponsorship",
+        "Oui, je suis autorisé",
+        "Oui, je suis autorisé(e)",
+        "Non, je n'ai pas besoin de parrainage",
+    ),
+    "requires_sponsorship": (
+        "Sponsorship needed",
+        "Sponsorship required",
+        "Requires sponsorship",
+        "Require sponsorship",
+        "Needs sponsorship",
+        "Need sponsorship",
+        "I need sponsorship",
+        "I require sponsorship",
+        "I will need sponsorship",
+        "I will require sponsorship",
+        "I would need sponsorship",
+        "I would require sponsorship",
+        "Visa sponsorship needed",
+        "Visa sponsorship required",
+        "I need visa sponsorship",
+        "I will need visa sponsorship",
+        "I will require visa sponsorship",
+        "Parrainage nécessaire",
+        "Besoin de parrainage",
+        "Besoin d'un parrainage",
+        "J'ai besoin d'un parrainage",
+        "Yes, I require sponsorship",
+        "Yes, I need sponsorship",
+        "Yes, I will require sponsorship",
+        "Yes, I will need sponsorship",
+        "Oui, j'ai besoin d'un parrainage",
+    ),
+    # Not authorised to work there: true exactly when sponsorship is needed.
+    "not_authorised": (
+        "Not authorized to work",
+        "Not authorised to work",
+        "No, I am not authorized",
+        "No, I am not authorised",
+        "No, I am not authorized to work",
+        "No, I am not authorised to work",
+        "Non, je ne suis pas autorisé",
+        "Non, je ne suis pas autorisé(e)",
+    ),
+    "citizen": (
+        "Citizen",
+        "I am a citizen",
+        "I am a US citizen",
+        "US citizen",
+        "I am a British citizen",
+        "British citizen",
+        "EU citizen",
+        "I am an EU citizen",
+        "Citoyen",
+        "Citoyen européen",
+    ),
+    "permanent_resident": (
+        "Permanent resident",
+        "I am a permanent resident",
+        "Green card holder",
+        "I have a green card",
+        "I hold a green card",
+        "Résident permanent",
+    ),
+    "visa_holder": (
+        "On a visa",
+        "I am on a visa",
+        "Visa holder",
+        "I hold a visa",
+        "I hold a work visa",
+        "I am on an H-1B visa",
+        "H-1B visa",
+        "I hold a Skilled Worker visa",
+        "Titulaire d'un visa",
+    ),
+}
+AUTHORISATION_OPTIONS: dict[str, str] = {
+    option_key(text): category
+    for category, texts in AUTHORISATION_OPTION_TEXTS.items()
+    for text in texts
+}
+
+# The yes and no options of the EEO questions that word them per topic, for a stored "Yes" or
+# "No" (the policy "stored"): the standard self identification wordings.
+EEO_YES_NO_OPTION_TEXTS: dict[str, dict[bool, tuple[str, ...]]] = {
+    "disability": {
+        True: (
+            "Yes, I have a disability",
+            "Yes, I have a disability (or previously had a disability)",
+            "Yes, I have a disability, or have had one in the past",
+        ),
+        False: ("No, I do not have a disability", "No, I don't have a disability"),
+    },
+    "veteran": {
+        True: (
+            "I am a protected veteran",
+            "I identify as one or more of the classifications of protected veteran",
+        ),
+        False: ("I am not a protected veteran", "I am not a veteran"),
+    },
+}
+
 _OTHER = ("other", "others", "autre", "autres", "something else", "not listed", "none of the above")
 _DECLINE = (
     "prefer not to say",
@@ -247,63 +466,39 @@ def _whole_words(inner: str, outer: str) -> bool:
     return len(inner) >= 3 and re.search(rf"\b{re.escape(inner)}\b", outer) is not None
 
 
+def _yes_no_option(value: bool, options: tuple[str, ...]) -> str | None:
+    """The one option whose whole text says yes (or no), from the vocabulary; none or two is
+    no match."""
+    vocabulary = YES_OPTIONS if value else NO_OPTIONS
+    hits = [option for option in options if option_key(option) in vocabulary]
+    return hits[0] if len(hits) == 1 else None
+
+
 def match_option(text: str, options: tuple[str, ...]) -> str | None:
-    """The option that stands for `text`: exact, then prefix, then contains (either way), after
-    folding case and accents. The families "Other" and "Prefer not to say" match their
-    equivalents. Two options at the same level make no match (ambiguous, left)."""
-    want = fold(text)
+    """The option that stands for `text`: the one whose whole text reads the same (case, accents
+    and punctuation aside), never a prefix or a part of it. A bare yes or no takes the one option
+    of the yes or no vocabulary; "Other" and "Prefer not to say" take their family's one option.
+    Two options make no match (ambiguous, left)."""
+    want = option_key(text)
     if not want or not options:
         return None
-    folded = [(fold(option), option) for option in options]
-    for test in (
-        lambda o: o == want,
-        lambda o: (len(want) >= 3 and o.startswith(want)) or want.startswith(f"{o} "),
-        lambda o: _whole_words(want, o) or (len(o) >= 3 and _whole_words(o, want)),
-    ):
-        hits = [raw for f, raw in folded if f and test(f)]
-        if len(hits) == 1:
-            return hits[0]
-        if len(hits) > 1:
-            return None
-    for family in (_OTHER, _DECLINE, YES, NO):
-        if want in family:
-            picked = _family_option(family, options)
-            if picked is not None:
-                return picked
+    hits = [option for option in options if option_key(option) == want]
+    if hits:
+        return hits[0] if len(hits) == 1 else None
+    if want in YES_OPTIONS or want in NO_OPTIONS:
+        return _yes_no_option(want in YES_OPTIONS, options)
+    for family in (_OTHER, _DECLINE):
+        if fold(text) in family:
+            return _family_option(family, options)
     return None
 
 
-def _option_words(option: str) -> str:
-    """An option folded with its punctuation gone: "Yes, I am" reads "yes i am"."""
-    return re.sub(r"\s+", " ", re.sub(r"[^\w' ]+", " ", fold(option))).strip()
-
-
-def _member(family: tuple[str, ...], words: str) -> bool:
-    return any(words == member or words.startswith(f"{member} ") for member in family)
-
-
 def _family_option(family: tuple[str, ...], options: tuple[str, ...]) -> str | None:
-    """The one option that is a member of the family. Yes and no: the bare word first ("Yes",
-    "No, I do not"), then the phrases ("I am", "I do not"); an option that also reads as the
-    other answer or as a decline is never one of them. The wordy families (Other, Prefer not to
-    say): the member as a phrase inside the option."""
-    if family is YES or family is NO:
-        other = NO if family is YES else YES
-        for tier in (family[:4], family):
-            hits = [
-                option
-                for option in options
-                if _member(tier, words := _option_words(option))
-                and not (family is YES and _member(other, words))
-                and not _member(_DECLINE, words)
-                and not any(d in words for d in _DECLINE)
-            ]
-            if hits:
-                return hits[0] if len(hits) == 1 else None
-        return None
+    """The one option that holds a member of a wordy family (Other, Prefer not to say) as a
+    phrase: "Decline to self-identify" reads "decline to self identify"."""
     hits = []
     for option in options:
-        words = _option_words(option)  # "Decline to self-identify" reads "decline to self identify"
+        words = re.sub(r"\s+", " ", re.sub(r"[^\w' ]+", " ", fold(option))).strip()
         if any(
             words == member or re.search(rf"\b{re.escape(member)}\b", words) for member in family
         ):
@@ -312,27 +507,31 @@ def _family_option(family: tuple[str, ...], options: tuple[str, ...]) -> str | N
 
 
 def _boolean(field: FormField, value: bool, source: str) -> Answer | Left:
-    """A yes or no for a field of any kind: the boolean for a checkbox or a bare yes/no, the
-    matching option for a choice."""
+    """A yes or no for a field of any kind: the boolean for a checkbox or a bare yes/no, the one
+    option of the yes or no vocabulary for a choice."""
     if field.kind in ("checkbox",) or (field.kind == "yes_no" and not field.options):
         return Answer(value, source)
     if field.options:
-        picked = _family_option(YES if value else NO, field.options)
+        picked = _yes_no_option(value, field.options)
         if picked is None:
             return Left("no_matching_option", field.options, field.required)
         return Answer(picked, source, option=picked)
     return Answer("Yes" if value else "No", source)
 
 
-def _text(field: FormField, value: str, source: str) -> Answer | Left:
-    """A sentence for a field: kept as written for text, matched to an option for a choice."""
+def _text(field: FormField, value: str, source: str, free: bool = False) -> Answer | Left:
+    """A stored value for a field: kept as written for text, the option that reads the same for
+    a choice. A free value (a notice period, a salary sentence, a relocation or travel sentence,
+    a start date) goes into text fields only: it is never read against options."""
     if field.kind in _CHOICES and field.options:
-        picked = match_option(value, field.options)
+        picked = None if free else match_option(value, field.options)
         if picked is None:
             return Left("no_matching_option", field.options, field.required)
         return Answer((picked,) if field.kind == "multi" else picked, source, option=picked)
     if field.kind in ("yes_no", "checkbox", "file"):
         return Left("not_a_yes_or_no", field.options, field.required)
+    if field.kind == "date" and not _ISO_DATE.match(value):
+        return Left("not_a_date", field.options, field.required)
     return Answer(value, source)
 
 
@@ -356,7 +555,7 @@ def normalise(label: str | None) -> str:
     raw = re.sub(r"\bU\.S\.(?:A\.)?|\bU\.S\b|\bUSA\b|\bUS\b", " USA ", label or "")
     text = fold(raw)
     text = re.sub(r"\((?:required|optional|obligatoire|facultatif)\)|[*✱]", " ", text)
-    text = re.sub(r"\(?\b(?:yes ?/ ?no|oui ?/ ?non)\b\)?", " ", text)
+    text = re.sub(r"\(?\b(?:yes ?(?:/|or) ?no|oui ?(?:/|ou) ?non)\b\)?", " ", text)
     text = re.sub(r"\((?:e|s|es|ne)\)", "", text)
     text = re.sub(r"[^a-z0-9+€£$/. ]+", " ", text)
     text = re.sub(r"(?<!\d)\.|\.(?!\d)", " ", text)
@@ -367,7 +566,7 @@ def normalise(label: str | None) -> str:
 
 # Two questions in one label: never answered as one. The pairs below are one question each.
 _ONE_QUESTION_PAIRS = re.compile(
-    r"now or in the future|maintenant ou (?:a l avenir|dans le futur)|race / ethnicity"
+    r"now or in the future|maintenant ou (?:a l avenir|dans le futur)|race / ethnicity|yes or no|oui ou non"
     r"|resume / cv|cv / resume|(?:portfolio|website) (?:/|or) (?:portfolio|website)|website blog (?:/|or) portfolio|hispanic (?:/|or) latino|\b(?:or|ou) (?:more|less|fewer|above|longer|plus|moins)\b"
 )
 _TWO_QUESTIONS = re.compile(
@@ -429,18 +628,24 @@ EU_MEMBERS: dict[str, tuple[str, ...]] = {
     "Sweden": ("sweden", "suede"),
 }
 COUNTRIES: dict[str, tuple[str, ...]] = {
-    EU: (
-        "european union",
-        "eu",
-        "e u",
+    # Only the EU itself and its member states read the EU entry. Europe, the EEA, Schengen and
+    # EFTA are other regions (Switzerland, Norway, the UK): each reads only an entry of its own.
+    EU: ("european union", "eu", "e u", "union europeenne", "ue"),
+    "Europe": ("europe", "continental europe", "l europe"),
+    "European Economic Area": (
         "eea",
         "european economic area",
-        "europe",
-        "union europeenne",
-        "ue",
         "espace economique europeen",
-        "europe",
+        "eee",
     ),
+    "Schengen Area": (
+        "schengen",
+        "schengen area",
+        "schengen zone",
+        "espace schengen",
+        "zone schengen",
+    ),
+    "EFTA": ("efta", "european free trade association", "aele"),
     "United States": (
         "united states",
         "united states of america",
@@ -582,7 +787,8 @@ def _left(field: FormField, reason: str) -> Left:
 
 def _boolean_form(field: FormField) -> bool:
     return field.kind in ("yes_no", "checkbox") or (
-        field.kind in _CHOICES and _family_option(YES, field.options) is not None
+        field.kind in _CHOICES
+        and any(option_key(o) in YES_OPTIONS | NO_OPTIONS for o in field.options)
     )
 
 
@@ -609,10 +815,10 @@ def _name_part(part: Literal["first", "last", "full"]) -> Handler:
     return handler
 
 
-def _answers_value(attr: str, reason: str) -> Handler:
+def _answers_value(attr: str, reason: str, free: bool = False) -> Handler:
     def handler(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
         value = getattr(s.answers, attr)
-        return _text(field, value, f"answers.{attr}") if value else _left(field, reason)
+        return _text(field, value, f"answers.{attr}", free) if value else _left(field, reason)
 
     return handler
 
@@ -651,6 +857,8 @@ def _link(kind: Literal["linkedin", "github", "website"]) -> Handler:
             source = "identity.links"
         else:
             url, source = ident.website, "identity.website"
+        if field.kind not in ("text", "textarea"):
+            return _left(field, "not_a_text_field")  # a file field never takes a link
         return Answer(url, source) if url else _left(field, "no_link")
 
     return handler
@@ -669,20 +877,119 @@ def _spoken(s: Sections) -> list[Any]:
     return [lang for lang in s.identity.languages if not _BEGINNER.search(fold(lang.level))]
 
 
+# A language level, as a CEFR grade or a word: the words of each band, English and French. An
+# option naming a CEFR grade is chosen only at the person's own grade; an option naming a word
+# only at the person's own band (a stored C1 is "fluent", never "native", never "C2").
+CEFR_BAND = {
+    "a1": "basic",
+    "a2": "basic",
+    "b1": "intermediate",
+    "b2": "intermediate",
+    "c1": "fluent",
+    "c2": "fluent",
+}
+LEVEL_WORDS: dict[str, tuple[str, ...]] = {
+    "basic": (
+        "basic",
+        "beginner",
+        "elementary",
+        "limited",
+        "notions",
+        "debutant",
+        "elementaire",
+        "scolaire",
+        "basique",
+    ),
+    "intermediate": ("intermediate", "conversational", "intermediaire"),
+    "fluent": ("fluent", "advanced", "full professional", "courant", "avance", "courante"),
+    "native": (
+        "native",
+        "mother tongue",
+        "native or bilingual",
+        "bilingual",
+        "langue maternelle",
+        "maternelle",
+        "bilingue",
+    ),
+}
+_BAND_OF = {option_key(word): band for band, words in LEVEL_WORDS.items() for word in words}
+_LEVEL_FILLER = re.compile(r"\b(?:proficiency|level|niveau|speaker|cefr|cecrl)\b")
+
+
+def language_level(text: str | None) -> tuple[str | None, str] | None:
+    """A level as (CEFR grade or None, band): "C1" reads ("c1", "fluent"), "Advanced (C1)"
+    ("c1", "fluent"), "Langue maternelle" (None, "native"). None when it is not a level or its
+    words disagree ("Basic (C2)")."""
+    words = _LEVEL_FILLER.sub(" ", option_key(text))
+    grades = re.findall(r"\b[abc][12]\b", words)
+    rest = re.sub(r"\s+", " ", re.sub(r"\b[abc][12]\b", " ", words)).strip()
+    if len(grades) > 1 or (not grades and not rest):
+        return None
+    grade = grades[0] if grades else None
+    band = _BAND_OF.get(rest) if rest else CEFR_BAND[grade]  # type: ignore[index]
+    if band is None or (grade is not None and CEFR_BAND[grade] != band):
+        return None
+    return grade, band
+
+
+def _level_holds(
+    option: tuple[str | None, str] | None, person: tuple[str | None, str] | None
+) -> bool:
+    if option is None or person is None:
+        return False
+    return option[0] == person[0] if option[0] is not None else option[1] == person[1]
+
+
+_LANGUAGE_PHRASES = sorted(_LANGUAGE_OF, key=len, reverse=True)
+
+
+def _language_option(option: str) -> tuple[str, str] | None:
+    """An option read as (language, the level text after it): "English (C1)" reads ("english",
+    "c1"), "Français" ("french", ""), "French (Français)" ("french", ""). None when it does not
+    open with a language."""
+    key = option_key(option)
+    for phrase in _LANGUAGE_PHRASES:
+        if key == phrase or key.startswith(f"{phrase} "):
+            language, rest = _LANGUAGE_OF[phrase], key[len(phrase) :].strip()
+            if _LANGUAGE_OF.get(rest) == language:
+                rest = ""  # the language named twice, in two languages
+            return language, rest
+    return None
+
+
+def _language_picks(options: tuple[str, ...], spoken: list[Any]) -> list[str] | None:
+    """The options for the languages the person speaks, each at the person's level when the
+    option states one. None when a spoken language the options name has no option, or more than
+    one, at the person's level: never two levels of one language, never a level not held."""
+    levels = {_language_key(lang.name): language_level(lang.level) for lang in spoken}
+    named: dict[str, list[str]] = {}
+    for option in options:
+        read = _language_option(option)
+        if read is None or read[0] not in levels:
+            continue
+        language, level = read
+        chosen = named.setdefault(language, [])
+        if not level or _level_holds(language_level(level), levels[language]):
+            chosen.append(option)
+    if any(len(chosen) != 1 for chosen in named.values()):
+        return None
+    return [o for o in options if any(o in chosen for chosen in named.values())]
+
+
 def _languages(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
-    """The languages the person speaks: every one of them in a multi select, the one option a
-    single choice can hold only when the person speaks one, the stored list as text."""
+    """The languages the person speaks: every one of them in a multi select, each at its level
+    when the options state levels; the one option a single choice can hold only when the person
+    speaks one; the stored list as text."""
     spoken = _spoken(s)
     if not spoken:
         return _left(field, "no_languages")
     if field.kind in _CHOICES and field.options and field.kind != "yes_no":
-        names = {_language_key(lang.name) for lang in spoken}
-        picked = tuple(o for o in field.options if _language_key(o) in names)
+        picked = _language_picks(field.options, spoken)
         if field.kind == "multi":
             if not picked:
                 return _left(field, "no_matching_option")
-            return Answer(picked, "identity.languages", option=picked[0])
-        if len(spoken) != 1 or len(picked) != 1:
+            return Answer(tuple(picked), "identity.languages", option=picked[0])
+        if len(spoken) != 1 or picked is None or len(picked) != 1:
             return _left(field, "several_languages_one_choice")
         return Answer(picked[0], "identity.languages", option=picked[0])
     if field.kind in ("yes_no", "checkbox", "file"):
@@ -691,6 +998,33 @@ def _languages(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) ->
         lang.name + (f" ({lang.level})" if lang.level else "") for lang in s.identity.languages
     )
     return Answer(listed, "identity.languages")
+
+
+def _language_level(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
+    """The person's level in the language named: the stored level as text, the one option at
+    that level for a choice (a grade option only at the stored grade)."""
+    want = _LANGUAGE_OF[m.group("language")]
+    lang = next((g for g in s.identity.languages if _language_key(g.name) == want), None)
+    if lang is None:
+        return _left(field, "language_not_in_profile")
+    if not lang.level:
+        return _left(field, "no_language_level")
+    if field.kind in _CHOICES and field.options and field.kind != "yes_no":
+        person = language_level(lang.level)
+        hits = []
+        for option in field.options:
+            read = _language_option(option)
+            level = read[1] if read is not None and read[0] == want else option
+            if _level_holds(language_level(level), person):
+                hits.append(option)
+        if len(hits) != 1:
+            return _left(field, "no_matching_option")
+        return Answer(
+            (hits[0],) if field.kind == "multi" else hits[0], "identity.languages", hits[0]
+        )
+    if field.kind not in ("text", "textarea"):
+        return _left(field, "not_a_yes_or_no")
+    return Answer(lang.level, "identity.languages")
 
 
 def _speaks(fluent: bool) -> Handler:
@@ -735,6 +1069,24 @@ def _entries(
     return entries, None
 
 
+def _authorisation_option(field: FormField, entries: list[WorkAuthorization]) -> Answer | Left:
+    """The one status option (`AUTHORISATION_OPTIONS`) whose category is true for the person in
+    the country asked: "authorised" when the entries need no sponsorship, "requires_sponsorship"
+    when they do. A citizenship, residence or visa option is never true: the profile stores none.
+    A status option reads the same whatever the label asks, so it is chosen on its own truth."""
+    needs = {e.needs_sponsorship for e in entries}
+    if len(needs) != 1 or None in needs:
+        return _left(field, "countries_disagree_or_unstated")
+    true = {"requires_sponsorship", "not_authorised"} if needs.pop() else {"authorised"}
+    hits = [o for o in field.options if AUTHORISATION_OPTIONS.get(option_key(o)) in true]
+    if len(hits) != 1:
+        return _left(field, "no_matching_option")
+    picked = hits[0]
+    return Answer(
+        (picked,) if field.kind == "multi" else picked, "answers.work_authorization", picked
+    )
+
+
 def _work(kind: Literal["authorised", "needs", "status"]) -> Handler:
     """Work authorisation ("may you work there"), sponsorship ("do you need it") and the status
     sentence, for the country the question names, else for the posting's."""
@@ -748,9 +1100,16 @@ def _work(kind: Literal["authorised", "needs", "status"]) -> Handler:
             if kind == "status" or len(needs) != 1 or None in needs:
                 return _left(field, "countries_disagree_or_unstated")
             needed = bool(needs.pop())
-            return _boolean(
+            said = _boolean(
                 field, needed if kind == "needs" else not needed, "answers.work_authorization"
             )
+            if isinstance(said, Left) and field.options:
+                # "Oui, je suis autorisé(e)" beside "Non": a status option, true on its own.
+                status = _authorisation_option(field, entries)
+                return status if isinstance(status, Answer) else said
+            return said
+        if field.kind in _CHOICES and field.options:
+            return _authorisation_option(field, entries)
         answers = {e.answer for e in entries}
         if len(answers) != 1:
             return _left(field, "countries_disagree_or_unstated")
@@ -759,31 +1118,127 @@ def _work(kind: Literal["authorised", "needs", "status"]) -> Handler:
     return handler
 
 
-_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
 def _start_date(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
     value = s.answers.earliest_start
     if not value:
         return _left(field, "no_earliest_start")
     if field.kind == "date" and not _ISO_DATE.match(value):
         return _left(field, "start_is_not_a_date")
-    return _text(field, value, "answers.earliest_start")
+    return _text(field, value, "answers.earliest_start", free=True)
+
+
+# The words a relocation sentence may hold besides the places it names. A sentence is read for
+# a yes or no only when every other word is one of these: "Yes, within France only." names
+# France, "only" makes every other country a no; "Open to Paris or Lyon." names two cities;
+# "Yes, anywhere." covers every place. Anything else ("but", "except", "maybe", a condition) is
+# not read, and a bare "Yes" names no place, so it covers none.
+_RELOCATION_WORDS = frozenset(
+    [
+        "yes",
+        "oui",
+        "open",
+        "to",
+        "relocate",
+        "relocating",
+        "relocation",
+        "willing",
+        "happy",
+        "ready",
+        "within",
+        "in",
+        "inside",
+        "and",
+        "or",
+        "et",
+        "a",
+        "en",
+        "au",
+        "aux",
+        "dans",
+        "the",
+        "le",
+        "la",
+        "les",
+        "l",
+        "i",
+        "am",
+        "je",
+        "suis",
+        "would",
+        "be",
+        "pret",
+        "prete",
+        "ouvert",
+        "ouverte",
+        "demenager",
+        "mobile",
+        "only",
+        "uniquement",
+        "seulement",
+        "exclusively",
+    ]
+)
+_ANYWHERE = re.compile(r"\b(?:anywhere|partout|worldwide|any location|n importe ou)\b")
+_RELOCATION_ONLY = re.compile(r"\b(?:only|uniquement|seulement|exclusively)\b")
+_PLACE_PHRASES = re.compile(rf"\b(?:{_alternation([*_PLACE_COUNTRY, *_COUNTRY_OF])})\b")
+
+
+def _relocation_covers(sentence: str, posting: Posting) -> bool | None:
+    """Whether the person's relocation sentence covers the posting's place: True when it says
+    anywhere or names the posting's city or country (or the EU for a member state), False only
+    for a bare "No" or a sentence saying "only" that names places elsewhere, else None."""
+    key = option_key(sentence)
+    if key in NO_OPTIONS:
+        return False
+    anywhere = _ANYWHERE.search(key) is not None
+    places = _PLACE_PHRASES.findall(key)
+    rest = _PLACE_PHRASES.sub(" ", _ANYWHERE.sub(" ", key)).split()
+    if not (anywhere or places) or any(word not in _RELOCATION_WORDS for word in rest):
+        return None
+    cities = {p for p in places if p in _PLACE_COUNTRY}
+    countries = {_COUNTRY_OF[p] for p in places if p not in _PLACE_COUNTRY}
+    only = _RELOCATION_ONLY.search(key) is not None
+
+    def covered(city: str | None, country: str) -> bool | None:
+        if anywhere or city in cities or country in countries:
+            return True
+        if EU in countries and country in EU_MEMBERS:
+            return True
+        if not only or (city is None and country in {_PLACE_COUNTRY[c] for c in cities}):
+            return None  # a city named in the posting's country: the posting may be there
+        return False
+
+    targets = [(c, _PLACE_COUNTRY[c]) for c in posting.cities if c in _PLACE_COUNTRY] or [
+        (None, c) for c in posting.countries
+    ]
+    verdicts = {covered(city, country) for city, country in targets}
+    return verdicts.pop() if len(verdicts) == 1 else None
 
 
 def _relocation(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Answer | Left:
-    """The person's relocation sentence; a question naming a place answers only for the
-    posting's own city or country."""
+    """The person's relocation sentence as text; a yes or no only for a known posting the
+    sentence explicitly covers or excludes (`_relocation_covers`). A question naming a place
+    answers only for the posting's own city or country."""
     place = m.groupdict().get("place")
+    posting = ctx.posting
     if place is not None:
-        posting = ctx.posting
         country = _PLACE_COUNTRY.get(place) or _COUNTRY_OF.get(place)
         here = posting is not None and (
             place in posting.cities if place in _PLACE_COUNTRY else country in posting.countries
         )
         if not here:
             return _left(field, "not_the_posting_location")
-    return _answers_value("relocation", "no_relocation")(field, ctx, s, m)
+    sentence = s.answers.relocation
+    if not sentence:
+        return _left(field, "no_relocation")
+    if not _boolean_form(field):
+        return _text(field, sentence, "answers.relocation", free=True)
+    if posting is None or not (posting.cities or posting.countries):
+        return _left(field, "no_posting_location")
+    verdict = _relocation_covers(sentence, posting)
+    if verdict is None:
+        return _left(field, "relocation_does_not_cover_the_posting")
+    return _boolean(field, verdict, "answers.relocation")
 
 
 def _flag(attr: str) -> Handler:
@@ -828,7 +1283,7 @@ def _salary(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> An
     if stance == "sentence":
         if not a.salary_policy:
             return _left(field, "no_salary_sentence")
-        return _text(field, a.salary_policy, "answers.salary_policy")
+        return _text(field, a.salary_policy, "answers.salary_policy", free=True)
     text = m.string
     wanted = {code for pattern, code in _CURRENCY_SIGNS if re.search(pattern, text)}
     words = set(re.findall(r"[a-z]+", text))
@@ -871,6 +1326,14 @@ def _eeo(topic: str) -> Handler:
             stored = next((e.answer for e in s.answers.eeo_answers if e.topic == topic), None)
             if stored is None:
                 return _left(field, "eeo_not_stored")
+            words = EEO_YES_NO_OPTION_TEXTS.get(topic, {})
+            said = option_key(stored)
+            if words and field.options and (said in YES_OPTIONS or said in NO_OPTIONS):
+                listed = {option_key(t) for t in words[said in YES_OPTIONS]}
+                hits = [o for o in field.options if option_key(o) in listed]
+                if len(hits) == 1 and match_option(stored, field.options) is None:
+                    source = f"answers.eeo_answers.{topic}"
+                    return Answer((hits[0],) if field.kind == "multi" else hits[0], source, hits[0])
             return _text(field, stored, f"answers.eeo_answers.{topic}")
         if not field.options:
             return _left(field, "eeo_no_decline_option")
@@ -1042,7 +1505,9 @@ def _heard(field: FormField, ctx: Context, s: Sections, m: re.Match[str]) -> Ans
     if not heard:
         return _left(field, "no_heard_about")
     if field.kind in _CHOICES and field.options:
-        picked = match_option(heard, field.options) or _family_option(_OTHER, field.options)
+        # The option that reads as the stored source; never "Other" by default, since the
+        # person's source may be one of the options under another wording.
+        picked = match_option(heard, field.options)
         if picked is None:
             return _left(field, "no_matching_option")
         return Answer((picked,) if field.kind == "multi" else picked, "answers.heard_about", picked)
@@ -1108,7 +1573,7 @@ _EXPERIENCE = r"(?:(?:professional|work|working|total|overall|industry) )*experi
 _SPONSORSHIP = (
     r"(?:visa |work visa |employment visa |immigration |employer )?sponsorship"
     r"(?: for (?:an? )?(?:employment|work) visa(?: status)?| for employment visa status"
-    r"| for employment)?(?: e g h 1b(?: visa)?(?: status)?)?"
+    r"| for employment| for (?:a |an )?work permit)?(?: e g h 1b(?: visa)?(?: status)?)?"
 )
 _SUBMIT = r"(?:have you |avez vous )"
 
@@ -1194,7 +1659,7 @@ TEMPLATES: tuple[Template, ...] = (
     _t(
         "authorised_to_work",
         _work("authorised"),
-        rf"(?:are you )?(?:legally |lawfully )?(?:authori[sz]ed|eligible|entitled|permitted) to work {_IN} {{C}}",
+        rf"(?:are you )?(?:legally |lawfully )?(?:authori[sz]ed|eligible|entitled|permitted) to work {_IN} {{C}}(?: for any employer)?",
         r"(?:are you )?legally able to work in {C}",
         r"do you have (?:the )?(?:legal )?right to work in {C}",
         r"do you have (?:valid )?(?:legal )?work authori[sz]ation (?:for|in) {C}",
@@ -1215,10 +1680,10 @@ TEMPLATES: tuple[Template, ...] = (
         "needs_sponsorship",
         _work("needs"),
         rf"(?:(?:will|would|do) you (?:now or in the future )?)?(?:require|need)s? {_SPONSORSHIP}"
-        rf"(?: now or in the future)?(?: to work {_IN} {{C}})?",
+        rf"(?: now or in the future)?(?: to work {_IN} {{C}})?(?: in the future)?",
         r"(?:will|would|do) you (?:now or in the future )?(?:require|need) (?:us |the company |an employer )?"
-        r"to sponsor (?:a |an |your )?(?:work |employment )?visa(?: to work in {C})?",
-        r"(?:visa )?sponsorship (?:required|needed)(?: to work in {C})?",
+        r"to sponsor (?:a |an |your )?(?:work |employment )?visa(?: for you)?(?: to work in {C})?",
+        r"(?:visa )?sponsorship (?:required|needed)(?: to work in {C})?|visa sponsorship",
         rf"(?:avez|aurez) vous (?:maintenant ou a l avenir )?besoin (?:maintenant ou a l avenir )?d (?:un |une )?(?:parrainage|sponsoring)"
         rf"(?: de visa| pour un visa)?(?: maintenant ou a l avenir| maintenant ou dans le futur)?"
         rf"(?: pour travailler {_IN} {{C}})?",
@@ -1232,8 +1697,8 @@ TEMPLATES: tuple[Template, ...] = (
     ),
     _t(
         "notice_period",
-        _answers_value("notice_period", "no_notice_period"),
-        rf"{_YOUR}notice period|when (?:can|could) you (?:start|join)|how soon (?:can|could) you (?:start|join)(?: us)?",
+        _answers_value("notice_period", "no_notice_period", free=True),
+        rf"{_YOUR}(?:current )?notice period|when (?:can|could) you (?:start|join)|how soon (?:can|could) you (?:start|join)(?: us)?",
         r"(?:quel est votre |votre |duree de |delai de |duree du )?preavis",
     ),
     _t(
@@ -1255,7 +1720,7 @@ TEMPLATES: tuple[Template, ...] = (
     ),
     _t(
         "travel",
-        _answers_value("travel", "no_travel"),
+        _answers_value("travel", "no_travel", free=True),
         r"(?:are you )?willing to travel|willingness to travel|travel requirements?",
         r"(?:etes vous )?(?:pret|dispose)e? a (?:vous deplacer|voyager)|deplacements",
     ),
@@ -1398,6 +1863,13 @@ TEMPLATES: tuple[Template, ...] = (
         rf"{_YOUR}languages(?: spoken| you speak)?|spoken languages|(?:which|what) languages do you speak"
         r"|language skills",
         r"(?:vos )?langues(?: parlees)?|quelles langues parlez vous|(?:vos )?competences linguistiques",
+    ),
+    _t(
+        "language_level",
+        _language_level,
+        r"(?:what is )?(?:your )?{L} (?:language )?(?:level|proficiency)(?: level)?",
+        r"(?:what is )?(?:your )?level (?:of|in) {L}",
+        r"(?:quel est )?(?:votre )?niveau (?:d |de |en )?{L}",
     ),
     _t("speaks", _speaks(False), r"(?:do|can) you speak {L}", r"parlez vous {L}"),
     _t(
@@ -1562,13 +2034,27 @@ def resolve(field: FormField, context: Context) -> Answer | Left:
             if picked is None:
                 return Left("no_matching_option", field.options, field.required)
             return Answer((picked,) if field.kind == "multi" else picked, "bank", picked)
-        if field.kind == "yes_no" and fold(bank) in (*YES, *NO):
-            return _boolean(field, fold(bank) in YES, "bank")
-        return Answer(bank, "bank")
+        if field.kind == "yes_no" and option_key(bank) in YES_OPTIONS | NO_OPTIONS:
+            return _boolean(field, option_key(bank) in YES_OPTIONS, "bank")
+        return _fits_kind(field, Answer(bank, "bank"))
     matched = match_template(field.label)
     if isinstance(matched, str):
         if field.kind == "checkbox":
             return _checkbox(field)
         return Left(matched, field.options, field.required)
     template, found = matched
-    return template.handler(field, context, sections, found)
+    return _fits_kind(field, template.handler(field, context, sections, found))
+
+
+def _fits_kind(field: FormField, result: Answer | Left) -> Answer | Left:
+    """The field's kind has the last word: a file field takes only a document, a date field only
+    a stored date."""
+    if isinstance(result, Left):
+        return result
+    if field.kind == "file" and not result.source.startswith("documents."):
+        return Left("not_a_file", field.options, field.required)
+    if field.kind == "date" and not (
+        isinstance(result.value, str) and _ISO_DATE.match(result.value)
+    ):
+        return Left("not_a_date", field.options, field.required)
+    return result

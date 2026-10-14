@@ -201,7 +201,14 @@ QUESTIONS: list[Case] = [
         "Referral source",
         "select",
         ("LinkedIn", "Careers page", "Other"),
-        expected="Careers page",
+        origin="own",  # round 4: "The company's careers page." is not "Careers page", left
+    ),
+    C(
+        "referral source reads the same",
+        "Referral source",
+        "select",
+        ("LinkedIn", "The company's careers page", "Other"),
+        expected="The company's careers page",
         origin="own",
     ),
     # B9 citizenship
@@ -652,8 +659,7 @@ QUESTIONS: list[Case] = [
         "how heard other",
         "How did you hear about us?",
         "select",
-        ("Friend", "Other"),
-        expected="Other",
+        ("Friend", "Other"),  # round 4: "Other" is never a default, left
     ),
     C("applied before", "Have you previously applied to this company?", "yes_no", expected=False),
     C(
@@ -1449,6 +1455,660 @@ ROUND3: list[Case] = [
 ]
 
 
+# Round 4: every probe the third review lists (its findings F1 to F5, the two wrong field kinds,
+# the right answers it quotes and the everyday labels it found left), origin "review3"; then our
+# own about options, half of them traps, origin "own4" or "trap4". All run on the third review's
+# profile: France and the European Union without sponsorship, the UK, the US, Switzerland, Canada
+# and Singapore with; French native, English C1; notice "Three months."; relocation "Yes, within
+# France only."; highest degree "MSc".
+def _probe4(**answers: Any) -> dict[str, Any]:
+    stored = _sections(
+        work_authorization=[
+            {
+                "country": "France",
+                "answer": "EU citizen, no sponsorship needed.",
+                "needs_sponsorship": False,
+            },
+            {
+                "country": "European Union",
+                "answer": "EU citizen, no sponsorship needed.",
+                "needs_sponsorship": False,
+            },
+            *(
+                {"country": country, "answer": "Sponsorship needed.", "needs_sponsorship": True}
+                for country in (
+                    "United Kingdom",
+                    "United States",
+                    "Switzerland",
+                    "Canada",
+                    "Singapore",
+                )
+            ),
+        ],
+        notice_period="Three months.",
+        earliest_start="2027-01-04",
+        relocation="Yes, within France only.",
+        highest_degree="MSc",
+        background_check_consent=True,
+        **answers,
+    )
+    stored["identity"]["languages"] = [
+        {"name": "French", "level": "Native"},
+        {"name": "English", "level": "C1"},
+    ]
+    return stored
+
+
+CONTEXTS.update(
+    {
+        "p4": lambda: Context(USER, _probe4(), Posting.at("Paris, France")),
+        "p4_london": lambda: Context(USER, _probe4(), Posting.at("London, United Kingdom")),
+        "p4_berlin": lambda: Context(USER, _probe4(), Posting.at("Berlin, Germany")),
+        "p4_zurich": lambda: Context(USER, _probe4(), Posting.at("Zurich, Switzerland")),
+        "p4_ny": lambda: Context(USER, _probe4(), Posting.at("New York, United States")),
+        "p4_none": lambda: Context(USER, _probe4(), None),
+        "p4_range": lambda: Context(USER, _probe4(salary_stance="range"), Posting.at("Paris")),
+    }
+)
+ENGLISH_LEVELS = ("English (Fluent)", "English (Basic)", "French (Native)", "French (Basic)")
+SPONSOR_US = ("I am a US citizen", "I have a green card", "I will need sponsorship")
+
+
+def R(  # noqa: N802, one letter like C, a case of round 4
+    name: str,
+    label: str,
+    kind: str = "text",
+    options: tuple[str, ...] = (),
+    context: str = "p4",
+    expected: Any = LEFT,
+    origin: str = "review3",
+) -> Case:
+    return Case(name, label, kind, options, context, expected, origin)
+
+
+ROUND4: list[Case] = [
+    # F1 a sentence never picks an option it merely contains
+    R(
+        "F1 authorized france",
+        "Are you authorized to work in France?",
+        "select",
+        ("Authorized to work", "Sponsorship needed"),
+        expected="Authorized to work",
+    ),
+    R(
+        "F1 status citizen resident",
+        "Work authorization status",
+        "select",
+        ("Citizen", "permanent resident", "Sponsorship needed", "Other"),
+    ),
+    # F2 "I am ..." is never a yes
+    R(
+        "F2 us citizen",
+        "Will you require sponsorship to work in the US?",
+        "select",
+        SPONSOR_US,
+        expected="I will need sponsorship",
+    ),
+    R(
+        "F2 h1b",
+        "Will you require sponsorship to work in the US?",
+        "select",
+        ("I am on an H-1B visa", "I will need sponsorship", "No sponsorship needed"),
+        expected="I will need sponsorship",
+    ),
+    R(
+        "F2 british citizen",
+        "Do you need sponsorship to work in the UK?",
+        "select",
+        ("I am a British citizen", "I hold a Skilled Worker visa", "I need sponsorship"),
+        expected="I need sponsorship",
+    ),
+    # F3 Europe is not the EU
+    R("F3 europe zurich", "Are you authorized to work in Europe?", "select", YES_NO, "p4_zurich"),
+    R("F3 europe london", "Are you authorized to work in Europe?", "select", YES_NO, "p4_london"),
+    R(
+        "F3 sponsorship europe zurich",
+        "Do you require sponsorship to work in Europe?",
+        "select",
+        YES_NO,
+        "p4_zurich",
+    ),
+    # F4 a qualified relocation sentence is not a yes
+    R(
+        "F4 relocate london",
+        "Are you willing to relocate?",
+        "select",
+        YES_NO,
+        "p4_london",
+        expected="No",
+    ),
+    # F5 a language option with a level is chosen only at the person's level
+    R(
+        "F5 levels words",
+        "Languages",
+        "multi",
+        ENGLISH_LEVELS,
+        expected=("English (Fluent)", "French (Native)"),
+    ),
+    R(
+        "F5 levels cefr",
+        "Spoken languages",
+        "multi",
+        ("English (C1)", "English (B2)", "French (C2)"),
+    ),
+    # the field kind
+    R("kind portfolio file", "Portfolio", "file"),
+    R("kind start date", "When can you start?", "date"),
+    # right answers the review quotes
+    R(
+        "right us authorized",
+        "Are you authorized to work in the U.S.?",
+        "select",
+        YES_NO,
+        expected="No",
+    ),
+    R(
+        "right england",
+        "Do you have the right to work in England?",
+        "select",
+        YES_NO,
+        expected="No",
+    ),
+    R(
+        "right eu sponsorship ny",
+        "Will you require sponsorship to work in the EU?",
+        "select",
+        YES_NO,
+        "p4_ny",
+        expected="No",
+    ),
+    R(
+        "right suisse sans parrainage",
+        "Pouvez-vous travailler en Suisse sans parrainage ?",
+        "select",
+        ("Oui", "Non"),
+        expected="Non",
+    ),
+    R("right 18 years", "Do you have 18 years of experience?", "select", YES_NO, expected="No"),
+    R(
+        "right 4 years required",
+        "Do you have 4 years of experience? (required)",
+        "select",
+        YES_NO,
+        expected="Yes",
+    ),
+    R(
+        "right seniority bands",
+        "Years of experience",
+        "select",
+        ("Junior (0-2 years)", "Mid (3-5 years)", "Senior (6+ years)"),
+        expected="Mid (3-5 years)",
+    ),
+    R("right eeo decline", "Gender", "select", DECLINE, expected="I don't wish to answer"),
+    R("right salary chf", "Expected salary in CHF", "text", context="p4_range"),
+    R("right gender id", "Gender (as shown on your ID)", "select", DECLINE),
+    # everyday labels the review found left
+    R(
+        "everyday any employer",
+        "Are you legally authorized to work in France for any employer?",
+        "select",
+        YES_NO,
+        expected="Yes",
+    ),
+    R(
+        "everyday work permit future",
+        "Will you now or in the future require sponsorship for a work permit?",
+        "select",
+        YES_NO,
+        expected="No",
+    ),
+    R(
+        "everyday visa future",
+        "Will you require visa sponsorship in the future?",
+        "select",
+        YES_NO,
+        expected="No",
+    ),
+    R("everyday visa sponsorship", "Visa sponsorship", "select", YES_NO, expected="No"),
+    R(
+        "everyday sponsor for you",
+        "Would you need us to sponsor a visa for you?",
+        "select",
+        YES_NO,
+        expected="No",
+    ),
+    R(
+        "everyday yes or no",
+        "Authorized to work in France - yes or no",
+        "select",
+        YES_NO,
+        expected="Yes",
+    ),
+    R("everyday current notice", "What is your current notice period?", expected="Three months."),
+    R("everyday notice months", "Notice period", "select", ("1 month", "2 months", "3 months")),
+    R("everyday english level", "English level", "select", ("B1", "B2", "C1", "C2"), expected="C1"),
+    R("everyday confirm email", "Confirm your email"),
+    R("everyday home phone", "Home phone"),
+    R("everyday cv pdf", "CV (PDF only)", "file"),
+    R("everyday salary k", "Expected salary (k€)"),
+    R("everyday degree msc", "Degree", "select", ("Bachelor's", "Master's", "PhD")),
+    # our own: options that contradict the label
+    R(
+        "contradict authorized citizen",
+        "Are you authorized to work in France?",
+        "select",
+        ("I need sponsorship", "I am a citizen"),
+        origin="trap4",
+    ),
+    R(
+        "contradict sponsorship london",
+        "Will you require sponsorship?",
+        "select",
+        ("No sponsorship needed", "Sponsorship needed"),
+        "p4_london",
+        expected="Sponsorship needed",
+        origin="own4",
+    ),
+    R(
+        "contradict sponsorship paris",
+        "Will you require sponsorship?",
+        "select",
+        ("No sponsorship needed", "Sponsorship needed"),
+        expected="No sponsorship needed",
+        origin="own4",
+    ),
+    R(
+        "contradict citizen resident ny",
+        "Will you require sponsorship?",
+        "select",
+        ("I am a US citizen", "I am a permanent resident"),
+        "p4_ny",
+        origin="trap4",
+    ),
+    R(
+        "contradict british visa",
+        "Are you authorized to work in the UK?",
+        "select",
+        ("I am a British citizen", "I hold a visa"),
+        origin="trap4",
+    ),
+    R(
+        "contradict yes citizen paris",
+        "Do you require sponsorship?",
+        "select",
+        ("Yes, I am a citizen", "No"),
+        expected="No",
+        origin="own4",
+    ),
+    R(
+        "contradict yes citizen london",
+        "Do you require sponsorship?",
+        "select",
+        ("Yes, I am a citizen", "No"),
+        "p4_london",
+        origin="trap4",
+    ),
+    R(
+        "contradict visa required words",
+        "Visa sponsorship",
+        "select",
+        ("Required", "Not required"),
+        origin="trap4",
+    ),
+    # near-duplicate options
+    R(
+        "dup yes twice",
+        "Are you authorized to work in France?",
+        "select",
+        ("Yes", "Yes ", "No"),
+        origin="trap4",
+    ),
+    R(
+        "dup yes oui",
+        "Are you authorized to work in France?",
+        "select",
+        ("Yes", "Oui", "No", "Non"),
+        origin="trap4",
+    ),
+    R(
+        "dup yes i am",
+        "Are you authorized to work in France?",
+        "select",
+        ("Yes, I am", "Yes", "No"),
+        origin="trap4",
+    ),
+    R(
+        "dup no i do not",
+        "Will you require sponsorship?",
+        "select",
+        ("No", "No, I do not", "Yes"),
+        origin="trap4",
+    ),
+    R(
+        "dup yes i am authorized",
+        "Are you authorized to work in France?",
+        "select",
+        ("Yes, I am authorized", "No"),
+        expected="Yes, I am authorized",
+        origin="own4",
+    ),
+    R("dup bands", "Years of experience", "select", ("3-5", "3-5 years", "6+"), origin="trap4"),
+    R(
+        "dup two declines",
+        "Gender",
+        "select",
+        ("Male", "Female", "Prefer not to say", "I don't wish to answer"),
+        origin="trap4",
+    ),
+    # options with levels
+    R(
+        "levels cefr both",
+        "Languages",
+        "multi",
+        ("English (C1)", "French (Native)"),
+        expected=("English (C1)", "French (Native)"),
+        origin="own4",
+    ),
+    R(
+        "levels english c2",
+        "Languages",
+        "multi",
+        ("English (C2)", "French (Native)"),
+        origin="trap4",
+    ),
+    R(
+        "levels dash words",
+        "Languages",
+        "multi",
+        ("English - Fluent", "English - Native", "French - Native"),
+        expected=("English - Fluent", "French - Native"),
+        origin="own4",
+    ),
+    R(
+        "levels french words",
+        "Langues",
+        "multi",
+        ("Anglais - courant", "Anglais - bilingue", "Français - langue maternelle"),
+        expected=("Anglais - courant", "Français - langue maternelle"),
+        origin="own4",
+    ),
+    R(
+        "levels two english match",
+        "Languages",
+        "multi",
+        ("English (Fluent)", "English (C1)", "French (Native)"),
+        origin="trap4",
+    ),
+    R(
+        "levels plain names",
+        "Languages",
+        "multi",
+        ("English", "French", "German"),
+        expected=("English", "French"),
+        origin="own4",
+    ),
+    R(
+        "levels intermediate",
+        "Languages",
+        "multi",
+        ("English (Intermediate)", "French (Native)"),
+        origin="trap4",
+    ),
+    R(
+        "level english words",
+        "English level",
+        "select",
+        ("Basic", "Intermediate", "Fluent", "Native"),
+        expected="Fluent",
+        origin="own4",
+    ),
+    R(
+        "level english low cefr",
+        "English level",
+        "select",
+        ("A1", "A2", "B1", "B2"),
+        origin="trap4",
+    ),
+    R(
+        "level niveau anglais",
+        "Niveau d'anglais",
+        "select",
+        ("B2", "C1", "C2"),
+        expected="C1",
+        origin="own4",
+    ),
+    R(
+        "level french native",
+        "French level",
+        "select",
+        ("Fluent", "Native"),
+        expected="Native",
+        origin="own4",
+    ),
+    R(
+        "level single select two",
+        "Languages",
+        "select",
+        ("English (C1)", "French (Native)"),
+        origin="trap4",
+    ),
+    R("level german not spoken", "German level", "select", ("B1", "B2"), origin="trap4"),
+    R("level english text", "English level", expected="C1", origin="own4"),
+    # options in the other language
+    R(
+        "lang oui non english label",
+        "Are you authorized to work in France?",
+        "select",
+        ("Oui", "Non"),
+        expected="Oui",
+        origin="own4",
+    ),
+    R(
+        "lang yes no french label",
+        "Êtes-vous autorisé à travailler en France ?",
+        "select",
+        YES_NO,
+        expected="Yes",
+        origin="own4",
+    ),
+    R(
+        "lang parrainage london",
+        "Avez-vous besoin d'un parrainage de visa ?",
+        "select",
+        ("Oui", "Non"),
+        "p4_london",
+        expected="Oui",
+        origin="own4",
+    ),
+    R(
+        "lang french status options",
+        "Will you require sponsorship?",
+        "select",
+        ("Parrainage nécessaire", "Pas besoin de parrainage"),
+        expected="Pas besoin de parrainage",
+        origin="own4",
+    ),
+    R(
+        "lang autorisation status",
+        "Autorisation de travail",
+        "select",
+        ("Autorisé à travailler", "Besoin d'un parrainage"),
+        expected="Autorisé à travailler",
+        origin="own4",
+    ),
+    R(
+        "lang i will not",
+        "Will you require sponsorship?",
+        "select",
+        ("I will", "I will not"),
+        expected="I will not",
+        origin="own4",
+    ),
+    R(
+        "lang i do",
+        "Do you have the right to work in France?",
+        "select",
+        ("I do", "I don't"),
+        expected="I do",
+        origin="own4",
+    ),
+    # options with extra words
+    R(
+        "extra yes only remote",
+        "Are you willing to relocate?",
+        "select",
+        ("Yes, but only remote", "No"),
+        origin="trap4",
+    ),
+    R(
+        "extra yes with restrictions",
+        "Are you authorized to work in France?",
+        "select",
+        ("Yes, with restrictions", "No"),
+        origin="trap4",
+    ),
+    R(
+        "extra background after offer",
+        "Do you consent to a background check?",
+        "select",
+        ("Yes, after an offer", "No"),
+        origin="trap4",
+    ),
+    R(
+        "extra speak fluently",
+        "Do you speak English?",
+        "select",
+        ("Yes, fluently", "Yes, basic", "No"),
+        origin="trap4",
+    ),
+    R("extra speak yes", "Do you speak English?", "select", YES_NO, expected="Yes", origin="own4"),
+    # relocation and regions
+    R(
+        "relocate paris",
+        "Are you willing to relocate?",
+        "select",
+        YES_NO,
+        expected="Yes",
+        origin="own4",
+    ),
+    R(
+        "relocate no posting",
+        "Are you willing to relocate?",
+        "select",
+        YES_NO,
+        "p4_none",
+        origin="trap4",
+    ),
+    R(
+        "relocate to london",
+        "Are you willing to relocate to London?",
+        "select",
+        YES_NO,
+        "p4_london",
+        expected="No",
+        origin="own4",
+    ),
+    R(
+        "relocate to paris",
+        "Are you willing to relocate to Paris?",
+        "select",
+        YES_NO,
+        expected="Yes",
+        origin="own4",
+    ),
+    R(
+        "relocate text london",
+        "Willing to relocate",
+        "text",
+        (),
+        "p4_london",
+        expected="Yes, within France only.",
+        origin="own4",
+    ),
+    R(
+        "region europe paris",
+        "Are you authorized to work in Europe?",
+        "select",
+        YES_NO,
+        origin="trap4",
+    ),
+    R(
+        "region eu zurich",
+        "Are you authorized to work in the European Union?",
+        "select",
+        YES_NO,
+        "p4_zurich",
+        expected="Yes",
+        origin="own4",
+    ),
+    R("region eea", "Are you authorized to work in the EEA?", "select", YES_NO, origin="trap4"),
+    R(
+        "region germany member",
+        "Are you authorized to work in Germany?",
+        "select",
+        YES_NO,
+        expected="Yes",
+        origin="own4",
+    ),
+    R(
+        "region schengen",
+        "Do you require sponsorship to work in the Schengen area?",
+        "select",
+        YES_NO,
+        origin="trap4",
+    ),
+    # multi selects and free values
+    R(
+        "multi status",
+        "Work authorization status",
+        "multi",
+        ("Authorized to work", "Sponsorship needed", "Citizen"),
+        expected=("Authorized to work",),
+        origin="own4",
+    ),
+    R(
+        "multi heard",
+        "How did you hear about us?",
+        "multi",
+        ("LinkedIn", "Careers page", "Other"),
+        origin="trap4",
+    ),
+    R(
+        "free salary bands",
+        "Salary expectations",
+        "select",
+        ("40-50k", "50-60k", "60k+"),
+        origin="trap4",
+    ),
+    R(
+        "free notice words",
+        "Notice period",
+        "select",
+        ("Three months", "One month"),
+        origin="trap4",
+    ),
+    R(
+        "free degree exact",
+        "Highest level of education",
+        "select",
+        ("Bachelor", "MSc", "PhD"),
+        expected="MSc",
+        origin="own4",
+    ),
+    R(
+        "free degree prefix",
+        "Highest level of education",
+        "select",
+        ("Master", "Bachelor"),
+        origin="trap4",
+    ),
+    R("kind website file", "Website", "file", origin="trap4"),
+    R("kind linkedin file", "LinkedIn profile", "file", origin="trap4"),
+    R("kind start date iso", "Earliest start date", "date", expected="2027-01-04", origin="own4"),
+    R("kind notice date", "Notice period", "date", origin="trap4"),
+]
+
+
 def run(case: Case) -> Answer | Left:
     field = FormField(case.label, case.kind, case.options, True)  # type: ignore[arg-type]
     return resolve(field, CONTEXTS[case.context]())
@@ -1499,3 +2159,18 @@ def test_round3_has_every_named_question_and_half_of_our_own_are_traps() -> None
         sum(not c.label.isascii() or c.label.startswith(("Avez", "Ne ", "Quelle")) for c in own)
         >= 8
     )
+
+
+@pytest.mark.parametrize("case", ROUND4, ids=[c.name for c in ROUND4])
+def test_round4_question(case: Case) -> None:
+    test_question(case)
+
+
+def test_round4_has_every_listed_probe_and_half_of_our_own_are_traps() -> None:
+    review = [c for c in ROUND4 if c.origin == "review3"]
+    own = [c for c in ROUND4 if c.origin in ("own4", "trap4")]
+    traps = [c for c in own if c.origin == "trap4"]
+    assert len(review) >= 37
+    assert len(own) >= 40
+    assert len(traps) * 2 >= len(own)
+    assert len({c.name for c in ROUND4}) == len(ROUND4)
