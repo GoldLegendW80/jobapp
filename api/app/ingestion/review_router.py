@@ -43,7 +43,7 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.ingestion import item_proposals, items, review
+from app.ingestion import deletion, item_proposals, items, review
 from app.ingestion.citations import FieldType
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun, RunStatus
@@ -96,7 +96,8 @@ class DocumentRef(BaseModel):
 
 class CitationOut(BaseModel):
     """Where a value comes from. `document` is null when the document was deleted since: the
-    excerpt is then all that is left of the source."""
+    excerpt is then all that is left of the source. `source_deleted` says the delete took the
+    excerpt too (an accepted item keeps only that mark, G15), so there is no quote to show."""
 
     document_id: str
     document: DocumentRef | None
@@ -105,6 +106,7 @@ class CitationOut(BaseModel):
     start: int
     end: int
     transcribed: bool
+    source_deleted: bool = False
 
 
 class OtherValueOut(BaseModel):
@@ -309,6 +311,7 @@ def _citations(raw: Any, known: Mapping[str, DocumentRef]) -> list[CitationOut]:
                 start=start if type(start) is int else 0,
                 end=end if type(end) is int else 0,
                 transcribed=citation.get("transcribed") is True,
+                source_deleted=citation.get(deletion.SOURCE_DELETED) is True,
             )
         )
     return out

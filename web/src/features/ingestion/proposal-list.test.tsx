@@ -275,6 +275,38 @@ describe("ProposalList", () => {
     expect(within(read).getByText("letter.txt")).toBeInTheDocument();
   });
 
+  it("says source deleted alone once the delete took the quote too", async () => {
+    fakeApi(
+      review(
+        {
+          identity: [
+            item("full_name", "Alice Martin", {
+              citations: [
+                cite(null, "", { source_deleted: true, start: 0, end: 0 }),
+                cite(LETTER, "engineer"),
+              ],
+            }),
+          ],
+        },
+        { documents: [{ id: "doc-gone", name: null, deleted: true }, LETTER] },
+      ),
+    );
+    show("run-1");
+    const row = await screen.findByTestId("proposal");
+    const [gone, kept] = within(
+      within(row).getByRole("list", { name: "Sources of Full name" }),
+    ).getAllByRole("listitem");
+    expect(gone).toHaveTextContent(/^Source deleted$/);
+    expect((gone as HTMLElement).querySelector("q")).toBeNull();
+    expect(within(gone as HTMLElement).queryByRole("button")).toBeNull();
+    expect(
+      within(gone as HTMLElement).queryByText(/open at the quote/),
+    ).toBeNull();
+    expect((kept as HTMLElement).querySelector("q")).toHaveTextContent(
+      "engineer",
+    );
+  });
+
   it("renders what a document wrote as text, cut to a bounded length", async () => {
     const hostile = `<img src=x onerror="alert(1)">`;
     const long = hostile + "x".repeat(2 * EXCERPT_SHOWN);

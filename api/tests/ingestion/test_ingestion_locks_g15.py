@@ -27,7 +27,16 @@ from app.agents.models import AgentEvent, AgentRun, Proposal, ProposalStatus
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
 from app.identity.models import User
-from app.ingestion import agents, deletion, engine, estimate_router, items, merge, review
+from app.ingestion import (
+    agents,
+    deletion,
+    engine,
+    estimate_router,
+    items,
+    merge,
+    review,
+    review_router,
+)
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun, IngestionRunStep, RunStatus, StepStatus
 from app.profile import service as profile_service
@@ -542,3 +551,17 @@ def test_deleting_the_account_leaves_nothing_of_the_module(
     with factory() as db, db.begin():
         db.execute(sa.delete(User).where(User.id == alice))
     assert {name: count for name, count in counts(factory).items() if count} == {}
+
+
+def test_an_accepted_citation_of_a_deleted_document_reads_as_source_deleted() -> None:
+    """What the delete leaves of an accepted item's citation reaches the page as a mark, with no
+    quote: the page then says "Source deleted" alone (G12's `Source`)."""
+    document = str(uuid.uuid4())
+    (out,) = review_router._citations(
+        [{"document_id": document, deletion.SOURCE_DELETED: True}], {}
+    )
+    assert (out.document, out.excerpt, out.source_deleted) == (None, "", True)
+    (kept,) = review_router._citations(
+        [{"document_id": document, "excerpt": "Alice", "start": 0, "end": 5}], {}
+    )
+    assert kept.source_deleted is False
