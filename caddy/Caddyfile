@@ -93,11 +93,14 @@
 	# /reset/<token>, /api/auth/invites/<token>) and, once such a page calls the api, in the
 	# Referer: both are masked so no log line holds a usable link. The name of an uploaded
 	# document travels in X-Filename (POST /api/ingestion/documents): removed, no log holds it.
+	# The `code` and the `state` of Google's answer travel in the query of
+	# /api/mail/oauth/callback (mail M4): the whole query of that path is masked, on the same
+	# line as the links, because a field takes one filter.
 	log {
 		output stdout
 		format filter {
 			wrap json
-			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+" "${1}[redacted]"
+			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback)\\?.*" "${1}${2}[redacted]"
 			request>headers>Referer regexp "(/(?:invites?|reset)/)[^/?#]+" "${1}[redacted]"
 			request>headers>X-Filename delete
 		}
