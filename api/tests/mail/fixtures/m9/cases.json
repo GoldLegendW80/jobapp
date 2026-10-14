@@ -1688,7 +1688,7 @@
  },
  {
   "name": "unicode_sharp_s_and_case",
-  "body": "I work at ORBITAL LABS, STRA\u1e9eE.",
+  "body": "I work at ORBITAL LABS. STRA\u1e9eE.",
   "expect": []
  },
  {
@@ -1732,5 +1732,906 @@
     "4 years"
    ]
   ]
+ },
+ {
+  "name": "org_behind_article_the_bbc",
+  "body": "I worked at the BBC.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "BBC"
+   ]
+  ]
+ },
+ {
+  "name": "org_behind_article_the_european_commission",
+  "body": "I worked for the European Commission.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "European Commission"
+   ]
+  ]
+ },
+ {
+  "name": "org_behind_article_the_university_of_lyon",
+  "body": "I studied at the University of Lyon.",
+  "expect": [
+   [
+    "school",
+    "school_not_in_profile",
+    "University of Lyon"
+   ]
+  ]
+ },
+ {
+  "name": "org_behind_article_la_sncf",
+  "body": "J'ai travaill\u00e9 pour la SNCF.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "SNCF"
+   ]
+  ]
+ },
+ {
+  "name": "org_behind_article_le_credit_agricole",
+  "body": "J'ai travaill\u00e9 chez le Cr\u00e9dit Agricole.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Cr\u00e9dit Agricole"
+   ]
+  ]
+ },
+ {
+  "name": "org_behind_elided_l_inria",
+  "body": "J'ai travaill\u00e9 pour l'INRIA.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "INRIA"
+   ]
+  ]
+ },
+ {
+  "name": "org_behind_elided_l_oreal",
+  "body": "J'ai travaill\u00e9 chez l'Or\u00e9al.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Or\u00e9al"
+   ]
+  ]
+ },
+ {
+  "name": "org_behind_elided_capital_l_oreal",
+  "body": "J'ai travaill\u00e9 chez L'Or\u00e9al.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Or\u00e9al"
+   ]
+  ]
+ },
+ {
+  "name": "org_with_apostrophe_oreilly",
+  "body": "I worked at O'Reilly.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "O'Reilly"
+   ]
+  ]
+ },
+ {
+  "name": "org_with_curly_apostrophe_oreilly",
+  "body": "I worked at O\u2019Reilly.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "O\u2019Reilly"
+   ]
+  ]
+ },
+ {
+  "name": "org_behind_elided_d_apostrophe",
+  "body": "J'ai travaill\u00e9 chez d'Alembert.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Alembert"
+   ]
+  ]
+ },
+ {
+  "name": "org_behind_article_employer_of_the_profile_passes",
+  "body": "I worked at the BBC.",
+  "expect": [],
+  "replace": {
+   "employers": [
+    "Orbital Labs",
+    "DevForge Studio",
+    "BBC"
+   ]
+  }
+ },
+ {
+  "name": "org_behind_article_school_of_the_profile_passes",
+  "body": "I studied at the University of Lyon.",
+  "expect": [],
+  "replace": {
+   "schools": [
+    "Universit\u00e9 de Bordeaux",
+    "University of Lyon"
+   ]
+  }
+ },
+ {
+  "name": "org_behind_article_la_sncf_of_the_profile_passes",
+  "body": "J'ai travaill\u00e9 pour la SNCF.",
+  "expect": [],
+  "replace": {
+   "employers": [
+    "Orbital Labs",
+    "DevForge Studio",
+    "SNCF"
+   ]
+  }
+ },
+ {
+  "name": "org_behind_elided_l_oreal_of_the_profile_passes",
+  "body": "J'ai travaill\u00e9 chez l'Or\u00e9al.",
+  "expect": [],
+  "replace": {
+   "employers": [
+    "Orbital Labs",
+    "DevForge Studio",
+    "L'Or\u00e9al"
+   ]
+  }
+ },
+ {
+  "name": "org_with_apostrophe_oreilly_of_the_profile_passes",
+  "body": "I worked at O'Reilly.",
+  "expect": [],
+  "replace": {
+   "employers": [
+    "Orbital Labs",
+    "DevForge Studio",
+    "O'Reilly"
+   ]
+  }
+ },
+ {
+  "name": "org_behind_article_lowercase_nouns_are_no_organisation",
+  "body": "I will send it at the end, for the team, with the client, chez le client, pour la suite.",
+  "expect": []
+ },
+ {
+  "name": "org_list_and_google",
+  "body": "I worked at Orbital Labs and Google.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_comma_and_and",
+  "body": "I worked at Orbital Labs, Google and Meta.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ],
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Meta"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_oxford_comma",
+  "body": "I worked at Orbital Labs, Google, and Meta.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ],
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Meta"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_french_et",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs et Thales.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Thales"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_french_ou",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs ou Thales.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Thales"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_slash",
+  "body": "I worked at Orbital Labs/Google.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_ampersand",
+  "body": "I worked at Orbital Labs & Google.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_or",
+  "body": "I worked at Orbital Labs or Google.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_article_in_the_list",
+  "body": "I worked at Orbital Labs and the BBC.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "BBC"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_unknown_first_still_flagged",
+  "body": "I worked at Google and Orbital Labs.",
+  "expect": [
+   [
+    "employer",
+    "employer_not_in_profile",
+    "Google"
+   ]
+  ]
+ },
+ {
+  "name": "org_list_of_two_profile_employers_passes",
+  "body": "I worked at Orbital Labs and DevForge Studio.",
+  "expect": []
+ },
+ {
+  "name": "org_list_ampersand_of_two_profile_employers_passes",
+  "body": "I worked at Orbital Labs & DevForge Studio.",
+  "expect": []
+ },
+ {
+  "name": "org_list_of_three_profile_employers_passes",
+  "body": "I worked at Orbital Labs, DevForge Studio and Globex.",
+  "expect": [],
+  "replace": {
+   "employers": [
+    "Orbital Labs",
+    "DevForge Studio",
+    "Globex"
+   ]
+  }
+ },
+ {
+  "name": "org_list_globex_of_the_profile_passes",
+  "body": "I worked at Orbital Labs and Globex.",
+  "expect": [],
+  "replace": {
+   "employers": [
+    "Orbital Labs",
+    "DevForge Studio",
+    "Globex"
+   ]
+  }
+ },
+ {
+  "name": "org_list_french_et_of_the_profile_passes",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs et Thales.",
+  "expect": [],
+  "replace": {
+   "employers": [
+    "Orbital Labs",
+    "DevForge Studio",
+    "Thales"
+   ]
+  }
+ },
+ {
+  "name": "org_list_ends_at_a_lowercase_word",
+  "body": "I worked at Orbital Labs and then moved on, or stayed.",
+  "expect": []
+ },
+ {
+  "name": "phone_in_the_mail_grouped_33_612_345_678",
+  "body": "Call me back on 33 612 345 678.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "33 612 345 678"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "Call me back on 33 612 345 678."
+   ]
+  }
+ },
+ {
+  "name": "phone_in_the_mail_grouped_612_345_678",
+  "body": "Call me back on 612 345 678.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "612 345 678"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "Call me back on 612 345 678."
+   ]
+  }
+ },
+ {
+  "name": "phone_in_the_mail_grouped_612_dot_345_dot_678",
+  "body": "Call me back on 612.345.678.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "612.345.678"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "Call me back on 612.345.678."
+   ]
+  }
+ },
+ {
+  "name": "phone_in_the_mail_grouped_0_612_345_678",
+  "body": "Call me back on 0 612 345 678.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "0 612 345 678"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "Call me back on 0 612 345 678."
+   ]
+  }
+ },
+ {
+  "name": "phone_in_the_mail_grouped_612345678",
+  "body": "Call me back on 612345678.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "612345678"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "Call me back on 612345678."
+   ]
+  }
+ },
+ {
+  "name": "phone_in_the_mail_grouped_91234567",
+  "body": "Call me back on 91234567.",
+  "expect": [
+   [
+    "address",
+    "phone_not_in_profile",
+    "91234567"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "Call me back on 91234567."
+   ]
+  }
+ },
+ {
+  "name": "number_of_the_profile_with_eight_digits_passes",
+  "body": "Your reference is 91234567.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Reference 91234567."
+   ]
+  }
+ },
+ {
+  "name": "number_of_the_profile_grouped_like_a_phone_passes",
+  "body": "Call me back on 33 612 345 678.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Reference 33 612 345 678."
+   ],
+   "thread": [
+    "Call me back on 33 612 345 678."
+   ]
+  }
+ },
+ {
+  "name": "number_of_seven_digits_from_the_mail_passes",
+  "body": "The budget is 1 234 567.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "The budget is 1 234 567."
+   ]
+  }
+ },
+ {
+  "name": "number_from_the_mail_with_eight_digits_unsourced_elsewhere_stays_a_number",
+  "body": "Order 91234567.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "91234567"
+   ]
+  ]
+ },
+ {
+  "name": "duration_with_a_word_between_en",
+  "body": "I have 10 full years of experience.",
+  "expect": [
+   [
+    "number",
+    "duration_not_in_profile",
+    "10 full years"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We need 10 years of experience."
+   ]
+  }
+ },
+ {
+  "name": "duration_with_a_word_between_words",
+  "body": "I have ten full years of experience.",
+  "expect": [
+   [
+    "number",
+    "duration_not_in_profile",
+    "ten full years"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We need 10 years of experience."
+   ]
+  }
+ },
+ {
+  "name": "duration_with_a_word_between_calendar",
+  "body": "I have 10 calendar years of experience.",
+  "expect": [
+   [
+    "number",
+    "duration_not_in_profile",
+    "10 calendar years"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We need 10 years of experience."
+   ]
+  }
+ },
+ {
+  "name": "duration_with_a_word_between_stray_number_en",
+  "body": "I have 4 solid years of experience.",
+  "expect": [
+   [
+    "number",
+    "duration_not_in_profile",
+    "4 solid years"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 4 in the team."
+   ]
+  }
+ },
+ {
+  "name": "duration_with_a_word_between_stray_number_fr",
+  "body": "J'ai 4 bonnes ann\u00e9es d'exp\u00e9rience.",
+  "expect": [
+   [
+    "number",
+    "duration_not_in_profile",
+    "4 bonnes ann\u00e9es"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We are 4 in the team."
+   ]
+  }
+ },
+ {
+  "name": "duration_with_two_words_between",
+  "body": "I have 10 very full years of experience.",
+  "expect": [
+   [
+    "number",
+    "duration_not_in_profile",
+    "10 very full years"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We need 10 years of experience."
+   ]
+  }
+ },
+ {
+  "name": "duration_with_a_word_between_months",
+  "body": "I have 8 whole months of experience.",
+  "expect": [
+   [
+    "number",
+    "duration_not_in_profile",
+    "8 whole months"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We need 8 in total."
+   ]
+  }
+ },
+ {
+  "name": "duration_with_a_word_between_of_the_profile_passes",
+  "body": "I have 10 full years of experience.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "About 10 years of engineering."
+   ]
+  }
+ },
+ {
+  "name": "duration_with_a_word_between_fr_of_the_profile_passes",
+  "body": "J'ai 10 belles ann\u00e9es d'exp\u00e9rience.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Environ 10 ans d'exp\u00e9rience."
+   ]
+  }
+ },
+ {
+  "name": "duration_with_a_word_between_decimal_of_the_profile_passes",
+  "body": "I have 3.5 solid years of experience.",
+  "expect": []
+ },
+ {
+  "name": "number_then_noun_then_last_year_is_no_duration",
+  "body": "I led 12 projects last year.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "We saw 12 projects."
+   ]
+  }
+ },
+ {
+  "name": "number_then_a_preposition_is_no_duration",
+  "body": "I led 12 projects in 3.5 years.",
+  "expect": [],
+  "replace": {
+   "thread": [
+    "We saw 12 projects."
+   ]
+  }
+ },
+ {
+  "name": "link_with_at_path_medium",
+  "body": "See medium.com/@globex.",
+  "expect": [
+   [
+    "link",
+    "link_not_in_profile",
+    "medium.com/@globex"
+   ]
+  ]
+ },
+ {
+  "name": "link_with_at_path_youtube",
+  "body": "See youtube.com/@jane.",
+  "expect": [
+   [
+    "link",
+    "link_not_in_profile",
+    "youtube.com/@jane"
+   ]
+  ]
+ },
+ {
+  "name": "link_with_at_path_mastodon",
+  "body": "See mastodon.social/@jane.",
+  "expect": [
+   [
+    "link",
+    "link_not_in_profile",
+    "mastodon.social/@jane"
+   ]
+  ]
+ },
+ {
+  "name": "link_wrapping_a_link_of_the_profile",
+  "body": "See evil.com/r?u=https://janeroe.dev.",
+  "expect": [
+   [
+    "link",
+    "link_not_in_profile",
+    "evil.com/r?u="
+   ]
+  ],
+  "replace": {
+   "profile": [
+    "Website https://janeroe.dev"
+   ]
+  }
+ },
+ {
+  "name": "link_wrapping_the_profile_link_with_a_path",
+  "body": "See evil.com/r?u=https://janeroe.example.net/portfolio.",
+  "expect": [
+   [
+    "link",
+    "link_not_in_profile",
+    "evil.com/r?u="
+   ]
+  ]
+ },
+ {
+  "name": "link_wrapping_an_address_of_the_profile",
+  "body": "Write to evil.com/x?m=jane.roe@example.org.",
+  "expect": [
+   [
+    "link",
+    "link_not_in_profile",
+    "evil.com/x?m="
+   ]
+  ]
+ },
+ {
+  "name": "link_with_at_path_of_the_profile_passes",
+  "body": "Find me on mastodon.social/@jane.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Fediverse: mastodon.social/@jane"
+   ]
+  }
+ },
+ {
+  "name": "link_of_the_profile_with_a_path_passes",
+  "body": "See https://janeroe.example.net/portfolio.",
+  "expect": []
+ },
+ {
+  "name": "link_of_the_profile_bare_with_a_path_passes",
+  "body": "See janeroe.example.net/portfolio.",
+  "expect": []
+ },
+ {
+  "name": "address_of_the_profile_passes_beside_a_scheme_link",
+  "body": "Write to jane.roe@example.org or see https://janeroe.example.net/portfolio.",
+  "expect": []
+ },
+ {
+  "name": "scale_billion",
+  "body": "I served 2 billion requests.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "billion"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We run 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "scale_milliards",
+  "body": "J'ai servi 3 milliards de requ\u00eates.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "milliards"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We run 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "scale_glued_m_without_currency",
+  "body": "I served 3M users.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "3M"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We run 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "scale_milliard_singular",
+  "body": "J'ai servi 2 milliard de requ\u00eates.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "milliard"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We run 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "scale_billions_plural",
+  "body": "I served 3 billions of requests.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "billions"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We run 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "scale_m_product_name_is_flagged_without_a_source",
+  "body": "We use a 3M Company product.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "3M"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We run 3 rounds and 2 calls."
+   ]
+  }
+ },
+ {
+  "name": "scale_billion_of_the_profile_passes",
+  "body": "I served 2 billion requests.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Served 2 billion requests."
+   ]
+  }
+ },
+ {
+  "name": "scale_milliards_of_the_profile_passes",
+  "body": "J'ai servi 3 milliards de requ\u00eates.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Servi 3 milliards de requ\u00eates."
+   ]
+  }
+ },
+ {
+  "name": "scale_glued_m_of_the_profile_passes",
+  "body": "I served 3M users.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Served 3M users."
+   ]
+  }
+ },
+ {
+  "name": "scale_m_product_name_of_the_profile_passes",
+  "body": "We use a 3M Company product.",
+  "expect": [],
+  "replace": {
+   "profile": [
+    "Worked with 3M Company products."
+   ]
+  }
+ },
+ {
+  "name": "scale_million_still_flagged",
+  "body": "I served 3 million users.",
+  "expect": [
+   [
+    "number",
+    "number_not_in_sources",
+    "million"
+   ]
+  ],
+  "replace": {
+   "thread": [
+    "We run 3 rounds and 2 calls."
+   ]
+  }
  }
 ]

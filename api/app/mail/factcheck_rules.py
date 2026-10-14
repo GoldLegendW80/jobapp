@@ -430,7 +430,12 @@ _TENS = _table(
     "vingt=20 vingts=20 twenty=20 trente=30 thirty=30 quarante=40 forty=40 cinquante=50"
     " fifty=50 soixante=60 sixty=60 seventy=70 eighty=80 ninety=90"
 )
-_BIG = _table("mille=1000 thousand=1000 million=1000000 millions=1000000")
+# Deliberate: "billion" and "milliard" are scale words too, so "2 billion requests" is a claim
+# of its own and not the small number "2".
+_BIG = _table(
+    "mille=1000 thousand=1000 million=1000000 millions=1000000 billion=1000000000"
+    " billions=1000000000 milliard=1000000000 milliards=1000000000"
+)
 
 
 def _word_number(word: str) -> tuple[str, int] | None:
@@ -459,7 +464,7 @@ def _parse_words(n: str, ts: list[_Tok], i: int) -> tuple[int, int] | None:
     total = group = 0
     prev = ""
     prev_word = ""
-    last_big = 10**9
+    last_big = 10**12  # above every scale word, billion included
     quatre_vingt = False
     last = -1
     k = i
@@ -526,6 +531,14 @@ def _parse_words(n: str, ts: list[_Tok], i: int) -> tuple[int, int] | None:
 
 _YEAR_UNITS = _set("year years yr yrs an ans annee annees")
 _MONTH_UNITS = _set("month months mois")
+# Words that end the search for a unit after a number ("10 projects in 3 years": the "in" does).
+_NOT_FILLER = _set(
+    "of de du des d in on at for to with by from per pour avec sur dans en au aux than that which"
+    " who whom whose as is are was were be been have has had will would can could more less"
+    " over under about around some many few each every other another last this next past"
+    " previous same the a an le la les un une and et or ou but mais if when while then also"
+    " plus moins after before since during ago depuis il elle on nous vous ils i you we they"
+)
 _PCT_WORDS = _set("percent percents pourcent pourcents pourcentage")
 _CURRENCY_WORDS = _set("eur euro euros usd dollar dollars gbp chf")
 _CURRENCY_PREFIX = _set("eur usd gbp chf")
@@ -617,6 +630,26 @@ def _bound_before(n: str, ts: list[_Tok], first: int) -> str:
     return ""
 
 
+def _unit_ahead(n: str, ts: list[_Tok], probe: int, pos: int) -> int:
+    """The index of the year or month unit that stands at token `probe`, or after at most two
+    plain words ("10 full years", "4 bonnes années"), else -1. A bounded scan of three tokens;
+    a number word, a preposition or any word of `_NOT_FILLER` ends it."""
+    for step in range(3):
+        k = probe + step
+        if k >= len(ts) or ts[k].kind != "w":
+            return -1
+        before = pos if step == 0 else ts[k - 1].end
+        gap = ts[k].start - before
+        if gap not in (0, 1) or (gap == 1 and n[before] not in " -") or (step > 0 and gap != 1):
+            return -1
+        word = ts[k].text
+        if word in _YEAR_UNITS or word in _MONTH_UNITS:
+            return k
+        if gap == 0 or word in _NOT_FILLER or word in _MONTHS or _word_number(word) is not None:
+            return -1
+    return -1
+
+
 def _after_blank(n: str, pos: int) -> int:
     return pos + 1 if pos < len(n) and n[pos] == " " else pos
 
@@ -636,7 +669,8 @@ def _quantity(
     end = ts[last].end
     nxt = last + 1
     factor = 1
-    # 90k, 1.2M euros
+    # 90k, 1.2M euros, 3M users: a glued "k" is a thousand, a glued "m" a million (also without
+    # a currency, so that "3M users" is not the small number 3)
     if (
         nxt < len(ts)
         and ts[nxt].kind == "w"
@@ -644,15 +678,9 @@ def _quantity(
         and ts[nxt].text in ("k", "m")
     ):
         suffix = ts[nxt]
-        after = _after_blank(n, suffix.end)
-        symbol = after < size and n[after] in _CURRENCY_SYMBOLS
-        word_after = (
-            nxt + 1 < len(ts) and ts[nxt + 1].start == after and ts[nxt + 1].text in _CURRENCY_WORDS
-        )
-        if suffix.text == "k" or symbol or word_after:
-            factor = 1000 if suffix.text == "k" else 10**6
-            end = suffix.end
-            nxt += 1
+        factor = 1000 if suffix.text == "k" else 10**6
+        end = suffix.end
+        nxt += 1
     if factor != 1:
         readings = tuple(tuple(_scale(v, factor) if v else v for v in r) for r in readings)
     bound = _bound_before(n, ts, first)
@@ -694,28 +722,29 @@ def _quantity(
         half = True
         probe += skipped
         pos = ts[probe - 1].end
-    if probe < len(ts) and ts[probe].kind == "w" and ts[probe].start - pos in (0, 1):
+    # The unit may stand behind up to two plain words: "10 full years" is a duration, not "10".
+    ahead = _unit_ahead(n, ts, probe, pos)
+    if ahead >= 0:
+        probe = ahead
         unit_tok = ts[probe]
-        unit = "y" if unit_tok.text in _YEAR_UNITS else "m" if unit_tok.text in _MONTH_UNITS else ""
-        gap_ok = unit_tok.start == pos or n[pos] in " -"
-        if unit and gap_ok:
-            claim_end = unit_tok.end
-            probe += 1
-            if not half:
-                tail = _half_words(n, ts, probe, claim_end)
-                if tail:
-                    half = True
-                    probe += tail
-                    claim_end = ts[probe - 1].end
-            if half:
-                readings = tuple(
-                    tuple(
-                        _decimal_text(Decimal(v) + Decimal("0.5")) if v and len(v) < 24 else v
-                        for v in r
-                    )
-                    for r in readings
+        unit = "y" if unit_tok.text in _YEAR_UNITS else "m"
+        claim_end = unit_tok.end
+        probe += 1
+        if not half:
+            tail = _half_words(n, ts, probe, claim_end)
+            if tail:
+                half = True
+                probe += tail
+                claim_end = ts[probe - 1].end
+        if half:
+            readings = tuple(
+                tuple(
+                    _decimal_text(Decimal(v) + Decimal("0.5")) if v and len(v) < 24 else v
+                    for v in r
                 )
-            return _Claim("dur", start, claim_end, readings, unit, bound), probe
+                for r in readings
+            )
+        return _Claim("dur", start, claim_end, readings, unit, bound), probe
     if word and readings[0][0] == "1":
         return None, nxt  # "un", "one": an article more than a count
     if (
@@ -878,8 +907,30 @@ _TRAILING = ".:!?]}*_"
 _LOCAL_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789._%+-")
 
 
+def _bare_link(text: str) -> bool:
+    """Is `text` (trailing punctuation already cut) a link without scheme: "www." or a host with
+    a well known suffix ("janeroe.dev/about"), or any dotted host before "/@" (a profile page)?"""
+    if text.startswith("www.") and len(text) > 4:
+        return True
+    host = text.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    labels = host.split(".")
+    if len(labels) < 2 or not all(_LABEL_RE.fullmatch(x) for x in labels):
+        return False
+    # Deliberate: a bare domain counts only with a well known suffix, so "Node.js" and
+    # "e.g." are not links but "janeroe.dev/about" is; "mastodon.social/@jane" is one too.
+    return labels[-1] in _TLDS or (labels[-1].isalpha() and text[len(host) :].startswith("/@"))
+
+
 def _links(n: str) -> list[_Claim]:
     claims: list[_Claim] = []
+
+    def before(start: int, prefix: str) -> None:
+        # What stands in front of a scheme or an address inside one token is a link too:
+        # "evil.com/r?u=https://jane.dev" and "evil.com/x?m=jane@x.org" are links to evil.com.
+        prefix = prefix.rstrip(_TRAILING)
+        if _bare_link(prefix):
+            claims.append(_Claim("link", start, start + len(prefix), ((_link_key(prefix),),)))
+
     for found in _TOKEN_RE.finditer(n):
         token = found.group()
         start = found.start()
@@ -887,6 +938,7 @@ def _links(n: str) -> list[_Claim]:
         if scheme is not None:
             link = token[scheme.start() :].rstrip(_TRAILING)
             body = link[scheme.end() - scheme.start() :]
+            before(start, token[: scheme.start()])
             if body:
                 claims.append(
                     _Claim(
@@ -913,6 +965,7 @@ def _links(n: str) -> list[_Claim]:
                 and all(_LABEL_RE.fullmatch(label) for label in labels)
             )
             if valid:
+                before(start, token[:cut])
                 claims.append(
                     _Claim(
                         "email",
@@ -921,16 +974,9 @@ def _links(n: str) -> list[_Claim]:
                         ((f"{local}@{domain}",),),
                     )
                 )
-            continue
+                continue  # no address here ("medium.com/@jane"): the token is read as a link
         trimmed = token.rstrip(_TRAILING)
-        if trimmed.startswith("www.") and len(trimmed) > 4:
-            claims.append(_Claim("link", start, start + len(trimmed), ((_link_key(trimmed),),)))
-            continue
-        host = trimmed.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
-        labels = host.split(".")
-        # Deliberate: a bare domain counts only with a well known suffix, so "Node.js" and
-        # "e.g." are not links but "janeroe.dev/about" is.
-        if len(labels) >= 2 and labels[-1] in _TLDS and all(_LABEL_RE.fullmatch(x) for x in labels):
+        if _bare_link(trimmed):
             claims.append(_Claim("link", start, start + len(trimmed), ((_link_key(trimmed),),)))
     return claims
 
@@ -1054,7 +1100,7 @@ def _titles(n: str, ts: list[_Tok]) -> list[_Claim]:
 
 _ORG_PREPOSITIONS = _set("at chez with for pour avec")
 _CONNECTORS = _set("of de du des la le d")
-_DETERMINERS = _set("the le la les l un une a an")
+_DETERMINERS = _set("the le la les l un une a an d")
 _NOT_ORGANISATIONS = _set(
     "i you your yours my our we they it he she this that these those here there thank thanks"
     " best kind kindest warm regards hello hi dear please bonjour bonsoir merci cordialement"
@@ -1068,6 +1114,9 @@ _SCHOOL_WORDS = _set(
 )
 
 
+_LIST_WORDS = _set("and et or ou")
+
+
 def _organisations(norm: _Norm, ts: list[_Tok]) -> list[_Claim]:
     n = norm.text
     claims: list[_Claim] = []
@@ -1079,47 +1128,86 @@ def _organisations(norm: _Norm, ts: list[_Tok]) -> list[_Claim]:
         gap = right.start - left.end
         return 0 < gap <= 3 and n[left.end : right.start].isspace()
 
+    def linked(left: _Tok, right: _Tok) -> bool:
+        # A blank, or the apostrophe of "l'Oréal" and "d'Alembert".
+        return blank(left, right) or n[left.end : right.start] == "'"
+
+    def first_word(j: int) -> int | None:
+        """The token where the name at `j` starts: it steps over one determiner, lowercase or
+        not ("the BBC", "la SNCF", "l'Oréal"). None when no capitalised name stands there."""
+        tok = ts[j]
+        if tok.kind != "w":
+            return None
+        if (
+            tok.text in _DETERMINERS
+            and j + 1 < len(ts)
+            and capitalised(ts[j + 1])
+            and linked(tok, ts[j + 1])
+        ):
+            return j + 1
+        return j if capitalised(tok) else None
+
+    def next_name(last: int) -> int | None:
+        """The token after a name where the next name of a list may start: past ",", "/", "&"
+        or "and", "et", "or", "ou" ("Orbital Labs, Google and Meta"), or None."""
+        j = last + 1
+        if j >= len(ts):
+            return None
+        gap = n[ts[last].end : ts[j].start]
+        if ts[j].text in _LIST_WORDS and gap in (" ", ", ") and j + 1 < len(ts):
+            return j + 1 if blank(ts[j], ts[j + 1]) else None
+        return j if len(gap) <= 3 and gap.strip() in (",", "/", "&") else None
+
+    resume = 0
     for k, tok in enumerate(ts):
-        if tok.kind != "w" or tok.text not in _ORG_PREPOSITIONS or k + 1 >= len(ts):
+        if k < resume or tok.kind != "w" or tok.text not in _ORG_PREPOSITIONS or k + 1 >= len(ts):
             continue
-        head = ts[k + 1]
-        if not capitalised(head) or not blank(tok, head):
+        if not blank(tok, ts[k + 1]):
             continue
-        run = [k + 1]
-        while len(run) < 6:
-            nxt = run[-1] + 1
-            if nxt >= len(ts):
+        head = k + 1
+        # One preposition governs a whole list; each name of it is a claim. The walk only moves
+        # forward and `resume` keeps a later preposition from walking the same tokens again.
+        while True:
+            first = first_word(head)
+            if first is None:
                 break
-            cur, after = ts[run[-1]], ts[nxt]
-            if (
-                capitalised(after)
-                and after.text not in _NOT_ORGANISATIONS
-                and (blank(cur, after) or n[cur.end : after.start] in ("-", " & "))
-            ):
-                run.append(nxt)
-            elif (
-                after.text in _CONNECTORS
-                and blank(cur, after)
-                and nxt + 1 < len(ts)
-                and capitalised(ts[nxt + 1])
-                and blank(after, ts[nxt + 1])
-            ):
-                run.extend((nxt, nxt + 1))
-            else:
+            run = [first]
+            while len(run) < 6:
+                nxt = run[-1] + 1
+                if nxt >= len(ts):
+                    break
+                cur, after = ts[run[-1]], ts[nxt]
+                if (
+                    capitalised(after)
+                    and after.text not in _NOT_ORGANISATIONS
+                    and (linked(cur, after) or n[cur.end : after.start] == "-")
+                ):
+                    run.append(nxt)
+                elif (
+                    after.text in _CONNECTORS
+                    and blank(cur, after)
+                    and nxt + 1 < len(ts)
+                    and capitalised(ts[nxt + 1])
+                    and linked(after, ts[nxt + 1])
+                ):
+                    run.extend((nxt, nxt + 1))
+                else:
+                    break
+            resume = run[-1] + 1
+            words = [ts[x].text for x in run]
+            if words[0] not in _NOT_ORGANISATIONS:
+                if words[0] in _DETERMINERS:
+                    words = words[1:]
+                    run = run[1:]
+                if words and len(" ".join(words)) >= 2:
+                    school = any(w in _SCHOOL_WORDS for w in words)
+                    kind = "school" if school else "employer"
+                    span = (ts[run[0]].start, ts[run[-1]].end)
+                    claims.append(_Claim(kind, *span, ((" ".join(words),),)))
+            following = next_name(resume - 1)
+            if following is None:
                 break
-        words = [ts[x].text for x in run]
-        if words[0] in _NOT_ORGANISATIONS:
-            continue
-        if words[0] in _DETERMINERS:
-            words = words[1:]
-            run = run[1:]
-            if not words:
-                continue
-        if len(" ".join(words)) < 2:
-            continue
-        school = any(w in _SCHOOL_WORDS for w in words)
-        kind = "school" if school else "employer"
-        claims.append(_Claim(kind, ts[run[0]].start, ts[run[-1]].end, ((" ".join(words),),)))
+            head = following
     return claims
 
 
@@ -1278,6 +1366,10 @@ def _duration_ok(claim: _Claim, own: _Facts) -> bool:
     return True
 
 
+def _long_digits(claim: _Claim) -> bool:
+    return any(v is not None and v.isdigit() and len(v) >= 8 for r in claim.readings for v in r)
+
+
 def _clean_address(address: str) -> str:
     """ "Name <a@b.c>" and "a@b.c" give the same key."""
     low = address.rfind("<")
@@ -1309,6 +1401,14 @@ def check(draft_body: str, sources: Sources) -> list[Issue]:
         kind = claim.type
         if kind in ("num", "pct", "amt"):
             sourced = any(all(v in everything.numbers for v in r) for r in claim.readings)
+            if sourced and kind == "num" and _long_digits(claim):
+                # A bare number of 8 digits or more may be a phone number grouped like a
+                # number ("33 612 345 678"): only the person's own sources can vouch for it,
+                # the thread cannot, and an unsourced one is reported as a phone.
+                sourced = any(
+                    all(v in own.numbers or v in own.phones for v in r) for r in claim.readings
+                )
+                kind = "phone"
         elif kind == "year":
             sourced = any(all(_year_ok(v, everything) for v in r) for r in claim.readings)
         elif kind == "dur":

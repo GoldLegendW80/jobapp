@@ -232,6 +232,21 @@ HOSTILE = {
     "month_names": hostile("may sept mars "),
     "street_words": hostile("rue "),
     "numbered_streets": hostile("12 rue de la "),
+    "determiners": hostile("at the the the "),
+    "determiners_then_capitals": hostile("at the The the La l'"),
+    "elided_names": hostile("chez l'Oreal d'Acme "),
+    "name_lists": hostile("at Acme and Acme, "),
+    "name_lists_with_slashes": hostile("at Acme/Acme & Acme et Acme ou "),
+    "name_lists_of_prepositions": hostile("at Acme, at Acme and "),
+    "apostrophe_names": hostile("at O'O'O'"),
+    "full_years": hostile("10 full full full "),
+    "full_years_then_unit": hostile("10 full years full "),
+    "number_then_fillers": hostile("10 big small "),
+    "at_paths": hostile("x.com/@x.com/@"),
+    "scheme_in_a_token": hostile("a.com/b?u=https://"),
+    "address_in_a_token": hostile("a.com/b?m=a@"),
+    "scale_words": hostile("3 billion milliards 3M "),
+    "grouped_long_numbers": hostile("33 612 345 678 "),
     "title_words": hostile("engineer "),
     "head_of": hostile("head of "),
     "at_signs": hostile("a@"),
@@ -275,7 +290,8 @@ def test_a_very_long_run_of_digits_is_one_opaque_value_not_a_conversion() -> Non
     body = "7" * 5000  # beyond Python's 4300 digit limit for int()
     assert [i.code for i in check(body, Sources())] == ["number_not_in_sources"]
     assert check(body, Sources(profile=(body,))) == []
-    assert check(body, Sources(thread=(body,))) == []
+    # The mail alone cannot vouch for a long bare number: it may be a phone grouped like a number.
+    assert [i.code for i in check(body, Sources(thread=(body,)))] == ["phone_not_in_profile"]
 
 
 def test_one_issue_for_a_run_of_numbers_that_is_not_sourced() -> None:
