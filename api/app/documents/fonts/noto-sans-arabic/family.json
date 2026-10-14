@@ -1,0 +1,20 @@
+{
+ "family": "Noto Sans Arabic",
+ "licence": "OFL-1.1",
+ "source": "Fontsource @fontsource/noto-sans-arabic 5.3.0 (Google Fonts files, unmodified); unicode_range: the subset's range limited to the glyphs the file holds",
+ "fallback": true,
+ "faces": [
+  {
+   "file": "arabic-400-normal.woff2",
+   "weight": 400,
+   "style": "normal",
+   "unicode_range": "U+0600-06FF,U+0750-077F,U+0870-088E,U+0890-0891,U+0898-08E1,U+08E3-08FF,U+200C-200E,U+2010-2011,U+204F,U+2E41,U+FB50-FBC2,U+FBD3-FD8F,U+FD92-FDC7,U+FDCF,U+FDF0-FDFF,U+FE70-FE74,U+FE76-FEFC,U+10EFD-10EFF"
+  },
+  {
+   "file": "arabic-700-normal.woff2",
+   "weight": 700,
+   "style": "normal",
+   "unicode_range": "U+0600-06FF,U+0750-077F,U+0870-088E,U+0890-0891,U+0898-08E1,U+08E3-08FF,U+200C-200E,U+2010-2011,U+204F,U+2E41,U+FB50-FBC2,U+FBD3-FD8F,U+FD92-FDC7,U+FDCF,U+FDF0-FDFF,U+FE70-FE74,U+FE76-FEFC,U+10EFD-10EFF"
+  }
+ ]
+}

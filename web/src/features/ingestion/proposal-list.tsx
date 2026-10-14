@@ -148,13 +148,13 @@ function Source({
   onOpen: (citation: Citation) => void;
 }) {
   const quote = <q className="break-words">{cut(citation.excerpt)}</q>;
-  if (citation.document === null)
+  if (citation.document === null || citation.source_deleted)
     return (
       <li className="text-sm">
         <span className="font-medium text-muted-foreground">
           Source deleted
-        </span>{" "}
-        {quote}
+        </span>
+        {citation.source_deleted ? null : <> {quote}</>}
       </li>
     );
   return (

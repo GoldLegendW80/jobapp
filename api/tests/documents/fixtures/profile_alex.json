@@ -1,0 +1,111 @@
+{
+  "revision": 7,
+  "sections": {
+    "identity": {
+      "full_name": "Alex Example",
+      "headline": "Platform Engineer",
+      "email": "e2e-alex@example.org",
+      "phone": "+33 1 23 45 67 89",
+      "city": "Lyon",
+      "country": "France",
+      "languages": [
+        {
+          "name": "English",
+          "level": "Fluent"
+        },
+        {
+          "name": "French",
+          "level": "Native"
+        }
+      ]
+    },
+    "experience": {
+      "employers": [
+        {
+          "key": "example-corp",
+          "organisation": "Example Corp",
+          "title": "Platform Engineer",
+          "start": "2023-01",
+          "end": null,
+          "location": "Lyon"
+        },
+        {
+          "key": "sample-labs",
+          "organisation": "Sample Labs",
+          "title": "Software Developer",
+          "start": "2021-03",
+          "end": "2022-12"
+        }
+      ],
+      "education": [
+        {
+          "school": "Example Institute of Technology",
+          "degree": "Bachelor of Computer Science",
+          "start": "2018",
+          "end": "2021"
+        }
+      ]
+    },
+    "facts": {
+      "blocks": [
+        {
+          "title": "Experience",
+          "body": "About 3.5 years of professional engineering, about 2 years in a platform title.\nAt Example Corp I run the deployment platform of the payments team and moved 40 services to Kubernetes.\nAt Sample Labs I built internal tools in Python and React for the support team."
+        },
+        {
+          "title": "Writing rules",
+          "body": "Plain words. No metric that this profile does not state."
+        }
+      ]
+    },
+    "skills": {
+      "years_experience": 3.5,
+      "have": [
+        {
+          "name": "Cloud platforms",
+          "terms": [
+            "Kubernetes",
+            "Terraform",
+            "AWS"
+          ]
+        },
+        {
+          "name": "Backend",
+          "terms": [
+            "Python",
+            "FastAPI",
+            "PostgreSQL"
+          ]
+        }
+      ],
+      "adjacent": [
+        {
+          "name": "Frontend",
+          "terms": [
+            "React",
+            "TypeScript"
+          ]
+        }
+      ],
+      "none": [
+        {
+          "name": "Mobile",
+          "terms": [
+            "Swift",
+            "Kotlin"
+          ]
+        }
+      ]
+    },
+    "answers": {
+      "notice_period": "One month.",
+      "motivation": "I enjoy building platforms that other engineers rely on. I would like to do that for a product team that ships every day.",
+      "work_authorization": [
+        {
+          "country": "France",
+          "answer": "EU citizen, no sponsorship needed."
+        }
+      ]
+    }
+  }
+}

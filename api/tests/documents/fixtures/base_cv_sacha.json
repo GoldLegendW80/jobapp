@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "headline": "Data Engineer",
+  "summary": "Data Engineer who builds batch and streaming pipelines in Python and Spark.",
+  "highlights": ["Reduced pipeline costs by moving batch jobs to Spark"],
+  "competencies": ["Python", "Spark"],
+  "experience": [
+    {"employer_key": "ferme-numerique", "bullets": ["Run the ingestion platform in Python and Spark."]},
+    {"employer_key": "kestrel", "bullets": ["Built ETL pipelines in Scala and SQL."]}
+  ],
+  "skills": [{"label": "Data", "items": ["Python 3.11", "Spark 3.5", "Airflow 2", "dbt", "Snowflake", "SQL", "Scala"]}],
+  "fixed": {
+    "employers": [
+      {"key": "ferme-numerique", "organisation": "Ferme Numérique", "title": "Data Engineer", "start": "2021-09", "end": null, "location": "Lyon"},
+      {"key": "kestrel", "organisation": "Kestrel Analytics Ltd", "title": "Software Developer", "start": "2018-03", "end": "2021-08"}
+    ],
+    "schools": [
+      {"school": "University of Northvale", "degree": "BSc Mathematics", "start": "2014", "end": "2017"}
+    ],
+    "languages": [{"name": "English", "level": "Fluent"}, {"name": "French", "level": "Native"}]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "target": "Brise Exemple",
+  "headline": "Platform Engineer",
+  "recipient": "Équipe de recrutement, Brise Exemple",
+  "subject": "Candidature au poste d'ingénieure plateforme",
+  "salutation": "Madame, Monsieur,",
+  "paragraphs": [
+    "Chez Example Corp, je fais tourner la plateforme de déploiement de l'équipe paiements.",
+    "J'ai environ 3,5 ans d'expérience professionnelle."
+  ],
+  "closing": "Cordialement,"
+}

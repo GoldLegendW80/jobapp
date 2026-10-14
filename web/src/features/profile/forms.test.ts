@@ -461,4 +461,71 @@ describe("answers schema", () => {
     ]);
     expect(out.motivation).toBeNull();
   });
+  it("keeps the apply fields through a round trip, empty ones as null", () => {
+    const data = haraldLike().answers;
+    const form = toAnswersForm(data);
+    expect(form.highest_degree_year).toBe("2022");
+    expect(form.willing_onsite).toBe("yes");
+    expect(form.previously_applied_default).toBe("no");
+    expect(form.salary_ranges[1]).toMatchObject({ maximum: "" });
+    const out = fromAnswersForm({
+      ...form,
+      pronouns: "  ",
+      highest_degree_year: "",
+      willing_hybrid: "",
+      salary_stance: "",
+    });
+    expect(out.pronouns).toBeNull();
+    expect(out.highest_degree_year).toBeNull();
+    expect(out.willing_hybrid).toBeNull();
+    expect(out.salary_stance).toBeNull();
+    expect(out.salary_ranges[1]).toMatchObject({
+      minimum: 45000,
+      maximum: null,
+    });
+  });
+
+  it("checks the apply fields", () => {
+    const base = answers();
+    const bad = (change: Record<string, unknown>) =>
+      answersSchema.safeParse({ ...base, ...change });
+    expect(bad({ highest_degree_year: "1800" }).success).toBe(false);
+    expect(bad({ highest_degree_year: "20x2" }).success).toBe(false);
+    expect(
+      bad({
+        salary_ranges: [
+          { currency: "eur", minimum: "1", maximum: "", period: "year" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      issues(
+        bad({
+          salary_ranges: [
+            { currency: "EUR", minimum: "9", maximum: "3", period: "year" },
+          ],
+        }),
+      )["salary_ranges.0.maximum"],
+    ).toBe("The maximum is below the minimum.");
+    expect(
+      issues(
+        bad({
+          eeo_answers: [
+            { topic: "age", answer: "a" },
+            { topic: "age", answer: "b" },
+          ],
+        }),
+      )["eeo_answers.1.topic"],
+    ).toBe("This topic is already listed.");
+    expect(
+      issues(
+        bad({
+          salary_ranges: [
+            { currency: "EUR", minimum: "1", maximum: "", period: "year" },
+            { currency: "EUR", minimum: "2", maximum: "", period: "day" },
+          ],
+        }),
+      )["salary_ranges.1.currency"],
+    ).toBe("This currency is already listed.");
+  });
 });

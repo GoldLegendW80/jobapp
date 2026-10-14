@@ -1,0 +1,44 @@
+Task D4a, 2026-10-14, on the Mac (renderer image of D3 built under its own tag jobapp-renderer:test-d4a, removed afterwards).
+
+docker build -q -t jobapp-renderer:test-d4a renderer
+cd api
+uv --native-tls run pytest -q tests/documents -m "not docker"
+  760 passed, 19 deselected
+RENDERER_TEST_IMAGE=jobapp-renderer:test-d4a uv --native-tls run --group ingestion pytest -q tests/documents -m docker
+  19 passed (D3's renderer tests and the Docker marked template tests)
+uv --native-tls run ruff check app tests        All checks passed!
+uv --native-tls run ruff format --check app tests   394 files already formatted
+
+Thumbnails and fits of classic (thumbnails.make through D3's test stack, the same code as
+python -m app.documents.templates.thumbnails classic in the stack):
+thumb classic cv 0 1
+thumb classic letter 0 1
+classic cv-short en step 0 pages 1 fit True pdf 38229
+classic cv-short fr step 0 pages 1 fit True pdf 38544
+classic cv-typical en step 1 pages 1 fit True pdf 41968
+classic cv-typical fr step 1 pages 1 fit True pdf 42276
+classic cv-long en step 4 pages 1 fit True pdf 45130
+classic cv-long fr step 4 pages 1 fit True pdf 45454
+classic cv-tightest en step 6 pages 1 fit True pdf 46160
+classic cv-tightest fr step 6 pages 1 fit True pdf 46490
+classic letter-en en step 0 pages 1 fit True pdf 19309
+classic letter-en fr step 0 pages 1 fit True pdf 19048
+classic letter-fr en step 0 pages 1 fit True pdf 20318
+classic letter-fr fr step 0 pages 1 fit True pdf 20051
+classic cv_short en step 0 pages 1 fit True pdf 34366
+classic cv_typical en step 0 pages 1 fit True pdf 39606
+classic cv_long en step 0 pages 1 fit True pdf 41212
+classic letter_typical en step 0 pages 1 fit True pdf 18918
+classic letter_fr fr step 0 pages 1 fit True pdf 17654
+soft-limit typical step 2 pdf 42252 renders 4
+tightest pages per step [2, 2, 2, 2, 2, 2, 1, 1]
+long pages per step [2, 2, 2, 2, 1, 1, 1, 1]
+typical html bytes 103951
+
+Evidence PDFs in this folder:
+classic-cv-en: step 0, pages 1, fit True, renders 1, pdf 40223 bytes
+classic-cv-fr: step 0, pages 1, fit True, renders 1, pdf 40591 bytes
+classic-letter-en: step 0, pages 1, fit True, renders 1, pdf 18941 bytes
+classic-cv-tightest: step 6, pages 1, fit True, renders 4, pdf 46160 bytes
+classic-letter-fr: step 0, pages 1, fit True, renders 1, pdf 20051 bytes
+classic-hostile-cv: step 0, pages 1, fit True, renders 1, pdf 62668 bytes

@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "headline": "Ingénieure données",
+  "summary": "Data engineer who builds pipelines in Python and SQL.",
+  "highlights": ["Built the data platform of Exemple SA"],
+  "competencies": ["Python", "SQL"],
+  "experience": [
+    {"employer_key": "exemple-sa", "bullets": ["Build the data platform in Python and dbt."]},
+    {"employer_key": "sample-labs", "bullets": ["Built the sales dashboards in SQL."]}
+  ],
+  "skills": [{"label": "Data", "items": ["Python", "PostgreSQL", "SQL"]}],
+  "fixed": {
+    "employers": [
+      {"key": "exemple-sa", "organisation": "Exemple SA", "title": "Ingénieure données", "start": "2022-12", "end": null, "location": "Nantes"},
+      {"key": "sample-labs", "organisation": "Sample Labs", "title": "Data Analyst", "start": "2020-09", "end": "2022-11"}
+    ],
+    "schools": [{"school": "Exemple University", "degree": "MSc in Data Science", "start": "2018", "end": "2020"}],
+    "languages": [{"name": "English", "level": "Fluent"}, {"name": "French", "level": "Native"}]
+  }
+}

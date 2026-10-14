@@ -805,16 +805,16 @@ def upload_again(factory: sessionmaker[Session], step: Step, body: bytes) -> str
     """The same file uploaded again, through the application's own path. Returns the text the row
     holds afterwards: the row, its id and its hash are the ones it had."""
     digest = hashlib.sha256(body).digest()
-    # Since G10 a guard keeps a document a step has read as it is, on this path too, until G15
-    # deletes it with what was drawn from it. The other paths that write `text` again (a newer
-    # parser, the transcription of G14) take no guard, so the guard is lifted for this upload.
-    guards = list(documents._delete_guards)
-    documents._delete_guards[:] = []
+    # Since G10 a check keeps a document a step has read as it is, on this path too (G15: the
+    # user deletes it, then uploads it again). The other paths that write `text` again (a newer
+    # parser, the transcription of G14) take no check, so the check is lifted for this upload.
+    guards = list(documents._checks)
+    documents._checks[:] = []
     try:
         with factory() as db, db.begin():
             stored = documents.store_file(db, step.user_id, "document.txt", body, digest, now())
     finally:
-        documents._delete_guards[:] = guards
+        documents._checks[:] = guards
     with factory() as db, db.begin():
         assert stored.created
         assert stored.document.id == step.document_id

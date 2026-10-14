@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "target": "Lumen Example, Senior Platform Engineer",
+  "headline": "Platform Engineer",
+  "recipient": "Hiring team, Lumen Example",
+  "subject": "A platform engineer who moved 40 services to Kubernetes",
+  "salutation": "Dear hiring team,",
+  "paragraphs": [
+    "I run the deployment platform of the payments team at Example Corp, where I moved 40 services to Kubernetes.",
+    "Your posting asks for Kubernetes and Python: I use both every day, with Terraform on AWS and FastAPI.",
+    "I have about 3.5 years of professional engineering, about 2 years in a platform title. I would rather say so than round up.",
+    "I would be glad to bring this to Lumen Example. I am based in Lyon and my notice period is one month."
+  ],
+  "closing": "Kind regards,"
+}

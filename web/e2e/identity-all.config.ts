@@ -35,6 +35,7 @@ const SPECS = [
   "profile-editors",
   "profile-history",
   "profile-dates",
+  "apply-a3",
   "throttle",
 ] as const;
 

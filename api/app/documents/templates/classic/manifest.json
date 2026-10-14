@@ -1,0 +1,143 @@
+{
+  "slug": "classic",
+  "version": 1,
+  "name": {
+    "en": "Classic",
+    "fr": "Classique"
+  },
+  "description": {
+    "en": "One column, sans serif, each section under a label on the left between thin rules. Reads well for people and for applicant tracking systems.",
+    "fr": "Une colonne, sans empattement, chaque section sous un intitulé à gauche entre deux filets. Se lit bien, par une personne comme par un logiciel de recrutement."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "ats friendly",
+    "photo"
+  ],
+  "photo": "optional",
+  "fonts": [
+    "nunito-sans"
+  ],
+  "accent": "#1f4e79",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.0,
+        "line_height": 1.42,
+        "section_gap": 10,
+        "item_gap": 5,
+        "margin": 15
+      },
+      {
+        "body_size": 9.7,
+        "line_height": 1.38,
+        "section_gap": 9,
+        "item_gap": 4.5,
+        "margin": 14
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.34,
+        "section_gap": 8,
+        "item_gap": 4,
+        "margin": 13
+      },
+      {
+        "body_size": 9.2,
+        "line_height": 1.3,
+        "section_gap": 7,
+        "item_gap": 3.5,
+        "margin": 12
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.27,
+        "section_gap": 6,
+        "item_gap": 3,
+        "margin": 11
+      },
+      {
+        "body_size": 8.8,
+        "line_height": 1.24,
+        "section_gap": 5,
+        "item_gap": 2.5,
+        "margin": 10
+      },
+      {
+        "body_size": 8.6,
+        "line_height": 1.21,
+        "section_gap": 4,
+        "item_gap": 2,
+        "margin": 9
+      },
+      {
+        "body_size": 8.4,
+        "line_height": 1.18,
+        "section_gap": 3,
+        "item_gap": 1.5,
+        "margin": 8
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.0,
+        "line_height": 1.5,
+        "section_gap": 12,
+        "item_gap": 8,
+        "margin": 20
+      },
+      {
+        "body_size": 10.6,
+        "line_height": 1.45,
+        "section_gap": 11,
+        "item_gap": 7,
+        "margin": 18
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.4,
+        "section_gap": 10,
+        "item_gap": 6,
+        "margin": 16
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.36,
+        "section_gap": 9,
+        "item_gap": 5,
+        "margin": 14
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.32,
+        "section_gap": 8,
+        "item_gap": 4,
+        "margin": 12
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.28,
+        "section_gap": 7,
+        "item_gap": 3,
+        "margin": 10
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "140d46f77143ca7ba17701b88cbb02262ae462e103a7f310af1f86bb965d117d"
+}

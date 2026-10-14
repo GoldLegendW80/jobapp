@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "target": "General",
+  "headline": "Platform Engineer, cloud and backend",
+  "summary": "Platform engineer with about 3.5 years of professional engineering. I run the deployment platform of the payments team at Example Corp.",
+  "highlights": [
+    "Moved 40 services to Kubernetes",
+    "Internal tools in Python and React",
+    "Deployment platform owner"
+  ],
+  "competencies": [
+    "Kubernetes",
+    "Terraform",
+    "Python",
+    "CI/CD"
+  ],
+  "experience": [
+    {
+      "employer_key": "example-corp",
+      "bullets": [
+        "Run the deployment platform of the payments team.",
+        "Cut build times by 30% with a shared cache."
+      ]
+    },
+    {
+      "employer_key": "sample-labs",
+      "bullets": [
+        "Built internal tools in Python and React for the support team."
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "label": "Cloud",
+      "items": [
+        "Kubernetes",
+        "Terraform",
+        "AWS"
+      ]
+    },
+    {
+      "label": "Backend",
+      "items": [
+        "Python",
+        "FastAPI"
+      ]
+    }
+  ],
+  "notes": "",
+  "fixed": {
+    "employers": [
+      {
+        "key": "example-corp",
+        "organisation": "Example Corp",
+        "title": "Engineer",
+        "start": "2023-01",
+        "end": null,
+        "location": "Lyon, France"
+      },
+      {
+        "key": "sample-labs",
+        "organisation": "Sample Labs",
+        "title": "Developer",
+        "start": "2021-03",
+        "end": "2022-12",
+        "location": "Grenoble"
+      },
+      {
+        "key": "north-shop",
+        "organisation": "North Shop",
+        "title": "Weekend cashier",
+        "start": "2017",
+        "end": "2018",
+        "location": ""
+      }
+    ],
+    "schools": [
+      {
+        "school": "Example Institute of Technology",
+        "degree": "BSc Computer Science",
+        "start": "2018",
+        "end": "2021",
+        "location": "Lyon"
+      }
+    ],
+    "languages": [
+      {
+        "name": "English",
+        "level": "C1"
+      },
+      {
+        "name": "Spanish",
+        "level": "B1"
+      }
+    ]
+  }
+}

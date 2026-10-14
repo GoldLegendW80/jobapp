@@ -19,7 +19,7 @@ an unknown one (404). No answer holds a document's text or an item's value: name
 statuses and the runner's own messages.
 
 Importing this module is what makes the api know the extraction agent (`agents`), the provider
-of finished steps for the estimate (`reuse`) and the delete guard (`delete_guard`).
+of finished steps for the estimate (`reuse`).
 """
 
 import logging
@@ -42,7 +42,6 @@ from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
 from app.ingestion import (
-    delete_guard,
     engine,
     estimate_router,
     merge,
@@ -82,8 +81,8 @@ OVERSHOOT = (
 LIST_MAX = 20
 _401 = {401: {"model": ErrorOut, "description": "Not signed in"}}
 _404 = {404: {"model": ErrorOut, "description": "No such run (or not yours)"}}
-# What the guard and the reuse query register at import (kept so the imports are not dropped).
-REGISTERED = (delete_guard.read_by_a_run, reuse.finished)
+# What the reuse query registers at import (kept so the import is not dropped).
+REGISTERED = (reuse.finished,)
 
 
 class RunIn(estimate_router.EstimateIn):

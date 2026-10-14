@@ -118,6 +118,34 @@ class Settings(BaseSettings):
     browser_session_max_s: int = Field(default=1800, ge=60, le=7200)
     # Past this share of the browser container's memory limit, browserd closes the newest tab.
     browser_mem_guard_pct: int = Field(default=90, ge=50, le=99)
+    # Documents (SPEC-documents.md, app/documents/). Every setting of the module, added at once
+    # by task D2 so that no later task edits this file. A render: its wall time in seconds, the
+    # renders one renderer process runs at once, the largest PDF kept.
+    documents_render_timeout_s: int = Field(default=30, ge=5, le=300)
+    documents_renders_at_once: int = Field(default=1, ge=1, le=8)
+    documents_max_pdf_bytes: int = Field(
+        default=4 * 1024 * 1024, ge=256 * 1024, le=32 * 1024 * 1024
+    )
+    # Unfrozen and unapproved versions kept per document (the frozen and approved ones stay).
+    documents_versions_kept: int = Field(default=30, ge=5, le=500)
+    # One writer run: its turns, its wall time in seconds, its submits.
+    documents_generation_max_turns: int = Field(default=10, ge=2, le=50)
+    documents_generation_wall_s: int = Field(default=300, ge=30, le=1800)
+    documents_max_submits: int = Field(default=4, ge=2, le=10)
+    # Automatic generation: runs at once per person, how far back a first base CV reaches, the
+    # wait before the one retry, and the defaults of the person's Advanced settings (the fit
+    # score threshold and the safety ceiling per day).
+    documents_auto_at_once: int = Field(default=1, ge=1, le=4)
+    documents_auto_lookback_days: int = Field(default=30, ge=1, le=365)
+    documents_auto_retry_after_s: int = Field(default=600, ge=60, le=86_400)
+    documents_min_fit_default: int = Field(default=70, ge=0, le=100)
+    documents_daily_ceiling_default: int = Field(default=100, ge=1, le=500)
+    # Base CVs per person, and the passes of a design capture (one repair, one fidelity).
+    documents_base_cvs_max: int = Field(default=10, ge=1, le=50)
+    documents_design_passes: int = Field(default=2, ge=1, le=4)
+    # The chat of a document: characters of one message, messages kept per document.
+    documents_chat_max_chars: int = Field(default=2000, ge=200, le=10_000)
+    documents_messages_kept: int = Field(default=200, ge=20, le=2000)
 
     @field_validator("app_env", "log_level", mode="before")
     @classmethod

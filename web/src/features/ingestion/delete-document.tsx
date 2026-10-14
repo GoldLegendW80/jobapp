@@ -19,15 +19,18 @@ import {
 } from "./documents-api";
 
 /**
- * What deleting does, said without a number of days because none is true yet: the server
- * still keeps 14 nightly dumps, and its predeploy dumps by count, whatever their age.
- *
- * G15: the owner's sentence (tasks/ingestion/todo.md, decision 3) is "Gone from the app now,
- * and from the server's backups within 7 days." Put it here only once T10 (backups kept 7
- * days) is deployed and verified on the server, the predeploy dumps included.
+ * What deleting does (task G15). The promise is the owner's sentence (tasks/ingestion/todo.md,
+ * decision 3), true once T10 keeps the server's backups 7 days, predeploy dumps included. The
+ * provider sentence is the one of the consent text: deleting here cannot reach what was sent.
  */
 export const DELETE_PROMISE =
-  "Gone from the app now. The server's backups still hold a copy for a while, until newer backups replace them.";
+  "Gone from the app now, and from the server's backups within 7 days.";
+export const DELETE_PROVIDER =
+  "It does not delete what Anthropic has already received.";
+export const DELETE_REMOVES =
+  "Items drawn from it that wait for your review are removed, and its quotes leave every proposal.";
+export const DELETE_KEEPS =
+  "What you already accepted stays in your profile, marked as from a deleted source.";
 
 interface Props {
   /** The document to delete; the dialog is open while it is set. */
@@ -42,9 +45,9 @@ interface Props {
 }
 
 /**
- * Asks before a document is deleted for good, and says exactly what "deleted" means. A refusal
- * by the server (later: a document a run has read) is shown in its own words and the document
- * stays. Task G15 extends what this dialog says.
+ * Asks before a document is deleted for good, and says exactly what "deleted" means: what goes,
+ * what stays in the profile, the backups and the provider. A refusal by the server (a run or a
+ * decision holds the document right now) is shown in its own words and the document stays.
  */
 export function DeleteDocument({
   document,
@@ -112,9 +115,13 @@ function Ask({
                 <bdi className="font-medium text-foreground">
                   {document.name}
                 </bdi>{" "}
-                will be deleted for good, with its text.
+                will be deleted for good, with its text, its page images and its
+                transcriptions.
               </p>
+              <p>{DELETE_REMOVES}</p>
+              <p>{DELETE_KEEPS}</p>
               <p>{DELETE_PROMISE}</p>
+              <p>{DELETE_PROVIDER}</p>
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
