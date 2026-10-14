@@ -42,9 +42,10 @@ applied or closed since, or the same role clicked since on another posting is ne
 import hashlib
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
@@ -97,6 +98,7 @@ SENTENCES = {
     "not_editable": "The answers of this application can no longer be changed.",
     "unknown_field": "This form has no such question to answer.",
     "wrong_type": "This answer does not fit the question.",
+    "not_an_option": "This form does not offer that choice.",
     # Not a refusal: the error code of a `submitted` application whose posting kept its status.
     "status_not_set": (
         "This application was sent, but the posting could not be marked as applied. Mark it "
@@ -556,15 +558,29 @@ def confirm_submitted(
 # documents) or a widget the app cannot fill (`skipped:`).
 EDITABLE = frozenset({State.needs_person, State.ready, State.approved})
 ANSWER_MAX = 5000
-TEXT_KINDS = frozenset({"text", "select", "combobox"})
+TEXT_KINDS = frozenset({"text", "textarea", "select", "combobox", "single", "date"})
+CHOICE_KINDS = frozenset({"select", "combobox", "single"})  # the value is one of the options
+ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 class InvalidAnswerError(ValueError):
-    """A 422: `unknown_field` (no such field, a file or a skipped widget) or `wrong_type`."""
+    """A 422: `unknown_field` (no such field, a file or a skipped widget), `wrong_type` or
+    `not_an_option` (a choice the form does not offer)."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
+
+
+def _is_date(value: str) -> bool:
+    """An ISO calendar date, `YYYY-MM-DD`, and a real one."""
+    if not ISO_DATE.fullmatch(value):
+        return False
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return False
+    return True
 
 
 def set_answer(
@@ -600,6 +616,15 @@ def set_answer(
         raise InvalidAnswerError("wrong_type")
     if isinstance(value, str) and (row.kind not in TEXT_KINDS or len(value) > ANSWER_MAX):
         raise InvalidAnswerError("wrong_type")
+    if isinstance(value, str) and row.kind == "date" and not _is_date(value):
+        raise InvalidAnswerError("wrong_type")
+    if (
+        isinstance(value, str)
+        and row.kind in CHOICE_KINDS
+        and row.options
+        and value not in row.options
+    ):
+        raise InvalidAnswerError("not_an_option")
     row.value = value
     row.source = AnswerSource.person
     row.approved = False

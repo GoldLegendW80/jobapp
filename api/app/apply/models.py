@@ -292,6 +292,10 @@ class ApplicationAnswer(Base):
     label: Mapped[str] = mapped_column(sa.Text, nullable=False)
     kind: Mapped[str] = mapped_column(sa.Text, nullable=False)
     value: Mapped[Any] = mapped_column(pg.JSONB, nullable=True)
+    # The labels the form offers for a select, combobox or single choice (null when it offers
+    # none, or none were read): what `set_answer` checks a choice against, and the approval view
+    # shows.
+    options: Mapped[list[str] | None] = mapped_column(pg.JSONB, nullable=True)
     source: Mapped[AnswerSource] = mapped_column(ANSWER_SOURCE_ENUM, nullable=False)
     required: Mapped[bool] = _flag()
     approved: Mapped[bool] = _flag()
