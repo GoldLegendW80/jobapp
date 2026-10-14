@@ -254,10 +254,13 @@ def test_the_holders_process_dies_and_the_lease_expires_after_the_idle_time(
     run(world, go)
 
 
-def test_an_idle_lease_is_ended_in_browserd_too(world: World) -> None:
+def test_an_idle_lease_ends_by_browserds_timer_and_the_api_follows(world: World) -> None:
     async def go() -> None:
         await world.store.acquire(A, "sweep", True)
         world.clock.advance(IDLE_S)
+        # browserd answers and still holds the lease: its timer decides, not the api's copy.
+        assert (await world.store.current(A)).lease is not None
+        assert await world.browserd.manager.tick() == "idle"  # browserd's loop, every second
         assert (await world.store.current(A)).lease is None
         assert world.browserd.manager.current() is None
         assert world.browserd.chromiums[0].stopped
@@ -266,10 +269,11 @@ def test_an_idle_lease_is_ended_in_browserd_too(world: World) -> None:
     run(world, go)
 
 
-def test_touch_keeps_a_lease_alive(world: World) -> None:
+def test_touch_keeps_a_lease_alive_while_browserd_cannot_be_asked(world: World) -> None:
     async def go() -> None:
         held = await world.store.acquire(A, "apply_fill", True)
         assert held.lease is not None
+        world.browserd.down = True  # the api's own timers apply
         for _ in range(2):  # 598 s: past the idle time twice, under the 900 s maximum
             world.clock.advance(IDLE_S - 1)
             assert await world.store.touch(A, held.lease.lease_id) is not None
@@ -285,6 +289,7 @@ def test_the_store_honours_the_wait_with_its_clock(world: World) -> None:
         held = await store.acquire(A, "apply_fill", True)
         assert held.lease is not None
         lease_id = held.lease.lease_id
+        world.browserd.down = True  # the api's own timers apply
         for _ in range(10):
             world.clock.advance(60)
             await store.touch(A, lease_id)
@@ -302,6 +307,51 @@ def test_the_store_honours_the_wait_with_its_clock(world: World) -> None:
         assert view.lease is not None
         assert view.lease.state == "active"
         assert view.lease.active_s(world.clock()) == 840
+
+    run(world, go)
+
+
+def test_browserd_decides_idle_and_maximum_while_it_answers(world: World) -> None:
+    async def go() -> None:
+        held = await world.store.acquire(A, "apply_fill", True)
+        assert held.lease is not None
+        assert held.token is not None
+        lease_id = held.lease.lease_id
+
+        async def tool_call() -> None:
+            return None
+
+        for _ in range(4):  # 800 s of tool calls in browserd, none touches the api's copy
+            world.clock.advance(200)
+            await world.browserd.manager.call(lease_id, held.token, tool_call)
+            assert await world.browserd.manager.tick() is None
+            view = await world.store.current(A)
+            assert view.lease is not None
+            assert view.lease.lease_id == lease_id
+            assert (await world.store.current(B)).held_by_other
+        world.clock.advance(100)  # 900 active seconds: the maximum of apply_fill, in browserd
+        assert await world.browserd.manager.tick() == "lease_max"
+        assert (await world.store.current(A)).lease is None
+        assert (await world.store.acquire(B, "takeover", False)).lease is not None
+
+    run(world, go)
+
+
+def test_browserd_stops_answering_and_the_api_timer_takes_over(world: World) -> None:
+    async def go() -> None:
+        held = await world.store.acquire(A, "apply_fill", True)
+        assert held.lease is not None
+        assert held.token is not None
+        world.clock.advance(IDLE_S - 1)
+
+        async def tool_call() -> None:
+            return None
+
+        await world.browserd.manager.call(held.lease.lease_id, held.token, tool_call)
+        world.clock.advance(1)
+        assert (await world.store.current(A)).lease is not None  # browserd saw the tool call
+        world.browserd.down = True
+        assert (await world.store.current(A)).lease is None  # IDLE_S since the api's last touch
 
     run(world, go)
 
@@ -478,8 +528,116 @@ def test_estimated_wait_from_the_last_ten_leases(world: World) -> None:
         await store.acquire(B, "takeover", False)
         await store.acquire(C, "takeover", False)
         b, c = (await store.current(B)).waiting[0], (await store.current(C)).waiting[0]
-        assert (b.position, b.estimated_wait_s) == (1, 150)
-        assert (c.position, c.estimated_wait_s) == (2, 350)
+        # 150 and 350 seconds, rounded up to whole minutes.
+        assert (b.position, b.estimated_wait_s) == (1, 180)
+        assert (c.position, c.estimated_wait_s) == (2, 360)
+
+    run(world, go)
+
+
+def test_the_estimated_wait_hides_the_holders_running_time(world: World) -> None:
+    async def go() -> None:
+        store = world.store
+        await store.acquire(A, "takeover", False)
+        await store.acquire(B, "takeover", False)
+        seen = set()
+        for _ in range(59):  # the holder runs from 1 to 59 s: one answer for the whole minute
+            world.clock.advance(1)
+            wait = (await store.current(B)).waiting[0].estimated_wait_s
+            assert wait % 60 == 0
+            seen.add(wait)
+        assert seen == {300}  # DEFAULT_LEASE_S minus 1 to 59 s, rounded up
+        world.clock.advance(1)
+        assert (await store.current(B)).waiting[0].estimated_wait_s == 240
+        world.clock.advance(IDLE_S - 60)  # the holder overran the typical length
+        assert world.browserd.manager.current() is not None  # browserd still holds it
+        assert (await store.current(B)).waiting[0].estimated_wait_s == 0
+
+    run(world, go)
+
+
+class Interleave:
+    """The Redis of one call: just before (or just after) that call's first `command`, the other
+    call runs to its end. `answer` keeps what the other call answered."""
+
+    def __init__(self, real: Any, command: str, after: bool, other: Callable[[], Awaitable[Any]]):
+        self.real, self.command, self.after = real, command, after
+        self.other: Callable[[], Awaitable[Any]] | None = other
+        self.answer: Any = None
+
+    def __getattr__(self, name: str) -> Any:
+        target = getattr(self.real, name)
+        if name != self.command or self.other is None:
+            return target
+
+        async def interleaved(*args: Any, **kwargs: Any) -> Any:
+            other, self.other = self.other, None
+            if not self.after:
+                self.answer = await other()
+            result = await target(*args, **kwargs)
+            if self.after:
+                self.answer = await other()
+            return result
+
+        return interleaved
+
+
+@pytest.mark.parametrize(
+    ("command", "after"),
+    [
+        ("set", False),  # the other tab took the turn before this one queued: it queues again
+        ("zadd", True),  # this one queued, the other tab took the turn with that same place
+    ],
+)
+def test_two_tabs_of_one_person_get_the_same_lease(world: World, command: str, after: bool) -> None:
+    async def go() -> None:
+        assert (await world.store.current(B)).lease is None  # Redis has read browserd
+        r = await world.redis()
+        tab = world.make_store()
+        proxy = Interleave(r, command, after, lambda: world.store.acquire(A, "takeover", False))
+
+        async def pool() -> Any:
+            return proxy
+
+        tab._pool = pool
+        loser = await tab.acquire(A, "takeover", False)
+        winner = proxy.answer
+        assert winner is not None
+        assert winner.lease is not None
+        assert winner.token is not None
+        assert loser.lease is not None
+        assert loser.lease.lease_id == winner.lease.lease_id
+        assert loser.token is None
+        assert loser.waiting is None
+        member = f"{A}|takeover"
+        assert await r.zrank(QUEUES[0], member) is None
+        assert not await r.exists(TICKET + member)
+        assert (await world.store.current(A)).waiting == ()
+        assert len(world.browserd.starts) == 1
+
+    run(world, go)
+
+
+def test_two_tabs_at_once_one_lease_one_token(world: World) -> None:
+    async def go() -> None:
+        tabs = await asyncio.gather(
+            world.store.acquire(A, "takeover", False),
+            world.make_store().acquire(A, "takeover", False),
+        )
+        winner = next(got for got in tabs if got.token is not None)
+        loser = next(got for got in tabs if got is not winner)
+        assert winner.lease is not None
+        assert loser.lease is not None
+        assert loser.token is None
+        # The same turn: browserd's id, or, while the winner's start is still in flight, the turn
+        # in state `starting` (what any call of that person answers then).
+        assert loser.lease.lease_id == winner.lease.lease_id or loser.lease.state == "starting"
+        assert (loser.lease.user_id, loser.lease.purpose) == (A, "takeover")
+        view = await world.store.current(A)
+        assert view.lease is not None
+        assert view.lease.lease_id == winner.lease.lease_id
+        assert view.waiting == ()
+        assert len(world.browserd.starts) == 1
 
     run(world, go)
 

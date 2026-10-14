@@ -269,6 +269,57 @@ def test_uids_are_unique_under_concurrency(factory: sessionmaker[Session]) -> No
         assert db.execute(sa.text("SELECT count(*) FROM browser_profiles")).scalar_one() == 8
 
 
+def last_uid(factory: sessionmaker[Session]) -> int:
+    with factory() as db:
+        return int(
+            db.execute(sa.text("SELECT last_value FROM browser_profile_uid_seq")).scalar_one()
+        )
+
+
+def test_later_leases_use_up_no_uid(factory: sessionmaker[Session]) -> None:
+    first_person = make_user(factory, email="e2e-browser-1@example.org").id
+    first = profiles.ensure(factory, first_person)
+    for _ in range(6):  # every later lease of that person
+        assert profiles.ensure(factory, first_person) == first
+    assert last_uid(factory) == first.uid
+    second = profiles.ensure(factory, make_user(factory, email="e2e-browser-2@example.org").id)
+    assert second.uid == first.uid + 1
+
+
+def test_racing_first_leases_of_one_person_make_one_row(factory: sessionmaker[Session]) -> None:
+    """k first leases of one person at once: one row, and at most k numbers of the sequence (each
+    call that passed the read before the winner committed draws one), never more; the calls that
+    follow draw none."""
+    person = make_user(factory, email="e2e-browser-1@example.org").id
+    profiles.ensure(factory, make_user(factory, email="e2e-browser-2@example.org").id)
+    before = last_uid(factory)
+    k = 8
+    found: list[profiles.ProfileRef] = []
+    gate = threading.Barrier(k)
+
+    def first_lease() -> None:
+        gate.wait()
+        found.append(profiles.ensure(factory, person))
+
+    threads = [threading.Thread(target=first_lease) for _ in range(k)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(found) == k
+    assert len(set(found)) == 1
+    used = last_uid(factory) - before
+    assert 1 <= used <= k
+    with factory() as db:
+        rows = db.execute(
+            sa.text("SELECT count(*) FROM browser_profiles WHERE user_id = :u"), {"u": person}
+        ).scalar_one()
+    assert rows == 1
+    for _ in range(3):
+        profiles.ensure(factory, person)
+    assert last_uid(factory) - before == used
+
+
 def test_a_taken_uid_is_retried(factory: sessionmaker[Session]) -> None:
     first = profiles.ensure(factory, make_user(factory, email="e2e-browser-1@example.org").id)
     with factory() as db:
@@ -316,7 +367,7 @@ def test_0016_up_down_up(engine: sa.Engine) -> None:
         with engine.connect() as conn:
             return int(conn.execute(sa.text(names)).scalar_one())
 
-    assert HEAD == "0016"
+    assert HEAD >= "0016"
     assert count() == 4
     command.downgrade(alembic_config(), "0015")
     assert current_revision(url) == "0015"

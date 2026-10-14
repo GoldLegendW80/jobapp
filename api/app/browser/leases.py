@@ -13,31 +13,39 @@ second one. The keys, all under `jobapp:browser:`:
     durations       the lengths of the last ten leases, for the estimated wait
     synced          set once this Redis has read browserd's current lease (below)
 
-`acquire(user_id, purpose, automation)` is idempotent per person and purpose: the first call
-queues, each call renews the ticket and takes the turn when the browser is free and this member
-is the head of the first non empty tier (one Lua script, so two callers never both win), then
-starts the lease in browserd on the person's one profile (app/browser/profiles.py). There is no
-preemption: a running lease ends first. A waiter keeps its place by asking again within
-TICKET_TTL_S; the caller that took the turn gets browserd's lease token once, in memory: it is
-never written to Redis nor logged.
+`acquire(user_id, purpose, automation)` is idempotent per person and purpose, also for two calls
+at once (two tabs): the one that loses the turn to the other answers that same lease, and leaves no
+place in the queue behind it. The first call queues, each call renews the ticket and takes the
+turn when the browser is free and this member is the head of the first non empty tier (one Lua
+script, so two callers never both win), then starts the lease in browserd on the person's one
+profile (app/browser/profiles.py). There is no preemption: a running lease ends first. A waiter
+keeps its place by asking again within TICKET_TTL_S; the caller that took the turn gets browserd's
+lease token once, in memory: it is never written to Redis nor logged.
 
 Time (SPEC-browser, "Leases"): the purpose's maximum counts active time only, and the idle timer
 (BROWSER_IDLE_S without a tool call or input, `touch`) ends a lease; while the lease is
 `waiting_person` (B12 sets it, with a reason, a site and a deadline of BROWSER_SESSION_MAX_S)
 neither runs, and `resume` gives the lease back the active time it had left. browserd applies the
-same rules to its own copy; this one ends the turn when browserd cannot be asked (a holder whose
-process died expires here after BROWSER_IDLE_S). Every call first settles the holder: an expired
-one is ended (browserd is told), and one that browserd no longer holds (its own idle timer, a
-crash) is dropped. When Redis has lost its keys (a restart), the first call reads browserd's
-`GET /leases/current` and takes its lease back as the holder.
+same rules to its own copy and sees every tool call and every input, so while it answers and still
+holds the lease, it alone decides idle and maximum (nobody has to `touch` this copy in step); the
+timers of this copy end the turn only when browserd cannot be asked (a holder whose process died
+expires here after BROWSER_IDLE_S without a `touch`). Every call first settles the holder: one that
+browserd no longer holds (its own idle or maximum, a crash) is dropped, and, while browserd cannot
+be asked, an expired one is ended (browserd is told when it can be). When Redis has lost its
+keys (a restart), the first call reads browserd's `GET /leases/current` and takes its lease back
+as the holder.
 
 `current(user_id)` answers the person's own lease, whether someone else holds the browser (never
-who, nor why), and the person's places in the queue. Every time comes from the injected clock.
+who, nor why), and the person's places in the queue. The estimated wait is rounded up to whole
+minutes, so a waiter learns how long another person's lease has run to the minute at best, never
+to the second (test_the_estimated_wait_hides_the_holders_running_time). Every time comes from the
+injected clock.
 """
 
 import asyncio
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -120,6 +128,7 @@ return 1
 """
 
 Clock = Callable[[], float]
+_CANNOT_ASK = "\0cannot_ask"  # _gone_in_browserd: browserd did not answer
 
 
 class StoreUnavailableError(Exception):
@@ -289,9 +298,6 @@ class Leases:
             if held is not None and held.user_id == user_id and held.purpose == purpose:
                 return Acquired(lease=held)
             member = _member(user_id, purpose)
-            # The ticket first: a member without one is pruned by the next claim.
-            await r.set(TICKET + member, "1", ex=TICKET_TTL_S)
-            await r.zadd(QUEUES[TIERS[purpose]], {member: await r.incr(SEQ)}, nx=True)
             turn = Lease(
                 lease_id=f"starting:{uuid.uuid4()}",
                 user_id=user_id,
@@ -305,9 +311,21 @@ class Leases:
                 last_input=now,
             )
             raw = turn.dumps()
-            if not await r.eval(CLAIM, 1 + len(QUEUES), HOLDER, *QUEUES, member, raw, TICKET):
-                return Acquired(waiting=await self._place(r, user_id, purpose, now))
-            return await self._start(r, turn, raw)
+            for _ in range(2):
+                # The ticket first: a member without one is pruned by the next claim.
+                await r.set(TICKET + member, "1", ex=TICKET_TTL_S)
+                await r.zadd(QUEUES[TIERS[purpose]], {member: await r.incr(SEQ)}, nx=True)
+                if await r.eval(CLAIM, 1 + len(QUEUES), HOLDER, *QUEUES, member, raw, TICKET):
+                    return await self._start(r, turn, raw)
+                mine = await self._own(r, user_id, purpose)
+                if mine is not None:
+                    return Acquired(lease=mine)
+                place = await self._place(r, user_id, purpose, now)
+                if place is not None:
+                    return Acquired(waiting=place)
+                # The other call of this member claimed and then lost its turn before this one
+                # read the holder: ask once more, as that call's caller will.
+            return Acquired(waiting=await self._place(r, user_id, purpose, now))
         except (RedisError, OSError, TimeoutError):
             raise StoreUnavailableError from None
 
@@ -438,9 +456,13 @@ class Leases:
             if raw is None:
                 return None
         lease = Lease.loads(raw)
-        reason = lease.expired(now)
-        if reason is None and lease.state != "starting":
+        if lease.state == "starting":
+            reason = lease.expired(now)
+        else:
+            # browserd decides while it answers; this copy's timers only when it cannot.
             reason = await self._gone_in_browserd(lease)
+            if reason == _CANNOT_ASK:
+                reason = lease.expired(now)
         if reason is None:
             return lease
         await self._end(r, raw, lease, reason, now)
@@ -481,12 +503,28 @@ class Leases:
         await r.set(SYNCED, "1")
         return _text(await r.get(HOLDER))
 
+    async def _own(self, r: Any, user_id: str, purpose: str) -> Lease | None:
+        """The person's lease of this purpose when another call of theirs (a second tab) took the
+        turn while this one queued; the place this call may have put back after that call's claim
+        is taken out, so the person never waits behind their own lease."""
+        raw = _text(await r.get(HOLDER))
+        if raw is None:
+            return None
+        lease = Lease.loads(raw)
+        if lease.user_id != user_id or lease.purpose != purpose:
+            return None
+        member = _member(user_id, purpose)
+        await r.zrem(QUEUES[TIERS[purpose]], member)
+        await r.delete(TICKET + member)
+        return lease
+
     async def _gone_in_browserd(self, lease: Lease) -> str | None:
-        """Why browserd no longer holds this lease, or None (it does, or cannot say)."""
+        """Why browserd no longer holds this lease, None when it does, _CANNOT_ASK when browserd
+        does not answer."""
         try:
             found = await self.client.current()
         except BrowserError:
-            return None
+            return _CANNOT_ASK
         current = found["lease"]
         if current is not None and current.get("lease_id") == lease.lease_id:
             return None
@@ -527,11 +565,9 @@ class Leases:
         left = 0.0
         if holder is not None:
             left = max(0.0, typical - (now - Lease.loads(holder).started_at))
-        return Waiting(
-            purpose=purpose,
-            position=position,
-            estimated_wait_s=round(left + (position - 1) * typical),
-        )
+        # Whole minutes, rounded up: the seconds would tell how long the holder has run.
+        minutes = math.ceil((left + (position - 1) * typical) / 60)
+        return Waiting(purpose=purpose, position=position, estimated_wait_s=60 * minutes)
 
     async def _update(
         self, user_id: str, lease_id: str, change: Callable[[Lease, float], None]
