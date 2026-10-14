@@ -9,7 +9,12 @@ import { fakeDocument, fakeDocuments, LIMITS } from "@/test/ingestion";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-import { DELETE_PROMISE } from "./delete-document";
+import {
+  DELETE_KEEPS,
+  DELETE_PROMISE,
+  DELETE_PROVIDER,
+  DELETE_REMOVES,
+} from "./delete-document";
 import type { IngestionDocument } from "./documents-api";
 import { WATCH_MS } from "./labels";
 
@@ -906,12 +911,22 @@ describe("documents: deleting", () => {
     expect(
       dialog.getByText(/will be deleted for good, with its text/),
     ).toBeVisible();
-    // True today: no number of days is promised while the server keeps its backups longer
-    // than the 7 days the plan aims for (delete-document.tsx says when the sentence changes).
+    // The owner's sentence (decision 3) and the consent text's, word for word, with no dash.
     expect(DELETE_PROMISE).toBe(
-      "Gone from the app now. The server's backups still hold a copy for a while, until newer backups replace them.",
+      "Gone from the app now, and from the server's backups within 7 days.",
     );
-    expect(DELETE_PROMISE).not.toMatch(/\d/);
+    expect(DELETE_PROVIDER).toBe(
+      "It does not delete what Anthropic has already received.",
+    );
+    for (const sentence of [
+      DELETE_PROMISE,
+      DELETE_PROVIDER,
+      DELETE_REMOVES,
+      DELETE_KEEPS,
+    ]) {
+      expect(sentence).not.toMatch(/ - |\u2013|\u2014/);
+      expect(dialog.getByText(sentence)).toBeVisible();
+    }
     expect(dialog.getByText(DELETE_PROMISE)).toBeVisible();
     expect(state.deleted).toEqual([]);
   });
@@ -961,7 +976,7 @@ describe("documents: deleting", () => {
         HttpResponse.json(
           {
             detail:
-              "This document was read by a run and cannot be deleted yet.",
+              "This document is being read or changed right now. Nothing was deleted. Try again in a moment.",
           },
           { status: 409 },
         ),
@@ -969,7 +984,7 @@ describe("documents: deleting", () => {
     );
     await user.click(dialog.getByRole("button", { name: "Delete for good" }));
     expect(await dialog.findByRole("alert")).toHaveTextContent(
-      "This document was read by a run and cannot be deleted yet.",
+      "This document is being read or changed right now. Nothing was deleted. Try again in a moment.",
     );
     await user.click(dialog.getByRole("button", { name: "Keep it" }));
     await waitFor(() => {
