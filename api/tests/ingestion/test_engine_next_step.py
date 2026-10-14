@@ -22,11 +22,21 @@ from app.agents.models import AgentRun
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
 from app.ingestion import documents, engine
-from app.ingestion.models import IngestionDocument
+from app.ingestion.models import IngestionDocument, TextStatus
 from app.ingestion.runs_models import IngestionRun, IngestionRunStep, RunStatus, StepStatus
 from tests.agents.run_helpers import add_user, now, save_credential
 from tests.ingestion import engine_helpers as eh
-from tests.ingestion.extract_helpers import add_document, key, keyring, settings
+from tests.ingestion.extract_helpers import Step, add_document, key, keyring, settings
+from tests.ingestion.transcribe_helpers import (
+    add_scan,
+    document_of,
+    images_of,
+    scanned_page,
+    sixty_steps,
+    tools_for,
+    transcribed_at_once,
+)
+from tests.ingestion.transcribe_helpers import transcribe as view_then_store
 
 _FIXTURES = (key, keyring, settings)
 
@@ -502,3 +512,177 @@ def test_a_stuck_run_closes_even_when_recording_its_running_step_fails(
     late = eh.run_of(factory, run_id)
     assert (late.status, late.tokens_spent) == (RunStatus.failed, 1_000)
     assert eh.statuses(factory, run_id) == ["cancelled", "cancelled"]
+
+
+# --- a transcription that did not finish, and one with nothing left (G14) -----------------------
+
+ITS_OWN = "The agent ended without a result."  # neither the provider's failure nor the box's
+
+
+@pytest.mark.parametrize(
+    "pages",
+    [[None, None], ["A page read as text, of a made-up letter.", None, "Its third page."]],
+    ids=["a pure scan", "a mixed PDF"],
+)
+def test_a_document_whose_transcription_failed_is_not_extracted_in_that_run(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    settings: Settings,
+    pages: list[str | None],
+) -> None:
+    """Its text is not whole (an empty slot per page that waits), so no model reads it: the
+    predicted extraction fails without an agent run, and the other document is read."""
+    scan = add_scan(factory, alice, pages)
+    other = add_document(factory, alice, eh.text_of(1))
+    run_id = eh.start(factory, alice, [scan, other])
+    first = eh.advance(factory, run_id, settings)
+    assert eh.running(factory, run_id).kind == "transcribe"
+    eh.end_agent(factory, first.enqueue, AgentStatus.failed, ITS_OWN, tokens=700)
+    before = rows_of(factory, run_id)
+    figure = shown(factory, run_id)
+    assert rows_of(factory, run_id) == before  # the prediction wrote nothing
+    second = eh.advance(factory, run_id, settings)
+    # The step that starts is the other document's: nothing ran for the scan's extraction.
+    reading = eh.running(factory, run_id)
+    assert (reading.kind, reading.document_id, reading.agent_run_id) == (
+        "extract",
+        other,
+        second.enqueue,
+    )
+    of_the_scan = [one for one in eh.steps_of(factory, run_id) if one.document_id == scan]
+    assert [(one.kind, one.status) for one in of_the_scan] == [
+        ("transcribe", StepStatus.failed),
+        ("extract", StepStatus.failed),
+    ]
+    assert of_the_scan[1].agent_run_id is None
+    assert [one.agent for one in eh.agent_runs_of(factory, alice)] == [
+        engine.TRANSCRIBE_NAME,
+        engine.agents.EXTRACT_NAME,
+    ]
+    assert eh.run_of(factory, run_id).tokens_spent == 700  # nothing charged for an extraction
+    assert figure >= 0
+    eh.end_agent(factory, second.enqueue, tokens=300)
+    assert eh.advance(factory, run_id, settings).enqueue is None
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.partial, closed.tokens_spent) == (RunStatus.done, True, 1000)
+    assert len(eh.agent_runs_of(factory, alice)) == 2
+    # The pages still wait, for a later run.
+    assert document_of(factory, scan).text_status is TextStatus.awaiting_transcription
+    assert None in images_of(factory, scan).values()
+
+
+def test_a_pure_scan_alone_whose_transcription_failed_ends_the_run_with_one_agent_run(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    scan = add_scan(factory, alice, [None, None])
+    run_id = eh.start(factory, alice, [scan])
+    first = eh.advance(factory, run_id, settings)
+    eh.end_agent(factory, first.enqueue, AgentStatus.failed, ITS_OWN, tokens=700)
+    assert shown(factory, run_id) == 0  # nothing would run: no raise is asked
+    assert eh.advance(factory, run_id, settings).enqueue is None
+    assert eh.statuses(factory, run_id) == ["failed", "failed"]
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.tokens_spent) == (RunStatus.failed, 700)
+    assert [one.agent for one in eh.agent_runs_of(factory, alice)] == [engine.TRANSCRIBE_NAME]
+
+
+def test_a_transcription_step_with_nothing_left_is_done_without_an_agent_run(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """A first attempt stored every page, then the worker stopped under it. The step is planned
+    again and has nothing to do: it is done, no second agent run is made for it, and the text
+    is read. The run counts no failed step."""
+    scan = add_scan(factory, alice, [None])
+    run_id = eh.start(factory, alice, [scan])
+    first = eh.advance(factory, run_id, settings)
+    step = eh.running(factory, run_id)
+    attempt = Step(alice, scan, run_id, step.id, first.enqueue)  # type: ignore[arg-type]
+    view_then_store(tools_for(factory, attempt), 0, "The whole page of a made-up letter.")
+    eh.end_agent(factory, first.enqueue, AgentStatus.failed, engine.agent_runs.STOPPED, tokens=500)
+    second = eh.advance(factory, run_id, settings)
+    kinds = [(one.kind, one.status) for one in eh.steps_of(factory, run_id)]
+    assert kinds == [("transcribe", StepStatus.done), ("extract", StepStatus.running)]
+    reading = eh.running(factory, run_id)
+    assert reading.agent_run_id == second.enqueue
+    assert (reading.range_start, reading.range_end) == (
+        0,
+        len("The whole page of a made-up letter."),
+    )
+    assert [one.agent for one in eh.agent_runs_of(factory, alice)] == [
+        engine.TRANSCRIBE_NAME,
+        engine.agents.EXTRACT_NAME,
+    ]
+    assert eh.run_of(factory, run_id).tokens_spent == 500  # the first attempt, counted once
+    eh.end_agent(factory, second.enqueue, tokens=300)
+    eh.advance(factory, run_id, settings)
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.partial, closed.tokens_spent) == (RunStatus.done, False, 800)
+    assert "failed" not in eh.statuses(factory, run_id)
+
+
+def test_a_group_with_nothing_left_is_done_and_the_next_group_is_what_a_continue_pays_for(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    """Nine pages are two groups. The first stored its eight pages before the worker stopped:
+    it is done, and the step a run paused on its ceiling asks a raise for is the second group,
+    in the figure shown and in what starts."""
+    scan = add_scan(factory, alice, [None] * 9)
+    run_id = eh.start(factory, alice, [scan])
+    first = eh.advance(factory, run_id, settings)
+    step = eh.running(factory, run_id)
+    attempt = Step(alice, scan, run_id, step.id, first.enqueue)  # type: ignore[arg-type]
+    tools = tools_for(factory, attempt)
+    for position in range(8):
+        view_then_store(tools, position, f"Page {position + 1} of a made-up scan.")
+    eh.end_agent(factory, first.enqueue, AgentStatus.failed, engine.agent_runs.STOPPED, tokens=500)
+    eh.set_run(factory, run_id, token_ceiling=501)
+    assert eh.advance(factory, run_id, settings).enqueue is None
+    paused = eh.run_of(factory, run_id)
+    assert (paused.status, paused.paused_reason) == (RunStatus.paused, engine.TOKEN_CEILING)
+    with factory() as db:
+        steps = [db.merge(one) for one in eh.steps_of(factory, run_id)]
+        chosen = engine.next_step(db, eh.run_of(factory, run_id), steps, now())
+    assert chosen.step is not None
+    assert (chosen.step.kind, list(chosen.step.image_positions or ())) == ("transcribe", [8])
+    # The pause wrote what `next_step` listed: the first group is done, the rest still waits.
+    assert eh.statuses(factory, run_id) == ["done", "planned", "planned"]
+    assert shown(factory, run_id) >= chosen.needs - 1
+    assert len(eh.agent_runs_of(factory, alice)) == 1  # no agent run for the group that was done
+
+
+def asked(factory: sessionmaker[Session], run_id: uuid.UUID) -> Any:
+    with factory() as db:
+        steps = [db.merge(one) for one in eh.steps_of(factory, run_id)]
+        return engine.next_step(db, eh.run_of(factory, run_id), steps, now())
+
+
+def test_a_transcribed_text_that_takes_the_run_past_60_steps_fails_its_predicted_part(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """The run holds 60 steps and the mixed PDF's text, once transcribed, is two parts: it does
+    not fit. Its predicted extraction is listed as failed, not removed, so the run cannot close
+    as if that document had been read; the document that comes next is planned as usual."""
+    run_id, mixed = sixty_steps(factory, alice)
+    transcribed_at_once(factory, run_id, mixed, scanned_page(6_000))  # 102,001 characters
+    before = rows_of(factory, run_id)
+    chosen = asked(factory, run_id)
+    assert rows_of(factory, run_id) == before  # the prediction wrote nothing
+    assert [(one.document_id, one.kind) for one in chosen.failed] == [(mixed, "extract")]
+    assert all(one.document_id != mixed for one in chosen.removed + chosen.added)
+    # The scans are planned from their text, which fits; the run goes on with them.
+    assert len(chosen.removed) == len(chosen.added) == 29
+    assert chosen.step is not None
+    assert chosen.step.document_id != mixed
+
+
+def test_a_transcribed_text_that_fits_in_60_steps_is_planned_again_as_before(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """The control: the same run, the page transcribed is short, the text is one part."""
+    run_id, mixed = sixty_steps(factory, alice)
+    transcribed_at_once(factory, run_id, mixed, scanned_page(100))
+    chosen = asked(factory, run_id)
+    assert chosen.failed == ()
+    assert (mixed, "extract") in [(one.document_id, one.kind) for one in chosen.removed]
+    assert (mixed, "extract") in [(one.document_id, one.kind) for one in chosen.added]
+    assert len(chosen.removed) == len(chosen.added) == 30

@@ -1,0 +1,204 @@
+{
+  "description": "Transcription of a two page scan: each page viewed, then stored.",
+  "steps": [
+    {
+      "message": {
+        "type": "system",
+        "subtype": "init",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000001",
+        "cwd": "/tmp/run",
+        "model": "{model}",
+        "permissionMode": "dontAsk",
+        "tools": [
+          "mcp__app__view_image",
+          "mcp__app__store_transcription"
+        ],
+        "mcp_servers": [
+          {
+            "name": "app",
+            "status": "connected"
+          }
+        ],
+        "apiKeySource": "ANTHROPIC_API_KEY",
+        "claude_code_version": "2.1.286"
+      }
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000101",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_extract_001",
+          "type": "message",
+          "role": "assistant",
+          "model": "{model}",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_transcribe_001v",
+              "name": "mcp__app__view_image",
+              "input": {
+                "position": 0
+              }
+            }
+          ],
+          "stop_reason": "tool_use",
+          "usage": {
+            "input_tokens": 700,
+            "output_tokens": 40,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 100
+          }
+        }
+      }
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000102",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_extract_002",
+          "type": "message",
+          "role": "assistant",
+          "model": "{model}",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_transcribe_002s",
+              "name": "mcp__app__store_transcription",
+              "input": {
+                "position": 0,
+                "text": "Camille Durand\nData Engineer\nEmail: camille.durand@example.org"
+              }
+            }
+          ],
+          "stop_reason": "tool_use",
+          "usage": {
+            "input_tokens": 700,
+            "output_tokens": 40,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 100
+          }
+        }
+      }
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000103",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_extract_003",
+          "type": "message",
+          "role": "assistant",
+          "model": "{model}",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_transcribe_003v",
+              "name": "mcp__app__view_image",
+              "input": {
+                "position": 1
+              }
+            }
+          ],
+          "stop_reason": "tool_use",
+          "usage": {
+            "input_tokens": 700,
+            "output_tokens": 40,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 100
+          }
+        }
+      }
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000104",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_extract_004",
+          "type": "message",
+          "role": "assistant",
+          "model": "{model}",
+          "content": [
+            {
+              "type": "tool_use",
+              "id": "toolu_transcribe_004s",
+              "name": "mcp__app__store_transcription",
+              "input": {
+                "position": 1,
+                "text": "Example Works, Data Engineer, January 2021 to March 2023, Lyon\nBuilt the ingestion pipeline for 12 regional warehouses."
+              }
+            }
+          ],
+          "stop_reason": "tool_use",
+          "usage": {
+            "input_tokens": 700,
+            "output_tokens": 40,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 100
+          }
+        }
+      }
+    },
+    {
+      "message": {
+        "type": "assistant",
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-000000000105",
+        "parent_tool_use_id": null,
+        "message": {
+          "id": "msg_extract_005",
+          "type": "message",
+          "role": "assistant",
+          "model": "{model}",
+          "content": [
+            {
+              "type": "text",
+              "text": "Transcribed 2 images."
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 700,
+            "output_tokens": 40,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 100
+          }
+        }
+      }
+    },
+    {
+      "message": {
+        "type": "result",
+        "subtype": "success",
+        "is_error": false,
+        "duration_ms": 1800,
+        "duration_api_ms": 1500,
+        "num_turns": 5,
+        "session_id": "{session_id}",
+        "uuid": "00000000-0000-4000-8000-0000000009ff",
+        "result": "Transcribed 2 images.",
+        "stop_reason": "end_turn",
+        "total_cost_usd": 0.02,
+        "usage": {
+          "input_tokens": 3500,
+          "output_tokens": 200,
+          "cache_creation_input_tokens": 500,
+          "cache_read_input_tokens": 500
+        },
+        "permission_denials": [],
+        "terminal_reason": "completed"
+      }
+    }
+  ]
+}

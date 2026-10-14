@@ -273,6 +273,8 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
     current: uuid.UUID | None = None
     by_status = dict.fromkeys((one.value for one in StepStatus), 0)
     read: set[uuid.UUID] = set()
+    extracted: set[uuid.UUID] = set()
+    cut_short: set[uuid.UUID] = set()  # an extraction that failed or was cancelled
     for row in rows:
         one = row[0]
         has_agent = row.status is not None
@@ -280,6 +282,13 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
         by_status[one.status.value] += 1
         if one.status in (StepStatus.done, StepStatus.reused):
             read.add(one.document_id)
+            if one.kind is plan.StepKind.extract:
+                extracted.add(one.document_id)
+        elif one.kind is plan.StepKind.extract and one.status in (
+            StepStatus.failed,
+            StepStatus.cancelled,
+        ):
+            cut_short.add(one.document_id)
         if one.status is StepStatus.running:
             current = one.agent_run_id
             spent += tokens or 0  # not yet added to the run: its end is not recorded
@@ -302,6 +311,8 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
                 error=row.error if has_agent and row.status is AgentStatus.failed else None,
             )
         )
+    # A transcribed document is not read until its text is: its transcription done is not enough.
+    read -= cut_short - extracted
     sources = reuse.source_steps(db, run.id)
     items = 0
     if sources:

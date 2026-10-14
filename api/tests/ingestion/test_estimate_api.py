@@ -277,8 +277,8 @@ def test_documents_that_cannot_be_read_are_named_left_out_and_counted(
     set_columns(factory, failed, text_status=TextStatus.failed)
     secret = str(uploaded(api, alice, f"key {secret_like()}\n".encode(), "secret.md")["id"])
     images = text_file(api, alice, "d", 500, "pages.md")
+    # It waits for a transcription and holds no image to transcribe (G14 reads the ones that do).
     set_columns(factory, images, text_status=TextStatus.awaiting_transcription)
-    add_image(factory, images)
 
     body = answer(api, alice, [waiting, good, being_read, failed, secret, images])
     assert [(one["name"], one["code"]) for one in body["unreadable"]] == [

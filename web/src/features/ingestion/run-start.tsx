@@ -206,9 +206,15 @@ export function RunStart() {
   );
 }
 
-/** A document the run can read now. The estimate has the last word on it. */
+/**
+ * A document the run can read now: its text is there, or its page images wait for the agent,
+ * which transcribes them in the first steps of the run. The estimate has the last word on it.
+ */
 function canBeChosen(document: IngestionDocument): boolean {
-  return document.status === "done" && document.readable;
+  return (
+    document.readable &&
+    (document.status === "done" || document.status === "awaiting_transcription")
+  );
 }
 
 /**
