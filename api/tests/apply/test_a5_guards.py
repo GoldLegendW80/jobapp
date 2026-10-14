@@ -141,6 +141,101 @@ OPEN_LEAKS = [
     ("Quel est votre besoin de parrainage ?", "authorization"),
     ("Welche Vorstrafen haben Sie?", "history"),
     ("¿Cuáles son sus antecedentes penales?", "history"),
+    # round 3 (PR #312): closed topics worded with an open opener, asked before
+    ("How much do you make today?", "pay"),
+    ("How much did you make in your last role?", "pay"),
+    ("How much do you take home?", "pay"),
+    ("How much are you looking for?", "pay"),
+    ("How much do you want?", "pay"),
+    ("What range are you looking at?", "pay"),
+    ("What figure do you have in mind?", "pay"),
+    ("What are you hoping to make?", "pay"),
+    ("What ballpark are you in?", "pay"),
+    ("What is a fair price for your work?", "pay"),
+    ("What was your last raise?", "pay"),
+    ("What is your 2025 target?", "pay"),
+    ("What is your last drawn?", "pay"),
+    ("What is your ECTC?", "pay"),
+    ("What is your price?", "pay"),
+    ("How would you describe your financial situation?", "pay"),
+    ("Comment êtes-vous payé aujourd'hui ?", "pay"),
+    ("Quelle est votre fourchette ?", "pay"),
+    ("Cómo está pagado actualmente?", "pay"),
+    ("Cuál es su expectativa económica?", "pay"),
+    ("Quelle est votre situation au regard du droit de travail en France ?", "authorization"),
+    ("What is your legal status in the country?", "authorization"),
+    ("What's your status in the US?", "authorization"),
+    ("Parlez-nous de votre situation administrative", "authorization"),
+    ("Describa su situación migratoria", "authorization"),
+    ("What is the highest level of security vetting you hold?", "authorization"),
+    ("Why were you let go from your last role?", "history"),
+    ("Explain your gap", "history"),
+    ("Which religion do you follow?", "personal"),
+    ("What is your marital status?", "personal"),
+    ("How many children do you have?", "personal"),
+    ("Which medications do you take?", "personal"),
+    ("Tell us about your family situation", "personal"),
+    ("What accommodations do you need?", "personal"),
+    ("What is your caste?", "personal"),
+    ("What is your political affiliation?", "personal"),
+    ("Which pronouns do you use?", "personal"),
+    ("What city do you live in?", "personal"),
+    ("Which state do you live in?", "personal"),
+    ("What is today's date?", "personal"),
+    ("How old are you?", "personal"),
+    ("What year were you born?", "personal"),
+    ("Share information about your health", "personal"),
+    # data sharing, retention and communications (they were refused before `share` and digits left
+    # `terms.legal_reading`)
+    ("Share my data with partners", "consent_topic"),
+    ("Share my profile with other companies", "consent_topic"),
+    ("Share my details with our network", "consent_topic"),
+    ("Share your CV with our subsidiaries", "consent_topic"),
+    ("Share my application with the group", "consent_topic"),
+    ("Share my data with the hiring team", "consent_topic"),
+    ("Share my data for 12 months", "consent_topic"),
+    ("Share my information with recruiters", "consent_topic"),
+    ("Share my information with our group companies", "consent_topic"),
+    ("Which companies may we share your data with?", "consent_topic"),
+    ("How long may we keep your data?", "consent_topic"),
+    ("How many years may we store your data?", "consent_topic"),
+    ("How would you like to receive our offers?", "consent_topic"),
+    ("Which communications do you want to receive?", "consent_topic"),
+    ("How do you want to hear from us?", "consent_topic"),
+    ("Which privacy settings do you choose?", "consent_topic"),
+]
+
+# Closed topics and plain data questions that no vocabulary names: the topic anchor
+# (`_ABOUT_THE_JOB`) refuses them, since the question is not about the job, the company, the team
+# or the person's motivation and experience. A yes/no select is refused by its options first.
+OFF_TOPIC = [
+    "What is the number you have in mind?",
+    "What do you bring in?",
+    "What is your number?",
+    "Describe your status",
+    "Quel est votre statut ?",
+    "What documents do you have to work in the UK?",
+    "What restrictions apply to you?",
+    "What are the legal requirements you must meet?",
+    "Tell us about your relocation needs",
+    "Why did you leave your last job?",
+    "Pourquoi avez-vous quitté votre dernier emploi ?",
+    "Warum haben Sie Ihren letzten Job verlassen?",
+    "Por qué dejó su último trabajo?",
+    "What is your reason for leaving?",
+    "Why did you apply?",
+    "What is your current location?",
+    "Which languages do you speak?",
+    "Which university did you attend?",
+    "What is your GPA?",
+    "What is the name of your current manager?",
+    "How soon can you start?",
+    "What is your earliest start date?",
+    "What is your work arrangement?",
+    "What is your availability?",
+    "How did you hear about us?",
+    "How do you handle 2FA?",
+    "Describe your last 3 jobs",
 ]
 
 
@@ -161,6 +256,21 @@ def test_pay_authorization_and_history_stay_the_persons_in_any_widget(
         assert (verdict.answer, verdict.code) == (None, code)
 
 
+@pytest.mark.parametrize("label", OFF_TOPIC)
+@pytest.mark.parametrize(("kind", "options"), [("text", ()), ("select", THREE), ("select", YN)])
+def test_a_question_not_about_the_job_stays_the_persons_in_any_widget(
+    label: str, kind: str, options: tuple[str, ...]
+) -> None:
+    code = "yes_or_no" if options == YN else "off_topic"
+    assert agent.refusal(label, kind, options) == code
+    item = ats_base.Field(key="k", label=label, kind=kind, options=options)  # type: ignore[arg-type]
+    for reason in agent.AGENT_REASONS:
+        outcome = ats_base.Outcome(item, run.Left(reason, options), ats_base.Filled("left", reason))
+        # A3 wrote a free text question for this company: its label needs no opener nor topic.
+        asked = reason == "free_text_for_the_agent" and options != YN
+        assert bool(agent.eligible([outcome])) is asked
+
+
 @pytest.mark.parametrize(
     ("label", "kind", "options", "code"),
     [
@@ -170,7 +280,7 @@ def test_pay_authorization_and_history_stay_the_persons_in_any_widget(
         ("Do you agree to binding arbitration?", "text", (), "legal"),
         ("I would like to receive marketing emails", "select", YN, "legal"),
         ("Would you like to join our talent community?", "select", YN, "legal"),
-        ("Can we keep your data for future opportunities?", "text", (), "legal"),
+        ("Can we keep your data for future opportunities?", "text", (), "consent_topic"),
         ("Do you agree to our terms and conditions?", "text", (), "legal"),
         ("I certify that the information provided is true", "text", (), "legal"),
         ("Are you subject to a non-compete agreement?", "text", (), "legal"),
@@ -215,8 +325,8 @@ def test_pay_authorization_and_history_stay_the_persons_in_any_widget(
         ("Are you a US citizen?", "text", (), "authorization"),
         ("Do you now or in the future require sponsorship?", "text", (), "authorization"),
         ("Have you ever been convicted of a felony?", "text", (), "history"),
-        ("I acknowledge the privacy notice", "text", (), "legal"),
-        ("Do you consent to us sharing your data with partners?", "text", (), "legal"),
+        ("I acknowledge the privacy notice", "text", (), "consent_topic"),
+        ("Do you consent to us sharing your data with partners?", "text", (), "consent_topic"),
         ("Do you enjoy puzzles?", "yes_no", (), "yes_or_no"),
         ("Kubernetes in production", "select", YN, "yes_or_no"),
         ("Kubernetes in production", "select", ("Yes, daily", "Not yet"), "yes_or_no"),
@@ -233,7 +343,7 @@ def test_pay_authorization_and_history_stay_the_persons_in_any_widget(
             "option_topic",
         ),
         (
-            "Which range fits you?",
+            "Which describes you?",
             "select",
             ("Salary under 50k", "Salary over 50k"),
             "option_topic",
@@ -271,7 +381,31 @@ def test_pay_authorization_and_history_stay_the_persons_in_any_widget(
         ("Whatever you like", "text", (), "not_open"),
         ("Howdy", "text", (), "not_open"),
         ("Commentaires", "text", (), "not_open"),
-        # true free text, still asked
+        # true free text, still asked (declared open points: "How many years of Python?", answered
+        # from the model's text and A3's years rule; the judge drops numbers the profile lacks)
+        ("How many years of Python?", "text", (), None),
+        ("How many years of experience do you have with Kubernetes?", "text", (), None),
+        ("What are you looking for in your next role?", "text", (), None),
+        ("How would you make an agent reliable?", "text", (), None),
+        ("Describe a neural network you built", "text", (), None),
+        ("What range of tools have you used?", "text", (), None),
+        ("Tell us about a bug you figured out", "text", (), None),
+        ("Share your portfolio", "text", (), None),
+        ("Please share your GitHub profile", "text", (), None),
+        ("Share the details of a project you led", "text", (), None),
+        ("Tell us in 100 words why you want this job", "text", (), None),
+        ("Why us?", "text", (), None),
+        ("Describe a healthcare project you led", "text", (), None),
+        ("What is the status of your project?", "text", (), None),
+        ("1. Why do you want to join us?", "text", (), None),
+        ("What motivates you?", "text", (), None),
+        ("Tell us about yourself", "text", (), None),
+        ("Describe your biggest achievement", "text", (), None),
+        ("Explain your interest in the company", "text", (), None),
+        ("Comment avez-vous connu notre entreprise ?", "text", (), None),
+        ("Quelle est votre motivation ?", "text", (), None),
+        ("Décrivez votre expérience", "text", (), None),
+        ("Why Example Robotics? (optional)", "text", (), None),
         ("Why do you want to work here?", "text", (), None),
         ("Why Example Robotics?", "text", (), None),
         ("WHY EXAMPLE ROBOTICS", "text", (), None),

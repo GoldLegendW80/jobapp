@@ -9,7 +9,7 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
   for this company (`free_text_for_the_agent`), of a kind the adapter can type (text, select,
   combobox with its options), each key once. Then `refusal` fails closed: what the owner keeps
   for the person stays left whatever a model would say (test_what_the_agent_is_never_asked).
-  The resolver's default for a label it does not know is `not_a_known_question`, so two lines
+  The resolver's default for a label it does not know is `not_a_known_question`, so three lines
   close the door, in any widget:
   1. the shape (`not_open`): a question the resolver does not know is asked only when its label
      reads as an open question or a prompt to write: it opens on why, what, which, how,
@@ -20,17 +20,26 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
      Lettre de motivation). A bare noun phrase ("Work permit", "Pending charges", "Total comp",
      "Team preference") or a statement stays the person's, whatever its options. A3's free
      text questions (`free_text_for_the_agent`) were already read as prompts and skip this line;
-  2. the vocabularies, in any wording, open or not:
+  2. the topic (`off_topic`): such a question is also asked only when it is about the job, the
+     company, the team, or the person's motivation, interests and experience (`_ABOUT_THE_JOB`,
+     an allowlist of topics, so a closed question needs no row per wording). "Why did you leave
+     your last job?" and "What is your legal status?" fall out; "Why do you want to work here?",
+     "Tell us about a project" and "Share your portfolio" stay;
+  3. the vocabularies, in any wording, open or not:
   - a label `terms.legal_reading` reads as a commitment, a consent, the privacy notice or the
     accuracy statement (arbitration, background checks, marketing, data retention, a
     non-compete, a signature, the terms);
+  - a consent to share, keep or contact (`consent_topic`: data sharing with partners or a group,
+    retention, offers and communications, privacy choices);
   - pay, wanted or received, in any form (salary, OTE, package, rate, bonus, equity, comp, TC,
-    income, base, budget; Gehalt, salario, sueldo, pretensión);
+    income, base, budget, how much, range, ballpark, target; Gehalt, salario, sueldo, pretensión);
   - work authorization and immigration (a visa, sponsorship, a permit, the right to work, a
     green card, residency, citizenship, a passport, H-1B, OPT; titre de séjour, Arbeitserlaubnis,
     permiso de trabajo);
   - criminal and employment history (charges, arrests, convictions, offences, a DBS check, a
-    dismissal, disciplinary action; casier, condamnation);
+    dismissal, being let go, a gap, disciplinary action; casier, condamnation);
+  - sensitive personal data and where the person lives (`personal`: religion, marital status,
+    children, health, medication, accommodation, caste, politics, pronouns, age, family);
   - the person's identity or a credential (a password, a social security, tax or ID number, an
     address, a phone, an e-mail, a name, a signature, a birth date): the agent never receives
     the identity section, so any value would be invented;
@@ -47,7 +56,11 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
 - `judge`: what is kept of the agent's reply. The same `refusal` first, so a question that
   reaches it by another path is still left. Each proposal must name a question it was asked and
   a source of the person's (`facts`, `experience`, `skills`, `answers`, `motivation`, `letter`):
-  one without is dropped (`no_source`). A choice must be one of the field's options exactly
+  one without is dropped (`no_source`). The source is DECLARED by the model, a string it writes
+  itself, and nothing here proves it: the only check of what is said is `factcheck_rules`
+  below. So the refusals above are the guard of the closed topics, and an answer to an open
+  question the vocabularies miss is the model's own text, its numbers, links, employers and
+  titles excepted. A choice must be one of the field's options exactly
   (`answers.match_option`); a typed value that is a bare yes or no is dropped (`yes_or_no`), so
   is one that is a bare negation or a non answer ("None", "N/A", "Not applicable", "No pending
   charges", "I do not require sponsorship", "Aucun", "Néant": `bare_negation`), and a value that
@@ -147,8 +160,13 @@ _PAY = re.compile(
     r"\b(?:salar(?:y|ies)|salaires?|compensation|remunerations?|pay|paid|wages?|earn\w*"
     r"|gagne\w*|package|ctc|ote|on-? ?target|rates?|tarifs?|tjm|bonus(?:es)?|primes?|equity"
     r"|stocks?|rsus?|commissions?|pretentions?|expected pay|comp|total comp|tc|income|revenus?"
-    r"|base|hourly|daily|budget|expect\w* to (?:make|earn)|financial expectations?|ganar)\b"
-    r"|gehalt|lohn|verg(?:u|ue)tung|verdien|salario|sueldo|pretension|retribuci"
+    r"|base|hourly|daily|budget|expect\w* to (?:make|earn)|financial expectations?|ganar"
+    r"|ballpark|take[ -]home|(?:last|pay|salary|annual) raise|last drawn|ectc|price|target"
+    r"|financial|paye[es]?|fourchette|economic\w*)\b"
+    r"|\bhow much\b(?! (?:experience|time)\b)|\bhoping to (?:make|earn)\b|\b(?:make|made)\b"
+    r".{0,40}\b(?:today|now|currently|last|previous|per|year|month)\b"
+    r"|\brange\b(?! of\b)|\bfigure\b(?! out)"
+    r"|gehalt|lohn|verg(?:u|ue)tung|verdien|salario|sueldo|pretension|retribuci|pagad|cobr"
 )
 # Work authorization and immigration: a status the profile never proves to code, and a no that
 # is a false legal statement (sponsorship in a wording A3 does not know).
@@ -159,12 +177,34 @@ _AUTHORIZATION = re.compile(
     r"|immigra|\bh-? ?1 ?-?b\b|\bopt\b|\bcpt\b|titre de sejour|permis de (?:travail|sejour)"
     r"|autorisation de travail|parrainage|arbeitserlaubnis|arbeitsgenehmigung|aufenthalt"
     r"|staatsangeh|permiso de trabajo|patrocin|nacionalid|ciudadan"
+    r"|droit (?:de|au) travail|legal status|status in|migrator|situation administrative"
+    r"|vetting|documents? (?:you have )?to work"
 )
 # Criminal and employment history. "In charge of" is a role, not a charge.
 _HISTORY = re.compile(
     r"convict|(?<!in )\bcharge[sd]?\b|arrest|felon|misdemean|offen[cs]e|criminal|casier"
     r"|condamn|\bdbs\b|disclosure and barring|fired|dismiss|terminated|disciplin|sanction"
-    r"|vorstraf|fuhrungszeugnis|antecedentes|penal"
+    r"|vorstraf|fuhrungszeugnis|antecedentes|penal|let go|laid off|employment gap|\bgap\b"
+)
+# Sensitive personal data and where the person lives: the profile holds none of it for a model.
+_PERSONAL = re.compile(
+    r"religio|marital|married|spouse|\bpartner\b|child|\bkids\b|pregnan|\bhealth\b"
+    r"|\bmedic(?:al|ation|ine)s?\b|disab|accommodat|caste|politic|\bunions?\b|sexual|orientation"
+    r"|pronoun|veteran|family|gender|ethnic|racial|\bhow old\b|\bage\b|\bborn\b"
+    r"|where do you live|\b(?:city|state|country) do you live|today'?s date"
+)
+# Consent to share, keep or contact: a data sharing, retention or communications choice. A
+# request for the person's own link or work ("Share your portfolio") is not one.
+_CONSENT_TOPIC = re.compile(
+    r"\bshar\w+ (?:my|our)\b|\bshar\w+ your (?:personal )?(?:data|cv|resume|application)\b"
+    r"|\b(?:my|your|our) (?:data|cv|resume|personal information)\b.{0,40}\bwith\b"
+    r"|\bpartners?\b|subsidiar\w+|\brecruiters?\b|\b(?:our|talent|partner) network\b"
+    r"|group compan|\b(?:keep|store|retain|hold|delete|erase)\w* .{0,20}\b(?:your|my|our|the) "
+    r"(?:data|information|cv|resume|profile)\b"
+    r"|\b(?:offers?|communications?|newsletters?|updates?|alerts?)\b"
+    r".*\b(?:receive|hear from|contact)"
+    r"|\b(?:receive|contact)\b.*\b(?:offers?|communications?|newsletters?|updates?|alerts?)\b"
+    r"|\bhear from\b|privacy|gdpr|data (?:protection|retention|processing)"
 )
 # The person's identity and credentials: never sent to the model, so never answerable by it.
 _IDENTITY = re.compile(
@@ -210,6 +250,23 @@ _OPEN = re.compile(
     r"|erzahlen|erklaren|por ?que|cual(?:es)?|como|describ\w*|cuent\w*)\b"
     r"|^\W*(?:motivation|cover letter|lettre de motivation|additional information"
     r"|informations? complementaires?)\W*$"
+)
+# The question is about the job, the company, the team or the person's motivation, interests and
+# experience: an allowlist of topics, beside the vocabularies that name the closed ones. Not "us",
+# "our" or "why" alone: "Why did you leave your last job?" is history. "Why <Company>?" is read as
+# a short "why" that is not a verb ("Why Example Robotics?").
+_ABOUT_THE_JOB = re.compile(
+    r"\b(?:work (?:here|for|with|at)|join\w*|rejoindre|compan\w+|role|position|team|motivat\w*"
+    r"|interest\w*|excit\w*|passion\w*|attract\w*|projects?|experience|skill\w*|strength\w*"
+    r"|achiev\w*|proud|challenge\w*|example|leadership|environment|yourself|fit|contribut\w*"
+    r"|goals?|ideal|mission|product|values?|culture|opportunity|this job|approach\w*|evaluat\w*"
+    r"|build\w*|built|bug|design\w*|test\w*|technolog\w*|tools?|stack|systems?|agents?|favou?rite"
+    r"|years? of|portfolio|github|learn\w*|solv\w*|trade-?off|projet|entreprise|poste|equipe"
+    r"|empresa|puesto|equipo|unternehmen|stelle|projekt|proyecto|erfahrung|experiencia"
+    r"|trabajar (?:aqui|con|en)|bei uns|approche|evalu\w*|outils?|sistema|cover letter"
+    r"|additional information|lettre de motivation|informations? complementaires?)\b"
+    r"|^[\W\d_]*(?:why|pourquoi|warum|por ?que)\s+(?!(?:did|do|does|are|were|was|have|had|would"
+    r"|should|could|can|is|will|avez|etes|hat|haben|sind|ha|has)\b)\w+(?:\s+\w+){0,2}\W*$"
 )
 _YES_NO_WORD = re.compile(r"^(?:yes|no|oui|non|ja|nein|si|y|n)\b")
 _BARE = frozenset({"yes", "no", "oui", "non", "ja", "nein", "si", "y", "n"})
@@ -266,7 +323,9 @@ REFUSALS: tuple[tuple[str, Callable[[str, str, tuple[str, ...]], bool]], ...] = 
     ("pay", lambda text, kind, options: bool(_PAY.search(text))),
     ("authorization", lambda text, kind, options: bool(_AUTHORIZATION.search(text))),
     ("history", lambda text, kind, options: bool(_HISTORY.search(text))),
+    ("consent_topic", lambda text, kind, options: bool(_CONSENT_TOPIC.search(text))),
     ("legal", lambda text, kind, options: terms.legal_reading(text) or bool(_CONSENT.search(text))),
+    ("personal", lambda text, kind, options: bool(_PERSONAL.search(text))),
     ("identity", lambda text, kind, options: bool(_IDENTITY.search(text))),
     ("unproven", lambda text, kind, options: bool(_UNPROVEN.search(text))),
     ("yes_or_no", lambda text, kind, options: any(_says_yes_or_no(o) for o in options)),
@@ -280,15 +339,19 @@ def refusal(
 ) -> str | None:
     """Why a question stays the person's whatever a model would say, else None. An empty label
     is refused too: nothing says what it asks. A question the resolver does not know (any
-    reason but A3's free text, by default) must also read as open (`_OPEN`)."""
+    reason but A3's free text, by default) must also read as open (`_OPEN`) and be about the job
+    (`_ABOUT_THE_JOB`)."""
     text = answers.fold(label)
     if not text:
         return "no_label"
     for code, refuses in REFUSALS:
         if refuses(text, kind, options):
             return code
-    if reason != "free_text_for_the_agent" and not _OPEN.search(text):
-        return "not_open"
+    if reason != "free_text_for_the_agent":
+        if not _OPEN.search(text):
+            return "not_open"
+        if not _ABOUT_THE_JOB.search(text):
+            return "off_topic"
     return None
 
 
@@ -374,7 +437,9 @@ def judge(
     questions: Sequence[Question], reply: Reply, sources: factcheck_rules.Sources
 ) -> list[Verdict]:
     """One verdict per question asked, in their order: a question the reply does not answer, or
-    answers twice, stays left; a proposal for a question not asked is ignored."""
+    answers twice, stays left; a proposal for a question not asked is ignored. The `source` of a
+    proposal is declared by the model and checked only by `factcheck_rules` (see the module
+    docstring), not against the profile text."""
     by_key: dict[str, list[Proposal]] = {}
     for proposal in reply.proposals:
         by_key.setdefault(proposal.key, []).append(proposal)
