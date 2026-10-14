@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { admin, fakeSession, member } from "@/test/auth";
+import { fakeDocuments } from "@/test/documents";
 import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
@@ -375,6 +376,38 @@ describe("unsaved changes guard", () => {
     // Back on Identity, the saved value is shown again and no guard is left behind.
     await user.click(tab(/Identity/));
     expect(screen.getByLabelText("Headline")).toHaveValue("GenAI Engineer");
+  });
+
+  it("asks once when leaving unsaved changes for the CV tab, and again for a later change", async () => {
+    fakeSession(admin);
+    fakeProfile();
+    fakeDocuments();
+    const { user, location } = await openProfile();
+    await user.type(screen.getByLabelText("Headline"), " edited");
+    await user.click(tab(/^CV/));
+    await user.click(
+      within(
+        await screen.findByRole("alertdialog", {
+          name: "Discard unsaved changes?",
+        }),
+      ).getByRole("button", { name: "Discard changes" }),
+    );
+    await waitFor(() => {
+      expect(location()).toBe("/profile/cv");
+    });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(tab(/^CV/)).toHaveAttribute("aria-selected", "true");
+
+    // The answer covered that one navigation only: a new change is guarded again.
+    await user.click(tab(/Identity/));
+    await user.type(screen.getByLabelText("Headline"), "!");
+    await user.click(screen.getByRole("link", { name: "Admin" }));
+    expect(
+      await screen.findByRole("alertdialog", {
+        name: "Discard unsaved changes?",
+      }),
+    ).toBeVisible();
+    expect(location()).toBe("/profile?tab=identity");
   });
 
   it("switches tab without asking when nothing changed", async () => {

@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it } from "vitest";
 import { toast } from "sonner";
 
@@ -12,9 +13,10 @@ import {
 } from "@/test/documents";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
+import { server } from "@/test/server";
 
-import { POLL_MS } from "./document-view";
 import type { BaseCv } from "./documents-api";
+import { POLL_MS } from "./labels";
 
 afterEach(() => {
   toast.dismiss();
@@ -202,7 +204,7 @@ describe("the CV tab", () => {
     expect(second).toHaveTextContent("Template: Compact");
     expect(second).not.toHaveTextContent("Default");
     expect(
-      within(first!).queryByRole("button", { name: /Make .* the default/ }),
+      within(first!).queryByRole("button", { name: /^Make default/ }),
     ).toBeNull();
     const line = await screen.findByTestId("threshold");
     expect(line).toHaveTextContent(
@@ -224,7 +226,7 @@ describe("the CV tab", () => {
     });
     const { user } = await openCvs();
     await user.click(
-      await screen.findByRole("button", { name: "Make Second the default" }),
+      await screen.findByRole("button", { name: "Make default for Second" }),
     );
     await waitFor(() => {
       expect(api.cvs.find((one) => one.id === "b")?.is_default).toBe(true);
@@ -271,6 +273,97 @@ describe("the CV tab", () => {
     expect(api.cvs.map((one) => [one.id, one.is_default])).toEqual([
       ["a", true],
     ]);
+  });
+
+  it("opens the rename dialog on the current name, whatever was typed and cancelled before", async () => {
+    setup({ cvs: [fakeCv({ id: "a", name: "Main CV" })] });
+    const { user } = await openCvs();
+    await user.click(
+      await screen.findByRole("button", { name: "Rename Main CV" }),
+    );
+    const first = await screen.findByRole("dialog", { name: "Rename this CV" });
+    await user.clear(within(first).getByLabelText("Name"));
+    await user.type(within(first).getByLabelText("Name"), "Typed and dropped");
+    await user.click(within(first).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    await user.click(screen.getByRole("button", { name: "Rename Main CV" }));
+    const again = await screen.findByRole("dialog", { name: "Rename this CV" });
+    expect(within(again).getByLabelText("Name")).toHaveValue("Main CV");
+  });
+
+  it("gives the make default button a name that holds its visible text", async () => {
+    setup({
+      cvs: [
+        fakeCv({ id: "a", name: "Main CV" }),
+        fakeCv({ id: "b", name: "Second", is_default: false }),
+      ],
+      consent: { accepted: true },
+    });
+    await openCvs();
+    const button = await screen.findByRole("button", {
+      name: "Make default for Second",
+    });
+    expect(button).toHaveTextContent("Make default");
+  });
+
+  it("says what to add when the profile has no experience and there is no CV", async () => {
+    fakeSession(member);
+    fakeProfile({});
+    fakeDocuments();
+    await openCvs();
+    expect(await screen.findByTestId("no-experience-line")).toHaveTextContent(
+      "Add your CV or fill your experience to get documents for each posting.",
+    );
+    expect(screen.getByText("You have no CV yet")).toBeVisible();
+  });
+
+  it("does not say it when the profile has an experience", async () => {
+    setup();
+    await openCvs();
+    expect(await screen.findByText("You have no CV yet")).toBeVisible();
+    expect(screen.queryByTestId("no-experience-line")).toBeNull();
+  });
+
+  it("reads the consent again when its text changed under the open tab", async () => {
+    const api = setup();
+    const { user } = await openCvs();
+    await user.click(
+      await screen.findByRole("button", { name: "Build it from my profile" }),
+    );
+    let outdated = false;
+    server.use(
+      http.post("*/api/documents/consent", () => {
+        outdated = true;
+        return HttpResponse.json(
+          {
+            detail:
+              "The consent text has changed. Read the current text and accept it.",
+          },
+          { status: 422 },
+        );
+      }),
+      http.get("*/api/documents/consent", () =>
+        HttpResponse.json({
+          ...api.consent,
+          version: outdated ? 2 : 1,
+          text: outdated ? "The newer text." : api.consent.text,
+        }),
+      ),
+    );
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("checkbox"));
+    await user.click(
+      within(dialog).getByRole("button", { name: "Agree and build my CV" }),
+    );
+    expect(await screen.findByTestId("consent-text")).toHaveTextContent(
+      "The newer text.",
+    );
+    expect(within(dialog).getByRole("checkbox")).not.toBeChecked();
+    expect(
+      writes(api).some((one) => one.path === "/api/documents/base-cvs"),
+    ).toBe(false);
   });
 
   it("deletes the last CV and goes back to the empty state", async () => {

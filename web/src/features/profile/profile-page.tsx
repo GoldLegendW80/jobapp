@@ -4,6 +4,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -89,9 +90,14 @@ export function ProfilePage() {
     setDirty(value);
   }, []);
 
+  // Set while the tab guard's own "Discard changes" navigates: the person has just answered, so
+  // the blocker must not ask a second time for a change of pathname (the CV tab has its own).
+  const discarding = useRef(false);
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
-      dirty && currentLocation.pathname !== nextLocation.pathname,
+      !discarding.current &&
+      dirty &&
+      currentLocation.pathname !== nextLocation.pathname,
   );
 
   useEffect(() => {
@@ -266,7 +272,12 @@ export function ProfilePage() {
                   blocker.proceed();
                 } else if (pendingTab) {
                   setDirty(false);
-                  openTab(pendingTab);
+                  discarding.current = true;
+                  try {
+                    openTab(pendingTab);
+                  } finally {
+                    discarding.current = false;
+                  }
                   setPendingTab(undefined);
                 }
               }}

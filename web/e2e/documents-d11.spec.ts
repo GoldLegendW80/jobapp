@@ -129,7 +129,7 @@ test("a copy becomes the default and downloads as a one page PDF", async () => {
   expect(copyId).not.toBe("");
 
   await page
-    .getByRole("button", { name: "Make Copy for Paris the default" })
+    .getByRole("button", { name: "Make default for Copy for Paris" })
     .click();
   await expect
     .poll(
@@ -157,10 +157,12 @@ test("after a reload the list is the same and the copy is still the default", as
     .getByRole("list", { name: "Your CVs" })
     .getByRole("listitem");
   await expect(items).toHaveCount(before.length);
-  await expect(items.filter({ hasText: "Default" })).toHaveCount(1);
-  await expect(items.filter({ hasText: "Default" })).toContainText(
-    "Copy for Paris",
-  );
+  await expect(
+    items.filter({ has: page.getByText("Default", { exact: true }) }),
+  ).toHaveCount(1);
+  await expect(
+    items.filter({ has: page.getByText("Default", { exact: true }) }),
+  ).toContainText("Copy for Paris");
   await page.reload();
   await expect(items).toHaveCount(before.length);
   expect((await list()).map((one) => [one.id, one.is_default])).toEqual(before);

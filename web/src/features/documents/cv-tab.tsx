@@ -30,10 +30,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { getProfile, profileKey } from "@/features/profile/api";
 import { describeError } from "@/lib/api";
 
 import { ConsentDialog } from "./consent-dialog";
-import { POLL_MS, DocumentView } from "./document-view";
+import { DocumentView } from "./document-view";
 import {
   acceptConsent,
   baseCvsKey,
@@ -53,6 +54,7 @@ import {
   failedSentence,
   formatWhen,
   isOpen,
+  pollInterval,
   SOURCE_LABELS,
   templateLabel,
   WAIT_SENTENCES,
@@ -78,16 +80,21 @@ export function CvTab() {
   const list = useQuery({
     queryKey: baseCvsKey,
     queryFn: ({ signal }) => listBaseCvs(signal),
-    refetchInterval: (current) =>
-      current.state.data?.base_cvs.some(
-        (one) => isOpen(one.generation) || one.render_state !== "idle",
-      )
-        ? POLL_MS
-        : false,
+    refetchInterval: (current) => {
+      const waits = (current.state.data?.base_cvs ?? [])
+        .map((one) => pollInterval(one.render_state, one.generation))
+        .filter((wait) => wait !== false);
+      return waits.length > 0 ? Math.min(...waits) : false;
+    },
   });
   const consent = useQuery({
     queryKey: consentKey,
     queryFn: ({ signal }) => getConsent(signal),
+  });
+  // The same read as the profile page's own, so it is already in the cache.
+  const profile = useQuery({
+    queryKey: profileKey,
+    queryFn: ({ signal }) => getProfile(signal),
   });
   // The build that waits for the person's agreement.
   const [asking, setAsking] = useState<BaseCvRequest>();
@@ -106,6 +113,10 @@ export function CvTab() {
       const accepted = await acceptConsent(version);
       client.setQueryData(consentKey, accepted);
       return accepted;
+    },
+    // A 422 means the text changed under the open tab: read the current one to agree to.
+    onError: () => {
+      void client.invalidateQueries({ queryKey: consentKey });
     },
   });
 
@@ -182,6 +193,10 @@ export function CvTab() {
           minFit={consent.data?.min_fit}
           consentReady={consent.data !== undefined}
           consentError={consent.isError}
+          noExperience={
+            profile.data !== undefined &&
+            profile.data.sections.experience.employers.length === 0
+          }
           onNew={() => {
             setCreating(true);
           }}
@@ -236,6 +251,7 @@ function Overview({
   consentMissing,
   consentReady,
   consentError,
+  noExperience,
   minFit,
   onNew,
   onBuild,
@@ -246,6 +262,7 @@ function Overview({
   consentMissing: boolean;
   consentReady: boolean;
   consentError: boolean;
+  noExperience: boolean;
   minFit: number | undefined;
   onNew: () => void;
   onBuild: () => void;
@@ -287,6 +304,12 @@ function Overview({
             The app can write one from your profile. It becomes the default and
             every document for a posting starts from it.
           </p>
+          {noExperience ? (
+            <p className="text-sm font-medium" data-testid="no-experience-line">
+              Add your CV or fill your experience to get documents for each
+              posting.
+            </p>
+          ) : null}
           {consentMissing ? (
             <p className="text-sm font-medium" data-testid="confirm-line">
               Confirm what is sent to build your CV.
@@ -484,7 +507,7 @@ function Actions({
           variant="outline"
           size="sm"
           disabled={makeDefault.isPending}
-          aria-label={`Make ${cv.name} the default`}
+          aria-label={`Make default for ${cv.name}`}
           onClick={() => {
             makeDefault.mutate();
           }}
@@ -514,6 +537,7 @@ function Actions({
       </Button>
 
       <RenameDialog
+        key={renaming ? "open" : "closed"}
         cv={cv}
         open={renaming}
         onClose={() => {
@@ -589,10 +613,7 @@ function RenameDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (next) {
-          setName(cv.name);
-          save.reset();
-        } else if (!save.isPending) onClose();
+        if (!next && !save.isPending) onClose();
       }}
     >
       <DialogContent>
