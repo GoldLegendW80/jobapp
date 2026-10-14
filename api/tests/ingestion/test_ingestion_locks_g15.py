@@ -9,6 +9,8 @@ state; nothing sleeps to synchronise (`Path` of `test_ingestion_locks.py`).
 What a delete removes is counted on every table whose name starts with `ingestion_`, listed by
 reflection, so a table a later task adds fails here until its expectation is written down."""
 
+import asyncio
+import hashlib
 import json
 import secrets
 import uuid
@@ -25,13 +27,15 @@ from app.agents.models import AgentEvent, AgentRun, Proposal, ProposalStatus
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
 from app.identity.models import User
-from app.ingestion import deletion, engine, estimate_router, items, merge, review
+from app.ingestion import agents, deletion, engine, estimate_router, items, merge, review
 from app.ingestion.models import IngestionDocument
-from app.ingestion.runs_models import IngestionRun, IngestionRunStep, StepStatus
+from app.ingestion.runs_models import IngestionRun, IngestionRunStep, RunStatus, StepStatus
 from app.profile import service as profile_service
-from tests.agents.run_helpers import add_user, now, save_credential
+from tests.agents.g6_helpers import run_context
+from tests.agents.run_helpers import add_user, execute, now, save_credential
 from tests.identity.api_helpers import Api
 from tests.ingestion import engine_helpers as eh
+from tests.ingestion import journey_streams
 from tests.ingestion import merge_helpers as mh
 from tests.ingestion.conftest import signed_in
 from tests.ingestion.extract_helpers import add_document, key, keyring, settings
@@ -217,6 +221,92 @@ def test_decided_items_keep_what_reruns_need_and_a_rerun_remembers(
     assert sorted(proposed) == ["full_name", "travel"]
     assert proposed["full_name"].payload["value"] == "Alice Marie Martin"  # changed: proposed
     assert "conflict" not in proposed["full_name"].payload  # the rejected one stays out
+
+
+def fixture(factory: Factory, user: uuid.UUID, name: str) -> uuid.UUID:
+    """A stored document with the bytes of a journey fixture, so its step replays the recorded
+    stream named after its hash (tests/ingestion/journey_streams.py)."""
+    data = (journey_streams.FIXTURES / name).read_bytes()
+    return add_document(factory, user, data.decode("utf-8"), digest=hashlib.sha256(data).digest())
+
+
+def replayed(
+    factory: Factory,
+    user: uuid.UUID,
+    settings: Settings,
+    keyring: Keyring,
+    documents: list[uuid.UUID],
+) -> tuple[uuid.UUID, list[AgentRun]]:
+    """A whole run through the real runner under the fake backend, each step replaying its
+    recorded stream and its end calling the hook. Answers the run and the agent runs it made."""
+    fake = settings.model_copy(update={"agents_fake_backend": True})
+    before = {one.id for one in eh.agent_runs_of(factory, user)}
+    run_id = eh.start(factory, user, documents)
+    queue: list[uuid.UUID] = []
+
+    async def enqueue(agent_run_id: uuid.UUID) -> None:
+        queue.append(agent_run_id)
+
+    asyncio.run(engine.drive(factory, enqueue, run_id, now, fake))
+    context = run_context(
+        fake, factory, keyring, agents.EXTRACT, services={engine.ENQUEUE_SERVICE: enqueue}
+    )
+    while queue:
+        assert execute(context, queue.pop(0)) is AgentStatus.done
+    assert eh.run_of(factory, run_id).status is RunStatus.done
+    return run_id, [one for one in eh.agent_runs_of(factory, user) if one.id not in before]
+
+
+def proposed(factory: Factory, user: uuid.UUID, run_id: uuid.UUID) -> list[dict[str, Any]]:
+    """The pending items of a run as they read, without the id of the run that proposed them,
+    by key (the merge may insert them in another order)."""
+    found = [
+        {name: value for name, value in one.payload.items() if name != "ingestion_run_id"}
+        for one in mh.proposals_of(factory, user, run_id)
+    ]
+    return sorted(found, key=lambda one: str(one["key"]))
+
+
+def test_the_same_documents_run_twice_propose_the_same_items_without_a_model_call(
+    factory: Factory, alice: uuid.UUID, settings: Settings, keyring: Keyring
+) -> None:
+    documents = [
+        fixture(factory, alice, "g12_first.txt"),
+        fixture(factory, alice, "g12_second.txt"),
+    ]
+    first, made = replayed(factory, alice, settings, keyring, documents)
+    assert len(made) == 2
+    assert eh.run_of(factory, first).tokens_spent > 0
+    before = proposed(factory, alice, first)
+    assert {one["section"] for one in before} >= {"identity", "experience"}
+
+    second, made = replayed(factory, alice, settings, keyring, documents)
+    assert made == []  # no agent run, so no model call
+    assert eh.statuses(factory, second) == ["reused", "reused"]
+    assert eh.run_of(factory, second).tokens_spent == 0
+    assert proposed(factory, alice, second) == before
+    assert mh.proposals_of(factory, alice, first) == []  # the older ones were superseded
+
+
+def test_one_document_added_runs_only_its_own_step(
+    factory: Factory, alice: uuid.UUID, settings: Settings, keyring: Keyring
+) -> None:
+    read = fixture(factory, alice, "g12_first.txt")
+    first, made = replayed(factory, alice, settings, keyring, [read])
+    assert len(made) == 1
+    names = {one["key"] for one in proposed(factory, alice, first)}
+
+    added = fixture(factory, alice, "g12_second.txt")
+    second, made = replayed(factory, alice, settings, keyring, [read, added])
+    assert eh.statuses(factory, second) == ["reused", "done"]
+    (one,) = made
+    (step,) = [step for step in eh.steps_of(factory, second) if step.document_id == added]
+    assert step.agent_run_id == one.id
+    assert one.input["script"].startswith(f"ingest_extract_{bytes(step.sha256).hex()[:12]}")
+    run = eh.run_of(factory, second)
+    assert run.tokens_spent == (one.input_tokens or 0) + (one.output_tokens or 0) > 0
+    # What the added document says is merged with what the reused step had stored.
+    assert {one["key"] for one in proposed(factory, alice, second)} >= names
 
 
 def test_a_rejected_conflict_is_remembered_with_each_of_its_values(
