@@ -1,0 +1,255 @@
+# Tasks: apply
+
+Spec: [SPEC-apply.md](../../SPEC-apply.md). Depends on browser ([tasks/browser/todo.md](../browser/todo.md): leases, the live view, the tool layer and its gate capability), documents (`tasks/documents/todo.md` on branch `documents/spec`, PR #189: the versions to send, `documents.freeze(version, reason="apply")` of D12, the fact check of D2), jobs (`set_status` under `lock_job`, statuses, `never_apply` rules and events), profile (the `identity` and `answers` sections), agents (runner, `model_by_credential`, `token_budget`, the in-process MCP server, the fake model backend) and mail (the gate `mail.gate.send` for applications by e-mail, A14; the canary helper of M1; the fact check rules of M9). Umbrella issue: #69. Review queue: #78. Full auto: #79. Swipe deck that sends the Likes: #74. Onboarding step 6 (application behaviour): #76.
+
+Task ids use the prefix `A`. Branches are `apply/a<n>-<slug>`. Every block's issue is still to create. New code calls a job a **posting** (`posting_id`), as mail does, since Job becomes Opportunity (#73). This is the first version, a draft for the owner: nothing is built.
+
+## Decisions
+
+**Owner decisions**, each with the planner's recommendation; work starts on the recommendation.
+1. **Full auto defaults and caps.** Recommended: off by default; when on, 10 submissions a day, one per company in 30 days unless a company cap says otherwise, a hold of 15 minutes with Cancel, minimum fit, Ashby, Greenhouse and Lever only (and e-mail after A14), 3 rehearsals first. Alternatives: no daily cap (as mail decision 11), or Full auto for e-mail only.
+2. **Accounts on ATS sites.** Recommended: the app never creates an account and never chooses a password; the person signs in or creates the account once, in a sign in session of the live view; a form that needs one goes to the person. Alternatives: the agent creates accounts with a stored generated password, with or without a per site approval.
+3. **LinkedIn** (SPEC-browser): recommended opt in, off by default; Easy Apply submitted only after the person's approval, never in Full auto. A16 is built only with (b) or (c).
+
+**Defaults decided by the planner (2026-10-14)**, which the owner may change.
+- No model ever clicks Submit. The one click path is `apply/gate.py`, through the browser's `gate_click` capability (B5), after a decision that writes its audit row first.
+- Review first refills from the approved answers in a fresh lease with no model call, reads each value back and refuses on a difference (`form_changed`).
+- `submit_unknown` is never resubmitted by the app; "It was submitted" or "Try again" (a new approval) are the person's.
+- Term boxes: the employer's privacy notice for this application and "the information is accurate" may be ticked; arbitration, marketing, talent pools, background check authorisations and anything else are the person's.
+- EEO: `decline` by default. Salary: `leave_blank` by default. Neither is ever inferred.
+- Company caps are the person's own entries (the owner enters the two he knows); the pace per ATS host is global (one submission every 3 minutes, 20 a day) because every person shares the Jetson's address.
+- Screenshots: "before" and "after" kept as long as the application; step and error images 30 days.
+- Full auto's rehearsals and every `dry_run` go through the whole gate and stop before the click.
+
+## Who owns which shared file
+Tasks of one group never edit the same file; where two tasks touch one file they are in different groups, in the order given. Cross plan order is written where a file is shared with another plan.
+- `api/alembic/versions/`: **A2 takes 0017**, **A11 takes 0018**. No other migration in this plan. 0016 is browser B3's; 0015 is documents D5's. `api/app/models.py`: **A2**, then **A11**, one import line each.
+- `api/app/config.py`, `.env.example`: **A2**, with every setting of the module at once (`APPLY_SUBMIT_ENABLED` true, `APPLY_APPROVAL_TTL_S` 86,400, `APPLY_HOLD_S` 900, `APPLY_FULL_AUTO_DAILY_MAX` 10, `APPLY_FULL_AUTO_COMPANY_DAYS` 30, `APPLY_REHEARSALS` 3, `APPLY_HOST_MIN_INTERVAL_S` 180, `APPLY_HOST_DAILY_MAX` 20, `APPLY_RETRY_DELAYS_S` 600 and 3,600, `APPLY_NEEDS_PERSON_WAIT_S` 1,800, `APPLY_STEP_SHOTS_KEEP_DAYS` 30, `APPLY_STUB_BASE_URL` refused in production). **Browser B2 edits the same two files: the orchestrator never runs A2 and B2 at once.**
+- `api/app/apply/`: `models.py`, `service.py`, `states.py`, `guardrails.py`, `router.py`, `registry.py`: **A2**. `answers.py`, `terms.py`, `bank.py`: **A3**. `ats/base.py`, `ats/greenhouse.py`, `ats/ashby.py`: **A4**; later adapters add a file each (`lever.py`, `generic.py` A8, `workday.py`, `google_careers.py`, `vie.py` A15, `linkedin.py` A16) and one line in `ats/__init__.py`'s list, which A4 writes with commented placeholders. `run.py`, `agent.py`, `shots.py`: **A5**. `gate.py`, `submit.py`, `admin.py`: **A6**. `manual.py` **A9**, `failures.py` **A10**, `caps.py` **A11** (A6 writes `caps.check` as a stub that A11 replaces by owning the file from then on), `queue_router.py` and `likes.py` **A12**, `full_auto.py` **A13**, `email.py` **A14**, `privacy.py` **A17**.
+- `api/app/worker.py`, `api/app/queue.py`: **A5 only** (the `jobapp:apply` queue, concurrency 1, its cron for held and retried applications). Mail M7 and ingestion G10 edit them too: the orchestrator never runs A5 with either open.
+- `api/app/profile/schemas.py`: **A3** (the new optional fields of `AnswersSection` and the EEO and salary policies). Browser B8 edits the same file later (the browser sources of `search`): never at once, A3 first.
+- `api/app/mail/gate.py`: **A14 only**, after mail M12, M18 and M23 have merged; it adds two accepted authorisation kinds and changes no check of mail's.
+- `web/src/features/apply/`: **A7** (`apply-section.tsx`, `fields-table.tsx`, `approve-dialog.tsx`, `run-report.tsx`, `apply-api.ts`, and placeholders `manual-panel.tsx` for **A9**, `needs-person.tsx` for **A10**), **A11** (`settings-page.tsx`, `caps-editor.tsx`, `answer-bank.tsx`), **A12** (`queue-page.tsx`, `queue-card.tsx`), **A13** (`full-auto-settings.tsx`, `held-countdown.tsx`, composed by placeholders A11 and A12 write).
+- `web/src/features/jobs/job-detail-page.tsx`: **A7**, one line, after documents D9 and mail M14 have merged. `web/src/routes.tsx`: **A11** (settings), then **A12** (the queue). `web/src/features/shell/app-shell.tsx`: **A10** (the notification dot), then **A12** (the queue link and its count).
+- **Shared with the browser plan:** `api/app/main.py` and `api/app/models.py` (A2 and A11 here, B3 there), `deploy.sh` (A6's `apply pause|resume` commands here, B6's firewall block there). The orchestrator never runs two of these tasks at once.
+- Test scaffolding: **A1**: `tests/ats_forms_stub.py` and `tests/ats-forms-stub.compose.yml` (the fake ATS forms server), `api/tests/apply/conftest.py` (persons A and B with profiles, postings on the fake ATS, documents rendered by the fake renderer path, the browser test stack), `web/e2e/apply-helpers.ts`, `web/e2e/apply-all.config.ts`, the line of the `apply` group in `ops/local-check.sh`. A later task adds pages under `tests/ats_forms/a<n>/` and helpers in `api/tests/apply/a<n>_support.py`; it never edits the three files.
+- `SPEC-apply.md`, `SPEC-agents.md` (the apply agents are the "ask first" case of SPEC-agents: an agent that submits outside the app, here never the agent itself but its run), `SPEC-documents.md`: each task amends the sentences it contradicts.
+- This file: "Measurements" has one sub section per task.
+
+## Rules every task follows
+- **Isolation:** at least one test with two people, A and B, with postings at the same company: B's application, answers, screenshots, approval and answer bank answer 404 to A; A's approval can never authorise B's submission.
+- **No submission outside the gate:** every task that adds a path to a form has a test that the fake ATS server received no submission except through `gate.submit`, and one that the agent's tools refuse the submit element.
+- **No real company in a test,** ever. The fake ATS server is the only form a test fills; the stub base address is refused in production. The owner's real applications are human steps of Checkpoint A.
+- **Never apply:** every task that starts filling or submitting tests a posting whose title matches a never apply rule (the agent never starts; the gate refuses).
+- **Canary:** mail M1's `canary.py` over logs, Redis, job arguments, arq results and error answers: no answer value, typed text, screenshot byte or lease token.
+- **Evidence** under `tasks/evidence/apply-a<n>/` with the journey's screenshots; figures under "Measurements".
+- **Merge rule:** CONTRIBUTING's, with the local check in place of CI; the orchestrator merges.
+
+## A0: This plan
+**Issue:** to create. **Scope:** S. Docs only. Done when the pull request of this plan is merged with the owner's answers to the three decisions.
+
+## A1: The fake ATS forms server and the test scaffolding
+**Issue:** to create.
+**Acceptance:** `tests/ats_forms_stub.py` (one small server, recorded shapes written from the public pages of each system on the task's start date, no copy of their scripts): an Ashby form (yes or no button groups, a location typeahead, resume and cover letter inputs, an invisible check at submit that fails when the submit comes less than 3 s after the last input or with `navigator.webdriver` set), a Greenhouse hosted form and its embed page on a fake company site (react-select comboboxes, an EEO block, an arbitration box, a marketing box, a privacy box, an optional e-mail code step), each with its confirmation page, its error rendering for a missing required field, and variants: slow (10 s), closed posting, captcha shown, layout changed, a page that addresses "AI assistants". Every submission is recorded with its fields and files and readable by tests (`GET /_stub/submissions`), and can be reset. Companies are invented ("Example Robotics", "Northwind Labs"). The compose file joins the browser test stack's `egress` side so the test browser reaches it and nothing else. The scaffolding of "Who owns which shared file".
+**Edge cases to test:** the stub's invisible check rejects a fill with no dwell and accepts a paced one (so pacing is proven against it); two submissions of the same form are both recorded (duplicates are caught by the app, not the stub); files are stored by hash; reset between tests; the stub refuses to start under `APP_ENV=production`.
+**Playwright journey:** `apply-a1.spec.ts`: the test browser (Playwright directly, not the app) opens each fake form, fills it by hand code, submits, and the submission is listed.
+**Scope:** M. **Depends on:** none (the browser test stack of B2 joins it later; until then it runs on Playwright's own Chromium). **Migration:** none. **Owns:** the scaffolding files listed above, `tests/ats_forms/`.
+
+## A2: Tables, states and the refusals before anything is spent
+**Issue:** to create.
+**Acceptance:** migration 0017: `applications(id, user_id, posting_id, mode enum(manual, review, full_auto), dry_run bool, state enum(the spec's states), ats text, form_url text, canonical_key text, document_versions jsonb, answers_hash bytea null, attempt int, needs text null, error_code text null, cost jsonb, created_at, updated_at, submitted_at null)` with the composite key `(posting_id, user_id)` to `jobs` and a partial unique index refusing two live applications per posting; `application_answers(application_id, user_id, field_key, label, kind, value jsonb, source enum(identity, document, answers, bank, agent, person, left), required bool, approved bool)`; `application_events(id, application_id, user_id, at, kind, data jsonb)` with ids, codes and counts only; `application_screenshots(id, application_id, user_id, kind enum(before, after, step, error), jpeg bytea, sha256, created_at)`; `apply_answer_bank(user_id, question_key, question text, answer jsonb, updated_at, used_count)`; `apply_authorisations(id, user_id, application_id, kind enum(person_approval, full_auto_like), answers_hash, created_at, expires_at, used_at null)`. `states.py` (allowed transitions, one function), `guardrails.py` (pure: `never_apply(posting, search)` with `sweep.never_apply_rules` and `term_matcher` on the title and the sweep's `never_apply` event; `duplicates(db, user_id, posting)` on the three keys of the spec; `canonical_key(url)` for Ashby, Greenhouse, Lever and a normalised address otherwise), `service.start(db, user_id, posting_id, mode, dry_run)` and `POST /api/postings/{id}/applications` answering each refusal with its code and sentence, `GET /api/applications`, `GET /api/applications/{id}`. Every setting of the module.
+**Edge cases to test:** a never apply title in each mode (manual allowed with the warning code, review and Full auto refused); the sweep's `never_apply` event; the same role on two postings (same company, same normalised title, 179 and 181 days); the same Greenhouse job id under two addresses; a posting already `applied` or `interview`; two starts at once (one row, the unique index); a transition not in the table raises; B starts on A's posting (404); deleting the posting or the person cascades every table.
+**Playwright journey:** none: the page comes in A7. `api/tests/apply/test_start.py` is the evidence.
+**Scope:** M. **Depends on:** none. **Migration:** 0017. **Owns:** `api/app/apply/models.py`, `service.py`, `states.py`, `guardrails.py`, `router.py`, `registry.py`, `api/alembic/versions/0017_apply.py`, one line of `api/app/models.py` and of `api/app/main.py`, `api/app/config.py`, `.env.example`.
+
+## A3: Answers from the profile
+**Issue:** to create.
+**Acceptance:** the optional fields of the spec added to `AnswersSection` (preferred name, pronouns, years of experience as stated, highest degree and year, on site or hybrid stance, previously applied default, background and reference check consent, `eeo_policy` enum(decline, leave, stored) with the stored answers, `salary_policy` as a structured choice: leave blank, a range per currency, or a sentence), validated, shown in the profile's Answers tab, exported and imported. `answers.py`: `resolve(field, context) -> Answer | Left` where a field is `{label, kind (text, textarea, yes_no, single, multi, select, combobox, date, file, checkbox), options, required}` and the context holds the profile, the posting (country from the jobs gazetteer) and the document versions; pattern tables in English and French for the standard questions (names, contact, links, location, work authorisation per country, sponsorship, notice, start date, relocation, languages, years, education, how heard, previously applied), option matching (exact, prefix, contains, "Other" and "Prefer not to say" equivalents), and the source of every value. `terms.py`: the box classifier (allowed: privacy notice for this application, accuracy; everything else is the person's). `bank.py`: the answer bank lookup by a normalised question key and its update on a person's edit. No model in this task.
+**Edge cases to test:** a country not in the work authorisation list (left); a posting in two countries; a required salary field under each policy (left under `leave_blank`); an EEO select with and without a decline option under each policy; "8+ years of X" when the profile states fewer (No) and when it says nothing (left); a French form ("Prénom", "Nom", "Ville"); a combobox whose options do not contain the answer (left with the options listed); an arbitration box, a marketing box, a "join our talent community" box, a privacy box, an accuracy box; a bank answer beats the pattern table; an empty profile (everything left, nothing invented); the profile's import and export round trip with the new fields; B's bank never used for A.
+**Playwright journey:** `apply-a3.spec.ts`: person A fills the new Answers fields in the profile page, saves, reloads, sees them.
+**Scope:** M. **Depends on:** none. **Migration:** none (JSONB section; the answer bank table is A2's). **Owns:** `api/app/apply/answers.py`, `terms.py`, `bank.py`, `api/app/profile/schemas.py` (the answers fields), the Answers tab component of the profile page.
+
+## A4: Greenhouse and Ashby adapters
+**Issue:** to create.
+**Acceptance:** `ats/base.py`: the adapter contract (`matches(url, page)`, `form_url(posting)`, `discover(lease) -> [field]` through the browser client's tool calls, `fill(lease, field, answer)`, `submit_selectors`, `confirmation(page_text, url)`, `errors(page)`, `traps`), `ats/__init__.py` with the list and commented placeholders. `greenhouse.py` (hosted page, the embed page a company site frames, react-select: type then click the option, the EEO block, the e-mail code step reported as `needs_person: email_code` until A10) and `ashby.py` (`/application`, the `?embed=js` fallback, yes or no groups, the location typeahead), each filling from `answers.resolve` and uploading the CV and the letter (or pasting the letter's text where no letter input exists). The fill uses the browser's paced tools; no model.
+**Edge cases to test:** every field kind of both fake forms; an embed page inside a fake company site; the hosted Ashby page answering not found (the embed fallback); a field whose label is only an `aria-label`; an option that appears after typing; an upload rejected by the form (reported); the layout changed variant (`form_changed`, nothing typed after the first missing selector); the arbitration and marketing boxes stay unticked, privacy and accuracy ticked; the adapter never clicks the submit element (the tool layer's refusal is not reached because the adapter has no such call: asserted by a spy).
+**Playwright journey:** `apply-a4.spec.ts`: on the browser test stack, an adapter fills each fake form for person A while the live view shows it; the screenshot shows every allowed field filled and the left ones empty.
+**Scope:** M. **Depends on:** A1, A3, browser B5. **Migration:** none. **Owns:** `api/app/apply/ats/base.py`, `__init__.py`, `greenhouse.py`, `ashby.py`, `tests/ats_forms/a4/`.
+
+## A5: The apply run: fill, the agent for what is left, screenshots
+**Issue:** to create.
+**Acceptance:** the queue `jobapp:apply` (concurrency 1) and its job `apply_fill(application_id)`: a browser lease (purpose `apply_fill`, host allow list from the adapter), the document versions chosen (approved, else latest rendered; refused with the documents' issue list when an issue is open and not acknowledged), the PDFs placed on the lease, the adapter's fill, then the **answer agent** for the fields the resolver left that are not EEO, salary or term boxes: one model call (agent `apply_answer`, `internal`, `private_io`, `model_by_credential`, `token_budget`; no browser tool; input: the left questions as data, the profile's facts and answers, the posting, the letter; output: one value per question with its source, or "leave"), its free text checked by `factcheck_rules.check` (mail M9), accepted values typed by the adapter. Then the full page "before" screenshot, the fields stored with sources, the posting moved to `staged` through `set_status` under `lock_job` (event `via: "apply"`), and the state `ready` (or `needs_person` with what is needed, or `rehearsed` for a dry run). Cost and duration on the application. Without a credential the run skips the agent and leaves those fields.
+**Edge cases to test:** the lease waits behind another person's (state `queued`, position shown); the model proposes a value with no source (dropped, left); the model answers a question about years with a number the profile does not hold (fact check issue, left); the posting text tells the model to add a link (no effect); the token budget is reached (stopped, the rest left); the browser crashes mid fill (retry per A10's stub: `failed` until A10); a never apply posting (the job refuses before the lease); the posting's status was changed by the person during the fill (the `staged` move respects `set_status`'s rules); B's run never sees A's profile (the prompt captured by the fake backend).
+**Playwright journey:** `apply-a5.spec.ts`: person A starts a review application on the fake Greenhouse posting through the api; the run fills it on the fake model backend; the application reads `ready` with the screenshot and the fields, the posting reads `staged`.
+**Scope:** M. **Depends on:** A2, A4, browser B3. **Migration:** none. **Owns:** `api/app/apply/run.py`, `agent.py`, `shots.py`, `api/app/worker.py`, `api/app/queue.py`.
+
+## A6: The gate, the approval and the submission
+**Issue:** to create.
+**Acceptance:** `gate.py`: `authorise_approval(db, user, application, answers_hash)` (only the approve route calls it, after the session and the CSRF header) and `decide(db, authorisation, now)`: one transaction under the posting's row lock and the person's apply lock, with the checks of the spec in order (kill switches, the authorisation, never apply, duplicates, `caps.check` as a stub returning ok until A11, the documents' freeze), writing its audit event whatever the outcome and committing before any click. `submit.py`: the submit lease (no model): open the form, refill from the approved answers through the adapter, read each value back (a difference: `form_changed`, back to `ready`), the "before" screenshot again, the paced scroll, hover and dwell, `client.gate_click` with the lease's capability on the adapter's submit element, then the confirmation or the errors within 60 s: `submitted` (the posting to `applied` with `applied_on`, the documents frozen with reason `apply`, the "after" screenshot), `refused_by_site` (the fields named, back to `ready`), or `submit_unknown` (never resubmitted). Routes: approve, reject, cancel, "I submitted it" and "It was submitted", retry (a new approval). `admin.py`: `./deploy.sh apply pause|resume` (a Redis flag) and `APPLY_SUBMIT_ENABLED`, both read in `decide` and again just before the click.
+**Edge cases to test:** an approval with a stale hash (409, the current fields shown); an approval used twice (one submission); an expired approval; a double click on Approve (one submission); the pause set between the decision and the click (no click, `cancelled` with `paused`); the documents' version got an issue after approval (refused with the list); the fake's captcha variant at submit (`needs_person`); the slow confirmation (submitted at 10 s); no confirmation (`submit_unknown`, the fake received one submission, the app never sends a second); the fake's error variant (`refused_by_site`); the posting moved to `applied` by a mail during the fill (duplicate refusal); A's approval on B's application (404); the canary over the audit events.
+**Playwright journey:** `apply-a6.spec.ts`: through the api, person A approves the `ready` application of A5's journey; the fake server lists exactly one submission with the CV's hash; the posting is `applied`; a second approve is refused.
+**Scope:** M. **Depends on:** A5, browser B5, documents D12. **Migration:** none. **Owns:** `api/app/apply/gate.py`, `submit.py`, `admin.py`, the `apply` lines of `deploy.sh`'s command table.
+
+## A7: The Apply section of a posting
+**Issue:** to create.
+**Acceptance:** on the job page, the Apply section: Apply (Review first) and Apply myself (placeholder until A9), the live view of B4 while the run fills, the status line, the fields table (label, value, source badge, left fields highlighted, an inline edit that saves to the answer bank and recomputes the hash), the "before" screenshot (zoomable), **Approve and submit** with a confirmation that names the company, the role and the two documents ("Submit this application to Example Robotics for Robotics Engineer?"), Cancel, Reject, the run report (timeline, cost, duration, "after" screenshot). The refusal sentences of A2 shown before anything starts. Mobile friendly.
+**Edge cases to test:** a person who leaves the page during the fill and comes back (the state and live view resume); edit then approve (the edited value is what the fake receives); a left required field blocks Approve with the field named; the confirmation dialog shows the documents' versions; `submit_unknown` shows the two buttons; a narrow screen; B opening A's application address (404 page).
+**Playwright journey:** `apply-a7.spec.ts`, **the first end to end slice:** person A opens the fake Greenhouse posting (documents already rendered by the scaffolding), clicks Apply, watches the live view fill the form, edits one answer, clicks Approve and submit, confirms, sees `Applied`, both screenshots and the run report; the fake server holds exactly that submission. The same journey on the fake Ashby form.
+**Scope:** M. **Depends on:** A6, browser B4, documents D9. **Migration:** none. **Owns:** the A7 files of `web/src/features/apply/`, one line of `web/src/features/jobs/job-detail-page.tsx`.
+
+## A8: Lever and the generic strategy
+**Issue:** to create.
+**Acceptance:** `ats/lever.py` (`/apply`, the resume parse corrected against the profile, native selects, "Additional information" for the letter, hCaptcha as `needs_person`). `ats/generic.py`: for any other form, the **form agent** (`internal`, `private_io`, browser tools of B5 bound to the lease, `answers.resolve` exposed as a tool, at most 30 turns, `token_budget`) discovers and fills fields and names the submit element with `designate_submit(ref)`, which code checks (a button inside the form, visible, the detector marks it) and highlights in the "before" screenshot; Review first only. Fake pages: a Lever form, a Workable like form, a two step custom form.
+**Edge cases to test:** the agent designates a link that is not in the form (refused); the agent tries to click submit (refused by the tool layer, reported); a two step form (the agent clicks Next, allowed; the final step's Submit designated); an iframe form; a page that asks the assistant to e-mail something (no tool for it; reported); the turn limit; an unknown form in Full auto (sent to the queue, A13's test once it exists).
+**Playwright journey:** `apply-a8.spec.ts`: person A applies to the fake Lever posting and to the fake custom form with Review first; the highlighted submit element is visible in the screenshot; approval submits once.
+**Scope:** M. **Depends on:** A7. **Migration:** none. **Owns:** `api/app/apply/ats/lever.py`, `ats/generic.py`, the form agent's definition, `tests/ats_forms/a8/`.
+
+## A9: Apply myself
+**Issue:** to create.
+**Acceptance:** `manual.py`: a lease with input given to the person at once (B4's takeover), the form opened, the documents placed on the lease and Chromium's file dialog opening in that folder; on request ("Fill my details"), the adapter fills identity fields only; a watcher on the page's address and text sees the adapter's confirmation (or the generic patterns) and offers "Record as applied"; "I submitted it" does the same. The app never clicks Submit in this mode. Never apply postings allowed with the warning.
+**Edge cases to test:** the person submits and the confirmation is seen (one click to record); the person closes the session without submitting (application `cancelled`); the person submits on a site with no known confirmation ("I submitted it"); the lease idle timeout while the person reads (a warning at 4 minutes).
+**Playwright journey:** `apply-a9.spec.ts`: person A clicks Apply myself on the fake Ashby posting, types in the live view, uploads the CV from the dialog, clicks the form's Submit in the live view, records it; the posting is `applied`.
+**Scope:** S. **Depends on:** A7, browser B7. **Migration:** none. **Owns:** `api/app/apply/manual.py`, `web/src/features/apply/manual-panel.tsx`.
+
+## A10: Failures, retries and "needs you"
+**Issue:** to create.
+**Acceptance:** `failures.py`: the retry rule before the click (2 retries after `APPLY_RETRY_DELAYS_S`, then `failed`), the cron that requeues; `needs_person` with its reason (`captcha`, `signin`, `account`, `left_required`, `email_code`, `payment_requested`) shown on the job page and in the app shell's notification dot, the live view opened on the tab, the lease released after `APPLY_NEEDS_PERSON_WAIT_S` and the application kept waiting; `posting_closed` with a proposal to move the posting to `closed`; the Greenhouse e-mail code read through the mail module when it is connected (a read only function of mail's store, the newest message of the ATS's sending domain after the fill started, the code by pattern; else the person types it).
+**Edge cases to test:** each fake failure variant; a retry that finds the posting closed; a captcha solved by the person in the live view, then Give back (the run continues to `ready`); the person never comes (lease released, item waiting); a payment page (ended with the sentence); the e-mail code with mail connected and not; a retry never happens after the click.
+**Playwright journey:** `apply-a10.spec.ts`: the fake Greenhouse posting with the captcha variant: the page says "A captcha needs you", person A solves the fake captcha in the live view, gives back, approves, submitted.
+**Scope:** M. **Depends on:** A7. **Migration:** none. **Owns:** `api/app/apply/failures.py`, `web/src/features/apply/needs-person.tsx`, the notification dot's line in `app-shell.tsx` (A12 edits the same file later, in another group).
+
+## A11: Company caps, pacing and the Applications settings
+**Issue:** to create.
+**Acceptance:** migration 0018: `apply_company_caps(user_id, company_key, label, max_count, window_days, same_role_days)` and `apply_settings(user_id pk, mode_after_like enum(review, full_auto), paused bool, full_auto_since, rehearsals_done int, daily_max, company_days)`. `caps.py` owns `caps.check` from now on: the person's caps counted on `submitted` and `submit_unknown`, the per ATS host pace across people (Redis, a minimum interval and a daily count). Settings page "Applications": the mode (Full auto disabled until A13), the pause switch, the caps editor ("Example Robotics: at most 3 applications in 90 days, and 180 days before the same role"), the answer bank. Company keys normalised (case, accents, legal suffixes) and matched on the posting's company and the ATS org.
+**Edge cases to test:** a cap reached by `submit_unknown`; two approvals racing for the last slot (one passes); the host pace across two people (the second waits, its state shows when); a company under two spellings; a cap edited down below the current count (refuses new ones, nothing undone); B's caps never counted for A.
+**Playwright journey:** `apply-a11.spec.ts`: person A adds a cap of 1 for "Example Robotics", applies once (submitted), and the second application on another of its postings is refused with the cap sentence.
+**Scope:** M. **Depends on:** A6. **Migration:** 0018. **Owns:** `api/app/apply/caps.py`, its models, `api/alembic/versions/0018_apply_settings.py`, one line of `api/app/models.py`, `web/src/routes.tsx` (the settings route), the A11 files of `web/src/features/apply/`.
+
+## A12: The review queue after a Like (#78)
+**Issue:** to create (refines #78).
+**Acceptance:** `likes.py`: `apply.on_like(db, user_id, posting_id)`, the one entry point the swipe deck (#74) calls; it asks the documents module to generate (its own route and consent rules) and, once the versions exist, starts a review application; until #74 exists, a "Like" action on the jobs list calls it. `/applications`: cards (company, role, the screenshot, what is left, the documents' check status), Approve (opens the same confirmation as A7), Edit (opens the posting's Apply section), Reject (the application `cancelled`, the posting kept; "and skip the posting" moves it to `skipped`), a count in the app shell. Items that fell back from Full auto carry their reason.
+**Edge cases to test:** a Like while documents fail (the card says why, no application); a Like on a never apply posting (refused at once with the sentence); Likes on two postings of the same role (the second refused as a duplicate); approve from the queue while the posting page is open in another tab (one submission); reject then Like again (a new application).
+**Playwright journey:** `apply-a12.spec.ts`: person A Likes three fake postings from the jobs list; the queue fills as the runs finish; A approves one, edits and approves another, rejects the third; the fake holds two submissions.
+**Scope:** M. **Depends on:** A10, A11, documents D8. **Migration:** none. **Owns:** `api/app/apply/likes.py`, `queue_router.py`, the A12 files of `web/src/features/apply/`, `web/src/routes.tsx` (the queue route), `web/src/features/shell/app-shell.tsx` (the queue link and count).
+
+## A13: Full auto (#79)
+**Issue:** to create (refines #79).
+**Acceptance:** `full_auto.py`: turning Full auto on (the settings card with the limits of owner decision 1 and the sentence "The app will submit applications for you, up to 10 a day, 15 minutes after each Like unless you cancel."), recorded with the date; a Like then records a `full_auto_like` authorisation with the settings in force; after the documents, the fill, and the hold (`APPLY_HOLD_S`, a countdown with Cancel on the queue and the job page), the gate decides with the Full auto checks of the spec (no issue on documents or agent text and the check by model passed, minimum fit, supported ATS, nothing left, no captcha seen, the daily and per company limits, the never apply term in the posting's text). The first `APPLY_REHEARSALS` run as dry runs and ask "Does this look right?" before the mode goes live. Every refusal moves the item to the review queue with its reason. The person's pause switch and the administrator's pause stop held items. A daily summary card: submitted, held, sent to review and why.
+**Edge cases to test:** each Full auto check failing in turn (each lands in the queue with its reason); Cancel during the hold; the pause during the hold and between decision and click; the 11th Like of a day (queued for review); a second posting at the same company within 30 days; Full auto turned off with items held (they become review items); the rehearsal rejected by the person (Full auto stays in rehearsal); a Like recorded before Full auto was turned on (review, not auto); B's Full auto never touches A's Likes.
+**Playwright journey:** `apply-a13.spec.ts`: person A turns Full auto on, Likes three fake postings, confirms the three rehearsals, Likes two more with the hold shortened by the test setting: one is cancelled during the hold, the other is submitted; the fake holds exactly one submission from Full auto.
+**Scope:** M. **Depends on:** A12. **Migration:** none. **Owns:** `api/app/apply/full_auto.py`, the A13 files of `web/src/features/apply/`.
+
+## A14: Applications by e-mail, through the mail gate
+**Issue:** to create.
+**Acceptance:** for a posting whose way to apply is an address ("send your CV to jobs@example-robotics.test"), `email.py` prepares a new mail (subject from the role, body from the letter's text, the two PDFs attached by version id, recipients computed by code from the posting's text: the address is flagged `new_address` and must be confirmed by the approval; in Full auto it must be on the company's own domain) as a mail draft of a new kind; `mail/gate.py` accepts the authorisations `person_approval` and `full_auto_like` of this module for that kind only, with mail's own checks unchanged (connected, `gmail.send`, never apply, fact check, the audit row before the call, `unknown` never resent). The application records the mail send's id; `submitted` when Gmail answers an id.
+**Edge cases to test:** a posting with two addresses (the person picks); an address on a free mail domain in Full auto (review); the mail account not connected or without `gmail.send` (needs_person with the sentence); a Gmail 5xx (`submit_unknown`, never resent); the attachments are the frozen versions byte for byte (the fake Gmail's stored raw message); a mail authorisation of kind `user_click` never reaches this path and an apply authorisation never sends a reply draft.
+**Playwright journey:** `apply-a14.spec.ts`: on the fake Gmail and a fake posting that asks for an e-mail, person A approves; the fake Gmail holds one message with both PDFs to the posting's address.
+**Scope:** M. **Depends on:** A6, mail M12, M18 and M23 (merged), A13 for the Full auto part (a constant switched on by A13's merge). **Migration:** none. **Owns:** `api/app/apply/email.py`, `api/app/mail/gate.py` (the two kinds and the draft kind).
+
+## A15: Workday, Google Careers and Business France VIE (Review first only)
+**Issue:** to create.
+**Acceptance:** `ats/workday.py` (Apply, "Apply manually", the account step: `needs_person: account` under owner decision 2, then the wizard pages), `ats/google_careers.py` (signed in check, the résumé through the file chooser, elements by label and role), `ats/vie.py` (signed in check and complete profile check, the native panel with CV, letter and the message from the person's motivation; the external Apply link followed into that site's adapter). Fake pages for each, Workday's heavy page included for the browser's memory guard.
+**Edge cases to test:** no Workday account (needs the person; after the person signs in in a sign in session, the run continues); a Workday session expired mid wizard; Google Careers signed out; a VIE offer with an external link; a VIE profile incomplete (needs the person); Full auto on these (sent to review).
+**Playwright journey:** `apply-a15.spec.ts`: on the fake Workday tenant, the run stops at the account step, person A creates the fake account in the live view, gives back, the wizard is filled, A approves, submitted.
+**Scope:** M. **Depends on:** A10, browser B7. **Migration:** none. **Owns:** `api/app/apply/ats/workday.py`, `google_careers.py`, `vie.py`, `tests/ats_forms/a15/`.
+
+## A16: LinkedIn Easy Apply (only with the owner's opt in)
+**Issue:** to create.
+**Acceptance:** built only with owner decision 3 (b) or (c). `ats/linkedin.py`: the Easy Apply modal steps on the person's signed in session, the same answers, the submit designated by the adapter, Review first only (a constant that the gate checks, so Full auto can never reach it); the "Apply on company site" link followed into that site's adapter instead when present. A checkpoint or unusual activity page stops LinkedIn work for 7 days, as browser B10.
+**Edge cases to test:** not opted in (the Apply button offers only the company site link or Apply myself); a Full auto Like on a LinkedIn posting (review); the checkpoint fixture; a modal with a question left.
+**Playwright journey:** `apply-a16.spec.ts`: on the fake standing in for Easy Apply, person A (opted in) applies with Review first and approves.
+**Scope:** S. **Depends on:** A10, browser B10, the owner's answer. **Migration:** none. **Owns:** `api/app/apply/ats/linkedin.py`, `tests/ats_forms/a16/`.
+
+## A17: Privacy, retention and isolation over the module
+**Issue:** to create.
+**Acceptance:** `privacy.py`: the daily prune of step and error screenshots older than `APPLY_STEP_SHOTS_KEEP_DAYS`; the module's sentences for `/privacy` (what an application stores: the answers, the two screenshots, the events; that they stay with the posting; that they leave with the posting or the account); a suite over every route with two people; the canary over a full journey of each mode; a check that no code path outside `gate.py` calls `gate_click` and none outside `mail/gate.py` sends mail (a test that greps the import graph, as mail's M12 test does).
+**Edge cases to test:** the prune never removes "before" or "after"; a deleted posting removes its application rows and images; an account deletion removes everything of the module; every route signed out (401).
+**Playwright journey:** `apply-a17.spec.ts`: A's full Review first journey, then B tries each of A's addresses.
+**Scope:** S. **Depends on:** A7 to A15. **Migration:** none. **Owns:** `api/app/apply/privacy.py`, `api/tests/apply/test_isolation.py`, the module's privacy sentences.
+
+## Checkpoint A: the owner's real applications
+**Issue:** to create. Human steps on `https://jobapp.taild83d16.ts.net`, with the owner's own profile and documents, written on the issue with their date. No test or agent ever submits to a real company outside these steps.
+- **Stage A, after A7 (the first end to end slice on the Jetson):** he picks one real Greenhouse or Ashby posting he wants, clicks Apply, watches the fill on his phone or laptop, checks the answers and the screenshot, approves; the posting is `applied`, the documents are frozen, the confirmation mail arrives and the mail module links it. He writes what he had to correct.
+- **Stage B, after A12:** ten Likes in Review first; he counts the fields left and the corrections, written under "Measurements".
+- **Stage C, after A13:** Full auto turned on with his own caps entered; three rehearsals confirmed; one day of real Full auto within the caps; he checks the summary and one "after" screenshot per submission.
+
+## Task table
+| Id | Issue | What | Scope | Depends on | Migration | Group |
+|---|---|---|---|---|---|---|
+| A0 | to create | This plan | S | none | none | done with its merge |
+| A1 | to create | The fake ATS forms server and the test scaffolding | M | none | none | 1 |
+| A2 | to create | Tables, states and the refusals before anything is spent | M | none | 0017 | 1 |
+| A3 | to create | Answers from the profile | M | none | none | 1 |
+| A4 | to create | Greenhouse and Ashby adapters | M | A1, A3, B5 | none | 2 |
+| A5 | to create | The apply run: fill, the agent for what is left, screenshots | M | A2, A4, B3 | none | 3 |
+| A6 | to create | The gate, the approval and the submission | M | A5, B5, documents D12 | none | 4 |
+| A7 | to create | The Apply section of a posting (first end to end slice) | M | A6, B4, documents D9 | none | 5 |
+| A8 | to create | Lever and the generic strategy | M | A7 | none | 6 |
+| A9 | to create | Apply myself | S | A7, B7 | none | 6 |
+| A10 | to create | Failures, retries and "needs you" | M | A7 | none | 6 |
+| A11 | to create | Company caps, pacing and the Applications settings | M | A6 | 0018 | 6 |
+| A12 | to create | The review queue after a Like (#78) | M | A10, A11, documents D8 | none | 7 |
+| A15 | to create | Workday, Google Careers and VIE, Review first only | M | A10, B7 | none | 7 |
+| A13 | to create | Full auto (#79) | M | A12 | none | 8 |
+| A16 | to create | LinkedIn Easy Apply, only with the owner's opt in | S | A10, B10, owner | none | 8 |
+| A14 | to create | Applications by e-mail through the mail gate | M | A6, A13, mail M12, M18, M23 | none | 9 |
+| A17 | to create | Privacy, retention and isolation over the module | S | A7 to A15 | none | 10 |
+| Checkpoint A | to create | The owner's real applications, stages A, B and C | human | A7, then A12, then A13 | none | after 5, 7 and 8 |
+
+**The first end to end slice**, in the order the orchestrator runs it across the two plans: A1, A2 and A3 with browser B1 (in parallel), then B2, then B3 and B6, then B4 and B5, then A4, A5, A6, A7. Twelve tasks, each one agent run; Checkpoint A stage A follows on the Jetson. Everything after A7 widens the slice: more sites (A8, A15, A16), the person's own path (A9), resilience (A10), limits (A11), then the Like pipeline (A12, A13) and e-mail (A14).
+
+## Measurements
+
+### A1
+Nothing yet.
+
+### A2
+Nothing yet.
+
+### A3
+Nothing yet.
+
+### A4
+Nothing yet.
+
+### A5
+Nothing yet. (The tokens per application on the fake forms, against the spec's estimates.)
+
+### A6
+Nothing yet.
+
+### A7
+Nothing yet.
+
+### A8
+Nothing yet. (The tokens per application of the generic strategy.)
+
+### A9
+Nothing yet.
+
+### A10
+Nothing yet.
+
+### A11
+Nothing yet.
+
+### A12
+Nothing yet.
+
+### A13
+Nothing yet.
+
+### A14
+Nothing yet.
+
+### A15
+Nothing yet.
+
+### A16
+Nothing yet.
+
+### A17
+Nothing yet.
+
+### Checkpoint A
+Nothing yet.
