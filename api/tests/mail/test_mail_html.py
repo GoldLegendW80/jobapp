@@ -548,6 +548,210 @@ def test_a_spent_budget_and_a_sanitiser_that_gives_up(monkeypatch: pytest.Monkey
     assert refused("<p>x</p>") == "unreadable"
 
 
+# --- what the scan leaves uncounted (review of PR #179, round 2: N1 and the table) ----------------
+# Counted, never timed: the tags that survive the scan and the tags the sanitiser is handed.
+
+# Left uncounted by the first two rounds, counted now under narrow rules.
+REMOVED = ("p", "td", "th", "tr", "option", "thead", "tbody", "tfoot")
+
+
+def tags(markup: str) -> int:
+    return markup.count("<")
+
+
+@pytest.mark.parametrize("container", ["svg", "math", "SVG"])
+@pytest.mark.parametrize("name", [*REMOVED, *sorted(mail_html._VOID)])
+def test_inside_foreign_content_every_name_is_counted(
+    monkeypatch: pytest.MonkeyPatch, container: str, name: str
+) -> None:
+    limit = mail_html.SCAN_DEPTH_MAX
+    given, _ = watched_sanitiser(monkeypatch)
+    short = f"<{container}>" + f"<{name}>" * (limit // 2) + "</a>" * (limit // 2)
+    assert mail_html.cut_at_depth(short) == (short, False)
+    for size in (2 * limit, 4 * limit, 8 * limit):  # the page grows, what is read does not
+        page = f"<{container}>" + f"<{name}>" * size + "</a>" * size
+        kept, was_cut = mail_html.cut_at_depth(page)
+        assert (was_cut, tags(kept)) == (True, limit), size
+        given.clear()
+        assert sanitised(page).truncated is True
+        assert tags(given[0]) == limit, size
+
+
+@pytest.mark.parametrize(
+    ("page", "name", "kept"),
+    [
+        ("<svg>" + "<td>" * 62_500 + "</a>" * 62_500, "<td>", 2999),
+        ("<math>" + "<th>" * 62_500 + "</a>" * 62_500, "<th>", 2999),
+        ("<svg><![CDATA[</svg>]]>" + "<td>" * 62_500 + "</a>" * 62_500, "<td>", 3000),
+        ("<svg><!--</svg>-->" + "<option>" * 41_000 + "</x>" * 41_000, "<option>", 3000),
+        ('<svg a="</svg>">' + "<wbr>" * 55_000 + "</div>" * 55_000, "<wbr>", 3000),
+    ],
+    ids=["svg td", "math th", "svg closed in CDATA", "svg closed in a comment", "in a value"],
+)
+def test_the_pages_of_the_review_are_cut_at_the_bound(
+    monkeypatch: pytest.MonkeyPatch, page: str, name: str, kept: int
+) -> None:
+    given, _ = watched_sanitiser(monkeypatch)
+    got = sanitised(page)
+    assert got.truncated is True
+    # The bound, less the `svg` or `math` when it is still open for the scan: a `</svg>` that
+    # the scan reads (in CDATA, a comment, a value) ends the mark of foreign content no more.
+    assert given[0].count(name) == kept
+
+
+def every_name() -> list[str]:
+    """Every element name the sanitiser or the scan knows, from the module's own lists."""
+    m = mail_html
+    known = set(m.TAGS) | m.VOID | m.DROPPED_WITH_CONTENT | m._VOID | m._FOREIGN | set(m._KIND)
+    known |= m._BUTTON_SCOPE | m._TABLE_PARTS | m._TABLE_CONTEXT | m._BLOCKS | m._CELLS
+    return sorted(known | set(m._ITEMS) | m._FORMATTING)
+
+
+class Nesting(HTMLParser):
+    """How many elements of one name stand open at once in what the library wrote."""
+
+    def __init__(self, name: str, markup: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.name, self.starts, self.depth, self.deepest = name, 0, 0, 0
+        self.feed(markup)
+        self.close()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == self.name:
+            self.starts += 1
+            self.depth += tag not in mail_html._VOID
+            self.deepest = max(self.deepest, self.depth, 1)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == self.name:
+            self.depth -= 1
+
+
+def in_the_library(name: str, before: str = "") -> Nesting:
+    """Three start tags of `name`, each followed by a digit, after `before`, through the
+    library's tree builder with `name` allowed (inside a table for `col`, nothing outside one)."""
+    before, after = (before + "<table>", "</table>") if name == "col" else (before, "")
+    markup = before + "".join(f"<{name}>{digit}" for digit in "012") + after
+    written = mail_html.nh3.clean(
+        markup, tags={name, "table", "colgroup"}, clean_content_tags=set(), attributes={}
+    )
+    assert re.sub(r"<[^>]*>", "", written) == "012", (name, written)  # no digit was lost
+    return Nesting(name, written)
+
+
+@pytest.mark.parametrize("name", every_name())
+def test_no_name_nests_ten_thousand_deep_past_the_scan(name: str) -> None:
+    """The test that would have caught the three rounds: a name the scan does not cut is one the
+    tree builder does not nest, shown by a real parse. A void element nested in another would
+    hide what follows it (the library writes no child of a void), so all three must be there."""
+    cut = mail_html.cut_at_depth
+    for before in ("", "<svg>", "<math>"):
+        if cut(before + f"<{name}>" * 10_000)[1] and cut(before + f"<{name.upper()}>" * 10_000)[1]:
+            continue
+        found = in_the_library(name, before)
+        assert found.deepest <= 1, (before, name)
+        if name in mail_html._VOID:
+            assert found.starts == 3, (before, name)
+    # In foreign content nothing is left uncounted but the items, which leave it (`<li>` ends
+    # the `<svg>` it stands in): every void nests there and is counted.
+    if name not in mail_html._ITEMS:
+        assert cut("<svg>" + f"<{name}>" * 10_000)[1] is True
+
+
+@pytest.mark.parametrize("name", ["p-x", "br-x", "td:x", "p\xa0x", "linK", "brİ"])
+def test_a_name_is_read_whole_as_the_tokenizer_reads_it(name: str) -> None:
+    # Each is an element of its own that nests, not the paragraph or the void it begins with.
+    assert mail_html.cut_at_depth(f"<{name}>" * 10_000)[1] is True
+    assert mail_html.cut_at_depth("<BR><bR/><P>" * 10_000)[1] is False
+
+
+@pytest.mark.parametrize("table", ["<table>", "<table><tr>", "<TABLE><tbody>", "<table><colgroup>"])
+@pytest.mark.parametrize("unit", ["<p>", "<li>", "</p>", "<hr>", "<br>", "x<br>", "<b></b>"])
+def test_tags_directly_in_a_table_are_cut_at_the_bound(table: str, unit: str) -> None:
+    bound = mail_html.SCAN_FOSTERED_MAX
+    for size in (bound + 1, 2 * bound, 4 * bound):  # the page grows, what is read does not
+        kept, was_cut = mail_html.cut_at_depth(table + unit * size)
+        assert (was_cut, tags(kept) - tags(table)) == (True, bound), size
+
+
+def test_a_table_cut_hands_the_sanitiser_no_more_than_the_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    given, _ = watched_sanitiser(monkeypatch)
+    got = sanitised("<p>before</p><table>" + "<p>" * 166_000)
+    assert got.truncated is True
+    assert given[0].count("<p>") == 1 + mail_html.SCAN_FOSTERED_MAX
+
+
+def test_tables_that_hold_their_content_in_cells_are_not_counted() -> None:
+    cut = mail_html.cut_at_depth
+    for page in (
+        "<table>" + "<tr><td>x</td></tr>" * 25_000 + "</table>",
+        "<table>" + "<tr><td>x<td><p>y" * 15_000 + "</table>",
+        ("<table><caption><b>c</b></caption><tr><th><i>h</i><tr><td><p>a<br>b</table>") * 5000,
+        "<table><tr><td>" + "<div><p>x</p><br></div>" * 20_000 + "</table>",
+    ):
+        assert cut(page) == (page, False)
+
+
+# Three ordinary large mails of the review, made here: each comes out whole.
+
+
+def words_of(text: str) -> set[str]:
+    return set(re.findall(r"\w+", text))
+
+
+def newsletter() -> tuple[str, list[str]]:
+    """A table layout newsletter, its blocks inside `font`, `b` and `span`."""
+    words, rows = [], []
+    for i in range(1400):
+        words += [f"Headline{i}", f"Story{i}"]
+        rows.append(
+            f'<tr><td><table width="100%"><tr><td><font face="Arial"><b><span>'
+            f"<div>Headline{i}</div><p>Story{i} "
+            f'<a href="https://news.example.org/{i}">read</a></p></span></b></font></td></tr>'
+            "</table></td></tr>"
+        )
+    return '<table width="600"><tbody>' + "".join(rows) + "</tbody></table>", words
+
+
+def thread() -> tuple[str, list[str]]:
+    """Thirty quoted replies, each inside the one before, in Gmail's markup."""
+    words, page = [], ""
+    for i in range(30):
+        lines = [f"Reply{i}line{j}" for j in range(400)]
+        words += lines
+        page += '<div dir="ltr">' + "".join(f"<div>{line}</div>" for line in lines)
+        page += '<br><div class="gmail_quote"><blockquote class="gmail_quote">'
+    return page + "</blockquote></div></div>" * 30, words
+
+
+def marketing() -> tuple[str, list[str]]:
+    """A marketing mail of 2,000 links, each around an image and a label."""
+    words, cells = [], []
+    for i in range(2000):
+        words.append(f"Product{i}")
+        cells.append(
+            f'<tr><td><a href="https://shop.example.org/{i}">'
+            f'<img src="https://img.example.org/{i}.png" alt="">'
+            f"<br><b>Product{i}</b></a></td></tr>"
+        )
+    return "<table>" + "".join(cells) + "</table>", words
+
+
+@pytest.mark.parametrize("make", [newsletter, thread, marketing])
+def test_ordinary_large_mails_are_not_cut(make: Any) -> None:
+    page, words = make()
+    assert len(page) > 250_000
+    assert mail_html.cut_at_depth(page) == (page, False)
+    got = sanitised(page)
+    assert got.truncated is False
+    assert set(words) <= words_of(got.text)
+    if make is marketing:
+        assert got.remote_images == 2000
+        assert len(addresses(got.html, "href")) == 2000
+
+
 # --- the worker's reading of an answer -----------------------------------------------------------
 
 

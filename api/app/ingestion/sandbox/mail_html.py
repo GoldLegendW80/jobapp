@@ -46,11 +46,13 @@ an estimate of the nesting made before pass 1, which cuts the document where it 
 the child is what holds if it is fooled); in the same scan, an estimate of the formatting
 elements the tree builder opens again (it reopens every open `b`, `i`, `font`... under each
 block that follows, so n of them before m blocks are written n times m times), which cuts the
-document where it passes `SCAN_REOPENED_MAX`; `GROWTH_MAX`, what pass 1 may write in times what
-it read, beyond which the page is refused before the walker reads it; `HTML_MAX_BYTES` and
-`TEXT_MAX_CHARS` of output; and the whole answer under `ANSWER_MAX` bytes. Each cut sets
-`truncated`. The walker answers an end tag without reading its stack of open tags, and looks
-at the budget every `WALK_BUDGET_EVERY` steps.
+document where it passes `SCAN_REOPENED_MAX`; in the same scan, the tags that stand directly in
+a table (the tree builder moves each in front of the table, and the library pays for each move
+as many steps as were moved before), cut where they pass `SCAN_FOSTERED_MAX`; `GROWTH_MAX`, what
+pass 1 may write in times what it read, beyond which the page is refused before the walker reads
+it; `HTML_MAX_BYTES` and `TEXT_MAX_CHARS` of output; and the whole answer under `ANSWER_MAX`
+bytes. Each cut sets `truncated`. The walker answers an end tag without reading its stack of
+open tags, and looks at the budget every `WALK_BUDGET_EVERY` steps.
 
 A failure is `{"ok": false, "failure": "file", "code": ...}`: `unreadable` (the sanitiser gave
 up), `too_slow` (the budget was spent, or pass 1 wrote more than `GROWTH_MAX` times its input).
@@ -138,6 +140,7 @@ ANSWER_MAX = 1_499_000  # the worker reads 1.5 MB; main.py adds `usage` to the a
 DEPTH_MAX = 100  # nesting of the stored HTML
 SCAN_DEPTH_MAX = 3000  # nesting of the input, estimated, beyond which it is cut
 SCAN_REOPENED_MAX = 300_000  # formatting elements opened again, estimated, beyond which it is cut
+SCAN_FOSTERED_MAX = 20_000  # tags directly inside a table, beyond which it is cut
 ALIKE_MAX = 3  # elements alike the tree builder holds open for reopening (its "Noah's Ark")
 PLAIN_TAG_MAX = 200  # characters of a start tag beyond which it is alike to no other
 GROWTH_MAX = 8  # what pass 1 may write, in times what it read: escaping alone writes six
@@ -150,7 +153,11 @@ _PASS_1 = {"a": {"href"}, "img": {"alt", "width", "height", "src"}}
 _PASS_3 = {"a": {"href"}, "img": {"alt", "width", "height", "data-src"}}
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-_OPENING = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9]*)")
+# A tag and its name as the tokenizer reads them: the name runs to a space, a `/` or a `>`, so
+# `<p-x>` is an element of its own and not a paragraph. Only A to Z are lowered, as there: the
+# Kelvin sign is lowered to `k` by Python and by no tokenizer.
+_OPENING = re.compile(r"<(/?)([a-zA-Z][^\t\n\f\r />]*)")
+_ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 # What follows the name of a start tag written plainly, up to its `>`: attributes without a
 # value, or with one that holds no quote and no angle bracket. Two such tags written alike are
 # the same element to the tree builder; of any other tag nothing is assumed.
@@ -160,33 +167,79 @@ _REMOTE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
 _NUMBER = re.compile(r"[0-9]{1,4}")
 _SPACES = re.compile(r"[ \t\r\n\f\v]+")
 _BLANK_LINES = re.compile(r"\n{3,}")
-# Tags the HTML parser never nests in themselves (it closes the one before), and the void ones.
-_NOT_NESTING = frozenset(
+# What the estimate leaves uncounted, and why (review of PR #179, N1). Only the void elements:
+# in HTML content the tree builder inserts one and closes it at once (`col` outside a table is
+# not inserted at all), so none of them ever holds the next tag. Inside `<svg>` or `<math>` any
+# name may hold the next tag, voids included: from the first start tag of those two on, the
+# mark is kept to the end of the page (a `</svg>` in a comment, a CDATA section or an attribute
+# closes nothing for the tree builder) and every start tag is counted.
+_VOID = frozenset(
     [
-        "p",
-        "td",
-        "th",
-        "tr",
-        "option",
-        "thead",
-        "tbody",
-        "tfoot",
-        "br",
-        "hr",
-        "img",
-        "meta",
-        "link",
-        "input",
-        "col",
         "area",
         "base",
-        "wbr",
-        "source",
-        "param",
+        "br",
+        "col",
         "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
         "track",
+        "wbr",
     ]
 )
+_FOREIGN = frozenset({"svg", "math"})
+# The names that were also left uncounted in the first two rounds (`p`, `option`, the cells, the
+# rows and the sections) are counted now, each with the narrow rule of the list items: a start
+# tag closes the element right above it, the top of the estimate, when that element is of one
+# of the kinds `_CLOSES` lists for it, in that order, and never looks further down. Each is no
+# more than what the tree builder does: `<option>` closes the option that is the current node,
+# `<li>` an item of its kind, a cell, a row or a section the cell, row and section it ends.
+# Whatever else stands between two of them is counted, and so is the next: `<li><dd><li>` and
+# `<td><b><td>` grow the estimate. The paragraph is the one kind looked for further down, as
+# the tree builder looks for it: each of these closes the nearest open `p` and all above it,
+# unless one of `_BUTTON_SCOPE` stands above that `p` (`<p><b>x<p>` is two paragraphs side by
+# side, `<p><object><p>` nests and is counted). In foreign content only the rule of the items
+# holds, as it did before.
+_KIND = {
+    "p": "p",
+    "li": "li",
+    "dd": "dd",
+    "dt": "dd",
+    "option": "option",
+    "td": "cell",
+    "th": "cell",
+    "tr": "row",
+    "tbody": "section",
+    "thead": "section",
+    "tfoot": "section",
+}
+_BUTTON_SCOPE = frozenset(
+    ["applet", "button", "caption", "html", "marquee", "object", "table", "td", "th", "template"]
+)
+_CLOSES = {
+    "p": ("p",),
+    "li": ("p", "li"),
+    "dd": ("p", "dd"),
+    "option": ("option",),
+    "cell": ("p", "cell"),
+    "row": ("p", "cell", "row"),
+    "section": ("p", "cell", "row", "section"),
+}
+# A cell, a row or a section outside a table (or a template) is ignored by the tree builder in
+# body: such a tag is not counted while the estimate holds no `table` and no `template` open.
+_TABLE_ONLY = frozenset({"td", "th", "tr", "tbody", "thead", "tfoot"})
+# What a table holds itself. Any other tag that stands directly in a table (a `table` open, no
+# cell, caption or template open in it) is moved in front of the table by the tree builder, and
+# the library inserts each such node in front of its sibling at a cost that grows with the
+# siblings already moved: quadratic, so those tags are counted against SCAN_FOSTERED_MAX.
+_TABLE_PARTS = frozenset(
+    ["table", "caption", "colgroup", "col", "tbody", "thead", "tfoot", "tr", "td", "th"]
+)
+_TABLE_CONTEXT = frozenset({"table", "td", "th", "caption", "template"})
 _BLOCKS = frozenset(
     [
         "p",
@@ -207,9 +260,7 @@ _BLOCKS = frozenset(
     ]
 )
 _CELLS = frozenset({"td", "th"})
-# A list item closes the item before it only when nothing the tree builder calls special stands
-# between the two: `<li><li>` is two items side by side, `<li><dd><li><dd>` nests without end.
-# The estimate closes the item that is right above, of the same kind, and counts every other.
+# The items of the first rounds' rule, which also holds in foreign content.
 _ITEMS = {"li": "li", "dd": "dd", "dt": "dd"}
 # The formatting elements of the HTML standard: closed by a block's end, the tree builder opens
 # them again under whatever follows.
@@ -234,20 +285,33 @@ _FORMATTING = frozenset(
 
 
 def cut_at_depth(text: str) -> tuple[str, bool]:
-    """`text` up to the tag that would open more than SCAN_DEPTH_MAX elements at once, or
-    open again more than SCAN_REOPENED_MAX formatting elements, and whether it was cut. A
-    linear estimate: start tags are counted, an end tag closes the nearest open element of its
-    name and all those above it, as the tree builder does. A formatting element is held from
-    its start tag to an end tag of its name, and every tag in between may open again all those
-    that are held. Of start tags written alike three are held, as the tree builder holds
-    three elements that are alike: a page that never closes its `<b>` is not one that grows."""
+    """`text` up to the tag that would open more than SCAN_DEPTH_MAX elements at once, open
+    again more than SCAN_REOPENED_MAX formatting elements, or be the tag past SCAN_FOSTERED_MAX
+    that stands directly in a table, and whether it was cut. A linear estimate: start tags are
+    counted but for the voids and the narrow rules of `_CLOSES` and `_TABLE_ONLY`, none of
+    which holds once `<svg>` or `<math>` was seen; an end tag closes the nearest open element
+    of its name and all those above it. A formatting element is held from its start tag to an
+    end tag of its name, and every tag in between may open again all those that are held. Of
+    start tags written alike three are held, as the tree builder holds three elements that are
+    alike: a page that never closes its `<b>` is not one that grows."""
     open_names: list[str] = []
     counts: dict[str, int] = {}
+    contexts: list[int] = []  # where in open_names a table, a cell, a caption, a template stand
+    scopes: list[int] = []  # where in open_names a `p` or one of _BUTTON_SCOPE stands
     held: dict[str, list[str | None]] = {}  # per name: the start tags held, as written if plain
     alike: dict[str, int] = {}
-    holding = reopened = 0
+    holding = reopened = fostered = 0
+    foreign = False
+
+    def close_top() -> None:
+        counts[open_names.pop()] -= 1
+        if contexts and contexts[-1] == len(open_names):
+            contexts.pop()
+        if scopes and scopes[-1] == len(open_names):
+            scopes.pop()
+
     for found in _OPENING.finditer(text):
-        name = found[2].lower()
+        name = found[2].translate(_ASCII_LOWER)
         if found[1] and held.get(name):
             ended = held[name].pop()
             if ended is not None:
@@ -256,34 +320,54 @@ def cut_at_depth(text: str) -> tuple[str, bool]:
         reopened += holding
         if reopened > SCAN_REOPENED_MAX:
             return text[: found.start()], True
-        if name in _NOT_NESTING:
-            continue
-        if not found[1]:
-            # An `a` ends the `a` before it: one is held at a time.
-            if name in _FORMATTING and not (name == "a" and held.get("a")):
-                rest = _PLAIN_REST.match(text, found.end(), found.end() + PLAIN_TAG_MAX)
-                written = text[found.start() : rest.end()] if rest else None
-                if written is not None and alike.get(written) == ALIKE_MAX:
-                    # The first of the three leaves. At most `holding` steps, and this tag
-                    # has just added as much to `reopened`: the scan stays linear in its cap.
-                    held[name].remove(written)
-                else:
-                    holding += 1
-                    if written is not None:
-                        alike[written] = alike.get(written, 0) + 1
-                held.setdefault(name, []).append(written)
-            if name in _ITEMS and open_names and _ITEMS.get(open_names[-1]) == _ITEMS[name]:
-                counts[open_names.pop()] -= 1
-            open_names.append(name)
-            counts[name] = counts.get(name, 0) + 1
-            if len(open_names) > SCAN_DEPTH_MAX:
+        if contexts and open_names[contexts[-1]] == "table" and name not in _TABLE_PARTS:
+            fostered += 1
+            if fostered > SCAN_FOSTERED_MAX:
                 return text[: found.start()], True
-        elif counts.get(name):
-            while open_names:
-                last = open_names.pop()
-                counts[last] -= 1
-                if last == name:
-                    break
+        if found[1]:
+            if counts.get(name):
+                while open_names:
+                    last = open_names[-1]
+                    close_top()
+                    if last == name:
+                        break
+            continue
+        foreign = foreign or name in _FOREIGN
+        if not foreign:
+            if name in _VOID:
+                continue
+            if name in _TABLE_ONLY and not (counts.get("table") or counts.get("template")):
+                continue
+            for kind in _CLOSES.get(_KIND.get(name, ""), ()):
+                if kind == "p" and scopes and open_names[scopes[-1]] == "p":
+                    bottom = scopes[-1]
+                    while len(open_names) > bottom:
+                        close_top()
+                elif open_names and _KIND.get(open_names[-1]) == kind:
+                    close_top()
+        elif name in _ITEMS and open_names and _ITEMS.get(open_names[-1]) == _ITEMS[name]:
+            close_top()
+        # An `a` ends the `a` before it: one is held at a time.
+        if name in _FORMATTING and not (name == "a" and held.get("a")):
+            rest = _PLAIN_REST.match(text, found.end(), found.end() + PLAIN_TAG_MAX)
+            written = text[found.start() : rest.end()] if rest else None
+            if written is not None and alike.get(written) == ALIKE_MAX:
+                # The first of the three leaves. At most `holding` steps, and this tag has
+                # just added as much to `reopened`: the scan stays linear in its cap.
+                held[name].remove(written)
+            else:
+                holding += 1
+                if written is not None:
+                    alike[written] = alike.get(written, 0) + 1
+            held.setdefault(name, []).append(written)
+        if name in _TABLE_CONTEXT:
+            contexts.append(len(open_names))
+        if name == "p" or name in _BUTTON_SCOPE:
+            scopes.append(len(open_names))
+        open_names.append(name)
+        counts[name] = counts.get(name, 0) + 1
+        if len(open_names) > SCAN_DEPTH_MAX:
+            return text[: found.start()], True
     return text, False
 
 
