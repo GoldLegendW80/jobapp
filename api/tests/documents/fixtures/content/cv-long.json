@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "kind": "cv",
+  "language": "en",
+  "content": {
+    "target": "Staff Engineer at Demo Industries (invented posting)",
+    "headline": "Staff engineer for data platforms, from the first prototype to the service other teams depend on",
+    "summary": "Staff engineer who takes data platforms from a first prototype to a dependable service. Designs the contracts between teams, writes the code that enforces them, and measures what users actually feel. Comfortable in front of clients, in a design review and in the middle of an incident, and happiest when a manual process disappears for good.",
+    "highlights": [
+      "Turned a weekly manual export into a live service",
+      "Ran design reviews across four product teams",
+      "Wrote the evaluation suite that gates each release"
+    ],
+    "competencies": ["Data platforms", "API design", "Distributed systems", "PostgreSQL", "Stream processing", "Evaluation", "Mentoring", "Client scoping"],
+    "experience": [
+      {"employer_key": "example-corp", "bullets": [
+        "Designed the event platform that carries orders, invoices and shipments between the sales, finance and logistics systems, with schemas checked at the edge and replay from any point in time.",
+        "Took the pricing engine from a spreadsheet maintained by hand to a typed service with its own test data, release notes and a dashboard the finance team reads every morning.",
+        "Introduced contract tests between the eight services of the order flow, so a breaking change fails in review rather than in production on a Friday evening.",
+        "Wrote and ran the evaluation suite that gates every release of the matching model, comparing precision and recall against a frozen reference set before anything ships.",
+        "Led the migration of the reporting warehouse to columnar storage, rehearsed on copies of production, with a rollback plan that was tested and never needed.",
+        "Scoped three client projects with the account team, turning loose wishes into written acceptance lines and a delivery plan the client signed.",
+        "Mentored four engineers through their first on call rotation, pairing on real incidents and writing down what each one taught us.",
+        "Built the internal command line tool that creates a new service with logging, metrics, health checks and a deploy pipeline in one step."
+      ]},
+      {"employer_key": "sample-labs", "bullets": [
+        "Built the ingestion layer for sensor data, from the devices to the time series store.",
+        "Wrote the alerting rules that page only when a customer would notice.",
+        "Maintained the shared libraries for configuration, logging and retries.",
+        "Ran the weekly architecture review and kept its decision log.",
+        "Automated the yearly certificate rotation across every environment.",
+        "Reduced the build time of the main repository by caching its dependencies."
+      ]},
+      {"employer_key": "demo-industries", "bullets": [
+        "Wrote a test harness for the factory floor data collectors.",
+        "Documented the line controllers' message formats.",
+        "Prototyped a dashboard for the quality team."
+      ]}
+    ],
+    "skills": [
+      {"label": "Languages", "items": ["Python", "Go", "SQL", "TypeScript", "Bash"]},
+      {"label": "Platform", "items": ["Kubernetes", "Docker", "Terraform", "GitHub Actions", "Linux"]},
+      {"label": "Data", "items": ["PostgreSQL", "Kafka", "Redis", "ClickHouse", "dbt"]},
+      {"label": "Practice", "items": ["Design reviews", "Contract tests", "Runbooks", "Postmortems", "Mentoring"]}
+    ],
+    "notes": "Too long on purpose: it needs the tightest step, or overflows."
+  }
+}

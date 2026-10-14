@@ -1,0 +1,31 @@
+Task D3 of the documents plan, 2026-10-14. Commands run and their results.
+
+On the Jetson (one block, 5,012 MiB available before, 5,072 after; everything removed):
+  tests/documents_render_jetson.sh --run                      exit 0, output in jetson-run.log
+    build table: cv-short 0/1 OK (1 render), cv-typical 1/1 OK (4), cv-long 5/1 OK (4),
+    cv-tightest 7/1 OK (4), letter-en 0/1 OK (1), letter-fr 0/1 OK (1)
+    50 renders of the typical CV: median 218 ms, max 291 ms
+    renderer cgroup: 98 MiB at rest, 110 MiB after, peak 134 MiB (0.2 s samples), anon 97 MiB
+    worker side: VmRSS 48,632 KiB before, 49,688 KiB after
+  tests/documents_render_jetson.sh --dir ../x                 refused: "--dir is a folder name"
+  tests/documents_render_jetson.sh                            dry run: prints 6 commands, runs nothing
+
+On the Mac (api/):
+  uv --native-tls run pytest -q tests/documents tests/ingestion/parser/test_compose_parser.py \
+    tests/test_openssl_armcap.py -m "not docker"               133 passed, 12 deselected
+  uv --native-tls run pytest -q tests/documents -m docker     12 passed (the image built by the
+                                                              fixture under its own tag, removed)
+  uv --native-tls run ruff check app tests                    All checks passed
+  uv --native-tls run ruff format --check app tests           356 files already formatted
+  bash -n tests/documents_render_jetson.sh                    clean
+  koalaman/shellcheck (CI's image) tests/documents_render_jetson.sh   clean
+
+Own stack (project d3stack, -f compose.yml -f compose.mac.yml and an override with d3stack-*
+image tags; compose.yml's renderer and worker, the worker built from this branch):
+  up -d --wait renderer                                       renderer healthy
+  run --rm --no-deps -T worker python -c "render_client.render(<cv-tightest at step 7>)"
+                                                              {"pages": 1, "pdf_bytes": 63617,
+                                                               "png_bytes": 121240,
+                                                               "host": "renderer"}
+  exec renderer: a connection to 1.1.1.1:443                  refused (OSError)
+  down -v --remove-orphans; docker rmi d3stack-*              done

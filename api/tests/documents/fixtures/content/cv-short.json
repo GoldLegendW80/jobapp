@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "kind": "cv",
+  "language": "en",
+  "content": {
+    "target": "Backend Engineer at Example Corp (invented posting)",
+    "headline": "Backend engineer for data heavy web services",
+    "summary": "Engineer who builds and runs Python services for internal teams. Comfortable from the first sketch to the production deploy.",
+    "highlights": [
+      "Moved a reporting service to Postgres",
+      "Wrote the team's deploy checklist",
+      "Mentored two interns"
+    ],
+    "competencies": ["Python", "PostgreSQL", "REST APIs", "Docker"],
+    "experience": [
+      {"employer_key": "example-corp", "bullets": [
+        "Run the reporting service that the sales teams read every morning.",
+        "Replaced nightly exports with a query layer over Postgres."
+      ]},
+      {"employer_key": "sample-labs", "bullets": [
+        "Built internal tools in Python and React."
+      ]}
+    ],
+    "skills": [
+      {"label": "Languages", "items": ["Python", "SQL", "TypeScript"]},
+      {"label": "Tools", "items": ["Docker", "Git", "Linux"]}
+    ],
+    "notes": "Fits at the loosest step in both layouts."
+  }
+}

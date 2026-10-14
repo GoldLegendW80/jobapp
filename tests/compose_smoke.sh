@@ -88,7 +88,7 @@ step "production config: only caddy publishes a port, mem_limit and restart ever
 import json, sys
 cfg = json.load(sys.stdin)
 services = cfg["services"]
-assert set(services) == {"api", "caddy", "db", "parser", "redis", "tailscale", "worker"}, sorted(services)
+assert set(services) == {"api", "caddy", "db", "parser", "redis", "renderer", "tailscale", "worker"}, sorted(services)
 for name, svc in services.items():
     ports, restart = svc.get("ports"), svc.get("restart")
     if name == "caddy":
@@ -125,9 +125,12 @@ assert parser["environment"] == {"PARSER_PORT": "7070"} and "env_file" not in pa
 assert not parser.get("volumes") and not parser.get("tmpfs") and not parser.get("depends_on"), parser
 assert list(parser["networks"]) == ["parsing"], parser["networks"]
 assert cfg["networks"]["parsing"]["internal"] is True, cfg["networks"]
-assert sorted(worker["networks"]) == ["default", "parsing"], worker["networks"]
+assert sorted(worker["networks"]) == ["default", "parsing", "rendering"], worker["networks"]
+# renderer (documents D3): every key is held by api/tests/documents/test_compose_renderer.py.
+assert list(services["renderer"]["networks"]) == ["rendering"], services["renderer"]["networks"]
+assert cfg["networks"]["rendering"]["internal"] is True, cfg["networks"]
 for name, svc in services.items():
-    if name not in ("parser", "worker"):
+    if name not in ("parser", "renderer", "worker"):
         assert list(svc["networks"]) == ["default"], (name, svc["networks"])
 # tailscale: the full checks of the service are in tests/tailscale_test.sh.
 ts = services["tailscale"]
@@ -158,11 +161,11 @@ ok "dev publishes 8000, 5432 and $HTTP_PORT on 127.0.0.1 only"
 
 step "dev stack up, every service healthy"
 "${DEV[@]}" up -d --build --wait --wait-timeout 180 >/dev/null 2>&1 || fail "stack did not become healthy"
-for svc in api caddy db parser redis worker; do
+for svc in api caddy db parser redis renderer worker; do
   health="$(docker inspect -f '{{.State.Health.Status}}' "$("${DEV[@]}" ps -q "$svc")")"
   [[ "$health" == "healthy" ]] || fail "$svc is $health"
 done
-ok "api, caddy, db, parser, redis, worker healthy"
+ok "api, caddy, db, parser, redis, renderer, worker healthy"
 # What the dev api runs, for the stand in that takes its place further down.
 API_IMAGE="$(docker inspect -f '{{.Config.Image}}' "$("${DEV[@]}" ps -q api)")"
 

@@ -587,7 +587,24 @@ Nothing yet.
 Nothing yet.
 
 ### M3
-Nothing yet.
+- **`nh3`, checked on 2026-10-14** on PyPI's JSON page and on OSV: 0.3.7 (released 2026-08-23) is the latest release, licence MIT, no dependency, an abi3 wheel for `manylinux_2_17_aarch64` (859,615 bytes: the Jetson) and one for macOS arm64, no advisory in either source. A1 holds. Pinned in the `ingestion` group, so it is in the worker image, which the parser runs, and never in the api image. The worker image built from this branch imports it on `aarch64`.
+- **The public suffix list** comes from the package `publicsuffixlist` 1.1.0.20261010 (pure Python, 109 kB, no dependency, MPL-2.0 like the list, no advisory on 2026-10-14): no package already in `uv.lock` carries the list. The snapshot is the one of 2026-10-10 (`domains.SNAPSHOT_DATE`, held to the pin by a test). Nothing downloads it at run time: the package's `update` extra is not installed.
+- **A4 was not read on Google's pages.** The rules of the implementers forbid any contact with a real Google host, so the shape of Gmail's own lines in the fixtures is the one this plan states and M1's fake writes. It stays an assumption until stage B reads ten real messages. One thing more for stage B to look at: whether the API returns a long header folded (with its line breaks) or on one line. `auth.py` reads both: a line break followed by a space or a tab is a fold and is removed, any other CR or LF makes the header unrecognised, which is not a pass.
+- **A12:** every `sending_domains` value of `hosts.ATS_SYSTEMS` is the author's belief, taken from no mailbox. Stage B corrects the table. A wrong row fails closed (the mail becomes a proposal).
+- **Time and memory per message, in the parser container on the Mac** (Apple M4, arm64, 2026-10-14, the worker image of this branch, one message per job through `parser_client.sanitise_mail_html`; `MAIL_MEASURE_OUT=<file> pytest -m docker tests/mail/test_parser_container.py`). Wall time includes the connection and the start of the locked down child; a child that sanitises a few hundred bytes costs 54 to 58 ms of CPU, which is the price of starting it.
+
+  | HTML | wall | CPU | resident | address space |
+  |---|---|---|---|---|
+  | 1 kB, an ordinary mail | 107 ms | 99 ms | 18.9 MiB | 39.7 MiB |
+  | 100 kB | 133 ms | 117 ms | 19.0 MiB | 39.7 MiB |
+  | 500 kB (links: the output is cut at its cap) | 304 ms | 258 ms | 32.6 MiB | 39.7 MiB |
+  | 500 kB of `&` | 300 ms | 279 ms | 33.4 MiB | 39.7 MiB |
+  | 500 kB of one unclosed tag | 67 ms | 58 ms | 20.2 MiB | 39.7 MiB |
+  | 100,000 nested `div` (cut by the scan before parsing) | 83 ms | 73 ms | 19.6 MiB | 39.7 MiB |
+  | 2 MB of four byte characters (cut at the input cap) | 123 ms | 86 ms | 37.2 MiB | 47.0 MiB |
+
+  The limit of the kind is 128 MiB of address space (`MAIL_HTML_AS`), 2.7 times the worst. Without the scan, 100,000 nested `div` take the sanitiser 10.4 s on the same Mac (its tree builder is quadratic in the depth), 10,000 take 100 ms.
+- **Not measured on the Jetson: this task had no access to it.** The same command there gives the figures. A9 is therefore open: on the Mac a message costs about 110 ms, half of it the start of the child, so the Jetson is probably near or over the 300 ms above which a job should carry ten messages. That batch is not built; one message per job is what `sanitise_mail_html` does today.
 
 ### M4
 - **N11, the `taken` case, decided 2026-10-14:** user B's fresh tokens are dropped without a call to Google. The fake, like Google, ends every token of one person for this client when one is revoked, so revoking B's would break A's connection. The same holds for the second tab of a user who is already connected. Every other refused grant (no `gmail.readonly`, an address that is not verified, no refresh token, another address while connected, a failed `getProfile`) is revoked, because no stored account lives on it. A grant whose owner is unknown (`userinfo` failed) is not revoked either.

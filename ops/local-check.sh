@@ -191,7 +191,7 @@ remove_docker_things() { # remove_docker_things [process id of a killed step ...
   # shellcheck disable=SC2086
   [[ -z "$ids" ]] || docker network rm $ids >/dev/null 2>&1 || true
   pattern="^${PREFIX}-"
-  for pid in "$@"; do pattern="$pattern|^jobapp-worker:parser-test-${pid}\$"; done
+  for pid in "$@"; do pattern="$pattern|^jobapp-worker:parser-test-${pid}\$|^jobapp-renderer:test-${pid}\$"; done
   ids="$(docker image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | awk -v p="$pattern" '$1 ~ p')"
   # shellcheck disable=SC2086
   [[ -z "$ids" ]] || docker image rm -f $ids >/dev/null 2>&1 || true
@@ -614,13 +614,16 @@ services:
     image: $PREFIX-worker:latest
   parser:
     image: $PREFIX-worker:latest
+  renderer:
+    image: $PREFIX-renderer:latest
 EOF
   # CI built with `docker buildx bake -f compose.yml`. The bake of Docker Desktop on this Mac
   # refuses that file ("service worker refers to undefined network default", measured on
-  # 2026-10-13), so the same three images are built by compose, which starts them below, under
-  # this check's names: the shared jobapp-*:latest tags are not written.
+  # 2026-10-13), so the same images, and the renderer's (documents D3), are built by compose,
+  # which starts them below, under this check's names: the shared jobapp-*:latest tags are not
+  # written.
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
-  docker compose --progress plain -p "$PREFIX-build" "${files[@]}" build api worker caddy
+  docker compose --progress plain -p "$PREFIX-build" "${files[@]}" build api worker caddy renderer
 }
 
 lane_images() {

@@ -75,7 +75,7 @@ body_of() { sed -n '/^---8<---$/,$p' <<<"$1" | tail -n +2; }
 hdr() { headers_of "$1" | grep -i "^$2:" | head -n 1 | cut -d' ' -f2-; }
 
 step "services healthy, only caddy published, on loopback"
-for svc in api caddy db redis worker parser tailscale; do
+for svc in api caddy db redis worker parser renderer tailscale; do
   id="$(rc ps -q "$svc")"
   [[ -n "$id" ]] || fail "$svc is not running"
   # A service that has just (re)started is `starting` until its first healthcheck: give it a minute.
@@ -92,7 +92,7 @@ for svc in api caddy db redis worker parser tailscale; do
     [[ -z "$ports" ]] || fail "$svc publishes $ports"
   fi
 done
-ok "api, caddy, db, redis, worker, parser, tailscale healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
+ok "api, caddy, db, redis, worker, parser, renderer, tailscale healthy; caddy alone on 127.0.0.1:$PORT (its tunnel listener :8080 unpublished)"
 if [[ "$HOST" == "local" ]]; then
   ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") print $(i + 1)}')"
 else
@@ -126,9 +126,9 @@ if rc exec -T api python -c "'import claude_agent_sdk'" >/dev/null 2>&1; then
 fi
 [[ "$(rc exec -T api id -u | tr -d '\r')" == "10001" ]] || fail "api does not run as uid 10001"
 ok "runtime image: no dev dependencies, runs as uid 10001"
-[[ "$(r "docker inspect -f '{{.Architecture}}' jobapp-api:latest jobapp-worker:latest jobapp-caddy:latest" | sort -u)" == "arm64" ]] ||
+[[ "$(r "docker inspect -f '{{.Architecture}}' jobapp-api:latest jobapp-worker:latest jobapp-caddy:latest jobapp-renderer:latest" | sort -u)" == "arm64" ]] ||
   fail "images are not arm64"
-ok "jobapp-api, jobapp-worker and jobapp-caddy images are arm64"
+ok "jobapp-api, jobapp-worker, jobapp-caddy and jobapp-renderer images are arm64"
 
 # --- parser (ingestion G2a) --------------------------------------------------------------------
 # Read only, a few seconds: what the container is (docker inspect, judged here by

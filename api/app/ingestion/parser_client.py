@@ -72,7 +72,7 @@ logger = logging.getLogger("app.ingestion.parser_client")
 
 HOST = "parser"
 PORT = 7070
-KINDS = ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render", "ping")
+KINDS = ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render", "mail_html", "ping")
 
 MIB = 1024 * 1024
 MAX_HEADER = 4096
@@ -92,6 +92,13 @@ MAX_IMAGE_BYTES = 300_000  # ingestion_images.jpeg
 MAX_IMAGE_SIDE = 2000  # ingestion_images.width and height
 MAX_NOTES = 16
 JPEG_MAGIC = b"\xff\xd8\xff"
+# The HTML of a mail (kind `mail_html`, mail M3): the caps of sandbox/mail_html.py. Of an answer
+# of that kind the worker reads at most 1.5 MB, not the 4 MiB of a document.
+MAIL_HTML_MAX_ANSWER = 1_500_000
+MAX_MAIL_HTML_BYTES = 500_000  # mail_messages.body_html_sanitized
+MAX_MAIL_TEXT_CHARS = 500_000  # mail_messages.body_text
+MAX_MAIL_IMAGES = 100_000
+MAIL_LINK_REL = "noopener noreferrer nofollow"
 PAGE_BREAK = "\f"
 
 # Why the server answered without a result (sandbox/server.py, CODES), and what a child may say
@@ -436,14 +443,14 @@ def _values(found: Mapping[str, Any]) -> dict[str, int]:
 _HEADER_KEYS = frozenset({"ok", "failure", "code", "length"})
 
 
-def check_header(line: bytes) -> int:
-    """The length of the body a header line announces. Raises the error a refusal stands for,
-    or ParserMalformedError when the line is not a header."""
+def check_header(line: bytes, max_answer: int = MAX_ANSWER) -> int:
+    """The length of the body a header line announces, at most `max_answer`. Raises the error
+    a refusal stands for, or ParserMalformedError when the line is not a header."""
     header = loads(line)
     if not isinstance(header, dict) or set(header) != _HEADER_KEYS:
         _bad("header")
     ok, failure, code = header["ok"], header["failure"], header["code"]
-    length = _integer(header["length"], 0, MAX_ANSWER, "length")
+    length = _integer(header["length"], 0, max_answer, "length")
     if ok is True:
         if failure is not None or code != "ok":
             _bad("header")
@@ -685,6 +692,140 @@ def check_parsed(answer: Any, kind: str) -> Parsed:
     )
 
 
+# --- reading an answer: the HTML of a mail (mail M3) --------------------------------------------
+
+_MAIL_KEYS = frozenset({"ok", "kind", "html", "text", "remote_images", "truncated", "usage"})
+# The allow list of sandbox/mail_html.py, stated a second time on purpose: the child that
+# sanitised the HTML may be the process a mail took over, so what it calls sanitised is read
+# here again, by a few regular expressions and no parser. tests/mail keeps the two in step.
+MAIL_TAGS = frozenset(
+    [
+        "p",
+        "br",
+        "div",
+        "span",
+        "a",
+        "b",
+        "strong",
+        "i",
+        "em",
+        "u",
+        "ul",
+        "ol",
+        "li",
+        "blockquote",
+        "pre",
+        "code",
+        "table",
+        "thead",
+        "tbody",
+        "tr",
+        "td",
+        "th",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "hr",
+        "img",
+    ]
+)
+_MAIL_VOID = frozenset({"br", "hr", "img"})
+# One piece of sanitised HTML as the sanitiser serialises it: text without `<`, or a tag in
+# lower case whose attributes are each ` name="value"` with no quote and no angle bracket in
+# the value (the serialiser writes those three as character references).
+_MAIL_PIECE = re.compile(r'[^<]+|<(/?)([a-z][a-z0-9]*)((?: [a-z-]+="[^"<>]*")*)>')
+_MAIL_ATTRIBUTE = re.compile(r' ([a-z-]+)="([^"<>]*)"')
+_MAIL_LINK = re.compile(r"(?:https?://|mailto:)\S+", re.IGNORECASE)
+_MAIL_REMOTE = re.compile(r"https?://\S+", re.IGNORECASE)
+_MAIL_NUMBER = re.compile(r"[0-9]{1,4}")
+_MAIL_VALUES = MappingProxyType(
+    {
+        ("a", "href"): _MAIL_LINK.fullmatch,
+        ("a", "rel"): lambda value: value == MAIL_LINK_REL,
+        ("img", "data-src"): _MAIL_REMOTE.fullmatch,
+        ("img", "width"): _MAIL_NUMBER.fullmatch,
+        ("img", "height"): _MAIL_NUMBER.fullmatch,
+        ("img", "alt"): lambda value: True,
+    }
+)
+
+
+@dataclass(frozen=True)
+class MailHtml:
+    """The HTML of a mail that passed every check: it can be stored and shown."""
+
+    html: str  # the allow list and nothing else; no `src`: remote images wait in `data-src`
+    text: str  # the plain text version, links written "label (address)"
+    remote_images: int
+    truncated: bool
+    usage: Mapping[str, int] | None = None
+
+
+def _mail_html(value: Any) -> str:
+    """`value` when it is HTML of the allow list, piece by piece. One pass, no backtracking
+    over more than one piece: a megabyte is read in a few milliseconds."""
+    if not isinstance(value, str) or len(value) > MAX_MAIL_HTML_BYTES:
+        _bad("html_too_long")
+    if "\x00" in value:
+        _bad("nul")
+    if _SURROGATE.search(value):
+        _bad("surrogate")
+    if len(value.encode("utf-8")) > MAX_MAIL_HTML_BYTES:
+        _bad("html_too_long")
+    position = 0
+    while position < len(value):
+        piece = _MAIL_PIECE.match(value, position)
+        if piece is None:
+            _bad("html")
+        position = piece.end()
+        closing, tag, attributes = piece[1], piece[2], piece[3]
+        if tag is None:
+            continue
+        if tag not in MAIL_TAGS:
+            _bad("html_tag")
+        if closing:
+            if attributes or tag in _MAIL_VOID:
+                _bad("html")
+            continue
+        seen = set()
+        for name, content in _MAIL_ATTRIBUTE.findall(attributes):
+            allowed = _MAIL_VALUES.get((tag, name))
+            if allowed is None or name in seen or not allowed(content):
+                _bad("html_attribute")
+            seen.add(name)
+    return value
+
+
+def check_mail_html(answer: Any) -> MailHtml:
+    """The sanitised HTML an answer of the kind `mail_html` holds, or the error it stands for.
+    As for check_parsed, nothing of `answer` is trusted, the HTML least of all."""
+    if not isinstance(answer, dict) or type(answer.get("ok")) is not bool:
+        _bad("ok")
+    if not answer["ok"]:
+        _refusal(answer)
+    if not _MAIL_KEYS - {"usage"} <= set(answer) <= _MAIL_KEYS:
+        _bad("keys")
+    if answer["kind"] != "mail_html":
+        _bad("kind")
+    text = answer["text"]
+    if not isinstance(text, str) or len(text) > MAX_MAIL_TEXT_CHARS:
+        _bad("text_too_long")
+    if "\x00" in text:
+        _bad("nul")
+    if _SURROGATE.search(text):
+        _bad("surrogate")
+    if type(answer["truncated"]) is not bool:
+        _bad("truncated")
+    return MailHtml(
+        html=_mail_html(answer["html"]),
+        text=text,
+        remote_images=_integer(answer["remote_images"], 0, MAX_MAIL_IMAGES, "remote_images"),
+        truncated=answer["truncated"],
+        usage=_usage(answer.get("usage")),
+    )
+
+
 # --- reading an answer: a ping ------------------------------------------------------------------
 
 _PING_KEYS = frozenset({"ok", "kind", "sandbox", "received", "sha256", "usage"})
@@ -821,7 +962,9 @@ def request_line(kind: str, size: int, options: Mapping[str, Any] | None) -> byt
     return line
 
 
-async def _exchange(line: bytes, data: bytes, host: str, port: int) -> bytes:
+async def _exchange(
+    line: bytes, data: bytes, host: str, port: int, max_answer: int = MAX_ANSWER
+) -> bytes:
     """Send one request and return the body of the answer, its length checked. The caller holds
     the deadline."""
     try:
@@ -850,7 +993,7 @@ async def _exchange(line: bytes, data: bytes, host: str, port: int) -> bytes:
             raise ParserDownError("closed") from None
         if len(answer) > MAX_HEADER:
             _bad("header_too_long")
-        length = check_header(answer)
+        length = check_header(answer, max_answer)
         try:
             body = await reader.readexactly(length)
         except (asyncio.IncompleteReadError, ConnectionError):
@@ -882,6 +1025,7 @@ async def _call[Checked](
     port: int,
     timeout_s: float,
     check: Callable[[Any], Checked],
+    max_answer: int = MAX_ANSWER,
 ) -> Checked:
     """One request and its answer, decoded and judged by `check`. Logs one line, whatever the
     end: the kind, the size sent, the outcome as a code, the duration."""
@@ -893,7 +1037,7 @@ async def _call[Checked](
             raise ParserRefusedError("too_large")
         try:
             async with asyncio.timeout(timeout_s):
-                body = await _exchange(line, data, host, port)
+                body = await _exchange(line, data, host, port, max_answer)
         except TimeoutError:
             raise ParserTimeoutError("deadline") from None
         # Off the event loop: an answer written to be slow to read must not stall the worker.
@@ -930,6 +1074,8 @@ async def parse(
     otherwise; `error.failure` says whether the file or the server failed."""
     if kind == "ping":
         raise ValueError("ping is not a parse: use ping()")
+    if kind == "mail_html":
+        raise ValueError("mail_html is not a document: use sanitise_mail_html()")
     return await _call(
         kind, data, options, host, port, timeout_s, lambda answer: check_parsed(answer, kind)
     )
@@ -953,6 +1099,30 @@ async def ping(
         return report
 
     return await _call("ping", data, None, host, port, timeout_s, check)
+
+
+async def sanitise_mail_html(
+    html: str,
+    *,
+    host: str = HOST,
+    port: int = PORT,
+    timeout_s: float = TIMEOUT_S,
+) -> MailHtml:
+    """Have the HTML part of one mail sanitised by the parser service and return the checked
+    result (mail M3; M7 owns the call). The HTML is a stranger's: it is parsed there, in the
+    process that holds no token, and never here. Raises a ParserError otherwise, whatever it
+    is: the caller then stores the mail with its plain text part, or its snippet, and no HTML.
+    A mail is never lost because its HTML is hostile."""
+    return await _call(
+        "mail_html",
+        html.encode("utf-8", "replace"),
+        None,
+        host,
+        port,
+        timeout_s,
+        check_mail_html,
+        MAIL_HTML_MAX_ANSWER,
+    )
 
 
 # --- command line -------------------------------------------------------------------------------

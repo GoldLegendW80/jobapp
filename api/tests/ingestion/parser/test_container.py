@@ -864,7 +864,14 @@ def test_the_kinds_without_a_handler_answer_not_supported_yet(stack: Stack) -> N
         " if os.path.isfile('" + sandbox + "/' + n)))"
     )
     handlers = {name + ".py" for name in main.HANDLERS.values() if name}
-    assert handlers == {"pdf_text.py", "docx.py", "linkedin_zip.py", "image.py", "pdf_render.py"}
+    assert handlers == {
+        "pdf_text.py",
+        "docx.py",
+        "linkedin_zip.py",
+        "image.py",
+        "pdf_render.py",
+        "mail_html.py",  # mail M3: the HTML of a mail, tests/mail/test_parser_container.py
+    }
     # The image as it is built (the client runs it with nothing mounted there): all five.
     shipped = set(json.loads(stack.inside("client", files).stdout.replace("'", '"')))
     assert handlers <= shipped

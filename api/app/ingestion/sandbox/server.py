@@ -58,7 +58,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CHILD = (sys.executable, "-I", "-B", os.path.join(HERE, "main.py"))
 
 DEFAULT_PORT = 7070
-KINDS = ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render", "ping")
+KINDS = ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render", "mail_html", "ping")
 MIB = 1024 * 1024
 MAX_HEADER = 4096
 MAX_SIZE = 20 * MIB

