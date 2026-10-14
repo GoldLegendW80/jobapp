@@ -8,9 +8,11 @@ What goes, by SPEC-ingestion.md ("Deletion is a hard delete") and the plan's "Fa
   place), and an item left with none is deleted, as is a pending derived item that counted it
   (its value was computed from what the document said). An accepted item keeps its value, which
   is the user's own profile now, and each of its citations of the document becomes
-  `{document_id, source_deleted: true}` with the excerpt gone. Every other item (rejected,
-  superseded, invalid, undone) keeps only its section, key, action and value hash, with the
-  value hashes of a conflict: what a rerun needs so as not to propose a refused value again
+  `{document_id, source_deleted: true}` with the excerpt gone; but a value of it that the user
+  turned down (they accepted with their own value, by an edit or by picking another value of a
+  conflict) and that only this document gave keeps its hash alone, no text. Every other item
+  (rejected, superseded, invalid, undone) keeps only its section, key, action and value hash,
+  with the value hashes of a conflict: what a rerun needs so as not to propose a refused value again
   (`merge.py`, rule 4), and nothing a document said. Such an item has no run any more, so no
   run's page lists it;
 - every `agent_events` row of the steps that read the document. A step still at work has its
@@ -225,7 +227,7 @@ def _strip_proposals(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) ->
             proposal.payload = kept
             counts["proposals_kept"] += 1
         elif proposal.status is ProposalStatus.accepted:
-            proposal.payload = _accepted(payload, gone)
+            proposal.payload = _accepted(payload, gone, proposal.edited_value)
             counts["proposals_kept"] += 1
         else:
             proposal.payload = remembered(payload)
@@ -285,14 +287,33 @@ def _marked(citations: Any, gone: str) -> list[dict[str, Any]]:
     ]
 
 
-def _accepted(payload: Mapping[str, Any], gone: str) -> dict[str, Any]:
-    kept = {**payload, "citations": _marked(payload.get("citations"), gone)}
+def _turned_down(entry: dict[str, Any], gone: str, kept: str | None) -> dict[str, Any]:
+    """A value an accepted item showed, with its citations marked. When the user kept a value of
+    their own (`kept` is its hash) and the document was the only source of this one, it is a
+    value the user turned down and its text goes: the hash stays, for the rerun to refuse it."""
+    cited = _of(entry.get("citations"))
+    # A citation an earlier delete marked is a source that is gone already.
+    only = bool(cited) and all(
+        one.get(SOURCE_DELETED) is True or str(one.get("document_id")) == gone for one in cited
+    )
+    entry = {**entry, "citations": _marked(entry.get("citations"), gone)}
+    if only and kept is not None and entry.get("value_hash") != kept:
+        entry.pop("value", None)
+    return entry
+
+
+def _accepted(payload: Mapping[str, Any], gone: str, edited: Any = None) -> dict[str, Any]:
+    """An accepted item keeps its value, its citation of the document turned into "source
+    deleted". An item accepted with the user's own value (an edit, or the pick of another value
+    of a conflict, `edited`) turned down the values the documents gave; of those, the ones this
+    document alone gave lose their text."""
+    kept = items.value_hash(edited) if edited is not None else None
+    result = _turned_down(dict(payload), gone, kept)
     if CONFLICT in payload:
-        kept[CONFLICT] = [
-            {**other, "citations": _marked(other.get("citations"), gone)}
-            for other in _of(payload.get(CONFLICT))
+        result[CONFLICT] = [
+            _turned_down(dict(other), gone, kept) for other in _of(payload[CONFLICT])
         ]
-    return kept
+    return result
 
 
 def remembered(payload: Mapping[str, Any]) -> dict[str, Any]:

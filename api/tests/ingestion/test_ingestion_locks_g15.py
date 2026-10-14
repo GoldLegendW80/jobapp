@@ -379,6 +379,104 @@ def test_a_locked_accepted_item_keeps_its_value_and_says_source_deleted(
     assert kept["citations"][1]["excerpt"] == "Alice Martin"
 
 
+def tables(factory: Factory) -> str:
+    """Every row of every ingestion table as text, for a search of a planted token."""
+    with factory() as db:
+        names = sorted(
+            name
+            for name in sa.inspect(db.get_bind()).get_table_names()
+            if name.startswith("ingestion_")
+        )
+        rows = [
+            list(row) for name in names for row in db.execute(sa.text(f'select * from "{name}"'))
+        ]
+        return json.dumps(rows, default=str)
+
+
+def named_as(token: str) -> tuple[str, str, str, str]:
+    return ("identity", "full_name", f"Alice {token}", "Alice Martin")
+
+
+def hashes_of(payload: dict[str, Any]) -> list[str]:
+    return [payload["value_hash"], *(other["value_hash"] for other in payload.get("conflict", []))]
+
+
+@pytest.mark.parametrize("how", ["edit", "pick"])
+def test_a_value_the_user_turned_down_loses_its_text_with_its_only_source(
+    factory: Factory,
+    alice: uuid.UUID,
+    settings: Settings,
+    caplog: pytest.LogCaptureFixture,
+    how: str,
+) -> None:
+    """The user accepted with a value of their own, by an edit or by the pick of the other value
+    of a conflict. The value they turned down was drawn from one document; once that is deleted
+    its text is nowhere, its hash stays so that a rerun does not propose it again."""
+    token = f"tok{secrets.token_hex(8)}"
+    down = named_as(token)
+    if how == "edit":
+        run_id, (cv,) = mh.merged(factory, alice, settings, [mh.CV], [[down, EMAIL]])
+        own = "Alicia Q"
+    else:
+        run_id, (cv, _) = mh.merged(
+            factory, alice, settings, [mh.CV, mh.LETTER], [[down], [RENAMED]]
+        )
+        own = "Alice Marie Martin"
+    found = by_key(mh.proposals_of(factory, alice, run_id))
+    named = found["full_name"]
+    hashes = hashes_of(named.payload)
+    assert len(hashes) == (1 if how == "edit" else 2)
+    with factory() as db, db.begin():
+        assert proposals.accept(db, alice, named.id, now(), edited_value=own) is not None
+    assert token in everything(factory)
+
+    with caplog.at_level("DEBUG"):
+        assert delete(factory, alice, cv) is True
+
+    with factory() as db:
+        kept = db.get_one(Proposal, named.id)
+        assert kept.edited_value == own
+        assert kept.payload["citations"][0] == {"document_id": str(cv), "source_deleted": True}
+        assert hashes_of(kept.payload) == hashes
+        shown = review_router._item(kept, None, {}, set())
+    assert shown.value == own
+    assert all(other.value != down[2] for other in shown.conflict)
+    assert token not in everything(factory) + tables(factory)
+    assert token not in caplog.text + "".join(
+        json.dumps(vars(r), default=str) for r in caplog.records
+    )
+
+    # The same documents read again: the value turned down is not proposed, from its hash alone.
+    other = marked(mh.LETTER)[0]  # the letter of the pick is still there: another file
+    texts, facts = ([mh.CV], [[down]]) if how == "edit" else ([mh.CV, other], [[down], [RENAMED]])
+    again, _ = mh.merged(factory, alice, settings, texts, facts)
+    assert mh.proposals_of(factory, alice, again) == []
+
+
+def test_a_turned_down_value_with_a_second_source_keeps_its_text_until_that_goes(
+    factory: Factory, alice: uuid.UUID, settings: Settings
+) -> None:
+    token = f"tok{secrets.token_hex(8)}"
+    down = named_as(token)
+    run_id, (cv, letter) = mh.merged(factory, alice, settings, [mh.CV, mh.LETTER], [[down], [down]])
+    (named,) = mh.proposals_of(factory, alice, run_id)
+    with factory() as db, db.begin():
+        assert proposals.accept(db, alice, named.id, now(), edited_value="Alicia Q") is not None
+
+    assert delete(factory, alice, cv) is True
+    with factory() as db:
+        kept = db.get_one(Proposal, named.id).payload
+    assert kept["value"] == f"Alice {token}"  # the letter still says it
+    assert kept["citations"][0] == {"document_id": str(cv), "source_deleted": True}
+    assert kept["citations"][1]["document_id"] == str(letter)
+
+    assert delete(factory, alice, letter) is True
+    with factory() as db:
+        kept = db.get_one(Proposal, named.id).payload
+    assert "value" not in kept
+    assert token not in everything(factory) + tables(factory)
+
+
 # --- a step at work ------------------------------------------------------------------------------
 
 
