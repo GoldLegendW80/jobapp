@@ -1,0 +1,13 @@
+# documents D2: commands run on the Mac, 2026-10-14
+
+$ uv --native-tls run pytest -q tests/documents tests/mail tests/test_config.py -m "not docker"
+851 passed in 38.69s
+
+$ uv --native-tls run ruff check app tests
+All checks passed!
+$ uv --native-tls run ruff format --check app tests
+365 files already formatted
+
+Measurements
+- 20 KB CV (19,579 bytes of canonical JSON, 694 issues, 296 corrections), fix_separators + checks.run + remove_remaining: best of 5 runs 19.8 ms on the Mac (the plan's line is 200 ms; measured, not asserted, as tests carry no clock bound).
+- False issues of the fact check on the three invented CVs (tests/documents/test_measurements.py): cv_short 0, cv_typical 2 ("3.12" of Python 3.12, "16" of PostgreSQL 16), cv_long 3 (the same and "18" of React 18). All are version numbers in the skills section.

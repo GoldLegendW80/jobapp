@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "target": "Lumen Example, Senior Platform Engineer",
+  "headline": "Platform Engineer, Kubernetes and Python",
+  "summary": "Platform engineer with about 3.5 years of professional engineering.",
+  "highlights": [
+    "Moved 40 services to Kubernetes"
+  ],
+  "competencies": [
+    "Kubernetes",
+    "Python"
+  ],
+  "experience": [
+    {
+      "employer_key": "example-corp",
+      "bullets": [
+        "Run the deployment platform of the payments team."
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "label": "Cloud",
+      "items": [
+        "Kubernetes",
+        "Terraform"
+      ]
+    }
+  ]
+}

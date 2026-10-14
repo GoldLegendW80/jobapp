@@ -1,0 +1,13 @@
+{
+  "revision": 1,
+  "sections": {
+    "identity": {
+      "full_name": "Blake Sample",
+      "email": "e2e-blake@example.org"
+    },
+    "experience": null,
+    "facts": null,
+    "skills": null,
+    "answers": null
+  }
+}
