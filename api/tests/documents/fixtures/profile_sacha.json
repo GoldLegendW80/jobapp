@@ -1,0 +1,46 @@
+{
+  "revision": 1,
+  "sections": {
+    "identity": {
+      "full_name": "Sacha Duvalier",
+      "headline": "Data Engineer",
+      "email": "e2e-sacha@example.org",
+      "phone": "+33 7 00 44 55 66",
+      "city": "Lyon",
+      "country": "France",
+      "website": "https://sacha.example.org",
+      "linkedin_url": "https://www.linkedin.com/in/sacha-duvalier",
+      "languages": [{"name": "English", "level": "Fluent"}, {"name": "French", "level": "Native"}]
+    },
+    "experience": {
+      "employers": [
+        {"key": "ferme-numerique", "organisation": "Ferme Numérique", "title": "Data Engineer", "start": "2021-09", "end": null, "location": "Lyon"},
+        {"key": "kestrel", "organisation": "Kestrel Analytics Ltd", "title": "Software Developer", "start": "2018-03", "end": "2021-08"}
+      ],
+      "education": [
+        {"school": "University of Northvale", "degree": "BSc Mathematics", "start": "2014", "end": "2017"}
+      ]
+    },
+    "facts": {
+      "blocks": [
+        {"title": "Achievements", "body": "I reduced pipeline costs by 20% by moving batch jobs to Spark.\nI work in a team of three data engineers.\nI cut dashboard load time by 30%."},
+        {"title": "Certifications", "body": "Google Professional Data Engineer, 2023"}
+      ]
+    },
+    "skills": {
+      "years_experience": 8.5,
+      "have": [
+        {"name": "Data", "terms": ["Python 3.11", "Spark 3.5", "Airflow 2", "dbt", "Snowflake", "SQL", "Scala"]}
+      ],
+      "adjacent": [],
+      "none": []
+    },
+    "answers": {
+      "notice_period": "Two months.",
+      "salary_policy": "55 to 60k EUR gross per year.",
+      "relocation": "Remote, or on site in Lyon.",
+      "motivation": "I like building data platforms that analysts trust.",
+      "work_authorization": [{"country": "France", "answer": "EU citizen, no sponsorship needed."}]
+    }
+  }
+}

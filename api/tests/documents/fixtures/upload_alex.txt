@@ -1,0 +1,5 @@
+Alex Example
+Platform Engineer, Lyon
+Example Corp, Platform Engineer, since January 2023. Run the deployment platform of the payments team.
+Sample Labs, Software Developer, March 2021 to December 2022.
+Speaker at the Lyon Python Meetup.

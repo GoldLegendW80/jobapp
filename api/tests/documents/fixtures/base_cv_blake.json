@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "headline": "Data Analyst",
+  "summary": "Data analyst who builds reporting in SQL and Python.",
+  "highlights": [],
+  "competencies": [
+    "SQL",
+    "Python"
+  ],
+  "experience": [
+    {
+      "employer_key": "northwind-example",
+      "bullets": [
+        "Built the weekly sales reporting in SQL."
+      ]
+    }
+  ],
+  "skills": [],
+  "fixed": {
+    "employers": [
+      {
+        "key": "northwind-example",
+        "organisation": "Northwind Example",
+        "title": "Data Analyst",
+        "start": "2020",
+        "end": "2024"
+      }
+    ],
+    "schools": [],
+    "languages": [
+      {
+        "name": "German",
+        "level": "Native"
+      }
+    ]
+  }
+}

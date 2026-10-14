@@ -1,0 +1,74 @@
+{
+  "schema": 1,
+  "target": "Lumen Example, Senior Platform Engineer",
+  "headline": "Platform Engineer: Kubernetes, Terraform and Python for product teams that ship every day",
+  "summary": "Platform engineer with about 3.5 years of professional engineering, about 2 years in a platform title. At Example Corp, since January 2023, I run the deployment platform of the payments team and moved 40 services to Kubernetes. At Sample Labs, from March 2021 to December 2022, I built internal tools in Python and React for the support team. Bachelor of Computer Science, Example Institute of Technology, 2021.",
+  "highlights": [
+    "Moved 40 services to Kubernetes at Example Corp",
+    "Owner of the deployment platform of the payments team",
+    "Internal tools in Python and React at Sample Labs"
+  ],
+  "competencies": [
+    "Kubernetes",
+    "Terraform",
+    "AWS",
+    "Python",
+    "FastAPI",
+    "PostgreSQL",
+    "React",
+    "TypeScript"
+  ],
+  "experience": [
+    {
+      "employer_key": "example-corp",
+      "bullets": [
+        "Run the deployment platform of the payments team, from the first commit to production, with Kubernetes, Terraform and AWS.",
+        "Moved 40 services to Kubernetes, one service at a time, with Terraform modules on AWS shared by every team.",
+        "Wrote the platform's backend services in Python with FastAPI and PostgreSQL, and its dashboards in React.",
+        "Keep the platform's runbooks and the on-call notes of the payments team."
+      ]
+    },
+    {
+      "employer_key": "sample-labs",
+      "bullets": [
+        "Built internal tools in Python and React for the support team.",
+        "Worked with TypeScript on the frontend of those tools.",
+        "Wrote the tests of the support tools with pytest."
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "label": "Cloud",
+      "items": [
+        "Kubernetes",
+        "Terraform",
+        "AWS",
+        "Docker"
+      ]
+    },
+    {
+      "label": "Backend",
+      "items": [
+        "Python 3.12",
+        "FastAPI",
+        "PostgreSQL 16",
+        "Redis"
+      ]
+    },
+    {
+      "label": "Frontend",
+      "items": [
+        "React 18",
+        "TypeScript"
+      ]
+    },
+    {
+      "label": "Languages",
+      "items": [
+        "English, fluent",
+        "French, native"
+      ]
+    }
+  ]
+}

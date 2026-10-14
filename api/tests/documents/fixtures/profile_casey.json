@@ -1,0 +1,44 @@
+{
+  "revision": 3,
+  "sections": {
+    "identity": {
+      "full_name": "Casey Sample",
+      "headline": "Ingénieure données",
+      "email": "e2e-casey@example.org",
+      "phone": "+33 6 12 34 56 78",
+      "city": "Nantes",
+      "country": "France",
+      "website": "https://casey.example.org",
+      "languages": [{"name": "English", "level": "Fluent"}, {"name": "French", "level": "Native"}]
+    },
+    "experience": {
+      "employers": [
+        {"key": "exemple-sa", "organisation": "Exemple SA", "title": "Ingénieure données", "start": "2022-12", "end": null, "location": "Nantes"},
+        {"key": "sample-labs", "organisation": "Sample Labs", "title": "Data Analyst", "start": "2020-09", "end": "2022-11"}
+      ],
+      "education": [
+        {"school": "Exemple University", "degree": "MSc in Data Science", "start": "2018", "end": "2020"}
+      ]
+    },
+    "facts": {
+      "blocks": [
+        {"title": "Experience", "body": "About 3.5 years of professional experience.\nAt Exemple SA I build the data platform in Python and dbt, and I moved the jobs to Python 3.11.\nAt Sample Labs I built the sales dashboards in SQL."},
+        {"title": "Certifications", "body": "AWS Certified Solutions Architect Associate (2023)."}
+      ]
+    },
+    "skills": {
+      "years_experience": 3.5,
+      "have": [
+        {"name": "Data", "terms": ["Python", "PostgreSQL", "SQL", "dbt", "Airflow"]},
+        {"name": "Office", "terms": ["Excel"]}
+      ],
+      "adjacent": [],
+      "none": []
+    },
+    "answers": {
+      "notice_period": "Three months.",
+      "motivation": "I like building data platforms that analysts trust.",
+      "work_authorization": [{"country": "France", "answer": "EU citizen, no sponsorship needed."}]
+    }
+  }
+}

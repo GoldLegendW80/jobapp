@@ -1,0 +1,3 @@
+Blake Sample
+Data Analyst at Northwind Example, 2020 to 2024. Built the weekly sales reporting in SQL.
+German (native).

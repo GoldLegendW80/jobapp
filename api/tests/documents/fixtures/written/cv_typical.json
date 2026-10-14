@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "target": "Lumen Example, Senior Platform Engineer",
+  "headline": "Platform Engineer for teams that ship every day",
+  "summary": "Platform engineer with about 3.5 years of professional engineering, about 2 years in a platform title. At Example Corp I run the deployment platform of the payments team and moved 40 services to Kubernetes.",
+  "highlights": [
+    "Moved 40 services to Kubernetes",
+    "Deployment platform of the payments team",
+    "Internal tools in Python and React"
+  ],
+  "competencies": [
+    "Kubernetes",
+    "Terraform",
+    "AWS",
+    "Python",
+    "FastAPI",
+    "PostgreSQL",
+    "CI/CD",
+    "Platform engineering"
+  ],
+  "experience": [
+    {
+      "employer_key": "example-corp",
+      "bullets": [
+        "Run the deployment platform of the payments team, from the first commit to production.",
+        "Moved 40 services to Kubernetes with Terraform on AWS.",
+        "Wrote the platform's backend services in Python with FastAPI and PostgreSQL."
+      ]
+    },
+    {
+      "employer_key": "sample-labs",
+      "bullets": [
+        "Built internal tools in Python and React for the support team.",
+        "Worked with TypeScript on the frontend."
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "label": "Cloud",
+      "items": [
+        "Kubernetes",
+        "Terraform",
+        "AWS"
+      ]
+    },
+    {
+      "label": "Backend",
+      "items": [
+        "Python 3.12",
+        "FastAPI",
+        "PostgreSQL 16"
+      ]
+    },
+    {
+      "label": "Frontend",
+      "items": [
+        "React",
+        "TypeScript"
+      ]
+    },
+    {
+      "label": "Languages",
+      "items": [
+        "English, fluent",
+        "French, native"
+      ]
+    }
+  ]
+}
