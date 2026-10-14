@@ -200,7 +200,8 @@ class CheckTest(unittest.TestCase):
 
 
 class LocalCheckGroupTest(unittest.TestCase):
-    """A journey group that only ops/local-check.sh runs (the mail module's)."""
+    """A journey group that only ops/local-check.sh runs: every web/e2e/<group>-all.config.ts
+    is one, found by the script (issue #279), with no line to add anywhere."""
 
     CONFIG = "e2e/mail-all.config.ts"
 
@@ -215,31 +216,80 @@ class LocalCheckGroupTest(unittest.TestCase):
             (made.root / "ops/local-check.sh").write_text(script, encoding="utf-8")
         return made
 
-    def test_a_spec_of_a_group_the_local_check_names_is_accounted_for(self) -> None:
-        repo = self.repo(
-            '  mail) echo "-c e2e/mail-all.config.ts" ;;\n', ["mail-m1", "mail-m4"]
-        )
+    def config(self, repo: Repo, name: str, text: str) -> None:
+        (repo.root / "web/e2e" / name).write_text(text, encoding="utf-8")
+
+    def test_a_spec_of_a_group_config_is_accounted_for(self) -> None:
+        # The script's text does not matter: it finds the configs, it does not list them.
+        for script in ("", '  mail) echo "-c e2e/mail-all.config.ts" ;;\n'):
+            repo = self.repo(script, ["mail-m1", "mail-m4"])
+            self.assertEqual(repo.problems(), [], script)
+            self.assertEqual(
+                e2e_groups.specs_in_local_check(repo.root),
+                ["mail-m1.spec.ts", "mail-m4.spec.ts"],
+            )
+            self.assertEqual(
+                e2e_groups.local_check_configs(repo.root), ["e2e/mail-all.config.ts"]
+            )
+
+    def test_a_new_group_config_needs_no_list(self) -> None:
+        repo = self.repo("", ["mail-m1", "other-a", "other-b"])
+        self.config(repo, "other-all.config.ts", 'const SPEC_PREFIX = "other-";\n')
         self.assertEqual(repo.problems(), [])
         self.assertEqual(
-            e2e_groups.specs_in_local_check(repo.root),
-            ["mail-m1.spec.ts", "mail-m4.spec.ts"],
+            e2e_groups.local_check_configs(repo.root),
+            ["e2e/mail-all.config.ts", "e2e/other-all.config.ts"],
         )
+        # A config whose name does not end in -all.config.ts is no group.
+        repo = self.repo("", ["mail-m1", "other-a"])
+        self.config(repo, "other.config.ts", 'const SPEC_PREFIX = "other-";\n')
+        problems = repo.problems()
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("other-a.spec.ts is in no e2e group", problems[0])
 
-    def test_without_the_line_in_the_local_check_the_spec_is_in_no_group(self) -> None:
-        for script in (None, "", '# mail) echo "-c e2e/mail-all.config.ts" ;;\n'):
-            problems = self.repo(script, ["mail-m1"]).problems()
-            self.assertEqual(len(problems), 1, script)
-            self.assertIn("mail-m1.spec.ts is in no e2e group", problems[0])
+    def test_without_the_local_check_the_spec_is_in_no_group(self) -> None:
+        problems = self.repo(None, ["mail-m1"]).problems()
+        self.assertEqual(len(problems), 1)
+        self.assertIn("mail-m1.spec.ts is in no e2e group", problems[0])
 
-    def test_a_config_that_is_not_listed_accounts_for_nothing(self) -> None:
-        repo = self.repo('  other) echo "-c e2e/other-all.config.ts" ;;\n', ["other-a"])
-        (repo.root / "web/e2e/other-all.config.ts").write_text(
-            'const SPEC_PREFIX = "other-";\n', encoding="utf-8"
+    def test_a_config_the_workflow_runs_is_not_the_local_checks_own(self) -> None:
+        workflow = (
+            WORKFLOW
+            + "      - run: pnpm exec playwright test -c e2e/mail-all.config.ts\n"
         )
-        self.assertEqual(len(repo.problems()), 1)
+        repo = Repo(workflow=workflow, specs=[*ON_DISK, "mail-m1"])
+        self.addCleanup(repo.tmp.cleanup)
+        self.config(repo, "mail-all.config.ts", 'const SPEC_PREFIX = "mail-";\n')
+        (repo.root / "ops").mkdir()
+        (repo.root / "ops/local-check.sh").write_text("", encoding="utf-8")
+        self.assertEqual(e2e_groups.local_check_configs(repo.root), [])
+        self.assertEqual(repo.problems(), [])
+
+    def test_a_group_config_the_local_check_cannot_run_is_a_problem(self) -> None:
+        empty = 'const SPEC_PREFIX = "nothing-";\n'
+        cases = {
+            "apps-all.config.ts": "cannot be a journey group",
+            "sweep-all.config.ts": "cannot be a journey group",
+            "Docs-all.config.ts": "cannot be a journey group",
+            "mail_x-all.config.ts": "cannot be a journey group",
+            "two words-all.config.ts": "cannot be a journey group",
+            "-all.config.ts": "cannot be a journey group",
+            "-x-all.config.ts": "cannot be a journey group",
+            "empty-all.config.ts": "runs no spec",
+        }
+        for name, message in cases.items():
+            repo = self.repo("", ["mail-m1"])
+            self.config(repo, name, empty)
+            problems = repo.problems()
+            self.assertEqual(len(problems), 1, (name, problems))
+            self.assertIn(message, problems[0], name)
+        for name in ("a-all.config.ts", "d6-all.config.ts", "two-words-all.config.ts"):
+            repo = self.repo("", ["mail-m1", "z-a"])
+            self.config(repo, name, 'const SPEC_PREFIX = "z-";\n')
+            self.assertEqual(repo.problems(), [], name)
 
     def test_a_spec_run_by_both_or_also_excluded_is_a_problem(self) -> None:
-        repo = self.repo('  mail) echo "-c e2e/mail-all.config.ts" ;;\n', ["mail-m1"])
+        repo = self.repo("", ["mail-m1"])
         excluded = {**EXCLUDED, "mail-m1.spec.ts": "why"}
         self.assertTrue(
             any("pick one" in problem for problem in repo.problems(excluded))
@@ -254,48 +304,57 @@ class LocalCheckGroupTest(unittest.TestCase):
             'const SPEC_PREFIX = "mail-";\n', encoding="utf-8"
         )
         (both.root / "ops").mkdir()
-        (both.root / "ops/local-check.sh").write_text(
-            'mail) echo "-c e2e/mail-all.config.ts" ;;\n', encoding="utf-8"
-        )
+        (both.root / "ops/local-check.sh").write_text("", encoding="utf-8")
         self.assertTrue(any("pick one" in problem for problem in both.problems()))
 
 
 class ThisRepositoryTest(unittest.TestCase):
     ROOT = Path(__file__).resolve().parents[2]
 
-    def test_every_local_check_config_exists_is_named_and_has_a_reason(self) -> None:
-        script = e2e_groups.uncommented(
-            (self.ROOT / "ops/local-check.sh").read_text(encoding="utf-8")
+    def test_every_group_config_is_a_group_and_the_reverse(self) -> None:
+        # Every web/e2e/*-all.config.ts is run, by the workflow or by the local check alone, and
+        # the local check runs no config that is not on disk.
+        on_disk = sorted(
+            f"e2e/{p.name}" for p in (self.ROOT / "web/e2e").glob("*-all.config.ts")
         )
-        for config, reason in e2e_groups.LOCAL_CHECK_CONFIGS.items():
-            self.assertTrue((self.ROOT / "web" / config).is_file(), config)
-            self.assertIn(f"-c {config}", script)
-            self.assertTrue(reason.strip(), config)
-        # The local check's own groups: mail (mail-*.spec.ts) and apply (apply-*.spec.ts).
-        local = set(e2e_groups.specs_in_local_check(self.ROOT))
-        self.assertLessEqual(
-            {"mail-m1.spec.ts", "apply-a1.spec.ts", "apply-a3.spec.ts"}, local
+        self.assertTrue(on_disk)
+        workflow = e2e_groups.uncommented(
+            (self.ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         )
-        on_disk = {
-            p.name
-            for prefix in ("mail-", "apply-")
-            for p in (self.ROOT / "web/e2e").glob(f"{prefix}*.spec.ts")
+        in_workflow = set(e2e_groups.CONFIG.findall(workflow))
+        local = e2e_groups.local_check_configs(self.ROOT)
+        self.assertEqual(sorted(set(local) | (in_workflow & set(on_disk))), on_disk)
+        self.assertFalse(set(local) & in_workflow)
+        self.assertLessEqual(in_workflow, set(on_disk))
+        # Each local group runs every spec under its prefix, and the workflow none of them.
+        specs = set(e2e_groups.specs_in_local_check(self.ROOT))
+        expected = {
+            name
+            for config in local
+            for name in e2e_groups.config_specs(self.ROOT / "web" / config)
         }
-        self.assertEqual(local, on_disk)
-        self.assertFalse(local & set(e2e_groups.specs_in_ci(self.ROOT)))
+        self.assertEqual(specs, expected)
+        self.assertFalse(specs & set(e2e_groups.specs_in_ci(self.ROOT)))
+        self.assertEqual(e2e_groups.group_problems(self.ROOT), [])
 
     def test_the_real_workflow_accounts_for_every_spec(self) -> None:
         self.assertEqual(e2e_groups.check(self.ROOT), [])
 
     def test_the_real_groups_are_the_known_ones(self) -> None:
-        # The identity chain (10: profile-dates.spec.ts joined it with issue #48; apply-a3.spec.ts
-        # left it for the apply group of the local check with A1), the sweep (1) and the apps
-        # group (6: agents-streaming.spec.ts joined it with issue #33), each named one by one; and the ingestion group, which takes
-        # every ingestion-*.spec.ts through its config, so its count grows with the module and is
-        # not written here.
+        # The groups the workflow names one spec at a time (apps, sweep) and through a SPECS
+        # array (identity) keep their anchors; their sizes are not written here, so a spec that
+        # joins a group changes no test. The ingestion group takes every ingestion-*.spec.ts.
         ran = set(e2e_groups.specs_in_ci(self.ROOT))
+        self.assertLessEqual(
+            {
+                "jobs.spec.ts",
+                "agents-runs.spec.ts",
+                "identity.spec.ts",
+                "jobs-sweep.spec.ts",
+            },
+            ran,
+        )
         ingestion = {name for name in ran if name.startswith("ingestion-")}
-        self.assertEqual(len(ran - ingestion), 17)
         self.assertIn("ingestion-g1.spec.ts", ingestion)
         on_disk = {p.name for p in (self.ROOT / "web/e2e").glob("ingestion-*.spec.ts")}
         self.assertEqual(ingestion, on_disk)

@@ -40,7 +40,10 @@ in the job folder that holds this repository (it is not part of the repository).
    the groups apps or sweep is also added to `journey_specs` in `ops/local-check.sh`
    (`tests/local_check_test.sh` fails when the two differ). A spec of the ingestion
    module is named `ingestion-<task>.spec.ts` and joins its group by that name alone
-   (`web/e2e/ingestion-all.config.ts` runs them all). Every step of `ci.yml`
+   (`web/e2e/ingestion-all.config.ts` runs them all). A module adds a journey group of its own
+   by adding `web/e2e/<group>-all.config.ts` (a `SPEC_PREFIX` or a `SPECS` array): the batch
+   check finds it and runs it as the step `journeys-<group>`, with no list to edit
+   (`journey_groups` in `ops/local-check.sh`, issue #279). Every step of `ci.yml`
    has an `id` and is listed in `.github/scripts/ci_plan.py`: a new check under its unit in
    `LANES`, with a condition on that unit's plan output, anything else in `SUPPORT`.
    `ci_plan_test.py` fails on a step that is in no list, on a check that does not follow its
