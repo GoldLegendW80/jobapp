@@ -118,6 +118,35 @@ in the job folder that holds this repository (it is not part of the repository).
    only while the Mac is awake and Docker Desktop is open, one check at a time. Nothing on
    GitHub shows its result: the record on the Mac and the `LOCAL CHECK: PASS` line are the
    proof, so the orchestrator quotes that whole line when it merges.
+
+   **One command for steps 6 and 7: `ops/ship.sh`** (issue #278). It does the sequence above
+   and stops at the first thing that is not as it should be:
+
+   ```bash
+   ops/ship.sh --plan --approved   # which pull requests, in which order, with which gate: reads GitHub only, changes nothing
+   ops/ship.sh --approved          # every open pull request approved on its current head, not a draft, MERGEABLE
+   ops/ship.sh 281 279             # these, in this order; one that is not approved on its head stops the run
+   ```
+
+   A pull request whose body has a line beginning `Depends on #N` or `Stacked on #N` ships only
+   after #N: once #N is merged, or after it in the same batch; otherwise it waits (and so do the
+   pull requests that depend on it). A pull request that changes `ops/local-check.sh` goes first
+   and the batch is checked with its own version of the script, from a detached worktree of its
+   head (a second one, or one that depends on another pull request of the batch, waits for the
+   next run). A failed batch is checked again once: a PASS ships (the first failure is named
+   flaky), other failing steps stop the run (`SHIP: FAIL flaky gate`), the same failure is
+   bisected: the pull request that makes it fail is dropped with its dependents and gets a
+   comment with the step blamed and the last 30 lines of its log (each line that may hold a
+   secret withheld), and the rest is checked again; a main that fails alone stops the run.
+   It merges only when main and every head are still what the PASS record lists (`gh pr merge
+   --repo <owner/repo> --match-head-commit`), and moves the issues the merged pull requests
+   close to Done on the board right after the merges. Then it pulls the main checkout (which
+   must be clean and on `main`), deploys only when its tree is the gate's tree, and checks the
+   Jetson over ssh with the deploy's compose profile (every service running and healthy, a
+   stopped or missing one counts, `alembic current` at head, memory, no error line in the last
+   10 minutes, JSON `"level": "error"` lines included). The last line is `SHIP: OK`,
+   `SHIP: PLAN, nothing was done`, `SHIP: NOTHING TO SHIP` or `SHIP: FAIL <reason>` (exit 1);
+   the gate and deploy logs of the last 10 runs stay in `.local-check/ship/`.
 7. Only a checked tree is deployed, through `ops/deploy-checked.sh`. It refuses a commit whose
    tree has no PASS record, and a commit that is not on `origin/main`. Then it starts
    `.github/workflows/deploy.yml` on the Jetson's own runner for the full sha
@@ -199,5 +228,6 @@ tests/ci_runners_test.sh                                 # when ops/ci-runners.s
 python3 .github/scripts/ci_plan_test.py                  # when ci.yml, .pre-commit-config.yaml or the path rules of ci_plan.py change
 tests/secret_scan_test.sh                                # when .github/scripts/secret_scan.sh or the gitleaks hooks change
 tests/local_check_test.sh                                # when ops/local-check.sh, ops/deploy-checked.sh or the triggers of the workflows change
+tests/ship_test.sh                                       # when ops/ship.sh changes
 ops/local-check.sh --base HEAD --only api                # one job of the batch check on a commit of one's own (api, checks or journeys; a partial run writes no record)
 ```

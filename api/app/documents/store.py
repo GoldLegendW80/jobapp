@@ -765,19 +765,23 @@ def snapshot(
     legacy_file_id: uuid.UUID | None = None,
     pdf_sha256: bytes | None = None,
     keep: int | None = None,
+    content: object | None = None,
 ) -> tuple[DocumentVersion, bool]:
-    """The draft as a version: `(version, made)`. Without a generation, when the latest version
-    has the draft's content hash, language, template and template version and is not frozen, it
+    """The draft as a version: `(version, made)`. `content`, given, is stored in place of the
+    draft, which stays as it is (D7: a generation whose draft was edited during its run), and
+    always makes a version. Without a generation, when the latest version has the draft's
+    content hash, language, template and template version and is not frozen, it
     is reused (`made` is False); a generation always makes one. A legacy version points at its
     job file (`legacy_file_id`, with the file's `pdf_sha256`). The others beyond `keep` are
     pruned."""
     document = lock_document(db, user_id, document_id)
     kind = _kind(document)
-    model = _model(kind, document.draft)
+    model = _model(kind, document.draft if content is None else content)
     digest = c.content_hash(kind, model)
     latest = _latest(db, document)
     if (
-        generation_id is None
+        content is None
+        and generation_id is None
         and legacy_file_id is None
         and latest is not None
         and latest.frozen_at is None
