@@ -23,12 +23,14 @@
 #             the rule of its range is below, at SCAN_FROM), the shell lint of the files ci.yml
 #             lists, the e2e groups and CI plan tests, every tests/*_test.sh that ci.yml runs
 #             (one that neither runs nor is left out with a reason fails the step shell-tests);
-#             the journey groups apps, ingestion and mail (mail on a stack that also runs
-#             the fake Google of tests/gmail-stub.compose.yml, never a real account).
+#             the journey groups apps, ingestion, mail and apply (mail on a stack that also runs
+#             the fake Google of tests/gmail-stub.compose.yml, never a real account; apply on a
+#             stack that also runs the fake ATS forms server of tests/ats-forms-stub.compose.yml,
+#             never a real job site).
 #   journeys  the web lint, type check, vitest and build; the journey groups identity and sweep.
 #
 # The lists that ci.yml holds (the files of its Shellcheck step, the tests/*_test.sh steps) are read from
-# ci.yml, so a step added there runs here. The five journey groups are written below, and
+# ci.yml, so a step added there runs here. The six journey groups are written below, and
 # tests/local_check_test.sh fails when their spec files differ from those of ci.yml.
 #
 # Arrangement. Four lanes start together: api (its own Postgres and Redis containers on free
@@ -644,6 +646,7 @@ journey_specs() { # the Playwright arguments of a group, as ci.yml has them
   apps) echo "jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts --workers=1" ;;
   ingestion) echo "-c e2e/ingestion-all.config.ts" ;;
   mail) echo "-c e2e/mail-all.config.ts" ;;
+  apply) echo "-c e2e/apply-all.config.ts" ;;
   identity) echo "-c e2e/identity-all.config.ts" ;;
   sweep) echo "jobs-sweep.spec.ts --workers=1" ;;
   esac
@@ -658,7 +661,7 @@ journey_play() { # journey_play <group> <Playwright arguments>
 # Starts a stack on the port picked for its group. The port is bound once more just before the
 # start; when the start still fails on a port (another program took it in between), this stack,
 # and only this one, is taken down and started again on another port (the mail stack also on
-# another one for its fake Google), three starts at most.
+# another one for its fake Google, the apply stack also on another one for its fake forms server), three starts at most.
 stack_up() { # stack_up <group> <project> <compose file arguments>
   local group="$1" project="$2" port="" out attempt=1 rc
   shift 2
@@ -679,6 +682,10 @@ stack_up() { # stack_up <group> <project> <compose file arguments>
     if [[ "$group" == mail ]]; then # the fake Google has a loopback port of its own, taken anew too
       GMAIL_STUB_PORT="$(claim_port)" || return 1
       export GMAIL_STUB_PORT E2E_GMAIL_STUB_URL="http://127.0.0.1:$GMAIL_STUB_PORT"
+    fi
+    if [[ "$group" == apply ]]; then # so has the fake ATS forms server
+      ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
+      export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
     fi
     attempt=$((attempt + 1))
   done
@@ -702,6 +709,14 @@ s_journey() {
     export GMAIL_STUB_PORT E2E_GMAIL_STUB_URL="http://127.0.0.1:$GMAIL_STUB_PORT"
     files+=(-f tests/gmail-stub.compose.yml)
     ;;
+  apply)
+    # The fake ATS forms server beside the stack (never a real job site). The browser of a
+    # journey opens its pages, so it is published on a loopback port of its own, claimed like
+    # the stack's.
+    ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
+    export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
+    files+=(-f tests/ats-forms-stub.compose.yml)
+    ;;
   esac
   specs="$(journey_specs "$group")"
   stack_up "$group" "$project" "${files[@]}" &&
@@ -714,7 +729,7 @@ s_journey() {
 
 lane_journeys() {
   local groups=() group running=0 why=""
-  if wanted checks; then groups+=(apps ingestion mail); fi
+  if wanted checks; then groups+=(apps ingestion mail apply); fi
   if wanted journeys; then groups+=(identity sweep); fi
   ((${#groups[@]})) || return 0
   while [[ ! -f "$WORK/images.done" || ! -f "$WORK/web.done" ]]; do sleep 1; done
@@ -874,7 +889,7 @@ expected_steps() {
   fi
   if wanted checks || wanted journeys; then printf '%s\n' web-install images chromium; fi
   if wanted checks; then
-    printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests journeys-apps journeys-ingestion journeys-mail
+    printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests journeys-apps journeys-ingestion journeys-mail journeys-apply
     (cd "$TREE" && shell_tests) | sed 's/^tests\///; s/\.sh$//'
   fi
   if wanted journeys; then printf '%s\n' lint typecheck build vitest journeys-identity journeys-sweep; fi
