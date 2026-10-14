@@ -50,7 +50,9 @@ describe("profile page", () => {
     });
     expect(bar).toHaveAttribute("aria-valuenow", "100");
     expect(screen.getByText("100%")).toBeVisible();
-    expect(screen.getAllByRole("tab")).toHaveLength(6);
+    // The CV tab (documents D11) comes first, then the six sections.
+    expect(screen.getAllByRole("tab")).toHaveLength(7);
+    expect(screen.getAllByRole("tab")[0]).toHaveTextContent("CV");
     for (const name of [
       "Identity",
       "Experience",

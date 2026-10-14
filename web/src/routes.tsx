@@ -59,6 +59,7 @@ export const routes: RouteObject[] = [
           { path: "jobs/:id", element: <JobDetailPage /> },
           { path: "account", element: <AccountPage /> },
           { path: "profile", element: <ProfilePage /> },
+          { path: "profile/cv/:id?", element: <ProfilePage /> },
           { path: "profile/fill", element: <FillPage /> },
           { path: "runs", element: <RunsPage /> },
           { path: "runs/:id", element: <RunPage /> },
