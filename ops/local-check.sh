@@ -566,13 +566,18 @@ s_pytest_alone() {
 FLAKY_MAX=3
 
 flaky_candidates() { # prints the failed node ids of the step pytest when a rerun may clear them
-  local log="$LOGS/pytest.log" summary n ids
+  local log="$WORK/pytest-plain.log" summary n ids
+  # pytest colours its output (ESC[31m before "FAILED" and the summary): read a copy without.
+  sed $'s/\x1b\\[[0-9;]*m//g' "$LOGS/pytest.log" >"$log"
   awk -F '\t' '$1 == "pytest" && $2 == 1 { found = 1 } END { exit !found }' "$WORK/results" || return 1
   summary="$(grep -E '^=+ .* in [0-9.]+s' "$log" | tail -n 1)"
   [[ "$summary" =~ ([0-9]+)\ failed ]] || return 1
   n="${BASH_REMATCH[1]}"
-  ((n <= FLAKY_MAX)) && [[ "$summary" != *error* ]] && ! grep -q '^ERROR ' "$log" || return 1
-  ids="$(sed -n 's/^FAILED \([^ ]*\).*/\1/p' "$log" | sort -u)"
+  # A pytest error line names a test file ("ERROR tests/x.py::test - ..."); a captured log line
+  # of the app ("ERROR    app:main.py:207 unhandled error") is not one.
+  ((n <= FLAKY_MAX)) && [[ "$summary" != *error* ]] && ! grep -qE '^ERROR [^ ]+\.py' "$log" || return 1
+  # A node id may hold spaces (a parametrized id like [unicode-1-api key]): it ends at " - ".
+  ids="$(awk 'sub(/^FAILED /, "") { i = index($0, " - "); print(i ? substr($0, 1, i - 1) : $0) }' "$log" | sort -u)"
   [[ "$(grep -c . <<<"$ids")" == "$n" ]] || return 1
   printf '%s\n' "$ids"
 }
