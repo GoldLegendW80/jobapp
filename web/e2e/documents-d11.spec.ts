@@ -15,8 +15,9 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
 /**
  * Documents D11 against the real stack through Caddy, driven through the page: an account with
  * an invented profile and a made up model credential (the stack's Anthropic stub accepts it),
- * the worker on the fake model backend (the build uses its default recorded stream) and the real
- * renderer. Open the profile, accept the consent, build a CV from the profile and see its page,
+ * the worker on the fake model backend and the real renderer. The page cannot name a recorded
+ * stream, so the build request it sends is given D9's `script` for this invented profile on its
+ * way out (the default stream is written for another profile and would end without a result). Open the profile, accept the consent, build a CV from the profile and see its page,
  * build a second as a copy, make it the default, download the PDF, reload and see the same list.
  *
  * Locally, as documents-d6.spec.ts (AGENTS_FAKE_BACKEND=1 on the worker), then:
@@ -28,6 +29,7 @@ test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
 const EVIDENCE = "documents-d11";
 const KEY = `sk-ant-api03-e2egood${"Dn9x".repeat(20)}Rn42`;
+const SCRIPT = "documents_base_journey";
 
 type BaseCv = {
   id: string;
@@ -54,6 +56,17 @@ test.beforeAll(async ({ browser }) => {
   context = await newContext(browser);
   page = await context.newPage();
   errors = watchErrors(page);
+  await page.route("**/api/documents/base-cvs", async (route) => {
+    const request = route.request();
+    const body = request.postDataJSON() as { from?: string } | null;
+    if (request.method() !== "POST" || body?.from !== "profile") {
+      await route.continue();
+      return;
+    }
+    await route.continue({
+      postData: JSON.stringify({ ...body, script: SCRIPT }),
+    });
+  });
 });
 
 test.afterAll(async () => {
