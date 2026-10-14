@@ -9,7 +9,9 @@
 # step (no fsync), each capped with `docker run --cpus 1`, named agent-<caller>-<process id>-pg
 # and -redis, published on free loopback ports and removed on exit, on failure and on Ctrl+C (a
 # trap). Then, in api/, `nice -n 15 uv run pytest <arguments>` with TEST_DATABASE_URL and
-# REDIS_URL set to them. At most `-n 2`: `-n 3` and more, `-n auto` and `-n logical` are refused.
+# REDIS_URL set to them. At most `-n 2`: `-n 3` and more, `-n auto` and `-n logical` are refused,
+# in any spelling (`-vn3`, PYTEST_ADDOPTS, `-o addopts=...`), before anything starts, and the
+# plugin ops/agent_test_cap.py (`-p agent_test_cap`) refuses whatever pytest resolved above it.
 # No -n means one process.
 #
 # Playwright. `nice -n 15 pnpm exec playwright test <arguments> --workers=1` in web/, against the
@@ -61,28 +63,71 @@ NAME="$(printf '%s' "$NAME" | LC_ALL=C tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-
 PREFIX="agent-$NAME-$$"
 
 # --- the arguments ---------------------------------------------------------------------------------
+FROM="" # where the words being checked come from, for the messages
+
 check_jobs() { # check_jobs <value of -n>: refuses what is above MAX_PYTEST_JOBS or not a number
-  [[ "$1" =~ ^[0-9]+$ ]] || usage_error "-n $1: give a number, at most $MAX_PYTEST_JOBS (the gate may run beside you)"
-  ((10#$1 <= MAX_PYTEST_JOBS)) || usage_error "-n $1: at most -n $MAX_PYTEST_JOBS beside the gate"
+  [[ "$1" =~ ^[0-9]+$ ]] || usage_error "$FROM-n $1: give a number, at most $MAX_PYTEST_JOBS (the gate may run beside you)"
+  ((10#$1 <= MAX_PYTEST_JOBS)) || usage_error "$FROM-n $1: at most -n $MAX_PYTEST_JOBS beside the gate"
 }
 
-check_pytest_args() {
-  local i=0 arg
-  while ((i < ${#ARGS[@]})); do
-    arg="${ARGS[$i]}"
+check_ini_override() { # check_ini_override <value of -o>: addopts could hold any -n
+  local key="${1#"${1%%[![:space:]]*}"}"
+  [[ "$key" != addopts* ]] || usage_error "$FROM-o $1: addopts cannot be overridden here (at most -n $MAX_PYTEST_JOBS beside the gate)"
+}
+
+# The short options of pytest and xdist that take a value. In a cluster (`-vn3`, `-qn 4`) argparse
+# reads the letters up to the first of them, which takes the rest of the word, else the next one.
+SHORT_WITH_VALUE="kmcoprWn"
+
+check_pytest_words() { # check_pytest_words <word ...>: pytest arguments, given or from PYTEST_ADDOPTS
+  local words=("$@") i=0 k arg c value
+  while ((i < ${#words[@]})); do
+    arg="${words[$i]}"
     case "$arg" in
-    -n | --numprocesses)
-      ((i + 1 < ${#ARGS[@]})) || usage_error "$arg needs a number"
-      check_jobs "${ARGS[$((i + 1))]}"
+    --) break ;; # what follows is file names
+    --numprocesses | --override-ini)
+      ((i + 1 < ${#words[@]})) || usage_error "$FROM$arg needs a value"
       i=$((i + 1))
+      if [[ "$arg" == --numprocesses ]]; then check_jobs "${words[$i]}"; else check_ini_override "${words[$i]}"; fi
       ;;
     --numprocesses=*) check_jobs "${arg#*=}" ;;
-    -n*) check_jobs "${arg#-n}" ;;
+    --override-ini=*) check_ini_override "${arg#*=}" ;;
     # Other ways to start more processes than -n says.
-    --tx* | --maxprocesses* | -d) usage_error "$arg: the number of processes is set with -n only (at most $MAX_PYTEST_JOBS)" ;;
+    --tx* | --maxprocesses*) usage_error "$FROM$arg: the number of processes is set with -n only (at most $MAX_PYTEST_JOBS)" ;;
+    --*) ;;
+    -?*)
+      for ((k = 1; k < ${#arg}; k++)); do
+        c="${arg:k:1}"
+        [[ "$c" != d ]] || usage_error "$FROM$arg: the number of processes is set with -n only (at most $MAX_PYTEST_JOBS)"
+        [[ "$SHORT_WITH_VALUE" == *"$c"* ]] || continue
+        value="${arg:k+1}"
+        if [[ -z "$value" ]]; then
+          ((i + 1 < ${#words[@]})) || usage_error "$FROM$arg needs a value"
+          i=$((i + 1))
+          value="${words[$i]}"
+        fi
+        case "$c" in
+        n) check_jobs "$value" ;;
+        o) check_ini_override "$value" ;;
+        p) [[ "$value" != no:agent_test_cap ]] || usage_error "$FROM$arg $value: the worker cap stays on" ;;
+        esac
+        break
+      done
+      ;;
     esac
     i=$((i + 1))
   done
+}
+
+check_pytest_args() {
+  local words=()
+  check_pytest_words ${ARGS[@]+"${ARGS[@]}"}
+  [[ -n "${PYTEST_ADDOPTS:-}" ]] || return 0
+  FROM="PYTEST_ADDOPTS: "
+  [[ "$PYTEST_ADDOPTS" != *addopts* ]] || usage_error "${FROM}addopts cannot be overridden here"
+  read -ra words <<<"$PYTEST_ADDOPTS"
+  check_pytest_words ${words[@]+"${words[@]}"}
+  FROM=""
 }
 
 check_playwright_args() {
@@ -201,7 +246,8 @@ cd "$ROOT/api"
 # In the background, so a signal reaches the trap at once and not when pytest ends; a background
 # job starts with SIGINT ignored, so the default is given back first (as the gate's interruptible).
 python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' \
-  nice -n "$NICENESS" uv --native-tls run pytest ${ARGS[@]+"${ARGS[@]}"} &
+  env PYTHONPATH="$ROOT/ops${PYTHONPATH:+:$PYTHONPATH}" \
+  nice -n "$NICENESS" uv --native-tls run pytest -p agent_test_cap ${ARGS[@]+"${ARGS[@]}"} &
 CHILD=$!
 rc=0
 wait "$CHILD" || rc=$?

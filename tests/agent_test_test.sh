@@ -26,7 +26,7 @@ fail() {
 # A throwaway repository that holds the script, with a worktree: the lock is the main checkout's.
 REPO="$WORK/repo"
 mkdir -p "$REPO/ops" "$REPO/api" "$REPO/web"
-cp "$ROOT/ops/agent-test.sh" "$REPO/ops/"
+cp "$ROOT/ops/agent-test.sh" "$ROOT/ops/agent_test_cap.py" "$REPO/ops/"
 git -C "$REPO" init -q -b main
 git -C "$REPO" -c user.name=t -c user.email=t@example.org add -A
 git -C "$REPO" -c user.name=t -c user.email=t@example.org commit -q -m init
@@ -34,6 +34,9 @@ git -C "$REPO" worktree add -q -b feature/Some_Task "$WORK/wt" main
 mkdir -p "$WORK/wt/api" "$WORK/wt/web"
 
 # The fakes. CALLS holds one line per call; uv and pnpm also write their own niceness.
+# What `nice -n 15` gives from here: 15 when this test runs at normal priority, as in the gate,
+# and the system's ceiling when an agent runs it under nice itself.
+NICE15="$(nice -n 15 sh -c 'ps -o nice= -p $$' | tr -d ' ')"
 BIN="$WORK/bin"
 mkdir -p "$BIN"
 CALLS="$WORK/calls"
@@ -50,6 +53,7 @@ EOF
 cat >"$BIN/uv" <<'EOF'
 #!/usr/bin/env bash
 printf 'uv nice=%s pwd=%s db=%s redis=%s args=%s\n' "$(ps -o nice= -p $$ | tr -d ' ')" "$PWD" "$TEST_DATABASE_URL" "$REDIS_URL" "$*" >>"$CALLS"
+printf 'uv pythonpath=%s\n' "${PYTHONPATH:-}" >>"$CALLS"
 if [[ -n "${FAKE_PYTEST_WAITS:-}" ]]; then
   echo $$ >"$FAKE_PYTEST_WAITS"
   exec sleep 30 # ended by the SIGINT the script forwards
@@ -84,21 +88,58 @@ removed_both() { # the two containers of the last run were removed, by name
 
 # --- -n above 2 is refused before any container starts --------------------------------------------
 for args in "-n 3" "-n 4" "-n4" "-n 12" "--numprocesses 3" "--numprocesses=8" "-n auto" "-n logical" "-nauto" \
-  "--tx 4*popen" "--maxprocesses=4" "tests/x -q -n 3" "-n" "-n -1"; do
+  "--tx 4*popen" "--maxprocesses=4" "tests/x -q -n 3" "-n" "-n -1" \
+  "-vn3" "-qn 4" "-xn4" "-vxn 3" "-qnauto" "-o addopts=-n3" "-oaddopts=-n3" "--override-ini=addopts=-n 3" \
+  "--override-ini addopts=" "-p no:agent_test_cap" "-pno:agent_test_cap" "-vd" "-k"; do
   # shellcheck disable=SC2086
   run 64 $args
   calls_lack "docker run"
   calls_lack "uv "
 done
-ok "-n 3 and more, auto, logical, --tx, --maxprocesses and a bare -n are refused (exit 64), nothing started"
+for addopts in "-n 3" "-q -n4" "-vn 3" "--numprocesses=auto" "-o addopts=-n3" "--tx 3*popen"; do
+  PYTEST_ADDOPTS="$addopts" run 64 tests
+  out_has "PYTEST_ADDOPTS: "
+  calls_lack "docker run"
+done
+ok "-n 3 and more, auto, logical, --tx, --maxprocesses and a bare -n are refused (exit 64), nothing started, whatever the spelling: clustered (-vn3, -qn 4), PYTEST_ADDOPTS, -o addopts"
 
-for args in "-n 2" "-n2" "-n 1" "-n 0" "--numprocesses=2" "-n 02" "tests/jobs -q"; do
+for args in "-n 2" "-n2" "-n 1" "-n 0" "--numprocesses=2" "-n 02" "tests/jobs -q" "-vn2" "-qn 1" "-xvn2" \
+  "-k n3 -m docker" "-kdn3" "-o log_level=INFO" "-p no:cacheprovider" "-W error -vn 2" "tests/x -- -n3"; do
   # shellcheck disable=SC2086
   run 0 $args
-  calls_have "uv nice=15"
-  calls_have "args=--native-tls run pytest $args"
+  calls_have "uv nice=$NICE15"
+  calls_have "args=--native-tls run pytest -p agent_test_cap $args"
+  calls_have "uv pythonpath=$WORK/wt/ops"
 done
-ok "-n 2 or fewer, and no -n, run pytest with the arguments as given"
+PYTEST_ADDOPTS="-q -n 2" run 0 tests
+ok "-n 2 or fewer, and no -n, run pytest with the arguments as given and the worker cap plugin"
+
+# The plugin reads what pytest resolved (here a stand-in for pytest and xdist's config.option).
+python3 -I - "$ROOT/ops/agent_test_cap.py" <<'EOF' || fail "the worker cap plugin"
+import importlib.util, sys, types
+from types import SimpleNamespace as NS
+fake = types.ModuleType("pytest")
+fake.UsageError = type("UsageError", (Exception,), {})
+fake.hookimpl = lambda **_: (lambda f: f)
+fake.Config = object
+sys.modules["pytest"] = fake
+spec = importlib.util.spec_from_file_location("agent_test_cap", sys.argv[1])
+cap = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(cap)
+def refused(**option):
+    try:
+        cap.pytest_configure(NS(option=NS(**option)))
+    except fake.UsageError:
+        return True
+    return False
+for option in [dict(numprocesses=3, tx=["popen"] * 3), dict(numprocesses=None, tx=["3*popen"]),
+               dict(numprocesses=None, tx=["popen"] * 3), dict(numprocesses="auto"), dict(numprocesses=8)]:
+    assert refused(**option), option
+for option in [dict(numprocesses=2, tx=["popen"] * 2), dict(numprocesses=0, tx=[]), dict(numprocesses=None, tx=None),
+               dict(), dict(numprocesses=1, tx=["popen"]), dict(tx=["2*popen"])]:
+    assert not refused(**option), option
+EOF
+ok "the plugin refuses more than two workers as pytest resolved them (numprocesses, tx), and lets two or fewer run"
 
 # --- the services: the gate's images, --cpus 1, the caller's name, removed on exit -------------------
 run 0 --name "Brave_Task.7" tests/jobs -n 2
@@ -158,7 +199,7 @@ ok "interrupted (SIGTERM) during pytest: exit 130 and both containers removed"
 
 # --- Playwright --------------------------------------------------------------------------------------
 run 0 --playwright -c e2e/jobs-all.config.ts
-calls_have "pnpm nice=15 pwd=$WORK/wt/web args=exec playwright test -c e2e/jobs-all.config.ts --workers=1"
+calls_have "pnpm nice=$NICE15 pwd=$WORK/wt/web args=exec playwright test -c e2e/jobs-all.config.ts --workers=1"
 calls_lack "docker"
 run 0 --playwright jobs.spec.ts --workers 1
 run 0 --playwright jobs.spec.ts -j1

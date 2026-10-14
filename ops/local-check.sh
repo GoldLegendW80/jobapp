@@ -458,10 +458,22 @@ pick_journey_ports() { # pick_journey_ports <group ...>: one claimed port per gr
 NET_BASE="${LOCAL_CHECK_NET_BASE:-10.213}"
 STACK_NETWORKS="default parsing rendering browsing egress"
 
-claim_net_slot() { # prints the first slot (0 to 49) that no stack of this check holds
-  local slot
+# A check that died without its trap (SIGKILL, Docker Desktop or the Mac restarted) leaves its
+# stacks' networks behind, on the same slots as this check's: a slot is claimed only when no Docker
+# network holds one of its subnets (one query per claim), and stack_up moves a stack that still
+# meets "Pool overlaps" to another slot.
+claim_net_slot() { # prints the first slot (0 to 49) that no stack of this check holds and no network uses
+  local slot j ids used="" taken
   mkdir -p "$WORK/nets"
+  ids="$(docker network ls -q 2>/dev/null)" || ids=""
+  # shellcheck disable=SC2086
+  [[ -z "$ids" ]] || used=" $(docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' $ids 2>/dev/null | tr '\n' ' ') " || used=""
   for slot in $(seq 0 49); do
+    taken=""
+    for j in 0 1 2 3 4; do
+      [[ "$used" != *" $NET_BASE.$((slot * 5 + j)).0/27 "* ]] || taken=1
+    done
+    [[ -z "$taken" ]] || continue
     if mkdir "$WORK/nets/$slot" 2>/dev/null; then
       printf '%s\n' "$slot"
       return 0
@@ -545,6 +557,35 @@ s_pytest_alone() {
     --cov --cov-append --cov-report= --cov-fail-under=0
 }
 
+# A few tests that measure time fail now and then while agents load the machine (2026-10-14: a burst
+# of sign-ins over its time bound, the scrub before clip, the parser's client calls), and each cost
+# a gate. When the parallel suite failed only on tests, at most FLAKY_MAX of them and no error,
+# the quiet phase runs exactly those again, one process, as pytest-alone: if they all pass, the step
+# pytest counts as passed and the summary and the record list them under `flaky`, so an issue can
+# be filed. One failing again, more of them, or an error (collection, fixture) fail as before.
+FLAKY_MAX=3
+
+flaky_candidates() { # prints the failed node ids of the step pytest when a rerun may clear them
+  local log="$LOGS/pytest.log" summary n ids
+  awk -F '\t' '$1 == "pytest" && $2 == 1 { found = 1 } END { exit !found }' "$WORK/results" || return 1
+  summary="$(grep -E '^=+ .* in [0-9.]+s' "$log" | tail -n 1)"
+  [[ "$summary" =~ ([0-9]+)\ failed ]] || return 1
+  n="${BASH_REMATCH[1]}"
+  ((n <= FLAKY_MAX)) && [[ "$summary" != *error* ]] && ! grep -q '^ERROR ' "$log" || return 1
+  ids="$(sed -n 's/^FAILED \([^ ]*\).*/\1/p' "$log" | sort -u)"
+  [[ "$(grep -c . <<<"$ids")" == "$n" ]] || return 1
+  printf '%s\n' "$ids"
+}
+
+s_pytest_flaky() {
+  local ids=() one
+  cd api
+  # shellcheck disable=SC1091
+  . "$WORK/api.env"
+  while IFS= read -r one; do ids+=("$one"); done <"$WORK/flaky-ids"
+  interruptible uv run --frozen pytest -p no:cacheprovider -p no:xdist "${ids[@]}"
+}
+
 s_coverage() {
   cd api
   uv run --frozen coverage report --fail-under=95 | tail -n 15
@@ -609,6 +650,12 @@ quiet_phase() {
   # needs most of a core for a minute; beside Vitest they end on wall_limit.
   if ((api)); then run_step pytest-docker s_pytest_docker || true; fi
   ((api)) || return 0
+  if flaky_candidates >"$WORK/flaky-ids" && run_step pytest-flaky s_pytest_flaky; then
+    awk -F '\t' -v OFS='\t' '$1 == "pytest" { $2 = 0 } { print }' "$WORK/results" >"$WORK/results.new"
+    mv "$WORK/results.new" "$WORK/results"
+    mv "$WORK/flaky-ids" "$WORK/flaky"
+    echo "pytest: counted as passed, its failed tests passed when run again alone: $(tr '\n' ' ' <"$WORK/flaky")"
+  fi
   if passed pytest; then
     run_step pytest-alone s_pytest_alone || true
     run_step coverage s_coverage || true
@@ -740,18 +787,22 @@ journey_specs() { # the Playwright arguments of a group, as ci.yml has them
   esac
 }
 
-journey_play() { # journey_play <group> <Playwright arguments>
+journey_play() ( # journey_play <group> <Playwright arguments>
+  # A subshell: the `cd web` stays in it, so s_journey takes its stack down from the tree root.
   # Called below `&&` in s_journey, where errexit is off: the two commands are chained.
   # shellcheck disable=SC2086
   cd web && pnpm exec playwright test $2 --reporter=list --output="test-results/$1"
-}
+)
 
 # Starts a stack on the port picked for its group. The port is bound once more just before the
 # start; when the start still fails on a port (another program took it in between), this stack,
 # and only this one, is taken down and started again on another port (the mail stack also on
 # another one for its fake Google, the apply stack also on another one for its fake forms server), three starts at most.
+# A start that fails on "Pool overlaps" (a network left by a check that died) is taken down and
+# started again on another network slot, within the same three starts: the bad slot stays claimed,
+# and `slot`, s_journey's local, names the new one so that s_journey frees that one.
 stack_up() { # stack_up <group> <project> <compose file arguments>
-  local group="$1" project="$2" port="" out attempt=1 rc
+  local group="$1" project="$2" port="" out attempt=1 rc why
   shift 2
   out="$WORK/up-$group.log"
   [[ ! -s "$WORK/ports/$group" ]] || port="$(cat "$WORK/ports/$group")"
@@ -763,9 +814,23 @@ stack_up() { # stack_up <group> <project> <compose file arguments>
     docker compose -p "$project" "$@" up -d --no-build --wait --wait-timeout 300 >"$out" 2>&1 || rc=$?
     cat "$out"
     ((rc != 0)) || return 0
-    if ((attempt >= 3)) || ! grep -qiE 'failed to bind|address already in use|port is already allocated' "$out"; then return "$rc"; fi
-    echo "retry $attempt of 2: port $port was taken before $project started, taking it down, picking another port"
+    ((attempt < 3)) || return "$rc"
+    if grep -qiE 'failed to bind|address already in use|port is already allocated' "$out"; then
+      why=port
+      echo "retry $attempt of 2: port $port was taken before $project started, taking it down, picking another port"
+    elif grep -qiE 'pool overlaps' "$out"; then
+      why=pool
+      echo "retry $attempt of 2: a network already uses the subnets of slot $slot, taking $project down, picking another slot"
+    else
+      return "$rc"
+    fi
     docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
+    attempt=$((attempt + 1))
+    if [[ "$why" == pool ]]; then # same file, new subnets: the compose arguments stay valid
+      slot="$(claim_net_slot)" || return 1
+      stack_networks "$group" "$slot" >/dev/null
+      continue
+    fi
     port=""
     if [[ "$group" == mail ]]; then # the fake Google has a loopback port of its own, taken anew too
       GMAIL_STUB_PORT="$(claim_port)" || return 1
@@ -775,7 +840,6 @@ stack_up() { # stack_up <group> <project> <compose file arguments>
       ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
       export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
     fi
-    attempt=$((attempt + 1))
   done
 }
 
@@ -813,8 +877,13 @@ s_journey() {
     docker compose -p "$project" -f compose.yml exec -T api alembic upgrade head &&
     journey_play "$group" "$specs" || rc=$?
   docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color >"$LOGS/stack-$group.log" 2>&1 || true
-  docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
-  rmdir "$WORK/nets/$slot" 2>/dev/null || true
+  # The slot is free again only when its stack is gone: one that could not be taken down keeps
+  # its networks, so it keeps its slot until the trap removes everything under the prefix.
+  if docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0; then
+    rmdir "$WORK/nets/$slot" 2>/dev/null || true
+  else
+    echo "the stack $project could not be taken down: network slot $slot stays claimed"
+  fi
   return "$rc"
 }
 
@@ -1134,10 +1203,12 @@ record = {
     "date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "check": sys.argv[3],
     "stub": bool(sys.argv[4]),
+    "flaky": (work / "flaky").read_text().split() if (work / "flaky").exists() else [],
 }
 out.write_text(json.dumps(record, indent=2) + "\n")
 PY
   say "record: $RECORDS/$tree_sha.json"
 fi
+[[ ! -s "$WORK/flaky" ]] || say "flaky: $(tr '\n' ' ' <"$WORK/flaky")"
 timing total 0 "$total"
 say "LOCAL CHECK: ${kind}PASS $tree_sha ${total}s$note"
