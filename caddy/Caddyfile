@@ -95,7 +95,9 @@
 	# document travels in X-Filename (POST /api/ingestion/documents): removed, no log holds it.
 	# The `code` and the `state` of Google's answer travel in the query of
 	# /api/mail/oauth/callback (mail M4): the whole query of that path is masked, on the same
-	# line as the links, because a field takes one filter.
+	# line as the links, because a field takes one filter. The same state also leaves in the
+	# Location of the 303 that /api/mail/oauth/start answers (the address of Google's consent
+	# page): the value of `state=` is masked there.
 	log {
 		output stdout
 		format filter {
@@ -103,6 +105,7 @@
 			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback)\\?.*" "${1}${2}[redacted]"
 			request>headers>Referer regexp "(/(?:invites?|reset)/)[^/?#]+" "${1}[redacted]"
 			request>headers>X-Filename delete
+			resp_headers>Location regexp "([?&]state=)[^&#]+" "${1}[redacted]"
 		}
 	}
 

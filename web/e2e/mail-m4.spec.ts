@@ -9,7 +9,14 @@ import {
   stub,
   stubUrl,
 } from "./mail-helpers";
-import { caddyUrl, cliLink, newContext, root, setPassword } from "./stack";
+import {
+  caddyUrl,
+  cliLink,
+  makeShots,
+  newContext,
+  root,
+  setPassword,
+} from "./stack";
 
 /**
  * Task M4 of the mail module against the real stack through Caddy plus the fake Google
@@ -25,6 +32,7 @@ test.skip(
 );
 
 const project = process.env.E2E_COMPOSE_PROJECT;
+const shots = makeShots("mail-m4", "mail-m4");
 const run = Date.now().toString(36);
 const USER_A = `e2e-mail-a-${run}@example.org`;
 const USER_B = `e2e-mail-b-${run}@example.org`;
@@ -64,6 +72,10 @@ function logs(...services: string[]): string {
 
 const card = (page: Page) =>
   page.locator("[aria-labelledby='gmail-card-title']");
+
+// The card also holds a "Loading" status while the account is fetched: pick the notice by its text.
+const notice = (page: Page, text: string) =>
+  card(page).getByRole("status").filter({ hasText: text });
 
 async function account(page: Page, email: string, name: string) {
   await page.goto(cliLink(email));
@@ -125,9 +137,7 @@ test("a user connects Gmail from Account with the consent ticked", async () => {
   await expect(
     card(pageA).getByText("Connected", { exact: true }),
   ).toBeVisible();
-  await expect(card(pageA).getByRole("status")).toHaveText(
-    "Gmail is connected.",
-  );
+  await expect(notice(pageA, "Gmail is connected.")).toBeVisible();
   // The consent ticked before leaving is recorded, and survives a reload.
   const box = card(pageA).getByRole("checkbox", {
     name: "Let the assistant read my job mails",
@@ -143,21 +153,13 @@ test("a user connects Gmail from Account with the consent ticked", async () => {
   expect(await stub.calls("getProfile", ALICE)).toHaveLength(1);
 });
 
-test("the card holds at 375 px in the dark, with no sideways scroll", async () => {
-  await pageA.setViewportSize({ width: 375, height: 800 });
-  await pageA.emulateMedia({ colorScheme: "dark" });
+test("the connected card holds at 375 px, light and dark, with no sideways scroll", async () => {
   await expect(card(pageA).getByText(ALICE)).toBeVisible();
   await expect(
     card(pageA).getByRole("button", { name: "Disconnect" }),
   ).toBeVisible();
-  const overflow = await pageA.evaluate(
-    () =>
-      document.documentElement.scrollWidth -
-      document.documentElement.clientWidth,
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
-  await pageA.setViewportSize({ width: 1280, height: 800 });
-  await pageA.emulateMedia({ colorScheme: "light" });
+  // makeShots fails on any horizontal overflow, at both widths and both schemes.
+  await shots(pageA, "01-card-connected");
 });
 
 test("a second user who tries the same Google account is told it is taken", async () => {
@@ -169,6 +171,7 @@ test("a second user who tries the same Google account is told it is taken", asyn
   await expect(card(pageB).getByRole("alert")).toContainText(TAKEN);
   await expect(card(pageB).getByText("Not connected")).toBeVisible();
   await expect(card(pageB).getByText(ALICE)).toHaveCount(0);
+  await shots(pageB, "02-card-taken");
   // The first user's connection is untouched, and nothing was revoked for it.
   expect(await stub.calls("revoke")).toEqual([]);
   await pageA.reload();
@@ -197,11 +200,15 @@ test("Deny at Google shows a calm message", async () => {
   await denyOnConsentPage(pageA);
 
   await expect(pageA).toHaveURL(/\/account$/);
-  await expect(card(pageA).getByRole("status")).toHaveText(
-    "Nothing was connected. You can connect Gmail whenever you want to.",
-  );
+  await expect(
+    notice(
+      pageA,
+      "Nothing was connected. You can connect Gmail whenever you want to.",
+    ),
+  ).toBeVisible();
   await expect(card(pageA).getByRole("alert")).toHaveCount(0);
   await expect(card(pageA).getByText("Not connected")).toBeVisible();
+  await shots(pageA, "03-card-denied");
 });
 
 test("the code and the state of the callbacks are in no log, Caddy's included", () => {
@@ -210,6 +217,10 @@ test("the code and the state of the callbacks are in no log, Caddy's included", 
   expect(secrets.length).toBeGreaterThanOrEqual(10);
   const caddy = logs("caddy");
   expect(caddy).toContain("/api/mail/oauth/callback[redacted]");
+  // No callback line keeps a query, and the state leaves no consent address in a Location.
+  // (booleans: a failing assertion must not print the log)
+  expect(/oauth\/callback\?/.test(caddy)).toBe(false);
+  expect(/[?&]state=[A-Za-z0-9._~%-]{20,}/.test(caddy)).toBe(false);
   const all = caddy + logs("api", "worker");
   for (const secret of secrets) expect(all.includes(secret)).toBe(false);
 });
