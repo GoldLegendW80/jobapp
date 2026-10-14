@@ -422,6 +422,8 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
       ) : null}
       {pending && editing ? (
         <EditForm
+          // The form reads its value once, when it mounts: it restarts from the value picked.
+          key={chosen ?? -1}
           title={title}
           value={picked ? picked.value : item.value}
           busy={busy}

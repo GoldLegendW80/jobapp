@@ -460,6 +460,47 @@ describe("the review of a run's proposals", () => {
     ]);
   });
 
+  it("restarts the open edit form from the value picked, and never sends the one that was not", async () => {
+    const other = { ...EMPLOYER, start: "2021-05" };
+    const api = fakeApi([
+      item("employers:acme-group-2021", EMPLOYER, {
+        section: "experience",
+        flags: ["conflict"],
+        locked: true,
+        bulk: "locked",
+        conflict: [{ value: other, citations: [cite(LETTER, "May 2021")] }],
+      }),
+    ]);
+    const user = userEvent.setup();
+    show();
+    const row = await screen.findByTestId("proposal");
+    // The form opens on value 1 with nothing picked, and the user types into it.
+    await user.click(
+      within(row).getByRole("button", { name: "Edit: Employers: Acme Group" }),
+    );
+    const form = () =>
+      within(row).getByRole("form", { name: "Edit Employers: Acme Group" });
+    await user.clear(within(form()).getByLabelText("Organisation"));
+    await user.type(within(form()).getByLabelText("Organisation"), "Typed Ltd");
+    expect(within(form()).getByLabelText("Start")).toHaveValue("2021");
+    // Picking value 2 restarts the form from value 2: what was typed is not carried over.
+    await user.click(screen.getByRole("radio", { name: /^Value 2:/ }));
+    expect(within(form()).getByLabelText("Start")).toHaveValue("2021-05");
+    expect(within(form()).getByLabelText("Organisation")).toHaveValue(
+      "Acme Group",
+    );
+    await user.click(
+      within(form()).getByRole("button", { name: "Accept with my changes" }),
+    );
+    expect(await within(row).findByText("Accepted")).toBeInTheDocument();
+    expect(api.calls).toEqual([
+      {
+        path: "/api/proposals/p-employers:acme-group-2021/accept",
+        body: { profile_revision: 3, edited_value: other },
+      },
+    ]);
+  });
+
   it("marks a stale item to check again and shows the server's sentence when it moved once more", async () => {
     fakeApi([
       item("years_experience", 2.2, {
