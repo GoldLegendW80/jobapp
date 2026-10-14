@@ -74,11 +74,12 @@ class CvInput(BaseModel):
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
 
 
-def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
-    """What a CV writer run is bound to: `{generation_id, document_id, posting_id,
+def bind_for(db: Session, run: AgentRun, kind: Kind) -> Mapping[str, Any] | None:
+    """What a writer run is bound to: `{generation_id, document_id, posting_id,
     base_document_id, mode}`, ids as text. None (the run fails before any model call) unless
-    the generation is this run's own and running, of this person, for a posting's CV whose
-    posting is the run's job. Reads only, takes no lock."""
+    the generation is this run's own and running, of this person, for a posting's document of
+    `kind` whose posting is the run's job. Reads only, takes no lock. The letter writer binds
+    through it too (writer_letter.py)."""
     try:
         generation_id = uuid.UUID(str(run.input.get("generation_id")))
     except ValueError:
@@ -93,7 +94,7 @@ def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
             DocumentGeneration.status == GenerationStatus.running,
             Document.user_id == run.user_id,
             Document.scope == Scope.posting,
-            Document.kind == Kind.cv,
+            Document.kind == kind,
         )
     ).one_or_none()
     if row is None:
@@ -111,7 +112,12 @@ def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
     }
 
 
-def _limits_line(limits: Mapping[str, Any]) -> str:
+def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
+    """`bind_for` the CV writer: a posting's CV."""
+    return bind_for(db, run, Kind.cv)
+
+
+def limits_line(limits: Mapping[str, Any]) -> str:
     shown = [f"{name} {value}" for name, value in limits.items() if value]
     if not shown:
         return ""
@@ -124,7 +130,7 @@ class CvWriter(definitions.AgentDefinition):
 
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         language = LANGUAGES.get(str(data.get("language")), "English")
-        limits = _limits_line(data.get("limits") or {})
+        limits = limits_line(data.get("limits") or {})
         if data.get("mode") == GenerationMode.shorten.value:
             fields = ", ".join(str(path) for path in data.get("long_fields") or ()) or "the longest"
             text = (
@@ -143,8 +149,9 @@ class CvWriter(definitions.AgentDefinition):
         return text.strip()
 
 
-# Called once a run of the writer has reached its final status: `generate.on_final`, registered
-# when generate.py is imported (it imports this module, so this one cannot import it).
+# Called once a run of a writer (the CV's or the letter's) has reached its final status:
+# `generate.on_final`, registered when generate.py is imported (it imports this module, so this
+# one cannot import it).
 _final_hooks: list[definitions.OnFinal] = []
 
 
@@ -153,7 +160,7 @@ def register_final_hook(hook: definitions.OnFinal) -> None:
         _final_hooks.append(hook)
 
 
-async def _on_final(final: definitions.FinalRun) -> None:
+async def run_final_hooks(final: definitions.FinalRun) -> None:
     for hook in list(_final_hooks):
         await hook(final)
 
@@ -184,7 +191,7 @@ def _definition() -> CvWriter:
         live_text=False,
         bind=bind_generation,
         private_io=True,
-        on_final=_on_final,
+        on_final=run_final_hooks,
     )
 
 

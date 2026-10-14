@@ -23,6 +23,11 @@ memory (`_RUNS`, by run id), for the run's final hook (`generate.on_final`) to `
    `needs_rewrite` class is cut only where the sentence stays whole, else kept and recorded for
    the person to see).
 
+A letter submitted with no recipient takes the default of the spec ("Hiring team, " and the
+posting's company, in the document's language), before the checks: the company is a source of a
+letter. The base CV a letter is written from is the generation's (`base_document_id`): the
+letter document has none of its own.
+
 The posting's title and company are not sources of a CV (`sources_for(..., kind="cv")`): a
 claim copied from the posting is flagged like any invented one. Nothing here logs a text: the
 answers go to the writer only, inside a private run whose tool results are never stored.
@@ -40,13 +45,14 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.documents import checks, corrections, render_job, rules, store
+from app.documents import checks, corrections, profile_view, render_job, rules, store
 from app.documents import content as c
 from app.documents.corrections import Correction
 from app.documents.models import Document, DocumentGeneration
 from app.documents.settings import DocumentSettings
 from app.documents.sources import DocumentSources, sources_for
 from app.ingestion.models import IngestionDocument
+from app.profile import service as profile_service
 
 STORED = "Stored. Your work is done: answer with one short line."
 ALREADY = "Already stored. Do not submit again: answer with one short line."
@@ -62,6 +68,8 @@ RULES = {
     "required": "a required field is missing",
     "wrong_type": "the wrong type",
 }
+# The recipient of a letter that names none, by language.
+RECIPIENT = {"en": "Hiring team, {company}", "fr": "Équipe de recrutement, {company}"}
 
 
 @dataclass(frozen=True)
@@ -75,6 +83,7 @@ class WriterContext:
     soft_limits: rules.SoftLimits
     fallbacks: corrections.Fallbacks
     today: date
+    recipient: str = ""  # a letter's default recipient; empty for a CV or a posting with no company
 
 
 @dataclass(frozen=True)
@@ -154,25 +163,32 @@ def context_for(
         return None
     started = generation.started_at or generation.created_at
     context = render_job.read_context(db, document, started)
-    base = (
-        store.get(db, user_id, document.base_document_id)
-        if document.base_document_id is not None
-        else None
-    )
+    view, base_content = context.view, context.base
+    base = store.get(db, user_id, document.base_document_id or generation.base_document_id)
+    if kind == "letter" and base is not None and base_content is None:
+        # A letter has no base CV of its own: the generation's is its source, as for a CV.
+        base_content = c.parse("base", base.draft)
+        profile = profile_service.get_profile(db, user_id, started)
+        view = profile_view.build(
+            profile_service.sections_view(profile), profile.revision, base_content
+        )
     sources = sources_for(
-        context.view, context.base, _upload_text(db, user_id, base), context.posting, kind=kind
+        view, base_content, _upload_text(db, user_id, base), context.posting, kind=kind
     )
     template_kind = "letter" if kind == "letter" else "cv"
+    company = context.posting.company.strip() if context.posting is not None else ""
+    language = document.language.value
     return WriterContext(
         kind=kind,
         sources=sources,
         settings=store.settings(db, user_id),
-        employer_keys=tuple(employer.key for employer in context.view.employers),
+        employer_keys=tuple(employer.key for employer in view.employers),
         soft_limits=context.template.kinds[template_kind].soft_limits,
-        fallbacks=corrections.fallbacks_for(
-            context.view, context.base, context.posting, document.language.value
-        ),
+        fallbacks=corrections.fallbacks_for(view, base_content, context.posting, language),
         today=started.date(),
+        recipient=RECIPIENT[language].format(company=company)
+        if kind == "letter" and company
+        else "",
     )
 
 
@@ -235,6 +251,8 @@ def handle(context: WriterContext | None, run_id: uuid.UUID, raw: object) -> tup
         state.exhausted = left <= 0
         return _invalid_answer(found, left), True
     content, separators = corrections.fix_separators(kind, found.content, context.settings)
+    if isinstance(content, c.LetterContent) and not content.recipient.strip() and context.recipient:
+        content = content.model_copy(update={"recipient": context.recipient})
     found = checks.run(
         kind,
         content,

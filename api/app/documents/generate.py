@@ -1,7 +1,8 @@
 """Generations of a posting's documents (task D7; SPEC-documents.md, Flow step 4, "Being careful,
 and the automatic correction", "Limits of one run").
 
-A generation is a row of `document_generations` and, once started, one agent run of the writer:
+A generation is a row of `document_generations` and, once started, one agent run of the writer
+of its document's kind (the CV writer, or the letter writer of task D8):
 
 1. `create(db, document, mode, trigger, base_document_id, estimate, token_ceiling, ...)`: the row,
    `queued` (or `waiting` with its reason). `estimate` and `token_ceiling` are computed by the
@@ -21,6 +22,12 @@ A generation is a row of `document_generations` and, once started, one agent run
    (D6's `mark_queued` and `enqueue`, the two halves of `queue_render`; a lost enqueue is queued
    again by D6's cron). A run that ends any other way keeps nothing: `cancelled`, or `failed`
    with a code of `ERRORS`. Nothing refuses a document once its schema passed.
+   The letter follows the CV (`start_letter`, D8): when a CV's `posting` generation of an
+   `auto` or `click` trigger is done and the posting's letter has no version yet, the letter's
+   generation is created with the CV's `estimate`, `token_ceiling` and base CV (the caller
+   computed them for the pair), started, and queued by the same final hook. A chat, a
+   shortening and a letter that already has a version start none: the person's letter is not
+   rewritten behind their back. A letter is never shortened: the render fits its font.
 4. An overflow: D6's render job calls `render_job.on_overflow(document_id, version_id)` after
    storing a PDF that overflows at the tightest step. This module sets it to `on_overflow`,
    which creates one `shorten` generation for a version a writer's `posting` generation made,
@@ -36,7 +43,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Any
@@ -51,7 +58,7 @@ from app.agents.definitions import FinalRun
 from app.agents.models import AgentRun, RunStatus
 from app.config import Settings, get_settings
 from app.documents import content as c
-from app.documents import render_job, rules, store, submit, writer_cv
+from app.documents import render_job, rules, store, submit, writer_cv, writer_letter
 from app.documents.corrections import Correction
 from app.documents.models import (
     Author,
@@ -77,8 +84,14 @@ ERRORS = ("invalid_output", "no_result", "token_limit", "binding_gone", "run_fai
 QUEUE_SERVICE = "documents_queue"
 # The recorded streams a writer replays on the fake backend when its caller names none.
 DEFAULT_SCRIPTS = {
-    GenerationMode.posting: "documents_cv_valid",
-    GenerationMode.shorten: "documents_cv_shorten",
+    (Kind.cv, GenerationMode.posting): "documents_cv_valid",
+    (Kind.cv, GenerationMode.shorten): "documents_cv_shorten",
+    (Kind.letter, GenerationMode.posting): "documents_letter_valid",
+}
+# The writer of each kind of posting document, and the modes it writes in.
+WRITERS = {
+    Kind.cv: (writer_cv.CV_WRITER, (GenerationMode.posting, GenerationMode.shorten)),
+    Kind.letter: (writer_letter.LETTER_WRITER, (GenerationMode.posting,)),
 }
 
 
@@ -189,10 +202,10 @@ def create(
     return generation
 
 
-def _script(settings: Settings, mode: GenerationMode, script: str | None) -> str | None:
+def _script(settings: Settings, kind: Kind, mode: GenerationMode, script: str | None) -> str | None:
     if not settings.agents_fake_backend or settings.app_env == "production":
         return None
-    return script or DEFAULT_SCRIPTS.get(mode)
+    return script or DEFAULT_SCRIPTS.get((kind, mode))
 
 
 def start(
@@ -208,26 +221,27 @@ def start(
     commits, then `enqueue_run`. Raises agent_runs.ActiveRunsError when the person has their
     most runs active (the generation stays as it was)."""
     settings = settings or get_settings()
-    if generation.mode not in (GenerationMode.posting, GenerationMode.shorten):
-        raise ValueError(f"not a mode of the CV writer: {generation.mode.value}")
     if generation.status not in (GenerationStatus.queued, GenerationStatus.waiting):
         raise ValueError(f"the generation is {generation.status.value}: it has its run")
     document = store.lock_document(db, generation.user_id, generation.document_id)
-    if document.scope != Scope.posting or document.kind != Kind.cv:
-        raise ValueError("the CV writer writes a posting's CV only")
+    if document.scope != Scope.posting or document.kind not in WRITERS:
+        raise ValueError("the writers write a posting's CV or letter only")
+    definition, modes = WRITERS[document.kind]
+    if generation.mode not in modes:
+        raise ValueError(f"not a mode of the {document.kind.value} writer: {generation.mode.value}")
     template = render_job.template_of(db, generation.user_id, document.template_slug)
     data: dict[str, Any] = {
         "generation_id": str(generation.id),
         "mode": generation.mode.value,
         "language": document.language.value,
-        "limits": asdict(template.kinds["cv"].soft_limits),
-        "long_fields": list(long_fields),
+        "limits": asdict(template.kinds[document.kind.value].soft_limits),
         "token_budget": generation.token_ceiling,
     }
-    chosen = _script(settings, generation.mode, script)
+    if document.kind == Kind.cv:
+        data["long_fields"] = list(long_fields)
+    chosen = _script(settings, document.kind, generation.mode, script)
     if chosen is not None:
         data["script"] = chosen
-    definition = writer_cv.CV_WRITER
     run = agent_runs.create_run(
         db,
         generation.user_id,
@@ -391,30 +405,110 @@ def settle(
         return render
 
 
-async def on_final(final: FinalRun) -> None:
-    """The writer's final hook: settle the generation, then queue its render."""
-    if final.agent != writer_cv.NAME:
-        return
-    taken = submit.take(final.run_id)
-    render = await asyncio.to_thread(
-        settle, final.sessions, final.run_id, final.status, taken, final.clock()
-    )
-    if render is None:
-        return
+def start_letter(
+    sessions: sessionmaker[Session],
+    run_id: uuid.UUID,
+    at: datetime,
+    settings: Settings,
+) -> uuid.UUID | None:
+    """Create and start the letter that follows a CV (module docstring, 3): the CV's `posting`
+    generation of run `run_id` is done, of an `auto` or `click` trigger, and the posting's letter
+    has no version yet. The letter's generation takes the CV's estimate, ceiling and base CV, and
+    its document the CV's template. Returns the run to enqueue, else None (nothing to chain, a
+    generation already open for the letter, or the person's runs all busy: the letter then
+    stays unwritten and "Write now" writes it)."""
+    with sessions() as db:
+        found = db.execute(
+            sa.select(DocumentGeneration.user_id, DocumentGeneration.document_id).where(
+                DocumentGeneration.run_id == run_id
+            )
+        ).one_or_none()
+        if found is None:
+            return None
+        cv = store.lock_document(db, found.user_id, found.document_id)
+        parent = db.execute(
+            sa.select(DocumentGeneration).where(DocumentGeneration.run_id == run_id)
+        ).scalar_one()
+        if (
+            cv.scope != Scope.posting
+            or cv.kind != Kind.cv
+            or cv.posting_id is None
+            or parent.mode is not GenerationMode.posting
+            or parent.status is not GenerationStatus.done
+            or parent.trigger not in (GenerationTrigger.auto, GenerationTrigger.click)
+        ):
+            return None
+        letter = store.get_or_create(db, cv.user_id, cv.posting_id, Kind.letter, at=at)
+        if _has_version(db, letter):
+            return None  # the person's letter is not written again behind their back
+        try:
+            generation = create(
+                db,
+                letter,
+                GenerationMode.posting,
+                parent.trigger,
+                parent.base_document_id or cv.base_document_id,
+                parent.estimate,
+                parent.token_ceiling,
+                at=at,
+            )
+            run = start(db, generation, at=at, settings=settings)
+        except (store.GenerationOpenError, agent_runs.ActiveRunsError):
+            db.rollback()
+            return None
+        store.commit(db)
+        return run.id
+
+
+async def _send(
+    final: FinalRun, send: Callable[[Any], Awaitable[Any]], lost: str, **fields: str
+) -> None:
+    """`send(queue)` on the run's queue service, else on a Queue of the settings; a queue that
+    is down is logged as `lost`, never raised (the row stays queued for D6's cron or the
+    caller's next pass)."""
     queue = final.services.get(QUEUE_SERVICE)
     own = queue is None
     if own:
         queue = queues.Queue(final.settings.redis_url.get_secret_value())
     try:
-        await render_job.enqueue(queue, render[0], render[1])
+        await send(queue)
     except queues.QueueUnavailableError:
-        # The row stays `queued`: D6's cron queues it again within a minute.
-        logger.warning(
-            "documents.generation.render_not_queued", extra={"run_id": str(final.run_id)}
-        )
+        logger.warning(lost, extra=fields)
     finally:
         if own:
             await queue.close()
+
+
+async def on_final(final: FinalRun) -> None:
+    """The writers' final hook: settle the generation, queue its render, and after a CV start
+    the posting's letter."""
+    if final.agent not in (writer_cv.NAME, writer_letter.NAME):
+        return
+    taken = submit.take(final.run_id)
+    render = await asyncio.to_thread(
+        settle, final.sessions, final.run_id, final.status, taken, final.clock()
+    )
+    if render is not None:
+        await _send(
+            final,
+            lambda queue: render_job.enqueue(queue, render[0], render[1]),
+            # The row stays `queued`: D6's cron queues it again within a minute.
+            "documents.generation.render_not_queued",
+            run_id=str(final.run_id),
+        )
+    if final.agent != writer_cv.NAME or final.status is not RunStatus.done:
+        return
+    letter = await asyncio.to_thread(
+        start_letter, final.sessions, final.run_id, final.clock(), final.settings
+    )
+    if letter is not None:
+        logger.info("documents.generation.letter", extra={"run_id": str(letter)})
+        await _send(
+            final,
+            lambda queue: enqueue_run(queue, letter),
+            "documents.generation.run_not_queued",
+            run_id=str(letter),
+        )
 
 
 # --- the shortening pass ----------------------------------------------------------------------
