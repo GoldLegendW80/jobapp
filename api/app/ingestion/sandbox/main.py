@@ -13,6 +13,7 @@ application may be importable here). It parses nothing itself. It locks itself d
 the bytes to the handler of `kind`, one file of this directory per kind:
 
     pdf_text.py (G2b)   docx.py, linkedin_zip.py (G7)   image.py, pdf_render.py (G8)
+    mail_html.py (mail M3: the HTML of a mail, an answer of its own shape)
 
 A handler is `handle(data: bytes, options: dict, budget: Budget) -> dict` and returns the whole
 answer: `{"ok": true, ...}` or `{"ok": false, "failure": "file", "code": "..."}` with integers
@@ -72,6 +73,7 @@ HANDLERS = {
     "linkedin_zip": "linkedin_zip",
     "image": "image",
     "pdf_render": "pdf_render",
+    "mail_html": "mail_html",
 }
 
 MIB = 1024 * 1024
@@ -141,6 +143,17 @@ IMAGE_AS = 320 * MIB
 PDF_RENDER_AS = 256 * MIB
 LIMITS["image"]["as"] = IMAGE_AS
 LIMITS["pdf_render"]["as"] = PDF_RENDER_AS
+# The sanitiser of a mail's HTML (mail M3), measured in the parser container on the Mac (arm64,
+# 2026-10-14; tasks/mail/todo.md, Measurements, M3; tests/mail/test_parser_container.py takes
+# the figures again on every run and holds each under 80 % of the limit). The highest address
+# space of a child was 47 MiB (2 MB of four byte characters, cut at the cap of the input) and
+# 40 MiB for every other page: an ordinary mail of 1 kB, 100 kB or 500 kB, 500 kB of one
+# unclosed tag, of ampersands, of links, 100,000 nested `div`. Resident memory went from 19 MiB
+# (1 kB) to 37 MiB. 128 MiB is 2.7 times the worst of them. A page that asks for more ends the
+# child (the Rust side aborts when memory is refused), the server answers `crashed`, and the
+# worker stores the mail with its plain text and no HTML.
+MAIL_HTML_AS = 128 * MIB
+LIMITS["mail_html"]["as"] = MAIL_HTML_AS
 # The hard CPU limit is one second above the soft one. At the soft limit the kernel sends
 # SIGXCPU, whose default action ends the process, and the server reports `cpu_limit`. The
 # kernel looks at the hard limit first, though: with both at 45 it would send SIGKILL straight

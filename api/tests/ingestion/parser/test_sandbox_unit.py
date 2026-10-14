@@ -374,7 +374,7 @@ def test_the_table_names_the_five_handlers_and_the_tasks_add_their_files() -> No
     assert set(present) >= {"main.py", "server.py", "pdf_text.py"}
     assert main.HANDLERS["ping"] is None
     assert sorted(name for name in main.HANDLERS.values() if name) == [
-        "docx", "image", "linkedin_zip", "pdf_render", "pdf_text",
+        "docx", "image", "linkedin_zip", "mail_html", "pdf_render", "pdf_text",
     ]  # fmt: skip
 
 
