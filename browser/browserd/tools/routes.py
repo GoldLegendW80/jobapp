@@ -84,9 +84,7 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
         raise LeaseError(400, "bad_args")
     capability = req.headers.get("x-gate-capability")
     if capability is not None:
-        good = bool(lease.gate_hash) and hmac.compare_digest(
-            lease.gate_hash, _hash(capability)
-        )
+        good = bool(lease.gate_hash) and hmac.compare_digest(lease.gate_hash, _hash(capability))
         if name != "browser_click" or not good:
             raise LeaseError(403, "bad_capability")
     tab = actions.Tab(
@@ -106,13 +104,9 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
                 return actions.failure("bad_args", f"Bad argument: {exc}.")
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 - Playwright's errors: a result, the type only
-                log.warning(
-                    "lease %s: %s failed: %s", lease_id[:8], name, type(exc).__name__
-                )
-                return actions.failure(
-                    "page_error", "The page did not let this action finish."
-                )
+            except Exception as exc:
+                log.warning("lease %s: %s failed: %s", lease_id[:8], name, type(exc).__name__)
+                return actions.failure("page_error", "The page did not let this action finish.")
 
     return 200, await _run(svc, lease_id, token, work)
 

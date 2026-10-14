@@ -210,7 +210,7 @@ FACTS_JS = r"""
   }
   return facts;
 }
-"""
+"""  # noqa: E501  JS source run in the page, kept as written
 
 
 def words(text: str) -> list[str]:
@@ -220,9 +220,7 @@ def words(text: str) -> list[str]:
     text = unicodedata.normalize("NFKC", text)
     text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
     text = "".join(
-        ch
-        for ch in unicodedata.normalize("NFKD", text)
-        if not unicodedata.combining(ch)
+        ch for ch in unicodedata.normalize("NFKD", text) if not unicodedata.combining(ch)
     )
     text = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)
     return [w for w in re.split(r"[^0-9a-z]+", text.casefold()) if w]
@@ -234,9 +232,7 @@ def _starts(tokens: list[str], stems: tuple[str, ...]) -> bool:
 
 def _phrase(tokens: list[str], phrase: tuple[str, ...]) -> bool:
     size = len(phrase)
-    return any(
-        tuple(tokens[i : i + size]) == phrase for i in range(len(tokens) - size + 1)
-    )
+    return any(tuple(tokens[i : i + size]) == phrase for i in range(len(tokens) - size + 1))
 
 
 def _glued(names: list[str]) -> list[str]:
@@ -256,8 +252,7 @@ def says_submit(names: list[str], profile_edit: bool = False) -> bool:
     if _starts(tokens, CONFIRM_VERBS) and _starts(tokens, APPLICATION_NOUNS):
         return True
     return profile_edit and (
-        _starts(tokens, PROFILE_STEMS)
-        or any(_phrase(tokens, p) for p in PROFILE_PHRASES)
+        _starts(tokens, PROFILE_STEMS) or any(_phrase(tokens, p) for p in PROFILE_PHRASES)
     )
 
 
@@ -301,9 +296,7 @@ def multiline(facts: dict[str, Any]) -> bool:
     return tag == "textarea" or (facts.get("editable") is True and tag != "input")
 
 
-def verdict(
-    facts: Any, *, action: str = "click", profile_edit: bool = False
-) -> str | None:
+def verdict(facts: Any, *, action: str = "click", profile_edit: bool = False) -> str | None:
     """None when the action may go ahead, else the refusal's code: `danger`, `card_field`,
     `submit`, `not_editable`, `bad_selector`, `unreadable`. `action` is click, check, type
     (a click on the field, then keys) or key (Enter or Space on the focused element).

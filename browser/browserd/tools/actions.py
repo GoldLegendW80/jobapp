@@ -48,7 +48,7 @@ DEEP_FOCUS_JS = """() => {
   }
   return e;
 }"""
-FOCUS_TAG_JS = "e => !e ? 'BODY' : (e === document.body || e === document.documentElement) ? 'BODY' : e.tagName"
+FOCUS_TAG_JS = "e => !e ? 'BODY' : (e === document.body || e === document.documentElement) ? 'BODY' : e.tagName"  # noqa: E501  one JS expression run in the page
 
 
 def failure(code: str, message: str) -> dict[str, Any]:
@@ -73,7 +73,7 @@ def refused(code: str) -> dict[str, Any]:
     return failure(code, MESSAGES.get(code, "Refused."))
 
 
-class OffList(Exception):
+class OffList(Exception):  # noqa: N818  a control-flow signal, not an error
     """The tab shows a host off the list (or a hop off it was stopped): `run` takes it back and
     answers host_not_allowed, whatever the tool had done or read."""
 
@@ -118,18 +118,14 @@ class Tab:
         """The page and its main frame show a host of the list."""
         try:
             return self.allowed(page.url) and self.allowed(page.main_frame.url)
-        except Exception:  # noqa: BLE001 - a page closing under us: not shown, fail closed
+        except Exception:
             return False
 
     async def _guard(self, route: Any, request: Any) -> None:
         # A navigation of a tab's main frame to a host outside the list (a link, a redirect, a
         # window.open) never leaves: it is aborted here, and settle() reports it.
         frame = request.frame if request.is_navigation_request() else None
-        if (
-            frame is not None
-            and frame.parent_frame is None
-            and not self.allowed(request.url)
-        ):
+        if frame is not None and frame.parent_frame is None and not self.allowed(request.url):
             self.state.blocked.append(request.url[:200])
             await route.abort("blockedbyclient")
             return
@@ -144,10 +140,10 @@ class Tab:
             frame = request.frame
             if frame.parent_frame is not None or self.allowed(request.url):
                 return
-        except Exception:  # noqa: BLE001 - a request with no frame (a worker): not a navigation
+        except Exception:
             return
         self.state.blocked.append(request.url[:200])
-        asyncio.ensure_future(stop_loading(frame))
+        asyncio.ensure_future(stop_loading(frame))  # noqa: RUF006  fire and forget, the page owns it
 
     async def page(self) -> Any:
         context = self.browser.browser.contexts[0]
@@ -174,38 +170,30 @@ class Tab:
         for other in list(context.pages):
             off = policy.url_verdict(other.url, self.hosts) is not None
             if other is not self.state.page and off:
-                log.warning(
-                    "lease %s: a tab outside the allow list closed", self.lease_tag
-                )
+                log.warning("lease %s: a tab outside the allow list closed", self.lease_tag)
                 await other.close()
         page = self.state.page
         left = page is not None and not page.is_closed() and not self.on_list(page)
         if left:
-            with contextlib.suppress(
-                Exception
-            ):  # no history, a timeout: the blank page then
+            with contextlib.suppress(Exception):  # no history, a timeout: the blank page then
                 await page.go_back(timeout=ACTION_S * 1000)
             if not self.on_list(page):
                 await page.goto(ABOUT_BLANK)
         if left or self.state.blocked:
             self.state.blocked.clear()
-            log.warning(
-                "lease %s: a navigation outside the allow list stopped", self.lease_tag
-            )
+            log.warning("lease %s: a navigation outside the allow list stopped", self.lease_tag)
             return {**refused("host_not_allowed"), "url": page.url if page else None}
         return result
 
     async def element(self, args: dict[str, Any]) -> tuple[Any, Any]:
         """The element the ref names, with its facts; (None, failure) when it is gone."""
-        ref = policy.ref_of(
-            args
-        )  # a malformed ref is bad_args before the page is touched
+        ref = policy.ref_of(args)  # a malformed ref is bad_args before the page is touched
         page = await self.page()
         locator = page.locator(f"aria-ref={ref}")
         try:
             if await locator.count() != 1:
                 return None, refused("stale_ref")
-        except Exception:  # noqa: BLE001 - Playwright refuses a ref of an older snapshot
+        except Exception:
             return None, refused("stale_ref")
         return locator, None
 
@@ -217,7 +205,7 @@ class Tab:
                 detect.FACTS_JS,
                 {"sels": list(self.request.submit_selectors), "point": point},
             )
-        except Exception:  # noqa: BLE001 - detached, navigated away: unreadable, fail closed
+        except Exception:
             return None
 
     def judge(self, facts: Any, action: str, tool: str) -> dict[str, Any] | None:
@@ -273,7 +261,7 @@ async def title(page: Any) -> str:
     # A navigation under way (a redirect the page started) destroys the context title() reads.
     try:
         return await page.title()
-    except Exception:  # noqa: BLE001 - that navigation: no title this time
+    except Exception:
         return ""
 
 
@@ -310,9 +298,7 @@ async def navigate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 async def click(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     button = args.get("button", "left")
     if button not in ("left", "right", "middle") or args.get("modifiers"):
-        return failure(
-            "bad_args", "Only a plain click is allowed, with no modifier key."
-        )
+        return failure("bad_args", "Only a plain click is allowed, with no modifier key.")
     locator, gone = await tab.element(args)
     if gone:
         return gone
@@ -379,9 +365,7 @@ async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 async def select_option(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     values = args.get("values")
     if not isinstance(values, list) or not 0 < len(values) <= 20:
-        return failure(
-            "bad_args", "values must be a list of 1 to 20 option values or labels."
-        )
+        return failure("bad_args", "values must be a list of 1 to 20 option values or labels.")
     if not all(isinstance(v, str) and len(v) <= 500 for v in values):
         return failure("bad_args", "values must be strings.")
     locator, gone = await tab.element(args)
@@ -413,30 +397,19 @@ async def check(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     names = args.get("paths")
     if not isinstance(names, list) or not 0 < len(names) <= policy.FILES_MAX:
-        return failure(
-            "bad_args", "paths must list the names of documents given to this lease."
-        )
+        return failure("bad_args", "paths must list the names of documents given to this lease.")
     missing = [n for n in names if not isinstance(n, str) or n not in tab.state.files]
     if missing:
-        log.warning(
-            "lease %s: browser_file_upload refused: file_not_given", tab.lease_tag
-        )
-        return failure(
-            "file_not_given", "Refused: only documents given to this lease upload."
-        )
+        log.warning("lease %s: browser_file_upload refused: file_not_given", tab.lease_tag)
+        return failure("file_not_given", "Refused: only documents given to this lease upload.")
     payloads = [
-        {"name": n, "mimeType": "application/pdf", "buffer": tab.state.files[n]}
-        for n in names
+        {"name": n, "mimeType": "application/pdf", "buffer": tab.state.files[n]} for n in names
     ]
     locator, gone = await tab.element(args)
     if gone:
         return gone
     facts = await tab.facts(locator)
-    if (
-        isinstance(facts, dict)
-        and facts.get("tag") == "input"
-        and facts.get("type") == "file"
-    ):
+    if isinstance(facts, dict) and facts.get("tag") == "input" and facts.get("type") == "file":
         await tab.pacer.dwell()
         await locator.set_input_files(payloads, timeout=ACTION_S * 1000)
         return await tab.settle({**await _here(tab), "uploaded": names})
@@ -455,16 +428,12 @@ async def file_upload(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 async def press_key(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     key = args.get("key")
     if key not in policy.KEYS:
-        return failure(
-            "bad_args", f"key must be one of {', '.join(sorted(policy.KEYS))}."
-        )
+        return failure("bad_args", f"key must be one of {', '.join(sorted(policy.KEYS))}.")
     page = await tab.page()
     if key in ("Enter", "Space"):
         focused, tag = await focus_of(page)
         if focused is None:
-            log.warning(
-                "lease %s: browser_press_key refused: unreadable", tab.lease_tag
-            )
+            log.warning("lease %s: browser_press_key refused: unreadable", tab.lease_tag)
             return refused("unreadable")
         if tag != "BODY":
             # Enter in a field of a form submits it; Enter or Space on a button presses it.
@@ -492,7 +461,7 @@ async def focus_of(page: Any) -> tuple[Any, str]:
             frame = await handle.content_frame()
             if frame is None:
                 return None, ""
-    except Exception:  # noqa: BLE001 - a frame detached or out of reach: unresolved
+    except Exception:
         return None, ""
     return None, ""
 
@@ -501,26 +470,19 @@ async def wait_for(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     page = await tab.page()
     seconds, text, gone = args.get("time"), args.get("text"), args.get("textGone")
     if seconds is not None:
-        if (
-            not isinstance(seconds, int | float)
-            or not 0 <= seconds <= policy.WAIT_MAX_S
-        ):
-            return failure(
-                "bad_args", f"time is at most {policy.WAIT_MAX_S:g} seconds."
-            )
+        if not isinstance(seconds, int | float) or not 0 <= seconds <= policy.WAIT_MAX_S:
+            return failure("bad_args", f"time is at most {policy.WAIT_MAX_S:g} seconds.")
         await tab.pacer.sleep(float(seconds))
     for wanted, state in ((text, "visible"), (gone, "hidden")):
         if wanted is None:
             continue
         if not isinstance(wanted, str) or not 0 < len(wanted) <= 500:
-            return failure(
-                "bad_args", "text and textGone are strings of at most 500 characters."
-            )
+            return failure("bad_args", "text and textGone are strings of at most 500 characters.")
         try:
             await page.get_by_text(wanted).first.wait_for(
                 state=state, timeout=policy.WAIT_MAX_S * 1000
             )
-        except Exception:  # noqa: BLE001 - Playwright's timeout
+        except Exception:
             return failure("timeout", "The text did not appear or go within the wait.")
     return await tab.settle(await _here(tab))
 
@@ -541,9 +503,7 @@ async def take_screenshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     else:
         data = await page.screenshot(full_page=bool(args.get("fullPage")), **options)
     if len(data) > SHOT_MAX:
-        return failure(
-            "too_large", "The screenshot is too large: take the visible part only."
-        )
+        return failure("too_large", "The screenshot is too large: take the visible part only.")
     return {
         "ok": True,
         "type": kind,
@@ -555,20 +515,14 @@ async def take_screenshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     action = args.get("action", "list")
     await tab.page()
-    settled = await tab.settle(
-        {"ok": True}
-    )  # tabs off the list are closed before any is listed
+    settled = await tab.settle({"ok": True})  # tabs off the list are closed before any is listed
     if not settled.get("ok"):
         return settled
     context = tab.browser.browser.contexts[0]
     found = list(context.pages)
     if action in ("select", "close"):
         index = args.get("index")
-        if (
-            not isinstance(index, int)
-            or isinstance(index, bool)
-            or not 0 <= index < len(found)
-        ):
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(found):
             return failure("bad_args", "index must be the index of an open tab.")
         if action == "select":
             tab.state.page = await pages.front(found[index])
@@ -576,9 +530,7 @@ async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
             await found[index].close()
         found = list(context.pages)
     elif action != "list":
-        return failure(
-            "bad_args", "action is list, select or close; no tool opens a new tab."
-        )
+        return failure("bad_args", "action is list, select or close; no tool opens a new tab.")
     listed = [
         {
             "index": i,

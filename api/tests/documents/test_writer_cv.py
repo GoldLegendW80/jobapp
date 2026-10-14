@@ -77,6 +77,22 @@ def _submitted(script: str) -> list[dict[str, Any]]:
     ]
 
 
+def _renders(who: Person) -> list[str]:
+    """The queued renders. The CV's generation also queues the run of the posting's letter
+    (task D8), which these tests do not look at."""
+    return [job["function"] for job in who.queue.jobs if job["function"] == render_job.FUNCTION]
+
+
+def _shortenings(who: Person) -> list[dict[str, Any]]:
+    """The queued runs that are shortening passes, never the letter's run."""
+    return [
+        job
+        for job in who.queue.jobs
+        if job["function"] == "run_agent"
+        and run_row(who.factory, uuid.UUID(job["args"][0])).input.get("mode") == "shorten"
+    ]
+
+
 def _done(who: Person, document: uuid.UUID, generation: uuid.UUID) -> dict[str, Any]:
     """The finished generation's one version, as {content, corrections}."""
     row = generation_row(who.factory, generation)
@@ -148,7 +164,7 @@ def test_a_valid_cv_replaces_the_draft_and_queues_its_render(alex: Person) -> No
     assert row.template_slug == "classic"
     assert row.render_state.value == "queued"
     assert row.render_revision == row.draft_revision
-    assert [job["function"] for job in alex.queue.jobs] == [render_job.FUNCTION]
+    assert _renders(alex) == [render_job.FUNCTION]
     assert alex.queue.jobs[0]["args"] == (str(document), row.draft_revision)
     # The budget is the generation's ceiling; the run is the posting's.
     found = run_row(alex.factory, run)
@@ -345,7 +361,7 @@ def test_a_draft_edited_during_the_run_is_kept_and_the_result_is_a_version(alex:
     assert draft.draft_written_by is Author.user
     [version] = versions(alex.factory, document)
     assert version.content["headline"] == "Platform Engineer for teams that ship every day"
-    assert alex.queue.jobs == []  # the person's draft is not the writer's to render
+    assert _renders(alex) == []  # the person's draft is not the writer's to render
 
 
 def test_a_cancel_keeps_nothing_even_after_an_accepted_submit(alex: Person) -> None:
@@ -388,7 +404,7 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
     asyncio.run(
         render_job.render_document(context(alex.factory, renderer, AT), str(document), revision)
     )
-    agents = [job for job in alex.queue.jobs if job["function"] == "run_agent"]
+    agents = _shortenings(alex)
     assert len(agents) == 1
     shorten_run = uuid.UUID(agents[0]["args"][0])
     found = run_row(alex.factory, shorten_run)
@@ -415,7 +431,7 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
             context(alex.factory, renderer, AT), str(document), shortened.draft_revision
         )
     )
-    assert len([job for job in alex.queue.jobs if job["function"] == "run_agent"]) == 1
+    assert len(_shortenings(alex)) == 1
     assert [v.fit.value for v in versions(alex.factory, document) if v.fit] == [
         "overflow",
         "overflow",
@@ -447,7 +463,7 @@ def test_a_hand_edit_saved_during_the_render_is_never_shortened(
         db.commit()
     assert generate.shorten(alex.factory, document, overflowing.id, AT, alex.settings) is None
     asyncio.run(generate.on_overflow(document, overflowing.id))
-    assert [job for job in alex.queue.jobs if job["function"] == "run_agent"] == []
+    assert _shortenings(alex) == []
     row = document_row(alex.factory, document)
     assert row.draft["headline"] == "My own words"
     assert row.draft_written_by is Author.user

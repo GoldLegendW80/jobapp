@@ -47,7 +47,7 @@ def parse_hosts(raw: Any) -> tuple[str, ...]:
     hosts = []
     for entry in raw:
         if not isinstance(entry, str):
-            raise ValueError("hosts")  # noqa: TRY004 - one error kind: the request's 400
+            raise ValueError("hosts")
         entry = entry.strip().lower().rstrip(".")
         if not HOST_ENTRY.fullmatch(entry) or entry.rsplit(".", 1)[-1].isdigit():
             raise ValueError("hosts")
@@ -102,9 +102,7 @@ def cut_snapshot(text: str, limit: int = SNAPSHOT_MAX) -> tuple[str, bool]:
     """The snapshot within `limit` characters, cut at a line end, with a marker saying so."""
     if len(text) <= limit:
         return text, False
-    marker = (
-        f"\n[snapshot cut at {limit} characters: {len(text) - limit} more not shown]"
-    )
+    marker = f"\n[snapshot cut at {limit} characters: {len(text) - limit} more not shown]"
     head = text[: limit - len(marker)]
     if "\n" in head:
         head = head[: head.rindex("\n")]

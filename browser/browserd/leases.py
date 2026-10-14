@@ -40,7 +40,7 @@ class LeaseError(Exception):
         self.status, self.code, self.extra = status, code, extra
 
 
-class LeaseEnded(Exception):
+class LeaseEnded(Exception):  # noqa: N818 - an outcome, not an error
     """A tool call whose lease ended under it (maximum, idle, crash, release)."""
 
     def __init__(self, reason: str) -> None:
@@ -76,11 +76,7 @@ class Request:
         except ValueError:
             raise LeaseError(400, "bad_profile_id") from None
         uid = body.get("uid")
-        if (
-            not isinstance(uid, int)
-            or isinstance(uid, bool)
-            or not UID_MIN <= uid <= UID_MAX
-        ):
+        if not isinstance(uid, int) or isinstance(uid, bool) or not UID_MIN <= uid <= UID_MAX:
             raise LeaseError(400, "bad_uid")
         purpose = body.get("purpose")
         if purpose not in PURPOSES:
@@ -92,17 +88,11 @@ class Request:
         if (
             not isinstance(languages, list)
             or not 1 <= len(languages) <= 6
-            or not all(
-                isinstance(lang, str) and LANGUAGE.match(lang) for lang in languages
-            )
+            or not all(isinstance(lang, str) and LANGUAGE.match(lang) for lang in languages)
         ):
             raise LeaseError(400, "bad_languages")
         timezone = body.get("timezone") or "Europe/Paris"
-        if (
-            not isinstance(timezone, str)
-            or not TIMEZONE.match(timezone)
-            or ".." in timezone
-        ):
+        if not isinstance(timezone, str) or not TIMEZONE.match(timezone) or ".." in timezone:
             raise LeaseError(400, "bad_timezone")
         try:
             hosts = policy.parse_hosts(body.get("hosts"))
@@ -134,9 +124,7 @@ class Lease:
     wait_reason: str | None = None
     wait_site: str | None = None
     wait_deadline: float | None = None
-    active_before: float = (
-        0.0  # active seconds banked before the current active stretch
-    )
+    active_before: float = 0.0  # active seconds banked before the current active stretch
     active_since: float = 0.0
     last_input: float = 0.0
     events: list[dict[str, Any]] = field(default_factory=list)
@@ -172,11 +160,7 @@ class Lease:
     def expired(self, now: float) -> str | None:
         """Why the lease must end now, or None."""
         if self.state == "waiting_person":
-            return (
-                "person_timeout"
-                if self.wait_deadline and now >= self.wait_deadline
-                else None
-            )
+            return "person_timeout" if self.wait_deadline and now >= self.wait_deadline else None
         if self.active_s(now) >= self.max_s:
             return "lease_max"
         if now - self.last_input >= self.idle_s:
@@ -243,9 +227,7 @@ class Manager:
             except LeaseError:
                 raise
             except Exception as exc:
-                log.warning(
-                    "lease start failed: %s: %s", type(exc).__name__, str(exc)[:300]
-                )
+                log.warning("lease start failed: %s: %s", type(exc).__name__, str(exc)[:300])
                 raise LeaseError(503, "browser_failed") from exc
             finally:
                 self.starting = None
@@ -275,9 +257,7 @@ class Manager:
             raise LeaseError(403, "bad_lease_token")
         return lease
 
-    async def call(
-        self, lease_id: str, token: str, work: Callable[[], Awaitable[T]]
-    ) -> T:
+    async def call(self, lease_id: str, token: str, work: Callable[[], Awaitable[T]]) -> T:
         """Runs one tool call on the lease (B5's tools go through here): it counts as input, and
         a lease that ends while it runs cancels it, so the call answers LeaseEnded."""
         lease = self.check_token(lease_id, token)
@@ -307,9 +287,7 @@ class Manager:
         self.last_end = {"lease_id": lease.lease_id, "reason": reason}
         for task in list(self._calls):
             task.cancel()
-        for (
-            kept
-        ) in lease.scratch.values():  # the tools' state: documents dropped now (B5)
+        for kept in lease.scratch.values():  # the tools' state: documents dropped now (B5)
             end = getattr(kept, "end", None)
             if callable(end):
                 end()
