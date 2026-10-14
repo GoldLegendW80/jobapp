@@ -1,7 +1,9 @@
 {#- timeline: one column. The header (the photo on the right when there is one) with a thick
     accent rule on its left, then the profile, the achievements and the key competencies side by
     side, and the experience and the education along a thin vertical line: each role's dates in
-    a rail on the left of the line, a dot on the line, the role on its right. The skills and the
+    a rail on the left of the line, a dot on the line, the role on its right. Each entry is a grid
+    of the rail and the text, so the height of the dates counts in the entry's height; the rail
+    holds the period only (a school's location is printed with its text). The skills and the
     languages close the page. An empty section is not printed. -#}
 {% extends "_base/page.html.j2" %}
 {% import "_base/macros.html.j2" as base with context %}
@@ -37,7 +39,12 @@
 <h2 class="label">{{ base.label("experience") }}</h2>
 <div class="rail">
 {% for role in roles %}
-{{ base.employer(role) }}
+<article class="entry">
+<h3 class="entry-title">{{ role.title }}{% if role.title and role.organisation %}, {% endif %}<span class="org">{{ role.organisation }}</span></h3>
+{% if role.period %}<p class="period">{{ role.period }}</p>{% endif %}
+{% if role.location %}<p class="place">{{ role.location }}</p>{% endif %}
+{{ base.bullets(role.bullets) }}
+</article>
 {% endfor %}
 </div>
 </section>
@@ -48,7 +55,12 @@
 <h2 class="label">{{ base.label("education") }}</h2>
 <div class="rail">
 {% for item in schools %}
-{{ base.school(item) }}
+<div class="school">
+<h3 class="entry-title">{{ item.degree }}</h3>
+{% if item.period %}<p class="period">{{ item.period }}</p>{% endif %}
+<p class="org">{{ item.school }}</p>
+{% if item.location %}<p class="place">{{ item.location }}</p>{% endif %}
+</div>
 {% endfor %}
 </div>
 </section>

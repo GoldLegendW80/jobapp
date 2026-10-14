@@ -6,8 +6,8 @@
     "fr": "Minimal"
   },
   "description": {
-    "en": "One column in black and greys, wide margins and open spacing, small spaced headings continued by a hairline.",
-    "fr": "Une colonne en noir et gris, de larges marges et des espaces ouverts, de petits titres espacés prolongés par un filet."
+    "en": "One column in black and greys on a left margin: a large bold name, the headings and the dates standing in the margin, open spacing.",
+    "fr": "Une colonne en noir et gris sur une marge gauche : un grand nom en gras, les titres et les dates dans la marge, des espaces ouverts."
   },
   "tags": [
     "one column",
@@ -139,5 +139,5 @@
       "paragraph": 900
     }
   },
-  "thumbnail_of": "4af6d6ec18ecf73c05ff55b01308b12698e40bd76c65b657151e81ca80099624"
+  "thumbnail_of": "1be2f935b346b41a666c9c6954fd2e2f67102d6d37a9a81d4c61065e86354205"
 }

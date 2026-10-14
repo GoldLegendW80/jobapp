@@ -12,3 +12,5 @@ uv --native-tls run ruff check app tests        All checks passed!
 uv --native-tls run ruff format --check app tests   420 files already formatted
 
 Files: <slug>-cv-typical.pdf (D1's cv-typical, English, at its fitted step) and <slug>-letter-en.pdf.
+
+Review round 2026-10-14 (renderer image jobapp-renderer:d19b, removed afterwards): timeline's rail is a grid per entry and prints the period only; minimal on a left margin; the thumbnails and the PDFs above were made again; timeline-long-locations-fr.pdf is timeline in French at its loosest step with three schools dated by month with a city and a country (test_timeline_dates_of_a_school_never_reach_the_next_entry).

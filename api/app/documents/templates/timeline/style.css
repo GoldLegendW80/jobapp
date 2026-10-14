@@ -1,8 +1,9 @@
 /* timeline: one column, Work Sans, a plum accent. The experience and the education run along a
-   thin vertical line: the dates sit in a rail on its left (absolutely placed inside each entry,
-   so the role's title still comes first in the text), a ringed dot marks each entry on the line.
-   An entry is at least three rail lines tall, so dates that wrap to three lines stay clear of
-   the next entry.
+   thin vertical line: the dates sit in a rail on its left (the first grid column of each entry,
+   placed beside the title though they follow it in the text), a ringed dot marks each entry on
+   the line. The entry is a grid of the rail and the text, and the dates span the text rows with
+   the last row taking the slack, so a period that wraps to many lines makes the entry taller
+   instead of running into the next one.
    The density comes from the step on :root. */
 @page { size: A4; }
 * { box-sizing: border-box; }
@@ -100,10 +101,15 @@ li, p { overflow-wrap: anywhere; }
 }
 .rail .entry, .rail .school {
   position: relative;
-  padding-left: 32mm;
-  min-height: 3.6em;
+  display: grid;
+  grid-template-columns: 32mm minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
   margin-bottom: var(--item-gap);
 }
+.rail .entry > *, .rail .school > * { grid-column: 2; }
+.rail .entry-title { grid-row: 1; }
+.rail .entry .place, .rail .school .org { grid-row: 2; }
+.rail .entry > ul, .rail .school .place { grid-row: 3; }
 .rail .entry:last-child, .rail .school:last-child { margin-bottom: 0; }
 .rail .entry::before, .rail .school::before {
   content: "";
@@ -117,10 +123,10 @@ li, p { overflow-wrap: anywhere; }
   border: 1.6pt solid var(--accent);
 }
 .rail .period {
-  position: absolute;
-  left: 0;
-  top: 0.12em;
+  grid-column: 1;
+  grid-row: 1 / span 3;
   width: 24mm;
+  padding-top: 0.12em;
   text-align: right;
   font-size: 0.86em;
   font-weight: 600;
