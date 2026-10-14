@@ -39,6 +39,7 @@ import {
   isActive,
   listRuns,
   runKey,
+  refreshRuns,
   runsKey,
   startRefusal,
   startRun,
@@ -310,7 +311,7 @@ function StartDialog({
         ],
         active_run_id: isActive(run.status) ? run.id : null,
       }));
-      void client.invalidateQueries({ queryKey: runsKey, exact: true });
+      refreshRuns(client);
       onClose();
     },
     onError: (error, current) => {

@@ -21,7 +21,7 @@ import {
   PAUSED_ON_CEILING,
   resumeRun,
   runKey,
-  runsKey,
+  refreshRuns,
   tokens,
   useShownRun,
   type Run,
@@ -119,7 +119,7 @@ function RunView({ run }: { run: Run }) {
 
   const settle = (updated: Run) => {
     client.setQueryData(runKey(updated.id), updated);
-    void client.invalidateQueries({ queryKey: runsKey, exact: true });
+    refreshRuns(client);
   };
   const action = useMutation({
     mutationFn: (what: {
