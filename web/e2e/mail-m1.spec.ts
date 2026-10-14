@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 import {
   ALICE,
@@ -58,6 +58,20 @@ test.beforeAll(async () => {
   await stub.reset();
 });
 
+/**
+ * The address the browser was sent to on the redirect address, the last one. The app's own
+ * callback (task M4) answers a browser with no session by redirecting it away, so the tab no
+ * longer stays on that address: the request is what holds the code.
+ */
+function watchRedirects(page: Page): () => URL {
+  const seen: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/mail/oauth/callback")
+      seen.push(request.url());
+  });
+  return () => new URL(seen.at(-1) ?? "about:blank");
+}
+
 test("the stack starts with the fake Google healthy and seeded", async () => {
   expect(await stub.health()).toBe(true);
   test.skip(!project, "set E2E_COMPOSE_PROJECT to read the service's state");
@@ -87,6 +101,7 @@ test("the browser allows on the consent page and lands on the redirect address w
 }) => {
   const state = `state-${run}`;
   const { verifier, challenge } = pkce();
+  const redirected = watchRedirects(page);
   await page.goto(consentUrl({ state, challenge, loginHint: ALICE }));
   await expect(page.getByLabel("Account")).toHaveValue(ALICE);
   // One checkbox per scope asked, ticked, and both buttons.
@@ -96,7 +111,7 @@ test("the browser allows on the consent page and lands on the redirect address w
   await shots(page, "01-consent-page");
 
   await allowOnConsentPage(page, ALICE);
-  const landed = new URL(page.url());
+  const landed = redirected();
   expect(`${landed.origin}${landed.pathname}`).toBe(redirectUri);
   expect(landed.searchParams.get("state")).toBe(state);
   const code = landed.searchParams.get("code") ?? "";
@@ -113,7 +128,7 @@ test("the browser allows on the consent page and lands on the redirect address w
   // A refused exchange spends the code, as at Google: a second consent gives a fresh one.
   await page.goto(consentUrl({ state, challenge, loginHint: ALICE }));
   await allowOnConsentPage(page, ALICE);
-  const fresh = new URL(page.url()).searchParams.get("code") ?? "";
+  const fresh = redirected().searchParams.get("code") ?? "";
   expect(fresh).not.toBe(code);
   const tokens = await exchangeCode(fresh, verifier);
   expect(tokens.status).toBe(200);
@@ -135,9 +150,10 @@ test("a user who unticks sending is granted the rest, and one who denies comes b
 }) => {
   const state = `state-narrow-${run}`;
   const { verifier, challenge } = pkce();
+  const redirected = watchRedirects(page);
   await page.goto(consentUrl({ state, challenge }));
   await allowOnConsentPage(page, BOB, [SCOPE_SEND]);
-  const landed = new URL(page.url());
+  const landed = redirected();
   const granted = landed.searchParams.get("scope")?.split(" ") ?? [];
   expect(granted).toContain(SCOPE_READONLY);
   expect(granted).not.toContain(SCOPE_SEND);
@@ -149,7 +165,7 @@ test("a user who unticks sending is granted the rest, and one who denies comes b
 
   await page.goto(consentUrl({ state, challenge }));
   await denyOnConsentPage(page);
-  const denied = new URL(page.url());
+  const denied = redirected();
   expect(`${denied.origin}${denied.pathname}`).toBe(redirectUri);
   expect(denied.searchParams.get("error")).toBe("access_denied");
   expect(denied.searchParams.get("state")).toBe(state);

@@ -78,7 +78,7 @@ const submitPassword = (user: ReturnType<typeof userEvent.setup>) =>
   );
 
 describe("account page", () => {
-  it("opens from the user menu and shows the three cards", async () => {
+  it("opens from the user menu and shows the four cards", async () => {
     account();
     const { location, user } = await (async () => {
       const utils = renderApp("/");
@@ -99,6 +99,7 @@ describe("account page", () => {
       "Profile name",
       "Change password",
       "Model access",
+      "Gmail",
     ]);
   });
 

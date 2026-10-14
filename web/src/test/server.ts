@@ -50,6 +50,19 @@ export const handlers = [
       { status: 404 },
     ),
   ),
+  // No Gmail connected (the Account page's Gmail card).
+  http.get("*/api/mail/account", () =>
+    HttpResponse.json({
+      available: true,
+      status: "not_connected",
+      email: null,
+      can_read: false,
+      can_send: false,
+      connected_at: null,
+      last_sync_at: null,
+      consent: { granted: false, at: null, version: null, current_version: 1 },
+    }),
+  ),
   // No agent run and no proposal yet (job detail's Agent assessment section).
   http.get("*/api/agents/runs", () => HttpResponse.json({ items: [] })),
   http.get("*/api/proposals", () => HttpResponse.json({ items: [] })),

@@ -22,6 +22,7 @@ from tests.pg import Postgres, docker_available, start_postgres
 FAST_HASHER = PasswordHasher(time_cost=1, memory_cost=1024, parallelism=1)
 
 ENV_NAMES = (
+    "GOOGLE_OAUTH_REDIRECT_URI",
     "APP_ENV",
     "LOG_LEVEL",
     "SECRET_KEY",
