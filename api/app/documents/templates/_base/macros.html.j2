@@ -1,0 +1,80 @@
+{#- The shared macros of every template. Import them with
+      {% import "_base/macros.html.j2" as base with context %}
+    Every value prints escaped; links come from `contact`, built by code from the
+    profile (secure web and mail addresses only). A template orders and styles these as it likes, and prints
+    every field of the content and every fixed fact. -#}
+
+{% macro label(key) %}{{ labels[key] }}{% endmacro %}
+
+{% macro contact_lines(class="contact") %}
+{% if contact %}
+<ul class="{{ class }}">
+{% for line in contact %}
+<li>{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% endmacro %}
+
+{% macro portrait(class="photo") %}
+{% if photo %}<img class="{{ class }}" src="{{ photo }}" alt="{{ name }}">{% endif %}
+{% endmacro %}
+
+{% macro header(headline) %}
+<header class="head">
+{{ portrait() }}
+<div class="headtext">
+<h1 class="name">{{ name }}</h1>
+{% if headline %}<p class="headline">{{ headline }}</p>{% endif %}
+{{ contact_lines() }}
+</div>
+</header>
+{% endmacro %}
+
+{% macro bullets(items, class="") %}
+{% if items %}
+<ul{% if class %} class="{{ class }}"{% endif %}>
+{% for item in items %}
+<li>{{ item }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% endmacro %}
+
+{% macro employer(role) %}
+<article class="entry">
+<div class="entry-head">
+<h3 class="entry-title">{{ role.title }}{% if role.title and role.organisation %}, {% endif %}<span class="org">{{ role.organisation }}</span></h3>
+{% if role.period %}<p class="period">{{ role.period }}</p>{% endif %}
+</div>
+{% if role.location %}<p class="place">{{ role.location }}</p>{% endif %}
+{{ bullets(role.bullets) }}
+</article>
+{% endmacro %}
+
+{% macro school(item) %}
+<div class="school">
+<h3 class="entry-title">{{ item.degree }}</h3>
+<p class="org">{{ item.school }}</p>
+{% if item.period or item.location %}<p class="period">{{ item.period }}{% if item.period and item.location %}, {% endif %}{{ item.location }}</p>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro language(item) %}
+<li><strong>{{ item.name }}</strong>{% if item.level %}: {{ item.level }}{% endif %}</li>
+{% endmacro %}
+
+{% macro skill_group(group) %}
+<div class="skill-group">
+<h3 class="group-label">{{ group.label }}</h3>
+<p class="items">{{ group["items"] | join(", ") }}</p>
+</div>
+{% endmacro %}
+
+{% macro paragraphs(items) %}
+{% for text in items %}
+<p class="paragraph">{{ text }}</p>
+{% endfor %}
+{% endmacro %}
+
+{% macro letter_date() %}<p class="date">{{ date }}</p>{% endmacro %}

@@ -1,0 +1,13 @@
+{#- The document every template extends: one A4 page, the language, the style (the fonts, the
+    step's custom properties, the accent and the template's style.css, put in by code). -#}
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<title>{{ name }}</title>
+<style>{{ style }}</style>
+</head>
+<body class="{{ kind }}">
+{% block body %}{% endblock %}
+</body>
+</html>

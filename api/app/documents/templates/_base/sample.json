@@ -1,0 +1,76 @@
+{
+  "_about": "The invented person of every thumbnail (python -m app.documents.templates.thumbnails): no real person, no real company.",
+  "rendered_on": "2026-10-14",
+  "profile": {
+    "identity": {
+      "full_name": "Alex Example",
+      "headline": "Platform Engineer",
+      "email": "e2e-alex@example.org",
+      "phone": "+33 6 00 00 00 00",
+      "city": "Lyon",
+      "country": "France",
+      "website": "https://example.org/alex",
+      "languages": [
+        {"name": "French", "level": "native"},
+        {"name": "English", "level": "fluent"},
+        {"name": "German", "level": "intermediate"}
+      ]
+    },
+    "experience": {
+      "employers": [
+        {"key": "example-corp", "organisation": "Example Corp", "title": "Senior Platform Engineer", "start": "2023-02", "end": null, "location": "Lyon, France"},
+        {"key": "sample-labs", "organisation": "Sample Labs", "title": "Software Engineer", "start": "2020-09", "end": "2023-01", "location": "Grenoble, France"}
+      ],
+      "education": [
+        {"school": "Université Exemple", "degree": "MSc Computer Science", "start": "2018", "end": "2020"},
+        {"school": "Institut Échantillon", "degree": "BSc Mathematics", "start": "2015", "end": "2018"}
+      ]
+    }
+  },
+  "cv": {
+    "schema": 1,
+    "target": "Platform Engineer at an invented company",
+    "headline": "Platform engineer: reliable services, clear operations, calm releases",
+    "summary": "Platform engineer who designs, ships and operates the services other teams build on. Turns fragile manual steps into automated, observable pipelines, and writes the runbook before the incident rather than after it.",
+    "highlights": [
+      "Moved release preparation into one automated pipeline",
+      "Ran the on call rotation of the deployment platform",
+      "Introduced typed contracts between teams"
+    ],
+    "competencies": ["Service design", "Release engineering", "Observability", "Incident response", "Infrastructure as code", "Developer experience", "Technical writing", "Mentoring"],
+    "experience": [
+      {"employer_key": "example-corp", "bullets": [
+        "Runs the deployment platform that every product team ships through, from the first commit to the production rollout.",
+        "Replaced a hand kept release checklist with an automated pipeline that tests, packages and announces each release.",
+        "Wrote the operating guides of the platform and trained the teams that took over its daily care."
+      ]},
+      {"employer_key": "sample-labs", "bullets": [
+        "Built the internal services of the measurement product.",
+        "Moved the test suite to parallel runs.",
+        "Wrote the first monitoring dashboards."
+      ]}
+    ],
+    "skills": [
+      {"label": "Languages", "items": ["Python", "Go", "SQL", "TypeScript"]},
+      {"label": "Platform", "items": ["Kubernetes", "Terraform", "PostgreSQL", "Redis"]},
+      {"label": "Observability", "items": ["Prometheus", "Grafana", "OpenTelemetry"]},
+      {"label": "Practices", "items": ["Code review", "Runbooks", "Postmortems"]}
+    ],
+    "notes": ""
+  },
+  "letter": {
+    "schema": 1,
+    "target": "Platform Engineer at an invented company",
+    "headline": "Platform Engineer",
+    "recipient": "Hiring team, Example Harbour",
+    "subject": "A platform your teams can ship on every day",
+    "salutation": "Dear hiring team,",
+    "paragraphs": [
+      "I run the deployment platform of Example Corp, the path every product team takes from the first commit to production. Your posting asks for someone who makes releases calm, and that is the work I do every week.",
+      "At Example Corp I replaced a hand kept release checklist with one automated pipeline that tests, packages and announces each release, and I wrote the guides that let other teams take over its daily care.",
+      "Before that, at Sample Labs, I built the internal services of a measurement product and moved its test suite to parallel runs, which taught me to treat slow feedback as a defect.",
+      "I live in Lyon, speak French and English, and can join on the usual notice. I would be glad to talk about your platform and what it needs next."
+    ],
+    "closing": "Kind regards,"
+  }
+}

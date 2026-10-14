@@ -1,0 +1,129 @@
+/* classic: one column, sans (Nunito Sans, the bundled stand in for the command line's Avenir),
+   a label column on the left of each section, rules between the sections. The density comes
+   from the step on :root: --body-size, --line-height, --section-gap, --item-gap, --margin. */
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Nunito Sans", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #1d232b;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p { overflow-wrap: anywhere; }
+
+.bar { border-top: 2.5px solid #1d232b; }
+
+.head {
+  display: flex;
+  gap: 14pt;
+  align-items: center;
+  padding: 9pt 0;
+}
+.photo {
+  width: 25mm;
+  height: 25mm;
+  object-fit: cover;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.headtext { flex: 1 1 auto; }
+.name {
+  font-size: 2.35em;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.01em;
+}
+.headline {
+  font-size: 1.15em;
+  color: var(--accent);
+  font-weight: 600;
+  margin-top: 2pt;
+}
+.contact {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1pt 12pt;
+  margin-top: 5pt;
+  color: #4a525e;
+}
+
+.row {
+  display: flex;
+  gap: 10pt;
+  padding: var(--section-gap) 0;
+  border-bottom: 0.75px solid #c9d0d9;
+}
+.row:last-child { border-bottom: 0; }
+.label {
+  flex: 0 0 27mm;
+  font-size: 0.82em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--accent);
+  padding-top: 0.2em;
+}
+.body { flex: 1 1 auto; }
+
+.summary { margin-bottom: var(--item-gap); }
+.about-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12pt;
+}
+.sub, .group-label {
+  font-size: 0.86em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #4a525e;
+  margin-bottom: 1pt;
+}
+.body ul { padding-left: 1.05em; }
+.body li { margin-bottom: 1pt; }
+.body li::marker { color: var(--accent); }
+
+.entry { margin-bottom: var(--item-gap); }
+.entry:last-child { margin-bottom: 0; }
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10pt;
+  align-items: baseline;
+}
+.entry-title { font-size: 1.04em; font-weight: 700; }
+.org { font-weight: 600; }
+.entry .org { color: var(--accent); }
+.period, .place { color: #5a6270; font-size: 0.92em; }
+.entry-head .period { flex: 0 0 auto; text-align: right; }
+
+.schools {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--item-gap) 12pt;
+}
+.skills {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--item-gap) 12pt;
+}
+.languages {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2pt 16pt;
+}
+.body .languages { padding-left: 0; }
+
+.letter-body { padding-top: 14pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; color: #4a525e; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; }
+.paragraph { text-align: justify; white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); }
