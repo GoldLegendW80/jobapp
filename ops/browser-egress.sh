@@ -16,8 +16,9 @@
 #   sudo bash ops/browser-egress.sh install [network]
 #       once: a root owned copy at /usr/local/sbin/jobapp-browser-egress, the record
 #       /etc/jobapp-browser-egress.conf, the boot unit jobapp-browser-egress.service (the rules of
-#       the recorded bridge before docker starts, so a reboot never starts the browser without
-#       them), then apply. network: the compose network, default jobapp_egress
+#       the recorded bridge before docker starts; the unit is wanted, not required, by docker, so
+#       if it fails Docker still starts and tests/reboot_check.sh reports it), then apply.
+#       network: the compose network, default jobapp_egress
 #   sudo bash ops/browser-egress.sh uninstall
 #       the jumps, the chains, the unit, the record and the copy removed; the browser is left
 #       as it is (deploy stops it at the next run)
@@ -29,10 +30,13 @@
 # As the deploy user (docker group), in the deploy directory, by deploy.sh and deploy.yml:
 #   COMPOSE="docker compose -f compose.yml --profile tunnel" bash ops/browser-egress.sh deploy
 #       creates the browser's networks, then apply and check through the installed copy, run in
-#       the host's namespaces by a one off privileged container of the browser image (the docker
-#       group is root on the host already; only the owner's root owned copy runs). Exit 0: start
-#       the browser (--profile browser). Otherwise the browser container is removed and the
-#       reason printed, exit 1: the rest of the stack deploys without it.
+#       the host's namespaces by a one off privileged container of HOP_IMAGE, pulled when missing
+#       (the docker group is root on the host already; only the owner's root owned copy runs).
+#       Exit 0: start the browser (--profile browser). Otherwise, whichever step failed, the
+#       browser container is removed and the reason printed, exit 1: the rest of the stack
+#       deploys without it.
+#   bash ops/browser-egress.sh host-check
+#       check through the installed copy, the same way (tests/reboot_check.sh after a boot)
 # Anywhere, no root:
 #   ops/browser-egress.sh rules <bridge> [resolver ...]
 #       print the iptables-restore input of both families, for review and tests
@@ -47,6 +51,11 @@ CONF="$ROOTFS/etc/jobapp-browser-egress.conf"
 UNIT="$ROOTFS/etc/systemd/system/jobapp-browser-egress.service"
 RESOLV="${EGRESS_RESOLV:-/etc/resolv.conf}"
 SYSTEMD_RESOLV="${EGRESS_SYSTEMD_RESOLV:-/run/systemd/resolve/resolv.conf}"
+# The image of the privileged hop into the host's namespaces: it runs as root on the host, so it
+# is the smallest image that holds nsenter (util-linux), pinned by the digest of its multi-arch
+# index (read with `docker buildx imagetools inspect`, 2026-10-14), never an image this project
+# builds (PR #307 review).
+HOP_IMAGE=debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
 CHAIN=JOBAPP-EGRESS
 CHAIN_IN=JOBAPP-EGRESS-IN
 # Every IPv4 range that is not the internet (RFC 6890 and the proxy's own list in
@@ -267,33 +276,77 @@ cmd_uninstall() {
   say "uninstalled: no egress rule, chain, unit, record or copy left; the browser stays as it is until the next deploy stops it"
 }
 
-cmd_deploy() {
-  : "${COMPOSE:?set COMPOSE to the docker compose command of the stack}"
-  local image=jobapp-browser:latest project network out
-  # shellcheck disable=SC2086 # COMPOSE is a command line
-  project="$($COMPOSE config --format json | sed -n 's/^  "name": "\(.*\)",$/\1/p' | awk 'NR == 1')"
-  [[ -n "$project" ]] || die "cannot read the compose project name"
-  network="${project}_egress"
-  # shellcheck disable=SC2086
-  if ! $COMPOSE --profile browser create browser >/dev/null; then
-    say "browser: compose create failed, the browser stays stopped" >&2
+# hop <apply|check>: the installed copy, run as root in the host's namespaces by a one off
+# privileged container of HOP_IMAGE, pulled first when missing.
+hop() {
+  local err
+  if ! docker image inspect "$HOP_IMAGE" >/dev/null 2>&1 && ! err="$(docker pull -q "$HOP_IMAGE" 2>&1 >/dev/null)"; then
+    say "cannot pull $HOP_IMAGE: ${err:-no output}"
     return 1
   fi
-  local run=(docker run --rm --privileged --pid=host --network=host --entrypoint nsenter "$image"
-    -t 1 -m -u -i -n -p -- /usr/local/sbin/jobapp-browser-egress)
+  docker run --rm --privileged --pid=host --network=host --entrypoint nsenter "$HOP_IMAGE" \
+    -t 1 -m -u -i -n -p -- /usr/local/sbin/jobapp-browser-egress "$1"
+}
+
+cmd_host_check() {
+  local out
+  if ! out="$(hop check 2>&1)"; then
+    printf '%s\n' "${out:-browser-egress: check failed, no output}" >&2
+    return 1
+  fi
+  say "$out"
+}
+
+# not_started <project> <reason>: the one exit of a failed deploy. The browser container, maybe
+# still running from the previous deploy, is removed, through compose when its file reads and by
+# its compose labels otherwise; the message says whether that worked.
+not_started() {
+  local project="$1" reason="$2" left
+  # shellcheck disable=SC2086 # COMPOSE is a command line
+  if ! $COMPOSE --profile browser rm -s -f browser >/dev/null 2>&1; then
+    left="$(docker ps -aq --filter "label=com.docker.compose.project=$project" \
+      --filter label=com.docker.compose.service=browser 2>/dev/null)" || left="unknown"
+    # shellcheck disable=SC2086 # container ids, one per line
+    if [[ "$left" == unknown ]] || { [[ -n "$left" ]] && ! docker rm -f $left >/dev/null 2>&1; }; then
+      printf 'browser: not started, %s; removing the previous browser container failed, it may still run: docker rm -f %s-browser-1\n' \
+        "$reason" "$project" >&2
+      return 1
+    fi
+  fi
+  printf 'browser: not started, %s; no browser container left\n' "$reason" >&2
+  return 1
+}
+
+cmd_deploy() {
+  : "${COMPOSE:?set COMPOSE to the docker compose command of the stack}"
+  local project network out config
+  # shellcheck disable=SC2086 # COMPOSE is a command line
+  if ! config="$($COMPOSE config --format json 2>&1)"; then
+    not_started jobapp "compose config failed: ${config:0:300}"
+    return 1
+  fi
+  project="$(sed -n 's/^  "name": "\(.*\)",$/\1/p' <<<"$config" | awk 'NR == 1')"
+  [[ -n "$project" ]] || {
+    not_started jobapp "cannot read the compose project name"
+    return 1
+  }
+  network="${project}_egress"
+  # shellcheck disable=SC2086
+  if ! out="$($COMPOSE --profile browser create browser 2>&1 >/dev/null)"; then
+    not_started "$project" "compose create failed: ${out:-no output}"
+    return 1
+  fi
   local reason=""
-  if ! out="$("${run[@]}" apply 2>&1)"; then
+  if ! out="$(hop apply 2>&1)"; then
     reason="apply failed: ${out:-no output}"
-  elif ! out="$("${run[@]}" check 2>&1)"; then
+  elif ! out="$(hop check 2>&1)"; then
     reason="check failed: ${out:-no output}"
   fi
   if [[ "$out" == *"No such file"* || "$out" == *"not installed"* ]]; then
     reason="the host firewall is not installed. Once, on the Jetson: sudo bash ~/jobapp/ops/browser-egress.sh install $network"
   fi
   if [[ -n "$reason" ]]; then
-    # shellcheck disable=SC2086
-    $COMPOSE --profile browser rm -s -f browser >/dev/null 2>&1 || true
-    printf 'browser: not started, %s\n' "$reason" >&2
+    not_started "$project" "$reason"
     return 1
   fi
   printf 'browser: %s\n' "$out"
@@ -308,6 +361,7 @@ main() {
     apply) cmd_apply "$@" ;;
     check) cmd_check ;;
     deploy) cmd_deploy ;;
+    host-check) cmd_host_check ;;
     rules)
       if [[ $# -lt 1 ]] || ! valid_bridge "$1"; then die "usage: ops/browser-egress.sh rules <bridge> [resolver ...]"; fi
       local r

@@ -1004,8 +1004,9 @@ def test_proxy_allow_private_refused_in_production(
 def test_uid_records_seeded_from_existing_profiles(tmp_path: Path) -> None:
     """Issue #230 (follow up 1 of PR #294's review): directories made before the records existed
     bind their owner uid at start, so a new profile under that uid is refused 409. A uid with
-    two directories, a link, a file, a name that is not a profile id and a uid outside the
-    range are left alone; a second start writes nothing more."""
+    two directories gets a record that refuses every lease of it (PR #307 review, follow up 7);
+    a link, a file, a name that is not a profile id and a uid outside the range are left alone;
+    a second start writes nothing more."""
     profiles, root = tmp_path / "profiles", tmp_path / "profiles" / ".uids"
     profiles.mkdir()
     chromium.make_uid_records(str(root))
@@ -1033,12 +1034,18 @@ def test_uid_records_seeded_from_existing_profiles(tmp_path: Path) -> None:
         fields[4] = owner.get(Path(path).name, real.st_uid)  # st_uid
         return os.stat_result(fields)
 
-    assert chromium.seed_uid_records(str(profiles), str(root), lstat) == 2
-    assert sorted(p.name for p in root.iterdir()) == ["20001", "20002"]
+    assert chromium.seed_uid_records(str(profiles), str(root), lstat) == 3
+    assert sorted(p.name for p in root.iterdir()) == ["20001", "20002", "20003"]
     assert (root / "20001").read_text() == a
+    assert (root / "20003").read_text() == chromium.AMBIGUOUS
     with pytest.raises(LeaseError) as refused:
         chromium.bind_uid(20001, "1d1e2f30-0000-4000-8000-000000000009", str(root))
     assert (refused.value.status, refused.value.code) == (409, "uid_in_use")
+    # The uid of two directories: neither of them, nor a new profile, may be leased under it.
+    for profile in (twin1, twin2, "1d1e2f30-0000-4000-8000-00000000000a"):
+        with pytest.raises(LeaseError) as refused:
+            chromium.bind_uid(20003, profile, str(root))
+        assert (refused.value.status, refused.value.code) == (409, "uid_in_use")
     assert chromium.seed_uid_records(str(profiles), str(root), lstat) == 0  # idempotent
 
     # A record that names another profile is kept, never rewritten from the directories.

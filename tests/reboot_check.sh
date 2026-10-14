@@ -101,13 +101,12 @@ smoke_ok=1
 smoke_at="$(uptime_s)"
 new_url="$(./deploy.sh url 2>/dev/null || echo none)"
 # The browser's host firewall (browser B6, ops/browser-egress.sh): once installed, its rules must
-# be back after a boot, before the browser runs. `check` runs as root through the installed copy,
-# in the host's namespaces, like the deploy runs it.
+# be back after a boot, before the browser runs. `host-check` runs `check` as root through the
+# installed copy, in the host's namespaces, from the same pinned image as the deploy.
 egress="not installed"
 if r 'test -x /usr/local/sbin/jobapp-browser-egress'; then
   egress="FAILED"
-  r 'docker run --rm --privileged --pid=host --network=host --entrypoint nsenter jobapp-browser:latest -t 1 -m -u -i -n -p -- /usr/local/sbin/jobapp-browser-egress check' &&
-    egress="in place"
+  r "cd $RDIR && bash ops/browser-egress.sh host-check" && egress="in place"
 fi
 
 printf '\n== reboot check on %s\n' "$HOST"

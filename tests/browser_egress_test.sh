@@ -6,9 +6,10 @@
 # Covers: the rules printed for review (every private range, DNS to the given resolvers only,
 # IPv6 dropped whole, bad bridge and resolver names refused), the resolvers read as Docker reads
 # them (systemd-resolved's upstream file behind 127.0.0.53, IPv6 and loopback servers left out,
-# junk refused, none found means no DNS), `deploy` against a fake docker (not installed, apply or
-# check failing, compose create failing: the browser removed and exit 1; both passing: exit 0,
-# nothing removed), root refused for every root command, the nightly backup naming no volume
+# junk refused, none found means no DNS), `deploy` against a fake docker (the hop image pinned by
+# digest and pulled when missing; not installed, apply or check failing, compose create or config
+# failing, the hop image not pullable: the browser removed and exit 1; both passing: exit 0,
+# nothing removed), `host-check`, root refused for every root command, the nightly backup naming no volume
 # (pg_dump only, so `browserprofiles` is never in it), and, with Docker, the real iptables of a
 # throwaway container's own network namespace (never the host's): apply twice gives one jump per
 # chain and the same rules, a user rule of DOCKER-USER kept, a new bridge replaces the old jump,
@@ -118,12 +119,23 @@ step "deploy: the browser starts only when apply and check pass"
 mkdir -p "$WORK/bin"
 cat >"$WORK/bin/docker" <<'EOF'
 #!/usr/bin/env bash
-# Fake docker: records each call; compose config answers a project name; `run` plays the
-# installed copy as FAKE_COPY says (missing, applyfail, checkfail, ok); create fails on FAKE_CREATE=fail.
+# Fake docker: records each call; compose config answers a project name, and every compose call
+# fails on FAKE_CONFIG=fail (a compose file that does not read); `run` plays the installed copy as
+# FAKE_COPY says (missing, applyfail, checkfail, ok); create fails on FAKE_CREATE=fail; the hop
+# image is missing on FAKE_HOP=missing and its pull fails on FAKE_HOP=nopull; `ps` by labels
+# answers FAKE_LEFT, whose removal fails on FAKE_RM=fail.
 echo "docker $*" >>"$FAKE_CALLS"
+if [[ "$1" == compose && "${FAKE_CONFIG:-}" == fail ]]; then
+  echo "yaml: line 3: did not find expected key" >&2
+  exit 15
+fi
 case "$*" in
   *" config --format json") printf '{\n  "name": "jobapp",\n  "services": {}\n}\n' ;;
   *" create browser") [[ "${FAKE_CREATE:-}" != fail ]] || { echo "create failed" >&2; exit 1; } ;;
+  "image inspect "*) [[ "${FAKE_HOP:-}" != missing && "${FAKE_HOP:-}" != nopull ]] || exit 1 ;;
+  "pull "*) [[ "${FAKE_HOP:-}" != nopull ]] || { echo "pull access denied" >&2; exit 1; } ;;
+  "ps -aq "*) printf '%s' "${FAKE_LEFT:-}" ;;
+  "rm -f "*) [[ "${FAKE_RM:-}" != fail ]] || exit 1 ;;
   "run "*)
     case "${FAKE_COPY:-ok}:${*: -1}" in
       missing:*) echo "nsenter: failed to execute /usr/local/sbin/jobapp-browser-egress: No such file or directory" >&2; exit 127 ;;
@@ -144,11 +156,18 @@ dep() { # dep <expected exit> [env assignments]
     COMPOSE="docker compose -f compose.yml --profile tunnel" bash "$SCRIPT" deploy
 }
 removed() { grep -qx "docker compose -f compose.yml --profile tunnel --profile browser rm -s -f browser" "$WORK/calls"; }
+hop_image="$(sed -n 's/^HOP_IMAGE=//p' "$SCRIPT")"
+# The privileged hop runs as root on the host: a minimal image pinned by digest, never one this
+# project builds (PR #307 review, blocking 1).
+[[ "$hop_image" =~ ^debian:bookworm-slim@sha256:[0-9a-f]{64}$ ]] || fail "HOP_IMAGE is not pinned by digest: '$hop_image'"
+grep -n "jobapp-browser:latest\|--entrypoint nsenter jobapp" "$SCRIPT" tests/reboot_check.sh && fail "the hop runs a project image"
+grep -q 'bash ops/browser-egress.sh host-check' tests/reboot_check.sh || fail "reboot_check.sh does not check through host-check"
 dep 0
 out_has "browser: egress rules in place on br-0123456789ab (network jobapp_egress)"
 removed && fail "the browser was removed although the rules passed"
-grep -q "^docker run --rm --privileged --pid=host --network=host --entrypoint nsenter jobapp-browser:latest -t 1 -m -u -i -n -p -- /usr/local/sbin/jobapp-browser-egress apply$" "$WORK/calls" ||
+grep -qxF "docker run --rm --privileged --pid=host --network=host --entrypoint nsenter $hop_image -t 1 -m -u -i -n -p -- /usr/local/sbin/jobapp-browser-egress apply" "$WORK/calls" ||
   fail "apply not run through the installed copy in the host's namespaces: $(cat "$WORK/calls")"
+grep -q "^docker pull" "$WORK/calls" && fail "the hop image was pulled although present"
 create="$(grep -n "create browser" "$WORK/calls" | cut -d: -f1)" apply="$(grep -n " apply$" "$WORK/calls" | cut -d: -f1)" chk="$(grep -n " check$" "$WORK/calls" | cut -d: -f1)"
 ((create < apply && apply < chk)) || fail "order is create $create, apply $apply, check $chk"
 ok "create (the networks), then apply, then check, through the root owned copy; exit 0, nothing removed"
@@ -163,10 +182,45 @@ dep 1 FAKE_COPY=checkfail
 out_has "not started, check failed: browser-egress: IPv4 INPUT does not start with the jump"
 removed || fail "the browser was not removed after a failed check"
 dep 1 FAKE_CREATE=fail
+out_has "browser: not started, compose create failed: create failed; no browser container left"
+removed || fail "the previous browser was not removed after a failed create"
 grep -q "^docker run" "$WORK/calls" && fail "apply ran after a failed create"
 run 1 bash "$SCRIPT" deploy
 out_has "set COMPOSE"
-ok "not installed, apply failing, check failing: the browser removed, exit 1 with the reason; create failing: nothing applied"
+ok "not installed, apply failing, check failing, create failing: the browser removed, exit 1 with the reason, nothing applied after a failed create"
+
+step "deploy: a compose file that does not read still removes the previous browser"
+dep 1 FAKE_CONFIG=fail FAKE_LEFT=c0ffee
+out_has "browser: not started, compose config failed: yaml: line 3: did not find expected key; no browser container left"
+grep -qx "docker ps -aq --filter label=com.docker.compose.project=jobapp --filter label=com.docker.compose.service=browser" "$WORK/calls" ||
+  fail "the browser was not looked up by its labels: $(cat "$WORK/calls")"
+grep -qx "docker rm -f c0ffee" "$WORK/calls" || fail "the previous browser was not removed: $(cat "$WORK/calls")"
+grep -q "^docker run\|create browser" "$WORK/calls" && fail "create or apply ran after a failed config"
+dep 1 FAKE_CONFIG=fail FAKE_LEFT=
+out_has "no browser container left"
+grep -q "^docker rm" "$WORK/calls" && fail "rm ran with no container"
+dep 1 FAKE_CONFIG=fail FAKE_LEFT=c0ffee FAKE_RM=fail
+out_has "removing the previous browser container failed, it may still run: docker rm -f jobapp-browser-1"
+out_lacks "no browser container left"
+ok "config failing: the previous browser removed by its compose labels, none left said only when true"
+
+step "deploy: the hop image is pulled when missing"
+dep 0 FAKE_HOP=missing
+grep -qxF "docker pull -q $hop_image" "$WORK/calls" || fail "the hop image was not pulled: $(cat "$WORK/calls")"
+dep 1 FAKE_HOP=nopull
+out_has "not started, apply failed: cannot pull $hop_image: pull access denied"
+removed || fail "the browser was not removed when the hop image cannot be pulled"
+ok "a missing hop image is pulled; a failed pull removes the browser, exit 1"
+
+step "host-check: check through the installed copy, no root"
+: >"$WORK/calls"
+run 0 env PATH="$WORK/bin:$PATH" FAKE_CALLS="$WORK/calls" bash "$SCRIPT" host-check
+out_has "egress rules in place on br-0123456789ab (network jobapp_egress)"
+grep -qxF "docker run --rm --privileged --pid=host --network=host --entrypoint nsenter $hop_image -t 1 -m -u -i -n -p -- /usr/local/sbin/jobapp-browser-egress check" "$WORK/calls" ||
+  fail "host-check did not run check through the hop: $(cat "$WORK/calls")"
+run 1 env PATH="$WORK/bin:$PATH" FAKE_CALLS="$WORK/calls" FAKE_COPY=checkfail bash "$SCRIPT" host-check
+out_has "browser-egress: IPv4 INPUT does not start with the jump"
+ok "host-check exits 0 when the rules are in place, 1 with the reason otherwise"
 
 step "backups: the browser profiles are never in them"
 # The nightly backup is pg_dump of the database only (ops/db.sh), never a volume: the profiles
@@ -184,11 +238,15 @@ if [[ "${EGRESS_TEST_DOCKER:-1}" == 1 ]]; then
   # answers `network inspect` with BRIDGE, read from a file the test rewrites.
   cat >"$WORK/inner.sh" <<'EOF'
 set -euo pipefail
-apk add --no-cache -q bash iptables ip6tables >/dev/null
+apk add --no-cache -q bash iptables ip6tables iptables-legacy >/dev/null
 mkdir -p /fake/bin
-for t in iptables ip6tables iptables-restore ip6tables-restore; do
-  ln -sf "/sbin/${t/tables/tables-legacy}" "/fake/bin/$t" 2>/dev/null || ln -sf "$(command -v "${t/tables/tables-legacy}")" "/fake/bin/$t"
+# Alpine's iptables is the nf_tables one; the Jetson's is legacy (1.8.7): link the legacy tools,
+# and stop if one is missing (a dangling link would fall through to the nf_tables tool).
+for t in iptables ip6tables iptables-restore ip6tables-restore iptables-save ip6tables-save; do
+  [ -x "/sbin/${t/tables/tables-legacy}" ] || { echo "no /sbin/${t/tables/tables-legacy}"; exit 1; }
+  ln -sf "/sbin/${t/tables/tables-legacy}" "/fake/bin/$t"
 done
+case "$(/fake/bin/iptables -V)" in *legacy*) ;; *) echo "iptables is not legacy"; exit 1 ;; esac
 cat >/fake/bin/docker <<'D'
 #!/bin/sh
 case "$*" in

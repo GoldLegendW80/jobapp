@@ -168,13 +168,19 @@ def bind_uid(uid: int, profile_id: str, root: str = c.UIDS) -> None:
         os.unlink(draft)
 
 
+# The record of a uid that owns two profile directories: never a profile id (those are uuids), so
+# bind_uid refuses every lease of that uid.
+AMBIGUOUS = "ambiguous"
+
+
 def seed_uid_records(profiles: str = c.PROFILES, root: str = c.UIDS, lstat=os.lstat) -> int:
     """At start, after make_uid_records and before the first lease (review of PR #294, issue
     #230): a profile directory made before the records existed binds its owner uid, so a new
     profile can never be created under that uid. Only a real directory named as a profile id
-    and owned by a profile uid counts; a uid owning two such directories is ambiguous and stays
-    unbound (logged), as does a uid whose record already names another profile, and nothing is
-    seeded when the record directory is not browserd's own (every lease is refused 503 then).
+    and owned by a profile uid counts; a uid owning two such directories is ambiguous and gets
+    the record AMBIGUOUS, which names no profile, so every lease of that uid is refused 409
+    (logged). A uid whose record already names another profile keeps it, and nothing is seeded
+    when the record directory is not browserd's own (every lease is refused 503 then).
     Returns how many records were written."""
     owners: dict[int, list[str]] = {}
     for name in os.listdir(profiles):
@@ -188,12 +194,13 @@ def seed_uid_records(profiles: str = c.PROFILES, root: str = c.UIDS, lstat=os.ls
             owners.setdefault(info.st_uid, []).append(name)
     seeded = 0
     for uid, names in sorted(owners.items()):
+        profile = names[0]
         if len(names) > 1:
-            log.warning("uid %d owns %d profile directories: left unbound", uid, len(names))
-            continue
+            log.warning("uid %d owns %d profile directories: leases refused", uid, len(names))
+            profile = AMBIGUOUS
         known = os.path.lexists(f"{root}/{uid}")
         try:
-            bind_uid(uid, names[0], root)  # an existing record that agrees is left as it is
+            bind_uid(uid, profile, root)  # an existing record that agrees is left as it is
         except LeaseError as exc:  # another profile's record, or records that are not safe
             log.warning("uid %d: not seeded (%s)", uid, exc.code)
             continue

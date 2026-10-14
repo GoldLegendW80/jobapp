@@ -2041,26 +2041,31 @@ case "$*" in
   "compose -f compose.yml --profile tunnel ps -q --status running caddy") echo "${FAKE_CADDY_ID:-}" ;;
   "compose -f compose.yml --profile tunnel ps -q --status running worker") echo "${FAKE_WORKER_ID:-}" ;;
   "compose -f compose.yml --profile tunnel ps -q --status running renderer") echo "${FAKE_RENDERER_ID:-}" ;;
+  "compose -f compose.yml --profile tunnel --profile browser ps -q --status running browser") echo "${FAKE_BROWSER_ID:-}" ;;
   "inspect -f {{.Image}} c0ffee") echo "sha256:1111" ;;
   "inspect -f {{.Image}} beef") echo "sha256:2222" ;;
   "inspect -f {{.Image}} feed") echo "sha256:3333" ;;
   "inspect -f {{.Image}} cafe") echo "sha256:4444" ;;
+  "inspect -f {{.Image}} b0b0") echo "sha256:5555" ;;
 esac
 exit 0
 FAKE
 chmod +x "$WORK/bin4/docker"
 prev() { env PATH="$WORK/bin4:$PATH" FAKE_CALLS="$WORK/calls4" "$@"; }
 : >"$WORK/calls4"
-run 0 prev FAKE_API_ID=c0ffee FAKE_WORKER_ID=feed FAKE_CADDY_ID=beef FAKE_RENDERER_ID=cafe ops/previous.sh tag-running
+run 0 prev FAKE_API_ID=c0ffee FAKE_WORKER_ID=feed FAKE_CADDY_ID=beef FAKE_RENDERER_ID=cafe FAKE_BROWSER_ID=b0b0 ops/previous.sh tag-running
 grep -qx "docker tag sha256:1111 jobapp-api:previous" "$WORK/calls4" || fail "api not tagged from its container: $(cat "$WORK/calls4")"
 grep -qx "docker tag sha256:3333 jobapp-worker:previous" "$WORK/calls4" || fail "worker not tagged from its container: $(cat "$WORK/calls4")"
 grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "caddy not tagged from its container"
 grep -qx "docker tag sha256:4444 jobapp-renderer:previous" "$WORK/calls4" || fail "renderer not tagged from its container: $(cat "$WORK/calls4")"
+grep -qx "docker tag sha256:5555 jobapp-browser:previous" "$WORK/calls4" || fail "browser not tagged from its container: $(cat "$WORK/calls4")"
 grep -q "jobapp-.*:latest" "$WORK/calls4" && fail ":latest was read: $(cat "$WORK/calls4")"
 : >"$WORK/calls4"
 run 0 prev FAKE_API_ID= FAKE_WORKER_ID= FAKE_CADDY_ID=beef FAKE_RENDERER_ID= ops/previous.sh tag-running
 out_has "api: no running container, jobapp-api:previous left as it was"
 out_has "renderer: no running container, jobapp-renderer:previous left as it was"
+out_has "browser: no running container, jobapp-browser:previous left as it was"
+grep -q "jobapp-browser:previous" "$WORK/calls4" && fail "a stopped browser was still tagged: $(cat "$WORK/calls4")"
 grep -q "jobapp-renderer:previous" "$WORK/calls4" && fail "a stopped renderer was still tagged: $(cat "$WORK/calls4")"
 out_has "worker: no running container, jobapp-worker:previous left as it was"
 grep -q "jobapp-api:previous" "$WORK/calls4" && fail "a stopped api was still tagged: $(cat "$WORK/calls4")"
@@ -2070,18 +2075,18 @@ grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "
 : >"$WORK/calls4"
 run 0 prev FAKE_API_ID=c0ffee FAKE_WORKER_ID=c0ffee FAKE_CADDY_ID=beef ops/previous.sh tag-running
 grep -qx "docker tag sha256:1111 jobapp-worker:previous" "$WORK/calls4" || fail "the worker's old api image was not kept"
-ok "tag-running tags the image id of each running container, worker included (never :latest); a stopped service keeps its :previous"
+ok "tag-running tags the image id of each running container, worker and browser included (never :latest); a stopped service keeps its :previous"
 
 # Every image the stack builds is built before the restart and rolled back on failure.
 grep -q "^  for svc in api worker caddy renderer; do$" deploy.sh || fail "deploy.sh does not build api, worker, caddy and renderer"
 grep -q "^          for svc in api worker caddy renderer; do$" .github/workflows/deploy.yml || fail "deploy.yml does not build the worker and the renderer"
-grep -q "^            for img in jobapp-api jobapp-worker jobapp-caddy jobapp-renderer; do$" .github/workflows/deploy.yml ||
-  fail "deploy.yml does not restore jobapp-worker:previous and jobapp-renderer:previous"
-grep -q "^IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy renderer:jobapp-renderer)$" ops/previous.sh || fail "previous.sh misses the worker or the renderer"
+grep -q "^            for img in jobapp-api jobapp-worker jobapp-caddy jobapp-renderer jobapp-browser; do$" .github/workflows/deploy.yml ||
+  fail "deploy.yml does not restore jobapp-worker:previous, jobapp-renderer:previous and jobapp-browser:previous"
+grep -q "^IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy renderer:jobapp-renderer browser:jobapp-browser)$" ops/previous.sh || fail "previous.sh misses the worker, the renderer or the browser"
 [[ "$(grep -c -E "^ +(run: docker buildx bake .* --load api worker caddy renderer|targets: api,worker,caddy,renderer)$" .github/workflows/ci.yml)" == 4 ]] ||
   fail "ci.yml does not bake the renderer in all four places"
 grep -q "jobapp-renderer:latest" tests/jetson_smoke.sh || fail "jetson_smoke.sh does not check the renderer image"
-ok "deploy.sh and deploy.yml build api, worker, caddy and renderer; the rollback restores jobapp-worker and jobapp-renderer too; ci.yml bakes the renderer"
+ok "deploy.sh and deploy.yml build api, worker, caddy and renderer; the rollback restores jobapp-worker, jobapp-renderer and jobapp-browser too; ci.yml bakes the renderer"
 
 app="$WORK/app"
 saved="$WORK/backups/previous-tree"
@@ -2499,7 +2504,7 @@ out_has "::error::the migrations did not apply: the deploy stopped before starti
 untouched "$MIG/calls"
 [[ "$(wf_count "^smoke$")" == 0 ]] || fail "the smoke ran after a failed migration"
 (($(wf_line "^db.sh backup") < $(wf_line " run --rm "))) || fail "no backup before the failed migration"
-for img in jobapp-api jobapp-worker jobapp-caddy jobapp-renderer; do
+for img in jobapp-api jobapp-worker jobapp-caddy jobapp-renderer jobapp-browser; do
   grep -qx "docker tag $img:previous $img:latest" "$MIG/calls" || fail "$img:latest was not put back: $(cat "$MIG/calls")"
 done
 [[ "$(cat "$WF/app/compose.yml")" == "name: previous release" ]] || fail "the previous tree was not put back"
