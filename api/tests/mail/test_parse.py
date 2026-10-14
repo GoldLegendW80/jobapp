@@ -4,6 +4,7 @@ hand made ones of fixtures/m3 (tests/mail/m3_fixtures.py), or built here part by
 import logging
 import secrets
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -406,6 +407,127 @@ def test_addresses_and_references_are_capped() -> None:
     kept = got.references_header.split(" ")
     assert len(kept) == parse.MAX_REFERENCES
     assert (kept[0], kept[-1]) == ("<r0@example.org>", "<r199@example.org>")
+
+
+# --- address headers: what the library is handed (review of PR #179, B1) --------------------------
+
+
+def watched_library(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """Every (name, value) handed to `email.headerregistry`. A value over 5,000 characters is
+    recorded and not read, so that this file stays quick on a parser that hands them over."""
+    handed: list[tuple[str, str]] = []
+    read = parse.policy.default.header_factory
+
+    def watching(name: str, value: str) -> Any:
+        handed.append((name, value))
+        return read(name, value) if len(value) <= 5000 else None
+
+    stand_in = SimpleNamespace(default=SimpleNamespace(header_factory=watching))
+    monkeypatch.setattr(parse, "policy", stand_in)
+    return handed
+
+
+@pytest.mark.parametrize("filler", ['"', "\\", ",", "(", "<"])
+def test_the_library_is_handed_a_bounded_number_of_characters(
+    monkeypatch: pytest.MonkeyPatch, filler: str
+) -> None:
+    handed = watched_library(monkeypatch)
+    long = filler * 16_000
+    headers = [["From", "ada@example.com"], ["Reply-To", long]]
+    got = parse.parse(fx.simple([*headers, *[["To", long]] * 30, *[["Cc", long]] * 30]), fx.ME)
+    assert parse.MAX_ADDRESS_HEADER == 4000
+    # One `From`, one `Reply-To`, the first `To` and the first `Cc`, each under the cap.
+    assert len(handed) <= 4
+    assert sum(len(value) for _, value in handed) <= len("ada@example.com") + 3 * 4000
+    assert (got.from_addr, got.suspicious, got.trusted) == ("ada@example.com", False, True)
+    assert (got.reply_to, got.to_addrs, got.cc_addrs) == (None, (), ())
+    assert got.truncated is True
+
+
+def test_a_long_list_of_recipients_is_cut_at_a_comma() -> None:
+    many = ", ".join(f"{'p' * 50}{i}@example.org" for i in range(400))
+    whole = many[: parse.MAX_ADDRESS_HEADER].rsplit(",", 1)[0].split(", ")
+    assert 50 < len(whole) < parse.MAX_ADDRESSES
+    sender = ["From", "ada@example.com"]
+    got = parse.parse(fx.simple([sender, ["To", many], ["Cc", "c@example.org"]]), fx.ME)
+    assert got.to_addrs == tuple(whole)  # the address the cut fell in is not half read
+    assert (got.cc_addrs, got.truncated) == (("c@example.org",), True)
+    reply = parse.parse(fx.simple([sender, ["Reply-To", "r@example.org, " + "x" * 4000]]), fx.ME)
+    assert (reply.reply_to, reply.truncated) == ("r@example.org", True)
+    short = parse.parse(
+        fx.simple([sender, ["To", many[:3000]], ["Reply-To", "r@example.org"]]), fx.ME
+    )
+    assert (len(short.to_addrs), short.truncated) == (45, False)
+
+
+def test_only_the_first_to_and_the_first_cc_are_read() -> None:
+    sender = ["From", "ada@example.com"]
+    one = [sender, ["To", "a@example.org"], ["Cc", "c@example.org"]]
+    got = parse.parse(fx.simple(one), fx.ME)
+    assert (got.to_addrs, got.cc_addrs, got.truncated) == (
+        ("a@example.org",),
+        ("c@example.org",),
+        False,
+    )
+    for extra in (["To", "b@example.org"], ["Cc", "d@example.org"]):
+        got = parse.parse(fx.simple([*one, extra]), fx.ME)
+        assert (got.to_addrs, got.cc_addrs, got.truncated) == (
+            ("a@example.org",),
+            ("c@example.org",),
+            True,
+        )
+
+
+def test_a_sender_longer_than_an_address_header_may_be_is_not_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    handed = watched_library(monkeypatch)
+    got = with_from("Ada <ada@example.com>" + " " * 4000)
+    assert (got.from_addr, got.suspicious, got.trusted) == (None, True, False)
+    assert handed == []
+
+
+# --- a domain written in another script (review of PR #179, B5) ----------------------------------
+
+
+def with_results(sender: str, results: str) -> ParsedMessage:
+    """A mail of `sender` under Gmail's own lines, with these results in place of the usual."""
+    lines = [
+        [name, f"mx.google.com; {results}" if name == "Authentication-Results" else value]
+        for name, value in fx.gmail_lines()
+    ]
+    return parse.parse(fx.simple([*lines, ["From", sender]], gmail=False), fx.ME)
+
+
+def test_a_name_the_old_idna_rules_write_as_another_domain_is_never_the_sender() -> None:
+    # The control: this header set is a pass for the domain it names.
+    passing = (
+        "dkim=pass header.i=@strasse.example; dmarc=pass (p=REJECT) header.from=strasse.example"
+    )
+    got = with_results("HR <hr@strasse.example>", passing)
+    assert (got.from_addr, got.from_domain, got.trusted) == (
+        "hr@strasse.example",
+        "strasse.example",
+        True,
+    )
+    # `straße.example` is another registrable domain than `strasse.example`: a mail from it
+    # is never stored under the second, whatever Gmail authenticated.
+    for results in (
+        passing,
+        "dkim=pass header.i=@xn--strae-oqa.example; "
+        "dmarc=pass (p=REJECT) header.from=stra\u00dfe.example",
+        "dmarc=pass (p=REJECT) header.from=xn--strae-oqa.example",
+    ):
+        got = with_results("HR <hr@straße.example>", results)
+        assert (got.from_addr, got.from_domain, got.trusted) == (None, None, False)
+        assert got.suspicious is True
+    # And a pass for it proves nothing for the domain it would have been read as.
+    for results in (
+        "dkim=pass header.i=@straße.example",
+        "dmarc=pass (p=REJECT) header.from=straße.example",
+    ):
+        got = with_results("HR <hr@strasse.example>", results)
+        assert (got.from_addr, got.trusted) == ("hr@strasse.example", False)
 
 
 # --- what is not a mail --------------------------------------------------------------------------

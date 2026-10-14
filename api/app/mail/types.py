@@ -67,7 +67,9 @@ class ParsedMessage:
     # The first `text/html` part, decoded and capped, **as the stranger wrote it**: hostile.
     # Its one use is to be sent to the parser service. It is never stored, shown or logged.
     raw_html: str | None
-    truncated: bool  # a part was cut at the cap, or the tree was deeper or wider than is walked
+    # A part was cut at the cap, the tree was deeper or wider than is walked, or a list of
+    # recipients was longer than is read (or stood in a second header).
+    truncated: bool
     # A of the binding rule (mail/auth.py). `from_domain` is the registrable domain of the
     # visible `From`; it is a claim of the sender unless `trusted` is true.
     trusted: bool

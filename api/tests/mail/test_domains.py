@@ -25,6 +25,9 @@ from app.mail import domains
         ("bücher.example.org", "example.org"),
         ("www.bücher.example", "xn--bcher-kva.example"),
         ("www.xn--bcher-kva.example", "xn--bcher-kva.example"),
+        # Case and composition are the same name: only they may differ from what was written.
+        ("WWW.B\u00dcCHER.example", "xn--bcher-kva.example"),
+        ("www.bu\u0308cher.example", "xn--bcher-kva.example"),
     ],
 )
 def test_the_registrable_domain(host: str, expected: str) -> None:
@@ -52,6 +55,15 @@ def test_the_registrable_domain(host: str, expected: str) -> None:
         "a" * 64 + ".example.org",
         ".".join(["a" * 60] * 5) + ".org",
         "é" * 2000 + ".org",
+        # Names the IDNA 2003 codec of Python would write as another name: under the rules
+        # registries follow (IDNA 2008) each is a domain of its own, or no name at all.
+        "stra\u00dfe.example",  # sharp s, read as `strasse.example`
+        "www.stra\u00dfe.example",
+        "\u03bf\u03b4\u03cc\u03c2.example",  # a final sigma, read as a sigma
+        "a\u200db.example",  # a zero width joiner, dropped
+        "a\u200cb.example",
+        "ex\u00adample.org",  # a soft hyphen, dropped
+        "\uff45xample.org",  # a full width letter, read as `example.org`
         None,
         b"example.org",
         42,

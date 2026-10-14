@@ -15,11 +15,16 @@ its ids, its labels and its date was written by a stranger, so:
 - **the HTML is only carried** (`raw_html`): no library of this process parses it. The parser
   service does (`parser_client.sanitise_mail_html`, called by M7);
 - **headers are read strictly.** Addresses go through `email.headerregistry` and then through a
-  check of their own; what fails it is dropped. A subject or a name keeps its accents and its
-  emoji and loses every control character, line break and direction override;
+  check of their own; what fails it is dropped. That library is quadratic on some values, so it
+  is handed little: the one `From`, the first `Reply-To`, the first `To` and the first `Cc`,
+  each up to `MAX_ADDRESS_HEADER` characters. A longer list of recipients is cut at its last
+  comma within the cap, and that cut, like a second `To` or `Cc`, sets `truncated`; a longer
+  `From` is not read. A subject or a name keeps its accents and its emoji and loses every
+  control character, line break and direction override;
 - **`suspicious`** is set by two `From` headers (or none), a `From` with several addresses or a
-  group, a `From` that cannot be read, a display name that contains an address of another
-  domain, and more headers than are read. A suspicious message is never trusted (mail/auth.py);
+  group, a `From` that cannot be read or is longer than is read, a display name that contains
+  an address of another domain, and more headers than are read. A suspicious message is never
+  trusted (mail/auth.py);
 - **direction**: `outbound` when Gmail labelled the message `SENT` and its sender is the
   connected address. A stranger's mail that shows the user's own address is `inbound`.
 
@@ -48,6 +53,7 @@ MAX_PARTS = 200
 MAX_PART_BYTES = 500_000
 MAX_HEADERS = 1000
 MAX_HEADER_VALUE = auth.MAX_VALUE
+MAX_ADDRESS_HEADER = 4000  # characters of an address header the library is handed
 MAX_ADDRESSES = 100
 MAX_SUBJECT = 1000
 MAX_DISPLAY_NAME = 300
@@ -161,16 +167,22 @@ def _invalid(header: Any) -> bool:
     return any(isinstance(defect, email_errors.InvalidHeaderDefect) for defect in header.defects)
 
 
-def _address_list(values: list[str]) -> tuple[str, ...]:
-    """Every plain address of the headers `values`, each once, in order."""
+def _address_list(values: list[str]) -> tuple[tuple[str, ...], bool]:
+    """Every plain address of the first of the headers `values`, each once, in order, and
+    whether something was left unread: a second header, or what follows the last comma that
+    stands within MAX_ADDRESS_HEADER characters."""
+    if not values:
+        return (), False
+    value, cut = values[0], len(values) > 1
+    if len(value) > MAX_ADDRESS_HEADER:
+        value, cut = value[: max(value.rfind(",", 0, MAX_ADDRESS_HEADER), 0)], True
     found: dict[str, None] = {}
-    for value in values:
-        header = _decoded("To", value[:MAX_HEADER_VALUE])
-        for address in getattr(header, "addresses", ()):
-            strict = _strict(address)
-            if strict is not None and len(found) < MAX_ADDRESSES:
-                found[strict] = None
-    return tuple(found)
+    header = _decoded("To", value) if value else None
+    for address in getattr(header, "addresses", ()):
+        strict = _strict(address)
+        if strict is not None and len(found) < MAX_ADDRESSES:
+            found[strict] = None
+    return tuple(found), cut
 
 
 def _names_another_domain(display_name: str, address: str) -> bool:
@@ -187,7 +199,7 @@ def _names_another_domain(display_name: str, address: str) -> bool:
 
 def _sender(values: list[str]) -> tuple[str | None, str, bool]:
     """(address, display name, suspicious) of the `From` headers of a message."""
-    if len(values) != 1 or len(values[0]) > MAX_HEADER_VALUE:
+    if len(values) != 1 or len(values[0]) > MAX_ADDRESS_HEADER:
         return None, "", True
     header = _decoded("From", values[0])
     if header is None or _invalid(header):
@@ -388,7 +400,9 @@ def parse(gmail_message_json: Mapping[str, Any], own_address: str) -> ParsedMess
         references = [references[0], *references[-(MAX_REFERENCES - 1) :]]
     message_ids = _message_ids(_named(headers, "message-id")[:1])
     in_reply_to = _message_ids(_named(headers, "in-reply-to")[:1])
-    reply_to = _address_list(_named(headers, "reply-to")[:1])
+    reply_to, cut_reply_to = _address_list(_named(headers, "reply-to")[:1])
+    to_addrs, cut_to = _address_list(_named(headers, "to"))
+    cc_addrs, cut_cc = _address_list(_named(headers, "cc"))
     subjects = _named(headers, "subject")
     snippet = message.get("snippet")
     text, markup, attachments, cut = _walk(payload)
@@ -402,8 +416,8 @@ def parse(gmail_message_json: Mapping[str, Any], own_address: str) -> ParsedMess
         from_addr=from_addr,
         from_name=from_name,
         reply_to=reply_to[0] if reply_to else None,
-        to_addrs=_address_list(_named(headers, "to")),
-        cc_addrs=_address_list(_named(headers, "cc")),
+        to_addrs=to_addrs,
+        cc_addrs=cc_addrs,
         received_at=datetime.fromtimestamp(int(stamp) / 1000, UTC),
         subject=_unstructured(subjects[0], MAX_SUBJECT) if subjects else "",
         snippet=_line(html.unescape(snippet[: MAX_SNIPPET * 8]), MAX_SNIPPET)
@@ -411,7 +425,7 @@ def parse(gmail_message_json: Mapping[str, Any], own_address: str) -> ParsedMess
         else "",
         body_text=text or "",
         raw_html=markup,
-        truncated=cut,
+        truncated=cut or cut_reply_to or cut_to or cut_cc,
         trusted=verdict.trusted,
         from_domain=verdict.from_domain,
         suspicious=suspicious,

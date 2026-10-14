@@ -15,11 +15,18 @@ last label is the suffix), which is what makes `evil.example` a domain in the te
 Anything that is not a plain host name has no registrable domain, and the callers read `None`
 as "not trusted": an IP address, a name with an empty label, an underscore, a space, a control
 character, a label over 63 characters, a name over 253, a name that is itself a suffix.
+
+A name written in another script is read by Python's `idna` codec, which follows IDNA 2003: it
+writes `straße.example` as `strasse.example`, a final sigma as a sigma, and drops a zero width
+joiner. Under IDNA 2008, which registries, browsers and mail follow, each of those is another
+registrable domain, or none. So a name the codec changed by more than case and composition has
+no registrable domain here either: it is never read as the name of someone else.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import date
 
 from publicsuffixlist import PublicSuffixList
@@ -33,15 +40,18 @@ _PSL = PublicSuffixList()  # the bundled file; `accept_unknown` is the list's de
 
 def normalise(host: object) -> str | None:
     """`host` as lower case ASCII labels (IDNA for a name written in another script), without
-    its final dot, or None when it is not a host name."""
+    its final dot, or None when it is not a host name, or is one the codec reads as another."""
     if not isinstance(host, str) or not host or len(host) > MAX_NAME * 4:
         return None
     name = host[:-1] if host.endswith(".") else host
     if not name.isascii():
         try:
-            name = name.encode("idna").decode("ascii")
+            encoded = name.encode("idna")
+            if encoded.decode("idna").lower() != unicodedata.normalize("NFC", name).lower():
+                return None
         except UnicodeError:
             return None
+        name = encoded.decode("ascii")
     name = name.lower()
     if len(name) > MAX_NAME:
         return None
