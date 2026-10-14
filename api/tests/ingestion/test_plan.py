@@ -122,8 +122,8 @@ def test_the_parts_of_a_cut_text_keep_their_offsets() -> None:
 
 
 def test_a_document_with_images_is_refused_by_name_while_transcription_is_off() -> None:
-    assert plan.TRANSCRIPTION is False  # G14 turns it on
-    planned = plan.build([doc(1, 1_000), doc(2, images=3)], model=OPUS)
+    assert plan.TRANSCRIPTION is True  # since G14; a caller can still plan without it
+    planned = plan.build([doc(1, 1_000), doc(2, images=3)], model=OPUS, transcription=False)
     assert planned.refused == ((uuid.UUID(int=2), Refusal.awaiting_transcription),)
     assert planned.planned_documents == (uuid.UUID(int=1),)
 

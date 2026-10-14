@@ -607,7 +607,10 @@ Nothing yet.
 - **Not measured on the Jetson: this task had no access to it.** The same command there gives the figures. A9 is therefore open: on the Mac a message costs about 110 ms, half of it the start of the child, so the Jetson is probably near or over the 300 ms above which a job should carry ten messages. That batch is not built; one message per job is what `sanitise_mail_html` does today.
 
 ### M4
-Nothing yet.
+- **N11, the `taken` case, decided 2026-10-14:** user B's fresh tokens are dropped without a call to Google. The fake, like Google, ends every token of one person for this client when one is revoked, so revoking B's would break A's connection. The same holds for the second tab of a user who is already connected. Every other refused grant (no `gmail.readonly`, an address that is not verified, no refresh token, another address while connected, a failed `getProfile`) is revoked, because no stored account lives on it. A grant whose owner is unknown (`userinfo` failed) is not revoked either.
+- **The consent travels outside the OAuth round trip.** `GET /api/mail/oauth/start` takes no parameter: a link from another site could otherwise record a consent the user never ticked. The page keeps the tick in `sessionStorage` and sends `PUT /api/mail/account/consent` (a write, with the CSRF header) once it is back on `/account?gmail=connected`.
+- **The redirect address is a setting, `GOOGLE_OAUTH_REDIRECT_URI`**, added to `config.py`, `.env.example` and `tests/gmail-stub.compose.yml`: the plan named none, and an address built from the request would follow a forged Host header. The owner sets it on the Jetson to `https://jobapp.taild83d16.ts.net/api/mail/oauth/callback` before stage A; without it the card says Gmail cannot be connected.
+- **Not measured:** the journey `mail-m4.spec.ts` was written and type checked but not run by the task's agent (under 15 GiB of free disk on the shared Mac, 2026-10-14). The gate runs it.
 
 ### M5
 Nothing yet.

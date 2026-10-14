@@ -133,6 +133,7 @@ class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
         sa.UniqueConstraint("user_id", "slug", name="uq_jobs_user_id_slug"),
+        sa.UniqueConstraint("id", "user_id", name="uq_jobs_id_user_id"),
         sa.CheckConstraint(f"slug ~ '{SLUG_PATTERN}'", name="slug_format"),
         sa.CheckConstraint("fit IS NULL OR (fit >= 0 AND fit <= 100)", name="fit_range"),
         sa.CheckConstraint("url IS NULL OR url <> ''", name="url_not_empty"),

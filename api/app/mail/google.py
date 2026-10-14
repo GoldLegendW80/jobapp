@@ -633,7 +633,12 @@ class GoogleClient:
         login_hint: str | None = None,
     ) -> str:
         """Where the browser is sent: offline access, consent asked again (so a refresh token
-        comes back), PKCE with S256."""
+        comes back), PKCE with S256. Only scopes of `SCOPES` are ever asked for, and an address
+        without a `state` or a challenge is never built (issue #175)."""
+        if not scopes or any(scope not in SCOPES for scope in scopes):
+            raise ValueError("consent_url: a scope outside SCOPES")
+        if not state or not code_challenge:
+            raise ValueError("consent_url: state and code_challenge are required")
         query = {
             "client_id": self._client(),
             "redirect_uri": redirect_uri,
@@ -727,13 +732,16 @@ class GoogleClient:
         self._tokens.pop(user_id, None)
 
     async def revoke(self, token: str) -> None:
-        """Revoke a refresh token at Google. A token Google no longer knows is a success: the
-        aim, a dead grant, is reached."""
+        """Revoke a refresh token at Google. A token Google no longer knows (`invalid_token`) is
+        a success: the aim, a dead grant, is reached. Any other 400 is a refusal (`OAuthError`):
+        the grant may still live, and the caller must not record it as revoked (issue #175)."""
 
         async def once() -> None:
             answer = await self._send("POST", self.endpoints.revoke_url, form={"token": token})
             if answer.status == 400:
-                return
+                if _google_reason(answer.body) == "invalid_token":
+                    return
+                raise OAuthError(status=400, reason="refused")
             raise_for_answer(answer, "revoke")
 
         with log.hide(token):

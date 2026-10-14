@@ -19,6 +19,7 @@ x-fake-google: &fake-google
   GOOGLE_API_BASE_URL: http://gmailstub:8098
   GOOGLE_OAUTH_CLIENT_ID: fake-client-id.apps.fake-google.test
   GOOGLE_OAUTH_CLIENT_SECRET: fake-client-secret-0123456789
+  GOOGLE_OAUTH_REDIRECT_URI: http://127.0.0.1:${HTTP_PORT:-80}/api/mail/oauth/callback
 
 services:
   api:
