@@ -1,0 +1,741 @@
+{
+ "fixtures": {
+  "cv-long.one": {
+   "weasy_step": 5,
+   "chromium_step": 5,
+   "weasy_pages": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 20.48,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  },
+  "cv-long.two": {
+   "weasy_step": 0,
+   "chromium_step": 3,
+   "weasy_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    2,
+    2,
+    2,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 24.81,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  },
+  "cv-short.one": {
+   "weasy_step": 0,
+   "chromium_step": 0,
+   "weasy_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 9.47,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  },
+  "cv-short.two": {
+   "weasy_step": 0,
+   "chromium_step": 0,
+   "weasy_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 27.89,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  },
+  "cv-typical.one": {
+   "weasy_step": 1,
+   "chromium_step": 1,
+   "weasy_pages": [
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    2,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 19.41,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  },
+  "cv-typical.two": {
+   "weasy_step": 0,
+   "chromium_step": 0,
+   "weasy_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 28.55,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  },
+  "letter-en.one": {
+   "weasy_step": 0,
+   "chromium_step": 0,
+   "weasy_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 9.17,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  },
+  "letter-en.two": {
+   "weasy_step": 0,
+   "chromium_step": 0,
+   "weasy_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 36.04,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  },
+  "letter-fr.one": {
+   "weasy_step": 0,
+   "chromium_step": 0,
+   "weasy_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 11.25,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  },
+  "letter-fr.two": {
+   "weasy_step": 0,
+   "chromium_step": 0,
+   "weasy_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "chromium_pages": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "diff_same_step": 35.14,
+   "font_check_weasy": "pass",
+   "font_check_chromium": "pass"
+  }
+ },
+ "probes": {
+  "flex": {
+   "diff": 2.22,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "flex-wrap-gap": {
+   "diff": 6.44,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "flex-column-gap": {
+   "diff": 1.1,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "inline-flex": {
+   "diff": 4.83,
+   "fonts_weasy": [
+    "DejaVu-Sans",
+    "DejaVu-Sans-Bold"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans",
+    "DejaVuSans-Bold"
+   ]
+  },
+  "grid-fr": {
+   "diff": 2.23,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "grid-auto-1fr": {
+   "diff": 1.56,
+   "fonts_weasy": [
+    "DejaVu-Sans",
+    "DejaVu-Sans-Bold"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans",
+    "DejaVuSans-Bold"
+   ]
+  },
+  "grid-areas": {
+   "diff": 2.08,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "custom-properties-calc": {
+   "diff": 10.12,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "min-max-clamp": {
+   "diff": 8.01,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "font-face-data": {
+   "missing": [
+    "probe-font-face-data.pdf"
+   ]
+  },
+  "font-weight-600": {
+   "diff": 0.41,
+   "fonts_weasy": [
+    "DejaVu-Sans",
+    "DejaVu-Sans-Bold"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans",
+    "DejaVuSans-Bold"
+   ]
+  },
+  "page-margin-box": {
+   "diff": 0.46,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "multi-column": {
+   "diff": 8.87,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "borders-radius": {
+   "diff": 2.14,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "background-colour-gradient": {
+   "diff": 0.84,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "image-object-fit-round": {
+   "diff": 0.87,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "position-absolute": {
+   "diff": 2.46,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "position-fixed": {
+   "diff": 0.23,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "list-markers": {
+   "diff": 1.62,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "before-counter": {
+   "diff": 0.45,
+   "fonts_weasy": [
+    "DejaVu-Sans",
+    "DejaVu-Sans-Bold"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans",
+    "DejaVuSans-Bold"
+   ]
+  },
+  "overflow-wrap-anywhere": {
+   "diff": 5.94,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "hyphens-auto": {
+   "diff": 4.55,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "text-transform-letter-spacing": {
+   "diff": 0.71,
+   "fonts_weasy": [
+    "DejaVu-Sans",
+    "DejaVu-Sans-Small-Caps"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "box-shadow": {
+   "diff": 0.68,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "transform": {
+   "diff": 0.64,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "opacity": {
+   "diff": 0.19,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "aspect-ratio": {
+   "diff": 2.08,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "float": {
+   "diff": 4.4,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "table": {
+   "diff": 1.52,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "text-overflow-ellipsis": {
+   "diff": 0.65,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "inline-svg": {
+   "diff": 0.24,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "text-align-justify": {
+   "diff": 3.0,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  },
+  "filter": {
+   "diff": 0.28,
+   "fonts_weasy": [
+    "DejaVu-Sans"
+   ],
+   "fonts_chromium": [
+    "DejaVuSans"
+   ]
+  }
+ },
+ "edges": {
+  "edge-missing-font": {
+   "weasy": {
+    "ok": true,
+    "pages": 2,
+    "fetched": [],
+    "stderr": [],
+    "detail": null,
+    "fonts": [
+     "DejaVu-Sans",
+     "DejaVu-Sans-Bold",
+     "DejaVu-Serif"
+    ],
+    "font_check": "FAIL: not asked for: DejaVu-Sans, DejaVu-Sans-Bold, DejaVu-Serif"
+   },
+   "chromium": {
+    "ok": true,
+    "pages": 1,
+    "fetched": [],
+    "detail": null,
+    "fonts": [
+     "DejaVuSerif",
+     "LiberationSerif",
+     "LiberationSerif-Bold"
+    ],
+    "font_check": "FAIL: not asked for: DejaVuSerif, LiberationSerif, LiberationSerif-Bold"
+   }
+  },
+  "edge-data-font": {
+   "weasy": {
+    "ok": false,
+    "pages": null,
+    "fetched": null,
+    "stderr": [],
+    "detail": "FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/']"
+   },
+   "chromium": {
+    "ok": true,
+    "pages": 2,
+    "fetched": [],
+    "detail": null,
+    "fonts": [
+     "TplSans-Bold",
+     "TplSans-Regular",
+     "TplSerif-Regular"
+    ],
+    "font_check": "pass"
+   }
+  },
+  "edge-outside": {
+   "weasy": {
+    "ok": true,
+    "pages": 1,
+    "fetched": [
+     {
+      "url": "http://192.0.2.10/sheet.css",
+      "outcome": "refused"
+     },
+     {
+      "url": "http://192.0.2.10/import.css",
+      "outcome": "refused"
+     },
+     {
+      "url": "https://outside.example.org/pixel.png",
+      "outcome": "refused"
+     },
+     {
+      "url": "http://192.0.2.10/object",
+      "outcome": "refused"
+     },
+     {
+      "url": "http://192.0.2.10/bg.png",
+      "outcome": "refused"
+     }
+    ],
+    "stderr": [],
+    "detail": null,
+    "fonts": [
+     "DejaVu-Sans"
+    ],
+    "font_check": "pass"
+   },
+   "chromium": {
+    "ok": true,
+    "pages": 1,
+    "fetched": [
+     {
+      "url": "http://192.0.2.10/sheet.css",
+      "outcome": "aborted"
+     },
+     {
+      "url": "http://192.0.2.10/import.css",
+      "outcome": "aborted"
+     },
+     {
+      "url": "https://outside.example.org/pixel.png",
+      "outcome": "aborted"
+     },
+     {
+      "url": "http://192.0.2.10/frame",
+      "outcome": "aborted"
+     },
+     {
+      "url": "http://192.0.2.10/bg.png",
+      "outcome": "aborted"
+     },
+     {
+      "url": "http://192.0.2.10/object",
+      "outcome": "aborted"
+     }
+    ],
+    "detail": null,
+    "fonts": [
+     "DejaVuSans"
+    ],
+    "font_check": "pass"
+   }
+  },
+  "edge-outside.default-fetcher": {
+   "exit": 0,
+   "wall_ms": 1512,
+   "stderr": [],
+   "ok": true,
+   "code": null,
+   "detail": null,
+   "pages": 1,
+   "render_ms": 153,
+   "import_ms": 1054,
+   "hwm_mib": 58,
+   "vmpeak_mib": 214,
+   "fetched": [
+    {
+     "url": "http://192.0.2.10/sheet.css",
+     "outcome": "URLError: <urlopen error [Errno 1] Operation not permitted>"
+    },
+    {
+     "url": "http://192.0.2.10/import.css",
+     "outcome": "URLError: <urlopen error [Errno 1] Operation not permitted>"
+    },
+    {
+     "url": "https://outside.example.org/pixel.png",
+     "outcome": "URLError: <urlopen error [Errno -3] Temporary failure in name resolution>"
+    },
+    {
+     "url": "http://192.0.2.10/object",
+     "outcome": "URLError: <urlopen error [Errno 1] Operation not permitted>"
+    },
+    {
+     "url": "http://192.0.2.10/bg.png",
+     "outcome": "URLError: <urlopen error [Errno 1] Operation not permitted>"
+    }
+   ],
+   "version": "66.0"
+  },
+  "strict-limits": {
+   "exit": -24,
+   "wall_ms": 45045,
+   "stderr": [
+    "(process:3685): GLib-ERROR **: 07:08:43.902: creating thread '[pango] fontconfig': Error creating thread: Resource temporarily unavailable"
+   ],
+   "ok": null
+  }
+ }
+}
