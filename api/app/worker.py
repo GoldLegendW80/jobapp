@@ -35,6 +35,18 @@ Ingestion queue (app.queue.INGESTION, ingestion G2b, app/ingestion/jobs.py):
   no job holds (a lost job, a document stored before its kind had a reader), queues again the
   ones whose try failed for the server, and fails the ones whose last try never came back.
 
+Documents queue (app.queue.DOCUMENTS, documents D6, app/documents/render_job.py):
+- render_document(document_id, revision): one render of a CV or a letter (the fit loop through
+  the `renderer` service, 256m, one render at a time). One job at a time (max_jobs 1), under
+  render_client's own gate as well; tried once by arq (render_job tries the renderer once more
+  when it is unavailable); its result is not kept in Redis, so the same render can be queued
+  again once it ended.
+- resend_queued_renders: cron every minute: a render marked queued whose job was lost is queued
+  again. At start, every render left `rendering` by a dead process goes back to idle as
+  `interrupted` (reset_interrupted_at_start).
+- documents_tick: cron every minute (documents D10, `documents.tick.run`), registered only once
+  app/documents/tick.py exists.
+
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
 cancelled agent run likewise (runner.execute), its scratch directory removed. Every Worker is
@@ -46,6 +58,8 @@ import argparse
 import asyncio
 import contextlib
 import functools
+import importlib
+import importlib.util
 import logging
 import math
 import os
@@ -72,6 +86,7 @@ from app.agents import definitions
 from app.agents import runs as agent_runs
 from app.config import Settings, load_settings
 from app.db import build_engine, build_sessionmaker
+from app.documents import render_job
 from app.identity.service import utcnow
 from app.ingestion import jobs as ingestion_jobs
 from app.jobs import ats, service, sweep
@@ -108,6 +123,9 @@ AGENT_STALE_QUEUED = timedelta(hours=6)
 # still lets the worker say why it stopped: that is the case the bound exists for.
 STOP_WAIT_S = 12.0
 INGESTION_ADVANCE_SECOND = 20  # the tick of the ingestion chain, once a minute
+DOCUMENTS_RESEND_SECOND = 50  # the render queue's resend, once a minute
+DOCUMENTS_TICK_SECOND = 5  # the automatic generation's tick (D10), once a minute
+DOCUMENTS_TICK_TIMEOUT_S = 50
 
 
 class AgentTooLongError(RuntimeError):
@@ -436,10 +454,73 @@ def ingestion_queue() -> QueueSpec:
     )
 
 
+# --- documents queue (D6; D10's tick joins it once its file exists) ----------------------------
+
+
+def documents_queue() -> QueueSpec:
+    functions = [
+        # keep_result=0: nothing of a render is left in Redis, and the same render can be
+        # queued again under its id once its job ended.
+        func(
+            render_job.render_document,
+            name=render_job.FUNCTION,
+            timeout=render_job.JOB_TIMEOUT_S,
+            max_tries=1,
+            keep_result=0,
+        ),
+        func(
+            render_job.resend_queued,
+            name="resend_queued_renders",
+            timeout=60,
+            max_tries=1,
+            keep_result=0,
+        ),
+    ]
+    cron_jobs = [
+        cron(
+            render_job.resend_queued,
+            name="cron:resend_queued_renders",
+            second=DOCUMENTS_RESEND_SECOND,
+            timeout=60,
+            keep_result=0,
+        )
+    ]
+    if importlib.util.find_spec("app.documents.tick") is not None:
+        tick = importlib.import_module("app.documents.tick")
+        functions.append(
+            func(
+                tick.run,
+                name="documents_tick",
+                timeout=DOCUMENTS_TICK_TIMEOUT_S,
+                max_tries=1,
+                keep_result=0,
+            )
+        )
+        cron_jobs.append(
+            cron(
+                tick.run,
+                name="cron:documents_tick",
+                second=DOCUMENTS_TICK_SECOND,
+                timeout=DOCUMENTS_TICK_TIMEOUT_S,
+                keep_result=0,
+            )
+        )
+    return QueueSpec(
+        name=queue.DOCUMENTS,
+        functions=functions,
+        cron_jobs=cron_jobs,
+        # One render at a time: the renderer renders one page at a time in its 256m, and the
+        # bytes of a PDF are in this process while it is stored. The crons wait their turn.
+        max_jobs=1,
+        job_timeout_s=render_job.JOB_TIMEOUT_S,
+        on_start=render_job.reset_interrupted_at_start,
+    )
+
+
 def queues(settings: Settings | None = None) -> list[QueueSpec]:
     """Every queue this worker consumes (TEST_FAST_TIMERS shortens the schedule tick)."""
     fast = bool(settings is not None and settings.test_fast_timers)
-    return [sweeps_queue(fast=fast), agents_queue(), ingestion_queue()]
+    return [sweeps_queue(fast=fast), agents_queue(), ingestion_queue(), documents_queue()]
 
 
 class QueueWorker(Worker):
