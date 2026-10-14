@@ -92,7 +92,12 @@ class Hung(RecordingStore):
 
 
 def test_every_agent_is_live_unless_its_definition_says_otherwise() -> None:
-    assert all(agent.live_text for agent in definitions.AGENTS.values())
+    # The agents of definitions.py are live; an agent of another module registered in this
+    # process may turn live text off only together with private_io (documents D7's writer).
+    assert all(
+        agent.live_text for agent in (definitions.ECHO, definitions.TRIAGE, definitions.JOB_CHAT)
+    )
+    assert all(agent.live_text or agent.private_io for agent in definitions.AGENTS.values())
     assert definitions.live_text("echo")
     assert not definitions.live_text("an agent that is gone")
     assert not replace(definitions.ECHO, live_text=False).live_text
