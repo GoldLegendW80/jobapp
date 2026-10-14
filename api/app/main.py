@@ -22,6 +22,7 @@ from app.agents.live import RedisLiveStore
 from app.agents.ratelimit import RateLimiter
 from app.agents.verify import Verifier
 from app.body_limit import BodiesInFlight, LimitRequestBodyMiddleware, SessionGate
+from app.browser import registry as browser_registry
 from app.config import Settings, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity import deps as identity_deps
@@ -258,5 +259,6 @@ def create_app(
         app.include_router(ingestion_router)
     for mail_router in mail_routers.load():
         app.include_router(mail_router)
+    browser_registry.include(app)
     identity_deps.assert_default_deny(app)
     return app

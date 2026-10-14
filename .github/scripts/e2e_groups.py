@@ -32,6 +32,8 @@ NOT_IN_CI: dict[str, str] = {
     # Stops and starts the db service of the stack it is pointed at, so it cannot share a stack
     # with the other journeys (README: never beside identity.spec.ts). Run by hand against a
     # local stack or the Jetson.
+    # Browser B3: needs the stack with the compose profile `browser`, which no group starts yet.
+    "browser-b3.spec.ts": "needs the browser profile of the stack, no group starts it yet",
     "caddy.spec.ts": "stops the database of the stack under test",
     # The task 5 health card with /api mocked by route interception, against `vite preview`
     # (web/playwright.config.ts), not the Compose stack. It was never part of CI: putting it in

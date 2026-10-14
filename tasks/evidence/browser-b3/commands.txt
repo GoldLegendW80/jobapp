@@ -1,0 +1,13 @@
+# browser B3, 2026-10-14, on the Mac (arm64), throwaway postgres:16.15-alpine and redis:7.4.11-alpine
+$ nice -n 15 uv --native-tls run pytest -q -n 2 -m "not docker" tests/browser tests/test_*.py tests/*/test_migration*.py
+523 passed in 46.09s
+$ uv --native-tls run ruff check app tests
+All checks passed!
+$ uv --native-tls run ruff format --check app tests
+429 files already formatted
+$ pnpm --dir web run typecheck
+typecheck: ok
+$ pnpm --dir web run lint
+lint: ok
+$ python3 .github/scripts/e2e_groups_test.py && python3 .github/scripts/e2e_groups.py
+e2e_groups: 29 specs run in CI, 5 excluded with a reason, 5 run by a group of the local check only

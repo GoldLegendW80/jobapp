@@ -75,7 +75,7 @@ def _state(engine: sa.Engine) -> tuple[set[str], set[str], set[str], int]:
 
 
 def test_0015_up_down_up(at_head: sa.Engine) -> None:
-    assert HEAD == "0015"
+    assert HEAD >= "0015"
     url = at_head.url.render_as_string(hide_password=False)
     tables, enums, names, trigger = _state(at_head)
     assert tables >= TABLES
