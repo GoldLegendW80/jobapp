@@ -1,0 +1,14 @@
+{
+ "source": "https://raw.githubusercontent.com/moby/profiles/main/seccomp/default.json (fetched 2026-10-14)",
+ "change": "one rule appended to Docker default profile",
+ "appended_rule": {
+  "names": [
+   "clone",
+   "unshare",
+   "setns",
+   "chroot"
+  ],
+  "action": "SCMP_ACT_ALLOW"
+ },
+ "note": "clone3 keeps the default ENOSYS answer, so glibc falls back to clone; without chroot Chromium fails: Check failed: sys_chroot(\"/proc/self/fdinfo/\") == 0"
+}

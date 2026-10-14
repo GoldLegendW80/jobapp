@@ -1,0 +1,122 @@
+<!doctype html>
+<!-- A heavy application wizard in the style of Workday (browser B1): a large script bundle
+     compiled at load (about 4 MB of generated source, kept alive as Workday's is), six steps of
+     sixty fields built by script, a country combobox of 250 options in every sixth field, a
+     mutation observer, an autosave timer and a spinner animation. The pages server needs nothing
+     special for it. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workday style application</title>
+<style>
+  body { font-family: "Liberation Sans", "Noto Sans", sans-serif; margin: 0; background: #f0f2f5; }
+  header { background: #0b3d91; color: #fff; padding: 16px 32px; display: flex; justify-content: space-between; }
+  nav.steps { display: flex; gap: 4px; padding: 12px 32px; background: #fff; border-bottom: 1px solid #d7dbe0; }
+  nav.steps span { padding: 6px 10px; border-radius: 14px; font-size: 13px; background: #eef1f5; }
+  nav.steps span.active { background: #0b3d91; color: #fff; }
+  section.step { display: none; max-width: 900px; margin: 24px auto; background: #fff; padding: 24px 32px; border-radius: 8px; }
+  section.step.active { display: block; }
+  .field { margin: 12px 0; }
+  .field label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .field input, .field select { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #b9c0c9; border-radius: 4px; }
+  .listbox { display: none; max-height: 200px; overflow: auto; border: 1px solid #b9c0c9; }
+  .listbox.open { display: block; }
+  .spinner { width: 16px; height: 16px; border: 3px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  footer { max-width: 900px; margin: 0 auto 40px; display: flex; justify-content: space-between; }
+  footer button { padding: 10px 24px; border-radius: 4px; border: 1px solid #0b3d91; background: #0b3d91; color: #fff; }
+</style>
+</head>
+<body>
+<header><span>Example Corp careers · Senior Applied AI Engineer</span><span class="spinner" aria-label="Saving"></span></header>
+<nav class="steps" id="steps"></nav>
+<div id="wizard"></div>
+<footer><button type="button" id="back">Back</button><span id="autosave" role="status">Not saved yet</span><button type="button" id="next">Save and Continue</button></footer>
+<script>
+  // The bundle: generated source compiled once and kept, as a large single page app's bundle is.
+  (function () {
+    const parts = [];
+    for (let i = 0; i < 15000; i++) {
+      parts.push("function m" + i + "(s){var o={id:" + i + ",n:'module" + i + "',v:[]};for(var k=0;k<(s%7)+3;k++){o.v.push((s*k+" + i + ")%97)}return o.v.reduce(function(a,b){return a+b},0)+String(o.n).length}");
+    }
+    parts.push("window.__bundle=[];for(var j=0;j<15000;j++){window.__bundle.push(this['m'+j]||eval('m'+j))}");
+    const source = parts.join(";\n");
+    window.__bundleSource = source;
+    (0, eval)(source);
+  })();
+
+  const STEPS = ["My Information", "My Experience", "Application Questions", "Voluntary Disclosures", "Self Identify", "Review"];
+  const COUNTRIES = [];
+  for (let i = 0; i < 250; i++) COUNTRIES.push("Country " + String(i).padStart(3, "0"));
+  const KINDS = ["text", "text", "email", "tel", "date", "combo"];
+  const nav = document.getElementById("steps");
+  const wizard = document.getElementById("wizard");
+  STEPS.forEach((name, s) => {
+    const chip = document.createElement("span");
+    chip.textContent = (s + 1) + ". " + name;
+    nav.appendChild(chip);
+    const section = document.createElement("section");
+    section.className = "step";
+    section.dataset.step = String(s);
+    const title = document.createElement("h2");
+    title.textContent = name;
+    section.appendChild(title);
+    for (let f = 0; f < 60; f++) {
+      const kind = KINDS[f % KINDS.length];
+      const id = "s" + s + "f" + f;
+      const field = document.createElement("div");
+      field.className = "field";
+      const label = document.createElement("label");
+      label.htmlFor = id;
+      label.textContent = name + ", question " + (f + 1) + (f % 4 === 0 ? " *" : "");
+      field.appendChild(label);
+      if (kind === "combo") {
+        const input = document.createElement("input");
+        input.id = id;
+        input.setAttribute("role", "combobox");
+        input.setAttribute("aria-expanded", "false");
+        const list = document.createElement("div");
+        list.className = "listbox";
+        list.setAttribute("role", "listbox");
+        COUNTRIES.forEach((c) => {
+          const option = document.createElement("div");
+          option.setAttribute("role", "option");
+          option.textContent = c;
+          option.addEventListener("click", () => { input.value = c; list.classList.remove("open"); });
+          list.appendChild(option);
+        });
+        input.addEventListener("focus", () => { list.classList.add("open"); input.setAttribute("aria-expanded", "true"); });
+        field.appendChild(input);
+        field.appendChild(list);
+      } else {
+        const input = document.createElement("input");
+        input.id = id;
+        input.type = kind;
+        field.appendChild(input);
+      }
+      section.appendChild(field);
+    }
+    wizard.appendChild(section);
+  });
+
+  let current = 0;
+  function show(step) {
+    current = Math.max(0, Math.min(STEPS.length - 1, step));
+    document.querySelectorAll("section.step").forEach((s, i) => s.classList.toggle("active", i === current));
+    nav.querySelectorAll("span").forEach((c, i) => c.classList.toggle("active", i === current));
+    document.body.dataset.step = String(current);
+  }
+  document.getElementById("next").addEventListener("click", () => show(current + 1));
+  document.getElementById("back").addEventListener("click", () => show(current - 1));
+  show(0);
+
+  let mutations = 0;
+  new MutationObserver((records) => { mutations += records.length; }).observe(document.body, { subtree: true, attributes: true, childList: true });
+  setInterval(() => {
+    const filled = Array.from(document.querySelectorAll("input")).filter((i) => i.value).length;
+    document.getElementById("autosave").textContent = "Saved, " + filled + " answers, " + mutations + " changes";
+  }, 250);
+  document.body.dataset.ready = "true";
+</script>
+</body>
+</html>

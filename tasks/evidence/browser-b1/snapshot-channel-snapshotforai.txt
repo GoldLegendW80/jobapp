@@ -1,0 +1,62 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - strong [ref=e3]: Example Labs
+    - text: · Applied AI Engineer · Paris, France (hybrid)
+  - main [ref=e4]:
+    - heading "Apply for this job" [level=1] [ref=e5]
+    - generic [ref=e6]:
+      - generic [ref=e7]: First name *
+      - textbox "First name *" [ref=e8]
+      - generic [ref=e9]: Last name *
+      - textbox "Last name *" [ref=e10]
+      - generic [ref=e11]: Email *
+      - textbox "Email *" [ref=e12]
+      - generic [ref=e13]: Phone
+      - textbox "Phone" [ref=e14]
+      - generic [ref=e15]: Location (city) *
+      - combobox "Location (city) *" [ref=e16]
+      - generic [ref=e17]: Resume/CV *
+      - button "Resume/CV *" [ref=e18]
+      - generic [ref=e19]: No file chosen
+      - generic [ref=e20]: Cover letter
+      - button "Attach" [ref=e21] [cursor=pointer]
+      - generic [ref=e22]: No file chosen
+      - generic [ref=e23]: LinkedIn profile
+      - textbox "LinkedIn profile" [ref=e24]
+      - generic [ref=e25]: Website
+      - textbox "Website" [ref=e26]
+      - generic [ref=e27]: Are you legally authorised to work in France?
+      - group "Are you legally authorised to work in France?" [ref=e28]:
+        - button "Yes" [ref=e29] [cursor=pointer]
+        - button "No" [ref=e30] [cursor=pointer]
+      - generic [ref=e31]: Will you now or in the future require sponsorship?
+      - group "Will you now or in the future require sponsorship?" [ref=e32]:
+        - button "Yes" [ref=e33] [cursor=pointer]
+        - button "No" [ref=e34] [cursor=pointer]
+      - generic [ref=e35]: How did you hear about us?
+      - combobox "How did you hear about us?" [ref=e36]:
+        - option "Select..." [selected]
+        - option "LinkedIn"
+        - option "Company website"
+        - option "Referral"
+        - option "Other"
+      - generic [ref=e37]: Notice period
+      - combobox "Notice period" [ref=e38]:
+        - option "Select..." [selected]
+        - option "Immediately"
+        - option "1 month"
+        - option "2 months"
+        - option "3 months"
+      - generic [ref=e39]: Why do you want to join Example Labs? *
+      - textbox "Why do you want to join Example Labs? *" [ref=e40]
+      - generic [ref=e41]: Gender (voluntary)
+      - combobox "Gender (voluntary)" [ref=e42]:
+        - option "Decline to answer" [selected]
+        - option "Female"
+        - option "Male"
+        - option "Non-binary"
+      - generic [ref=e43]:
+        - checkbox "I agree to the processing of my data for this application." [ref=e44]
+        - text: I agree to the processing of my data for this application.
+      - button "Submit application" [ref=e45] [cursor=pointer]
+      - status

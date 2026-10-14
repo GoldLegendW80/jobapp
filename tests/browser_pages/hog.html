@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- A memory hog (browser B1): allocates 16 MiB typed arrays and touches every page of them,
+     every 50 ms, until `?cap=<MiB>` is reached (then holds), or forever without a cap, so the
+     container's memory limit is reached and the kernel kills the renderer, not the Jetson. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Memory hog</title>
+</head>
+<body>
+<h1>Memory hog</h1>
+<p id="allocated" data-mib="0">0 MiB</p>
+<script>
+  const cap = Number(new URLSearchParams(location.search).get("cap") || 0);
+  const step = 16;
+  const keep = [];
+  let mib = 0;
+  function tick() {
+    const out = document.getElementById("allocated");
+    if (cap && mib >= cap) { out.textContent = mib + " MiB, holding"; out.dataset.done = "true"; return; }
+    const block = new Uint8Array(step * 1048576);
+    for (let i = 0; i < block.length; i += 4096) block[i] = 1;
+    keep.push(block);
+    mib += step;
+    out.textContent = mib + " MiB";
+    out.dataset.mib = String(mib);
+    setTimeout(tick, 50);
+  }
+  tick();
+</script>
+</body>
+</html>
