@@ -17,13 +17,14 @@ from app.mail.factcheck_rules import Sources
 from tests.documents.conftest import base_cv, posting, view_of, written
 
 OFF = DocumentSettings()
+NUMBER = corrections.NUMBER_NOT_STATED
 DASH_ON = DocumentSettings(no_dash_separators=True)
 EM = "—"
 
 
-def _sources() -> Sources:
+def _sources(kind: c.Kind = "cv") -> Sources:
     base = base_cv("alex")
-    return sources_for(view_of("alex", base), base, None, posting("lumen"))
+    return sources_for(view_of("alex", base), base, None, posting("lumen"), kind=kind)
 
 
 def _fallbacks(language: str = "en") -> Fallbacks:
@@ -35,7 +36,7 @@ def _fallbacks(language: str = "en") -> Fallbacks:
 def _correct(
     kind: c.Kind, data: dict[str, Any], settings: DocumentSettings = OFF, **fallbacks: Any
 ) -> tuple[Any, list[corrections.Correction]]:
-    result = checks.run(kind, data, _sources(), settings)
+    result = checks.run(kind, data, _sources(kind), settings)
     assert result.content is not None
     return corrections.remove_remaining(
         result.content, result, fallbacks.get("fallbacks", _fallbacks())
@@ -206,7 +207,9 @@ def test_a_skills_group_whose_label_goes_is_dropped_and_recorded() -> None:
 
 
 def test_a_skills_group_whose_items_all_go_is_dropped() -> None:
-    data = _cv(skills=[{"label": "Cloud", "items": ["Kubernetes 2015", "Terraform 2014"]}])
+    data = _cv(
+        skills=[{"label": "Cloud", "items": ["Kubernetes since 2015", "Terraform since 2014"]}]
+    )
     fixed, records = _correct("cv", data)
     assert fixed.skills == []
     assert [r.field_path for r in records] == ["skills.0.items.0", "skills.0.items.1"]
@@ -398,3 +401,13 @@ def test_hostile_text_always_ends_valid_with_no_claim_left(bullet: str) -> None:
     assert c.parse("cv", c.dump(fixed)) == fixed
     assert checks.run("cv", fixed, _sources(), DASH_ON).claims == ()
     assert "Kept." in fixed.experience[0].bullets
+
+
+def test_a_version_after_a_profile_term_loses_only_the_number() -> None:
+    data = _cv(skills=[{"label": "Cloud", "items": ["Kubernetes 2015", "Terraform 1.5"]}])
+    fixed, records = _correct("cv", data)
+    assert fixed.skills[0].items == ["Kubernetes", "Terraform"]
+    assert [(r.field_path, r.before, r.after, r.code, r.reason) for r in records] == [
+        ("skills.0.items.0", "Kubernetes 2015", "Kubernetes", "version_removed", NUMBER),
+        ("skills.0.items.1", "Terraform 1.5", "Terraform", "version_removed", NUMBER),
+    ]

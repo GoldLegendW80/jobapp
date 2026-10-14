@@ -85,6 +85,7 @@ class ProfileView:
     skills_terms: tuple[str, ...] = ()
     years_experience: float | None = None
     answers: tuple[str, ...] = ()
+    answer_topics: tuple[tuple[str, str], ...] = ()  # (the answer's question key, the answer)
     motivation: str = ""
 
     @property
@@ -180,18 +181,25 @@ def _skills_terms(skills: SkillsSection) -> tuple[str, ...]:
     return tuple(out)
 
 
-def _answers(answers: AnswersSection) -> tuple[str, ...]:
-    texts = [item.answer for item in answers.work_authorization]
-    texts += [
-        answers.notice_period,
-        answers.earliest_start,
-        answers.salary_policy,
-        answers.relocation,
-        answers.travel,
-        answers.motivation,
-        answers.heard_about,
+def _answer_topics(answers: AnswersSection) -> tuple[tuple[str, str], ...]:
+    pairs = [("work_authorization", item.answer) for item in answers.work_authorization]
+    pairs += [
+        (name, getattr(answers, name))
+        for name in (
+            "notice_period",
+            "earliest_start",
+            "salary_policy",
+            "relocation",
+            "travel",
+            "motivation",
+            "heard_about",
+        )
     ]
-    return tuple(text for text in texts if text)
+    return tuple((name, text) for name, text in pairs if text)
+
+
+def _answers(answers: AnswersSection) -> tuple[str, ...]:
+    return tuple(text for _, text in _answer_topics(answers))
 
 
 def build(
@@ -226,5 +234,6 @@ def build(
         skills_terms=_skills_terms(skills),
         years_experience=skills.years_experience,
         answers=_answers(answers),
+        answer_topics=_answer_topics(answers),
         motivation=answers.motivation or "",
     )

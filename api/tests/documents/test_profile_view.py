@@ -79,7 +79,13 @@ def test_a_regex_category_gives_its_name_not_its_patterns() -> None:
     assert profile_view.build(sections, revision).skills_terms == ("Infra",)
 
 
-def test_sources_follow_the_spec(alex_sources: Sources, alex_upload: str) -> None:
+def test_sources_follow_the_spec(
+    alex_sources: Sources,
+    alex_upload: str,
+    alex_view: profile_view.ProfileView,
+    alex_base: c.BaseCvContent,
+    lumen: PostingView,
+) -> None:
     sources = alex_sources
     profile_text = "\n".join(sources.profile)
     assert "moved 40 services to Kubernetes" in profile_text  # facts
@@ -93,9 +99,14 @@ def test_sources_follow_the_spec(alex_sources: Sources, alex_upload: str) -> Non
     assert "One month." in sources.answers
     assert sources.employers == ("Example Corp", "Sample Labs", "North Shop")
     assert sources.schools == ("Example Institute of Technology",)
-    assert sources.titles[-1] == "Senior Platform Engineer"  # the posting's title
     assert "Platform Engineer" in sources.titles
-    assert sources.participants == ("Lumen Example",)
+    # The posting's title and company source a letter only: in a CV they would pass as
+    # experience ("Senior Platform Engineer at Lumen Example").
+    assert "Senior Platform Engineer" not in sources.titles
+    assert sources.participants == ()
+    letter = sources_for(alex_view, alex_base, alex_upload, lumen, kind="letter")
+    assert letter.titles[-1] == "Senior Platform Engineer"
+    assert letter.participants == ("Lumen Example",)
     assert "Kubernetes" in sources.known_terms
     assert sources.thread == ()
     assert sources.instructions == ()

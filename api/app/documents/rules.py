@@ -16,8 +16,9 @@ letter.
 
 from __future__ import annotations
 
+import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -36,6 +37,9 @@ BANNED_PHRASE = "banned_phrase"
 UNKNOWN_EMPLOYER = "unknown_employer"
 OVER_SOFT_LENGTH = "over_soft_length"
 REQUIRED_EMPTY = "required_empty"
+CREDENTIAL = "credential_not_in_profile"
+CHANGE = "change_not_in_profile"
+DECADE = "decade_not_in_profile"
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,3 +361,376 @@ def sentences(text: str) -> list[tuple[int, int]]:
     if start < n:
         spans.append((start, n))
     return spans
+
+
+# --- the claims M9 does not see: credentials, change words, decades -----------------------------
+#
+# A credential (a degree, a certification, an award, a school one graduated from), a change word
+# that implies a metric ("doubled", "x10", "by half") and a duration in decades are claims that
+# M9's rules leave alone. Each is sourced only when the person's own text states it: the same
+# words in the profile or the base CV, folded. These scanners walk the words of the text once,
+# each with a bounded look around (at most `_REACH` words), so they are linear.
+
+_WORD_RE = re.compile(r"[^\W_]+")  # one class under one quantifier: linear
+_REACH = 12
+
+
+@dataclass(frozen=True, slots=True)
+class _Word:
+    start: int
+    end: int
+    folded: str
+    capital: bool
+    digits: bool
+
+
+def _fold_word(word: str) -> str:
+    return "".join(_fold_char(ch) for ch in word)
+
+
+def _words(text: str) -> list[_Word]:
+    out = []
+    for found in _WORD_RE.finditer(text):
+        word = found.group()
+        out.append(
+            _Word(
+                found.start(),
+                found.end(),
+                _fold_word(word),
+                word[0].isupper(),
+                any(ch.isdigit() for ch in word),
+            )
+        )
+    return out
+
+
+def corpus(texts: Iterable[str]) -> tuple[str, ...]:
+    """The person's texts as padded folded word lists, one entry per text, so that " a b " in
+    an entry is a phrase search that never matches inside a word or across two texts."""
+    return tuple(" " + " ".join(w.folded for w in _words(text)) + " " for text in texts if text)
+
+
+def _stated(phrase: str, entries: Sequence[str]) -> bool:
+    return any(f" {phrase} " in entry for entry in entries)
+
+
+def corpus_states(text: str, entries: Sequence[str]) -> bool:
+    """Do the person's texts (`corpus`) hold the words of `text`, folded, as a phrase?"""
+    phrase = " ".join(w.folded for w in _words(text))
+    return bool(phrase) and _stated(phrase, entries)
+
+
+# A degree, a certification, an award. `_GENERIC` words name no credential by themselves ("a
+# degree", "graduated"): only the names around them are checked. `_CAPITAL_ONLY` are keys only
+# when capitalised ("Master", "Licence", "Prix"), as their lowercase forms are common words
+# ("master branch", "software licence", "prix fixe").
+_KEYS = frozenset(
+    [
+        "phd",
+        "doctorate",
+        "doctorat",
+        "mba",
+        "msc",
+        "bsc",
+        "meng",
+        "mres",
+        "master",
+        "masters",
+        "mastere",
+        "bachelor",
+        "bachelors",
+        "licence",
+        "bts",
+        "dut",
+        "deug",
+        "ingenieur",
+        "certified",
+        "certification",
+        "certifie",
+        "certifiee",
+        "award",
+        "awards",
+        "prize",
+        "prix",
+        "laureat",
+        "laureate",
+        "degree",
+        "diploma",
+        "diplome",
+        "diplomee",
+        "diplomes",
+        "diplomees",
+        "graduated",
+        "graduate",
+    ]
+)
+_GENERIC = frozenset(
+    [
+        "degree",
+        "diploma",
+        "diplome",
+        "diplomee",
+        "diplomes",
+        "diplomees",
+        "graduated",
+        "graduate",
+        "s",
+    ]
+)
+_CAPITAL_ONLY = frozenset(
+    [
+        "master",
+        "masters",
+        "mastere",
+        "licence",
+        "bts",
+        "dut",
+        "deug",
+        "ingenieur",
+        "prix",
+        "certified",
+        "certifie",
+        "certifiee",
+    ]
+)
+# A key that names a thing with the lowercase word just before it ("hackathon award").
+_GLUE_LEFT = frozenset(["certification", "award", "awards", "prize"])
+# The words that join a credential to its field or its school ("MSc in Data Science from
+# Exemple University", "diplômée de l'École Exemple").
+_JOINS = frozenset(["in", "of", "from", "at", "en", "de", "du", "des", "d", "l", "la", "le", "the"])
+_STOPS = frozenset(
+    [
+        "a",
+        "an",
+        "the",
+        "my",
+        "his",
+        "her",
+        "their",
+        "our",
+        "your",
+        "and",
+        "or",
+        "with",
+        "for",
+        "to",
+        "as",
+        "on",
+        "by",
+        "by",
+        "un",
+        "une",
+        "le",
+        "la",
+        "les",
+        "mon",
+        "ma",
+        "mes",
+        "son",
+        "sa",
+        "ses",
+        "et",
+        "ou",
+        "avec",
+        "pour",
+        "par",
+        "sur",
+        "au",
+        "aux",
+    ]
+)
+_SENTENCE_STOPS = frozenset(".!?:;\n\u2022")
+
+
+def _joined(text: str, left: _Word, right: _Word) -> bool:
+    """Two words of one name: only spaces, an apostrophe or a hyphen between them."""
+    gap = text[left.end : right.start]
+    return len(gap) <= 3 and all(ch in " '\u2019-" for ch in gap)
+
+
+def _is_key(word: _Word) -> bool:
+    if word.folded not in _KEYS:
+        return False
+    return word.capital or word.folded not in _CAPITAL_ONLY
+
+
+def _opens_sentence(text: str, word: _Word) -> bool:
+    at = word.start
+    while at > 0 and text[at - 1] == " ":
+        at -= 1
+    return at == 0 or text[at - 1] in _SENTENCE_STOPS
+
+
+def _common_word(text: str, words: list[_Word], i: int) -> bool:
+    """A key that is capitalised only because it opens the sentence, followed by a lowercase
+    word that joins nothing: "Master data management", "Certified datasets for the audit"."""
+    if not _opens_sentence(text, words[i]) or i + 1 >= len(words):
+        return False
+    after = words[i + 1]
+    return not (after.capital or after.digits or after.folded in _JOINS or _is_key(after))
+
+
+def _name_word(word: _Word) -> bool:
+    return (word.capital or _is_key(word)) and not word.digits and word.folded not in _STOPS
+
+
+def credentials(text: str, entries: Sequence[str]) -> list[tuple[int, int]]:
+    """The spans of the credentials of `text` that the person's texts (`corpus`) do not state.
+
+    A credential is a key word with the capitalised words around it ("AWS Certified Solutions
+    Architect Associate"), then, through a joining word, its field or its school ("PhD in
+    Computer Science", "MSc from Example Polytechnic", "Graduated from Stanford University").
+    Each part but the generic words must stand in ONE of the person's texts: "MSc" and "Exemple
+    University" in the school's entry. A capitalised word that opens the sentence ("Earned")
+    may be left out of the first part."""
+    words = _words(text)
+    out: list[tuple[int, int]] = []
+    i = 0
+    n = len(words)
+    while i < n:
+        if not _is_key(words[i]):
+            i += 1
+            continue
+        key = words[i]
+        generic = key.folded in _GENERIC
+        if key.folded in _CAPITAL_ONLY and _common_word(text, words, i):
+            i += 1
+            continue
+        # Left: the capitalised words of the name, and one lowercase word before a key such as
+        # "award" ("hackathon award").
+        first = i
+        while first > 0 and i - first < 4 and _joined(text, words[first - 1], words[first]):
+            before = words[first - 1]
+            if (
+                before.folded == "s"
+                or _name_word(before)
+                or (first == i and key.folded in _GLUE_LEFT and before.folded not in _STOPS)
+            ):
+                first -= 1
+            else:
+                break
+        # Right: the rest of the name, then joined parts.
+        last = i
+        while (
+            last + 1 < n and last - first < _REACH and _joined(text, words[last], words[last + 1])
+        ):
+            after = words[last + 1]
+            if not (after.folded == "s" or _name_word(after)):
+                break
+            last += 1
+        parts = [words[first : last + 1]]
+        while last + 2 < n and last - first < _REACH:
+            j = last + 1
+            if words[j].folded not in _JOINS or not _joined(text, words[last], words[j]):
+                break
+            if (
+                j + 1 < n
+                and words[j + 1].folded in _JOINS
+                and _joined(text, words[j], words[j + 1])
+            ):
+                j += 1
+            k = j + 1
+            if k >= n or not _joined(text, words[j], words[k]):
+                break
+            part: list[_Word] = []
+            while k < n and len(part) < 4 and (not part or _joined(text, words[k - 1], words[k])):
+                word = words[k]
+                lowercase_field = not generic and not word.digits
+                if word.folded in _JOINS or word.folded in _STOPS:
+                    break
+                if not (_name_word(word) or lowercase_field):
+                    break
+                part.append(word)
+                k += 1
+            if not part:
+                break
+            parts.append(part)
+            last = k - 1
+        phrases = [" ".join(w.folded for w in part if w.folded not in _GENERIC) for part in parts]
+        if any(phrases) and not _credential_stated(text, words[first], phrases, entries):
+            out.append((words[first].start, words[last].end))
+        i = last + 1
+    return out
+
+
+def _credential_stated(text: str, first: _Word, phrases: list[str], entries: Sequence[str]) -> bool:
+    options = [phrases]
+    head = phrases[0].split(" ", 1)
+    if _opens_sentence(text, first) and first.folded == head[0] and len(head) == 2:
+        options.append([head[1], *phrases[1:]])
+    for option in options:
+        needed = [phrase for phrase in option if phrase]
+        if any(all(f" {phrase} " in entry for phrase in needed) for entry in entries):
+            return True
+    return False
+
+
+# A change that implies a metric: "doubled the throughput" says by how much without a number.
+_CHANGES = frozenset(
+    [
+        "doubled",
+        "doubling",
+        "tripled",
+        "tripling",
+        "quadrupled",
+        "quadrupling",
+        "halved",
+        "halving",
+        "tenfold",
+        "twofold",
+        "threefold",
+        "decuple",
+    ]
+)
+_CHANGES_ACCENTED = frozenset(("doublé", "doublée", "doublés", "triplé", "triplée", "triplés"))
+_CHANGE_PAIRS = frozenset(
+    (
+        ("by", "half"),
+        ("de", "moitie"),
+        ("multiplied", "by"),
+        ("divided", "by"),
+        ("multiplie", "par"),
+        ("multipliee", "par"),
+        ("multiplies", "par"),
+        ("divise", "par"),
+        ("divisee", "par"),
+    )
+)
+
+
+_NOT_FACTORS = frozenset(("x86", "x64", "x32"))
+
+
+def _times(folded: str) -> bool:
+    """ "x10", "2x", "10x": a factor ("x86" is an architecture)."""
+    if len(folded) < 2 or len(folded) > 6 or folded in _NOT_FACTORS:
+        return False
+    if folded[0] == "x":
+        return folded[1:].isdigit()
+    return folded[-1] == "x" and folded[:-1].isdigit()
+
+
+def changes(text: str, entries: Sequence[str]) -> list[tuple[int, int]]:
+    """The spans of the change words of `text` that the person's texts do not state."""
+    words = _words(text)
+    out: list[tuple[int, int]] = []
+    for i, word in enumerate(words):
+        phrase = ""
+        end = word.end
+        original = text[word.start : word.end].lower()
+        if word.folded in _CHANGES or _times(word.folded) or original in _CHANGES_ACCENTED:
+            phrase = word.folded
+        elif i + 1 < len(words) and (word.folded, words[i + 1].folded) in _CHANGE_PAIRS:
+            phrase = f"{word.folded} {words[i + 1].folded}"
+            end = words[i + 1].end
+        if phrase and not _stated(phrase, entries):
+            out.append((word.start, end))
+    return out
+
+
+_DECADES = {"decade": 10, "decades": 20, "decennie": 10, "decennies": 20}
+
+
+def decades(text: str) -> list[tuple[int, int, int]]:
+    """The durations in decades of `text`: `(start, end, the years they at least mean)`."""
+    return [(w.start, w.end, _DECADES[w.folded]) for w in _words(text) if w.folded in _DECADES]

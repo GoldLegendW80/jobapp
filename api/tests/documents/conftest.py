@@ -16,6 +16,9 @@ Fixtures a test gets by naming them:
 - `alex_view`, `alex_sources`: the profile view and the fact check sources of Alex writing for
   Lumen from his base CV;
 - `written`: the CVs and letters of `fixtures/written/`, as JSON data, by name.
+
+`profile_casey`, `base_cv_casey` and `posting_brume` are the invented profile, base CV and
+posting of the review probes (`test_review_probes.py`), read with `view_of`, `base_cv`, `posting`.
 """
 
 from __future__ import annotations

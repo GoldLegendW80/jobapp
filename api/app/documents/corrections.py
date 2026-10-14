@@ -8,10 +8,12 @@ Who corrects what:
     hyphen used as a separator becomes a comma (a range of digits keeps a hyphen, a dash that
     opens or closes a line goes); "full-stack" never changes (step 2);
   - `remove_remaining`: each claim still open after the writer's correction pass loses the
-    sentence that holds it; a bullet, highlight, competency, skills group or paragraph left
-    empty is dropped; a field that must not be empty takes a fallback (`Fallbacks`: the base
-    CV's headline or summary, "Application for" and the posting's title, the profile's
-    motivation, else one sentence naming the role and the company) (step 5).
+    sentence that holds it, but for a version number after a skills term of the profile
+    ("Python 3.12", "Office 2019", "Airflow v2"): only the number goes, with the code
+    `version_removed`, and the true skill stays; a bullet, highlight, competency, skills group
+    or paragraph left empty is dropped; a field that must not be empty takes a fallback
+    (`Fallbacks`: the base CV's headline or summary, "Application for" and the posting's
+    title, the profile's motivation, else one sentence naming the role and the company) (step 5).
 - **By a model rewrite**, not here: the correction pass of the writer (step 4) asks it once to
   rewrite or remove each flagged claim. The generation tasks (D7 and later) run it; this module
   gives them the interface: the issues to send (`checks.Checks.claims` with `checks.excerpt`)
@@ -53,6 +55,7 @@ FILLED_IN = "Filled in because nothing was left"
 REASONS: tuple[str, ...] = (NOT_IN_PROFILE, NUMBER_NOT_STATED, DASH, BANNED, FILLED_IN)
 
 FALLBACK = "fallback"
+VERSION_REMOVED = "version_removed"
 
 # M9's codes of a number, a year, a duration, an amount, a percentage, a date or a time.
 _NUMBER_CODES = frozenset(
@@ -71,7 +74,7 @@ By = Literal["writer", "code"]
 
 
 def reason_for(code: str) -> str:
-    if code in _NUMBER_CODES:
+    if code in _NUMBER_CODES or code in (VERSION_REMOVED, rules.CHANGE, rules.DECADE):
         return NUMBER_NOT_STATED
     if code == rules.BANNED_PHRASE:
         return BANNED
@@ -342,12 +345,50 @@ def fallbacks_for(
     )
 
 
+_VERSION_CODES = frozenset(("number_not_in_sources", "year_not_in_sources"))
+
+
+def _version_shaped(span: str) -> bool:
+    """ "3.12", "16", "2019", "2.x": digits with at most two dots, an optional final "x"."""
+    parts = span.split(".")
+    if not 1 <= len(parts) <= 3 or len(parts[0]) > 4:
+        return False
+    if len(parts) > 1 and parts[-1] == "x":
+        parts = parts[:-1]
+    return all(part.isdigit() and len(part) <= 4 for part in parts)
+
+
+def _version_start(text: str, issue: Issue, terms: tuple[str, ...]) -> int | None:
+    """Where the version of `issue` starts with its leading space (and a "v"), when it follows a
+    skills term of the sources; None when it is no version."""
+    if issue.code not in _VERSION_CODES or not _version_shaped(text[issue.start : issue.end]):
+        return None
+    if issue.end < len(text) and (text[issue.end].isalnum() or text[issue.end] in "+%"):
+        return None
+    at = issue.start
+    if at > 0 and text[at - 1] in "vV":
+        at -= 1
+    if at == 0 or text[at - 1] != " ":
+        return None
+    before = rules.fold(text[max(0, at - 1 - c.TERM_MAX) : at - 1]).text
+    for term in terms:
+        folded = rules.fold(term).text.strip()
+        if folded and before.endswith(folded):
+            head = before[: len(before) - len(folded)]
+            if not head or not head[-1].isalnum():
+                return at - 1
+    return None
+
+
 def remove_remaining(
     content: c.CvContent | c.LetterContent, checks: Checks, fallbacks: Fallbacks
 ) -> tuple[c.CvContent | c.LetterContent, list[Correction]]:
     """Each claim of `checks` (the checks of this very content) loses its sentence, by code;
     the empty entries are dropped and the empty required fields take their fallback. Offsets
-    are those of the issues, into the field's text, so combining marks stay where they were."""
+    are those of the issues, into the field's text, so combining marks stay where they were.
+
+    A version number after a skills term of the sources loses only itself: an unstated "3.12"
+    must go, but "Python", a true skill, must not go with it ("Python 3.12" becomes "Python")."""
     kind = checks.kind
     texts = dict(c.text_fields(content))
     by_field: dict[str, list[Issue]] = {}
@@ -361,14 +402,24 @@ def remove_remaining(
         spans = rules.sentences(text)
         starts = [start for start, _ in spans]
         removed: dict[int, str] = {}
+        cuts: list[tuple[int, int]] = []
         for issue in issues:
+            cut = _version_start(text, issue, checks.known_terms)
+            if cut is not None:
+                cuts.append((cut, issue.end))
+                continue
             index = max(bisect_right(starts, issue.start) - 1, 0)
             removed.setdefault(index, issue.code)
-        kept = "".join(text[s:e] for i, (s, e) in enumerate(spans) if i not in removed).strip()
+        kept_spans = [(s, e) for i, (s, e) in enumerate(spans) if i not in removed]
+        kept_cut = "".join(_cut(text, s, e, cuts) for s, e in kept_spans).strip()
         records += [
             _record(path, text[spans[i][0] : spans[i][1]].strip(), "", code, "code")
             for i, code in sorted(removed.items())
         ]
+        kept = "".join(text[s:e] for s, e in kept_spans).strip()
+        if kept_cut != kept:
+            records.append(_record(path, kept, kept_cut, VERSION_REMOVED, "code"))
+        kept = kept_cut
         _set(data, path, kept or None)
         if path.startswith("skills.") and path.endswith(".label") and not kept:
             group = data["skills"][int(path.split(".")[1])]
@@ -391,6 +442,19 @@ def remove_remaining(
             data["paragraphs"] = [paragraph]
             records.append(_record("paragraphs.0", "", paragraph, FALLBACK, "code"))
     return _rebuild(kind, data), records
+
+
+def _cut(text: str, start: int, end: int, cuts: list[tuple[int, int]]) -> str:
+    """`text[start:end]` without the spans of `cuts` inside it."""
+    out: list[str] = []
+    at = start
+    for low, high in sorted(cuts):
+        if low < start or high > end or low < at:
+            continue
+        out.append(text[at:low])
+        at = high
+    out.append(text[at:end])
+    return "".join(out)
 
 
 def records_json(records: list[Correction]) -> list[dict[str, str]]:

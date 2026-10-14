@@ -21,37 +21,9 @@ from tests.pg import Postgres, docker_available, start_postgres
 # parameters. The application never sees this hasher outside the test process.
 FAST_HASHER = PasswordHasher(time_cost=1, memory_cost=1024, parallelism=1)
 
-ENV_NAMES = (
-    "GOOGLE_OAUTH_REDIRECT_URI",
-    "APP_ENV",
-    "LOG_LEVEL",
-    "SECRET_KEY",
-    "DATABASE_URL",
-    "DB_CONNECT_TIMEOUT_S",
-    "DB_STATEMENT_TIMEOUT_MS",
-    "HEALTH_TIMEOUT_S",
-    "ATS_BASE_URL",
-    "ATS_BASE_URL_ORG_PREFIX",
-    "REDIS_URL",
-    "CREDENTIALS_KEY",
-    "CREDENTIALS_KEY_PREVIOUS",
-    "MODEL_API_BASE_URL",
-    "AGENTS_FAKE_BACKEND",
-    "AGENTS_SCRATCH_DIR",
-    "AGENTS_LIVE_TEXT",
-    "GOOGLE_OAUTH_CLIENT_ID",
-    "GOOGLE_OAUTH_CLIENT_SECRET",
-    "GOOGLE_AUTH_URL",
-    "GOOGLE_TOKEN_BASE_URL",
-    "GOOGLE_API_BASE_URL",
-    "MAIL_AUTO_APPLY_CONFIDENCE",
-    "MAIL_SEND_DAILY_LIMIT",
-    "MAIL_SEND_COMPANY_DAILY_LIMIT",
-    "MAIL_AUTO_RUNS_PER_DAY",
-    "MAIL_STORAGE_MAX_MESSAGES",
-    "MAIL_STORAGE_MAX_BYTES",
-    "MAIL_SENDS_KEEP_DAYS",
-)
+# Every variable `Settings` reads, so that a module adding a setting is covered without a list
+# to keep in step (a name missing here let the shell change `Settings()` in every test).
+ENV_NAMES = tuple(name.upper() for name in Settings.model_fields)
 
 
 @pytest.fixture(autouse=True)

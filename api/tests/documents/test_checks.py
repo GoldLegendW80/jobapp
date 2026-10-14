@@ -19,9 +19,9 @@ OFF = DocumentSettings()
 DASH_ON = DocumentSettings(no_dash_separators=True)
 
 
-def _sources() -> Sources:
+def _sources(kind: c.Kind = "cv") -> Sources:
     base = base_cv("alex")
-    return sources_for(view_of("alex", base), base, None, posting("lumen"))
+    return sources_for(view_of("alex", base), base, None, posting("lumen"), kind=kind)
 
 
 def _cv(bullet: str) -> dict[str, Any]:
@@ -31,7 +31,7 @@ def _cv(bullet: str) -> dict[str, Any]:
 
 
 def _claims(kind: c.Kind, data: dict[str, Any], settings: DocumentSettings = OFF) -> list[str]:
-    result = checks.run(kind, data, _sources(), settings)
+    result = checks.run(kind, data, _sources(kind), settings)
     assert result.content is not None
     return [checks.excerpt(result.content, issue) for issue in result.claims]
 
@@ -72,7 +72,7 @@ def test_the_postings_company_named_in_a_letter_passes() -> None:
 
 def test_a_title_not_in_the_profile_is_flagged_in_french_too() -> None:
     base = base_cv("alex")
-    sources = sources_for(view_of("alex", base), base, None, posting("brise"))
+    sources = sources_for(view_of("alex", base), base, None, posting("brise"), kind="letter")
     data = {**written("letter_fr"), "headline": "Directeur technique"}
     result = checks.run("letter", data, sources, OFF)
     assert [(i.field, i.code) for i in result.claims] == [("headline", "title_not_in_profile")]
