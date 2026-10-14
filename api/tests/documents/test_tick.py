@@ -468,7 +468,9 @@ def test_a_stop_at_the_ceiling_is_retried_at_once_with_one_more_high_estimate(
     world.tick()
     world.finish("failed", "token_limit")
     assert len(world.tick()) == 1
-    first, second = world.generations(posting)
+    found = world.generations(posting)  # one frozen clock: tell them apart by status
+    (first,) = [g for g in found if g["status"] is GenerationStatus.failed]
+    (second,) = [g for g in found if g["status"] is GenerationStatus.running]
     with world.factory() as db:
         high = db.get(DocumentGeneration, second["id"]).estimate["high"]  # type: ignore[union-attr]
     assert second["token_ceiling"] == first["token_ceiling"] + high
