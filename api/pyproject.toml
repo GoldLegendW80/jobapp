@@ -21,6 +21,7 @@ dependencies = [
     "email-validator==2.3.0",
     "fastapi==0.142.4",
     "httpx==0.28.1",
+    "jinja2==3.1.6",
     "pillow==12.3.0",
     "psycopg[binary]==3.3.6",
     # The public suffix list, bundled (mail M3, app/mail/domains.py: the registrable domain of a

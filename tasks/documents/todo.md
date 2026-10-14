@@ -359,6 +359,7 @@ Measured on the Jetson on 2026-10-14 with `tests/documents_render_jetson.sh --ru
 
 ### D4a, D4b, D19, D20, D21, D22
 To be measured per template: the step at which each fixture fits, the soft limits, the PDF size.
+**`classic` (D4a),** measured on the Mac on 2026-10-14 through the renderer's image of D3 (D3's test stack, `tests/documents/test_templates.py -m docker`; PDFs in `tasks/evidence/documents-d4a/`). Main family Nunito Sans (the bundled stand in for the command line's Avenir), eight CV steps from 10 pt, line height 1.42, 15 mm margins down to 8.4 pt, 1.18, 8 mm; six letter steps from 11 pt down to 9 pt. Fit step per fixture, the same in English and French: D1's `cv-short` 0, `cv-typical` 1, `cv-long` 4, `cv-tightest` 6 (cut to the eight bullets a CV can hold; at its ten bullets it never fits, which D2's hard limit refuses anyway), both letters 0; D2's three CVs and two letters 0. Pages per step: `cv-long` 2, 2, 2, 2, 1, 1, 1, 1 and `cv-tightest` 2, 2, 2, 2, 2, 2, 1, 1 (monotonic). Soft limits (the command line's figures, kept): headline 90, summary 330, highlight 60, competency 40, main employer's bullet 190, other bullets 100, a letter's paragraph 900; `cv-typical` with every field filled to them fits at step 2 of 7. PDF size 19 to 46 KB (62 KB for the hostile fixture with its Hebrew, Arabic and emoji fallbacks); the HTML of a Latin CV is about 104 KB, five font faces as `data:`.
 
 ### D9
 To be written: the estimate formulas, their assumptions, two worked figures.

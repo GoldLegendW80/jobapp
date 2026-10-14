@@ -1,0 +1,30 @@
+{
+  "en": {
+    "summary": "Profile",
+    "highlights": "Selected achievements",
+    "competencies": "Key competencies",
+    "experience": "Experience",
+    "education": "Education",
+    "skills": "Skills",
+    "languages": "Languages",
+    "contact": "Contact",
+    "subject": "Subject:",
+    "to": "to",
+    "present": "present",
+    "months": ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+  },
+  "fr": {
+    "summary": "Profil",
+    "highlights": "Réalisations",
+    "competencies": "Compétences clés",
+    "experience": "Expérience",
+    "education": "Formation",
+    "skills": "Compétences techniques",
+    "languages": "Langues",
+    "contact": "Contact",
+    "subject": "Objet :",
+    "to": "à",
+    "present": "aujourd'hui",
+    "months": ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+  }
+}

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_right
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
@@ -64,10 +65,22 @@ DASH = "A dash used as a separator"
 BANNED = "A phrase you banned"
 FILLED_IN = "Filled in because nothing was left"
 KEPT = "Kept as written, for you to check"
-REASONS: tuple[str, ...] = (NOT_IN_PROFILE, NUMBER_NOT_STATED, DASH, BANNED, FILLED_IN, KEPT)
+NOT_PRINTABLE_REASON = "A character this template cannot print"
+REASONS: tuple[str, ...] = (
+    NOT_IN_PROFILE,
+    NUMBER_NOT_STATED,
+    DASH,
+    BANNED,
+    FILLED_IN,
+    KEPT,
+    NOT_PRINTABLE_REASON,
+)
 
 FALLBACK = "fallback"
 VERSION_REMOVED = "version_removed"
+# A character no font of the template's library draws (CJK, for one): replaced by its closest
+# printable form, else dropped, before the render (templates.printable), so it never fails.
+NOT_PRINTABLE = "not_printable"
 # A claim ambiguous by construction (`rules.POLICY`) that no token cut could take: the sentence
 # is kept as written and the record shows the person the claim (`before` equals `after`).
 NEEDS_REWRITE = rules.NEEDS_REWRITE
@@ -100,6 +113,8 @@ def reason_for(code: str) -> str:
         return DASH
     if code == FALLBACK:
         return FILLED_IN
+    if code == NOT_PRINTABLE:
+        return NOT_PRINTABLE_REASON
     return NOT_IN_PROFILE
 
 
@@ -232,6 +247,27 @@ def fix_separators(
             if compact:
                 raise
     raise AssertionError("unreachable")  # pragma: no cover
+
+
+# --- before the render: the characters a template cannot print ---------------------------------
+
+
+def replace_unprintable(
+    kind: c.Kind, content: c.CvContent | c.LetterContent, printable: Callable[[str], str]
+) -> tuple[c.CvContent | c.LetterContent, list[Correction]]:
+    """Every printed field through `printable` (the template's own: a character none of its
+    fonts draws becomes its closest printable form, or goes), one record per field changed; a
+    list entry left empty is dropped. Unchanged content is returned as it is."""
+    data = c.dump(content)
+    records = []
+    for path, text in c.text_fields(content):
+        fixed = printable(text)
+        if fixed != text:
+            _set(data, path, fixed or None)
+            records.append(_record(path, text, fixed, NOT_PRINTABLE, "code"))
+    if not records:
+        return content, []
+    return _rebuild(kind, data), records
 
 
 # --- step 4: what the writer's correction pass changed ------------------------------------------

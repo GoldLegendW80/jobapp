@@ -1,0 +1,20 @@
+{
+ "family": "Noto Sans Math",
+ "licence": "OFL-1.1",
+ "source": "Fontsource @fontsource/noto-sans-math 5.3.0 (Google Fonts file), cut with fontTools into two slices of the symbol blocks U+2000-2BFF, layout features kept: arrows and operators (U+2190-22FF, U+27C0-27FF, U+2900-2AFF), the other symbols; unicode_range: the glyphs each slice holds. Its mathematical letters and the Arabic letters it holds for formulas are left out",
+ "fallback": true,
+ "faces": [
+  {
+   "file": "arrows-operators-400-normal.woff2",
+   "weight": 400,
+   "style": "normal",
+   "unicode_range": "U+2190-22FF,U+27C0-27FF,U+2900-2AFF,U+2BFE"
+  },
+  {
+   "file": "symbols-400-normal.woff2",
+   "weight": 400,
+   "style": "normal",
+   "unicode_range": "U+2000-200B,U+2010,U+2014-2019,U+201C-201D,U+2020-2022,U+2025-2026,U+202F,U+2032-2038,U+203C,U+2040,U+2043-2044,U+2047,U+2050,U+2057,U+205F,U+20AC,U+20D0-20DF,U+20E1,U+20E4-20F0,U+2102,U+2107,U+210A-2113,U+2115,U+2118-211D,U+2124,U+2126-2129,U+212B-212D,U+212F-2138,U+213C-214B,U+221F,U+2300,U+2302,U+2305-2306,U+2308-230B,U+2310-2313,U+2317,U+2319,U+231C-2323,U+232C,U+2332,U+2336-237A,U+237C,U+2394-2395,U+239B-23B9,U+23CE,U+23D0,U+23DC-23E7,U+2422-2423,U+2474-2475,U+2500,U+2506,U+250C,U+2510,U+2514,U+2518,U+2550,U+2571-2572,U+2577,U+2580,U+2584,U+2588,U+258C,U+2590-2593,U+25A0-25FF,U+2605-2606,U+2609,U+2621,U+263B-263E,U+2640,U+2642,U+2660-2667,U+2669-266F,U+267E,U+2680-2689,U+26A5,U+26AA-26AC,U+26B2,U+2713,U+2720,U+272A,U+2736,U+2739,U+273D,U+2772-2773,U+279B,U+2B00-2B04,U+2B0E-2B4C,U+2B50-2B54,U+2BFE"
+  }
+ ]
+}
