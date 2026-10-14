@@ -1,0 +1,9 @@
+{
+ "engine": "chromium",
+ "tag": "sandbox-parser",
+ "chromium_sandbox": true,
+ "launch": {
+  "ok": false,
+  "detail": "Error: BrowserType.launch: EROFS: read-only file system, mkdtemp '/tmp/playwright-artifacts-IGhTKZ' [...] Error: BrowserType.launch: EROFS: read-only file system, mkdtemp '/tmp/playwright-artifacts-IGhTKZ'"
+ }
+}

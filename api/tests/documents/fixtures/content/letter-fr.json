@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "kind": "letter",
+  "language": "fr",
+  "content": {
+    "target": "Ingénieur données chez Démo Industries (offre inventée)",
+    "headline": "Ingénieur données",
+    "recipient": "Équipe de recrutement, Démo Industries",
+    "subject": "Des données fiables, livrées à l'heure, pour vos équipes qualité",
+    "salutation": "Madame, Monsieur,",
+    "paragraphs": [
+      "Votre offre recherche un ingénieur capable de fiabiliser des flux de données industriels. C'est précisément ce que je fais depuis trois ans chez Example Corp, où j'ai conçu la plateforme d'événements qui relie les ventes, la facturation et la logistique.",
+      "Vous citez Python, PostgreSQL et le traitement de flux. J'ai écrit la couche d'ingestion des capteurs chez Sample Labs, des appareils jusqu'à la base de séries temporelles, et les règles d'alerte qui ne réveillent l'équipe que lorsqu'un client le remarquerait.",
+      "Je travaille par petites étapes, relues et réversibles, et j'écris la procédure avant l'incident plutôt qu'après. Je préfère nommer un manque que l'arrondir : mon expérience de Kafka en production est d'un an, pas davantage.",
+      "J'habite à Lyon, je parle français, anglais et allemand, et je peux être présent dans vos locaux d'Annecy deux jours par semaine. Ça m'intéresserait beaucoup d'échanger avec votre équipe à propos de l'été prochain, de vos priorités et de leur échéancier.",
+      "Je serais heureux d'en discuter avec vous lors d'un entretien."
+    ],
+    "closing": "Je vous prie d'agréer, Madame, Monsieur, l'expression de mes salutations distinguées."
+  }
+}

@@ -19,16 +19,18 @@
 #   web          name kept free: the React build ships inside the caddy image
 #   browser      headed Chromium, Xvfb, noVNC (browser module)
 #
-# Networks: every service is on `default`, except `parser`, which is on `parsing` alone, an
-# internal network (no gateway, no route out) that it shares with the worker and nobody else.
+# Networks: every service is on `default`, except `parser`, which is on `parsing` alone, and
+# `renderer`, which is on `rendering` alone: two internal networks (no gateway, no route out),
+# each shared with the worker and nobody else.
 #
 # Memory budget, 5G for the whole stack on the 7.4G Jetson (each service sets mem_limit):
-#   api 512m, db 768m, redis 256m, caddy 128m, tailscale 128m, worker 1536m, parser 640m
-#                                              this file: 3968m
+#   api 512m, db 768m, redis 256m, caddy 128m, tailscale 128m, worker 1536m, parser 640m,
+#   renderer 384m                              this file: 4352m
 #   browser 1536m                              reserved for the browser module
-#   total 5504m with the browser module: over the 5G budget by about 380m. The parser's 640m is
-#   a starting figure (ingestion G2a); G2b and G8 set it from the peaks they measure, and the
-#   browser module decides its own limit against what is left when it is built.
+#   total 5888m with the browser module: over the 5G budget by 768m (384m before the renderer).
+#   The parser's 640m is a starting figure (ingestion G2a); G2b and G8 set it from the peaks they
+#   measure, and the browser module decides its own limit against what is left when it is built
+#   (SPEC-platform.md, SPEC-documents.md "Rendering on the Jetson").
 
 name: jobapp
 
@@ -179,9 +181,11 @@ services:
     mem_limit: 1536m
     # `parsing`: the only way to the parser. The worker sends it a document and writes the
     # result to the database itself (app/ingestion/parser_client.py).
+    # `rendering`: the only way to the renderer (app/documents/render_client.py).
     networks:
       - default
       - parsing
+      - rendering
   # --- end of worker --------------------------------------------------------------------------
 
   # --- parser (ingestion G2a; decision of the owner of 2026-10-10) ----------------------------
@@ -231,6 +235,53 @@ services:
     expose:
       - "7070"
   # --- end of parser --------------------------------------------------------------------------
+
+  # --- renderer (documents D3; the engine D1 measured and chose on the Jetson) -----------------
+  # One HTML page in, one A4 PDF out: Playwright's Chromium headless shell behind
+  # renderer/server.py, one warm browser, a fresh context per render with JavaScript off and
+  # every request but a data: address aborted. The HTML holds what a person wrote, so this
+  # service gets nothing else and reaches nothing:
+  # - its own image, its own uid, 10003; no env_file and no environment: no secret, no database
+  #   or Redis address, no credential; it takes an HTML body and nothing else;
+  # - `rendering` alone, an internal network shared with the worker only, no published port;
+  # - no capability, no new privilege, a read only root, `ipc: none` (Chromium runs with
+  #   --disable-dev-shm-usage), Docker's default seccomp profile;
+  # - Chromium runs with --no-sandbox: its own sandbox needs user namespaces, which the default
+  #   seccomp profile and no-new-privileges refuse (D1). The container is the boundary. Never
+  #   add a capability, `seccomp=unconfined` or `privileged` to start Chromium's sandbox;
+  # - a 64m tmpfs on /tmp: Playwright and Chromium write there, and fail with EROFS without it;
+  # - at most 128 processes and threads (D1 measured a peak of 71; 32 kills it), 384m of memory
+  #   (D1's peak 157 MiB; D3 measured 50 renders on the Jetson, SPEC-documents.md).
+  # A render longer than 30 s is stopped and its context closed, else the browser is killed and
+  # launched again; a crash of the service is a restart.
+  # Never give it an env_file, an environment, a volume, a second network or a published port.
+  renderer:
+    <<: *restart
+    build:
+      context: ./renderer
+    image: jobapp-renderer:latest
+    command: ["python", "-I", "/renderer/server.py"]
+    user: "10003:10003"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    ipc: none
+    pids_limit: 128
+    networks:
+      - rendering
+    healthcheck:
+      test: ["CMD", "python", "-I", "/renderer/server.py", "--check"]
+      interval: 15s
+      timeout: 8s
+      start_period: 20s
+      retries: 3
+    mem_limit: 384m
+    expose:
+      - "7071"
+  # --- end of renderer ------------------------------------------------------------------------
 
   db:
     <<: *restart
@@ -282,6 +333,9 @@ networks:
   # The worker and the parser, and nothing else. internal: no gateway, so no route to another
   # network or to the internet, and Docker's resolver answers for this network's names only.
   parsing:
+    internal: true
+  # The worker and the renderer, and nothing else, internal for the same reasons.
+  rendering:
     internal: true
 
 volumes:

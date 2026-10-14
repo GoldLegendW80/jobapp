@@ -1,0 +1,42 @@
+
+== stage (d3spike-3040923066)
++ rsync /var/folders/7w/05_t27m941z_0nx0r35kky100000gn/T/tmp.snwZq34IWH/ jetson:~/d3spike-3040923066/
+
+== build the renderer's image
+available: 5012 MiB
++ ssh jetson cd $HOME/d3spike-3040923066/renderer && docker build -q -t d3spike-renderer . && docker image inspect -f '{{.Size}}' d3spike-renderer
+sha256:8613d7a76daed874bf4304b9287bb4f6c7c0641a4e662c6a4f9743e5645629ee
+953029754
+
+== the renderer as compose.yml starts it, on an internal network of its own
++ ssh jetson docker network create --internal d3spike-net-3040923066 >/dev/null && docker run -d --rm --name d3spike-renderer --user 10003:10003 --read-only --tmpfs /tmp:size=64m,mode=1777 --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 128 --memory 384m --cpus 2 --network d3spike-net-3040923066 --network-alias renderer d3spike-renderer >/dev/null && for i in $(seq 1 60); do docker exec d3spike-renderer python -I /renderer/server.py --check && break; sleep 1; done && docker inspect -f '{{.Config.User}} ro={{.HostConfig.ReadonlyRootfs}} pids={{.HostConfig.PidsLimit}} mem={{.HostConfig.Memory}} ipc={{.HostConfig.IpcMode}} caps={{.HostConfig.CapDrop}} env={{len .Config.Env}}' d3spike-renderer
+10003:10003 ro=true pids=128 mem=402653184 ipc=none caps=[ALL] env=8
+
+== memory sampler, the build table, 50 renders
+available: 5076 MiB
++ ssh jetson cg=$(find /sys/fs/cgroup -maxdepth 3 -type d -name "*$(docker inspect -f '{{.Id}}' d3spike-renderer)*" | head -n 1); echo "cgroup: $cg"; echo "renderer at rest: $(($(cat $cg/memory.current) / 1048576)) MiB"; (while [ -e $cg/memory.current ]; do cat $cg/memory.current; sleep 0.2; done > $HOME/d3spike-3040923066/samples.txt 2>/dev/null </dev/null &) ; docker run --rm --name d3spike-driver --network d3spike-net-3040923066 --user 10001:10001 --read-only --cap-drop ALL --security-opt no-new-privileges:true --memory 512m --cpus 2 -v $HOME/d3spike-3040923066/documents:/app/app/documents:ro -v $HOME/d3spike-3040923066/d3:/d3:ro jobapp-worker:latest python -I /d3/documents_render_jetson.py 50; echo "renderer after: $(($(cat $cg/memory.current) / 1048576)) MiB"; sort -n $HOME/d3spike-3040923066/samples.txt | tail -n 1 | awk '{printf "renderer peak (0.2 s samples): %d MiB\n", $1 / 1048576}'; [ -e $cg/memory.peak ] && echo "renderer memory.peak: $(($(cat $cg/memory.peak) / 1048576)) MiB"; grep -E '^(anon|file) ' $cg/memory.stat; docker exec d3spike-renderer sh -c 'ls /proc | grep -c "^[0-9]"' | sed 's/^/processes in the container: /'; docker logs d3spike-renderer 2>&1 | grep -c '"outcome": "ok"' | sed 's/^/renders answered ok: /'
+cgroup: /sys/fs/cgroup/system.slice/docker-2f22d867d0e8d90c14a6233fe0e041c41cb10975a311b94ce91fb5031671d81c.scope
+renderer at rest: 98 MiB
+file           step pages  status    renders     ms
+cv-short          0     1  OK              1    560
+cv-typical        1     1  OK              4    982
+cv-long           5     1  OK              4    962
+cv-tightest       7     1  OK              4   1171
+letter-en         0     1  OK              1    201
+letter-fr         0     1  OK              1    231
+{"renders": 50, "worker_rss_kib_before": 48632, "worker_rss_kib_after": 49688, "worker_peak_kib": 49688, "ms_median": 218, "ms_max": 291}
+renderer after: 110 MiB
+renderer peak (0.2 s samples): 134 MiB
+anon 101494784
+file 7405568
+processes in the container: 10
+renders answered ok: 65
+
+== clean up
+no d3spike image left
+no d3spike network left
+               total        used        free      shared  buff/cache   available
+Mem:            7619        2223         338          90        5057        5072
+Swap:           3809         389        3420
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/mmcblk0p1  116G   77G   35G  69% /

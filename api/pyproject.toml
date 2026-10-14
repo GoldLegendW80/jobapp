@@ -23,6 +23,13 @@ dependencies = [
     "httpx==0.28.1",
     "pillow==12.3.0",
     "psycopg[binary]==3.3.6",
+    # The public suffix list, bundled (mail M3, app/mail/domains.py: the registrable domain of a
+    # sender, for the binding rule). Pure Python (py3-none-any, 109 kB), no dependency (its
+    # `update` extra, which downloads a newer list, is never installed), MPL-2.0 like the list
+    # itself. The last part of the version is the date of the snapshot: domains.SNAPSHOT_DATE
+    # states it and tests/mail/test_domains.py holds the two together, so an upgrade is a
+    # conscious change of the list. Checked on PyPI on 2026-10-14: no advisory.
+    "publicsuffixlist==1.1.0.20261010",
     "pydantic-settings==2.15.0",
     "sqlalchemy==2.1.4",
     "tzdata==2026.5",
@@ -63,6 +70,12 @@ ingestion = [
     # advisory on either. The wheel bundles PDFium itself: after a PDFium security release,
     # take the pypdfium2 release that carries it (README, "Updating pypdfium2").
     "pypdfium2==5.14.0",
+    # The HTML of a mail, sanitised against an allow list (mail M3, sandbox/mail_html.py): the
+    # Python binding of the Rust library ammonia. Checked on PyPI and on OSV on 2026-10-14:
+    # 0.3.7 (2026-08-23) is the latest release, MIT, no dependency, an abi3 wheel for
+    # manylinux_2_17_aarch64 (859,615 bytes: the Jetson) and for macosx_11_0_arm64, no advisory
+    # on either. Imported only inside the locked down child, like the three above.
+    "nh3==0.3.7",
 ]
 dev = [
     "pytest==9.1.1",

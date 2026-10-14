@@ -1,0 +1,9 @@
+{
+ "engine": "chromium",
+ "tag": "sandbox-relaxed",
+ "chromium_sandbox": true,
+ "launch": {
+  "ok": false,
+  "detail": "TargetClosedError: BrowserType.launch: Target page, context or browser has been closed\nBrowser logs:\nChromium sandboxing failed!\n================================\nTo avoid the sandboxing issue, do eith [...]  user namespaces with AppArmor, see https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md. Otherwise see https://chromium.googlesource.com/chromium/src/+/main/docs/linux/suid_sandbox_development.md for more information on developing with the (older) SUID sandbox. If you want to live dangerously and need an immediate workaround, you can try using --no-sandbox.\n  - [pid=18] <gracefully close start>\n  - [pid=18] <kill>\n  - [pid=18] <will force kill>\n  - [pid=18] <process did exit: exitCode=null, signal=SIGTRAP>\n  - [pid=18] starting temporary directories cleanup\n  - [pid=18] finished temporary directories cleanup\n  - [pid=18] <gracefully close end>\n"
+ }
+}

@@ -1,0 +1,424 @@
+
+== stage the build context (d1-spike-7341)
++ rsync /var/folders/7w/05_t27m941z_0nx0r35kky100000gn/T/tmp.PBx9FvTiO6/ jetson:~/d1-spike-7341/spike/
+
+== build the images
+available: 5185 MiB
++ ssh jetson cd $HOME/d1-spike-7341/spike && docker build -q -t d1spike-weasy -f Dockerfile.weasy . && docker build -q -t d1spike-chromium -f Dockerfile.chromium .
+sha256:f1f77e5f261410443d685932b6c2ec57e1d01ee5abca6c5e4c13bbab42aad77a
+sha256:0af62960b09a4e32a5f295b28f2bd71ac0359cab424d9d7d14a1fba37288e200
++ ssh jetson docker image inspect -f '{{.Size}}' jobapp-worker:latest d1spike-weasy python:3.12.15-slim-trixie d1spike-chromium | tr '\n' ' ' > $HOME/d1-spike-7341/work/sizes.txt; cat $HOME/d1-spike-7341/work/sizes.txt
+570927813 637070743 144567615 964956856
+== fixtures to HTML
++ ssh jetson docker run --rm --name d1spike-make --memory 1500m --cpus 2 --network none -v $HOME/d1-spike-7341/spike:/spike:ro -v $HOME/d1-spike-7341/work:/work -v $HOME/d1-spike-7341/spike/fixtures:/fixtures:ro d1spike-weasy python /spike/make_html.py /fixtures /work
+FFTM NOT subset; don't know how to subset; dropped
+FFTM NOT subset; don't know how to subset; dropped
+FFTM NOT subset; don't know how to subset; dropped
+10 fixture layouts x 8 steps, 33 probes, 3 edges
+
+== WeasyPrint inside the parser sandbox, alone
+available: 5176 MiB
++ ssh jetson docker run --rm --name d1spike-weasy-run --user 10002:10002 --read-only --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 32 --network none --memory 640m --cpus 2 -v $HOME/d1-spike-7341/spike:/spike:ro -v $HOME/d1-spike-7341/work:/work d1spike-weasy python /spike/weasy_bench.py /work/html /work full alone
+{"cold_ms": 2522, "cold_hwm": 62, "ok": true, "code": null, "detail": null, "stderr": []}
+
+== Chromium: its own sandbox under the parser's settings, then relaxed, then without it
+available: 5075 MiB
++ ssh jetson docker run --rm --name d1spike-chromium-a --user 10003:10003 --read-only --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 32 --network none --memory 640m --cpus 2 --memory 1500m -v $HOME/d1-spike-7341/spike:/spike:ro -v $HOME/d1-spike-7341/work:/work d1spike-chromium python /spike/chromium_bench.py /work/html /work sandbox sandbox-parser || true
+{"ok": false, "detail": "Error: BrowserType.launch: EROFS: read-only file system, mkdtemp '/tmp/playwright-artifacts-IGhTKZ' [...] Error: BrowserType.launch: EROFS: read-only file system, mkdtemp '/tmp/playwright-artifacts-IGhTKZ'"}
++ ssh jetson docker run --rm --name d1spike-chromium-b --user 10003:10003 --read-only --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 32 --network none --memory 640m --cpus 2 --memory 1500m --tmpfs /tmp:size=64m --pids-limit 256 -v $HOME/d1-spike-7341/spike:/spike:ro -v $HOME/d1-spike-7341/work:/work d1spike-chromium python /spike/chromium_bench.py /work/html /work sandbox sandbox-relaxed || true
+{"ok": false, "detail": "TargetClosedError: BrowserType.launch: Target page, context or browser has been closed\nBrowser logs:\nChromium sandboxing failed!\n================================\nTo avoid the sandboxing issue, do eith [...]  user namespaces with AppArmor, see https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md. Otherwise see https://chromium.googlesource.com/chromium/src/+/main/docs/linux/suid_sandbox_development.md for more information on developing with the (older) SUID sandbox. If you want to live dangerously and need an immediate
++ ssh jetson docker run --rm --name d1spike-chromium-c --user 10003:10003 --read-only --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 32 --network none --memory 640m --cpus 2 --memory 1500m --tmpfs /tmp:size=64m -v $HOME/d1-spike-7341/spike:/spike:ro -v $HOME/d1-spike-7341/work:/work d1spike-chromium python /spike/chromium_bench.py /work/html /work sandbox nosandbox-pids32 --no-sandbox || true
+{"ok": false, "detail": "TargetClosedError: BrowserType.launch: Target page, context or browser has been closed\nBrowser logs:\n\n<launching> /ms-playwright/chromium_headless_shell-1187/chrome-linux/headless_shell --disable-fiel [...] reading/platform_thread_posix.cc:158] pthread_create: Resource temporarily unavailable (11)\n  - [pid=19][err] [1014/071026.411148:ERROR:content/browser/gpu/gpu_process_host.cc:958] GPU process launch failed: error_code=1002\n  - [pid=19][err] [1014/071026.411165:WARNING:content/browser/gpu/gpu_process_host.cc:1405] The GPU process has crashed 1 time(s)\n  - [pid
++ ssh jetson docker run --rm --name d1spike-chromium-run --user 10003:10003 --read-only --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 32 --network none --memory 640m --cpus 2 --memory 1500m --tmpfs /tmp:size=64m --pids-limit 256 -v $HOME/d1-spike-7341/spike:/spike:ro -v $HOME/d1-spike-7341/work:/work d1spike-chromium python /spike/chromium_bench.py /work/html /work full alone --no-sandbox
+{"launch": {"ok": true, "launch_ms": 223}, "cold_ms": 449, "peak": {"current": 141, "anon": 118, "rss": 486, "pids": 69}}
+
+== both again while a stand in for an agent run is busy (two cores, 300 MB)
+available: 5170 MiB
++ ssh jetson docker run -d --rm --name d1spike-load --memory 600m --cpus 2 --network none python:3.12.15-slim-trixie sh -c 'python -c "x = bytearray(300 * 2**20); exec(\"while 1: pass\")" & python -c "while 1: pass"'
+2e84ea314920b919c20a61ccbe9ced02f905f6b66a5ce46882f4ccd40f62f4c2
++ ssh jetson docker run --rm --name d1spike-weasy-load --user 10002:10002 --read-only --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 32 --network none --memory 640m --cpus 2 -v $HOME/d1-spike-7341/spike:/spike:ro -v $HOME/d1-spike-7341/work:/work d1spike-weasy python /spike/weasy_bench.py /work/html /work quick load
+{"cold_ms": 2503, "cold_hwm": 62, "ok": true, "code": null, "detail": null, "stderr": []}
++ ssh jetson docker run --rm --name d1spike-chromium-load --user 10003:10003 --read-only --cap-drop ALL --security-opt no-new-privileges:true --ipc none --pids-limit 32 --network none --memory 640m --cpus 2 --memory 1500m --tmpfs /tmp:size=64m --pids-limit 256 -v $HOME/d1-spike-7341/spike:/spike:ro -v $HOME/d1-spike-7341/work:/work d1spike-chromium python /spike/chromium_bench.py /work/html /work quick load --no-sandbox
+{"launch": {"ok": true, "launch_ms": 279}, "cold_ms": 487, "peak": {"current": 147, "anon": 124, "rss": 489, "pids": 71}}
++ ssh jetson docker rm -f d1spike-load
+d1spike-load
+
+== side by side, probes, font check
++ ssh jetson docker run --rm --name d1spike-compare --memory 1500m --cpus 2 --network none -v $HOME/d1-spike-7341/spike:/spike:ro -v $HOME/d1-spike-7341/work:/work d1spike-weasy python /spike/compare.py /work /work/evidence
+{"fixtures": 10, "probes": 33, "edges": 5}
+
+== bring the evidence back
++ rsync jetson:~/d1-spike-7341/work/{evidence,*.json,sizes.txt} /private/tmp/claude-501/-Users-harald-thorvaldhautin-Desktop-job/3ce0f209-6e15-4b87-9024-6adcfa180e07/scratchpad/wt/d1/tasks/evidence/documents-d1/
+
+== clean up
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-table.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-background-colour-gradient.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-transform.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-flex-column-gap.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/edge-outside.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-list-markers.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-position-fixed.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-box-shadow.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-aspect-ratio.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-inline-flex.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-custom-properties-calc.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/edge-missing-font.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-overflow-wrap-anywhere.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-flex.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-text-transform-letter-spacing.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-borders-radius.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-text-align-justify.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-font-weight-600.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-grid-areas.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-float.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-text-overflow-ellipsis.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-image-object-fit-round.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-opacity.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-hyphens-auto.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-before-counter.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-position-absolute.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-page-margin-box.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-inline-svg.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-multi-column.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-grid-fr.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-en.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-min-max-clamp.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-flex-wrap-gap.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-grid-auto-1fr.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-filter.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-long.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-short.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/cv-typical.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/letter-fr.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-table.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-background-colour-gradient.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-transform.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-flex-column-gap.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/edge-outside.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-list-markers.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-position-fixed.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-box-shadow.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-aspect-ratio.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-inline-flex.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-custom-properties-calc.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/edge-missing-font.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-overflow-wrap-anywhere.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.two.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-flex.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-text-transform-letter-spacing.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-borders-radius.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-text-align-justify.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-font-weight-600.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-grid-areas.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-float.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.one.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.two.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.two.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-text-overflow-ellipsis.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-image-object-fit-round.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-opacity.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.one.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-hyphens-auto.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-before-counter.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/edge-data-font.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-position-absolute.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-page-margin-box.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-inline-svg.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-multi-column.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-grid-fr.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-en.two.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.two.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.one.s5.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.one.s7.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.two.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-min-max-clamp.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-flex-wrap-gap.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.one.s1.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-grid-auto-1fr.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.two.s0.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-filter.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-long.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-short.one.s4.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.one.s6.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/cv-typical.one.s3.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/letter-fr.two.s2.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-chromium/probe-font-face-data.pdf': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/results.json': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/cv-typical.two.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/letter-en.one.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/letter-en.two.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/letter-fr.two.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/cv-short.two.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/probes-1.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/probes-4.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/probes-2.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/letter-fr.one.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/probes-3.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/cv-typical.one.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/edge-missing-font.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/cv-short.one.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/cv-long.one.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/evidence/cv-long.two.png': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.two.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.two.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.one.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/edge-installed-font.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-text-align-justify.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.one.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.one.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.one.s0.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.two.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-grid-auto-1fr.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-multi-column.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-text-overflow-ellipsis.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.one.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.one.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.one.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.two.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-background-colour-gradient.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-inline-svg.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-hyphens-auto.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.one.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/edge-outside.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.one.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-text-transform-letter-spacing.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.two.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.one.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-flex-wrap-gap.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-font-face-data.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.two.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.two.s0.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.one.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-grid-areas.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.one.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.one.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.one.s0.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.two.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-table.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-inline-flex.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.two.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-borders-radius.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.two.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.one.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-flex.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.one.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.one.s0.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-min-max-clamp.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-flex-column-gap.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.one.s0.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.one.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.two.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.two.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-image-object-fit-round.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-aspect-ratio.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.two.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-filter.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.two.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.two.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-opacity.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.two.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.one.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.two.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-float.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.one.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.one.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.one.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-font-weight-600.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.one.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.one.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.two.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.one.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.two.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.one.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.one.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.two.s0.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.one.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.two.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-position-absolute.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.one.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.one.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.one.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-grid-fr.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.one.s0.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.two.s0.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-before-counter.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.two.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-box-shadow.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/edge-missing-font.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-custom-properties-calc.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.two.s0.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.two.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.one.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.two.s5.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.one.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.one.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.two.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-transform.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.one.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-list-markers.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.two.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.two.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.two.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-page-margin-box.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-fr.two.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/edge-data-font.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.two.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.two.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.two.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/index.json': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.two.s6.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.two.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-overflow-wrap-anywhere.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.two.s2.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.two.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/letter-en.one.s1.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.two.s4.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-short.one.s3.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-typical.one.s7.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/probe-position-fixed.html': Permission denied
+rm: cannot remove '/home/yessai/d1-spike-7341/work/html/cv-long.two.s0.html': Permission denied
+no d1spike image left
+               total        used        free      shared  buff/cache   available
+Mem:            7619        2109         755          91        4755        5039
+Swap:           3809         388        3421
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/mmcblk0p1  116G   76G   36G  69% /
+bash tests/documents_render_jetson.sh --run --dir d1-spike-7341  0.39s user 0.24s system 0% cpu 7:27.27 total
