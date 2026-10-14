@@ -374,6 +374,8 @@ def _source(answer: Answer | Left, status: str) -> AnswerSource:
 def _value(answer: Answer | Left, status: str) -> Any:
     if isinstance(answer, Left) or status not in FILLED:
         return None
+    if answer.option is not None:
+        return answer.option  # what the page shows, and what the gate (A6) refills and reads back
     value = answer.value
     return list(value) if isinstance(value, tuple) else value
 

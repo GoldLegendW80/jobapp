@@ -303,17 +303,24 @@ def _live(application: Application) -> bool:
 
 
 def duplicates(
-    db: Session, user_id: uuid.UUID, posting: Job, key: str, now: datetime
+    db: Session,
+    user_id: uuid.UUID,
+    posting: Job,
+    key: str,
+    now: datetime,
+    *,
+    exclude: uuid.UUID | None = None,
 ) -> Refusal | None:
     """The first duplicate refusal for starting an application on `posting` with the form key
-    `key`, or None. The caller holds the posting's row lock and the person's apply lock."""
+    `key`, or None. The caller holds the posting's row lock and the person's apply lock. The gate
+    (A6) passes the application it decides on as `exclude`: it is not its own duplicate."""
     own = db.execute(
         sa.select(Application).where(
             Application.user_id == user_id, Application.posting_id == posting.id
         )
     ).scalars()
     for application in own:
-        if not _live(application):
+        if not _live(application) or application.id == exclude:
             continue
         state = State(application.state)
         code = state.value if state in (State.submitted, State.submit_unknown) else "in_progress"

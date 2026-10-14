@@ -318,7 +318,7 @@ def test_every_state_has_a_row() -> None:
 def test_move_follows_the_table(current: State, to: State) -> None:
     application = _application(current)
     if to in states.TRANSITIONS[current]:
-        states.move(application, to, AT)
+        states.move(application, to, AT, by_gate=to in states.DECIDED)
         assert application.state is to
         assert application.updated_at == AT
     else:
@@ -349,7 +349,7 @@ def test_the_click_time_is_set_once_and_kept() -> None:
     later = datetime(2026, 10, 15, tzinfo=UTC)
     states.move(application, State.ready, later)
     assert application.submitted_at == AT
-    states.move(application, State.approved, later)
+    states.move(application, State.approved, later, by_gate=True)
     states.move(application, State.submitting, later)
     states.move(application, State.submitted, later)
     assert application.submitted_at == AT

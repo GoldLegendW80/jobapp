@@ -255,7 +255,7 @@ Measured on 2026-10-14, first slice (the adapters, no run yet). On the fake ATS 
 First slice (the fill without the model): no tokens yet; the answer agent's ceiling is set at twice the spec's estimate, 34,000 tokens (`agent.TOKEN_BUDGET`). The tokens per application on the fake forms, against the spec's estimates, come with the second slice (the `apply_answer` agent on the runtime).
 
 ### A6
-Nothing yet.
+First slice (approval, read back, submit, confirmation, freeze, status, kill switches): the submit lease calls no model (0 tokens). A confirmed submit is the refill, two read backs, one dwell of 4 s (`submit.DWELL_S`), one click and the polls; no confirmation polls every 2 s until 60 s by the injected clock (at most 40 reads), then `submit_unknown`. The figures on the browser test stack come with `apply-a6.spec.ts`.
 
 ### A7
 Nothing yet.

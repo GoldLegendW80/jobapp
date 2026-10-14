@@ -1,7 +1,7 @@
 """The states of an application and the moves between them (SPEC-apply, "States").
 
 `queued` → `filling` → `needs_person` or `ready` → `approved` (Review first) or `held` (Full
-auto's hold) → `submitting` → `submitted`, `submit_unknown`, `refused_by_site` or `failed`.
+auto's hold) → `submitting` → `submitted`, `submit_unknown` or `refused_by_site`.
 Besides: `rehearsed` (a dry run stopped before the click), `cancelled`, `blocked` (a guardrail
 refused it, with its code), `posting_closed`.
 
@@ -14,6 +14,20 @@ after an end is a new application. Two rules of the spec are in the table itself
   The person says "It was submitted" (to `submitted`) or "Try again", which is a new approval
   of the refilled form (to `ready`).
 - `submitting` is reached only from `approved` or `held`, the two states that follow a decision.
+
+Tightened by apply A6 (issue #296):
+- `approved` and `held` are entered only by the gate's decision (`move(..., by_gate=True)`, which
+  only `gate.decide` passes, after it spent an unused authorisation). Every way back to `ready`
+  (`form_changed`, "Try again" after `submit_unknown` or `refused_by_site`) therefore needs a new
+  approval before `submitting` again (test_try_again_needs_a_new_approval).
+- `submitting` is committed just before the click, so it ends only in the three outcomes of a
+  click: `submitted`, `submit_unknown`, `refused_by_site`. It never ends in a state that frees the
+  unique indexes (cancelled, blocked, posting_closed, failed) as if nothing was sent; a crash
+  after it is `submit_unknown` (`submit.py`).
+- A rehearsal (`dry_run`) never reaches `submitting`: the gate records `rehearsed` from
+  `approved` after the refill and the read back, before the click.
+- Before the click the submit lease may stop: `approved` to `ready` (a difference on the read
+  back, the approval spent), `needs_person` (a captcha on the refilled form), or an end.
 """
 
 from datetime import datetime
@@ -34,13 +48,14 @@ TRANSITIONS: dict[State, frozenset[State]] = {
     # filling: refilled (an edit, or the submit lease of an approval reopening the form).
     S.ready: frozenset({S.queued, S.filling, S.needs_person, S.approved, S.held, S.rehearsed})
     | _STOPS,
-    # ready: the approval no longer matches (form_changed, a newer document), back to the queue.
-    S.approved: frozenset({S.ready, S.submitting, S.rehearsed}) | _STOPS,
+    # ready: the approval no longer matches (form_changed on the refill), back to the queue.
+    # needs_person: a captcha on the refilled form. cancelled: the kill switch, checked again
+    # just before the click.
+    S.approved: frozenset({S.ready, S.needs_person, S.submitting, S.rehearsed}) | _STOPS,
     # ready: Full auto's refusal sends the item to the review queue, never to the bin.
-    S.held: frozenset({S.ready, S.submitting, S.rehearsed}) | _STOPS,
-    # blocked: the kill switch, checked again just before the click. ready: form_changed on the
-    # refill. The three outcomes of the click.
-    S.submitting: frozenset({S.ready, S.submitted, S.submit_unknown, S.refused_by_site}) | _STOPS,
+    S.held: frozenset({S.ready, S.needs_person, S.submitting, S.rehearsed}) | _STOPS,
+    # The three outcomes of the click, and nothing else: the click may have gone through.
+    S.submitting: frozenset({S.submitted, S.submit_unknown, S.refused_by_site}),
     S.refused_by_site: frozenset({S.ready, S.filling, S.cancelled}),
     S.submit_unknown: frozenset({S.submitted, S.ready}),
     S.submitted: frozenset(),
@@ -49,6 +64,8 @@ TRANSITIONS: dict[State, frozenset[State]] = {
 
 # The states in which the app has clicked Submit: they hold the posting for good.
 CLICKED = frozenset({S.submitted, S.submit_unknown})
+# The states only the gate's decision enters.
+DECIDED = frozenset({S.approved, S.held})
 
 
 class TransitionError(ValueError):
@@ -59,12 +76,22 @@ def allowed(current: State, to: State) -> bool:
     return to in TRANSITIONS[current]
 
 
-def move(application: Application, to: State, now: datetime) -> None:
+def move(application: Application, to: State, now: datetime, *, by_gate: bool = False) -> None:
     """Move `application` to `to`, or raise TransitionError. The caller holds its row lock and
-    commits. `submitted_at` is set when the move records the click, and kept after it."""
+    commits. `submitted_at` is set when the move records the click, and kept after it. Only the
+    gate's decision passes `by_gate` (into `approved` or `held`); a rehearsal never moves to
+    `submitting`."""
     current = State(application.state)
     if not allowed(current, to):
         raise TransitionError(f"an application cannot move from {current.value} to {to.value}")
+    if to in DECIDED and not by_gate:
+        raise TransitionError(
+            f"an application cannot move from {current.value} to {to.value} without a decision"
+        )
+    if to is S.submitting and application.dry_run:
+        raise TransitionError(
+            f"an application cannot move from {current.value} to {to.value} in a rehearsal"
+        )
     application.state = to
     application.updated_at = now
     if to in CLICKED and application.submitted_at is None:

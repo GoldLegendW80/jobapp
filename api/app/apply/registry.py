@@ -13,6 +13,7 @@ from fastapi import APIRouter, FastAPI
 
 ROUTER_MODULES: tuple[str, ...] = (
     "router",  # A2: start an application, list and read them
+    "approval_router",  # A6: approve, reject, cancel, submitted, retry
     "queue_router",  # A12: the review queue
     "profile_router",  # A18a: Complete my profile on this site, the run
     "profile_approve_router",  # A18b: its gate and its save
