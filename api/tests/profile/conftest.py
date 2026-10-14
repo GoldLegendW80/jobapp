@@ -155,6 +155,23 @@ FULL: dict[str, dict[str, Any]] = {
         "motivation": "I want to build agents that run real operations.\nWith humans in charge.",
         "heard_about": "The company's careers page.",
         "leave_blank": ["gender", "ethnicity"],
+        "preferred_name": "Ana",
+        "pronouns": "she/her",
+        "years_experience_stated": "About 3.5 years",
+        "highest_degree": "Master's degree",
+        "highest_degree_year": 2022,
+        "willing_onsite": True,
+        "willing_hybrid": True,
+        "previously_applied_default": False,
+        "background_check_consent": False,
+        "reference_check_consent": True,
+        "eeo_policy": "stored",
+        "eeo_answers": [{"topic": "gender", "answer": "Woman"}],
+        "salary_stance": "range",
+        "salary_ranges": [
+            {"currency": "EUR", "minimum": 50000, "maximum": 60000, "period": "year"},
+            {"currency": "GBP", "minimum": 45000, "maximum": None, "period": "year"},
+        ],
     },
 }
 

@@ -109,6 +109,18 @@ export const CONTRACT_TYPES = [
   "Freelance",
 ] as const;
 export const REMOTE_STANCES = ["remote", "hybrid", "office", "any"] as const;
+export const EEO_TOPICS = [
+  "gender",
+  "ethnicity",
+  "race",
+  "disability",
+  "veteran",
+  "sexual_orientation",
+  "age",
+] as const;
+export const EEO_POLICIES = ["decline", "leave", "stored"] as const;
+export const SALARY_STANCES = ["leave_blank", "range", "sentence"] as const;
+export const SALARY_PERIODS = ["year", "month", "day"] as const;
 
 export const WEEKDAYS = [
   "monday",
@@ -165,6 +177,29 @@ export interface Answers {
   motivation: string | null;
   heard_about: string | null;
   leave_blank: string[];
+  /** the optional fields the apply module reads (A3) */
+  preferred_name: string | null;
+  pronouns: string | null;
+  years_experience_stated: string | null;
+  highest_degree: string | null;
+  highest_degree_year: number | null;
+  willing_onsite: boolean | null;
+  willing_hybrid: boolean | null;
+  previously_applied_default: boolean | null;
+  background_check_consent: boolean | null;
+  reference_check_consent: boolean | null;
+  eeo_policy: (typeof EEO_POLICIES)[number];
+  eeo_answers: { topic: (typeof EEO_TOPICS)[number]; answer: string }[];
+  /** null reads as "sentence" when salary_policy is filled, else "leave_blank" */
+  salary_stance: (typeof SALARY_STANCES)[number] | null;
+  salary_ranges: SalaryRange[];
+}
+
+export interface SalaryRange {
+  currency: string;
+  minimum: number;
+  maximum: number | null;
+  period: (typeof SALARY_PERIODS)[number];
 }
 
 export interface SectionData {
@@ -226,6 +261,20 @@ export const EMPTY: SectionData = {
     motivation: null,
     heard_about: null,
     leave_blank: [],
+    preferred_name: null,
+    pronouns: null,
+    years_experience_stated: null,
+    highest_degree: null,
+    highest_degree_year: null,
+    willing_onsite: null,
+    willing_hybrid: null,
+    previously_applied_default: null,
+    background_check_consent: null,
+    reference_check_consent: null,
+    eeo_policy: "decline",
+    eeo_answers: [],
+    salary_stance: null,
+    salary_ranges: [],
   },
 };
 

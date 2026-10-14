@@ -12,7 +12,11 @@
 import { z } from "zod";
 
 import {
+  EEO_POLICIES,
+  EEO_TOPICS,
   EMPLOYER_CONTRACTS,
+  SALARY_PERIODS,
+  SALARY_STANCES,
   type Answers,
   type Employer,
   type Experience,
@@ -34,6 +38,7 @@ export const EMPLOYERS_MAX = 30;
 export const EDUCATION_MAX = 20;
 export const AUTHORIZATIONS_MAX = 50;
 export const LEAVE_BLANK_MAX = 50;
+export const SALARY_RANGES_MAX = 10;
 
 // C0 and C1 control characters and DEL; multi-line text keeps newline and tab.
 // eslint-disable-next-line no-control-regex
@@ -384,6 +389,17 @@ export function fromExperienceForm(values: ExperienceForm): Experience {
 // --- answers ---------------------------------------------------------------------------------
 
 const sponsorshipSchema = z.enum(["", "yes", "no"]);
+/** Yes, no, or not said: the form value of an optional boolean. */
+const triState = z.enum(["", "yes", "no"]);
+const WHOLE_NUMBER = /^\d{1,9}$/;
+const wholeNumber = (label: string, required: boolean) =>
+  z
+    .string()
+    .refine((v) => v.trim() !== "" || !required, `Enter ${label}.`)
+    .refine(
+      (v) => v.trim() === "" || WHOLE_NUMBER.test(v.trim()),
+      `Enter ${label} as a whole number.`,
+    );
 
 export const answersSchema = z
   .object({
@@ -411,6 +427,63 @@ export const answersSchema = z
         z.object({ value: text("a question", LINE_MAX, { required: true }) }),
       )
       .max(LEAVE_BLANK_MAX, `Keep at most ${LEAVE_BLANK_MAX} entries.`),
+    preferred_name: text("a preferred name", LINE_MAX),
+    pronouns: text("your pronouns", LINE_MAX),
+    years_experience_stated: text("your years of experience", LINE_MAX),
+    highest_degree: text("your highest degree", LINE_MAX),
+    highest_degree_year: z
+      .string()
+      .refine(
+        (v) =>
+          v.trim() === "" ||
+          (/^\d{4}$/.test(v.trim()) && Number(v) >= 1950 && Number(v) <= 2100),
+        "Enter a year between 1950 and 2100.",
+      ),
+    willing_onsite: triState,
+    willing_hybrid: triState,
+    previously_applied_default: triState,
+    background_check_consent: triState,
+    reference_check_consent: triState,
+    eeo_policy: z.enum(EEO_POLICIES),
+    eeo_answers: z
+      .array(
+        z.object({
+          topic: z.enum(EEO_TOPICS),
+          answer: text("the answer", LINE_MAX, { required: true }),
+        }),
+      )
+      .max(EEO_TOPICS.length, `Keep at most ${EEO_TOPICS.length} answers.`),
+    salary_stance: z.enum(["", ...SALARY_STANCES]),
+    salary_ranges: z
+      .array(
+        z
+          .object({
+            currency: z
+              .string()
+              .refine(
+                (v) => /^[A-Z]{3}$/.test(v.trim()),
+                "Enter a currency code of three capital letters, such as EUR.",
+              ),
+            minimum: wholeNumber("the minimum", true),
+            maximum: wholeNumber("the maximum", false),
+            period: z.enum(SALARY_PERIODS),
+          })
+          .superRefine((range, ctx) => {
+            const { minimum, maximum } = range;
+            if (
+              WHOLE_NUMBER.test(minimum.trim()) &&
+              WHOLE_NUMBER.test(maximum.trim()) &&
+              Number(maximum) < Number(minimum)
+            ) {
+              ctx.addIssue({
+                code: "custom",
+                message: "The maximum is below the minimum.",
+                path: ["maximum"],
+              });
+            }
+          }),
+      )
+      .max(SALARY_RANGES_MAX, `Keep at most ${SALARY_RANGES_MAX} ranges.`),
   })
   .superRefine((values, ctx) => {
     uniqueBy(
@@ -420,6 +493,22 @@ export const answersSchema = z
       "This country is already listed.",
       ctx,
       "work_authorization",
+    );
+    uniqueBy(
+      values.eeo_answers,
+      (a) => a.topic,
+      "topic",
+      "This topic is already listed.",
+      ctx,
+      "eeo_answers",
+    );
+    uniqueBy(
+      values.salary_ranges,
+      (r) => r.currency.trim(),
+      "currency",
+      "This currency is already listed.",
+      ctx,
+      "salary_ranges",
     );
   });
 export type AnswersForm = z.infer<typeof answersSchema>;
@@ -440,7 +529,37 @@ export function toAnswersForm(answers: Answers): AnswersForm {
     motivation: answers.motivation ?? "",
     heard_about: answers.heard_about ?? "",
     leave_blank: answers.leave_blank.map((value) => ({ value })),
+    preferred_name: answers.preferred_name ?? "",
+    pronouns: answers.pronouns ?? "",
+    years_experience_stated: answers.years_experience_stated ?? "",
+    highest_degree: answers.highest_degree ?? "",
+    highest_degree_year:
+      answers.highest_degree_year === null
+        ? ""
+        : String(answers.highest_degree_year),
+    willing_onsite: fromBoolean(answers.willing_onsite),
+    willing_hybrid: fromBoolean(answers.willing_hybrid),
+    previously_applied_default: fromBoolean(answers.previously_applied_default),
+    background_check_consent: fromBoolean(answers.background_check_consent),
+    reference_check_consent: fromBoolean(answers.reference_check_consent),
+    eeo_policy: answers.eeo_policy,
+    eeo_answers: answers.eeo_answers.map((a) => ({ ...a })),
+    salary_stance: answers.salary_stance ?? "",
+    salary_ranges: answers.salary_ranges.map((r) => ({
+      currency: r.currency,
+      minimum: String(r.minimum),
+      maximum: r.maximum === null ? "" : String(r.maximum),
+      period: r.period,
+    })),
   };
+}
+
+function fromBoolean(value: boolean | null): "" | "yes" | "no" {
+  return value === null ? "" : value ? "yes" : "no";
+}
+
+function toBoolean(value: "" | "yes" | "no"): boolean | null {
+  return value === "" ? null : value === "yes";
 }
 
 export function fromAnswersForm(values: AnswersForm): Answers {
@@ -459,5 +578,30 @@ export function fromAnswersForm(values: AnswersForm): Answers {
     motivation: textOrNull(values.motivation),
     heard_about: textOrNull(values.heard_about),
     leave_blank: values.leave_blank.map((l) => l.value.trim()),
+    preferred_name: orNull(values.preferred_name),
+    pronouns: orNull(values.pronouns),
+    years_experience_stated: orNull(values.years_experience_stated),
+    highest_degree: orNull(values.highest_degree),
+    highest_degree_year:
+      values.highest_degree_year.trim() === ""
+        ? null
+        : Number(values.highest_degree_year),
+    willing_onsite: toBoolean(values.willing_onsite),
+    willing_hybrid: toBoolean(values.willing_hybrid),
+    previously_applied_default: toBoolean(values.previously_applied_default),
+    background_check_consent: toBoolean(values.background_check_consent),
+    reference_check_consent: toBoolean(values.reference_check_consent),
+    eeo_policy: values.eeo_policy,
+    eeo_answers: values.eeo_answers.map((a) => ({
+      topic: a.topic,
+      answer: a.answer.trim(),
+    })),
+    salary_stance: values.salary_stance === "" ? null : values.salary_stance,
+    salary_ranges: values.salary_ranges.map((r) => ({
+      currency: r.currency.trim(),
+      minimum: Number(r.minimum),
+      maximum: r.maximum.trim() === "" ? null : Number(r.maximum),
+      period: r.period,
+    })),
   };
 }
