@@ -35,6 +35,10 @@ Ingestion queue (app.queue.INGESTION, ingestion G2b, app/ingestion/jobs.py):
   no job holds (a lost job, a document stored before its kind had a reader), queues again the
   ones whose try failed for the server, and fails the ones whose last try never came back.
 
+Registration: every module package of app/ that has a registration module (REGISTRATION_MODULES:
+its agents, the hook that chains them, its arq jobs, its writers) is imported by
+register_modules(), found on disk, wherever the queues are built (issue #279).
+
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
 cancelled agent run likewise (runner.execute), its scratch directory removed. Every Worker is
@@ -46,6 +50,7 @@ import argparse
 import asyncio
 import contextlib
 import functools
+import importlib
 import logging
 import math
 import os
@@ -59,6 +64,7 @@ from collections.abc import Awaitable, Callable, Collection, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from arq import cron, func
@@ -114,12 +120,33 @@ class AgentTooLongError(RuntimeError):
     """A registered agent may run longer than the job timeout of the agents queue."""
 
 
-def register_ingestion_agents() -> None:
-    """Make this process know the ingestion agents and the engine that chains them (ingestion
-    G10): the import registers `profile_extract`, its tools and the `on_final` hook. Called
-    where the agents queue is built and where a run's context is made, not at the top of this
-    file: `python -m app.worker --check` must not need the SDK."""
-    from app.ingestion import engine  # noqa: F401
+# The files of a module package (app/<module>/) that register something when they are imported:
+# its agents and their tools (`agents`), the hook that chains its agents (`engine`, ingestion
+# G10: `profile_extract`, its tools and the `on_final` hook), its arq jobs (`jobs`), its document
+# writers (`writers`, documents D7). A module adds its file, not a line to this one (issue #279).
+REGISTRATION_MODULES = ("agents", "engine", "jobs", "writers")
+APP_DIR = Path(__file__).resolve().parent
+
+
+def registration_modules(app_dir: Path = APP_DIR) -> list[str]:
+    """The dotted names of the registration modules of every package of app/, package by
+    package in name order. Read from the files: nothing is imported."""
+    found: list[str] = []
+    for package in sorted(app_dir.iterdir()):
+        if not (package / "__init__.py").is_file():
+            continue
+        for name in REGISTRATION_MODULES:
+            if (package / f"{name}.py").is_file() or (package / name / "__init__.py").is_file():
+                found.append(f"{app_dir.name}.{package.name}.{name}")
+    return found
+
+
+def register_modules() -> None:
+    """Make this process know what every module registers, by importing its registration modules
+    (registration_modules). Called where the queues are built, not at the top of this file:
+    `python -m app.worker --check` must not need the SDK. A second call imports nothing anew."""
+    for name in registration_modules():
+        importlib.import_module(name)
 
 
 def longest_agent_s() -> float:
@@ -350,9 +377,9 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
 
 
 def agents_queue() -> QueueSpec:
-    # The limits are computed here, after the import that registers the ingestion agents: a
-    # 15 minute step under a timeout computed before it would be cut at 12 minutes.
-    register_ingestion_agents()
+    # The limits are computed here, after the imports that register the agents: a 15 minute
+    # step of ingestion under a timeout computed before it would be cut at 12 minutes.
+    register_modules()
     job_timeout_s = agent_job_timeout_s()
     check_agents_fit(job_timeout_s)
     return QueueSpec(
@@ -439,6 +466,7 @@ def ingestion_queue() -> QueueSpec:
 def queues(settings: Settings | None = None) -> list[QueueSpec]:
     """Every queue this worker consumes (TEST_FAST_TIMERS shortens the schedule tick)."""
     fast = bool(settings is not None and settings.test_fast_timers)
+    register_modules()
     return [sweeps_queue(fast=fast), agents_queue(), ingestion_queue()]
 
 
