@@ -37,19 +37,23 @@ def _fold(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub("[̀-ͯ]", "", plain)).strip()
 
 
-# Anything here makes the box the person's, whatever else the label says.
-_PERSON = re.compile(
+# Anything here makes the box the person's, whatever else the label says. `_LEGAL` is the same
+# vocabulary without a number and "share": in a box they are a clause ("2 e-mails a week", "share
+# my profile"), in a question to the agent they are not a legal topic ("your first 90 days",
+# "share an example"), and a consent to share is caught by its verb or its third party.
+_LEGAL = re.compile(
     r"arbitra|marketing|newsletter|promotion|advertis|publicit|talent (?:community|pool|network)"
     r"|communaute|vivier|futur|other (?:job|role|position|opening|opportunit|vacanc)s?"
     r"|\bopenings?\b|opportunit|autres? (?:postes?|offres?|recrutements?)|recrutements"
-    r"|retain|retention|retenu|conserv|keep my (?:data|information)|\d"
+    r"|retain|retention|retenu|conserv|keep my (?:data|information)"
     r"|background|\breferenc|verif|antecedent|criminal|drug|credit check|third part|tiers"
     r"|partenaires|affiliate|sms|text message|whatsapp|stay in touch|keep in touch|updates?\b"
-    r"|receive (?:e-?mail|communication)|recevoir|share|partag|sensitive|sensible|biometric"
+    r"|receive (?:e-?mail|communication)|recevoir|sensitive|sensible|biometric"
     r"|non-?compete|non-?disclosure|confidential\b|contract|contrat|binding|waive|release|indemn"
     r"|signature|\bterms?\b|\bconditions?\b|\bcgu\b|\bcgv\b|at-?will|transfer|transfert"
     r"|agreement|\baccord\b|cookie|employ|authori[sz]|consider|contact|\bany\b|\ball (?:my )?data"
 )
+_PERSON = re.compile(rf"{_LEGAL.pattern}|\d|share|partag")
 _PRIVACY = re.compile(
     r"privacy (?:notice|policy|statement)|data protection (?:notice|policy)"
     r"|politique de (?:confidentialite|protection des donnees)|notice de confidentialite"
@@ -91,7 +95,7 @@ def legal_reading(label: str) -> bool:
     to a model in any widget, a box ticked or a text typed (`agent.eligible`), whatever this
     module would let the agent tick: those two boxes are code's, from the person's rules."""
     text = _fold(label)
-    return bool(_PERSON.search(text) or _PRIVACY.search(text) or _ACCURACY.search(text))
+    return bool(_LEGAL.search(text) or _PRIVACY.search(text) or _ACCURACY.search(text))
 
 
 def classify(label: str) -> Box:
