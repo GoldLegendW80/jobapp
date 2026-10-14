@@ -1,4 +1,4 @@
-import { Navigate, Outlet, type RouteObject } from "react-router";
+import { Outlet, type RouteObject } from "react-router";
 
 import { Toaster } from "@/components/ui/sonner";
 import { AccountPage } from "@/features/account/account-page";
@@ -8,6 +8,9 @@ import { AuthProvider } from "@/features/auth/auth-provider";
 import { PublicOnly, RequireAdmin, RequireAuth } from "@/features/auth/guards";
 import { LinkPage } from "@/features/auth/link-page";
 import { LoginPage } from "@/features/auth/login-page";
+import { HomePage } from "@/features/public/home-page";
+import { PrivacyPage } from "@/features/public/privacy-page";
+import { TermsPage } from "@/features/public/terms-page";
 import { FillPage } from "@/features/ingestion/fill-page";
 import { JobDetailPage } from "@/features/jobs/job-detail-page";
 import { JobsPage } from "@/features/jobs/jobs-page";
@@ -17,8 +20,10 @@ import { AppShell } from "@/features/shell/app-shell";
 import { NotFoundPage } from "@/features/shell/not-found-page";
 
 /**
- * Every route of the app. Public: /login, /invite/:token, /reset/:token. Everything else sits
- * behind RequireAuth, so an unknown path asks for a session before it says "not found".
+ * Every route of the app. Public: /, /privacy, /terms, /login, /invite/:token, /reset/:token.
+ * Everything else sits behind RequireAuth, so an unknown path asks for a session before it says
+ * "not found". /privacy and /terms make no api call at all; / checks the session once, to send a
+ * signed in visitor to /jobs.
  */
 export const routes: RouteObject[] = [
   {
@@ -29,6 +34,9 @@ export const routes: RouteObject[] = [
       </AuthProvider>
     ),
     children: [
+      { path: "/", element: <HomePage /> },
+      { path: "/privacy", element: <PrivacyPage /> },
+      { path: "/terms", element: <TermsPage /> },
       {
         path: "/login",
         element: (
@@ -46,8 +54,6 @@ export const routes: RouteObject[] = [
           </RequireAuth>
         ),
         children: [
-          // The jobs dashboard is the home page.
-          { index: true, element: <Navigate to="/jobs" replace /> },
           { path: "jobs", element: <JobsPage /> },
           { path: "jobs/map", element: <JobsMapPage /> },
           { path: "jobs/:id", element: <JobDetailPage /> },
