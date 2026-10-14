@@ -930,6 +930,44 @@ def test_a_react_select_whose_option_click_the_page_ignores_is_unverified() -> N
     assert by_label(report)["Country"].filled.status == "unverified"
 
 
+def test_a_choice_shown_beside_an_open_menu_is_unverified_menu_open() -> None:
+    def reopen(form: FakeForm, n: int) -> None:
+        country = form.spec("Country")
+        if country.value == "France" and not country.open:
+            country.open = True  # the choice is shown, the menu did not close
+
+    form = greenhouse_form(on_call=reopen)
+    report = fill(Greenhouse(), form)
+    assert form.spec("Country").value == "France"
+    assert by_label(report)["Country"].filled == base.Filled("unverified", "menu_open")
+
+
+def test_a_click_the_page_ignores_with_the_menu_closed_is_unverified_value_differs() -> None:
+    def close(form: FakeForm, n: int) -> None:
+        country = form.spec("Country")
+        if [c[0] for c in form.calls[-2:]] == ["click", "snapshot"] and country.typed:
+            country.open = False  # the click took nothing and the menu closed
+
+    form = greenhouse_form(on_call=close)
+    form.spec("Country").ignore_click = True
+    report = fill(Greenhouse(), form)
+    assert form.spec("Country").value == "" and form.spec("Country").typed == "France"
+    assert by_label(report)["Country"].filled == base.Filled("unverified", "value_differs")
+
+
+def test_a_captcha_shown_between_two_fields_stops_before_the_next_one_is_typed() -> None:
+    def robot(form: FakeForm, n: int) -> None:
+        last = [c[0] for c in form.calls[-3:]]
+        if last == ["type", "snapshot", "snapshot"] and form.calls[-3][1]["text"] == "Example":
+            form.captcha = "beside"  # the form stays, the next field's read finds the checkbox
+
+    form = greenhouse_form(on_call=robot)
+    report = fill(Greenhouse(), form)
+    assert (report.stopped, report.needs_person) == ("needs_person", "captcha")
+    typed = [c[1]["text"] for c in form.acted() if c[0] == "type"]
+    assert typed[-1] == "Example"
+
+
 def test_a_typeahead_whose_option_click_the_page_ignores_is_unverified() -> None:
     form = ashby_form()
     form.spec("Current location").options += ("Bordeaux, France",)
