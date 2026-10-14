@@ -1,0 +1,369 @@
+"""The refusals before anything is spent (SPEC-apply, "Guardrails", rules 3 and 4).
+
+**Never apply** (`never_apply`, pure). The person's `never_apply` rules (`sweep.never_apply_rules`
+on the search section) match the posting the way the sweep excludes a role: each rule's terms,
+whole word with an optional plural, case-insensitive, on the company and the title. Two
+additions, both toward refusing, since a role the person excluded must never be applied to by
+the app: the text is folded first (accents, compatibility forms: "Sécurité" is "securite", a full
+width letter is its plain one), and a term also matches at the start or the end of a glued word,
+so the owner's rule "No cybersecurity roles: cyber, security, pentest, threat" refuses
+"Cybersecurity Engineer" and "AppSecurity Lead", which the sweep's whole word match lets through;
+spaces, hyphens, underscores, slashes and dots are one separator ("Cyber-Security", "red_team").
+Stated cost: a short term refuses more ("ai" in a rule refuses "Aide"), and that is the side the
+rule errs on.
+The sweep's own decision counts too: a posting whose history holds the sweep's `never_apply`
+event (`swept`) is refused whatever the rules say today. In Full auto the first 1,500 characters
+of the posting's text are read as well. A search section that no longer validates cannot be read,
+so it refuses as a match would (`rules_unreadable`).
+
+**Duplicates** (`duplicates`). Refused, in this order:
+- `submitted` / `submit_unknown`: the posting has an application the app already clicked;
+- `in_progress`: the posting has another live application (the partial unique index holds it too);
+- `already_applied`: the posting's status is `applied`, `interview` or `rejected`;
+- `posting_closed`: the posting's status is `closed`;
+- `same_form`: another posting of the person has a live application, or an applied status, on the
+  same canonical form address (`canonical_key`; a second partial unique index holds the first);
+- `same_role`: another posting of the person, at the same company and with the same normalised
+  title (`company_key`, `title_key`), was submitted by the app, or has an applied status with its
+  `applied_on`, in the last 180 days, counted from `now`: at exactly 180 days it is still refused.
+
+**The form address** (`canonical_key`). Ashby, Greenhouse and Lever job ids are global, so the key
+is the ATS and its id, wherever the form is shown: `ashby:<uuid>` from jobs.ashbyhq.com/<org>/<id>
+or `?ashby_jid=`; `greenhouse:<number>` from (job-)boards(.eu).greenhouse.io/<org>/jobs/<id>, the
+embed's `?token=` or a company page's `?gh_jid=`; `lever:<uuid>` from jobs(.eu).lever.co/<org>/<id>.
+Any other address is `url:` and the jobs module's normalised address (`slug.url_key`: http and
+https alike, host lowercase without www, no fragment, no trailing slash, no tracking parameter).
+An address that is not http or https has no form (`None`).
+
+Declared open points (what these rules still miss, each toward applying):
+- a never apply term in another language than the rule's ("sécurité" for "security") or a
+  synonym: the person writes those terms in the rule;
+- a term inside a word that neither starts nor ends with it ("cyber" in "anticyberattack");
+- the same role under two different titles ("ML Engineer" and "Machine Learning Engineer"), or a
+  title that adds a city in parentheses: only accents, case, punctuation and gender markers
+  ("H/F", "(m/w/d)") are dropped from a title, and only legal forms ("SAS", "Inc.") from a company;
+- a form shown under an address the three ATS patterns do not cover (a company page that embeds
+  Ashby without `ashby_jid`): it is compared as an address.
+"""
+
+import re
+import unicodedata
+import uuid
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from urllib.parse import parse_qsl, urlsplit
+
+import sqlalchemy as sa
+from sqlalchemy.orm import Session
+
+from app.apply.models import ENDED, Application, Mode, State
+from app.jobs import slug
+from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
+from app.jobs.sweep import NeverApplyRule
+from app.profile.matching import PLURAL, escape
+
+SAME_ROLE_DAYS = 180
+FULL_AUTO_TEXT_CHARS = 1500
+APPLIED_STATUSES = frozenset({JobStatus.applied, JobStatus.interview, JobStatus.rejected})
+SUPPORTED_ATS = ("ashby", "greenhouse", "lever")
+
+NEVER_APPLY = "Your rules exclude this role."
+NEVER_APPLY_REFUSED = (
+    "Your rules exclude this role, so the app will not apply for you. You can still apply yourself."
+)
+RULES_UNREADABLE = (
+    "Your never apply rules could not be read, so the app will not apply for you. Open the Search "
+    "tab of your profile and save it again."
+)
+SENTENCES = {
+    "never_apply_role": NEVER_APPLY_REFUSED,
+    "rules_unreadable": RULES_UNREADABLE,
+    "no_address": "This posting has no address to apply on. Add its link first.",
+    "submitted": "You already applied to this posting through the app.",
+    "submit_unknown": (
+        "We could not confirm an earlier application to this posting. Look for a confirmation "
+        "mail or on the site."
+    ),
+    "in_progress": "An application to this posting is already under way.",
+    "already_applied": "This posting is marked as applied.",
+    "posting_closed": "This posting is closed.",
+    "same_form": "This application form was already used for another of your postings.",
+    "same_role": "You applied to the same role at this company less than 180 days ago.",
+}
+# What Apply myself shows instead of refusing: the person decides, the app does not click.
+WARNINGS = {
+    "never_apply_role": NEVER_APPLY,
+    "rules_unreadable": "Your never apply rules could not be read.",
+    "same_role": SENTENCES["same_role"],
+}
+
+
+@dataclass(frozen=True)
+class Refusal:
+    code: str
+    application_id: uuid.UUID | None = None
+
+    @property
+    def sentence(self) -> str:
+        return SENTENCES[self.code]
+
+
+# --- never apply ---------------------------------------------------------------------------------
+
+
+_JOINERS = re.compile(r"[\s\-\u2010-\u2015_/.]+")
+
+
+def fold(text: str) -> str:
+    """NFKC then NFKD with the combining marks dropped, case folded, and every run of spaces,
+    hyphens, underscores, slashes and dots one space: "Sécurité" is "securite", a full width
+    letter is its plain one, "Red-Team" and "red_team" are "red team"."""
+    decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))
+    plain = "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+    return _JOINERS.sub(" ", plain)
+
+
+def _term_pattern(terms: Sequence[str]) -> re.Pattern[str] | None:
+    """The sweep's whole word match of the folded terms, widened to a term that starts or ends
+    a glued word. Linear: one alternation, searched once."""
+    folded = [escape(fold(term)) for term in terms if fold(term).strip()]
+    if not folded:
+        return None
+    alternation = "|".join(folded)
+    starts = rf"(?<!\w)(?:{alternation})"  # "cyber" in "cybersecurity"
+    ends = rf"(?:{alternation}){PLURAL}(?!\w)"  # "security" in "cybersecurity"
+    return re.compile(f"{starts}|{ends}")
+
+
+def matching_rule(rules: Iterable[NeverApplyRule], *texts: str) -> NeverApplyRule | None:
+    """The first rule whose terms match one of `texts`, or None."""
+    folded = " \n ".join(fold(text) for text in texts if text)
+    for rule in rules:
+        pattern = _term_pattern(rule.terms)
+        if pattern is not None and pattern.search(folded) is not None:
+            return rule
+    return None
+
+
+def never_apply(
+    posting: Job,
+    rules: Sequence[NeverApplyRule] | None,
+    *,
+    swept: bool,
+    mode: Mode,
+) -> str | None:
+    """`never_apply_role` when the posting is excluded, `rules_unreadable` when the rules could
+    not be read (`rules` None), else None. The caller decides what the code does per mode."""
+    if swept:
+        return "never_apply_role"
+    if rules is None:
+        return "rules_unreadable"
+    texts = [posting.company, posting.title]
+    if mode is Mode.full_auto:
+        texts.append((posting.posting_text or "")[:FULL_AUTO_TEXT_CHARS])
+    return "never_apply_role" if matching_rule(rules, *texts) is not None else None
+
+
+def swept_never_apply(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> bool:
+    """Whether the sweep moved this posting to skipped for a never apply rule."""
+    found = db.execute(
+        sa.select(JobEvent.id)
+        .where(
+            JobEvent.user_id == user_id,
+            JobEvent.job_id == posting_id,
+            JobEvent.kind == JobEventKind.status,
+            JobEvent.data["via"].astext == "never_apply",
+        )
+        .limit(1)
+    ).first()
+    return found is not None
+
+
+# --- the form address ----------------------------------------------------------------------------
+
+
+def _uuid(text: str) -> str | None:
+    try:
+        return str(uuid.UUID(text))
+    except ValueError:
+        return None
+
+
+def _number(text: str) -> str | None:
+    return str(int(text)) if text.isascii() and text.isdigit() and len(text) <= 20 else None
+
+
+def _host(url: str) -> tuple[str, list[str], dict[str, str]] | None:
+    parts = urlsplit(url.strip())
+    if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+        return None
+    host = parts.hostname.lower().rstrip(".").removeprefix("www.")
+    segments = [segment for segment in parts.path.split("/") if segment]
+    query = {name.lower(): value for name, value in parse_qsl(parts.query)}
+    return host, segments, query
+
+
+def unstub(url: str, stub_base: str | None) -> str:
+    """Tests only: an address under the fake forms server read as the ATS address its path names
+    (/ashby/... is jobs.ashbyhq.com/..., /greenhouse/... boards.greenhouse.io/..., /lever/...
+    jobs.lever.co/...). The setting is refused in production."""
+    if not stub_base or not url.startswith(stub_base.rstrip("/") + "/"):
+        return url
+    rest = url[len(stub_base.rstrip("/")) + 1 :]
+    first, _, tail = rest.partition("/")
+    hosts = {"ashby": "jobs.ashbyhq.com", "greenhouse": "boards.greenhouse.io"}
+    hosts["lever"] = "jobs.lever.co"
+    return f"https://{hosts[first]}/{tail}" if first in hosts else url
+
+
+def ats_of(url: str) -> str:
+    """`ashby`, `greenhouse`, `lever` by the form's host, else `other`."""
+    found = _host(url)
+    if found is None:
+        return "other"
+    host, _, query = found
+    for ats, domain in (("ashby", "ashbyhq.com"), ("greenhouse", "greenhouse.io")):
+        if host == domain or host.endswith("." + domain):
+            return ats
+    if host == "lever.co" or host.endswith(".lever.co"):
+        return "lever"
+    if _uuid(query.get("ashby_jid", "")):
+        return "ashby"
+    if _number(query.get("gh_jid", "")):
+        return "greenhouse"
+    return "other"
+
+
+def canonical_key(url: str | None) -> str | None:
+    """The key of the form an address shows (module docstring), None when it shows none."""
+    if url is None:
+        return None
+    found = _host(url)
+    if found is None:
+        return None
+    host, segments, query = found
+    ats = ats_of(url)
+    if ats == "ashby":
+        job = _uuid(segments[1]) if host.endswith("ashbyhq.com") and len(segments) >= 2 else None
+        job = job or _uuid(query.get("ashby_jid", ""))
+        if job:
+            return f"ashby:{job}"
+    if ats == "greenhouse":
+        job = None
+        if host.endswith("greenhouse.io"):
+            if len(segments) >= 3 and segments[1] == "jobs":
+                job = _number(segments[2])
+            elif segments[-2:] == ["embed", "job_app"]:
+                job = _number(query.get("token", ""))
+        job = job or _number(query.get("gh_jid", ""))
+        if job:
+            return f"greenhouse:{job}"
+    if ats == "lever" and len(segments) >= 2:
+        job = _uuid(segments[1])
+        if job:
+            return f"lever:{job}"
+    return f"url:{slug.url_key(url)}"
+
+
+# --- the same role -------------------------------------------------------------------------------
+
+_GENDER = re.compile(
+    r"\(\s*(?:[hfmwdx]\s*/\s*){1,3}[hfmwdx]\s*\)"  # (H/F), (m/w/d)
+    r"|(?<!\w)(?:[hfmwdx]\s*/\s*){1,3}[hfmwdx](?!\w)"  # H/F, f/m/d
+    r"|\(\s*all genders\s*\)",
+)
+_LEGAL_FORMS = frozenset(
+    {
+        "inc", "incorporated", "ltd", "limited", "llc", "llp", "plc", "sas", "sasu", "sa", "sarl",
+        "eurl", "gmbh", "ag", "bv", "nv", "corp", "corporation", "co", "company",
+    }
+)  # fmt: skip
+
+
+def title_key(title: str) -> str:
+    """The title compared for the same role: folded, gender markers dropped, words of a-z and
+    0-9 separated by one space."""
+    return slug.text_key(_GENDER.sub(" ", slug.fold(unicodedata.normalize("NFKC", title))))
+
+
+def company_key(company: str) -> str:
+    """The company compared for the same role: its words without trailing legal forms."""
+    words = slug.text_key(fold(company)).split()
+    while len(words) > 1 and words[-1] in _LEGAL_FORMS:
+        words.pop()
+    return " ".join(words)
+
+
+# --- duplicates ----------------------------------------------------------------------------------
+
+
+def _live(application: Application) -> bool:
+    return State(application.state) not in ENDED
+
+
+def duplicates(
+    db: Session, user_id: uuid.UUID, posting: Job, key: str, now: datetime
+) -> Refusal | None:
+    """The first duplicate refusal for starting an application on `posting` with the form key
+    `key`, or None. The caller holds the posting's row lock and the person's apply lock."""
+    own = db.execute(
+        sa.select(Application).where(
+            Application.user_id == user_id, Application.posting_id == posting.id
+        )
+    ).scalars()
+    for application in own:
+        if not _live(application):
+            continue
+        state = State(application.state)
+        code = state.value if state in (State.submitted, State.submit_unknown) else "in_progress"
+        return Refusal(code, application.id)
+    status = JobStatus(posting.status)
+    if status in APPLIED_STATUSES:
+        return Refusal("already_applied")
+    if status is JobStatus.closed:
+        return Refusal("posting_closed")
+
+    other = db.execute(
+        sa.select(Application.id)
+        .where(
+            Application.user_id == user_id,
+            Application.posting_id != posting.id,
+            Application.canonical_key == key,
+            Application.state.not_in(ENDED),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if other is not None:
+        return Refusal("same_form", other)
+
+    since = now - timedelta(days=SAME_ROLE_DAYS)
+    applied = db.execute(
+        sa.select(Job.company, Job.title, Job.url, Job.applied_on).where(
+            Job.user_id == user_id,
+            Job.id != posting.id,
+            Job.status.in_(APPLIED_STATUSES),
+        )
+    ).all()
+    for _, _, url, _ in applied:
+        if url is not None and canonical_key(url) == key:
+            return Refusal("same_form")
+    clicked = db.execute(
+        sa.select(Job.company, Job.title)
+        .join(Application, Application.posting_id == Job.id)
+        .where(
+            Application.user_id == user_id,
+            Job.id != posting.id,
+            Application.submitted_at >= since,
+        )
+    ).all()
+    recent = [(company, title) for company, title in clicked]
+    recent += [
+        (company, title)
+        for company, title, _, applied_on in applied
+        if applied_on is not None and applied_on >= since.date()
+    ]
+    role = (company_key(posting.company), title_key(posting.title))
+    if any((company_key(c), title_key(t)) == role for c, t in recent):
+        return Refusal("same_role")
+    return None

@@ -22,8 +22,8 @@ submitted, stays in the context of every later turn.
   generation's `token_ceiling` (the run's `token_budget`, "Limits of one run").
 
 A posting's estimate is the pair the tick starts together: the CV and then the letter, which
-reads the same sources plus the new CV (`O_low` more to read). The letter writer's prompt does
-not exist yet (task D8): the CV's prompt size stands for it.
+reads the same sources plus the new CV (`O_low` more to read), with the letter writer's own
+prompt (`prompts/letter.md`).
 
 The estimates are `app.ingestion.estimate.RunEstimate` values, so `app.ingestion.pricing.costs`
 prices them as it prices an ingestion run. Pure but for the `*_chars` readers at the end, which
