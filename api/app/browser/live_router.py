@@ -15,8 +15,11 @@ the keyboard and the mouse.
   The grant names the lease and the viewer, lives GRANT_TTL_S, carries a nonce browserd accepts
   once, and is signed with BROWSER_CONTROL_SECRET as browser/browserd/live.py checks it.
 - POST /api/browser/takeover `{viewer}` gives that viewer the input of the person's current lease
-  (browserd forwards no key or click from any other viewer); POST /api/browser/giveback gives it
-  back to the agent. The agent's next tool call waits meanwhile (browserd's `Live.agent_turn`).
+  (browserd forwards no key or click from any other viewer); POST /api/browser/giveback
+  `{viewer}` gives it back to the agent, when that viewer is the one that holds it (a tab that
+  unmounts after another took over does not take the input from it). The agent's next tool call
+  waits meanwhile (browserd's `Live.agent_turn`). The input also goes back to the agent when the
+  holder's last view has been closed for a few seconds (a closed tab runs no cleanup).
 
 Nobody but the holder of the lease gets a ticket, a grant or the input: there is no lease id in
 any path or body, the user comes from the session. No ticket, grant or query string is logged.
@@ -210,10 +213,12 @@ async def live_auth(request: Request, active: CurrentSession, store: Store) -> R
     )
 
 
-async def _set_input(store: Leases, user_id: str, viewer: str | None) -> InputOut:
+async def _set_input(
+    store: Leases, user_id: str, viewer: str | None, giver: str | None = None
+) -> InputOut:
     lease = await _held(store, user_id)
     try:
-        holder = await store.client.live_input(lease.lease_id, viewer)
+        holder = await store.client.live_input(lease.lease_id, viewer, giver)
     except BrowserError as exc:
         if exc.code == "refused":  # the lease ended in browserd meanwhile
             raise _forbidden() from None
@@ -227,5 +232,5 @@ async def take_over(body: InputIn, user: CurrentUser, store: Store) -> InputOut:
 
 
 @router.post("/giveback", response_model=InputOut, responses={**_403, **_503})
-async def give_back(user: CurrentUser, store: Store) -> InputOut:
-    return await _set_input(store, str(user.id), None)
+async def give_back(body: InputIn, user: CurrentUser, store: Store) -> InputOut:
+    return await _set_input(store, str(user.id), None, str(body.viewer))

@@ -98,9 +98,11 @@ export function takeOver(viewer: string): Promise<InputHolder> {
   });
 }
 
-export function giveBack(): Promise<InputHolder> {
+/** Gives the input back to the assistant, only if this view (`viewer`) is the one that holds it. */
+export function giveBack(viewer: string): Promise<InputHolder> {
   return request("/browser/giveback", {
     method: "POST",
+    body: { viewer },
     validate: (data) => inputSchema.parse(data).input,
   });
 }

@@ -23,6 +23,10 @@ only, whatever its page says. The clipboard, desktop resizing and the xvp power 
 always dropped; a message the filter does not know closes the viewer (fail closed). An input
 forwarded counts as activity on the lease (its idle timer starts again).
 
+At most VIEWERS_MAX views of a lease are open at once (each one is an x11vnc with its own copy of
+the framebuffer in the shared browser container); the next one is told TOO_MANY in RFB's own
+words. A view gets no byte once its lease is no longer the current one, whatever tick() has done.
+
 The agent's side (`agent_turn`, for B5's tool calls): while the person holds the input the call
 waits, until Give back or TAKEOVER_S, then learns that the person used the browser, so the
 person's keys and the agent's never mix.
@@ -59,7 +63,14 @@ GRANT_TTL_S = (
 TAKEOVER_S = (
     900  # the person holds the input this long at most, then the agent has it back
 )
+HOLDER_GRACE_S = (
+    10  # the holder's last viewer may be away this long (a reload) before Give back
+)
 PERSON_USED = "The person used the browser"
+VIEWERS_MAX = (
+    3  # open views of one lease: two tabs and a reload, each one an x11vnc of its own
+)
+TOO_MANY = "Too many open views of your browser. Close one."
 HEAD_MAX = 8 * 1024
 FRAME_MAX = 1024 * 1024  # one websocket frame from a viewer
 CUT_MAX = (
@@ -367,11 +378,15 @@ class Live:
         self.input_lease: str | None = None
         self.input_viewer: str | None = None
         self.input_until = 0.0
+        self.absent_since: float | None = None  # when the holder's last viewer went
         self.used: set[str] = (
             set()
         )  # leases the person used since the agent's last call
         self.given_back = asyncio.Event()
         self.given_back.set()
+        self.starting: dict[
+            str, int
+        ] = {}  # viewers admitted whose x11vnc is not up yet, by lease
         self.watcher: asyncio.Task[None] | None = None
 
     # The input ------------------------------------------------------------------------------------
@@ -391,13 +406,19 @@ class Live:
             raise LeaseError(404, "no_such_lease")
         self.input_lease, self.input_viewer = lease_id, viewer
         self.input_until = self.manager.clock() + TAKEOVER_S
+        self.absent_since = None
         self.used.add(lease_id)
         self.given_back.clear()
 
-    def give_back(self, lease_id: str | None = None) -> None:
+    def give_back(self, lease_id: str | None = None, viewer: str | None = None) -> None:
+        """The agent has the input again. With `viewer`, only when that viewer holds it: a tab
+        that unmounts after another tab took over does not take the input from that tab."""
         if lease_id is not None and lease_id != self.input_lease:
             return
+        if viewer is not None and viewer != self.input_viewer:
+            return
         self.input_lease = self.input_viewer = None
+        self.absent_since = None
         self.given_back.set()
 
     async def agent_turn(self, lease_id: str) -> str | None:
@@ -413,19 +434,38 @@ class Live:
 
     def tick(self) -> None:
         """Every half second: the viewers of an ended lease are closed, and a take over past
-        TAKEOVER_S, or of a lease that ended, gives the input back."""
+        TAKEOVER_S, of a lease that ended, or whose holder has had no open view for
+        HOLDER_GRACE_S (a closed tab), gives the input back."""
         current = self._lease_id()
+        now = self.manager.clock()
         for viewer in list(self.viewers):
             if viewer.lease_id != current:
                 viewer.close()
                 self.viewers.discard(viewer)
-        if self.input_lease is not None and (
-            self.input_lease != current or self.manager.clock() >= self.input_until
-        ):
-            self.give_back()
+        if self.input_lease is not None:
+            if self.holder_here():
+                self.absent_since = None
+            elif self.absent_since is None:
+                self.absent_since = now
+            if (
+                self.input_lease != current
+                or now >= self.input_until
+                or (
+                    self.absent_since is not None
+                    and now - self.absent_since >= HOLDER_GRACE_S
+                )
+            ):
+                self.give_back()
         self.used &= {current} if current else set()
-        now = self.wall()
-        self.nonces = {n: exp for n, exp in self.nonces.items() if exp >= now}
+        wall = self.wall()
+        self.nonces = {n: exp for n, exp in self.nonces.items() if exp >= wall}
+
+    def holder_here(self) -> bool:
+        """The holder of the input has an open view."""
+        return any(
+            v.lease_id == self.input_lease and v.viewer == self.input_viewer
+            for v in self.viewers
+        )
 
     # A viewer -------------------------------------------------------------------------------------
 
@@ -476,6 +516,33 @@ class Live:
                 await writer.drain()
             writer.close()
 
+    def open_views(self, lease_id: str) -> int:
+        """The views of that lease, those whose x11vnc is still starting included."""
+        return self.starting.get(lease_id, 0) + sum(
+            v.lease_id == lease_id for v in self.viewers
+        )
+
+    async def refuse_view(
+        self,
+        key: str,
+        headers: dict[str, str],
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        """The websocket opens and noVNC is told, in RFB's own words (a server that offers no
+        security type gives a reason), that there are too many views: the page shows TOO_MANY."""
+        writer.write(upgrade(key, headers))
+        writer.write(frame(0x2, b"RFB 003.008\n"))
+        with contextlib.suppress(
+            Closed, asyncio.IncompleteReadError, TimeoutError, OSError
+        ):
+            await asyncio.wait_for(
+                read_frame(reader), 5
+            )  # noVNC's version, then its wait
+            reason = TOO_MANY.encode()
+            writer.write(frame(0x2, b"\x00" + struct.pack(">I", len(reason)) + reason))
+        writer.write(frame(0x8, struct.pack(">H", 1000)))
+
     async def serve_viewer(
         self,
         grant: Grant,
@@ -484,22 +551,22 @@ class Live:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
+        # The place is taken before the first await, so concurrent admits cannot pass the cap.
+        if self.open_views(grant.lease_id) >= VIEWERS_MAX:
+            await self.refuse_view(key, headers, reader, writer)
+            return
+        self.starting[grant.lease_id] = self.starting.get(grant.lease_id, 0) + 1
         try:
             vnc_reader, vnc_writer, stop = await self.spawn()
         except OSError as exc:  # x11vnc missing, or the uid change refused
             log.warning("x11vnc did not start: %s", type(exc).__name__)
             writer.write(answer(503))
             return
-        offered = [
-            p.strip() for p in headers.get("sec-websocket-protocol", "").split(",")
-        ]
-        protocol = "Sec-WebSocket-Protocol: binary\r\n" if "binary" in offered else ""
-        writer.write(
-            (
-                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                f"Sec-WebSocket-Accept: {accept_key(key)}\r\n{protocol}\r\n"
-            ).encode()
-        )
+        finally:
+            self.starting[grant.lease_id] -= 1
+            if not self.starting[grant.lease_id]:
+                del self.starting[grant.lease_id]
+        writer.write(upgrade(key, headers))
         viewer = Viewer(grant.lease_id, grant.viewer, writer)
         self.viewers.add(viewer)
         rfb = RfbFilter()
@@ -519,6 +586,8 @@ class Live:
                     continue
                 if opcode not in (0x0, 0x2):
                     raise Closed("text frame")
+                if self._lease_id() != viewer.lease_id:
+                    return  # the lease ended: nothing more reaches the next person's screen
                 data, inputs = rfb.feed(payload, allow)
                 if inputs:
                     lease = self.manager.current()
@@ -535,6 +604,10 @@ class Live:
                 data = await vnc_reader.read(READ_CHUNK)
                 if not data:
                     return
+                # Checked for every chunk, not only by tick(): a byte read after the lease ended
+                # may come from the next person's screen on the same display.
+                if self._lease_id() != viewer.lease_id:
+                    return
                 writer.write(frame(0x2, data))
                 await writer.drain()
 
@@ -545,13 +618,23 @@ class Live:
         try:
             await asyncio.wait(viewer.tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
-            # A viewer that goes (a reload) keeps the input it took until Give back or the end.
+            # A viewer that goes keeps the input it took for HOLDER_GRACE_S (tick), so a reload or
+            # a dropped socket does not end the take over; a closed tab does, soon after.
             for task in viewer.tasks:
                 task.cancel()
             await asyncio.gather(*viewer.tasks, return_exceptions=True)
             self.viewers.discard(viewer)
             viewer.close()
             await stop()
+
+
+def upgrade(key: str, headers: dict[str, str]) -> bytes:
+    offered = [p.strip() for p in headers.get("sec-websocket-protocol", "").split(",")]
+    protocol = "Sec-WebSocket-Protocol: binary\r\n" if "binary" in offered else ""
+    return (
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        f"Sec-WebSocket-Accept: {accept_key(key)}\r\n{protocol}\r\n"
+    ).encode()
 
 
 def parse_head(head: bytes) -> tuple[str, str, dict[str, str]]:
@@ -591,18 +674,24 @@ def live_of(svc: Any) -> Live:
 
 
 async def set_input(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
-    """POST /leases/{id}/live/input {viewer: <uuid> | null}: that viewer takes the keyboard and
-    the mouse, or (null) the agent has them back."""
+    """POST /leases/{id}/live/input {viewer: <uuid> | null, from?: <uuid>}: that viewer takes the
+    keyboard and the mouse, or (null) the agent has them back; with `from`, only when that viewer
+    is the one that holds them (a tab that unmounts does not take them from the tab that took
+    over after it). Answers who holds them afterwards for the caller: "person" or "agent"."""
     body = req.json()
-    viewer = body.get("viewer") if isinstance(body, dict) else None
+    body = body if isinstance(body, dict) else {}
+    viewer, giver = body.get("viewer"), body.get("from")
     live = live_of(svc)
+    for value in (viewer, giver):
+        if value is not None and (
+            not isinstance(value, str) or not re.fullmatch(UUID, value)
+        ):
+            raise LeaseError(400, "bad_viewer")
     if viewer is None:
         if match["lease_id"] != live._lease_id():
             raise LeaseError(404, "no_such_lease")
-        live.give_back(match["lease_id"])
+        live.give_back(match["lease_id"], giver)
         return 200, {"input": "agent"}
-    if not isinstance(viewer, str) or not re.fullmatch(UUID, viewer):
-        raise LeaseError(400, "bad_viewer")
     live.take(match["lease_id"], viewer)
     return 200, {"input": "person"}
 

@@ -34,7 +34,7 @@ const TICKET = "t".repeat(43);
 interface Calls {
   tickets: unknown[];
   takeovers: unknown[];
-  givebacks: number;
+  givebacks: unknown[];
   sessions: unknown[];
   deletes: number;
   headers: Headers[];
@@ -44,7 +44,7 @@ function fakeServer(state: { browser: Browser; session?: unknown }): Calls {
   const calls: Calls = {
     tickets: [],
     takeovers: [],
-    givebacks: 0,
+    givebacks: [],
     sessions: [],
     deletes: 0,
     headers: [],
@@ -80,8 +80,8 @@ function fakeServer(state: { browser: Browser; session?: unknown }): Calls {
       calls.headers.push(request.headers);
       return HttpResponse.json({ input: "you" });
     }),
-    http.post("*/api/browser/giveback", () => {
-      calls.givebacks += 1;
+    http.post("*/api/browser/giveback", async ({ request }) => {
+      calls.givebacks.push(await request.json());
       return HttpResponse.json({ input: "assistant" });
     }),
   );
@@ -110,7 +110,7 @@ class FakeScreen implements Screen {
 let opened: Array<{
   url: string;
   screen: FakeScreen;
-  events: { connect(): void; disconnect(): void };
+  events: { connect(): void; refused(): void; disconnect(): void };
 }>;
 
 beforeEach(() => {
@@ -193,7 +193,7 @@ describe("your browser card", () => {
     expect(view.screen.keys).toEqual([0x6f, 0x6b, 0xff0d]);
 
     await user.click(screen.getByRole("button", { name: "Give back" }));
-    expect(calls.givebacks).toBe(1);
+    expect(calls.givebacks).toEqual([{ viewer: ticket.viewer }]);
     expect(view.screen.viewOnly).toBe(true);
     expect(screen.getByRole("button", { name: "Take over" })).toBeEnabled();
   });
@@ -222,6 +222,45 @@ describe("your browser card", () => {
       expect(opened).toHaveLength(2);
     });
     expect(calls.tickets).toHaveLength(2);
+  });
+
+  it("says so when the server turns the view away, and reconnect clears it", async () => {
+    fakeServer({ browser: MINE });
+    const user = userEvent.setup();
+    renderWithQuery(<BrowserCard />);
+    const view = await connected();
+    act(() => {
+      view.events.refused();
+      view.events.disconnect();
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Too many open views of your browser. Close one.",
+    );
+    await user.click(screen.getByRole("button", { name: "Reconnect" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  it("leaving the page while holding the input gives it back as this view", async () => {
+    const calls = fakeServer({ browser: MINE });
+    const user = userEvent.setup();
+    const { unmount } = renderWithQuery(<BrowserCard />);
+    await connected();
+    await user.click(screen.getByRole("button", { name: "Take over" }));
+    const ticket = only(calls.tickets as Array<{ viewer: string }>);
+    unmount();
+    await waitFor(() => {
+      expect(calls.givebacks).toEqual([{ viewer: ticket.viewer }]);
+    });
+  });
+
+  it("leaving the page without the input gives nothing back", async () => {
+    const calls = fakeServer({ browser: MINE });
+    const { unmount } = renderWithQuery(<BrowserCard />);
+    await connected();
+    unmount();
+    expect(calls.givebacks).toEqual([]);
   });
 
   it("says why when the ticket is refused", async () => {

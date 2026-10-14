@@ -168,7 +168,7 @@ def test_b_never_gets_into_as_view(
     # B holds no lease: no ticket, no input.
     assert api.post("/api/browser/live/ticket", token=b, json={"viewer": VIEWER}).status_code == 403
     assert api.post("/api/browser/takeover", token=b, json={"viewer": VIEWER}).status_code == 403
-    assert api.post("/api/browser/giveback", token=b).status_code == 403
+    assert api.post("/api/browser/giveback", token=b, json={"viewer": VIEWER}).status_code == 403
     # A's ticket in B's session is refused (and spent).
     stolen = auth(api, b, ticket(api, a))
     assert stolen.status_code == 403  # type: ignore[attr-defined]
@@ -257,9 +257,15 @@ def test_take_over_and_give_back(
     assert (taken.status_code, taken.json()) == (200, {"input": "you"})
     assert taken.headers["cache-control"] == "no-store"
     assert live.live_of(browserd.service).holder(lease_id) == VIEWER
-    back = api.post("/api/browser/giveback", token=a)
+    # Another tab's Give back (it unmounted after this tab took over) takes nothing away.
+    other = str(uuid.uuid4())
+    stale = api.post("/api/browser/giveback", token=a, json={"viewer": other})
+    assert (stale.status_code, stale.json()) == (200, {"input": "assistant"})
+    assert live.live_of(browserd.service).holder(lease_id) == VIEWER
+    back = api.post("/api/browser/giveback", token=a, json={"viewer": VIEWER})
     assert (back.status_code, back.json()) == (200, {"input": "assistant"})
     assert live.live_of(browserd.service).holder(lease_id) is None
+    assert api.post("/api/browser/giveback", token=a).status_code == 422  # a viewer is required
     # CSRF and the body's shape are checked like every write.
     assert (
         api.post("/api/browser/takeover", token=a, csrf=False, json={"viewer": VIEWER}).status_code

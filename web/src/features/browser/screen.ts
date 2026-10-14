@@ -11,6 +11,8 @@ export interface Screen {
 
 export interface ScreenEvents {
   connect(): void;
+  /** The server turned this view away (too many open views): the disconnect follows. */
+  refused(): void;
   disconnect(): void;
 }
 
@@ -35,6 +37,9 @@ export const screenFactory = {
     rfb.background = "transparent";
     rfb.addEventListener("connect", () => {
       events.connect();
+    });
+    rfb.addEventListener("securityfailure", () => {
+      events.refused();
     });
     rfb.addEventListener("disconnect", () => {
       events.disconnect();

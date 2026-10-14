@@ -119,11 +119,13 @@ class BrowserdClient:
             }
         raise self._failure(status, payload)
 
-    async def live_input(self, lease_id: str, viewer: str | None) -> str:
+    async def live_input(self, lease_id: str, viewer: str | None, giver: str | None = None) -> str:
         """The viewer `viewer` takes the keyboard and the mouse of the lease's live view, or
-        (None) the agent has them back. Answers who holds them: "person" or "agent"."""
+        (None) the agent has them back, when `giver` is given only if that viewer holds them.
+        Answers who holds them: "person" or "agent"."""
         path = f"/leases/{lease_id}/live/input"
-        status, payload = await self._call("POST", path, TIMEOUT_S, {"viewer": viewer})
+        body = {"viewer": viewer} if giver is None else {"viewer": viewer, "from": giver}
+        status, payload = await self._call("POST", path, TIMEOUT_S, body)
         if (
             status == 200
             and isinstance(payload, dict)

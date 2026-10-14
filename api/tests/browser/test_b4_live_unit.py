@@ -238,10 +238,14 @@ class FakeVnc:
         self.got = asyncio.Event()
         self.stopped = 0
         self.stop_seen = asyncio.Event()
+        self.spawned = 0
+        self.writer: asyncio.StreamWriter | None = None  # x11vnc's end of the last viewer
 
     async def spawn(self) -> live.Vnc:
+        self.spawned += 1
         ours, theirs = await socket_pair()
         reader, writer = theirs
+        self.writer = writer
         writer.write(b"RFB 003.008\n")
 
         async def record() -> None:
@@ -525,6 +529,213 @@ def test_the_viewer_is_closed_when_the_lease_ends() -> None:
     run(go)
 
 
+async def closed_by_browserd(ws: WsClient) -> None:
+    assert await asyncio.wait_for(ws.recv(), 5) == (0x8, struct.pack(">H", 1000))
+    assert await asyncio.wait_for(ws.reader.read(), 5) == b""
+
+
+def test_no_byte_reaches_a_viewer_after_its_lease_ended_even_without_the_tick() -> None:
+    async def go(w: World) -> None:
+        first = await w.lease()
+        _server, port = await served(w)
+        _, ws = await open_ws(port, {"X-Live-Grant": w.grant(first)})
+        assert await ws.recv() == (0x2, b"RFB 003.008\n")
+        await w.manager.release(first, "released")
+        second = await w.lease()  # the next person's browser, no tick() in between
+        assert second != first
+        marker = secrets.token_hex(16).encode()
+        assert w.vnc.writer is not None
+        w.vnc.writer.write(marker)
+        await closed_by_browserd(ws)  # the close frame comes first: the marker was never sent
+        assert not w.live.viewers
+        await asyncio.wait_for(w.vnc.stop_seen.wait(), 5)
+
+    run(go)
+
+
+def test_a_viewer_frame_after_its_lease_ended_is_not_forwarded() -> None:
+    async def go(w: World) -> None:
+        first = await w.lease()
+        _server, port = await served(w)
+        _, ws = await open_ws(port, {"X-Live-Grant": w.grant(first)})
+        await ws.recv()
+        await w.manager.release(first, "released")
+        await w.lease()
+        ws.send(HANDSHAKE + UPDATE)
+        await closed_by_browserd(ws)
+        assert w.vnc.received == b""
+
+    run(go)
+
+
+def test_the_fourth_view_of_a_lease_is_refused_and_a_closed_view_frees_a_place() -> None:
+    async def go(w: World) -> None:
+        lease_id = await w.lease()
+        _server, port = await served(w)
+        views = []
+        for _ in range(live.VIEWERS_MAX):
+            _, ws = await open_ws(port, {"X-Live-Grant": w.grant(lease_id, str(uuid.uuid4()))})
+            assert await ws.recv() == (0x2, b"RFB 003.008\n")
+            views.append(ws)
+        assert w.vnc.spawned == live.VIEWERS_MAX
+
+        status, extra = await open_ws(port, {"X-Live-Grant": w.grant(lease_id, str(uuid.uuid4()))})
+        assert status.startswith("HTTP/1.1 101")  # noVNC reads the reason in RFB's own words
+        assert await asyncio.wait_for(extra.recv(), 5) == (0x2, b"RFB 003.008\n")
+        extra.send(b"RFB 003.008\n")
+        reason = live.TOO_MANY.encode()
+        assert await asyncio.wait_for(extra.recv(), 5) == (
+            0x2,
+            b"\x00" + struct.pack(">I", len(reason)) + reason,
+        )
+        await closed_by_browserd(extra)
+        assert w.vnc.spawned == live.VIEWERS_MAX  # no x11vnc for the refused one
+        assert len(w.live.viewers) == live.VIEWERS_MAX
+        assert not w.live.starting
+
+        # A view that closes frees its place.
+        views[0].writer.close()
+        await asyncio.wait_for(w.vnc.stop_seen.wait(), 5)
+        assert len(w.live.viewers) == live.VIEWERS_MAX - 1
+        _, again = await open_ws(port, {"X-Live-Grant": w.grant(lease_id, str(uuid.uuid4()))})
+        assert await again.recv() == (0x2, b"RFB 003.008\n")
+        assert w.vnc.spawned == live.VIEWERS_MAX + 1
+
+    run(go)
+
+
+def test_concurrent_admits_never_pass_the_cap() -> None:
+    async def go(w: World) -> None:
+        lease_id = await w.lease()
+        _server, port = await served(w)
+        gate = asyncio.Event()
+        real = w.vnc.spawn
+
+        async def slow() -> live.Vnc:  # every x11vnc is still starting when the others ask
+            await gate.wait()
+            return await real()
+
+        w.live.spawn = slow
+        tries = [
+            asyncio.ensure_future(
+                open_ws(port, {"X-Live-Grant": w.grant(lease_id, str(uuid.uuid4()))})
+            )
+            for _ in range(live.VIEWERS_MAX + 5)
+        ]
+        # The refused ones answer (their 101) at once; the admitted ones wait for their x11vnc.
+        answered: set[asyncio.Future[tuple[str, WsClient]]] = set()
+        while len(answered) < len(tries) - live.VIEWERS_MAX:
+            done, _ = await asyncio.wait(
+                set(tries) - answered, timeout=5, return_when=asyncio.FIRST_COMPLETED
+            )
+            assert done, "a view above the cap waited for an x11vnc"
+            answered |= done
+        assert w.live.starting[lease_id] == live.VIEWERS_MAX
+        assert w.live.open_views(lease_id) == live.VIEWERS_MAX
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(*tries), 5)
+        assert w.vnc.spawned == live.VIEWERS_MAX
+        assert len(w.live.viewers) == live.VIEWERS_MAX
+
+    run(go)
+
+
+def test_the_cap_is_per_lease() -> None:
+    async def go(w: World) -> None:
+        first = await w.lease()
+        w.live.starting[str(uuid.uuid4())] = live.VIEWERS_MAX  # another lease is full
+        assert w.live.open_views(first) == 0
+        _server, port = await served(w)
+        status, _ = await open_ws(port, {"X-Live-Grant": w.grant(first)})
+        assert status.startswith("HTTP/1.1 101")
+
+    run(go)
+
+
+def test_the_input_goes_back_when_the_holders_last_view_is_gone_for_the_grace() -> None:
+    async def go(w: World) -> None:
+        lease_id = await w.lease()
+        _server, port = await served(w)
+        _, ws = await open_ws(port, {"X-Live-Grant": w.grant(lease_id)})
+        await ws.recv()
+        w.live.take(lease_id, VIEWER)
+        turn = asyncio.ensure_future(w.live.agent_turn(lease_id))
+        w.live.tick()
+        await asyncio.sleep(0)
+        assert not turn.done()  # the holder's tab is open: the agent waits
+
+        ws.writer.close()  # the tab closed: no cleanup ran in the page
+        await asyncio.wait_for(w.vnc.stop_seen.wait(), 5)
+        w.live.tick()  # the clock starts
+        w.clock.now += live.HOLDER_GRACE_S - 1
+        w.live.tick()
+        await asyncio.sleep(0)
+        assert not turn.done()  # a reload may still come back
+        assert w.live.holder(lease_id) == VIEWER
+        w.clock.now += 1
+        w.live.tick()
+        assert await turn == live.PERSON_USED
+        assert w.live.holder(lease_id) is None
+
+    run(go)
+
+
+def test_a_holder_that_comes_back_within_the_grace_keeps_the_input() -> None:
+    async def go(w: World) -> None:
+        lease_id = await w.lease()
+        _server, port = await served(w)
+        _, ws = await open_ws(port, {"X-Live-Grant": w.grant(lease_id)})
+        await ws.recv()
+        w.live.take(lease_id, VIEWER)
+        ws.writer.close()
+        await asyncio.wait_for(w.vnc.stop_seen.wait(), 5)
+        w.live.tick()
+        w.clock.now += live.HOLDER_GRACE_S - 1
+        w.live.tick()
+        _, back = await open_ws(port, {"X-Live-Grant": w.grant(lease_id)})  # same viewer id
+        await back.recv()
+        w.clock.now += 5 * live.HOLDER_GRACE_S
+        w.live.tick()
+        assert w.live.holder(lease_id) == VIEWER
+
+    run(go)
+
+
+def test_another_view_closing_does_not_end_the_holders_take_over() -> None:
+    async def go(w: World) -> None:
+        lease_id = await w.lease()
+        _server, port = await served(w)
+        _, held = await open_ws(port, {"X-Live-Grant": w.grant(lease_id)})
+        _, spare = await open_ws(port, {"X-Live-Grant": w.grant(lease_id, str(uuid.uuid4()))})
+        for ws in (held, spare):
+            await ws.recv()
+        w.live.take(lease_id, VIEWER)
+        spare.writer.close()
+        await asyncio.wait_for(w.vnc.stop_seen.wait(), 5)
+        w.live.tick()
+        w.clock.now += 10 * live.HOLDER_GRACE_S
+        w.live.tick()
+        assert w.live.holder(lease_id) == VIEWER
+
+    run(go)
+
+
+def test_give_back_from_a_view_that_is_not_the_holder_is_ignored() -> None:
+    async def go(w: World) -> None:
+        lease_id = await w.lease()
+        mine, other = str(uuid.uuid4()), str(uuid.uuid4())
+        w.live.take(lease_id, mine)
+        w.live.give_back(lease_id, other)  # tab A unmounts after tab B took over
+        assert w.live.holder(lease_id) == mine
+        w.live.give_back(lease_id, mine)
+        assert w.live.holder(lease_id) is None
+        w.live.take(lease_id, mine)
+        w.live.give_back(lease_id)  # the agent side: whoever holds it
+        assert w.live.holder(lease_id) is None
+
+    run(go)
+
+
 def test_refusals() -> None:
     async def go(w: World) -> None:
         lease_id = await w.lease()
@@ -598,7 +809,14 @@ def test_the_input_route_of_the_control_api() -> None:
             200,
             {"input": "agent"},
         )
-        for body in (b'{"viewer": "../x"}', b'{"viewer": 3}'):
+        await route.handler(service, req(f'{{"viewer": "{VIEWER}"}}'.encode()), match)
+        stale = f'{{"viewer": null, "from": "{uuid.uuid4()}"}}'.encode()
+        assert await route.handler(service, req(stale), match) == (200, {"input": "agent"})
+        assert w.live.holder(lease_id) == VIEWER  # the one that gave back is not the holder
+        mine = f'{{"viewer": null, "from": "{VIEWER}"}}'.encode()
+        assert await route.handler(service, req(mine), match) == (200, {"input": "agent"})
+        assert w.live.holder(lease_id) is None
+        for body in (b'{"viewer": "../x"}', b'{"viewer": 3}', b'{"viewer": null, "from": 3}'):
             with pytest.raises(LeaseError):
                 await route.handler(service, req(body), match)
         other = route.pattern.fullmatch(f"/leases/{uuid.uuid4()}/live/input")

@@ -34,6 +34,8 @@ const SPECIAL_KEYS: Record<string, number> = {
 
 type Phase = "connecting" | "connected" | "closed";
 
+const TOO_MANY = "Too many open views of your browser. Close one.";
+
 const STATUS: Record<InputHolder, string> = {
   assistant: "You are watching your browser. Take over to use it yourself.",
   you: "You have the keyboard and the mouse. Give back when you are done.",
@@ -78,6 +80,9 @@ export function LiveBrowser({ status }: { status?: string }) {
             connect: () => {
               if (!gone()) setPhase("connected");
             },
+            refused: () => {
+              if (!gone()) setProblem(TOO_MANY);
+            },
             disconnect: () => {
               if (gone()) return;
               screen.current = null;
@@ -109,9 +114,10 @@ export function LiveBrowser({ status }: { status?: string }) {
   // Leaving the page while holding the input gives it back, so the agent does not wait for it.
   useEffect(
     () => () => {
-      if (inputRef.current === "you") void giveBack().catch(() => undefined);
+      if (inputRef.current === "you")
+        void giveBack(viewer).catch(() => undefined);
     },
-    [],
+    [viewer],
   );
 
   const holder = (next: InputHolder) => {
@@ -127,7 +133,7 @@ export function LiveBrowser({ status }: { status?: string }) {
     setBusy(true);
     setProblem(undefined);
     try {
-      holder(await (to === "you" ? takeOver(viewer) : giveBack()));
+      holder(await (to === "you" ? takeOver(viewer) : giveBack(viewer)));
     } catch (error) {
       setProblem(sentence(error));
     } finally {
