@@ -11,9 +11,10 @@
 #   Playwright of a journey, which is not a container.
 # - It starts with APP_ENV unset: the server refuses to run under APP_ENV=production, and
 #   APPLY_STUB_BASE_URL (the app's own setting) is refused in production by the api.
-networks:
-  egress: {}
-
+# - `egress` is compose.yml's own network, so this file names it and does not define it. A test
+#   that drives the browser against this server sets BROWSER_PROXY_ALLOW_PRIVATE: atsforms on
+#   the browser service, and reaches it on a port of the egress proxy's set (80, 443, 8080 or
+#   8443): the proxy checks the port of an allowed name too.
 services:
   atsforms:
     # Standard library only: the same pinned base image as the other stubs.

@@ -7,6 +7,7 @@ after the person stopped it); and the day of the ceiling in the person's time zo
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -172,6 +173,24 @@ def test_the_day_of_the_ceiling_is_the_persons_day(
     now: datetime, timezone: str | None, day: date
 ) -> None:
     assert e.ceiling_day(now, timezone) == day
+
+
+@pytest.mark.parametrize(
+    ("now", "day"),
+    [
+        (datetime(2026, 10, 14, 21, 59, 59, tzinfo=UTC), date(2026, 10, 14)),
+        (datetime(2026, 10, 14, 22, 0, tzinfo=UTC), date(2026, 10, 14)),  # midnight in Paris
+        (datetime(2026, 10, 14, 23, 59, 59, tzinfo=UTC), date(2026, 10, 14)),
+        (datetime(2026, 10, 15, 0, 0, tzinfo=UTC), date(2026, 10, 15)),
+        (datetime(2026, 10, 15, 0, 30, tzinfo=ZoneInfo("Europe/Paris")), date(2026, 10, 14)),
+        (datetime(2026, 10, 14, 20, 0, tzinfo=ZoneInfo("America/New_York")), date(2026, 10, 15)),
+    ],
+)
+def test_the_window_ends_on_the_utc_date_that_found_on_is_stamped_in(
+    now: datetime, day: date
+) -> None:
+    """`found_on` is the UTC date of the clock, so the window never follows the local day."""
+    assert e.found_day(now) == day
 
 
 @pytest.mark.parametrize(("ceiling", "started", "left"), [(100, 0, 100), (1, 1, 0), (1, 5, 0)])

@@ -132,7 +132,7 @@ def eligible(
     user_id: uuid.UUID,
     setting: eligibility.Setting,
     search: SearchSection | None,
-    today: date,
+    last_day: date,
     lookback_days: int,
 ) -> list[Candidate]:
     """The person's eligible postings, in order. The query narrows by status, fit and window;
@@ -152,7 +152,7 @@ def eligible(
             Job.status.in_(eligibility.OPEN_STATUSES),
             Job.fit.is_not(None),
             Job.fit >= setting.min_fit,
-            Job.found_on >= eligibility.since(today, lookback_days),
+            Job.found_on >= eligibility.since(last_day, lookback_days),
         )
     ).all()
     rules = sweep.never_apply_rules(search) if search is not None else []
@@ -163,7 +163,7 @@ def eligible(
             eligibility.Posting(row.status, row.fit, row.found_on, row.company, row.title, row.lg),
             setting,
             rules,
-            today,
+            last_day,
             lookback_days,
         )
         is None
@@ -530,7 +530,14 @@ def person(db: Session, user_id: uuid.UUID, *, at: datetime, settings: Settings)
             out.runs += writer_base.start_ready(db, user_id, at=at, settings=settings)
         else:
             create = False  # nothing to write from: nothing created, the rest still settled
-    postings = eligible(db, user_id, setting, search, today, settings.documents_auto_lookback_days)
+    postings = eligible(
+        db,
+        user_id,
+        setting,
+        search,
+        eligibility.found_day(at),
+        settings.documents_auto_lookback_days,
+    )
     if create:
         docs = posting_docs(db, user_id)
         for posting in postings:
