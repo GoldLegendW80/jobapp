@@ -398,6 +398,34 @@ def test_messages_send_keeps_the_message_id_and_the_header_and_answers_rfc822msg
     assert len(fake.sent) == 1
 
 
+def test_the_padding_switch_makes_the_fake_pad_the_attachment_data(fake: FakeGoogle) -> None:
+    token = _access(fake, ALICE)
+    mailbox = fake.mailboxes[ALICE]
+    for size in (1, 2, 3):
+        mailbox.add(
+            {
+                "id": f"m-pad-{size}",
+                "headers": [],
+                "text": "f",
+                "attachments": [
+                    {"filename": "f.bin", "base64": base64.b64encode(b"x" * size).decode()}
+                ],
+            }
+        )
+
+    def data_of(size: int) -> str:
+        attachment = mailbox.messages[f"m-pad-{size}"]["attachments"][0]["attachmentId"]
+        return _get(fake, token, f"{GMAIL}/messages/m-pad-{size}/attachments/{attachment}")[1][
+            "data"
+        ]
+
+    assert [data_of(size) for size in (1, 2, 3)] == ["eA", "eHg", "eHh4"]
+    fake.switch("attachment_padding", "on")
+    assert [data_of(size) for size in (1, 2, 3)] == ["eA==", "eHg=", "eHh4"]
+    with pytest.raises(ValueError, match="attachment_padding"):
+        fake.switch("attachment_padding", "sometimes")
+
+
 def test_the_switch_makes_the_fake_replace_the_message_id_or_drop_the_answer(
     fake: FakeGoogle,
 ) -> None:

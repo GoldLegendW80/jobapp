@@ -471,7 +471,9 @@ async def decode_attachment(
 ) -> AsyncIterator[bytes]:
     """The bytes of an attachment out of the stream of Google's answer
     (`{"size": n, "data": "<base64url>"}`), piece by piece: nothing but the current piece and
-    at most three characters carried over is held. Over `cap` bytes of answer: `TooLargeError`
+    at most five characters carried over (three of data, two of padding) is held. Padding, which
+    Google may add, is accepted only at the very end of the data; anywhere else it is refused
+    as a malformed answer. Over `cap` bytes of answer: `TooLargeError`
     after what was already decoded (the download is cut, the caller drops what it wrote)."""
     total = 0
     state = "head"
@@ -498,7 +500,10 @@ async def decode_attachment(
                 state = "tail"
                 piece, carry = carry.rstrip(b"="), b""
             else:
-                usable = len(carry) - len(carry) % 4
+                bare = len(carry.rstrip(b"="))
+                if len(carry) - bare > 2:
+                    raise MalformedAnswerError(reason="shape")
+                usable = bare - bare % 4
                 piece, carry = carry[:usable], carry[usable:]
             if piece:
                 yield _decode(piece)

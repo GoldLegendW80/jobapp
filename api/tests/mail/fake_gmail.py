@@ -133,6 +133,9 @@ SWITCHES = {
     "send_answer": ("normal", "drop", "error"),
     # `messages.list` hands back the same page token for ever.
     "repeat_page_token": ("off", "on"),
+    # `attachments.get` pads the base64url of `data` with `=` (Discovery type `byte`), as Google
+    # may; `off` strips the padding.
+    "attachment_padding": ("off", "on"),
 }
 
 ROUTES = [
@@ -1251,12 +1254,16 @@ class FakeGoogle:
 
     def _attachment(self, held: Mapping[str, Any]) -> Iterator[bytes]:
         size = int(held["size"])
+        padded = self.switches["attachment_padding"] == "on"
         yield f'{{"size": {size}, "data": "'.encode("ascii")
         if "base64" in held:
-            yield b64url(base64.b64decode(held["base64"])).encode("ascii")
+            encoded = base64.urlsafe_b64encode(base64.b64decode(held["base64"]))
+            yield encoded if padded else encoded.rstrip(b"=")
         else:
+            # Pieces are multiples of three bytes but the last: only that one can carry `=`.
             for piece in generated_bytes(held["attachmentId"], size):
-                yield base64.urlsafe_b64encode(piece).rstrip(b"=")
+                encoded = base64.urlsafe_b64encode(piece)
+                yield encoded if padded else encoded.rstrip(b"=")
         yield b'"}'
 
     def _send(self, mailbox: Mailbox, body: bytes) -> Reply:

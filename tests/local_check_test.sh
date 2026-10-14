@@ -250,6 +250,39 @@ out_has "journeys-sweep             FAIL"
 [[ "$(ups)" == 3 ]] || fail "a port that is always taken: $(ups) starts, expected 3"
 ok "a stack that cannot bind its port is taken down and started on another, three starts at most, and four stacks hold four different ports"
 
+# The mail group also publishes the fake Google on a port of its own: when that one is taken, the
+# retry changes it too, instead of failing the three starts on the same stub port.
+cat >"$WORK/ports-mail.sh" <<'EOF'
+docker() {
+  echo "docker $*" >>"$STUB_CALLS"
+  case " $* " in
+  *" up "*)
+    echo "up $HTTP_PORT $GMAIL_STUB_PORT $E2E_GMAIL_STUB_URL" >>"$STUB_CALLS"
+    if [[ "$(grep -c '^up ' "$STUB_CALLS")" -le "$STUB_UP_FAILS" ]]; then
+      echo "Error response from daemon: driver failed programming external connectivity on endpoint x: failed to bind port 127.0.0.1:$GMAIL_STUB_PORT/tcp: address already in use" >&2
+      return 1
+    fi
+    ;;
+  esac
+  return 0
+}
+journey_play() { true; }
+stub_plan() {
+  pick_journey_ports mail
+  run_step journeys-mail s_journey mail || true
+}
+EOF
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports-mail.sh" STUB_UP_FAILS=1 "$CHECK" --only journeys
+out_has "journeys-mail              PASS"
+[[ "$(ups)" == 2 ]] || fail "mail, one failed start: $(ups) starts, expected 2"
+[[ "$(grep '^up ' "$STUB_CALLS" | awk '{print $2}' | sort -u | wc -l | tr -d ' ')" == 2 ]] || fail "the mail stack kept its port"
+[[ "$(grep '^up ' "$STUB_CALLS" | awk '{print $3}' | sort -u | wc -l | tr -d ' ')" == 2 ]] || fail "the retry of the mail stack kept the port of the fake Google"
+while read -r _ _ stub url; do
+  [[ "$url" == "http://127.0.0.1:$stub" ]] || fail "the address of the fake Google ($url) does not follow its port ($stub)"
+done < <(grep '^up ' "$STUB_CALLS")
+ok "the retry of the mail stack takes a new port for the fake Google too"
+
 # --- a step of several commands --------------------------------------------------------------------
 # Bash ignores errexit below a command whose status is tested, so a step called as the lanes call
 # it (`|| true`, `if`, `!`) once passed when its first command failed and its last succeeded

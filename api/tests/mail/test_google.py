@@ -13,6 +13,7 @@ import logging
 import pickle
 import traceback
 import tracemalloc
+from collections.abc import AsyncIterator
 from urllib.parse import unquote
 
 import httpx
@@ -29,6 +30,7 @@ from app.mail.google import (
     USER_UNITS_PER_MINUTE,
     GoogleClient,
     Grant,
+    decode_attachment,
     next_backoff,
 )
 from tests.mail import canary
@@ -361,6 +363,130 @@ def test_an_attachment_answer_cut_short_is_truncated(
     with pytest.raises(errors.MalformedAnswerError) as caught:
         run(download())
     assert caught.value.reason == "truncated"
+
+
+async def _chunks(*parts: bytes) -> AsyncIterator[bytes]:
+    for part in parts:
+        yield part
+
+
+def _decoded(*parts: bytes) -> bytes:
+    async def collect() -> bytes:
+        return b"".join([piece async for piece in decode_attachment(_chunks(*parts))])
+
+    return run(collect())
+
+
+def _padded_answer(raw: bytes) -> bytes:
+    data = base64.urlsafe_b64encode(raw)
+    return b'{"size": %d, "data": "%s"}' % (len(raw), data)
+
+
+@pytest.mark.parametrize("raw_size", [9, 10, 11, 12, 13, 14, 15])  # 0, 1 and 2 padding characters
+def test_a_padded_attachment_decodes_alike_cut_at_every_byte_position(raw_size: int) -> None:
+    raw = bytes(range(200, 200 + raw_size))
+    answer = _padded_answer(raw)
+    assert answer.count(b"=") == (-raw_size) % 3
+    assert _decoded(answer) == raw
+    for cut in range(1, len(answer)):
+        assert _decoded(answer[:cut], answer[cut:]) == raw, cut
+    for cut in range(1, len(answer) - 1):  # three chunks, the second one a single byte
+        assert _decoded(answer[:cut], answer[cut : cut + 1], answer[cut + 1 :]) == raw, cut
+
+
+def test_a_padded_attachment_whose_closing_quote_starts_a_chunk_decodes() -> None:
+    assert _decoded(b'{"size": 1, "data": "QQ==', b'"}') == b"A"
+    assert _decoded(b'{"size": 2, "data": "QUI=', b'"}') == b"AB"
+    assert _decoded(b'{"size": 1, "data": "QQ=', b"=", b'"}') == b"A"
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        [b'{"size": 2, "data": "QQ==QQ=="}'],
+        [b'{"size": 2, "data": "QQ==', b'QQ=="}'],
+        [b'{"size": 2, "data": "QQ=', b"=QQ", b'=="}'],
+        [b'{"size": 2, "data": "QQ==', b"Q", b"Q", b"Q", b'Q"}'],
+        [b'{"size": 2, "data": "Q=QQ"}'],
+        [b'{"size": 2, "data": "QQ===', b'"}'],
+        [b'{"size": 2, "data": "QQ=', b"=", b"=", b'"}'],
+        [b'{"size": 2, "data": "=', b'QQQ"}'],
+    ],
+)
+def test_padding_in_the_middle_of_the_data_is_still_refused(parts: list[bytes]) -> None:
+    with pytest.raises(errors.MalformedAnswerError) as caught:
+        _decoded(*parts)
+    assert caught.value.reason == "shape"
+
+
+def test_a_padding_only_stream_does_not_grow_the_carry() -> None:
+    async def run_it() -> None:
+        async for _ in decode_attachment(_chunks(b'{"size": 2, "data": "', b"=" * 3, b"=" * 3)):
+            pass
+
+    with pytest.raises(errors.MalformedAnswerError) as caught:
+        run(run_it())
+    assert caught.value.reason == "shape"
+
+
+def test_a_padded_answer_with_its_closing_quote_on_a_64_kib_boundary_downloads(
+    fake: FakeGoogle,
+    mail_settings: Settings,
+    clock: Clock,
+    sleeps: list[float],
+    account_a: Connected,
+) -> None:
+    boundary = 65536  # CHUNK_BYTES: the closing quote is the first byte of the second chunk
+    size = 49100  # 49100 % 3 == 2: one padding character
+    raw = bytes(index % 251 for index in range(size))
+    data = base64.urlsafe_b64encode(raw)
+    head = b'{"size": %d,' % size
+    tail = b'"data": "'
+    answer = head + b" " * (boundary - len(head) - len(tail) - len(data)) + tail + data + b'"}'
+    assert data.endswith(b"=")
+    assert answer.index(b'"}') == boundary
+    inner = fake.transport()
+
+    def padded(request: httpx.Request) -> httpx.Response:
+        if "/attachments/" in request.url.path:
+            return httpx.Response(200, content=answer)
+        return inner.handler(request)
+
+    client = make_client(fake, mail_settings, clock, sleeps, transport=httpx.MockTransport(padded))
+
+    async def download() -> bytes:
+        stream = client.download_attachment(account_a.grant, "m", "a")
+        return b"".join([piece async for piece in stream])
+
+    assert run(download()) == raw
+    assert sleeps == []  # no retry was needed
+
+
+@pytest.mark.parametrize("raw_size", [1, 2, 3, 100_000, 100_001, 100_002])
+def test_the_fake_serves_a_padded_attachment_and_the_client_downloads_it(
+    fake: FakeGoogle, google: GoogleClient, account_a: Connected, raw_size: int
+) -> None:
+    fake.switch("attachment_padding", "on")
+    held = [
+        {"filename": "small.bin", "base64": base64.b64encode(bytes([65]) * raw_size).decode()}
+        if raw_size < 10
+        else {"filename": "large.bin", "size": raw_size}
+    ]
+    message = fake.mailboxes[ALICE].add(
+        {"id": f"m-pad-{raw_size}", "headers": [], "text": "f", "attachments": held}
+    )
+    attachment_id = message["attachments"][0]["attachmentId"]
+    expected = (
+        bytes([65]) * raw_size
+        if raw_size < 10
+        else b"".join(generated_bytes(attachment_id, raw_size))
+    )
+
+    async def download() -> bytes:
+        stream = google.download_attachment(account_a.grant, f"m-pad-{raw_size}", attachment_id)
+        return b"".join([piece async for piece in stream])
+
+    assert run(download()) == expected
 
 
 def test_the_pdf_of_the_seed_downloads_whole(

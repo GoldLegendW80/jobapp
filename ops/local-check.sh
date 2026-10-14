@@ -654,7 +654,8 @@ journey_play() { # journey_play <group> <Playwright arguments>
 
 # Starts a stack on the port picked for its group. The port is bound once more just before the
 # start; when the start still fails on a port (another program took it in between), this stack,
-# and only this one, is taken down and started again on another port, three starts at most.
+# and only this one, is taken down and started again on another port (the mail stack also on
+# another one for its fake Google), three starts at most.
 stack_up() { # stack_up <group> <project> <compose file arguments>
   local group="$1" project="$2" port="" out attempt=1 rc
   shift 2
@@ -672,6 +673,10 @@ stack_up() { # stack_up <group> <project> <compose file arguments>
     echo "retry $attempt of 2: port $port was taken before $project started, taking it down, picking another port"
     docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0 || true
     port=""
+    if [[ "$group" == mail ]]; then # the fake Google has a loopback port of its own, taken anew too
+      GMAIL_STUB_PORT="$(claim_port)" || return 1
+      export GMAIL_STUB_PORT E2E_GMAIL_STUB_URL="http://127.0.0.1:$GMAIL_STUB_PORT"
+    fi
     attempt=$((attempt + 1))
   done
 }

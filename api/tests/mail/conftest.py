@@ -12,7 +12,8 @@ What a test gets by naming a fixture:
 - `google`: `app.mail.google.GoogleClient` on the fake, with that clock and no jitter.
 - `account_a`, `account_b`: a connected account each, on the Google side (`Connected`: the user
   id, the address, the `Grant` to hand to the client). The row of `mail_accounts` comes with M4.
-- `redis_url`: a Redis for the canary (TEST_REDIS_URL, else a throwaway container, else skip).
+- `redis_url`: a Redis for the canary (TEST_REDIS_URL or REDIS_URL, else a throwaway container,
+  else skip).
 
 Run for every test of the folder: the mail variables are removed from the environment, and
 `no_real_google` fails a test that tried to resolve a real Google host.
@@ -188,7 +189,8 @@ def account_b(fake: FakeGoogle) -> Connected:
 
 @pytest.fixture(scope="session")
 def redis_url() -> Iterator[str]:
-    external = os.environ.get("TEST_REDIS_URL")
+    # The gate (and CI) give a Redis in REDIS_URL; elsewhere a throwaway container.
+    external = os.environ.get("TEST_REDIS_URL") or os.environ.get("REDIS_URL")
     if external:
         yield external
         return
