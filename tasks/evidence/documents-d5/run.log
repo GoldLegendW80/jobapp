@@ -1,0 +1,9 @@
+$ uv --native-tls run pytest -q -n 4 -m "not docker" tests/documents tests/test_migrations.py (plus every *migration* test file, tests/mail/test_m4_schema.py)
+..................................................                       [100%]
+914 passed in 26.56s
+$ uv --native-tls run pytest -q -n 4 -m "not docker" tests/jobs tests/identity
+1139 passed, 15 skipped in 65.68s (0:01:05)
+$ uv --native-tls run ruff check app tests alembic
+All checks passed!
+$ uv --native-tls run ruff format --check app tests alembic
+410 files already formatted
