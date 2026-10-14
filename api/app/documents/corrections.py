@@ -8,12 +8,15 @@ Who corrects what:
     hyphen used as a separator becomes a comma (a range of digits keeps a hyphen, a dash that
     opens or closes a line goes); "full-stack" never changes (step 2);
   - `remove_remaining`: each claim still open after the writer's correction pass loses the
-    sentence that holds it, but for a version number after a skills term of the profile
-    ("Python 3.12", "Office 2019", "Airflow v2"): only the number goes, with the code
-    `version_removed`, and the true skill stays; a bullet, highlight, competency, skills group
-    or paragraph left empty is dropped; a field that must not be empty takes a fallback
-    (`Fallbacks`: the base CV's headline or summary, "Application for" and the posting's
-    title, the profile's motivation, else one sentence naming the role and the company) (step 5).
+    sentence that holds it, unless the claim can go alone and leave a grammatical sentence
+    that is no lie: a version number after a skills term of the profile ("Python 3.12",
+    "Office 2019", "Airflow v2", recorded as `version_removed`), a count before a noun ("Led
+    8 engineers"), a percent after "by" or "de" ("by 40%"), a seniority word ("Senior"), a
+    date at an employer ("since 2021"); the true rest of the sentence stays; a bullet,
+    highlight, competency, skills group or paragraph left empty is dropped; a field that must
+    not be empty takes a fallback (`Fallbacks`: the base CV's headline or summary,
+    "Application for" and the posting's title, the profile's motivation, else one sentence
+    naming the role and the company) (step 5).
 - **By a model rewrite**, not here: the correction pass of the writer (step 4) asks it once to
   rewrite or remove each flagged claim. The generation tasks (D7 and later) run it; this module
   gives them the interface: the issues to send (`checks.Checks.claims` with `checks.excerpt`)
@@ -67,6 +70,7 @@ _NUMBER_CODES = frozenset(
         "amount_not_in_sources",
         "year_not_in_sources",
         "date_not_in_sources",
+        rules.DATE_AT_EMPLOYER,
     )
 )
 
@@ -380,6 +384,144 @@ def _version_start(text: str, issue: Issue, terms: tuple[str, ...]) -> int | Non
     return None
 
 
+# What removing a token alone would break: a count after one of these words is part of a range
+# or a comparison ("from 3 to 5", "by 2", "8 out of 10"), and before one of these it is a measure.
+_NO_CUT_BEFORE = frozenset(
+    [
+        "from",
+        "to",
+        "by",
+        "than",
+        "between",
+        "and",
+        "or",
+        "x",
+        "par",
+        "entre",
+        "et",
+        "ou",
+        "que",
+        "sur",
+        "out",
+        "per",
+        "of",
+        "de",
+    ]
+)
+_NO_CUT_AFTER = frozenset(
+    [
+        "to",
+        "and",
+        "or",
+        "out",
+        "of",
+        "per",
+        "times",
+        "fois",
+        "x",
+        "ms",
+        "s",
+        "h",
+        "k",
+        "m",
+        "km",
+        "kg",
+        "gb",
+        "mb",
+        "tb",
+        "million",
+        "millions",
+        "billion",
+        "billions",
+        "thousand",
+        "mille",
+        "milliers",
+        "milliard",
+        "milliards",
+        "percent",
+        "pourcent",
+        "pour",
+    ]
+)
+
+
+def _word_before(text: str, at: int) -> tuple[int, str]:
+    """The word that ends right before `text[at]` (one space between), and where it starts."""
+    if at < 2 or text[at - 1] != " ":
+        return at, ""
+    start = at - 1
+    while start > 0 and start > at - 40 and text[start - 1].isalpha():
+        start -= 1
+    return start, text[start : at - 1].lower()
+
+
+def _word_after(text: str, at: int) -> str:
+    if at >= len(text) - 1 or text[at] != " ":
+        return ""
+    stop = at + 1
+    while stop < len(text) and stop < at + 40 and text[stop].isalpha():
+        stop += 1
+    return text[at + 1 : stop]
+
+
+def _count_cut(text: str, issue: Issue) -> tuple[int, int] | None:
+    """A count before a noun loses itself alone: "Led 8 engineers" becomes "Led engineers"."""
+    core = text[issue.start : issue.end].rstrip("+")
+    if not (core.isdigit() and len(core) <= 6) and not (core.isalpha() and core.islower()):
+        return None
+    _, before = _word_before(text, issue.start)
+    after = _word_after(text, issue.end)
+    if not before or before in _NO_CUT_BEFORE:
+        return None
+    if not (before + after).isascii():
+        return None  # French wants an article in its place ("Encadré des développeurs")
+    if not after or not after[0].islower() or after.lower() in _NO_CUT_AFTER:
+        return None
+    return issue.start, issue.end + 1
+
+
+def _percent_cut(text: str, issue: Issue) -> tuple[int, int] | None:
+    """ "by 40%" (or "de 40 %", "of 40 percent") goes with its preposition: "Cut the costs by
+    40%." becomes "Cut the costs."; any other percent takes its sentence."""
+    found = rules.percents(text[issue.start : issue.start + 24])
+    if not found or found[0][0] != 0:
+        return None
+    end = issue.start + found[0][1]
+    start, before = _word_before(text, issue.start)
+    if before not in ("by", "de", "of") or (end < len(text) and text[end].isalnum()):
+        return None
+    return (start - 1, end) if start > 0 and text[start - 1] == " " else None
+
+
+def _date_cut(text: str, start: int, end: int) -> tuple[int, int]:
+    """ "since 2021", "(2015 to 2021)" goes with its space or its brackets; at the start of a
+    sentence, with the comma after it."""
+    if start > 0 and text[start - 1] == "(" and end < len(text) and text[end] == ")":
+        start, end = start - 1, end + 1
+    if start > 0 and text[start - 1] == " ":
+        return start - 1, end
+    while end < len(text) and text[end] in ", ":
+        end += 1
+    return start, end
+
+
+def _token_cut(text: str, issue: Issue) -> tuple[int, int] | None:
+    """The span to cut when a claim goes alone and its sentence stays grammatical and no lie: a
+    count, a percent after "by", a seniority word, a date at an employer. None: the sentence
+    goes."""
+    if issue.code == rules.SENIORITY:
+        if issue.end < len(text) and text[issue.end] == " ":
+            return issue.start, issue.end + 1
+        return None
+    if issue.code == rules.DATE_AT_EMPLOYER:
+        return _date_cut(text, issue.start, issue.end)
+    if issue.code == "percent_not_in_sources":
+        return _percent_cut(text, issue)
+    if issue.code == "number_not_in_sources":
+        return _count_cut(text, issue)
+    return None
+
+
 def remove_remaining(
     content: c.CvContent | c.LetterContent, checks: Checks, fallbacks: Fallbacks
 ) -> tuple[c.CvContent | c.LetterContent, list[Correction]]:
@@ -402,24 +544,32 @@ def remove_remaining(
         spans = rules.sentences(text)
         starts = [start for start, _ in spans]
         removed: dict[int, str] = {}
-        cuts: list[tuple[int, int]] = []
+        cuts: list[tuple[int, int, str]] = []
         for issue in issues:
             cut = _version_start(text, issue, checks.known_terms)
             if cut is not None:
-                cuts.append((cut, issue.end))
+                cuts.append((cut, issue.end, VERSION_REMOVED))
+                continue
+            token = _token_cut(text, issue)
+            if token is not None:
+                cuts.append((*token, issue.code))
                 continue
             index = max(bisect_right(starts, issue.start) - 1, 0)
             removed.setdefault(index, issue.code)
         kept_spans = [(s, e) for i, (s, e) in enumerate(spans) if i not in removed]
-        kept_cut = "".join(_cut(text, s, e, cuts) for s, e in kept_spans).strip()
         records += [
             _record(path, text[spans[i][0] : spans[i][1]].strip(), "", code, "code")
             for i, code in sorted(removed.items())
         ]
         kept = "".join(text[s:e] for s, e in kept_spans).strip()
-        if kept_cut != kept:
-            records.append(_record(path, kept, kept_cut, VERSION_REMOVED, "code"))
-        kept = kept_cut
+        # The token cuts, one record per code, in the order they first stand in the field.
+        applied: list[tuple[int, int]] = []
+        for code in dict.fromkeys(code for *_, code in sorted(cuts)):
+            applied += [(a, b) for a, b, k in cuts if k == code]
+            after = "".join(_cut(text, s, e, applied) for s, e in kept_spans).strip()
+            if after != kept:
+                records.append(_record(path, kept, after, code, "code"))
+            kept = after
         _set(data, path, kept or None)
         if path.startswith("skills.") and path.endswith(".label") and not kept:
             group = data["skills"][int(path.split(".")[1])]
@@ -445,7 +595,8 @@ def remove_remaining(
 
 
 def _cut(text: str, start: int, end: int, cuts: list[tuple[int, int]]) -> str:
-    """`text[start:end]` without the spans of `cuts` inside it."""
+    """`text[start:end]` without the spans of `cuts` inside it. A cut that opens the sentence
+    gives its capital to the word after it ("Senior engineer" becomes "Engineer")."""
     out: list[str] = []
     at = start
     for low, high in sorted(cuts):
@@ -453,6 +604,9 @@ def _cut(text: str, start: int, end: int, cuts: list[tuple[int, int]]) -> str:
             continue
         out.append(text[at:low])
         at = high
+        if low == start and at < end and text[at].islower():
+            out.append(text[at].upper())
+            at += 1
     out.append(text[at:end])
     return "".join(out)
 

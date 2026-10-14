@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "headline": "Software Engineer",
+  "summary": "Software Engineer who builds payment systems in Rust and Python.",
+  "highlights": ["Run the payments API of Orbite Données"],
+  "competencies": ["Rust", "Kubernetes"],
+  "experience": [
+    {"employer_key": "orbite-donnees", "bullets": ["Run the payments API in Rust and Python."]},
+    {"employer_key": "atelier-nimbus", "bullets": ["Mentored two junior engineers."]}
+  ],
+  "skills": [{"label": "Backend", "items": ["Rust", "Python", "Java 17", "PostgreSQL 15"]}],
+  "fixed": {
+    "employers": [
+      {"key": "orbite-donnees", "organisation": "Orbite Données", "title": "Software Engineer", "start": "2022-01", "end": null, "location": "Rennes"},
+      {"key": "atelier-nimbus", "organisation": "Atelier Nimbus", "title": "Développeur backend", "start": "2017-01", "end": "2021-01"}
+    ],
+    "schools": [
+      {"school": "Université Exemple", "degree": "MSc in Computer Science", "start": "2015", "end": "2017"},
+      {"school": "Université Exemple", "degree": "Licence Informatique", "start": "2012", "end": "2015"}
+    ],
+    "languages": [{"name": "English", "level": "Fluent"}, {"name": "French", "level": "Native"}]
+  }
+}

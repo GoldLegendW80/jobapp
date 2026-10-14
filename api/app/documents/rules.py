@@ -40,6 +40,10 @@ REQUIRED_EMPTY = "required_empty"
 CREDENTIAL = "credential_not_in_profile"
 CHANGE = "change_not_in_profile"
 DECADE = "decade_not_in_profile"
+# A seniority word on a title that is the person's without it ("Senior Software Engineer").
+SENIORITY = "seniority_not_in_profile"
+# A date said of one of the person's organisations that is not its stored date.
+DATE_AT_EMPLOYER = "date_not_in_profile"
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,7 +380,7 @@ _REACH = 12
 
 
 @dataclass(frozen=True, slots=True)
-class _Word:
+class Word:
     start: int
     end: int
     folded: str
@@ -384,16 +388,27 @@ class _Word:
     digits: bool
 
 
+_FOLDED_CHARS: dict[str, str] = {}  # a pure function of one character: bounded by the alphabet
+
+
 def _fold_word(word: str) -> str:
-    return "".join(_fold_char(ch) for ch in word)
+    if word.isascii():
+        return word.lower()
+    out = []
+    for ch in word:
+        folded = _FOLDED_CHARS.get(ch)
+        if folded is None:
+            folded = _FOLDED_CHARS[ch] = _fold_char(ch)
+        out.append(folded)
+    return "".join(out)
 
 
-def _words(text: str) -> list[_Word]:
+def _words(text: str) -> list[Word]:
     out = []
     for found in _WORD_RE.finditer(text):
         word = found.group()
         out.append(
-            _Word(
+            Word(
                 found.start(),
                 found.end(),
                 _fold_word(word),
@@ -404,10 +419,107 @@ def _words(text: str) -> list[_Word]:
     return out
 
 
+words_of = _words
+
+
+# Equivalent names, as data: the canonical name, then the names a writer uses for it, folded
+# word by word ("Master's" is "master s"). The text and the person's texts are both read through
+# this table, so that "Master of Science" is sourced by "MSc" and "Bachelor's degree" by
+# "Licence", and never "PhD" by "MSc". The fields of a degree are here too, English and French.
+_EQUIVALENT_NAMES: dict[str, tuple[str, ...]] = {
+    "msc": (
+        "msc",
+        "m sc",
+        "master of science",
+        "master s degree",
+        "masters degree",
+        "master degree",
+        "master s",
+        "masters",
+        "master",
+        "mastere",
+    ),
+    "bsc": (
+        "bsc",
+        "b sc",
+        "bachelor of science",
+        "bachelor s degree",
+        "bachelors degree",
+        "bachelor degree",
+        "bachelor s",
+        "bachelors",
+        "bachelor",
+        "licence",
+    ),
+    "phd": ("phd", "ph d", "doctorate", "doctorat", "doctor of philosophy"),
+    "ingenieur": ("ingenieur", "diplome d ingenieur", "engineering degree"),
+    "mba": ("mba", "master of business administration"),
+    "informatique": ("informatique", "computer science"),
+    "data science": ("data science", "science des donnees"),
+    "software engineering": ("software engineering", "genie logiciel"),
+    "mathematiques": ("mathematiques", "mathematics", "maths"),
+    "physique": ("physique", "physics"),
+}
+_EQUIVALENTS: dict[tuple[str, ...], str] = {
+    tuple(name.split()): canonical
+    for canonical, names in _EQUIVALENT_NAMES.items()
+    for name in names
+}
+_LONGEST = max(len(key) for key in _EQUIVALENTS)
+
+
+def _tight(text: str, left: Word, right: Word) -> bool:
+    """Two words of one name: a space, an apostrophe, a hyphen or a dot ("M.Sc.") between."""
+    gap = text[left.end : right.start]
+    return 0 < len(gap) <= 3 and all(ch in " '\u2019-." for ch in gap)
+
+
+def _canonical(text: str, words: list[Word]) -> list[Word]:
+    """`words` with each equivalent name (`_EQUIVALENT_NAMES`) replaced by one word, its
+    canonical name, spanning the original words. A single word that is a key only when
+    capitalised ("master branch", "software licence") stays as it is in lowercase. Linear: at
+    most `_LONGEST` lookups per word."""
+    out: list[Word] = []
+    i = 0
+    n = len(words)
+    while i < n:
+        for size in range(min(_LONGEST, n - i), 0, -1):
+            canonical = _EQUIVALENTS.get(tuple(w.folded for w in words[i : i + size]))
+            if canonical is None:
+                continue
+            first = words[i]
+            if size == 1 and first.folded in _CAPITAL_ONLY and not first.capital:
+                continue
+            if any(not _tight(text, words[k], words[k + 1]) for k in range(i, i + size - 1)):
+                continue
+            last = words[i + size - 1]
+            out.append(Word(first.start, last.end, canonical, first.capital or size > 1, False))
+            i += size
+            break
+        else:
+            out.append(words[i])
+            i += 1
+    return out
+
+
+def names_credential(text: str) -> bool:
+    """Does `text` (an organisation as M9 reads it, "an MSc") open with a credential key?"""
+    words = [w for w in canonical_words(text) if w.folded not in _ARTICLES]
+    return bool(words) and _is_key(words[0])
+
+
+def canonical_words(text: str) -> list[Word]:
+    """The words of `text`, folded, with every equivalent name read as its canonical name."""
+    return _canonical(text, _words(text))
+
+
 def corpus(texts: Iterable[str]) -> tuple[str, ...]:
     """The person's texts as padded folded word lists, one entry per text, so that " a b " in
-    an entry is a phrase search that never matches inside a word or across two texts."""
-    return tuple(" " + " ".join(w.folded for w in _words(text)) + " " for text in texts if text)
+    an entry is a phrase search that never matches inside a word or across two texts. Equivalent
+    names are read as their canonical name."""
+    return tuple(
+        " " + " ".join(w.folded for w in canonical_words(text)) + " " for text in texts if text
+    )
 
 
 def _stated(phrase: str, entries: Sequence[str]) -> bool:
@@ -416,7 +528,7 @@ def _stated(phrase: str, entries: Sequence[str]) -> bool:
 
 def corpus_states(text: str, entries: Sequence[str]) -> bool:
     """Do the person's texts (`corpus`) hold the words of `text`, folded, as a phrase?"""
-    phrase = " ".join(w.folded for w in _words(text))
+    phrase = " ".join(w.folded for w in canonical_words(text))
     return bool(phrase) and _stated(phrase, entries)
 
 
@@ -540,37 +652,43 @@ _STOPS = frozenset(
     ]
 )
 _SENTENCE_STOPS = frozenset(".!?:;\n\u2022")
+_ARTICLES = frozenset(["the", "a", "an", "le", "la", "les"])
+# A word that ends the name of a credential and says only what it is: "Certified Kubernetes
+# Application Developer certification" names the same credential as without it.
+_TRAILING_GENERIC = frozenset(["certification", "certificate", "certificat"])
 
 
-def _joined(text: str, left: _Word, right: _Word) -> bool:
+def _joined(text: str, left: Word, right: Word) -> bool:
     """Two words of one name: only spaces, an apostrophe or a hyphen between them."""
     gap = text[left.end : right.start]
     return len(gap) <= 3 and all(ch in " '\u2019-" for ch in gap)
 
 
-def _is_key(word: _Word) -> bool:
+def _is_key(word: Word) -> bool:
     if word.folded not in _KEYS:
         return False
     return word.capital or word.folded not in _CAPITAL_ONLY
 
 
-def _opens_sentence(text: str, word: _Word) -> bool:
+def _opens_sentence(text: str, word: Word) -> bool:
     at = word.start
     while at > 0 and text[at - 1] == " ":
         at -= 1
     return at == 0 or text[at - 1] in _SENTENCE_STOPS
 
 
-def _common_word(text: str, words: list[_Word], i: int) -> bool:
+def _common_word(text: str, words: list[Word], i: int) -> bool:
     """A key that is capitalised only because it opens the sentence, followed by a lowercase
     word that joins nothing: "Master data management", "Certified datasets for the audit"."""
     if not _opens_sentence(text, words[i]) or i + 1 >= len(words):
         return False
     after = words[i + 1]
+    if after.folded in _ARTICLES:
+        return True  # a verb: "Certified the payments API"
     return not (after.capital or after.digits or after.folded in _JOINS or _is_key(after))
 
 
-def _name_word(word: _Word) -> bool:
+def _name_word(word: Word) -> bool:
     return (word.capital or _is_key(word)) and not word.digits and word.folded not in _STOPS
 
 
@@ -583,7 +701,7 @@ def credentials(text: str, entries: Sequence[str]) -> list[tuple[int, int]]:
     Each part but the generic words must stand in ONE of the person's texts: "MSc" and "Exemple
     University" in the school's entry. A capitalised word that opens the sentence ("Earned")
     may be left out of the first part."""
-    words = _words(text)
+    words = canonical_words(text)
     out: list[tuple[int, int]] = []
     i = 0
     n = len(words)
@@ -632,7 +750,7 @@ def credentials(text: str, entries: Sequence[str]) -> list[tuple[int, int]]:
             k = j + 1
             if k >= n or not _joined(text, words[j], words[k]):
                 break
-            part: list[_Word] = []
+            part: list[Word] = []
             while k < n and len(part) < 4 and (not part or _joined(text, words[k - 1], words[k])):
                 word = words[k]
                 lowercase_field = not generic and not word.digits
@@ -646,6 +764,15 @@ def credentials(text: str, entries: Sequence[str]) -> list[tuple[int, int]]:
                 break
             parts.append(part)
             last = k - 1
+        head = parts[0]
+        if len(head) == 1 and head[0].folded in _TRAILING_GENERIC:
+            parts[0] = []  # "the CKAD certification": the name before it is checked alone
+        elif (
+            len(head) > 1
+            and head[-1].folded in _TRAILING_GENERIC
+            and any(_is_key(w) for w in head[:-1])
+        ):
+            parts[0] = head[:-1]
         phrases = [" ".join(w.folded for w in part if w.folded not in _GENERIC) for part in parts]
         if any(phrases) and not _credential_stated(text, words[first], phrases, entries):
             out.append((words[first].start, words[last].end))
@@ -653,7 +780,7 @@ def credentials(text: str, entries: Sequence[str]) -> list[tuple[int, int]]:
     return out
 
 
-def _credential_stated(text: str, first: _Word, phrases: list[str], entries: Sequence[str]) -> bool:
+def _credential_stated(text: str, first: Word, phrases: list[str], entries: Sequence[str]) -> bool:
     options = [phrases]
     head = phrases[0].split(" ", 1)
     if _opens_sentence(text, first) and first.folded == head[0] and len(head) == 2:
@@ -676,26 +803,37 @@ _CHANGES = frozenset(
         "quadrupling",
         "halved",
         "halving",
-        "tenfold",
         "twofold",
         "threefold",
+        "fourfold",
+        "fivefold",
+        "sixfold",
+        "sevenfold",
+        "eightfold",
+        "ninefold",
+        "tenfold",
+        "hundredfold",
         "decuple",
+        "centuple",
     ]
 )
 _CHANGES_ACCENTED = frozenset(("doublé", "doublée", "doublés", "triplé", "triplée", "triplés"))
-_CHANGE_PAIRS = frozenset(
-    (
-        ("by", "half"),
-        ("de", "moitie"),
-        ("multiplied", "by"),
-        ("divided", "by"),
-        ("multiplie", "par"),
-        ("multipliee", "par"),
-        ("multiplies", "par"),
-        ("divise", "par"),
-        ("divisee", "par"),
-    )
-)
+_CHANGE_PAIRS = frozenset((("by", "half"), ("in", "half"), ("de", "moitie"), ("en", "deux")))
+# A verb of scale and its factor, a few words apart in one sentence: "multiplied the number of
+# bookings by four", "divisé le temps de déploiement par deux".
+_SCALINGS = {
+    "multiplied": "by",
+    "divided": "by",
+    "multiplie": "par",
+    "multipliee": "par",
+    "multiplies": "par",
+    "multipliees": "par",
+    "divise": "par",
+    "divisee": "par",
+    "divises": "par",
+    "divisees": "par",
+}
+_SCALING_REACH = 8
 
 
 _NOT_FACTORS = frozenset(("x86", "x64", "x32"))
@@ -710,21 +848,42 @@ def _times(folded: str) -> bool:
     return folded[-1] == "x" and folded[:-1].isdigit()
 
 
+def _factor(text: str, words: list[Word], i: int) -> int | None:
+    """For a verb of scale at `i`, the index of its factor: the word after its "by" or "par",
+    within `_SCALING_REACH` words and the same sentence. None when there is none."""
+    joint = _SCALINGS[words[i].folded]
+    for j in range(i + 1, min(i + _SCALING_REACH + 1, len(words) - 1)):
+        if any(ch in _SENTENCE_STOPS for ch in text[words[j - 1].end : words[j].start]):
+            return None
+        if words[j].folded == joint:
+            return j + 1
+    return None
+
+
 def changes(text: str, entries: Sequence[str]) -> list[tuple[int, int]]:
-    """The spans of the change words of `text` that the person's texts do not state."""
+    """The spans of the change words of `text` that the person's texts do not state: a change
+    word ("doubled", "fourfold", "4-fold", "x3"), a pair ("in half", "de moitié"), or a verb of
+    scale with its factor ("multiplied ... by four"), which the texts must state both."""
     words = _words(text)
     out: list[tuple[int, int]] = []
     for i, word in enumerate(words):
-        phrase = ""
-        end = word.end
+        phrases: list[str] = []
+        start, end = word.start, word.end
         original = text[word.start : word.end].lower()
         if word.folded in _CHANGES or _times(word.folded) or original in _CHANGES_ACCENTED:
-            phrase = word.folded
+            phrases = [word.folded]
+        elif word.folded == "fold" and i > 0 and words[i - 1].digits:
+            if text[words[i - 1].end : word.start] in ("-", " ", "\u2011"):
+                start = words[i - 1].start
+                phrases = [f"{words[i - 1].folded} fold"]
         elif i + 1 < len(words) and (word.folded, words[i + 1].folded) in _CHANGE_PAIRS:
-            phrase = f"{word.folded} {words[i + 1].folded}"
+            phrases = [f"{word.folded} {words[i + 1].folded}"]
             end = words[i + 1].end
-        if phrase and not _stated(phrase, entries):
-            out.append((word.start, end))
+        elif word.folded in _SCALINGS and (k := _factor(text, words, i)) is not None:
+            phrases = [word.folded, f"{_SCALINGS[word.folded]} {words[k].folded}"]
+            end = words[k].end
+        if phrases and not any(all(f" {p} " in entry for p in phrases) for entry in entries):
+            out.append((start, end))
     return out
 
 
@@ -734,3 +893,124 @@ _DECADES = {"decade": 10, "decades": 20, "decennie": 10, "decennies": 20}
 def decades(text: str) -> list[tuple[int, int, int]]:
     """The durations in decades of `text`: `(start, end, the years they at least mean)`."""
     return [(w.start, w.end, _DECADES[w.folded]) for w in _words(text) if w.folded in _DECADES]
+
+
+# --- percents and schools -----------------------------------------------------------------------
+
+_PERCENT_WORDS = ("percent", "per cent", "pour cent", "pourcent", "pourcents")
+_BLANKS = " \u00a0\u202f"
+
+
+def _percent_tail(text: str, at: int) -> int | None:
+    """Where a percent sign or word that starts at `at` (after at most two blanks) ends."""
+    k = at
+    while k < len(text) and k - at < 2 and text[k] in _BLANKS:
+        k += 1
+    if k < len(text) and text[k] in "%\uff05":
+        return k + 1
+    tail = text[k : k + 10].lower().replace("\u00a0", " ")
+    for word in _PERCENT_WORDS:
+        stop = k + len(word)
+        if tail.startswith(word) and (stop >= len(text) or not text[stop].isalnum()):
+            return stop
+    return None
+
+
+def percents(text: str) -> list[tuple[int, int, str]]:
+    """Each percent of `text`: "40%", "40 %", "40 percent", "40 pour cent", as `(start, end,
+    key)`. The key is the number ("40", "2.5"), with "top " before it in "top 1%", which is a
+    rank and is sourced only by a rank. One pass: each character is read a bounded number of
+    times."""
+    out: list[tuple[int, int, str]] = []
+    n = len(text)
+    i = 0
+    while i < n:
+        if not text[i].isdigit():
+            i += 1
+            continue
+        j = i
+        while j < n and text[j].isdigit():
+            j += 1
+        if j + 1 < n and text[j] in ".," and text[j + 1].isdigit():
+            j += 1
+            while j < n and text[j].isdigit():
+                j += 1
+        glued = i > 0 and (text[i - 1].isalnum() or text[i - 1] in ".,")
+        end = None if glued else _percent_tail(text, j)
+        if end is not None:
+            number = text[i:j].replace(",", ".")
+            if "." in number:
+                number = number.rstrip("0").rstrip(".")
+            before = text[max(0, i - 5) : i].lower().rstrip(_BLANKS)
+            rank = before.endswith("top") and (len(before) == 3 or not before[-4].isalnum())
+            out.append((i, end, f"top {number}" if rank else number))
+            j = end
+        i = j
+    return out
+
+
+_SCHOOL_WORDS = frozenset(
+    [
+        "university",
+        "universite",
+        "universitat",
+        "school",
+        "ecole",
+        "institut",
+        "institute",
+        "college",
+        "polytechnique",
+        "polytech",
+        "academy",
+        "academie",
+        "faculte",
+        "faculty",
+    ]
+)
+_SCHOOL_JOINS = frozenset(["of", "de", "du", "des", "d", "l", "la", "le", "the", "for"])
+
+
+def schools(text: str, entries: Sequence[str]) -> list[tuple[int, int]]:
+    """The spans of the schools named in `text` ("Institut Exemple Paris", "École Centrale de
+    Lyon") that the person's texts do not state, wherever they stand (after a comma, in
+    brackets), not only after a preposition as M9 reads them."""
+    words = _words(text)
+    out: list[tuple[int, int]] = []
+    i = 0
+    n = len(words)
+    while i < n:
+        word = words[i]
+        if word.folded not in _SCHOOL_WORDS or not word.capital:
+            i += 1
+            continue
+        first = i
+        while (
+            first > 0
+            and i - first < 3
+            and words[first - 1].capital
+            and words[first - 1].folded not in _KEYS
+            and _joined(text, words[first - 1], words[first])
+        ):
+            first -= 1
+        last = i
+        while last + 1 < n and last - first < 6 and _joined(text, words[last], words[last + 1]):
+            after = words[last + 1]
+            if after.capital and not after.digits:
+                last += 1
+            elif (
+                after.folded in _SCHOOL_JOINS
+                and last + 2 < n
+                and words[last + 2].capital
+                and _joined(text, after, words[last + 2])
+            ):
+                last += 2
+            else:
+                break
+        phrase = " ".join(w.folded for w in words[first : last + 1])
+        # A capitalised word that opens the sentence may be a verb ("Joined Exemple University").
+        opener = first < i and _opens_sentence(text, words[first])
+        shorter = " ".join(w.folded for w in words[first + 1 : last + 1]) if opener else ""
+        if not _stated(phrase, entries) and not (shorter and _stated(shorter, entries)):
+            out.append((words[first].start, words[last].end))
+        i = last + 1
+    return out

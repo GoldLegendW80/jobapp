@@ -115,7 +115,9 @@ def test_only_the_sentence_holding_the_claim_goes_offsets_kept_with_combining_ac
 
 
 def test_every_highlight_flagged_drops_them_all() -> None:
-    data = _cv(highlights=["Led 14 people", "Saved 45% of costs", "Worked at Globex Industries"])
+    data = _cv(
+        highlights=["Led a team of 14 people", "Saved 45% of costs", "Worked at Globex Industries"]
+    )
     fixed, records = _correct("cv", data)
     assert fixed.highlights == []
     assert [r.field_path for r in records] == ["highlights.0", "highlights.1", "highlights.2"]
@@ -126,7 +128,9 @@ def test_every_highlight_flagged_drops_them_all() -> None:
 
 
 def test_an_emptied_headline_and_summary_take_the_base_cvs() -> None:
-    data = _cv(headline="Led 14 engineers", summary="Worked at Globex Industries for years.")
+    data = _cv(
+        headline="Led a team of 14 engineers", summary="Worked at Globex Industries for years."
+    )
     fixed, records = _correct("cv", data)
     base = base_cv("alex")
     assert fixed.headline == base.headline
@@ -148,7 +152,7 @@ def test_an_emptied_letter_subject_names_the_postings_title() -> None:
 def test_a_letter_whose_every_paragraph_is_flagged_takes_the_motivation() -> None:
     data = {
         **written("letter_typical"),
-        "paragraphs": ["I led 14 engineers.", "I worked at Globex Industries."],
+        "paragraphs": ["I led a team of 14 engineers.", "I worked at Globex Industries."],
     }
     fixed, records = _correct("letter", data)
     assert fixed.paragraphs == [view_of("alex").motivation]
@@ -185,7 +189,7 @@ def test_without_a_motivation_the_letter_takes_one_sentence(
     view = view_of("blake")
     fallbacks = corrections.fallbacks_for(view, None, posting_, language)  # type: ignore[arg-type]
     assert fallbacks.paragraph == sentence
-    data = {**written("letter_typical"), "paragraphs": ["I led 14 engineers."]}
+    data = {**written("letter_typical"), "paragraphs": ["I led a team of 14 engineers."]}
     fixed, _ = _correct("letter", data, fallbacks=fallbacks)
     assert fixed.paragraphs == [sentence]
 
@@ -224,7 +228,7 @@ def test_content_without_claims_is_left_as_it_is() -> None:
 
 
 def test_an_empty_required_field_without_fallback_stays_empty_and_valid() -> None:
-    model = c.parse("cv", {"highlights": ["Led 14 engineers"]})
+    model = c.parse("cv", {"highlights": ["Led a team of 14 engineers"]})
     result = checks.run("cv", model, _sources(), OFF)
     fixed, records = corrections.remove_remaining(model, result, Fallbacks())
     assert (fixed.headline, fixed.summary, fixed.highlights) == ("", "", [])
@@ -322,7 +326,10 @@ def test_diff_follows_an_employer_by_its_key_and_skips_what_did_not_change() -> 
 
 
 def test_diff_on_skills_and_paragraphs() -> None:
-    letter = {**written("letter_typical"), "paragraphs": ["I led 14 engineers.", "Thanks."]}
+    letter = {
+        **written("letter_typical"),
+        "paragraphs": ["I led a team of 14 engineers.", "Thanks."],
+    }
     before = c.parse("letter", letter)
     issues = checks.run("letter", before, _sources(), OFF).claims
     after = c.parse("letter", {**letter, "paragraphs": ["Thanks."]})
@@ -361,7 +368,7 @@ def test_every_single_field_of_a_letter_may_be_emptied() -> None:
         **written("letter_typical"),
         "headline": "Engineer since 2015",
         "recipient": "Hiring team at Globex Industries",
-        "salutation": "Dear 14 engineers,",
+        "salutation": "Dear team of 14,",
         "closing": "Twelve years of regards, 2015",
     }
     fixed, records = _correct("letter", data)

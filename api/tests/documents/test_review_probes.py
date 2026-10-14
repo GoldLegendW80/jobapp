@@ -294,7 +294,7 @@ FALSE: list[tuple[str, str, str, str, str]] = [
         "Doubled the throughput of the pipelines.",
         "Doubled",
     ),
-    ("three_squads", "cv", "experience.0.bullets.0", "Managed three squads.", "squads"),
+    ("three_squads", "cv", "experience.0.bullets.0", "Managed three squads.", "three"),
     # The review's further direct checks.
     (
         "posting_company_employer",
@@ -464,7 +464,7 @@ EDGE_FALSE: list[tuple[str, str, str, str, str]] = [
     ("number_after_a_verb", "cv", "experience.0.bullets.0", "Shipped 16 pipelines.", "16"),
     ("version_unstated", "cv", "skills.0.items.0", "Python 3.13", "3.13"),
     # In a letter, the answers still source only their own topic.
-    ("letter_team_from_notice", "letter", "paragraphs.1", "I managed three squads.", "squads"),
+    ("letter_team_from_notice", "letter", "paragraphs.1", "I managed three squads.", "three"),
 ]
 
 

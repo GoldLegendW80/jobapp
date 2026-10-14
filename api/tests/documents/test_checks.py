@@ -11,7 +11,6 @@ from app.documents import checks, rules
 from app.documents import content as c
 from app.documents.settings import DocumentSettings
 from app.documents.sources import sources_for
-from app.mail import factcheck_rules
 from app.mail.factcheck_rules import Sources
 from tests.documents.conftest import base_cv, posting, view_of, written
 
@@ -151,9 +150,9 @@ def test_one_joined_check_gives_the_issues_of_one_check_per_field(name: str) -> 
     sources = _sources()
     fields = [(path, text) for path, text in c.text_fields(model) if text]
     per_field = [
-        (path, found.start, found.end, found.code)
-        for path, text in fields
-        for found in factcheck_rules.check(text, sources)
+        (found.field, found.start, found.end, found.code)
+        for field in fields
+        for found in checks.fact_issues([field], sources)
     ]
     joined = [(i.field, i.start, i.end, i.code) for i in checks.fact_issues(fields, sources)]
     assert sorted(joined) == sorted(per_field)

@@ -1,0 +1,48 @@
+{
+  "revision": 1,
+  "sections": {
+    "identity": {
+      "full_name": "Robin Exemplaire",
+      "headline": "Software Engineer",
+      "email": "e2e-robin@example.org",
+      "phone": "+33 7 00 11 22 33",
+      "city": "Rennes",
+      "country": "France",
+      "website": "https://robin.example.org",
+      "linkedin_url": "https://www.linkedin.com/in/robin-exemplaire",
+      "languages": [{"name": "English", "level": "Fluent"}, {"name": "French", "level": "Native"}]
+    },
+    "experience": {
+      "employers": [
+        {"key": "orbite-donnees", "organisation": "Orbite Données", "title": "Software Engineer", "start": "2022-01", "end": null, "location": "Rennes"},
+        {"key": "atelier-nimbus", "organisation": "Atelier Nimbus", "title": "Développeur backend", "start": "2017-01", "end": "2021-01"}
+      ],
+      "education": [
+        {"school": "Université Exemple", "degree": "MSc in Computer Science", "start": "2015", "end": "2017"},
+        {"school": "Université Exemple", "degree": "Licence Informatique", "start": "2012", "end": "2015"}
+      ]
+    },
+    "facts": {
+      "blocks": [
+        {"title": "Experience", "body": "About 6.5 years of professional experience.\nAt Orbite Données I run the payments API in Rust and Python, and I cut its p99 latency by 35%.\nAt Atelier Nimbus I mentored two junior engineers in a team of four developers."},
+        {"title": "Certifications", "body": "Certified Kubernetes Application Developer (CKAD), 2023."}
+      ]
+    },
+    "skills": {
+      "years_experience": 6.5,
+      "have": [
+        {"name": "Backend", "terms": ["Rust", "Python", "Java 17", "PostgreSQL 15"]},
+        {"name": "Platform", "terms": ["Kubernetes", "Terraform", "React"]}
+      ],
+      "adjacent": [],
+      "none": []
+    },
+    "answers": {
+      "notice_period": "Three months.",
+      "salary_policy": "45 to 50k EUR gross per year.",
+      "relocation": "Open to relocating within France.",
+      "motivation": "I like building platforms that teams rely on.",
+      "work_authorization": [{"country": "France", "answer": "EU citizen, no sponsorship needed."}]
+    }
+  }
+}

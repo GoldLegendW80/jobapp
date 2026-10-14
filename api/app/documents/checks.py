@@ -27,7 +27,16 @@ nothing else:
 - a numeric date ("12/2022", "2022-12") equal to a stored period of an employer or a school is
   sourced, a bare "12" never;
 - "N years at <employer>" (or months, "ans chez") is sourced when that employer's closed period
-  holds N whole years (or months), counted from the stored months.
+  holds N whole years (or months), counted from the stored months;
+- a date said of one of the person's organisations ("since 2021", "depuis janvier 2022",
+  "(2017 to 2021)") is sourced by that organisation's stored start and end only, never by the
+  same year elsewhere in the profile (`date_not_in_profile`);
+- a title that M9 reads with a connector before it ("then Software Engineer") is read without
+  it; a descriptive title ("Backend engineer") is sourced by one of the person's titles with
+  the same head noun and seniority; a seniority word the person's titles lack is the claim
+  alone (`seniority_not_in_profile`); a letter's posting title held at one of the person's
+  employers is a claim;
+- a degree after "with" ("with an MSc") is a credential, never an employer.
 
 For speed, M9 runs once over the printed fields joined by a neutral break (a pilcrow between
 blank lines) rather than once per field, which would fold every source again for every field;
@@ -82,7 +91,9 @@ class Checks:
 
 def fact_issues(fields: list[tuple[str, str]], sources: Sources) -> list[Issue]:
     """M9 over the fields at once, each issue mapped back onto its field (clipped to it), less
-    those that `DocumentSources` sources (the module docstring)."""
+    those that `DocumentSources` sources (the module docstring), and with the dates anchored to
+    their employer (`_anchored_dates`). Linear in the fields: the sentences, the anchored dates
+    and the words of each answer are computed once."""
     starts: list[int] = []
     parts: list[str] = []
     at = 0
@@ -99,7 +110,22 @@ def fact_issues(fields: list[tuple[str, str]], sources: Sources) -> list[Issue]:
     topics = sources.answer_topics if isinstance(sources, DocumentSources) else ()
     if not topics:
         topics = tuple(("", text) for text in sources.answers)
+    scope = _AnswerScope(topics)
+    apart = _Apart(sources) if isinstance(sources, DocumentSources) else None
     out: list[Issue] = []
+    anchored: dict[int, list[tuple[int, int, bool]]] = {}
+    if apart is not None:
+        for index, (path, text) in enumerate(fields):
+            anchored[index] = _anchored_dates(text, apart.names)
+            out += [
+                Issue(path, s, e, rules.DATE_AT_EMPLOYER, "claim")
+                for s, e, ok in anchored[index]
+                if not ok
+            ]
+            out += [
+                Issue(path, s, e, "title_not_in_profile", "claim")
+                for s, e in apart.posting_titles_at_employers(text)
+            ]
     for issue in found:
         index = bisect_right(starts, issue.start) - 1
         if index < 0:
@@ -109,15 +135,60 @@ def fact_issues(fields: list[tuple[str, str]], sources: Sources) -> list[Issue]:
         end = min(issue.end - starts[index], len(text))
         if start >= len(text) or end <= start:
             continue
-        answered = (issue.start, issue.end, issue.code) not in with_answers
-        if answered and _about_an_answer(text, start, end, topics):
-            continue
-        if isinstance(sources, DocumentSources) and _sourced_apart(
-            text, start, end, issue.code, sources
+        if issue.code in _DATE_CODES and any(
+            s <= start and end <= e for s, e, _ in anchored.get(index, ())
         ):
+            continue  # the date at an employer is that employer's date, checked above
+        answered = (issue.start, issue.end, issue.code) not in with_answers
+        if answered and scope.about(index, text, start, end):
             continue
-        out.append(Issue(path, start, end, issue.code, "claim"))
+        if apart is None:
+            out.append(Issue(path, start, end, issue.code, "claim"))
+            continue
+        out += [
+            Issue(path, s, e, code, "claim")
+            for s, e, code in apart.adjust(text, start, end, issue.code)
+        ]
     return out
+
+
+class _AnswerScope:
+    """Is a claim that only an answer sources in a sentence about what that answer answers? The
+    sentence must share a word, outside the claim, with the answer or its question. The words
+    of each answer and the sentences of each field are computed once, and whether an answer
+    states a claim once per claim text: one pass over a field, whatever its number of claims."""
+
+    def __init__(self, topics: tuple[tuple[str, str], ...]) -> None:
+        self.answers = [
+            (answer, _content_words(answer) | set(topic.split())) for topic, answer in topics
+        ]
+        self.sentences: dict[int, tuple[list[int], list[tuple[int, int]]]] = {}
+        self.words: dict[tuple[int, int], set[str]] = {}
+        self.states: dict[str, list[bool]] = {}
+
+    def about(self, field: int, text: str, start: int, end: int) -> bool:
+        if field not in self.sentences:
+            spans = rules.sentences(text)
+            self.sentences[field] = ([s for s, _ in spans], spans)
+        firsts, spans = self.sentences[field]
+        at = max(bisect_right(firsts, start) - 1, 0)
+        key = (field, at)
+        if key not in self.words:
+            s, e = spans[at] if spans else (0, len(text))
+            self.words[key] = _content_words(text[s:e])
+        claim = text[start:end]
+        around = self.words[key] - _content_words(claim)
+        if not around:
+            return False
+        if claim not in self.states:
+            self.states[claim] = [
+                not factcheck_rules.check(claim, Sources(answers=(answer,)))
+                for answer, _ in self.answers
+            ]
+        return any(
+            states and around & words
+            for states, (_, words) in zip(self.states[claim], self.answers, strict=True)
+        )
 
 
 _IDENTITY_CODES = frozenset(("phone_not_in_profile", "email_not_in_profile", "link_not_in_profile"))
@@ -237,37 +308,336 @@ def _content_words(text: str) -> set[str]:
     return {word for word in words if word and word not in _PLAIN}
 
 
-def _about_an_answer(text: str, start: int, end: int, topics: tuple[tuple[str, str], ...]) -> bool:
-    """Is the claim at `text[start:end]`, which only an answer sources, in a sentence about what
-    that answer answers? The sentence must share a word, outside the claim, with the answer or
-    its question."""
-    claim = text[start:end]
-    sentence = next((text[s:e] for s, e in rules.sentences(text) if s <= start < e), text)
-    around = _content_words(sentence) - _content_words(claim)
-    if not around:
-        return False
-    for topic, answer in topics:
-        if factcheck_rules.check(claim, Sources(answers=(answer,))):
-            continue  # this answer does not state the claim
-        if around & (_content_words(answer) | set(topic.split())):
+# The head nouns of a title, English and French read as one ("Développeur" is a "Developer"),
+# and the seniority words a title claim may carry only when one of the person's titles does.
+_TITLE_HEADS = {
+    "engineer": "engineer",
+    "ingenieur": "engineer",
+    "ingenieure": "engineer",
+    "developer": "developer",
+    "developpeur": "developer",
+    "developpeuse": "developer",
+    "programmer": "developer",
+    "architect": "architect",
+    "architecte": "architect",
+    "analyst": "analyst",
+    "analyste": "analyst",
+    "consultant": "consultant",
+    "consultante": "consultant",
+    "scientist": "scientist",
+    "researcher": "researcher",
+    "chercheur": "researcher",
+    "chercheuse": "researcher",
+    "designer": "designer",
+    "manager": "manager",
+}
+_SENIORITY = frozenset(
+    ["senior", "sr", "lead", "principal", "staff", "head", "chief", "confirme", "confirmee"]
+)
+_SPAN_CODES = frozenset(
+    ("title_not_in_profile", "employer_not_in_profile", "school_not_in_profile")
+)
+
+
+class _Apart:
+    """What `DocumentSources` sources apart from M9, and how an issue of M9 is narrowed to the
+    claim it makes (the module docstring). Built once per check; each lookup is a bounded scan
+    of the claim's own words."""
+
+    def __init__(self, sources: DocumentSources) -> None:
+        self.sources = sources
+        self.names = _period_names(sources.periods)
+        self._own: tuple[str, ...] | None = None
+        self._titles: tuple[str, ...] | None = None
+        self.own_titles = [
+            {w.folded for w in rules.words_of(title)} for title in sources.own_titles
+        ]
+        self.posting = [
+            tuple(w.folded for w in rules.words_of(title)) for title in sources.posting_titles
+        ]
+        self.employers = [
+            tuple(w.folded for w in rules.words_of(name)) for name in sources.employers
+        ]
+
+    @property
+    def own(self) -> tuple[str, ...]:
+        if self._own is None:
+            self._own = rules.corpus(self.sources.profile)
+        return self._own
+
+    @property
+    def titles(self) -> tuple[str, ...]:
+        if self._titles is None:
+            s = self.sources
+            self._titles = rules.corpus([*s.profile, *s.answers, *s.titles])
+        return self._titles
+
+    def adjust(self, text: str, start: int, end: int, code: str) -> list[tuple[int, int, str]]:
+        """The issue of M9 at `text[start:end]` as the claims it makes: none when sourced."""
+        claim = text[start:end]
+        s = self.sources
+        if code in _IDENTITY_CODES:
+            if s.identity and not factcheck_rules.check(claim, Sources(profile=s.identity)):
+                return []
+        elif code in _DATE_CODES:
+            month = _numeric_month(claim)
+            if month is not None and any(
+                month in (_month_of(a), _month_of(b)) for _, a, b in s.periods
+            ):
+                return []
+        elif code == "duration_not_in_profile":
+            if _duration_at_employer(text, start, end, s.periods):
+                return []
+        elif code in _SPAN_CODES:
+            return self._span(text, start, end, code)
+        return [(start, end, code)]
+
+    def _span(self, text: str, start: int, end: int, code: str) -> list[tuple[int, int, str]]:
+        # M9 takes the lowercase words before a name into its span ("then Software Engineer",
+        # "puis Software Engineer"): they are connectors, never part of the claim. A seniority
+        # word stays ("senior Software Engineer").
+        words = rules.words_of(text[start:end])
+        k = 0
+        while (
+            k < len(words) - 1
+            and not words[k].capital
+            and words[k].folded not in _SENIORITY
+            and any(w.capital for w in words[k + 1 :])
+        ):
+            k += 1
+        if k:
+            start += words[k].start
+            words = rules.words_of(text[start:end])
+        claim = text[start:end]
+        if code != "title_not_in_profile":
+            # A degree or a certification after "with" ("with an MSc") is a credential, which
+            # `rules.credentials` checks; trimmed, a name of the person's own is sourced.
+            if rules.names_credential(claim):
+                return []
+            if k and rules.corpus_states(claim, self.titles):
+                return []
+            return [(start, end, code)]
+        if self._title_sourced(claim, words):
+            return []
+        first = words[0]
+        if first.folded in _SENIORITY and len(words) > 1:
+            rest = claim[words[1].start :]
+            if self._title_sourced(rest, rules.words_of(rest)):
+                # Only the seniority word is unsourced: it alone is the claim.
+                return [(start + first.start, start + first.end, rules.SENIORITY)]
+        return [(start, end, code)]
+
+    def _title_sourced(self, claim: str, words: list) -> bool:
+        """The title as the person's texts state it, or a descriptive title ("Backend engineer",
+        lowercase after its first word) whose head noun is the head of one of the person's
+        titles, whose seniority words that title holds, and whose other words the person's
+        texts state."""
+        if rules.corpus_states(claim, self.titles):
             return True
-    return False
+        if not words or any(w.capital for w in words[1:]):
+            return False
+        heads = {_TITLE_HEADS[w.folded] for w in words if w.folded in _TITLE_HEADS}
+        if not heads:
+            return False
+        seniority = {w.folded for w in words if w.folded in _SENIORITY}
+        if not any(
+            heads & {_TITLE_HEADS[x] for x in title if x in _TITLE_HEADS} and seniority <= title
+            for title in self.own_titles
+        ):
+            return False
+        others = [
+            w.folded for w in words if w.folded not in _TITLE_HEADS and w.folded not in _SENIORITY
+        ]
+        return all(any(f" {w} " in entry for entry in self.own) for w in others)
+
+    def posting_titles_at_employers(self, text: str) -> list[tuple[int, int]]:
+        """A letter's posting title held at one of the person's employers ("As a Staff Platform
+        Engineer at Orbite Données"): the posting sources the role applied for, never a title
+        held elsewhere. A claim unless the person's own texts state that title."""
+        if not self.posting:
+            return []
+        words = rules.words_of(text)
+        out: list[tuple[int, int]] = []
+        for title in self.posting:
+            size = len(title)
+            for i in range(len(words) - size - 1):
+                if words[i].folded != title[0]:
+                    continue
+                if tuple(w.folded for w in words[i : i + size]) != title:
+                    continue
+                at = i + size
+                if words[at].folded not in _AT or not self._employer_at(words, at + 1):
+                    continue
+                span = (words[i].start, words[at - 1].end)
+                if not rules.corpus_states(text[span[0] : span[1]], self.own):
+                    out.append(span)
+        return out
+
+    def _employer_at(self, words: list, i: int) -> bool:
+        return any(
+            name and tuple(w.folded for w in words[i : i + len(name)]) == name
+            for name in self.employers
+        )
 
 
-def _sourced_apart(text: str, start: int, end: int, code: str, sources: DocumentSources) -> bool:
-    claim = text[start:end]
-    if code in _IDENTITY_CODES:
-        return bool(sources.identity) and not factcheck_rules.check(
-            claim, Sources(profile=sources.identity)
-        )
-    if code in _DATE_CODES:
-        month = _numeric_month(claim)
-        return month is not None and any(
-            month in (_month_of(s), _month_of(e)) for _, s, e in sources.periods
-        )
-    if code == "duration_not_in_profile":
-        return _duration_at_employer(text, start, end, sources.periods)
-    return False
+# --- dates anchored to their employer -----------------------------------------------------------
+
+_MONTH_WORDS = {
+    **dict.fromkeys(("jan", "january", "janv", "janvier"), 1),
+    **dict.fromkeys(("feb", "february", "fev", "fevr", "fevrier"), 2),
+    **dict.fromkeys(("mar", "march", "mars"), 3),
+    **dict.fromkeys(("apr", "april", "avr", "avril"), 4),
+    **dict.fromkeys(("may", "mai"), 5),
+    **dict.fromkeys(("jun", "june", "juin"), 6),
+    **dict.fromkeys(("jul", "july", "juil", "juillet"), 7),
+    **dict.fromkeys(("aug", "august", "aout"), 8),
+    **dict.fromkeys(("sep", "sept", "september", "septembre"), 9),
+    **dict.fromkeys(("oct", "october", "octobre"), 10),
+    **dict.fromkeys(("nov", "november", "novembre"), 11),
+    **dict.fromkeys(("dec", "december", "decembre"), 12),
+}
+_SINCE = frozenset(("since", "from", "depuis", "de", "starting"))
+_UNTIL = frozenset(("to", "until", "till", "through", "jusqu"))
+_RANGE_DASHES = frozenset("-\u2010\u2011\u2012\u2013\u2014\u2212")
+
+_Date = tuple[int, int | None]
+
+
+def _period_names(
+    periods: tuple[tuple[str, str, str], ...],
+) -> dict[str, list[tuple[tuple[str, ...], list[tuple[str, str]]]]]:
+    """The stored organisations by their first folded word: (their words, their periods)."""
+    grouped: dict[tuple[str, ...], list[tuple[str, str]]] = {}
+    for name, start, end in periods:
+        words = tuple(w.folded for w in rules.words_of(name))
+        if words:
+            grouped.setdefault(words, []).append((start, end))
+    out: dict[str, list[tuple[tuple[str, ...], list[tuple[str, str]]]]] = {}
+    for words, rows in grouped.items():
+        out.setdefault(words[0], []).append((words, rows))
+    return out
+
+
+def _role(text: str, word: rules.Word) -> str:
+    """ "since" for a word that opens a start date, "until" for one that opens an end date.
+    The French "à" and "dès" count with their accent only: "a" and "des" are other words."""
+    original = text[word.start : word.end].lower()
+    if word.folded in _SINCE or original == "d\u00e8s":
+        return "since"
+    if word.folded in _UNTIL or original == "\u00e0":
+        return "until"
+    return ""
+
+
+def _year(word: str) -> int | None:
+    return int(word) if len(word) == 4 and word.isdigit() and 1950 <= int(word) <= 2100 else None
+
+
+def _date_at(text: str, words: list, i: int) -> tuple[_Date, int] | None:
+    """The date that starts at word `i` and the index after it: "January 2022", "Jan 2022",
+    "01/2022", "2022-01" (a year and a month), or "2022" (a year)."""
+    n = len(words)
+    if i >= n:
+        return None
+    word = words[i].folded
+    gap = text[words[i].end : words[i + 1].start] if i + 1 < n else ""
+    nxt = words[i + 1].folded if i + 1 < n else ""
+    if word in _MONTH_WORDS and (year := _year(nxt)) and gap.strip(" .,") == "":
+        return (year, _MONTH_WORDS[word]), i + 2
+    if (year := _year(word)) is not None:
+        if gap in ("-", "/") and 1 <= len(nxt) <= 2 and nxt.isdigit() and 1 <= int(nxt) <= 12:
+            return (year, int(nxt)), i + 2
+        return (year, None), i + 1
+    if 1 <= len(word) <= 2 and word.isdigit() and gap in ("/", ".", "-") and (year := _year(nxt)):
+        month = int(word)
+        return ((year, month), i + 2) if 1 <= month <= 12 else None
+    return None
+
+
+def _same(claim: _Date | None, stored: str) -> bool:
+    if claim is None:
+        return True
+    month = _month_of(stored)
+    year = month[0] if month else (int(stored) if stored.isdigit() else None)
+    if year is None or claim[0] != year:
+        return False
+    return claim[1] is None or month is None or claim[1] == month[1]
+
+
+def _anchored_dates(
+    text: str, names: dict[str, list[tuple[tuple[str, ...], list[tuple[str, str]]]]]
+) -> list[tuple[int, int, bool]]:
+    """The dates of `text` said of one of the person's organisations, with whether they are
+    its stored dates: `(start, end, true)`. A date after "since", "from", "depuis" or "de" is a
+    start, after "to", "until", "à" or "jusqu'en" an end, and "<date> to <date>" or
+    "<date>-<date>" a period; each belongs to the organisation named last before it in its
+    sentence (else the first after it), and is true only when that organisation's stored start
+    (and end) has the same year (and month, when both give one). A date of no organisation is
+    left to M9. One pass over the words, each date and name read once."""
+    if not names:
+        return []
+    words = rules.words_of(text)
+    out: list[tuple[int, int, bool]] = []
+    stop = 0
+    for _, s_end in rules.sentences(text):
+        first = stop
+        while stop < len(words) and words[stop].start < s_end:
+            stop += 1
+        if first == stop:
+            continue
+        mentions: list[tuple[int, int, list[tuple[str, str]]]] = []
+        k = first
+        while k < stop:
+            hit = None
+            for name, rows in names.get(words[k].folded, ()):
+                if tuple(w.folded for w in words[k : k + len(name)]) == name:
+                    hit = (k, k + len(name), rows)
+                    break
+            if hit:
+                mentions.append(hit)
+                k = hit[1]
+            else:
+                k += 1
+        if not mentions:
+            continue
+        i = first
+        m = 0
+        while i < stop:
+            word = words[i].folded
+            role = _role(text, words[i])
+            j = i + 1 if role else i
+            if word == "jusqu" and j < stop and words[j].folded in ("en", "a", "au"):
+                j += 1
+            found = _date_at(text, words, j) if j < stop else None
+            if found is None:
+                i += 1
+                continue
+            date, k = found
+            begin: _Date | None = date if role != "until" else None
+            finish: _Date | None = date if role == "until" else None
+            if role != "until" and k < stop:
+                gap = text[words[k - 1].end : words[k].start].strip()
+                later = None
+                if _role(text, words[k]) == "until" and gap == "":
+                    later = _date_at(text, words, k + 1)
+                elif gap and all(ch in _RANGE_DASHES for ch in gap):
+                    later = _date_at(text, words, k)
+                if later is not None and later[1] <= stop:
+                    finish, k = later
+            if not role and finish is None:
+                i += 1  # a year alone ("in 2017") belongs to no organisation here
+                continue
+            while m < len(mentions) and mentions[m][1] <= i:
+                m += 1
+            after = m
+            while after < len(mentions) and mentions[after][0] < k:
+                after += 1
+            mention = mentions[m - 1] if m else (mentions[after] if after < len(mentions) else None)
+            if mention is not None:
+                ok = any(_same(begin, a) and _same(finish, b) for a, b in mention[2])
+                out.append((words[i].start, words[k - 1].end, ok))
+            i = k
+    return out
 
 
 def _month_of(stored: str) -> tuple[int, int] | None:
@@ -336,13 +706,27 @@ def _duration_at_employer(
     return False
 
 
+_PERCENT = "percent_not_in_sources"
+_SCHOOL = "school_not_in_profile"
+
+
 def own_issues(fields: list[tuple[str, str]], sources: Sources) -> list[Issue]:
-    """The claims M9 does not see (`rules.credentials`, `rules.changes`, `rules.decades`),
-    against the person's own texts only (the profile sources, never the answers)."""
+    """The claims M9 does not see (`rules.credentials`, `rules.changes`, `rules.decades`, a
+    percent the person's texts do not state as a percent, `rules.percents`, and a school named
+    outside a preposition, `rules.schools`), against the person's own texts only (the profile
+    sources, never the answers; a letter's addressee may be a school)."""
     entries = rules.corpus(sources.profile)
+    named = rules.corpus([*sources.profile, *sources.participants])
+    stated = {key for text in sources.profile for *_, key in rules.percents(text)}
     years: dict[int, bool] = {}
     out: list[Issue] = []
     for path, text in fields:
+        out += [
+            Issue(path, s, e, _PERCENT, "claim")
+            for s, e, key in rules.percents(text)
+            if key not in stated
+        ]
+        out += [Issue(path, s, e, _SCHOOL, "claim") for s, e in rules.schools(text, named)]
         out += [
             Issue(path, s, e, rules.CREDENTIAL, "claim")
             for s, e in rules.credentials(text, entries)
@@ -388,8 +772,17 @@ def run(
         issues += rules.employer_keys(model, employer_keys)
     fields = [(path, text) for path, text in c.text_fields(model) if text]
     order = {path: i for i, (path, _) in enumerate(c.text_fields(model))}
-    issues += fact_issues(fields, sources)
-    issues += own_issues(fields, sources)
+    found = fact_issues(fields, sources)
+    issues += found
+    # A percent or a school that M9 flags already is one claim, not two.
+    seen = {(i.field, i.code): [] for i in found}
+    for i in found:
+        seen[(i.field, i.code)].append((i.start, i.end))
+    issues += [
+        i
+        for i in own_issues(fields, sources)
+        if not any(s < i.end and i.start < e for s, e in seen.get((i.field, i.code), ()))
+    ]
     for path, text in fields:
         issues += [
             Issue(path, start, end, rules.BANNED_PHRASE, "claim")

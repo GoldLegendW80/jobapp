@@ -18,6 +18,10 @@ a `DocumentSources` that carries what the documents' own rules read besides:
   version number is cut alone (`corrections`);
 - `identity`: the person's phone, e-mail, website and links, which source only the same phone,
   address or link (the header and contact lines), never a number of the text;
+- `own_titles`: the titles of the person's employers (the profile's and the base CV's), which
+  source a descriptive title of the same head noun and seniority ("Backend engineer" for a
+  "Software Engineer"); `posting_titles`, a letter's only, which never source a title held at
+  one of the person's employers ("As a Staff Platform Engineer at Orbite Données");
 - `periods`: the stored periods of the employers and schools, `(organisation, start, end)` as
   stored, which source a numeric date equal to one of them ("12/2022") and a number of years at
   one employer that its closed period holds ("2 years at Sample Labs"), matched as dates and
@@ -74,6 +78,8 @@ class DocumentSources(Sources):
     identity: tuple[str, ...] = ()
     terms: tuple[str, ...] = ()  # the skills terms with the base CV's skills and competencies
     periods: tuple[tuple[str, str, str], ...] = ()  # (organisation, start, end or "")
+    own_titles: tuple[str, ...] = ()  # the person's titles, never the posting's
+    posting_titles: tuple[str, ...] = ()  # a letter's: the role it applies for
 
 
 def _unique(texts: Iterable[str]) -> tuple[str, ...]:
@@ -168,9 +174,12 @@ def sources_for(
     if upload_text:
         profile.append(upload_text)
     titles = [e.title for e in view.employers]
+    own_titles = [*titles, *(e.title for e in base.fixed.employers)] if base else list(titles)
     participants: list[str] = []
+    posting_titles: list[str] = []
     if posting is not None and kind == "letter":
         titles.append(posting.title)
+        posting_titles.append(posting.title)
         participants.append(posting.company)
     return DocumentSources(
         profile=_unique(profile),
@@ -186,4 +195,6 @@ def sources_for(
         identity=_unique(_identity(view)),
         terms=_unique(_terms(view, base)),
         periods=tuple(_periods(view, base)),
+        own_titles=_unique(own_titles),
+        posting_titles=_unique(posting_titles),
     )
