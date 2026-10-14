@@ -57,6 +57,53 @@ class Issue:
     end: int
     code: str
     level: Level
+    # The claim is ambiguous by construction (`POLICY`): it waits for the model rewrite (D7),
+    # and the code fallback only cuts its token or keeps it for the person to see.
+    rewrite: bool = False
+
+
+# --- who corrects a claim (SPEC-documents.md, "Being careful", step 5) --------------------------
+
+# The code's correction acts alone: a claim of high confidence.
+BY_CODE = "by_code"
+# Ambiguous by construction: recorded as `needs_rewrite` for the model rewrite that D7 runs.
+# Without one, code cuts only the unsourced token when the sentence stays grammatical, else
+# keeps the sentence as written and records the issue for the person to see.
+NEEDS_REWRITE = "needs_rewrite"
+# A name: by code when it shares no distinctive word with the person's names of its kind (an
+# employer the person never had), `needs_rewrite` when it may be a paraphrase of one of them.
+NAME = "name"
+
+POLICY: dict[str, str] = {
+    # An unsourced number or percent attached to a metric or a count.
+    "number_not_in_sources": BY_CODE,
+    "percent_not_in_sources": BY_CODE,
+    "amount_not_in_sources": BY_CODE,
+    "time_not_in_sources": BY_CODE,
+    # An unsourced credential, seniority word, change word; a banned phrase; an identity line.
+    CREDENTIAL: BY_CODE,
+    SENIORITY: BY_CODE,
+    CHANGE: BY_CODE,
+    BANNED_PHRASE: BY_CODE,
+    "phone_not_in_profile": BY_CODE,
+    "email_not_in_profile": BY_CODE,
+    "link_not_in_profile": BY_CODE,
+    # Durations and dates in free text: rounding, anchors and paraphrase make them ambiguous.
+    "duration_not_in_profile": NEEDS_REWRITE,
+    DECADE: NEEDS_REWRITE,
+    "year_not_in_sources": NEEDS_REWRITE,
+    "date_not_in_sources": NEEDS_REWRITE,
+    DATE_AT_EMPLOYER: NEEDS_REWRITE,
+    # Names.
+    "title_not_in_profile": NAME,
+    "employer_not_in_profile": NAME,
+    "school_not_in_profile": NAME,
+}
+
+
+def policy(code: str) -> str:
+    """Who corrects a claim of `code` (`POLICY`); a code the table does not name is by code."""
+    return POLICY.get(code, BY_CODE)
 
 
 # --- step 1: structure --------------------------------------------------------------------------
@@ -774,10 +821,54 @@ def credentials(text: str, entries: Sequence[str]) -> list[tuple[int, int]]:
         ):
             parts[0] = head[:-1]
         phrases = [" ".join(w.folded for w in part if w.folded not in _GENERIC) for part in parts]
-        if any(phrases) and not _credential_stated(text, words[first], phrases, entries):
+        if (
+            any(phrases)
+            and not _credential_stated(text, words[first], phrases, entries)
+            and not _certification_stated(parts, entries)
+        ):
             out.append((words[first].start, words[last].end))
         i = last + 1
     return out
+
+
+# The words that say a name is a certification ("Google Professional Data Engineer
+# certification", "Certified ... Engineer", "certifié ..."): the stated name with or without them
+# is the same credential.
+_CERT_WORDS = frozenset(
+    [
+        "certification",
+        "certifications",
+        "certificate",
+        "certificates",
+        "certificat",
+        "certificats",
+        "certified",
+        "certifie",
+        "certifiee",
+    ]
+)
+
+
+def _certification_stated(parts: list[list[Word]], entries: Sequence[str]) -> bool:
+    """A certification named with a certification word at its edge ("<name> certification",
+    "Certified <name>", "certifié <name>") is stated when one of the person's texts that speaks
+    of a certification holds the name without that word. The word in the middle of a name
+    ("AWS Certified Solutions Architect") stays part of it."""
+    head = [w.folded for w in parts[0]]
+    if len(parts) > 1 or not head:
+        return False
+    if head[0] not in _CERT_WORDS and head[-1] not in _CERT_WORDS:
+        return False
+    while head and head[0] in _CERT_WORDS:
+        head = head[1:]
+    while head and head[-1] in _CERT_WORDS:
+        head = head[:-1]
+    if not head or len(head) < 2:
+        return False  # "Certified Engineer": a name of one word is no certification name
+    phrase = f" {' '.join(head)} "
+    return any(
+        phrase in entry and any(f" {word} " in entry for word in _CERT_WORDS) for entry in entries
+    )
 
 
 def _credential_stated(text: str, first: Word, phrases: list[str], entries: Sequence[str]) -> bool:

@@ -25,7 +25,12 @@ a `DocumentSources` that carries what the documents' own rules read besides:
 - `periods`: the stored periods of the employers and schools, `(organisation, start, end)` as
   stored, which source a numeric date equal to one of them ("12/2022") and a number of years at
   one employer that its closed period holds ("2 years at Sample Labs"), matched as dates and
-  durations so that a bare "12" is never sourced.
+  durations so that a bare "12" is never sourced;
+- `entries`: each experience entry's employer key with its organisation and period, which alone
+  source a year in that entry's bullets ("Built the platform in 2018" under an employer joined
+  in 2021 is a claim, whatever other period holds 2018);
+- `years_experience`: the person's total, which sources any whole number of years at or below
+  it ("8 years" for 8.5: rounded down is true, rounded up a claim).
 
 `instructions` and `thread` stay empty: neither the posting nor a chat message makes a claim
 true ("5 years of Python required" in a posting does not make "5 years of Python" pass).
@@ -80,6 +85,11 @@ class DocumentSources(Sources):
     periods: tuple[tuple[str, str, str], ...] = ()  # (organisation, start, end or "")
     own_titles: tuple[str, ...] = ()  # the person's titles, never the posting's
     posting_titles: tuple[str, ...] = ()  # a letter's: the role it applies for
+    # (employer key, organisation, start, end or ""): the period of an experience entry, which
+    # alone sources a year of its bullets.
+    entries: tuple[tuple[str, str, str, str], ...] = ()
+    # The person's total ("8.5"), the one entry: a whole number of years at or under it is true.
+    years_experience: tuple[str, ...] = ()
 
 
 def _unique(texts: Iterable[str]) -> tuple[str, ...]:
@@ -147,6 +157,19 @@ def _periods(view: ProfileView, base: c.BaseCvContent | None) -> list[tuple[str,
     return out
 
 
+def _entries(view: ProfileView, base: c.BaseCvContent | None) -> list[tuple[str, str, str, str]]:
+    rows = [(e.key, e.organisation, e.start, e.end) for e in view.employers]
+    if base is not None:
+        rows += [(e.key, e.organisation, e.start, e.end) for e in base.fixed.employers]
+    out: list[tuple[str, str, str, str]] = []
+    seen: set[str] = set()
+    for key, name, start, end in rows:
+        if key not in seen:
+            seen.add(key)
+            out.append((key, name.strip(), start or "", end or ""))
+    return out
+
+
 def sources_for(
     view: ProfileView,
     base: c.BaseCvContent | None,
@@ -197,4 +220,8 @@ def sources_for(
         periods=tuple(_periods(view, base)),
         own_titles=_unique(own_titles),
         posting_titles=_unique(posting_titles),
+        entries=tuple(_entries(view, base)),
+        years_experience=(
+            (f"{view.years_experience:g}",) if view.years_experience is not None else ()
+        ),
     )

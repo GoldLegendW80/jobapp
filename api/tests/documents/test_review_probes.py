@@ -343,7 +343,7 @@ FALSE: list[tuple[str, str, str, str, str]] = [
     ("count_8", "cv", "experience.0.bullets.0", "Built 8 dashboards.", "8 dashboards"),
     ("count_eight", "cv", "experience.0.bullets.0", "Built eight dashboards.", "eight"),
     ("count_five", "cv", "experience.0.bullets.0", "Built five dashboards.", "five"),
-    ("years_two_of_rust", "cv", "summary", "Two years of Rust.", "Rust"),
+    ("years_two_of_rust", "cv", "summary", "Two years of Rust.", "Two years"),
     # Their neighbours.
     ("tripled", "cv", "experience.0.bullets.0", "Tripled the number of daily jobs.", "Tripled"),
     ("halved", "cv", "experience.0.bullets.0", "Halved the cost of the warehouse.", "Halved"),
@@ -358,7 +358,7 @@ FALSE: list[tuple[str, str, str, str, str]] = [
     ),
     ("decades", "cv", "summary", "Two decades of data engineering.", "decades"),
     ("decennie", "cv", "summary", "Une décennie de data engineering.", "cennie"),
-    ("months_of_rust_from_notice", "cv", "summary", "Three months of Rust.", "Rust"),
+    ("months_of_rust_from_notice", "cv", "summary", "Three months of Rust.", "Three months"),
     (
         "diplome_other_school",
         "cv",
@@ -456,9 +456,6 @@ EDGE_FALSE: list[tuple[str, str, str, str, str]] = [
     ("phone_digits", "cv", "experience.0.bullets.0", "Built 34 dashboards.", "34"),
     ("other_phone", "letter", "paragraphs.1", "Reach me at +33 6 99 88 77 66.", "99"),
     ("other_site", "letter", "paragraphs.1", "Portfolio at https://other.example.org.", "other"),
-    # A period's length, rounded down, never up, and never an open period (no clock).
-    ("duration_rounded_up", "cv", "experience.1.bullets.0", "3 years at Sample Labs.", "3 years"),
-    ("duration_open_period", "cv", "experience.0.bullets.0", "5 years at Exemple SA.", "5 years"),
     ("duration_unknown_employer", "cv", "summary", "2 years at Nimbus Example.", "2 years"),
     # A version after a word that is no skills term is a number like any other.
     ("number_after_a_verb", "cv", "experience.0.bullets.0", "Shipped 16 pipelines.", "16"),
@@ -473,6 +470,26 @@ EDGE_FALSE: list[tuple[str, str, str, str, str]] = [
 )
 def test_an_edge_false_claim_is_removed(kind: str, path: str, text: str, gone: str) -> None:
     test_a_false_claim_is_removed(kind, path, text, gone)
+
+
+# A period's length, rounded down, never up, and never an open period without the generation
+# date. A duration is ambiguous by construction (SPEC-documents.md step 5, `rules.POLICY`): no
+# cut leaves these whole, so code keeps them for the model rewrite and shows them to the person.
+EDGE_FLAGGED = [
+    ("duration_rounded_up", "experience.1.bullets.0", "3 years at Sample Labs."),
+    ("duration_open_period", "experience.0.bullets.0", "5 years at Exemple SA."),
+]
+
+
+@pytest.mark.parametrize(
+    ("path", "text"), [t[1:] for t in EDGE_FLAGGED], ids=[t[0] for t in EDGE_FLAGGED]
+)
+def test_an_edge_ambiguous_claim_is_flagged_and_kept(path: str, text: str) -> None:
+    fixed, records = _correct("cv", path, text)
+    assert _field(fixed, path) == text
+    assert [(r.after, r.code, r.reason) for r in records] == [
+        (text, "duration_not_in_profile", corrections.KEPT)
+    ]
 
 
 def test_the_new_rules_name_their_codes() -> None:

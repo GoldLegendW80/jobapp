@@ -201,18 +201,18 @@ def test_a_skills_group_whose_label_goes_is_dropped_and_recorded() -> None:
             {"label": "Cloud", "items": ["Terraform"]},
         ]
     )
-    data["skills"][0]["label"] = "Tools of 2015"
+    data["skills"][0]["label"] = "Tools with 40% uptime"
     fixed, records = _correct("cv", data)
     assert [g.label for g in fixed.skills] == ["Cloud"]
     assert [(r.field_path, r.before) for r in records] == [
-        ("skills.0.label", "Tools of 2015"),
+        ("skills.0.label", "Tools with 40% uptime"),
         ("skills.0", "Kubernetes"),
     ]
 
 
 def test_a_skills_group_whose_items_all_go_is_dropped() -> None:
     data = _cv(
-        skills=[{"label": "Cloud", "items": ["Kubernetes since 2015", "Terraform since 2014"]}]
+        skills=[{"label": "Cloud", "items": ["Kubernetes, 40% of uptime", "Terraform, 35% of it"]}]
     )
     fixed, records = _correct("cv", data)
     assert fixed.skills == []
@@ -366,10 +366,10 @@ def test_records_serialise_for_the_version_row() -> None:
 def test_every_single_field_of_a_letter_may_be_emptied() -> None:
     data = {
         **written("letter_typical"),
-        "headline": "Engineer since 2015",
+        "headline": "Engineer with 40% uptime",
         "recipient": "Hiring team at Globex Industries",
         "salutation": "Dear team of 14,",
-        "closing": "Twelve years of regards, 2015",
+        "closing": "Regards from 35% of us",
     }
     fixed, records = _correct("letter", data)
     assert (fixed.headline, fixed.recipient, fixed.salutation, fixed.closing) == ("", "", "", "")

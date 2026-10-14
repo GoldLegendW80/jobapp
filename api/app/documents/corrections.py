@@ -3,6 +3,13 @@ anything"): pure functions that change content and say what they changed.
 
 Who corrects what:
 
+- **Who acts on a claim** is `rules.POLICY` (SPEC-documents.md step 5, the table): a claim of
+  high confidence is corrected by code alone, as below; a claim ambiguous by construction
+  (a duration, a date of free text, a name that may be a paraphrase) is `needs_rewrite`: the
+  model rewrite of D7 comes first, and without it `remove_remaining` cuts only its token when
+  the sentence stays whole ("with 9 years of experience", "for five years", "in 2018", "since
+  2019") and otherwise keeps the sentence as written with a record whose `before` equals its
+  `after` (`KEPT`), for the person to see. Nothing blocks.
 - **By code, alone**, here:
   - `fix_separators`: with the person's dash rule on, an em dash, an en dash or a spaced
     hyphen used as a separator becomes a comma (a range of digits keeps a hyphen, a dash that
@@ -34,6 +41,7 @@ the same records in the same order.
 
 from __future__ import annotations
 
+import re
 from bisect import bisect_right
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -55,10 +63,14 @@ NUMBER_NOT_STATED = "A number your profile does not state"
 DASH = "A dash used as a separator"
 BANNED = "A phrase you banned"
 FILLED_IN = "Filled in because nothing was left"
-REASONS: tuple[str, ...] = (NOT_IN_PROFILE, NUMBER_NOT_STATED, DASH, BANNED, FILLED_IN)
+KEPT = "Kept as written, for you to check"
+REASONS: tuple[str, ...] = (NOT_IN_PROFILE, NUMBER_NOT_STATED, DASH, BANNED, FILLED_IN, KEPT)
 
 FALLBACK = "fallback"
 VERSION_REMOVED = "version_removed"
+# A claim ambiguous by construction (`rules.POLICY`) that no token cut could take: the sentence
+# is kept as written and the record shows the person the claim (`before` equals `after`).
+NEEDS_REWRITE = rules.NEEDS_REWRITE
 
 # M9's codes of a number, a year, a duration, an amount, a percentage, a date or a time.
 _NUMBER_CODES = frozenset(
@@ -78,6 +90,8 @@ By = Literal["writer", "code"]
 
 
 def reason_for(code: str) -> str:
+    if code == NEEDS_REWRITE:
+        return KEPT
     if code in _NUMBER_CODES or code in (VERSION_REMOVED, rules.CHANGE, rules.DECADE):
         return NUMBER_NOT_STATED
     if code == rules.BANNED_PHRASE:
@@ -494,15 +508,91 @@ def _percent_cut(text: str, issue: Issue) -> tuple[int, int] | None:
 
 
 def _date_cut(text: str, start: int, end: int) -> tuple[int, int]:
-    """ "since 2021", "(2015 to 2021)" goes with its space or its brackets; at the start of a
-    sentence, with the comma after it."""
+    """ "since 2021", "(2015 to 2021)" goes with its space or its brackets, ", 2018 to 2022"
+    with its comma (the comma after it stays: "Ltd, 2018 to 2022, building" becomes "Ltd,
+    building"); at the start of a sentence, with the comma after it."""
     if start > 0 and text[start - 1] == "(" and end < len(text) and text[end] == ")":
         start, end = start - 1, end + 1
+    if start > 1 and text[start - 2 : start] == ", ":
+        return start - 2, end
     if start > 0 and text[start - 1] == " ":
         return start - 1, end
     while end < len(text) and text[end] in ", ":
         end += 1
     return start, end
+
+
+# The words before a date of free text that go with it ("in 2015", "depuis 2015").
+_DATE_BEFORE = frozenset(
+    ["in", "since", "from", "during", "by", "en", "depuis", "de", "dès", "des", "until", "till"]
+)
+_DATE_CODES = frozenset(("year_not_in_sources", "date_not_in_sources"))
+_JOINED_AFTER = frozenset(["and", "or", "to", "et", "ou", "au"])
+# The words before a duration that are part of it ("more than 10 years", "a decade").
+_DURATION_BEFORE = (
+    "more than ",
+    "at least ",
+    "plus de ",
+    "au moins ",
+    "over ",
+    "nearly ",
+    "almost ",
+    "about ",
+    "around ",
+    "a ",
+    "an ",
+    "une ",
+    "un ",
+)
+_EXPERIENCE_AFTER = (
+    " of professional experience",
+    " of work experience",
+    " of experience",
+    " of hands-on experience",
+    " d'expérience professionnelle",
+    " d'expérience",
+    " d\u2019expérience",
+)
+
+
+def _free_date_cut(text: str, issue: Issue) -> tuple[int, int] | None:
+    """A date of free text goes with its preposition ("in 2015") when one stands before it, and
+    never out of a list or a range ("in 2019 and 2022", "in 2019 to 2021": kept)."""
+    start, before = _word_before(text, issue.start)
+    if before not in _DATE_BEFORE or _word_after(text, issue.end).lower() in _JOINED_AFTER:
+        return None
+    return _date_cut(text, start, issue.end)
+
+
+def _duration_cut(text: str, issue: Issue) -> tuple[int, int] | None:
+    """A duration that can go alone: "with N years of experience" at the end of a clause,
+    "N years of" before what they were of ("I have experience in Rust"), "for N years". None
+    when the sentence would break ("Three years as a developer at ..."): it is kept."""
+    start, end = issue.start, issue.end
+    for _ in range(2):  # "over a decade": an article, then a bound
+        low = text[max(0, start - 12) : start].lower()
+        for bound in _DURATION_BEFORE:
+            at = start - len(bound)
+            if low.endswith(bound) and (at == 0 or text[at - 1] == " "):
+                start = at
+                break
+    rest = text[end:]
+    folded = rest.lower()
+    _, before = _word_before(text, start)
+    for phrase in _EXPERIENCE_AFTER:
+        if folded.startswith(phrase):
+            stop = end + len(phrase)
+            if before in ("with", "avec") and (stop == len(text) or text[stop] in ".,;!?"):
+                return start - len(before) - 2 if start > len(before) + 1 else start, stop
+            if phrase.startswith(" of"):
+                return start, end + len(" of ")
+            return start, end + len(phrase) - len("expérience")
+    if folded.startswith(" of ") or folded.startswith(" de "):
+        return start, end + 4
+    if before in ("for", "pendant", "during"):
+        at, _ = _word_before(text, start)
+        return at - 1, end
+    return None
 
 
 def _token_cut(text: str, issue: Issue) -> tuple[int, int] | None:
@@ -514,7 +604,14 @@ def _token_cut(text: str, issue: Issue) -> tuple[int, int] | None:
             return issue.start, issue.end + 1
         return None
     if issue.code == rules.DATE_AT_EMPLOYER:
+        # "since 2021" holds its preposition; a year of an experience entry ("in 2018") does not.
+        if _word_before(text, issue.start)[1] in _DATE_BEFORE:
+            return _free_date_cut(text, issue)
         return _date_cut(text, issue.start, issue.end)
+    if issue.rewrite and issue.code in _DATE_CODES:
+        return _free_date_cut(text, issue)
+    if issue.code in ("duration_not_in_profile", rules.DECADE):
+        return _duration_cut(text, issue) if issue.rewrite else None
     if issue.code == "percent_not_in_sources":
         return _percent_cut(text, issue)
     if issue.code == "number_not_in_sources":
@@ -544,6 +641,7 @@ def remove_remaining(
         spans = rules.sentences(text)
         starts = [start for start, _ in spans]
         removed: dict[int, str] = {}
+        kept_for_check: dict[int, str] = {}
         cuts: list[tuple[int, int, str]] = []
         for issue in issues:
             cut = _version_start(text, issue, checks.known_terms)
@@ -555,11 +653,22 @@ def remove_remaining(
                 cuts.append((*token, issue.code))
                 continue
             index = max(bisect_right(starts, issue.start) - 1, 0)
+            if issue.rewrite:
+                kept_for_check.setdefault(index, issue.code)
+                continue
             removed.setdefault(index, issue.code)
         kept_spans = [(s, e) for i, (s, e) in enumerate(spans) if i not in removed]
         records += [
             _record(path, text[spans[i][0] : spans[i][1]].strip(), "", code, "code")
             for i, code in sorted(removed.items())
+        ]
+        # The ambiguous claims no token cut could take: the sentence stays as written, and the
+        # record shows the person the claim (the model rewrite of D7 comes first when it runs).
+        records += [
+            Correction(path, sentence, sentence, code, "code", KEPT)
+            for i, code in sorted(kept_for_check.items())
+            if i not in removed
+            for sentence in [text[spans[i][0] : spans[i][1]].strip()]
         ]
         kept = "".join(text[s:e] for s, e in kept_spans).strip()
         # The token cuts, one record per code, in the order they first stand in the field.
@@ -595,20 +704,55 @@ def remove_remaining(
 
 
 def _cut(text: str, start: int, end: int, cuts: list[tuple[int, int]]) -> str:
-    """`text[start:end]` without the spans of `cuts` inside it. A cut that opens the sentence
-    gives its capital to the word after it ("Senior engineer" becomes "Engineer")."""
+    """`text[start:end]` without the spans of `cuts` inside it, its punctuation and spacing
+    made whole again (`tidy`). A cut that opens the sentence gives its capital to the word
+    after it ("Senior engineer" becomes "Engineer")."""
     out: list[str] = []
     at = start
+    cut = False
     for low, high in sorted(cuts):
         if low < start or high > end or low < at:
             continue
+        cut = True
         out.append(text[at:low])
         at = high
         if low == start and at < end and text[at].islower():
             out.append(text[at].upper())
             at += 1
     out.append(text[at:end])
-    return "".join(out)
+    sentence = "".join(out)
+    if not cut:
+        return sentence
+    core = sentence.strip()
+    if not core:
+        return sentence
+    head = sentence[: len(sentence) - len(sentence.lstrip())]
+    tail = sentence[len(sentence.rstrip()) :]
+    return head + tidy(core) + tail
+
+
+# What a cut can leave behind, and what it becomes: a comma before a stop or another comma, a
+# space before a comma or a stop, empty brackets, a space inside a bracket, a double space.
+_TIDY = (
+    (re.compile(r"\(\s*\)"), ""),
+    (re.compile(r"\(\s+"), "("),
+    (re.compile(r"\s+\)"), ")"),
+    (re.compile(r"[ \t]{2,}"), " "),
+    (re.compile(r"\s+([,.])"), r"\1"),
+    (re.compile(r",(?:\s*,)+"), ","),
+    (re.compile(r"[,;:]+(?=[.!?])"), ""),
+    (re.compile(r"^[\s,;:]+"), ""),
+)
+# A joining word left at the end of a sentence ("Built the API and.").
+_DANGLING = re.compile(r"(?:,\s*|\s+)(?:and|or|et|ou|with|avec)\s*([.!?]?)$", re.IGNORECASE)
+
+
+def tidy(sentence: str) -> str:
+    """A sentence made whole after a cut: no ",.", ",,", " ,", "( )", dangling "and" or "et" at
+    its end, or double space."""
+    for pattern, by in _TIDY:
+        sentence = pattern.sub(by, sentence)
+    return _DANGLING.sub(r"\1", sentence).rstrip(" ,;:")
 
 
 def records_json(records: list[Correction]) -> list[dict[str, str]]:
