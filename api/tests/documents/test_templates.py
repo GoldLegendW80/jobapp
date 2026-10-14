@@ -1324,8 +1324,11 @@ def test_the_fit_rule_on_d1_fixtures(renderer: Any, slug: str, language: str) ->
 
 @docker
 @pytest.mark.parametrize("slug", SLUGS)
-def test_the_fit_rule_on_d2_fixtures(renderer: Any, slug: str) -> None:
-    found, view = template(slug), view_of("alex")
+@pytest.mark.parametrize("who", ["alex", "dana"])
+def test_the_fit_rule_on_d2_fixtures(renderer: Any, slug: str, who: str) -> None:
+    """`dana` is Alex's profile with three schools dated by month, each with a city and a country
+    (D19 review: a template that prints a school's location beside its dates must still fit)."""
+    found, view = template(slug), view_of(who)
     for name in D2_FIXTURES:
         kind = "letter" if name.startswith("letter") else "cv"
         language = "fr" if name.endswith("_fr") else "en"

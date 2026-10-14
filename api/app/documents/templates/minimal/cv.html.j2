@@ -1,0 +1,93 @@
+{#- minimal: one column, monochrome, generous white space, set on a left margin. The name large
+    and heavy on top with the headline and the contact lines under it, then every section as a
+    margin and a text column: the heading stands in the margin (no rule), the text beside it;
+    in the experience and the education the dates stand in the margin, each beside its role or
+    school (the heading takes a row of its own above them). The profile, the achievements, the
+    key competencies in columns, the experience, the education, the skills as one line per group
+    and the languages. An empty section is not printed. The margin is the first grid column, so
+    the reading order stays heading, then text, then dates after their title. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+<header class="head">
+<h1 class="name">{{ name }}</h1>
+{% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+{{ base.contact_lines() }}
+</header>
+
+{% if content.summary %}
+<section class="block">
+<h2 class="label">{{ base.label("summary") }}</h2>
+<div class="body"><p class="summary">{{ content.summary }}</p></div>
+</section>
+{% endif %}
+
+{% if content.highlights %}
+<section class="block">
+<h2 class="label">{{ base.label("highlights") }}</h2>
+<div class="body">{{ base.bullets(content.highlights, "highlights") }}</div>
+</section>
+{% endif %}
+
+{% if content.competencies %}
+<section class="block">
+<h2 class="label">{{ base.label("competencies") }}</h2>
+<div class="body">{{ base.bullets(content.competencies, "competencies") }}</div>
+</section>
+{% endif %}
+
+{% if roles %}
+<section class="block dated">
+<h2 class="label">{{ base.label("experience") }}</h2>
+<div class="body">
+{% for role in roles %}
+<article class="entry">
+<h3 class="entry-title">{{ role.title }}{% if role.title and role.organisation %}, {% endif %}<span class="org">{{ role.organisation }}</span></h3>
+{% if role.period %}<p class="period">{{ role.period }}</p>{% endif %}
+{% if role.location %}<p class="place">{{ role.location }}</p>{% endif %}
+{{ base.bullets(role.bullets) }}
+</article>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if schools %}
+<section class="block dated">
+<h2 class="label">{{ base.label("education") }}</h2>
+<div class="body">
+{% for item in schools %}
+<div class="school">
+<h3 class="entry-title">{{ item.degree }}</h3>
+{% if item.period %}<p class="period">{{ item.period }}</p>{% endif %}
+<p class="org">{{ item.school }}{% if item.location %}, {{ item.location }}{% endif %}</p>
+</div>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if content.skills %}
+<section class="block">
+<h2 class="label">{{ base.label("skills") }}</h2>
+<div class="body">
+{% for group in content.skills %}
+{{ base.skill_group(group) }}
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if languages %}
+<section class="block">
+<h2 class="label">{{ base.label("languages") }}</h2>
+<div class="body">
+<ul class="languages">
+{% for item in languages %}
+{{ base.language(item) }}
+{% endfor %}
+</ul>
+</div>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,121 @@
+/* minimal: one column, Arimo, black and greys only, generous white space (wide margins, open
+   section gaps), set on a left margin: a large heavy name, the headings in the margin (no rule),
+   the dates of the experience and the education in the margin beside each role, no markers but
+   thin grey ones, the key competencies in two columns. The density comes from the step on
+   :root. */
+:root { --rail: 27mm; }
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Arimo", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #1b1b1b;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p { overflow-wrap: anywhere; }
+
+.head { padding-bottom: 2pt; }
+.name {
+  font-size: 3.5em;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.025em;
+  color: var(--accent);
+}
+.headline {
+  font-size: 1.15em;
+  color: #4a4a4a;
+  margin: 7pt 0 0 var(--rail);
+}
+.contact {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1pt 16pt;
+  margin: 4pt 0 0 var(--rail);
+  color: #555555;
+  font-size: 0.94em;
+}
+
+.block {
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr);
+  margin-top: var(--section-gap);
+}
+.label {
+  grid-column: 1;
+  grid-row: 1;
+  font-size: 0.74em;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #1b1b1b;
+  padding: 0.25em 6pt 0 0;
+}
+.body { grid-column: 2; grid-row: 1; }
+.dated .label { margin-bottom: var(--item-gap); }
+.dated .body { grid-column: 1 / -1; grid-row: 2; }
+
+.block ul { padding-left: 1em; }
+.block li { margin-bottom: 1.5pt; }
+.block li::marker { color: #6b6b6b; }
+.block .competencies {
+  columns: 2;
+  column-gap: 14pt;
+}
+.competencies li { break-inside: avoid; }
+
+.entry, .school {
+  display: grid;
+  grid-template-columns: var(--rail) minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
+  margin-bottom: var(--item-gap);
+}
+.entry:last-child, .school:last-child { margin-bottom: 0; }
+.entry > *, .school > * { grid-column: 2; }
+.entry-title { grid-row: 1; font-size: 1.04em; font-weight: 700; }
+.school .entry-title { font-size: 1em; }
+.org { font-weight: 400; }
+.entry .place, .school .org { grid-row: 2; }
+.entry > ul { grid-row: 3; }
+.period, .place { color: #555555; font-size: 0.92em; }
+.entry .period, .school .period {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  padding-right: 6pt;
+  font-weight: 700;
+  color: #1b1b1b;
+}
+.place { margin-bottom: 1pt; }
+
+.skill-group {
+  display: grid;
+  grid-template-columns: 26mm 1fr;
+  gap: 10pt;
+  margin-bottom: 2pt;
+}
+.group-label { font-size: 1em; font-weight: 700; }
+
+.languages {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2pt 20pt;
+}
+.block .languages { padding-left: 0; }
+
+.letter-body {
+  margin-top: 14pt;
+  padding-top: 8pt;
+  padding-left: var(--rail);
+}
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { color: #555555; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; }
+.paragraph { white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); }
