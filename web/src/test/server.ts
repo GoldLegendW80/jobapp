@@ -109,6 +109,8 @@ export const handlers = [
       last_30_days: { input: 0, output: 0, cost_usd: "0" },
     }),
   ),
+  // No application started for a posting (job detail's Apply section).
+  http.get("*/api/applications", () => HttpResponse.json({ items: [] })),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),
   ),

@@ -9,6 +9,7 @@ import { defineConfig, devices } from "@playwright/test";
  *   apply-a1   the test browser opens each fake form, fills it by hand code, submits, and the
  *              submission is listed (task A1)
  *   apply-a3   the Answers tab of the profile (task A3)
+ *   apply-a7   the Apply section of a posting: apply, review, approve, applied (task A7)
  *
  * A task of the module adds its spec as apply-a<n>.spec.ts and it runs here: the local check
  * (ops/local-check.sh, group apply) names this config, not the specs, and
