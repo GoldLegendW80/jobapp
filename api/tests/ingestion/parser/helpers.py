@@ -112,7 +112,7 @@ class BackgroundServer:
 
 # The names under which the child imports its own files from beside them (it puts the folder on
 # its path): the handlers, and the helper two of them share.
-FLAT_NAMES = ("docx", "image", "linkedin_zip", "pdf_render", "pdf_text", "zipcaps")
+FLAT_NAMES = ("docx", "image", "linkedin_zip", "mail_html", "pdf_render", "pdf_text", "zipcaps")
 _ABSENT = object()
 
 
