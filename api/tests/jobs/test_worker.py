@@ -471,7 +471,7 @@ def test_main_exits_at_once_when_the_stop_left_threads(
     async def served(_settings: Settings, _specs: Any) -> int:
         return left[0]
 
-    monkeypatch.setattr(worker, "load_settings", lambda: settings)
+    monkeypatch.setattr(worker, "get_settings", lambda: settings)
     monkeypatch.setattr(worker, "configure_logging", lambda _level: None)
     monkeypatch.setattr(worker, "drop_secrets_from_environ", lambda: [])
     monkeypatch.setattr(worker, "serve", served)

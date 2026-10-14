@@ -593,15 +593,15 @@ specs_of() { grep -v '^ *#' "$1" | grep -o '[a-z0-9-]*\.spec\.ts\|e2e/[a-z-]*\.c
 [[ -n "$(specs_of .github/workflows/ci.yml)" ]] || fail "no journey spec found in ci.yml"
 # A group that only the local check runs is listed, with its reason, in LOCAL_CHECK_CONFIGS of
 # .github/scripts/e2e_groups.py (the mail module's: its stack also runs a fake Google; the apply module's: its stack also
-# runs a fake ATS forms server). Nothing
+# runs a fake ATS forms server; the documents module's: added after CI stopped). Nothing
 # else may differ.
 local_only="$(python3 -c 'import sys; sys.path.insert(0, ".github/scripts"); import e2e_groups; print("\n".join(sorted(e2e_groups.LOCAL_CHECK_CONFIGS)))')"
-[[ "$local_only" == $'e2e/apply-all.config.ts\ne2e/mail-all.config.ts' ]] || fail "the groups of the local check alone are no longer the apply and mail groups: $local_only"
+[[ "$local_only" == $'e2e/apply-all.config.ts\ne2e/documents-all.config.ts\ne2e/mail-all.config.ts' ]] || fail "the groups of the local check alone are no longer the apply, documents and mail groups: $local_only"
 expected_specs() { { specs_of .github/workflows/ci.yml; printf '%s\n' "$local_only"; } | sort -u; }
 [[ "$(expected_specs)" == "$(specs_of ops/local-check.sh)" ]] ||
   fail "the journey groups of ops/local-check.sh (journey_specs) differ from those of ci.yml plus the local check's own: $(diff <(expected_specs) <(specs_of ops/local-check.sh) | tr '\n' ' ')"
 ! specs_of .github/workflows/ci.yml | grep -qxF "$local_only" || fail "$local_only is also run by ci.yml: remove it from LOCAL_CHECK_CONFIGS"
-ok "ops/local-check.sh runs the journey specs and configs that ci.yml names, and the mail and apply groups of their own"
+ok "ops/local-check.sh runs the journey specs and configs that ci.yml names, and the mail, apply and documents groups of their own"
 
 listed="$(awk '/koalaman\/shellcheck:/ { on = 1; next } on && /^ *(#|- )/ { exit } on { print }' .github/workflows/ci.yml | tr '\n' ' ')"
 for script in ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh; do

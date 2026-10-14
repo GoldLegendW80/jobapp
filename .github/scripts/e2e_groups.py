@@ -56,6 +56,9 @@ LOCAL_CHECK_CONFIGS: dict[str, str] = {
     # beside the stack (no journey may fill a real job site). apply-a3 ran in the identity group
     # until A1 made this group.
     "e2e/apply-all.config.ts": "needs the fake ATS forms server, group apply of ops/local-check.sh",
+    # The documents journeys (D6 and later) came after the workflow stopped running: no CI job
+    # starts their stack, the renderer included.
+    "e2e/documents-all.config.ts": "added after CI stopped, group documents of ops/local-check.sh",
 }
 
 WORKFLOW = Path(".github/workflows/ci.yml")

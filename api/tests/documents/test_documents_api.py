@@ -251,6 +251,15 @@ def test_template_and_language_switches(
         "PATCH", f"/api/documents/{document}", token=alex, json={"template_slug": "nope"}
     )
     assert unknown.status_code == 422
+    # A slug longer than the column takes is refused by the schema (the body limit test wants
+    # every schema bounded); 64 characters still reach the template lookup.
+    for slug, schema in (("a" * 65, True), ("a" * 64, False)):
+        refused = api.request(
+            "PATCH", f"/api/documents/{document}", token=alex, json={"template_slug": slug}
+        )
+        assert refused.status_code == 422
+        assert (refused.json()["detail"] == unknown.json()["detail"]) is not schema
+        assert ("at most 64 characters" in refused.json()["detail"]) is schema
     # Another person's own template: Blake's row, asked for by Alex.
     with factory() as db:
         blake_id = db.execute(

@@ -23,9 +23,9 @@
 #             the rule of its range is below, at SCAN_FROM), the shell lint of the files ci.yml
 #             lists, the e2e groups and CI plan tests, every tests/*_test.sh that ci.yml runs
 #             (one that neither runs nor is left out with a reason fails the step shell-tests);
-#             the journey groups apps, ingestion, mail and apply (mail on a stack that also runs
-#             the fake Google of tests/gmail-stub.compose.yml, never a real account; apply on a
-#             stack that also runs the fake ATS forms server of tests/ats-forms-stub.compose.yml,
+#             the journey groups apps, ingestion, mail, apply and documents (mail on a stack that
+#             also runs the fake Google of tests/gmail-stub.compose.yml, never a real account; apply
+#             on a stack that also runs the fake ATS forms server of tests/ats-forms-stub.compose.yml,
 #             never a real job site).
 #   journeys  the web lint, type check, vitest and build; the journey groups identity and sweep.
 #
@@ -647,6 +647,7 @@ journey_specs() { # the Playwright arguments of a group, as ci.yml has them
   ingestion) echo "-c e2e/ingestion-all.config.ts" ;;
   mail) echo "-c e2e/mail-all.config.ts" ;;
   apply) echo "-c e2e/apply-all.config.ts" ;;
+  documents) echo "-c e2e/documents-all.config.ts" ;;
   identity) echo "-c e2e/identity-all.config.ts" ;;
   sweep) echo "jobs-sweep.spec.ts --workers=1" ;;
   esac
@@ -729,7 +730,7 @@ s_journey() {
 
 lane_journeys() {
   local groups=() group running=0 why=""
-  if wanted checks; then groups+=(apps ingestion mail apply); fi
+  if wanted checks; then groups+=(apps ingestion mail apply documents); fi
   if wanted journeys; then groups+=(identity sweep); fi
   ((${#groups[@]})) || return 0
   while [[ ! -f "$WORK/images.done" || ! -f "$WORK/web.done" ]]; do sleep 1; done
@@ -889,7 +890,7 @@ expected_steps() {
   fi
   if wanted checks || wanted journeys; then printf '%s\n' web-install images chromium; fi
   if wanted checks; then
-    printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests journeys-apps journeys-ingestion journeys-mail journeys-apply
+    printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests journeys-apps journeys-ingestion journeys-mail journeys-apply journeys-documents
     (cd "$TREE" && shell_tests) | sed 's/^tests\///; s/\.sh$//'
   fi
   if wanted journeys; then printf '%s\n' lint typecheck build vitest journeys-identity journeys-sweep; fi

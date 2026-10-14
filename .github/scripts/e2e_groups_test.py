@@ -271,14 +271,21 @@ class ThisRepositoryTest(unittest.TestCase):
             self.assertTrue((self.ROOT / "web" / config).is_file(), config)
             self.assertIn(f"-c {config}", script)
             self.assertTrue(reason.strip(), config)
-        # The local check's own groups: mail (mail-*.spec.ts) and apply (apply-*.spec.ts).
+        # The local check's own groups: mail (mail-*.spec.ts), apply (apply-*.spec.ts) and
+        # documents (documents-*.spec.ts).
         local = set(e2e_groups.specs_in_local_check(self.ROOT))
         self.assertLessEqual(
-            {"mail-m1.spec.ts", "apply-a1.spec.ts", "apply-a3.spec.ts"}, local
+            {
+                "mail-m1.spec.ts",
+                "apply-a1.spec.ts",
+                "apply-a3.spec.ts",
+                "documents-d6.spec.ts",
+            },
+            local,
         )
         on_disk = {
             p.name
-            for prefix in ("mail-", "apply-")
+            for prefix in ("mail-", "apply-", "documents-")
             for p in (self.ROOT / "web/e2e").glob(f"{prefix}*.spec.ts")
         }
         self.assertEqual(local, on_disk)

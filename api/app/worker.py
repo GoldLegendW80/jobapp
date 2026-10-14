@@ -84,7 +84,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue
 from app.agents import definitions
 from app.agents import runs as agent_runs
-from app.config import Settings, load_settings
+from app.config import Settings, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
@@ -138,6 +138,22 @@ def register_ingestion_agents() -> None:
     where the agents queue is built and where a run's context is made, not at the top of this
     file: `python -m app.worker --check` must not need the SDK."""
     from app.ingestion import engine  # noqa: F401
+
+    register_document_writers()
+
+
+DOCUMENT_WRITERS = "app.documents.writers"
+
+
+def register_document_writers(module: str | None = None) -> None:
+    """Make this process know the documents writers (documents D7, app/documents/writers.py):
+    the import registers their agents and sets `render_job.on_overflow`. Called where the agents
+    queue is built and where the documents queue is built: only the process that renders calls
+    `on_overflow`. Skipped while the file does not exist (before D7), as the tick of D10 is; a
+    file that exists and fails to import fails the start."""
+    module = module or DOCUMENT_WRITERS
+    if importlib.util.find_spec(module) is not None:
+        importlib.import_module(module)
 
 
 def longest_agent_s() -> float:
@@ -458,6 +474,7 @@ def ingestion_queue() -> QueueSpec:
 
 
 def documents_queue() -> QueueSpec:
+    register_document_writers()  # D7's writers set render_job.on_overflow in this process
     functions = [
         # keep_result=0: nothing of a render is left in Redis, and the same render can be
         # queued again under its id once its job ended.
@@ -905,7 +922,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.worker", description=__doc__)
     parser.add_argument("--check", action="store_true", help="healthcheck: exit 0 when healthy")
     args = parser.parse_args(argv)
-    settings = load_settings()
+    # Loaded through the cache: job code that reads get_settings() (the documents renders,
+    # render_client and store) runs after the secrets below left the environment.
+    settings = get_settings()
     if args.check:
         return asyncio.run(check(settings))
     configure_logging(settings.log_level)

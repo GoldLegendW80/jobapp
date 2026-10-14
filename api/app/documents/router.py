@@ -41,7 +41,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app import queue as queues
@@ -185,7 +185,7 @@ class QueuedOut(BaseModel):
 class DocumentPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     language: Language | None = None
-    template_slug: str | None = None
+    template_slug: Annotated[str, Field(max_length=64)] | None = None  # the column's bound
 
 
 class TemplateOut(BaseModel):
