@@ -301,6 +301,23 @@ def apply_score(
     return changed
 
 
+# The hook of other modules on a status change (documents D14 freezes the sent CV and letter on
+# `applied`). A callback gets the session, the job, the status it left, the status it reached and
+# the clock's `now`; it runs inside set_status, under the job's row lock, after the event is
+# written, so its writes commit or roll back with the status change. This module imports
+# nothing of the modules that register.
+StatusCallback = Callable[[Session, Job, JobStatus, JobStatus, datetime], None]
+_status_callbacks: list[StatusCallback] = []
+
+
+def register_status_callback(callback: StatusCallback) -> None:
+    """Call `callback` after every status change, in registration order. Registering the same
+    function again changes nothing. An exception from a callback leaves set_status like one of
+    its own: the caller rolls the transaction back, the status change with it."""
+    if callback not in _status_callbacks:
+        _status_callbacks.append(callback)
+
+
 def set_status(
     db: Session,
     job: Job,
@@ -317,7 +334,8 @@ def set_status(
     the job's pending status proposals to the caller, which supersedes those of many jobs at
     once (supersede_status_proposals). The job must have been read under the row lock in this
     transaction (lock_job, lock_jobs, undo_bulk), else UnlockedJobError: two changes racing on
-    an unlocked row would each record an event from a status the other had already moved."""
+    an unlocked row would each record an event from a status the other had already moved. Once
+    the change is written the registered status callbacks run (register_status_callback)."""
     if job.id not in _locked_ids(db):
         raise UnlockedJobError(
             f"job {job.id} was not read under the lock in this transaction: "
@@ -325,7 +343,8 @@ def set_status(
         )
     if job.status == status:
         return False
-    data: dict[str, Any] = {"from": job.status.value, "to": status.value}
+    previous = job.status
+    data: dict[str, Any] = {"from": previous.value, "to": status.value}
     if via:
         data["via"] = via
     if extra:
@@ -340,6 +359,8 @@ def set_status(
             db, job.user_id, [job.id], now, keep=(extra or {}).get("proposal_id")
         )
     db.flush()
+    for callback in tuple(_status_callbacks):
+        callback(db, job, previous, status, now)
     return True
 
 

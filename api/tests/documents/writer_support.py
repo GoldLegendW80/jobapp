@@ -26,6 +26,7 @@ from app.config import Settings
 from app.documents import content as c
 from app.documents import generate, store, writers  # noqa: F401 (registers the writer)
 from app.documents.models import (
+    Author,
     BaseSource,
     Document,
     DocumentGeneration,
@@ -128,6 +129,47 @@ def start(
         run = generate.start(db, generation, at=AT, script=script, settings=who.settings)
         db.commit()
         return document.id, generation.id, run.id
+
+
+def start_letter(
+    who: Person, script: str | None, *, ceiling: int = CEILING, base: bool = True
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    """A posting letter generation started: (document id, generation id, run id). `base` names
+    the base CV, as the chain of a CV does."""
+    with who.factory() as db:
+        document = store.get_or_create(db, who.user, who.posting, Kind.letter, at=AT)
+        generation = generate.create(
+            db,
+            document,
+            GenerationMode.posting,
+            GenerationTrigger.click,
+            who.base if base else None,
+            ESTIMATE,
+            ceiling,
+            at=AT,
+        )
+        run = generate.start(db, generation, at=AT, script=script, settings=who.settings)
+        db.commit()
+        return document.id, generation.id, run.id
+
+
+def write_letter(
+    who: Person, script: str | None, *, ceiling: int = CEILING, base: bool = True
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    document, generation, run = start_letter(who, script, ceiling=ceiling, base=base)
+    execute(who, run)
+    return document, generation, run
+
+
+def give_cv_text(who: Person, content: dict[str, Any]) -> uuid.UUID:
+    """The posting's CV, with `content` as its draft (what the letter writer reads)."""
+    with who.factory() as db:
+        document = store.get_or_create(db, who.user, who.posting, Kind.cv, at=AT)
+        store.save_draft(
+            db, who.user, document.id, content, document.draft_revision, Author.writer, at=AT
+        )
+        db.commit()
+        return document.id
 
 
 def execute(who: Person, run_id: uuid.UUID) -> None:
