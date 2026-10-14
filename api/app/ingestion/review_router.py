@@ -338,6 +338,12 @@ def _changed(found: Sequence[Proposal]) -> set[str]:
     return changed
 
 
+def _set_aside(proposal: Proposal) -> str | None:
+    """Why the system set this item aside (G13 greys it with the reason): the sentence written
+    when it was marked invalid, which names a rule and no value."""
+    return proposal.reason if proposal.status is ProposalStatus.invalid else None
+
+
 def _item(
     proposal: Proposal,
     stored: Mapping[str, Any] | None,
@@ -371,7 +377,7 @@ def _item(
         stale_reason=reason,  # type: ignore[arg-type]
         locked=bool(seen.locked) if seen else item_proposals.bulk_exclusion(payload) == "locked",
         bulk=(seen.bulk or (item_proposals.STALE if reason else None)) if seen else None,
-        problem=seen.problem if seen else None,
+        problem=seen.problem if seen else _set_aside(proposal),
         flags=[flag for flag in payload.get("flags") or () if flag in items.FLAGS],
         free_text=_free_text(payload),
         citations=_citations(payload.get("citations"), known),

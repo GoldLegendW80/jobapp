@@ -311,6 +311,10 @@ def test_one_item_that_no_longer_fits_stops_the_batch_and_is_named(
     assert row(factory, broken).status is ProposalStatus.invalid
     listed = api.get(f"/api/ingestion/runs/{run_id}/proposals", token=first).json()
     assert listed["counts"] == {**listed["counts"], "pending": 3, "invalid": 1}
+    (facts,) = listed["sections"]
+    (aside,) = [one for one in facts["items"] if one["status"] == "invalid"]
+    assert aside["id"] == str(broken)
+    assert aside["problem"].startswith("This value no longer fits the profile")
     # The same click again takes the three that fit and leaves the invalid one out.
     answer = bulk(api, first, run_id, "accept", "facts", [*good, broken])
     assert (answer.status_code, answer.json()["decided"]) == (200, [str(one) for one in good])
