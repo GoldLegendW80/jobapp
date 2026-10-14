@@ -211,7 +211,16 @@ def test_stop_interrupts_a_running_sweep_cleanly(
                 row = db.get(Sweep, sweep_id)
                 return bool(row and row.stats.get("picked_at"))
 
+        def asked() -> bool:
+            with fake_ats.state.lock:
+                return any(path.endswith("/fake-timeout") for path in fake_ats.state.counts)
+
         await wait_for(picked)
+        # Stop once the request is at the server, not while it is still connecting: a connect
+        # cancelled half way leaves a socket that nobody owns, which surfaced as a ResourceWarning
+        # in a later test (the flake of #104). The client owns the connection once it is made,
+        # and closes it with the sweep.
+        await wait_for(asked)
 
     serve_until(settings, context(settings, fake_ats, timeout_s=20.0), scenario)
     with factory() as db:
