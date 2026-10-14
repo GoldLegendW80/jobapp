@@ -45,6 +45,10 @@ PUBLIC_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/auth/logout"),
         ("GET", "/api/auth/invites/{token}"),  # the invite and reset pages check their link
         ("POST", "/api/auth/invites/{token}/accept"),  # and use it: the token is the credential
+        # Google's return to the app (mail M4). It checks the session itself: with none it
+        # redirects to the sign in, where the 401 JSON would leave the `code` and the `state`
+        # of its address in the tab.
+        ("GET", "/api/mail/oauth/callback"),
     }
 )
 

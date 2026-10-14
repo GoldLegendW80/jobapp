@@ -24,6 +24,8 @@ ROUTER_MODULES: tuple[str, ...] = (
 )
 
 PREFIX = "/api/mail"
+# Where Google sends the browser back: its address holds the `code` and the `state`.
+CALLBACK = f"{PREFIX}/oauth/callback"
 
 
 def load(
@@ -46,14 +48,22 @@ def private(path: str) -> bool:
     return path == PREFIX or path.startswith(f"{PREFIX}/")
 
 
+def extra_headers(path: str) -> dict[str, str]:
+    """The headers every answer under this module carries: never stored, and for the callback
+    also never the referrer of what the page loads next (the tab icon would send its address)."""
+    if path == CALLBACK:
+        return {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+    return {"Cache-Control": "no-store"} if private(path) else {}
+
+
 async def no_store(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     """Every answer under /api/mail is `Cache-Control: no-store`, the ones built outside the
-    routers included (the 401 of the session check, the 403 of the CSRF check, a 405, a 422).
-    The 500 of an unhandled error is built outside every middleware: app.main sets the header
-    there, with `private`."""
+    routers included (a 403 of the CSRF check, a 405, a 422), and every answer of the callback
+    is also `Referrer-Policy: no-referrer`. The 500 of an unhandled error is built outside
+    every middleware: app.main sets the same headers there, with `extra_headers`."""
     response = await call_next(request)
-    if private(request.url.path):
-        response.headers["Cache-Control"] = "no-store"
+    for name, value in extra_headers(request.url.path).items():
+        response.headers[name] = value
     return response

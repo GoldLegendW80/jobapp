@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
@@ -193,6 +194,48 @@ def test_deny_and_errors_of_google_end_on_a_fixed_word(
     assert "token" not in endpoints(fake)
 
 
+def test_the_callback_without_a_session_redirects_and_keeps_nothing_of_its_query(
+    api: Api, fake: FakeGoogle, user_a: Signed, lines: Lines
+) -> None:
+    planted_code, planted_state = f"c{uuid.uuid4().hex}", f"s{uuid.uuid4().hex}"
+    answer = api.get(f"/api/mail/oauth/callback?code={planted_code}&state={planted_state}")
+    assert outcome(answer) == "error"
+    location = str(answer.headers["location"])
+    assert location == "/account?gmail=error"
+    assert planted_code not in answer.text + location
+    assert planted_state not in answer.text + location
+    assert planted_code not in lines.text
+    assert planted_state not in lines.text
+    assert "token" not in endpoints(fake)
+
+
+def test_every_answer_of_the_callback_carries_the_two_headers(
+    app: FastAPI,
+    api: Api,
+    fake: FakeGoogle,
+    user_a: Signed,
+    user_b: Signed,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The five outcomes and the no session case go through `outcome`, which checks both headers.
+    assert connect(api, fake, user_a[1]) == "connected"
+    assert connect(api, fake, user_b[1]) == "taken"
+    assert connect(api, fake, user_b[1], BOB, untick=(SCOPE_READONLY,)) == "scope"
+    assert connect(api, fake, user_b[1], BOB, allow=False) == "denied"
+    assert outcome(api.get("/api/mail/oauth/callback", token=user_b[1])) == "error"
+
+    # An unhandled error is built outside every middleware, and carries them too.
+    async def broken(**_: Any) -> None:
+        raise RuntimeError("planted failure")
+
+    monkeypatch.setattr(accounts, "complete", broken)
+    with TestClient(app, follow_redirects=False, raise_server_exceptions=False) as client:
+        failed = Api(client).get("/api/mail/oauth/callback?code=x&state=y", token=user_b[1])
+    assert failed.status_code == 500
+    assert failed.headers["cache-control"] == "no-store"
+    assert failed.headers["referrer-policy"] == "no-referrer"
+
+
 def test_fewer_scopes_than_asked(
     api: Api, fake: FakeGoogle, factory: Factory, user_a: Signed, user_b: Signed
 ) -> None:
@@ -230,8 +273,8 @@ def test_a_state_works_once_for_its_user_in_its_session_for_ten_minutes(
     state = parse_qs(urlsplit(good).query)["state"][0]
     forged = good.replace(state, state[:-1] + ("A" if state[-1] != "A" else "B"))
     assert outcome(api.get(forged, token=token)) == "error"
-    # No session at all.
-    assert api.get(good).status_code == 401
+    # No session at all: nothing is read, so the state stays good for its owner.
+    assert outcome(api.get(good)) == "error"
     assert account_of(factory, user_id) is None
     assert "token" not in endpoints(fake)
     # Replayed: the first use connects, the second finds no verifier and calls nothing.

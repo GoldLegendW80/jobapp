@@ -224,6 +224,7 @@ def connect(api: Api, fake: FakeGoogle, token: str, account: str = ALICE, **how:
 def outcome(answer: httpx.Response) -> str:
     assert answer.status_code == 303, answer.text
     assert answer.headers["cache-control"] == "no-store"
+    assert answer.headers["referrer-policy"] == "no-referrer"
     location = str(answer.headers["location"])
     assert location.startswith("/account?gmail="), location
     return location.removeprefix("/account?gmail=")

@@ -6,7 +6,11 @@
   `/account?gmail=error` instead.
 - GET /oauth/callback is where Google sends the browser back. It always answers with a
   redirect to `/account?gmail=<connected | denied | taken | scope | error>`: a fixed list, never
-  a value of the request. Nothing of the query is echoed, logged or stored.
+  a value of the request. Nothing of the query is echoed, logged or stored. It is a public
+  route (identity.deps.PUBLIC_ROUTES) that reads the session itself: with none it redirects to
+  `error` too, so the `code` and the `state` do not stay in the address bar (the sign in then
+  leads to /account?gmail=error), and the state is left unread, so it stays good for its owner's
+  session until it expires.
 - GET /account answers the caller's own connection: `{available, status, email, can_send,
   scopes, connected_at, last_sync_at, consent}`. `status` is `not_connected`, `ok`,
   `needs_reconnect`, `error` or `disconnecting`.
@@ -193,7 +197,10 @@ async def start(request: Request, session: CurrentSession) -> RedirectResponse:
 @router.get(
     "/oauth/callback", status_code=status.HTTP_303_SEE_OTHER, response_class=RedirectResponse
 )
-async def callback(request: Request, session: CurrentSession) -> RedirectResponse:
+async def callback(request: Request) -> RedirectResponse:
+    session = await deps.resolve(request)
+    if session is None:
+        return _back(accounts.Outcome.error)
     google, keyring = _google(request), _keyring(request)
     if google is None or keyring is None or not _available(request):
         return _back(accounts.Outcome.error)

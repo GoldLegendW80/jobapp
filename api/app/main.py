@@ -204,10 +204,11 @@ def create_app(
         logger.exception("unhandled error", extra={"path": request.url.path})
         # Built outside every middleware: the no-store of the ingestion routes is set here.
         path = request.url.path
-        private = ingestion_private(path) or mail_routers.private(path)
-        headers = {"Cache-Control": "no-store"} if private else None
+        headers = mail_routers.extra_headers(path)
+        if ingestion_private(path):
+            headers["Cache-Control"] = "no-store"
         return JSONResponse(
-            status_code=500, content={"detail": "internal server error"}, headers=headers
+            status_code=500, content={"detail": "internal server error"}, headers=headers or None
         )
 
     async def job_busy(_: Request, exc: Exception) -> JSONResponse:

@@ -211,6 +211,52 @@ test("Deny at Google shows a calm message", async () => {
   await shots(pageA, "03-card-denied");
 });
 
+test("a callback with no session redirects, keeps nothing in the address bar and sends no referrer", async ({
+  browser,
+}) => {
+  // A code and a state that no one issued, planted so the logs can be searched for them.
+  const code = `planted-code-${crypto.randomUUID()}`;
+  const state = `planted-state-${crypto.randomUUID()}`;
+  secrets.push(
+    code,
+    encodeURIComponent(code),
+    state,
+    encodeURIComponent(state),
+  );
+  const address = `/api/mail/oauth/callback?code=${code}&state=${state}`;
+  const fresh = await newContext(browser);
+  try {
+    // The answer itself, before any redirect is followed.
+    const raw = await fresh.request.get(`${caddyUrl}${address}`, {
+      maxRedirects: 0,
+    });
+    expect(raw.status()).toBe(303);
+    expect(raw.headers()["referrer-policy"]).toBe("no-referrer");
+    expect(raw.headers()["cache-control"]).toBe("no-store");
+    expect(raw.headers().location).toBe("/account?gmail=error");
+
+    // The tab: the address that stays is the sign in page, with neither value in it.
+    const page = await fresh.newPage();
+    await page.goto(address);
+    await expect(page).toHaveURL(/\/login/);
+    expect(page.url().includes(code)).toBe(false);
+    expect(page.url().includes(state)).toBe(false);
+    // A page of the app loads from there, the tab icon included.
+    await page.goto("/login");
+    const icon = await page.request.get("/favicon.ico");
+    expect(icon.status()).toBeLessThan(500);
+
+    // Were the address ever to stay in the tab (a 500, a 502), the browser would send it as the
+    // referer of the next request of the page: Caddy must mask it in its access log.
+    const referred = await fresh.request.get(`${caddyUrl}/favicon.ico`, {
+      headers: { Referer: `${caddyUrl}${address}` },
+    });
+    expect(referred.status()).toBeLessThan(500);
+  } finally {
+    await fresh.close();
+  }
+});
+
 test("the code and the state of the callbacks are in no log, Caddy's included", () => {
   expect(project, "E2E_COMPOSE_PROJECT names the stack to read").toBeTruthy();
   // Two allowed callbacks (a code and a state each) and one denied (a state).
@@ -221,6 +267,8 @@ test("the code and the state of the callbacks are in no log, Caddy's included", 
   // (booleans: a failing assertion must not print the log)
   expect(/oauth\/callback\?/.test(caddy)).toBe(false);
   expect(/[?&]state=[A-Za-z0-9._~%-]{20,}/.test(caddy)).toBe(false);
+  // (the Referer of a request that came from a callback address is masked the same way)
+  expect(/"Referer":\["[^"]*oauth\/callback\?/.test(caddy)).toBe(false);
   const all = caddy + logs("api", "worker");
   for (const secret of secrets) expect(all.includes(secret)).toBe(false);
 });
