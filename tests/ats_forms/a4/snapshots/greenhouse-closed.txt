@@ -1,0 +1,3 @@
+- generic [active] [ref=e1]:
+  - heading "The job you are looking for is no longer open." [level=1] [ref=e2]
+  - paragraph [ref=e3]: See our other openings.

@@ -1,0 +1,85 @@
+- generic [active] [ref=e1]:
+  - heading "Software Engineer, Agents" [level=1] [ref=e2]
+  - paragraph [ref=e3]: Northwind Labs, Remote, Europe
+  - paragraph [ref=e4]: Build agents that run real operations. Invented posting.
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - checkbox "I have read the Applicant Privacy Notice. (required) *" [ref=e7]
+      - generic [ref=e8]:
+        - text: I have read the Applicant Privacy Notice. (required)
+        - generic [ref=e9]: "*"
+    - generic [ref=e10]:
+      - checkbox "I would like to receive news and marketing updates from Northwind Labs. (optional)" [ref=e11]
+      - generic [ref=e12]: I would like to receive news and marketing updates from Northwind Labs. (optional)
+    - generic [ref=e13]:
+      - checkbox "I agree to resolve any employment dispute through binding arbitration. (optional)" [ref=e14]
+      - generic [ref=e15]: I agree to resolve any employment dispute through binding arbitration. (optional)
+    - generic [ref=e16]:
+      - generic [ref=e17]: Disability status (optional)
+      - generic [ref=e20] [cursor=pointer]:
+        - generic [ref=e21] [cursor=pointer]: Select...
+        - combobox "Disability status (optional)" [ref=e22]
+    - generic [ref=e23]:
+      - generic [ref=e24]: Veteran status (optional)
+      - generic [ref=e27] [cursor=pointer]:
+        - generic [ref=e28] [cursor=pointer]: Select...
+        - combobox "Veteran status (optional)" [ref=e29]
+    - generic [ref=e30]:
+      - generic [ref=e31]: Hispanic ethnicity (optional)
+      - generic [ref=e34] [cursor=pointer]:
+        - generic [ref=e35] [cursor=pointer]: Select...
+        - combobox "Hispanic ethnicity (optional)" [ref=e36]
+    - generic [ref=e37]:
+      - generic [ref=e38]: Gender (optional)
+      - generic [ref=e41] [cursor=pointer]:
+        - generic [ref=e42] [cursor=pointer]: Select...
+        - combobox "Gender (optional)" [ref=e43]
+    - generic [ref=e44]:
+      - generic [ref=e45]: LinkedIn Profile (optional)
+      - textbox "LinkedIn Profile (optional)" [ref=e46]
+    - generic [ref=e47]:
+      - generic [ref=e48]: How did you hear about this job? (optional)
+      - generic [ref=e51] [cursor=pointer]:
+        - generic [ref=e52] [cursor=pointer]: Select...
+        - combobox "How did you hear about this job? (optional)" [ref=e53]
+    - generic [ref=e54]:
+      - generic [ref=e55]:
+        - text: Country (required)
+        - generic [ref=e56]: "*"
+      - generic [ref=e59] [cursor=pointer]:
+        - generic [ref=e60] [cursor=pointer]: Select...
+        - combobox "Country (required) *" [ref=e61]
+    - generic [ref=e62]:
+      - generic [ref=e63]:
+        - text: Are you legally authorized to work in the country in which you are applying? (required)
+        - generic [ref=e64]: "*"
+      - generic [ref=e67] [cursor=pointer]:
+        - generic [ref=e68] [cursor=pointer]: Select...
+        - combobox "Are you legally authorized to work in the country in which you are applying? (required) *" [ref=e69]
+    - generic [ref=e70]:
+      - generic [ref=e71]: Cover Letter (optional)
+      - button "Cover Letter (optional)" [ref=e72]
+    - generic [ref=e73]:
+      - generic [ref=e74]:
+        - text: Resume/CV (required)
+        - generic [ref=e75]: "*"
+      - button "Resume/CV (required) *" [ref=e76]
+    - generic [ref=e77]:
+      - generic [ref=e78]: Phone (optional)
+      - textbox "Phone (optional)" [ref=e79]
+    - generic [ref=e80]:
+      - generic [ref=e81]:
+        - text: Email (required)
+        - generic [ref=e82]: "*"
+      - textbox "Email (required) *" [ref=e83]
+    - generic [ref=e84]:
+      - generic [ref=e85]:
+        - text: Last Name (required)
+        - generic [ref=e86]: "*"
+      - textbox "Last Name (required) *" [ref=e87]
+    - generic [ref=e88]:
+      - generic [ref=e89]:
+        - text: First Name (required)
+        - generic [ref=e90]: "*"
+      - textbox "First Name (required) *" [ref=e91]
+    - button "Send application" [ref=e92]
