@@ -1,6 +1,9 @@
 /* sidebar: two columns, IBM Plex Sans. A tinted column bleeds off the left, top and bottom edges of
    the page (the page margin is 0 and --margin becomes the padding of the columns), the main
-   column carries the name and the story. The density comes from the step on :root. */
+   column carries the name and the story. The main column comes first in the document so a text
+   extractor (an applicant tracking system) reads the name before the contact lines; the grid
+   puts the tinted column on the left (flex `order` would paint, and so extract, it first).
+   The density comes from the step on :root. */
 @page { size: A4; margin: 0; }
 * { box-sizing: border-box; }
 html {
@@ -14,15 +17,19 @@ p, ul, h1, h2, h3 { margin: 0; padding: 0; }
 a { color: inherit; text-decoration: none; }
 li, p { overflow-wrap: anywhere; }
 
-.page { display: flex; min-height: 296mm; }
+.page {
+  display: grid;
+  grid-template-columns: 66mm minmax(0, 1fr);
+  min-height: 296mm;
+}
 .side {
-  flex: 0 0 66mm;
+  grid-area: 1 / 1;
   background: #eceef6;
   border-right: 2.5px solid var(--accent);
   padding: var(--margin) 4mm var(--margin) var(--margin);
 }
 .main {
-  flex: 1 1 auto;
+  grid-area: 1 / 2;
   min-width: 0;
   padding: var(--margin) var(--margin) var(--margin) 8mm;
 }

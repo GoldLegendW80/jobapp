@@ -5,39 +5,6 @@
 {% import "_base/macros.html.j2" as base with context %}
 {% block body %}
 <div class="page">
-<aside class="side">
-{{ base.portrait() }}
-{% if contact %}
-<section class="block">
-<h2 class="label">{{ base.label("contact") }}</h2>
-{{ base.contact_lines() }}
-</section>
-{% endif %}
-{% if content.competencies %}
-<section class="block">
-<h2 class="label">{{ base.label("competencies") }}</h2>
-{{ base.bullets(content.competencies, "competencies") }}
-</section>
-{% endif %}
-{% if content.skills %}
-<section class="block skills">
-<h2 class="label">{{ base.label("skills") }}</h2>
-{% for group in content.skills %}
-{{ base.skill_group(group) }}
-{% endfor %}
-</section>
-{% endif %}
-{% if languages %}
-<section class="block">
-<h2 class="label">{{ base.label("languages") }}</h2>
-<ul class="languages">
-{% for item in languages %}
-{{ base.language(item) }}
-{% endfor %}
-</ul>
-</section>
-{% endif %}
-</aside>
 <main class="main">
 <header class="head">
 <h1 class="name">{{ name }}</h1>
@@ -74,5 +41,38 @@
 </section>
 {% endif %}
 </main>
+<aside class="side">
+{{ base.portrait() }}
+{% if contact %}
+<section class="block">
+<h2 class="label">{{ base.label("contact") }}</h2>
+{{ base.contact_lines() }}
+</section>
+{% endif %}
+{% if content.competencies %}
+<section class="block">
+<h2 class="label">{{ base.label("competencies") }}</h2>
+{{ base.bullets(content.competencies, "competencies") }}
+</section>
+{% endif %}
+{% if content.skills %}
+<section class="block skills">
+<h2 class="label">{{ base.label("skills") }}</h2>
+{% for group in content.skills %}
+{{ base.skill_group(group) }}
+{% endfor %}
+</section>
+{% endif %}
+{% if languages %}
+<section class="block">
+<h2 class="label">{{ base.label("languages") }}</h2>
+<ul class="languages">
+{% for item in languages %}
+{{ base.language(item) }}
+{% endfor %}
+</ul>
+</section>
+{% endif %}
+</aside>
 </div>
 {% endblock %}

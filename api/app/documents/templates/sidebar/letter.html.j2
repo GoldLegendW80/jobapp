@@ -5,15 +5,6 @@
 {% import "_base/macros.html.j2" as base with context %}
 {% block body %}
 <div class="page">
-<aside class="side">
-{{ base.portrait() }}
-{% if contact %}
-<section class="block">
-<h2 class="label">{{ base.label("contact") }}</h2>
-{{ base.contact_lines() }}
-</section>
-{% endif %}
-</aside>
 <main class="main">
 <header class="head">
 <h1 class="name">{{ name }}</h1>
@@ -29,5 +20,14 @@
 <p class="signature">{{ name }}</p>
 </div>
 </main>
+<aside class="side">
+{{ base.portrait() }}
+{% if contact %}
+<section class="block">
+<h2 class="label">{{ base.label("contact") }}</h2>
+{{ base.contact_lines() }}
+</section>
+{% endif %}
+</aside>
 </div>
 {% endblock %}
