@@ -4,3 +4,5 @@ which tools.py needs to build a tool."""
 
 READ_DOCUMENT = "read_document"
 PROPOSE = "propose_profile_changes"
+VIEW_IMAGE = "view_image"
+STORE_TRANSCRIPTION = "store_transcription"

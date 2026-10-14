@@ -58,8 +58,8 @@ EXTRACTOR_VERSION = 1
 MODEL = DEFAULT_MODEL
 MODEL_BY_CREDENTIAL: dict[str, str] = {CredentialKind.anthropic_api_key.value: "claude-sonnet-5-5"}
 
-# Off until G14 ships the transcription agent (module docstring).
-TRANSCRIPTION = False
+# On since G14 shipped the transcription agent (module docstring).
+TRANSCRIPTION = True
 
 _PARAGRAPH_END = "\n\n"
 _LINE_END = "\n"
