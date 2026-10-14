@@ -93,6 +93,7 @@ def test_a_base_cv_from_the_profile_passes_the_fact_check_and_keeps_the_profiles
     assert [e["organisation"] for e in fixed["employers"]] == ["Example Corp", "Sample Labs"]
     assert [s["school"] for s in fixed["schools"]] == ["Example Institute of Technology"]
     assert [x["name"] for x in fixed["languages"]] == ["English", "French"]
+    assert "Globex" not in str(fixed)  # the stream submits an invented fixed block
     assert "Moved 40 services to Kubernetes" in printed(document.draft)
     assert [job["function"] for job in who.queue.jobs] == ["render_document"]
 

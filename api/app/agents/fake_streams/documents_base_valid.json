@@ -158,7 +158,33 @@
          }
         ],
         "notes": "",
-        "fixed": {}
+        "fixed": {
+         "employers": [
+          {
+           "key": "example-corp",
+           "organisation": "Globex Invented Holdings",
+           "title": "Chief Technology Officer",
+           "start": "2009-01",
+           "end": null,
+           "location": "Paris"
+          }
+         ],
+         "schools": [
+          {
+           "school": "Invented University of Nowhere",
+           "degree": "PhD",
+           "start": "2004",
+           "end": "2008",
+           "location": ""
+          }
+         ],
+         "languages": [
+          {
+           "name": "German",
+           "level": "Native"
+          }
+         ]
+        }
        }
       }
      ],

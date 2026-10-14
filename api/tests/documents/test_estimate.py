@@ -83,3 +83,16 @@ def test_the_estimate_is_priced_like_an_ingestion_run() -> None:
 def test_the_base_writer_prompt_is_counted() -> None:
     assert estimate.prompt_chars("base") > 1_000
     assert estimate.prompt_chars("no-such-writer") == 0
+
+
+def test_the_worked_figures_of_the_plan() -> None:
+    # "Measurements / D9" in tasks/documents/todo.md: change both together.
+    assert (estimate.prompt_chars("base"), estimate.prompt_chars("cv")) == (2_678, 3_112)
+    base = estimate.base_profile(1_396, turns=10, submits=4)
+    assert (base.low, base.high, base.ceiling) == (28_779, 194_804, 389_608)
+    costs = pricing.costs(base, "claude-sonnet-5-5")
+    assert (costs.low, costs.high) == (Decimal("0.05"), Decimal("0.51"))
+    pair = estimate.posting(1_396, 1_503, 6_000, turns=10, submits=4)
+    assert (pair.low, pair.high, pair.ceiling) == (71_098, 449_523, 899_046)
+    costs = pricing.costs(pair, "claude-sonnet-5-5")
+    assert (costs.low, costs.high) == (Decimal("0.13"), Decimal("1.15"))
