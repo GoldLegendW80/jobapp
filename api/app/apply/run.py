@@ -59,7 +59,8 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import agent, form_agent, guardrails, shots, states
+from app.apply import agent, guardrails, shots, states
+from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
@@ -126,7 +127,7 @@ class Services:
     answer_agent: agent.AnswerAgent | None = None
     stub_base: str | None = None
     before_tool: Callable[[], Awaitable[None]] | None = None  # B4's Live.agent_turn
-    form_agent: form_agent.FormAgent | None = None  # the generic strategy's (A8)
+    form_agent: forms.FormAgent | None = None  # the generic strategy's (A8)
 
 
 @dataclass
@@ -429,7 +430,7 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 approved=False,
             )
         )
-    if isinstance(report, form_agent.FormReport) and report.designated:
+    if isinstance(report, forms.FormReport) and report.designated:
         marks = [
             (generic.SUBMIT_KEY, "Submit button, clicked after your approval", report.designated)
         ]
@@ -703,8 +704,8 @@ async def _drive_generic(
     outlines the submit it designated, and without both the person is needed."""
     if plan.mode is not Mode.review or services.form_agent is None:
         return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
-    session = form_agent.FormSession(adapter, tools, plan.context, str(plan.user_id))
-    report, cost = await form_agent.fill(services.form_agent, session)
+    session = forms.FormSession(adapter, tools, plan.context, str(plan.user_id))
+    report, cost = await forms.fill(services.form_agent, session)
     shot = await shots.take(tools)
     if report.stopped:
         state, needs, error = _stopped(report.stopped, report.needs_person)

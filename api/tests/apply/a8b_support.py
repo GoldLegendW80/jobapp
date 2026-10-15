@@ -15,6 +15,7 @@ from typing import Any
 from PIL import Image
 
 from app.apply import form_agent
+from app.apply.ats.base import label_of, parse_snapshot
 from tests.apply.a4_support import Spec
 from tests.apply.a6_support import SubmitForm
 
@@ -59,16 +60,29 @@ class CustomForm(SubmitForm):
         self.extras, self.paragraph = list(extras), paragraph
         self.shot = page_jpeg()
         self.probes: list[str] = []
+        self._seen: dict[tuple[str, int, str], int] = {}
+        self._stable: dict[tuple[str, int, str, int], str] = {}
+
+    def _ref(self, what: str, index: int = -1, part: str = "") -> str:
+        """The same element keeps its ref from one read to the next; a new one takes a new ref."""
+        nth = self._seen.get((what, index, part), 0)
+        self._seen[(what, index, part)] = nth + 1
+        ref = self._stable.get((what, index, part, nth))
+        if ref is None:
+            self._next += 1
+            ref = self._stable[(what, index, part, nth)] = (
+                f"{'f1' if self.frame else ''}e{self._next}"
+            )
+        self._refs[ref] = (what, index, part)
+        return ref
 
     def render(self) -> str:
-        self._next, self._refs = 0, {}
+        self._seen, self._refs = {}, {}
         if self._other is not None:
             return f'- heading "{self._other}" [level=1] [ref={self._ref("page")}]'
         pad = "      " if self.frame else "  "
         first = sum(self.groups[: self.step])
         out = [f'{pad}- heading "{self.title}" [level=1] [ref={self._ref("page")}]']
-        if self.paragraph:
-            out.append(f"{pad}- paragraph [ref={self._ref('text')}]: {self.paragraph}")
         out.append(f"{pad}- generic [ref={self._ref('form')}]:")
         for i in range(first, first + self.groups[self.step]):
             out += [pad + "  " + line for line in self._field(i, self.fields[i])]
@@ -79,6 +93,8 @@ class CustomForm(SubmitForm):
             out.append(f'{pad}  - button "{self.submit}"{attrs} [ref={self._ref("submit")}]')
         for role, name in self.extras:
             out.append(f'{pad}- {role} "{name}" [ref={self._ref("extra")}]')
+        if self.paragraph:  # after the form, so the form keeps the refs of the Workable like one
+            out.append(f"{pad}- paragraph [ref={self._ref('text')}]: {self.paragraph}")
         if self.frame:
             site = [
                 f"- generic [active] [ref={self._ref('site')}]:",
@@ -90,10 +106,10 @@ class CustomForm(SubmitForm):
         return "\n".join([f"- generic [active] [ref={self._ref('page')}]:", *out])
 
     def ref_of(self, name: str) -> str:
-        """The ref of the element named `name` on the page now (tests and streams)."""
-        for line in self.render().splitlines():
-            if f'"{name}"' in line and "[ref=" in line:
-                return line.split("[ref=", 1)[1].split("]", 1)[0]
+        """The ref of the control named `name` on the page now (tests and streams)."""
+        for node in parse_snapshot(self.render()).walk():
+            if node.ref and node.role not in ("generic", "text") and label_of(node.name)[0] == name:
+                return node.ref
         raise LookupError(name)
 
     async def click(self, ref: str, element: str = "") -> dict[str, Any]:
