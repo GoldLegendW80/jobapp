@@ -135,7 +135,7 @@ The model is chosen by the credential (`model_by_credential`) and each run carri
 - **The generic strategy:** an agent loop over snapshots (8,000 to 20,000 tokens each), at most 30 turns: 150,000 to 400,000 tokens in (mostly cache reads), 10,000 out.
 - **The submit lease after an approval:** no model.
 - **Complete my profile on a site:** one model call per section, about 10,000 tokens in and 1,500 out on a site with an adapter (Workday, LinkedIn), so about 50,000 tokens for a five section profile; an unknown site uses the generic agent loop, capped as above. Measured in A18a.
-Automatic runs share the person's daily cap of automatic runs and the agents runtime's two concurrent runs; a run without a credential falls back to deterministic filling and leaves the rest.
+Automatic runs share the person's daily cap of automatic runs and the person's active agent runs (`runs.ACTIVE_PER_USER`); the answer agent's run executes inside the fill, in the worker's process, outside the agents queue's two concurrent runs, so the worker holds at most three Claude Code processes (one fill at a time); a run without a credential falls back to deterministic filling and leaves the rest.
 
 ## API
 

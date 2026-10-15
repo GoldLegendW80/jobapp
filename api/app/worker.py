@@ -20,9 +20,12 @@ Sweeps queue (app.queue.SWEEPS):
   sweep.STALE_AFTER (worker crash, lost queue message).
 
 Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
-- run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time, so the Jetson's RAM
-  holds two Claude Code processes next to the sweeps within the 1536m limit; a third waits in
-  the queue. Tried once: a run whose worker died is never started again behind the user's back.
+- run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time; a third waits in
+  the queue. The apply fill's answer agent (`apply_answer`) is not counted: it runs inside the
+  fill, in this process, one fill at a time, so the worker holds at most three Claude Code
+  processes next to the sweeps (about 145 MiB plus 3 x 240 MiB measured in A2 and A5, within
+  the 1536m limit). Tried once: a run whose worker died is never started again behind the
+  user's back.
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
   so long that their message must be lost).
@@ -50,7 +53,8 @@ Documents queue (app.queue.DOCUMENTS, documents D6, app/documents/render_job.py)
 Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
 - apply_fill(application_id): the fill of one application form on a browser lease, one at a time
   (max_jobs 1: the browser is one); tried once by arq, its result not kept, so the tick can queue
-  it again under the same id once it ended.
+  it again under the same id once it ended. Its answer agent (`apply_answer`, app/apply/agents.py)
+  is one agent run executed inside the fill, in this process, never on the agents queue.
 - apply_submit(application_id): the submit lease of one `approved` application (apply A6,
   app/apply/submit.py): refill, read back, the one click through the gate.
 - apply_tick: cron every 30 seconds: asks a fill for the next `queued` application of every
@@ -566,8 +570,10 @@ APPLY_JOB_MARGIN_S = 120
 
 def apply_services(ctx: dict[str, Any]) -> Any:
     """The fill's services: tests put theirs in the context; else the lease store and the tools
-    of browser B3 and B5 on this worker's Redis. B4's `Live.agent_turn` goes in `before_tool`
-    once B4 is merged; no answer agent until A5's second slice registers it."""
+    of browser B3 and B5 on this worker's Redis, and the answer agent (`apply_answer`, run in
+    this process on the runner's context of `agent_context`). B4's `Live.agent_turn` goes in
+    `before_tool` once B4 is merged."""
+    from app.apply import agents as apply_agents
     from app.apply import run as apply_run
 
     given = ctx.get("apply_services")
@@ -601,6 +607,7 @@ def apply_services(ctx: dict[str, Any]) -> Any:
         clock=clock_of(ctx),
         leases=leases,
         tools_for=lambda user, lease, token: LeaseTools(leases, client, user, lease, token),
+        answer_agent=apply_agents.RuntimeAnswerAgent(lambda: agent_context(ctx)),
         stub_base=settings.apply_stub_base_url,
     )
 
