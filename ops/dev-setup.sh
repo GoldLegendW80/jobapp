@@ -2,22 +2,25 @@
 # What a new laptop needs to develop jobapp with Claude Code, checked without changing anything.
 # Read only: it installs, pulls, logs in and writes nothing, and never prints a token or a host.
 #
-#   ops/dev-setup.sh [--skip-jetson]
+#   ops/dev-setup.sh [--jetson]
 #
 # Each line is `ok`, `MISS` (needed, with the command that fixes it) or `WARN` (useful, not
-# needed). Checked: git; gh, signed in to github.com with the scopes `repo` and `project` (the
-# board) and, as a warning, `workflow` (pushing a change of .github/workflows); Docker running,
+# needed). Checked: git; gh, signed in to github.com with the scopes `repo`, `project` (the
+# board) and `workflow` (dispatching deploy.yml and ops.yml, which is how every laptop deploys and
+# operates the Jetson, and pushing a change of .github/workflows); Docker running,
 # with at least DEV_SETUP_MIN_FREE_GIB (default 16) GiB free on the disk of this checkout (the
 # merge gate refuses to start under 12 and uses about 3 while it runs); the pinned shellcheck
 # image of the gate, present or pullable (`docker manifest inspect`, nothing is pulled); uv;
 # Node at least the version of `.nvmrc` when the file exists, else of `engines.node` in
 # web/package.json; pnpm of the major version `packageManager` of web/package.json names, or pnpm
 # 10 or later above it (it runs the pinned version itself); python3 at least 3.12 (the scripts of
-# .github/scripts parse the api's code); pre-commit, and its hook installed in this clone; the
-# ssh alias `jetson` (DEV_SETUP_JETSON_ALIAS), reachable with BatchMode, so never a password
-# prompt (--skip-jetson leaves it out, for a laptop that does not deploy); Claude Code
-# (`claude`), as a warning. The new machine guide is the section "Develop on a new machine" of
-# the README, and CLAUDE.md is where Claude Code starts.
+# .github/scripts parse the api's code); pre-commit, and its hook installed in this clone; Claude
+# Code (`claude`), as a warning. Only with --jetson: the ssh alias `jetson`
+# (DEV_SETUP_JETSON_ALIAS), reachable with BatchMode, so never a password prompt; nothing needs it
+# any more (owner decision of 2026-10-15: deploys and operations go through GitHub, README
+# "Deploy from any machine"), only the owner's own steps on the Jetson (sudo, a restore).
+# --skip-jetson, the default now, is still accepted. The new machine guide is the section
+# "Develop on a new machine" of the README, and CLAUDE.md is where Claude Code starts.
 #
 # The last line is `DEV SETUP: OK` (exit 0) or `DEV SETUP: <n> missing` (exit 1). Wrong
 # arguments: exit 64.
@@ -31,16 +34,17 @@ JETSON_ALIAS="${DEV_SETUP_JETSON_ALIAS:-jetson}"
 SHELLCHECK_IMAGE="koalaman/shellcheck:v0.11.0"
 MIN_PYTHON="3.12"
 
-SKIP_JETSON=0
+CHECK_JETSON=0
 while (($#)); do
   case "$1" in
-  --skip-jetson) SKIP_JETSON=1 ;;
+  --jetson) CHECK_JETSON=1 ;;
+  --skip-jetson) CHECK_JETSON=0 ;;
   -h | --help)
     sed -n '2,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
     exit 0
     ;;
   *)
-    printf '%s: unknown argument %s\nusage: %s [--skip-jetson]\n' "$PROG" "$1" "$PROG" >&2
+    printf '%s: unknown argument %s\nusage: %s [--jetson]\n' "$PROG" "$1" "$PROG" >&2
     exit 64
     ;;
   esac
@@ -97,19 +101,18 @@ else
     scopes="$(printf '%s\n' "$auth" | grep -i 'token scopes' | head -n 1)"
     if [[ -z "$scopes" ]]; then
       warn "gh is signed in, but its token scopes cannot be read (a GH_TOKEN or a fine grained token?)" \
-        "make sure it can read and write this repository and edit project 1 of the owner"
+        "make sure it can read and write this repository, dispatch its workflows and edit project 1 of the owner"
     else
       need=""
       [[ "$scopes" == *"'repo'"* ]] || need="$need repo"
       [[ "$scopes" == *"'project'"* ]] || need="$need project"
+      [[ "$scopes" == *"'workflow'"* ]] || need="$need workflow"
       if [[ -n "$need" ]]; then
-        miss "gh token lacks the scope(s):$need" "gh auth refresh -h github.com -s repo,project"
+        miss "gh token lacks the scope(s):$need (workflow: to deploy and operate the Jetson; project: the board)" \
+          "gh auth refresh -h github.com -s repo,project,workflow"
       else
-        ok "gh signed in to github.com with the scopes repo and project"
+        ok "gh signed in to github.com with the scopes repo, project and workflow"
       fi
-      [[ "$scopes" == *"'workflow'"* ]] ||
-        warn "gh token lacks the scope workflow (needed only to push a change of .github/workflows)" \
-          "gh auth refresh -h github.com -s workflow"
     fi
   else
     miss "gh is not signed in to github.com" "gh auth login -h github.com -s project,workflow"
@@ -233,9 +236,9 @@ else
     "pre-commit install (from the repository root, once per clone)"
 fi
 
-# --- the Jetson over ssh, without a prompt ---------------------------------------------------
-if ((SKIP_JETSON)); then
-  ok "jetson not checked (--skip-jetson)"
+# --- the Jetson over ssh, without a prompt, only when asked -----------------------------------
+if ((CHECK_JETSON == 0)); then
+  ok "jetson over ssh not checked: deploys and operations go through GitHub (ops/remote.sh); --jetson checks it"
 elif ! have ssh; then
   miss "ssh is not installed" "install OpenSSH"
 elif ssh -o BatchMode=yes -o ConnectTimeout=8 "$JETSON_ALIAS" true </dev/null >/dev/null 2>&1; then

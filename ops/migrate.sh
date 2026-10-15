@@ -31,18 +31,26 @@
 # The database must be reachable: a db service that is not running is started first (a first
 # install creates the volume and the empty database here); one that runs is left exactly as it is.
 #
-# Output: alembic's own log lines (INFO, the revisions applied) and the revision reached. No value
-# of .env is ever printed: the settings hold the database URL as a secret and alembic does not log
-# it; as a second guard, the credentials of anything shaped like a URL are masked on the way out.
+# Output: figures only, because .github/workflows/deploy.yml runs it and the run log of this public
+# repository is readable by anyone: each step as it starts (`step: <from> -> <to>`, revision ids),
+# the revision reached, and on a failure the step it failed in, the exit code and the class of the
+# exception, never a line of alembic's own output (a failing data migration prints SQL with its
+# parameters and Postgres' DETAIL with row values). The whole output is kept in a file on this
+# machine, MIGRATE_LOG_DIR/migrate-<time>.log (mode 600, its folder 700, the newest 20 kept),
+# which is never inside the deploy directory; the credentials of anything shaped like a URL are
+# masked there too.
 #
 # Settings from the environment: COMPOSE (default: docker compose -f compose.yml --profile tunnel),
-# MIGRATE_TIMEOUT_S (default 300), MIGRATE_CONTAINER (default jobapp-migrate, one per project).
+# MIGRATE_TIMEOUT_S (default 300), MIGRATE_CONTAINER (default jobapp-migrate, one per project),
+# MIGRATE_LOG_DIR (default: logs in BACKUP_DIR, else ~/jobapp-backups/logs).
 set -euo pipefail
 export LC_ALL=C
 
 COMPOSE="${COMPOSE:-docker compose -f compose.yml --profile tunnel}"
 TIMEOUT_S="${MIGRATE_TIMEOUT_S:-300}"
 NAME="${MIGRATE_CONTAINER:-jobapp-migrate}"
+LOG_DIR="${MIGRATE_LOG_DIR:-${BACKUP_DIR:-$HOME/jobapp-backups}/logs}"
+LOG_KEEP=20
 DB_WAIT_S=120
 # MIGRATION_LOCK_ID of api/alembic/env.py: every `alembic upgrade` session holds or waits for it.
 MIGRATION_LOCK_ID=7406202610
@@ -56,10 +64,33 @@ info() { printf '   %s\n' "$*"; }
 # shellcheck disable=SC2086
 dc() { $COMPOSE "$@"; }
 
-# mask: user:password@ of anything shaped like a URL becomes ***:***@. Line by line and flushed,
-# so a long migration shows its progress as it goes.
-mask() {
-  awk '{ gsub("://[^:/@ \t]*:[^@ \t]*@", "://***:***@"); print; fflush() }'
+# figures <file>: alembic's output, line by line. Every line goes to <file>, the user:password@ of
+# anything shaped like a URL masked as ***:***@; only the step of each `Running upgrade <from> ->
+# <to>, <message>` comes out, its ids as plain tokens (`-` otherwise, `base` for the first one).
+# Flushed, so a long migration shows its progress as it goes.
+figures() {
+  awk -v file="$1" '
+    { gsub("://[^:/@ \t]*:[^@ \t]*@", "://***:***@"); print >> file; fflush(file) }
+    /Running upgrade / {
+      s = $0; sub(/.*Running upgrade /, "", s); n = split(s, a, " -> ")
+      from = a[1]; to = (n > 1) ? a[2] : ""; sub(/,.*/, "", to)
+      if (from == "") from = "base"
+      if (from !~ /^[A-Za-z0-9_]+$/) from = "-"
+      if (to !~ /^[A-Za-z0-9_]+$/) to = "-"
+      printf "   step: %s -> %s\n", from, to; fflush()
+    }'
+}
+# failed_at <file>: the step a failed run was in, then the class of the last exception (a dotted
+# name or one ending in Error or Exception, at the start of a line), each `-` when there is none.
+failed_at() {
+  awk '
+    /Running upgrade / { s = $0; sub(/.*Running upgrade /, "", s); split(s, a, " -> "); from = a[1]; to = a[2]; sub(/,.*/, "", to); if (from == "") from = "base"; step = from " -> " to }
+    /^([A-Za-z_][A-Za-z0-9_]*\.)+[A-Za-z_][A-Za-z0-9_]*(: |:?$)/ || /^[A-Za-z_][A-Za-z0-9_]*(Error|Exception)(: |:?$)/ { c = $0; sub(/:.*/, "", c); cls = c }
+    END {
+      if (step !~ /^[A-Za-z0-9_]+ -> [A-Za-z0-9_]+$/) step = "-"
+      if (cls == "") cls = "-"
+      print step; print cls
+    }' "$1"
 }
 
 [[ $# -eq 0 ]] || die "usage: ops/migrate.sh (no argument; settings come from the environment)"
@@ -67,11 +98,16 @@ mask() {
 [[ "$NAME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || die "MIGRATE_CONTAINER must be a container name, got '$NAME'"
 [[ -f compose.yml && -f .env ]] || die "no deployed tree here ($PWD): compose.yml and .env are needed"
 command -v timeout >/dev/null || die "the timeout command (coreutils) is missing: nothing was run"
+[[ "$LOG_DIR" == /* ]] || die "MIGRATE_LOG_DIR must be an absolute path, got '$LOG_DIR'"
+case "$LOG_DIR/" in
+  "$PWD"/*) die "MIGRATE_LOG_DIR must be outside the deploy directory ($PWD): nothing was run" ;;
+esac
+if ! mkdir -p "$LOG_DIR" || ! chmod 700 "$LOG_DIR"; then
+  die "cannot make $LOG_DIR private to this user: nothing was run"
+fi
 
-OUT=""
 STARTED=0
 cleanup() {
-  [[ -z "$OUT" ]] || rm -f "$OUT"
   # Only the container this run started: after a timeout or a signal it may outlive its client.
   if ((STARTED == 1)); then docker rm -f "$NAME" >/dev/null 2>&1 || true; fi
 }
@@ -95,14 +131,18 @@ if [[ -z "$(dc ps -q --status running db 2>/dev/null || true)" ]]; then
     die "db did not become healthy within ${DB_WAIT_S}s: no migration was run, the api and the worker were not touched"
 fi
 
-info "alembic upgrade head in the one off container $NAME (new api image, at most ${TIMEOUT_S}s)"
-OUT="$(mktemp)"
+# The newest LOG_KEEP outputs stay; the names sort by time.
+find "$LOG_DIR" -maxdepth 1 -type f -name 'migrate-*.log' | sort -r | awk -v keep="$LOG_KEEP" 'NR > keep' |
+  while IFS= read -r old; do rm -f -- "$old"; done
+LOG="$LOG_DIR/migrate-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
+(umask 077 && : >"$LOG") || die "cannot write $LOG: nothing was run"
+info "alembic upgrade head in the one off container $NAME (new api image, at most ${TIMEOUT_S}s); its output is kept on this machine in ${LOG##*/}"
 STARTED=1
 start=$SECONDS
 rc=0
 # shellcheck disable=SC2086 # $COMPOSE is a command with its arguments
 timeout -k 20 "$TIMEOUT_S" $COMPOSE run --rm --no-deps -T --name "$NAME" api \
-  sh -c 'alembic upgrade head && alembic current' </dev/null 2>&1 | mask | tee "$OUT" || rc="${PIPESTATUS[0]}"
+  sh -c 'alembic upgrade head && alembic current' </dev/null 2>&1 | figures "$LOG" || rc="${PIPESTATUS[0]}"
 
 elapsed=$((SECONDS - start))
 if ((rc == 124 || rc == 137)); then
@@ -129,10 +169,15 @@ if ((rc == 124 || rc == 137)); then
   die "the migrations did not finish within ${TIMEOUT_S}s and were stopped: the open transaction is rolled back, the schema is what it was, and nothing was restarted. A migration that waits on a lock held by the running release is the usual cause; MIGRATE_TIMEOUT_S raises the limit"
 fi
 if ((rc != 0)); then
-  die "alembic upgrade head failed (exit $rc, see above): the upgrade runs in one transaction, so the schema is what it was, and nothing was restarted. Fix the migration and deploy again"
+  { read -r step && read -r cls; } < <(failed_at "$LOG")
+  info "failed in step: $step"
+  info "error: $cls"
+  die "alembic upgrade head failed (exit $rc; the whole output is on this machine in ${LOG##*/}): the upgrade runs in one transaction, so the schema is what it was, and nothing was restarted. Fix the migration and deploy again"
 fi
 
-applied="$(grep -c 'Running upgrade ' "$OUT" || true)"
+revision="$(grep -E '^[A-Za-z0-9_]+ \(head\)$' "$LOG" | tail -n 1 || true)"
+info "revision: ${revision:--}"
+applied="$(grep -c 'Running upgrade ' "$LOG" || true)"
 if ((applied > 0)); then
   info "migrations applied: $applied, in $((SECONDS - start))s; the schema is at head and the previous release still serves"
 else

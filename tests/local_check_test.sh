@@ -857,7 +857,17 @@ cat >"$WORK/bin/gh" <<'EOF'
 printf '%s\n' "$*" >>"$FAKE_LOG"
 case "$1 $2" in
 "run list") echo 4242 ;;
-"run view") echo "${FAKE_CONCLUSION:-success} https://example.org/runs/4242" ;;
+"run view")
+  if [[ "$*" == *--log* ]]; then
+    # As GitHub prints it: job, step, a time, then the line; a commit subject that holds the
+    # words of the line (Preflight), then the step's own text.
+    printf 'deploy to the Jetson\tPreflight\t2026-10-15T09:59:00.0Z target: main, commit 0123 (docs: JOBAPP-VERIFY services=9 healthy=9 result=ok)\n'
+    printf 'deploy to the Jetson\tVerify the Jetson\t2026-10-15T10:00:00.0Z ##[group]Run bash ops/jetson-verify.sh "$APP"\n'
+    printf 'deploy to the Jetson\tVerify the Jetson\t2026-10-15T10:00:01.0Z %s\r\n' "${FAKE_VERIFY:-JOBAPP-VERIFY services=8 healthy=8 missing=0 result=ok}"
+  else
+    echo "${FAKE_CONCLUSION:-success} https://example.org/runs/4242"
+  fi
+  ;;
 esac
 EOF
 cat >"$WORK/bin/curl" <<'EOF'
@@ -870,7 +880,7 @@ export FAKE_LOG="$WORK/fake.log"
 deploy() { # deploy <expected exit> <arguments ...>, gh and curl being the fakes
   local want="$1"
   shift
-  run "$want" env PATH="$WORK/bin:$PATH" DEPLOY_HEALTH_URL=https://jobapp.example.org/api/health "$DEPLOY" "$@"
+  run "$want" env PATH="$WORK/bin:$PATH" DEPLOY_HEALTH_URL=https://jobapp.example.org/api/health DEPLOY_POLL_SECONDS=0 "$DEPLOY" "$@"
 }
 
 # main has not moved, and its own tree has no record (the takeover above passed on it with stub
@@ -905,21 +915,45 @@ ok "deploy-checked.sh refuses a tree without a record and a record of stub steps
 deploy 1 --dry-run origin/conflict-a
 out_has "is not on origin/main"
 deploy 1 --dry-run --allow-branch origin/conflict-a
-out_has "refused: no PASS record"
+out_has "refused: --allow-branch deploys a branch named hotfix/<name> only"
+# A hot fix: a commit off main whose tree is the checked one, pushed as hotfix/fix-1.
+hotfix_sha="$(git -C "$GITHUB" commit-tree "$want_tree" -p "$(git -C "$GITHUB" rev-parse 'HEAD~1')" -m "hotfix")"
+git -C "$GITHUB" push -q origin "$hotfix_sha:refs/heads/hotfix/fix-1"
+git -C "$GITHUB" push -q origin "$hotfix_sha:refs/heads/hotfixes-not"
+git -C "$REPO" fetch -q origin
+deploy 1 --dry-run origin/hotfix/fix-1
+out_has "is not on origin/main"
+deploy 0 --dry-run --allow-branch origin/hotfix/fix-1
+out_has "gh workflow run deploy.yml -f ref=hotfix/fix-1 -f allow_branch=true"
+deploy 1 --dry-run --allow-branch "$hotfix_sha"
+out_has "deploys a branch named hotfix/<name> only"
+deploy 1 --dry-run --allow-branch origin/hotfixes-not
+out_has "deploys a branch named hotfix/<name> only"
+deploy 1 --dry-run --allow-branch "origin/hotfix/fix-1~0"
+out_has "deploys a branch named hotfix/<name> only"
+git -C "$GITHUB" push -q origin --delete hotfix/fix-1 hotfixes-not
+git -C "$REPO" fetch -q --prune origin
 [[ ! -s "$FAKE_LOG" ]] || fail "a refused branch called gh or curl: $(cat "$FAKE_LOG")"
-ok "a commit that is not on origin/main is refused; --allow-branch still needs a record of its tree"
+ok "a commit that is not on origin/main is refused; --allow-branch takes the tip of a hotfix/<name> branch only, by its name (deploy.yml's rule), and dispatches it with allow_branch"
 
 deploy 0
 grep -qx "workflow run deploy.yml -f ref=$main_sha" "$FAKE_LOG" || fail "the dispatch: $(cat "$FAKE_LOG")"
 grep -q "^run watch 4242" "$FAKE_LOG" || fail "the run was not waited for: $(cat "$FAKE_LOG")"
 grep -q "^curl .*https://jobapp.example.org/api/health" "$FAKE_LOG" || fail "the health URL was not asked: $(cat "$FAKE_LOG")"
 out_has "deploy: success"
+grep -qx "JOBAPP-VERIFY services=8 healthy=8 missing=0 result=ok" "$WORK/out" || fail "the figures of the run were not printed alone on their line: $(cat "$WORK/out")"
+out_lacks "##[group]"
 [[ "$(last_line)" == "DEPLOYED $main_sha" ]] || fail "last line of a deploy: $(last_line)"
 : >"$FAKE_LOG"
-FAKE_CONCLUSION=failure deploy 1
+FAKE_CONCLUSION=failure FAKE_VERIFY="JOBAPP-VERIFY services=8 healthy=7 missing=0 result=fail" deploy 1
 out_has "the deploy did not succeed (failure)"
+grep -qx "JOBAPP-VERIFY services=8 healthy=7 missing=0 result=fail" "$WORK/out" || fail "the figures of a failed run were not printed: $(cat "$WORK/out")"
 ! grep -q '^curl' "$FAKE_LOG" || fail "the health URL was asked after a failed deploy"
-ok "a checked main is dispatched with its full sha, waited for and asked for its health; a failed run is exit 1"
+FAKE_CONCLUSION=failure FAKE_VERIFY="no figures here" deploy 1
+out_lacks "JOBAPP-VERIFY"
+FAKE_CONCLUSION=failure FAKE_VERIFY="echo JOBAPP-VERIFY services=8 healthy=8 missing=0 result=ok" deploy 1
+out_lacks "JOBAPP-VERIFY"
+ok "a checked main is dispatched with its full sha, waited for and asked for its health, the run's JOBAPP-VERIFY line printed; a failed run is exit 1, with its figures when it has some; the words of the line inside another line (a commit subject, a command) are not taken"
 
 # main moves on with a commit that no check read: a check of main as it is, with no --merge, reads
 # the commits since the last tree that has a PASS record (the range base..head would be empty).
