@@ -83,6 +83,9 @@ ERRORS = ("invalid_output", "no_result", "token_limit", "binding_gone", "run_fai
 # A key of a click's CV generation estimate: the click asked for both kinds, so the letter
 # follows the new CV even when it has a version (`start_letter`; D10's "Write now").
 LETTER_FOLLOWS = "letter_follows"
+# A key of a click's CV generation estimate: the recorded stream the following letter replays on
+# the fake backend (a journey names the streams of both kinds in one click).
+LETTER_SCRIPT = "letter_script"
 # The service of a run's context that queues renders (tests); else a Queue on REDIS_URL.
 QUEUE_SERVICE = "documents_queue"
 # The recorded streams a writer replays on the fake backend when its caller names none.
@@ -448,7 +451,9 @@ def start_letter(
         )
         if _has_version(db, letter) and not asked:
             return None  # the person's letter is not written again behind their back
-        figures = {k: v for k, v in parent.estimate.items() if k != LETTER_FOLLOWS}
+        figures = {
+            k: v for k, v in parent.estimate.items() if k not in (LETTER_FOLLOWS, LETTER_SCRIPT)
+        }
         try:
             generation = create(
                 db,
@@ -460,7 +465,13 @@ def start_letter(
                 parent.token_ceiling,
                 at=at,
             )
-            run = start(db, generation, at=at, settings=settings)
+            run = start(
+                db,
+                generation,
+                at=at,
+                script=parent.estimate.get(LETTER_SCRIPT),
+                settings=settings,
+            )
         except (store.GenerationOpenError, agent_runs.ActiveRunsError):
             db.rollback()
             return None

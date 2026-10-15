@@ -2,8 +2,10 @@
 # Ship the app to the Jetson and run it there (platform module, SPEC-platform.md).
 #
 #   ./deploy.sh [deploy] [--env]   rsync the tree, build on the Jetson, migrate (one off container of
-#                                  the new image, the previous release still serving), compose up,
-#                                  health. A migration that fails stops the deploy before anything
+#                                  the new image, the previous release still serving), the browser
+#                                  behind its host firewall (ops/browser-egress.sh; a browser image
+#                                  that does not build means no browser, the rest deploys), compose
+#                                  up, health. A migration that fails stops the deploy before anything
 #                                  restarts (ops/migrate.sh, issue #81)
 #   ./deploy.sh logs <service>     follow the logs of one service (last 200 lines first)
 #   ./deploy.sh ps                 docker compose ps on the Jetson
@@ -475,6 +477,37 @@ build_images() {
     rcompose --progress=quiet build "$svc" || die "build of $svc failed"
     record "build $svc" "$start"
   done
+  # The browser too (behind the `browser` profile); browser_egress decides whether it starts. A
+  # failed build does not stop the deploy (owner decision of 2026-10-14): everything else deploys
+  # without the browser, which stays down until a deploy builds its image again.
+  start=$SECONDS
+  if rcompose --profile browser --progress=quiet build browser; then
+    record "build browser" "$start"
+  else
+    BROWSER_BUILD_FAILED=1
+    record "build browser FAILED" "$start"
+    warn "build of browser failed: everything else deploys, the browser is not deployed"
+  fi
+}
+
+# browser_egress (browser B6): the browser starts only behind the host firewall of its egress
+# network. ops/browser-egress.sh creates its networks, then applies and checks the rules through
+# the root owned copy the owner installed once (sudo bash ops/browser-egress.sh install);
+# otherwise it removes the browser container and the rest of the stack deploys without it. The same
+# when the browser image did not build (BROWSER_BUILD_FAILED): `skip` removes the previous container.
+browser_egress() {
+  step "browser behind its host firewall (ops/browser-egress.sh)"
+  if [[ -n "${BROWSER_BUILD_FAILED:-}" ]]; then
+    # The previous browser container is removed (not_started, same path as a failed firewall
+    # check), so no browser runs without an image that was built and checked in this deploy.
+    remote "cd $RDIR_Q && COMPOSE=$(printf '%q' "$RCOMPOSE") bash ops/browser-egress.sh skip 'the browser image did not build'" || true
+    TIMES+=("browser: NOT deployed, its image did not build; fix the build and deploy again")
+    warn "the browser is not deployed (its image did not build); everything else deploys"
+  elif remote "cd $RDIR_Q && COMPOSE=$(printf '%q' "$RCOMPOSE") bash ops/browser-egress.sh deploy"; then
+    RCOMPOSE="$RCOMPOSE --profile browser"
+  else
+    warn "the browser is not started (above); everything else deploys"
+  fi
 }
 
 # migrate: ops/migrate.sh of the tree just synced, on the Jetson, BEFORE start_stack (issue #81).
@@ -653,6 +686,7 @@ cmd_deploy() {
   check_port
   build_images
   migrate
+  browser_egress
   start_stack
   health
   step "public URL"

@@ -29,7 +29,8 @@ __all__ = ["stack"]
 
 pytestmark = [pytest.mark.docker]
 
-FORM = "http://pages:8000/b5/form.html"
+# 8080, a port of the proxy's set: the allowed test name passes the port check too (#281).
+FORM = "http://pages:8080/b5/form.html"
 TOOL_CALL = """
 import http.client, json, sys
 method, path, secret, headers, body, size = sys.argv[1:7]
@@ -190,20 +191,29 @@ def test_the_page_never_leaves_the_list(lease: Lease) -> None:
     assert [t["url"] for t in tabs] == [FORM]
     # A client side redirect off the list: stopped (reported by the call it happens in, or the
     # next), and the page stays where it was.
-    redirect = "http://pages:8000/b5/redirect.html"
+    redirect = "http://pages:8080/b5/redirect.html"
     results = [lease.tool("browser_navigate", url=redirect), lease.tool("browser_wait_for", time=2)]
     assert "host_not_allowed" in [r.get("error") for r in results], results
     tabs = lease.tool("browser_tabs", action="list")["tabs"]
     assert len(tabs) == 1
-    assert tabs[0]["url"].startswith("http://pages:8000/b5/")
+    assert tabs[0]["url"].startswith("http://pages:8080/b5/")
     # A server side 302 off the list (the route guard sees its first URL only): stopped too, and
     # nothing of the page it led to is answered.
-    hop = "http://pages:8000/redirect?to=http://evil.example/landing"
+    origin = lease.snapshot()
+    hop = "http://pages:8080/redirect?to=http://evil.example/landing"
     results = [lease.tool("browser_navigate", url=hop), lease.tool("browser_snapshot")]
     assert "host_not_allowed" in [r.get("error") for r in results], results
-    assert all("evil.example" not in r.get("snapshot", "") for r in results)
+
+    # What is answered is the page the tab came from, as it was (the form links to evil.example
+    # itself, so the host cannot be the test): nothing of the landing page. Refs are renumbered.
+    def bare(text: str) -> str:
+        return re.sub(r" \[ref=e\d+\]", "", text)
+
+    shown = [r["snapshot"] for r in results if "snapshot" in r]
+    assert shown, results
+    assert all(bare(s) == bare(origin) for s in shown), results
     tabs = lease.tool("browser_tabs", action="list")["tabs"]
-    assert [t["url"].startswith("http://pages:8000/") for t in tabs] == [True]
+    assert [t["url"].startswith("http://pages:8080/") for t in tabs] == [True]
 
 
 def test_a_stale_ref_clicks_nothing(lease: Lease) -> None:

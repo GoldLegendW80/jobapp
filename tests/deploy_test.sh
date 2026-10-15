@@ -2047,26 +2047,31 @@ case "$*" in
   "compose -f compose.yml --profile tunnel ps -q --status running caddy") echo "${FAKE_CADDY_ID:-}" ;;
   "compose -f compose.yml --profile tunnel ps -q --status running worker") echo "${FAKE_WORKER_ID:-}" ;;
   "compose -f compose.yml --profile tunnel ps -q --status running renderer") echo "${FAKE_RENDERER_ID:-}" ;;
+  "compose -f compose.yml --profile tunnel --profile browser ps -q --status running browser") echo "${FAKE_BROWSER_ID:-}" ;;
   "inspect -f {{.Image}} c0ffee") echo "sha256:1111" ;;
   "inspect -f {{.Image}} beef") echo "sha256:2222" ;;
   "inspect -f {{.Image}} feed") echo "sha256:3333" ;;
   "inspect -f {{.Image}} cafe") echo "sha256:4444" ;;
+  "inspect -f {{.Image}} b0b0") echo "sha256:5555" ;;
 esac
 exit 0
 FAKE
 chmod +x "$WORK/bin4/docker"
 prev() { env PATH="$WORK/bin4:$PATH" FAKE_CALLS="$WORK/calls4" "$@"; }
 : >"$WORK/calls4"
-run 0 prev FAKE_API_ID=c0ffee FAKE_WORKER_ID=feed FAKE_CADDY_ID=beef FAKE_RENDERER_ID=cafe ops/previous.sh tag-running
+run 0 prev FAKE_API_ID=c0ffee FAKE_WORKER_ID=feed FAKE_CADDY_ID=beef FAKE_RENDERER_ID=cafe FAKE_BROWSER_ID=b0b0 ops/previous.sh tag-running
 grep -qx "docker tag sha256:1111 jobapp-api:previous" "$WORK/calls4" || fail "api not tagged from its container: $(cat "$WORK/calls4")"
 grep -qx "docker tag sha256:3333 jobapp-worker:previous" "$WORK/calls4" || fail "worker not tagged from its container: $(cat "$WORK/calls4")"
 grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "caddy not tagged from its container"
 grep -qx "docker tag sha256:4444 jobapp-renderer:previous" "$WORK/calls4" || fail "renderer not tagged from its container: $(cat "$WORK/calls4")"
+grep -qx "docker tag sha256:5555 jobapp-browser:previous" "$WORK/calls4" || fail "browser not tagged from its container: $(cat "$WORK/calls4")"
 grep -q "jobapp-.*:latest" "$WORK/calls4" && fail ":latest was read: $(cat "$WORK/calls4")"
 : >"$WORK/calls4"
 run 0 prev FAKE_API_ID= FAKE_WORKER_ID= FAKE_CADDY_ID=beef FAKE_RENDERER_ID= ops/previous.sh tag-running
 out_has "api: no running container, jobapp-api:previous left as it was"
 out_has "renderer: no running container, jobapp-renderer:previous left as it was"
+out_has "browser: no running container, jobapp-browser:previous left as it was"
+grep -q "jobapp-browser:previous" "$WORK/calls4" && fail "a stopped browser was still tagged: $(cat "$WORK/calls4")"
 grep -q "jobapp-renderer:previous" "$WORK/calls4" && fail "a stopped renderer was still tagged: $(cat "$WORK/calls4")"
 out_has "worker: no running container, jobapp-worker:previous left as it was"
 grep -q "jobapp-api:previous" "$WORK/calls4" && fail "a stopped api was still tagged: $(cat "$WORK/calls4")"
@@ -2076,18 +2081,18 @@ grep -qx "docker tag sha256:2222 jobapp-caddy:previous" "$WORK/calls4" || fail "
 : >"$WORK/calls4"
 run 0 prev FAKE_API_ID=c0ffee FAKE_WORKER_ID=c0ffee FAKE_CADDY_ID=beef ops/previous.sh tag-running
 grep -qx "docker tag sha256:1111 jobapp-worker:previous" "$WORK/calls4" || fail "the worker's old api image was not kept"
-ok "tag-running tags the image id of each running container, worker included (never :latest); a stopped service keeps its :previous"
+ok "tag-running tags the image id of each running container, worker and browser included (never :latest); a stopped service keeps its :previous"
 
 # Every image the stack builds is built before the restart and rolled back on failure.
 grep -q "^  for svc in api worker caddy renderer; do$" deploy.sh || fail "deploy.sh does not build api, worker, caddy and renderer"
 grep -q "^          for svc in api worker caddy renderer; do$" .github/workflows/deploy.yml || fail "deploy.yml does not build the worker and the renderer"
-grep -q "^            for img in jobapp-api jobapp-worker jobapp-caddy jobapp-renderer; do$" .github/workflows/deploy.yml ||
-  fail "deploy.yml does not restore jobapp-worker:previous and jobapp-renderer:previous"
-grep -q "^IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy renderer:jobapp-renderer)$" ops/previous.sh || fail "previous.sh misses the worker or the renderer"
+grep -q "^            for img in jobapp-api jobapp-worker jobapp-caddy jobapp-renderer jobapp-browser; do$" .github/workflows/deploy.yml ||
+  fail "deploy.yml does not restore jobapp-worker:previous, jobapp-renderer:previous and jobapp-browser:previous"
+grep -q "^IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy renderer:jobapp-renderer browser:jobapp-browser)$" ops/previous.sh || fail "previous.sh misses the worker, the renderer or the browser"
 [[ "$(grep -c -E "^ +(run: docker buildx bake .* --load api worker caddy renderer|targets: api,worker,caddy,renderer)$" .github/workflows/ci.yml)" == 4 ]] ||
   fail "ci.yml does not bake the renderer in all four places"
 grep -q "jobapp-renderer:latest" tests/jetson_smoke.sh || fail "jetson_smoke.sh does not check the renderer image"
-ok "deploy.sh and deploy.yml build api, worker, caddy and renderer; the rollback restores jobapp-worker and jobapp-renderer too; ci.yml bakes the renderer"
+ok "deploy.sh and deploy.yml build api, worker, caddy and renderer; the rollback restores jobapp-worker, jobapp-renderer and jobapp-browser too; ci.yml bakes the renderer"
 
 app="$WORK/app"
 saved="$WORK/backups/previous-tree"
@@ -2166,6 +2171,10 @@ case "$args" in
     echo up >>"$FAKE_DIR/ups"
     if [[ -n "${FAKE_FAIL_UP:-}" && "$(wc -l <"$FAKE_DIR/ups" | tr -d ' ')" == 1 ]]; then exit 1; fi
     ;;
+  *" build browser")
+    [[ -z "${FAKE_FAIL_BROWSER_BUILD:-}" ]] || { echo "E: Version '147.0.1-1~deb12u1' for 'chromium' was not found" >&2; exit 1; }
+    ;;
+  *" config --format json") printf '{\n  "name": "jobapp",\n  "services": {}\n}\n' ;;
   "volume inspect jobapp_pgdata") [[ -z "${FAKE_NO_VOLUME:-}" ]] || exit 1 ;;
   *" exec -T db sh -c psql "*"pg_terminate_backend"*) echo 1 ;;
 esac
@@ -2328,7 +2337,7 @@ deploy_order() { # deploy_order <substring of the remote command that fails, or 
   local failing="$1"
   : >"$WORK/order"
   (
-    eval "$(sed -n -e '/^step() {/p' -e '/^info() {/p' -e '/^die() {/,/^}/p' -e '/^envval() {/,/^}/p' \
+    eval "$(sed -n -e '/^step() {/p' -e '/^info() {/p' -e '/^warn() {/p' -e '/^die() {/,/^}/p' -e '/^envval() {/,/^}/p' \
       -e '/^setting() {/,/^}/p' -e '/^record() {/,/^}/p' -e '/^rcompose() {/,/^}/p' \
       -e '/^build_images() {/,/^}/p' -e '/^migrate() {/,/^}/p' -e '/^start_stack() {/,/^}/p' \
       -e '/^cmd_deploy() {/,/^}/p' deploy.sh)"
@@ -2340,7 +2349,7 @@ deploy_order() { # deploy_order <substring of the remote command that fails, or 
       echo "remote: $*" >>"$WORK/order"
       [[ -z "$failing" || "$*" != *"$failing"* ]]
     }
-    for stub in take_lock ssh_master preflight remote_lock sync_tree push_env check_port health warn_leftover_authkey; do
+    for stub in take_lock ssh_master preflight remote_lock sync_tree push_env check_port health warn_leftover_authkey browser_egress; do
       eval "$stub() { echo $stub >>\"\$WORK/order\"; }"
     done
     # shellcheck disable=SC2329 # called by the evaluated cmd_deploy
@@ -2359,9 +2368,48 @@ built="$(line_of "build renderer")" migrated="$(line_of "ops/migrate.sh")" upped
 [[ -n "$built" && -n "$migrated" && -n "$upped" && -n "$healthy" ]] || fail "a step is missing: $(cat "$WORK/order")"
 ((built < migrated && migrated < upped && upped < healthy)) ||
   fail "order is build $built, migrate $migrated, up $upped, health $healthy: $(cat "$WORK/order")"
+guarded="$(line_of "^browser_egress$")" browser_built="$(line_of "build browser")"
+[[ -n "$guarded" && -n "$browser_built" ]] || fail "the browser is not built or not guarded: $(cat "$WORK/order")"
+((browser_built < migrated && migrated < guarded && guarded < upped)) ||
+  fail "order is build browser $browser_built, migrate $migrated, browser_egress $guarded, up $upped"
 grep -q "exec -T api alembic" "$WORK/order" && fail "a migration still runs in the started api container"
 out_has "migrations: "
-ok "cmd_deploy: build api, worker, caddy, renderer, then ops/migrate.sh, then compose up --wait, then health"
+ok "cmd_deploy: build api, worker, caddy, renderer and browser, then ops/migrate.sh, then the browser's host firewall, then compose up --wait, then health"
+run 0 deploy_order "build browser"
+out_has "build of browser failed: everything else deploys, the browser is not deployed"
+out_has "build browser FAILED: "
+out_has "migrations: "
+for step in "ops/migrate.sh" "^browser_egress$" "up -d --remove-orphans" "^health$"; do
+  [[ -n "$(line_of "$step")" ]] || fail "a failed browser build stopped the deploy before '$step': $(cat "$WORK/order")"
+done
+ok "a browser image that does not build: ./deploy.sh warns and goes on (migrate, browser_egress, compose up, health), exit 0"
+
+browser_egress_run() { # browser_egress_run <BROWSER_BUILD_FAILED value, or ''>: the function, remote recorded
+  : >"$WORK/order"
+  (
+    eval "$(sed -n -e '/^step() {/p' -e '/^info() {/p' -e '/^warn() {/p' -e '/^browser_egress() {/,/^}/p' deploy.sh)"
+    # shellcheck disable=SC2034 # read by the evaluated browser_egress
+    BROWSER_BUILD_FAILED="$1" RDIR_Q=jobapp RCOMPOSE="docker compose -f compose.yml --profile tunnel" TIMES=()
+    # shellcheck disable=SC2329 # called by the evaluated browser_egress
+    remote() { echo "remote: $*" >>"$WORK/order"; }
+    browser_egress
+    echo "RCOMPOSE=$RCOMPOSE" >>"$WORK/order"
+    printf '%s\n' ${TIMES[@]+"${TIMES[@]}"} >>"$WORK/order"
+  )
+}
+run 0 browser_egress_run 1
+[[ "$(grep -c '^remote: ' "$WORK/order")" == 1 ]] || fail "more than one remote call: $(cat "$WORK/order")"
+grep -qF "bash ops/browser-egress.sh skip 'the browser image did not build'" "$WORK/order" || fail "the previous browser is not removed through skip: $(cat "$WORK/order")"
+grep -q "browser-egress.sh deploy" "$WORK/order" && fail "the firewall step ran although the image did not build"
+grep -q "^RCOMPOSE=.*--profile browser" "$WORK/order" && fail "the browser profile was added although the image did not build"
+grep -q "^browser: NOT deployed, its image did not build" "$WORK/order" || fail "the summary lacks the browser line: $(cat "$WORK/order")"
+out_has "the browser is not deployed (its image did not build); everything else deploys"
+run 0 browser_egress_run ""
+grep -qF "bash ops/browser-egress.sh deploy" "$WORK/order" || fail "a good build does not run the firewall step: $(cat "$WORK/order")"
+grep -q "browser-egress.sh skip" "$WORK/order" && fail "skip ran although the image built"
+grep -q "^RCOMPOSE=.*--profile browser" "$WORK/order" || fail "the browser profile was not added after the firewall step"
+ok "browser_egress: a failed image build removes the previous browser (skip) and never starts it; a good build runs the firewall step as before"
+
 run 1 deploy_order "ops/migrate.sh"
 out_has "the migrations did not apply"
 out_has "the containers on fakejetson were not touched and still run the previous release"
@@ -2411,6 +2459,8 @@ wf() {
   : >"$MIG/calls"
   cp .rsyncignore "$WF/ws/"
   cp ops/migrate.sh ops/previous.sh "$WF/ws/ops/"
+  # The real browser script runs only where a test is about it (the others find none and carry on).
+  if [[ " $* " == *" FAKE_FAIL_BROWSER_BUILD=1 "* ]]; then cp ops/browser-egress.sh "$WF/ws/ops/"; fi
   printf 'name: new release\n' >"$WF/ws/compose.yml"
   cat >"$WF/ws/ops/db.sh" <<'STUB'
 #!/usr/bin/env bash
@@ -2501,12 +2551,27 @@ out_has "::error::the migrations did not apply: the deploy stopped before starti
 untouched "$MIG/calls"
 [[ "$(wf_count "^smoke$")" == 0 ]] || fail "the smoke ran after a failed migration"
 (($(wf_line "^db.sh backup") < $(wf_line " run --rm "))) || fail "no backup before the failed migration"
-for img in jobapp-api jobapp-worker jobapp-caddy jobapp-renderer; do
+for img in jobapp-api jobapp-worker jobapp-caddy jobapp-renderer jobapp-browser; do
   grep -qx "docker tag $img:previous $img:latest" "$MIG/calls" || fail "$img:latest was not put back: $(cat "$MIG/calls")"
 done
 [[ "$(cat "$WF/app/compose.yml")" == "name: previous release" ]] || fail "the previous tree was not put back"
 [[ "$(cat "$WF/app/.deployed-commit")" == "previous-commit" ]] || fail ".deployed-commit changed"
 ok "a failing migration: exit 1 before compose up, nothing stopped or restarted, the previous files and :latest tags back, .deployed-commit kept"
+
+wf 0 FAKE_PENDING=1 FAKE_FAIL_BROWSER_BUILD=1
+out_has "::warning::build of browser failed: everything else deploys, the browser is not deployed"
+out_has "browser: not started, the browser image did not build; no browser container left"
+out_has "::warning::the browser is not deployed (its image did not build); everything else deploys"
+built="$(wf_line " build browser")" removed_at="$(wf_line "--profile browser rm -s -f browser")" upped="$(wf_line "^$WF_UP$")" smoked="$(wf_line "^smoke$")"
+[[ -n "$built" && -n "$removed_at" && -n "$upped" && -n "$smoked" ]] || fail "a step is missing: $(cat "$MIG/calls")"
+((built < removed_at && removed_at < upped && upped < smoked)) ||
+  fail "order is build browser $built, remove browser $removed_at, up $upped, smoke $smoked: $(cat "$MIG/calls")"
+[[ "$(wf_count " up -d --remove-orphans ")" == 1 ]] || fail "compose up ran more than once"
+grep -q "create browser\|nsenter\|^docker pull" "$MIG/calls" && fail "the browser was created or the firewall step ran: $(cat "$MIG/calls")"
+grep -q "up -d --remove-orphans.*--profile browser\|--profile browser up" "$MIG/calls" && fail "the browser profile was in compose up"
+[[ "$(cat "$WF/app/.deployed-commit")" == "$WF_COMMIT" ]] || fail ".deployed-commit not written"
+[[ "$(cat "$WF/app/compose.yml")" == "name: new release" ]] || fail "the new tree is not in place"
+ok "a browser image that does not build: the workflow deploys everything else, removes the previous browser container, never starts it, and says so"
 
 wf 1 FAKE_TIMEOUT=1
 out_has "did not finish within 300s and were stopped"

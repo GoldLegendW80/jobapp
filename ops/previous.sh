@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # What a failed deploy rolls back to (.github/workflows/deploy.yml, issue #3).
 #
-#   ops/previous.sh tag-running            tag the image each running api, worker, caddy and renderer
-#                                          container was started from as jobapp-<service>:previous
+#   ops/previous.sh tag-running            tag the image each running api, worker, caddy, renderer and
+#                                          browser container was started from as
+#                                          jobapp-<service>:previous
 #   ops/previous.sh save-tree <app> <dir>  copy the deployed tree <app> to <dir> before the sync
 #   ops/previous.sh restore-tree <dir> <app>
 #                                          put that copy back over <app>
@@ -14,13 +15,14 @@
 # The worker has its own image since agents A2 (jobapp-worker, the api's code plus the Claude
 # Agent SDK); on the first deploy of that change the running worker still runs jobapp-api, and
 # that image id becomes jobapp-worker:previous, which is what a rollback must start again.
+# The browser sits behind the `browser` profile (browser B6), so its container is looked up with it.
 #
 # The trees are copied with .rsyncignore, the deploy's own sync rules: .env*, .deployed-commit and
 # the other ignored paths are neither saved nor overwritten, so a rollback never touches secrets.
 # restore-tree on a missing copy (first deploy) does nothing and says so.
 set -euo pipefail
 
-IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy renderer:jobapp-renderer)
+IMAGES=(api:jobapp-api worker:jobapp-worker caddy:jobapp-caddy renderer:jobapp-renderer browser:jobapp-browser)
 
 die() {
   printf 'ops/previous.sh: %s\n' "$*" >&2
@@ -32,9 +34,11 @@ tag_running() {
   for pair in "${IMAGES[@]}"; do
     svc="${pair%%:*}"
     img="${pair#*:}"
-    # word splitting of $compose is wanted: it is a command with its arguments
+    local profile=""
+    [[ "$svc" != browser ]] || profile="--profile browser"
+    # word splitting of $compose and $profile is wanted: a command with its arguments
     # shellcheck disable=SC2086
-    ids="$($compose ps -q --status running "$svc" 2>/dev/null || true)"
+    ids="$($compose $profile ps -q --status running "$svc" 2>/dev/null || true)"
     id="$(head -n 1 <<<"$ids")"
     if [[ -z "$id" ]]; then
       echo "$svc: no running container, $img:previous left as it was"

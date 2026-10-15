@@ -51,7 +51,8 @@
   });
   // The typing pace as the page sees it: the shortest gap between two keys, in ms.
   const keys = [];
-  document.getElementById("first_name").addEventListener("keydown", () => {
+  document.getElementById("first_name").addEventListener("keydown", (event) => {
+    if (event.key.length !== 1) return;  // the Delete that clearing the field sends is no typing
     keys.push(performance.now());
     const gaps = keys.slice(1).map((t, i) => t - keys[i]);
     if (gaps.length) document.getElementById("pace").textContent = "keys " + keys.length + " shortest gap " + Math.floor(Math.min(...gaps));
