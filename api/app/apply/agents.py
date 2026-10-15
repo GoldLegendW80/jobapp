@@ -23,14 +23,22 @@ through the agents queue. So the run's input holds no text of the person, the po
 form: only `request`, a random key of the `agent.Request` held in this process while the run
 lasts, the token budget and the fake backend's `script`. The prompt is built from that request
 (`prompt_for`): the questions (as `q1`, `q2`: the model never sees a field's key), the profile's
-facts, experience, skills and answers (never identity), the posting and the letter, each a JSON
-document between tags, with every "<" escaped, so no text of a page can close its block. The
-system prompt (prompts/answer.md) says that what is inside is data, never instructions.
+allowlist (`agent.profile_for`: facts, experience, skills, and of the answers only the
+motivation, the stated years and the highest degree; never identity, an EEO answer, pay, work
+authorization or a practicality), the posting and the letter, each a JSON document between tags,
+with every angle bracket and its lookalikes escaped, so no text of a page can close its block.
+The system prompt (prompts/answer.md) says that what is inside is data, never instructions.
 
 Without a credential no run is created (`no_credential`); over the person's active runs
 (`runs.ACTIVE_PER_USER`) none either (`busy`): in both cases every question stays left, as for a
 run with no answer agent. A run that failed or was stopped says so in `Reply.stopped`, and what
-it submitted before is still judged.
+it submitted before is still judged. A fill cancelled after the run was created but before the
+runner claimed it fails the run (`runs.fail_queued`, shielded), so it never holds one of the
+person's run slots until the stale reaper finds it.
+
+The run executes in the fill's process, outside the agents queue and so outside its
+`MAX_AGENT_RUNS` (app/worker.py): with the fill's one at a time queue, the worker holds at most
+three Claude Code processes.
 
 Importing this module registers the agent, and its tool where the Claude Agent SDK is installed
 (the worker). It is a registration module (`agents`, app/worker.py `REGISTRATION_MODULES`), so
@@ -40,6 +48,7 @@ the worker imports it by itself.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
 import json
 import secrets
@@ -121,10 +130,14 @@ def question_ids(request: agent.Request) -> dict[str, str]:
     return {f"q{n}": q.key for n, q in enumerate(request.questions[:MAX_QUESTIONS], start=1)}
 
 
+# The angle brackets and their lookalikes (fullwidth, small form), each as a JSON escape.
+_BRACKETS = str.maketrans({c: f"\\u{ord(c):04x}" for c in "<>\uff1c\uff1e\ufe64\ufe65"})
+
+
 def _block(tag: str, value: Any) -> str:
-    """A JSON document between tags, every "<" escaped (still valid JSON): nothing inside can
-    close the block or open another."""
-    text = json.dumps(value, ensure_ascii=False, indent=1).replace("<", "\\u003c")
+    """A JSON document between tags, every angle bracket and its lookalikes escaped (still valid
+    JSON): nothing inside can close the block, open another, or look like a tag."""
+    text = json.dumps(value, ensure_ascii=False, indent=1).translate(_BRACKETS)
     return f"<{tag}>\n{text}\n</{tag}>"
 
 
@@ -272,13 +285,27 @@ class RuntimeAnswerAgent:
                 return "busy"
             return made.id
 
-        created = await asyncio.to_thread(_in_db, context.sessions, create)
+        creating = asyncio.ensure_future(asyncio.to_thread(_in_db, context.sessions, create))
+        try:
+            created = await asyncio.shield(creating)
+        except asyncio.CancelledError:
+            # The row may be written while the fill is cancelled: wait for it, then fail it.
+            with contextlib.suppress(Exception):
+                made = await asyncio.shield(creating)
+                if isinstance(made, uuid.UUID):
+                    await _release(context, made)
+            raise
         if isinstance(created, str):
             return agent.Reply(stopped=created)
         with _LOCK:
             _PENDING[key] = request
         try:
             await runner.execute(context, created)
+        except asyncio.CancelledError:
+            # Cancelled before the runner claimed the run: it would stay queued, holding one of
+            # the person's run slots for AGENT_STALE_QUEUED. Once claimed, the runner ends it.
+            await _release(context, created)
+            raise
         finally:
             with _LOCK:
                 _PENDING.pop(key, None)
@@ -290,6 +317,16 @@ class RuntimeAnswerAgent:
             output_tokens=ended.output_tokens,
             stopped=_stopped(ended),
         )
+
+
+async def _release(context: RunContext, run_id: uuid.UUID) -> None:
+    """A run still queued when its fill is cancelled: failed, shielded from the cancellation (the
+    `sweep.run_sweep` pattern). A run the runner claimed is left to the runner."""
+
+    def fail(db: Session) -> bool:
+        return runs.fail_queued(db, run_id, runs.STOPPED, context.clock())
+
+    await asyncio.shield(asyncio.to_thread(_in_db, context.sessions, fail))
 
 
 def _ended(db: Session, run_id: uuid.UUID) -> _Ended:

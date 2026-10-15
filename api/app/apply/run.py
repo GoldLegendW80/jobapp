@@ -604,7 +604,11 @@ async def _answer_left(
     tools: RunTools,
     report: ats_base.Report,
 ) -> dict[str, Any]:
-    """The answer agent for what is left; accepted values typed in place. Returns its cost."""
+    """The answer agent for what is left; accepted values typed in place. Returns its cost. A
+    cover letter box the resolver left gets the letter's own text first, by code."""
+    for index, answer in agent.letter_boxes(report.outcomes, plan.letter_text):
+        if await _type(adapter, tools, report, index, answer):
+            return {"agent": "not_run"}
     questions = agent.eligible(report.outcomes)
     if not questions:
         return {"agent": "none_needed"}
@@ -643,16 +647,29 @@ async def _answer_left(
         if verdict.answer is None:
             continue
         index = next(i for i, o in enumerate(report.outcomes) if o.field.key == verdict.key)
-        item = report.outcomes[index].field
-        filled = await adapter.fill(tools, item, verdict.answer)
-        report.outcomes[index] = ats_base.Outcome(item, verdict.answer, filled)
-        if filled.status == "failed" and filled.code in ats_base.PENDING_STEPS:
-            report.stopped, report.needs_person = "needs_person", filled.code
-            break
-        if filled.status == "failed" and filled.code in ats_base.STOPPING:
-            report.stopped = filled.code
+        if await _type(adapter, tools, report, index, verdict.answer):
             break
     return cost
+
+
+async def _type(
+    adapter: ats_base.Adapter,
+    tools: RunTools,
+    report: ats_base.Report,
+    index: int,
+    answer: Answer,
+) -> bool:
+    """One value typed in place of a left field; True when the fill must stop there."""
+    item = report.outcomes[index].field
+    filled = await adapter.fill(tools, item, answer)
+    report.outcomes[index] = ats_base.Outcome(item, answer, filled)
+    if filled.status == "failed" and filled.code in ats_base.PENDING_STEPS:
+        report.stopped, report.needs_person = "needs_person", filled.code
+        return True
+    if filled.status == "failed" and filled.code in ats_base.STOPPING:
+        report.stopped = filled.code
+        return True
+    return False
 
 
 async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:

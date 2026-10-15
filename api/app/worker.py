@@ -20,9 +20,12 @@ Sweeps queue (app.queue.SWEEPS):
   sweep.STALE_AFTER (worker crash, lost queue message).
 
 Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
-- run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time, so the Jetson's RAM
-  holds two Claude Code processes next to the sweeps within the 1536m limit; a third waits in
-  the queue. Tried once: a run whose worker died is never started again behind the user's back.
+- run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time; a third waits in
+  the queue. The apply fill's answer agent (`apply_answer`) is not counted: it runs inside the
+  fill, in this process, one fill at a time, so the worker holds at most three Claude Code
+  processes next to the sweeps (about 145 MiB plus 3 x 240 MiB measured in A2 and A5, within
+  the 1536m limit). Tried once: a run whose worker died is never started again behind the
+  user's back.
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
   so long that their message must be lost).
