@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import threading
 import uuid
 from typing import Any
 
@@ -61,6 +60,7 @@ from tests.documents.store_support import (
     factory,
     migrated_url,
 )
+from tests.documents.two_sessions import in_thread, wait_until_blocked
 from tests.documents.writer_support import (
     POSTING,
     Person,
@@ -736,30 +736,6 @@ def test_the_letters_ceiling_is_the_pairs_minus_what_the_cvs_run_spent(
         assert generate.letter_ceiling(db, db.get(DocumentGeneration, generation)) == left
 
 
-def _wait_until_blocked(engine: sa.Engine, threads: list[threading.Thread], count: int) -> None:
-    """Return once `count` backends of this database wait for a lock another session holds
-    (Postgres says so), or once a thread has ended. Polls; no sleep, no clock."""
-    query = sa.text(
-        "SELECT count(*) FROM pg_stat_activity "
-        "WHERE datname = current_database() AND wait_event_type = 'Lock'"
-    )
-    with engine.connect() as watcher:
-        while all(t.is_alive() for t in threads) and watcher.execute(query).scalar_one() < count:
-            watcher.rollback()
-
-
-def _in_thread(target: Any, outcome: dict[str, Any]) -> threading.Thread:
-    def body() -> None:
-        try:
-            outcome["result"] = target()
-        except Exception as exc:  # the main thread asserts on it
-            outcome["error"] = exc
-
-    thread = threading.Thread(target=body)
-    thread.start()
-    return thread
-
-
 def test_the_chain_waits_behind_a_render_holding_the_posting_and_both_commit(
     alex: Person, engine: sa.Engine
 ) -> None:
@@ -770,8 +746,8 @@ def test_the_chain_waits_behind_a_render_holding_the_posting_and_both_commit(
     outcome: dict[str, Any] = {}
     with alex.factory() as render:
         assert jobs_service.lock_job(render, alex.user, alex.posting) is not None
-        thread = _in_thread(lambda: _chain(alex, run), outcome)
-        _wait_until_blocked(engine, [thread], 1)
+        thread = in_thread(lambda: _chain(alex, run), outcome)
+        wait_until_blocked(engine, [thread], 1)
         store.lock_document(render, alex.user, cv)
         store.commit(render)
     thread.join()
@@ -786,8 +762,8 @@ def test_two_chains_of_one_cv_at_once_start_one_letter(alex: Person, engine: sa.
     outcomes: list[dict[str, Any]] = [{}, {}]
     with alex.factory() as gate:
         store.lock_document(gate, alex.user, cv)  # both chains queue behind it, then race
-        threads = [_in_thread(lambda: _chain(alex, run), o) for o in outcomes]
-        _wait_until_blocked(engine, threads, 2)
+        threads = [in_thread(lambda: _chain(alex, run), o) for o in outcomes]
+        wait_until_blocked(engine, threads, 2)
         gate.rollback()
     for thread in threads:
         thread.join()

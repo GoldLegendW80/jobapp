@@ -616,6 +616,7 @@ def test_the_cron_job_takes_ids_only_and_queues_the_runs(world: World) -> None:
 def click(who: World, posting: uuid.UUID) -> None:
     """A "Write now" of the posting's CV, as `auto_router.write_now` does it, in its own session."""
     with who.factory() as db:
+        store.lock_posting(db, who.user, posting)
         document = store.get_or_create(db, who.user, posting, Kind.cv, at=AT)
         auto_router._give_way(db, document, AT)
         figures = estimate.for_posting(db, who.user, posting, None)
