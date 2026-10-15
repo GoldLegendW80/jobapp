@@ -341,8 +341,7 @@ function ThresholdFigures({
         <Alert>
           <TriangleAlert aria-hidden="true" />
           <AlertDescription>
-            At 0 every posting with a fit score qualifies: {postings(count)} of
-            the last 30 days.
+            {`At 0 the threshold holds nothing back: ${postings(count)} of the last 30 days have a fit score.`}
           </AlertDescription>
         </Alert>
       ) : null}
