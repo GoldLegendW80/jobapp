@@ -59,7 +59,7 @@ from app.agents import runs as agent_runs
 from app.agents.models import AgentEvent, AgentRun
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
-from app.ingestion import agents, estimate, estimate_router, merge, plan, reuse
+from app.ingestion import agents, citations, estimate, estimate_router, merge, plan, reuse
 from app.ingestion.models import IngestionDocument, IngestionImage, TextStatus
 from app.ingestion.runs_models import (
     IngestionItem,
@@ -68,6 +68,7 @@ from app.ingestion.runs_models import (
     RunStatus,
     StepStatus,
     identity_hash,
+    may_be_read,
     of_stored_text,
     stored_text_sha256,
     text_sha256,
@@ -681,7 +682,7 @@ def next_step(
         gone = {id(one) for one in old}
         rows = [one for one in rows if id(one) not in gone]
         new = _planned_again(db, run, step.document_id, rows)
-        if new is None:  # over 60 steps: its predicted parts fail, so the run ends partial
+        if new is None:  # over 60 steps, or unreadable: its parts fail, the run ends partial
             failed += old
             out |= {id(one) for one in old}
             rows += old  # their rows stay, in the count of the 60
@@ -707,13 +708,15 @@ def _never_ran(
 
 def _stored_text_hash(db: Session, run: IngestionRun, step: IngestionRunStep) -> bytes | None:
     """The hash of the text stored now for the step's document; None when the document is gone,
-    has no text, or still waits for its transcription (its text is not whole yet)."""
+    has no text, or may not be read now (`may_be_read`): its text is not whole yet (it waits for
+    its transcription) or not read, or a transcription set a secret warning the user has not
+    confirmed. `agents.bind_step` refuses the same, so no such step is started."""
     stored = db.execute(
         sa.select(stored_text_sha256()).where(
             IngestionDocument.id == step.document_id,
             IngestionDocument.user_id == run.user_id,
             IngestionDocument.sha256 == step.sha256,
-            IngestionDocument.text_status != TextStatus.awaiting_transcription,
+            may_be_read(),
         )
     ).first()
     return bytes(stored[0]) if stored is not None and stored[0] is not None else None
@@ -754,7 +757,9 @@ def _planned_again(
     has finished, or its text was replaced), placed after `kept`, the steps the run keeps. Rows
     only: nothing is added to the session. The 60 step rule: when the new parts do not fit the
     answer is None, not an empty list (a text with nothing to read): the document is left unread
-    and the run ends partial."""
+    and the run ends partial. So is a text nothing can be cited from
+    (`citations.prepare(text).readable` is false, as `estimate_router.quote` refuses it at the
+    start): its parts would be read and every item refused."""
     document = db.execute(
         sa.select(IngestionDocument.sha256, IngestionDocument.text).where(
             IngestionDocument.id == document_id, IngestionDocument.user_id == run.user_id
@@ -763,6 +768,8 @@ def _planned_again(
     if document is None or not document.text:
         return []
     text = document.text
+    if not citations.prepare(text).readable:
+        return None
     digest = text_sha256(text)
     credential = credentials.get(db, run.user_id)
     model = plan.model_for(credential.kind if credential is not None else None)
@@ -817,7 +824,7 @@ def _plan_again(db: Session, run: IngestionRun, document_id: uuid.UUID) -> None:
     gone = {id(one) for one in old}
     kept = [one for one in steps if id(one) not in gone]
     new = _planned_again(db, run, document_id, kept)
-    if new is not None:  # over 60 steps: the rows stay, `next_step` fails them
+    if new is not None:  # over 60 steps, or unreadable: the rows stay, `next_step` fails them
         _swap(db, old, new)
     db.flush()
 
