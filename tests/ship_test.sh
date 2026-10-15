@@ -88,6 +88,12 @@ case "$1 $2" in
   ;;
 "pr view")
   d="$(pr_dir "$3")"
+  # The state read right after a merge fails once (the file names the pull request).
+  if [[ "$*" == "pr view $3 --json state --jq .state" && "$(cat "$d/state")" == MERGED && "$(cat "$STATE/state_read_fail" 2>/dev/null)" == "$3" ]]; then
+    rm -f "$STATE/state_read_fail"
+    echo "error connecting to api.github.com" >&2
+    exit 1
+  fi
   jq -n --arg state "$(cat "$d/state")" --argjson draft "$(cat "$d/draft")" --arg head "$(cat "$d/head")" \
     --arg mergeable "$(mergeable "$d")" --slurpfile reviews "$d/reviews.json" --slurpfile closes "$d/closes.json" \
     --arg body "$(cat "$d/body" 2>/dev/null || true)" \
@@ -129,6 +135,8 @@ case "$1 $2" in
   for other in "$STATE"/pr/*; do echo 1 >"$other/unknown"; done
   if [[ -s "$STATE/move_on_merge" ]]; then "$STATE/move-head" "$(cat "$STATE/move_on_merge")" >/dev/null 2>&1; fi
   echo "✓ Merged pull request #$3"
+  # A TERM to ship.sh right after the merge of the number in $STATE/term_after_merge.
+  if [[ "$(cat "$STATE/term_after_merge" 2>/dev/null)" == "$3" ]]; then kill -TERM "$(cat "$STATE/../main/.local-check/ship.lock/pid")"; fi
   if [[ "$(cat "$STATE/merge_then_fail" 2>/dev/null)" == "$3" ]]; then
     echo "failed to delete local branch pr$3: error: cannot delete branch 'pr$3' used by worktree" >&2
     exit 1
@@ -162,7 +170,11 @@ cat >"$TOP/bin/ssh" <<'EOF'
 printf '%s\n' "$*" >>"$STATE/ssh.log"
 [[ ! -e "$STATE/ssh_fail" ]] || exit 255
 [[ "$*" == "-o BatchMode=yes -o ConnectTimeout=20 jetson-test bash -s" ]] || exit 254
-HOME="$STATE/home" PATH="$STATE/remote-bin:$PATH" bash -s
+if [[ -e "$STATE/ssh_truncate" ]]; then # the connection drops after a few lines
+  HOME="$STATE/home" PATH="$STATE/remote-bin:$PATH" bash -s | head -n "$(cat "$STATE/ssh_truncate")"
+else
+  HOME="$STATE/home" PATH="$STATE/remote-bin:$PATH" bash -s
+fi
 EOF
 REMOTE_BIN="$TOP/remote-bin"
 mkdir -p "$REMOTE_BIN"
@@ -172,7 +184,14 @@ C="compose -f compose.yml --profile tunnel"
 case "$*" in
 "$C config --services") cat "$STATE/remote/services" ;;
 "$C ps -a --format "*) cat "$STATE/remote/ps" ;;
-"$C exec -T api alembic current") cat "$STATE/remote/alembic" ;;
+"$C exec -T api alembic current")
+  # As the real one: it reads stdin (which, under "bash -s", is the rest of the script), the INFO
+  # lines go to stderr, a warning may come first on stdout, the revision line is last.
+  cat >/dev/null
+  printf 'INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.\nINFO  [alembic.runtime.migration] Will assume transactional DDL.\n' >&2
+  printf '/app/.venv/lib/python3.12/site-packages/x.py:1: SAWarning: a warning on stdout\n'
+  cat "$STATE/remote/alembic"
+  ;;
 "$C logs --no-color --since 10m") cat "$STATE/remote/logs" ;;
 *)
   printf '%s\n' "$*" >>"$STATE/docker-unexpected"
@@ -298,7 +317,7 @@ fresh() {
   printf 'E   assert 1 == 2\n' >"$STATE/fail_tail"
   printf '%s\trunning\thealthy\n' api worker caddy db redis parser renderer browser tailscale >"$STATE/remote/ps"
   printf '%s\n' caddy tailscale api worker parser renderer db redis >"$STATE/remote/services"
-  printf 'INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.\n0042_ship (head)\n' >"$STATE/remote/alembic"
+  printf '0042_ship (head)\n' >"$STATE/remote/alembic"
   {
     printf 'api-1  | INFO started %s\nworker-1  | errors handled: none\n' "$CANARY"
     printf 'api-1  | {"ts": "2026-10-14T10:00:00.000+00:00", "level": "info", "logger": "app", "msg": "3 errors retried"}\n'
@@ -565,13 +584,16 @@ for n in 81 82 83; do mkpr "$n"; done
 printf 'Stacked on #82\n' >"$STATE/pr/83/body"
 printf '82 api-pytest\n' >"$STATE/gate_fail"
 run 0 ship --approved
-[[ "$(cat "$STATE/gate.log")" == "$(printf 'main 81 82 83\nmain 81 82 83\nmain 81 82\nmain 81\nmain 81')" ]] || fail "dependent bisect runs: $(cat "$STATE/gate.log")"
+[[ "$(cat "$STATE/gate.log")" == "$(printf 'main 81 82 83\nmain 81 82 83\nmain 81 82\nmain 81')" ]] || fail "dependent bisect runs: $(cat "$STATE/gate.log")"
 out_has "dropped:  #82 (api-pytest), #83 (waits for #82)"
+out_has "gate   run 4 already passed this batch, not run again"
+out_has "gate:     PASS"
+grep -q "PASS .* after 4 run(s)" "$OUT" || fail "the summary should count 4 runs: $(tail -c 800 "$OUT")"
 [[ -f "$STATE/comment-82.txt" && ! -e "$STATE/comment-83.txt" ]] || fail "#82 alone gets a comment"
 grep '^pr merge' "$STATE/gh.log" | grep -qv '^pr merge 81 ' && fail "only #81 should merge: $(grep '^pr merge' "$STATE/gh.log")"
 log_has gh.log "pr merge 81 "
 [[ "$(last_line)" == "SHIP: OK" ]] || fail "dependent drop: $(last_line)"
-ok "a bisect that drops a pull request drops its dependents too, without a comment, and ships the rest"
+ok "a bisect that drops a pull request drops its dependents too, without a comment, and ships the rest; the prefix the bisect already passed is not gated again"
 
 # === the flake guard ==================================================================================
 fresh
@@ -718,7 +740,7 @@ fresh
 mkpr 67
 printf 'api\trunning\thealthy\nworker\texited\t\ncaddy\trestarting\t\nparser\trunning\tunhealthy\n' >"$STATE/remote/ps"
 printf '%s\n' caddy tailscale api worker parser >"$STATE/remote/services"
-printf 'INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.\n0041_old\n' >"$STATE/remote/alembic"
+printf '0041_old\n' >"$STATE/remote/alembic"
 {
   printf 'api-1  | {"ts": "2026-10-14T10:00:00.000+00:00", "level": "error", "logger": "app", "msg": "%s"}\n' "$CANARY"
   printf 'worker-1  | {"ts": "2026-10-14T10:00:01.000+00:00", "level": "critical", "logger": "arq", "msg": "%s"}\n' "$CANARY"
@@ -744,6 +766,15 @@ touch "$STATE/ssh_fail"
 run 1 ship --approved
 out_has "SHIP: FAIL ssh jetson-test failed"
 ok "an unreachable Jetson exits 1"
+
+fresh
+mkpr 70
+echo 12 >"$STATE/ssh_truncate"
+run 1 ship --approved
+out_has "SHIP: FAIL the Jetson after the deploy: the check on the Jetson ended early"
+out_has "memory not read"
+out_has "alembic -; memory - of - MB used"
+ok "a Jetson check whose output stops early is a failure that says so"
 
 fresh
 mkpr 69
@@ -780,6 +811,31 @@ out_has "not merged: #85"
 log_lacks gh.log "pr merge 85"
 [[ ! -e "$STATE/deploy.log" ]] || fail "deployed after a head moved between two merges"
 ok "a head that moves between two merges stops the run with what merged and what did not"
+
+fresh
+mkpr 91
+mkpr 92
+echo 91 >"$STATE/state_read_fail"
+run 0 ship --approved
+[[ ! -e "$STATE/state_read_fail" ]] || fail "the state read of #91 after its merge never failed"
+[[ "$(last_line)" == "SHIP: OK" ]] || fail "state read failed once after a merge: $(last_line)"
+out_has "merged:   #91, #92"
+[[ "$(grep -cxF 'pr view 91 --json state --jq .state' "$STATE/gh.log")" -ge 2 ]] || fail "the state of #91 was not read again"
+ok "a state read that fails right after a merge is retried once, the pull request counts as merged"
+
+fresh
+for n in 93 94 95; do mkpr "$n"; done
+echo 94 >"$STATE/term_after_merge"
+run 130 ship --approved
+out_has "merged:   #93, #94"
+out_has "not merged: #95"
+out_has "interrupted: while merging #94, which is MERGED on GitHub"
+out_has "SHIP: FAIL interrupted during the merges: nothing deployed"
+log_has gh.log "project item-edit --project-id PVT_kwHOA9eVYc4BmeB8 --id ITEM_1093"
+log_lacks gh.log "pr merge 95"
+[[ ! -e "$STATE/deploy.log" ]] || fail "deployed after an interrupt"
+[[ ! -e "$MAIN/.local-check/ship.lock" ]] || fail "the lock was left after an interrupt"
+ok "TERM during the merges prints what merged and what did not, moves the cards of the merged, exits 130, deploys nothing"
 
 fresh
 mkpr 86
@@ -836,6 +892,11 @@ keep=(
   "npm_config_cache is set"
   "pypi-mirror-eu is the index"
   "the acca of the gate, the sgx module"
+  "ssl.create_default_context() was called"
+  "the file sl.py has 3 lines, hvs.py has 4"
+  "r8_ab, glc_ab and gsk_ab are short names"
+  "a vault path hvs. is documented"
+  "the pplx module and the figd module"
   ""
 )
 # The secret shapes are cut in two in this file, so that the secret scan of the repository and
@@ -900,6 +961,20 @@ withhold=(
   "{'api_key': 'abc'}"
   "my_creds"": abc"
   "\"key\""": \"abc\""
+  "gs""k_abcdef0123456789"
+  "gl""c_abcdef0123456789"
+  "gl""sa_abcdef0123456789"
+  "gl""ptt-abcdef0123456789"
+  "dck""r_pat_abcdef0123456789"
+  "snt""rys_abcdef0123456789"
+  "fig""d_abcdef0123456789"
+  "r""8_abcdef0123456789"
+  "pp""lx-abcdef0123456789"
+  "ls""v2_pt_abcdef0123456789"
+  "xo""xe-1-abcdef0123456789"
+  "xo""xe.xoxp-1-abcdef0123456789"
+  "token h""vs.abcdef0123456789"
+  "dropbox s""l.abcdef0123456789"
 )
 for line in "${keep[@]}"; do
   got="$(printf '%s\n' "$line" | "$ROOT/ops/ship.sh" --redact)"
