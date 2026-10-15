@@ -1,0 +1,8 @@
+{
+  "headline": "Platform engineer",
+  "summary": "Platform engineer for product teams.",
+  "experience": [
+    {"employer_key": "example-corp", "bullets": ["Designed the deployment pipeline."]},
+    {"employer_key": "harbor-sample-works", "role": "Intern", "bullets": ["Wrote internal tools."]}
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "headline": "Platform engineer",
+  "summary": "Platform engineer for product teams.",
+  "photo": "data:image/png;base64,AAAA",
+  "highlights": [
+    "First highlight",
+    "",
+    "Second highlight",
+    "Third highlight",
+    "Fourth highlight"
+  ],
+  "experience": [
+    {"employer_key": "example-corp", "role": 7, "bullets": ["Designed the deployment pipeline."]},
+    {"employer_key": "sample-labs", "bullets": ["Ran the reviews after each outage. Ran the reviews after each outage. Ran the reviews after each outage. Ran the reviews after each outage. Ran the reviews after each outage. Ran the reviews after each outage. Ran the reviews after each outage. Ran the reviews after each outage. Ran the reviews after each outage. Ran the reviews after each outage. "]},
+    {"employer_key": "example-corp", "bullets": ["A second entry for the same employer."]}
+  ],
+  "notes": "Kept from the command line."
+}
