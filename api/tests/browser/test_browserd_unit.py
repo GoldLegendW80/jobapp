@@ -262,14 +262,19 @@ def test_the_control_secret(secret: bytes, header: str, ok: bool) -> None:
     assert app.authorized(secret, {"authorization": header} if header else {}) is ok
 
 
-def test_the_router_list_has_b4_and_the_placeholder_of_b5() -> None:
+def test_the_router_list_has_the_routes_of_b4_and_b5() -> None:
     text = (ROOT / "browser/browserd/app.py").read_text(encoding="utf-8")
     assert "    *live.ROUTES,  # B4" in text
-    assert "    # *tools.ROUTES,  # B5" in text
     paths = {(r.method, r.pattern.pattern) for r in app.ROUTES}
     assert ("POST", "/leases") in paths
     assert ("GET", "/healthz") in paths
     assert ("POST", r"/leases/(?P<lease_id>[0-9a-f-]{36})/live/input") in paths
+    methods = {
+        r.method
+        for r in app.ROUTES
+        if "/tools/" in r.pattern.pattern or "/files/" in r.pattern.pattern
+    }
+    assert methods == {"POST", "PUT"}  # B5: browserd/tools/routes.py
 
 
 @pytest.mark.parametrize(
