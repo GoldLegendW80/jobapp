@@ -519,6 +519,28 @@ function FixedBlock({ form }: { form: Form }) {
   );
 }
 
+/** A line of the form: the field, its label, its hard limit, one line or several. */
+type Line = [field: string, label: string, max: number, multiline?: boolean];
+
+function Lines({ form, lines }: { form: Form; lines: Line[] }) {
+  return lines.map(([field, label, max, multiline]) => (
+    <TextField
+      key={field}
+      form={form}
+      path={[field]}
+      label={label}
+      max={max}
+      multiline={multiline}
+    />
+  ));
+}
+
+const CV_TOP: Line[] = [
+  ["target", "What this CV is for (not printed)", MAX.line],
+  ["headline", "Headline", MAX.headline],
+  ["summary", "Summary", MAX.summary, true],
+];
+
 export function CvForm({
   form,
   base,
@@ -533,25 +555,7 @@ export function CvForm({
   return (
     <>
       <Section title="Top of the page">
-        <TextField
-          form={form}
-          path={["target"]}
-          label="What this CV is for (not printed)"
-          max={MAX.line}
-        />
-        <TextField
-          form={form}
-          path={["headline"]}
-          label="Headline"
-          max={MAX.headline}
-        />
-        <TextField
-          form={form}
-          path={["summary"]}
-          label="Summary"
-          max={MAX.summary}
-          multiline
-        />
+        <Lines form={form} lines={CV_TOP} />
         <ListField
           form={form}
           path={["highlights"]}
@@ -573,12 +577,9 @@ export function CvForm({
       <Skills form={form} />
       {base ? <FixedBlock form={form} /> : null}
       <Section title="For you">
-        <TextField
+        <Lines
           form={form}
-          path={["notes"]}
-          label="Notes (not printed)"
-          max={MAX.notes}
-          multiline
+          lines={[["notes", "Notes (not printed)", MAX.notes, true]]}
         />
       </Section>
     </>
@@ -588,35 +589,15 @@ export function CvForm({
 export function LetterForm({ form }: { form: Form }) {
   return (
     <Section title="The letter">
-      <TextField
+      <Lines
         form={form}
-        path={["target"]}
-        label="What this letter is for (not printed)"
-        max={MAX.line}
-      />
-      <TextField
-        form={form}
-        path={["headline"]}
-        label="Headline"
-        max={MAX.headline}
-      />
-      <TextField
-        form={form}
-        path={["recipient"]}
-        label="Recipient"
-        max={MAX.line}
-      />
-      <TextField
-        form={form}
-        path={["subject"]}
-        label="Subject"
-        max={MAX.line}
-      />
-      <TextField
-        form={form}
-        path={["salutation"]}
-        label="Salutation"
-        max={MAX.line}
+        lines={[
+          ["target", "What this letter is for (not printed)", MAX.line],
+          ["headline", "Headline", MAX.headline],
+          ["recipient", "Recipient", MAX.line],
+          ["subject", "Subject", MAX.line],
+          ["salutation", "Salutation", MAX.line],
+        ]}
       />
       <ListField
         form={form}
@@ -627,12 +608,7 @@ export function LetterForm({ form }: { form: Form }) {
         itemMax={MAX.paragraph}
         multiline
       />
-      <TextField
-        form={form}
-        path={["closing"]}
-        label="Closing"
-        max={MAX.line}
-      />
+      <Lines form={form} lines={[["closing", "Closing", MAX.line]]} />
     </Section>
   );
 }
