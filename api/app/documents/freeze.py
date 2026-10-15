@@ -15,8 +15,11 @@ module is the one place that decides which version that is, and what the apply m
 - `on_rendered`: the approved version whose PDF is still on its way when the posting reaches
   `applied` is the one to freeze, not an older rendered one, and the trigger of 0015 refuses a
   PDF on a frozen row. So `on_status` leaves that document, and the render job calls this after
-  it stores a PDF, under the document's lock: while the posting is `applied` and the document
-  has an approved version and nothing frozen, the hook's choice is made again there.
+  it stores a PDF, under the document's lock: when the version just stored is the approved one,
+  the posting is `applied` and nothing of the document is frozen, it freezes that version. The
+  render of any other version freezes nothing: a version not approved never becomes what was
+  sent by landing, and an approval given after `applied` freezes only when the render of that
+  version lands after it.
 - `current`: what the apply module sends, the approved version else the latest rendered one,
   of the posting's CV and letter, with the reason a document is not there yet.
 - `freeze`: the apply module attaches a version to a submission. It never refuses on content
@@ -248,12 +251,16 @@ def _freeze_applied(db: Session, user_id: uuid.UUID, document_id: uuid.UUID, at:
     return True
 
 
-def on_rendered(db: Session, document: Document, at: datetime) -> None:
-    """The render job, after it stored a PDF on a version of `document`, under the document's
-    lock and in the same transaction: see the module text. Reads the posting's status after
-    that lock, and `on_status` takes the document's lock before it reads the versions, so of a
-    status change and a stored PDF the one that commits second sees the other."""
+def on_rendered(db: Session, document: Document, version: DocumentVersion, at: datetime) -> None:
+    """The render job, after it stored a PDF on `version` of `document`, under the document's
+    lock and in the same transaction: see the module text. Only an approved `version` can
+    freeze, and then it is the hook's choice (the one approved version, now rendered). Reads
+    the posting's status after that lock, and `on_status` takes the document's lock before it
+    reads the versions, so of a status change and a stored PDF the one that commits second
+    sees the other."""
     if document.scope is not Scope.posting or document.posting_id is None:
+        return
+    if version.approved_at is None:
         return
     # The sessions do not autoflush, and `lock_document` reloads the row: the caller's state first.
     db.flush()
@@ -262,14 +269,7 @@ def on_rendered(db: Session, document: Document, at: datetime) -> None:
     ).scalar_one_or_none()
     if status is not JobStatus.applied:
         return
-    approved = db.execute(
-        sa.select(DocumentVersion.id).where(
-            DocumentVersion.document_id == document.id,
-            DocumentVersion.user_id == document.user_id,
-            DocumentVersion.approved_at.is_not(None),
-        )
-    ).first()
-    if approved is not None and _freeze_applied(db, document.user_id, document.id, at):
+    if _freeze_applied(db, document.user_id, document.id, at):
         logger.info(
             "documents.freeze.rendered",
             extra={"document_id": str(document.id), "user_id": str(document.user_id)},
