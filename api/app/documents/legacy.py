@@ -103,42 +103,26 @@ class Reading:
         return not self.left_out
 
     def notes(self) -> list[dict[str, Any]]:
-        """The draft's notes: one `legacy_invalid` per left out path (at most NOTED_MAX, the
-        field being the content's top level name), then one `unknown_employer` per entry."""
+        """The draft's notes: one `legacy_invalid` per left out path (at most NOTED_MAX, on the
+        content's top level field it belongs to), then one `unknown_employer` per entry."""
+        names = _names(type(self.content))
         out = []
-        shown = self.left_out[:NOTED_MAX]
-        for path, code in shown:
+        for path, code in self.left_out[:NOTED_MAX]:
             top = path.split(".", 1)[0]
-            out.append(
-                {
-                    **asdict(
-                        rules.Issue(
-                            top if top in _names(self.content) else "",
-                            0,
-                            0,
-                            LEGACY_INVALID,
-                            "invalid",
-                        )
-                    ),
-                    "legacy_path": path,
-                    "reason": code,
-                }
-            )
+            out.append(_note(top if top in names else "", path, code))
         if len(self.left_out) > NOTED_MAX:
-            out.append(
-                {
-                    **asdict(rules.Issue("", 0, 0, LEGACY_INVALID, "invalid")),
-                    "legacy_path": "",
-                    "reason": f"{len(self.left_out) - NOTED_MAX} more",
-                }
-            )
+            out.append(_note("", "", f"{len(self.left_out) - NOTED_MAX} more"))
         return out + [asdict(issue) for issue in self.unknown_employers]
 
 
-def _names(model: c.CvContent | c.LetterContent | type[c.CvContent | c.LetterContent]) -> list[str]:
+def _note(field: str, path: str, reason: str) -> dict[str, Any]:
+    issue = rules.Issue(field, 0, 0, LEGACY_INVALID, "invalid")
+    return {**asdict(issue), "legacy_path": path, "reason": reason}
+
+
+def _names(model: type[c.CvContent | c.LetterContent]) -> list[str]:
     """The content's field names as JSON spells them (`schema` for the schema version)."""
-    found = model.model_fields if isinstance(model, type) else type(model).model_fields
-    return [info.alias or name for name, info in found.items()]
+    return [info.alias or name for name, info in model.model_fields.items()]
 
 
 def _first_error(kind: c.Kind, data: dict[str, Any]) -> c.FieldError | None:
