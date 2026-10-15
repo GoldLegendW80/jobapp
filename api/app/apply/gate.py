@@ -30,9 +30,9 @@ field approved, stores the hash on the application and moves it to `approved` (t
 is approved the same way; the submit lease records `rehearsed` before the click. The gate never
 freezes a document: the freeze is in the transaction that records the click (`submit.record`).
 
-A refusal by a kill switch, the authorisation or the documents leaves the application `ready`; a
-refusal by never apply or a duplicate ends it `blocked` with the code (`posting_closed` for a
-closed posting), as at the start (A2).
+A refusal by a kill switch, the authorisation, the caps or the documents leaves the application
+`ready`; a refusal by never apply or a duplicate ends it `blocked` with the code
+(`posting_closed` for a closed posting), as at the start (A2).
 
 The decision is not the last word: the submit lease runs the checks that can change after it
 again under the same locks, when it starts and just before the click (`submit.recheck`: the

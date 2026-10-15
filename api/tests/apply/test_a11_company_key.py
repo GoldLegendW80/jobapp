@@ -19,6 +19,8 @@ ONE_COMPANY = [
     "  Example   Robotics  ",
     "Example Robotics",
     "Example\tRobotics",
+    "Exam\u200bple Robotics",
+    "Exam\u00adple Robotics",
     "Example-Robotics",
     "Example‐Robotics",
     "example_robotics",

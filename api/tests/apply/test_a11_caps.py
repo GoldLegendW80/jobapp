@@ -5,6 +5,8 @@ commits, the second tries again). Every company is invented."""
 
 from __future__ import annotations
 
+import itertools
+import random
 import secrets
 from collections.abc import Iterator
 from datetime import datetime, timedelta
@@ -365,6 +367,28 @@ def test_the_daily_count_of_a_host_is_any_24_hours(db: Session, person_a: Person
         db, person_a, state=State.approved, ats="lever", form_url="https://jobs.lever.co/x/1"
     )
     assert caps.next_slot(db, lever, AT) is None
+
+
+def test_the_pace_holds_for_any_sequence_of_attempts(db: Session, person_a: Person) -> None:
+    """The property: whatever the times people try, two clicks of one host are never closer than
+    the interval and never more than the daily count in any 24 hours, and an attempt is refused
+    only until a time after it."""
+    pace = caps.pace_of("ashby")
+    other = a11.clicked(db, person_a.user_id, AT - DAY)
+    found = mine(db, person_a, state=State.approved)
+    draw = random.Random(248)  # noqa: S311 (test data, not a secret)
+    now, clicks = AT, []
+    for _ in range(300):
+        now += timedelta(seconds=draw.choice([1, 30, 90, 179, 180, 181, 600, 3600, 4 * 3600]))
+        until = caps.next_slot(db, found, now)
+        if until is None:
+            a11.click(db, other, now)
+            clicks.append(now)
+        else:
+            assert until > now
+    assert len(clicks) > pace.daily_max
+    assert all(b - a >= pace.interval for a, b in itertools.pairwise(clicks))
+    assert all(sum(t <= c < t + DAY for c in clicks) <= pace.daily_max for t in clicks)
 
 
 def test_a_rehearsal_is_never_paced(
