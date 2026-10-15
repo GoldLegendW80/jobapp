@@ -247,7 +247,7 @@ ok "the smoke streams the check to the Jetson; its TS_AUTHKEY grep finds quoted 
 
 step "deploy.yml: the .env check before the build; the rollback trap from the sync until the new stack is up"
 yml=.github/workflows/deploy.yml
-line_of() { grep -nF -- "$1" "$yml" | head -n 1 | cut -d: -f1; }
+line_of() { grep -nF -- "$1" "$yml" | head -n 1 | cut -d: -f1 || true; }
 check="$(line_of 'bash ops/env_check.sh "$app/.env" "$app/.env"')"
 build="$(line_of '::group::build')"
 sync="$(line_of 'rsync -a --delete --exclude-from=.rsyncignore')"
@@ -255,7 +255,8 @@ trap_on="$(line_of "trap 'echo \"::error::a deploy command failed")"
 trap_off="$(line_of 'trap - ERR')"
 backup="$(line_of '::group::backup before migrations')"
 # Issue #81: the migrations run in a one off container before compose up, the trap still set.
-migrations="$(line_of 'if ! bash ops/migrate.sh; then')"
+# Their output goes to the logs folder (MIGRATE_LOG_DIR), so the call carries that variable.
+migrations="$(line_of 'bash ops/migrate.sh; then')"
 up="$(line_of 'up -d --remove-orphans --wait --wait-timeout 180 || rollback')"
 for v in check build sync trap_on trap_off backup migrations up; do
   [[ -n "${!v}" ]] || fail "deploy.yml: $v not found"
@@ -264,7 +265,9 @@ done
   fail "deploy.yml order: check $check build $build sync $sync trap $trap_on backup $backup migrations $migrations up $up untrap $trap_off"
 # trap - ERR is the line just before the smoke group (the first match of tests/jetson_smoke.sh is
 # in the header comment, so look for the step's own line).
-smoke_run="$(grep -nF 'DEPLOY_HOST=local JETSON_SMOKE_FULL=0 tests/jetson_smoke.sh' "$yml" | cut -d: -f1)"
+# The step's own line carries JETSON_SMOKE_LOG (its detail goes to the logs folder).
+smoke_run="$(line_of 'DEPLOY_HOST=local JETSON_SMOKE_FULL=0 JETSON_SMOKE_LOG=')"
+[[ -n "$smoke_run" ]] || fail "deploy.yml: the smoke run not found"
 ((trap_off < smoke_run)) || fail "the trap is still set when the smoke runs"
 grep -qF 'reported no backup file"; restore_previous; exit 1;' "$yml" || fail "the explicit backup failure does not restore"
 grep -qF 'a smoke that fails after that does NOT roll back, on purpose' "$yml" || fail "header lacks the no-rollback note"
