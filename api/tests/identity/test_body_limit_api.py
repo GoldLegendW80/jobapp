@@ -240,7 +240,7 @@ UNBOUNDED_SCHEMAS = {
     ),
     ("PUT", "/api/documents/{document_id}/draft"): (
         "content is free JSON validated by app.documents.content, each field and list capped; "
-        "its real limit is the 1 MiB default class"
+        "its real limit is its own class, the content's raw cap and room for escapes"
     ),
     ("PUT", "/api/profile/{section}"): (
         "data is validated per section; facts at most 200,000 bytes. Its real limit is the "
