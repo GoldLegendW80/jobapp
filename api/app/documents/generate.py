@@ -80,6 +80,9 @@ logger = logging.getLogger("app.documents.generate")
 
 # What a failed generation records (`document_generations.error`).
 ERRORS = ("invalid_output", "no_result", "token_limit", "binding_gone", "run_failed")
+# A key of a click's CV generation estimate: the click asked for both kinds, so the letter
+# follows the new CV even when it has a version (`start_letter`; D10's "Write now").
+LETTER_FOLLOWS = "letter_follows"
 # The service of a run's context that queues renders (tests); else a Queue on REDIS_URL.
 QUEUE_SERVICE = "documents_queue"
 # The recorded streams a writer replays on the fake backend when its caller names none.
@@ -413,10 +416,11 @@ def start_letter(
 ) -> uuid.UUID | None:
     """Create and start the letter that follows a CV (module docstring, 3): the CV's `posting`
     generation of run `run_id` is done, of an `auto` or `click` trigger, and the posting's letter
-    has no version yet. The letter's generation takes the CV's estimate, ceiling and base CV, and
-    its document the CV's template. Returns the run to enqueue, else None (nothing to chain, a
-    generation already open for the letter, or the person's runs all busy: the letter then
-    stays unwritten and "Write now" writes it)."""
+    has no version yet, or the click asked for both kinds (its estimate carries LETTER_FOLLOWS:
+    the letter is written again, from the new CV). The letter's generation takes the CV's
+    estimate, ceiling and base CV, and its document the CV's template. Returns the run to
+    enqueue, else None (nothing to chain, a generation already open for the letter, or the
+    person's runs all busy: the letter then stays unwritten and "Write now" writes it)."""
     with sessions() as db:
         found = db.execute(
             sa.select(DocumentGeneration.user_id, DocumentGeneration.document_id).where(
@@ -439,8 +443,12 @@ def start_letter(
         ):
             return None
         letter = store.get_or_create(db, cv.user_id, cv.posting_id, Kind.letter, at=at)
-        if _has_version(db, letter):
+        asked = parent.trigger is GenerationTrigger.click and bool(
+            parent.estimate.get(LETTER_FOLLOWS)
+        )
+        if _has_version(db, letter) and not asked:
             return None  # the person's letter is not written again behind their back
+        figures = {k: v for k, v in parent.estimate.items() if k != LETTER_FOLLOWS}
         try:
             generation = create(
                 db,
@@ -448,7 +456,7 @@ def start_letter(
                 GenerationMode.posting,
                 parent.trigger,
                 parent.base_document_id or cv.base_document_id,
-                parent.estimate,
+                figures,
                 parent.token_ceiling,
                 at=at,
             )
