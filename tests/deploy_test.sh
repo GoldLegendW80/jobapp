@@ -49,6 +49,7 @@ run() {
   [[ "$got" == "$want" ]] || fail "$* exited $got, expected $want: $(head -c 400 "$WORK/out")"
 }
 out_has() { grep -q -- "$1" "$WORK/out" || fail "output lacks '$1': $(head -c 400 "$WORK/out")"; }
+out_lacks() { ! grep -q -- "$1" "$WORK/out" || fail "output holds '$1': $(grep -- "$1" "$WORK/out" | head -c 400)"; }
 
 step "shellcheck"
 SCRIPTS=(deploy.sh ops/db.sh ops/previous.sh ops/migrate.sh ops/runner/entrypoint.sh ops/runner/job-guard.sh tests/deploy_test.sh tests/jetson_smoke.sh tests/backup_test.sh
@@ -241,7 +242,7 @@ if command -v gh >/dev/null; then
   ok "runner status: an unreachable host fails with the ssh message"
 fi
 
-step "runner image: the job guard is baked in and refuses every job but deploy.yml from main"
+step "runner image: the job guard is baked in and refuses every job but deploy.yml and ops.yml from main"
 grep -q '^ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/runner-job-guard.sh$' ops/runner/Dockerfile ||
   fail "ops/runner/Dockerfile does not set ACTIONS_RUNNER_HOOK_JOB_STARTED"
 grep -q '^COPY --chmod=755 job-guard.sh /usr/local/bin/runner-job-guard.sh$' ops/runner/Dockerfile ||
@@ -261,11 +262,18 @@ guard 1 GoldLegendW80/jobapp "$main_ref" pull_request
 guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/deploy.yml@refs/heads/evil" workflow_dispatch
 out_has "refused: workflow"
 guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/ci.yml@refs/heads/main" workflow_dispatch
+ops_ref="GoldLegendW80/jobapp/.github/workflows/ops.yml@refs/heads/main"
+guard 0 GoldLegendW80/jobapp "$ops_ref" workflow_dispatch
+guard 1 GoldLegendW80/jobapp "$ops_ref" push
+guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/ops.yml@refs/heads/evil" workflow_dispatch
+out_has "refused: workflow"
+guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/ops.yml.evil.yml@refs/heads/main" workflow_dispatch
+guard 1 someone/fork "someone/fork/.github/workflows/ops.yml@refs/heads/main" workflow_dispatch
 guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/deploy.yml@refs/pull/1/merge" pull_request
 guard 1 someone/fork "someone/fork/.github/workflows/deploy.yml@refs/heads/main" workflow_dispatch
 out_has "refused: repository"
 guard 1 "" "" ""
-ok "hook set in the image; allowed: deploy.yml@main on workflow_dispatch; refused: workflow_run (issue #116), push, pull_request, another branch, another workflow, a fork, no context"
+ok "hook set in the image; allowed: deploy.yml@main and ops.yml@main on workflow_dispatch; refused: ops.yml on push, from another branch or a fork, a look-alike name, workflow_run (issue #116), push, pull_request, another branch, another workflow, a fork, no context"
 
 step "runner install and remove against a fake Jetson and a fake gh: the token never shows"
 # A canary token: install and remove must pass it to the container on stdin only, never on a
@@ -1639,7 +1647,8 @@ for f in "${odd[@]}"; do printf 'not a dump of this script\n' >"$ROT/backups/$f"
 nl=$'jobapp-2026-09-04T000000.dump\njobapp-2026-09-05T000000.dump'
 printf 'a name with a line break\n' >"$ROT/backups/$nl"
 printf 'log\n' >"$ROT/backups/backup.log"
-mkdir "$ROT/backups/jobapp-2026-09-02T000000.dump" "$ROT/backups/previous-tree"
+mkdir "$ROT/backups/jobapp-2026-09-02T000000.dump" "$ROT/backups/previous-tree" "$ROT/backups/logs"
+printf 'the private output of a deploy\n' >"$ROT/backups/logs/migrate-20260901T000000Z-1.log"
 # What every deploy leaves next to the dumps (deploy.yml, ops/previous.sh save-tree): passed over.
 printf '.env*\n' >"$ROT/backups/previous-tree.rsyncignore"
 printf 'name: previous release\n' >"$ROT/backups/previous-tree/compose.yml"
@@ -1667,9 +1676,10 @@ done
 grep -qF "left alone in $ROT/backups/incoming, not a dump of this script: local-truncated.dump (outside the retention, delete it by hand)" "$WORK/out" ||
   fail "the odd upload is not reported: $(cat "$WORK/out")"
 out_has "left alone: $ROT/backups/deploys is a symbolic link or a file, not a folder of dumps"
-grep -q "not a dump of this script: \(backup\.log\|\.lock\|\.deploy\.lock\|previous-tree\|incoming\)" "$WORK/out" &&
+grep -q "not a dump of this script: \(backup\.log\|\.lock\|\.deploy\.lock\|previous-tree\|incoming\|logs\)" "$WORK/out" &&
   fail "the script reports files the app keeps there itself (the review's N1: previous-tree.rsyncignore): $(cat "$WORK/out")"
 [[ -f "$ROT/backups/previous-tree.rsyncignore" && -f "$ROT/backups/previous-tree/compose.yml" ]] || fail "the saved tree of the deploy was touched"
+[[ -f "$ROT/backups/logs/migrate-20260901T000000Z-1.log" ]] || fail "the deploy's logs folder was touched"
 [[ "$(grep -c "^rm -f -- " "$ROT/order")" == 2 ]] || fail "more than the two old dumps reached rm: $(cat "$ROT/order")"
 ok "left alone and reported, run after run: no timestamp, a date that does not exist, another suffix or prefix, an upper case tag, a partial file, a name with a line break, a folder and a symbolic link named like old dumps (the file it points to untouched), a deploys/ that is a link"
 rot 0 "$NOW" -- retention
@@ -2162,6 +2172,12 @@ case "$args" in
       echo "OperationalError: postgresql+psycopg://jobapp:CANARYPASSWORD@db:5432/jobapp refused" >&2
     fi
     if [[ -n "${FAKE_FAIL_MIGRATE:-}" ]]; then
+      # What a failing data migration prints: SQL with its parameters, Postgres' DETAIL with a
+      # row's values, an address. None of it may reach the public run log.
+      echo "Traceback (most recent call last):" >&2
+      echo "sqlalchemy.exc.IntegrityError: (psycopg.errors.UniqueViolation) duplicate key" >&2
+      echo "DETAIL:  Key (email)=(e2e-rowvalue@example.org) already exists. 10.1.2.3" >&2
+      echo "[SQL: UPDATE users SET email=%(email)s] [parameters: {'email': 'e2e-rowvalue@example.org'}]" >&2
       echo "psycopg.errors.DuplicateColumn: column \"credential_kind\" already exists" >&2
       exit 1
     fi
@@ -2175,6 +2191,7 @@ case "$args" in
     [[ -z "${FAKE_FAIL_BROWSER_BUILD:-}" ]] || { echo "E: Version '147.0.1-1~deb12u1' for 'chromium' was not found" >&2; exit 1; }
     ;;
   *" config --format json") printf '{\n  "name": "jobapp",\n  "services": {}\n}\n' ;;
+  *" ps -a --format "*) printf 'api exited health= exit=1\nworker running health=healthy exit=0 {"said": "e2e-leak@example.org"}\n' ;;
   "volume inspect jobapp_pgdata") [[ -z "${FAKE_NO_VOLUME:-}" ]] || exit 1 ;;
   *" exec -T db sh -c psql "*"pg_terminate_backend"*) echo 1 ;;
 esac
@@ -2205,10 +2222,13 @@ mig() {
   local want="$1"
   shift
   rm -f "$MIG/calls" "$MIG/db-up" "$MIG/ups"
+  rm -rf "$MIG/logs"
   : >"$MIG/calls"
-  run "$want" in_dir "$MIG/app" env -u COMPOSE -u MIGRATE_TIMEOUT_S -u MIGRATE_CONTAINER "$@" \
-    FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh"
+  run "$want" in_dir "$MIG/app" env -u COMPOSE -u MIGRATE_TIMEOUT_S -u MIGRATE_CONTAINER -u BACKUP_DIR \
+    MIGRATE_LOG_DIR="$MIG/logs" "$@" FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh"
 }
+# mig_log: the whole output the last run kept (one file)
+mig_log() { cat "$MIG"/logs/migrate-*.log; }
 # mig_calls_are <expected, one per line>: every docker and timeout call of the last run, in order
 mig_calls_are() {
   diff <(printf '%s\n' "$@") "$MIG/calls" >/dev/null || fail "calls: $(cat "$MIG/calls")"
@@ -2232,19 +2252,28 @@ untouched "$MIG/calls"
 grep -Eq -- '--service-ports|--publish| -p ' "$MIG/calls" && fail "the one off container publishes a port: $(cat "$MIG/calls")"
 ok "at head: one container of the api service (--rm, --no-deps, no port, named), nothing to apply, the running db left alone, exit 0"
 mig 0 FAKE_PENDING=2
-out_has "Running upgrade 0010 -> 0011"
+out_has "   step: 0010 -> 0011"
+out_has "   step: 0011 -> 0012"
 out_has "migrations applied: 2"
-out_has "0012 (head)"
+out_has "   revision: 0012 (head)"
+out_lacks "Running upgrade"
+out_lacks "INFO"
+mig_log | grep -q "Running upgrade 0011 -> 0012, step 2" || fail "the kept output lacks alembic's lines: $(mig_log)"
 untouched "$MIG/calls"
-ok "pending migrations: alembic's lines in the log, the count and the revision reached; nothing restarted"
+ok "pending migrations: each step and the revision reached as figures, the count; alembic's own lines only in the kept file; nothing restarted"
 mig 1 FAKE_PENDING=1 FAKE_FAIL_MIGRATE=1
-out_has "DuplicateColumn"
-out_has "alembic upgrade head failed (exit 1, see above)"
+out_has "   failed in step: 0010 -> 0011"
+out_has "   error: psycopg.errors.DuplicateColumn"
+out_has "alembic upgrade head failed (exit 1; the whole output is on this machine in migrate-"
 out_has "the schema is what it was, and nothing was restarted"
+for leak in rowvalue "parameters" "DETAIL" "10.1.2.3" "already exists" "Traceback"; do out_lacks "$leak"; done
+mig_log | grep -q "e2e-rowvalue@example.org" || fail "the kept output lacks the row values: $(mig_log)"
+[[ "$(find "$MIG/logs" -maxdepth 0 -perm 700 | wc -l | tr -d ' ')" == 1 ]] || fail "the logs folder is not 700: $(ls -ld "$MIG/logs")"
+[[ "$(find "$MIG/logs" -name 'migrate-*.log' -perm 600 | wc -l | tr -d ' ')" == 1 ]] || fail "the kept output is not 600: $(ls -l "$MIG/logs")"
 grep -q "migrations applied" "$WORK/out" && fail "a failed migration was reported as applied"
 untouched "$MIG/calls"
 grep -qx "docker rm -f jobapp-migrate" "$MIG/calls" || fail "the one off container was not removed after a failure"
-ok "a failing migration: exit 1 with alembic's error and what to do, the stack untouched, the container removed"
+ok "a failing migration: exit 1 with the step, the exception's class and what to do, no SQL, parameter, row value or address in the output (kept in a 600 file of a 700 folder), the stack untouched, the container removed"
 mig 1 FAKE_TIMEOUT=1 MIGRATE_TIMEOUT_S=7
 out_has "did not finish within 7s and were stopped"
 out_has "nothing was restarted"
@@ -2308,9 +2337,23 @@ out_has "db did not become healthy within 120s: no migration was run"
 grep -q " run --rm " "$MIG/calls" && fail "a migration ran without a database"
 ok "a db that does not start: exit 1 before any migration"
 mig 1 FAKE_LEAK=1 FAKE_FAIL_MIGRATE=1
-out_has "postgresql+psycopg://\*\*\*:\*\*\*@db:5432/jobapp"
-grep -q "CANARYPASSWORD" "$WORK/out" && fail "a password in a URL reached the log"
-ok "credentials in anything shaped like a URL are masked on the way to the log"
+out_lacks "CANARYPASSWORD"
+out_lacks "postgresql"
+mig_log | grep -q "postgresql+psycopg://\*\*\*:\*\*\*@db:5432/jobapp" || fail "the URL is not in the kept output, masked: $(mig_log)"
+mig_log | grep -q "CANARYPASSWORD" && fail "a password in a URL reached the kept output"
+ok "credentials in anything shaped like a URL are masked in the kept output, and the output never reaches the log"
+mkdir -p "$MIG/keep"
+for n in $(seq 10 34); do printf 'old\n' >"$MIG/keep/migrate-20260901T0000${n}Z-1.log"; done
+run 0 in_dir "$MIG/app" env -u COMPOSE -u BACKUP_DIR MIGRATE_LOG_DIR="$MIG/keep" FAKE_DIR="$MIG" PATH="$MIG/bin:$PATH" bash "$ROOT/ops/migrate.sh"
+[[ "$(find "$MIG/keep" -name 'migrate-*.log' | wc -l | tr -d ' ')" == 21 ]] || fail "the kept outputs are not the newest 20 plus this one: $(ls "$MIG/keep")"
+[[ ! -e "$MIG/keep/migrate-20260901T000014Z-1.log" && -e "$MIG/keep/migrate-20260901T000015Z-1.log" ]] || fail "not the oldest went: $(ls "$MIG/keep")"
+mig 1 MIGRATE_LOG_DIR=relative/logs
+out_has "MIGRATE_LOG_DIR must be an absolute path"
+mig 1 MIGRATE_LOG_DIR="$MIG/app/logs"
+out_has "MIGRATE_LOG_DIR must be outside the deploy directory"
+[[ ! -e "$MIG/app/logs" ]] || fail "a logs folder was made in the deploy directory"
+grep -q " run --rm " "$MIG/calls" && fail "a migration ran with a bad MIGRATE_LOG_DIR"
+ok "the newest 20 kept outputs stay; MIGRATE_LOG_DIR must be absolute and outside the deploy directory, else nothing runs"
 for bad in abc 0 -5 1.5; do
   mig 1 MIGRATE_TIMEOUT_S="$bad"
   out_has "MIGRATE_TIMEOUT_S must be a whole number of seconds, got '$bad'"
@@ -2505,8 +2548,10 @@ migrated="$(wf_line " run --rm --no-deps -T --name jobapp-migrate api ")" upped=
   fail "a step is missing: $(cat "$MIG/calls")"
 ((tagged < built && built < dumped && dumped < migrated && migrated < upped && upped < smoked)) ||
   fail "order is tag $tagged, build $built, backup $dumped, migrate $migrated, up $upped, smoke $smoked: $(cat "$MIG/calls")"
-out_has "Running upgrade 0010 -> 0011"
+out_has "   step: 0010 -> 0011"
+out_lacks "Running upgrade"
 out_has "migrations applied: 1"
+ls "$WF/backups/logs/"migrate-*.log >/dev/null 2>&1 || fail "the migrations' output was not kept in the logs folder of the backups"
 [[ "$(wf_count " up -d --remove-orphans ")" == 1 ]] || fail "compose up ran more than once on a good deploy"
 [[ "$(wf_count "exec -T api alembic upgrade")" == 0 ]] || fail "a migration ran in the started api container"
 [[ "$(cat "$WF/app/.deployed-commit")" == "$WF_COMMIT" ]] || fail ".deployed-commit not written"
@@ -2515,7 +2560,12 @@ ok "a pending migration: :previous tagged, images built, the predeploy backup, t
 grep -qx "db.sh backup --tag predeploy-0123456789ab in $WF/backups/deploys keep=unset" "$MIG/calls" ||
   fail "the predeploy backup was given a BACKUP_KEEP of its own: $(grep '^db.sh' "$MIG/calls")"
 ok "T10: the predeploy backup names no retention of its own, so ops/db.sh applies the one of every backup (the Jetson's .env, then 7) in the predeploy folder"
-out_has "   backup: $WF/backups/deploys/jobapp-2026-10-10T120000-predeploy.dump"
+out_has "^predeploy dump: jobapp-2026-10-10T120000-predeploy.dump$"
+out_lacks "   backup: "
+grep -qx "   backup: $WF/backups/deploys/jobapp-2026-10-10T120000-predeploy.dump" "$WF/backups/logs/predeploy-0123456789ab.log" ||
+  fail "the backup's output was not kept in the logs folder"
+[[ "$(find "$WF/backups/logs" -maxdepth 0 -perm 700 | wc -l | tr -d ' ')" == 1 && -n "$(find "$WF/backups/logs/predeploy-0123456789ab.log" -perm 600)" ]] ||
+  fail "the logs folder is not 700 or the backup's output not 600: $(ls -la "$WF/backups/logs")"
 grep -q "predeploy backup: " "$WORK/out" && fail "a backup that warns of nothing left an annotation: $(cat "$WORK/out")"
 
 # The review's N12: a rotation held by the size check ends its backup well, so the deploy is
@@ -2529,15 +2579,16 @@ out_has "^::error::predeploy backup: ERROR: held for 7 runs, since jobapp-b.dump
 ok "T10: a WARNING of the predeploy backup (a held rotation, a BACKUP_KEEP above 7) is a ::warning:: annotation of the run and an ERROR line an ::error:: one; the deploy goes on, since the backup itself ended well"
 
 wf 1 FAKE_PENDING=1 FAKE_FAIL_PREDEPLOY=1
-out_has "   backup: $WF/backups/deploys/jobapp-2026-10-10T120000-predeploy.dump"
-out_has "   deleted old backup jobapp-2026-10-01T120000-predeploy.dump (9 days old, the limit is 7)"
+grep -q "deleted old backup jobapp-2026-10-01T120000-predeploy.dump (9 days old, the limit is 7)" "$WF/backups/logs/predeploy-0123456789ab.log" ||
+  fail "what the failed backup printed was not kept"
+out_lacks "deleted old backup"
 out_has "db.sh: could not delete $WF/backups/deploys/jobapp-2026-10-02T120000-predeploy.dump"
-out_has "::error::a deploy command failed: restoring the previous files and tags"
+out_has "::error::the predeploy backup failed (exit 1; its output is on the Jetson in logs/predeploy-0123456789ab.log): nothing was migrated"
 untouched "$MIG/calls"
 [[ "$(wf_count " run --rm ")" == 0 ]] || fail "a migration ran after a predeploy backup that failed"
 [[ "$(cat "$WF/app/compose.yml")" == "name: previous release" ]] || fail "the previous tree was not put back"
 [[ "$(cat "$WF/app/.deployed-commit")" == "previous-commit" ]] || fail ".deployed-commit changed"
-ok "T10: a predeploy backup that fails after its dump is written: what it had printed is in the job log with its error, the deploy stops before the migrations, the previous files are put back"
+ok "T10: a predeploy backup that fails after its dump is written: its error in the job log, what it had printed kept in the logs folder, the deploy stops before the migrations, the previous files are put back"
 
 wf 0
 out_has "already at head, nothing to apply"
@@ -2546,7 +2597,8 @@ out_has "already at head, nothing to apply"
 ok "a database already at head: a no-op, the deploy goes on"
 
 wf 1 FAKE_PENDING=1 FAKE_FAIL_MIGRATE=1
-out_has "alembic upgrade head failed (exit 1, see above)"
+out_has "alembic upgrade head failed (exit 1; the whole output is on this machine in migrate-"
+for leak in rowvalue parameters DETAIL 10.1.2.3; do out_lacks "$leak"; done
 out_has "::error::the migrations did not apply: the deploy stopped before starting the new code"
 untouched "$MIG/calls"
 [[ "$(wf_count "^smoke$")" == 0 ]] || fail "the smoke ran after a failed migration"
@@ -2584,6 +2636,11 @@ out_has "migrations applied: 1"
 out_has "::error::compose up did not become healthy: rolling back to the previous files and images"
 out_has "the schema stays migrated, it is never downgraded automatically"
 out_has "database dump taken before this deploy: $WF/backups/deploys/jobapp-2026-10-10T120000-predeploy.dump"
+out_has "^state: api exited health= exit=1$"
+out_has "^state: worker running health=healthy exit=0 - -$"
+out_lacks "e2e-leak"
+grep -q -- "ps -a --format {{.Service}} {{.State}} health={{.Health}} exit={{.ExitCode}}$" "$MIG/calls" || fail "the rollback's ps is not figures only: $(grep ' ps ' "$MIG/calls")"
+grep -qx "docker compose -f compose.yml --profile tunnel ps -a" "$MIG/calls" && fail "the rollback printed the raw ps"
 [[ "$(wf_count " up -d --remove-orphans ")" == 2 ]] || fail "the rollback did not start the previous stack: $(cat "$MIG/calls")"
 [[ "$(wf_count " run --rm ")" == 1 ]] || fail "the rollback ran alembic again: $(cat "$MIG/calls")"
 grep -q "downgrade" "$MIG/calls" && fail "the rollback downgraded the schema: $(cat "$MIG/calls")"
@@ -2611,5 +2668,79 @@ started_db="$(wf_line " up -d --wait --wait-timeout 120 db")" migrated="$(wf_lin
 ((started_db < migrated && migrated < upped)) || fail "first install order: db $started_db, migrate $migrated, up $upped"
 [[ "$(wf_count "^db.sh backup")" == 0 ]] || fail "a backup ran without a database"
 ok "first install on an empty database: db started alone, every migration applied, then the stack"
+
+step "deploy.yml: only a commit of main, or a hotfix/<name> branch with allow_branch"
+# The step "Only a commit of main", cut out of the workflow and run in a checkout of a local
+# "GitHub" (a bare repository): main, a feature branch, a hot fix branch, a tag named like one.
+awk '
+  /^      - name: Only a commit of main$/ { on = 1; next }
+  on && /^      (- name:|# )/ { exit }
+  on && /^        run: \|$/ { body = 1; next }
+  on && body { sub(/^          /, ""); print }
+' .github/workflows/deploy.yml >"$WORK/onmain.sh"
+head -n 1 "$WORK/onmain.sh" | grep -qx "set -euo pipefail" || fail "the step Only a commit of main was not found in deploy.yml"
+# shellcheck disable=SC2016 # the literal text of the workflow, not an expansion
+grep -q '\${{' "$WORK/onmain.sh" && fail "the step holds a workflow expression the test cannot run"
+grep -qx "          ALLOW_BRANCH: \${{ inputs.allow_branch }}" .github/workflows/deploy.yml || fail "allow_branch does not reach the step through its env"
+grep -A 3 '^      allow_branch:$' .github/workflows/deploy.yml | grep -qx '        type: boolean' || fail "allow_branch is not a boolean input"
+order="$(grep '^      - \(uses: actions/checkout\|name: Only a commit of main\|name: Preflight\)' .github/workflows/deploy.yml | sed 's/^      - //; s/@.*//' | tr '\n' ',')"
+[[ "$order" == "uses: actions/checkout,name: Only a commit of main,name: Preflight," ]] || fail "the check does not run right after the checkout, before any script of it: $order"
+grep -qx '          fetch-depth: 0' .github/workflows/deploy.yml || fail "the checkout is shallow: merge-base cannot tell"
+G="$WORK/onmain"
+export GIT_AUTHOR_NAME=e2e GIT_AUTHOR_EMAIL=e2e-deploy@example.org GIT_COMMITTER_NAME=e2e GIT_COMMITTER_EMAIL=e2e-deploy@example.org
+git init -q --bare "$G/origin.git"
+git init -q -b main "$G/seed"
+commit() { printf '%s\n' "$1" >"$G/seed/f" && git -C "$G/seed" add f && git -C "$G/seed" commit -q -m "$1"; }
+commit base
+git -C "$G/seed" remote add origin "$G/origin.git"
+git -C "$G/seed" push -q origin main
+git -C "$G/seed" checkout -q -b feature
+commit feature
+git -C "$G/seed" push -q origin feature
+git -C "$G/seed" checkout -q -b hotfix/fix-1 main
+commit hotfix
+git -C "$G/seed" push -q origin hotfix/fix-1
+git -C "$G/seed" tag hotfix/tagged feature
+git -C "$G/seed" push -q origin refs/tags/hotfix/tagged
+git -C "$G/seed" checkout -q main
+commit later
+git -C "$G/seed" push -q origin main
+on_main() { # on_main <expected exit> <commit to check out> <TARGET> <ALLOW_BRANCH>
+  rm -rf "$G/ws"
+  git clone -q "$G/origin.git" "$G/ws"
+  git -C "$G/ws" checkout -q --detach "$2"
+  run "$1" in_dir "$G/ws" env TARGET="$3" ALLOW_BRANCH="$4" bash -e "$WORK/onmain.sh"
+}
+main_first="$(git -C "$G/seed" rev-parse main~1)"
+on_main 0 "$main_first" "$main_first" false
+out_has "is on main"
+on_main 0 origin/main main false
+on_main 1 origin/feature feature false
+out_has "::error::refused: .* is not on main. Only main is deployed"
+on_main 1 origin/feature feature true
+out_has "allow_branch deploys a branch named hotfix/<name> only"
+on_main 1 origin/hotfix/fix-1 hotfix/fix-1 false
+out_has "is not on main"
+on_main 0 origin/hotfix/fix-1 hotfix/fix-1 true
+out_has "::warning::deploying hotfix/fix-1 at"
+on_main 0 origin/hotfix/fix-1 refs/heads/hotfix/fix-1 true
+on_main 1 origin/hotfix/fix-1 "$(git -C "$G/seed" rev-parse hotfix/fix-1)" true
+out_has "branch named hotfix/<name> only"
+on_main 1 hotfix/tagged hotfix/tagged true
+out_has "is not the tip of the branch hotfix/tagged"
+on_main 1 origin/hotfix/fix-1 "hotfix/../feature" true
+out_has "branch named hotfix/<name> only"
+on_main 1 origin/hotfix/fix-1 "hotfix/fix-1;id" true
+out_has "branch named hotfix/<name> only"
+# The branch moved on GitHub after the checkout: its old commit is not deployed.
+rm -rf "$G/ws"
+git clone -q "$G/origin.git" "$G/ws"
+git -C "$G/ws" checkout -q --detach origin/hotfix/fix-1
+git -C "$G/seed" checkout -q hotfix/fix-1
+commit "hotfix 2"
+git -C "$G/seed" push -q origin hotfix/fix-1
+run 1 in_dir "$G/ws" env TARGET=hotfix/fix-1 ALLOW_BRANCH=true bash -e "$WORK/onmain.sh"
+out_has "is not the tip of the branch hotfix/fix-1"
+ok "deploy.yml refuses a commit that is not on main before any script runs, unless allow_branch is set and the ref is a hotfix/<name> branch whose tip is the commit (not a feature branch, a sha, a tag named hotfix/, a path with .., or a branch that moved)"
 
 printf '\nAll %d checks passed.\n' "$passed"

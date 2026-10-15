@@ -3,7 +3,7 @@
 # The official runner release for linux-arm64, on the same Ubuntu as the Jetson, run as a user
 # with the Jetson user's name, uid and home, so ~/jobapp and ~/jobapp-backups (bind-mounted at the
 # same paths) mean the same thing inside and outside. A job-started hook (job-guard.sh) refuses
-# every job but deploy.yml from main. The Docker CLI and its compose and buildx
+# every job but deploy.yml and ops.yml from main. The Docker CLI and its compose and buildx
 # plugins are bind-mounted read-only from the host by ./deploy.sh runner install, so they always
 # match the daemon they talk to. Built on the Jetson by ./deploy.sh runner install:
 #
@@ -53,7 +53,7 @@ RUN groupadd --gid "${RUNNER_GID}" "${RUNNER_USER}" \
     && chown "${RUNNER_UID}:${RUNNER_GID}" "/home/${RUNNER_USER}/actions-runner"
 
 COPY --chmod=755 entrypoint.sh /usr/local/bin/runner-entrypoint
-# Every job runs this first and fails unless it is deploy.yml from main (job-guard.sh). Set in the
+# Every job runs this first and fails unless it is deploy.yml or ops.yml from main (job-guard.sh). Set in the
 # image, not in the repository, so no branch or workflow can switch it off. The runner only takes
 # a hook path ending in .sh (it refused /usr/local/bin/runner-job-guard on 2026-10-09).
 COPY --chmod=755 job-guard.sh /usr/local/bin/runner-job-guard.sh

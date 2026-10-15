@@ -2,9 +2,11 @@
 # Tests of ops/ship.sh (issue #278) on throwaway repositories: a bare "origin" whose
 # refs/pull/<n>/head hold the pull requests, a main checkout that holds ship.sh next to a fake gate
 # (ops/local-check.sh: real git merges, a record, failures on demand) and a fake deploy
-# (ops/deploy-checked.sh), and fakes of gh and ssh on PATH that read and write a small state
-# folder. The fake gh merges into the bare origin as GitHub would; the fake ssh runs the remote
-# script here, against a fake docker and free. Nothing reaches GitHub or the Jetson.
+# (ops/deploy-checked.sh, which prints the JOBAPP-VERIFY line of its run as the real one does),
+# and a fake gh on PATH that reads and writes a small state folder. The fake gh merges into the
+# bare origin as GitHub would. Nothing reaches GitHub or the Jetson, and nothing uses ssh: the
+# figures of the Jetson come from the deploy's output (ops/jetson-verify.sh is tested by
+# tests/remote_ops_test.sh).
 #
 #   tests/ship_test.sh
 set -euo pipefail
@@ -42,7 +44,7 @@ log_lacks() { ! grep -qF -- "$2" "$STATE/$1" 2>/dev/null || fail "$1 holds '$2':
 
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.org GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.org
-export SHIP_POLL_SECONDS=0 SHIP_SSH_HOST=jetson-test
+export SHIP_POLL_SECONDS=0
 export TMPDIR="$TOP/tmp"
 mkdir -p "$TMPDIR" "$TOP/bin"
 export PATH="$TOP/bin:$PATH"
@@ -164,48 +166,13 @@ case "$1 $2" in
 esac
 EOF
 
-# --- the fake ssh, and the Jetson's docker and free -------------------------------------------------
+# No ssh at all: one that is called fails the test.
 cat >"$TOP/bin/ssh" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$STATE/ssh.log"
-[[ ! -e "$STATE/ssh_fail" ]] || exit 255
-[[ "$*" == "-o BatchMode=yes -o ConnectTimeout=20 jetson-test bash -s" ]] || exit 254
-if [[ -e "$STATE/ssh_truncate" ]]; then # the connection drops after a few lines
-  HOME="$STATE/home" PATH="$STATE/remote-bin:$PATH" bash -s | head -n "$(cat "$STATE/ssh_truncate")"
-else
-  HOME="$STATE/home" PATH="$STATE/remote-bin:$PATH" bash -s
-fi
+exit 255
 EOF
-REMOTE_BIN="$TOP/remote-bin"
-mkdir -p "$REMOTE_BIN"
-cat >"$REMOTE_BIN/docker" <<'EOF'
-#!/usr/bin/env bash
-C="compose -f compose.yml --profile tunnel"
-case "$*" in
-"$C config --services") cat "$STATE/remote/services" ;;
-"$C ps -a --format "*) cat "$STATE/remote/ps" ;;
-"$C exec -T api alembic current")
-  # As the real one: it reads stdin (which, under "bash -s", is the rest of the script), the INFO
-  # lines go to stderr, a warning may come first on stdout, the revision line is last.
-  cat >/dev/null
-  printf 'INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.\nINFO  [alembic.runtime.migration] Will assume transactional DDL.\n' >&2
-  printf '/app/.venv/lib/python3.12/site-packages/x.py:1: SAWarning: a warning on stdout\n'
-  cat "$STATE/remote/alembic"
-  ;;
-"$C logs --no-color --since 10m") cat "$STATE/remote/logs" ;;
-*)
-  printf '%s\n' "$*" >>"$STATE/docker-unexpected"
-  exit 1
-  ;;
-esac
-EOF
-cat >"$REMOTE_BIN/free" <<'EOF'
-#!/usr/bin/env bash
-printf '               total        used        free      shared  buff/cache   available\n'
-printf 'Mem:            7620        3120        1200         100        3300        4300\n'
-printf 'Swap:           3810           0        3810\n'
-EOF
-chmod +x "$TOP/bin/gh" "$TOP/bin/ssh" "$REMOTE_BIN/docker" "$REMOTE_BIN/free"
+chmod +x "$TOP/bin/gh" "$TOP/bin/ssh"
 
 # --- the fake gate and the fake deploy, committed on main of each origin ---------------------------
 # The gate merges the refs as ops/local-check.sh does (a detached worktree of origin/main, git merge
@@ -293,15 +260,27 @@ echo "LOCAL CHECK: PASS $tree 4s"
 if [[ -s "$STATE/move_after_gate" ]]; then "$STATE/move-head" "$(cat "$STATE/move_after_gate")"; fi
 if [[ -e "$STATE/push_main_after_gate" ]]; then "$STATE/push-main"; fi
 EOF
+# As ops/deploy-checked.sh: some lines of its own (one that quotes a look-alike of the figures
+# mid line, with a planted secret), the JOBAPP-VERIFY line of the run ($STATE/verify, when it
+# exists), then its last line.
 cat >"$TOP/fake-deploy" <<'EOF'
 #!/usr/bin/env bash
 printf 'deploy %s\n' "$*" >>"$STATE/deploy.log"
 code="$(cat "$STATE/deploy_exit" 2>/dev/null || echo 0)"
+printf '   run 4242: waiting for the Jetson\n   api-1 | said JOBAPP-VERIFY services=1 result=ok %s\n' "$CANARY"
+if [[ -f "$STATE/verify" ]]; then cat "$STATE/verify"; fi
 if [[ "$code" == 0 ]]; then echo "deployed $1, health ok"; else echo "ops/deploy-checked.sh: the deploy run failed"; fi
 if [[ -f "$STATE/deploy_last" ]]; then cat "$STATE/deploy_last"; fi
 exit "$code"
 EOF
 chmod +x "$TOP/fake-gate" "$TOP/fake-deploy"
+
+# verify_line <services> <healthy> <missing> <unhealthy> <alembic> <head> <errors> <browser>
+# <unwell> <absent> <result>: a line as ops/jetson-verify.sh prints it.
+verify_line() {
+  printf 'JOBAPP-VERIFY services=%s healthy=%s missing=%s unhealthy=%s alembic=%s head=%s' "$1" "$2" "$3" "$4" "$5" "$6"
+  printf ' mem_used=3120 mem_total=7620 errors=%s browser=%s commit=0123456789ab unwell=%s absent=%s result=%s\n' "$7" "$8" "$9" "${10}" "${11}"
+}
 
 # --- one scenario: fresh origin, main checkout, developer clone and state ---------------------------
 N=0
@@ -312,17 +291,10 @@ fresh() {
   ORIGIN="$base/origin.git"
   MAIN="$base/main"
   DEV="$base/dev"
-  mkdir -p "$STATE/pr" "$STATE/remote" "$STATE/home/jobapp"
+  mkdir -p "$STATE/pr"
   : >"$STATE/gate_fail"
   printf 'E   assert 1 == 2\n' >"$STATE/fail_tail"
-  printf '%s\trunning\thealthy\n' api worker caddy db redis parser renderer browser tailscale >"$STATE/remote/ps"
-  printf '%s\n' caddy tailscale api worker parser renderer db redis >"$STATE/remote/services"
-  printf '0042_ship (head)\n' >"$STATE/remote/alembic"
-  {
-    printf 'api-1  | INFO started %s\nworker-1  | errors handled: none\n' "$CANARY"
-    printf 'api-1  | {"ts": "2026-10-14T10:00:00.000+00:00", "level": "info", "logger": "app", "msg": "3 errors retried"}\n'
-    printf 'caddy-1  | {"level":"info","ts":1760436000.1,"logger":"http.log.access","msg":"handled request"}\n'
-  } >"$STATE/remote/logs"
+  verify_line 8 8 0 0 0042_ship 1 0 off - - ok >"$STATE/verify"
   git init -q --bare -b main "$ORIGIN"
   git clone -q "$ORIGIN" "$MAIN" 2>/dev/null
   mkdir -p "$MAIN/ops"
@@ -336,7 +308,6 @@ fresh() {
   git -C "$MAIN" push -q origin main
   git clone -q "$ORIGIN" "$DEV" 2>/dev/null
   git clone -q "$ORIGIN" "$STATE/merger" 2>/dev/null
-  ln -s "$REMOTE_BIN" "$STATE/remote-bin"
   cat >"$STATE/move-head" <<EOF
 #!/usr/bin/env bash
 # a push after the gate, approved again on its new head: only the gate's record shows the move
@@ -519,8 +490,9 @@ grep -E '^pr merge' "$STATE/gh.log" >"$TOP/merges"
 main_sha="$(git -C "$MAIN" rev-parse HEAD)"
 [[ "$main_sha" == "$(git -C "$ORIGIN" rev-parse main)" ]] || fail "the main checkout was not pulled"
 [[ "$(cat "$STATE/deploy.log")" == "deploy $main_sha" ]] || fail "deploy: $(cat "$STATE/deploy.log")"
-out_has "jetson:   9 services, 9 healthy, 0 missing; alembic 0042_ship; memory 3120 of 7620 MB used; 0 error lines in 10 minutes"
-[[ ! -e "$STATE/docker-unexpected" ]] || fail "docker on the Jetson was called without -f compose.yml --profile tunnel: $(cat "$STATE/docker-unexpected")"
+out_has "jetson:   8 services, 8 healthy, 0 missing; alembic 0042_ship; memory 3120 of 7620 MB used; 0 error lines in 10 minutes; browser off"
+out_has "check  the figures of the deploy run (JOBAPP-VERIFY)"
+[[ ! -e "$STATE/ssh.log" ]] || fail "ship.sh called ssh: $(cat "$STATE/ssh.log")"
 out_has "cards:    Done: #1032, #1031"
 log_has gh.log "project item-add 1 --owner GoldLegendW80 --url https://github.com/GoldLegendW80/jobapp/issues/1032 --format json --jq .id"
 log_has gh.log "project item-edit --project-id PVT_kwHOA9eVYc4BmeB8 --id ITEM_1031 --field-id PVTSSF_lAHOA9eVYc4BmeB8zhlG8_A --single-select-option-id 98236657"
@@ -719,13 +691,15 @@ ok "a main tree that differs from the gate's tree stops before the deploy"
 fresh
 mkpr 66
 echo 1 >"$STATE/deploy_exit"
+rm -f "$STATE/verify"
 run 1 ship --approved
 out_has "SHIP: FAIL ops/deploy-checked.sh failed (exit 1): ops/deploy-checked.sh: the deploy run failed"
-[[ ! -e "$STATE/ssh.log" ]] || fail "the Jetson was checked after a failed deploy"
+out_lacks "jetson:"
+out_lacks "check  the figures"
 log_has gh.log "project item-add 1 --owner GoldLegendW80 --url https://github.com/GoldLegendW80/jobapp/issues/1066"
 log_has gh.log "project item-edit --project-id PVT_kwHOA9eVYc4BmeB8 --id ITEM_1066"
 out_has "cards:    Done: #1066"
-ok "a failed deploy exits 1, no Jetson check, the cards moved right after the merge"
+ok "a failed deploy with no figures exits 1, no Jetson check, the cards moved right after the merge"
 
 fresh
 mkpr 66
@@ -738,43 +712,49 @@ ok "the deploy log's last line is redacted before it is printed"
 
 fresh
 mkpr 67
-printf 'api\trunning\thealthy\nworker\texited\t\ncaddy\trestarting\t\nparser\trunning\tunhealthy\n' >"$STATE/remote/ps"
-printf '%s\n' caddy tailscale api worker parser >"$STATE/remote/services"
-printf '0041_old\n' >"$STATE/remote/alembic"
-{
-  printf 'api-1  | {"ts": "2026-10-14T10:00:00.000+00:00", "level": "error", "logger": "app", "msg": "%s"}\n' "$CANARY"
-  printf 'worker-1  | {"ts": "2026-10-14T10:00:01.000+00:00", "level": "critical", "logger": "arq", "msg": "%s"}\n' "$CANARY"
-  printf 'caddy-1  | {"level":"error","ts":1760436000.1,"logger":"http.log.error","msg":"%s"}\n' "$CANARY"
-  printf 'api-1  | {"ts": "2026-10-14T10:00:02.000+00:00", "level": "info", "logger": "app", "msg": "errors: none, error_rate 0"}\n'
-  printf 'api-1  | Traceback (most recent call last):\nworker-1  | a error here\n'
-} >"$STATE/remote/logs"
+verify_line 5 1 1 3 0041_old 0 5 off worker:exited,caddy:restarting,parser:unhealthy tailscale fail >"$STATE/verify"
 run 1 ship --approved
 out_has "not healthy: worker exited, caddy restarting, parser unhealthy"
 out_has "missing: tailscale"
-out_has "jetson:   5 services, 1 healthy, 1 missing"
+out_has "jetson:   5 services, 1 healthy, 1 missing; alembic 0041_old"
 out_has "alembic is not at head"
 out_has "5 error lines in 10 minutes"
 out_lacks "$CANARY"
-out_lacks "Traceback (most"
-[[ ! -e "$STATE/docker-unexpected" ]] || fail "unexpected docker call: $(cat "$STATE/docker-unexpected")"
 log_has gh.log "project item-edit --project-id PVT_kwHOA9eVYc4BmeB8 --id ITEM_1067"
-ok "an unwell Jetson (stopped, restarting, unhealthy and missing services, alembic, JSON and plain error lines) exits 1, prints figures only, the cards moved already"
+ok "an unwell Jetson (stopped, restarting, unhealthy and missing services, alembic, error lines) exits 1, prints figures only, the cards moved already"
+
+fresh
+mkpr 71
+echo 1 >"$STATE/deploy_exit"
+verify_line 8 8 0 0 0042_ship 1 0 running:unhealthy - - fail >"$STATE/verify"
+run 1 ship --approved
+out_has "deploy:   FAIL, exit 1"
+out_has "SHIP: FAIL the Jetson after the deploy: browser running unhealthy"
+out_has "browser running:unhealthy"
+ok "a run that failed at its verify step names the figures that failed (a running browser that is not healthy)"
 
 fresh
 mkpr 68
-touch "$STATE/ssh_fail"
+rm -f "$STATE/verify"
 run 1 ship --approved
-out_has "SHIP: FAIL ssh jetson-test failed"
-ok "an unreachable Jetson exits 1"
+out_has "SHIP: FAIL the deploy run printed no JOBAPP-VERIFY line"
+out_has "deployed, the Jetson is not checked (ops/remote.sh status)"
+ok "a deploy whose run printed no figures exits 1 and says the Jetson is not checked"
 
 fresh
 mkpr 70
-echo 12 >"$STATE/ssh_truncate"
+printf 'JOBAPP-VERIFY services=8 healthy=8 missing=0 unhealthy=0 alembic=- head=0 mem_used=- mem_total=- errors=- browser=off commit=- unwell=- absent=- result=fail\n' >"$STATE/verify"
 run 1 ship --approved
-out_has "SHIP: FAIL the Jetson after the deploy: the check on the Jetson ended early"
-out_has "memory not read"
+out_has "SHIP: FAIL the Jetson after the deploy: alembic is not at head, memory not read, error lines not read"
 out_has "alembic -; memory - of - MB used"
-ok "a Jetson check whose output stops early is a failure that says so"
+ok "figures the Jetson could not read are failures that say so"
+
+fresh
+mkpr 72
+printf 'JOBAPP-VERIFY services=8 healthy=8 missing=0 unhealthy=0 alembic=0042_ship head=1 mem_used=3120 mem_total=7620 errors=0 browser=off commit=- unwell=- absent=- result=fail\n' >"$STATE/verify"
+run 1 ship --approved
+out_has "SHIP: FAIL the Jetson after the deploy: the check on the Jetson failed"
+ok "a result=fail is a failure even when every figure ship.sh knows reads well"
 
 fresh
 mkpr 69
@@ -782,7 +762,8 @@ touch "$STATE/card_fail"
 run 1 ship --approved
 out_has "but these cards did not move to Done: #1069"
 out_has "cards:    Done: none; not moved: #1069"
-[[ -s "$STATE/deploy.log" && -s "$STATE/ssh.log" ]] || fail "a card that did not move stopped the deploy or the Jetson check"
+[[ -s "$STATE/deploy.log" ]] || fail "a card that did not move stopped the deploy"
+out_has "jetson:   8 services, 8 healthy"
 ok "a card that does not move exits 1 and names it, after the deploy and the Jetson check"
 
 # === a stop between two merges, and gh failing after GitHub merged ==================================

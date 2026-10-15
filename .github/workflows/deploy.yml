@@ -8,8 +8,9 @@
 # the script. The job runs on the self-hosted runner installed on the Jetson by ./deploy.sh
 # runner install (labels self-hosted, jetson). The runner only connects out to GitHub; no port
 # is opened. The workflow definition always comes from main: the runner's job-started hook
-# (ops/runner/job-guard.sh) refuses every job that is not this file on refs/heads/main, run by
-# workflow_dispatch. A dispatched branch is deployed as code, never as workflow.
+# (ops/runner/job-guard.sh) refuses every job that is not this file (or ops.yml, the operations
+# without ssh) on refs/heads/main, run by workflow_dispatch. A dispatched hot fix branch is
+# deployed as code, never as workflow.
 #
 # The same steps as ./deploy.sh, run on the Jetson itself, under the Jetson's deploy lock
 # (flock on ~/jobapp-backups/.deploy.lock, shared with ./deploy.sh): rsync of the commit into
@@ -52,9 +53,25 @@
 # anything is built: a malformed line fails the run at once with "line N: invalid (reason)",
 # never the value, instead of docker compose refusing the file in the middle of the build.
 #
-# Security: the runner has the host Docker socket, which is root on the Jetson. Only this private
-# repository's deploy.yml from main reaches it; it must never be offered to forks or public
-# repositories.
+# Security: the runner has the host Docker socket, which is root on the Jetson. Only this
+# repository's deploy.yml and ops.yml from main, dispatched by an account with write access,
+# reach it (the guard above); it must never run a job of a fork or of a pull request.
+#
+# The last step, "Verify the Jetson" (ops/jetson-verify.sh), prints the figures of the stack as
+# one line, JOBAPP-VERIFY services=... result=ok|fail, and in the job summary: ops/deploy-checked.sh
+# and ops/ship.sh read that line from this run's log instead of asking the Jetson over ssh (owner
+# decision of 2026-10-15). It fails the run when the stack is not well.
+#
+# Only main's history is deployed (review of pull request 334: a second account can dispatch):
+# the step "Only a commit of main" refuses a ref whose commit is not on origin/main before any
+# file of the checkout runs, unless the dispatch sets allow_branch AND the ref is a branch named
+# hotfix/<name> whose tip is the commit checked out.
+#
+# The run log of this public repository is readable by anyone, so every path of this workflow
+# prints figures only: names, states, counts, exit codes, revisions, never a log line, an address
+# or a response body. The full output of the migrations, the predeploy backup and the smoke is
+# kept on the Jetson in $BACKUPS/logs (mode 700, outside the checkout; tests/remote_ops_test.sh
+# holds the rule).
 name: Deploy
 
 on:
@@ -64,6 +81,11 @@ on:
         description: Branch, tag or commit to deploy (the workflow itself always comes from main)
         required: true
         default: main
+      allow_branch:
+        description: Deploy a branch that is not on main; only a branch named hotfix/<name> is accepted
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -89,6 +111,37 @@ jobs:
           ref: ${{ env.TARGET }}
           persist-credentials: false
           clean: true
+          # The whole history: the next step asks whether the commit is on main.
+          fetch-depth: 0
+
+      # Before any file of the checkout runs (header). The repository is public, so the fetch needs
+      # no credential.
+      - name: Only a commit of main
+        env:
+          ALLOW_BRANCH: ${{ inputs.allow_branch }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if git merge-base --is-ancestor "$sha" refs/remotes/origin/main; then
+            echo "ref: $sha is on main"
+            exit 0
+          fi
+          branch="${TARGET#refs/heads/}"
+          if [[ "$ALLOW_BRANCH" != "true" ]]; then
+            echo "::error::refused: $sha is not on main. Only main is deployed; a hot fix is a branch hotfix/<name> dispatched with allow_branch"
+            exit 1
+          fi
+          if [[ ! "$branch" =~ ^hotfix/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ || "$branch" == *..* ]]; then
+            echo "::error::refused: allow_branch deploys a branch named hotfix/<name> only, and this ref is not one"
+            exit 1
+          fi
+          tip="$(git ls-remote --heads origin "refs/heads/$branch" | cut -f1)"
+          if [[ "$tip" != "$sha" ]]; then
+            echo "::error::refused: $sha is not the tip of the branch $branch (a tag, or the branch moved)"
+            exit 1
+          fi
+          echo "::warning::deploying $branch at $sha, which is not on main (allow_branch)"
 
       - name: Preflight
         run: |
@@ -117,12 +170,19 @@ jobs:
           echo "previous: $(cat "$app/.deployed-commit" 2>/dev/null || echo unknown)"
 
       - name: Deploy under the Jetson deploy lock
+        id: deploy
         run: |
           set -euo pipefail
           mkdir -p "$BACKUPS"
           exec 9>"$BACKUPS/.deploy.lock"
           echo "waiting for the deploy lock (shared with ./deploy.sh)"
           flock -w 900 9 || { echo "::error::another deploy held the lock for 15 minutes"; exit 1; }
+          # The full output of the backup, the migrations and the smoke (header): readable by the
+          # deploy user only, outside the checkout, kept 30 days.
+          logdir="$BACKUPS/logs"
+          mkdir -p "$logdir"
+          chmod 700 "$logdir"
+          find "$logdir" -maxdepth 1 -type f -name '*.log' -mtime +30 -delete || true
 
           echo "::group::what ran before: images of the running containers, files of ~/jobapp"
           tree="$BACKUPS/previous-tree"
@@ -198,14 +258,13 @@ jobs:
             # this dump is verified and again at each nightly backup. No BACKUP_KEEP is set
             # here: a number of its own would keep predeploy dumps longer than the 7 days
             # within which a deleted document is promised to leave the server's backups.
-            # Through tee, so that what the script printed is in this log also when it fails after
-            # its dump is written (a dump it cannot delete, a flush that fails); pipefail keeps
-            # its exit status. What it prints holds no secret: paths, dump names, sizes, the
-            # BACKUP_KEEP in force and where it is set, the database's name. (Its errors, with
-            # the first 300 bytes of pg_dump's or pg_restore's own message, already went to this
-            # log on stderr; those commands run over the local socket and are given no password.)
-            out="$(mktemp)"
-            BACKUP_DIR="$BACKUPS/deploys" bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}" | tee "$out"
+            # What the script prints (paths, dump names, sizes, the retention) goes to a file of the
+            # logs folder, never to this public log: the dump's name comes out, and its WARNING and
+            # ERROR lines (its own words about the retention: names, ages, sizes). Its errors on
+            # stderr name a dump or a command, never a row.
+            out="$logdir/predeploy-${COMMIT:0:12}.log"
+            rc=0
+            (umask 077 && BACKUP_DIR="$BACKUPS/deploys" bash ops/db.sh backup --tag "predeploy-${COMMIT:0:12}" >"$out") || rc=$?
             dump="$(sed -n 's/^backup=//p' "$out" | tail -n 1)"
             # A WARNING or an ERROR of the backup must be seen, not only read by whoever opens
             # this group of a green job: a rotation held by the size check deletes nothing until
@@ -217,7 +276,12 @@ jobs:
                 "   ERROR: "*) echo "::error::predeploy backup: ${line:3:500}" ;;
               esac
             done <"$out"
-            rm -f "$out"
+            if ((rc != 0)); then
+              echo "::error::the predeploy backup failed (exit $rc; its output is on the Jetson in logs/${out##*/}): nothing was migrated"
+              restore_previous
+              exit 1
+            fi
+            echo "predeploy dump: ${dump##*/}"
             [[ -n "$dump" ]] || { echo "::error::ops/db.sh reported no backup file"; restore_previous; exit 1; }
           else
             echo "no jobapp_pgdata volume: first start, nothing to back up"
@@ -228,7 +292,7 @@ jobs:
           # image, while the previous release still serves. A failure stops the deploy before
           # anything restarts; ops/migrate.sh says why, and never downgrades.
           echo "::group::migrations (one off container of the new api image, before the new code starts)"
-          if ! bash ops/migrate.sh; then
+          if ! MIGRATE_LOG_DIR="$logdir" bash ops/migrate.sh; then
             echo "::error::the migrations did not apply: the deploy stopped before starting the new code, the running stack was not touched and still runs the previous release. Fix the migration and deploy again"
             restore_previous
             exit 1
@@ -239,7 +303,9 @@ jobs:
             echo "::error::$1: rolling back to the previous files and images"
             restore_previous
             $COMPOSE up -d --remove-orphans --wait --wait-timeout 180 || true
-            $COMPOSE ps -a || true
+            # Figures only (header), as the step State on failure prints them.
+            $COMPOSE ps -a --format '{{.Service}} {{.State}} health={{.Health}} exit={{.ExitCode}}' 2>/dev/null |
+              awk '{ for (i = 1; i <= NF; i++) if ($i !~ /^[A-Za-z0-9._:=-]+$/) $i = "-"; print "state: " $0 }' || true
             echo "::warning::the schema stays migrated, it is never downgraded automatically: the previous release runs on it by the expand rule (CONTRIBUTING.md, Migrations)"
             if [[ -n "$dump" ]]; then
               echo "::warning::database dump taken before this deploy: $dump (restore: BACKUP_DIR=$BACKUPS/deploys bash ops/db.sh restore-live $dump)"
@@ -274,7 +340,9 @@ jobs:
 
           echo "::group::smoke (tests/jetson_smoke.sh, quick mode, on the Jetson)"
           cd "$GITHUB_WORKSPACE"
-          DEPLOY_HOST=local JETSON_SMOKE_FULL=0 tests/jetson_smoke.sh
+          # Figures only here (check names, ok or FAIL, HTTP status codes); the detail (addresses,
+          # bodies) goes to its file in the logs folder.
+          DEPLOY_HOST=local JETSON_SMOKE_FULL=0 JETSON_SMOKE_LOG="$logdir/smoke-${COMMIT:0:12}.log" tests/jetson_smoke.sh
           echo "::endgroup::"
 
           # Only now: the commit is running and passed the smoke.
@@ -296,7 +364,7 @@ jobs:
             fi
             sleep 2
           done
-          [[ -n "$url" ]] || { echo "::error::tailscale is not connected or has no ts.net name (docker compose logs tailscale)"; exit 1; }
+          [[ -n "$url" ]] || { echo "::error::tailscale is not connected or has no ts.net name (its log stays on the Jetson: ./deploy.sh logs tailscale, over ssh)"; exit 1; }
           public="no answer yet (the first request after a first login waits for the certificate)"
           for delay in 2 4 8 15 15 15; do
             if [[ "$(curl -s --max-time 10 "$url/api/health" || true)" == '{"status":"ok"}' ]]; then
@@ -315,10 +383,22 @@ jobs:
           echo "$url"
       # --- end of tailscale -------------------------------------------------------------------
 
+      # The figures of the stack, read on the Jetson (header): also after a Public URL step that
+      # failed, never after a deploy step that failed (its rollback is a red run already). From the
+      # checkout, the commit just deployed. The step's own text holds no JOBAPP-VERIFY line, so a
+      # reader of the log finds the script's line only.
+      - name: Verify the Jetson
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
+        run: bash ops/jetson-verify.sh "$APP"
+
+      # The run log of this public repository is readable by anyone: figures only (service, state,
+      # health, exit code) and the names of the newest predeploy dumps, never a log line. The logs
+      # stay on the Jetson (./deploy.sh logs <service>, over ssh, for the owner).
       - name: State on failure
         if: failure()
         working-directory: ${{ env.APP }}
         run: |
-          $COMPOSE ps -a || true
-          $COMPOSE logs --no-color --tail 80 || true
-          ls -1t "$BACKUPS/deploys" 2>/dev/null | head -n 3 | sed 's/^/predeploy dump: /' || true
+          $COMPOSE --profile browser ps -a --format '{{.Service}} {{.State}} health={{.Health}} exit={{.ExitCode}}' 2>/dev/null |
+            awk '{ for (i = 1; i <= NF; i++) if ($i !~ /^[A-Za-z0-9._:=-]+$/) $i = "-"; print "state: " $0 }' || true
+          find "$BACKUPS/deploys" -maxdepth 1 -type f -name 'jobapp-*.dump' -printf '%f\n' 2>/dev/null |
+            sort | tail -n 3 | sed 's/^/predeploy dump: /' || true

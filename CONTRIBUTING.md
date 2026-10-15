@@ -142,9 +142,11 @@ in the job folder that holds this repository (it is not part of the repository).
    --repo <owner/repo> --match-head-commit`), and moves the issues the merged pull requests
    close to Done on the board right after the merges. Then it pulls the main checkout (which
    must be clean and on `main`), deploys only when its tree is the gate's tree, and checks the
-   Jetson over ssh with the deploy's compose profile (every service running and healthy, a
-   stopped or missing one counts, `alembic current` at head, memory, no error line in the last
-   10 minutes, JSON `"level": "error"` lines included). The last line is `SHIP: OK`,
+   Jetson without ssh, from the `JOBAPP-VERIFY` line the deploy run printed (its last step,
+   `ops/jetson-verify.sh`, with the deploy's compose profile: every service running and healthy,
+   a stopped or missing one counts, `alembic current` at head, memory, no error line in the last
+   10 minutes, JSON `"level": "error"` lines included, a running browser healthy; README,
+   "Deploy from any machine"). The last line is `SHIP: OK`,
    `SHIP: PLAN, nothing was done`, `SHIP: NOTHING TO SHIP` or `SHIP: FAIL <reason>` (exit 1);
    the gate and deploy logs of the last 10 runs stay in `.local-check/ship/`.
 7. Only a checked tree is deployed, through `ops/deploy-checked.sh`. It refuses a commit whose
@@ -229,5 +231,6 @@ python3 .github/scripts/ci_plan_test.py                  # when ci.yml, .pre-com
 tests/secret_scan_test.sh                                # when .github/scripts/secret_scan.sh or the gitleaks hooks change
 tests/local_check_test.sh                                # when ops/local-check.sh, ops/deploy-checked.sh or the triggers of the workflows change
 tests/ship_test.sh                                       # when ops/ship.sh changes
+tests/remote_ops_test.sh                                 # when ops/jetson-verify.sh, ops/jetson-ops.sh, ops/remote.sh or ops.yml change
 ops/local-check.sh --base HEAD --only api                # one job of the batch check on a commit of one's own (api, checks or journeys; a partial run writes no record)
 ```
