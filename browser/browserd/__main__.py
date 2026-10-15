@@ -47,6 +47,9 @@ async def main() -> None:
     os.chmod(c.PROFILES, 0o1733)  # noqa: S103
     os.chmod(c.LEASES, 0o1733)  # noqa: S103
     chromium.make_uid_records()
+    seeded = chromium.seed_uid_records()
+    if seeded:
+        log.info("uid records seeded from %d existing profile directory(ies)", seeded)
     killed = await chromium.reap_strays()
     if killed:
         log.warning("killed %d process(es) left under a profile uid", killed)

@@ -25,6 +25,7 @@ pytestmark = pytest.mark.skipif(
 STACKS = [("compose.yml",), ("compose.yml", "compose.dev.yml"), ("compose.yml", "compose.mac.yml")]
 MIB = 1024 * 1024
 ENV = {
+    "APP_ENV",  # only to refuse BROWSER_PROXY_ALLOW_PRIVATE under production (B6)
     "BROWSER_CONTROL_SECRET",
     "BROWSER_LEASE_MAX_S",
     "BROWSER_IDLE_S",
@@ -99,15 +100,15 @@ def test_root_with_setuid_and_setgid_only_and_no_new_privileges(stack: dict) -> 
 
 
 def test_chromium_sandbox_kept_by_the_seccomp_profile(stack: dict) -> None:
-    """Item 1 of B1's review: Docker's default profile plus the one rule, never unconfined, and
-    Chromium never started with --no-sandbox."""
+    """Item 1 of B1's review: Docker's default profile plus the namespace rules (narrowed by B6,
+    test_seccomp_profile.py), never unconfined, and Chromium never started with --no-sandbox."""
     browser = stack["services"]["browser"]
     assert browser["security_opt"] == ["no-new-privileges:true", "seccomp=./browser/seccomp.json"]
     profile = json.loads((ROOT / "browser/seccomp.json").read_text(encoding="utf-8"))
     assert profile["defaultAction"] == "SCMP_ACT_ERRNO"
-    added = profile["syscalls"][-1]
-    assert added == {"names": ["clone", "unshare", "setns", "chroot"], "action": "SCMP_ACT_ALLOW"}
-    for rule in profile["syscalls"][:-1]:
+    added = profile["syscalls"][-4:]
+    assert [rule["names"] for rule in added] == [["clone"], ["clone"], ["unshare"], ["chroot"]]
+    for rule in profile["syscalls"][:-4]:
         # Docker's own rules: the namespace calls are allowed there only with CAP_SYS_ADMIN or
         # without the CLONE_NEW* flags, which is what the appended rule widens.
         if rule["action"] == "SCMP_ACT_ALLOW" and "unshare" in rule["names"]:
@@ -170,7 +171,8 @@ def test_own_image_profile_command_and_health_check(stack: dict) -> None:
     assert browser["command"] == ["python", "-m", "browserd"]
     assert browser["healthcheck"]["test"] == ["CMD", "python", "-m", "browserd", "--check"]
     assert browser["expose"] == ["9300"]
-    assert browser["restart"] == "unless-stopped"
+    # No restart policy: after a reboot only a deploy, behind the firewall check, starts it.
+    assert browser["restart"] == "no"
 
 
 def test_playwright_pinned_exactly() -> None:

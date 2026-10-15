@@ -78,6 +78,47 @@ export const handlers = [
   http.get("*/api/proposals", () => HttpResponse.json({ items: [] })),
   // No chat thread yet (job detail's Chat panel).
   http.get("*/api/agents/threads", () => HttpResponse.json({ items: [] })),
+  // Nothing written for a posting, one base CV, the default threshold (job detail's Documents section).
+  http.get("*/api/jobs/:id/documents", () =>
+    HttpResponse.json({ documents: [] }),
+  ),
+  http.get("*/api/documents/base-cvs", () =>
+    HttpResponse.json({
+      base_cvs: [
+        {
+          id: "cv-default",
+          name: "My CV",
+          source: "profile",
+          template_slug: "classic",
+          language: "en",
+          is_default: true,
+          created_at: "2026-10-14T08:00:00Z",
+          updated_at: "2026-10-14T09:00:00Z",
+          last_version_at: "2026-10-14T09:00:00Z",
+          render_state: "idle",
+          generation: null,
+        },
+      ],
+      max: 10,
+    }),
+  ),
+  http.get("*/api/documents/spend", () =>
+    HttpResponse.json({
+      day: "2026-10-14",
+      auto: true,
+      min_fit: 70,
+      daily_ceiling: 100,
+      written_today: 0,
+      waiting: 0,
+      postings_30_days: 0,
+      to_write: 0,
+      to_write_estimate: { tokens: { low: 0, high: 0 }, cost: null },
+      priced: false,
+      cost_note: "",
+      today: { input: 0, output: 0, cost_usd: "0" },
+      last_30_days: { input: 0, output: 0, cost_usd: "0" },
+    }),
+  ),
   http.get("*/api/auth/me", () =>
     HttpResponse.json({ detail: "Not signed in." }, { status: 401 }),
   ),

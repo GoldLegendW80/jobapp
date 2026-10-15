@@ -51,6 +51,7 @@ from app.documents import corrections, render_client, render_job, store, templat
 from app.documents.models import (
     Author,
     Document,
+    DocumentGeneration,
     DocumentVersion,
     FitResult,
     FreezeReason,
@@ -166,6 +167,7 @@ class DocumentOut(BaseModel):
 class GenerationOut(BaseModel):
     status: GenerationStatus
     wait_reason: GenerationWait | None
+    error: str | None = None  # a code of generate.ERRORS, only on a failed one
 
 
 class PostingDocumentOut(DocumentOut):
@@ -385,10 +387,25 @@ def _revision(value: str | None) -> int:
 # --- a posting's documents ----------------------------------------------------------------------
 
 
+def _failed_generation(
+    db: Session, user_id: uuid.UUID, document_id: uuid.UUID
+) -> DocumentGeneration | None:
+    """The document's latest generation when it failed (a later one that did not hides it), so
+    the card can say why and offer "Try again"."""
+    last = db.execute(
+        sa.select(DocumentGeneration)
+        .where(DocumentGeneration.user_id == user_id, DocumentGeneration.document_id == document_id)
+        .order_by(DocumentGeneration.created_at.desc(), DocumentGeneration.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return last if last is not None and last.status == GenerationStatus.failed else None
+
+
 @router.get("/api/jobs/{job_id}/documents", response_model=PostingDocumentsOut)
 def posting_documents(job_id: uuid.UUID, user: CurrentUser, db: Db) -> PostingDocumentsOut:
     """The posting's CV and letter, as far as they exist: state, latest version, notes, the
-    approved and sent versions, the open generation and why it waits."""
+    approved and sent versions, the open generation and why it waits, else the latest one when it
+    failed (with its error code)."""
     owned = db.execute(
         sa.select(Job.id).where(Job.user_id == user.id, Job.id == job_id)
     ).scalar_one_or_none()
@@ -398,14 +415,20 @@ def posting_documents(job_id: uuid.UUID, user: CurrentUser, db: Db) -> PostingDo
     for document in store.posting_documents(db, user.id, job_id):
         found = store.versions(db, user.id, document.id)
         approved = [v.number for v in found if v.approved_at is not None]
-        generation = store.open_generation(db, user.id, document.id)
+        generation = store.open_generation(db, user.id, document.id) or _failed_generation(
+            db, user.id, document.id
+        )
         out.append(
             PostingDocumentOut(
                 **_fields(db, document),
                 approved=max(approved) if approved else None,
                 sent=sorted(v.number for v in found if v.frozen_at is not None),
                 generation=(
-                    GenerationOut(status=generation.status, wait_reason=generation.wait_reason)
+                    GenerationOut(
+                        status=generation.status,
+                        wait_reason=generation.wait_reason,
+                        error=generation.error,
+                    )
                     if generation is not None
                     else None
                 ),

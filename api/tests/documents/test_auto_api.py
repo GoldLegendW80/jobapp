@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import credentials
 from app.agents.crypto import Keyring
-from app.agents.models import CredentialKind
+from app.agents.models import AgentRun, CredentialKind
 from app.documents import consent, generate, store, tick
 from app.documents.models import (
     BaseSource,
@@ -156,6 +156,46 @@ def test_a_click_for_both_kinds_marks_the_cv_so_the_letter_follows_it_and_one_ki
     assert marks[both].get(generate.LETTER_FOLLOWS) is True
     assert generate.LETTER_FOLLOWS not in marks[one]
     assert [g[0] for g in alex.generations(both)] == [Kind.cv]  # the letter waits for the CV
+
+
+def test_a_recorded_stream_named_by_the_click_is_the_writers_and_the_letters(
+    alex: Who,
+    api: Api,
+    factory: sessionmaker[Session],
+    clock: Any,
+    migrated_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(migrated_url, agents_fake_backend=True)
+    monkeypatch.setattr(generate, "get_settings", lambda: settings)
+    job = alex.posting(80)
+    response = api.request(
+        "POST", write(job), token=alex.token, json={"kinds": ["cv", "letter"], "script": "journey"}
+    )
+    assert response.status_code == 202, response.text
+    with factory() as db:
+        cv = db.execute(sa.select(DocumentGeneration)).scalar_one()
+        cv.status = GenerationStatus.done  # the CV is written: the letter follows
+        db.commit()
+        assert db.get(AgentRun, cv.run_id).input["script"] == "documents_cv_journey"  # type: ignore[union-attr]
+        assert cv.estimate[generate.LETTER_SCRIPT] == "documents_letter_journey"
+    run = generate.start_letter(factory, cv.run_id, clock(), settings)  # type: ignore[arg-type]
+    assert run is not None
+    with factory() as db:
+        assert db.get(AgentRun, run).input["script"] == "documents_letter_journey"  # type: ignore[union-attr]
+        letter = db.execute(
+            sa.select(DocumentGeneration).where(DocumentGeneration.run_id == run)
+        ).scalar_one()
+        assert generate.LETTER_SCRIPT not in letter.estimate
+
+
+@pytest.mark.parametrize("script", ["", "Journey", "journey-1", "journey one", "a" * 31])
+def test_a_script_that_is_not_a_stream_suffix_is_refused(alex: Who, api: Api, script: str) -> None:
+    job = alex.posting(80)
+    response = api.request(
+        "POST", write(job), token=alex.token, json={"kinds": ["cv"], "script": script}
+    )
+    assert response.status_code == 422
 
 
 def test_a_click_with_the_ceiling_reached_is_written_and_never_counted(

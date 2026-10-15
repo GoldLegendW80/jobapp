@@ -1,0 +1,102 @@
+{
+  "format": "jobapp-profile",
+  "version": 1,
+  "exported_at": "2026-10-14T08:00:00Z",
+  "sections": {
+    "identity": {
+      "full_name": "Morgan Exampleton",
+      "headline": "Platform Engineer",
+      "email": "e2e-documents-morgan@example.org",
+      "phone": "+33 6 00 00 00 00",
+      "city": "Nantes",
+      "country": "France",
+      "linkedin_url": null,
+      "website": null,
+      "links": [],
+      "languages": [
+        { "name": "English", "level": "Fluent" },
+        { "name": "French", "level": "Native" }
+      ]
+    },
+    "experience": {
+      "employers": [
+        {
+          "key": "quillmere",
+          "organisation": "Quillmere Example Works",
+          "title": "Platform Engineer",
+          "start": "2023-02",
+          "end": null,
+          "location": "Nantes",
+          "contract": "CDI"
+        },
+        {
+          "key": "tarnwick",
+          "organisation": "Tarnwick Sample Studio",
+          "title": "Software Developer",
+          "start": "2021-01",
+          "end": "2023-01",
+          "location": "Rennes",
+          "contract": "CDI"
+        }
+      ],
+      "education": [
+        {
+          "school": "Example Institute of Technology",
+          "degree": "BSc Computer Science",
+          "start": "2017",
+          "end": "2020",
+          "location": "Nantes",
+          "details": null
+        }
+      ]
+    },
+    "facts": {
+      "blocks": [
+        {
+          "title": "Experience",
+          "body": "About 3.5 years of professional engineering.\nAt Quillmere Example Works I run the deployment platform of the billing team."
+        }
+      ]
+    },
+    "skills": {
+      "years_experience": 3.5,
+      "have": [
+        { "name": "cloud", "advanced_regex": false, "terms": ["kubernetes", "terraform"] },
+        { "name": "python", "advanced_regex": false, "terms": ["python", "fastapi"] }
+      ],
+      "adjacent": [
+        { "name": "frontend", "advanced_regex": false, "terms": ["react", "typescript"] }
+      ],
+      "none": [{ "name": "mobile", "advanced_regex": false, "terms": ["swift", "kotlin"] }],
+      "gates": []
+    },
+    "search": {
+      "title_include": { "advanced_regex": false, "terms": ["platform engineer"] },
+      "title_exclude": { "advanced_regex": false, "terms": ["intern"] },
+      "location": { "advanced_regex": false, "terms": ["Nantes", "Remote"] },
+      "contract_types": ["CDI"],
+      "remote_stance": "hybrid",
+      "min_fit": 70,
+      "days": 30,
+      "boards": [],
+      "never_apply": []
+    },
+    "answers": {
+      "work_authorization": [
+        {
+          "country": "France",
+          "answer": "EU citizen, no sponsorship needed.",
+          "needs_sponsorship": false
+        }
+      ],
+      "notice_period": "One month.",
+      "earliest_start": "January 2027",
+      "salary_policy": "Against the band.",
+      "relocation": null,
+      "travel": null,
+      "motivation": "I build platforms that other engineers rely on.",
+      "heard_about": null,
+      "leave_blank": []
+    }
+  }
+}

@@ -157,6 +157,12 @@ script() {
 DEFAULT_FRAGMENT="e two strongest poin" # 20 characters of the default MESSAGE, from its 14th
 grep -q -F -- "$DEFAULT_FRAGMENT" "$SCRIPT" || fail "the default MESSAGE of the script changed: update DEFAULT_FRAGMENT"
 
+# bash 3.2 (macOS) runs the inherited EXIT trap when a background job ends, which removed the script's
+# temporary directory under it whenever the sampler ended first (a failure under load only). The
+# sampler is exec'd after the trap is cleared; a plain `ssh ... &` would bring the failure back.
+grep -q -F 'trap - EXIT; exec ssh' "$SCRIPT" || fail "the background sampler of $SCRIPT keeps the EXIT trap: clear it (trap - EXIT) and exec ssh"
+! grep -q -E '^[[:space:]]*ssh .*&$' "$SCRIPT" || fail "$SCRIPT starts ssh as a plain background job: it inherits the EXIT trap"
+
 [[ -d "$COMMITTED" ]] || fail "$COMMITTED is missing"
 sums >"$WORK/sums.before"
 [[ -s "$WORK/sums.before" ]] || fail "$COMMITTED holds no file"
