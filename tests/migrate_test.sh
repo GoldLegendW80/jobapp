@@ -81,7 +81,7 @@ migrate() {
   local want="$1" got=0
   shift
   (cd "$TREE" && env "$@" COMPOSE="docker compose -p $PROJECT ${FILES[*]}" \
-    MIGRATE_CONTAINER="$PROJECT-migrate" bash ops/migrate.sh) >"$WORK/out" 2>&1 || got=$?
+    MIGRATE_CONTAINER="$PROJECT-migrate" MIGRATE_LOG_DIR="$WORK/logs" bash ops/migrate.sh) >"$WORK/out" 2>&1 || got=$?
   sed 's/^/   | /' "$WORK/out"
   [[ "$got" == "$want" ]] || fail "ops/migrate.sh exited $got, expected $want"
 }
@@ -213,7 +213,10 @@ write_revision 9999 "$HEAD_REV" '    op.add_column("users", sa.Column("migrate_t
     op.execute("select 1 / 0")'
 build
 migrate 1
-out_has "alembic upgrade head failed (exit 1, see above)"
+out_has "alembic upgrade head failed (exit 1; the whole output is on this machine in migrate-"
+out_has "failed in step: $HEAD_REV -> 9999"
+grep -q "division by zero" "$WORK/out" && fail "Postgres' error reached the output"
+grep -q "division by zero" "$WORK"/logs/migrate-*.log || fail "Postgres' error is not in the kept output"
 out_has "nothing was restarted"
 [[ "$(revision)" == "$HEAD_REV" ]] || fail "the revision moved to '$(revision)' after a failed migration"
 [[ "$(has_column migrate_test_half)" == 0 ]] || fail "the column of the failed migration is there: the transaction did not roll back"
@@ -305,7 +308,7 @@ build
 NEW_IMAGE="$(docker image inspect -f '{{.Id}}' "jobapp-$TAG-api:latest")"
 [[ "$NEW_IMAGE" != "$OLD_IMAGE" ]] || fail "the new image is the old one"
 migrate 0
-out_has "Running upgrade $HEAD_REV -> 9999"
+out_has "step: $HEAD_REV -> 9999"
 out_has "migrations applied: 1"
 out_has "9999 (head)"
 [[ "$(revision)" == "9999" && "$(has_column migrate_test_note)" == 1 ]] || fail "the migration did not apply"

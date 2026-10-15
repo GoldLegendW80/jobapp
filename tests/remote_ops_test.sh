@@ -347,8 +347,12 @@ run 0 ops/remote.sh apply-pause
 out_has "JOBAPP-OPS action=apply-pause apply=paused result=ok"
 line_is 3 "REMOTE: OK apply-pause"
 gh_fresh success "JOBAPP-OPS action=apply-status apply=paused result=ok"
+# The words of the line inside another line (a command, a commit subject) are not the line.
+printf 'ops on the Jetson\tRun the action\t2026-10-15T10:00:02.0Z echo JOBAPP-OPS action=apply-pause result=ok\n' >>"$STATE/log"
+printf 'ops on the Jetson\tRun the action\t2026-10-15T10:00:02.1Z said: JOBAPP-OPS action=apply-pause result=ok\n' >>"$STATE/log"
 run 1 ops/remote.sh apply-pause
 out_has "REMOTE: FAIL apply-pause the run printed no result=ok for apply-pause"
+out_lacks "action=apply-pause result=ok"
 gh_fresh failure "JOBAPP-OPS action=backup exit=1 warnings=0 errors=1 result=fail"
 run 1 ops/remote.sh backup
 out_has "JOBAPP-OPS action=backup exit=1 warnings=0 errors=1 result=fail"
@@ -358,7 +362,10 @@ printf 'ops on the Jetson\tSet up job\t2026-10-15T10:00:00.0Z runner-job-guard: 
 run 1 ops/remote.sh status
 out_has "REMOTE: FAIL status the run ended failure with no figures: gh run view 12 --log-failed"
 out_has "runner-job-guard: refused"
-ok "a failed run prints its figures and FAIL; one with no figures points at the log and the runner guard; a result for another action is not a success"
+gh_fresh cancelled
+run 1 ops/remote.sh backup
+out_has "REMOTE: FAIL backup the run was cancelled: GitHub keeps one pending run per concurrency group (ops-jetson, ops.yml)"
+ok "a failed run prints its figures and FAIL; one with no figures points at the log and the runner guard; a result for another action, or the words of the line inside another line, is not a success; a cancelled run says why"
 
 gh_fresh success
 touch "$STATE/dispatch_fail"
@@ -421,5 +428,108 @@ order="$(grep '^      - name: \(Deploy under the Jetson deploy lock\|Public URL\
   fail "deploy.yml step order: $order"
 ! grep -q 'JOBAPP-VERIFY' <<<"$verify_step" || fail "the verify step's own text holds the line a reader of the log looks for"
 ok "deploy.yml: the verify step runs ops/jetson-verify.sh after the Public URL step, whenever the deploy step succeeded, and its text holds no JOBAPP-VERIFY"
+
+# === figures only on every path of deploy.yml (the run log of this public repository) ===============
+failure_step="$(awk '/^      - name: State on failure$/ { on = 1; print; next } on && /^      (- name:|# )/ { exit } on { print }' .github/workflows/deploy.yml)"
+[[ -n "$failure_step" ]] || fail "deploy.yml has no step State on failure"
+if grep -q 'logs' <<<"$failure_step"; then fail "State on failure prints logs: $failure_step"; fi
+grep -qF 'ps -a --format' <<<"$failure_step" || fail "State on failure does not print the states as figures: $failure_step"
+grep -qF -- "-printf '%f\n'" <<<"$failure_step" || fail "State on failure does not print the dump names alone: $failure_step"
+ok "deploy.yml State on failure: compose ps as figures (service, state, health, exit code) and the names of the newest dumps, never a log"
+
+# run_code <workflow>: the code lines of every run: of a workflow, comment lines dropped.
+run_code() {
+  awk '
+    /^ *run: \|$/ { match($0, /^ */); ind = RLENGTH; on = 1; next }
+    /^ *run: [^|]/ { on = 0; line = $0; sub(/^ *run: /, "", line); print line; next }
+    on { match($0, /^ */); if ($0 !~ /^ *$/ && RLENGTH <= ind) on = 0; else print }
+  ' "$1" | grep -v '^ *#' || true
+}
+wf_code="$(run_code .github/workflows/deploy.yml)"
+[[ "$(grep -c . <<<"$wf_code")" -gt 100 ]] || fail "the run: blocks of deploy.yml were not found: $(grep -c . <<<"$wf_code") lines"
+# guard_code <what> <code>: no log read, no tee, no address, no body, no file printed
+guard_code() {
+  local what="$1" code="$2" hit
+  hit="$(grep -nE '(\$COMPOSE|\$RCOMPOSE|\bcompose|\bdocker|\brc|\bdc)\b[^;|&#]* logs\b' <<<"$code" || true)"
+  [[ -z "$hit" ]] || fail "$what reads a log into the output: $hit"
+  hit="$(grep -nwE 'tee' <<<"$code" || true)"
+  [[ -z "$hit" ]] || fail "$what copies a command's output with tee: $hit"
+  hit="$(grep -nE '\b[0-9]{1,3}(\.[0-9]{1,3}){3}\b|\bip +(-[0-9] +)?(addr|route|a|r)\b|hostname +-[iI]|ifconfig|\.IPAddress' <<<"$code" || true)"
+  [[ -z "$hit" ]] || fail "$what reads or names an address: $hit"
+  hit="$(grep -nwE 'curl' <<<"$code" | grep -vE -- '-o /dev/null|\[\[ "\$\(curl ' || true)"
+  [[ -z "$hit" ]] || fail "$what may print a response body: $hit"
+  hit="$(grep -nE '(^|[;&|(] *)cat\b' <<<"$code" | grep -vF '.deployed-commit' || true)"
+  [[ -z "$hit" ]] || fail "$what prints a file: $hit"
+}
+guard_code deploy.yml "$wf_code"
+# The guard bites: each planted line is refused.
+for planted in '$COMPOSE logs --no-color --tail 80 || true' 'docker compose -f compose.yml logs api' \
+  'bash ops/db.sh backup | tee "$out"' 'echo "lan: 192.168.1.20"' 'ip -4 route get 1.1.1.1' \
+  "docker inspect -f '{{.NetworkSettings.IPAddress}}' x" 'echo "$(curl -s "$url/api/health")"' 'cat "$out"'; do
+  if (guard_code planted "$planted") 2>/dev/null; then fail "the guard lets through: $planted"; fi
+done
+ok "deploy.yml, every run: no compose or docker logs, no tee, no address read or named, no response body, no file printed (each planted breach is caught)"
+
+grep -qF 'MIGRATE_LOG_DIR="$logdir" bash ops/migrate.sh' .github/workflows/deploy.yml || fail "deploy.yml does not keep the migrations' output in the logs folder"
+grep -qF 'JETSON_SMOKE_LOG="$logdir/smoke-' .github/workflows/deploy.yml || fail "deploy.yml does not run the smoke figures only"
+grep -qF '>"$out") || rc=$?' .github/workflows/deploy.yml || fail "deploy.yml does not keep the predeploy backup's output in a file"
+# ops/migrate.sh: alembic's output reaches only the kept file and the figures read from it.
+mig_code="$(grep -v '^ *#' ops/migrate.sh)"
+guard_code ops/migrate.sh "$mig_code"
+hit="$(grep -n '\$LOG"' <<<"$mig_code" | grep -vE 'figures "\$LOG"|failed_at "\$LOG"|^[0-9]+:revision="\$\(grep -E .* "\$LOG" \| tail -n 1|^[0-9]+:applied="\$\(grep -c .Running upgrade . "\$LOG"|: >"\$LOG"|^[0-9]+:LOG="\$LOG_DIR/' || true)"
+[[ -z "$hit" ]] || fail "ops/migrate.sh uses its kept output another way: $hit"
+ok "ops/migrate.sh: alembic's output goes to the kept file only; what comes out is read from it as figures (step, revision, count, class)"
+# tests/jetson_smoke.sh: in JETSON_SMOKE_LOG mode only say() reaches the public output, and say is
+# given fixed words and counts.
+smoke_code="$(grep -v '^ *#' tests/jetson_smoke.sh)"
+[[ "$(grep -c '>&3' <<<"$smoke_code")" == 1 ]] || fail "jetson_smoke.sh writes to the public output outside say(): $(grep -n '>&3' <<<"$smoke_code")"
+hit="$(grep -n '\bsay "' <<<"$smoke_code" | sed -E 's/\$\*|\$passed|\$\(\(passed \+ 1\)\)|\$CURRENT_STEP|\$code|\$rc//g' | grep '\$' || true)"
+[[ -z "$hit" ]] || fail "jetson_smoke.sh says a value read from the Jetson: $hit"
+grep -qx '  exec 3>&1 >>"$LOG" 2>&1' tests/jetson_smoke.sh || fail "jetson_smoke.sh does not send everything else to its log"
+
+# The smoke against a fake Jetson whose LAN address answers: the address stays in the file.
+SB="$WORK/smokebin"
+mkdir -p "$SB" "$WORK/smokehome/jobapp"
+printf 'HTTP_PORT=8088\n' >"$WORK/smokehome/jobapp/.env"
+cat >"$SB/docker" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+"compose -f compose.yml --profile tunnel ps -q "*) a="$*" && echo "id-${a##* }" ;;
+"inspect -f {{.State.Health.Status}} "*) echo healthy ;;
+"port id-caddy") echo "80/tcp -> 127.0.0.1:8088" ;;
+"port id-"*)
+  [[ -z "${SMOKE_PORT_FAILS:-}" ]] || { echo "Error: 10.9.8.7 said $CANARY" >&2; exit 3; }
+  ;;
+*) exit 9 ;;
+esac
+EOF
+printf '#!/usr/bin/env bash\necho "1.1.1.1 via 192.168.77.1 dev eth0 src 192.168.77.23 uid 1000"\n' >"$SB/ip"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$SB/curl"
+chmod +x "$SB/"*
+smoke() { # smoke <expected exit> [env ...]: the smoke in log mode against the fakes, public output in $OUT
+  local want="$1"
+  shift
+  rm -rf "$WORK/smokelogs"
+  run "$want" env HOME="$WORK/smokehome" PATH="$SB:$PATH" DEPLOY_HOST=local JETSON_SMOKE_FULL=0 \
+    JETSON_SMOKE_LOG="$WORK/smokelogs/smoke.log" "$@" bash tests/jetson_smoke.sh
+}
+smoke 1
+line_is 1 "== services healthy, only caddy published, on loopback"
+line_is 2 "   ok: check 1"
+line_is 3 "   FAIL: check 2, in the step 'services healthy, only caddy published, on loopback'; the detail is in the smoke log on the Jetson"
+[[ "$(wc -l <"$OUT" | tr -d ' ')" == 3 ]] || fail "more than the figures came out: $(cat "$OUT")"
+out_lacks "192.168"
+out_lacks "127.0.0.1"
+grep -q "the stack answers on the LAN at 192.168.77.23:8088" "$WORK/smokelogs/smoke.log" || fail "the detail is not in the smoke log"
+[[ -n "$(find "$WORK/smokelogs/smoke.log" -perm 600)" ]] || fail "the smoke log is not 600"
+smoke 3 SMOKE_PORT_FAILS=1
+line_is 2 "   FAIL: a command of the step 'services healthy, only caddy published, on loopback' failed (exit 3), the detail is in the smoke log on the Jetson"
+out_lacks "$CANARY"
+out_lacks "10.9.8.7"
+grep -q "$CANARY" "$WORK/smokelogs/smoke.log" || fail "the failing command's words are not in the smoke log"
+smoke 64 JETSON_SMOKE_LOG=relative.log
+smoke 64 JETSON_SMOKE_LOG="$WORK/smokehome/jobapp/smoke.log"
+[[ ! -e "$WORK/smokehome/jobapp/smoke.log" ]] || fail "a smoke log was written in the deploy directory"
+ok "jetson_smoke.sh with JETSON_SMOKE_LOG: step names, ok counts and FAIL with its step only (a check that fails, a command that fails), the LAN address, loopback and error words in a 600 file; a relative path or one in the deploy directory is refused"
 
 printf '\nAll %d checks passed.\n' "$passed"

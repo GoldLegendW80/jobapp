@@ -90,7 +90,22 @@ How it works:
 - **Figures only.** The run logs of this public repository are readable by anyone: the scripts
   print counts, states, revisions and dump names, never a log line, a path of the Jetson's
   disk beyond a dump's name, or an environment value. The secrets stay in `~/jobapp/.env` on the
-  Jetson.
+  Jetson. Every path of `deploy.yml` holds to it, a failure included: its failure step prints
+  each service's state, health and exit code and the names of the newest predeploy dumps, never
+  a log (`./deploy.sh logs <service>`, over ssh, reads them); the rollback prints the same
+  states; the migrations print each step, the revision reached and, on a failure, the step, the
+  exit code and the exception's class; the smoke prints its step names, ok counts and, on a
+  failure, the step and the last HTTP status code. Their whole output (alembic's lines, the
+  smoke's addresses and bodies, the predeploy backup's report) is kept on the Jetson in
+  `~/jobapp-backups/logs/` (mode 700, files 600, kept 30 days), never in the checkout.
+  `tests/remote_ops_test.sh` fails on a `logs`, a `tee`, an address or a printed body in any
+  step.
+- **Only main is deployed.** The first step after the checkout refuses a ref whose commit is not
+  on `origin/main`, before any script of that checkout runs. A hot fix that cannot wait for main
+  is a branch `hotfix/<name>`, deployed by its name with `allow_branch`:
+  `ops/deploy-checked.sh --allow-branch origin/hotfix/<name>` (it still needs a PASS record of
+  its tree) dispatches `-f ref=hotfix/<name> -f allow_branch=true`, and the workflow checks that
+  the branch's tip is the commit it checked out. A feature branch, a sha, or a tag is refused.
 - **The runner** only runs `deploy.yml` and `ops.yml` from `main`, on `workflow_dispatch`: its
   job-started hook (`ops/runner/job-guard.sh`, baked into its image) refuses every other job, a
   pull request, a fork, a branch's workflow, before its first step. Dispatching needs write access
@@ -345,7 +360,9 @@ happens when it goes wrong:
 
 - The migration fails: the upgrade is one transaction, Postgres rolls it back, the deploy stops
   with a non zero exit before anything restarts, and the previous release keeps serving. The log
-  shows alembic's error. Fix the migration and deploy again.
+  shows the step it failed in and the exception's class; alembic's whole output (SQL, Postgres'
+  DETAIL) is in `~/jobapp-backups/logs/migrate-<time>.log` on the Jetson (`MIGRATE_LOG_DIR`, the
+  newest 20 kept). Fix the migration and deploy again.
 - The migration hangs (usually waiting for a lock the running release holds): it is stopped after
   `MIGRATE_TIMEOUT_S` (300 seconds by default), its session ended in Postgres so no lock stays
   behind, and the deploy stops the same way.
@@ -377,6 +394,7 @@ where locktype = 'advisory' and objsubid = 1
 SQL
 ssh jetson 'cd ~/jobapp && docker compose -f compose.yml --profile tunnel exec -T api alembic current'   # the revision the database is at
 ssh jetson 'cd ~/jobapp && bash ops/migrate.sh'           # run the step alone, safe to repeat
+ssh jetson 'ls -t ~/jobapp-backups/logs | head -n 3'       # the kept outputs of the last migrations and smokes
 ./deploy.sh                                      # or deploy again by hand once the cause is fixed
 ```
 
@@ -394,8 +412,10 @@ this, `ops/env_check.sh` checks the syntax of `~/jobapp/.env` (`KEY=VALUE` with 
 name, comments and blank lines only; a value with spaces or quotes in quotes, closed on its line),
 naming each bad line by its number and never printing it; `./deploy.sh` runs the same check on
 `.env.jetson` and on the Jetson's `.env` in its preflight, and `tests/jetson_smoke.sh` runs it
-too. A started deploy is never cancelled. `gh workflow run deploy.yml -f ref=<branch or sha>` deploys a branch by hand to test it
-before the merge (the next merge redeploys `main`); the workflow itself always comes from `main`.
+too. A started deploy is never cancelled. `gh workflow run deploy.yml -f ref=<sha of main>`
+deploys a commit of main by hand; a branch is refused unless it is `hotfix/<name>` dispatched with
+`-f allow_branch=true` (Only main is deployed, above; the next merge redeploys `main`). The
+workflow itself always comes from `main`.
 Each ref has its own concurrency group: GitHub keeps one pending run per group and replaces an
 older pending one, so a branch dispatch never displaces a pending `main` deploy.
 

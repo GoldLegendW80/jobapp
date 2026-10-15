@@ -27,6 +27,11 @@ ACTIONS="status backup backups apply-status apply-pause apply-resume egress-host
 POLL_SECONDS="${REMOTE_POLL_SECONDS:-2}"
 # The lines of ops/jetson-ops.sh and ops/jetson-verify.sh, matched exactly.
 LINE_RE='JOBAPP-(VERIFY|OPS) [a-z_]+=[A-Za-z0-9_.:,-]+( [a-z_]+=[A-Za-z0-9_.:,-]+)*'
+# A line of `gh run view --log` is <job> TAB <step> TAB <time ending in Z> SPACE <line>: the figures
+# count only as a whole line right after that prefix, never inside another line (a commit subject).
+TAB=$'\t'
+CR=$'\r'
+LOG_LINE_RE="^[^${TAB}]*${TAB}[^${TAB}]*${TAB}[^ ${TAB}]*Z (${LINE_RE})${CR}?\$"
 
 usage_error() {
   printf '%s: %s\nusage: %s <action> | --list\nactions: %s\n' "$PROG" "$1" "$PROG" "$ACTIONS" >&2
@@ -86,7 +91,7 @@ conclusion="$(gh run view "$run" --json conclusion --jq .conclusion 2>/dev/null 
 lines=""
 for _ in 1 2 3 4 5; do
   if log="$(gh run view "$run" --log 2>/dev/null)"; then
-    lines="$(grep -oE "$LINE_RE" <<<"$log" || true)"
+    lines="$(sed -nE "s/$LOG_LINE_RE/\1/p" <<<"$log" || true)"
     break
   fi
   sleep "$POLL_SECONDS"
@@ -94,6 +99,9 @@ done
 log=""
 [[ -z "$lines" ]] || printf '%s\n' "$lines"
 
+if [[ "$conclusion" == cancelled ]]; then
+  fail "the run was cancelled: GitHub keeps one pending run per concurrency group (ops-jetson, ops.yml), so a newer dispatch while one ran and this one waited replaced it; or someone cancelled it. Run the action again: gh run view $run"
+fi
 if [[ "$conclusion" != success ]]; then
   [[ -n "$lines" ]] ||
     fail "the run ended $conclusion with no figures: gh run view $run --log-failed (a 'runner-job-guard: refused' there means the Jetson's runner predates ops.yml: README, Deploy from any machine)"
