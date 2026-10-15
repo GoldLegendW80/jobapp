@@ -112,13 +112,21 @@ class Taken:
     exhausted: bool
 
 
+# A run whose final hook never takes its memory (its job cancelled under it by the queue's
+# timeout, its end recorded by another worker) would stay forever: past RUNS_KEPT, the run that
+# submitted least recently is forgotten. A worker runs MAX_AGENT_RUNS (2) runs at once.
+RUNS_KEPT = 64
 _RUNS: dict[uuid.UUID, _Run] = {}
 _LOCK = threading.Lock()
 
 
 def _run(run_id: uuid.UUID) -> _Run:
     with _LOCK:
-        return _RUNS.setdefault(run_id, _Run())
+        found = _RUNS.pop(run_id, None) or _Run()
+        _RUNS[run_id] = found
+        while len(_RUNS) > RUNS_KEPT:
+            del _RUNS[next(iter(_RUNS))]
+        return found
 
 
 def take(run_id: uuid.UUID) -> Taken:
