@@ -4,6 +4,7 @@ A self-hosted job-search app for Harald and a few invited friends. It finds post
 
 ## Documents
 
+- [CLAUDE.md](CLAUDE.md): the entry point for Claude Code and for anyone picking up the build; it links [docs/STATUS.md](docs/STATUS.md), [docs/decisions.md](docs/decisions.md) and the agents' rules in `docs/agents/`.
 - [CAPABILITY-MAP.md](CAPABILITY-MAP.md): the modules, their dependencies and the build order.
 - [SPEC-platform.md](SPEC-platform.md): the platform module (Compose stack, deploy, public URL through Tailscale Funnel), built first.
 - [CONTRIBUTING.md](CONTRIBUTING.md): branches, pull requests, review, the batch check on the Mac and the deploy of a checked tree, started by hand.
@@ -15,6 +16,38 @@ A self-hosted job-search app for Harald and a few invited friends. It finds post
 cp .env.example .env           # then fill in real values; .env is never committed
 pre-commit install             # ruff, prettier, eslint, gitleaks and file fixers on every commit
 ```
+
+## Develop on a new machine
+
+Everything the build needs is in this repository: [CLAUDE.md](CLAUDE.md) is where Claude Code
+starts (the map, the hard rules, the daily commands), `docs/agents/` holds the agents' rules and
+the workflow, [docs/STATUS.md](docs/STATUS.md) the state and [docs/decisions.md](docs/decisions.md)
+the owner's decisions. Nothing depends on another machine's temporary files.
+
+```bash
+gh auth login -h github.com -s project,workflow    # repo is in the default scopes; project for the board, workflow to push .github/workflows
+gh repo clone GoldLegendW80/jobapp && cd jobapp
+brew install uv                                    # or curl -LsSf https://astral.sh/uv/install.sh | sh
+corepack enable && corepack prepare pnpm@9.15.9 --activate   # the pnpm of packageManager in web/package.json; Node 22.12 or newer
+uv tool install pre-commit && pre-commit install   # the hooks, secret scan included, once per clone
+pnpm --dir web install && (cd api && uv sync)      # dependencies (add --native-tls to uv on a network that intercepts TLS)
+ops/dev-setup.sh                                   # read only: lists what is still missing and the command that fixes it
+```
+
+- **Docker Desktop** running, with at least 16 GiB free on the disk (the merge gate refuses to
+  start under 12).
+- **The Jetson**, only to deploy or check production: join the owner's tailnet with Tailscale
+  (ask the owner for an invite), add a `Host jetson` block to `~/.ssh/config` with the HostName,
+  User and IdentityFile the owner gives you (never commit them), put your public key in the
+  Jetson's `authorized_keys`, then `ssh jetson true` must answer without a prompt.
+  `ops/dev-setup.sh --skip-jetson` leaves this check out on a laptop that does not deploy.
+- **Claude Code**: install it (`npm install -g @anthropic-ai/claude-code`) and run `claude` from
+  the repository root. It loads `CLAUDE.md` and the versioned `.claude/` config: the
+  `implementer` and `reviewer` subagents, the commands `/build-task`, `/review-pr`, `/fix-pr`,
+  `/ship` and `/status`, and `settings.json`, whose permissions allow the common read only and
+  test commands, ask before a merge, a gate, a deploy or ssh, and deny reading `.env` files.
+  Personal settings go in `.claude/settings.local.json` (git ignored); agent worktrees live in
+  `.claude/worktrees/` (git ignored).
 
 ## Development on the Mac
 
