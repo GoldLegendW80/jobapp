@@ -1,0 +1,243 @@
+{
+ "description": "D24: the base reader reads an uploaded CV (Morgan Exampleton's, invented) and the writing rules, and submits a base CV every claim and fixed fact of which the file states.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__read_profile_section",
+     "mcp__app__get_upload_text",
+     "mcp__app__submit_base"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_upload_002",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read the uploaded CV and the writing rules first."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_upload_002_text",
+       "name": "mcp__app__get_upload_text",
+       "input": {}
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_upload_002_facts",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "facts"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_upload_003",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_upload_003_submit_base",
+       "name": "mcp__app__submit_base",
+       "input": {
+        "schema": 1,
+        "target": "Platform engineering roles",
+        "headline": "Platform Engineer",
+        "summary": "Platform engineer who runs the deployment platform of the billing team at Quillmere Example Works and moved 30 services to Kubernetes with Terraform.",
+        "highlights": [
+         "Moved 30 services to Kubernetes",
+         "Deployment platform of the billing team",
+         "Internal tools in Python and React"
+        ],
+        "competencies": [
+         "Kubernetes",
+         "Terraform",
+         "Python",
+         "FastAPI",
+         "PostgreSQL",
+         "React",
+         "TypeScript"
+        ],
+        "experience": [
+         {
+          "employer_key": "quillmere-example-works",
+          "bullets": [
+           "Run the deployment platform of the billing team, from the first commit to production.",
+           "Wrote the platform's backend services in Python with FastAPI and PostgreSQL.",
+           "Moved 30 services to Kubernetes with Terraform."
+          ]
+         },
+         {
+          "employer_key": "tarnwick-sample-studio",
+          "bullets": [
+           "Built internal tools in Python and React for the support team."
+          ]
+         }
+        ],
+        "skills": [
+         {
+          "label": "Cloud",
+          "items": [
+           "Kubernetes",
+           "Terraform"
+          ]
+         },
+         {
+          "label": "Backend",
+          "items": [
+           "Python",
+           "FastAPI",
+           "PostgreSQL"
+          ]
+         },
+         {
+          "label": "Frontend",
+          "items": [
+           "React",
+           "TypeScript"
+          ]
+         }
+        ],
+        "notes": "",
+        "fixed": {
+         "employers": [
+          {
+           "key": "quillmere-example-works",
+           "organisation": "Quillmere Example Works",
+           "title": "Platform Engineer",
+           "start": "2023-02",
+           "end": null,
+           "location": "Nantes"
+          },
+          {
+           "key": "tarnwick-sample-studio",
+           "organisation": "Tarnwick Sample Studio",
+           "title": "Software Developer",
+           "start": "2021-01",
+           "end": "2023-01",
+           "location": "Rennes"
+          }
+         ],
+         "schools": [
+          {
+           "school": "Example Institute of Technology",
+           "degree": "MSc Computer Science",
+           "start": "2018",
+           "end": "2020",
+           "location": ""
+          }
+         ],
+         "languages": [
+          {
+           "name": "English",
+           "level": "fluent"
+          },
+          {
+           "name": "French",
+           "level": "native"
+          }
+         ]
+        }
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_upload_004",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "The base CV is stored."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 10,
+    "duration_api_ms": 5,
+    "num_turns": 3,
+    "session_id": "{session_id}",
+    "result": "The base CV is stored.",
+    "total_cost_usd": 0.05,
+    "usage": {
+     "input_tokens": 3000,
+     "output_tokens": 300
+    },
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}
