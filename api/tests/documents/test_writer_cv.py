@@ -20,7 +20,7 @@ from app.agents import definitions, failures, fake_backend, runs
 from app.agents import tools as app_tools
 from app.agents.definitions import FinalRun
 from app.agents.models import RunStatus
-from app.documents import corrections, generate, render_job, store, submit, writer_cv
+from app.documents import consent, corrections, generate, render_job, store, submit, writer_cv
 from app.documents.models import (
     Author,
     BaseSource,
@@ -46,6 +46,7 @@ from tests.documents.store_support import (
     migrated_url,
 )
 from tests.documents.writer_support import (
+    CEILING,
     POSTING,
     Person,
     document_row,
@@ -392,23 +393,43 @@ def test_a_cancel_keeps_nothing_even_after_an_accepted_submit(alex: Person) -> N
 # --- the overflow and its one shortening pass ---------------------------------------------------
 
 
+def _consent(who: Person) -> None:
+    with who.factory() as db:
+        consent.record(db, who.user, AT)
+        db.commit()
+
+
+def _overflow(who: Person) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    """The writer's CV, done, then its render overflowing: (document, generation, run)."""
+    document, generation, run = write(who, "documents_cv_overflow")
+    _done(who, document, generation)
+    revision = document_row(who.factory, document).draft_revision
+    asyncio.run(
+        render_job.render_document(
+            context(who.factory, FakeRenderer(pages=2), AT), str(document), revision
+        )
+    )
+    return document, generation, run
+
+
 def test_an_overflow_starts_one_shortening_pass_and_only_one(
     alex: Person, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(generate, "RUNTIME", alex.runtime())
     assert render_job.on_overflow is generate.on_overflow
-    document, generation, _ = write(alex, "documents_cv_overflow")
-    _done(alex, document, generation)
+    _consent(alex)
+    document, _, cv_run = _overflow(alex)
     renderer = FakeRenderer(pages=2)
-    revision = document_row(alex.factory, document).draft_revision
-    asyncio.run(
-        render_job.render_document(context(alex.factory, renderer, AT), str(document), revision)
-    )
     agents = _shortenings(alex)
     assert len(agents) == 1
     shorten_run = uuid.UUID(agents[0]["args"][0])
     found = run_row(alex.factory, shorten_run)
     assert found.input["mode"] == "shorten"
+    # Its ceiling is what the posting's ceiling has left after the CV's own run.
+    spent = run_row(alex.factory, cv_run)
+    left = CEILING - (spent.input_tokens or 0) - (spent.output_tokens or 0)
+    assert 0 < left < CEILING
+    assert found.input["token_budget"] == left
     assert found.input["script"] == "documents_cv_shorten"
     assert found.input["long_fields"][:2] in (
         ["summary", "experience.0.bullets.0"],
@@ -436,6 +457,41 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
         "overflow",
         "overflow",
     ]
+
+
+@pytest.mark.parametrize("missing", ["consent", "token_ceiling"])
+def test_the_shortening_pass_needs_the_consent_and_a_ceiling_left(
+    alex: Person, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, missing: str
+) -> None:
+    monkeypatch.setattr(generate, "RUNTIME", alex.runtime())
+    if missing == "token_ceiling":
+        _consent(alex)
+        monkeypatch.setattr(generate, "shorten_ceiling", lambda _db, _parent: 0)
+    caplog.set_level(logging.INFO, logger="app.documents")
+    document, _, _ = _overflow(alex)
+    assert _shortenings(alex) == []
+    assert [v.fit.value for v in versions(alex.factory, document) if v.fit] == ["overflow"]
+    skipped = [r for r in caplog.records if r.message == "documents.generation.shorten_skipped"]
+    assert [getattr(r, "reason", None) for r in skipped] == [missing]
+
+
+def test_the_shortening_ceiling_is_what_the_cv_run_left(alex: Person) -> None:
+    _, generation, run = write(alex, "documents_cv_valid")
+    with alex.factory() as db:
+        db.execute(
+            sa.text("UPDATE agent_runs SET input_tokens = :i, output_tokens = :o WHERE id = :r"),
+            {"i": CEILING - 300, "o": 200, "r": run},
+        )
+        db.commit()
+        parent = db.get(DocumentGeneration, generation)
+        assert parent is not None
+        assert generate.shorten_ceiling(db, parent) == 100
+        db.execute(
+            sa.text("UPDATE agent_runs SET output_tokens = :o WHERE id = :r"), {"o": 900, "r": run}
+        )
+        db.commit()
+        db.refresh(parent)
+        assert generate.shorten_ceiling(db, parent) == 0
 
 
 def test_a_generation_already_running_is_not_started_twice(alex: Person) -> None:
