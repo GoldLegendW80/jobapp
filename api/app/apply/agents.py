@@ -46,7 +46,7 @@ import secrets
 import threading
 import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -252,7 +252,6 @@ class RuntimeAnswerAgent:
 
     context: Callable[[], RunContext]
     script: str | None = None
-    runs_made: list[uuid.UUID] = field(default_factory=list, repr=False)
 
     async def __call__(self, request: agent.Request) -> agent.Reply:
         from app.agents import runner  # the SDK: the worker's image only
@@ -276,7 +275,6 @@ class RuntimeAnswerAgent:
         created = await asyncio.to_thread(_in_db, context.sessions, create)
         if isinstance(created, str):
             return agent.Reply(stopped=created)
-        self.runs_made.append(created)
         with _LOCK:
             _PENDING[key] = request
         try:
