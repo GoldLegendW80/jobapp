@@ -14,7 +14,12 @@ committed between the tick's read and its start (one run either way, no exceptio
 person still handled). A run that ended without its final hook (reaped, killed, cancelled while
 queued): untouched within the grace, then settled, the next posting started and the posting
 retried once. One person's failure never ends the pass; a start that raised is never counted; a
-waiting automatic base CV with `auto` off; no base CV and no employer still cancels."""
+waiting automatic base CV with `auto` off; no base CV and no employer still cancels.
+
+The letter of a written CV is work for the tick after the CV moved its posting to `cv_ready`: the
+one the chain left `queued` (the person's runs all busy) and the one it never created (the hook
+cut short), never one of a posting applied meanwhile or of a `cv_ready` posting without a written
+CV; and it gets what the pair's ceiling has left after the CV's run."""
 
 from __future__ import annotations
 
@@ -28,7 +33,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import credentials, failures, runner
+from app.agents import credentials, failures, runner, runs
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind
 from app.documents import (  # noqa: F401 (writers registers the writers)
@@ -52,7 +57,7 @@ from app.documents.models import (
     Kind,
     Scope,
 )
-from app.jobs.models import Job
+from app.jobs.models import Job, JobStatus
 from tests.agents.conftest import API_KEY, new_key
 from tests.conftest import make_settings
 from tests.documents.canary import find, marker
@@ -920,3 +925,105 @@ def test_without_a_base_cv_or_an_employer_what_waits_is_still_cancelled(
     assert [g["status"] for g in posting_cv(who.generations(posting))] == [
         GenerationStatus.cancelled
     ]
+
+
+# --- the letter of a written CV -----------------------------------------------------------------
+
+
+def _letters(world: World, posting: uuid.UUID) -> list[dict[str, Any]]:
+    return [g for g in world.generations(posting) if g["kind"] is Kind.letter]
+
+
+def _busy(world: World) -> list[uuid.UUID]:
+    """The person's runs all taken by runs of another kind (as ingestion's or a chat's)."""
+    with world.factory() as db:
+        made = [
+            runs.create_run(db, world.user, "documents_cv", None, {}, "m", AT).id
+            for _ in range(runs.ACTIVE_PER_USER)
+        ]
+        db.commit()
+    return made
+
+
+def _free(world: World, busy: list[uuid.UUID]) -> None:
+    with world.factory() as db:
+        db.execute(sa.text("UPDATE agent_runs SET status = 'done' WHERE id = ANY(:r)"), {"r": busy})
+        db.commit()
+
+
+def test_a_letter_the_busy_chain_left_queued_starts_after_the_cv_moved_the_posting(
+    world: World,
+) -> None:
+    posting = world.posting(80)
+    (cv_run,) = world.tick()
+    world.finish()
+    busy = _busy(world)
+    assert generate.start_letter(world.factory, cv_run, AT, world.settings) is None
+    assert [(g["status"], g["trigger"]) for g in _letters(world, posting)] == [
+        (GenerationStatus.queued, GenerationTrigger.auto)
+    ]
+    world.set_job(posting, status=JobStatus.cv_ready)  # the CV's one page render
+    assert world.tick(AT + timedelta(minutes=1)) == []  # still busy: kept, not cancelled
+    assert [g["status"] for g in _letters(world, posting)] == [GenerationStatus.queued]
+    _free(world, busy)
+    started = world.tick(AT + timedelta(minutes=2))
+    (letter,) = _letters(world, posting)
+    assert letter["status"] is GenerationStatus.running
+    assert started == [letter["run_id"]]
+
+
+def test_a_cv_done_without_its_letter_gets_it_from_the_tick_once_the_posting_is_cv_ready(
+    world: World,
+) -> None:
+    posting = world.posting(80)
+    world.tick()
+    world.finish()  # the hook was cut short: no letter, nothing waits
+    world.set_job(posting, status=JobStatus.cv_ready)
+    started = world.tick(AT + timedelta(minutes=1))
+    (letter,) = _letters(world, posting)
+    assert (letter["status"], letter["trigger"]) == (
+        GenerationStatus.running,
+        GenerationTrigger.auto,
+    )
+    assert started == [letter["run_id"]]
+
+
+@pytest.mark.parametrize("status", [JobStatus.staged, JobStatus.applied, JobStatus.skipped])
+def test_a_queued_letter_of_a_posting_moved_past_cv_ready_is_cancelled_never_started(
+    world: World, status: JobStatus
+) -> None:
+    posting = world.posting(80)
+    (cv_run,) = world.tick()
+    world.finish()
+    busy = _busy(world)
+    generate.start_letter(world.factory, cv_run, AT, world.settings)
+    _free(world, busy)
+    world.set_job(posting, status=status)
+    assert world.tick(AT + timedelta(minutes=1)) == []
+    assert [g["status"] for g in _letters(world, posting)] == [GenerationStatus.cancelled]
+
+
+def test_a_cv_ready_posting_without_a_written_cv_gets_nothing(world: World) -> None:
+    posting = world.posting(80, status="cv_ready")
+    assert world.tick() == []
+    assert world.generations(posting) == []
+
+
+def test_the_ticks_letter_gets_what_the_pairs_ceiling_has_left_after_the_cvs_run(
+    world: World,
+) -> None:
+    posting = world.posting(80)
+    (cv_run,) = world.tick()
+    with world.factory() as db:
+        db.execute(
+            sa.text(
+                "UPDATE agent_runs SET input_tokens = 30000, output_tokens = 4000 WHERE id = :r"
+            ),
+            {"r": cv_run},
+        )
+        db.commit()
+    world.finish()
+    world.tick(AT + timedelta(minutes=1))
+    (cv,) = posting_cv(world.generations(posting))
+    (letter,) = _letters(world, posting)
+    assert letter["token_ceiling"] == cv["token_ceiling"] - 34_000
