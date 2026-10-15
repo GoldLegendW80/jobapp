@@ -168,7 +168,7 @@ export interface Search {
   never_apply: string[];
   /** when the boards are swept automatically; edited in Jobs (J5), kept as is by this tab */
   sweep_schedule: SweepSchedule;
-  /** the automatic generation of documents (D10), kept as is by this tab until D13's card */
+  /** the automatic generation of documents (D10), edited by the Search tab's documents card */
   documents: DocumentsGeneration;
 }
 
