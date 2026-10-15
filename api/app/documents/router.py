@@ -393,7 +393,8 @@ def _failed_generation(
 ) -> DocumentGeneration | None:
     """The document's latest `posting` generation when it failed (a later one that did not hides
     it), so the card can say why and offer "Try again", which writes the document again. A chat
-    or a shortening is not the writing of the document: its failure is told where it was asked."""
+    or a shortening is not the writing of the document, so "Try again" would not repeat it: its
+    failure is not named here."""
     last = db.execute(
         sa.select(DocumentGeneration)
         .where(
