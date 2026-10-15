@@ -1518,12 +1518,14 @@ then stops at its predeploy backup until the line is put right. `backups`, `rest
 
 ## Reboot and crash recovery
 
-Every service has `restart: unless-stopped` and `docker.service` is enabled at boot, so the daemon
+Every service but the browser has `restart: unless-stopped` and `docker.service` is enabled at boot, so the daemon
 starts the stack again after a reboot; `tailscale` logs in again from its saved state, with the same URL.
 `tests/crash_check.sh` proves the restart half without sudo: it kills each container's main process
 with SIGKILL from the host PID namespace (what the OOM killer or a segfault looks like) and waits
 for the daemon to restart it healthy. `docker kill` and `docker compose kill` count as a manual
-stop, which `unless-stopped` deliberately leaves down. The reboot itself needs sudo, so it is run by
+stop, which `unless-stopped` deliberately leaves down. The one exception is the browser (profile
+`browser`): it has `restart: "no"`, so after a reboot it stays down until the next deploy, which checks
+its host firewall before starting it (`ops/browser-egress.sh`). The reboot itself needs sudo, so it is run by
 hand:
 
 ```bash

@@ -171,7 +171,8 @@ def test_own_image_profile_command_and_health_check(stack: dict) -> None:
     assert browser["command"] == ["python", "-m", "browserd"]
     assert browser["healthcheck"]["test"] == ["CMD", "python", "-m", "browserd", "--check"]
     assert browser["expose"] == ["9300"]
-    assert browser["restart"] == "unless-stopped"
+    # No restart policy: after a reboot only a deploy, behind the firewall check, starts it.
+    assert browser["restart"] == "no"
 
 
 def test_playwright_pinned_exactly() -> None:

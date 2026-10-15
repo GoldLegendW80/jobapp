@@ -222,6 +222,29 @@ run 1 env PATH="$WORK/bin:$PATH" FAKE_CALLS="$WORK/calls" FAKE_COPY=checkfail ba
 out_has "browser-egress: IPv4 INPUT does not start with the jump"
 ok "host-check exits 0 when the rules are in place, 1 with the reason otherwise"
 
+step "skip: a browser image that did not build removes the previous container, no firewall step"
+: >"$WORK/calls"
+run 1 env PATH="$WORK/bin:$PATH" FAKE_CALLS="$WORK/calls" COMPOSE="docker compose -f compose.yml --profile tunnel" \
+  bash "$SCRIPT" skip "the browser image did not build"
+out_has "browser: not started, the browser image did not build; no browser container left"
+removed || fail "the previous browser was not removed: $(cat "$WORK/calls")"
+grep -q "^docker run\|create browser\|^docker pull" "$WORK/calls" && fail "skip touched the firewall or created the browser: $(cat "$WORK/calls")"
+: >"$WORK/calls"
+run 1 env PATH="$WORK/bin:$PATH" FAKE_CALLS="$WORK/calls" FAKE_CONFIG=fail FAKE_LEFT=c0ffee \
+  COMPOSE="docker compose -f compose.yml --profile tunnel" bash "$SCRIPT" skip "the browser image did not build"
+grep -qx "docker rm -f c0ffee" "$WORK/calls" || fail "skip with a compose file that does not read left the browser: $(cat "$WORK/calls")"
+run 1 env PATH="$WORK/bin:$PATH" FAKE_CALLS="$WORK/calls" COMPOSE="docker compose -f compose.yml" bash "$SCRIPT" skip
+out_has "usage: ops/browser-egress.sh skip <reason>"
+ok "skip removes the previous browser (through compose, by labels when the file does not read), exits 1, never creates it or runs the hop; no reason: usage"
+
+step "boot: the browser has no restart policy and nothing at boot starts it"
+restart="$(awk '/^  browser:$/ { f = 1; next } f && /^  [a-z]/ { exit } f && /^    restart:/ { print }' compose.yml)"
+[[ "$restart" == '    restart: "no"' ]] || fail "the browser service restart policy is '$restart', not \"no\""
+unit_start="$(sed -n 's/^ExecStart=//p' "$SCRIPT")"
+[[ "$unit_start" == "/usr/local/sbin/jobapp-browser-egress apply --boot" ]] || fail "the boot unit runs '$unit_start'"
+grep -n "profile browser\|compose.* up\|create browser" tests/reboot_check.sh && fail "tests/reboot_check.sh starts the browser"
+ok "compose: browser restart is \"no\"; the boot unit only applies the rules; the reboot check never starts the browser"
+
 step "backups: the browser profiles are never in them"
 # The nightly backup is pg_dump of the database only (ops/db.sh), never a volume: the profiles
 # (logins) are out by construction (SPEC-browser, "Persistent profiles and logins").

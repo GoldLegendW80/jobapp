@@ -16,9 +16,14 @@
 #   sudo bash ops/browser-egress.sh install [network]
 #       once: a root owned copy at /usr/local/sbin/jobapp-browser-egress, the record
 #       /etc/jobapp-browser-egress.conf, the boot unit jobapp-browser-egress.service (the rules of
-#       the recorded bridge before docker starts; the unit is wanted, not required, by docker, so
-#       if it fails Docker still starts and tests/reboot_check.sh reports it), then apply.
-#       network: the compose network, default jobapp_egress
+#       the recorded bridge before docker starts, so the rest of the host is covered early), then
+#       apply. network: the compose network, default jobapp_egress
+#       The browser does not start at boot, by the owner's decision of 2026-10-14: its compose
+#       service has `restart: "no"`, and neither this unit nor tests/reboot_check.sh starts it. After
+#       a reboot it stays down until the next deploy, which applies and checks the rules first and
+#       starts it only if both pass; the rest of the stack restarts by itself as usual. So there is
+#       no boot path on which the browser runs without checked rules, whether or not the unit worked
+#       (it is wanted, not required, by docker; tests/reboot_check.sh reports a failure).
 #   sudo bash ops/browser-egress.sh uninstall
 #       the jumps, the chains, the unit, the record and the copy removed; the browser is left
 #       as it is (deploy stops it at the next run)
@@ -35,6 +40,9 @@
 #       Exit 0: start the browser (--profile browser). Otherwise, whichever step failed, the
 #       browser container is removed and the reason printed, exit 1: the rest of the stack
 #       deploys without it.
+#   COMPOSE="docker compose -f compose.yml --profile tunnel" bash ops/browser-egress.sh skip <reason>
+#       the same removal and message, with no firewall step: for a deploy whose browser image did
+#       not build, so no browser runs without an image that was built and checked. Always exit 1.
 #   bash ops/browser-egress.sh host-check
 #       check through the installed copy, the same way (tests/reboot_check.sh after a boot)
 # Anywhere, no root:
@@ -317,9 +325,9 @@ not_started() {
   return 1
 }
 
-cmd_deploy() {
-  : "${COMPOSE:?set COMPOSE to the docker compose command of the stack}"
-  local project network out config
+# compose_project: the compose project name, printed; on failure not_started has run and the exit is 1.
+compose_project() {
+  local config project
   # shellcheck disable=SC2086 # COMPOSE is a command line
   if ! config="$($COMPOSE config --format json 2>&1)"; then
     not_started jobapp "compose config failed: ${config:0:300}"
@@ -330,6 +338,23 @@ cmd_deploy() {
     not_started jobapp "cannot read the compose project name"
     return 1
   }
+  printf '%s\n' "$project"
+}
+
+# skip <reason>: the browser is not started and the previous container is removed, with no
+# firewall step (its image did not build: deploy.sh and deploy.yml carry on without it).
+cmd_skip() {
+  : "${COMPOSE:?set COMPOSE to the docker compose command of the stack}"
+  [[ $# -ge 1 && -n "$1" ]] || die "usage: ops/browser-egress.sh skip <reason>"
+  local project
+  project="$(compose_project)" || return 1
+  not_started "$project" "$1"
+}
+
+cmd_deploy() {
+  : "${COMPOSE:?set COMPOSE to the docker compose command of the stack}"
+  local project network out
+  project="$(compose_project)" || return 1
   network="${project}_egress"
   # shellcheck disable=SC2086
   if ! out="$($COMPOSE --profile browser create browser 2>&1 >/dev/null)"; then
@@ -361,6 +386,7 @@ main() {
     apply) cmd_apply "$@" ;;
     check) cmd_check ;;
     deploy) cmd_deploy ;;
+    skip) cmd_skip "$@" ;;
     host-check) cmd_host_check ;;
     rules)
       if [[ $# -lt 1 ]] || ! valid_bridge "$1"; then die "usage: ops/browser-egress.sh rules <bridge> [resolver ...]"; fi
