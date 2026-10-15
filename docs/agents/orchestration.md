@@ -47,18 +47,39 @@ to 7. Owner decisions: [../decisions.md](../decisions.md).
 9. **Ship.** `ops/ship.sh --plan --approved` shows the batch, the order and the gate;
    `ops/ship.sh <prs in order>` (or `--approved`) runs the gate on the merged batch, merges,
    deploys the checked tree and checks the Jetson. The last line is `SHIP: OK` or
-   `SHIP: FAIL <reason>`. Ship when few agents run tests (see Parallelism).
+   `SHIP: FAIL <reason>`. Ship when few agents run tests (see Parallelism). No ssh anywhere in
+   this (owner, 2026-10-15): see "Deploy from any machine" below.
 10. **After.** Follow ups from the review files become issues with cards; the merged branch's
     worktree is removed (`git worktree remove .claude/worktrees/<name>`), its scratch images
     removed by tag; [../STATUS.md](../STATUS.md) gets the new state.
+
+## Deploy from any machine (owner, 2026-10-15)
+
+- The orchestrator may run on any laptop with Docker and a gh account with write access and the
+  scope `workflow` (the owner's or a collaborator's with write). Nothing needs ssh to the Jetson.
+- The gate is local: each machine gates its own batch, and its PASS record lives in
+  `.local-check/` of that checkout only. `ops/ship.sh` gates, merges and deploys in one go; a
+  laptop that did not run the gate cannot `ops/deploy-checked.sh` that tree until it runs
+  `ops/local-check.sh` on main itself.
+- The Jetson's state after a deploy is the run's `JOBAPP-VERIFY` line (`ops/jetson-verify.sh`, the
+  last step of `deploy.yml`), which `ops/ship.sh` reads through `ops/deploy-checked.sh`. At any
+  other time: `ops/remote.sh status`. A `SHIP: FAIL` that names figures is read from that line.
+- Operations are `ops/remote.sh <action>` (`ops.yml` on the Jetson's runner): status, backup,
+  backups, apply-status, apply-pause, apply-resume, egress-host-check. Pause the apply gate with
+  `ops/remote.sh apply-pause` before a risky deploy instead of ssh.
+- The self-hosted runner runs only `deploy.yml` and `ops.yml` from main on `workflow_dispatch`
+  (job guard in its image). Never add a trigger that a pull request or a fork can fire.
+- What stays with the owner, by hand and over ssh: sudo (the browser egress install, a reboot),
+  `./deploy.sh runner install` when the guard changes, restores into the live database, admin
+  links, imports. Write the exact command for him and stop.
 
 ## Permission model
 
 `.claude/settings.json` is versioned and has three tiers. **Allow** holds the read only and test
 commands, `worktree add .claude/worktrees/*`, and read only `gh api` GETs on
 this repository's pulls and issues (the review verdict reads). **Ask** holds what changes shared
-state: a merge, the gate, a deploy, `ssh jetson`, and the full `ops/dev-setup.sh` run (it calls
-`ssh jetson true`; only `--skip-jetson` is allowed). **Deny** wins over allow: force pushes, hook
+state: a merge, the gate, a deploy, `ssh jetson`, and the full `ops/dev-setup.sh` run (with `--jetson`
+it calls `ssh jetson true`; only `--skip-jetson` is allowed). **Deny** wins over allow: force pushes, hook
 bypasses, `gh api` with a write method or body (`-X`, `--method`, `-f`, `-F`, `--field`,
 `--input`), and every way to read or change the secret files `.env`, `.env.jetson`, `.env.local`,
 `.env.*.local`, `.env.production` and `.env.prod` (the Read, Edit and Write tools, and Bash `cat`,
