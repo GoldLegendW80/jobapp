@@ -169,6 +169,10 @@ function createSaver(
       timer = setTimeout(() => void save(), AUTOSAVE_MS);
     },
     save,
+    /** Leaving a field saves what waits at once. */
+    flush() {
+      if (timer !== undefined) void save();
+    },
     /** A draft read again (the poll, a restore, a writer): taken when nothing waits here. */
     seen(next: DocumentOut) {
       if (next.draft_revision <= revision) return;

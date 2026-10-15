@@ -194,7 +194,13 @@ export function EditPanel({ document, generation }: PanelProps) {
         </ul>
       )}
       <ProfileFacts profile={profile.data} letter={letter} />
-      <div key={round} className="flex flex-col gap-4">
+      <div
+        key={round}
+        className="flex flex-col gap-4"
+        onBlur={() => {
+          saver.flush();
+        }}
+      >
         {letter ? (
           <LetterForm form={form} />
         ) : (
