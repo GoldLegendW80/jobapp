@@ -52,6 +52,21 @@ to 7. Owner decisions: [../decisions.md](../decisions.md).
     worktree is removed (`git worktree remove .claude/worktrees/<name>`), its scratch images
     removed by tag; [../STATUS.md](../STATUS.md) gets the new state.
 
+## Permission model
+
+`.claude/settings.json` is versioned and has three tiers. **Allow** holds the read only and test
+commands, including the mandated `git -C <worktree> ...` form of status, log, diff, show, fetch,
+rev-parse, branch listing and `worktree add .claude/worktrees/*`, and read only `gh api` GETs on
+this repository's pulls and issues (the review verdict reads). **Ask** holds what changes shared
+state: a merge, the gate, a deploy, `ssh jetson`, and the full `ops/dev-setup.sh` run (it calls
+`ssh jetson true`; only `--skip-jetson` is allowed). **Deny** wins over allow: force pushes, hook
+bypasses, `gh api` with a write method or body (`-X`, `--method`, `-f`, `-F`, `--field`,
+`--input`), and every way to read or change `.env` files (the Read, Edit and Write tools, and
+Bash `cat`, `grep`, `head`, `sed`, `awk`, `cp` and similar on `.env` and `.env.*`; the template is
+read with `git show HEAD:.env.example`). The Bash patterns are text matches, a guard against
+slips and not a sandbox. A pattern that blocks legitimate work is fixed in this file by a pull
+request, never bypassed.
+
 ## Model policy (owner, 2026-10-13)
 
 - **Opus:** M sized tasks, security sensitive code (sandbox, chain, send gate, submit gate, auth,
