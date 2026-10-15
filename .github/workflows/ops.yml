@@ -1,0 +1,64 @@
+# Operations on the Jetson without ssh (owner decision of 2026-10-15: "something like gh action").
+#
+# Dispatched by hand, or by ops/remote.sh <action> from any laptop whose gh account has write
+# access to this repository (dispatching a workflow needs it, and the token needs the scope
+# `workflow`). It runs on the Jetson's self-hosted runner, whose job-started hook
+# (ops/runner/job-guard.sh) admits only deploy.yml and this file, from main, on workflow_dispatch.
+#
+# The action is a closed choice: GitHub refuses a dispatch with another value, and
+# ops/jetson-ops.sh refuses it again (exit 64). It reaches the script through the environment,
+# never through an expression inside the script, so no value can become a command. There is no
+# free argument at all: what needs one (a restore, an admin link, an unlock) stays with
+# ./deploy.sh and ssh, for the owner.
+#
+# The scripts come from the checkout of main (so a new action works as soon as it is merged) and
+# act on the deploy directory ~/jobapp, through the scripts deployed there (ops/db.sh,
+# ops/browser-egress.sh) and its compose files. The log of this public repository's runs is
+# readable by anyone: ops/jetson-ops.sh prints figures only (JOBAPP-OPS and JOBAPP-VERIFY lines),
+# never a log line or an environment value, and nothing here prints more.
+name: Ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: What to do on the Jetson (ops/jetson-ops.sh)
+        type: choice
+        required: true
+        default: status
+        options:
+          - status
+          - backup
+          - backups
+          - apply-status
+          - apply-pause
+          - apply-resume
+          - egress-host-check
+
+permissions:
+  contents: read
+
+# One operation at a time on the Jetson; a started one always finishes.
+concurrency:
+  group: ops-jetson
+  cancel-in-progress: false
+
+jobs:
+  ops:
+    name: ops on the Jetson
+    runs-on: [self-hosted, jetson]
+    timeout-minutes: 20
+    env:
+      ACTION: ${{ inputs.action }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: true
+
+      - name: Run the action
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "aarch64" ]] || { echo "::error::not on the Jetson"; exit 1; }
+          # JOBAPP_DIR and BACKUP_DIR are set in the runner container by ./deploy.sh runner install.
+          bash ops/jetson-ops.sh "$ACTION"

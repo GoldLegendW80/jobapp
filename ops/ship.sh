@@ -48,13 +48,15 @@
 #    does not move is named and makes the exit status 1, but stops nothing.
 # 6. The main checkout (checked clean and on main before the gate, and again here) gets
 #    git pull --ff-only; its tree must equal the gate's tree, then ops/deploy-checked.sh <commit>.
-# 7. The Jetson over ssh, in ~/jobapp, with the compose files and profile of its deploy
-#    (docker compose -f compose.yml --profile tunnel): every service of the compose file has a
-#    container (ps -a, so a stopped one shows) that is running and healthy, alembic current at
-#    (head), the memory used, and the count of error lines in the last 10 minutes of the compose
-#    logs, which must be 0: a JSON line at level error or critical (the api and the worker, see
-#    api/app/logging_config.py, and caddy), " error " or "traceback" (any case). Only these figures
-#    come back: no log line, no environment value.
+# 7. The Jetson, as the deploy run saw it, without ssh (owner decision of 2026-10-15): the last
+#    step of deploy.yml (ops/jetson-verify.sh) prints one line JOBAPP-VERIFY services=...
+#    result=ok|fail, which ops/deploy-checked.sh reads from the run's log and prints. Every
+#    service of the compose file (with the tunnel profile) has a container (ps -a, so a stopped one
+#    shows) that is running and healthy, alembic current at (head), the memory used, the count of
+#    error lines in the last 10 minutes of the compose logs, which must be 0 (a JSON line at level
+#    error or critical, " error " or "traceback", any case), and the browser, when its profile is
+#    on. Only these figures come back: no log line, no environment value. A deploy without the line
+#    is deployed and not checked, which fails the run: ops/remote.sh status asks again.
 #
 # Output: one line per action, then a summary block whose last line is "SHIP: OK", "SHIP: PLAN",
 # "SHIP: NOTHING TO SHIP" or "SHIP: FAIL <reason>"; on a failure the same reason goes to stderr.
@@ -62,14 +64,13 @@
 # Exit status: 0 shipped, planned or nothing to ship; 1 a step failed or refused; 64 wrong
 # arguments.
 #
-# For tests/ship_test.sh: SHIP_SSH_HOST (default jetson) and SHIP_POLL_SECONDS (default 5, the
-# wait between two reads of a pull request whose mergeable state GitHub has not computed yet).
+# For tests/ship_test.sh: SHIP_POLL_SECONDS (default 5, the wait between two reads of a pull
+# request whose mergeable state GitHub has not computed yet).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROG="ops/ship.sh"
 GATE_SCRIPT="ops/local-check.sh"
-SSH_HOST="${SHIP_SSH_HOST:-jetson}"
 POLL_SECONDS="${SHIP_POLL_SECONDS:-5}"
 KEEP_LOGS=10
 # The project board: project 1 of GoldLegendW80, its Status field and the option Done.
@@ -182,7 +183,7 @@ done
 if ((APPROVED)) && ((${#GIVEN[@]})); then usage_error "--approved or pull request numbers, not both"; fi
 if ((APPROVED == 0)) && ((${#GIVEN[@]} == 0)); then usage_error "name pull requests, or give --approved"; fi
 
-for tool in git gh python3 ssh; do
+for tool in git gh python3; do
   command -v "$tool" >/dev/null || die "$tool is not installed"
 done
 COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ||
@@ -484,7 +485,7 @@ if ((PLAN)); then
   fi
   [[ ! -d "$RECORDS/lock" ]] ||
     say "plan   a batch check holds $RECORDS/lock now ($(cat "$RECORDS/lock/holder" 2>/dev/null || echo "holder unknown")): the gate of a real run would refuse to start"
-  say "plan   ops/deploy-checked.sh <that commit>, then ssh $SSH_HOST: compose health, alembic head, memory, error lines of 10 minutes"
+  say "plan   ops/deploy-checked.sh <that commit>, then the figures its run printed (JOBAPP-VERIFY): compose health, alembic head, memory, error lines of 10 minutes, browser"
   cards=()
   for n in "${ORDER[@]}"; do
     issues="$(issues_of "$n")" || die "gh cannot read the issues #$n closes"
@@ -857,6 +858,44 @@ note merged "$(joined "${MERGED[@]/#/#}")"
 ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
 move_cards "${MERGED[@]}"
 
+# figure <key> <JOBAPP-VERIFY line>: the value of one key, `-` when the line lacks it.
+figure() {
+  local value
+  value="$(sed -n "s/.* $1=\([^ ]*\).*/\1/p" <<<" $2")"
+  printf '%s' "${value:--}"
+}
+# check_jetson <JOBAPP-VERIFY line>: its figures in the summary; any problem stops the run.
+check_jetson() {
+  local line="$1" services healthy missing rev head mem_used mem_total errors browser unwell absent
+  local problems=()
+  services="$(figure services "$line")"
+  healthy="$(figure healthy "$line")"
+  missing="$(figure missing "$line")"
+  rev="$(figure alembic "$line")"
+  head="$(figure head "$line")"
+  mem_used="$(figure mem_used "$line")"
+  mem_total="$(figure mem_total "$line")"
+  errors="$(figure errors "$line")"
+  browser="$(figure browser "$line")"
+  unwell="$(figure unwell "$line")"
+  absent="$(figure absent "$line")"
+  [[ "$services" != 0 ]] || problems+=("no compose service")
+  unwell="${unwell//:/ }"
+  [[ "$unwell" == - ]] || problems+=("not healthy: ${unwell//,/, }")
+  [[ "$absent" == - ]] || problems+=("missing: ${absent//,/, }")
+  [[ "$head" == 1 ]] || problems+=("alembic is not at head")
+  [[ "$mem_used" != - ]] || problems+=("memory not read")
+  if [[ "$errors" == - ]]; then
+    problems+=("error lines not read")
+  elif [[ "$errors" != 0 ]]; then
+    problems+=("$errors error lines in 10 minutes")
+  fi
+  [[ "$browser" != running:* ]] || problems+=("browser ${browser/:/ }")
+  [[ "$(figure result "$line")" == ok || ${#problems[@]} -gt 0 ]] || problems+=("the check on the Jetson failed")
+  note jetson "$services services, $healthy healthy, $missing missing; alembic $rev; memory $mem_used of $mem_total MB used; $errors error lines in 10 minutes; browser $browser"
+  ((${#problems[@]} == 0)) || die "the Jetson after the deploy: $(joined "${problems[@]}")"
+}
+
 # --- 6. pull, compare, deploy -----------------------------------------------------------------------
 why="$(main_refusal)"
 [[ -z "$why" ]] || die "$why: not pulled, nothing deployed"
@@ -870,83 +909,20 @@ say "deploy ops/deploy-checked.sh $commit"
 deploy_status=0
 "$MAIN/ops/deploy-checked.sh" "$commit" >"$LOGS/deploy.log" 2>&1 </dev/null || deploy_status=$?
 deploy_last="$(tail -n 1 "$LOGS/deploy.log" | redact)"
+# The figures of the run (step 7), whatever its result: a run whose verify step failed is red.
+verify="$(grep -E '^JOBAPP-VERIFY services=[0-9]+( [a-z_]+=[A-Za-z0-9_.:,-]+)*$' "$LOGS/deploy.log" | tail -n 1 || true)"
 if ((deploy_status)); then
   note deploy "FAIL, exit $deploy_status ($LOGS/deploy.log)"
+  [[ "$verify" != *" result=fail"* ]] || check_jetson "$verify"
   die "ops/deploy-checked.sh failed (exit $deploy_status): $deploy_last"
 fi
 note deploy "ok ($deploy_last)"
 
 # --- 7. the Jetson ----------------------------------------------------------------------------------
-# Runs there; prints only tab separated figures and service names, never a log line or an
-# environment value. The compose files and profile are those of .github/workflows/deploy.yml.
-# The script itself is the stdin of "bash -s", so every command that may read stdin gets
-# /dev/null: "docker compose exec -T" otherwise swallows the rest of the script (the first real
-# run lost the alembic, memory and error figures that way). The last line, "end", tells the
-# parser the script ran to its end.
-# shellcheck disable=SC2016 # expanded on the Jetson
-REMOTE='set -u
-cd ~/jobapp || exit 3
-compose() { docker compose -f compose.yml --profile tunnel "$@" </dev/null; }
-compose config --services 2>/dev/null | while IFS= read -r line; do printf "svc\t%s\n" "$line"; done
-compose ps -a --format "{{.Service}}\t{{.State}}\t{{.Health}}" 2>/dev/null |
-  while IFS= read -r line; do printf "ps\t%s\n" "$line"; done
-rev="$(compose exec -T api alembic current 2>/dev/null |
-  sed -n "s/^\([0-9A-Za-z_][0-9A-Za-z_]*\) (head).*/\1/p" | head -n 1)"
-printf "alembic\t%s\n" "${rev:--}"
-free -m | awk "/^Mem:/ { printf \"memory\t%s\t%s\n\", \$3, \$2 }"
-logs="$(mktemp)"
-if compose logs --no-color --since 10m >"$logs" 2>&1; then
-  printf "errors\t%s\n" "$(grep -ciE "\"level\": ?\"(error|critical)\"| error |traceback" "$logs")"
-else
-  printf "errors\t-\n"
-fi
-rm -f "$logs"
-printf "end\n"'
-say "check  ssh $SSH_HOST, ~/jobapp"
-jetson="$(ssh -o BatchMode=yes -o ConnectTimeout=20 "$SSH_HOST" bash -s <<<"$REMOTE" 2>"$LOGS/jetson.err")" ||
-  die "ssh $SSH_HOST failed ($LOGS/jetson.err): deployed, the Jetson is not checked"
-declared=()
-running=" "
-services=0
-unwell=()
-rev="-"
-mem_used="-"
-mem_total="-"
-errors="-"
-finished=0
-while IFS=$'\t' read -r kind a b c; do
-  case "$kind" in
-  svc) declared+=("$a") ;;
-  ps)
-    services=$((services + 1))
-    running="$running$a "
-    [[ "$b" == running && "$c" == healthy ]] || unwell+=("$a ${c:-$b}")
-    ;;
-  alembic) rev="$a" ;;
-  memory)
-    mem_used="$a"
-    mem_total="$b"
-    ;;
-  errors) errors="$a" ;;
-  end) finished=1 ;;
-  esac
-done <<<"$jetson"
-missing=()
-for svc in ${declared[@]+"${declared[@]}"}; do
-  [[ "$running" == *" $svc "* ]] || missing+=("$svc")
-done
-services=$((services + ${#missing[@]}))
-problems=()
-((finished)) || problems+=("the check on the Jetson ended early")
-((${#declared[@]} > 0)) || problems+=("compose lists no service")
-((services > 0)) || problems+=("no compose service")
-((${#unwell[@]} == 0)) || problems+=("not healthy: $(joined "${unwell[@]}")")
-((${#missing[@]} == 0)) || problems+=("missing: $(joined "${missing[@]}")")
-[[ "$rev" != - ]] || problems+=("alembic is not at head")
-[[ "$mem_used" != - ]] || problems+=("memory not read")
-[[ "$errors" == 0 ]] || problems+=("$errors error lines in 10 minutes")
-note jetson "$services services, $((services - ${#unwell[@]} - ${#missing[@]})) healthy, ${#missing[@]} missing; alembic $rev; memory $mem_used of $mem_total MB used; $errors error lines in 10 minutes"
-((${#problems[@]} == 0)) || die "the Jetson after the deploy: $(joined "${problems[@]}")"
+say "check  the figures of the deploy run (JOBAPP-VERIFY)"
+[[ -n "$verify" ]] ||
+  die "the deploy run printed no JOBAPP-VERIFY line ($LOGS/deploy.log): deployed, the Jetson is not checked (ops/remote.sh status)"
+check_jetson "$verify"
 ((${#STUCK[@]} == 0)) || die "deployed and checked, but these cards did not move to Done: $(joined "${STUCK[@]}")"
 summary
 say "SHIP: OK"
