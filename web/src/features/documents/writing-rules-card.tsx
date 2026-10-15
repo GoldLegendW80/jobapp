@@ -45,7 +45,7 @@ export function WritingRulesCard() {
   return (
     <Group
       title="Writing rules"
-      description="Rules every CV and letter written for you follows. A sentence that breaks one is corrected, never refused."
+      description="Rules the writer follows for your CVs and letters. What breaks one is corrected."
     >
       {query.isPending ? (
         <p className="text-sm text-muted-foreground">
@@ -121,8 +121,8 @@ function Rules({ saved }: { saved: DocumentSettings }) {
           No dashes as separators
         </label>
         <p id={`${id}-dash`} className="text-xs text-muted-foreground">
-          An em dash, an en dash or a spaced hyphen between two parts of a
-          sentence becomes a comma. Hyphenated words stay as they are.
+          An em dash, an en dash or a spaced hyphen used as a separator becomes
+          a comma. Hyphenated words and ranges of numbers keep a plain hyphen.
         </p>
       </div>
 
