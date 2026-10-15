@@ -32,30 +32,6 @@ from tests.documents.writer_support import (
 
 __all__ = ["db", "engine", "factory", "migrated_url"]
 
-# Every column of a version that a frozen one keeps, its identity and its freeze included.
-KEPT = (
-    "id",
-    "number",
-    "origin",
-    "generation_id",
-    "content",
-    "content_schema",
-    "content_hash",
-    "language",
-    "template_slug",
-    "template_version",
-    "corrections",
-    "fit",
-    "fit_step",
-    "pages",
-    "pdf",
-    "pdf_sha256",
-    "legacy_file_id",
-    "frozen_at",
-    "frozen_reason",
-    "created_at",
-)
-
 
 @pytest.fixture
 def alex(factory: sessionmaker[Session], migrated_url: str) -> Person:
@@ -72,7 +48,7 @@ def alex(factory: sessionmaker[Session], migrated_url: str) -> Person:
 def _row(who: Person, document: uuid.UUID, number: int) -> dict[str, Any]:
     with who.factory() as db:
         found = db.execute(
-            sa.select(*(getattr(DocumentVersion, column) for column in KEPT)).where(
+            sa.select(DocumentVersion.__table__).where(
                 DocumentVersion.document_id == document, DocumentVersion.number == number
             )
         ).one()
