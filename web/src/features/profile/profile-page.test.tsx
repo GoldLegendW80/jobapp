@@ -475,7 +475,7 @@ describe("experience tab", () => {
     const state = fakeProfile();
     const { user } = await openProfile("/profile?tab=experience");
     expect(screen.getByLabelText("Organisation of employer 1")).toHaveValue(
-      "Betclic Group",
+      "Lumetra Group",
     );
     expect(screen.getByLabelText("Present at employer 1")).toBeChecked();
     expect(screen.getByLabelText("End of employer 1")).toBeDisabled();
@@ -511,10 +511,10 @@ describe("experience tab", () => {
     expect(await screen.findByText("Experience saved.")).toBeVisible();
     const sent = state.saves[0]!.body.data as Experience;
     expect(sent.employers.map((e) => e.key)).toEqual([
-      "betclic",
+      "lumetra",
       "zoe-co",
-      "devtech",
-      "elsan",
+      "noxtech",
+      "santeva",
     ]);
     expect(sent.employers[1]).toEqual<Employer>({
       key: "zoe-co",
@@ -550,7 +550,7 @@ describe("experience tab", () => {
       screen.getByLabelText("Organisation of employer 1"),
       " SAS",
     );
-    expect(screen.getByLabelText("Key of employer 1")).toHaveValue("betclic");
+    expect(screen.getByLabelText("Key of employer 1")).toHaveValue("lumetra");
   });
 
   it("validates dates, end before start, present, duplicate and malformed keys", async () => {
@@ -562,7 +562,7 @@ describe("experience tab", () => {
     await user.clear(screen.getByLabelText("End of employer 3"));
     await user.click(screen.getByLabelText("Present at employer 2"));
     await user.clear(screen.getByLabelText("Key of employer 2"));
-    await user.type(screen.getByLabelText("Key of employer 2"), "betclic");
+    await user.type(screen.getByLabelText("Key of employer 2"), "lumetra");
     await user.clear(screen.getByLabelText("Start of school 1"));
     await user.type(screen.getByLabelText("Start of school 1"), "2026-01");
     await user.click(screen.getByRole("button", { name: "Add employer" }));
@@ -763,7 +763,7 @@ describe("experience tab", () => {
       ),
     );
     const { user } = await openProfile("/profile?tab=experience");
-    await user.type(screen.getByLabelText("Location of school 2"), "Reims");
+    await user.type(screen.getByLabelText("Location of school 2"), "Kervan");
     await user.click(saveButton("experience"));
     expect(
       await screen.findByText("End must not be before start."),

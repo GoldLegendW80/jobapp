@@ -12,7 +12,7 @@ const harald = JSON.parse(
   readFileSync(
     path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
-      "../../../../api/tests/profile/fixtures/harald_export.json",
+      "../../../../api/tests/profile/fixtures/owner_export.json",
     ),
     "utf8",
   ),

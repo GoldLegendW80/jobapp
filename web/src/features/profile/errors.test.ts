@@ -61,7 +61,7 @@ describe("serverFieldError", () => {
       employers: [
         experience.employers[0]!,
         experience.employers[1]!,
-        { ...experience.employers[2]!, key: "betclic" },
+        { ...experience.employers[2]!, key: "lumetra" },
       ],
     };
     expect(

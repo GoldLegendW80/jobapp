@@ -1,6 +1,6 @@
 /**
- * A fake /api/profile for tests: a profile shaped like Harald's real import
- * (api/tests/profile/fixtures/harald_export.json) with made up contact details, and MSW handlers
+ * A fake /api/profile for tests: a profile shaped like the invented owner's import
+ * (api/tests/profile/fixtures/owner_export.json), and MSW handlers
  * that keep it in memory, bump the revision on every save, answer 409 to a stale base_revision,
  * and compute completeness with the api's rules. Every save and import appends to `revisions`,
  * which the History endpoints page through as the api does (newest first, `before` exclusive),
@@ -45,8 +45,8 @@ export function haraldLike(): SectionData {
     experience: {
       employers: [
         {
-          key: "betclic",
-          organisation: "Betclic Group",
+          key: "lumetra",
+          organisation: "Lumetra Group",
           title: "GenAI Engineer",
           start: "2025-09",
           end: null,
@@ -54,8 +54,8 @@ export function haraldLike(): SectionData {
           contract: null,
         },
         {
-          key: "devtech",
-          organisation: "DevTechSolutions",
+          key: "noxtech",
+          organisation: "NoxTechSolutions",
           title: "Auto-entrepreneur (self-employed)",
           start: "2024-08",
           end: null,
@@ -63,8 +63,8 @@ export function haraldLike(): SectionData {
           contract: "freelance",
         },
         {
-          key: "elsan",
-          organisation: "ELSAN",
+          key: "santeva",
+          organisation: "SANTEVA",
           title: "Full-stack Developer (apprenticeship)",
           start: "2023-01",
           end: "2025-08",
@@ -74,7 +74,7 @@ export function haraldLike(): SectionData {
       ],
       education: [
         {
-          school: "EPITECH",
+          school: "ORBITECH",
           degree: "MSc Pro",
           start: "2022-09",
           end: "2025-07",
@@ -82,7 +82,7 @@ export function haraldLike(): SectionData {
           details: "Specialization: AI",
         },
         {
-          school: "Université de Reims Champagne-Ardenne",
+          school: "Université de Kervan Haute-Loire",
           degree: "Bachelor of Computer Science",
           start: null,
           end: null,
