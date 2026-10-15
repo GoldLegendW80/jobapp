@@ -59,9 +59,9 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import agent, guardrails, shots, states
+from app.apply import agent, form_agent, guardrails, shots, states
 from app.apply.answers import Answer, Context, Documents, Left, Posting
-from app.apply.ats import adapter_for
+from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
 from app.apply.bank import AnswerBank
 from app.apply.models import (
@@ -126,6 +126,7 @@ class Services:
     answer_agent: agent.AnswerAgent | None = None
     stub_base: str | None = None
     before_tool: Callable[[], Awaitable[None]] | None = None  # B4's Live.agent_turn
+    form_agent: form_agent.FormAgent | None = None  # the generic strategy's (A8)
 
 
 @dataclass
@@ -142,6 +143,7 @@ class Plan:
     posting_text: str
     letter_text: str
     pdfs: dict[str, bytes] = field(repr=False, default_factory=dict)
+    mode: Mode = Mode.review
 
 
 @dataclass
@@ -348,6 +350,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
         posting_text=posting.posting_text or "",
         letter_text=letter_text,
         pdfs=pdfs,
+        mode=application.mode,
     )
 
 
@@ -426,6 +429,26 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 approved=False,
             )
         )
+    if isinstance(report, form_agent.FormReport) and report.designated:
+        marks = [
+            (generic.SUBMIT_KEY, "Submit button, clicked after your approval", report.designated)
+        ]
+        for i, name in enumerate(report.steps, start=1):
+            marks.append((f"{generic.STEP_KEY}{i}", f"Step {i}: the button to the next step", name))
+        rows += [
+            ApplicationAnswer(
+                application_id=application.id,
+                user_id=application.user_id,
+                field_key=key,
+                label=label,
+                kind="designated",
+                value=name,
+                source=AnswerSource.agent,
+                required=False,
+                approved=False,
+            )
+            for key, label, name in marks
+        ]
     return rows
 
 
@@ -672,6 +695,31 @@ async def _type(
     return False
 
 
+async def _drive_generic(
+    services: Services, plan: Plan, adapter: generic.Generic, tools: RunTools
+) -> Result:
+    """The generic strategy (A8): Review first only, so Full auto hands the form to the person
+    (`no_adapter`, as before the strategy existed). The form agent fills; the "before" screenshot
+    outlines the submit it designated, and without both the person is needed."""
+    if plan.mode is not Mode.review or services.form_agent is None:
+        return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
+    session = form_agent.FormSession(adapter, tools, plan.context, str(plan.user_id))
+    report, cost = await form_agent.fill(services.form_agent, session)
+    shot = await shots.take(tools)
+    if report.stopped:
+        state, needs, error = _stopped(report.stopped, report.needs_person)
+        return Result(state, needs=needs, error=error, report=report, shot=shot, cost=cost)
+    needs = _needs(report)
+    if not report.designated:
+        needs = "submit_not_designated"
+    elif (lit := await generic.highlighted(tools, report.designated_ref, shot)) is None:
+        needs = "submit_not_highlighted"
+    else:
+        shot = lit
+    state = State.needs_person if needs else State.ready
+    return Result(state, needs=needs, report=report, shot=shot, cost=cost)
+
+
 async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
     for name, data in plan.pdfs.items():
         put = await tools.put_file(name, data)
@@ -688,6 +736,8 @@ async def _drive(services: Services, plan: Plan, tools: RunTools) -> Result:
         )
         if adapter is None:
             return Result(State.needs_person, needs="no_adapter", shot=await shots.take(tools))
+        if isinstance(adapter, generic.Generic):
+            return await _drive_generic(services, plan, adapter, tools)
     else:
         code = await adapter.open(tools, plan.form_url)
         if code:
