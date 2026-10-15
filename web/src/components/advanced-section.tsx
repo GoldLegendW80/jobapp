@@ -1,8 +1,8 @@
 /**
- * "Advanced": the options most people never change, folded away under one button until opened.
- * One component for every page, so they all open and read the same way. Pass `open` and
- * `onOpenChange` to hold it open from outside (a field inside with an error to show); the
- * content stays mounted while folded, so a form keeps its fields.
+ * "Advanced": the options most people leave as they are, folded away under one button until
+ * opened. One component for the pages that have such options, so they open and read the same
+ * way. Pass `open` and `onOpenChange` to hold it open from outside (a field inside with an error
+ * to show); the content stays mounted while folded, so a form keeps its fields.
  */
 import { ChevronDown } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";

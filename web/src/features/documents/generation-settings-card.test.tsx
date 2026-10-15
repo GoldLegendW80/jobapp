@@ -273,7 +273,7 @@ describe("documents for new postings: Advanced", () => {
     fireEvent.change(slider(), { target: { value: "0" } });
     expect(
       await within(figures).findByText(
-        "At 0 every posting with a fit score qualifies: 4 postings of the last 30 days.",
+        "At 0 the threshold holds nothing back: 4 postings of the last 30 days have a fit score.",
       ),
     ).toBeVisible();
     expect(screen.getByTestId("documents-newly")).toHaveTextContent(

@@ -1,6 +1,6 @@
 /**
  * The card "Writing rules" of the Search tab (SPEC-documents.md, Decision 9): the rules code
- * enforces on every CV and letter, through `GET` and `PUT /api/documents/settings`. Each change
+ * enforces on the CVs and letters the writer makes, through `GET` and `PUT /api/documents/settings`. Each change
  * is saved at once, the whole value at a time, with the controls held while it saves; the card
  * shows what the api answered (between two tabs the last save wins: the api keeps no revision).
  * It sits inside the Search form, so nothing here submits it.
