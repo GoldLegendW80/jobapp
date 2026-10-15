@@ -41,6 +41,8 @@ ops/dev-setup.sh                                   # read only: lists what is st
   User and IdentityFile the owner gives you (never commit them), put your public key in the
   Jetson's `authorized_keys`, then `ssh jetson true` must answer without a prompt.
   `ops/dev-setup.sh --skip-jetson` leaves this check out on a laptop that does not deploy.
+  Without ssh to the Jetson, ship by hand as
+  [docs/STATUS.md](docs/STATUS.md#from-a-machine-without-ssh-to-the-jetson) says.
 - **Claude Code**: install it (`npm install -g @anthropic-ai/claude-code`) and run `claude` from
   the repository root. It loads `CLAUDE.md` and the versioned `.claude/` config: the
   `implementer` and `reviewer` subagents, the commands `/build-task`, `/review-pr`, `/fix-pr`,
