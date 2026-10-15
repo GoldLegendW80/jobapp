@@ -4,6 +4,7 @@ database side is in test_start.py.
 """
 
 import random
+import unicodedata
 import uuid
 from datetime import UTC, datetime
 from itertools import product
@@ -465,6 +466,11 @@ STILL_MISSED = [
     "Anti​cyber​fraud Analyst",  # a term inside a word, as "Anticyberfraud"
     "Secսrity Engineer",  # Armenian u, a script outside the lookalike table
     "Ꮪecurity Engineer",  # Cherokee S
+    "Secυrity Engineer",  # Greek small upsilon, read as its capital: "y"
+    "Peηtest Lead",  # Greek small eta, read as its capital: "h"
+    "Secμrity Engineer",  # Greek small mu, read as its capital: "m"
+    "Securitγ Engineer",  # Greek gamma, not read
+    "Seϲurity Engineer",  # lunate sigma, which NFKC makes a sigma
 ]
 
 
@@ -509,6 +515,158 @@ def test_fold(text: str, folded: str) -> None:
 def test_the_company_key_reads_the_fold_too() -> None:
     assert company_key("Example​ Robotics SAS") == company_key("Example Robotics")
     assert company_key("Exаmple Robotics") == company_key("Example Robotics")
+
+
+# --- the fold in every case, and every reviewer input across rounds -----------------------------
+
+
+def test_every_lookalike_reads_one_letter_in_every_case() -> None:
+    table = {chr(k): chr(v) for k, v in guardrails._LOOKALIKES.items()}
+    # the table's letters and every letter whose case fold is one of them: their capitals
+    letters = {c for c in map(chr, range(0x110000)) if c.isalpha() and c.casefold() in table}
+    assert set(table) < letters
+    for c in sorted(letters):
+        forms = (c, c.upper(), c.lower(), c.casefold())
+        assert {guardrails.fold(form) for form in forms} == {table[c.casefold()]}, f"U+{ord(c):04X}"
+
+
+FOREIGN = NeverApplyRule.parse("Pas de sécurité: sécurité, sicherheit")
+SHORT_TERMS = NeverApplyRule.parse("Short terms: soc, siem, ctf, iam, grc, red team")
+
+
+def _greek(term: str) -> NeverApplyRule:
+    return NeverApplyRule.parse(f"Not these roles: {term}")
+
+
+# French and German titles: whether the owner's English rule refuses them (the foreign one does)
+_FRENCH_AND_GERMAN = {
+    "Développeur sécurité réseau": False,
+    "Ingénieur Cybersécurité (H/F)": True,
+    "IT-Sicherheitsingenieur (m/w/d)": False,
+    "Ingenieur für Informationssicherheit": False,
+}
+_WRITTEN = (
+    lambda t: unicodedata.normalize("NFC", t),
+    lambda t: unicodedata.normalize("NFD", t),
+    lambda t: unicodedata.normalize("NFD", t.upper()),
+)
+_KEPT_BY_BOTH = [
+    "Менеджер по продажам",
+    "Тестировщик ПО",
+    "Аналитик данных",
+    "Секретарь",
+    "ΤΕΧΝΙΚΟΣ ΥΠΟΣΤΗΡΙΞΗΣ",
+    "Οικονομικός Αναλυτής",
+    "Сотрудник склада",
+    "Социолог",
+    "Securities Lawyer",
+    "Data Engineer \u2764\ufe0f",
+    "データエンジニア",
+]
+
+# Every input a review quoted, with its round (rule, title, refused): never delete a row.
+REVIEWER_INPUTS = [
+    ("1", OWNER, "Secu\u00adrity Engineer", True),
+    ("2", _greek("γραμματέας"), "Γραμματέας", True),
+    ("2", _greek("μηχανικός ασφαλείας"), "Μηχανικός Ασφαλείας", True),
+    ("2", _greek("μηχανικός ασφαλείας"), "ΜΗΧΑΝΙΚΟΣ ΑΣΦΑΛΕΙΑΣ", True),
+    ("2", _greek("υποδομές"), "Υποδομές Cloud", True),
+    ("2", _greek("ΜΗΧΑΝΙΚΟΣ"), "μηχανικός λογισμικού", True),
+    *(
+        ("2", rule, written(title), refused)
+        for title, by_owner in _FRENCH_AND_GERMAN.items()
+        for written in _WRITTEN
+        for rule, refused in ((FOREIGN, True), (OWNER, by_owner))
+    ),
+    ("2", OWNER, "Ｔｈｒｅａｔ Analyst", True),  # full width
+    ("2", OWNER, "𝕊𝕖𝕔𝕦𝕣𝕚𝕥𝕪 Engineer", True),  # double struck
+    ("2", OWNER, "𝔖𝔢𝔠𝔲𝔯𝔦𝔱𝔶 Engineer", True),  # Fraktur
+    ("2", OWNER, "𝘚𝘦𝘤𝘶𝘳𝘪𝘵𝘺 Engineer", True),  # sans serif italic
+    ("2", OWNER, "ˢᵉᶜᵘʳⁱᵗʸ Engineer", True),  # modifier letters
+    ("2", OWNER, "Cyber Sеcurity", True),  # Cyrillic e
+    ("2", OWNER, "Pentеster", True),  # Cyrillic e
+    ("2", OWNER, "Threаt Intelligence", True),  # Cyrillic a
+    ("2", SHORT_TERMS, "Red\u00a0Team Lead", True),  # no-break space
+    ("2", OWNER, "Cyber\u2011Security Analyst", True),  # non-breaking hyphen
+    ("2", OWNER, "S̲e̲c̲u̲r̲i̲t̲y̲ Engineer", True),  # combining low line
+    ("2", NeverApplyRule.parse("No security: Secu\u00adrity"), "Security Engineer", True),
+    *(("2", rule, title, False) for title in _KEPT_BY_BOTH for rule in (OWNER, SHORT_TERMS)),
+    ("2", NeverApplyRule.parse("Без безопасности: безопасность"), "БЕЗОПАСНОСТЬ ИНФОРМАЦИИ", True),
+]
+
+
+@pytest.mark.parametrize(
+    ("round_", "rule", "title", "refused"), REVIEWER_INPUTS, ids=range(len(REVIEWER_INPUTS))
+)
+def test_every_reviewer_input_keeps_its_outcome(
+    round_: str, rule: NeverApplyRule, title: str, refused: bool
+) -> None:
+    assert (matching_rule([rule], "Example Robotics", title) is rule) is refused
+
+
+@pytest.mark.parametrize("title", _FRENCH_AND_GERMAN)
+def test_nfc_and_nfd_fold_alike(title: str) -> None:
+    nfc, nfd = (unicodedata.normalize(form, title) for form in ("NFC", "NFD"))
+    assert guardrails.fold(nfc) == guardrails.fold(nfd)
+
+
+_CASED_ROWS = [
+    *((OWNER, title) for title in REFUSED_BY_OWNER + KEPT_BY_OWNER),
+    *((OWNER, title) for title in HIDDEN_FROM_THE_RULE + TRUE_TITLES + STILL_MISSED),
+    *((rule, title) for _, rule, title, _ in REVIEWER_INPUTS),
+]
+
+
+@pytest.mark.parametrize(("rule", "title"), _CASED_ROWS, ids=range(len(_CASED_ROWS)))
+def test_the_match_does_not_depend_on_the_case_of_the_title(
+    rule: NeverApplyRule, title: str
+) -> None:
+    cases = (title, title.upper(), title.lower(), title.casefold())
+    assert len({matching_rule([rule], "Example Robotics", case) is rule for case in cases}) == 1
+
+
+OTHER_SCRIPT_TERMS = [
+    "γραμματέας",
+    "μηχανικός ασφαλείας",
+    "υποδομές",
+    "νοσηλευτής",
+    "ζωολόγος",
+    "γεωλόγος",
+    "безопасность",
+    "инженер-тестировщик",
+]
+_RULE_CASES = {"lower": str.lower, "upper": str.upper, "title": str.title}
+_TITLE_CASES = {
+    **_RULE_CASES,
+    "casefold": str.casefold,
+    "upper NFD": lambda t: unicodedata.normalize("NFD", t.upper()),
+}
+
+
+@pytest.mark.parametrize(
+    ("term", "rule_case", "title_case"),
+    list(product(OTHER_SCRIPT_TERMS, _RULE_CASES, _TITLE_CASES)),
+)
+def test_a_rule_in_another_script_matches_in_every_case(
+    term: str, rule_case: str, title_case: str
+) -> None:
+    rule = _greek(_RULE_CASES[rule_case](term))
+    title = f"{_TITLE_CASES[title_case](term)}, Example Robotics"
+    assert matching_rule([rule], "Example Robotics", title) is rule
+
+
+@pytest.mark.parametrize(
+    ("written", "other"),
+    [
+        ("ΜΗΧΑΝΙΚΗ ΑΕ", "Μηχανική ΑΕ"),
+        ("ΜΗΧΑΝΙΚΗ ΑΕ", "μηχανική αε"),
+        ("ΜΗΧΑΝΙΚΗ ΑΕ", unicodedata.normalize("NFD", "Μηχανική ΑΕ")),
+        ("ΥΠΟΔΟΜΕΣ ΝΕΦΟΥΣ", "Υποδομές Νέφους"),
+        ("ООО ПРИМЕР", "ООО Пример"),
+    ],
+)
+def test_the_company_key_does_not_depend_on_case_in_any_script(written: str, other: str) -> None:
+    assert company_key(written) == company_key(other)
 
 
 # --- issue #296: the Greenhouse and Ashby addresses, both directions ------------------------------
