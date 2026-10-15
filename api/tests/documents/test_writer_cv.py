@@ -45,6 +45,7 @@ from tests.documents.store_support import (
     factory,
     migrated_url,
 )
+from tests.documents.two_sessions import in_thread, mark_applied, wait_until_blocked
 from tests.documents.writer_support import (
     POSTING,
     Person,
@@ -444,6 +445,38 @@ def test_a_generation_already_running_is_not_started_twice(alex: Person) -> None
         row = db.get(DocumentGeneration, generation)
         with pytest.raises(ValueError, match="running"):
             generate.start(db, row, at=AT, settings=alex.settings)
+
+
+def test_a_move_to_applied_waits_behind_the_shortening_pass_and_both_commit(
+    alex: Person, engine: sa.Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The shortening pass holds the CV, then its run's row needs the posting; a move to applied
+    locks the posting, then the freeze locks the CV. With the CV locked first, a circle Postgres
+    broke. The pass now takes the posting first."""
+    document, generation, _ = write(alex, "documents_cv_overflow")
+    _done(alex, document, generation)
+    [overflowing] = versions(alex.factory, document)
+    real = render_job.template_of
+    outcome: dict[str, Any] = {}
+    movers: list[Any] = []
+
+    def holding_the_cv_then_apply(*args: Any, **kwargs: Any) -> Any:
+        if not movers:  # the pass holds the CV here, before its run's row
+            movers.append(
+                in_thread(lambda: mark_applied(alex.factory, alex.user, alex.posting, AT), outcome)
+            )
+            wait_until_blocked(engine, movers, 1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(render_job, "template_of", holding_the_cv_then_apply)
+    run = generate.shorten(alex.factory, document, overflowing.id, AT, alex.settings)
+    movers[0].join()
+    assert "error" not in outcome, outcome.get("error")
+    assert run is not None
+    assert run_row(alex.factory, run).input["mode"] == "shorten"
+    with alex.factory() as db:
+        status = db.scalar(sa.text("SELECT status FROM jobs WHERE id = :j"), {"j": alex.posting})
+    assert status == "applied"
 
 
 def test_a_hand_edit_saved_during_the_render_is_never_shortened(

@@ -4,9 +4,16 @@ Postgres shows it waiting for a lock the other holds, then the test moves the ot
 from __future__ import annotations
 
 import threading
+import uuid
+from datetime import datetime
 from typing import Any
 
 import sqlalchemy as sa
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.documents import freeze, store  # noqa: F401 (freeze registers its status hook)
+from app.jobs import service as jobs_service
+from app.jobs.models import JobStatus
 
 
 def wait_until_blocked(engine: sa.Engine, threads: list[threading.Thread], count: int) -> None:
@@ -33,3 +40,15 @@ def in_thread(target: Any, outcome: dict[str, Any]) -> threading.Thread:
     thread = threading.Thread(target=body)
     thread.start()
     return thread
+
+
+def mark_applied(
+    factory: sessionmaker[Session], user_id: uuid.UUID, posting_id: uuid.UUID, at: datetime
+) -> None:
+    """The person marks the posting applied, as the jobs service does: the posting locked for
+    update, then the freeze of D14 locks its CV and its letter."""
+    with factory() as db:
+        job = jobs_service.lock_job(db, user_id, posting_id)
+        assert job is not None
+        jobs_service.set_status(db, job, JobStatus.applied, at)
+        store.commit(db)
