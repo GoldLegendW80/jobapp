@@ -20,7 +20,8 @@
 #
 # The browser (browser module) sits behind the `browser` profile, like tailscale behind `tunnel`:
 # a stack started without it has no headed Chromium. Its own stacks and tests start it with
-# --profile browser; deploy.sh enables it on the Jetson when the module is switched on (B6).
+# --profile browser; deploy.sh starts it on the Jetson once the host firewall of its `egress`
+# network is installed and checked (ops/browser-egress.sh, B6), and stops it otherwise.
 #
 # Networks: every service is on `default`, except `parser`, which is on `parsing` alone,
 # `renderer`, which is on `rendering` alone (two internal networks, no gateway, no route out,
@@ -308,16 +309,16 @@ services:
   #   Chromium under that profile's own uid (20000 and up, mode 0700 directories); every other
   #   capability dropped, no new privilege, a read only root with tmpfs for /tmp and /leases;
   # - Chromium's own sandbox stays on (never --no-sandbox): browser/seccomp.json is Docker's
-  #   default profile plus one rule allowing clone, unshare, setns and chroot, which Chromium's
-  #   user namespace sandbox needs (B1), no capability added; B6 narrows it;
+  #   default profile plus what Chromium's user namespace sandbox needs (B1, narrowed by B6):
+  #   clone and unshare of user, PID and network namespaces only, and chroot; no capability;
   # - no env_file: no SECRET_KEY, CREDENTIALS_KEY, database or Redis address, model credential.
-  #   Its environment is its own control secret and its timers;
+  #   Its environment is APP_ENV, its own control secret and its timers;
   # - `browsing` (internal) for its control API, and `egress`, its own network with a route out.
   #   Every connection of Chromium goes through browserd's proxy, which refuses any address that
   #   is not public (private, loopback, link local and metadata, CGNAT and the tailnet, ULA), so
-  #   a page cannot reach the app's services on `browsing`, the LAN or the Docker host; B6 adds
-  #   the host firewall rule on the `egress` subnet. Not on `default`: db, redis and the api's
-  #   name do not resolve there. No published port;
+  #   a page cannot reach the app's services on `browsing`, the LAN or the Docker host; the host
+  #   firewall drops the same from the `egress` bridge (ops/browser-egress.sh, B6). Not on
+  #   `default`: db, redis and the api's name do not resolve there. No published port;
   # - 1024m of memory and as much with swap (memswap_limit equal: no swap, a fast OOM kill),
   #   128m of /dev/shm (B1: Chromium used none of it), 1024 processes and threads.
   # SIGTERM releases the lease and closes Chromium cleanly (the profile is flushed) within 15 s.
@@ -343,6 +344,8 @@ services:
       - seccomp=./browser/seccomp.json
     pids_limit: 1024
     environment:
+      # Only to refuse a test setting under production (BROWSER_PROXY_ALLOW_PRIVATE, B6).
+      APP_ENV: ${APP_ENV:-}
       BROWSER_CONTROL_SECRET: ${BROWSER_CONTROL_SECRET:-}
       BROWSER_LEASE_MAX_S: ${BROWSER_LEASE_MAX_S:-}
       BROWSER_IDLE_S: ${BROWSER_IDLE_S:-300}
@@ -422,8 +425,9 @@ networks:
   # browserd's control API and live view: the browser, the api, the worker and caddy.
   browsing:
     internal: true
-  # The browser's way out, its own: no other service joins it. B6 drops its traffic to private,
-  # link local and CGNAT ranges on the host (DOCKER-USER); browserd's proxy refuses them too.
+  # The browser's way out, its own: no other service joins it. ops/browser-egress.sh (B6) drops
+  # its traffic to private, link local and CGNAT ranges, the host and UDP but DNS on the host
+  # (DOCKER-USER, INPUT); browserd's proxy refuses them too.
   egress: {}
 
 volumes:
