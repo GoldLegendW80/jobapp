@@ -32,7 +32,7 @@ export function galleryLanguage(
   browser: string = typeof navigator === "undefined" ? "" : navigator.language,
 ): Language {
   if (documentLanguage !== undefined) return documentLanguage;
-  return browser.toLowerCase().startsWith("fr") ? "fr" : "en";
+  return browser.toLowerCase().split(/[-_]/)[0] === "fr" ? "fr" : "en";
 }
 
 export function nameOf(template: Template, language: Language): string {

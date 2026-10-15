@@ -100,7 +100,7 @@ describe("the document view", () => {
     // No other view is offered until the task that owns it replaces its placeholder.
     expect(screen.queryByRole("tab", { name: "Edit" })).toBeNull();
     expect(screen.queryByRole("tab", { name: "Chat" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Template" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Template" })).toBeVisible();
     expect(screen.queryByRole("tab", { name: "Compare" })).toBeNull();
     expect(document.body.textContent).not.toMatch(SEPARATOR);
   });
