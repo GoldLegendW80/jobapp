@@ -1,0 +1,85 @@
+- generic [active] [ref=e1]:
+  - heading "Software Engineer, Agents" [level=1] [ref=e2]
+  - paragraph [ref=e3]: Northwind Labs, Remote, Europe
+  - paragraph [ref=e4]: Build agents that run real operations. Invented posting.
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - text: First Name
+        - generic [ref=e8]: "*"
+      - textbox "First Name *" [ref=e9]
+    - generic [ref=e10]:
+      - generic [ref=e11]:
+        - text: Last Name
+        - generic [ref=e12]: "*"
+      - textbox "Last Name *" [ref=e13]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - text: Email
+        - generic [ref=e16]: "*"
+      - textbox "Email *" [ref=e17]
+    - generic [ref=e18]:
+      - generic [ref=e19]: Phone
+      - textbox "Phone" [ref=e20]
+    - generic [ref=e21]:
+      - generic [ref=e22]:
+        - text: Resume/CV
+        - generic [ref=e23]: "*"
+      - button "Resume/CV *" [ref=e24]
+    - generic [ref=e25]:
+      - generic [ref=e26]: Cover Letter
+      - button "Cover Letter" [ref=e27]
+    - generic [ref=e28]:
+      - generic [ref=e29]:
+        - text: Are you legally authorized to work in the country in which you are applying?
+        - generic [ref=e30]: "*"
+      - generic [ref=e33] [cursor=pointer]:
+        - generic [ref=e34] [cursor=pointer]: Select...
+        - combobox "Are you legally authorized to work in the country in which you are applying? *" [ref=e35]
+    - generic [ref=e36]:
+      - generic [ref=e37]:
+        - text: Country
+        - generic [ref=e38]: "*"
+      - generic [ref=e41] [cursor=pointer]:
+        - generic [ref=e42] [cursor=pointer]: Select...
+        - combobox "Country *" [ref=e43]
+    - generic [ref=e44]:
+      - generic [ref=e45]: How did you hear about this job?
+      - generic [ref=e48] [cursor=pointer]:
+        - generic [ref=e49] [cursor=pointer]: Select...
+        - combobox "How did you hear about this job?" [ref=e50]
+    - generic [ref=e51]:
+      - generic [ref=e52]: LinkedIn Profile
+      - textbox "LinkedIn Profile" [ref=e53]
+    - generic [ref=e54]:
+      - generic [ref=e55]: Gender
+      - generic [ref=e58] [cursor=pointer]:
+        - generic [ref=e59] [cursor=pointer]: Select...
+        - combobox "Gender" [ref=e60]
+    - generic [ref=e61]:
+      - generic [ref=e62]: Hispanic ethnicity
+      - generic [ref=e65] [cursor=pointer]:
+        - generic [ref=e66] [cursor=pointer]: Select...
+        - combobox "Hispanic ethnicity" [ref=e67]
+    - generic [ref=e68]:
+      - generic [ref=e69]: Veteran status
+      - generic [ref=e72] [cursor=pointer]:
+        - generic [ref=e73] [cursor=pointer]: Select...
+        - combobox "Veteran status" [ref=e74]
+    - generic [ref=e75]:
+      - generic [ref=e76]: Disability status
+      - generic [ref=e79] [cursor=pointer]:
+        - generic [ref=e80] [cursor=pointer]: Select...
+        - combobox "Disability status" [ref=e81]
+    - generic [ref=e82]:
+      - checkbox "I agree to resolve any employment dispute through binding arbitration." [ref=e83]
+      - generic [ref=e84]: I agree to resolve any employment dispute through binding arbitration.
+    - generic [ref=e85]:
+      - checkbox "I would like to receive news and marketing updates from Northwind Labs." [ref=e86]
+      - generic [ref=e87]: I would like to receive news and marketing updates from Northwind Labs.
+    - generic [ref=e88]:
+      - checkbox "I have read the Applicant Privacy Notice. *" [ref=e89]
+      - generic [ref=e90]:
+        - text: I have read the Applicant Privacy Notice.
+        - generic [ref=e91]: "*"
+    - button "Submit application" [ref=e92]

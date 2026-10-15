@@ -249,7 +249,7 @@ Measured on 2026-10-14. The accept and refuse tables of `api/tests/apply/test_a2
 Nothing yet.
 
 ### A4
-Nothing yet.
+Measured on 2026-10-14, first slice (the adapters, no run yet). On the fake ATS forms in Chrome (Playwright 1.55, the snapshot browserd uses), filling a whole form takes 46 tool calls on Ashby (11 fields) and 63 on Greenhouse (17 fields, every empty react-select opened once to read its options): one fresh snapshot before each field, since refs change on every render. With browser B5's pacing (1 to 3 s of dwell per click, 60 to 140 ms per typed character) that is about one to two minutes per form, all of it in the tool layer; the adapter's own work is under 1 ms per snapshot (a 20,000 line snapshot parses in one pass). On the profile sample, the stub's Greenhouse form ends with 9 fields filled and 8 left (EEO by the person's policy, arbitration and marketing boxes, "how did you hear", and the work authorisation question, which A3's templates do not know in Greenhouse's wording); the Ashby form with 8 filled and 3 left (the location typeahead holds no "Bordeaux, France", the EU work question has no entry, the free text is the agent's). Evidence: `tasks/evidence/apply-a4/`.
 
 ### A5
 Nothing yet. (The tokens per application on the fake forms, against the spec's estimates.)
