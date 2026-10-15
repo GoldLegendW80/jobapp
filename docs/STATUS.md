@@ -52,45 +52,33 @@ Then a deploy (the next `ops/ship.sh`, or `ops/deploy-checked.sh` on the current
 and checks the rules and starts the browser. Older owner steps for paused work stay in their
 issues (mail: #63 Google console, #187 the OAuth redirect setting on the Jetson).
 
-## From a machine without ssh to the Jetson
+## Shipping from this laptop
 
-`ops/ship.sh` ends with a check of the Jetson over ssh, so from such a machine the orchestrator
-runs its steps by hand: `ops/local-check.sh --merge <pr> --merge <pr>` (the proof is the last line
-`LOCAL CHECK: PASS <tree sha> <seconds>s`); in the checked order,
-`gh pr merge <pr> --repo GoldLegendW80/jobapp --merge --delete-branch --match-head-commit <sha>`;
-after `git fetch origin`, `git rev-parse 'origin/main^{tree}'` must print the PASS tree sha; then
-`ops/deploy-checked.sh` (it dispatches the deploy workflow and asks the public health URL, no ssh).
-The Jetson shell check (services, `alembic current`, memory, error lines) is then the owner's. The
-board needs the `project` scope of gh (`gh auth refresh -h github.com -s repo,project`):
-`ops/card.sh` and the board step of `ops/ship.sh` fail without it. The gate's PASS records live
-in `.local-check/` of the machine that ran the gate and `ops/deploy-checked.sh` refuses a tree
-without one, so only one machine ships at a time. A second machine builds and reviews, and says on
-the issue when it starts a builder so the other does not start a duplicate.
+The laptop this file is updated from has no ssh to the Jetson, so it ships by hand as
+[CONTRIBUTING.md](../CONTRIBUTING.md#one-task-one-branch-one-pull-request), step 6, says.
 
 ## Open pull requests
 
 | PR | What | State | Next |
 |---|---|---|---|
-| #326 | Harness permissions: `git -C` forms, `gh api` reads, `.env` shell denies (follow ups 1 to 3 of the review of #325, refs #324) | opened 09:48 UTC, no review yet | first review |
-
-Being built from the owner's second laptop, pull requests to come: A8 (#245, Lever and the generic
-strategy, branch `apply/a8-lever-generic`) and the A2 follow ups (#296, branch
-`apply/296-a2-followups`). The live truth is `gh pr list`.
+| #326 | Harness permissions: `git -C` forms, `gh api` reads, `.env` shell denies (follow ups 1 to 3 of the review of #325, refs #324) | APPROVE on `e427397` (review of `48fdfbd`, then an orchestrator note) | ship |
+| #330 | Apply: the A2 follow ups (closes #296), built from the owner's second laptop | opened 09:59 UTC, no review at 10:05 UTC | first review |
+| #331 | Apply A8, first slice: the Lever adapter (refs #245; the generic strategy is its "Left to do"), built from the owner's second laptop | opened 10:02 UTC, no review at 10:05 UTC | first review |
+| #333 | Platform: `ops/dev-setup.sh` accepts pnpm 10 over a 9.x pin (closes #328) | opened 10:03 UTC, no review at 10:05 UTC | first review |
 
 ## Next steps, in order
 
-1. **Review and ship the pull requests above** (#326, then the A8 and #296 builders' when they
-   open): a fresh reviewer each, then `ops/ship.sh --plan --approved` and `ops/ship.sh <prs>` on
-   the machine that ships.
+1. **Ship #326, then review and ship #330, #331 and #333:** a fresh reviewer for each new one,
+   then `ops/ship.sh --plan --approved` and `ops/ship.sh <prs>` on the machine that ships.
 2. **Follow ups on the MVP path**, highest first:
    - #311 Browser B6b: prove the egress refusals and Chromium's sandbox from inside the browser
      container (Mac stack and Jetson), right after the owner's firewall step;
-   - #317 item 4 (the rest of the A5 follow ups), #296 A2, #282 A1 stub bounds;
+   - #317 item 4 (the rest of the A5 follow ups), #282 A1 stub bounds;
    - #314 D12, #306 D8, #304 D14, #299 D9, #290 D6 and D7, #291 B3;
    - #264 software WebGL only when a site needs it.
 3. **Platform follow ups:** #293 gate under 7 minutes (rest of W3b), #289 and #287 (ship.sh and
    registries), #146 local check, #104 flaky tests.
-4. **Apply after the MVP:** A8 Lever and the generic strategy (#245), A9 Apply myself (#246).
+4. **Apply after the MVP:** A9 Apply myself (#246).
 5. **Full auto:** A10 failures, retries and "needs you" (#247), A11 company caps, pacing and the
    Applications settings (#248), A12 the review queue after a Like (#249), A13 Full auto (#250).
 6. Later, unchanged order: documents D13, D15 to D18, D20 to D26; browser B7 to B12; apply A14 to
