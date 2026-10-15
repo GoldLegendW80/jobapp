@@ -190,6 +190,50 @@ def test_posting_documents_name_a_failed_generation_until_a_later_one_replaces_i
     assert other.status_code == 404
 
 
+@pytest.mark.parametrize(
+    ("modes", "shown"),
+    [
+        # A chat or a shortening that fails is not the writing of the document: no "Try again".
+        ((("posting", "done"), ("chat", "failed")), None),
+        ((("posting", "done"), ("shorten", "failed")), None),
+        # Nor does one that ends well hide a writing that failed before it.
+        ((("posting", "failed"), ("chat", "done")), "failed"),
+        ((("posting", "failed"), ("shorten", "failed")), "failed"),
+        ((("chat", "failed"), ("posting", "failed")), "failed"),
+        ((("posting", "failed"), ("posting", "done")), None),
+    ],
+)
+def test_posting_documents_name_only_a_failed_writing_of_the_document(
+    two: dict[str, Any],
+    api: Api,
+    factory: sessionmaker[Session],
+    clock: Any,
+    modes: tuple[tuple[str, str], ...],
+    shown: str | None,
+) -> None:
+    alex, document = two["alex"], two["document"]
+    with factory() as db:
+        for mode, status in modes:
+            made = store.create_generation(
+                db,
+                two["alex_id"],
+                document,
+                GenerationMode(mode),
+                GenerationTrigger.click,
+                at=clock(),
+                estimate={},
+                token_ceiling=1000,
+                status=GenerationStatus(status),
+            )
+            made.error = "run_failed" if status == "failed" else None
+            db.commit()
+            clock.advance(seconds=1)
+    generation = api.get(f"/api/jobs/{two['posting']}/documents", token=alex).json()["documents"][
+        0
+    ]["generation"]
+    assert (generation or {}).get("status") == shown
+
+
 def test_another_persons_document_does_not_exist(
     two: dict[str, Any], api: Api, factory: sessionmaker[Session], queue: RecordingQueue, clock: Any
 ) -> None:

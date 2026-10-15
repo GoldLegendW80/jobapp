@@ -36,6 +36,15 @@ const WAIT_LINKS: Record<WaitReason, { to: string; label: string } | null> = {
 
 const TITLES: Record<Kind, string> = { cv: "CV", letter: "Letter" };
 
+/** The document inside a sentence: "the CV", "the letter". */
+const NOUNS: Record<Kind, string> = { cv: "CV", letter: "letter" };
+
+/** Waits of an automatic generation only, which a click replaces; on any other a click would wait too. */
+const CLICK_REPLACES: ReadonlySet<WaitReason> = new Set([
+  "daily_ceiling",
+  "base_cv",
+]);
+
 /** One document of the posting: its state, its page 1, and what the person can do next. */
 export function PostingDocumentCard({
   jobId,
@@ -47,6 +56,7 @@ export function PostingDocumentCard({
   choice,
   onChoose,
   cvReady,
+  letterWritten,
 }: {
   jobId: string;
   kind: Kind;
@@ -60,6 +70,8 @@ export function PostingDocumentCard({
   onChoose: (id: string) => void;
   /** The posting's CV has a version: the letter card offers its button only then, because a letter is written from the CV. */
   cvReady: boolean;
+  /** The posting's letter has a version: a CV written again takes the letter along. */
+  letterWritten: boolean;
 }) {
   const queryClient = useQueryClient();
   const selectId = useId();
@@ -69,9 +81,13 @@ export function PostingDocumentCard({
     queryClient.invalidateQueries({ queryKey: postingDocumentsKey(jobId) });
 
   const write = useMutation({
-    mutationFn: (base?: string) =>
+    mutationFn: ({ base, again }: { base?: string; again?: boolean }) =>
       writeNow(jobId, {
-        kinds: [kind],
+        // The letter follows a new CV (written after it, from it), as the automatic chain does.
+        kinds:
+          kind === "cv" && (again === true || letterWritten)
+            ? ["cv", "letter"]
+            : [kind],
         ...(base === undefined ? {} : { base_document_id: base }),
       }),
     onSettled: refresh,
@@ -96,12 +112,15 @@ export function PostingDocumentCard({
     latest !== null &&
     choice !== undefined &&
     choice !== currentBase;
+  const clickWouldWait =
+    state.tag === "waiting" &&
+    (state.reason === null || !CLICK_REPLACES.has(state.reason));
   const canWrite =
     (kind === "cv" || cvReady) &&
     (state.tag === "empty" ||
       state.tag === "under" ||
       state.tag === "manual" ||
-      state.tag === "waiting" ||
+      (state.tag === "waiting" && !clickWouldWait) ||
       state.tag === "failed");
 
   return (
@@ -122,7 +141,7 @@ export function PostingDocumentCard({
       {document !== undefined && latest !== null && latest.has_pdf ? (
         <img
           src={versionPage1Url(document.id, latest.number, PREVIEW_WIDTH)}
-          alt={`Page 1 of the ${TITLES[kind].toLowerCase()}, version ${String(latest.number)}`}
+          alt={`Page 1 of the ${NOUNS[kind]}, version ${String(latest.number)}`}
           loading="lazy"
           className="w-full max-w-64 rounded border bg-white"
         />
@@ -165,7 +184,7 @@ export function PostingDocumentCard({
             <Link to={`/jobs/${jobId}/documents/${kind}`}>
               <ExternalLink aria-hidden="true" />
               Open
-              <span className="sr-only"> the {TITLES[kind].toLowerCase()}</span>
+              <span className="sr-only"> the {NOUNS[kind]}</span>
             </Link>
           </Button>
         ) : null}
@@ -174,7 +193,7 @@ export function PostingDocumentCard({
             <a
               href={versionPdfUrl(document.id, latest.number)}
               download
-              aria-label={`Download the ${TITLES[kind].toLowerCase()} as a PDF`}
+              aria-label={`Download PDF of the ${NOUNS[kind]}`}
             >
               <Download aria-hidden="true" />
               Download PDF
@@ -186,7 +205,7 @@ export function PostingDocumentCard({
             size="sm"
             disabled={busy}
             onClick={() => {
-              write.mutate(kind === "cv" ? choice : undefined);
+              write.mutate({ base: kind === "cv" ? choice : undefined });
             }}
           >
             {write.isPending ? (
@@ -199,9 +218,9 @@ export function PostingDocumentCard({
           <Button
             size="sm"
             variant="secondary"
-            disabled={busy || state.tag === "writing"}
+            disabled={busy || state.tag === "writing" || clickWouldWait}
             onClick={() => {
-              write.mutate(choice);
+              write.mutate({ base: choice, again: true });
             }}
           >
             Write it again from this CV
@@ -221,6 +240,11 @@ export function PostingDocumentCard({
           </Button>
         ) : null}
       </div>
+      {rewrite ? (
+        <p className="text-sm text-muted-foreground">
+          The letter is then written again from the new CV.
+        </p>
+      ) : null}
     </article>
   );
 }
@@ -234,7 +258,7 @@ function StateLine({
   kind: Kind;
   hasVersion: boolean;
 }) {
-  const noun = TITLES[kind].toLowerCase();
+  const noun = NOUNS[kind];
   switch (state.tag) {
     case "waiting": {
       const link = state.reason ? WAIT_LINKS[state.reason] : null;

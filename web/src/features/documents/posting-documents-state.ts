@@ -4,7 +4,13 @@ import {
   type PostingDocuments,
   type WaitReason,
 } from "./documents-api";
-import { isOpen, pollInterval } from "./labels";
+import { isOpen, POLL_MS, pollInterval } from "./labels";
+
+/**
+ * How long the section keeps reading the documents after the CV's generation closes, for the
+ * letter that follows it: the worker creates the letter's generation just after the CV's closes.
+ */
+export const LETTER_FOLLOW_MS = 15_000;
 
 /** What a card says first. Open work wins, then a failure, then the state of the latest version. */
 export type CardState =
@@ -51,11 +57,23 @@ export function cardState(
   return { tag: "empty" };
 }
 
-/** How soon to read the posting's documents again: the soonest of what each one is waiting for. */
+/** True while a document still changes by itself: a generation open or a page being drawn. */
+export function isBusy(document: PostingDocument): boolean {
+  return isOpen(document.generation) || document.render.state !== "idle";
+}
+
+/**
+ * How soon to read the posting's documents again: the soonest of what each one is waiting for,
+ * and every POLL_MS while a letter is expected and its generation is not there yet.
+ */
 export function postingPollInterval(
   documents: PostingDocuments | undefined,
+  expectLetter = false,
 ): number | false {
-  let next: number | false = false;
+  let next: number | false =
+    expectLetter && !isOpen(documentOf(documents, "letter")?.generation)
+      ? POLL_MS
+      : false;
   for (const one of documents?.documents ?? []) {
     const every = pollInterval(one.render.state, one.generation);
     if (every !== false && (next === false || every < next)) next = every;

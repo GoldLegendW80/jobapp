@@ -55,6 +55,7 @@ from app.documents.models import (
     DocumentVersion,
     FitResult,
     FreezeReason,
+    GenerationMode,
     GenerationStatus,
     GenerationWait,
     Kind,
@@ -390,11 +391,16 @@ def _revision(value: str | None) -> int:
 def _failed_generation(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID
 ) -> DocumentGeneration | None:
-    """The document's latest generation when it failed (a later one that did not hides it), so
-    the card can say why and offer "Try again"."""
+    """The document's latest `posting` generation when it failed (a later one that did not hides
+    it), so the card can say why and offer "Try again", which writes the document again. A chat
+    or a shortening is not the writing of the document: its failure is told where it was asked."""
     last = db.execute(
         sa.select(DocumentGeneration)
-        .where(DocumentGeneration.user_id == user_id, DocumentGeneration.document_id == document_id)
+        .where(
+            DocumentGeneration.user_id == user_id,
+            DocumentGeneration.document_id == document_id,
+            DocumentGeneration.mode == GenerationMode.posting,
+        )
         .order_by(DocumentGeneration.created_at.desc(), DocumentGeneration.id.desc())
         .limit(1)
     ).scalar_one_or_none()
