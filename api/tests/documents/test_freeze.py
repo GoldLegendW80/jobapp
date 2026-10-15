@@ -240,6 +240,30 @@ def test_a_status_that_returns_to_applied_does_not_freeze_a_later_edit(
     assert _marks(factory, both["cv"]) == {1: None, 2: "applied", 3: None}
 
 
+def test_an_undo_back_to_applied_does_not_freeze_a_later_approved_edit(
+    both: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    # SPEC-documents.md, "Versions and freezing": the owner's reading of "becoming applied".
+    _status(api, both["alex"], both["posting"], "applied")
+    _write(factory, clock, both["alex_id"], both["posting"], Kind.cv, {**CV, "headline": "Third"})
+    _approve(api, both["alex"], both["cv"], 3)
+    moved = api.post(
+        "/api/jobs/bulk",
+        token=both["alex"],
+        json={"ids": [str(both["posting"])], "set": {"status": "interview"}},
+    )
+    undone = api.post(
+        "/api/jobs/bulk/undo", token=both["alex"], json={"token": moved.json()["undo_token"]}
+    )
+    assert undone.status_code == 200, undone.text
+    with factory() as db:
+        job = db.get(Job, both["posting"])
+        assert job is not None
+        assert job.status is JobStatus.applied
+    assert _marks(factory, both["cv"]) == {1: None, 2: "applied", 3: None}
+    assert _marks(factory, both["letter"]) == {1: "applied"}
+
+
 def test_a_status_change_of_the_mail_module_freezes_in_its_transaction(
     both: dict[str, Any], factory: sessionmaker[Session], clock: Any
 ) -> None:
