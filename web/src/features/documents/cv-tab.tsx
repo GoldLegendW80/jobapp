@@ -35,6 +35,7 @@ import { describeError } from "@/lib/api";
 
 import { ConsentDialog } from "./consent-dialog";
 import { DocumentView } from "./document-view";
+import { UploadPanel } from "./upload-panel";
 import {
   acceptConsent,
   baseCvsKey,
@@ -206,6 +207,9 @@ export function CvTab() {
         />
       )}
 
+      {id === undefined ? (
+        <UploadPanel openHref={(to) => `${LIST}/${to}`} />
+      ) : null}
       <NewCvDialog
         key={creating ? "open" : "closed"}
         open={creating}

@@ -223,7 +223,7 @@ function canBeChosen(document: IngestionDocument): boolean {
  * start the server refuses because the figures changed replaces what is shown and waits for
  * another click.
  */
-function StartDialog({
+export function StartDialog({
   documentIds,
   opener,
   onClose,
