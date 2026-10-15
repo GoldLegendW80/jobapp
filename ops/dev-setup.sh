@@ -190,15 +190,15 @@ pnpm_fix() {
 if ! have pnpm; then
   miss "pnpm is not installed" "$(pnpm_fix "${pnpm_want:-9}")"
 else
-  # Off for this call: in web/, pnpm 10 and later would download the pinned pnpm and name it instead.
-  pnpm_have="$(first_version "$(npm_config_manage_package_manager_versions=false pnpm --version 2>/dev/null)")"
+  # Asked from / with the pnpm 10 and 11 switches off: under web/, pnpm would download the pin.
+  pnpm_have="$(first_version "$(cd / && npm_config_manage_package_manager_versions=false pnpm_config_pm_on_fail=ignore pnpm --version 2>/dev/null)")"
   pnpm_have_major="${pnpm_have%%.*}"
   pnpm_want_major="${pnpm_want%%.*}"
   if [[ -z "$pnpm_want" ]]; then
     warn "pnpm $pnpm_have, but web/package.json names no packageManager" "check web/package.json"
   elif [[ "$pnpm_have_major" == "$pnpm_want_major" ]]; then
     ok "pnpm $pnpm_have (web/package.json pins $pnpm_want)"
-  # pnpm 10 and later run the pinned version themselves (managePackageManagerVersions, on by default).
+  # pnpm 10 and later run the pinned version themselves by default (pmOnFail=download from 11).
   elif ((10#${pnpm_have_major:-0} >= 10 && 10#${pnpm_have_major:-0} > 10#$pnpm_want_major)); then
     ok "pnpm $pnpm_have, runs the pinned $pnpm_want itself (packageManager of web/package.json)"
   else

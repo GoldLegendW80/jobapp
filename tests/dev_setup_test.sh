@@ -90,7 +90,7 @@ echo "${FAKE_NODE_VERSION:-v22.12.0}"
 EOF
 fake pnpm <<'EOF'
 #!/usr/bin/env bash
-printf 'pnpm %s (switch %s)\n' "$*" "${npm_config_manage_package_manager_versions:-on}" >>"$CALLS"
+printf 'pnpm %s (in %s, switch %s, on fail %s)\n' "$*" "$PWD" "${npm_config_manage_package_manager_versions:-on}" "${pnpm_config_pm_on_fail:-download}" >>"$CALLS"
 echo "${FAKE_PNPM_VERSION:-9.15.9}"
 EOF
 fake python3 <<'EOF'
@@ -155,6 +155,13 @@ misses() { # misses <n>: exactly n MISS lines and the matching last line
   last_line_is "DEV SETUP: $1 missing"
 }
 calls_lack() { if grep -qE -- "$1" "$CALLS"; then fail "a call matches '$1': $(cat "$CALLS")"; fi; }
+# The one pnpm call: its version, from / (no packageManager above) with both version switches off.
+pnpm_asked_from_root() {
+  local want='pnpm --version (in /, switch false, on fail ignore)' others
+  grep -qxF "$want" "$CALLS" || fail "pnpm --version not asked from / with the switches off: $(cat "$CALLS")"
+  others="$(grep '^pnpm ' "$CALLS" | grep -vxF "$want" || true)"
+  [[ -z "$others" ]] || fail "another pnpm call: $others"
+}
 
 # --- everything in place --------------------------------------------------------------------
 run 0
@@ -186,12 +193,15 @@ connects="$(grep '^ssh ' "$CALLS" | grep -v '^ssh -G ' | grep -v 'BatchMode=yes'
 out_lacks "gho_"
 out_lacks "FAKETOKEN"
 out_lacks "e2e-someone"
-grep -q '^pnpm --version (switch false)$' "$CALLS" || fail "pnpm --version not asked with the switch off: $(cat "$CALLS")"
-calls_lack '^pnpm .*\(switch [^f]'
+pnpm_asked_from_root
 FAKE_SSH_FAILS=1 run 1
 out_lacks "100.64.0.99"
 out_lacks "someone"
-ok "read only: no pull, run, sign in, install or project edit; ssh only with BatchMode; pnpm asked with its version switch off; no token, account or host printed"
+cd "$REPO/web"
+run 0
+pnpm_asked_from_root
+cd "$ROOT"
+ok "read only: no pull, run, sign in, install or project edit; ssh only with BatchMode; pnpm asked from / with its version switches off, also when started in web/; no token, account or host printed"
 
 # --- each missing piece is named with its fix --------------------------------------------------
 FAKE_GH_SIGNED_OUT=1 run 1
