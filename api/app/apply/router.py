@@ -29,10 +29,12 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
+from app.jobs import service as jobs_service
 
 NOT_FOUND = "No such posting."
 NO_APPLICATION = "No such application."
 NO_STORE = {"Cache-Control": "no-store"}
+BUSY = "This posting is busy with another change. Try again in a moment."
 
 
 def _no_store(response: Response) -> None:
@@ -145,6 +147,11 @@ def start_application(
     except service.PostingNotFoundError:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND) from None
+    except jobs_service.JobBusyError:
+        # A lock held past its timeout (issue #296): a refusal with its code, like the others.
+        db.rollback()
+        out = RefusalOut(detail=BUSY, code="busy")
+        return JSONResponse(status_code=409, content=out.model_dump(mode="json"), headers=NO_STORE)
     except service.RefusedError as exc:
         db.rollback()
         refusal = exc.refusal

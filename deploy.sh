@@ -52,6 +52,10 @@
 #                                  list the account's fits that differ from the computed ones
 #                                  (set by hand in the CSV); a dry run unless --apply, which
 #                                  marks them so no rescore replaces them (app.jobs.cli)
+#   ./deploy.sh apply pause|resume|status
+#                                  stop (or allow again) every application submission at once:
+#                                  a Redis flag the apply gate reads before its decision and
+#                                  again just before the click (app.apply.admin)
 #   ./deploy.sh runner install|status|remove
 #                                  the self-hosted GitHub Actions runner on the Jetson (ops/runner/):
 #                                  a container with the host Docker socket, registered to the repo
@@ -856,6 +860,18 @@ jobs_mark_overrides() {
   rcompose exec -T api python -m app.jobs.cli mark-overrides --email "$1" "${@:2}"
 }
 
+# cmd_apply pause|resume|status: the administrator's pause of every submission (apply A6), set
+# through app.apply.admin in the api container on the Jetson.
+cmd_apply() {
+  [[ $# -eq 1 && ("$1" == "pause" || "$1" == "resume" || "$1" == "status") ]] ||
+    die "usage: ./deploy.sh apply pause|resume|status"
+  ssh_master
+  require_remote
+  require_deployed
+  step "apply $1 on $HOST"
+  rcompose exec -T api python -m app.apply.admin "$1"
+}
+
 cmd_url() {
   [[ $# -eq 0 ]] || die "usage: ./deploy.sh url"
   ssh_master
@@ -1470,6 +1486,7 @@ main() {
     restore) cmd_restore "$@" ;;
     backup-schedule) cmd_backup_schedule "$@" ;;
     admin) cmd_admin "$@" ;;
+    apply) cmd_apply "$@" ;;
     profile) cmd_profile "$@" ;;
     jobs) cmd_jobs "$@" ;;
     runner) cmd_runner "$@" ;;

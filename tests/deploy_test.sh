@@ -133,6 +133,12 @@ out_has "usage: ./deploy.sh url"
 run 1 ./deploy.sh smoke --bogus
 out_has "unknown option for smoke: --bogus"
 ok "url takes no argument, smoke refuses an unknown option, both before any network call"
+for args in "apply" "apply stop" "apply pause extra"; do
+  # shellcheck disable=SC2086
+  run 1 ./deploy.sh $args
+  out_has "usage: ./deploy.sh apply pause|resume|status"
+done
+ok "apply takes exactly pause, resume or status, before any network call"
 for args in "admin" "admin create" "admin list x@y.z" "admin create a@b.c extra" "admin delete a@b.c"; do
   # shellcheck disable=SC2086 # word splitting wanted
   run 1 nohost ./deploy.sh $args

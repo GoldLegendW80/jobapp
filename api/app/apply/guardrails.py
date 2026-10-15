@@ -24,7 +24,8 @@ so it refuses as a match would (`rules_unreadable`).
 - `same_form`: another posting of the person has a live application, or an applied status, on the
   same canonical form address (`canonical_key`; a second partial unique index holds the first);
 - `same_role`: another posting of the person, at the same company and with the same normalised
-  title (`company_key`, `title_key`), was submitted by the app, or has an applied status with its
+  title (`company_key`, `title_key`), was submitted by the app (or is `submitting`, its click under
+  way), or has an applied status with its
   `applied_on`, in the last 180 days, counted from `now`: at exactly 180 days it is still refused.
 
 **The form address** (`canonical_key`). Ashby, Greenhouse and Lever job ids are global, so the key
@@ -303,17 +304,24 @@ def _live(application: Application) -> bool:
 
 
 def duplicates(
-    db: Session, user_id: uuid.UUID, posting: Job, key: str, now: datetime
+    db: Session,
+    user_id: uuid.UUID,
+    posting: Job,
+    key: str,
+    now: datetime,
+    *,
+    exclude: uuid.UUID | None = None,
 ) -> Refusal | None:
     """The first duplicate refusal for starting an application on `posting` with the form key
-    `key`, or None. The caller holds the posting's row lock and the person's apply lock."""
+    `key`, or None. The caller holds the posting's row lock and the person's apply lock. The gate
+    (A6) passes the application it decides on as `exclude`: it is not its own duplicate."""
     own = db.execute(
         sa.select(Application).where(
             Application.user_id == user_id, Application.posting_id == posting.id
         )
     ).scalars()
     for application in own:
-        if not _live(application):
+        if not _live(application) or application.id == exclude:
             continue
         state = State(application.state)
         code = state.value if state in (State.submitted, State.submit_unknown) else "in_progress"
@@ -354,7 +362,8 @@ def duplicates(
         .where(
             Application.user_id == user_id,
             Job.id != posting.id,
-            Application.submitted_at >= since,
+            # `submitting` has no `submitted_at` yet, but its click is under way (A6).
+            sa.or_(Application.submitted_at >= since, Application.state == State.submitting),
         )
     ).all()
     recent = [(company, title) for company, title in clicked]

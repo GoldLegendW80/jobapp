@@ -51,12 +51,16 @@ Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
 - apply_fill(application_id): the fill of one application form on a browser lease, one at a time
   (max_jobs 1: the browser is one); tried once by arq, its result not kept, so the tick can queue
   it again under the same id once it ended.
+- apply_submit(application_id): the submit lease of one `approved` application (apply A6,
+  app/apply/submit.py): refill, read back, the one click through the gate.
 - apply_tick: cron every 30 seconds: asks a fill for the next `queued` application of every
   person whose fill is not running (a new one, one waiting for its documents or behind another
-  person's lease, whose ticket lives 60 s), one per person so people take turns.
-  The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus a margin. At
-  start, every application left `filling` by a dead process ends `failed` as `interrupted`
-  (reset_fills_at_start).
+  person's lease, whose ticket lives 60 s), one per person so people take turns; and the submit
+  of every `approved` application (A6).
+  The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus a margin, the
+  submit's the `apply_submit` lease's. At start, every application left `filling` by a dead
+  process ends `failed` as `interrupted`, and every one left `submitting` ends `submit_unknown`:
+  the click may have gone through (reset_fills_at_start).
 
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
@@ -607,12 +611,25 @@ async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
     await apply_run.fill(apply_services(ctx), uuid.UUID(application_id))
 
 
+async def apply_submit(ctx: dict[str, Any], application_id: str) -> None:
+    """The submit lease of one approved application (apply A6, app/apply/submit.py)."""
+    from app.apply import submit as apply_submit_run
+
+    services = ctx.get("apply_submit_services") or apply_submit_run.from_fill(
+        apply_services(ctx), ctx["settings"], ctx.get("redis")
+    )
+    await apply_submit_run.submit(services, uuid.UUID(application_id))
+
+
 async def apply_tick(ctx: dict[str, Any]) -> int:
-    """Queues a fill for every application waiting for one. Answers a count, nothing else."""
+    """Queues a fill for every application waiting for one, and the submit of every approved
+    one (apply A6). Answers a count, nothing else."""
     from app.apply import run as apply_run
+    from app.apply import submit as apply_submit_run
 
     with sessions_of(ctx)() as db:
         due = apply_run.due(db)
+        approved = apply_submit_run.due(db)
     redis: ArqRedis | None = ctx.get("redis")
     if redis is None:
         return 0
@@ -625,6 +642,14 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
             _queue_name=queue.APPLY,
         )
         queued += job is not None
+    for application_id in approved:
+        job = await redis.enqueue_job(
+            "apply_submit",
+            str(application_id),
+            _job_id=queue.apply_submit_job_id(application_id),
+            _queue_name=queue.APPLY,
+        )
+        queued += job is not None
     return queued
 
 
@@ -632,11 +657,15 @@ async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
     """No fill runs when the apply queue starts: an application left `filling` by a killed
     worker ends `failed` with `interrupted`."""
     from app.apply import run as apply_run
+    from app.apply import submit as apply_submit_run
 
     clock = clock_of(ctx)
 
     def step(db: Session) -> int:
-        return apply_run.reset_interrupted(db, clock())
+        # A6: a `submitting` left by a killed worker is `submit_unknown`, never freed.
+        return apply_run.reset_interrupted(db, clock()) + apply_submit_run.reset_interrupted(
+            db, clock()
+        )
 
     count = await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)
     if count:
@@ -650,12 +679,20 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
     # The lease's own ceiling, BROWSER_LEASE_MAX_S included, and a margin to write the end.
     table = lease_max_table(settings.browser_lease_max_s) if settings is not None else LEASE_MAX_S
     fill_timeout_s = table["apply_fill"] + APPLY_JOB_MARGIN_S
+    submit_timeout_s = table["apply_submit"] + APPLY_JOB_MARGIN_S
     return QueueSpec(
         name=queue.APPLY,
         functions=[
             # keep_result=0: nothing of a fill is left in Redis, and the tick can queue the same
             # application again under its id once the job ended.
             func(apply_fill, name="apply_fill", timeout=fill_timeout_s, max_tries=1, keep_result=0),
+            func(
+                apply_submit,
+                name="apply_submit",
+                timeout=submit_timeout_s,
+                max_tries=1,
+                keep_result=0,
+            ),
             func(apply_tick, name="apply_tick", timeout=60, max_tries=1, keep_result=0),
         ],
         cron_jobs=[
@@ -669,7 +706,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
         ],
         # One fill at a time: there is one browser. The tick waits its turn behind a fill.
         max_jobs=1,
-        job_timeout_s=fill_timeout_s,
+        job_timeout_s=max(fill_timeout_s, submit_timeout_s),
         on_start=reset_fills_at_start,
     )
 

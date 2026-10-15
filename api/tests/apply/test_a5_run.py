@@ -731,7 +731,7 @@ def test_the_apply_queue_runs_one_fill_at_a_time_and_ticks_every_30_seconds() ->
     assert spec.name == queue.APPLY == "jobapp:apply"
     assert spec.max_jobs == 1
     functions = {f.name: f for f in spec.functions}
-    assert set(functions) == {"apply_fill", "apply_tick"}
+    assert set(functions) == {"apply_fill", "apply_submit", "apply_tick"}  # submit: A6
     assert all(f.keep_result_s == 0 and f.max_tries == 1 for f in functions.values())
     (tick,) = spec.cron_jobs
     assert tick.second == {0, 30}

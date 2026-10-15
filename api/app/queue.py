@@ -83,6 +83,12 @@ def apply_fill_job_id(application_id: object) -> str:
     return f"apply-fill:{application_id}"
 
 
+def apply_submit_job_id(application_id: object) -> str:
+    """One submit lease per application at a time (apply A6): the approve route and the tick
+    asking for the same `approved` application make one job."""
+    return f"apply-submit:{application_id}"
+
+
 class Queue:
     """The api's handle on the queues: one pool, made on first use."""
 

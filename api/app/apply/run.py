@@ -380,6 +380,8 @@ def _source(answer: Answer | Left, status: str) -> AnswerSource:
 def _value(answer: Answer | Left, status: str) -> Any:
     if isinstance(answer, Left) or status not in FILLED:
         return None
+    if answer.option is not None:
+        return answer.option  # what the page shows, and what the gate (A6) refills and reads back
     value = answer.value
     return list(value) if isinstance(value, tuple) else value
 
@@ -399,6 +401,7 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 field_key=item.key,
                 label=item.label,
                 kind=item.kind,
+                options=list(item.options) or None,
                 value=_value(outcome.answer, outcome.filled.status),
                 source=_source(outcome.answer, outcome.filled.status),
                 required=item.required,
@@ -452,6 +455,16 @@ def finish(
     if application.state is not State.filling:
         _event(db, application, "fill_superseded", now, state=application.state.value)
         return "superseded"
+    # The person's own answers (A6, `gate.set_answer`) outlive a refill: the agent never
+    # replaces them, for a field the form still has.
+    mine = db.execute(
+        sa.select(ApplicationAnswer.field_key, ApplicationAnswer.value).where(
+            ApplicationAnswer.application_id == application.id,
+            ApplicationAnswer.user_id == application.user_id,
+            ApplicationAnswer.source == AnswerSource.person,
+        )
+    ).all()
+    theirs = {key: value for key, value in mine}
     db.execute(
         sa.delete(ApplicationAnswer).where(
             ApplicationAnswer.application_id == application.id,
@@ -459,6 +472,9 @@ def finish(
         )
     )
     rows = _answer_rows(application, result.report)
+    for row in rows:
+        if row.field_key in theirs and not row.field_key.startswith("skipped:"):
+            row.value, row.source = theirs[row.field_key], AnswerSource.person
     db.add_all(rows)
     counts = _counts(result.report)
     _event(db, application, "filled", now, **counts)
