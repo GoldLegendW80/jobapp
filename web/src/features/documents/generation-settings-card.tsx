@@ -283,7 +283,7 @@ function Threshold({
           </FormControl>
           <FormDescription>
             {
-              'New postings with a fit at or above it get their documents without a click. Under it, "Write now" on the posting writes them.'
+              'With the switch on, new postings at or above it get their documents without a click. Under it, "Write now" on the posting writes them.'
             }
           </FormDescription>
           <div aria-live="polite" data-testid="documents-threshold">
