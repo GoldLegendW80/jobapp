@@ -41,8 +41,8 @@ below.
 5. **Tests use only `e2e-*@example.org` accounts**, never real user data, never a real Google
    host, never a real job site (fakes: `tests/gmail-stub.compose.yml`,
    `tests/ats-forms-stub.compose.yml`).
-6. **Never read `.env` files** (`.env`, `.env.jetson`, any `.env.*`) or production credentials;
-   never print, grep or log a secret. Read the template with `git show HEAD:.env.example`.
+6. **Never read `.env` files** (`.env`, `.env.jetson`, `.env.local`, `.env.*.local`, `.env.production`, `.env.prod`) or production credentials;
+   never print, grep or log a secret. `.env.example` is the tracked template: read and edit it freely.
 7. **The owner types sudo, passwords and 2FA himself.** Write the exact command and stop.
 8. **The repository is public:** never commit personal data, e-mail addresses, phone numbers,
    tokens, secrets or private URLs. Fixtures and evidence use invented data.
