@@ -515,6 +515,38 @@ describe("the Documents section of a posting", () => {
       }, 100);
     });
 
+    it("stops reading once the letter that follows the CV is written, before the window ends", async () => {
+      const api = fakePosting([writing("cv")]);
+      await openOnFakeClock();
+      api.documents = [ready("cv")];
+      await waitForOnFakeClock(() => {
+        expect(screen.getByTestId("posting-cv")).toHaveTextContent(
+          "Ready, on one page",
+        );
+      }, 100);
+      api.documents = [ready("cv"), writing("letter")];
+      await waitForOnFakeClock(() => {
+        expect(screen.getByTestId("posting-letter")).toHaveTextContent(
+          "Writing the letter",
+        );
+      }, 100);
+      api.documents = [ready("cv"), ready("letter")];
+      await waitForOnFakeClock(() => {
+        expect(screen.getByTestId("posting-letter")).toHaveTextContent(
+          "Ready, on one page",
+        );
+      }, 100);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_MS);
+      });
+      const reads = api.reads;
+      // Well inside the window the CV's closing opened: the letter's generation ended it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(POLL_MS * 4);
+      });
+      expect(api.reads).toBe(reads);
+    });
+
     it("stops reading when no letter follows within the window", async () => {
       const api = fakePosting([writing("cv")]);
       await openOnFakeClock();

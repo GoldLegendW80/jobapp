@@ -39,7 +39,7 @@ import {
 export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   const queryClient = useQueryClient();
   const [choice, setChoice] = useState<string>();
-  // Counts the CV generations seen closing; 0 when no letter is expected.
+  // CV generations seen closing; 0 when no letter is expected or its generation is read.
   const [letterWindow, setLetterWindow] = useState(0);
   const documents = useQuery({
     queryKey: postingDocumentsKey(job.id),
@@ -81,12 +81,15 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
 
   const cvGeneration = documentOf(documents.data, "cv")?.generation ?? null;
   const cvOpen = isOpen(cvGeneration);
+  const letterOpen = isOpen(documentOf(documents.data, "letter")?.generation);
   const [cvWasOpen, setCvWasOpen] = useState(cvOpen);
   if (cvOpen !== cvWasOpen) {
     setCvWasOpen(cvOpen);
-    if (!cvOpen && cvGeneration?.status !== "failed")
+    if (!cvOpen && cvGeneration?.status !== "failed" && !letterOpen)
       setLetterWindow((count) => count + 1);
   }
+  // The letter's own generation is read from here on: the wait for it is over.
+  if (letterWindow > 0 && letterOpen) setLetterWindow(0);
   useEffect(() => {
     if (letterWindow === 0) return;
     const timer = setTimeout(() => {
