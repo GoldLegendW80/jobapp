@@ -454,8 +454,14 @@ def test_the_bound_counts_two_asks_on_two_documents_one_after_the_other(
 
 
 def _switch_during_render(
-    factory: sessionmaker[Session], fail: str | None = None, **change: Any
+    factory: sessionmaker[Session],
+    fail: str | None = None,
+    ask: Any = render_job.mark_edited,
+    renderer: FakeRenderer | None = None,
+    **change: Any,
 ) -> tuple[dict[str, Any], RecordingQueue, FakeRenderer]:
+    """`ask` is how the switch asks for its render: `mark_edited` (the PATCH route), or
+    `mark_queued` ("Render" pressed right after it)."""
     made = _setup(factory)
     queue = RecordingQueue()
     revision = _ask(factory, made["user"], made["document"], queue)
@@ -463,15 +469,17 @@ def _switch_during_render(
     def switch() -> None:
         with factory() as db:
             assert render_job.switch(db, made["user"], made["document"], at=AT, **change)
-            _, fresh = render_job.mark_edited(db, made["user"], made["document"])
+            _, fresh = ask(db, made["user"], made["document"])
             db.commit()
         assert not fresh  # the job that renders is the one that renders it next
 
-    renderer = FakeRenderer(during=switch, fail=fail)
+    renderer = renderer or FakeRenderer(fail=fail)
+    renderer.during = switch
     _run(context(factory, renderer, AT), made["document"], revision)
     return made, queue, renderer
 
 
+@pytest.mark.parametrize("ask", [render_job.mark_edited, render_job.mark_queued])
 @pytest.mark.parametrize(
     ("change", "looks"),
     [
@@ -480,9 +488,12 @@ def _switch_during_render(
     ],
 )
 def test_a_switch_during_a_render_of_the_same_revision_is_rendered_next(
-    factory: sessionmaker[Session], change: dict[str, Any], looks: list[tuple[str, str]]
+    factory: sessionmaker[Session],
+    change: dict[str, Any],
+    looks: list[tuple[str, str]],
+    ask: Any,
 ) -> None:
-    made, queue, renderer = _switch_during_render(factory, **change)
+    made, queue, renderer = _switch_during_render(factory, ask=ask, **change)
     versions = _versions(factory, made["document"])
     assert [
         (v.number, v.template_slug, v.language.value, v.pdf_sha256 is not None) for v in versions
@@ -499,6 +510,139 @@ def test_a_failed_render_keeps_the_switch_queued_for_the_cron(
     made, _, _ = _switch_during_render(factory, fail="render_failed", template_slug="sidebar")
     document = _document(factory, made["document"])
     assert (document.render_state, document.render_error) == (RenderState.queued, None)
+
+
+@pytest.mark.parametrize("switched_pages", [1, 2], ids=["switched_fits", "switched_overflows"])
+def test_the_overflow_hook_is_called_for_the_look_the_person_kept_only(
+    factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch, switched_pages: int
+) -> None:
+    # The CV overflows in `classic`; the person switches to `sidebar` during that render. The
+    # one shorten pass must start from sidebar's own render, never from the look left.
+    called: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        render_job, "on_overflow", lambda _document, version: called.append(version)
+    )
+    renderer = FakeRenderer(pages=2)
+    claim = render_job._claim
+
+    def claiming(*args: Any) -> Any:
+        if renderer.during is None:  # the switch is made: this claim is the switched version's
+            renderer.pages = switched_pages
+        return claim(*args)
+
+    monkeypatch.setattr(render_job, "_claim", claiming)
+    made, _, _ = _switch_during_render(factory, renderer=renderer, template_slug="sidebar")
+    left, kept = _versions(factory, made["document"])
+    assert (left.template_slug, left.fit) == ("classic", FitResult.overflow)
+    assert kept.template_slug == "sidebar"
+    if switched_pages == 1:
+        assert kept.fit == FitResult.one_page
+        assert called == []
+        assert _status(factory, made["posting"]) == "cv_ready"
+    else:
+        assert kept.fit == FitResult.overflow
+        assert called == [kept.id]
+
+
+def test_an_error_of_the_overflow_hook_keeps_a_switch_queued_for_the_cron(
+    factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # D7's shorten can raise DocumentBusyError; a switch made meanwhile must still be rendered.
+    made = _setup(factory)
+    switched: list[bool] = []
+
+    def hook(document_id: uuid.UUID, version_id: uuid.UUID) -> None:
+        if not switched:
+            switched.append(True)
+            with factory() as db:
+                assert render_job.switch(
+                    db, made["user"], document_id, at=AT, template_slug="sidebar"
+                )
+                render_job.mark_edited(db, made["user"], document_id)
+                db.commit()
+        raise store.DocumentBusyError(store.BUSY)
+
+    monkeypatch.setattr(render_job, "on_overflow", hook)
+    revision = _ask(factory, made["user"], made["document"], RecordingQueue())
+    _run(context(factory, FakeRenderer(pages=2), AT), made["document"], revision)
+    document = _document(factory, made["document"])
+    assert (document.render_state, document.render_error) == (RenderState.queued, None)
+    assert render_job._waiting(factory) == [(made["document"], revision)]
+    _run(context(factory, FakeRenderer(pages=2), AT), made["document"], revision)  # the cron's
+    assert [
+        (v.template_slug, v.pdf_sha256 is not None) for v in _versions(factory, made["document"])
+    ] == [
+        ("classic", True),
+        ("sidebar", True),
+    ]
+    document = _document(factory, made["document"])
+    assert (document.render_state, document.render_error) == (RenderState.idle, None)
+
+
+@pytest.mark.parametrize(
+    ("busy", "kept"),
+    [(render_job.STORE_ATTEMPTS - 1, True), (render_job.STORE_ATTEMPTS, False)],
+)
+def test_a_document_locked_while_the_pdf_is_stored_is_waited_for(
+    factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch, busy: int, kept: bool
+) -> None:
+    made = _setup(factory)
+    refusals: list[int] = []
+    lock = store.lock_document
+
+    def locking(*args: Any, **kwargs: Any) -> Any:
+        if refusals:
+            refusals.pop()
+            raise store.DocumentBusyError(store.BUSY)
+        return lock(*args, **kwargs)
+
+    monkeypatch.setattr(store, "lock_document", locking)
+    renderer = FakeRenderer(during=lambda: refusals.extend([1] * busy))  # a save holds the row
+    revision = _ask(factory, made["user"], made["document"], RecordingQueue())
+    _run(context(factory, renderer, AT), made["document"], revision)
+    (version,) = _versions(factory, made["document"])
+    document = _document(factory, made["document"])
+    if kept:
+        assert version.pdf is not None
+        assert (document.render_state, document.render_error) == (RenderState.idle, None)
+        assert _status(factory, made["posting"]) == "cv_ready"
+    else:
+        assert version.pdf is None
+        assert (document.render_state, document.render_error) == (
+            RenderState.idle,
+            "render_failed",
+        )
+
+
+def test_the_status_moves_once_only_when_retention_pruned_the_one_page_versions(
+    factory: sessionmaker[Session],
+) -> None:
+    # The durable record of the move is the posting's status event, not a version.
+    made = _setup(factory)
+    render = FakeRenderer()
+    revision = _ask(factory, made["user"], made["document"], RecordingQueue())
+    _run(context(factory, render, AT), made["document"], revision)
+    assert _status(factory, made["posting"]) == "cv_ready"
+    _set_status(factory, made["posting"], "shortlisted")
+    with factory() as db:
+        db.execute(
+            sa.text("DELETE FROM document_versions WHERE document_id = :d"),
+            {"d": made["document"]},
+        )
+        store.save_draft(
+            db,
+            made["user"],
+            made["document"],
+            {**CV, "headline": "Two"},
+            revision,
+            Author.user,
+            at=AT,
+        )
+        db.commit()
+    revision = _ask(factory, made["user"], made["document"], RecordingQueue())
+    _run(context(factory, render, AT), made["document"], revision)
+    assert [v.fit for v in _versions(factory, made["document"])] == [FitResult.one_page]
+    assert _status(factory, made["posting"]) == "shortlisted"
 
 
 def test_the_canary_never_reaches_logs_arq_arguments_or_redis(

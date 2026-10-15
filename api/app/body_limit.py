@@ -27,7 +27,8 @@ does three things, in this order.
    - routes under /api/auth/ (sign in, sign out, link check and accept, and the account
      routes): PUBLIC_MAX_BYTES, a few hundred bytes of sign in or acceptance with wide margin,
      and the short times;
-   - a route whose schema allows more than the default: its own size, from the schema (SIZED);
+   - a route whose schema allows more, or whose content is capped at far less, than the
+     default: its own size, from the schema (SIZED, by method and path template);
    - every other route under /api: DEFAULT_MAX_BYTES, well under Caddy's 10 MiB.
 
 How it caps. A request that announces no body is passed on untouched. A declared Content-Length
@@ -56,10 +57,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
 from typing import Any
 
+from app.documents.content import RAW_MAX_BYTES
 from app.jobs.schemas import POSTING_MAX
 
 Scope = MutableMapping[str, Any]
@@ -73,12 +76,16 @@ PUBLIC_MAX_BYTES = 64 * 1024  # a login or an invite acceptance is a few hundred
 DEFAULT_MAX_BYTES = 1024 * 1024  # other JSON routes; well under Caddy's 10 MiB edge limit
 
 # Routes whose schema allows more than DEFAULT_MAX_BYTES, each sized from that schema with four
-# bytes per character (the longest UTF-8 encoding) plus room for the other fields. A session is
-# required before any of it is read. tests/identity/test_body_limit_api.py walks every route
-# with a JSON body and fails when a schema can describe more than its class takes.
+# bytes per character (the longest UTF-8 encoding) plus room for the other fields, and routes
+# whose content is capped far below it. Keyed by method and path template (`{name}` is one path
+# segment). A session is required before any of it is read. tests/identity/test_body_limit_api.py
+# walks every route with a JSON body and fails when a schema can describe more than its class
+# takes.
 SIZED: dict[tuple[str, str], int] = {
     # A posting added by hand: posting_text up to POSTING_MAX characters (jobs/schemas.py).
     ("POST", "/api/jobs"): 4 * POSTING_MAX + 64 * 1024,
+    # A draft saved by hand: the content's raw cap (documents/content.py), and room for escapes.
+    ("PUT", "/api/documents/{document_id}/draft"): RAW_MAX_BYTES + 48 * 1024,
 }
 
 # Routes that read their own raw body with their own limit (module docstring). They are not
@@ -136,6 +143,20 @@ def is_api_path(path: str) -> bool:
     return path == "/api" or path.startswith("/api/")
 
 
+def _template(path: str) -> re.Pattern[str]:
+    return re.compile("[^/]+".join(re.escape(part) for part in re.split(r"\{[^}]*\}", path)))
+
+
+_SIZED = tuple((method, _template(path), size) for (method, path), size in SIZED.items())
+
+
+def _sized(method: str, path: str) -> int:
+    for wanted, template, size in _SIZED:
+        if wanted == method and template.fullmatch(path):
+            return size
+    return DEFAULT_MAX_BYTES
+
+
 def class_for(method: str, path: str) -> BodyClass | None:
     """The size and the times of this request's body, or None when it is not capped here (a
     route that reads its own body, or a path the api does not serve)."""
@@ -143,8 +164,7 @@ def class_for(method: str, path: str) -> BodyClass | None:
         return None
     if path.startswith(PUBLIC_PREFIX):
         return BodyClass(PUBLIC_MAX_BYTES, PUBLIC_READ_IDLE_S, PUBLIC_READ_TOTAL_S)
-    size = SIZED.get((method, path), DEFAULT_MAX_BYTES)
-    return BodyClass(size, BODY_READ_IDLE_S, BODY_READ_TOTAL_S)
+    return BodyClass(_sized(method, path), BODY_READ_IDLE_S, BODY_READ_TOTAL_S)
 
 
 def limit_for(method: str, path: str) -> int | None:
