@@ -572,6 +572,26 @@ class InvalidAnswerError(ValueError):
         self.code = code
 
 
+REQUIRED_LEFT = "required_left"  # the `needs` of a fill that left a required field (run._needs)
+
+
+def _required_left(db: Session, application: Application) -> bool:
+    """Whether a required field of the form is still left: what the run left (`left`, no value)
+    and no one answered since. Flushes first: the answer just set is in the session only."""
+    db.flush()
+    found = db.scalar(
+        sa.select(ApplicationAnswer.field_key)
+        .where(
+            ApplicationAnswer.application_id == application.id,
+            ApplicationAnswer.user_id == application.user_id,
+            ApplicationAnswer.required.is_(True),
+            ApplicationAnswer.source == AnswerSource.left,
+        )
+        .limit(1)
+    )
+    return found is not None
+
+
 def _is_date(value: str) -> bool:
     """An ISO calendar date, `YYYY-MM-DD`, and a real one."""
     if not ISO_DATE.fullmatch(value):
@@ -594,9 +614,10 @@ def set_answer(
     """The person's own value for one field of the form (one left for them, or one they
     override): stored with the source `person`, so the hash changes and any approval no longer
     matches; an `approved` application goes back to `ready` (its approval spent, a new one
-    needed). The submit lease refills and reads back this value as any other; a refill by the
-    run keeps it (`run.finish`). Raises NotFoundError, RefusedError (`not_editable`) or
-    InvalidAnswerError. The caller commits. No value goes into the event."""
+    needed); a `needs_person` one that waited only for required fields goes to `ready` once the
+    last of them is answered. The submit lease refills and reads back this value as any other;
+    a refill by the run keeps it (`run.finish`). Raises NotFoundError, RefusedError
+    (`not_editable`) or InvalidAnswerError. The caller commits. No value goes into the event."""
     application, _ = lock(db, user_id, application_id)
     if application.state not in EDITABLE:
         raise RefusedError("not_editable")
@@ -631,6 +652,16 @@ def set_answer(
     if application.state is State.approved:
         states.move(application, State.ready, now)
         application.error_code = "stale"
+    elif (
+        application.state is State.needs_person
+        and application.needs == REQUIRED_LEFT
+        and not _required_left(db, application)
+    ):
+        # The fill stopped only for required fields left to the person (run._needs); the last
+        # of them is answered, so the form is complete and waits for the approval like any
+        # other. A file or a skipped widget is never answered here and keeps it waiting.
+        states.move(application, State.ready, now)
+        application.needs = None
     application.updated_at = now
     _event(db, application, "answer_set", now, field_key=field_key)
     return application

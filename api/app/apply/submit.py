@@ -508,6 +508,10 @@ async def refill(
                 return Stop(State.ready, "form_changed")  # a question nobody approved
             if row.value is None:
                 continue  # left: the read back checks it shows nothing
+            if row.kind == "checkbox" and row.value is not True:
+                # A box approved unticked (the person's No): the adapter never ticks it, so
+                # there is nothing to type; the read back checks the page shows it unticked.
+                continue
             filled = await adapter.fill(tools, item, _answer(row))
             if filled.status != "filled":
                 return _stop_of(filled.code if filled.status == "failed" else "")

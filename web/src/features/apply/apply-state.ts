@@ -86,7 +86,7 @@ const NEEDS: Record<string, string> = {
   captcha: "The site asks for a captcha, so the assistant stopped.",
   signin: "The site asks you to sign in, so the assistant stopped.",
   email_code: "The site sent a code by e-mail that only you can read.",
-  left_required: "A required question is left for you to answer.",
+  required_left: "A required question is left for you to answer.",
   payment_requested: "The site asks for a payment, so the assistant stopped.",
   no_adapter: "The assistant does not know this form yet.",
 };
