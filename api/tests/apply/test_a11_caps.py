@@ -201,6 +201,20 @@ def test_the_pause_switch_refuses_and_keeps_the_form(
     assert approve(factory, person_a, app_id).passed
 
 
+def test_the_pause_switch_stops_a_pending_approval_before_the_click(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    assert approve(factory, person_a, app_id).passed
+    caps.save_settings(db, person_a.user_id, AT, paused=True, min_fit=None)
+    db.commit()
+    form = submit_ashby()
+    assert run_submit(submit_services(factory, form, stub), app_id) == "paused_by_you"
+    assert form.gate_clicks == []
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.ready, "paused_by_you")
+
+
 def test_two_approvals_racing_for_the_last_slot_one_passes(
     db: Session,
     factory: sessionmaker[Session],
