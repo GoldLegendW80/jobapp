@@ -109,24 +109,21 @@ SENTENCES = {
     **caps.SENTENCES,
 }
 # Refusals that leave the application as it is (`ready`): the person may approve again later.
-KEEP = (
-    frozenset(
-        {
-            "submit_disabled",
-            "paused",
-            "not_ready",
-            "stale",
-            "authorisation_invalid",
-            "authorisation_used",
-            "authorisation_expired",
-            "documents_changed",
-            "documents_review",
-            "manual",
-            "full_auto_unavailable",
-        }
-    )
-    | caps.KEEP
-)
+KEEP = frozenset(
+    {
+        "submit_disabled",
+        "paused",
+        "not_ready",
+        "stale",
+        "authorisation_invalid",
+        "authorisation_used",
+        "authorisation_expired",
+        "documents_changed",
+        "documents_review",
+        "manual",
+        "full_auto_unavailable",
+    }
+).union(caps.KEEP)
 # The authorisation each mode needs.
 KIND_OF_MODE = {
     Mode.review: AuthorisationKind.person_approval,
