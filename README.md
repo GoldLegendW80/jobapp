@@ -48,6 +48,8 @@ ops/dev-setup.sh                                   # read only: lists what is st
   test commands, ask before a merge, a gate, a deploy or ssh, and deny reading `.env` files.
   Personal settings go in `.claude/settings.local.json` (git ignored); agent worktrees live in
   `.claude/worktrees/` (git ignored).
+  If an older clone has the line `.claude/` in `.git/info/exclude`, narrow it to
+  `.claude/worktrees/`: left as it is, it hides the versioned `.claude/` config from git.
 
 ## Development on the Mac
 
