@@ -48,9 +48,12 @@ Declared open points (what these rules still miss, each toward applying):
 - a term inside a word that neither starts nor ends with it ("cyber" in "anticyberattack");
 - a term split by something drawn as a space or a mark ("S e c u r i t y", "Secu-rity", the
   Braille blank U+2800), and letters drawn like Latin ones in scripts outside the lookalike table
-  (Armenian U+057D for "u", Cherokee U+13DA for "S"); the stated cost on the other side: a
-  Cyrillic or Greek title is read with its lookalike letters as Latin ones, so a Latin term could
-  match a word of it;
+  (Armenian U+057D for "u", Cherokee U+13DA for "S"); a small letter is read as its capital is,
+  so a reading of the small letter alone is lost: Greek small eta is "h" (not "n"), small mu "m"
+  and small upsilon "y" (not "u"), small nu "n" (not "v"), the Cyrillic palochka "i" (not "l"),
+  and gamma and the lunate sigma U+03F2 (which NFKC makes a sigma) are not read; the stated cost
+  on the other side: a Cyrillic or Greek title is read with its lookalike letters as Latin ones, so
+  a Latin term could match a word of it;
 - the same role under two different titles ("ML Engineer" and "Machine Learning Engineer"), or a
   title that adds a city in parentheses: only accents, case, punctuation and gender markers
   ("H/F", "(m/w/d)") are dropped from a title, and only legal forms ("SAS", "Inc.") from a company;
@@ -133,21 +136,10 @@ _JOINERS = re.compile(r"[\s\-\u2010-\u2015_/.]+")
 # nonspacing and enclosing marks (accents, variation selectors, the grapheme joiner).
 _UNSEEN = frozenset({"Cf", "Cc", "Cs", "Co", "Cn", "Mn", "Me"})
 _HANGUL_FILLERS = frozenset("\u115f\u1160")  # letters drawn as nothing (NFKC maps U+3164 here)
-# Letters of Cyrillic, Greek and IPA drawn like a Latin letter, read as that letter. Applied before
-# the case fold, since a capital and its small letter can look like two different Latin letters.
+# Keys are small letters as NFKC, NFKD and the case fold leave them: any other key is never reached.
 _LOOKALIKES = str.maketrans(
-    "АВЕКМНОРСТХУЅІЈԚԜҮӀҺ"
-    "авекмнорстхуѕіјһԁԛԝүӏ"
-    "ΑΒΕΖΗΙΚΜΝΟΡΤΥΧ"  # noqa: RUF001
-    "αβεηικμνορτυχγϲϳ"
-    "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢ"
-    "ıȷɑɡɩ",
-    "ABEKMHOPCTXYSIJQWYIH"
-    "abekmhopctxysijhdqwyl"
-    "ABEZHIKMNOPTYX"
-    "abenikuvoptuxycj"
-    "abcdefghijklmnoprstuvwyz"
-    "ijagi",
+    "авекмнорстхуѕіјһԁԛԝүӏαβεζηικμνορτυχϳᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢıȷɑɡɩ",
+    "abekmhopctxysijhdqwyiabezhikmnoptyxjabcdefghijklmnoprstuvwyzijagi",
 )
 
 
@@ -161,12 +153,14 @@ def _seen(c: str) -> bool:
 
 def fold(text: str) -> str:
     """NFKC then NFKD with what a reader does not see dropped (`_UNSEEN`: accents, soft hyphens,
-    zero width characters), lookalike letters read as Latin, case folded, and every run of spaces,
-    hyphens, underscores, slashes and dots one space: "Sécurité" is "securite", a full width
-    letter is its plain one, "Secu\u00adrity" (a soft hyphen) and "Security" written with
-    Cyrillic letters are "security", "Red-Team" and "red_team" are "red team"."""
+    zero width characters), case folded, lookalike letters then read as Latin, and every run of
+    spaces, hyphens, underscores, slashes and dots one space: "Sécurité" is "securite", a full
+    width letter is its plain one, "Secu\u00adrity" (a soft hyphen) and "Security" written with
+    Cyrillic letters are "security", "Red-Team" and "red_team" are "red team". The lookalikes are
+    read after the case fold, so a capital and its small letter read as one letter (Greek capital
+    and small eta are both "h"), and a rule matches a title whatever the case of either."""
     decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))
-    plain = "".join(c for c in decomposed if _seen(c)).translate(_LOOKALIKES).casefold()
+    plain = "".join(c for c in decomposed if _seen(c)).casefold().translate(_LOOKALIKES)
     return _JOINERS.sub(" ", plain)
 
 
