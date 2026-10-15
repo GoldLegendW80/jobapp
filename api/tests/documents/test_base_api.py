@@ -2,9 +2,9 @@
 (made twice, deleted with others and last), a build from the profile (waiting for the consent,
 then for a credential, then started), a build from an empty profile (a skeleton with its note),
 a copy (and a copy of another person's, 404), the 11th refused with its sentence, a delete that
-leaves the posting CVs written from it, the upload answered 501, the consent (its pinned text,
-its version, accepted twice, the text bumped), its estimates, and a claim added by hand to a
-base CV that stays a note at every save."""
+leaves the posting CVs written from it, an upload of an unknown file (404; D24's own tests are
+in test_base_upload_api.py), the consent (its pinned text, its version, accepted twice, the text
+bumped), its estimates, and a claim added by hand to a base CV that stays a note at every save."""
 
 from __future__ import annotations
 
@@ -360,7 +360,7 @@ def test_deleting_a_base_cv_leaves_the_posting_cvs_written_from_it(
         assert kept.base_document_id is None
 
 
-def test_from_an_upload_answers_501_until_d24(api: Api, alex: Any) -> None:
+def test_from_an_upload_of_an_unknown_file_answers_404(api: Api, alex: Any) -> None:
     token, _ = alex
     response = api.request(
         "POST",
@@ -368,8 +368,8 @@ def test_from_an_upload_answers_501_until_d24(api: Api, alex: Any) -> None:
         token=token,
         json={"from": "upload", "ingestion_document_id": str(uuid.uuid4())},
     )
-    assert response.status_code == 501
-    assert response.json()["detail"] == base_router.UPLOAD_LATER
+    assert response.status_code == 404
+    assert response.json()["detail"] == base_router.UPLOAD_NOT_FOUND
 
 
 # --- a claim added by hand ----------------------------------------------------------------------
