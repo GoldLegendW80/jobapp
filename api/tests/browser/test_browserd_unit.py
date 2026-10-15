@@ -974,3 +974,91 @@ def test_one_uid_one_profile_for_ever(tmp_path: Path) -> None:
         with pytest.raises(LeaseError) as unsafe:
             chromium.bind_uid(20009, PROFILE, str(path))
         assert (unsafe.value.status, unsafe.value.code) == (503, "uid_records_unsafe")
+
+
+@pytest.mark.parametrize(
+    ("app_env", "allow", "refused"),
+    [
+        ("production", "pages", True),
+        ("Production", "pages", True),
+        (" production ", "pages,atsforms", True),
+        ("production", " , ", False),  # nothing named: nothing to refuse
+        ("production", "", False),
+        ("test", "pages", False),
+        ("development", "pages", False),
+        ("", "pages", False),
+        ("prod", "pages", False),  # the api's own convention: only the word production
+    ],
+)
+def test_proxy_allow_private_refused_in_production(
+    monkeypatch: pytest.MonkeyPatch, app_env: str, allow: str, refused: bool
+) -> None:
+    """Issue #230 (review of PR #294): the test stacks' private names never reach a production
+    browser. browserd refuses to start, so the container is never healthy and the deploy stops."""
+    monkeypatch.setenv("APP_ENV", app_env)
+    monkeypatch.setenv("BROWSER_PROXY_ALLOW_PRIVATE", allow)
+    if refused:
+        with pytest.raises(ValueError, match="APP_ENV=production"):
+            Config.from_env()
+    else:
+        assert Config.from_env().proxy_allow == frozenset(
+            h.strip() for h in allow.split(",") if h.strip()
+        )
+
+
+def test_uid_records_seeded_from_existing_profiles(tmp_path: Path) -> None:
+    """Issue #230 (follow up 1 of PR #294's review): directories made before the records existed
+    bind their owner uid at start, so a new profile under that uid is refused 409. A uid with
+    two directories gets a record that refuses every lease of it (PR #307 review, follow up 7);
+    a link, a file, a name that is not a profile id and a uid outside the range are left alone;
+    a second start writes nothing more."""
+    profiles, root = tmp_path / "profiles", tmp_path / "profiles" / ".uids"
+    profiles.mkdir()
+    chromium.make_uid_records(str(root))
+    a, b = PROFILE, "0b7e1c1e-9d43-4c55-8c1a-6f0f3c7f1a00"
+    twin1, twin2 = "1d1e2f30-0000-4000-8000-000000000001", "1d1e2f30-0000-4000-8000-000000000002"
+    owner = {a: 20001, b: 20002, twin1: 20003, twin2: 20003, "not-a-profile": 20004}
+    for name in owner:
+        (profiles / name).mkdir()
+    low = "1d1e2f30-0000-4000-8000-000000000005"
+    (profiles / low).mkdir()
+    owner[low] = 1000  # the display's uid, not a profile's
+    upper = "ABCDEF01-0000-4000-8000-000000000006"  # uuid accepts it, browserd never writes it
+    (profiles / upper).mkdir()
+    owner[upper] = 20006
+    filed = "1d1e2f30-0000-4000-8000-000000000007"
+    (profiles / filed).write_text("x")
+    owner[filed] = 20007
+    linked = "1d1e2f30-0000-4000-8000-000000000008"
+    (profiles / linked).symlink_to(profiles / a)
+    owner[linked] = 20008
+
+    def lstat(path: str) -> os.stat_result:
+        real = os.lstat(path)
+        fields = list(real)
+        fields[4] = owner.get(Path(path).name, real.st_uid)  # st_uid
+        return os.stat_result(fields)
+
+    assert chromium.seed_uid_records(str(profiles), str(root), lstat) == 3
+    assert sorted(p.name for p in root.iterdir()) == ["20001", "20002", "20003"]
+    assert (root / "20001").read_text() == a
+    assert (root / "20003").read_text() == chromium.AMBIGUOUS
+    with pytest.raises(LeaseError) as refused:
+        chromium.bind_uid(20001, "1d1e2f30-0000-4000-8000-000000000009", str(root))
+    assert (refused.value.status, refused.value.code) == (409, "uid_in_use")
+    # The uid of two directories: neither of them, nor a new profile, may be leased under it.
+    for profile in (twin1, twin2, "1d1e2f30-0000-4000-8000-00000000000a"):
+        with pytest.raises(LeaseError) as refused:
+            chromium.bind_uid(20003, profile, str(root))
+        assert (refused.value.status, refused.value.code) == (409, "uid_in_use")
+    assert chromium.seed_uid_records(str(profiles), str(root), lstat) == 0  # idempotent
+
+    # A record that names another profile is kept, never rewritten from the directories.
+    owner[a] = 20002
+    owner[b] = 20009
+    assert chromium.seed_uid_records(str(profiles), str(root), lstat) == 1  # 20009 only
+    assert (root / "20002").read_text() == b
+
+    # Records that are not browserd's own: nothing seeded, start goes on, leases refuse 503.
+    root.chmod(0o755)
+    assert chromium.seed_uid_records(str(profiles), str(root), lstat) == 0

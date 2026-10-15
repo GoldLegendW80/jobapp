@@ -88,6 +88,9 @@ class WriteIn(BaseModel):
 
     kinds: list[Literal["cv", "letter"]] = Field(min_length=1, max_length=2)
     base_document_id: uuid.UUID | None = None
+    # The fake backend's recorded streams (tests and journeys), named by what follows
+    # `documents_<kind>_`; ignored on the real model.
+    script: Annotated[str, Field(max_length=30, pattern=r"^[a-z0-9_]{1,30}$")] | None = None
 
 
 class WrittenOut(BaseModel):
@@ -178,6 +181,8 @@ def write_now(
             stored: dict[str, Any] = dict(estimate.as_json(figures))
             if kind == Kind.cv and both:
                 stored[generate.LETTER_FOLLOWS] = True
+            if kind == Kind.cv and body.script:
+                stored[generate.LETTER_SCRIPT] = f"documents_letter_{body.script}"
             generation = generate.create(
                 db,
                 document,
@@ -192,9 +197,10 @@ def write_now(
             )
             made.append((kind, generation))
         if reason is None:
-            for _, generation in made:
+            for kind, generation in made:
+                script = f"documents_{kind.value}_{body.script}" if body.script else None
                 try:
-                    runs.append(generate.start(db, generation, at=at).id)
+                    runs.append(generate.start(db, generation, at=at, script=script).id)
                 except agent_runs.ActiveRunsError:
                     break  # stays queued: the tick starts it before anything automatic
         out = WriteOut(

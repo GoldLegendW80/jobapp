@@ -4,10 +4,17 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
-import { Link, useBlocker, useSearchParams } from "react-router";
+import {
+  Link,
+  useBlocker,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -31,6 +38,8 @@ import {
   type Profile,
   type SectionName,
 } from "./api";
+import { CvTab } from "@/features/documents/cv-tab";
+
 import { AnswersTab } from "./answers-tab";
 import { ExperienceTab } from "./experience-tab";
 import { FactsTab } from "./facts-tab";
@@ -44,10 +53,15 @@ import { SkillsTab } from "./skills-tab";
 const isSection = (value: string | null): value is SectionName =>
   value !== null && (SECTIONS as readonly string[]).includes(value);
 
+/** The CV tab is not a profile section: it lives at /profile/cv and /profile/cv/:id. */
+const CV_TAB = "cv";
+type TabName = SectionName | typeof CV_TAB;
+
 /**
  * /profile: the completeness of the whole profile, then one tab per section, each an editor that
  * saves on its own.
- * The open tab lives in `?tab=`. With unsaved changes, switching tab, following a link away or
+ * The open tab lives in `?tab=`, except the CV tab (documents D11), which has paths of its own
+ * so a base CV can be linked. With unsaved changes, switching tab, following a link away or
  * closing the page asks first. Each tab has a History drawer (view and restore past saves), and
  * the header an Export or import menu. A restore or an import remounts the open tab, so its form
  * reloads from the new current version.
@@ -58,11 +72,14 @@ export function ProfilePage() {
     queryKey: profileKey,
     queryFn: ({ signal }) => getProfile(signal),
   });
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const onCv = /^\/profile\/cv(\/|$)/.test(useLocation().pathname);
   const requested = params.get("tab");
   const tab: SectionName = isSection(requested) ? requested : "identity";
+  const active: TabName = onCv ? CV_TAB : tab;
   const [dirty, setDirty] = useState(false);
-  const [pendingTab, setPendingTab] = useState<SectionName>();
+  const [pendingTab, setPendingTab] = useState<TabName>();
   // Bumped after a restore or an import: the tabs remount and read the new current version.
   const [generation, setGeneration] = useState(0);
   const reloadTabs = useCallback(() => {
@@ -73,9 +90,14 @@ export function ProfilePage() {
     setDirty(value);
   }, []);
 
+  // Set while the tab guard's own "Discard changes" navigates: the person has just answered, so
+  // the blocker must not ask a second time for a change of pathname (the CV tab has its own).
+  const discarding = useRef(false);
   const blocker = useBlocker(
     ({ currentLocation, nextLocation }) =>
-      dirty && currentLocation.pathname !== nextLocation.pathname,
+      !discarding.current &&
+      dirty &&
+      currentLocation.pathname !== nextLocation.pathname,
   );
 
   useEffect(() => {
@@ -90,13 +112,11 @@ export function ProfilePage() {
     };
   }, [dirty]);
 
-  const openTab = (next: SectionName) => {
-    setParams(
-      (old) => {
-        const updated = new URLSearchParams(old);
-        updated.set("tab", next);
-        return updated;
-      },
+  const openTab = (next: TabName) => {
+    void navigate(
+      next === CV_TAB
+        ? { pathname: "/profile/cv" }
+        : { pathname: "/profile", search: `?tab=${next}` },
       { replace: true },
     );
   };
@@ -151,17 +171,19 @@ export function ProfilePage() {
         }
       />
       <Tabs
-        value={tab}
+        value={active}
         onValueChange={(value) => {
-          if (!isSection(value) || value === tab) return;
+          if (!(isSection(value) || value === CV_TAB) || value === active)
+            return;
           if (dirty) setPendingTab(value);
           else openTab(value);
         }}
       >
         <TabsList
           aria-label="Profile sections"
-          className="grid h-auto grid-cols-3 gap-1 sm:grid-cols-6"
+          className="grid h-auto grid-cols-4 gap-1 sm:grid-cols-7"
         >
+          <TabsTrigger value={CV_TAB}>CV</TabsTrigger>
           {SECTIONS.map((name) => {
             const percent = profile.completeness.sections[name]?.percent ?? 0;
             return (
@@ -176,6 +198,9 @@ export function ProfilePage() {
             );
           })}
         </TabsList>
+        <TabsContent value={CV_TAB} className="flex flex-col gap-4">
+          <CvTab />
+        </TabsContent>
         {SECTIONS.map((name) => (
           <TabsContent key={name} value={name} className="flex flex-col gap-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -247,7 +272,12 @@ export function ProfilePage() {
                   blocker.proceed();
                 } else if (pendingTab) {
                   setDirty(false);
-                  openTab(pendingTab);
+                  discarding.current = true;
+                  try {
+                    openTab(pendingTab);
+                  } finally {
+                    discarding.current = false;
+                  }
                   setPendingTab(undefined);
                 }
               }}

@@ -71,17 +71,23 @@ class Config:
     session_max_s: int = 1800
     mem_guard_pct: int = 90
     # Host names the egress proxy lets through although they resolve to a private address: the
-    # test stack's pages server only (tests/browser.compose.yml). Empty in compose.yml.
+    # test stack's pages server only (tests/browser.compose.yml). Empty in compose.yml, and
+    # refused at start under APP_ENV=production (review of PR #294, issue #230).
     proxy_allow: frozenset[str] = frozenset()
 
     @classmethod
     def from_env(cls) -> "Config":
         allow = os.environ.get("BROWSER_PROXY_ALLOW_PRIVATE", "")
+        names = frozenset(h.strip().lower() for h in allow.split(",") if h.strip())
+        if names and os.environ.get("APP_ENV", "").strip().lower() == "production":
+            raise ValueError(
+                "BROWSER_PROXY_ALLOW_PRIVATE is for test stacks, refused when APP_ENV=production"
+            )
         return cls(
             secret=os.environ.get("BROWSER_CONTROL_SECRET", "").strip().encode(),
             lease_max_s=lease_max_table(os.environ.get("BROWSER_LEASE_MAX_S", "")),
             idle_s=_int("BROWSER_IDLE_S", 300, 1, 3600),
             session_max_s=_int("BROWSER_SESSION_MAX_S", 1800, 1, 7200),
             mem_guard_pct=_int("BROWSER_MEM_GUARD_PCT", 90, 10, 99),
-            proxy_allow=frozenset(h.strip().lower() for h in allow.split(",") if h.strip()),
+            proxy_allow=names,
         )

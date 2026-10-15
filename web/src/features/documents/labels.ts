@@ -48,7 +48,10 @@ export const WAIT_SENTENCES: Record<WaitReason, string> = {
 };
 
 /** The sentence for a code of the writer's fixed list of failures (`generate.ERRORS`). */
-export function failedSentence(code: string | null, kind: Kind = "cv"): string {
+export function failedSentence(
+  code: string | null | undefined,
+  kind: Kind = "cv",
+): string {
   const noun = kind === "letter" ? "letter" : "CV";
   switch (code) {
     case "token_limit":

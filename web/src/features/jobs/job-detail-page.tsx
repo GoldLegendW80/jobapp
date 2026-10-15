@@ -13,6 +13,7 @@ import { Link, useLocation, useParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PostingDocumentsSection } from "@/features/documents/posting-documents";
 import { JobAssessment } from "@/features/agents/job-assessment";
 import { JobChat } from "@/features/agents/job-chat";
 import { NotFoundPage } from "@/features/shell/not-found-page";
@@ -229,6 +230,8 @@ function JobDetailView({ job }: { job: JobDetail }) {
       <JobAssessment job={job} />
 
       <NotesEditor key={job.id} job={job} save={save} />
+
+      <PostingDocumentsSection job={job} />
 
       <section aria-labelledby="posting-title" className="flex flex-col gap-3">
         <h2 id="posting-title" className="text-lg font-semibold tracking-tight">
