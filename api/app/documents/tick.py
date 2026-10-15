@@ -28,7 +28,9 @@ held and leaves the person to the next tick, so two passes never start the same 
    open, the person stopped one, or it failed already twice (`eligibility.next_try`, which also
    raises the ceiling after a stop at the ceiling). Each is created with the estimate of D9's
    `estimate.for_posting` and its ceiling, naming the default base CV; a letter gets what the
-   pair's ceiling has left after its CV's run (`generate.letter_ceiling`). A posting whose CV
+   pair's ceiling has left after its CV's run (`generate.letter_ceiling`), none when that run
+   has no count (created `failed` at its limit; the one retry after a stop at the ceiling then
+   applies). A posting whose CV
    moved it to `cv_ready` is still read for its letter (`eligibility.LETTER_STATUSES`): a letter
    the chain could not start (the person's runs all busy, the hook cut short) is work here.
 6. Every automatic generation that has not started is cancelled when its posting is no longer
@@ -401,12 +403,14 @@ def _create(
         base_id = cv.base_document_id if cv is not None else None
         cv_done = db.get(DocumentGeneration, docs.done[cv_id]) if cv_id in docs.done else None
     figures = estimate.for_posting(db, user_id, posting_id, base_id)
+    # None: the CV's run has no count, so the letter gets no budget (generate.no_budget).
+    left = figures.ceiling if cv_done is None else generate.letter_ceiling(db, cv_done)
     chosen = eligibility.next_try(
         failures,
         stopped=False,
         now=at,
         retry_after_s=settings.documents_auto_retry_after_s,
-        ceiling=figures.ceiling if cv_done is None else generate.letter_ceiling(db, cv_done),
+        ceiling=left or 0,
         high=figures.high,
     )
     if chosen is None:
@@ -414,7 +418,7 @@ def _create(
     store.lock_posting(db, user_id, posting_id)  # before the document's row and lock (store.py)
     document = store.get_or_create(db, user_id, posting_id, kind, at=at)
     try:
-        generate.create(
+        made = generate.create(
             db,
             document,
             GenerationMode.posting,
@@ -426,6 +430,8 @@ def _create(
         )
     except (store.GenerationOpenError, store.NotFoundError):
         return False  # opened by a click since the read, or its base CV deleted meanwhile
+    if left is None and chosen.token_ceiling == 0:
+        generate.no_budget(db, made, at)
     docs.ids[(posting_id, kind)] = document.id
     docs.open.add(document.id)
     return True

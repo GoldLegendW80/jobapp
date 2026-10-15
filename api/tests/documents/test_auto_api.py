@@ -179,6 +179,9 @@ def test_a_recorded_stream_named_by_the_click_is_the_writers_and_the_letters(
     with factory() as db:
         cv = db.execute(sa.select(DocumentGeneration)).scalar_one()
         cv.status = GenerationStatus.done  # the CV is written: the letter follows
+        ran = db.get(AgentRun, cv.run_id)
+        assert ran is not None
+        ran.input_tokens, ran.output_tokens = 0, 0  # the counts the runner writes
         db.commit()
         assert db.get(AgentRun, cv.run_id).input["script"] == "documents_cv_journey"  # type: ignore[union-attr]
         assert cv.estimate[generate.LETTER_SCRIPT] == "documents_letter_journey"

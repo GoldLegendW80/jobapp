@@ -27,7 +27,9 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    generation is created with the CV's `estimate` and base CV, started, and queued by the same
    final hook. Its ceiling is what the pair has left (`letter_ceiling`): the CV generation's
    `token_ceiling`, computed by the caller for the pair, minus the tokens the CV's run spent,
-   so a posting's CV and letter share that one ceiling. The consent and the credential are read
+   so a posting's CV and letter share that one ceiling. When that spend is unknown (no run, or
+   a count the runner did not write), the letter gets no budget: it is created `failed` with
+   `token_limit` and starts no run (`no_budget`). The consent and the credential are read
    again first: without either the letter waits with that reason; with the person's runs all
    busy it stays `queued`; the tick starts it in both cases. A chat, a
    shortening and a letter that already has a version start none: the person's letter is not
@@ -419,13 +421,30 @@ def settle(
         return render
 
 
-def letter_ceiling(db: Session, cv_generation: DocumentGeneration) -> int:
+def letter_ceiling(db: Session, cv_generation: DocumentGeneration) -> int | None:
     """The token ceiling of the letter that follows `cv_generation`: the pair's ceiling minus the
     tokens its run spent (the run's own count, never an estimate), never under zero. A budget of
-    zero lets the letter's run make no call: it stops at its limit and is retried as one."""
+    zero lets the letter's run make no call: it stops at its limit and is retried as one. None
+    when the spend is unknown (no run, or a count missing): the letter gets no budget then,
+    never the whole pair's (`no_budget`)."""
     run = db.get(AgentRun, cv_generation.run_id) if cv_generation.run_id is not None else None
-    spent = (run.input_tokens or 0) + (run.output_tokens or 0) if run is not None else 0
-    return max(0, cv_generation.token_ceiling - spent)
+    if run is None or run.input_tokens is None or run.output_tokens is None:
+        return None
+    return max(0, cv_generation.token_ceiling - run.input_tokens - run.output_tokens)
+
+
+def no_budget(db: Session, generation: DocumentGeneration, at: datetime) -> None:
+    """A letter whose pair has no budget it can show: `failed` at its limit, with no run, so the
+    person sees "Try again" and the tick's one retry after a stop at the ceiling applies."""
+    generation.status = GenerationStatus.failed
+    generation.wait_reason = None
+    generation.error = "token_limit"
+    generation.finished_at = at
+    db.flush()
+    logger.info(
+        "documents.generation.failed",
+        extra={"generation_id": str(generation.id), "code": generation.error},
+    )
 
 
 def start_letter(
@@ -481,6 +500,7 @@ def start_letter(
             k: v for k, v in parent.estimate.items() if k not in (LETTER_FOLLOWS, LETTER_SCRIPT)
         }
         reason = writer_base.wait_reason(db, cv.user_id)
+        ceiling = letter_ceiling(db, parent)
         try:
             generation = create(
                 db,
@@ -489,13 +509,17 @@ def start_letter(
                 parent.trigger,
                 parent.base_document_id or cv.base_document_id,
                 figures,
-                letter_ceiling(db, parent),
+                ceiling or 0,
                 at=at,
                 status=GenerationStatus.waiting if reason else GenerationStatus.queued,
                 wait_reason=reason,
             )
         except store.GenerationOpenError:
             db.rollback()
+            return None
+        if ceiling is None:
+            no_budget(db, generation, at)
+            store.commit(db)
             return None
         started: uuid.UUID | None = None
         # The person's runs all busy: the letter stays `queued` and the tick starts it.
