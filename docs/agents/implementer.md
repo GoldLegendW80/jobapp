@@ -38,9 +38,8 @@ the merge gate is `ops/local-check.sh`, run by the orchestrator on the merged ba
 
 ## Safety
 
-- Never read `.env` files (`.env`, `.env.jetson`, any `.env.*`) or production credentials;
-  never print, grep or log a secret. `.env.example` is the tracked template: read it with
-  `git show HEAD:.env.example`.
+- Never read `.env` files (`.env`, `.env.jetson`, `.env.local`, `.env.*.local`, `.env.production`, `.env.prod`) or production credentials;
+  never print, grep or log a secret. `.env.example` is the tracked template: read and edit it freely (add a new setting there).
 - Tests use only `e2e-*@example.org` accounts and never touch real user data.
 - Never contact a real Google host; never send mail.
 - No cybersecurity specific feature work.

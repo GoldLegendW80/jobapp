@@ -82,6 +82,7 @@ OPTION_WAITS = 6  # snapshots taken while a typeahead's options load, 0.5 s apar
 OPTION_WAIT_S = 0.5
 NAME_MAX = 500  # characters of a label or option kept
 TEXT_MAX = 10_000  # characters of a value kept: what the tool layer types at most, read back whole
+VALUE_ROLES = frozenset({"textbox", "searchbox", "spinbutton", "combobox"})  # text cut at TEXT_MAX
 
 
 class Tools(Protocol):
@@ -173,10 +174,11 @@ def parse_snapshot(text: str) -> Node:
         if found is None:
             continue
         attrs = {k: (v or "") for k, v in _ATTR.findall(found["attrs"] or "")}
+        cap = TEXT_MAX if found["role"] in VALUE_ROLES else NAME_MAX
         node = Node(
             role=found["role"],
             name=_scalar(f'"{found["name"]}"')[:NAME_MAX] if found["name"] is not None else "",
-            text=_scalar(found["text"] or "")[:TEXT_MAX],
+            text=_scalar(found["text"] or "")[:cap],
             ref=attrs.pop("ref", ""),
             attrs=attrs,
         )
@@ -309,8 +311,8 @@ def _around(group: Node, control: Node) -> tuple[list[str], list[str]]:
 
 def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
     """The field group a control stands in (the nearest of three ancestors with words before
-    the control), its label (those words, marks off) and the words after the control (a chosen
-    file's name)."""
+    the control), its label (those words, marks off, cut at `NAME_MAX` as it makes the field's
+    key) and the words after the control (a chosen file's name)."""
     inner, group = control, control.parent
     for _ in range(3):
         if group is None or group.role == "root":
@@ -318,7 +320,7 @@ def _group_label(control: Node) -> tuple[Node | None, str, bool, list[str]]:
         before, after = _around(group, inner)
         if before:
             label, required = label_of(" ".join(w for w in before if w not in ("*", "✱")))
-            return group, label, required or "*" in before or "✱" in before, after
+            return group, label[:NAME_MAX], required or "*" in before or "✱" in before, after
         inner, group = group, group.parent
     return None, "", False, []
 

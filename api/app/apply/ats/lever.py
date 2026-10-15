@@ -117,6 +117,8 @@ class Lever(base.Adapter):
         before, code = await self.read(tools)
         if before is None:
             return base.Filled("failed", code)
+        if before.pending:
+            return base.Filled("failed", before.pending)
         filled = await super().fill(tools, item, answer)
         if filled.status not in ("filled", "unverified"):
             return filled
@@ -144,12 +146,16 @@ class Lever(base.Adapter):
                 await tools.wait_for(time=PARSE_WAIT_S)
         for item in parsed:
             found, code = await self.read(tools)
+            if found is not None and found.pending:
+                return base.Filled("failed", found.pending)
             now_item = found.find(item.key) if found is not None else None
             if now_item is None:
                 return base.Filled("failed", code or "form_changed")
             if code := base._ok(await tools.type(now_item.ref, "", now_item.label)):
                 return base.Filled("failed", code)
             found, code = await self.read(tools)
+            if found is not None and found.pending:
+                return base.Filled("failed", found.pending)
             now_item = found.find(item.key) if found is not None else None
             if now_item is None:
                 return base.Filled("failed", code or "form_changed")
