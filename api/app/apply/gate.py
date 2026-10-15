@@ -659,7 +659,8 @@ def set_answer(
     ):
         # The fill stopped only for required fields left to the person (run._needs); the last
         # of them is answered, so the form is complete and waits for the approval like any
-        # other. A file or a skipped widget is never answered here and keeps it waiting.
+        # other. A required file is never answered here and keeps it waiting; a skipped widget
+        # is never required (run._answer_rows), so it never held it.
         states.move(application, State.ready, now)
         application.needs = None
     application.updated_at = now
