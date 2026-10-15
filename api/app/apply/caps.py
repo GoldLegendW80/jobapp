@@ -34,11 +34,13 @@ are the `click` events the submit lease writes in the transaction that moves the
 people's clicks go one at a time and the second sees the first. A paced application stays
 `approved` and waits, with the time it goes (`submit.py`).
 
-Declared open points (`company_key`, each toward refusing more, except the last two):
+Declared open points (`company_key`, each toward refusing more, except the last three):
 - two different companies whose names differ only by legal forms, joining words or spacing are
   one company ("Example Group" and "Example");
 - a company written in two scripts ("Пример" and "Primer") or under an abbreviation ("P&G" and
   "Procter and Gamble") is two companies, unless the ATS organisation matches;
+- a name followed by a place or a division ("Example Robotics Paris") is another company than
+  the cap's, unless the ATS organisation matches;
 - postings marked applied by hand, without an application of the app, are not counted (the spec
   counts `submitted` and `submit_unknown` rows).
 """
