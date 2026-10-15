@@ -3,7 +3,8 @@
 - POST /api/postings/{posting_id}/applications `{mode: "manual" | "review", dry_run}` starts one:
   201 with the application and its warnings (`{code, sentence}`: Apply myself on a role the
   person's rules exclude), 409 `{detail, code, application_id}` for a refusal before anything is
-  spent (app/apply/guardrails.py lists the codes), 404 for a posting that is not the person's.
+  spent (app/apply/guardrails.py lists the codes), 409 `busy` when a lock is held past its
+  timeout, 404 for a posting that is not the person's.
   Full auto is never started here: its applications come from a Like while Full auto is on (A13),
   so a request cannot skip its switch and its authorisation. A rehearsal (`dry_run`) is Review
   first only.
@@ -21,6 +22,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, model_validator
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.apply import guardrails, service
@@ -120,6 +122,13 @@ def _uuid_or_404(value: str, detail: str) -> uuid.UUID:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail) from None
 
 
+def _busy(db: Session) -> JSONResponse:
+    """A lock held past its timeout: a refusal with its code, like the others."""
+    db.rollback()
+    out = RefusalOut(detail=BUSY, code="busy")
+    return JSONResponse(status_code=409, content=out.model_dump(mode="json"), headers=NO_STORE)
+
+
 def _out(application: Application) -> dict[str, Any]:
     return ApplicationOut.model_validate(application).model_dump()
 
@@ -148,10 +157,12 @@ def start_application(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND) from None
     except jobs_service.JobBusyError:
-        # A lock held past its timeout (issue #296): a refusal with its code, like the others.
-        db.rollback()
-        out = RefusalOut(detail=BUSY, code="busy")
-        return JSONResponse(status_code=409, content=out.model_dump(mode="json"), headers=NO_STORE)
+        return _busy(db)
+    except DBAPIError as exc:
+        # A later statement that waited past the lock timeout (the insert behind another writer's).
+        if not jobs_service.is_lock_timeout(exc):
+            raise
+        return _busy(db)
     except service.RefusedError as exc:
         db.rollback()
         refusal = exc.refusal
