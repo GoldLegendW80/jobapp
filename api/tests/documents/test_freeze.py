@@ -357,6 +357,93 @@ def test_a_render_holding_the_document_makes_the_status_change_busy_not_lost(
     assert _marks(factory, both["cv"]) == {1: None, 2: "applied"}
 
 
+def _apply_while_rendering(
+    both: dict[str, Any], api: Api, factory: sessionmaker[Session], approve: int | None
+) -> tuple[FakeRenderer, dict[str, Any]]:
+    """A renderer whose call is the window between the render's claim (committed: the version
+    is there, its PDF is not) and the store of its PDF. Another session, the person's, approves
+    a version in that window and moves the posting to `applied`; `seen` keeps the marks then."""
+    seen: dict[str, Any] = {}
+
+    def person() -> None:
+        if approve is not None:
+            _approve(api, both["alex"], both["cv"], approve)
+        _status(api, both["alex"], both["posting"], "applied")
+        seen["cv"], seen["letter"] = _marks(factory, both["cv"]), _marks(factory, both["letter"])
+
+    return FakeRenderer(during=person), seen
+
+
+def test_the_approved_version_still_rendering_is_frozen_when_its_render_lands(
+    both: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    renderer, seen = _apply_while_rendering(both, api, factory, approve=3)
+    third = {**CV, "headline": "Third"}
+    _write(factory, clock, both["alex_id"], both["posting"], Kind.cv, third, renderer)
+    # In the window: nothing older frozen in place of the approved version, the letter frozen.
+    assert seen == {"cv": {1: None, 2: None, 3: None}, "letter": {1: "applied"}}
+    assert _marks(factory, both["cv"]) == {1: None, 2: None, 3: "applied"}
+    with factory() as db:
+        landed = store.version(db, both["alex_id"], both["cv"], 3)
+        assert landed is not None
+        assert landed.pdf_sha256 is not None
+        assert landed.approved_at is not None
+        row = store.get(db, both["alex_id"], both["cv"])
+        assert row is not None
+        assert row.render_state is RenderState.idle
+    current = _current(factory, both)
+    assert current.cv.version is not None
+    assert (current.cv.version.number, current.cv.version.frozen) == (3, True)
+
+
+def test_without_an_approval_a_render_in_flight_changes_nothing_of_the_freeze(
+    both: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    renderer, seen = _apply_while_rendering(both, api, factory, approve=None)
+    third = {**CV, "headline": "Third"}
+    _write(factory, clock, both["alex_id"], both["posting"], Kind.cv, third, renderer)
+    assert seen["cv"] == {1: None, 2: "applied", 3: None}  # the latest rendered, at once
+    assert _marks(factory, both["cv"]) == {1: None, 2: "applied", 3: None}
+
+
+def test_an_approved_older_version_freezes_at_once_while_a_newer_one_renders(
+    both: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    renderer, seen = _apply_while_rendering(both, api, factory, approve=1)
+    third = {**CV, "headline": "Third"}
+    _write(factory, clock, both["alex_id"], both["posting"], Kind.cv, third, renderer)
+    assert seen["cv"] == {1: "applied", 2: None, 3: None}
+    assert _marks(factory, both["cv"]) == {1: "applied", 2: None, 3: None}
+
+
+def test_an_approved_version_whose_render_failed_is_frozen_by_the_render_that_lands(
+    both: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    renderer, seen = _apply_while_rendering(both, api, factory, approve=3)
+    renderer.fail = "render_failed"
+    third = {**CV, "headline": "Third"}
+    _write(factory, clock, both["alex_id"], both["posting"], Kind.cv, third, renderer)
+    assert seen["cv"] == {1: None, 2: None, 3: None}
+    assert _marks(factory, both["cv"]) == {1: None, 2: None, 3: None}  # nothing to send yet
+    # "Try again": the same draft renders the same version, and its PDF freezes it.
+    _write(factory, clock, both["alex_id"], both["posting"], Kind.cv, third)
+    assert _marks(factory, both["cv"]) == {1: None, 2: None, 3: "applied"}
+
+
+def test_a_render_that_lands_after_applied_with_nothing_approved_freezes_nothing(
+    two: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    posting = _posting(factory, two["alex_id"])
+    _status(api, two["alex"], posting, "applied")
+    cv = _write(factory, clock, two["alex_id"], posting, Kind.cv)
+    assert _marks(factory, cv) == {1: None}
+
+
+def _current(factory: sessionmaker[Session], both: dict[str, Any]) -> freeze.Current:
+    with factory() as db:
+        return freeze.current(db, both["alex_id"], both["posting"])
+
+
 def test_a_waiting_generation_is_left_alone_by_the_freeze(
     both: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
 ) -> None:
