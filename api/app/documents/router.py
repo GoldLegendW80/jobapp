@@ -23,6 +23,7 @@ import re
 import threading
 import unicodedata
 import uuid
+from dataclasses import asdict
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -201,6 +202,8 @@ class TemplateOut(BaseModel):
     accent: str | None
     kinds: list[str]
     thumbnails: dict[str, str]  # kind -> address; empty for a person's own
+    # kind -> the counters of the editor (`rules.SoftLimits`), in characters; null: no counter
+    soft_limits: dict[str, dict[str, int | None]]
 
 
 class TemplatesOut(BaseModel):
@@ -688,6 +691,10 @@ def save_settings(
 # --- templates ----------------------------------------------------------------------------------
 
 
+def _soft_limits(template: templates.Template) -> dict[str, dict[str, int | None]]:
+    return {kind: asdict(spec.soft_limits) for kind, spec in template.kinds.items()}
+
+
 def _thumbnails(template: templates.Template) -> dict[str, str]:
     return {
         kind: f"/api/document-templates/{template.slug}/thumbnail?kind={kind}&v={template.version}"
@@ -697,8 +704,8 @@ def _thumbnails(template: templates.Template) -> dict[str, str]:
 
 @templates_router.get("", response_model=TemplatesOut)
 def list_templates(user: CurrentUser, db: Db, response: Response) -> TemplatesOut:
-    """The gallery: every bundled template (manifest fields, both languages), then the
-    person's own, marked `user`."""
+    """The gallery: every bundled template (manifest fields, both languages, each kind's
+    counters for the editor), then the person's own, marked `user`."""
     response.headers.update(PRIVATE)
     out = [
         TemplateOut(
@@ -712,6 +719,7 @@ def list_templates(user: CurrentUser, db: Db, response: Response) -> TemplatesOu
             accent=template.accent,
             kinds=list(template.kinds),
             thumbnails=_thumbnails(template),
+            soft_limits=_soft_limits(template),
         )
         for template in sorted(templates.registry().values(), key=lambda t: t.slug)
     ]
@@ -728,6 +736,8 @@ def list_templates(user: CurrentUser, db: Db, response: Response) -> TemplatesOu
                 accent=None,
                 kinds=list(templates.KINDS),
                 thumbnails={},
+                # What the render and the writer use: the default's while the row cannot be read.
+                soft_limits=_soft_limits(render_job.template_of(db, user.id, own.slug)),
             )
         )
     return TemplatesOut(templates=out)
