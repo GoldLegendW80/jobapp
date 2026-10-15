@@ -20,11 +20,13 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
      Lettre de motivation). A bare noun phrase ("Work permit", "Pending charges", "Total comp",
      "Team preference") or a statement stays the person's, whatever its options. A3's free
      text questions (`free_text_for_the_agent`) were already read as prompts and skip this line;
-  2. the topic (`off_topic`): such a question is also asked only when it is about the job, the
-     company, the team, or the person's motivation, interests and experience (`_ABOUT_THE_JOB`,
-     an allowlist of topics, so a closed question needs no row per wording). "Why did you leave
-     your last job?" and "What is your legal status?" fall out; "Why do you want to work here?",
-     "Tell us about a project" and "Share your portfolio" stay;
+  2. the topic (`off_topic`): every question, A3's free text included (issue #317), is asked
+     only when it is about the job, the company, the team, or the person's motivation,
+     interests and experience (`_ABOUT_THE_JOB`, an allowlist of topics, so a closed question
+     needs no row per wording; "Why <Company>?" is one of them), or when its whole label asks
+     for the CV or the cover letter as text (`_DOCUMENT_PROMPT`). "Why did you leave your last
+     job?", a textarea "Describe your status" and "What is your legal status?" fall out; "Why
+     do you want to work here?", "Tell us about a project" and "Share your portfolio" stay;
   3. the vocabularies, in any wording, open or not:
   - a label `terms.legal_reading` reads as a commitment, a consent, the privacy notice or the
     accuracy statement (arbitration, background checks, marketing, data retention, a
@@ -37,9 +39,11 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
     green card, residency, citizenship, a passport, H-1B, OPT; titre de séjour, Arbeitserlaubnis,
     permiso de trabajo);
   - criminal and employment history (charges, arrests, convictions, offences, a DBS check, a
-    dismissal, being let go, a gap, disciplinary action; casier, condamnation);
+    dismissal, being let go, a gap, disciplinary action, a notice period; casier,
+    condamnation, un trou, préavis);
   - sensitive personal data and where the person lives (`personal`: religion, marital status,
-    children, health, medication, accommodation, caste, politics, pronouns, age, family);
+    a divorce, children, health, medication, accommodation, caste, politics, pronouns, age,
+    family, where the person lives or moved to);
   - the person's identity or a credential (a password, a social security, tax or ID number, an
     address, a phone, an e-mail, a name, a signature, a birth date): the agent never receives
     the identity section, so any value would be invented;
@@ -65,17 +69,19 @@ This file is the part of the agent that decides, and it is pure (no store, no cl
   is one that is a bare negation or a non answer ("None", "N/A", "Not applicable", "No pending
   charges", "I do not require sponsorship", "Aucun", "Néant": `bare_negation`), and a value that
   speaks of work authorization, criminal history or pay (`legal_statement`): a missed label
-  cannot be answered "None" or "I hold the right to work" on the person's behalf. A typed value
-  goes through mail M9's `factcheck_rules.check` against the profile: a number, a
-  duration, a link, an employer or a title that the profile does not hold leaves the field
-  (`fact_check`). So a posting that tells the model to add a link changes nothing on the form.
+  cannot be answered "None" or "I hold the right to work" on the person's behalf. A dash used
+  as a separator in a typed value is replaced by code first (`undashed`: the owner's rule, no
+  dashes as separators). A typed value then goes through mail M9's `factcheck_rules.check`
+  against the profile: a number, a duration, a link, an employer or a title that the profile
+  does not hold leaves the field (`fact_check`). So a posting that tells the model to add a
+  link changes nothing on the form.
 - `Request` and `Reply`: what the model call receives (the questions as data, the profile's
   facts and answers, the posting, the letter: never the identity section) and gives back.
 
-The call itself is an `AnswerAgent`. Declared open point: the agent of the agents runtime
-(`apply_answer`, internal, private_io, model_by_credential, token_budget, its fake streams) is the
-second slice of A5; until it is registered the run has no `AnswerAgent`, and skips the agent the
-way a run without a credential does (every question it would have asked stays left).
+The call itself is an `AnswerAgent`: in the worker, `app.apply.agents.RuntimeAnswerAgent`, the
+`apply_answer` agent of the agents runtime (internal, private_io, model_by_credential, the
+`TOKEN_BUDGET` below, one submit tool). A run without one, or a person without a credential,
+skips the agent: every question it would have asked stays left.
 """
 
 import re
@@ -86,6 +92,7 @@ from typing import Any, Protocol
 from app.apply import answers, terms
 from app.apply.ats import base
 from app.documents import profile_view
+from app.documents import rules as doc_rules
 from app.mail import factcheck_rules
 
 AGENT_REASONS = frozenset({"not_a_known_question", "free_text_for_the_agent"})
@@ -134,7 +141,11 @@ class Reply:
     proposals: tuple[Proposal, ...] = ()
     input_tokens: int = 0
     output_tokens: int = 0
-    stopped: str = ""  # token_budget, turns, error: the rest is left
+    # token_budget, cancelled, error: the rest is left; no_credential, busy: no run was made
+    stopped: str = ""
+
+
+NOT_RUN = frozenset({"no_credential", "busy"})
 
 
 class AnswerAgent(Protocol):
@@ -185,13 +196,15 @@ _HISTORY = re.compile(
     r"convict|(?<!in )\bcharge[sd]?\b|arrest|felon|misdemean|offen[cs]e|criminal|casier"
     r"|condamn|\bdbs\b|disclosure and barring|fired|dismiss|terminated|disciplin|sanction"
     r"|vorstraf|fuhrungszeugnis|antecedentes|penal|let go|laid off|employment gap|\bgap\b"
+    r"|\btrous?\b|notice period|preavis"
 )
 # Sensitive personal data and where the person lives: the profile holds none of it for a model.
 _PERSONAL = re.compile(
     r"religio|marital|married|spouse|\bpartner\b|child|\bkids\b|pregnan|\bhealth\b"
     r"|\bmedic(?:al|ation|ine)s?\b|disab|accommodat|caste|politic|\bunions?\b|sexual|orientation"
     r"|pronoun|veteran|family|gender|ethnic|racial|\bhow old\b|\bage\b|\bborn\b"
-    r"|where do you live|\b(?:city|state|country) do you live|today'?s date"
+    r"|where do you live|\b(?:city|state|country) do you live|\b(?:do|did) you live\b"
+    r"|today'?s date|divorc|widow|\bmov(?:e|ed|ing) to\b"
 )
 # Consent to share, keep or contact: a data sharing, retention or communications choice. A
 # request for the person's own link or work ("Share your portfolio") is not one.
@@ -262,11 +275,18 @@ _ABOUT_THE_JOB = re.compile(
     r"|goals?|ideal|mission|product|values?|culture|opportunity|this job|approach\w*|evaluat\w*"
     r"|build\w*|built|bug|design\w*|test\w*|technolog\w*|tools?|stack|systems?|agents?|favou?rite"
     r"|years? of|portfolio|github|learn\w*|solv\w*|trade-?off|projet|entreprise|poste|equipe"
-    r"|empresa|puesto|equipo|unternehmen|stelle|projekt|proyecto|erfahrung|experiencia"
+    r"|hir(?:e|ing)|empresa|puesto|equipo|unternehmen|stelle|projekt|proyecto|erfahrung|experiencia"
     r"|trabajar (?:aqui|con|en)|bei uns|approche|evalu\w*|outils?|sistema|cover letter"
     r"|additional information|lettre de motivation|informations? complementaires?)\b"
     r"|^[\W\d_]*(?:why|pourquoi|warum|por ?que)\s+(?!(?:did|do|does|are|were|was|have|had|would"
     r"|should|could|can|is|will|avez|etes|hat|haben|sind|ha|has)\b)\w+(?:\s+\w+){0,2}\W*$"
+)
+# A document asked for as text: the whole label names the CV or the cover letter (A3's `resume`
+# and `cover_letter` templates, which leave such a text field to the agent).
+_DOCUMENT_PROMPT = re.compile(
+    r"^\W*(?:(?:your|votre|upload(?: your| a)?|attach(?: your| a)?)\s+)?"
+    r"(?:(?:resume|cv|curriculum vitae)(?:\s*/\s*(?:resume|cv))?|cover letter|motivation letter"
+    r"|lettre de motivation)\W*$"
 )
 _YES_NO_WORD = re.compile(r"^(?:yes|no|oui|non|ja|nein|si|y|n)\b")
 _BARE = frozenset({"yes", "no", "oui", "non", "ja", "nein", "si", "y", "n"})
@@ -339,19 +359,19 @@ def refusal(
 ) -> str | None:
     """Why a question stays the person's whatever a model would say, else None. An empty label
     is refused too: nothing says what it asks. A question the resolver does not know (any
-    reason but A3's free text, by default) must also read as open (`_OPEN`) and be about the job
-    (`_ABOUT_THE_JOB`)."""
+    reason but A3's free text, by default) must also read as open (`_OPEN`); every question,
+    A3's free text included, must be about the job (`_ABOUT_THE_JOB`, which holds "why
+    <company>") or ask for a document as text (`_DOCUMENT_PROMPT`)."""
     text = answers.fold(label)
     if not text:
         return "no_label"
     for code, refuses in REFUSALS:
         if refuses(text, kind, options):
             return code
-    if reason != "free_text_for_the_agent":
-        if not _OPEN.search(text):
-            return "not_open"
-        if not _ABOUT_THE_JOB.search(text):
-            return "off_topic"
+    if reason != "free_text_for_the_agent" and not _OPEN.search(text):
+        return "not_open"
+    if not (_ABOUT_THE_JOB.search(text) or _DOCUMENT_PROMPT.search(text)):
+        return "off_topic"
     return None
 
 
@@ -399,6 +419,15 @@ def sources_of(
     )
 
 
+def undashed(text: str) -> str:
+    """The owner's dash rule on a value the agent typed, applied by code whatever the model
+    wrote: each dash used as a separator (an em dash, an en dash, a spaced hyphen) becomes a
+    comma, or nothing at the end of a line, by the documents module's own rule
+    (`documents.rules.separators`); "full-stack" and a range "2019-2021" keep their hyphen."""
+    found = doc_rules.separators(text)
+    return doc_rules.apply_separators(text, found) if found else text
+
+
 def _issues(text: str, sources: factcheck_rules.Sources) -> list[str]:
     return sorted({issue.code for issue in factcheck_rules.check(text, sources)})
 
@@ -420,6 +449,7 @@ def _judge_one(question: Question, proposal: Proposal, sources: factcheck_rules.
         if _issues(picked, sources):
             return Verdict(key, None, "fact_check")
         return Verdict(key, answers.Answer(picked, source, picked), "accepted")
+    value = undashed(value)
     if len(value) > VALUE_MAX:
         return Verdict(key, None, "too_long")
     if _bare_yes_or_no(value):

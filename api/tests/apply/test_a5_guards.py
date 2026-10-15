@@ -239,6 +239,18 @@ OFF_TOPIC = [
 ]
 
 
+# The `not_open` rows of the table below that are still about the job: written by A3 as free text,
+# they are asked; the other `not_open` rows are `off_topic` on that route.
+FREE_TEXT_ON_TOPIC = {
+    "Team preference",
+    "Favourite colour",
+    "Kubernetes experience",
+    "Experience with Kubernetes: why?",
+    "Motivation for the role",
+    "Cover letter text",
+}
+
+
 @pytest.mark.parametrize(("label", "code"), LEAKS + OPEN_LEAKS)
 @pytest.mark.parametrize(("kind", "options"), [("text", ()), ("select", THREE), ("select", YN)])
 def test_pay_authorization_and_history_stay_the_persons_in_any_widget(
@@ -266,9 +278,9 @@ def test_a_question_not_about_the_job_stays_the_persons_in_any_widget(
     item = ats_base.Field(key="k", label=label, kind=kind, options=options)  # type: ignore[arg-type]
     for reason in agent.AGENT_REASONS:
         outcome = ats_base.Outcome(item, run.Left(reason, options), ats_base.Filled("left", reason))
-        # A3 wrote a free text question for this company: its label needs no opener nor topic.
-        asked = reason == "free_text_for_the_agent" and options != YN
-        assert bool(agent.eligible([outcome])) is asked
+        # Issue #317: A3's free text questions need no opener, but they are held to the topic too.
+        assert agent.refusal(label, kind, options, reason) == code
+        assert agent.eligible([outcome]) == []
 
 
 @pytest.mark.parametrize(
@@ -457,8 +469,12 @@ def test_what_the_agent_is_never_asked(
     item = ats_base.Field(key="k", label=label, kind=kind, options=options)  # type: ignore[arg-type]
     for reason in agent.AGENT_REASONS:
         outcome = ats_base.Outcome(item, run.Left(reason, options), ats_base.Filled("left", reason))
-        # A3 wrote a free text question for this company: its label needs no opener.
-        expected = None if code == "not_open" and reason == "free_text_for_the_agent" else code
+        # A3 wrote a free text question for this company: its label needs no opener, and is
+        # asked when it is about the job (issue #317), else it stays the person's.
+        expected = code
+        if code == "not_open" and reason == "free_text_for_the_agent":
+            expected = None if label in FREE_TEXT_ON_TOPIC else "off_topic"
+        assert agent.refusal(label, kind, options, reason) == expected
         assert bool(agent.eligible([outcome])) is (expected is None)
 
 
@@ -707,3 +723,105 @@ def test_a_persons_application_waiting_for_documents_lets_their_next_one_go(
     _set(factory, third, needs="documents:writing", updated_at=AT + timedelta(seconds=40))
     with factory() as other:  # both wait: the one asked longest ago
         assert run.due(other) == [third]
+
+
+# --- A3's free text route holds the topic anchor too (issue #317) ----------------------------
+# Each label goes through the real resolver (the `full` profile, a posting in New York), in the
+# widget A3 reads, and must come out as A3's free text: then `eligible` (the adapter reports every
+# text box as `text`) and the refusal code. `None`: asked.
+
+FREE_TEXT_ROUTE = [
+    # the follow ups of PR #312's round 4, each asked on this route before
+    ("Why did you leave your last job?", "text", "off_topic"),
+    ("Why did you leave?", "text", "off_topic"),
+    ("Pourquoi avez-vous quitté votre dernier emploi ?", "text", "off_topic"),
+    ("Why did you move to the US?", "text", "personal"),
+    ("Why did you move to France?", "textarea", "personal"),
+    ("Why are you moving to Berlin?", "text", "personal"),
+    ("Why do you live in Paris?", "text", "personal"),
+    ("Why is your notice period so long?", "text", "history"),
+    ("Pourquoi votre préavis est-il si long ?", "text", "history"),
+    ("Why did you get divorced?", "text", "personal"),
+    ("Pourquoi avez-vous divorcé ?", "text", "personal"),
+    ("Pourquoi avez-vous un trou dans votre CV ?", "text", "history"),
+    ("Describe your status", "textarea", "off_topic"),
+    ("Tell us how your data should be handled", "textarea", "off_topic"),
+    ("Explain your situation", "textarea", "off_topic"),
+    ("Tell us about your weekend", "textarea", "off_topic"),
+    ("Why do you want to leave your current job?", "text", "off_topic"),
+    ("Why are you looking for a new job?", "text", "off_topic"),
+    ("Why did you apply?", "text", "off_topic"),
+    ("Why should we trust you?", "text", "off_topic"),
+    ("Décrivez votre situation", "textarea", "off_topic"),
+    # what this route still asks
+    ("Why Example Robotics?", "textarea", None),
+    ("Why Example Robotics?", "text", None),
+    ("Why us?", "text", None),
+    ("Why now?", "text", None),
+    ("Why this role?", "text", None),
+    ("Why do you want to work here?", "text", None),
+    ("Why do you want to join Example Robotics?", "text", None),
+    ("Why are you interested in this position?", "text", None),
+    ("Why should we hire you?", "text", None),
+    ("Pourquoi Example Robotics ?", "text", None),
+    ("Pourquoi souhaitez-vous rejoindre notre équipe ?", "text", None),
+    ("Tell us about a project you are proud of", "textarea", None),
+    ("Tell us about yourself", "textarea", None),
+    ("Describe your experience with LLM evaluation", "textarea", None),
+    ("Explain a technical challenge you solved", "textarea", None),
+    ("What makes you a great fit for this role?", "textarea", None),
+    ("Décrivez un projet dont vous êtes fier", "textarea", None),
+    ("Cover letter", "text", None),
+    ("Resume", "text", None),
+    ("Resume/CV", "text", None),
+]
+
+
+@pytest.mark.parametrize(("label", "kind", "code"), FREE_TEXT_ROUTE)
+def test_the_free_text_route_holds_the_topic_anchor(
+    label: str, kind: str, code: str | None
+) -> None:
+    from app.apply import answers
+    from tests.apply.test_a3_answers import ctx
+
+    left = answers.resolve(answers.FormField(label, kind), ctx("New York, NY, United States"))  # type: ignore[arg-type]
+    assert isinstance(left, answers.Left)
+    assert left.reason == "free_text_for_the_agent"
+    item = ats_base.Field(key="k", label=label, kind="text")
+    outcome = ats_base.Outcome(item, left, ats_base.Filled("left", left.reason))
+    assert agent.refusal(label, "text", (), left.reason) == code
+    assert bool(agent.eligible([outcome])) is (code is None)
+    # and the judge drops a reply that reaches it by another path
+    asked = agent.Question("k", label, "text", reason=left.reason)
+    reply = agent.Reply(
+        (agent.Proposal("k", "Example Robotics builds the robots I want.", "motivation"),)
+    )
+    (verdict,) = agent.judge([asked], reply, agent.sources_of({}, "Engineer", "Example Robotics"))
+    assert verdict.code == (code or "accepted")
+
+
+@pytest.mark.parametrize(
+    ("typed", "kept"),
+    [
+        ("I build agents — and I test them.", "I build agents, and I test them."),
+        ("I build agents – and test them", "I build agents, and test them"),
+        ("I build agents - and test them", "I build agents, and test them"),
+        ("I build agents -- and test them", "I build agents, and test them"),
+        ("Agents—evaluation—delivery", "Agents, evaluation, delivery"),
+        ("I like it -", "I like it"),
+        ("- I like full-stack work", "I like full-stack work"),
+        # kept as written: a hyphenated word, a range of years
+        ("I like full-stack work.", "I like full-stack work."),
+        ("Robotics, from the lab to the warehouse.", "Robotics, from the lab to the warehouse."),
+    ],
+)
+def test_no_dash_separator_in_an_answer_the_agent_writes(typed: str, kept: str) -> None:
+    """The owner's rule, by code: whatever the model wrote, no dash used as a separator is typed."""
+    asked = agent.Question("k", "Why Example Robotics?", "text", reason="free_text_for_the_agent")
+    reply = agent.Reply((agent.Proposal("k", typed, "motivation"),))
+    (verdict,) = agent.judge([asked], reply, agent.sources_of({}, "Engineer", "Example Robotics"))
+    assert verdict.code == "accepted"
+    assert verdict.answer is not None
+    assert verdict.answer.value == kept
+    for dash in ("—", "–", " - ", " -- "):
+        assert dash not in verdict.answer.value

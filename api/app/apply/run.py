@@ -624,11 +624,15 @@ async def _answer_left(
     except Exception as exc:  # the model failing leaves its questions
         logger.warning("apply.agent_failed", extra={"error": type(exc).__name__})
         return {"agent": "failed", "questions": len(questions)}
+    if reply.stopped in agent.NOT_RUN and not reply.proposals:
+        # No credential, or the person's runs are all busy: as a run without the agent.
+        return {"agent": "skipped", "questions": len(questions), "reason": reply.stopped}
     verdicts = agent.judge(
         questions, reply, agent.sources_of(plan.sections, plan.posting_title, plan.posting_company)
     )
     cost = {
         "agent": "stopped" if reply.stopped else "ran",
+        **({"stopped": reply.stopped} if reply.stopped else {}),
         "questions": len(questions),
         "input_tokens": reply.input_tokens,
         "output_tokens": reply.output_tokens,
