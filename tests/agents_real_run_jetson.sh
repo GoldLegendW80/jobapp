@@ -197,7 +197,9 @@ field() { # field <name> <file>
 
 sampler() { # every second on the Jetson, to the file $1: epoch, worker bytes, api bytes, host
   # available MiB, Claude Code processes, the sum and the highest of their RSS in KiB
-  ssh -o BatchMode=yes "$HOST" "bash -s -- $(printf '%q' "$RDIR")" >"$1" <<'REMOTE' &
+  # The background job is a subshell that inherits the EXIT trap, and bash 3.2 (macOS) runs it when the
+  # job ends: it would delete the temporary directory under the running script. trap - EXIT, then exec.
+  { trap - EXIT; exec ssh -o BatchMode=yes "$HOST" "bash -s -- $(printf '%q' "$RDIR")"; } >"$1" <<'REMOTE' &
 cd "$1" || exit 1
 w="/sys/fs/cgroup/system.slice/docker-$(docker compose -f compose.yml ps -q worker).scope/memory.current"
 a="/sys/fs/cgroup/system.slice/docker-$(docker compose -f compose.yml ps -q api).scope/memory.current"
