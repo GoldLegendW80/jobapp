@@ -183,8 +183,7 @@ export function PostingDocumentCard({
           <Button asChild variant="outline" size="sm">
             <Link to={`/jobs/${jobId}/documents/${kind}`}>
               <ExternalLink aria-hidden="true" />
-              Open
-              <span className="sr-only"> the {NOUNS[kind]}</span>
+              Open <span className="sr-only">the {NOUNS[kind]}</span>
             </Link>
           </Button>
         ) : null}
