@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import secrets
+import string
 import urllib.request
 import uuid
 from typing import Any
@@ -309,6 +311,21 @@ def test_the_letter_goes_into_additional_information() -> None:
     assert len(LETTER) > ats_base.NAME_MAX  # read back whole, not cut at a label's length
 
 
+@pytest.mark.parametrize(
+    ("role", "kept"),
+    [
+        *((r, ats_base.TEXT_MAX) for r in ("textbox", "searchbox", "spinbutton", "combobox")),
+        *(
+            (r, ats_base.NAME_MAX)
+            for r in ("paragraph", "generic", "alert", "heading", "option", "button", "checkbox")
+        ),
+    ],
+)
+def test_only_the_text_of_a_value_is_kept_past_a_labels_length(role: str, kept: int) -> None:
+    node = ats_base.parse_snapshot(f"- {role} [ref=e1]: " + "x" * 20_000).children[0]
+    assert len(node.text) == kept
+
+
 def test_without_a_letter_the_box_stays_for_the_agent() -> None:
     form = lever_form(files=("cv.pdf",))
     report = filled(form, context(letter=None))
@@ -330,6 +347,45 @@ def test_hcaptcha_needs_the_person_before_anything_is_typed() -> None:
     report = filled(form)
     assert (report.stopped, report.needs_person) == ("needs_person", "captcha")
     assert form.acted() == []
+
+
+PASSIVE = ("snapshot", "wait_for", "navigate", "put_file", "screenshot")
+
+
+def step_after_parse(step: str, after: int, **rest: Any) -> tuple[LeverForm, list[int]]:
+    """A Lever form where hCaptcha or a sign in wall shows on the `after`th snapshot following the
+    one the parse wrote in; the list receives that snapshot's index in `calls`."""
+    shown: list[int] = []
+    seen = [0]
+
+    def show(form: Any, n: int) -> None:
+        if shown or form.parses == 0 or form.calls[-1][0] != "snapshot":
+            return
+        seen[0] += 1
+        if seen[0] == after + 1:
+            shown.append(n - 1)
+            if step == "captcha":
+                form.hcaptcha = True
+            else:
+                form.fields.insert(0, Spec("Password", "text", True))
+
+    return lever_form(on_call=show, **rest), shown
+
+
+# The parse writes on the snapshot after the upload, the adapter sees it on the next one: `after`
+# 2 is the undo's first read, 3 the read after its first clear, 5 the read after its second.
+@pytest.mark.parametrize(
+    ("step", "after"), [("captcha", 2), ("captcha", 3), ("captcha", 5), ("signin", 2)]
+)
+def test_a_step_for_the_person_after_the_parse_stops_the_undo_and_nothing_more_is_done(
+    step: str, after: int
+) -> None:
+    form, shown = step_after_parse(step, after, files=("cv.pdf",))
+    report = filled(form)
+    assert shown, "the step never showed"
+    assert [c for c in form.calls[shown[0] + 1 :] if c[0] not in PASSIVE] == []
+    assert (report.stopped, report.needs_person) == ("needs_person", step)
+    assert outcome(report, "Resume/CV").filled == ats_base.Filled("failed", step)
 
 
 def test_the_adapter_never_clicks_the_submit_and_the_agent_binding_has_no_gate() -> None:
@@ -396,6 +452,62 @@ def test_lever_is_filled_approved_and_submitted_once_through_the_gate(
     assert form.spec(COMMENTS).value == LETTER
 
 
+class LongParagraph(LeverForm):
+    """Lever's form with an unnamed text box after `paragraphs`: its label is their words."""
+
+    paragraphs: tuple[str, ...] = ()
+
+    def render(self) -> str:
+        if self._other is not None:
+            return super().render()
+        note = [f"  - generic [ref={self._ref('note')}]:"]
+        note += [f"    - paragraph [ref={self._ref('note')}]: {p}" for p in self.paragraphs]
+        note.append(f"    - textbox [ref={self._ref('note')}]")
+        return "\n".join([super().render(), *note])
+
+
+def long_paragraph(paragraphs: tuple[str, ...]) -> LongParagraph:
+    model = lever_form()
+    form = LongParagraph(model.fields, submit=model.submit, title=model.title)
+    form.paragraphs = paragraphs
+    return form
+
+
+@pytest.mark.parametrize("sizes", [(9_000,), (500,) * 18], ids=["one", "eighteen"])
+def test_a_label_read_from_long_paragraphs_is_cut_stored_and_approved(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    sizes: tuple[int, ...],
+) -> None:
+    # Random words, as natural text compresses under the index row's limit.
+    rng = random.Random(331)  # noqa: S311, a repeatable draw of words, nothing secret
+    texts = tuple("".join(rng.choices(string.ascii_letters + string.digits, k=n)) for n in sizes)
+    on_lever(db, person_a, stub)
+    app_id = started(db, person_a)
+    assert (
+        fill(services(factory, long_paragraph(texts), None, FakeAgent(), stub_base=stub), app_id)
+        == "ready"
+    )
+    stored = answers_of(db, app_id)
+    label = " ".join(texts)[: ats_base.NAME_MAX]
+    assert label in stored
+    assert stored[label] is None
+    db.execute(
+        sa.update(ApplicationAnswer)
+        .where(ApplicationAnswer.application_id == app_id, ApplicationAnswer.label == COMMENTS)
+        .values(value=LETTER)
+    )
+    db.commit()
+    assert approve(factory, person_a, app_id).passed
+
+    form = long_paragraph(texts)
+    assert run_submit(submit_services(factory, form, stub), app_id) == "submitted"
+    assert [c["what"] for c in form.gate_clicks] == ["submit"]
+    assert form.spec(COMMENTS).value == LETTER
+
+
 def test_a_lever_hcaptcha_needs_the_person_and_nothing_is_typed(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:
@@ -408,6 +520,27 @@ def test_a_lever_hcaptcha_needs_the_person_and_nothing_is_typed(
     found = application(db, app_id)
     assert found.needs == "captcha"
     assert [c for c in form.acted() if c[0] not in ("put_file", "screenshot")] == []
+
+
+@pytest.mark.parametrize("when", ["at_load", "after_the_parse"])
+def test_a_refill_that_meets_hcaptcha_needs_the_person_and_nothing_is_typed_or_clicked(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, when: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    assert approve(factory, person_a, app_id).passed
+    if when == "at_load":
+        form, shown = lever_form(hcaptcha=True), [-1]
+    else:
+        form, shown = step_after_parse("captcha", 2)
+
+    assert run_submit(submit_services(factory, form, stub), app_id) == "needs_person"
+    found = application(db, app_id)
+    assert found.state is State.needs_person
+    assert found.needs == "captcha"
+    assert form.gate_clicks == []
+    assert form.submit_clicks == 0
+    assert shown, "the captcha never showed"
+    assert [c for c in form.calls[shown[0] + 1 :] if c[0] not in PASSIVE] == []
 
 
 def test_a_never_apply_lever_posting_never_starts(
