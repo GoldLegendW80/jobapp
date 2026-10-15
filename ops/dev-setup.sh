@@ -14,10 +14,10 @@
 # web/package.json; pnpm of the major version `packageManager` of web/package.json names, or pnpm
 # 10 or later above it (it runs the pinned version itself); python3 at least 3.12 (the scripts of
 # .github/scripts parse the api's code); pre-commit, and its hook installed in this clone; the
-# ssh alias `jetson` (DEV_SETUP_JETSON_ALIAS), reachable
-# with BatchMode, so never a password prompt (--skip-jetson leaves it out, for a laptop that
-# does not deploy); Claude Code (`claude`), as a warning. The new machine guide is the section
-# "Develop on a new machine" of the README, and CLAUDE.md is where Claude Code starts.
+# ssh alias `jetson` (DEV_SETUP_JETSON_ALIAS), reachable with BatchMode, so never a password
+# prompt (--skip-jetson leaves it out, for a laptop that does not deploy); Claude Code
+# (`claude`), as a warning. The new machine guide is the section "Develop on a new machine" of
+# the README, and CLAUDE.md is where Claude Code starts.
 #
 # The last line is `DEV SETUP: OK` (exit 0) or `DEV SETUP: <n> missing` (exit 1). Wrong
 # arguments: exit 64.
