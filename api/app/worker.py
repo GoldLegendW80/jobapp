@@ -47,9 +47,21 @@ Documents queue (app.queue.DOCUMENTS, documents D6, app/documents/render_job.py)
 - documents_tick: cron every minute (documents D10, `documents.tick.run`), registered only once
   app/documents/tick.py exists.
 
+Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
+- apply_fill(application_id): the fill of one application form on a browser lease, one at a time
+  (max_jobs 1: the browser is one); tried once by arq, its result not kept, so the tick can queue
+  it again under the same id once it ended.
+- apply_tick: cron every 30 seconds: asks a fill for the next `queued` application of every
+  person whose fill is not running (a new one, one waiting for its documents or behind another
+  person's lease, whose ticket lives 60 s), one per person so people take turns.
+  The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus a margin. At
+  start, every application left `filling` by a dead process ends `failed` as `interrupted`
+  (reset_fills_at_start).
+
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
-cancelled agent run likewise (runner.execute), its scratch directory removed. Every Worker is
+cancelled agent run likewise (runner.execute), its scratch directory removed, a cancelled fill
+likewise (apply run.fill, its lease released). Every Worker is
 then closed (close_worker), even when a job was cancelled while still being picked up, and only
 once the end of every job that was finishing is written (QueueWorker).
 """
@@ -542,11 +554,137 @@ def documents_queue() -> QueueSpec:
     )
 
 
+# --- apply queue (A5) -----------------------------------------------------------------------------
+
+APPLY_TICK_SECONDS = {0, 30}
+APPLY_JOB_MARGIN_S = 120
+
+
+def apply_services(ctx: dict[str, Any]) -> Any:
+    """The fill's services: tests put theirs in the context; else the lease store and the tools
+    of browser B3 and B5 on this worker's Redis. B4's `Live.agent_turn` goes in `before_tool`
+    once B4 is merged; no answer agent until A5's second slice registers it."""
+    from app.apply import run as apply_run
+
+    given = ctx.get("apply_services")
+    if given is not None:
+        return given
+    from app.browser.client import BrowserdClient
+    from app.browser.leases import DbProfiles, Leases, lease_max_table
+    from app.browser.tools import LeaseTools
+
+    settings: Settings = ctx["settings"]
+    redis = ctx["redis"]
+
+    async def pool() -> ArqRedis:
+        found: ArqRedis = redis
+        return found
+
+    secret = settings.browser_control_secret
+    client = BrowserdClient(
+        settings.browser_url, secret.get_secret_value() if secret is not None else None
+    )
+    leases = Leases(
+        pool,
+        client,
+        DbProfiles(sessions_of(ctx)),
+        idle_s=settings.browser_idle_s,
+        session_max_s=settings.browser_session_max_s,
+        max_table=lease_max_table(settings.browser_lease_max_s),
+    )
+    return apply_run.Services(
+        sessions=sessions_of(ctx),
+        clock=clock_of(ctx),
+        leases=leases,
+        tools_for=lambda user, lease, token: LeaseTools(leases, client, user, lease, token),
+        stub_base=settings.apply_stub_base_url,
+    )
+
+
+async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
+    from app.apply import run as apply_run
+
+    await apply_run.fill(apply_services(ctx), uuid.UUID(application_id))
+
+
+async def apply_tick(ctx: dict[str, Any]) -> int:
+    """Queues a fill for every application waiting for one. Answers a count, nothing else."""
+    from app.apply import run as apply_run
+
+    with sessions_of(ctx)() as db:
+        due = apply_run.due(db)
+    redis: ArqRedis | None = ctx.get("redis")
+    if redis is None:
+        return 0
+    queued = 0
+    for application_id in due:
+        job = await redis.enqueue_job(
+            "apply_fill",
+            str(application_id),
+            _job_id=queue.apply_fill_job_id(application_id),
+            _queue_name=queue.APPLY,
+        )
+        queued += job is not None
+    return queued
+
+
+async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
+    """No fill runs when the apply queue starts: an application left `filling` by a killed
+    worker ends `failed` with `interrupted`."""
+    from app.apply import run as apply_run
+
+    clock = clock_of(ctx)
+
+    def step(db: Session) -> int:
+        return apply_run.reset_interrupted(db, clock())
+
+    count = await asyncio.to_thread(apply_run._in_db, sessions_of(ctx), step)
+    if count:
+        logger.info("apply.fill.reset", extra={"count": count})
+    return count
+
+
+def apply_queue(settings: Settings | None = None) -> QueueSpec:
+    from app.browser.leases import LEASE_MAX_S, lease_max_table
+
+    # The lease's own ceiling, BROWSER_LEASE_MAX_S included, and a margin to write the end.
+    table = lease_max_table(settings.browser_lease_max_s) if settings is not None else LEASE_MAX_S
+    fill_timeout_s = table["apply_fill"] + APPLY_JOB_MARGIN_S
+    return QueueSpec(
+        name=queue.APPLY,
+        functions=[
+            # keep_result=0: nothing of a fill is left in Redis, and the tick can queue the same
+            # application again under its id once the job ended.
+            func(apply_fill, name="apply_fill", timeout=fill_timeout_s, max_tries=1, keep_result=0),
+            func(apply_tick, name="apply_tick", timeout=60, max_tries=1, keep_result=0),
+        ],
+        cron_jobs=[
+            cron(
+                apply_tick,
+                name="cron:apply_tick",
+                second=APPLY_TICK_SECONDS,
+                timeout=60,
+                keep_result=0,
+            )
+        ],
+        # One fill at a time: there is one browser. The tick waits its turn behind a fill.
+        max_jobs=1,
+        job_timeout_s=fill_timeout_s,
+        on_start=reset_fills_at_start,
+    )
+
+
 def queues(settings: Settings | None = None) -> list[QueueSpec]:
     """Every queue this worker consumes (TEST_FAST_TIMERS shortens the schedule tick)."""
     register_modules()
     fast = bool(settings is not None and settings.test_fast_timers)
-    return [sweeps_queue(fast=fast), agents_queue(), ingestion_queue(), documents_queue()]
+    return [
+        sweeps_queue(fast=fast),
+        agents_queue(),
+        ingestion_queue(),
+        documents_queue(),
+        apply_queue(settings),
+    ]
 
 
 class QueueWorker(Worker):
