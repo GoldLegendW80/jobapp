@@ -25,10 +25,19 @@ from app.apply.models import AnswerSource, Application, ApplicationAnswer, State
 from app.jobs import service as jobs_service
 from app.jobs.models import Job, JobStatus
 from app.main import create_app
+from tests.apply.a4_support import Spec
 from tests.apply.a5_support import FakeAgent
 from tests.apply.a6_support import FakeQueue, FakeRedis, GateLeases, SubmitForm, submit_ashby
 from tests.apply.conftest import AT, Person, add_posting
-from tests.apply.test_a5_run import WHY, application, events, fill, run_ashby, services
+from tests.apply.test_a5_run import (
+    WHY,
+    application,
+    events,
+    fill,
+    run_ashby,
+    services,
+    started,
+)
 from tests.apply.test_a6_gate import (
     SECRET_KEY,
     TTL,
@@ -427,6 +436,87 @@ def test_a_refill_keeps_the_person_s_answer(
         row = s.get(ApplicationAnswer, (app_id, left.field_key))
         assert row is not None
         assert (row.value, row.source) == (mine, AnswerSource.person)
+
+
+NEWS = "Send me news about Example Robotics."
+
+
+def test_a_box_the_person_left_unticked_is_not_ticked_at_the_click(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    """A7's journey on the fake Greenhouse form: the person answers No to a box the fill left
+    (the marketing consent). The refill types nothing for it, the read back sees it unticked,
+    and the click goes; before, the refill took the adapter's `left` for a failure and stopped
+    on `form_changed`."""
+    app_id = started(db, person_a)
+    form = run_ashby()
+    form.fields.append(Spec(NEWS, "checkbox"))
+    agent = FakeAgent(lambda q: ("I want to build agents.", "motivation"))
+    assert fill(services(factory, form, None, agent, stub_base=stub), app_id) == "ready"
+    box = _row(factory, app_id, NEWS)
+    assert (box.kind, box.source, box.value) == ("checkbox", AnswerSource.left, None)
+    with factory() as s:
+        gate.set_answer(s, person_a.user_id, app_id, box.field_key, False, AT)
+        s.commit()
+    assert approve(factory, person_a, app_id).passed
+    news = Spec(NEWS, "checkbox")
+    clicked = submit_ashby()
+    clicked.fields.append(news)
+    assert run_submit(submit_services(factory, clicked, stub), app_id) == "submitted"
+    assert not news.checked
+    assert len(clicked.gate_clicks) == 1
+
+
+def _waiting_for_required(
+    factory: sessionmaker[Session], app_id: uuid.UUID, needs: str, keys: list[str]
+) -> None:
+    """The application as a fill that stopped with `needs` leaves it: `keys` required and left."""
+    with factory() as s:
+        for key in keys:
+            row = s.get(ApplicationAnswer, (app_id, key))
+            assert row is not None
+            row.required, row.value, row.source = True, None, AnswerSource.left
+        found = s.get(Application, app_id)
+        assert found is not None
+        states.move(found, State.needs_person, AT)
+        found.needs = needs
+        s.commit()
+
+
+def test_the_last_required_field_answered_makes_the_form_ready(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    """A7's journey on the fake Greenhouse form: the fill left a required question (work
+    authorisation), so it ended `needs_person` with `required_left`. Once the person answered
+    every required field the form waits for the approval, and only then."""
+    app_id = ready(db, factory, person_a, stub)
+    keys = [_left(factory, app_id).field_key, _row(factory, app_id, WHY).field_key]
+    _waiting_for_required(factory, app_id, "required_left", keys)
+    with factory() as s:
+        gate.set_answer(s, person_a.user_id, app_id, keys[0], "Paris", AT)
+        s.commit()
+    found = application(db, app_id)
+    assert (found.state, found.needs) == (State.needs_person, "required_left")
+    with factory() as s:
+        gate.set_answer(s, person_a.user_id, app_id, keys[1], "Marker " + uuid.uuid4().hex, AT)
+        s.commit()
+    found = application(db, app_id)
+    assert (found.state, found.needs) == (State.ready, None)
+    assert approve(factory, person_a, app_id).passed
+
+
+@pytest.mark.parametrize("needs", ["captcha", "email_code", "signin", "form_changed"])
+def test_an_answer_does_not_end_a_step_that_is_not_a_left_field(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, needs: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    key = _left(factory, app_id).field_key
+    _waiting_for_required(factory, app_id, needs, [key])
+    with factory() as s:
+        gate.set_answer(s, person_a.user_id, app_id, key, "Paris", AT)
+        s.commit()
+    found = application(db, app_id)
+    assert (found.state, found.needs) == (State.needs_person, needs)
 
 
 def test_only_fields_of_the_form_before_the_click_take_an_answer(

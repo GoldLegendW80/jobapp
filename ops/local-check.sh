@@ -875,6 +875,7 @@ s_journey() {
     ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
     export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
     files+=(-f tests/ats-forms-stub.compose.yml)
+    export COMPOSE_PROFILES=browser # the browser that fills the fake forms (apply A7's journey)
     ;;
   esac
   specs="$(journey_specs "$group")"

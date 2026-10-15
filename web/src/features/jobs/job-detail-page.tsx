@@ -13,6 +13,7 @@ import { Link, useLocation, useParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ApplySection } from "@/features/apply/apply-section";
 import { PostingDocumentsSection } from "@/features/documents/posting-documents";
 import { JobAssessment } from "@/features/agents/job-assessment";
 import { JobChat } from "@/features/agents/job-chat";
@@ -232,6 +233,8 @@ function JobDetailView({ job }: { job: JobDetail }) {
       <NotesEditor key={job.id} job={job} save={save} />
 
       <PostingDocumentsSection job={job} />
+
+      <ApplySection job={job} />
 
       <section aria-labelledby="posting-title" className="flex flex-col gap-3">
         <h2 id="posting-title" className="text-lg font-semibold tracking-tight">

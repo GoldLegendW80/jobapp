@@ -14,7 +14,12 @@
 # - `egress` is compose.yml's own network, so this file names it and does not define it. A test
 #   that drives the browser against this server sets BROWSER_PROXY_ALLOW_PRIVATE: atsforms on
 #   the browser service, and reaches it on a port of the egress proxy's set (80, 443, 8080 or
-#   8443): the proxy checks the port of an allowed name too.
+#   8443): the proxy checks the port of an allowed name too, so the server listens on 8080.
+# - The stack's own browser (apply A7's journey): with this file and the profile `browser`
+#   (COMPOSE_PROFILES=browser, as the local check's apply group sets it), the browser lets
+#   atsforms through its proxy, and the api and the worker read a posting at
+#   http://atsforms:8080/... as the fake ATS (APPLY_STUB_BASE_URL), the address the browser
+#   opens. Never in production: both settings are refused there.
 services:
   atsforms:
     # Standard library only: the same pinned base image as the other stubs.
@@ -24,20 +29,20 @@ services:
       - -I
       - /fake/ats_forms_stub.py
       - --port
-      - "8100"
+      - "8080"
     volumes:
       # Relative to the project directory, the folder of compose.yml.
       - ./tests:/fake:ro
     networks:
       - egress
     ports:
-      - "127.0.0.1:${ATS_FORMS_STUB_PORT:-8100}:8100"
+      - "127.0.0.1:${ATS_FORMS_STUB_PORT:-8100}:8080"
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/healthz', timeout=2)"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2)"
       interval: 5s
       timeout: 3s
       retries: 10
@@ -45,4 +50,16 @@ services:
       start_interval: 1s
     mem_limit: 128m
     expose:
-      - "8100"
+      - "8080"
+
+  browser:
+    environment:
+      BROWSER_PROXY_ALLOW_PRIVATE: atsforms
+
+  api:
+    environment:
+      APPLY_STUB_BASE_URL: http://atsforms:8080
+
+  worker:
+    environment:
+      APPLY_STUB_BASE_URL: http://atsforms:8080
