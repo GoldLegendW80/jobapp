@@ -211,8 +211,16 @@ class World:
                 query = query.where(Document.posting_id == posting)
             return [dict(row._mapping) for row in db.execute(query)]
 
-    def finish(self, status: str = "done", error: str | None = None, at: datetime = AT) -> None:
-        """Every running generation of the person ends with `status` (as the writer's hook)."""
+    def finish(
+        self,
+        status: str = "done",
+        error: str | None = None,
+        at: datetime = AT,
+        *,
+        counted: bool = True,
+    ) -> None:
+        """Every running generation of the person ends with `status` (as the writer's hook), and
+        its run with the token counts the runner writes (none when not `counted`)."""
         with self.factory() as db:
             db.execute(
                 sa.text(
@@ -221,9 +229,15 @@ class World:
                 ),
                 {"s": status, "e": error, "u": self.user, "at": at},
             )
+            counts = (
+                ", input_tokens = coalesce(input_tokens, 0), "
+                "output_tokens = coalesce(output_tokens, 0)"
+                if counted
+                else ""
+            )
             db.execute(
                 sa.text(
-                    "UPDATE agent_runs SET status = 'done' WHERE user_id = :u "
+                    f"UPDATE agent_runs SET status = 'done'{counts} WHERE user_id = :u "
                     "AND status IN ('queued', 'running')"
                 ),
                 {"u": self.user},
@@ -1131,3 +1145,26 @@ def test_the_ticks_letter_gets_what_the_pairs_ceiling_has_left_after_the_cvs_run
     (cv,) = posting_cv(world.generations(posting))
     (letter,) = _letters(world, posting)
     assert letter["token_ceiling"] == cv["token_ceiling"] - 34_000
+
+
+def test_a_letter_after_a_cv_run_without_a_count_gets_no_budget_then_one_retry(
+    world: World,
+) -> None:
+    posting = world.posting(80)
+    world.tick()
+    world.finish(counted=False)  # the hook cut short, and the run wrote no count
+    world.set_job(posting, status=JobStatus.cv_ready)
+    assert world.tick(AT + timedelta(minutes=1)) == []
+    (letter,) = _letters(world, posting)
+    assert (letter["status"], letter["token_ceiling"], letter["run_id"]) == (
+        GenerationStatus.failed,
+        0,
+        None,
+    )
+    with world.factory() as db:
+        assert db.get(DocumentGeneration, letter["id"]).error == "token_limit"  # type: ignore[union-attr]
+        high = estimate.for_posting(db, world.user, posting, world.base).high
+    started = world.tick(AT + timedelta(minutes=2))
+    _, again = _letters(world, posting)
+    assert (again["status"], again["token_ceiling"]) == (GenerationStatus.running, high)
+    assert started == [again["run_id"]]

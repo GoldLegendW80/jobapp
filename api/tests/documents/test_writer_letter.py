@@ -1,10 +1,10 @@
 """D8: the letter writer, end to end on the fake backend (no model, no key): each recorded stream
 `documents_letter_*` and its outcome (the version, its corrections and their reasons), the
 recipient default, the paragraph limit, the CV the letter reads (none yet is not an error), the
-bound run, and the letter that follows a CV: what the pair's ceiling has left, the posting's lock
-before the CV's (two sessions against a render's order), two chains at once, a posting past
-`cv_ready`, the consent and the credential read again. Real Postgres at head (the identity
-fixtures)."""
+bound run, and the letter that follows a CV: what the pair's ceiling has left (no budget when the
+CV's run has no count), the posting's lock before the CV's (two sessions against a render's
+order), two chains at once, a posting past `cv_ready`, the consent and the credential read again.
+Real Postgres at head (the identity fixtures)."""
 
 from __future__ import annotations
 
@@ -734,6 +734,31 @@ def test_the_letters_ceiling_is_the_pairs_minus_what_the_cvs_run_spent(
     assert run_row(alex.factory, letter.run_id).input["token_budget"] == left
     with alex.factory() as db:
         assert generate.letter_ceiling(db, db.get(DocumentGeneration, generation)) == left
+
+
+@pytest.mark.parametrize("counts", [(None, None), (600, None), (None, 300)])
+def test_a_cv_run_without_its_count_gives_the_letter_no_budget_and_it_fails_at_its_limit(
+    alex: Person, counts: tuple[int | None, int | None]
+) -> None:
+    _, generation, run = _cv_done(alex, ceiling=1_000)
+    with alex.factory() as db:
+        db.execute(
+            sa.text("UPDATE agent_runs SET input_tokens = :i, output_tokens = :o WHERE id = :r"),
+            {"i": counts[0], "o": counts[1], "r": run},
+        )
+        db.commit()
+    assert _chain(alex, run) is None
+    [letter] = _letter_generations(alex)
+    assert (letter.status, letter.error, letter.token_ceiling, letter.run_id) == (
+        GenerationStatus.failed,
+        "token_limit",
+        0,
+        None,
+    )
+    with alex.factory() as db:
+        assert generate.letter_ceiling(db, db.get(DocumentGeneration, generation)) is None
+        no_run = DocumentGeneration(run_id=None, token_ceiling=1_000)
+        assert generate.letter_ceiling(db, no_run) is None
 
 
 def test_the_chain_waits_behind_a_render_holding_the_posting_and_both_commit(
