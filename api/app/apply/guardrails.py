@@ -46,11 +46,17 @@ Declared open points (what these rules still miss, each toward applying):
 - a never apply term in another language than the rule's ("sécurité" for "security") or a
   synonym: the person writes those terms in the rule;
 - a term inside a word that neither starts nor ends with it ("cyber" in "anticyberattack");
+- a term split by something drawn as a space or a mark ("S e c u r i t y", "Secu-rity", the
+  Braille blank U+2800), and letters drawn like Latin ones in scripts outside the lookalike table
+  (Armenian U+057D for "u", Cherokee U+13DA for "S"); the stated cost on the other side: a
+  Cyrillic or Greek title is read with its lookalike letters as Latin ones, so a Latin term could
+  match a word of it;
 - the same role under two different titles ("ML Engineer" and "Machine Learning Engineer"), or a
   title that adds a city in parentheses: only accents, case, punctuation and gender markers
   ("H/F", "(m/w/d)") are dropped from a title, and only legal forms ("SAS", "Inc.") from a company;
 - a form shown under an address the three ATS patterns do not cover (a company page that embeds
-  Ashby without `ashby_jid`): it is compared as an address.
+  Ashby without `ashby_jid`): it is compared as an address. A live application started on a boards
+  API address before these were keyed keeps its `url:` key.
 """
 
 import re
