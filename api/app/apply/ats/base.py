@@ -81,6 +81,7 @@ Status = Literal["filled", "unverified", "failed", "left"]
 OPTION_WAITS = 6  # snapshots taken while a typeahead's options load, 0.5 s apart
 OPTION_WAIT_S = 0.5
 NAME_MAX = 500  # characters of a label or option kept
+TEXT_MAX = 10_000  # characters of a value kept: what the tool layer types at most, read back whole
 
 
 class Tools(Protocol):
@@ -175,7 +176,7 @@ def parse_snapshot(text: str) -> Node:
         node = Node(
             role=found["role"],
             name=_scalar(f'"{found["name"]}"')[:NAME_MAX] if found["name"] is not None else "",
-            text=_scalar(found["text"] or "")[:NAME_MAX],
+            text=_scalar(found["text"] or "")[:TEXT_MAX],
             ref=attrs.pop("ref", ""),
             attrs=attrs,
         )
