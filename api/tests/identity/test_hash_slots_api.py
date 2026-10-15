@@ -210,6 +210,7 @@ def test_a_burst_of_ten_real_sign_ins_all_succeed(
     users = [f"e2e-burst-{i}@example.org" for i in range(10)]
     for email in users:
         make_user(factory, email=email, role=Role.member)
+    hasher.calls = hasher.peak = 0
 
     started = time.monotonic()
     responses = sign_ins_at_once(proxied, [(email, PASSWORD) for email in users])
@@ -217,9 +218,15 @@ def test_a_burst_of_ten_real_sign_ins_all_succeed(
 
     assert [response.status_code for response in responses] == [200] * 10
     assert all(session_cookie(response) is not None for response in responses)
+    # Ten hashes, never more than two at once: five rounds at least, which the hasher's sleeps
+    # make a lower bound on any CPU. Nobody refused: every wait for a slot ended within the
+    # 3 s bound, which the slots enforce themselves (a wait past it is a 503). The burst's
+    # wall clock above that is the CPU's, not the slots': a busy Mac took 4.24 s for these
+    # same ten sign ins (issue #293), so no upper bound on it is asserted.
+    assert hasher.calls == 10
     assert hasher.peak == 2
     assert slots.refused == 0
-    assert 5 * 0.25 <= elapsed < 3.0 + 1.0
+    assert elapsed >= 5 * 0.25
 
 
 # --- no slot free: the answer, and no oracle ---------------------------------------------------

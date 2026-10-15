@@ -240,8 +240,12 @@ def test_the_container_as_compose_starts_it(stack: Stack) -> None:
 
 def test_the_secret_missing_or_wrong_starts_nothing(stack: Stack) -> None:
     body = {"user_id": "a", "profile_id": A, "uid": 20001, "purpose": "sweep"}
+    # One hex digit off, always: `secret[:-1] + "0"` was the secret itself when its last digit
+    # was 0 (one run in 16), which leased a sweep and made the next test find it (issue #293).
+    wrong = stack.secret[:-1] + format((int(stack.secret[-1], 16) + 1) % 16, "x")
+    assert wrong != stack.secret
     assert stack.call("POST", "/leases", body, secret="")["status"] == 401
-    assert stack.call("POST", "/leases", body, secret=stack.secret[:-1] + "0")["status"] == 401
+    assert stack.call("POST", "/leases", body, secret=wrong)["status"] == 401
     assert stack.call("GET", "/healthz", secret="")["status"] == 401
     assert stack.current()["lease"] is None
     assert stack.call("GET", "/healthz")["body"]["ok"] is True

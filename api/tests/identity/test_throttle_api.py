@@ -371,20 +371,31 @@ def test_after_the_window_the_right_password_works(
 def _parallel_logins(app: FastAPI, bodies: list[tuple[str, str]], ip: str | list[str]) -> list[int]:
     # One client, so one lifespan and one engine: its portal takes calls from any thread, and
     # each request runs its handler on the app's threadpool, all at once after the barrier.
+    # The engine holds a connection for every guess (issue #293): the production pool (5 plus
+    # 5, a 2 s wait) is not what these tests are about, and on a busy CPU the guesses queued on
+    # the advisory lock outlasted that wait (QueuePool limit reached). Each guess still waits
+    # for the one lock per email and per address, which is what keeps the count exact.
+    pooled = sa.create_engine(
+        app.state.engine.url, pool_size=len(bodies), max_overflow=0, hide_parameters=True
+    )
+    app.state.sessionmaker = sessionmaker(bind=pooled, autoflush=False, expire_on_commit=False)
     barrier = threading.Barrier(len(bodies))
     ips = [ip] * len(bodies) if isinstance(ip, str) else ip
-    with TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*")) as client:
+    try:
+        with TestClient(ProxyHeadersMiddleware(app, trusted_hosts="*")) as client:
 
-        def attempt(body: tuple[str, str], from_address: str) -> int:
-            barrier.wait(timeout=30)
-            return client.post(
-                "/api/auth/login",
-                json={"email": body[0], "password": body[1]},
-                headers={**CSRF, **from_ip(from_address)},
-            ).status_code
+            def attempt(body: tuple[str, str], from_address: str) -> int:
+                barrier.wait(timeout=30)
+                return client.post(
+                    "/api/auth/login",
+                    json={"email": body[0], "password": body[1]},
+                    headers={**CSRF, **from_ip(from_address)},
+                ).status_code
 
-        with ThreadPoolExecutor(max_workers=len(bodies)) as pool:
-            return list(pool.map(attempt, bodies, ips))
+            with ThreadPoolExecutor(max_workers=len(bodies)) as pool:
+                return list(pool.map(attempt, bodies, ips))
+    finally:
+        pooled.dispose()
 
 
 def test_parallel_guesses_on_one_email_never_overshoot(

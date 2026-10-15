@@ -74,6 +74,10 @@ TAIL = " and what follows"
 # inside a grapheme.
 UNICODE = "é\U0001f469‍\U0001f4bb日é"
 RUN = uuid.UUID("00000000-0000-4000-8000-0000000000aa")
+# The clock of the live writers here never moves (issue #293): real time decides nothing. With
+# time.monotonic, a store call that a busy CPU delayed past STORE_SLOW_S started the back off
+# and held the rest of the text back; the back off has its own tests (test_live_hardening.py).
+STILL = 0.0
 
 secrets = pytest.mark.parametrize("secret", list(SECRETS.values()), ids=list(SECRETS))
 
@@ -266,7 +270,9 @@ def test_the_live_text_at_every_offset_around_its_cap(secret: str, size: int, fi
         for at in starts(cap, secret):
             raw = around(at, secret, fill)
             store = RecordingStore()
-            writer = live.LiveText(store, RUN, lambda: 3, secret=secret, cap=cap, flush_s=0)
+            writer = live.LiveText(
+                store, RUN, lambda: 3, secret=secret, cap=cap, flush_s=0, clock=lambda: STILL
+            )
             writer.feed(start(0, text=""))
             for i in range(0, len(raw), size):
                 writer.feed(delta(0, raw[i : i + size]))
@@ -286,7 +292,13 @@ def test_the_live_text_at_the_real_cap(at: int) -> None:
     async def go() -> RecordingStore:
         store = RecordingStore()
         writer = live.LiveText(
-            store, RUN, lambda: 3, secret=API_KEY, cap=runner.TEXT_MAX, flush_s=0
+            store,
+            RUN,
+            lambda: 3,
+            secret=API_KEY,
+            cap=runner.TEXT_MAX,
+            flush_s=0,
+            clock=lambda: STILL,
         )
         writer.feed(start(0, text=""))
         for i in range(0, len(raw), 997):
@@ -339,7 +351,9 @@ def test_live_text_a_credential_across_two_deltas_is_caught_across_two_blocks_is
 
     async def go() -> RecordingStore:
         store = RecordingStore()
-        writer = live.LiveText(store, RUN, lambda: 3, secret=API_KEY, flush_s=0)
+        writer = live.LiveText(
+            store, RUN, lambda: 3, secret=API_KEY, flush_s=0, clock=lambda: STILL
+        )
         writer.feed(start(0, text=""))
         for piece in ("one ", head, tail, " two"):
             writer.feed(delta(0, piece))
