@@ -76,7 +76,7 @@ FILE_HEADERS = {**PRIVATE, "X-Content-Type-Options": "nosniff"}
 THUMBNAIL_MAX_AGE_S = 86_400  # the template's version is in the address
 PREVIEW_WIDTH = 600
 PREVIEW_MIN, PREVIEW_MAX = 120, 1200
-PREVIEWS_AT_ONCE = 2  # page images drawn at once in this process
+PREVIEWS_AT_ONCE = 2  # page image requests drawing at once (PDFium itself: one at a time)
 NAME_MAX = 120
 
 NOT_FOUND = "Document not found."

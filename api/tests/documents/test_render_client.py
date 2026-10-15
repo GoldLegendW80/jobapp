@@ -1,6 +1,7 @@
 """The worker's side of the renderer (render_client.py), against a stand in for the service on a
 loopback port: every answer the service can give, the errors, the page count PDFium reads, the
-font check, the renders at once, and the log line that never holds a page.
+font check, the renders at once, the log line that never holds a page, and PDFium used by one
+thread at a time (issue #316: two page images at once crashed the api process).
 
 The real service, with Chromium, is test_renderer_container.py."""
 
@@ -11,7 +12,11 @@ import json
 import logging
 import secrets
 import socket
+import subprocess
+import sys
 from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import ClassVar
 
 import pypdfium2 as pdfium
 import pypdfium2.raw as raw
@@ -289,3 +294,82 @@ def test_the_log_line_holds_codes_and_sizes_never_the_page(
     for record in records:
         assert marker not in json.dumps(record.__dict__, default=str)
         assert {"html_bytes", "pdf_bytes", "ms"} <= set(record.__dict__)
+
+
+class WatchedDocument(pdfium.PdfDocument):
+    """A PdfDocument that notes whether PDFIUM was held when it was opened and closed."""
+
+    seen: ClassVar[list[tuple[str, bool]]] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        WatchedDocument.seen.append(("open", render_client.PDFIUM.locked()))
+        super().__init__(*args, **kwargs)
+
+    def close(self) -> None:
+        WatchedDocument.seen.append(("close", render_client.PDFIUM.locked()))
+        super().close()
+
+
+def test_every_use_of_pdfium_holds_the_process_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    one_page, two_pages = make_pdf(1), make_pdf(2)
+    monkeypatch.setattr(pdfium, "PdfDocument", WatchedDocument)
+    monkeypatch.setattr(WatchedDocument, "seen", [])
+    render_client.page1_png(one_page, 480)
+    assert render_client._check(two_pages, 2, HTML) == 2
+    with pytest.raises(RenderError):
+        render_client._check(one_page, 2, HTML)
+    with pytest.raises(RenderError):
+        render_client._check(b"%PDF-1.7 not a pdf", 1, HTML)
+    assert WatchedDocument.seen == [
+        ("open", True), ("close", True), ("open", True), ("close", True),
+        ("open", True), ("close", True), ("open", True),
+    ]  # fmt: skip
+    assert not render_client.PDFIUM.locked()
+
+
+HAMMER = """
+import pathlib, sys, threading
+from app.documents import render_client
+pdfs = [path.read_bytes() for path in sorted(pathlib.Path(sys.argv[1]).glob("*.pdf"))]
+threads, rounds = 8, 40
+start = threading.Barrier(threads)
+failed = []
+def draw(index):
+    start.wait()
+    try:
+        for round in range(rounds):
+            pdf = pdfs[(index + round) % len(pdfs)]
+            if (index + round) % 4:
+                render_client.page1_png(pdf, 480)
+            else:
+                render_client._check(pdf, 1, "<p style='font-family: Helvetica'>x</p>")
+    except Exception as error:
+        failed.append(repr(error))
+workers = [threading.Thread(target=draw, args=(index,)) for index in range(threads)]
+for worker in workers:
+    worker.start()
+for worker in workers:
+    worker.join()
+print("failed", failed)
+"""
+
+
+def test_page_images_drawn_by_many_threads_at_once_never_crash_the_process(
+    tmp_path: Path,
+) -> None:
+    """The job page asks for two page images at the same moment, and the api draws each on its
+    own thread: without the lock, PDFium crashed this child (SIGSEGV or SIGABRT) on each of six
+    runs, on macOS and in the api image. The threads run in a child process, so a crash fails
+    this test instead of ending the run."""
+    for index, font in enumerate(("Helvetica", "Times-Roman", "Courier", "Helvetica-Bold")):
+        tmp_path.joinpath(f"{index}.pdf").write_bytes(make_pdf(1, font=font))
+    child = subprocess.run(
+        [sys.executable, "-X", "faulthandler", "-c", HAMMER, str(tmp_path)],
+        cwd=Path(__file__).resolve().parents[2],
+        env={"PYTHONPATH": str(Path(__file__).resolve().parents[2])},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert child.returncode == 0, child.stderr[-3000:]
+    assert child.stdout.strip() == "failed []", child.stdout[-3000:]

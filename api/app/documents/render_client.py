@@ -30,12 +30,22 @@ sizes and the duration.
 
 PDFium (pypdfium2, the `ingestion` group, which the worker image installs) is imported inside
 the functions that read a PDF, so the api image imports this module without it.
+
+**One PDFium call at a time.** PDFium is not thread safe, not even across two documents: its
+font cache and page loader are process wide (pypdfium2's README says the same). The api draws
+page images on its threadpool (`page1_png`, the D6 route) and the worker checks PDFs through
+asyncio.to_thread (`_check`), so two threads can meet in PDFium; when they did, the api process
+died of a segmentation fault (issue #316: two `page1.png` of the job page at the same
+millisecond). Every use of PDFium in this module holds PDFIUM, from opening the document to
+closing it, with every page and bitmap closed inside, so no finalizer reaches PDFium later on
+another thread.
 """
 
 import asyncio
 import io
 import logging
 import re
+import threading
 import time
 import weakref
 from dataclasses import dataclass
@@ -64,6 +74,9 @@ GENERIC = frozenset(
     | {"ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong", "inherit"}
     | {"initial", "unset", "revert", "revert-layer"}
 )
+
+
+PDFIUM = threading.Lock()  # held around every use of PDFium in this process (module docstring)
 
 
 class RenderError(Exception):
@@ -183,23 +196,27 @@ def _check(pdf: bytes, said: int, html: str) -> int:
     """The page count PDFium reads, which must be the service's, and the font check."""
     import pypdfium2 as pdfium
 
-    try:
-        document = pdfium.PdfDocument(pdf)
-    except pdfium.PdfiumError:
-        raise RenderError("render_failed") from None
-    try:
-        pages = len(document)
-        if pages != said or pages < 1:
-            raise RenderError("render_failed")
-        if not fonts_asked(fonts_of(document), families_asked(html)):
-            raise RenderError("render_failed")
-    finally:
-        document.close()
+    asked = families_asked(html)
+    with PDFIUM:
+        try:
+            document = pdfium.PdfDocument(pdf)
+        except pdfium.PdfiumError:
+            raise RenderError("render_failed") from None
+        try:
+            pages = len(document)
+            fonts = fonts_of(document) if pages == said and pages >= 1 else []
+        finally:
+            document.close()
+    if pages != said or pages < 1:
+        raise RenderError("render_failed")
+    if not fonts_asked(fonts, asked):
+        raise RenderError("render_failed")
     return pages
 
 
 def fonts_of(document: object) -> list[str]:
-    """The base font name of every text object of every page, subset tag removed."""
+    """The base font name of every text object of every page, subset tag removed. The caller
+    holds PDFIUM."""
     import ctypes
 
     import pypdfium2.raw as raw
@@ -274,16 +291,23 @@ def page1_png(pdf: bytes, width: int) -> bytes:
     """Page 1 of a PDF as a PNG `width` pixels wide (a preview, a thumbnail)."""
     import pypdfium2 as pdfium
 
-    document = pdfium.PdfDocument(pdf)
-    try:
-        page = document[0]
-        bitmap = page.render(scale=width / page.get_width())
-        image = bitmap.to_pil()
-        if image.width != width:
-            image = image.resize((width, max(1, round(image.height * width / image.width))))
-        out = io.BytesIO()
-        image.save(out, format="PNG")
-        page.close()
-    finally:
-        document.close()
+    with PDFIUM:
+        document = pdfium.PdfDocument(pdf)
+        try:
+            page = document[0]
+            try:
+                bitmap = page.render(scale=width / page.get_width())
+                try:
+                    # A copy, so the image owns its pixels once the bitmap is closed.
+                    image = bitmap.to_pil().copy()
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
+        finally:
+            document.close()
+    if image.width != width:
+        image = image.resize((width, max(1, round(image.height * width / image.width))))
+    out = io.BytesIO()
+    image.save(out, format="PNG")
     return out.getvalue()
