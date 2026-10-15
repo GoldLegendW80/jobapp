@@ -22,6 +22,8 @@
 # a stack started without it has no headed Chromium. Its own stacks and tests start it with
 # --profile browser; deploy.sh starts it on the Jetson once the host firewall of its `egress`
 # network is installed and checked (ops/browser-egress.sh, B6), and stops it otherwise.
+# It has no restart policy: after a reboot of the Jetson it stays down until the next deploy, which
+# checks the firewall first (owner decision of 2026-10-14); the rest of the stack restarts as usual.
 #
 # Networks: every service is on `default`, except `parser`, which is on `parsing` alone,
 # `renderer`, which is on `rendering` alone (two internal networks, no gateway, no route out,
@@ -324,7 +326,9 @@ services:
   # SIGTERM releases the lease and closes Chromium cleanly (the profile is flushed) within 15 s.
   # Never give it an env_file, a published port, `default`, a capability or `unconfined`.
   browser:
-    <<: *restart
+    # Not `unless-stopped`: a daemon start after a reboot must not bring the browser up before the
+    # deploy has checked the host firewall (ops/browser-egress.sh deploy starts it).
+    restart: "no"
     profiles: [browser]
     build:
       context: ./browser

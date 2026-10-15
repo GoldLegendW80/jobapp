@@ -12,7 +12,9 @@
 # with a new boot id (up to REBOOT_SSH_TIMEOUT_S, 300s); wait until api, caddy, db, redis and
 # tailscale are running and healthy (up to 300s more), noting the Jetson's uptime when they are;
 # run ./deploy.sh smoke; check the browser's egress rules when installed (B6); print the new URL, the boot time, the uptime when the stack was healthy
-# and when the smoke passed. Pass: the stack healthy within REBOOT_LIMIT_S (120s) of boot and the
+# and when the smoke passed. The browser container is not part of the pass and is never started
+# here: it has no restart policy, so it stays down after a boot until the next deploy checks the
+# firewall and starts it (owner decision of 2026-10-14); the report says which it is. Pass: the stack healthy within REBOOT_LIMIT_S (120s) of boot and the
 # smoke green, the public URL unchanged. Exit 0 on pass, 1 otherwise.
 set -euo pipefail
 
@@ -108,6 +110,13 @@ if r 'test -x /usr/local/sbin/jobapp-browser-egress'; then
   egress="FAILED"
   r "cd $RDIR && bash ops/browser-egress.sh host-check" && egress="in place"
 fi
+# After a boot the browser is down by design (compose.yml, `restart: "no"`); a running one after
+# a real reboot means something started it without the deploy's firewall check.
+browser="down, as designed: the next deploy starts it behind the checked rules"
+if [[ -n "$(r 'docker ps -q --filter label=com.docker.compose.service=browser' 2>/dev/null || true)" ]]; then
+  browser="running (current boot, started by a deploy)"
+  ((REBOOT == 0)) || browser="RUNNING after the reboot: nothing but a deploy may start it (compose.yml)"
+fi
 
 printf '\n== reboot check on %s\n' "$HOST"
 printf '   booted at          %s\n' "$booted"
@@ -116,6 +125,7 @@ printf '   smoke %s at    %ss after boot\n' "$( ((smoke_ok)) && echo passed || e
 printf '   public URL before  %s\n' "$old_url"
 printf '   public URL now     %s\n' "$new_url"
 printf '   browser egress     %s\n' "$egress"
+printf '   browser container  %s\n' "$browser"
 printf '   memory             %s\n' "$(r "free -m | awk '/^Mem:/ {print \$3\"M used of \"\$2\"M, \"\$7\"M available\"}'")"
 if ((REBOOT == 0)); then
   ((smoke_ok)) || die "smoke failed"
@@ -123,6 +133,7 @@ if ((REBOOT == 0)); then
   exit 0
 fi
 ((smoke_ok)) || die "smoke failed after the reboot"
+[[ "$browser" != RUNNING* ]] || die "the browser container is running after the reboot: it has no restart policy, only a deploy starts it"
 [[ "$egress" != FAILED ]] || die "the browser's egress rules are not in place after the reboot"
 [[ "$new_url" == "$old_url" ]] || die "the public URL changed from $old_url to $new_url: the Funnel URL must survive a reboot"
 ((healthy_at <= LIMIT)) || die "the stack was healthy ${healthy_at}s after boot, over the ${LIMIT}s limit"
