@@ -33,7 +33,10 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    which creates one `shorten` generation for a version a writer's `posting` generation made,
    and starts it: the writer is asked to bring the fields over the template's soft limits under
    them, through the same steps. A version made by a `shorten` generation, or by hand, never
-   starts another: the pass runs once, and what still overflows is kept and shown.
+   starts another: the pass runs once, and what still overflows is kept and shown. The pass is
+   part of the posting's spend: it starts only with the person's consent and credential, and its
+   ceiling is what the CV generation's ceiling has left after the CV's own run
+   (`shorten_ceiling`); nothing left, no pass.
 
 Logs carry ids, modes, statuses, counts and codes, never a text.
 """
@@ -540,6 +543,14 @@ def long_fields(content: c.CvContent | c.LetterContent, limits: rules.SoftLimits
     return [issue.field for issue in over]
 
 
+def shorten_ceiling(db: Session, parent: DocumentGeneration) -> int:
+    """The token ceiling of the shortening of `parent`'s version: `parent`'s ceiling minus the
+    tokens its run spent (the run's own count), never under zero."""
+    run = db.get(AgentRun, parent.run_id) if parent.run_id is not None else None
+    spent = (run.input_tokens or 0) + (run.output_tokens or 0) if run is not None else 0
+    return max(0, parent.token_ceiling - spent)
+
+
 def shorten(
     sessions: sessionmaker[Session],
     document_id: uuid.UUID,
@@ -548,7 +559,10 @@ def shorten(
     settings: Settings,
 ) -> uuid.UUID | None:
     """Create and start the one `shorten` generation of an overflowing version that a writer's
-    `posting` generation made. Returns the run to enqueue, else None."""
+    `posting` generation made, with the consent, a credential and a ceiling left (module
+    docstring, 4). Returns the run to enqueue, else None."""
+    from app.documents import writer_base  # writer_base imports this module
+
     with sessions() as db:
         owner = db.scalar(sa.select(Document.user_id).where(Document.id == document_id))
         if owner is None:
@@ -576,6 +590,17 @@ def shorten(
             return (
                 None  # saved by hand during the render: the person's draft is not ours to shorten
             )
+        ceiling = shorten_ceiling(db, parent)
+        waiting = writer_base.wait_reason(db, owner)
+        if ceiling == 0 or waiting is not None:
+            logger.info(
+                "documents.generation.shorten_skipped",
+                extra={
+                    "document_id": str(document_id),
+                    "reason": waiting.value if waiting is not None else "token_ceiling",
+                },
+            )
+            return None
         template = render_job.template_of(db, owner, document.template_slug)
         fields = long_fields(c.parse("cv", version.content), template.kinds["cv"].soft_limits)
         try:
@@ -586,7 +611,7 @@ def shorten(
                 parent.trigger,
                 parent.base_document_id,
                 parent.estimate,
-                parent.token_ceiling,
+                ceiling,
                 at=at,
             )
             run = start(db, generation, at=at, long_fields=fields, settings=settings)
