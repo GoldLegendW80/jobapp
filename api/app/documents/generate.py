@@ -44,8 +44,8 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    them, through the same steps. A version made by a `shorten` generation, or by hand, never
    starts another: the pass runs once, and what still overflows is kept and shown. The pass is
    part of the posting's spend: it starts only with the person's consent and credential, and its
-   ceiling is what the CV generation's ceiling has left after the CV's own run
-   (`shorten_ceiling`); nothing left, no pass.
+   ceiling is the letter's, what the pair has left after the CV's run (`letter_ceiling`); with
+   nothing left, or a spend unknown, there is no pass.
 
 Logs carry ids, modes, statuses, counts and codes, never a text.
 """
@@ -425,11 +425,12 @@ def settle(
 
 
 def letter_ceiling(db: Session, cv_generation: DocumentGeneration) -> int | None:
-    """The token ceiling of the letter that follows `cv_generation`: the pair's ceiling minus the
-    tokens its run spent (the run's own count, never an estimate), never under zero. A budget of
-    zero lets the letter's run make no call: it stops at its limit and is retried as one. None
-    when the spend is unknown (no run, or a count missing): the letter gets no budget then,
-    never the whole pair's (`no_budget`)."""
+    """The token ceiling of the letter that follows `cv_generation`, and of the CV's one
+    shortening pass (module docstring, 4): the pair's ceiling minus the tokens its run spent
+    (the run's own count, never an estimate), never under zero. A budget of zero lets the
+    letter's run make no call: it stops at its limit and is retried as one. None when the
+    spend is unknown (no run, or a count missing): the letter gets no budget then, never the
+    whole pair's (`no_budget`). With None or zero, no shortening pass starts."""
     run = db.get(AgentRun, cv_generation.run_id) if cv_generation.run_id is not None else None
     if run is None or run.input_tokens is None or run.output_tokens is None:
         return None
@@ -600,14 +601,6 @@ def long_fields(content: c.CvContent | c.LetterContent, limits: rules.SoftLimits
     return [issue.field for issue in over]
 
 
-def shorten_ceiling(db: Session, parent: DocumentGeneration) -> int:
-    """The token ceiling of the shortening of `parent`'s version: `parent`'s ceiling minus the
-    tokens its run spent (the run's own count), never under zero."""
-    run = db.get(AgentRun, parent.run_id) if parent.run_id is not None else None
-    spent = (run.input_tokens or 0) + (run.output_tokens or 0) if run is not None else 0
-    return max(0, parent.token_ceiling - spent)
-
-
 def shorten(
     sessions: sessionmaker[Session],
     document_id: uuid.UUID,
@@ -652,15 +645,16 @@ def shorten(
             return (
                 None  # saved by hand during the render: the person's draft is not ours to shorten
             )
-        ceiling = shorten_ceiling(db, parent)
+        ceiling = letter_ceiling(db, parent)
         waiting = writer_base.wait_reason(db, owner)
-        if ceiling == 0 or waiting is not None:
+        if not ceiling or waiting is not None:
+            if waiting is not None:
+                reason = waiting.value
+            else:
+                reason = "spend_unknown" if ceiling is None else "token_ceiling"
             logger.info(
                 "documents.generation.shorten_skipped",
-                extra={
-                    "document_id": str(document_id),
-                    "reason": waiting.value if waiting is not None else "token_ceiling",
-                },
+                extra={"document_id": str(document_id), "reason": reason},
             )
             return None
         template = render_job.template_of(db, owner, document.template_slug)
