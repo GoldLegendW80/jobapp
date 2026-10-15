@@ -747,9 +747,11 @@ def test_try_again_needs_a_new_approval(
         with pytest.raises(states.TransitionError, match="without a decision"):
             states.move(Application(state=State.ready), to, AT)
     assert len(form.gate_clicks) == 1
-    # a new approval clicks again, once
+    # a new approval clicks again, once, past the pace of the host (apply A11)
     assert approve(factory, person_a, app_id).passed
-    assert run_submit(submit_services(factory, submit_ashby(), stub), app_id) == "submitted"
+    later = submit_services(factory, submit_ashby(), stub)
+    later.clock = lambda: AT + timedelta(minutes=10)
+    assert run_submit(later, app_id) == "submitted"
 
 
 def test_it_was_submitted_records_the_application(

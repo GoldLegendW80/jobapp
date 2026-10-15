@@ -62,4 +62,5 @@ services:
 
   worker:
     environment:
+      APPLY_HOST_MIN_INTERVAL_S: "10"
       APPLY_STUB_BASE_URL: http://atsforms:8080
