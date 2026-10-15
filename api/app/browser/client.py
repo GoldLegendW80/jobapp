@@ -6,6 +6,7 @@ network, behind BROWSER_CONTROL_SECRET. Nothing else of the application speaks t
     start(...)  POST /leases            the lease's id, its token and browserd's view of it
     end(id)     DELETE /leases/{id}     True, or False when it is no longer the current lease
     current()   GET /leases/current     {lease: {...} | None, last_end: {...} | None}
+    live_input(id, viewer)  POST /leases/{id}/live/input   who holds the live view's input (B4)
     tool(...)   POST /leases/{id}/tools/{name}   a tool's result (browser B5)
     put_file()  PUT /leases/{id}/files/{name}    a PDF placed on the lease for browser_file_upload
     gate_click(...)  browser_click with the gate's capability: the apply gate's code only
@@ -140,6 +141,21 @@ class BrowserdClient:
                 if isinstance(payload.get("last_end"), dict)
                 else None,
             }
+        raise self._failure(status, payload)
+
+    async def live_input(self, lease_id: str, viewer: str | None, giver: str | None = None) -> str:
+        """The viewer `viewer` takes the keyboard and the mouse of the lease's live view, or
+        (None) the agent has them back, when `giver` is given only if that viewer holds them.
+        Answers who holds them: "person" or "agent"."""
+        path = f"/leases/{lease_id}/live/input"
+        body = {"viewer": viewer} if giver is None else {"viewer": viewer, "from": giver}
+        status, payload = await self._call("POST", path, TIMEOUT_S, body)
+        if (
+            status == 200
+            and isinstance(payload, dict)
+            and payload.get("input") in ("person", "agent")
+        ):
+            return str(payload["input"])
         raise self._failure(status, payload)
 
     async def tool(

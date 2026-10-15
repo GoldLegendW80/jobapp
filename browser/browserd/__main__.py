@@ -15,7 +15,7 @@ import os
 import sys
 import time
 
-from browserd import chromium, proxy
+from browserd import chromium, live, proxy
 from browserd import config as c
 from browserd.app import Service, handler_for
 from browserd.leases import Manager, Request
@@ -80,6 +80,7 @@ async def main() -> None:
     service.display_ok = lambda: display.returncode is None
     egress = await proxy.serve(proxy.Proxy(cfg.proxy_allow), c.PROXY_PORT)
     server = await asyncio.start_server(handler_for(service), "0.0.0.0", c.CONTROL_PORT)  # noqa: S104 - `browsing` only
+    viewers = await live.serve(live.live_of(service))  # B4: the live view on :6080
     stop = asyncio.Event()
     chromium.stop_signals(asyncio.get_running_loop(), stop)
     log.info("browserd ready on :%d", c.CONTROL_PORT)
@@ -93,6 +94,7 @@ async def main() -> None:
             await asyncio.wait_for(stop.wait(), 1)
     log.info("SIGTERM: closing")
     server.close()
+    viewers.close()
     egress.close()
     if await manager.release(None, "shutdown"):
         log.info("chromium closed")

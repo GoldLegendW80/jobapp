@@ -80,8 +80,8 @@
 		# Only a default: the api sets no-referrer on the mail callback, whose address holds a
 		# code, and that must reach the browser.
 		?Referrer-Policy strict-origin-when-cross-origin
-		# The app is never framed by another site. When the browser module adds /vnc and the app
-		# embeds it in an iframe of its own, relax both to SAMEORIGIN and frame-ancestors 'self'.
+		# The app is never framed, not even by itself: the live view (/vnc) is a websocket drawn
+		# on a canvas of the app's own page (browser B4), not a frame.
 		X-Frame-Options DENY
 		Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
@@ -102,13 +102,14 @@
 	# page): the value of `state=` is masked there. The callback address can also stay in the tab
 	# (a 502 from Caddy, a 500) and then travels as the Referer of the tab icon: the same mask is
 	# on the Referer line, and the api's own `Referrer-Policy: no-referrer` on the callback is kept
-	# (see security_headers).
+	# (see security_headers). The live view's one use ticket travels in the query of
+	# /vnc/websockify (browser B4): the whole query of that path is masked on the same two lines.
 	log {
 		output stdout
 		format filter {
 			wrap json
-			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback)\\?.*" "${1}${2}[redacted]"
-			request>headers>Referer regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback)\\?.*" "${1}${2}[redacted]"
+			request>uri regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback|/vnc/websockify)\\?.*" "${1}${2}[redacted]"
+			request>headers>Referer regexp "(/(?:invites?|reset)/)[^/?#]+|(/api/mail/oauth/callback|/vnc/websockify)\\?.*" "${1}${2}[redacted]"
 			request>headers>X-Filename delete
 			resp_headers>Location regexp "([?&]state=)[^&#]+" "${1}[redacted]"
 		}
@@ -176,6 +177,11 @@
 	# Funnel's X-Forwarded-For on :8080), so a value sent by the visitor never reaches the api.
 	# On :8080 X-Forwarded-Proto is Funnel's https (the api then sets Secure cookies).
 	# A stopped api fails the dial at once and becomes 502.
+	# The live view's check is for Caddy's forward_auth alone (below, /vnc/websockify).
+	@live_auth path /api/browser/live/auth /api/browser/live/auth/
+	handle @live_auth {
+		respond 404
+	}
 	@api path /api /api/*
 	handle @api {
 		reverse_proxy api:8000 {
@@ -186,10 +192,42 @@
 		}
 	}
 
-	# Reserved for the browser module: noVNC of the headed Chromium.
-	# handle /vnc/* {
-	# 	reverse_proxy browser:6080
-	# }
+	# The live view (browser B4): the websocket of the noVNC client to browserd's live port, and
+	# nothing else of the browser container (its control API and its proxy stay unreachable).
+	# Caddy asks the api first: forward_auth sends the request's cookie, Origin and address
+	# (X-Forwarded-Uri, with the one use ticket) to GET /api/browser/live/auth, which answers 204
+	# with X-Live-Grant, copied onto the request to browserd, or 401 and 403, which end it here.
+	# A grant sent by the visitor is removed first, so only the api's reaches browserd. The check
+	# itself is for Caddy alone: from outside, /api/browser/live/auth is a 404 (above). No VNC port
+	# exists: browserd starts one x11vnc per admitted viewer (browser/browserd/live.py).
+	@live path /vnc/websockify
+	# `route` keeps the order as written: Caddy's own order runs forward_auth before
+	# request_header, which would delete the api's grant instead of the visitor's.
+	handle @live {
+		route {
+			request_header -X-Live-Grant
+			# The check is a plain GET: without the websocket's Upgrade the api answers it as
+			# HTTP (with it, uvicorn would take it for a websocket the api has no route for).
+			forward_auth api:8000 {
+				uri /api/browser/live/auth
+				copy_headers X-Live-Grant
+				header_up X-Forwarded-For {client_ip}
+				header_up -Upgrade
+				header_up -Connection
+				transport http {
+					dial_timeout 3s
+				}
+			}
+			reverse_proxy browser:6080 {
+				transport http {
+					dial_timeout 3s
+				}
+			}
+		}
+	}
+	handle /vnc/* {
+		respond 404
+	}
 
 	# Hashed build output: cached for a year, never revalidated. A missing file is a real 404,
 	# never index.html, so a stale chunk fails loudly instead of parsing HTML as JavaScript.
