@@ -494,7 +494,7 @@ function FixedList({
           }}
         >
           <Plus aria-hidden="true" />
-          Add a {lower}
+          Add {/^[aeiou]/.test(lower) ? "an" : "a"} {lower}
         </Button>
       </div>
       <p aria-live="polite" className="sr-only">

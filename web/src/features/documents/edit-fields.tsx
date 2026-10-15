@@ -255,7 +255,7 @@ export function ListField({
           }}
         >
           <Plus aria-hidden="true" />
-          Add a {lower}
+          Add {/^[aeiou]/.test(lower) ? "an" : "a"} {lower}
           {context === undefined ? "" : <span className="sr-only">{of}</span>}
         </Button>
         {items.length >= max ? (
