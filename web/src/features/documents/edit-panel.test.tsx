@@ -130,7 +130,7 @@ function fake(start: DocumentOut, versions: VersionSummary[] = []) {
     calls: [] as { method: string; path: string; body: unknown }[],
     hold: null as Promise<void> | null,
     renderAfterSave: "idle" as "idle" | "queued",
-    notes: (() => []) as (draft: Draft) => unknown[],
+    notes: (() => []) as (draft: Draft) => Record<string, unknown>[],
     refuse: null as unknown[] | null,
   };
   const note = async (request: Request) => {
