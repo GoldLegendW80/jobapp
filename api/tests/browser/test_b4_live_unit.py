@@ -157,6 +157,12 @@ def grant(**overrides: Any) -> str:
     return live.sign_grant(**values)
 
 
+def one_digit_off(raw: str) -> str:
+    """The last hex digit of the signature changed, always: `raw[:-1] + "0"` kept it whenever
+    that digit was 0 already, one run in 16 (issue #293)."""
+    return raw[:-1] + format((int(raw[-1], 16) + 1) % 16, "x")
+
+
 def test_the_apis_grant_is_the_one_browserd_reads() -> None:
     made = live_router.sign_grant(SECRET, LEASE, VIEWER, int(WALL) + 10)
     found = live.read_grant(SECRET, made, WALL)
@@ -171,7 +177,7 @@ def test_the_apis_grant_is_the_one_browserd_reads() -> None:
         (grant(), WALL + 11),  # expired
         (grant(exp=int(WALL) + 10 + 61), WALL),  # too far ahead
         (grant(secret=b"another secret"), WALL),
-        (grant()[:-1] + "0", WALL),  # signature changed
+        (one_digit_off(grant()), WALL),  # signature changed
         (grant().replace(LEASE, str(uuid.uuid4())), WALL),  # another lease, same signature
         (grant().replace(VIEWER, str(uuid.uuid4())), WALL),
         (grant().upper(), WALL),

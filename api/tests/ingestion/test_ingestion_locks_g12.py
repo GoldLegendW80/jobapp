@@ -30,7 +30,7 @@ from tests.agents.run_helpers import add_user, now, save_credential
 from tests.ingestion import engine_helpers as eh
 from tests.ingestion import merge_helpers as mh
 from tests.ingestion.extract_helpers import add_document, key, keyring, settings
-from tests.ingestion.test_ingestion_locks import Path
+from tests.ingestion.test_ingestion_locks import END_S, Path
 from tests.ingestion.test_item_proposals import stored
 
 _FIXTURES = (key, keyring, settings)
@@ -68,6 +68,29 @@ def free(db: Session, column: Any, value: uuid.UUID) -> bool:
     found = db.scalar(sa.select(column).where(column == value).with_for_update(skip_locked=True))
     db.rollback()
     return found is not None
+
+
+POLL_S = 0.01
+BLOCKED = sa.text(
+    "select exists (select from pg_stat_activity where :holder = any(pg_blocking_pids(pid)))"
+)
+
+
+def blocked_by(holder: Session, factory: sessionmaker[Session], path: Path) -> None:
+    """Return once Postgres shows a transaction waiting for a lock `holder` holds, while `path`
+    has not ended: the path then holds every lock it takes before that one. `Path.waits` only
+    tells a path that waits from one that ends at once; on a busy CPU a path not yet that far
+    passed it too, and a probe right after found its earlier lock free (issue #293)."""
+    pid = holder.scalar(sa.select(sa.func.pg_backend_pid()))
+    with factory() as probe:
+        for _ in range(int(END_S / POLL_S)):
+            found = probe.scalar(BLOCKED, {"holder": pid})
+            probe.rollback()  # pg_stat_activity is read once per transaction
+            if found:
+                assert not path.done.is_set(), "the path did not wait for the lock"
+                return
+            assert not path.done.wait(POLL_S), "the path did not wait for the lock"
+    raise AssertionError("the path never waited for the lock")
 
 
 def status_of(factory: sessionmaker[Session], proposal_id: uuid.UUID) -> ProposalStatus:
@@ -137,7 +160,7 @@ def test_the_merge_supersedes_the_older_items_in_id_order(
     with factory() as db:
         db.execute(sa.select(Proposal.id).where(Proposal.id == high).with_for_update())
         path = merging(factory, run_id, settings)
-        path.waits()
+        blocked_by(db, factory, path)
         with factory() as probe:
             assert not free(probe, Proposal.id, low)
         db.commit()
