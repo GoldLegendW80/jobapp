@@ -21,6 +21,9 @@ target_metadata = Base.metadata
 # Two concurrent `alembic upgrade` runs (a deploy retried while the first still runs) queue on
 # this transaction-scoped advisory lock instead of racing on the version table.
 MIGRATION_LOCK_ID = 7_406_202_610
+# The longest a migration statement waits for a lock, set after the advisory lock so a second
+# upgrade still queues on it: behind a long transaction it rolls back instead of stalling writes.
+LOCK_TIMEOUT = "5s"
 
 
 def run_migrations_offline() -> None:
@@ -40,6 +43,8 @@ def _run(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
     with context.begin_transaction():
         connection.execute(text("select pg_advisory_xact_lock(:id)"), {"id": MIGRATION_LOCK_ID})
+        timeout = config.attributes.get("lock_timeout", LOCK_TIMEOUT)
+        connection.execute(text("select set_config('lock_timeout', :t, true)"), {"t": timeout})
         context.run_migrations()
 
 
