@@ -14,7 +14,10 @@ submit element with `designate_submit(ref)`. What is accepted is decided here, i
   is refused, and an application without an accepted designation needs the person.
 - `marked`: the tool layer's submit detector (browser B5) marks it. Asked without a click: a
   `browser_select_option` is judged before it touches the element, and the detector refuses it
-  as `submit` exactly when it would refuse a click; any other answer is "not marked".
+  as `submit` when the element is a submit control by type, a selector of the lease or a wrapper
+  of one (the `check` judgement reads no names: a button that is a submit by its name alone is
+  refused by a click but not marked here, so it is left to the person); any other answer is
+  "not marked".
 
 The submit lease (app/apply/submit.py) refills with no model: `configured` gives the adapter the
 approved designation (`designated:submit`, `designated:step:<n>` rows, covered by the approval's
