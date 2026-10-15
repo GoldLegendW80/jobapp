@@ -113,6 +113,7 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 **Edge cases to test:** the person submits and the confirmation is seen (one click to record); the person closes the session without submitting (application `cancelled`); the person submits on a site with no known confirmation ("I submitted it"); the lease idle timeout while the person reads (a warning at 4 minutes).
 **Playwright journey:** `apply-a9.spec.ts`: person A clicks Apply myself on the fake Ashby posting, types in the live view, uploads the CV from the dialog, clicks the form's Submit in the live view, records it; the posting is `applied`.
 **Scope:** S. **Depends on:** A7, browser B7. **Migration:** none. **Owns:** `api/app/apply/manual.py`, `web/src/features/apply/manual-panel.tsx`.
+**Open point from issue #296:** Apply myself warns (`same_address`) when another posting marked applied shares an ordinary careers page address, but a live application on that address still refuses `same_form`, since the partial unique index `uq_applications_live_form` holds one live application per `canonical_key`, `url:` keys included; allowing two needs a migration that leaves `url:` keys (or Apply myself) out of that index.
 
 ## A10: Failures, retries and "needs you"
 **Issue:** to create.
