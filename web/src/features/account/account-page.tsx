@@ -1,5 +1,6 @@
 import { ModelAccessCard } from "@/features/agents/model-access-card";
 import { useMe } from "@/features/auth/auth-context";
+import { BrowserCard } from "@/features/browser/browser-card";
 import { GmailCard } from "@/features/mail/gmail-card";
 import { useTitle } from "@/lib/use-title";
 
@@ -25,6 +26,7 @@ export function AccountPage() {
       <PasswordCard user={user} />
       <ModelAccessCard />
       <GmailCard />
+      <BrowserCard />
     </div>
   );
 }
