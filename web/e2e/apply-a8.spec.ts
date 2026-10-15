@@ -1,4 +1,10 @@
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import {
+  expect,
+  test,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 
 import { atsFormsUrl, stub } from "./apply-helpers";
 import {
@@ -13,14 +19,16 @@ import {
 import { clearAttempts, newContext, watchErrors } from "./stack";
 
 /**
- * Apply A8, first slice, against the real stack through Caddy plus the fake ATS forms server: an
+ * Apply A8 against the real stack through Caddy plus the fake ATS forms server: an
  * invented person applies with Review first to the fake Lever posting of tests/ats_forms/a8/
  * (served by the fake server's static folder). The fill uploads the CV, undoes the fake resume
  * parse (a name, an e-mail, a phone and a company that are not the person's), types the
  * profile's values, chooses the native selects and writes the letter into "Additional
  * information"; the person answers what is left, approves, and the gate submits once. The fake
  * server holds exactly one submission of that form, with the person's values and none of the
- * parse's.
+ * parse's. Then the same person applies to the fake Workable like form of tests/ats_forms/a8/custom/:
+ * the form agent (its fake stream, apply_form) fills it and designates its submit, the "before"
+ * screenshot shows that button outlined, and approval submits once.
  *
  * Locally, as apply-all.config.ts says (the fake forms compose file, AGENTS_FAKE_BACKEND=1 on
  * the worker, COMPOSE_PROFILES=browser and a BROWSER_CONTROL_SECRET in .env), then:
@@ -37,6 +45,8 @@ const TYPED = "Not applicable";
 const STACK_FORMS = "http://atsforms:8080";
 const LEVER = "/forms/a8/lever/example-robotics/applied-ai-engineer/apply.html";
 const LEVER_FORM = "lever-example-robotics-applied-ai-engineer";
+const CUSTOM = "/forms/a8/custom/example-robotics/workable.html";
+const CUSTOM_FORM = "custom-workable";
 const PARSED = [
   "Alex Exampel",
   "alex.exampel@parsed.example",
@@ -170,6 +180,90 @@ test("apply on the fake Lever form: the parse corrected, approve, submitted once
   for (const guess of PARSED) expect(values).not.toContain(guess);
   expect(sent[0]!.fields["comments"]).toBeTruthy(); // the letter, in Additional information
   expect(sent[0]!.fields["cards[sponsorship]"]).toBeTruthy();
+});
+
+/** Pixels of the before screenshot near the outline the app draws around the designated submit. */
+async function outlinedPixels(shot: Locator): Promise<number> {
+  return shot.evaluate(async (img: HTMLImageElement) => {
+    await img.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const drawn = canvas.getContext("2d");
+    if (!drawn) return 0;
+    drawn.drawImage(img, 0, 0);
+    const { data } = drawn.getImageData(0, 0, canvas.width, canvas.height);
+    let count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      const [r, g, b] = [data[i]!, data[i + 1]!, data[i + 2]!];
+      if (r > 190 && g < 80 && b > 40 && b < 110) count += 1;
+    }
+    return count;
+  });
+}
+
+test("apply on the fake custom form: the submit designated and outlined, submitted once", async () => {
+  const job = await addPosting(page.request, person);
+  const read = await page.request.get(`/api/jobs/${job}`);
+  const { updated_at } = (await read.json()) as { updated_at: string };
+  const patched = await page.request.patch(`/api/jobs/${job}`, {
+    headers: CSRF,
+    data: { url: STACK_FORMS + CUSTOM, fit: 90, updated_at },
+  });
+  expect(patched.status()).toBe(200);
+  const written = await page.request.post(`/api/jobs/${job}/documents/write`, {
+    headers: CSRF,
+    data: { kinds: ["cv", "letter"], script: "journey" },
+  });
+  expect(written.status()).toBe(202);
+  await expect.poll(() => documentsReady(job), { timeout: 150_000 }).toBe(true);
+
+  await page.goto(`/jobs/${job}`);
+  const section = page.getByRole("region", { name: "Apply" });
+  await section.getByRole("button", { name: "Apply (Review first)" }).click();
+  const before = section.getByRole("img", { name: /before the click/ });
+  await expect(before).toBeVisible({ timeout: 300_000 });
+  // The form agent's fake stream (apply_form) designated "Submit application"; the app drew
+  // its outline on the "before" screenshot.
+  expect(await outlinedPixels(before)).toBeGreaterThan(200);
+  await expect(section).toContainText("Submit application");
+  await page.screenshot({
+    path: test.info().outputPath("custom-review.png"),
+    fullPage: true,
+  });
+
+  const open = section.locator("li[data-left=true]").filter({
+    has: page.locator("input, textarea, select"),
+  });
+  for (;;) {
+    const left = await open.count();
+    if (left === 0) break;
+    const row = open.first();
+    const box = row.getByRole("textbox");
+    if (await box.count()) {
+      await box.fill(TYPED);
+      await row.getByRole("button", { name: "Save answer" }).click();
+    } else {
+      await row.getByRole("combobox").selectOption({ index: 1 });
+    }
+    await expect(open).toHaveCount(left - 1);
+  }
+  await expect(section).toContainText("waiting for your approval");
+
+  await section.getByRole("button", { name: "Approve and submit" }).click();
+  const dialog = page.getByRole("alertdialog");
+  await dialog.getByRole("button", { name: "Approve and submit" }).click();
+  await expect(section).toContainText("Applied.", { timeout: 180_000 });
+  await page.screenshot({
+    path: test.info().outputPath("custom-applied.png"),
+    fullPage: true,
+  });
+
+  const sent = (await stub.submissions()).filter(
+    (one) => one.org === CUSTOM_FORM,
+  );
+  expect(sent).toHaveLength(1);
+  expect(sent[0]!.fields["email"]).toBe(person.email);
 });
 
 test("no page error was logged", () => {
