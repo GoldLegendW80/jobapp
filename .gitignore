@@ -28,8 +28,11 @@ test-results/
 .idea/
 .vscode/
 
-# agent worktrees
-.claude/
+# Claude Code: the project config (.claude/settings.json, agents/, commands/) is versioned;
+# agent worktrees, review drafts and personal settings stay on each machine
+.claude/worktrees/
+.claude/reviews/
+.claude/settings.local.json
 
 # Database dumps: pulled by ./deploy.sh backup --pull, never committed
 backups/
