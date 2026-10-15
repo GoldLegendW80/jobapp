@@ -36,7 +36,7 @@ import enum
 import zoneinfo
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Protocol
 
 from app.jobs.models import JobStatus
@@ -86,7 +86,7 @@ def refusal(
     posting: Posting,
     setting: Setting,
     rules: Iterable[Rule],
-    today: date,
+    last_day: date,
     lookback_days: int,
 ) -> Refusal | None:
     """None when the posting is eligible, else the first reason it is not (module docstring)."""
@@ -98,7 +98,7 @@ def refusal(
         return Refusal.no_fit
     if posting.fit < setting.min_fit:
         return Refusal.under_threshold
-    if posting.found_on < since(today, lookback_days):
+    if posting.found_on < since(last_day, lookback_days):
         return Refusal.too_old
     if posting.legacy:
         return Refusal.legacy
@@ -107,9 +107,15 @@ def refusal(
     return None
 
 
-def since(today: date, lookback_days: int) -> date:
-    """The first day of the window: `lookback_days` days, today included."""
-    return today - timedelta(days=lookback_days - 1)
+def found_day(now: datetime) -> date:
+    """The last day of the lookback window: `now` on the calendar `Job.found_on` is stamped in
+    (the UTC date of the clock), not the person's local day, which can be a day ahead."""
+    return now.astimezone(UTC).date()
+
+
+def since(last_day: date, lookback_days: int) -> date:
+    """The first day of the window: `lookback_days` days, `last_day` (`found_day`) included."""
+    return last_day - timedelta(days=lookback_days - 1)
 
 
 def order_key(fit: int | None, found_on: date, ident: str) -> tuple[int, int, str]:

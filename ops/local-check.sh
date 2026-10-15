@@ -530,8 +530,8 @@ s_api_services() {
 
 s_ruff() {
   cd api
-  uv run --frozen ruff check .
-  uv run --frozen ruff format --check .
+  uv run --frozen ruff check . ../browser
+  uv run --frozen ruff format --check . ../browser
 }
 
 # One test of the suite measures its own speed and failed once in five runs next to the four

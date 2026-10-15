@@ -307,12 +307,13 @@ def spend(
     threshold = setting.min_fit if min_fit is None else min_fit
     asked = eligibility.Setting(True, threshold, setting.daily_ceiling)
     lookback = request.app.state.settings.documents_auto_lookback_days
-    candidates = tick.eligible(db, user.id, asked, search, today, lookback)
+    found_day = eligibility.found_day(at)
+    candidates = tick.eligible(db, user.id, asked, search, found_day, lookback)
     docs = tick.posting_docs(db, user.id)
     to_write = sum(
         1 for found in candidates if docs.ids.get((found.id, Kind.cv)) not in docs.written
     )
-    figures = consent.figures(db, user.id, today)
+    figures = consent.figures(db, user.id, found_day)
     each = figures.posting
     zone_start = datetime.combine(today, time(), tzinfo=eligibility.zone(timezone))
     return SpendOut(
@@ -322,7 +323,7 @@ def spend(
         daily_ceiling=setting.daily_ceiling,
         written_today=tick.started_today(db, user.id, today),
         waiting=_waiting(db, user.id),
-        postings_30_days=consent.postings_at_or_above(db, user.id, threshold, today),
+        postings_30_days=consent.postings_at_or_above(db, user.id, threshold, found_day, lookback),
         to_write=to_write,
         to_write_estimate=_estimate_out(
             estimate.times(each, to_write), figures.model, figures.priced

@@ -401,6 +401,7 @@ def _answer_rows(application: Application, report: ats_base.Report) -> list[Appl
                 field_key=item.key,
                 label=item.label,
                 kind=item.kind,
+                options=list(item.options) or None,
                 value=_value(outcome.answer, outcome.filled.status),
                 source=_source(outcome.answer, outcome.filled.status),
                 required=item.required,

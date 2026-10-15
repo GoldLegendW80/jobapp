@@ -36,7 +36,7 @@ from typing import Annotated, Any
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy.orm import Session
 
 from app import queue as queues
@@ -73,13 +73,14 @@ class ApproveIn(BaseModel):
 class AnswerIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    value: Annotated[str, Field(min_length=1, max_length=gate.ANSWER_MAX)] | bool
+    value: Annotated[str, Field(min_length=1, max_length=gate.ANSWER_MAX)] | StrictBool
 
 
 class AnswerOut(BaseModel):
     field_key: str
     label: str
     kind: str
+    options: list[str] | None = None  # the choices of a select, combobox or single, when read
     value: Any
     source: str
     required: bool
@@ -134,6 +135,7 @@ def _answers(db: Session, application: Application) -> list[AnswerOut]:
             field_key=row.field_key,
             label=row.label,
             kind=row.kind,
+            options=row.options or None,
             value=row.value,
             source=row.source.value,
             required=row.required,

@@ -271,17 +271,27 @@ def test_two_submit_jobs_at_once_on_one_approval_click_once(
 # --- a confirmed submission is never lost ------------------------------------------------------
 
 
+@pytest.mark.parametrize("failure", ["python", "database"])
 def test_a_confirmed_submission_whose_status_cannot_be_set_stays_submitted(
     db: Session,
     factory: sessionmaker[Session],
     person_a: Person,
     stub: str,
     monkeypatch: pytest.MonkeyPatch,
+    failure: str,
 ) -> None:
+    """`database`: the status write goes through and then the statement after it fails in
+    Postgres, which aborts the transaction unless the write sits in a savepoint (`begin_nested`):
+    without it the record of the submission would fail too."""
     app_id = ready(db, factory, person_a, stub)
     assert approve(factory, person_a, app_id).passed
 
-    def refused(*args: Any, **kw: Any) -> bool:
+    def refused(session: Session, posting: Job, *args: Any, **kw: Any) -> bool:
+        if failure == "database":
+            session.execute(
+                sa.update(Job).where(Job.id == posting.id).values(status=JobStatus.applied)
+            )
+            session.execute(sa.text("SELECT 1 / 0"))
         raise RuntimeError("refused")
 
     monkeypatch.setattr(submit.jobs_service, "set_status", refused)
@@ -446,3 +456,151 @@ def test_only_fields_of_the_form_before_the_click_take_an_answer(
         s.commit()
     with factory() as s, pytest.raises(gate.RefusedError, match="not_editable"):
         gate.set_answer(s, person_a.user_id, app_id, _left(factory, app_id).field_key, "x", AT)
+
+
+# --- the kinds of field the person can answer --------------------------------------------------
+
+CHOICES = ["Remote", "On site"]
+
+
+def _make(
+    factory: sessionmaker[Session],
+    app_id: uuid.UUID,
+    key: str,
+    kind: str,
+    options: list[str] | None = None,
+) -> None:
+    """Turn a stored field into one of `kind` with `options`, as the form would have offered."""
+    with factory() as s:
+        row = s.get(ApplicationAnswer, (app_id, key))
+        assert row is not None
+        row.kind, row.options = kind, options
+        s.commit()
+
+
+def _put(
+    factory: sessionmaker[Session], person: Person, app_id: uuid.UUID, key: str, value: Any
+) -> str:
+    """The code of the refusal, or `ok`."""
+    with factory() as s:
+        try:
+            gate.set_answer(s, person.user_id, app_id, key, value, AT)
+            s.commit()
+        except gate.InvalidAnswerError as exc:
+            s.rollback()
+            return exc.code
+        return "ok"
+
+
+# (kind, options, accepted, wrong type, not an option): a missing entry is a case that does not
+# apply to the kind
+KINDS: list[tuple[str, list[str] | None, Any, Any, Any]] = [
+    ("text", None, "Bordeaux", True, None),
+    ("textarea", None, "Why I want to join.\nSecond line.", True, None),
+    ("select", CHOICES, "Remote", True, "Hybrid"),
+    ("combobox", CHOICES, "On site", False, "remote"),
+    ("single", CHOICES, "Remote", True, " Remote"),
+    ("date", None, "2026-11-02", True, None),
+    ("checkbox", None, True, "yes", None),
+    ("yes_no", None, False, "no", None),
+]
+
+
+@pytest.mark.parametrize(("kind", "options", "accepted", "wrong", "other"), KINDS)
+def test_every_kind_of_field_takes_its_own_type_of_value(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    kind: str,
+    options: list[str] | None,
+    accepted: Any,
+    wrong: Any,
+    other: Any,
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    key = _left(factory, app_id).field_key
+    _make(factory, app_id, key, kind, options)
+    assert _put(factory, person_a, app_id, key, wrong) == "wrong_type"
+    if other is not None:
+        assert _put(factory, person_a, app_id, key, other) == "not_an_option"
+    assert _put(factory, person_a, app_id, key, accepted) == "ok"
+    row = _row(factory, app_id, "Current location")
+    assert (row.value, row.source) == (accepted, AnswerSource.person)
+
+
+@pytest.mark.parametrize("kind", ["select", "combobox", "single"])
+def test_a_choice_without_known_options_is_taken_as_typed(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, kind: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    key = _left(factory, app_id).field_key
+    _make(factory, app_id, key, kind)
+    assert _put(factory, person_a, app_id, key, "Anything") == "ok"
+
+
+@pytest.mark.parametrize(
+    "value", ["02/11/2026", "2026-02-30", "2026-13-01", "20261102", "2026-11-2"]
+)
+def test_a_date_is_an_iso_calendar_date(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, value: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    key = _left(factory, app_id).field_key
+    _make(factory, app_id, key, "date")
+    assert _put(factory, person_a, app_id, key, value) == "wrong_type"
+
+
+@pytest.mark.parametrize(("kind", "code"), [("multi", "wrong_type"), ("file", "unknown_field")])
+def test_a_field_that_takes_no_single_value_refuses_one(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, kind: str, code: str
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    key = _left(factory, app_id).field_key
+    _make(factory, app_id, key, kind, CHOICES)
+    assert _put(factory, person_a, app_id, key, "Remote") == code
+
+
+def test_the_approval_view_offers_the_options_and_the_value_is_a_strict_boolean(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    person_b: Person,
+    stub: str,
+    api_app: FastAPI,
+) -> None:
+    app_id = ready(db, factory, person_a, stub)
+    key = _left(factory, app_id).field_key
+    _make(factory, app_id, key, "select", CHOICES)
+    _password(factory, person_a, person_b)
+    with TestClient(api_app, follow_redirects=False) as client:
+        api = Api(client)
+        token = api.login_token(person_a.email)
+        base = f"/api/applications/{app_id}"
+        path = f"{base}/answers/{quote(key, safe='')}"
+        view = api.get(f"{base}/approval", token=token).json()
+        shown = {a["field_key"]: a for a in view["answers"]}
+        assert shown[key]["options"] == CHOICES
+        with factory() as s:  # the run stored what the form offered, and the view returns it
+            stored = {
+                r.field_key: r.options
+                for r in s.execute(
+                    sa.select(ApplicationAnswer).where(ApplicationAnswer.application_id == app_id)
+                ).scalars()
+            }
+        assert {k: a["options"] for k, a in shown.items()} == stored
+        assert any(o for k, o in stored.items() if k != key)  # another field has its own
+        assert any(o is None for o in stored.values())  # and a field without options reads null
+        refused = api.request("PUT", path, token=token, json={"value": "Hybrid"})
+        assert (refused.status_code, refused.json()["code"]) == (422, "not_an_option")
+        chosen = api.request("PUT", path, token=token, json={"value": "On site"})
+        assert chosen.status_code == 200, chosen.text
+        (row,) = [a for a in chosen.json()["answers"] if a["field_key"] == key]
+        assert (row["value"], row["options"]) == ("On site", CHOICES)
+        for kind in ("checkbox", "yes_no"):
+            _make(factory, app_id, key, kind)
+            for bad in (1, 0, "true"):
+                got = api.request("PUT", path, token=token, json={"value": bad})
+                assert got.status_code == 422, (kind, bad)
+            ok = api.request("PUT", path, token=token, json={"value": True})
+            assert ok.status_code == 200, ok.text
