@@ -32,14 +32,16 @@
 #    first one alone, main is checked alone, and a main that fails stops the run). A dropped pull
 #    request gets a comment with the step the bisect blamed and the last 30 lines of its log, each
 #    line that may hold a secret withheld (redact below); every pull request that depends on it
-#    leaves the batch too, without a comment; then the rest is checked again. A lock or disk
+#    leaves the batch too, without a comment; then the rest is checked again, unless it is exactly
+#    a prefix the bisect already passed (that pass counts, no run). A lock or disk
 #    refusal of the gate stops the run.
 # 4. Merge. Only when origin/main is still the base the gate checked and each head is still the
 #    commit the PASS record lists: gh pr merge --repo <owner/repo> --merge --delete-branch
 #    --match-head-commit <sha>, in the checked order (with --repo gh leaves local branches alone,
 #    so a branch checked out in a worktree cannot fail it). The state is read after each call:
-#    MERGED counts as merged whatever gh exited with. A head that moved stops the run before the
-#    first merge; a stop between two merges names what merged and what did not.
+#    MERGED counts as merged whatever gh exited with (a state that cannot be read is read once
+#    more). A head that moved stops the run before the first merge; a stop between two merges, or
+#    INT or TERM during them, names what merged and what did not.
 # 5. The issues the merged pull requests close (GitHub's closingIssuesReferences, the "Closes #N"
 #    of their bodies) move to Done on the project board (project 1 of GoldLegendW80) right after
 #    the merges, since GitHub closes them then; also after a stop between two merges. A card that
@@ -124,10 +126,11 @@ joined() { # joined <word ...>: the words separated by ", ", or "none"
 B='(^|[^[:alnum:]])' # the start of a word, so that msg.send or hf_ratio stay
 SECRET_WORDS='secret|token|passw|pwd|api[_-]?key|apikey|'"${B}"'auth([^o]|$)|authorization:|oauth|bearer|credential|cookie|private[ _-]?key|signature|dsn|-----begin'
 SECRET_WORDS+='|(keys?|access|creds)(ids?)?([_.-][[:alnum:]_.-]*)?["'"'"']?[[:space:]]*[=:]'
-SECRET_WORDS+='|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|'"${B}"'sk-[[:alnum:]]|'"${B}"'[rs]k_(live|test)_|xox[abprs]-|xapp-[[:alnum:]]'
+SECRET_WORDS+='|ghp_|gho_|ghs_|ghu_|ghr_|github_pat_|glpat-|'"${B}"'sk-[[:alnum:]]|'"${B}"'[rs]k_(live|test)_|xox[abeprs]-|xapp-[[:alnum:]]'
 SECRET_WORDS+='|akia[[:alnum:]]{8}|'"${B}"'(asia|abia|acca|a3t[[:alnum:]])[[:alnum:]]{8}|aiza[[:alnum:]_-]{8}|ya29\.|gocspx-|eyj[[:alnum:]_-]{8,}\.'
 SECRET_WORDS+='|'"${B}"'hf_[[:alnum:]]{10,}|'"${B}"'npm_[[:alnum:]]{10,}|'"${B}"'sg\.[[:alnum:]_-]{8,}\.|dop_v1_|'"${B}"'pypi-[[:alnum:]]{10,}'
 SECRET_WORDS+='|shp(at|ss|ca|pa)_|lin_api_|accountkey=|tskey-'
+SECRET_WORDS+='|glsa_|glptt-|dckr_pat_|sntrys_|figd_|pplx-|lsv2_pt_|'"${B}"'(gsk|glc|r8)_[[:alnum:]]{8,}|'"${B}"'(hvs|sl)\.[[:alnum:]_-]{10,}'
 URL_PASSWORD='://[^/@[:space:]]*:[^/@[:space:]]*@'
 HEX_RUN='[[:xdigit:]]{32,}'
 TOKEN_RUN='[[:alnum:]+/=_-]{32,}'
@@ -540,6 +543,9 @@ fi
 
 # --- 3. gate and bisect ---------------------------------------------------------------------------
 GATE_RUNS=0
+PASS_KEY="" # the batch (numbers joined by ",") of the latest bisect prefix that passed ...
+PASS_TREE="" # ... the tree it passed on ...
+PASS_RUN=0 # ... and the run that checked it
 G_STATUS=0
 G_LOG=""
 G_LAST=""
@@ -590,6 +596,7 @@ tail_of() { # tail_of <gate log> <step>: the last 30 lines of that step's log (o
       on { for (; blanks > 0; blanks--) print ""; print }' "$1"
   fi | redact | tail -n 30
 }
+key_of() { local IFS=,; printf '%s' "$*"; }
 COMMENT_FAILED=()
 DROPPED=()
 FLAKY=()
@@ -653,6 +660,14 @@ while :; do
     gate_notes
     die "every pull request of the batch failed the gate"
   }
+  # What the bisect already passed is not gated again: after the culprit is dropped, the batch is
+  # often exactly the longest prefix that passed.
+  if [[ -n "$PASS_KEY" && "$(key_of "${BATCH[@]}")" == "$PASS_KEY" ]]; then
+    say "gate   run $PASS_RUN already passed this batch, not run again"
+    G_KIND=pass
+    G_TREE="$PASS_TREE"
+    break
+  fi
   run_gate "${BATCH[@]}"
   case "$G_KIND" in
   pass) break ;;
@@ -686,11 +701,17 @@ while :; do
   # prefix that fails at other steps than the batch does not reproduce it: it counts as passing.
   lo=1
   hi=${#BATCH[@]}
+  PASS_KEY=""
   while ((lo < hi)); do
     mid=$(((lo + hi) / 2))
     run_gate "${BATCH[@]:0:mid}"
     case "$G_KIND" in
-    pass) lo=$((mid + 1)) ;;
+    pass)
+      lo=$((mid + 1))
+      PASS_KEY="$(key_of "${BATCH[@]:0:mid}")"
+      PASS_TREE="$G_TREE"
+      PASS_RUN="$GATE_RUNS"
+      ;;
     fail)
       if [[ "$G_STEPS" == "$fail_steps" ]]; then
         hi=$mid
@@ -756,6 +777,7 @@ done
 MERGED=()
 MERGE_WARNINGS=()
 stop_merging() { # stop_merging <index in the batch of the first one not merged> <reason>
+  MERGING=0
   local rest=("${BATCH[@]:$1}")
   note merged "$(joined ${MERGED[@]+"${MERGED[@]/#/#}"})"
   note "not merged" "$(joined "${rest[@]/#/#}")"
@@ -763,7 +785,44 @@ stop_merging() { # stop_merging <index in the batch of the first one not merged>
   ((${#MERGED[@]} == 0)) || move_cards "${MERGED[@]}"
   die "$2: main is not the checked tree, nothing deployed"
 }
+# INT or TERM during the merges: say what merged and what did not (the one in flight is asked
+# of GitHub, since gh may have merged it just before the signal), move the cards of the merged
+# ones, exit 130.
+MERGING=0
+MERGE_AT=0
+on_signal() {
+  trap '' INT TERM
+  if ((MERGING)); then
+    MERGING=0
+    local at="" state=""
+    if ((MERGE_AT < ${#BATCH[@]})); then
+      at="${BATCH[MERGE_AT]}"
+      state="$(gh pr view "$at" --json state --jq .state 2>/dev/null)" || state="unknown"
+      if [[ "$state" == MERGED ]]; then
+        MERGED+=("$at")
+        MERGE_AT=$((MERGE_AT + 1))
+      fi
+    fi
+    local rest=("${BATCH[@]:$MERGE_AT}")
+    note merged "$(joined ${MERGED[@]+"${MERGED[@]/#/#}"})"
+    note "not merged" "$(joined "${rest[@]/#/#}")"
+    if [[ -z "$at" ]]; then
+      note interrupted "after the last merge, before the cards and the deploy"
+    else
+      note interrupted "while merging #$at, which is ${state:-unknown} on GitHub"
+    fi
+    ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
+    ((${#MERGED[@]} == 0)) || move_cards "${MERGED[@]}"
+    summary
+    say "SHIP: FAIL interrupted during the merges: nothing deployed"
+    printf '%s: interrupted during the merges\n' "$PROG" >&2
+  fi
+  exit 130
+}
+trap on_signal INT TERM
+MERGING=1
 for i in "${!BATCH[@]}"; do
+  MERGE_AT="$i"
   n="${BATCH[i]}"
   gated="$(gated_head "$n")"
   if ((${#MERGED[@]})); then
@@ -776,7 +835,11 @@ for i in "${!BATCH[@]}"; do
   merge_status=0
   (cd "$WORK" && gh pr merge "$n" --repo "$REPO" --merge --delete-branch --match-head-commit "$gated") >"$LOGS/merge-$n.log" 2>&1 ||
     merge_status=$?
-  state="$(gh pr view "$n" --json state --jq .state 2>/dev/null)" || state="unknown"
+  # An unreadable state is read once more: the merge may well have gone through.
+  state="$(gh pr view "$n" --json state --jq .state 2>/dev/null)" || {
+    sleep "$POLL_SECONDS"
+    state="$(gh pr view "$n" --json state --jq .state 2>/dev/null)" || state="unknown"
+  }
   if [[ "$state" != MERGED ]]; then
     if ((merge_status)); then stop_merging "$i" "gh pr merge #$n failed ($LOGS/merge-$n.log)"; fi
     stop_merging "$i" "#$n is $state after gh pr merge"
@@ -785,8 +848,11 @@ for i in "${!BATCH[@]}"; do
     MERGE_WARNINGS+=("gh pr merge #$n exited $merge_status after the merge ($LOGS/merge-$n.log)")
   fi
   MERGED+=("$n")
+  MERGE_AT=$((i + 1))
   say "merge  #$n $(short "$gated")"
 done
+MERGING=0
+trap 'exit 130' INT TERM
 note merged "$(joined "${MERGED[@]/#/#}")"
 ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
 move_cards "${MERGED[@]}"
@@ -813,10 +879,14 @@ note deploy "ok ($deploy_last)"
 # --- 7. the Jetson ----------------------------------------------------------------------------------
 # Runs there; prints only tab separated figures and service names, never a log line or an
 # environment value. The compose files and profile are those of .github/workflows/deploy.yml.
+# The script itself is the stdin of "bash -s", so every command that may read stdin gets
+# /dev/null: "docker compose exec -T" otherwise swallows the rest of the script (the first real
+# run lost the alembic, memory and error figures that way). The last line, "end", tells the
+# parser the script ran to its end.
 # shellcheck disable=SC2016 # expanded on the Jetson
 REMOTE='set -u
 cd ~/jobapp || exit 3
-compose() { docker compose -f compose.yml --profile tunnel "$@"; }
+compose() { docker compose -f compose.yml --profile tunnel "$@" </dev/null; }
 compose config --services 2>/dev/null | while IFS= read -r line; do printf "svc\t%s\n" "$line"; done
 compose ps -a --format "{{.Service}}\t{{.State}}\t{{.Health}}" 2>/dev/null |
   while IFS= read -r line; do printf "ps\t%s\n" "$line"; done
@@ -830,7 +900,8 @@ if compose logs --no-color --since 10m >"$logs" 2>&1; then
 else
   printf "errors\t-\n"
 fi
-rm -f "$logs"'
+rm -f "$logs"
+printf "end\n"'
 say "check  ssh $SSH_HOST, ~/jobapp"
 jetson="$(ssh -o BatchMode=yes -o ConnectTimeout=20 "$SSH_HOST" bash -s <<<"$REMOTE" 2>"$LOGS/jetson.err")" ||
   die "ssh $SSH_HOST failed ($LOGS/jetson.err): deployed, the Jetson is not checked"
@@ -842,6 +913,7 @@ rev="-"
 mem_used="-"
 mem_total="-"
 errors="-"
+finished=0
 while IFS=$'\t' read -r kind a b c; do
   case "$kind" in
   svc) declared+=("$a") ;;
@@ -856,6 +928,7 @@ while IFS=$'\t' read -r kind a b c; do
     mem_total="$b"
     ;;
   errors) errors="$a" ;;
+  end) finished=1 ;;
   esac
 done <<<"$jetson"
 missing=()
@@ -864,11 +937,13 @@ for svc in ${declared[@]+"${declared[@]}"}; do
 done
 services=$((services + ${#missing[@]}))
 problems=()
+((finished)) || problems+=("the check on the Jetson ended early")
 ((${#declared[@]} > 0)) || problems+=("compose lists no service")
 ((services > 0)) || problems+=("no compose service")
 ((${#unwell[@]} == 0)) || problems+=("not healthy: $(joined "${unwell[@]}")")
 ((${#missing[@]} == 0)) || problems+=("missing: $(joined "${missing[@]}")")
 [[ "$rev" != - ]] || problems+=("alembic is not at head")
+[[ "$mem_used" != - ]] || problems+=("memory not read")
 [[ "$errors" == 0 ]] || problems+=("$errors error lines in 10 minutes")
 note jetson "$services services, $((services - ${#unwell[@]} - ${#missing[@]})) healthy, ${#missing[@]} missing; alembic $rev; memory $mem_used of $mem_total MB used; $errors error lines in 10 minutes"
 ((${#problems[@]} == 0)) || die "the Jetson after the deploy: $(joined "${problems[@]}")"
