@@ -392,6 +392,7 @@ jobs:
           ops/ship.sh tests/ship_test.sh
           ops/browser-egress.sh tests/browser_egress_test.sh
           ops/card.sh ops/dev-setup.sh tests/dev_setup_test.sh
+          ops/jetson-verify.sh ops/jetson-ops.sh ops/remote.sh tests/remote_ops_test.sh
       # Issue #18: the .env syntax check and where it runs (deploy.sh, deploy.yml, the smoke).
       - name: tests/env_check_test.sh
         id: env_check_test
@@ -471,6 +472,12 @@ jobs:
         id: dev_setup_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/dev_setup_test.sh
+      # Operating the Jetson without ssh (owner decision of 2026-10-15): ops/jetson-verify.sh and
+      # ops/jetson-ops.sh against a fake docker, ops/remote.sh against a fake gh, ops.yml's rules.
+      - name: tests/remote_ops_test.sh
+        id: remote_ops_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
+        run: tests/remote_ops_test.sh
 
       # --- unit: e2e (groups apps and ingestion) -------------------------------------------
       # Playwright comes with the web dependencies. The pnpm version comes from packageManager

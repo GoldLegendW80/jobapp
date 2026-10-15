@@ -241,7 +241,7 @@ if command -v gh >/dev/null; then
   ok "runner status: an unreachable host fails with the ssh message"
 fi
 
-step "runner image: the job guard is baked in and refuses every job but deploy.yml from main"
+step "runner image: the job guard is baked in and refuses every job but deploy.yml and ops.yml from main"
 grep -q '^ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/runner-job-guard.sh$' ops/runner/Dockerfile ||
   fail "ops/runner/Dockerfile does not set ACTIONS_RUNNER_HOOK_JOB_STARTED"
 grep -q '^COPY --chmod=755 job-guard.sh /usr/local/bin/runner-job-guard.sh$' ops/runner/Dockerfile ||
@@ -261,11 +261,18 @@ guard 1 GoldLegendW80/jobapp "$main_ref" pull_request
 guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/deploy.yml@refs/heads/evil" workflow_dispatch
 out_has "refused: workflow"
 guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/ci.yml@refs/heads/main" workflow_dispatch
+ops_ref="GoldLegendW80/jobapp/.github/workflows/ops.yml@refs/heads/main"
+guard 0 GoldLegendW80/jobapp "$ops_ref" workflow_dispatch
+guard 1 GoldLegendW80/jobapp "$ops_ref" push
+guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/ops.yml@refs/heads/evil" workflow_dispatch
+out_has "refused: workflow"
+guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/ops.yml.evil.yml@refs/heads/main" workflow_dispatch
+guard 1 someone/fork "someone/fork/.github/workflows/ops.yml@refs/heads/main" workflow_dispatch
 guard 1 GoldLegendW80/jobapp "GoldLegendW80/jobapp/.github/workflows/deploy.yml@refs/pull/1/merge" pull_request
 guard 1 someone/fork "someone/fork/.github/workflows/deploy.yml@refs/heads/main" workflow_dispatch
 out_has "refused: repository"
 guard 1 "" "" ""
-ok "hook set in the image; allowed: deploy.yml@main on workflow_dispatch; refused: workflow_run (issue #116), push, pull_request, another branch, another workflow, a fork, no context"
+ok "hook set in the image; allowed: deploy.yml@main and ops.yml@main on workflow_dispatch; refused: ops.yml on push, from another branch or a fork, a look-alike name, workflow_run (issue #116), push, pull_request, another branch, another workflow, a fork, no context"
 
 step "runner install and remove against a fake Jetson and a fake gh: the token never shows"
 # A canary token: install and remove must pass it to the container on stdin only, never on a

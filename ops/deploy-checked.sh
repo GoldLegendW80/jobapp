@@ -20,6 +20,11 @@
 # and the commit of main the workflow runs from; gh run watch until it ends; its conclusion; on
 # success, the public health URL (README.md, Tailscale: https://jobapp.taild83d16.ts.net, or
 # DEPLOY_HEALTH_URL) must answer.
+# The figures of the stack come from the run too, not from ssh: its last step
+# (ops/jetson-verify.sh) prints one line JOBAPP-VERIFY services=... result=ok|fail, which this
+# script reads from the run's log (gh run view <id> --log, only that line) and prints, after a
+# success as after a failure. ops/ship.sh reads it there. A run without the line (a deploy step
+# that failed, logs GitHub has not published yet) prints none; the deploy's result is the run's.
 #
 # Exit status: 0 deployed and healthy (or a dry run that would dispatch), 1 refused or the deploy
 # failed, 64 wrong arguments.
@@ -29,6 +34,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PROG="ops/deploy-checked.sh"
 WORKFLOW="deploy.yml"
 HEALTH_URL="${DEPLOY_HEALTH_URL:-https://jobapp.taild83d16.ts.net/api/health}"
+POLL_SECONDS="${DEPLOY_POLL_SECONDS:-2}"
+# The line of ops/jetson-verify.sh, matched exactly: keys in lower case, values of one token.
+VERIFY_RE='JOBAPP-VERIFY services=[0-9]+( [a-z_]+=[A-Za-z0-9_.:,-]+)*'
 
 die() {
   printf '%s: %s\n' "$PROG" "$*" >&2
@@ -122,13 +130,24 @@ for _ in $(seq 1 30); do
     --json databaseId,createdAt,headSha \
     --jq "[.[] | select(.createdAt >= \"$since\" and .headSha == \"$main_sha\")] | sort_by(.createdAt) | .[0].databaseId // empty")" || run=""
   [[ -z "$run" ]] || break
-  sleep 2
+  sleep "$POLL_SECONDS"
 done
 [[ -n "$run" ]] || die "the run of the dispatch did not appear in a minute (gh run list --workflow $WORKFLOW): its result is unknown, look before dispatching again"
 info "run $run: waiting for the Jetson"
 gh run watch "$run" --exit-status >/dev/null 2>&1 || true
 conclusion="$(gh run view "$run" --json conclusion,url --jq '.conclusion + " " + .url')"
 info "deploy: $conclusion"
+# The log of a run that just ended can take a few seconds to be published: a few tries.
+verify=""
+for _ in 1 2 3 4 5; do
+  if log="$(gh run view "$run" --log 2>/dev/null)"; then
+    verify="$(grep -oE "$VERIFY_RE" <<<"$log" | tail -n 1 || true)"
+    break
+  fi
+  sleep "$POLL_SECONDS"
+done
+log=""
+[[ -z "$verify" ]] || printf '%s\n' "$verify"
 [[ "$conclusion" == success\ * ]] || die "the deploy did not succeed (${conclusion%% *}): gh run view $run --log-failed"
 
 curl -fsS --max-time 20 --retry 5 --retry-delay 3 --retry-all-errors -o /dev/null "$HEALTH_URL" ||

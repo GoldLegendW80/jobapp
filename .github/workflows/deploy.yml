@@ -8,8 +8,9 @@
 # the script. The job runs on the self-hosted runner installed on the Jetson by ./deploy.sh
 # runner install (labels self-hosted, jetson). The runner only connects out to GitHub; no port
 # is opened. The workflow definition always comes from main: the runner's job-started hook
-# (ops/runner/job-guard.sh) refuses every job that is not this file on refs/heads/main, run by
-# workflow_dispatch. A dispatched branch is deployed as code, never as workflow.
+# (ops/runner/job-guard.sh) refuses every job that is not this file (or ops.yml, the operations
+# without ssh) on refs/heads/main, run by workflow_dispatch. A dispatched branch is deployed as
+# code, never as workflow.
 #
 # The same steps as ./deploy.sh, run on the Jetson itself, under the Jetson's deploy lock
 # (flock on ~/jobapp-backups/.deploy.lock, shared with ./deploy.sh): rsync of the commit into
@@ -52,9 +53,14 @@
 # anything is built: a malformed line fails the run at once with "line N: invalid (reason)",
 # never the value, instead of docker compose refusing the file in the middle of the build.
 #
-# Security: the runner has the host Docker socket, which is root on the Jetson. Only this private
-# repository's deploy.yml from main reaches it; it must never be offered to forks or public
-# repositories.
+# Security: the runner has the host Docker socket, which is root on the Jetson. Only this
+# repository's deploy.yml and ops.yml from main, dispatched by an account with write access,
+# reach it (the guard above); it must never run a job of a fork or of a pull request.
+#
+# The last step, "Verify the Jetson" (ops/jetson-verify.sh), prints the figures of the stack as
+# one line, JOBAPP-VERIFY services=... result=ok|fail, and in the job summary: ops/deploy-checked.sh
+# and ops/ship.sh read that line from this run's log instead of asking the Jetson over ssh (owner
+# decision of 2026-10-15). It fails the run when the stack is not well.
 name: Deploy
 
 on:
@@ -117,6 +123,7 @@ jobs:
           echo "previous: $(cat "$app/.deployed-commit" 2>/dev/null || echo unknown)"
 
       - name: Deploy under the Jetson deploy lock
+        id: deploy
         run: |
           set -euo pipefail
           mkdir -p "$BACKUPS"
@@ -314,6 +321,14 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           echo "$url"
       # --- end of tailscale -------------------------------------------------------------------
+
+      # The figures of the stack, read on the Jetson (header): also after a Public URL step that
+      # failed, never after a deploy step that failed (its rollback is a red run already). From the
+      # checkout, the commit just deployed. The step's own text holds no JOBAPP-VERIFY line, so a
+      # reader of the log finds the script's line only.
+      - name: Verify the Jetson
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
+        run: bash ops/jetson-verify.sh "$APP"
 
       - name: State on failure
         if: failure()

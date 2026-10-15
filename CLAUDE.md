@@ -22,7 +22,7 @@ below.
 | `browser/`, `renderer/`, `caddy/`, `tailscale/` | the browser service (Chromium, browserd), the PDF renderer, the proxy, the public URL |
 | `compose.yml`, `compose.mac.yml`, `compose.dev.yml` | the stack; add `compose.mac.yml` on an Apple silicon Mac (README, Apple silicon) |
 | `ops/` | the gate, ship, deploy and helper scripts (below) |
-| `deploy.sh`, `.github/workflows/deploy.yml` | deploy to the Jetson (`ops/deploy-checked.sh` dispatches the workflow) |
+| `deploy.sh`, `.github/workflows/deploy.yml`, `ops.yml` | deploy to and operate the Jetson (`ops/deploy-checked.sh` and `ops/remote.sh` dispatch the workflows) |
 | `tests/*.sh` | shell tests of the scripts, each run by a step of `.github/workflows/ci.yml` |
 | `CAPABILITY-MAP.md`, `SPEC-<module>.md` | the modules and their specs |
 | `tasks/<module>/todo.md` | the plan of each module: decisions, one section per task id (D12, A5, ...) |
@@ -69,12 +69,17 @@ ops/local-check.sh --merge <pr> --merge <pr>        # the gate on a merged batch
 ops/ship.sh --plan --approved                       # what would ship, changes nothing
 ops/ship.sh <pr> <pr>                               # gate, merge, deploy the checked tree, check the Jetson: SHIP: OK
 ops/deploy-checked.sh                               # deploy the current checked main only
+ops/remote.sh status                                # the Jetson's figures through GitHub Actions (ops.yml), no ssh; --list for the actions
 ops/card.sh <issue or pr url> <todo|doing|done> <module> <now|next|later>   # the board
 ```
 
-`uv` needs `--native-tls` on a network that intercepts TLS. Deploy path: `ops/ship.sh` (or
-`ops/deploy-checked.sh`) dispatches `.github/workflows/deploy.yml` on the Jetson's runner for a
-tree the gate passed; `./deploy.sh` is for the first deploy and a new `.env` (README).
+`uv` needs `--native-tls` on a network that intercepts TLS. Deploy from any machine, no ssh
+(README, "Deploy from any machine"): the gate runs on the laptop that ships and writes its PASS
+record in that checkout; `ops/ship.sh` (or `ops/deploy-checked.sh`) dispatches
+`.github/workflows/deploy.yml` on the Jetson's runner for a tree that gate passed and reads the
+run's `JOBAPP-VERIFY` figures; `ops/remote.sh <action>` dispatches `.github/workflows/ops.yml`
+(status, backup, apply pause and resume, ...). Dispatching needs write access and the gh scope
+`workflow`. `./deploy.sh` and ssh stay for the owner: the first deploy, a new `.env`, sudo steps.
 
 ## How work flows
 
