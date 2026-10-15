@@ -18,7 +18,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import caps, gate
+from app.apply import bank, caps, gate
 from app.apply.caps_models import ApplySettings, CompanyCap
 from app.apply.models import AnswerBankEntry, Application, ApplicationEvent, Mode, State
 from app.documents.models import Kind
@@ -505,6 +505,23 @@ def test_the_settings_routes(api: Api, db: Session, person_a: Person, person_b: 
     assert db.get(ApplySettings, person_b.user_id) is None
 
 
+@pytest.mark.parametrize(
+    "lax",
+    ["no", "yes", "false", "true", "off", "on", "0", "1", "", 0, 1, 0.0, 1.0, [], {}],
+)
+def test_the_pause_switch_takes_a_json_boolean_only(
+    api: Api, db: Session, person_a: Person, lax: object
+) -> None:
+    token = api.login_token(person_a.email)
+    on = api.request("PUT", "/api/apply/settings", token=token, json={"paused": True})
+    assert on.status_code == 200
+    refused = api.request("PUT", "/api/apply/settings", token=token, json={"paused": lax})
+    assert refused.status_code == 422, refused.text
+    assert api.get("/api/apply/settings", token=token).json()["paused"] is True
+    off = api.request("PUT", "/api/apply/settings", token=token, json={"paused": False})
+    assert (off.status_code, off.json()["paused"]) == (200, False)
+
+
 def test_the_caps_routes(api: Api, db: Session, person_a: Person, person_b: Person) -> None:
     token_a, token_b = api.login_token(person_a.email), api.login_token(person_b.email)
     empty = api.get("/api/apply/caps", token=token_a).json()
@@ -603,6 +620,42 @@ def test_the_answer_bank_routes(api: Api, db: Session, person_a: Person, person_
     assert forgot.json()["items"] == []
     kept = api.get("/api/apply/answer-bank", token=token_b).json()["items"]
     assert [(e["question"], e["answer"]) for e in kept] == [("Notice period", "One month")]
+
+
+@pytest.mark.parametrize("blank", ["", " ", "   ", "\t", "\n \r\n", "\u00a0", "\u3000 "])
+def test_a_blank_saved_answer_is_forgotten_as_the_bank_does(
+    api: Api, db: Session, person_a: Person, blank: str
+) -> None:
+    token = api.login_token(person_a.email)
+    for key, answer in (("pronouns", "they"), ("notice period", "One month")):
+        db.add(
+            AnswerBankEntry(
+                user_id=person_a.user_id, question_key=key, question=key.title(), answer=answer
+            )
+        )
+    db.commit()
+    put = api.request(
+        "PUT",
+        "/api/apply/answer-bank",
+        token=token,
+        json={"question_key": "pronouns", "answer": blank},
+    )
+    assert put.status_code == 200, put.text
+    assert [e["question_key"] for e in put.json()["items"]] == ["notice period"]
+    assert (
+        bank.AnswerBank(person_a.user_id, {"pronouns": "they"})
+        .with_answer("Pronouns", blank)
+        .entries
+        == {}
+    )
+    # an answer with spaces around it is kept, without them
+    kept = api.request(
+        "PUT",
+        "/api/apply/answer-bank",
+        token=token,
+        json={"question_key": "notice period", "answer": f"{blank}Two months{blank}"},
+    )
+    assert [e["answer"] for e in kept.json()["items"]] == ["Two months"]
 
 
 def test_every_refusal_keeps_the_form_and_says_its_sentence() -> None:
