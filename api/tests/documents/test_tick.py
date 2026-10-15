@@ -61,6 +61,7 @@ from app.documents.models import (
     Kind,
     Scope,
 )
+from app.jobs import service as jobs_service
 from app.jobs.models import Job, JobStatus
 from tests.agents.conftest import API_KEY, new_key
 from tests.conftest import make_settings
@@ -1119,6 +1120,29 @@ def test_a_move_to_applied_after_the_ticks_read_cancels_what_it_would_start(
     owned = [g for g in world.generations(posting) if g["kind"] is kind]
     assert [(g["status"], g["run_id"]) for g in owned][-1:] == [(GenerationStatus.cancelled, None)]
     assert runs_of(world, posting) == (1 if kind is Kind.letter else 0)  # the CV's run only
+
+
+def test_a_pass_waits_behind_a_move_to_applied_holding_the_posting_and_cancels_the_letter(
+    world: World, engine: sa.Engine
+) -> None:
+    """The move holds the posting when the pass claims the letter: the claim waits for the
+    posting before it locks the letter, which the move's freeze locks next. The letter locked
+    first is a circle Postgres breaks (the pass rolled back, the letter left queued)."""
+    posting, _ = _queued_letter(world)
+    outcome: dict[str, Any] = {}
+    with world.factory() as mover:
+        job = jobs_service.lock_job(mover, world.user, posting)
+        assert job is not None
+        thread = in_thread(lambda: world.tick(AT + timedelta(minutes=1)), outcome)
+        wait_until_blocked(engine, [thread], 1)
+        jobs_service.set_status(mover, job, JobStatus.applied, AT)
+        store.commit(mover)
+    thread.join()
+    assert "error" not in outcome, outcome.get("error")
+    assert outcome["result"] == []
+    (row,) = _letters(world, posting)
+    assert (row["status"], row["run_id"]) == (GenerationStatus.cancelled, None)
+    assert runs_of(world, posting) == 1  # the CV's run only
 
 
 def test_a_cv_ready_posting_without_a_written_cv_gets_nothing(world: World) -> None:
