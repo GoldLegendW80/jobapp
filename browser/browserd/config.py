@@ -28,8 +28,10 @@ PROXY_PORT = 3128
 DISPLAY = ":1"
 SCREEN = "1440x900x24"
 PROFILES = "/profiles"
+# browserd's record of which profile each uid belongs to (chromium.bind_uid), root's, 0700.
+UIDS = "/profiles/.uids"
 LEASES = "/leases"
-STATE_DIR = "/tmp/browserd"
+STATE_DIR = "/tmp/browserd"  # noqa: S108 - the container's own /tmp, 0700 root
 # Linux uids of the profiles: 20000 plus a counter (SPEC-browser), allocated by the api (B3).
 UID_MIN, UID_MAX = 20000, 59999
 # The display's own user, uid 1000 of the image: Xvfb never runs as root nor as a profile's uid.
@@ -55,9 +57,7 @@ def lease_max_table(raw: str) -> dict[str, int]:
     table = dict(LEASE_MAX_S)
     for item in filter(None, (part.strip() for part in raw.split(","))):
         purpose, _, seconds = item.partition("=")
-        if purpose.strip() not in table or not re.fullmatch(
-            r"\d{2,5}", seconds.strip()
-        ):
+        if purpose.strip() not in table or not re.fullmatch(r"\d{2,5}", seconds.strip()):
             raise ValueError(f"BROWSER_LEASE_MAX_S: {item!r} is not purpose=seconds")
         table[purpose.strip()] = int(seconds)
     return table
@@ -83,7 +83,5 @@ class Config:
             idle_s=_int("BROWSER_IDLE_S", 300, 1, 3600),
             session_max_s=_int("BROWSER_SESSION_MAX_S", 1800, 1, 7200),
             mem_guard_pct=_int("BROWSER_MEM_GUARD_PCT", 90, 10, 99),
-            proxy_allow=frozenset(
-                h.strip().lower() for h in allow.split(",") if h.strip()
-            ),
+            proxy_allow=frozenset(h.strip().lower() for h in allow.split(",") if h.strip()),
         )

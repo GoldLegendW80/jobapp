@@ -106,10 +106,17 @@ def min_fit(db: Session, user_id: uuid.UUID) -> int:
     return int(setting("documents_min_fit_default"))
 
 
-def postings_at_or_above(db: Session, user_id: uuid.UUID, threshold: int, today: date) -> int:
-    """The person's postings found in the last 30 days (today included) whose fit is at or above
-    the threshold. A posting without a fit is never counted."""
-    since = today - timedelta(days=LOOKBACK_DAYS - 1)
+def postings_at_or_above(
+    db: Session,
+    user_id: uuid.UUID,
+    threshold: int,
+    last_day: date,
+    lookback_days: int = LOOKBACK_DAYS,
+) -> int:
+    """The person's postings found in the last `lookback_days` days (30; `last_day` included, the
+    UTC date of the clock, see `eligibility.found_day`) whose fit is at or above the threshold.
+    A posting without a fit is never counted."""
+    since = last_day - timedelta(days=lookback_days - 1)
     return int(
         db.scalar(
             sa.select(sa.func.count())
@@ -119,7 +126,7 @@ def postings_at_or_above(db: Session, user_id: uuid.UUID, threshold: int, today:
                 Job.fit.is_not(None),
                 Job.fit >= threshold,
                 Job.found_on >= since,
-                Job.found_on <= today,
+                Job.found_on <= last_day,
             )
         )
         or 0
@@ -137,14 +144,14 @@ def model_for(kind: CredentialKind | None) -> str | None:
     return MODEL_API_KEY if kind is CredentialKind.anthropic_api_key else MODEL
 
 
-def figures(db: Session, user_id: uuid.UUID, today: date) -> Figures:
+def figures(db: Session, user_id: uuid.UUID, last_day: date) -> Figures:
     credential = credentials.get(db, user_id)
     kind = CredentialKind(credential.kind) if credential is not None else None
     threshold = min_fit(db, user_id)
     profile = estimate.profile_chars(db, user_id)
     base = estimate.base_chars(db, user_id, None)
     one = estimate.posting(profile, base, estimate.POSTING_DEFAULT_CHARS, **estimate.limits())
-    count = postings_at_or_above(db, user_id, threshold, today)
+    count = postings_at_or_above(db, user_id, threshold, last_day)
     week = week_postings(count)
     return Figures(
         model=model_for(kind),

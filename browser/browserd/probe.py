@@ -30,7 +30,7 @@ def cdp_port() -> int:
 async def body_text(page) -> str:
     try:
         return (await page.inner_text("body", timeout=5000))[:2000]
-    except Exception:  # noqa: BLE001 - an error page or none: no text
+    except Exception:
         return ""
 
 
@@ -60,7 +60,8 @@ async def run(action: str, args: list[str]) -> dict:
                 **await page.evaluate(
                     """async () => {
                       const hints = navigator.userAgentData
-                        ? await navigator.userAgentData.getHighEntropyValues(["architecture", "platform"])
+                        ? await navigator.userAgentData.getHighEntropyValues(
+                            ["architecture", "platform"])
                         : {};
                       const canvas = document.createElement("canvas");
                       return {
@@ -82,9 +83,7 @@ async def run(action: str, args: list[str]) -> dict:
             second = await opened.value
             await second.wait_for_load_state()
             await pages.front(first)
-            after = await first.evaluate(
-                "[document.visibilityState, document.hasFocus()]"
-            )
+            after = await first.evaluate("[document.visibilityState, document.hasFocus()]")
             await second.close()
             return {"visibility": after[0], "focus": after[1]}
         if action == "webrtc":

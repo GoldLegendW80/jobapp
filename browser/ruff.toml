@@ -1,0 +1,3 @@
+# browser/ is linted with the api's rules (issue #281): the pre-commit hook and the local check
+# both find this file next to the code.
+extend = "../api/pyproject.toml"

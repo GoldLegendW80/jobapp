@@ -33,7 +33,8 @@ import pytest
 from tests.pg import docker_available
 
 ROOT = Path(__file__).resolve().parents[3]
-PAGES = "http://pages:8000"
+# 8080, a port of the proxy's set: the allowed test name passes the port check too (#281).
+PAGES = "http://pages:8080"
 CLIENT_CALL = """
 import json, sys, urllib.request, urllib.error
 method, path, secret, body = sys.argv[1:5]
@@ -309,9 +310,11 @@ def test_a_navigation_timeout_is_a_failure_result(stack: Stack) -> None:
 @pytest.mark.parametrize(
     "url",
     [
-        # Refused for the port alone.
+        # Refused for the port alone, the allowed test name included (issue #281).
         "http://127.0.0.1:9300/healthz",
         "http://pages-ip:8000/",
+        "http://pages:8000/",
+        "http://pages:3478/",
         # Refused for the address: every port here is one the proxy allows, and an answer of
         # 403 (not 502, not a page) is the address rule's own.
         "http://client:8080/",
@@ -343,6 +346,18 @@ def test_the_pages_server_answers_on_8080_by_its_allowed_name(stack: Stack) -> N
     assert stack.probe("navigate", "http://pages:8080/form.html", "20")["status"] == 200
 
 
+def test_the_upstream_reads_the_host_the_proxy_checked(stack: Stack) -> None:
+    """Issue #281 item 6: the Host header the pages server reads is the checked authority, and
+    no proxy header reaches it."""
+    result = stack.probe("navigate", f"{PAGES}/headers", "20")
+    assert result["status"] == 200, result
+    echoed = json.loads(result["text"])
+    assert echoed["host"] == "pages:8080"
+    assert echoed["connection"] == "close"
+    assert "proxy-connection" not in echoed
+    assert "keep-alive" not in echoed
+
+
 def pages_ip(stack: Stack) -> str:
     return stack.python("import socket; print(socket.gethostbyname('pages'))").strip()
 
@@ -370,6 +385,11 @@ def test_webrtc_sends_no_udp_outside_the_proxy(stack: Stack) -> None:
     assert result["complete"] is True, result
     assert not [c for c in result["candidates"] if " udp " in c.lower()], result
     assert datagrams(stack) == 0
+    # No WebRTC mDNS responder (issue #281): no socket on 5353 (hex 14E9) and no membership of
+    # 224.0.0.251 (FB0000E0 in /proc/net/igmp) in the container's network namespace.
+    sockets = stack.execute("browser", "cat", "/proc/net/udp", "/proc/net/udp6")
+    assert ":14E9 " not in sockets, sockets
+    assert "FB0000E0" not in stack.execute("browser", "cat", "/proc/net/igmp")
     policy = stack.probe("policy")
     assert all(policy.values()), policy
     send = "import socket, sys; socket.socket(2, 2).sendto(b'x', (sys.argv[1], 3478))"
@@ -407,6 +427,23 @@ def test_two_profiles_b_cannot_read_a(stack: Stack) -> None:
     assert chromium == {20002}
     stack.end()
     assert not [p for p in processes(stack) if p[0] == 20002]
+
+
+def test_one_uid_never_serves_a_second_profile(stack: Stack) -> None:
+    """Issue #281 item 8: 20001 holds A, so a lease for a new profile under 20001 is refused
+    409 and creates no directory; browserd's record is root's own, 0700."""
+    stack.end()
+    other = str(uuid.uuid4())
+    body = {"user_id": "c", "profile_id": other, "uid": 20001, "purpose": "apply_fill"}
+    answer = stack.call("POST", "/leases", body)
+    assert answer["status"] == 409, answer
+    assert answer["body"]["error"] == "uid_in_use"
+    assert stack.current()["lease"] is None
+    listing = stack.execute("browser", "ls", "-a", "/profiles")
+    assert other not in listing
+    record = stack.execute("browser", "stat", "-c", "%u %a", "/profiles/.uids").split()
+    assert record == ["0", "700"]
+    assert stack.execute("browser", "cat", "/profiles/.uids/20001") == A
 
 
 def test_a_stale_lock_of_another_host_is_cleared(stack: Stack) -> None:

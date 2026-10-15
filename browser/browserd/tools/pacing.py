@@ -23,9 +23,7 @@ Sleep = Callable[[float], Awaitable[None]]
 
 
 class Pacer:
-    def __init__(
-        self, sleep: Sleep = asyncio.sleep, rng: random.Random | None = None
-    ) -> None:
+    def __init__(self, sleep: Sleep = asyncio.sleep, rng: random.Random | None = None) -> None:
         self.sleep, self.rng = sleep, rng or random.SystemRandom()
 
     def _pick(self, bounds: tuple[float, float]) -> float:
