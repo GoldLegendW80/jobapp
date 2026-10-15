@@ -133,7 +133,7 @@
         "salutation": "Dear hiring team,",
         "paragraphs": [
          "I run the deployment platform of the billing team at Quillmere Example Works. I build platforms that other engineers rely on, and I want to do that at Brindle Example Labs.",
-         "You run a deployment platform on Kubernetes and write backend services in Python. I wrote the backend services of my platform in Python with FastAPI and PostgreSQL, and I work with Kubernetes and Terraform.",
+         "You run a deployment platform on Kubernetes and write backend services in Python. I wrote the backend services of my platform in Python with FastAPI, and I work with Kubernetes and Terraform.",
          "I would rather say so than round up: I have about 3.5 years of professional engineering.",
          "I live in Nantes and speak English and French. I would enjoy talking with your team about your platform."
         ],

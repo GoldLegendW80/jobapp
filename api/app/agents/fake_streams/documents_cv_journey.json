@@ -141,7 +141,7 @@
           "employer_key": "quillmere",
           "bullets": [
            "Run the deployment platform of the billing team, from the first commit to production.",
-           "Wrote the platform's backend services in Python with FastAPI and PostgreSQL."
+           "Wrote the platform's backend services in Python with FastAPI."
           ]
          },
          {
