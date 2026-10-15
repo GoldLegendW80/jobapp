@@ -53,7 +53,7 @@ issues (mail: #63 Google console, #187 the OAuth redirect setting on the Jetson)
 
 | PR | What | State | Next |
 |---|---|---|---|
-| #323 | Apply A5 follow ups: topic anchor on free text, the `apply_answer` agent, its journey (#317 items 1 to 3) | REQUEST CHANGES on `6aafd82`: the agent sees the whole `answers` section (EEO, salary and more) and `judge` keeps personal statements; questions about leaving a job are still sent to the agent | a fresh fix agent with the review's items, then a Sonnet re-check |
+| #323 | Apply A5 follow ups: topic anchor on free text, the `apply_answer` agent, its journey (#317 items 1 to 3) | APPROVE on `5aa3b38` (round 2); being shipped by `ops/ship.sh` | merge and deploy; then update this file (main moves) |
 | #325 | This harness: CLAUDE.md, agent docs, `.claude/` config, `ops/card.sh`, `ops/dev-setup.sh` | in review | first review (docs and scripts: Sonnet is enough) |
 
 ## Next steps, in order
