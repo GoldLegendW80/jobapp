@@ -52,6 +52,10 @@
 #                                  list the account's fits that differ from the computed ones
 #                                  (set by hand in the CSV); a dry run unless --apply, which
 #                                  marks them so no rescore replaces them (app.jobs.cli)
+#   ./deploy.sh documents import-legacy <email> [--dry-run]
+#                                  turn the cv.json and letter.json the jobs import attached into
+#                                  that account's documents, a sent posting's PDF kept frozen;
+#                                  idempotent, --dry-run prints the counts only (app.documents.cli)
 #   ./deploy.sh apply pause|resume|status
 #                                  stop (or allow again) every application submission at once:
 #                                  a Redis flag the apply gate reads before its decision and
@@ -860,6 +864,21 @@ jobs_mark_overrides() {
   rcompose exec -T api python -m app.jobs.cli mark-overrides --email "$1" "${@:2}"
 }
 
+# cmd_documents import-legacy <email> [--dry-run]: app.documents.cli import-legacy in the api
+# container on the Jetson, after `./deploy.sh jobs import <email>` attached the files.
+cmd_documents() {
+  [[ "${1:-}" == "import-legacy" && ($# -eq 2 || ($# -eq 3 && "${3:-}" == "--dry-run")) ]] ||
+    die "usage: ./deploy.sh documents import-legacy <email> [--dry-run]"
+  check_email "documents import-legacy" "$2"
+  local mode=""
+  [[ $# -eq 3 ]] && mode=" (dry run)"
+  ssh_master
+  require_remote
+  require_deployed
+  step "documents import-legacy on $HOST$mode"
+  rcompose exec -T api python -m app.documents.cli import-legacy "$2" "${@:3}"
+}
+
 # cmd_apply pause|resume|status: the administrator's pause of every submission (apply A6), set
 # through app.apply.admin in the api container on the Jetson.
 cmd_apply() {
@@ -1489,6 +1508,7 @@ main() {
     apply) cmd_apply "$@" ;;
     profile) cmd_profile "$@" ;;
     jobs) cmd_jobs "$@" ;;
+    documents) cmd_documents "$@" ;;
     runner) cmd_runner "$@" ;;
     -h | --help | help) usage ;;
     *)
