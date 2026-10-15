@@ -382,7 +382,10 @@ _STATEMENT = re.compile(
     rf"{_AUTHORIZATION.pattern}|convict|criminal|felon|misdemean|arrest|casier|condamn"
     r"|pending charges|vorstraf|antecedentes|salar|salaire|compensation|remunerat|negoti|negocia"
     r"|pretention|market rate|to be discussed|open to discuss|a discuter|a definir"
-    r"|\bfired\b|laid off|\blet go\b|\bdismiss(?:ed|al)\b|licenci|\bresign"
+    r"|\bfired\b|laid off|\blet go\b|\bdismiss(?:ed|al)\b|licenci|\bresign|made redundant"
+    r"|\b(?:position|role|job|post|contract|employment) (?:was|got|had been) (?:eliminated|cut"
+    r"|terminated|ended)\b|\b(?:quit|left) (?:my|the|that) (?:job|role|position|company|employer)\b"
+    r"|demission|gekundigt|entlassen|despid"
 )
 # A typed statement of sensitive personal data, whatever the question: gender, sexuality,
 # disability, health, pregnancy, religion, ethnicity, age, family, pronouns. The model never
@@ -406,7 +409,11 @@ _PERSONAL_STATEMENT = re.compile(
     r"|medication|ma sante|maladie|sante mentale|neurodiver|\bautis|\badhd\b|\btdah\b|dyslex"
     r"|wheelchair|fauteuil roulant|\bdeaf\b|\bsourde?\b|\bmariee?s?\b|verheiratet|schwanger"
     r"|behinderung|behindert|geschlecht|embaraz|discapac|\bcasad[ao]s?\b|\bmi familia\b"
-    r"|\bmis hijos\b"
+    r"|\bmis hijos\b|\bcancer\b|\bhiv\b|\btumou?r|diabet|\bdepression\b|\banxiety\b|burn-? ?out"
+    r"|(?:medical|sick|maternity|parental) leave|arret maladie|\bjews?\b|\bsikh|\bpray\w*"
+    r"|\bmosque|synagog|\bchurch|\b(?:mom|mum|dad|mothers?|fathers?|parenthood|parental)\b"
+    r"|\bmy (?:brother|sister|fiance\w*|boyfriend|girlfriend|baby|grand\w+)\b|got engaged"
+    r"|\bmutter\b|\bvater\b|\bkindern?\b"
 )
 
 

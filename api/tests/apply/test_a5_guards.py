@@ -977,6 +977,19 @@ TYPED_VALUES = [
     ("I am \uff47\uff41\uff59 and love robots.", "personal_statement"),
     ("I am preg\u200bnant and love robots.", "personal_statement"),
     ("I was fi\u00adred, so I want robots.", "legal_statement"),
+    # the second review's probe, each accepted before
+    ("I am HIV positive and love Example Robotics' robots.", "personal_statement"),
+    ("After beating cancer, I want to build robots at Example Robotics.", "personal_statement"),
+    ("I am on medical leave and love Example Robotics' robots.", "personal_statement"),
+    ("I am a practicing Jew and love Example Robotics.", "personal_statement"),
+    ("I recently got engaged and want to settle near Example Robotics.", "personal_statement"),
+    ("I quit my job to care for my father and love Example Robotics.", "legal_statement"),
+    ("I'm a proud mom and love Example Robotics' robots.", "personal_statement"),
+    ("Ich bin Mutter und liebe Roboter.", "personal_statement"),
+    ("My contract was terminated, so Example Robotics is a fresh start.", "legal_statement"),
+    ("I was made redundant, and Example Robotics builds robots I love.", "legal_statement"),
+    ("My position was eliminated, and Example Robotics builds robots I love.", "legal_statement"),
+    ("J'ai donn\u00e9 ma d\u00e9mission pour construire des robots.", "legal_statement"),
     # true inputs that stay accepted
     ("I love robots.", "accepted"),
     ("I built evaluation suites for agents.", "accepted"),
@@ -988,6 +1001,8 @@ TYPED_VALUES = [
     ("I want my work to reach the people who run the warehouse.", "accepted"),
     ("Robotics is the field where agents meet the physical world.", "accepted"),
     ("J'aime les robots et l'évaluation des agents.", "accepted"),
+    ("I terminated TLS at the edge and left the cache warm.", "accepted"),
+    ("I built redundant workers and a medical imaging pipeline.", "accepted"),
 ]
 
 
