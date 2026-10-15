@@ -340,38 +340,6 @@ def test_the_spend_counts_the_modules_runs_only_and_never_another_persons(
     assert body["priced"] is True
 
 
-# Around both midnights: UTC, and Paris (summer, UTC+2, and winter, UTC+1). `found_on` is the UTC
-# date of the clock, so a posting found 29 days ago counts at every one of these instants.
-BOUNDARIES = [
-    datetime(2026, 10, 14, 21, 59, 59, tzinfo=UTC),  # 23:59:59 in Paris
-    datetime(2026, 10, 14, 22, 0, 0, tzinfo=UTC),  # midnight in Paris, the 15th there
-    datetime(2026, 10, 14, 23, 59, 59, tzinfo=UTC),
-    datetime(2026, 10, 15, 0, 0, 0, tzinfo=UTC),
-    datetime(2026, 1, 14, 22, 59, 59, tzinfo=UTC),  # 23:59:59 in Paris, winter
-    datetime(2026, 1, 14, 23, 0, 0, tzinfo=UTC),  # midnight in Paris, winter
-    datetime(2026, 3, 28, 23, 30, 0, tzinfo=UTC),  # the night the clocks change
-]
-
-
-@pytest.mark.parametrize("now", BOUNDARIES, ids=lambda at: at.isoformat())
-def test_min_fit_counts_the_last_30_days_only(
-    alex: Who, api: Api, clock: Any, now: datetime
-) -> None:
-    clock.now = now
-    token = api.login_token(ALEX)
-    alex.posting(60)
-    alex.posting(60, days_ago=29)
-    alex.posting(60, days_ago=30)
-    alex.posting(40)
-    alex.posting(None)
-    at_default = api.request("GET", SPEND, token=token).json()
-    assert (at_default["min_fit"], at_default["postings_30_days"]) == (70, 0)
-    lowered = api.request("GET", SPEND, params={"min_fit": 50}, token=token).json()
-    assert (lowered["min_fit"], lowered["postings_30_days"], lowered["to_write"]) == (50, 2, 2)
-    assert lowered["to_write_estimate"]["tokens"]["high"] > 0
-    assert api.request("GET", SPEND, params={"min_fit": 101}, token=token).status_code == 422
-
-
 def test_a_lower_threshold_counts_the_postings_it_adds_with_their_estimate(
     alex: Who, api: Api, factory: sessionmaker[Session], clock: Any
 ) -> None:
@@ -407,3 +375,35 @@ def test_a_lower_threshold_counts_the_postings_it_adds_with_their_estimate(
         assert lowered["newly_estimate"]["cost"] is not None  # an API key
     assert (asked(64)["newly"], asked(65)["newly"], asked(100)["newly"]) == (1, 0, 0)
     assert asked(80)["to_write"] == 1
+
+
+# Around both midnights: UTC, and Paris (summer, UTC+2, and winter, UTC+1). `found_on` is the UTC
+# date of the clock, so a posting found 29 days ago counts at every one of these instants.
+BOUNDARIES = [
+    datetime(2026, 10, 14, 21, 59, 59, tzinfo=UTC),  # 23:59:59 in Paris
+    datetime(2026, 10, 14, 22, 0, 0, tzinfo=UTC),  # midnight in Paris, the 15th there
+    datetime(2026, 10, 14, 23, 59, 59, tzinfo=UTC),
+    datetime(2026, 10, 15, 0, 0, 0, tzinfo=UTC),
+    datetime(2026, 1, 14, 22, 59, 59, tzinfo=UTC),  # 23:59:59 in Paris, winter
+    datetime(2026, 1, 14, 23, 0, 0, tzinfo=UTC),  # midnight in Paris, winter
+    datetime(2026, 3, 28, 23, 30, 0, tzinfo=UTC),  # the night the clocks change
+]
+
+
+@pytest.mark.parametrize("now", BOUNDARIES, ids=lambda at: at.isoformat())
+def test_min_fit_counts_the_last_30_days_only(
+    alex: Who, api: Api, clock: Any, now: datetime
+) -> None:
+    clock.now = now
+    token = api.login_token(ALEX)
+    alex.posting(60)
+    alex.posting(60, days_ago=29)
+    alex.posting(60, days_ago=30)
+    alex.posting(40)
+    alex.posting(None)
+    at_default = api.request("GET", SPEND, token=token).json()
+    assert (at_default["min_fit"], at_default["postings_30_days"]) == (70, 0)
+    lowered = api.request("GET", SPEND, params={"min_fit": 50}, token=token).json()
+    assert (lowered["min_fit"], lowered["postings_30_days"], lowered["to_write"]) == (50, 2, 2)
+    assert lowered["to_write_estimate"]["tokens"]["high"] > 0
+    assert api.request("GET", SPEND, params={"min_fit": 101}, token=token).status_code == 422
