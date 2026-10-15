@@ -21,6 +21,7 @@ from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, CredentialKind
 from app.documents import consent, generate, store, tick
 from app.documents.models import (
+    Author,
     BaseSource,
     Document,
     DocumentGeneration,
@@ -28,6 +29,7 @@ from app.documents.models import (
     GenerationTrigger,
     GenerationWait,
     Kind,
+    Origin,
 )
 from tests.agents.conftest import API_KEY, new_key
 from tests.conftest import make_settings
@@ -369,3 +371,41 @@ def test_min_fit_counts_the_last_30_days_only(
     assert (lowered["min_fit"], lowered["postings_30_days"], lowered["to_write"]) == (50, 2, 2)
     assert lowered["to_write_estimate"]["tokens"]["high"] > 0
     assert api.request("GET", SPEND, params={"min_fit": 101}, token=token).status_code == 422
+
+
+def test_writing_the_cv_again_from_another_base_cv_takes_the_written_letter_along(
+    alex: Who, api: Api
+) -> None:
+    """D12 "Write it again from this CV" sends both kinds: the CV is written now from the base CV
+    chosen and marked so the letter follows it (generate.start_letter), even though the letter has
+    a version; nothing writes the letter from the old CV in between."""
+    job = alex.posting(80)
+    with alex.factory() as db:
+        other = store.create_base(db, alex.user, "Other", BaseSource.built, at=alex.clock()).id
+        for kind, content in ((Kind.cv, "cv_typical"), (Kind.letter, "letter_typical")):
+            document = store.get_or_create(db, alex.user, job, kind, at=alex.clock())
+            store.save_draft(
+                db,
+                alex.user,
+                document.id,
+                load(f"written/{content}.json"),
+                document.draft_revision,
+                Author.user,
+                at=alex.clock(),
+            )
+            store.snapshot(db, alex.user, document.id, Origin.edited, at=alex.clock())
+        db.commit()
+    body = {"kinds": ["cv", "letter"], "base_document_id": str(other)}
+    response = api.request("POST", write(job), token=alex.token, json=body)
+    assert response.status_code == 202, response.text
+    assert [g["kind"] for g in response.json()["generations"]] == ["cv"]
+    [(kind, _, trigger, base)] = alex.generations(job)
+    assert (kind, trigger, base) == (Kind.cv, GenerationTrigger.click, other)
+    with alex.factory() as db:
+        estimate = db.execute(
+            sa.select(DocumentGeneration.estimate).where(DocumentGeneration.user_id == alex.user)
+        ).scalar_one()
+    assert estimate.get(generate.LETTER_FOLLOWS) is True
+    # While that CV is written, a second click is refused rather than written from the old CV.
+    again = api.request("POST", write(job), token=alex.token, json=body)
+    assert again.status_code == 409
