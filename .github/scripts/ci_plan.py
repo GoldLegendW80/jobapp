@@ -82,6 +82,10 @@ RULES: tuple[tuple[str, frozenset[str], str], ...] = (
     ("CAPABILITY-MAP.md", NONE, "documentation"),
     ("SPEC-*.md", NONE, "documentation"),
     (".github/pull_request_template.md", NONE, "the pull request template"),
+    # Claude Code's entry point and project configuration: agent definitions, slash commands and
+    # permissions, read by Claude Code only.
+    ("CLAUDE.md", NONE, "documentation for Claude Code"),
+    (".claude/*", NONE, "Claude Code project configuration"),
     # The web app. No api test and no api code reads a file under web/ (checked by
     # ci_plan_test.py), and the api image is built from api/ alone. The shell unit stays: the
     # tailscale test reads web/Dockerfile.
@@ -110,6 +114,7 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
             "agent_test_test",
             "ship_test",
             "browser_egress_test",
+            "dev_setup_test",
         ),
         # ingestion: every web/e2e/ingestion-*.spec.ts through one config, so a task of that
         # module adds a spec without a new step here or in ci.yml (e2e_groups.py, SPEC_PREFIX).
