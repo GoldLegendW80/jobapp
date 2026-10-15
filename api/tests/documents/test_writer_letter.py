@@ -568,7 +568,7 @@ def test_the_letter_follows_the_cv_with_its_estimate_and_base_and_what_the_ceili
     assert letter.status is GenerationStatus.running
     assert letter.mode is GenerationMode.posting
     assert letter.estimate == parent.estimate
-    # The pair never spends more than its one ceiling: the CV's run, then what is left.
+    # The pair shares one ceiling: the CV's run spent first, the letter gets what is left.
     assert letter.token_ceiling == 77_000 - spent
     assert letter.base_document_id == alex.base
     assert letter.trigger is parent.trigger

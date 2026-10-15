@@ -27,9 +27,9 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    generation is created with the CV's `estimate` and base CV, started, and queued by the same
    final hook. Its ceiling is what the pair has left (`letter_ceiling`): the CV generation's
    `token_ceiling`, computed by the caller for the pair, minus the tokens the CV's run spent,
-   so a posting's CV and letter never spend more than that one ceiling. The consent and the
-   credential are read again first: without either the letter waits with that reason; with the
-   person's runs all busy it stays `queued`; the tick starts it in both cases. A chat, a
+   so a posting's CV and letter share that one ceiling. The consent and the credential are read
+   again first: without either the letter waits with that reason; with the person's runs all
+   busy it stays `queued`; the tick starts it in both cases. A chat, a
    shortening and a letter that already has a version start none: the person's letter is not
    rewritten behind their back. Nor does a posting past `cv_ready` (staged, applied, later or
    skipped): a letter written after the application is not what was sent (D14). The click
