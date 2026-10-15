@@ -394,9 +394,9 @@ describe("experience schema", () => {
 
 describe("slugify", () => {
   it.each([
-    ["Betclic Group", "betclic-group"],
+    ["Lumetra Group", "lumetra-group"],
     ["  Zoë Ångström & Co. ", "zoe-angstrom-co"],
-    ["ÉLSAN (Bordeaux)", "elsan-bordeaux"],
+    ["SANTÉVA (Bordeaux)", "santeva-bordeaux"],
     ["東京", ""],
     ["", ""],
     ["a".repeat(39) + " bcd", "a".repeat(39)],

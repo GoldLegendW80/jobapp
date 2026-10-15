@@ -1,6 +1,8 @@
 """Real image files for the photo tests, generated with Pillow (nothing binary is checked in)."""
 
+import base64
 import io
+import json
 import struct
 import zlib
 from typing import Any
@@ -14,6 +16,20 @@ SOFTWARE = 0x0131
 GPS_IFD = 0x8825
 GPS_LATITUDE_REF = 1
 GPS_LATITUDE = 2
+
+
+def golden_view(body: dict[str, Any]) -> dict[str, Any]:
+    """An export document as checked in, the photo by what it shows rather than 40 KB of base64.
+
+    The importer re-encodes the photo (photo.normalize), so its bytes depend on the libjpeg and
+    zlib builds bundled with Pillow, not only on the sources: a golden file records the decoded
+    image (format, mode, dimensions) instead.
+    """
+    view = json.loads(json.dumps(body))
+    if view.get("photo"):
+        with Image.open(io.BytesIO(base64.b64decode(view["photo"]["base64"]))) as image:
+            view["photo"]["base64"] = f"<{image.format} {image.mode} {image.width}x{image.height}>"
+    return view
 
 
 def save(image: Image.Image, fmt: str, **params: Any) -> bytes:

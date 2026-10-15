@@ -18,6 +18,7 @@
 # 5. Writes tasks/evidence/identity/index.md (screenshots by page) and run.log.
 #
 # Settings as deploy.sh: DEPLOY_HOST (default jetson), DEPLOY_DIR (default ~/jobapp).
+# OWNER (required): the e-mail address of the owner's account on the Jetson.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,7 +26,7 @@ cd "$ROOT"
 HOST="${DEPLOY_HOST:-jetson}"
 RDIR="${DEPLOY_DIR:-jobapp}"
 RDIR="${RDIR#\~/}"
-HARALD="hthautin@gmail.com"
+HARALD="${OWNER:-}"
 ADMIN="e2e-admin@example.org"
 E2E_LIKE="e2e-%@example.org"
 EVIDENCE="$ROOT/tasks/evidence/identity"
@@ -39,6 +40,7 @@ die() {
   printf 'e2e_jetson.sh: %s\n' "$*" >&2
   exit 1
 }
+[[ -n "$HARALD" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 
 # sql: run the SQL on stdin in the Jetson's database, unaligned, fields separated by |.
 sql() {

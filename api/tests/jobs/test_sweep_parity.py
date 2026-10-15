@@ -3,9 +3,9 @@
 fixtures/ats/filter_cases.json holds every posting of six real boards (2,996 of them) with the
 engine's decisions, made by build_ats_fixtures.py with the regexes of engine/boards.json: by the
 title, exclude, per-board exclude and location regexes, and with the 30 day window on a fixed
-day. Here the same postings go through sweep.SearchFilter built from Harald's search section as
-the profile importer converted it from that boards.json (tests/profile/fixtures/
-harald_export.json): every decision must be the same.
+day. Here the same postings go through sweep.SearchFilter built from the search section of
+tests/profile/fixtures/owner_export.json, the importer output of a copy of that boards.json
+(tests/profile/fixtures/owner_sources/engine/boards.json): every decision must be the same.
 
 When the engine's files are on this machine, the fixture itself is checked against the live
 boards.json (the conversion is redone and must give the same search terms).
@@ -24,7 +24,7 @@ from app.profile.schemas import SearchSection
 HERE = Path(__file__).parent
 CASES = json.loads((HERE / "fixtures" / "ats" / "filter_cases.json").read_text(encoding="utf-8"))
 EXPORT = json.loads(
-    (HERE.parent / "profile" / "fixtures" / "harald_export.json").read_text(encoding="utf-8")
+    (HERE.parent / "profile" / "fixtures" / "owner_export.json").read_text(encoding="utf-8")
 )
 SEARCH = SearchSection.model_validate(EXPORT["sections"]["search"])
 BOARDS = {board.org: board for board in SEARCH.boards}
