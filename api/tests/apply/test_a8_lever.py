@@ -160,6 +160,9 @@ LETTER_BOXES = [
     "add a cover letter or anything else you want to share",
     "Informations complémentaires",
     "Informations supplémentaires",
+    "Additional information (required)",
+    "Informations complémentaires (facultatif)",
+    "Informations complémentaires :",
 ]
 NOT_LETTER_BOXES = [
     "Additional information about your visa",
@@ -176,6 +179,18 @@ NOT_LETTER_BOXES = [
     "Cover letter",
     "Add a cover letter",
     "Anything else you want to share?",
+    "Anything else?",
+    "Notes",
+    "Comments",
+    "LinkedIn URL",
+    "Portfolio URL",
+    "Additional information?",
+    "Any additional information",
+    "Additional details",
+    "Other information",
+    "Information additionnelle",
+    "Informations complémentaires sur votre visa",
+    "additional_information",
     "",
     "x" * 5000,
 ]
@@ -358,9 +373,16 @@ def test_lever_is_filled_approved_and_submitted_once_through_the_gate(
     assert stored["Full name"] == full("identity")["full_name"]
     assert stored["Current company"] is None
     assert stored[SPONSORSHIP] == "No"
-    letter = stored[COMMENTS]
-    assert isinstance(letter, str)
-    assert letter.strip()
+    assert isinstance(stored[COMMENTS], str)
+    assert stored[COMMENTS].strip()
+    # A letter longer than a label's cap, so the refill's read back of the whole text is tested.
+    db.execute(
+        sa.update(ApplicationAnswer)
+        .where(ApplicationAnswer.application_id == app_id, ApplicationAnswer.label == COMMENTS)
+        .values(value=LETTER)
+    )
+    db.commit()
+    assert len(LETTER) > ats_base.NAME_MAX
     assert approve(factory, person_a, app_id).passed
 
     form = lever_form()
@@ -371,7 +393,7 @@ def test_lever_is_filled_approved_and_submitted_once_through_the_gate(
     # the refill undid the parse again, and typed the approved letter whole
     assert form.parses == 1
     assert form.spec("Current company").value == ""
-    assert form.spec(COMMENTS).value == letter
+    assert form.spec(COMMENTS).value == LETTER
 
 
 def test_a_lever_hcaptcha_needs_the_person_and_nothing_is_typed(
