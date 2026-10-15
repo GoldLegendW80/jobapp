@@ -27,10 +27,13 @@ held and leaves the person to the next tick, so two passes never start the same 
    Each gets a CV generation, or, once its CV has a version, a letter generation, unless one is
    open, the person stopped one, or it failed already twice (`eligibility.next_try`, which also
    raises the ceiling after a stop at the ceiling). Each is created with the estimate of D9's
-   `estimate.for_posting` and its ceiling, naming the default base CV.
+   `estimate.for_posting` and its ceiling, naming the default base CV; a letter gets what the
+   pair's ceiling has left after its CV's run (`generate.letter_ceiling`). A posting whose CV
+   moved it to `cv_ready` is still read for its letter (`eligibility.LETTER_STATUSES`): a letter
+   the chain could not start (the person's runs all busy, the hook cut short) is work here.
 6. Every automatic generation that has not started is cancelled when its posting is no longer
-   eligible (it left `found` and `shortlisted`, its fit fell under the threshold, it fell out of
-   the window, a never apply rule now matches it).
+   eligible (it left `found` and `shortlisted`, or `cv_ready` for a letter, its fit fell under
+   the threshold, it fell out of the window, a never apply rule now matches it).
 7. The others get their state: `waiting` with `consent` or `credential` (nothing spends without
    both), `base_cv` while the default base CV is being built, `daily_ceiling` for the CVs past
    today's room (`daily_ceiling` minus the postings whose CV started today in the person's time
@@ -88,7 +91,7 @@ from app.documents.models import (
     Scope,
 )
 from app.jobs import sweep
-from app.jobs.models import FileOrigin, Job, JobFile
+from app.jobs.models import FileOrigin, Job, JobFile, JobStatus
 from app.profile.models import Profile
 from app.profile.schemas import DocumentsGeneration, SearchSection
 
@@ -122,6 +125,7 @@ class Candidate:
     id: uuid.UUID
     fit: int | None
     found_on: date
+    status: JobStatus
 
     def key(self) -> tuple[int, int, str]:
         return eligibility.order_key(self.fit, self.found_on, str(self.id))
@@ -134,6 +138,7 @@ def eligible(
     search: SearchSection | None,
     last_day: date,
     lookback_days: int,
+    statuses: frozenset[JobStatus] = eligibility.OPEN_STATUSES,
 ) -> list[Candidate]:
     """The person's eligible postings, in order. The query narrows by status, fit and window;
     `eligibility.refusal` decides on every row it returns."""
@@ -149,7 +154,7 @@ def eligible(
             Job.id, Job.status, Job.fit, Job.found_on, Job.company, Job.title, legacy.label("lg")
         ).where(
             Job.user_id == user_id,
-            Job.status.in_(eligibility.OPEN_STATUSES),
+            Job.status.in_(statuses),
             Job.fit.is_not(None),
             Job.fit >= setting.min_fit,
             Job.found_on >= eligibility.since(last_day, lookback_days),
@@ -157,7 +162,7 @@ def eligible(
     ).all()
     rules = sweep.never_apply_rules(search) if search is not None else []
     found = [
-        Candidate(row.id, row.fit, row.found_on)
+        Candidate(row.id, row.fit, row.found_on, row.status)
         for row in rows
         if eligibility.refusal(
             eligibility.Posting(row.status, row.fit, row.found_on, row.company, row.title, row.lg),
@@ -165,6 +170,7 @@ def eligible(
             rules,
             last_day,
             lookback_days,
+            statuses,
         )
         is None
     ]
@@ -179,6 +185,7 @@ class Docs:
     written: set[uuid.UUID] = field(default_factory=set)  # documents with a version
     open: set[uuid.UUID] = field(default_factory=set)  # documents with an open generation
     stopped: set[uuid.UUID] = field(default_factory=set)  # a writing the person stopped
+    done: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # the last done generation
     failures: dict[uuid.UUID, list[eligibility.Failure]] = field(
         default_factory=lambda: defaultdict(list)
     )
@@ -205,6 +212,7 @@ def posting_docs(db: Session, user_id: uuid.UUID) -> Docs:
             docs.written.add(row.id)
     generations = db.execute(
         sa.select(
+            DocumentGeneration.id,
             DocumentGeneration.document_id,
             DocumentGeneration.status,
             DocumentGeneration.started_at,
@@ -226,6 +234,7 @@ def posting_docs(db: Session, user_id: uuid.UUID) -> Docs:
             docs.open.add(g.document_id)
         elif g.status is GenerationStatus.done:
             docs.written.add(g.document_id)  # a done generation always made a version
+            docs.done[g.document_id] = g.id
         elif g.status is GenerationStatus.cancelled and g.started_at is not None:
             docs.stopped.add(g.document_id)
         elif g.status is GenerationStatus.failed:
@@ -357,16 +366,19 @@ def _create(
     # A letter is written from the base CV of the posting's CV (generate.start_letter does
     # the same); a CV from its document's base, else the default (generate.create).
     base_id = None
+    cv_done: DocumentGeneration | None = None
     if kind == Kind.letter:
-        cv = store.get(db, user_id, docs.ids[(posting_id, Kind.cv)])
+        cv_id = docs.ids[(posting_id, Kind.cv)]
+        cv = store.get(db, user_id, cv_id)
         base_id = cv.base_document_id if cv is not None else None
+        cv_done = db.get(DocumentGeneration, docs.done[cv_id]) if cv_id in docs.done else None
     figures = estimate.for_posting(db, user_id, posting_id, base_id)
     chosen = eligibility.next_try(
         failures,
         stopped=False,
         now=at,
         retry_after_s=settings.documents_auto_retry_after_s,
-        ceiling=figures.ceiling,
+        ceiling=figures.ceiling if cv_done is None else generate.letter_ceiling(db, cv_done),
         high=figures.high,
     )
     if chosen is None:
@@ -537,18 +549,27 @@ def person(db: Session, user_id: uuid.UUID, *, at: datetime, settings: Settings)
         search,
         eligibility.found_day(at),
         settings.documents_auto_lookback_days,
+        eligibility.LETTER_STATUSES,
     )
     if create:
         docs = posting_docs(db, user_id)
         for posting in postings:
             cv = docs.ids.get((posting.id, Kind.cv))
-            kind = Kind.letter if cv is not None and cv in docs.written else Kind.cv
+            if cv is not None and cv in docs.written:
+                kind = Kind.letter
+            elif posting.status in eligibility.OPEN_STATUSES:
+                kind = Kind.cv
+            else:
+                continue  # `cv_ready` without a written CV: nothing of the pair is owed
             if _create(db, user_id, posting.id, kind, docs, at, settings):
                 out.created += 1
-    keep = {posting.id for posting in postings}
+    keep = {
+        Kind.letter: {posting.id for posting in postings},
+        Kind.cv: {p.id for p in postings if p.status in eligibility.OPEN_STATUSES},
+    }
     waiting = []
     for item in not_started(db, user_id):
-        if item.posting_id in keep:
+        if item.posting_id in keep[item.kind]:
             waiting.append(item)
         elif _claim(db, item.generation):
             _cancel(item.generation, at)
