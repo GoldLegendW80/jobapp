@@ -17,7 +17,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import definitions, failures, fake_backend, runs
+from app.agents import credentials, definitions, failures, fake_backend, runs
 from app.agents import tools as app_tools
 from app.agents.definitions import FinalRun
 from app.agents.models import RunStatus
@@ -402,12 +402,16 @@ def _consent(who: Person) -> None:
 
 
 def _overflow(
-    who: Person, spent: dict[str, int | None] | None = None
+    who: Person, spent: dict[str, int | None] | None = None, credential: bool = True
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
-    """The writer's CV, done, its run's token counts set to `spent` if given, then its render
-    overflowing: (document, generation, run)."""
+    """The writer's CV, done, its run's token counts set to `spent` if given, the credential
+    removed unless `credential`, then its render overflowing: (document, generation, run)."""
     document, generation, run = write(who, "documents_cv_overflow")
     _done(who, document, generation)
+    if not credential:
+        with who.factory() as db:
+            assert credentials.delete(db, who.user)
+            db.commit()
     if spent is not None:
         with who.factory() as db:
             db.execute(
@@ -488,6 +492,7 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
     ("missing", "spent"),
     [
         ("consent", None),
+        ("credential", None),
         ("token_ceiling", {"input_tokens": CEILING - 200, "output_tokens": 200}),
         ("token_ceiling", {"input_tokens": CEILING, "output_tokens": 1}),
         ("spend_unknown", {"input_tokens": 1_000, "output_tokens": None}),
@@ -506,7 +511,7 @@ def test_the_shortening_pass_needs_the_consent_and_a_known_ceiling_left(
     if missing != "consent":
         _consent(alex)
     caplog.set_level(logging.INFO, logger="app.documents")
-    document, _, _ = _overflow(alex, spent)
+    document, _, _ = _overflow(alex, spent, credential=missing != "credential")
     assert _shortenings(alex) == []
     assert [v.fit.value for v in versions(alex.factory, document) if v.fit] == ["overflow"]
     skipped = [r for r in caplog.records if r.message == "documents.generation.shorten_skipped"]
