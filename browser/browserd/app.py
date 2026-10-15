@@ -7,10 +7,13 @@ control API of SPEC-browser:
   DELETE /leases/{id}     204, Chromium closed cleanly; 404 when it is not the current lease
   GET    /leases/current  {lease: {...} | null, last_end: {lease_id, reason} | null}
   GET    /healthz         {ok, display, lease}
+  POST   /leases/{id}/tools/{name}, PUT /leases/{id}/files/{name}   the tool API (B5,
+                          browserd/tools/routes.py); POST /leases also answers the gate's
+                          capability (`gate_capability`) for an apply_submit or profile_edit lease
 
 Every request carries `Authorization: Bearer <BROWSER_CONTROL_SECRET>`, compared in constant
 time; without it (or with no secret configured) the answer is 401 and nothing starts. The lease
-token is for the tool API of B5 (`Manager.call`), never needed here. A small HTTP/1.1 server of
+token is for the tool API of B5 (`Manager.call`). A small HTTP/1.1 server of
 the standard library: one request per connection, JSON in and out, bodies capped per route.
 """
 
@@ -25,6 +28,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from browserd.leases import LeaseError, Manager, Request
+from browserd.tools import routes as tools
 
 log = logging.getLogger("browserd")
 
@@ -64,7 +68,12 @@ class Service:
 async def create_lease(svc: Service, req: HttpRequest, _: re.Match[str]) -> tuple[int, Any]:
     lease, token = await svc.manager.acquire(Request.parse(req.json()))
     now = svc.manager.clock()
-    return 201, {**lease.public(now), "lease_token": token}
+    answer = {**lease.public(now), "lease_token": token}
+    # B5: the gate's capability, for the purposes whose submit a gate's code clicks only.
+    capability = tools.issue_capability(lease)
+    if capability:
+        answer["gate_capability"] = capability
+    return 201, answer
 
 
 async def delete_lease(svc: Service, _: HttpRequest, match: re.Match[str]) -> tuple[int, Any]:
@@ -103,12 +112,12 @@ CONTROL = [
 ROUTES: list[Route] = [
     *CONTROL,
     # *live.ROUTES,  # B4: browserd/live.py, the live view's ticket check and take over
-    # *tools.ROUTES,  # B5: browserd/tools/, POST /leases/{id}/tools/{name}, PUT .../files/{name}
+    *(Route(*spec) for spec in tools.ROUTES),  # B5: browserd/tools/routes.py
 ]
 
 REASONS = {200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 401: "Unauthorized",
            403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 409: "Conflict",
-           413: "Payload Too Large", 500: "Internal Server Error", 503: "Service Unavailable"}  # fmt: skip  # noqa: E501
+           410: "Gone", 413: "Payload Too Large", 500: "Internal Server Error", 503: "Service Unavailable"}  # fmt: skip  # noqa: E501
 
 
 def authorized(secret: bytes, headers: dict[str, str]) -> bool:

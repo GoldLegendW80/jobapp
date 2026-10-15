@@ -1,6 +1,6 @@
 """The pages server of the browser test stack (tests/browser.compose.yml, browser B2): the static
 pages of this folder, a resource held back for `?ms=` milliseconds (slow.html) and an echo of the
-request headers (the Accept-Language the profile's preferences give). Run with the browser image's
+request headers (the Accept-Language the profile's preferences give), and a 302 to `?to=`. Run with the browser image's
 Python, read only, as an unprivileged user, on the `egress` network: the public side of the test.
 
 It answers HTTP on 8000 and on 8080 (a port the egress proxy allows: by its private address the
@@ -56,6 +56,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send(json.dumps({"ok": True}))
         if url.path == "/udp":
             return self.send(json.dumps(DATAGRAMS))
+        if url.path == "/redirect":  # a server side 302 (browser B5's allow list test)
+            self.send_response(302)
+            self.send_header("Location", query.get("to", ["/"])[0])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
         if url.path == "/headers":
             return self.send(
                 json.dumps({k.lower(): v for k, v in self.headers.items()})
