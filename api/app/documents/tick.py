@@ -45,8 +45,11 @@ held and leaves the person to the next tick, so two passes never start the same 
 **Never two starts.** A click ("Write now") cancels an automatic generation that has not
 started, under its document's lock. So the pass writes nothing to a generation, and starts none,
 before it holds the document's lock and has read the generation again (`_claim`): one the click
-cancelled meanwhile is left alone. One person whose pass fails for any other reason is rolled
-back and logged; the pass goes on with the next person.
+cancelled meanwhile is left alone. The posting's lock (shared) comes first, as for the click,
+the chain and a move to `applied`, and its status is read under it: an automatic generation
+whose posting moved past the statuses of its kind since step 5 read them is cancelled there,
+never started (D14). One person whose pass fails for any other reason is rolled back and
+logged; the pass goes on with the next person.
 
 The runs are queued on the agents queue after the commit. A queue that is down leaves the run
 `queued`, as the routes do. Logs carry ids and counts, never a text.
@@ -299,7 +302,7 @@ def recover(db: Session, user_id: uuid.UUID, at: datetime) -> int:
     ).all()
     settled = 0
     for row in rows:
-        store.lock_document(db, user_id, row.document_id)  # the lock order of store.py
+        _lock(db, user_id, row.document_id)  # held for the pass, so the posting comes first
         generation = db.execute(
             sa.select(DocumentGeneration)
             .where(DocumentGeneration.id == row.id)
@@ -330,18 +333,43 @@ def recover(db: Session, user_id: uuid.UUID, at: datetime) -> int:
     return settled
 
 
-def _claim(db: Session, generation: DocumentGeneration) -> bool:
-    """Lock the generation's document (the lock a click takes), then read the generation again:
-    True while it has still not started. A click may have cancelled it, and started its own, since
-    the pass read it: the pass then writes nothing to it."""
+def _lock(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> JobStatus | None:
+    """A posting document's posting (shared), then the document: the order of store.py, the one
+    of a move to `applied` (the freeze locks the documents under the posting) and of a run's row,
+    which references the posting. Returns the posting's status, read under its lock."""
+    posting_id = db.scalar(
+        sa.select(Document.posting_id).where(
+            Document.user_id == user_id, Document.id == document_id
+        )
+    )
+    status = store.lock_posting(db, user_id, posting_id) if posting_id is not None else None
+    store.lock_document(db, user_id, document_id)
+    return status
+
+
+def _claim(db: Session, generation: DocumentGeneration, *, at: datetime | None = None) -> bool:
+    """Lock the generation's posting and document (`_lock`; the document is the lock a click
+    takes), then read the generation again: True while it has still not started. A click may
+    have cancelled it, and started its own, since the pass read it: the pass then writes nothing
+    to it. Given `at`, an automatic one whose posting left the statuses of its kind since the
+    pass read them (moved to `applied` meanwhile) is cancelled at `at`, and False (D14)."""
     db.flush()  # what the pass already wrote to claimed rows, before the re-read replaces it
-    store.lock_document(db, generation.user_id, generation.document_id)
+    status = _lock(db, generation.user_id, generation.document_id)
     fresh = db.execute(
         sa.select(DocumentGeneration)
         .where(DocumentGeneration.id == generation.id)
         .execution_options(populate_existing=True)
     ).scalar_one()
-    return fresh.status in NOT_STARTED
+    if fresh.status not in NOT_STARTED:
+        return False
+    if at is None or fresh.trigger is not GenerationTrigger.auto:
+        return True
+    kind = db.scalar(sa.select(Document.kind).where(Document.id == fresh.document_id))
+    allowed = eligibility.LETTER_STATUSES if kind == Kind.letter else eligibility.OPEN_STATUSES
+    if status in allowed:
+        return True
+    _cancel(fresh, at)
+    return False
 
 
 def _create(
@@ -383,6 +411,7 @@ def _create(
     )
     if chosen is None:
         return False
+    store.lock_posting(db, user_id, posting_id)  # before the document's row and lock (store.py)
     document = store.get_or_create(db, user_id, posting_id, kind, at=at)
     try:
         generate.create(
@@ -616,7 +645,7 @@ def _settle_and_start(
             and not (to_name and generation.base_document_id is None)
         ):
             continue  # nothing to write
-        if not _claim(db, generation):
+        if not _claim(db, generation, at=at):
             gone.add(generation.id)
             room += 1 if took_room else 0
             continue
@@ -632,7 +661,7 @@ def _settle_and_start(
         generation = item.generation
         if generation.id in gone or generation.status is not GenerationStatus.queued:
             continue
-        if not _claim(db, generation) or generation.status is not GenerationStatus.queued:
+        if not _claim(db, generation, at=at) or generation.status is not GenerationStatus.queued:
             continue
         try:
             run = generate.start(db, generation, at=at, settings=settings)
