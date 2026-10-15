@@ -55,8 +55,7 @@ to 7. Owner decisions: [../decisions.md](../decisions.md).
 ## Permission model
 
 `.claude/settings.json` is versioned and has three tiers. **Allow** holds the read only and test
-commands, including the mandated `git -C <worktree> ...` form of status, log, diff, show, fetch,
-rev-parse, branch listing and `worktree add .claude/worktrees/*`, and read only `gh api` GETs on
+commands, `worktree add .claude/worktrees/*`, and read only `gh api` GETs on
 this repository's pulls and issues (the review verdict reads). **Ask** holds what changes shared
 state: a merge, the gate, a deploy, `ssh jetson`, and the full `ops/dev-setup.sh` run (it calls
 `ssh jetson true`; only `--skip-jetson` is allowed). **Deny** wins over allow: force pushes, hook
@@ -66,10 +65,11 @@ bypasses, `gh api` with a write method or body (`-X`, `--method`, `-f`, `-F`, `-
 `grep`, `head`, `sed`, `awk`, `cp` and similar). The names are listed one by one on purpose: a
 `.env.*` pattern would also block `.env.example`, the tracked template that an agent edits when it
 adds a setting. A new secret file name is added to the deny list in the same pull request that
-introduces it. The Bash patterns are text matches, a guard against slips and not a sandbox: a
-`git -C <path> ...` allow also matches a write command that merely contains the word, for example
-`git -C x commit -m "fix log"`. A pattern that blocks legitimate work is fixed in this file by a
-pull request, never bypassed.
+introduces it. The Bash patterns are text matches, a guard against slips and not a sandbox. That
+is why no `git -C <path> <subcommand>` form is allowed: the `*` of `git -C *` spans the
+subcommand, so an allow for status or log would also match `git -C x push origin log` or
+`git -C x reset --hard diff`; those commands go through the normal prompt instead. A pattern that
+blocks legitimate work is fixed in this file by a pull request, never bypassed.
 
 ## Model policy (owner, 2026-10-13)
 
