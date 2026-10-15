@@ -583,9 +583,14 @@ def shorten(
     """Create and start the one `shorten` generation of an overflowing version that a writer's
     `posting` generation made. Returns the run to enqueue, else None."""
     with sessions() as db:
-        owner = db.scalar(sa.select(Document.user_id).where(Document.id == document_id))
-        if owner is None:
+        found = db.execute(
+            sa.select(Document.user_id, Document.posting_id).where(Document.id == document_id)
+        ).one_or_none()
+        if found is None or found.posting_id is None:
             return None
+        owner = found.user_id
+        # Lock 2 before lock 3 (store.py): the run's row references the posting.
+        store.lock_posting(db, owner, found.posting_id)
         document = store.lock_document(db, owner, document_id)
         version = db.get(DocumentVersion, version_id)
         if version is None or version.document_id != document.id or version.generation_id is None:

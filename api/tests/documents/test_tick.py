@@ -40,11 +40,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials, failures, runner, runs
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind
-from app.documents import (  # noqa: F401 (writers registers the writers, freeze its hook)
+from app.documents import (  # noqa: F401 (writers registers the writers)
     auto_router,
     consent,
     estimate,
-    freeze,
     generate,
     store,
     tick,
@@ -62,7 +61,6 @@ from app.documents.models import (
     Kind,
     Scope,
 )
-from app.jobs import service as jobs_service
 from app.jobs.models import Job, JobStatus
 from tests.agents.conftest import API_KEY, new_key
 from tests.conftest import make_settings
@@ -80,7 +78,7 @@ from tests.documents.store_support import (
     migrated_url,
     short_locks,
 )
-from tests.documents.two_sessions import in_thread, wait_until_blocked
+from tests.documents.two_sessions import in_thread, mark_applied, wait_until_blocked
 from tests.documents.writer_support import Person, execute
 
 __all__ = ["engine", "factory", "migrated_url", "short_locks"]
@@ -1011,16 +1009,6 @@ def test_a_queued_letter_of_a_posting_moved_past_cv_ready_is_cancelled_never_sta
     assert [g["status"] for g in _letters(world, posting)] == [GenerationStatus.cancelled]
 
 
-def _apply(world: World, posting: uuid.UUID) -> None:
-    """The person marks the posting applied, as the jobs service does: the posting locked for
-    update, then the freeze of D14 locks its CV and its letter."""
-    with world.factory() as db:
-        job = jobs_service.lock_job(db, world.user, posting)
-        assert job is not None
-        jobs_service.set_status(db, job, JobStatus.applied, AT)
-        store.commit(db)
-
-
 def _queued_letter(world: World) -> tuple[uuid.UUID, uuid.UUID]:
     """A `cv_ready` posting whose letter the busy chain left `queued`, the runs free again:
     (posting, letter generation)."""
@@ -1047,7 +1035,7 @@ def test_a_move_to_applied_waits_behind_the_ticks_letter_start_and_both_commit(
         generation = db.get(DocumentGeneration, letter)
         assert generation is not None
         assert tick._claim(db, generation, at=AT)
-        mover = in_thread(lambda: _apply(world, posting), outcome)
+        mover = in_thread(lambda: mark_applied(world.factory, world.user, posting, AT), outcome)
         wait_until_blocked(engine, [mover], 1)
         run = generate.start(db, generation, at=AT, settings=world.settings)
         store.commit(db)
@@ -1075,7 +1063,9 @@ def test_a_move_to_applied_waits_behind_a_recovered_cv_retried_at_once_and_both_
 
     def recover_then_apply(db: Session, user_id: uuid.UUID, at: datetime) -> int:
         settled = real(db, user_id, at)
-        movers.append(in_thread(lambda: _apply(world, posting), outcome))
+        movers.append(
+            in_thread(lambda: mark_applied(world.factory, world.user, posting, AT), outcome)
+        )
         wait_until_blocked(engine, movers, 1)
         return settled
 
@@ -1104,7 +1094,8 @@ def test_a_move_to_applied_after_the_ticks_read_cancels_what_it_would_start(
     def read_then_apply(*args: Any, **kwargs: Any) -> Any:
         found = real(*args, **kwargs)
         if not moved:
-            _apply(world, posting)  # committed after the pass read the status, before its start
+            # committed after the pass read the status, before its start
+            mark_applied(world.factory, world.user, posting, AT)
             moved.append(posting)
         return found
 
