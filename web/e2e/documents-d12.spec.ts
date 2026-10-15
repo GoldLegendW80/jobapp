@@ -17,7 +17,10 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
 /**
  * Documents D12 against the real stack through Caddy, driven through the page: an invented
  * account with a made up model credential, the consent and a base CV, the writers on the fake
- * backend (their default recorded streams) and the real renderer. Add a posting with fit 80, open
+ * backend and the real renderer. The page cannot name a recorded stream, so the write request it
+ * sends is given the `journey` streams (`documents_cv_journey`, `documents_letter_journey`) on
+ * its way out: the default ones are written for another profile (their employer keys are no
+ * fixed employer of this one) and would end without a result. Add a posting with fit 80, open
  * it, write its CV and letter with one click, see both page 1 previews and "Based on" naming the
  * base CV, open the CV, download the PDF; the posting is `cv_ready`. A posting with fit 40 says
  * it is under the threshold and "Write now" writes its CV.
@@ -70,6 +73,19 @@ test.beforeAll(async ({ browser }) => {
   context = await newContext(browser);
   page = await context.newPage();
   errors = watchErrors(page);
+  await page.route("**/api/jobs/*/documents/write", async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST") {
+      await route.continue();
+      return;
+    }
+    await route.continue({
+      postData: JSON.stringify({
+        ...(request.postDataJSON() as object),
+        script: "journey",
+      }),
+    });
+  });
 });
 
 test.afterAll(async () => {

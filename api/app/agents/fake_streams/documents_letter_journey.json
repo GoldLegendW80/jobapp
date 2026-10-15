@@ -1,0 +1,200 @@
+{
+ "description": "D12 journey: the letter writer reads the invented profile of the documents journeys (Morgan Exampleton), the CV and the posting of Brindle Example Labs, and submits a letter every claim of which they state.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_job",
+     "mcp__app__read_profile_section",
+     "mcp__app__get_base_cv",
+     "mcp__app__get_document",
+     "mcp__app__submit_letter"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_letter_002",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read your profile, your base CV, the CV of this posting and the posting first."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_letter_001_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "facts"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_letter_001_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "experience"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_letter_001_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "skills"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_letter_001_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "answers"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_letter_001_get_base_cv",
+       "name": "mcp__app__get_base_cv",
+       "input": {}
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_letter_001_get_document",
+       "name": "mcp__app__get_document",
+       "input": {
+        "kind": "cv"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_letter_001_get_job",
+       "name": "mcp__app__get_job",
+       "input": {
+        "job_id": "{job_id}"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_letter_003",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_letter_002_submit_letter",
+       "name": "mcp__app__submit_letter",
+       "input": {
+        "schema": 1,
+        "target": "Brindle Example Labs, Senior Platform Engineer",
+        "headline": "Platform engineering for a team that ships every day",
+        "recipient": "Hiring team, Brindle Example Labs",
+        "subject": "A platform that other engineers rely on, for Brindle Example Labs",
+        "salutation": "Dear hiring team,",
+        "paragraphs": [
+         "I run the deployment platform of the billing team at Quillmere Example Works. I build platforms that other engineers rely on, and I want to do that at Brindle Example Labs.",
+         "You run a deployment platform on Kubernetes and write backend services in Python. I wrote the backend services of my platform in Python with FastAPI and PostgreSQL, and I work with Kubernetes and Terraform.",
+         "I would rather say so than round up: I have about 3.5 years of professional engineering.",
+         "I live in Nantes and speak English and French. I would enjoy talking with your team about your platform."
+        ],
+        "closing": "Kind regards,"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_letter_004",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "The letter is stored."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 10,
+    "duration_api_ms": 5,
+    "num_turns": 3,
+    "session_id": "{session_id}",
+    "result": "The letter is stored.",
+    "total_cost_usd": 0.05,
+    "usage": {
+     "input_tokens": 4000,
+     "output_tokens": 400
+    },
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}
