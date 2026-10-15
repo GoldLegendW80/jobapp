@@ -16,7 +16,8 @@ person's apply lock and the application's row lock, the checks of the spec in or
    the application `ready`;
 3. never apply (`guardrails.never_apply`, the sweep's event included);
 4. duplicates (`guardrails.duplicates`, this application excluded);
-5. `caps.check` (a stub answering None until A11);
+5. `caps.check`: the person's pause, company caps, and Full auto's one per company rule and
+   safety ceiling (A11; each refusal leaves the application `ready`);
 6. documents: `documents.current` returns the versions the hash covers, else `documents_changed`
    (a newer version written since the fill: nothing frozen, nothing refused on content). In Full
    auto, apply's own rule (`documents_need_review`);
@@ -108,20 +109,23 @@ SENTENCES = {
     **caps.SENTENCES,
 }
 # Refusals that leave the application as it is (`ready`): the person may approve again later.
-KEEP = frozenset(
-    {
-        "submit_disabled",
-        "paused",
-        "not_ready",
-        "stale",
-        "authorisation_invalid",
-        "authorisation_used",
-        "authorisation_expired",
-        "documents_changed",
-        "documents_review",
-        "manual",
-        "full_auto_unavailable",
-    }
+KEEP = (
+    frozenset(
+        {
+            "submit_disabled",
+            "paused",
+            "not_ready",
+            "stale",
+            "authorisation_invalid",
+            "authorisation_used",
+            "authorisation_expired",
+            "documents_changed",
+            "documents_review",
+            "manual",
+            "full_auto_unavailable",
+        }
+    )
+    | caps.KEEP
 )
 # The authorisation each mode needs.
 KIND_OF_MODE = {
