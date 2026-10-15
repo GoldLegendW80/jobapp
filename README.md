@@ -28,7 +28,7 @@ the owner's decisions. Nothing depends on another machine's temporary files.
 gh auth login -h github.com -s project,workflow    # repo is in the default scopes; project for the board, workflow to push .github/workflows
 gh repo clone GoldLegendW80/jobapp && cd jobapp
 brew install uv                                    # or curl -LsSf https://astral.sh/uv/install.sh | sh
-corepack enable && corepack prepare pnpm@9.15.9 --activate   # the pnpm of packageManager in web/package.json; Node 22.12 or newer
+npm install -g pnpm@9.15.9                         # the pnpm of packageManager in web/package.json (pnpm 10 or newer runs it itself, no corepack needed); Node 22.12 or newer
 uv tool install pre-commit && pre-commit install   # the hooks, secret scan included, once per clone
 pnpm --dir web install && (cd api && uv sync)      # dependencies (add --native-tls to uv on a network that intercepts TLS)
 ops/dev-setup.sh                                   # read only: lists what is still missing and the command that fixes it

@@ -90,7 +90,7 @@ echo "${FAKE_NODE_VERSION:-v22.12.0}"
 EOF
 fake pnpm <<'EOF'
 #!/usr/bin/env bash
-printf 'pnpm %s\n' "$*" >>"$CALLS"
+printf 'pnpm %s (switch %s)\n' "$*" "${npm_config_manage_package_manager_versions:-on}" >>"$CALLS"
 echo "${FAKE_PNPM_VERSION:-9.15.9}"
 EOF
 fake python3 <<'EOF'
@@ -186,10 +186,12 @@ connects="$(grep '^ssh ' "$CALLS" | grep -v '^ssh -G ' | grep -v 'BatchMode=yes'
 out_lacks "gho_"
 out_lacks "FAKETOKEN"
 out_lacks "e2e-someone"
+grep -q '^pnpm --version (switch false)$' "$CALLS" || fail "pnpm --version not asked with the switch off: $(cat "$CALLS")"
+calls_lack '^pnpm .*\(switch [^f]'
 FAKE_SSH_FAILS=1 run 1
 out_lacks "100.64.0.99"
 out_lacks "someone"
-ok "read only: no pull, run, sign in, install or project edit; ssh only with BatchMode; no token, account or host printed"
+ok "read only: no pull, run, sign in, install or project edit; ssh only with BatchMode; pnpm asked with its version switch off; no token, account or host printed"
 
 # --- each missing piece is named with its fix --------------------------------------------------
 FAKE_GH_SIGNED_OUT=1 run 1
@@ -256,14 +258,52 @@ FAKE_NODE_VERSION=v24.1.0 run 0
 rm "$REPO/.nvmrc"
 ok "node: under engines.node is a MISS (22.11.9, 20, 8), at or above passes (22.12.0, 22.13.1, 23, 100); .nvmrc wins when it exists"
 
-for v in 8.15.9 10.0.0; do
+for v in 8.15.9 7.33.0; do
   FAKE_PNPM_VERSION="$v" run 1
   misses 1
-  out_has "web/package.json pins 9.15.9"
-  out_has "corepack prepare pnpm@9.15.9 --activate"
+  out_has "MISS  pnpm $v, web/package.json pins 9.15.9"
+  out_has "fix: npm install -g pnpm@9.15.9"
+  out_lacks "corepack"
 done
 FAKE_PNPM_VERSION=9.0.1 run 0
-ok "pnpm: another major than packageManager is a MISS with the corepack fix, the same major passes"
+out_has "ok    pnpm 9.0.1 (web/package.json pins 9.15.9)"
+for v in 10.0.0 10.17.1 11.2.0; do
+  FAKE_PNPM_VERSION="$v" run 0
+  out_has "ok    pnpm $v, runs the pinned 9.15.9 itself (packageManager of web/package.json)"
+done
+ok "pnpm: the pinned major passes, 10 or later runs the 9.15.9 pin itself and passes, an older major is a MISS fixed with npm"
+
+pin_pnpm() { # pin_pnpm <version>: the packageManager of the throwaway web/package.json
+  printf '{\n  "name": "web",\n  "packageManager": "pnpm@%s",\n  "engines": {\n    "node": ">=22.12.0"\n  }\n}\n' "$1" >"$REPO/web/package.json"
+}
+pin_pnpm 8.15.9
+FAKE_PNPM_VERSION=9.15.9 run 1
+misses 1
+out_has "MISS  pnpm 9.15.9, web/package.json pins 8.15.9"
+FAKE_PNPM_VERSION=10.17.1 run 0
+pin_pnpm 11.1.0
+FAKE_PNPM_VERSION=10.17.1 run 1
+misses 1
+out_has "fix: npm install -g pnpm@11.1.0"
+pin_pnpm 9.15.9
+ok "pnpm above the pinned major passes only from 10 on (9 over an 8 pin is a MISS), and under the pin is a MISS (10 under 11)"
+
+mv "$BIN/pnpm" "$WORK/pnpm.saved"
+run 1
+out_has "MISS  pnpm is not installed"
+out_has "fix: npm install -g pnpm@9.15.9"
+out_lacks "corepack"
+mv "$WORK/pnpm.saved" "$BIN/pnpm"
+fake corepack <<'EOF'
+#!/usr/bin/env bash
+printf 'corepack %s\n' "$*" >>"$CALLS"
+EOF
+FAKE_PNPM_VERSION=8.15.9 run 1
+misses 1
+out_has "fix: npm install -g pnpm@9.15.9 (or corepack enable && corepack prepare pnpm@9.15.9 --activate)"
+calls_lack '^corepack '
+rm "$BIN/corepack"
+ok "the pnpm fix needs no corepack (npm install -g); corepack comes second only where it is installed, and is not run"
 
 for v in 3.9.6 3.11.9 2.7.18; do
   FAKE_PYTHON_VERSION="$v" run 1
