@@ -15,12 +15,35 @@
 # Funnel on and caddy's tunnel listener trusting only its X-Forwarded-For, production settings,
 # the parser service (hardened, holding no secret, reaching nothing, its sandbox in force),
 # migrations, redis persistence, database outage and recovery, memory limits.
+#
+# JETSON_SMOKE_LOG=<file>: figures only on stdout, what .github/workflows/deploy.yml runs (the run
+# log of this public repository is readable by anyone). Every line the checks print, with their
+# addresses, bodies and states, goes to <file> (mode 600, an absolute path outside the deploy
+# directory); stdout gets the name of each step, `ok: check <n>` and, on a failure, the check, its
+# step and the last HTTP status code of that step, nothing else.
 set -euo pipefail
 
 HOST="${DEPLOY_HOST:-jetson}"
 RDIR="${DEPLOY_DIR:-jobapp}"
 RDIR="${RDIR#\~/}"
 FULL="${JETSON_SMOKE_FULL:-1}"
+LOG="${JETSON_SMOKE_LOG:-}"
+CURRENT_STEP="start"
+FAILED=0
+res=""
+if [[ -n "$LOG" ]]; then
+  [[ "$LOG" == /* && "$LOG" != "$HOME/$RDIR/"* ]] || {
+    printf 'jetson_smoke.sh: JETSON_SMOKE_LOG must be an absolute path outside the deploy directory\n' >&2
+    exit 64
+  }
+  mkdir -p "$(dirname "$LOG")"
+  # fd 3 is the public output; everything else goes to the private file.
+  (umask 077 && : >>"$LOG")
+  exec 3>&1 >>"$LOG" 2>&1
+fi
+# say <text>: a line of the public output in JETSON_SMOKE_LOG mode, figures only (callers pass
+# fixed words, counts and status codes, never a value read from the Jetson).
+say() { if [[ -n "$LOG" ]]; then printf '%s\n' "$*" >&3; fi; }
 
 CTL="$(mktemp -d /tmp/jobapp-smoke.XXXXXX)"
 SSH=(ssh -o BatchMode=yes -o ConnectTimeout=5 -o ControlMaster=auto -o "ControlPath=$CTL/%C"
@@ -33,6 +56,8 @@ else
   r() { "${SSH[@]}" "$@"; }
 fi
 cleanup() {
+  local rc=$?
+  if ((rc != 0 && FAILED == 0)); then say "   FAIL: a command of the step '$CURRENT_STEP' failed (exit $rc), the detail is in the smoke log on the Jetson"; fi
   # Never leave db stopped by this script, whatever failed. A service that was already down when
   # the script started is left as it was: the smoke reports it, it does not repair it.
   if ((STOPPED_DB == 1)); then
@@ -44,13 +69,26 @@ cleanup() {
 trap cleanup EXIT
 
 passed=0
-step() { printf '\n== %s\n' "$*"; }
+# step <name>: every name is a fixed text of this script, so it may be said.
+step() {
+  CURRENT_STEP="$*"
+  res=""
+  printf '\n== %s\n' "$*"
+  say "== $*"
+}
 ok() {
   passed=$((passed + 1))
   printf '   ok: %s\n' "$*"
+  say "   ok: check $passed"
 }
 fail() {
+  local code
   printf '   FAIL: %s\n' "$*" >&2
+  FAILED=1
+  # The status code of the step's last request through caddy (the first line of rcurl), if any.
+  code="$(head -n 1 <<<"$res")"
+  if [[ "$code" =~ ^[0-9]{3}$ ]]; then code=", last HTTP status $code"; else code=""; fi
+  say "   FAIL: check $((passed + 1)), in the step '$CURRENT_STEP'$code; the detail is in the smoke log on the Jetson"
   exit 1
 }
 
@@ -228,6 +266,7 @@ ok "logged in (BackendState Running) as $dns"
 # stack works, and the file is Harald's to edit). grep runs on the Jetson, no value comes back.
 if r "grep -Eq '^[[:space:]]*TS_AUTHKEY=[\"'\'']?[^[:space:]#\"'\'']' $RDIR/.env"; then
   printf '   WARNING: TS_AUTHKEY is still set in %s/.env although tailscale is logged in: delete that line\n' "$RDIR" >&2
+  say "   WARNING: TS_AUTHKEY is still set in the .env of the Jetson although tailscale is logged in: delete that line"
 fi
 serve="$(rc exec -T tailscale tailscale serve status --json | tr -d '\r' | tr -d ' \n')"
 [[ "$serve" == *"\"AllowFunnel\":{\"$dns:443\":true}"* ]] ||
@@ -327,6 +366,7 @@ if ((FULL == 1)); then
   ok "db started: 200 again, api never restarted, row kept"
 else
   printf '\n== database outage skipped (JETSON_SMOKE_FULL=0)\n'
+  say "== database outage skipped (JETSON_SMOKE_FULL=0)"
 fi
 
 step "memory under the limits"
@@ -340,3 +380,4 @@ done
 ok "api 512MiB, caddy 128MiB, db 768MiB, redis 256MiB, worker 1.5GiB, parser 640MiB, tailscale 128MiB"
 
 printf '\nAll %d checks passed on %s.\n' "$passed" "$HOST"
+say "All $passed checks passed."

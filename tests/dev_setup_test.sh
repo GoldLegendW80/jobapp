@@ -159,22 +159,27 @@ calls_lack() { if grep -qE -- "$1" "$CALLS"; then fail "a call matches '$1': $(c
 # --- everything in place --------------------------------------------------------------------
 run 0
 last_line_is "DEV SETUP: OK"
-for line in "ok    git" "ok    gh signed in to github.com with the scopes repo and project" "ok    docker running" \
+for line in "ok    git" "ok    gh signed in to github.com with the scopes repo, project and workflow" "ok    docker running" \
   "GiB free on the disk of this checkout (at least 0)" "pullable (not pulled yet" "ok    uv 0.9.5" \
   "ok    node 22.12.0 (at least 22.12.0)" "ok    pnpm 9.15.9 (web/package.json pins 9.15.9)" \
   "ok    python3 3.12.7 (at least 3.12)" "ok    pre-commit 4.6.2" "ok    pre-commit hook installed" \
-  "ok    ssh jetson reachable without a prompt" "ok    claude (Claude Code) 2.1.0"; do
+  "ok    jetson over ssh not checked: deploys and operations go through GitHub (ops/remote.sh); --jetson checks it" \
+  "ok    claude (Claude Code) 2.1.0"; do
   out_has "$line"
 done
 out_lacks "WARN"
-ok "a laptop with everything: every check ok, last line DEV SETUP: OK, exit 0"
+calls_lack '^ssh '
+run 0 --jetson
+out_has "ok    ssh jetson reachable without a prompt"
+last_line_is "DEV SETUP: OK"
+ok "a laptop with everything: every check ok, last line DEV SETUP: OK, exit 0; no ssh unless --jetson"
 
 FAKE_SC_LOCAL=1 run 0
 out_has "ok    shellcheck image koalaman/shellcheck:v0.11.0 present"
 ok "the shellcheck image already pulled is reported present"
 
 # --- read only, and nothing secret printed ----------------------------------------------------
-run 0
+run 0 --jetson
 calls_lack '^docker (pull|run|build|rm|rmi|system|volume|network|image (rm|prune))'
 calls_lack '^gh auth (login|refresh|logout|token)'
 calls_lack '^gh (pr|issue|project|api|repo)'
@@ -186,7 +191,7 @@ connects="$(grep '^ssh ' "$CALLS" | grep -v '^ssh -G ' | grep -v 'BatchMode=yes'
 out_lacks "gho_"
 out_lacks "FAKETOKEN"
 out_lacks "e2e-someone"
-FAKE_SSH_FAILS=1 run 1
+FAKE_SSH_FAILS=1 run 1 --jetson
 out_lacks "100.64.0.99"
 out_lacks "someone"
 ok "read only: no pull, run, sign in, install or project edit; ssh only with BatchMode; no token, account or host printed"
@@ -201,14 +206,15 @@ ok "gh signed out: one MISS with gh auth login"
 FAKE_GH_SCOPES="'gist', 'read:org', 'repo', 'workflow'" run 1
 misses 1
 out_has "gh token lacks the scope(s): project"
-out_has "fix: gh auth refresh -h github.com -s repo,project"
+out_has "fix: gh auth refresh -h github.com -s repo,project,workflow"
 FAKE_GH_SCOPES="'read:project', 'workflow'" run 1
 out_has "gh token lacks the scope(s): repo project"
-FAKE_GH_SCOPES="'repo', 'project'" run 0
-out_has "WARN  gh token lacks the scope workflow"
+FAKE_GH_SCOPES="'repo', 'project'" run 1
+misses 1
+out_has "MISS  gh token lacks the scope(s): workflow (workflow: to deploy and operate the Jetson"
 FAKE_GH_NO_SCOPES=1 run 0
 out_has "WARN  gh is signed in, but its token scopes cannot be read"
-ok "gh scopes: project and repo are needed (read:project is not project), workflow is a warning, unreadable scopes a warning"
+ok "gh scopes: project, repo and workflow are needed (read:project is not project), unreadable scopes a warning"
 
 FAKE_DOCKER_DOWN=1 run 1
 misses 1
@@ -283,19 +289,22 @@ misses 1
 install_hook
 ok "pre-commit hook absent, or a hook that is not pre-commit's: one MISS with pre-commit install"
 
-FAKE_SSH_FAILS=1 run 1
+FAKE_SSH_FAILS=1 run 1 --jetson
 misses 1
 out_has "MISS  ssh jetson does not connect without a prompt"
 out_has "tailscale up"
-FAKE_SSH_FAILS=1 FAKE_SSH_NO_ALIAS=1 run 1
+FAKE_SSH_FAILS=1 FAKE_SSH_NO_ALIAS=1 run 1 --jetson
 misses 1
 out_has "no Host jetson block in ~/.ssh/config"
-FAKE_SSH_FAILS=1 run 0 --skip-jetson
-out_has "jetson not checked (--skip-jetson)"
+FAKE_SSH_FAILS=1 run 0
+out_has "jetson over ssh not checked"
 calls_lack '^ssh '
-FAKE_SSH_FAILS=1 DEV_SETUP_JETSON_ALIAS=board run 1
+FAKE_SSH_FAILS=1 run 0 --skip-jetson
+out_has "jetson over ssh not checked"
+calls_lack '^ssh '
+FAKE_SSH_FAILS=1 DEV_SETUP_JETSON_ALIAS=board run 1 --jetson
 out_has "MISS  ssh board does not connect"
-ok "ssh: no connection or no alias is a MISS with its fix, --skip-jetson calls no ssh, the alias can be renamed"
+ok "ssh: off by default and with --skip-jetson (no ssh call); with --jetson no connection or no alias is a MISS with its fix, the alias can be renamed"
 
 for tool in uv node pnpm python3 pre-commit gh; do
   mv "$BIN/$tool" "$WORK/$tool.saved"
@@ -311,15 +320,15 @@ mv "$WORK/claude.saved" "$BIN/claude"
 ok "each of uv, node, pnpm, python3, pre-commit, gh absent: exactly one MISS; Claude Code absent: a warning only"
 
 mv "$BIN/uv" "$WORK/uv.saved"
-FAKE_DOCKER_DOWN=1 FAKE_SSH_FAILS=1 run 1
+FAKE_DOCKER_DOWN=1 FAKE_SSH_FAILS=1 run 1 --jetson
 misses 3
 mv "$WORK/uv.saved" "$BIN/uv"
 ok "several missing pieces are all reported, and counted on the last line"
 
 run 64 --frobnicate
-out_has "usage: ops/dev-setup.sh [--skip-jetson]"
+out_has "usage: ops/dev-setup.sh [--jetson]"
 run 0 --help
-out_has "ops/dev-setup.sh [--skip-jetson]"
+out_has "ops/dev-setup.sh [--jetson]"
 out_lacks "set -uo"
 ok "an unknown argument exits 64 with the usage; --help prints the header"
 

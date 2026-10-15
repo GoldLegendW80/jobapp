@@ -286,8 +286,8 @@ dump_day() {
 
 # scan <dir>: DUMPS gets the dumps of <dir> (regular files with a dump's name), oldest first, and
 # ODD every other entry, except what this script and the deploy keep there themselves: the two
-# lock files, backup.log, the folders deploys, incoming and previous-tree, and the
-# previous-tree.rsyncignore that ops/previous.sh writes next to that folder at every deploy.
+# lock files, backup.log, the folders deploys, incoming, logs (the deploy's private output) and
+# previous-tree, and the previous-tree.rsyncignore that ops/previous.sh writes next to that folder at every deploy.
 # Names only, one level, never through a symbolic link: a link is not a dump, whatever it is called.
 DUMPS=()
 ODD=()
@@ -304,7 +304,7 @@ scan() {
       DUMPS+=("$name")
     elif [[ -d "$p" ]]; then
       case "$name" in
-        deploys | incoming | previous-tree) ;;
+        deploys | incoming | logs | previous-tree) ;;
         *) ODD+=("$name (a directory)") ;;
       esac
     else
