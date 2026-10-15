@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import threading
 import uuid
 from datetime import datetime
 from typing import Any
@@ -23,6 +24,7 @@ from app.documents import freeze, render_job, store
 from app.documents.models import (
     Author,
     BaseSource,
+    Document,
     DocumentGeneration,
     DocumentVersion,
     FitResult,
@@ -437,6 +439,96 @@ def test_a_render_that_lands_after_applied_with_nothing_approved_freezes_nothing
     _status(api, two["alex"], posting, "applied")
     cv = _write(factory, clock, two["alex_id"], posting, Kind.cv)
     assert _marks(factory, cv) == {1: None}
+
+
+def test_an_edit_rendered_after_the_approved_render_failed_freezes_nothing(
+    both: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    renderer, _ = _apply_while_rendering(both, api, factory, approve=3)
+    renderer.fail = "render_failed"
+    third = {**CV, "headline": "Third"}
+    _write(factory, clock, both["alex_id"], both["posting"], Kind.cv, third, renderer)
+    fourth = {**CV, "headline": "Fourth"}
+    _write(factory, clock, both["alex_id"], both["posting"], Kind.cv, fourth)
+    # v4 was written after `applied` and never approved: it does not become what was sent.
+    assert _marks(factory, both["cv"]) == {1: None, 2: None, 3: None, 4: None}
+    _approve(api, both["alex"], both["cv"], 4)  # not frozen, so not refused
+
+
+def test_an_approval_after_applied_freezes_only_by_the_render_of_that_version(
+    two: dict[str, Any], api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    posting = _posting(factory, two["alex_id"])
+    _status(api, two["alex"], posting, "applied")
+    cv = _write(factory, clock, two["alex_id"], posting, Kind.cv)
+    _approve(api, two["alex"], cv, 1)
+    _write(factory, clock, two["alex_id"], posting, Kind.cv, {**CV, "headline": "Later"})
+    assert _marks(factory, cv) == {1: None, 2: None}
+    renderer = FakeRenderer(during=lambda: _approve(api, two["alex"], cv, 3))
+    third = {**CV, "headline": "Third"}
+    _write(factory, clock, two["alex_id"], posting, Kind.cv, third, renderer)
+    assert _marks(factory, cv) == {1: None, 2: None, 3: "applied"}
+
+
+def _wait_until_blocked(engine: sa.Engine, pid: int, thread: threading.Thread) -> None:
+    """Return once the backend `pid` waits for a lock another session holds (Postgres says so),
+    or once its thread has ended. Polls the lock table; no sleep, no clock."""
+    with engine.connect() as watcher:
+        blocked = sa.text("SELECT cardinality(pg_blocking_pids(:p)) > 0")
+        while thread.is_alive() and not watcher.execute(blocked, {"p": pid}).scalar_one():
+            watcher.rollback()
+
+
+def test_a_status_change_waiting_for_the_store_of_the_approved_version_freezes_it(
+    both: dict[str, Any],
+    api: Api,
+    engine: sa.Engine,
+    factory: sessionmaker[Session],
+    clock: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The store first: it holds the posting and the CV when the person moves the posting to
+    `applied`. `on_rendered` reads the status before that change and freezes nothing; the change
+    waits, then `on_status` finds the approved version rendered, the document idle, and freezes
+    it. The status first is the order of `_apply_while_rendering`."""
+    monkeypatch.setattr(jobs_service, "LOCK_TIMEOUT_MS", 60_000)
+    at = clock()
+    seen: dict[str, Any] = {}
+    person = factory()
+    pid = person.execute(sa.text("SELECT pg_backend_pid()")).scalar_one()
+
+    def apply() -> None:
+        try:
+            job = jobs_service.lock_job(person, both["alex_id"], both["posting"])
+            assert job is not None
+            jobs_service.set_status(person, job, JobStatus.applied, at)
+            person.commit()
+        except Exception as exc:  # the main thread asserts on it
+            seen["error"] = exc
+            person.rollback()
+
+    waiter = threading.Thread(target=apply)
+    stored = freeze.on_rendered
+
+    def holding(db: Session, document: Document, version: DocumentVersion, when: datetime) -> None:
+        stored(db, document, version, when)
+        waiter.start()
+        _wait_until_blocked(engine, pid, waiter)
+        seen["waited"] = waiter.is_alive()
+        seen["store"] = _marks_in(db, both["cv"])
+
+    monkeypatch.setattr(freeze, "on_rendered", holding)
+    renderer = FakeRenderer(during=lambda: _approve(api, both["alex"], both["cv"], 3))
+    third = {**CV, "headline": "Third"}
+    try:
+        _write(factory, clock, both["alex_id"], both["posting"], Kind.cv, third, renderer)
+    finally:
+        if waiter.is_alive():
+            waiter.join()
+        person.close()
+    assert seen == {"waited": True, "store": {1: None, 2: None, 3: None}}
+    assert _marks(factory, both["cv"]) == {1: None, 2: None, 3: "applied"}
+    assert _marks(factory, both["letter"]) == {1: "applied"}
 
 
 def _current(factory: sessionmaker[Session], both: dict[str, Any]) -> freeze.Current:
