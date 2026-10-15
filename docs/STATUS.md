@@ -10,9 +10,10 @@ Last updated: 2026-10-15.
 
 ## In production
 
-`main` at `af94c78` (the merge of #325, tree `8f6e211`), deployed on 2026-10-15 by the deploy
-workflow: run 38715024235, dispatched at 09:43 UTC, success at 09:44 UTC (#323 before it:
-`63deb82`, run 38712414158). Alembic head on `main`: `0018`, unchanged by #323 and #325. The
+`main` at `d2b6d94` (the merge of #326, tree `d8601e9`), deployed on 2026-10-15 by the deploy
+workflow: run 38718620535, dispatched at 10:12 UTC, success at 10:14 UTC. Before it the same day:
+#325 (`af94c78`, run 38715024235, 09:43 UTC) and #323 (`63deb82`, run 38712414158). Alembic head
+on `main`: `0018`, unchanged by #323, #325 and #326. The
 Jetson figures here date from the check of `ops/ship.sh` on 2026-10-15 before #323 (`main` at
 `da518af`): 8 services running and healthy, alembic at `0018`, about 2.3 GiB of 7.6 used, no error
 line; later checks are not recorded here. The `browser` service is built but not started yet: it
@@ -22,7 +23,7 @@ Built and merged, by module (task ids of `tasks/<module>/todo.md`):
 
 | Module | Done |
 |---|---|
-| platform | Compose stack, deploy, Tailscale Funnel URL, backups (7 days), the batch gate `ops/local-check.sh`, `ops/deploy-checked.sh`, `ops/ship.sh`, `ops/agent-test.sh`, request body limits, flaky test fixes (W1, W2, W3, first slice of W3b), the harness versioned (#325 for #324: CLAUDE.md, `docs/agents/`, `.claude/` config, `ops/card.sh`, `ops/dev-setup.sh`) |
+| platform | Compose stack, deploy, Tailscale Funnel URL, backups (7 days), the batch gate `ops/local-check.sh`, `ops/deploy-checked.sh`, `ops/ship.sh`, `ops/agent-test.sh`, request body limits, flaky test fixes (W1, W2, W3, first slice of W3b), the harness versioned (#325 for #324: CLAUDE.md, `docs/agents/`, `.claude/` config, `ops/card.sh`, `ops/dev-setup.sh`), the harness permissions (#326: `git -C` forms, `gh api` reads, `.env` shell denies) |
 | identity | invite only accounts, sessions, throttling, administration |
 | profile | profile editing, export and import, year only dates (P1 to P7) |
 | jobs | postings, board sweeps (Ashby, Greenhouse, Lever), scoring, map, edit, J8 lock guard |
@@ -52,24 +53,33 @@ Then a deploy (the next `ops/ship.sh`, or `ops/deploy-checked.sh` on the current
 and checks the rules and starts the browser. Older owner steps for paused work stay in their
 issues (mail: #63 Google console, #187 the OAuth redirect setting on the Jetson).
 
-## Shipping from this laptop
+## Which machine ships
 
-The laptop this file is updated from has no ssh to the Jetson, so it ships by hand as
-[CONTRIBUTING.md](../CONTRIBUTING.md#one-task-one-branch-one-pull-request), step 6, says.
+Until #334 merges, the last step of `ops/ship.sh` checks the Jetson over ssh, so the owner's main
+Mac ships. #334 moves that check into the deploy workflow, after which any laptop whose gh account
+can write to the repository will ship. The gate's PASS records live in `.local-check/` of the
+machine that ran the gate (CONTRIBUTING.md, step 6), so that machine deploys the tree it checked.
+A second machine says on the issue when it starts a builder, so the other does not start a
+duplicate.
 
 ## Open pull requests
 
 | PR | What | State | Next |
 |---|---|---|---|
-| #326 | Harness permissions: `git -C` forms, `gh api` reads, `.env` shell denies (follow ups 1 to 3 of the review of #325, refs #324) | APPROVE on `e427397` (review of `48fdfbd`, then an orchestrator note) | ship |
-| #330 | Apply: the A2 follow ups (closes #296), built from the owner's second laptop | opened 09:59 UTC, no review at 10:05 UTC | first review |
-| #331 | Apply A8, first slice: the Lever adapter (refs #245; the generic strategy is its "Left to do"), built from the owner's second laptop | opened 10:02 UTC, no review at 10:05 UTC | first review |
-| #333 | Platform: `ops/dev-setup.sh` accepts pnpm 10 over a 9.x pin (closes #328) | opened 10:03 UTC, no review at 10:05 UTC | first review |
+| #329 | This file after the ships of #323, #325 and #326 (closes #327) | round 3 reduces it to `docs/STATUS.md`; the APPROVE of 10:14 UTC was on `7bd3244`, an older head | review of the new head |
+| #330 | Apply: the A2 follow ups (closes #296), built from the owner's second laptop | APPROVE on its head `d920775` at 10:38 UTC | ship |
+| #331 | Apply A8, first slice: the Lever adapter (refs #245), built from the owner's second laptop | REQUEST CHANGES on `f11e518` at 10:22 UTC; round 2 pushed, head `411933c` (read at 10:40 UTC) | review of `411933c` |
+| #333 | Platform: `ops/dev-setup.sh` accepts pnpm 10 over a 9.x pin (closes #328) | APPROVE on its head `a2abfc1` at 10:39 UTC (round 2) | ship |
+| #334 | Platform: deploy and operate the Jetson from any laptop through GitHub, no ssh (the owner's decision of 2026-10-15): the Jetson check moves into the deploy workflow and a new `ops.yml` runs the operations; from the owner's main Mac | REQUEST CHANGES on its head `8fd6eab` at 10:20 UTC, its first review | fix round |
+
+A8b, the generic strategy (#332), is being built from the owner's second laptop on branch
+`apply/a8b-generic`, stacked on #331.
 
 ## Next steps, in order
 
-1. **Ship #326, then review and ship #330, #331 and #333:** a fresh reviewer for each new one,
-   then `ops/ship.sh --plan --approved` and `ops/ship.sh <prs>` on the machine that ships.
+1. **Ship #330 and #333, then review the rest** (#329, #331 and #334 on their new heads): a
+   fresh reviewer for each, then `ops/ship.sh --plan --approved` and `ops/ship.sh <prs>` on the
+   machine that ships (above).
 2. **Follow ups on the MVP path**, highest first:
    - #311 Browser B6b: prove the egress refusals and Chromium's sandbox from inside the browser
      container (Mac stack and Jetson), right after the owner's firewall step;
@@ -78,7 +88,8 @@ The laptop this file is updated from has no ssh to the Jetson, so it ships by ha
    - #264 software WebGL only when a site needs it.
 3. **Platform follow ups:** #293 gate under 7 minutes (rest of W3b), #289 and #287 (ship.sh and
    registries), #146 local check, #104 flaky tests.
-4. **Apply after the MVP:** A9 Apply myself (#246).
+4. **Apply after the MVP:** the rest of A8 (#245): #331 is the first slice (Lever); the generic
+   strategy is #332 (being built, above). Then A9 Apply myself (#246).
 5. **Full auto:** A10 failures, retries and "needs you" (#247), A11 company caps, pacing and the
    Applications settings (#248), A12 the review queue after a Like (#249), A13 Full auto (#250).
 6. Later, unchanged order: documents D13, D15 to D18, D20 to D26; browser B7 to B12; apply A14 to

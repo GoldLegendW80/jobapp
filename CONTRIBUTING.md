@@ -147,30 +147,6 @@ in the job folder that holds this repository (it is not part of the repository).
    10 minutes, JSON `"level": "error"` lines included). The last line is `SHIP: OK`,
    `SHIP: PLAN, nothing was done`, `SHIP: NOTHING TO SHIP` or `SHIP: FAIL <reason>` (exit 1);
    the gate and deploy logs of the last 10 runs stay in `.local-check/ship/`.
-
-   **From a machine without ssh to the Jetson.** `ops/ship.sh` ends with a check of the Jetson
-   over ssh, so from such a machine the orchestrator runs its steps by hand:
-   `ops/local-check.sh --merge <n1> --merge <n2>` (the proof is the last line
-   `LOCAL CHECK: PASS <tree sha> <seconds>s`); before the first merge, `origin/main` is still the
-   base the gate checked (after `git fetch origin`, `git rev-parse origin/main` equals the base
-   commit the record `.local-check/<tree sha>.json` lists, `base.commit`, as step 4 of
-   `ops/ship.sh` checks); in the checked order,
-   `gh pr merge <n> --repo GoldLegendW80/jobapp --merge --delete-branch --match-head-commit <sha>`
-   (`<sha>` is the head of `<n>` the record lists); then each issue a merged pull request closes
-   goes to Done (`ops/card.sh <issue url> done <module> <horizon>`, what step 5 of `ops/ship.sh`
-   does); after `git fetch origin`, `git rev-parse 'origin/main^{tree}'` must print the PASS tree
-   sha; then `ops/deploy-checked.sh` (it dispatches the deploy workflow and asks the public health
-   URL, no ssh). The Jetson shell check (services, `alembic current`, memory, error lines) is then
-   the owner's. The board needs the `project` scope of gh
-   (`gh auth refresh -h github.com -s repo,project`): `ops/card.sh` and the board step of
-   `ops/ship.sh` fail without it. The gate's PASS records live in `.local-check/` of the main
-   checkout of the machine that ran the gate, and `ops/deploy-checked.sh` refuses a tree without a
-   record there, so the machine that ran the gate deploys it. Nothing stops two machines from
-   shipping at once, so the rule is that one machine ships at a time: a merge from the other
-   machine between a gate and its merges makes the tree of `origin/main` differ from the PASS
-   tree, and `main` is then checked again before any deploy (the tree sha is the key, above). A
-   second machine builds and reviews, and says on the issue when it starts a builder so the other
-   does not start a duplicate.
 7. Only a checked tree is deployed, through `ops/deploy-checked.sh`. It refuses a commit whose
    tree has no PASS record, and a commit that is not on `origin/main`. Then it starts
    `.github/workflows/deploy.yml` on the Jetson's own runner for the full sha

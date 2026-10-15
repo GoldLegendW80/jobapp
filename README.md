@@ -36,14 +36,11 @@ ops/dev-setup.sh                                   # read only: lists what is st
 
 - **Docker Desktop** running, with at least 16 GiB free on the disk (the merge gate refuses to
   start under 12).
-- **The Jetson**, only to ship with `ops/ship.sh` or check production: join the owner's tailnet
-  with Tailscale (ask the owner for an invite), add a `Host jetson` block to `~/.ssh/config` with
-  the HostName, User and IdentityFile the owner gives you (never commit them), put your public key
-  in the Jetson's `authorized_keys`, then `ssh jetson true` must answer without a prompt.
-  `ops/dev-setup.sh --skip-jetson` leaves this check out on a laptop without ssh to the Jetson.
-  Without ssh to the Jetson, ship by hand as
-  [CONTRIBUTING.md](CONTRIBUTING.md#one-task-one-branch-one-pull-request), step 6, says ("From a
-  machine without ssh to the Jetson").
+- **The Jetson**, only to deploy or check production: join the owner's tailnet with Tailscale
+  (ask the owner for an invite), add a `Host jetson` block to `~/.ssh/config` with the HostName,
+  User and IdentityFile the owner gives you (never commit them), put your public key in the
+  Jetson's `authorized_keys`, then `ssh jetson true` must answer without a prompt.
+  `ops/dev-setup.sh --skip-jetson` leaves this check out on a laptop that does not deploy.
 - **Claude Code**: install it (`npm install -g @anthropic-ai/claude-code`) and run `claude` from
   the repository root. It loads `CLAUDE.md` and the versioned `.claude/` config: the
   `implementer` and `reviewer` subagents, the commands `/build-task`, `/review-pr`, `/fix-pr`,
