@@ -113,11 +113,17 @@ export const handlers = [
       postings_30_days: 0,
       to_write: 0,
       to_write_estimate: { tokens: { low: 0, high: 0 }, cost: null },
+      newly: 0,
+      newly_estimate: { tokens: { low: 0, high: 0 }, cost: null },
       priced: false,
       cost_note: "",
       today: { input: 0, output: 0, cost_usd: "0" },
       last_30_days: { input: 0, output: 0, cost_usd: "0" },
     }),
+  ),
+  // No writing rule yet, the default of a new user (the Search tab's Writing rules card).
+  http.get("*/api/documents/settings", () =>
+    HttpResponse.json({ no_dash_separators: false, banned_phrases: [] }),
   ),
   // No application started for a posting (job detail's Apply section).
   http.get("*/api/applications", () => HttpResponse.json({ items: [] })),

@@ -287,6 +287,10 @@ export const boardKey = (b: { ats: string; org: string }) =>
   `${b.ats}:${b.org.trim().toLowerCase()}`;
 
 const YEAR_DAYS = /^\d{1,3}$/;
+/** schemas.py DocumentsGeneration: the safety ceiling, postings a day. */
+const CEILING = /^\d{1,3}$/;
+export const DAILY_CEILING_MAX = 500;
+export const DAILY_CEILING_PROBLEM = `The safety ceiling is a whole number of postings a day, from 1 to ${DAILY_CEILING_MAX}.`;
 
 export const searchSchema = z
   .object({
@@ -319,11 +323,19 @@ export const searchSchema = z
       times: z.array(z.string()),
       timezone: z.string(),
     }),
-    // Not edited here either (documents D13's card owns it): carried through unchanged.
+    // Edited by the documents card of this tab (documents/generation-settings-card.tsx).
     documents: z.object({
       auto: z.boolean(),
-      min_fit: z.number(),
-      daily_ceiling: z.number(),
+      min_fit: z.number().int().min(0).max(100),
+      daily_ceiling: z
+        .string()
+        .refine(
+          (v) =>
+            CEILING.test(v.trim()) &&
+            Number(v) >= 1 &&
+            Number(v) <= DAILY_CEILING_MAX,
+          DAILY_CEILING_PROBLEM,
+        ),
     }),
   })
   .superRefine((values, ctx) => {
@@ -362,7 +374,10 @@ export const toSearchForm = (search: Search): SearchForm => ({
     days: [...search.sweep_schedule.days],
     times: [...search.sweep_schedule.times],
   },
-  documents: { ...search.documents },
+  documents: {
+    ...search.documents,
+    daily_ceiling: String(search.documents.daily_ceiling),
+  },
 });
 
 export const fromSearchForm = (values: SearchForm): Search => ({
@@ -388,5 +403,8 @@ export const fromSearchForm = (values: SearchForm): Search => ({
     days: [...values.sweep_schedule.days],
     times: [...values.sweep_schedule.times],
   },
-  documents: { ...values.documents },
+  documents: {
+    ...values.documents,
+    daily_ceiling: Number(values.documents.daily_ceiling.trim()),
+  },
 });

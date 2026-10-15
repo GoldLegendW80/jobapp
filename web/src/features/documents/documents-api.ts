@@ -305,6 +305,10 @@ export const spendSchema = z.object({
   postings_30_days: z.number(),
   to_write: z.number(),
   to_write_estimate: estimateSchema,
+  /** Of `to_write`, those under the person's own threshold: what lowering it would add. Optional
+   * because answers recorded before it (other tasks' test doubles) lack it; then nothing is shown. */
+  newly: z.number().optional(),
+  newly_estimate: estimateSchema.optional(),
   priced: z.boolean(),
   cost_note: z.string(),
   today: tokensSpent,
