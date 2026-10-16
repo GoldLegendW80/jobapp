@@ -1,8 +1,17 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, ExternalLink, LoaderCircle } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { describeError } from "@/lib/api";
@@ -10,9 +19,14 @@ import { cn } from "@/lib/utils";
 
 import type { PanelProps } from "./document-view";
 import {
+  approveVersion,
   correctionSchema,
+  documentKey,
+  failureSentence,
   getVersion,
   listVersions,
+  postingDocumentsKey,
+  restoreVersion,
   versionKey,
   versionPage1Url,
   versionPdfUrl,
@@ -35,7 +49,10 @@ import {
 /** Width of the page image asked for: sharp on a phone held upright and on a laptop. */
 const PREVIEW_WIDTH = 900;
 
-/** The See view: the page, whether it fits one page, the corrections and the version history. */
+/**
+ * The See view: the page, whether it fits one page, the corrections and the version history,
+ * where a version is restored into the draft or approved.
+ */
 export function SeePanel({ document, generation }: PanelProps) {
   const [chosen, setChosen] = useState<number>();
   const latestNumber = document.latest?.number;
@@ -56,6 +73,40 @@ export function SeePanel({ document, generation }: PanelProps) {
 
   const open = isOpen(generation);
   const rendering = document.render.state !== "idle";
+  const queryClient = useQueryClient();
+  const [restoring, setRestoring] = useState<VersionSummary>();
+  const restore = useMutation({
+    mutationFn: (number: number) => restoreVersion(document.id, number),
+    onSuccess: (answer, number) => {
+      queryClient.setQueryData(documentKey(document.id), answer);
+      void queryClient.invalidateQueries({
+        queryKey: versionsKey(document.id),
+      });
+      setRestoring(undefined);
+      toast.success(
+        `The draft has the text of version ${String(number)}. Its page is being drawn.`,
+      );
+    },
+    onError: (error) => {
+      toast.error(failureSentence(error));
+    },
+  });
+  const approve = useMutation({
+    mutationFn: (number: number) => approveVersion(document.id, number),
+    onSuccess: (_, number) => {
+      void queryClient.invalidateQueries({
+        queryKey: versionsKey(document.id),
+      });
+      if (document.posting_id !== null)
+        void queryClient.invalidateQueries({
+          queryKey: postingDocumentsKey(document.posting_id),
+        });
+      toast.success(`Version ${String(number)} is approved.`);
+    },
+    onError: (error) => {
+      toast.error(failureSentence(error));
+    },
+  });
 
   return (
     <div className="flex flex-col gap-6">
@@ -90,7 +141,50 @@ export function SeePanel({ document, generation }: PanelProps) {
         error={history.isError ? describeError(history.error) : undefined}
         shown={shown?.number}
         onChoose={setChosen}
+        busy={restore.isPending || approve.isPending}
+        onRestore={setRestoring}
+        onApprove={(number) => {
+          approve.mutate(number);
+        }}
       />
+      <AlertDialog
+        open={restoring !== undefined}
+        onOpenChange={(value) => {
+          if (!value && !restore.isPending) setRestoring(undefined);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Restore version {restoring?.number} into the draft?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              The draft takes its text and a new page is drawn from it. Version{" "}
+              {restoring?.number} itself stays as it is
+              {restoring?.frozen_at ? ", as it was sent" : ""}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button
+              variant="outline"
+              disabled={restore.isPending}
+              onClick={() => {
+                setRestoring(undefined);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={restore.isPending}
+              onClick={() => {
+                if (restoring) restore.mutate(restoring.number);
+              }}
+            >
+              Restore
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -323,12 +417,18 @@ function History({
   error,
   shown,
   onChoose,
+  busy,
+  onRestore,
+  onApprove,
 }: {
   rows: VersionSummary[];
   loading: boolean;
   error: string | undefined;
   shown: number | undefined;
   onChoose: (number: number) => void;
+  busy: boolean;
+  onRestore: (version: VersionSummary) => void;
+  onApprove: (number: number) => void;
 }) {
   if (rows.length === 0 && !loading && error === undefined) return null;
   return (
@@ -362,21 +462,47 @@ function History({
                     : ""}
                 </span>
               </div>
-              <Button
-                variant={one.number === shown ? "secondary" : "outline"}
-                size="sm"
-                aria-pressed={one.number === shown}
-                aria-label={
-                  one.number === shown
-                    ? `Shown, version ${String(one.number)}`
-                    : `Open version ${String(one.number)}`
-                }
-                onClick={() => {
-                  onChoose(one.number);
-                }}
-              >
-                {one.number === shown ? "Shown" : "Open"}
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant={one.number === shown ? "secondary" : "outline"}
+                  size="sm"
+                  aria-pressed={one.number === shown}
+                  aria-label={
+                    one.number === shown
+                      ? `Shown, version ${String(one.number)}`
+                      : `Open version ${String(one.number)}`
+                  }
+                  onClick={() => {
+                    onChoose(one.number);
+                  }}
+                >
+                  {one.number === shown ? "Shown" : "Open"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label={`Restore version ${String(one.number)}`}
+                  disabled={busy}
+                  onClick={() => {
+                    onRestore(one);
+                  }}
+                >
+                  Restore
+                </Button>
+                {one.approved_at === null && one.frozen_at === null ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    aria-label={`Approve version ${String(one.number)}`}
+                    disabled={busy}
+                    onClick={() => {
+                      onApprove(one.number);
+                    }}
+                  >
+                    Approve
+                  </Button>
+                ) : null}
+              </div>
             </li>
           ))}
         </ul>
