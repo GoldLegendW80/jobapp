@@ -57,7 +57,7 @@ function fakeSettings(initial: Partial<ApplySettings> = {}) {
 }
 
 type Row = CapDraft & { used: number };
-type Answer = { status: number; body: unknown };
+type Answer = { status: number; body: Record<string, string> };
 
 const revisionOf = (n: number) => String(n).padStart(64, "0");
 
