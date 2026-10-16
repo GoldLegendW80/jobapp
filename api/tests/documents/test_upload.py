@@ -1,8 +1,10 @@
 """D24: what code reads of an uploaded CV's text (`app.documents.upload`), pure. The accept and
 refuse tables of a name, a field and a date against the text, with their neighbours (case,
 accents, punctuation, spacing, a longer name, a shorter one, a number inside a longer number,
-another script, French and English months, two digit years), the fixed block and the experience
-entries it drops, the language of a text, and the cost on the largest text."""
+another script, French and English months, two digit years), an employer's start kept open only
+where the text writes it open (each written form of a start against each open and closed
+neighbour), the fixed block and the experience entries it drops, the language of a text, and the
+cost on the largest text."""
 
 from __future__ import annotations
 
@@ -233,6 +235,168 @@ def test_the_fixed_block_keeps_what_the_text_states_and_records_the_rest() -> No
     assert all(r.by == "code" and r.code == upload.FIXED_NOT_IN_UPLOAD for r in checked.corrections)
 
 
+# Each written form of one start, with the value the reader stores for it.
+STARTS = [
+    ("2023", "2023"),
+    ("02/2023", "2023-02"),
+    ("2/2023", "2023-02"),
+    ("02.2023", "2023-02"),
+    ("2023-02", "2023-02"),
+    ("2023/02", "2023-02"),
+    ("February 2023", "2023-02"),
+    ("Feb. 2023", "2023-02"),
+    ("FEB 2023", "2023-02"),
+    ("février 2023", "2023-02"),
+    ("févr. 2023", "2023-02"),
+    ("２０２３", "2023"),  # full width figures fold
+]
+WRITTEN_OPEN = [
+    "{d} to present",
+    "{d} To Present",
+    "{d} – present",
+    "{d} - present",
+    "{d}-present",
+    "{d} — Present",
+    "{d} − present",
+    "{d} -- present",
+    "{d} –\npresent",
+    "{d}   Present",
+    "{d} until now",
+    "{d} till today",
+    "{d} through today",
+    "{d} to date",
+    "{d} – current",
+    "{d} to now",
+    "({d} – present)",
+    "from {d} to present",
+    "{d} à aujourd'hui",
+    "{d} à aujourd’hui",
+    "{d} à ce jour",
+    "{d} à présent",
+    "{d} jusqu'à aujourd'hui",
+    "{d} jusqu’à ce jour",
+    "{d} – aujourd'hui",
+    "de {d} à aujourd'hui",
+    "Since {d}",
+    "since {d}, in Nantes",
+    "SINCE {d}.",
+    "Depuis {d}",
+    "depuis {d}, Lyon",
+    "Dès {d}",
+    "From {d}",
+    "Starting {d}",
+]
+WRITTEN_CLOSED = [
+    "{d} to 2025",
+    "{d} – 2025",
+    "{d}-2025",
+    "{d} to 06/25",  # a two digit end year
+    "{d} – 06/25",
+    "{d} to June 2025",
+    "{d} à 2025",
+    "{d} jusqu'en 2025",
+    "from {d} to 2025",
+    "From {d} until 06/25",
+    "since {d} – 2025",
+    "Depuis {d} jusqu'en 2025",
+    "de {d} à 2025",
+    "de {d}",  # "de" is as often "of"
+    "{d}",
+    "in {d}",
+    "{d} –",  # a dash and nothing else: the cost of refusing when unsure
+    "{d}\npresent",  # an open end on the next line with no dash or "to" before it
+    "present\n{d}",
+    "{d} to 2025\npresent",
+    "{d}, present",
+    "{d} (present)",
+    "{d} a ce jour",  # "a" is not "à"
+    "{d} date",
+    "{d} – date",
+    "{d} ongoing",
+    "{d} à nos jours",
+    "{d} to the present",
+    "{d} presently",
+    "Des {d}",  # "des" is not "dès"
+    "Depuis {d} à Lyon",  # an "à" after a since date reads as an end
+]
+
+
+def _employer(text: str, start: str | None, end: str | None = None) -> tuple[Any, ...]:
+    """The start and end kept of one employer of `text`, and the records made."""
+    fixed = _fixed(
+        employers=[{"key": "e", "organisation": "Example Corp", "start": start, "end": end}]
+    )
+    checked = upload.check_fixed(fixed, f"Example Corp, Engineer\n{text}\n")
+    (kept,) = checked.fixed.employers
+    return kept.start, kept.end, [(r.field_path, r.before, r.after) for r in checked.corrections]
+
+
+@pytest.mark.parametrize("form", WRITTEN_OPEN)
+def test_a_start_the_text_writes_open_stays_ongoing(form: str) -> None:
+    got = {written: _employer(form.format(d=written), stored) for written, stored in STARTS}
+    assert got == {written: (stored, None, []) for written, stored in STARTS}
+
+
+@pytest.mark.parametrize("form", WRITTEN_CLOSED)
+def test_a_start_the_text_does_not_write_open_loses_its_period(form: str) -> None:
+    got = {written: _employer(form.format(d=written), stored) for written, stored in STARTS}
+    assert got == {
+        written: (None, None, [("fixed.employers.0.start", stored, "")])
+        for written, stored in STARTS
+    }
+
+
+@pytest.mark.parametrize(
+    ("text", "start", "end", "kept"),
+    [
+        # The review's probes: an end the text does not state never makes a role current.
+        ("2018 to 2020", "2018", "2021", (None, None)),
+        ("2018 to 06/20", "2018", "2020-06", (None, None)),
+        ("2018 to 2020", "2018", None, (None, None)),
+        ("2018 to 2020\nPresent", "2018", None, (None, None)),
+        ("2018 to 2020\nExample Labs, 2015 to present", "2018", None, (None, None)),
+        # The reader ended it, the text does not say when: neither is current.
+        ("2023 to present", "2023", "2026", (None, None)),
+        # An end the text states keeps the period whole.
+        ("2018 to 2020", "2018", "2020", ("2018", "2020")),
+        ("03/2018 – 06/2020", "2018-03", "2020-06", ("2018-03", "2020-06")),
+        ("2018 – 2020", "2018", "2020-06", ("2018", "2020")),
+        # A month counts only when the open end follows that month.
+        ("March 2023 to present\nFebruary 2023", "2023-02", None, (None, None)),
+        ("March 2023 to present\nFebruary 2023", "2023", None, ("2023", None)),
+        ("Since 2023", "2023-02", None, ("2023", None)),
+        ("since ٢٠٢٣\n2023 to 2025", "2023", None, (None, None)),
+        ("since 120230\n2023 to 2025", "2023", None, (None, None)),
+        ("Since 2023 – present", "2023", None, ("2023", None)),
+        # Declared: an open end of another role with the same start keeps this one current.
+        ("Example Labs, 2018 to present\n2018 to 2020", "2018", None, ("2018", None)),
+        ("", None, None, (None, None)),
+    ],
+)
+def test_the_review_probes_of_an_open_start(
+    text: str, start: str | None, end: str | None, kept: tuple[str | None, str | None]
+) -> None:
+    assert _employer(text, start, end)[:2] == kept
+
+
+def test_a_dropped_end_records_the_start_it_takes_and_one_record_per_field() -> None:
+    assert _employer("03/2019 to 2020", "2019-03", "2021-04") == (
+        None,
+        None,
+        [
+            ("fixed.employers.0.start", "2019-03", ""),
+            ("fixed.employers.0.end", "2021-04", ""),
+        ],
+    )
+
+
+def test_a_school_without_an_end_keeps_its_start() -> None:
+    fixed = _fixed(schools=[{"school": "Example Institute", "start": "2016"}])
+    checked = upload.check_fixed(fixed, "Example Institute, 2016 to 2018")
+    assert (checked.fixed.schools[0].start, checked.fixed.schools[0].end) == ("2016", None)
+    assert checked.corrections == ()
+
+
 def test_a_fixed_block_the_text_states_whole_is_untouched() -> None:
     fixed = _fixed(
         employers=[
@@ -353,9 +517,19 @@ def test_the_largest_text_is_read_whole() -> None:
             }
             for i in range(12)
         ]
-        + [{"key": "quillmere", "organisation": "Quillmere Example Works", "start": "2019-03"}]
+        + [
+            {
+                "key": "quillmere",
+                "organisation": "Quillmere Example Works",
+                "start": "2019-03",
+                "end": "2020-11",
+            }
+        ]
     )
     checked = upload.check_fixed(fixed, text)
     assert len(checked.dropped_keys) == 12
-    assert checked.fixed.employers[0].start == "2019-03"
+    assert (checked.fixed.employers[0].start, checked.fixed.employers[0].end) == (
+        "2019-03",
+        "2020-11",
+    )
     assert upload.language_of(text) is Language.en

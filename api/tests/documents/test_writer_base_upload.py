@@ -267,7 +267,10 @@ def test_a_cv_with_little_text_gives_a_short_base_cv_and_nothing_is_refused(
     (version,) = versions(factory, document_id)
     fixed = version.content["fixed"]
     assert fixed["employers"][0]["organisation"] == "Northwind Example"
-    assert fixed["employers"][0]["start"] == "2020"
+    assert fixed["employers"][0]["start"] is None  # "2020" alone does not say the role goes on
+    assert [(r["field_path"], r["before"]) for r in version.corrections] == [
+        ("fixed.employers.0.start", "2020")
+    ]
     assert (fixed["schools"], fixed["languages"]) == ([], [])
     assert version.content["experience"] == []
 

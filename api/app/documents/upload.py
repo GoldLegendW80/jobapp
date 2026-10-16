@@ -16,8 +16,17 @@ when unsure:
 - a date keeps its year when the year stands alone in the text (never inside a longer number),
   and its month when the text writes that month next to that year: "03/2019", "3.2019",
   "2019-03", "2019/03", "March 2019", "Mar. 2019", "mars 2019", "févr. 2019". Otherwise the
-  month goes ("2019-03" becomes "2019"); an absent year drops the date. An empty end stays empty
-  (the schema reads it as "present, or not stated"): it is never checked.
+  month goes ("2019-03" becomes "2019"); an absent year drops the date;
+- an employer's start without an end prints as "to present", so it stays only when the reader
+  left the end empty and the text writes that start open (`_open_starts`): an open end right
+  after it, on its line or after "to", "until", "à", "jusqu'à" or a dash ("2023 to present",
+  "02/2023" then a dash and "Present", "mars 2022 à aujourd'hui", "2022 à ce jour", "2023 to
+  date"), or "since", "depuis", "from", "starting" or "dès" right before it with no end after
+  it ("Since 2023", "Depuis mars 2022"). Otherwise the start goes too and the period prints
+  nothing: an end the text does not state ("2018 to 2020" read with the end "2021") never makes
+  an ended role a current one. The cost of refusing when unsure: a start followed by a dash and
+  nothing else, or an open end on the next line with no dash or "to" before it, loses its
+  period. A school's empty end stays empty (it prints its start alone).
 
 Every change is a `Correction` by code, of code FIXED_NOT_IN_UPLOAD and reason NOT_IN_UPLOAD.
 
@@ -25,13 +34,18 @@ Every change is a `Correction` by code, of code FIXED_NOT_IN_UPLOAD and reason N
 English ones, else English, the app's default (an empty text, a tie).
 
 What this does not see, stated: a two digit year ("03/19") is not read as its year, so such a
-date is dropped; a month written in a third language is not read, so it goes; a name the file
-writes in two different ways is kept only in the way the reader copied, when that way is in the
-text; each value is looked for in the whole text, not beside its organisation (a PDF's lines may
-come out of order), so a title or a year of one role stays on another, and a name the file
-writes in another context (a client) stays as an employer. Pure: no I/O. Linear in the length
-of the text: one fold and one pass to cut tokens, then a substring test per value and a
-dictionary lookup per date.
+date is dropped, and an employer whose end it was loses its start too ("2018 to 06/20" prints
+no period, never "2018 to present"); a month written in a third language is not read, so it
+goes; open ends outside the words above lose the period ("à nos jours", "to the present",
+"ongoing", "2022 a ce jour" without its accent), and so do "Depuis 2018 à Lyon" (an "à" after a
+since date reads as an end) and "de 2018" alone ("de" is also "of"); a name the file writes in
+two different ways is kept only in the way the reader copied, when that way is in the text;
+each value is looked for in the whole text, not beside its organisation (a PDF's lines may come
+out of order), so a title or a year of one role stays on another, an open end written beside
+the same start of another role keeps a role current, and a name the file writes in another
+context (a client) stays as an employer. Pure: no I/O. Linear in the length of the text: one
+fold and one pass to cut tokens, one pass over the words for the open starts, then a substring
+test per value and a dictionary lookup per date.
 """
 
 from __future__ import annotations
@@ -42,8 +56,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.documents import checks, rules
 from app.documents import content as c
-from app.documents import rules
 from app.documents.corrections import Correction
 from app.documents.models import Language
 
@@ -221,6 +235,77 @@ def period(value: str | None, text: _Text) -> str | None:
     return value if any(_month_at(text, at, number) for at in found) else year
 
 
+def _breaks_line(gap: str) -> bool:
+    return "".join(gap.splitlines()) != gap
+
+
+def _ends_open(text: str, words: list[rules.Word], k: int) -> bool:
+    """Does an open end follow the date that ends before word `k`?"""
+    if k >= len(words):
+        return False
+    gap = text[words[k - 1].end : words[k].start]
+    mark = gap.strip()
+    until = checks._role(text, words[k]) == "until" and not mark
+    dash = bool(mark) and all(ch in checks._RANGE_DASHES for ch in mark)
+    if until:
+        k += 1
+        if words[k - 1].folded == "jusqu" and k < len(words) and words[k].folded in ("a", "au"):
+            k += 1
+    elif not dash and (mark or _breaks_line(gap)):
+        return False
+    # "date" closes a period only after "to" or "à": alone it is a word ("Date of birth").
+    return checks._open_end(words, k, len(words)) is not None and (
+        until or words[k].folded != "date"
+    )
+
+
+def _ends_after(text: str, words: list[rules.Word], k: int) -> bool:
+    """Does an end follow the date that ends before word `k` ("from 2018 to 2020")?"""
+    if k >= len(words):
+        return False
+    mark = text[words[k - 1].end : words[k].start].strip()
+    if mark and all(ch in checks._RANGE_DASHES for ch in mark):
+        return True
+    return checks._role(text, words[k]) == "until"
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenStarts:
+    """The dates a text writes as the start of an open period: (year, month or None)."""
+
+    dates: frozenset[tuple[int, int | None]]
+    years: frozenset[int]
+
+    def hold(self, start: str) -> bool:
+        """Is `start` ("2023-02", "2023") one of them, its month counted when both give one?"""
+        year, _, month = start.partition("-")
+        if not month:
+            return int(year) in self.years
+        return (int(year), int(month)) in self.dates or (int(year), None) in self.dates
+
+
+def _open_starts(text: str) -> _OpenStarts:
+    """The starts `text` writes open (module docstring), read in one pass over its words with
+    the period vocabulary of `checks`."""
+    words = rules.words_of(text)
+    found: set[tuple[int, int | None]] = set()
+    i = 0
+    while i < len(words):
+        role = checks._role(text, words[i])
+        j = i + 1 if role else i
+        date = checks._date_at(text, words, j)
+        if date is None or not all(w.folded.isascii() for w in words[j : date[1]]):
+            i += 1
+            continue
+        claim, k = date
+        # "de 2018" is as often "of 2018": only "de 2018 à aujourd'hui" reads as open.
+        since = role == "since" and words[i].folded != "de" and not _ends_after(text, words, k)
+        if role != "until" and (since or _ends_open(text, words, k)):
+            found.add(claim)
+        i = k
+    return _OpenStarts(frozenset(found), frozenset(year for year, _ in found))
+
+
 @dataclass(frozen=True)
 class Checked:
     """The fixed block as the text states it, the employer keys it dropped, and the record."""
@@ -246,16 +331,24 @@ class _Fields:
         self.records.append(_record(f"{self.path}.{name}", value, ""))
         return ""
 
-    def date(self, name: str, value: str | None) -> str | None:
-        kept = period(value, self.text)
-        if kept != value:
-            self.records.append(_record(f"{self.path}.{name}", value or "", kept or ""))
-        return kept
+    def dates(
+        self, start: str | None, end: str | None, opens: _OpenStarts | None = None
+    ) -> tuple[str | None, str | None]:
+        """The start and end the text states. With an employer's `opens`, a start left without
+        an end stays only when the reader's end was empty and the text writes that start open."""
+        kept_start, kept_end = period(start, self.text), period(end, self.text)
+        if opens is not None and kept_start and not kept_end:
+            kept_start = kept_start if not end and opens.hold(kept_start) else None
+        for name, before, after in (("start", start, kept_start), ("end", end, kept_end)):
+            if after != before:
+                self.records.append(_record(f"{self.path}.{name}", before or "", after or ""))
+        return kept_start, kept_end
 
 
 def check_fixed(fixed: c.Fixed, text: str) -> Checked:
     """The fixed block of an upload, kept as far as `text` states it (module docstring)."""
     read = _read(text)
+    opens = _open_starts(text)
     records: list[Correction] = []
     employers: list[c.FixedEmployer] = []
     dropped: set[str] = set()
@@ -266,12 +359,14 @@ def check_fixed(fixed: c.Fixed, text: str) -> Checked:
             dropped.add(e.key)
             continue
         f = _Fields(read, path, records)
+        title = f.line("title", e.title)
+        start, end = f.dates(e.start, e.end, opens)
         employers.append(
             e.model_copy(
                 update={
-                    "title": f.line("title", e.title),
-                    "start": f.date("start", e.start),
-                    "end": f.date("end", e.end),
+                    "title": title,
+                    "start": start,
+                    "end": end,
                     "location": f.line("location", e.location),
                 }
             )
@@ -283,12 +378,14 @@ def check_fixed(fixed: c.Fixed, text: str) -> Checked:
             records.append(_record(f"{path}.school", s.school, ""))
             continue
         f = _Fields(read, path, records)
+        degree = f.line("degree", s.degree)
+        start, end = f.dates(s.start, s.end)
         schools.append(
             s.model_copy(
                 update={
-                    "degree": f.line("degree", s.degree),
-                    "start": f.date("start", s.start),
-                    "end": f.date("end", s.end),
+                    "degree": degree,
+                    "start": start,
+                    "end": end,
                     "location": f.line("location", s.location),
                 }
             )
