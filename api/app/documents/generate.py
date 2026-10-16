@@ -24,10 +24,19 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    with a code of `ERRORS`. Nothing refuses a document once its schema passed.
    The letter follows the CV (`start_letter`, D8): when a CV's `posting` generation of an
    `auto` or `click` trigger is done and the posting's letter has no version yet, the letter's
-   generation is created with the CV's `estimate`, `token_ceiling` and base CV (the caller
-   computed them for the pair), started, and queued by the same final hook. A chat, a
+   generation is created with the CV's `estimate` and base CV, started, and queued by the same
+   final hook. Its ceiling is what the pair has left (`letter_ceiling`): the CV generation's
+   `token_ceiling`, computed by the caller for the pair, minus the tokens the CV's run spent,
+   so a posting's CV and letter share that one ceiling. When that spend is unknown (no run, or
+   a count the runner did not write), the letter gets no budget: it is created `failed` with
+   `token_limit` and starts no run (`no_budget`). The consent and the credential are read
+   again first: without either the letter waits with that reason; with the person's runs all
+   busy it stays `queued`; the tick starts it in both cases. A chat, a
    shortening and a letter that already has a version start none: the person's letter is not
-   rewritten behind their back. A letter is never shortened: the render fits its font.
+   rewritten behind their back. Nor does a posting past `cv_ready` (staged, applied, later or
+   skipped): a letter written after the application is not what was sent (D14). The click
+   that asked for both kinds is the exception to both. A letter is never shortened: the render
+   fits its font.
 4. An overflow: D6's render job calls `render_job.on_overflow(document_id, version_id)` after
    storing a PDF that overflows at the tightest step. This module sets it to `on_overflow`,
    which creates one `shorten` generation for a version a writer's `posting` generation made,
@@ -41,6 +50,7 @@ Logs carry ids, modes, statuses, counts and codes, never a text.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Mapping
@@ -58,7 +68,7 @@ from app.agents.definitions import FinalRun
 from app.agents.models import AgentRun, RunStatus
 from app.config import Settings, get_settings
 from app.documents import content as c
-from app.documents import render_job, rules, store, submit, writer_cv, writer_letter
+from app.documents import eligibility, render_job, rules, store, submit, writer_cv, writer_letter
 from app.documents.corrections import Correction
 from app.documents.models import (
     Author,
@@ -411,6 +421,32 @@ def settle(
         return render
 
 
+def letter_ceiling(db: Session, cv_generation: DocumentGeneration) -> int | None:
+    """The token ceiling of the letter that follows `cv_generation`: the pair's ceiling minus the
+    tokens its run spent (the run's own count, never an estimate), never under zero. A budget of
+    zero lets the letter's run make no call: it stops at its limit and is retried as one. None
+    when the spend is unknown (no run, or a count missing): the letter gets no budget then,
+    never the whole pair's (`no_budget`)."""
+    run = db.get(AgentRun, cv_generation.run_id) if cv_generation.run_id is not None else None
+    if run is None or run.input_tokens is None or run.output_tokens is None:
+        return None
+    return max(0, cv_generation.token_ceiling - run.input_tokens - run.output_tokens)
+
+
+def no_budget(db: Session, generation: DocumentGeneration, at: datetime) -> None:
+    """A letter whose pair has no budget it can show: `failed` at its limit, with no run, so the
+    person sees "Try again" and the tick's one retry after a stop at the ceiling applies."""
+    generation.status = GenerationStatus.failed
+    generation.wait_reason = None
+    generation.error = "token_limit"
+    generation.finished_at = at
+    db.flush()
+    logger.info(
+        "documents.generation.failed",
+        extra={"generation_id": str(generation.id), "code": generation.error},
+    )
+
+
 def start_letter(
     sessions: sessionmaker[Session],
     run_id: uuid.UUID,
@@ -418,42 +454,53 @@ def start_letter(
     settings: Settings,
 ) -> uuid.UUID | None:
     """Create and start the letter that follows a CV (module docstring, 3): the CV's `posting`
-    generation of run `run_id` is done, of an `auto` or `click` trigger, and the posting's letter
-    has no version yet, or the click asked for both kinds (its estimate carries LETTER_FOLLOWS:
-    the letter is written again, from the new CV). The letter's generation takes the CV's
-    estimate, ceiling and base CV, and its document the CV's template. Returns the run to
-    enqueue, else None (nothing to chain, a generation already open for the letter, or the
-    person's runs all busy: the letter then stays unwritten and "Write now" writes it)."""
+    generation of run `run_id` is done, of an `auto` or `click` trigger, the posting is not past
+    `cv_ready` and its letter has no version yet, or the click asked for both kinds (its
+    estimate carries LETTER_FOLLOWS: the letter is written again, from the new CV). The letter's
+    generation takes the CV's estimate and base CV, what the pair's ceiling has left, and its
+    document the CV's template. Returns the run to enqueue, else None: nothing to chain, a
+    generation already open for the letter, or a letter left for the tick to start (waiting for
+    the consent or a credential, or `queued` while the person's runs are all busy)."""
+    from app.documents import writer_base  # writer_base imports this module
+
     with sessions() as db:
         found = db.execute(
-            sa.select(DocumentGeneration.user_id, DocumentGeneration.document_id).where(
-                DocumentGeneration.run_id == run_id
+            sa.select(
+                DocumentGeneration.user_id, DocumentGeneration.document_id, Document.posting_id
             )
+            .join(Document, Document.id == DocumentGeneration.document_id)
+            .where(DocumentGeneration.run_id == run_id)
         ).one_or_none()
-        if found is None:
+        if found is None or found.posting_id is None:
             return None
+        # Lock 2 before lock 3 (store.py): the letter's row and its run reference the posting.
+        posting_status = store.lock_posting(db, found.user_id, found.posting_id)
         cv = store.lock_document(db, found.user_id, found.document_id)
         parent = db.execute(
             sa.select(DocumentGeneration).where(DocumentGeneration.run_id == run_id)
         ).scalar_one()
         if (
-            cv.scope != Scope.posting
+            posting_status is None
+            or cv.scope != Scope.posting
             or cv.kind != Kind.cv
-            or cv.posting_id is None
             or parent.mode is not GenerationMode.posting
             or parent.status is not GenerationStatus.done
             or parent.trigger not in (GenerationTrigger.auto, GenerationTrigger.click)
         ):
             return None
-        letter = store.get_or_create(db, cv.user_id, cv.posting_id, Kind.letter, at=at)
         asked = parent.trigger is GenerationTrigger.click and bool(
             parent.estimate.get(LETTER_FOLLOWS)
         )
+        if posting_status not in eligibility.LETTER_STATUSES and not asked:
+            return None  # staged, sent or set aside: a letter now is not what was sent (D14)
+        letter = store.get_or_create(db, cv.user_id, found.posting_id, Kind.letter, at=at)
         if _has_version(db, letter) and not asked:
             return None  # the person's letter is not written again behind their back
         figures = {
             k: v for k, v in parent.estimate.items() if k not in (LETTER_FOLLOWS, LETTER_SCRIPT)
         }
+        reason = writer_base.wait_reason(db, cv.user_id)
+        ceiling = letter_ceiling(db, parent)
         try:
             generation = create(
                 db,
@@ -462,21 +509,31 @@ def start_letter(
                 parent.trigger,
                 parent.base_document_id or cv.base_document_id,
                 figures,
-                parent.token_ceiling,
+                ceiling or 0,
                 at=at,
+                status=GenerationStatus.waiting if reason else GenerationStatus.queued,
+                wait_reason=reason,
             )
-            run = start(
-                db,
-                generation,
-                at=at,
-                script=parent.estimate.get(LETTER_SCRIPT),
-                settings=settings,
-            )
-        except (store.GenerationOpenError, agent_runs.ActiveRunsError):
+        except store.GenerationOpenError:
             db.rollback()
             return None
+        if ceiling is None:
+            no_budget(db, generation, at)
+            store.commit(db)
+            return None
+        started: uuid.UUID | None = None
+        # The person's runs all busy: the letter stays `queued` and the tick starts it.
+        with contextlib.suppress(agent_runs.ActiveRunsError):
+            if reason is None:
+                started = start(
+                    db,
+                    generation,
+                    at=at,
+                    script=parent.estimate.get(LETTER_SCRIPT),
+                    settings=settings,
+                ).id
         store.commit(db)
-        return run.id
+        return started
 
 
 async def _send(
@@ -550,9 +607,14 @@ def shorten(
     """Create and start the one `shorten` generation of an overflowing version that a writer's
     `posting` generation made. Returns the run to enqueue, else None."""
     with sessions() as db:
-        owner = db.scalar(sa.select(Document.user_id).where(Document.id == document_id))
-        if owner is None:
+        found = db.execute(
+            sa.select(Document.user_id, Document.posting_id).where(Document.id == document_id)
+        ).one_or_none()
+        if found is None or found.posting_id is None:
             return None
+        owner = found.user_id
+        # Lock 2 before lock 3 (store.py): the run's row references the posting.
+        store.lock_posting(db, owner, found.posting_id)
         document = store.lock_document(db, owner, document_id)
         version = db.get(DocumentVersion, version_id)
         if version is None or version.document_id != document.id or version.generation_id is None:
