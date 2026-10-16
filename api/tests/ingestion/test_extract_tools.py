@@ -3,6 +3,7 @@
 refuses, the retry budget and the counters, the bind hook, and that a tool bound to one user's
 step reads and writes nothing else, whatever its arguments say."""
 
+import dataclasses
 import hashlib
 import logging
 import uuid
@@ -325,6 +326,90 @@ def test_a_removal_is_stored_without_a_value(factory: sessionmaker[Session], cle
     assert (row.action, row.value, row.key) == ("remove", None, "full_name")
 
 
+# The slots an agent may remove (one value each) and those it may not (an entry, a line, a whole
+# list): every slot of every section, so a slot added later is sorted by its kind.
+REMOVABLE = [
+    (section, name)
+    for section, slots in items.SLOTS.items()
+    for name, slot in slots.items()
+    if slot.kind is items.SlotKind.scalar and not slot.derived
+]
+NOT_REMOVABLE = [
+    (section, name)
+    for section, slots in items.SLOTS.items()
+    for name, slot in slots.items()
+    if slot.kind not in (items.SlotKind.scalar, items.SlotKind.setting)
+]
+
+
+@pytest.mark.parametrize(("section", "name"), NOT_REMOVABLE, ids="{0[0]}.{0[1]}".format)
+def test_a_removal_of_an_entry_a_line_or_a_list_is_refused_whatever_its_key(
+    section: str, name: str
+) -> None:
+    document = citations.prepare(CLEAN)
+    # The list alone, the whole key of an entry as `items.entry_key` writes it, a key with an
+    # empty or a free identity: the agent cannot see the profile, so none of them is accepted.
+    for key in (name, f"{name}:example-works-2021", f"{name}:", f"{name}:Camille Durand"):
+        made, verdict = tools._judge(
+            section, item(key, None, NAME_LINES, action="remove"), document
+        )
+        assert (made, verdict) == (None, tools._Refused(tools.REMOVAL_OF_A_LIST, "action")), key
+    # Near misses of the name are no slot at all: refused by the item model, never stored.
+    for key in (name.upper(), f" {name}", f"{name}s:x", f"{section}.{name}"):
+        made, verdict = tools._judge(
+            section, item(key, None, NAME_LINES, action="remove"), document
+        )
+        assert made is None
+        assert isinstance(verdict, tools._Refused)
+        assert verdict.rule in (items.UNKNOWN_KEY, tools.REMOVAL_OF_A_LIST), key
+    # An add of the same slot is not a removal: whatever it gives, it is not refused as one.
+    made, verdict = tools._judge(section, item(name, {}, NAME_LINES), document)
+    assert not (isinstance(verdict, tools._Refused) and verdict.rule == tools.REMOVAL_OF_A_LIST)
+
+
+@pytest.mark.parametrize(("section", "name"), REMOVABLE, ids="{0[0]}.{0[1]}".format)
+def test_a_removal_of_a_field_that_holds_one_value_passes(section: str, name: str) -> None:
+    made, verdict = tools._judge(
+        section, item(name, None, NAME_LINES, action="remove"), citations.prepare(CLEAN)
+    )
+    assert made is not None
+    assert (made.key, made.action, made.value) == (name, items.Action.remove, None)
+    assert isinstance(verdict, citations.Accepted)
+
+
+def test_a_removal_of_a_setting_is_still_named_a_setting() -> None:
+    document = citations.prepare(CLEAN)
+    for section, name in (("skills", "years_experience"), ("search", "min_fit")):
+        made, verdict = tools._judge(
+            section, item(name, None, NAME_LINES, action="remove"), document
+        )
+        assert made is None
+        assert isinstance(verdict, tools._Refused)
+        assert (verdict.rule, verdict.at) == (items.SETTING, "key")
+
+
+def test_a_removal_of_an_entry_is_answered_with_its_rule_and_counted(
+    factory: sessionmaker[Session], clean: Step
+) -> None:
+    removal = item("employers:example-works-2021", None, EMPLOYER_LINE, action="remove")
+    answer, error = call(tools_for(factory, clean), PROPOSE, section="experience", items=[removal])
+    assert error is False
+    assert answer == {
+        "stored": 0,
+        "already_stored": 0,
+        "refused": [
+            refusal(
+                0,
+                tools.REMOVAL_OF_A_LIST,
+                "action",
+                tools.REASONS[tools.REMOVAL_OF_A_LIST],
+            )
+        ],
+    }
+    assert all_items(factory) == 0
+    assert counters(factory, clean) == (0, 1, 0)  # a refusal like the others: it spends the budget
+
+
 def test_a_stored_item_becomes_a_proposal_through_the_item_model(
     factory: sessionmaker[Session], clean: Step
 ) -> None:
@@ -559,6 +644,197 @@ def test_an_item_whose_excerpt_is_only_in_another_document(
         (1, "excerpt_not_found"),
     ]
     assert all_items(factory) == 0
+
+
+# --- the value checked is the value stored --------------------------------------------------------
+
+# A document, and true items whose value the section model cleans into another one (case, spaces,
+# Unicode composition, fields it adds as null, duplicate terms) next to items it keeps as given.
+CLEANED_TEXT = (
+    "  Zoë Müller  \n"
+    "Email: Zoë.Müller@Example.org\n"
+    "E-mail : CAMILLE@EXAMPLE.ORG\n"
+    "Phone: +33 1 99 00 12 34\n"
+    "Website: https://camille.example.org\n"
+    "Title: Data\u00a0Engineer\u2003 lead\n"
+    "Languages: French native, English fluent (C1)\n"
+    "Portfolio link: GitHub https://github.example.org/camille\n"
+    "Example Works, Data Engineer, January 2021 to March 2023, Lyon\n"
+    "Cafe\u0301 Example, Barista, 2019, Paris\n"
+    "Example School, MSc Computer Science, 2015 to 2017, Grenoble, thesis on stream joins\n"
+    "Projects: Warehouse pipeline. Built the ingestion pipeline for 12 regional warehouses.\n"
+    "Skills: Python, SQL, Kafka and Airflow in production\n"
+    "Looking for: Data Engineer or Platform Engineer roles, remote or Lyon.\n"
+    "Authorised to work in France without sponsorship, as an EU citizen.\n"
+    "Notice period: three months. Available from 2026-01.\n"
+)
+TRUE_ITEMS: list[tuple[str, dict[str, Any]]] = [
+    (
+        "identity",
+        item("full_name", "  Zoë Müller ", "  Zoë Müller  \nEmail: Zoë.Müller@Example.org"),
+    ),
+    ("identity", item("email", "Zoë.Müller@Example.org", "Email: Zoë.Müller@Example.org")),
+    ("identity", item("email", "CAMILLE@EXAMPLE.ORG", "E-mail : CAMILLE@EXAMPLE.ORG")),
+    ("identity", item("phone", "+33 1 99 00 12 34", "Phone: +33 1 99 00 12 34")),
+    (
+        "identity",
+        item("website", "https://camille.example.org", "Website: https://camille.example.org"),
+    ),
+    (
+        "identity",
+        item("headline", "Data\u00a0Engineer\u2003 lead", "Title: Data\u00a0Engineer\u2003 lead"),
+    ),
+    (
+        "identity",
+        item("languages", {"name": "French"}, "Languages: French native, English fluent (C1)"),
+    ),
+    (
+        "identity",
+        item(
+            "languages",
+            {"name": "English", "level": "fluent (C1)"},
+            "Languages: French native, English fluent (C1)",
+        ),
+    ),
+    (
+        "identity",
+        item(
+            "links",
+            {"label": "GitHub", "url": "https://github.example.org/camille"},
+            "Portfolio link: GitHub https://github.example.org/camille",
+        ),
+    ),
+    (
+        "experience",
+        item(
+            "employers",
+            {
+                "organisation": "Example Works",
+                "title": "Data Engineer",
+                "start": "2021",
+                "end": "2023",
+            },
+            "Example Works, Data Engineer, January 2021 to March 2023, Lyon",
+        ),
+    ),
+    (
+        "experience",
+        item(
+            "employers",
+            {"organisation": "Cafe\u0301 Example", "title": "Barista", "start": "2019"},
+            "Cafe\u0301 Example, Barista, 2019, Paris",
+        ),
+    ),
+    (
+        "experience",
+        item(
+            "education",
+            {
+                "school": "Example School",
+                "degree": "MSc Computer Science",
+                "start": "2015",
+                "end": "2017",
+                "details": "thesis on stream joins",
+            },
+            "Example School, MSc Computer Science, 2015 to 2017, Grenoble, thesis on stream joins",
+        ),
+    ),
+    (
+        "facts",
+        item(
+            "blocks",
+            {
+                "title": "Warehouse pipeline",
+                "body": "Built the ingestion pipeline for 12 regional warehouses.",
+            },
+            "Warehouse pipeline. Built the ingestion pipeline for 12 regional warehouses.",
+        ),
+    ),
+    (
+        "skills",
+        item(
+            "have",
+            {"name": "Data", "terms": ["Python", "SQL", "Kafka", "python"]},
+            "Skills: Python, SQL, Kafka and Airflow in production",
+        ),
+    ),
+    (
+        "search",
+        item(
+            "title_include",
+            {"terms": ["Data Engineer", "Platform Engineer"]},
+            "Looking for: Data Engineer or Platform Engineer roles, remote or Lyon.",
+        ),
+    ),
+    (
+        "answers",
+        item(
+            "work_authorization",
+            {
+                "country": "France",
+                "answer": "Authorised to work in France without sponsorship, as an EU citizen.",
+            },
+            "Authorised to work in France without sponsorship, as an EU citizen.",
+        ),
+    ),
+    ("answers", item("notice_period", "three months", "Notice period: three months. Available")),
+    (
+        "answers",
+        item("earliest_start", "2026-01", "Notice period: three months. Available from 2026-01."),
+    ),
+]
+
+
+def checked_as_stored(row: IngestionItem, document: citations.Document) -> object:
+    """The check of a stored row: its cleaned value against the excerpts it stores."""
+    excerpts = [one["excerpt"] for one in row.citations]
+    return citations.check_item(tools.as_item(row).field_types, row.value, document, excerpts)
+
+
+def test_every_stored_value_passes_the_check_as_the_proposed_one_did(
+    factory: sessionmaker[Session], alice_id: uuid.UUID
+) -> None:
+    step = add_step(factory, alice_id, add_document(factory, alice_id, CLEANED_TEXT))
+    step_tools = tools_for(factory, step)
+    for section in dict.fromkeys(section for section, _ in TRUE_ITEMS):
+        proposed = [entry for of, entry in TRUE_ITEMS if of == section]
+        answer, error = call(step_tools, PROPOSE, section=section, items=proposed)
+        assert (error, answer["refused"], answer["stored"]) == (False, [], len(proposed)), section
+    rows = stored_items(factory, step)
+    assert len(rows) == len(TRUE_ITEMS)
+    proposed_values = [entry["value"] for _, entry in TRUE_ITEMS]
+    assert sum(row.value not in proposed_values for row in rows) >= 8  # cleaned into another value
+    document = citations.prepare(CLEANED_TEXT)
+    for row in rows:
+        assert isinstance(checked_as_stored(row, document), citations.Accepted), row.key
+
+
+def test_a_cleaned_value_that_its_excerpts_do_not_hold_is_refused_and_not_stored(
+    factory: sessionmaker[Session], clean: Step, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No section model does this today: a later cleaning that rewrites a value (another
+    address here) is refused by the check of the value stored, whatever passed before it."""
+    real = items.build
+
+    def rewriting(*args: Any, **kwargs: Any) -> items.Item:
+        made = real(*args, **kwargs)
+        return dataclasses.replace(made, value="c.durand@example.org")
+
+    monkeypatch.setattr(items, "build", rewriting)
+    answer, error = call(tools_for(factory, clean), PROPOSE, section="identity", items=[EMAIL])
+    assert error is False
+    assert answer["stored"] == 0
+    assert [(one["index"], one["rule"], one["at"]) for one in answer["refused"]] == [
+        (0, citations.Rule.ADDRESS_NOT_IN_SOURCE.value, "value")
+    ]
+    assert all_items(factory) == 0
+    assert counters(factory, clean) == (0, 1, 0)
+    # The same item, cleaned as today, passes: the refusal came from the rewritten value alone.
+    monkeypatch.setattr(items, "build", real)
+    assert (
+        call(tools_for(factory, clean), PROPOSE, section="identity", items=[EMAIL])[0]["stored"]
+        == 1
+    )
 
 
 def test_calls_and_items_of_the_wrong_shape(factory: sessionmaker[Session], clean: Step) -> None:
