@@ -19,8 +19,8 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
  * mocks, one fresh account and only invented data: a posting's CV rendered once through the api
  * (as D12's journey ends), then, through the page, its summary changed in the Edit view with the
  * template's counter, saved by itself and drawn as version 2; then version 1 restored into the
- * draft and approved from the version history of the See view. The Edit view is checked on a
- * phone and a desktop viewport for horizontal overflow.
+ * draft and approved from the version history of the See view. The Edit view and the history
+ * are checked on a phone and a desktop viewport for horizontal overflow (`makeShots`).
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
  *   HTTP_PORT=8099 docker compose -p jobapp-d16 -f compose.yml -f compose.mac.yml up -d --wait
@@ -132,6 +132,7 @@ test("version 1 is restored into the draft and approved from the history", async
     history.getByRole("button", { name: "Approve version 1" }),
   ).toHaveCount(0);
   await expect(history).toContainText("approved");
+  await makeShots(EVIDENCE, "d16")(page, "history");
 
   await page.getByRole("tab", { name: "Edit" }).click();
   await expect(page.getByLabel("Summary", { exact: true })).toHaveValue(
