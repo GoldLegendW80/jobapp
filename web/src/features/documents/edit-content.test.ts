@@ -119,6 +119,8 @@ describe("the draft of the Edit view", () => {
     expect(softLimit(undefined, ["summary"])).toBeNull();
     expect(characters("  two   words\t ")).toBe(9);
     expect(characters("Zoë 🙂")).toBe(5);
+    expect(characters("Zoë")).toBe(3);
+    expect(characters("one \r\n  two")).toBe(7);
   });
 
   it("moves an entry, and leaves the list as it is for a place outside it", () => {

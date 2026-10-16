@@ -284,9 +284,18 @@ export function softLimit(
   return limits[name] ?? null;
 }
 
-/** Characters as the api counts them: runs of spaces as one, the ends trimmed, by code point. */
+/** Characters as content._tidy leaves them: NFC, space runs as one, lines trimmed, by code point. */
 export const characters = (text: string): number =>
-  Array.from(text.replace(/[ \t]+/g, " ").trim()).length;
+  Array.from(
+    text
+      .normalize("NFC")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[ \t]+/g, " ")
+      .split("\n")
+      .map((line) => line.trim())
+      .join("\n")
+      .trim(),
+  ).length;
 
 // --- two drafts ---------------------------------------------------------------------------------
 
