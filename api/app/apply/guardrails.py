@@ -23,15 +23,21 @@ so it refuses as a match would (`rules_unreadable`).
 - `posting_closed`: the posting's status is `closed`;
 - `same_form`: another posting of the person has a live application, or an applied status, on the
   same canonical form address (`canonical_key`; a second partial unique index holds the first);
+- `same_address`: as `same_form`, for an applied posting whose address is an ordinary one (a `url:`
+  key, often one careers page for many roles), so Apply myself can show it as a warning;
 - `same_role`: another posting of the person, at the same company and with the same normalised
   title (`company_key`, `title_key`), was submitted by the app (or is `submitting`, its click under
-  way), or has an applied status with its
-  `applied_on`, in the last 180 days, counted from `now`: at exactly 180 days it is still refused.
+  way), or has an applied status with its `applied_on` in the last 180 days, counted from `now`:
+  at exactly 180 days it is still refused. An applied status without `applied_on` counts too: its
+  date is unknown, so nothing shows it is older (fail closed).
 
 **The form address** (`canonical_key`). Ashby, Greenhouse and Lever job ids are global, so the key
 is the ATS and its id, wherever the form is shown: `ashby:<uuid>` from jobs.ashbyhq.com/<org>/<id>
-or `?ashby_jid=`; `greenhouse:<number>` from (job-)boards(.eu).greenhouse.io/<org>/jobs/<id>, the
-embed's `?token=` or a company page's `?gh_jid=`; `lever:<uuid>` from jobs(.eu).lever.co/<org>/<id>.
+or `?ashby_jid=`; `greenhouse:<number>` from (job-)boards(.eu).greenhouse.io/<org>/jobs/<id> (the
+segment `jobs` in any case), the boards API's boards-api.greenhouse.io/v1/boards/<org>/jobs/<id>,
+the embed's `?token=` or a company page's `?gh_jid=`; `lever:<uuid>` from
+jobs(.eu).lever.co/<org>/<id>. A path is read only on the ATS's own domain or a subdomain of it
+("notashbyhq.com" is an ordinary address).
 Any other address is `url:` and the jobs module's normalised address (`slug.url_key`: http and
 https alike, host lowercase without www, no fragment, no trailing slash, no tracking parameter).
 An address that is not http or https has no form (`None`).
@@ -40,11 +46,20 @@ Declared open points (what these rules still miss, each toward applying):
 - a never apply term in another language than the rule's ("sécurité" for "security") or a
   synonym: the person writes those terms in the rule;
 - a term inside a word that neither starts nor ends with it ("cyber" in "anticyberattack");
+- a term split by something drawn as a space or a mark ("S e c u r i t y", "Secu-rity", the
+  Braille blank U+2800), and letters drawn like Latin ones in scripts outside the lookalike table
+  (Armenian U+057D for "u", Cherokee U+13DA for "S"); a small letter is read as its capital is,
+  so a reading of the small letter alone is lost: Greek small eta is "h" (not "n"), small mu "m"
+  and small upsilon "y" (not "u"), small nu "n" (not "v"), the Cyrillic palochka "i" (not "l"),
+  and gamma and the lunate sigma U+03F2 (which NFKC makes a sigma) are not read; the stated cost
+  on the other side: a Cyrillic or Greek title is read with its lookalike letters as Latin ones, so
+  a Latin term could match a word of it;
 - the same role under two different titles ("ML Engineer" and "Machine Learning Engineer"), or a
   title that adds a city in parentheses: only accents, case, punctuation and gender markers
   ("H/F", "(m/w/d)") are dropped from a title, and only legal forms ("SAS", "Inc.") from a company;
 - a form shown under an address the three ATS patterns do not cover (a company page that embeds
-  Ashby without `ashby_jid`): it is compared as an address.
+  Ashby without `ashby_jid`): it is compared as an address. A live application started on a boards
+  API address before these were keyed keeps its `url:` key.
 """
 
 import re
@@ -90,12 +105,14 @@ SENTENCES = {
     "already_applied": "This posting is marked as applied.",
     "posting_closed": "This posting is closed.",
     "same_form": "This application form was already used for another of your postings.",
+    "same_address": "Another of your postings with this address is marked as applied.",
     "same_role": "You applied to the same role at this company less than 180 days ago.",
 }
 # What Apply myself shows instead of refusing: the person decides, the app does not click.
 WARNINGS = {
     "never_apply_role": NEVER_APPLY,
     "rules_unreadable": "Your never apply rules could not be read.",
+    "same_address": SENTENCES["same_address"],
     "same_role": SENTENCES["same_role"],
 }
 
@@ -114,14 +131,36 @@ class Refusal:
 
 
 _JOINERS = re.compile(r"[\s\-\u2010-\u2015_/.]+")
+# What a reader does not see: format characters (soft hyphen, zero width space and joiners, word
+# joiner, BOM, bidi marks), controls, surrogates, private use and unassigned code points, and the
+# nonspacing and enclosing marks (accents, variation selectors, the grapheme joiner).
+_UNSEEN = frozenset({"Cf", "Cc", "Cs", "Co", "Cn", "Mn", "Me"})
+_HANGUL_FILLERS = frozenset("\u115f\u1160")  # letters drawn as nothing (NFKC maps U+3164 here)
+# Keys are small letters as NFKC, NFKD and the case fold leave them: any other key is never reached.
+_LOOKALIKES = str.maketrans(
+    "авекмнорстхуѕіјһԁԛԝүӏαβεζηικμνορτυχϳᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘʀꜱᴛᴜᴠᴡʏᴢıȷɑɡɩ",
+    "abekmhopctxysijhdqwyiabezhikmnoptyxjabcdefghijklmnoprstuvwyzijagi",
+)
+
+
+def _seen(c: str) -> bool:
+    if c.isspace():
+        return True  # a tab or a line break separates words, as a space does
+    if unicodedata.combining(c) or c in _HANGUL_FILLERS:
+        return False
+    return unicodedata.category(c) not in _UNSEEN
 
 
 def fold(text: str) -> str:
-    """NFKC then NFKD with the combining marks dropped, case folded, and every run of spaces,
-    hyphens, underscores, slashes and dots one space: "Sécurité" is "securite", a full width
-    letter is its plain one, "Red-Team" and "red_team" are "red team"."""
+    """NFKC then NFKD with what a reader does not see dropped (`_UNSEEN`: accents, soft hyphens,
+    zero width characters), case folded, lookalike letters then read as Latin, and every run of
+    spaces, hyphens, underscores, slashes and dots one space: "Sécurité" is "securite", a full
+    width letter is its plain one, "Secu\u00adrity" (a soft hyphen) and "Security" written with
+    Cyrillic letters are "security", "Red-Team" and "red_team" are "red team". The lookalikes are
+    read after the case fold, so a capital and its small letter read as one letter (Greek capital
+    and small eta are both "h"), and a rule matches a title whatever the case of either."""
     decomposed = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))
-    plain = "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+    plain = "".join(c for c in decomposed if _seen(c)).casefold().translate(_LOOKALIKES)
     return _JOINERS.sub(" ", plain)
 
 
@@ -218,6 +257,24 @@ def unstub(url: str, stub_base: str | None) -> str:
     return f"https://{hosts[first]}/{tail}" if first in hosts else url
 
 
+def _on(host: str, domain: str) -> bool:
+    """`host` is `domain` or one of its subdomains: "notashbyhq.com" is not Ashby's."""
+    return host == domain or host.endswith("." + domain)
+
+
+def _greenhouse_job(segments: list[str], query: dict[str, str]) -> str | None:
+    """The job id of a Greenhouse address: a board's /<org>/jobs/<id>, the boards API's
+    /v1/boards/<org>/jobs/<id>, the embed's /embed/job_app?token=<id>, segment names in any case."""
+    lowered = [segment.lower() for segment in segments]
+    if len(lowered) >= 3 and lowered[1] == "jobs":
+        return _number(segments[2])
+    if len(lowered) >= 5 and lowered[:2] == ["v1", "boards"] and lowered[3] == "jobs":
+        return _number(segments[4])
+    if lowered[-2:] == ["embed", "job_app"]:
+        return _number(query.get("token", ""))
+    return None
+
+
 def ats_of(url: str) -> str:
     """`ashby`, `greenhouse`, `lever` by the form's host, else `other`."""
     found = _host(url)
@@ -225,9 +282,9 @@ def ats_of(url: str) -> str:
         return "other"
     host, _, query = found
     for ats, domain in (("ashby", "ashbyhq.com"), ("greenhouse", "greenhouse.io")):
-        if host == domain or host.endswith("." + domain):
+        if _on(host, domain):
             return ats
-    if host == "lever.co" or host.endswith(".lever.co"):
+    if _on(host, "lever.co"):
         return "lever"
     if _uuid(query.get("ashby_jid", "")):
         return "ashby"
@@ -246,17 +303,12 @@ def canonical_key(url: str | None) -> str | None:
     host, segments, query = found
     ats = ats_of(url)
     if ats == "ashby":
-        job = _uuid(segments[1]) if host.endswith("ashbyhq.com") and len(segments) >= 2 else None
+        job = _uuid(segments[1]) if _on(host, "ashbyhq.com") and len(segments) >= 2 else None
         job = job or _uuid(query.get("ashby_jid", ""))
         if job:
             return f"ashby:{job}"
     if ats == "greenhouse":
-        job = None
-        if host.endswith("greenhouse.io"):
-            if len(segments) >= 3 and segments[1] == "jobs":
-                job = _number(segments[2])
-            elif segments[-2:] == ["embed", "job_app"]:
-                job = _number(query.get("token", ""))
+        job = _greenhouse_job(segments, query) if _on(host, "greenhouse.io") else None
         job = job or _number(query.get("gh_jid", ""))
         if job:
             return f"greenhouse:{job}"
@@ -355,7 +407,7 @@ def duplicates(
     ).all()
     for _, _, url, _ in applied:
         if url is not None and canonical_key(url) == key:
-            return Refusal("same_form")
+            return Refusal("same_address" if key.startswith("url:") else "same_form")
     clicked = db.execute(
         sa.select(Job.company, Job.title)
         .join(Application, Application.posting_id == Job.id)
@@ -370,7 +422,7 @@ def duplicates(
     recent += [
         (company, title)
         for company, title, _, applied_on in applied
-        if applied_on is not None and applied_on >= since.date()
+        if applied_on is None or applied_on >= since.date()
     ]
     role = (company_key(posting.company), title_key(posting.title))
     if any((company_key(c), title_key(t)) == role for c, t in recent):
