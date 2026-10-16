@@ -187,9 +187,10 @@ release runs on the new schema**. A migration must leave it able to.
   column without a `server_default` (the previous release inserts rows without it), tighten a
   constraint its writes would break.
 - A migration is one transaction and must be quick: a statement waits at most `LOCK_TIMEOUT`
-  (5 seconds, `api/alembic/env.py`) for a lock the running release holds, then the migration
-  fails and is rolled back whole, and the deploy is run again; the whole migration is stopped
-  after `MIGRATE_TIMEOUT_S` (300 seconds), rolled back.
+  (5 seconds, `api/alembic/env.py`) for a lock the running release holds. Past that the migration
+  fails, is rolled back whole and stops the deploy before the new code starts (`ops/migrate.sh`):
+  run the deploy again. Nothing retries it by itself. The whole migration is stopped after
+  `MIGRATE_TIMEOUT_S` (300 seconds), rolled back.
 - `downgrade()` is still written and tested, for a human who decides to go back; no deploy runs it.
 
 What the code stores in JSONB follows the same rule. The sections of a profile are validated on
