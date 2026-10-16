@@ -1,0 +1,27 @@
+# Behind a TLS inspecting proxy only (README, Behind a TLS inspecting proxy): add this file last to
+# a build, and the PEM bundle JOBAPP_EXTRA_CA names (an absolute path, outside the repository)
+# reaches each image build as the BuildKit secret extra_ca, never a container or a layer:
+#   JOBAPP_EXTRA_CA=/path/bundle.pem docker compose -f compose.yml -f compose.mac.yml -f compose.extra-ca.yml build
+# ops/local-check.sh adds it to its step images when the variable is set. deploy.sh and
+# .github/workflows/deploy.yml never name it (tests/extra_ca_test.sh).
+
+services:
+  caddy:
+    build:
+      secrets: [extra_ca]
+  api:
+    build:
+      secrets: [extra_ca]
+  worker:
+    build:
+      secrets: [extra_ca]
+  renderer:
+    build:
+      secrets: [extra_ca]
+  browser:
+    build:
+      secrets: [extra_ca]
+
+secrets:
+  extra_ca:
+    file: ${JOBAPP_EXTRA_CA:?set JOBAPP_EXTRA_CA to the absolute path of a PEM bundle, or leave this file out}

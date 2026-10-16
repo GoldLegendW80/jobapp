@@ -13,11 +13,19 @@ FROM ${PYTHON_IMAGE}
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-RUN pip install --no-cache-dir playwright==1.55.0 \
+# extra_ca: a bundle pip and Playwright's download trust beside their own, given only behind a TLS
+# inspecting proxy (README); apt reads deb.debian.org over http and needs none.
+RUN --mount=type=secret,id=extra_ca,required=false \
+    if [ -s /run/secrets/extra_ca ]; then \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/extra_ca >/tmp/extra-ca.pem \
+      && export PIP_CERT=/tmp/extra-ca.pem SSL_CERT_FILE=/tmp/extra-ca.pem \
+         NODE_EXTRA_CA_CERTS=/run/secrets/extra_ca; \
+    fi \
+    && pip install --no-cache-dir playwright==1.55.0 \
     && playwright install --with-deps --only-shell chromium \
     && apt-get install -y --no-install-recommends fonts-dejavu-core \
     && fc-cache -f \
-    && rm -rf /var/lib/apt/lists/* /root/.cache \
+    && rm -rf /var/lib/apt/lists/* /root/.cache /tmp/extra-ca.pem \
     && groupadd --system --gid 10003 renderer \
     && useradd --system --uid 10003 --gid renderer --no-create-home --home-dir /tmp \
        --shell /usr/sbin/nologin renderer
