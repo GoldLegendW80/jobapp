@@ -295,6 +295,17 @@ describe("documents for new postings: Advanced", () => {
     expect(card().textContent).not.toMatch(DASHES);
   });
 
+  it("at 0 with a single scored posting, says it has a fit score", async () => {
+    const { user } = await openSearch({ fits: [40] });
+    await openAdvanced(user);
+    fireEvent.change(slider(), { target: { value: "0" } });
+    expect(
+      await within(screen.getByTestId("documents-threshold")).findByText(
+        "At 0 the threshold holds nothing back: 1 posting of the last 30 days has a fit score.",
+      ),
+    ).toBeVisible();
+  });
+
   it.each(["501", "600", "0", "", "  ", "12.5", "1e2", "-3", "abc", "1000"])(
     "refuses a safety ceiling of %j with the sentence and saves nothing",
     async (value) => {
