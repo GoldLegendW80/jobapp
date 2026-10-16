@@ -512,6 +512,27 @@ async def take_screenshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def box(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
+    """The element's box in CSS pixels of the full page screenshot, and the device scale: for the
+    app to outline a designated submit on its "before" screenshot (apply A8). Reads only."""
+    locator, gone = await tab.element(args)
+    if gone:
+        return gone
+    found = await locator.bounding_box(timeout=ACTION_S * 1000)
+    if found is None:
+        return refused("not_visible")
+    page = await tab.page()
+    x, y, scale = await page.evaluate("() => [window.scrollX, window.scrollY, devicePixelRatio]")
+    return {
+        "ok": True,
+        "x": found["x"] + x,
+        "y": found["y"] + y,
+        "width": found["width"],
+        "height": found["height"],
+        "scale": scale,
+    }
+
+
 async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     action = args.get("action", "list")
     await tab.page()
@@ -554,6 +575,7 @@ TOOLS: dict[str, Tool] = {
     "browser_check": check,
     "browser_file_upload": file_upload,
     "browser_press_key": press_key,
+    "browser_box": box,
     "browser_wait_for": wait_for,
     "browser_take_screenshot": take_screenshot,
     "browser_tabs": tabs,
