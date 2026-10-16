@@ -123,7 +123,7 @@ test("the gallery lists the templates and filters those with no photo", async ()
 
   await page.getByLabel("Photo").selectOption({ label: "No photo" });
   await expect(page.getByText(/ of \d+ templates match\./)).toBeVisible();
-  const cards = all.locator("[data-testid^=template-]");
+  const cards = all.locator("li[data-testid^=template-]");
   const shown = await cards.count();
   expect(shown).toBeGreaterThan(0);
   expect(shown).toBeLessThan(served);
@@ -148,7 +148,7 @@ test("on a phone the gallery is a grid of two", async () => {
   await page.goto("/documents/templates");
   const cards = page
     .getByRole("region", { name: "All templates" })
-    .locator("[data-testid^=template-]");
+    .locator("li[data-testid^=template-]");
   await expect(cards.nth(2)).toBeVisible();
   const [first, second, third] = await Promise.all(
     [0, 1, 2].map(async (index) => cards.nth(index).boundingBox()),
