@@ -22,8 +22,9 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * its way out: the default ones are written for another profile (their employer keys are no
  * fixed employer of this one) and would end without a result. Add a posting with fit 80, open
  * it, write its CV and letter with one click, see both page 1 previews and "Based on" naming the
- * base CV, open the CV, download the PDF; the posting is `cv_ready`. A posting with fit 40 says
- * it is under the threshold and "Write now" writes its CV.
+ * base CV; the posting is `cv_ready` and its badge says so without a reload. Open the CV, download
+ * the PDF. Write the CV again from a copy of the base CV: the letter follows it. A posting with
+ * fit 40 says it is under the threshold and "Write now" writes its CV.
  *
  * Locally, as documents-d6.spec.ts (AGENTS_FAKE_BACKEND=1 on the worker), then:
  *   E2E_CADDY_URL=http://127.0.0.1:8099 E2E_COMPOSE_PROJECT=jobapp-d12 \
@@ -49,6 +50,9 @@ let errors: string[];
 let high: string;
 let low: string;
 let baseName: string;
+let baseId: string;
+/** The bodies the page sent to the write route, in order. */
+const written: { kinds: string[]; base_document_id?: string }[] = [];
 
 async function documentsOf(job: string): Promise<PostingDocument[]> {
   const response = await page.request.get(`/api/jobs/${job}/documents`);
@@ -79,11 +83,10 @@ test.beforeAll(async ({ browser }) => {
       await route.continue();
       return;
     }
+    const body = request.postDataJSON() as (typeof written)[number];
+    written.push(body);
     await route.continue({
-      postData: JSON.stringify({
-        ...(request.postDataJSON() as object),
-        script: "journey",
-      }),
+      postData: JSON.stringify({ ...body, script: "journey" }),
     });
   });
 });
@@ -117,6 +120,7 @@ test("an invented person has the consent, a base CV and a posting at fit 80", as
     (await built.json()) as { base_cv: { id: string; name: string } }
   ).base_cv;
   baseName = base.name;
+  baseId = base.id;
   await waitForRender(page.request, base.id, 1);
 
   high = await addPosting(page.request, person);
@@ -144,20 +148,35 @@ test("both cards are written with one click and show a one page preview", async 
   const [cv] = (await documentsOf(high)).filter((one) => one.kind === "cv");
   await waitForRender(page.request, cv?.id ?? "", 1);
 
-  for (const card of ["posting-cv", "posting-letter"]) {
-    await expect(section.getByTestId(card)).toContainText(
-      "Ready, on one page",
-      {
-        timeout: 60_000,
-      },
-    );
+  // No reload from here on: the page reads the letter that follows the CV, and the posting.
+  for (const [card, noun] of [
+    ["posting-cv", "CV"],
+    ["posting-letter", "letter"],
+  ] as const) {
+    const one = section.getByTestId(card);
+    await expect(one).toContainText("Ready, on one page", { timeout: 60_000 });
     await expect(
-      section.getByTestId(card).getByRole("img", { name: /^Page 1 of/ }),
+      one.getByRole("img", { name: `Page 1 of the ${noun}, version 1` }),
+    ).toBeVisible();
+    await expect(
+      one.getByRole("link", { name: `Open the ${noun}`, exact: true }),
+    ).toBeVisible();
+    await expect(
+      one.getByRole("link", {
+        name: `Download PDF of the ${noun}`,
+        exact: true,
+      }),
     ).toBeVisible();
   }
   await expect
     .poll(() => jobStatus(page.request, high), { timeout: 30_000 })
     .toBe("cv_ready");
+  await expect(page.locator("[data-status]")).toHaveAttribute(
+    "data-status",
+    "cv_ready",
+    { timeout: 30_000 },
+  );
+  await expect(page.locator("[data-status]")).toHaveText("CV ready");
   keep(EVIDENCE, "cards.png", await page.screenshot({ fullPage: true }));
 });
 
@@ -165,7 +184,7 @@ test("the CV opens in the document view and downloads as a one page PDF", async 
   await page.goto(`/jobs/${high}`);
   await page
     .getByTestId("posting-cv")
-    .getByRole("link", { name: /^Open/ })
+    .getByRole("link", { name: "Open the CV", exact: true })
     .click();
   await expect(page).toHaveURL(new RegExp(`/jobs/${high}/documents/cv$`));
   await expect(page.getByTestId("fit")).toHaveText("One page");
@@ -179,6 +198,40 @@ test("the CV opens in the document view and downloads as a one page PDF", async 
   expect(pdf.pages).toBe(1);
   expect(pdf.text).toContain(person.name);
   keep(EVIDENCE, "cv.pdf", pdf.bytes);
+});
+
+test("the CV written again from another base CV takes the letter along", async () => {
+  const copied = await page.request.post("/api/documents/base-cvs", {
+    headers: CSRF,
+    data: { from: "copy", copy_of: baseId, name: "Copy for D12" },
+  });
+  expect(copied.status()).toBe(201);
+  const copy = ((await copied.json()) as { base_cv: { id: string } }).base_cv;
+
+  await page.goto(`/jobs/${high}`);
+  const cv = page.getByTestId("posting-cv");
+  await cv.getByRole("combobox").selectOption(copy.id);
+  await expect(cv).toContainText(
+    "The letter is then written again from the new CV.",
+  );
+  await cv.getByRole("button", { name: "Write it again from this CV" }).click();
+  await expect
+    .poll(
+      async () =>
+        (await documentsOf(high)).map((one) => one.latest?.number ?? 0),
+      { timeout: 150_000, intervals: [500, 1_000, 2_000] },
+    )
+    .toEqual([2, 2]);
+  expect(written.at(-1)).toEqual({
+    kinds: ["cv", "letter"],
+    base_document_id: copy.id,
+  });
+  for (const card of ["posting-cv", "posting-letter"]) {
+    await expect(page.getByTestId(card)).toContainText("Ready, on one page", {
+      timeout: 60_000,
+    });
+  }
+  await expect(cv).toContainText("Based on: Copy for D12");
 });
 
 test("a posting under the threshold says so, and Write now writes its CV", async () => {
