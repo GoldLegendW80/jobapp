@@ -1,6 +1,6 @@
 {
   "label": "before: origin/main at 0998726",
-  "api_dir": "/Users/harald-thorvaldhautin/Desktop/job/app/.claude/worktrees/p108-base/api",
+  "api_dir": "/Users/owner/Desktop/job/app/.claude/worktrees/p108-base/api",
   "machine": "development Mac, not the Jetson; resident memory of the uvicorn process",
   "rest_mib": 145,
   "one_sign_in_at_a_time": {

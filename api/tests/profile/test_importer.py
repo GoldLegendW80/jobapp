@@ -2,7 +2,9 @@
 blocks and answers, skills and boards conversion, regex splitting, missing and broken files."""
 
 import base64
+import dataclasses
 import json
+import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +30,7 @@ from app.profile.schemas import completeness
 from tests.profile import images
 
 NOW = datetime(2026, 10, 8, 9, 30, tzinfo=UTC)
+FIXTURES = Path(__file__).parent / "fixtures"
 
 ASSEMBLE = '''\
 """A minimal assemble.py."""
@@ -572,3 +575,19 @@ def test_plain_terms_semantics() -> None:
     assert not matching.matches([], False, "anything")
     assert matching.compile_terms([], True) is None
     assert matching.plain_pattern("a.b") == r"(?<!\w)a\.b(?:s|es)?(?!\w)"
+
+
+def test_the_owner_fixture_is_the_importer_output_of_its_invented_sources(tmp_path: Path) -> None:
+    """fixtures/owner_export.json, read by the export, sweep and web tests, is what the importer
+    makes of fixtures/owner_sources (an invented person). After an intended change of those
+    sources or of the converter, regenerate it with UPDATE_GOLDEN=1 and review the diff."""
+    photo = tmp_path / "photo.b64"
+    photo.write_text(base64.b64encode(images.jpeg(420, 420)).decode(), encoding="utf-8")
+    paths = dataclasses.replace(SourcePaths.under(FIXTURES / "owner_sources"), photo=photo)
+    document = convert(paths, now=datetime(2026, 10, 8, tzinfo=UTC))
+    view = images.golden_view(json.loads(document.to_json()))
+    text = json.dumps(view, ensure_ascii=False, indent=2) + "\n"
+    golden = FIXTURES / "owner_export.json"
+    if os.environ.get("UPDATE_GOLDEN"):
+        golden.write_text(text, encoding="utf-8")
+    assert golden.read_text(encoding="utf-8") == text

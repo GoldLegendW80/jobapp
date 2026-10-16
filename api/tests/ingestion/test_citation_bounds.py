@@ -39,8 +39,8 @@ CHECK_BUDGET_S = 2.0  # one item against it, twenty excerpts and a long value in
 GROWTH_MAX = 8.0  # the cost of four times the text: about 4 when linear, 16 when quadratic
 
 WORDS = [
-    "Betclic",
-    "Thales",
+    "Lumetra",
+    "Velmor",
     "développeur",
     "ingénieur",
     "full-stack",
@@ -176,7 +176,7 @@ def test_an_item_is_checked_against_500_000_characters_in_bounded_time(large: st
         "terms[]": "term",
     }
     value = {
-        "organisation": "Betclic",
+        "organisation": "Lumetra",
         "title": "Développeur full-stack, 10 000 utilisateurs, 3,5 ans",
         "start": "2023-01",
         "email": "camille.durand@example.org",
@@ -334,7 +334,7 @@ def test_a_long_run_of_combining_marks_is_not_sorted_as_one() -> None:
 # --- crafted values and excerpts -----------------------------------------------------------------
 
 SOURCE = (
-    "Camille Durand, camille.durand@example.org, +33 6 39 98 12 34, Betclic depuis janvier "
+    "Camille Durand, camille.durand@example.org, +33 6 39 98 12 34, Lumetra depuis janvier "
     "2023, version 1.10 du moteur, 10 000 utilisateurs, https://www.example.org/in/camille."
 )
 VALUES = {
@@ -387,7 +387,7 @@ def test_a_crafted_value_costs_no_more_than_its_size(value: str) -> None:
 def test_a_crafted_excerpt_is_refused_at_once(excerpt: str) -> None:
     document = prepare(SOURCE)
     started = time.process_time()
-    result = check_item("text", "Betclic", document, [excerpt])
+    result = check_item("text", "Lumetra", document, [excerpt])
     elapsed = time.process_time() - started
     assert isinstance(result, Refusal)
     assert result.index == "excerpts[0]"
@@ -405,7 +405,7 @@ def test_twenty_excerpts_and_two_thousand_parts() -> None:
     assert isinstance(result, Accepted)
     elapsed = cpu(lambda: check_item("text", flat, document, [SOURCE] * citations.EXCERPTS_MAX))
     assert elapsed < CHECK_BUDGET_S, f"{elapsed:.3f} s"
-    names = ["Betclic depuis janvier"] * citations.VALUE_LEAVES_MAX
+    names = ["Lumetra depuis janvier"] * citations.VALUE_LEAVES_MAX
     elapsed = cpu(lambda: check_item("name", names, document, excerpts), repeat=1)
     assert elapsed < 3 * CHECK_BUDGET_S, f"{elapsed:.3f} s"
 
@@ -465,13 +465,13 @@ def test_a_name_or_an_address_present_everywhere_in_a_span_is_bounded() -> None:
 
 
 def test_a_deeply_nested_value_is_refused_without_recursion() -> None:
-    nested: object = "Betclic"
+    nested: object = "Lumetra"
     for _ in range(50_000):
         nested = [nested]
     assert check_item("text", nested, SOURCE, [SOURCE]) == Refusal(
         "value[0]", Rule.UNKNOWN_FIELD, citations.REASONS[Rule.UNKNOWN_FIELD]
     )
-    deep: object = "Betclic"
+    deep: object = "Lumetra"
     for _ in range(50_000):
         deep = {"a": deep}
     result = check_item({"a": "text"}, deep, SOURCE, [SOURCE])

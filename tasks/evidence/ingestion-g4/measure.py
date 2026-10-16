@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "api"))
 from app.ingestion import citations
 
 WORDS = [
-    "Betclic",
-    "Thales",
+    "Lumetra",
+    "Velmor",
     "développeur",
     "ingénieur",
     "full-stack",
@@ -98,7 +98,7 @@ def main() -> None:
             text[at : at + 250] for at in (start, text.index(" ", size // 3) + 1, 0)
         ]
         value = {
-            "organisation": "Betclic",
+            "organisation": "Lumetra",
             "title": "Développeur full-stack, 10 000 utilisateurs",
             "start": "2023-01",
         }

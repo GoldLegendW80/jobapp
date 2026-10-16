@@ -35,7 +35,7 @@ from tests.identity.api_helpers import Api, Clock, make_user
 from tests.profile import images
 from tests.profile.conftest import ALICE, BOB, FULL, full
 
-FIXTURE = Path(__file__).parent / "fixtures" / "harald_export.json"
+FIXTURE = Path(__file__).parent / "fixtures" / "owner_export.json"
 
 
 def png(width: int = 2, height: int = 2) -> bytes:
@@ -325,7 +325,7 @@ def test_import_normalises_like_a_save(api: Api, alice: str) -> None:
     assert identity["website"] is None
 
 
-def test_harald_fixture_imports_complete(api: Api, alice: str) -> None:
+def test_owner_fixture_imports_complete(api: Api, alice: str) -> None:
     """The checked-in golden output of the importer (photo left out) is a valid import."""
     golden = json.loads(FIXTURE.read_text(encoding="utf-8"))
     golden.pop("photo")

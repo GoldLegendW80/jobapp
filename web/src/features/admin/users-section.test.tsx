@@ -180,7 +180,7 @@ describe("accounts table", () => {
       "Actions",
     ]);
 
-    const mine = await rowOf("Harald Hautin");
+    const mine = await rowOf("Harald Example");
     expect(within(mine).getByText("You")).toBeInTheDocument();
     expect(mine).toHaveTextContent("harald@example.org");
     expect(mine).toHaveTextContent("Admin");
@@ -228,7 +228,7 @@ describe("accounts table", () => {
     expect(screen.getByText(/Database down\./)).toBeInTheDocument();
     fail = false;
     await user.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await rowOf("Harald Hautin")).toBeInTheDocument();
+    expect(await rowOf("Harald Example")).toBeInTheDocument();
   });
 
   it("pages through many accounts", async () => {
@@ -344,7 +344,7 @@ describe("actions", () => {
     await user.keyboard("{Escape}");
     // Your own row: no Disable (another admin does that), demoting allowed with two admins.
     await user.click(
-      screen.getByRole("button", { name: "Actions for Harald Hautin" }),
+      screen.getByRole("button", { name: "Actions for Harald Example" }),
     );
     const own = screen.getAllByRole("menuitem");
     expect(own.map((i) => i.textContent)).toEqual(["Make member"]);
@@ -361,7 +361,7 @@ describe("actions", () => {
     const user = userEvent.setup();
     renderApp("/admin/users");
     await user.click(
-      await screen.findByRole("button", { name: "Actions for Harald Hautin" }),
+      await screen.findByRole("button", { name: "Actions for Harald Example" }),
     );
     expect(
       screen.getByRole("menuitem", { name: "Make member" }),
@@ -388,7 +388,7 @@ describe("actions", () => {
     });
     const user = userEvent.setup();
     renderApp("/admin/users");
-    const dialog = await choose(user, "Harald Hautin", "Make member");
+    const dialog = await choose(user, "Harald Example", "Make member");
     expect(
       within(dialog).getByRole("heading", { name: "Give up your admin role?" }),
     ).toBeInTheDocument();
@@ -457,7 +457,7 @@ describe("actions", () => {
       await screen.findByRole("link", { name: "Admin" }),
     ).toBeInTheDocument();
 
-    const dialog = await choose(user, "Harald Hautin", "Make member");
+    const dialog = await choose(user, "Harald Example", "Make member");
     expect(dialog).toHaveTextContent("You lose the admin area at once");
     await user.click(
       within(dialog).getByRole("button", { name: "Make me a member" }),
