@@ -512,7 +512,7 @@ def test_an_excerpt_across_two_pages() -> None:
 
 
 def test_hyphenation_and_line_breaks_are_forgiven_on_both_sides() -> None:
-    source = "Développeur full-\nstack chez Dev-\nTech Solutions"
+    source = "Développeur full-\nstack chez Nox-\nTech Solutions"
     for excerpt in (
         "Développeur full-stack chez NoxTech Solutions",
         "Développeur fullstack chez Nox Tech Solutions",

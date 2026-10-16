@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { completenessOf, roundHalfEven } from "./completeness";
 
 // Expected values computed with api/app/profile/schemas.py `completeness` (the judge).
-const harald = JSON.parse(
+const owner = JSON.parse(
   readFileSync(
     path.resolve(
       path.dirname(fileURLToPath(import.meta.url)),
@@ -66,7 +66,7 @@ describe("roundHalfEven, as Python's round", () => {
 
 describe("completenessOf matches the api", () => {
   it("Harald's real import is 100% everywhere", () => {
-    const result = completenessOf(harald.sections);
+    const result = completenessOf(owner.sections);
     expect(result.overall).toBe(100);
     for (const section of Object.values(result.sections)) {
       expect(section).toEqual({ percent: 100, missing: [] });
