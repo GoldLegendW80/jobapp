@@ -224,7 +224,7 @@ describe("restore", () => {
     expect(screen.getByLabelText("Headline")).toHaveValue(
       "Applied AI Engineer",
     );
-    expect(screen.getByLabelText("City")).toHaveValue("Bordeaux");
+    expect(screen.getByLabelText("City")).toHaveValue("Nantes");
     expect(screen.queryByText("Unsaved changes")).toBeNull();
     // The list shows the new current version.
     expect(await versionButton(drawer, 9)).toHaveTextContent("Current");

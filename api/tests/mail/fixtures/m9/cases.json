@@ -1963,23 +1963,23 @@
  },
  {
   "name": "org_list_french_et",
-  "body": "J'ai travaill\u00e9 chez Orbital Labs et Thales.",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs et Velmor.",
   "expect": [
    [
     "employer",
     "employer_not_in_profile",
-    "Thales"
+    "Velmor"
    ]
   ]
  },
  {
   "name": "org_list_french_ou",
-  "body": "J'ai travaill\u00e9 chez Orbital Labs ou Thales.",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs ou Velmor.",
   "expect": [
    [
     "employer",
     "employer_not_in_profile",
-    "Thales"
+    "Velmor"
    ]
   ]
  },
@@ -2074,13 +2074,13 @@
  },
  {
   "name": "org_list_french_et_of_the_profile_passes",
-  "body": "J'ai travaill\u00e9 chez Orbital Labs et Thales.",
+  "body": "J'ai travaill\u00e9 chez Orbital Labs et Velmor.",
   "expect": [],
   "replace": {
    "employers": [
     "Orbital Labs",
     "DevForge Studio",
-    "Thales"
+    "Velmor"
    ]
   }
  },

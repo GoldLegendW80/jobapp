@@ -1,5 +1,7 @@
 # profile P2 real-world check, 2026-10-08, Mac, scratch prod stack
-# Harald's phone number and email address are redacted throughout.
+# Harald's phone number and email address are redacted throughout; his name, city, employers and
+# schools are replaced with invented ones (the same invented person as
+# api/tests/profile/fixtures/owner_sources).
 
 ## Stack
 docker compose -p jobapp-p2scratch -f compose.yml -f compose.p2.yml up -d --build --wait
@@ -16,7 +18,7 @@ docker compose ... exec -T api python -m app.identity.cli create-admin harald.p2
 
 ## Convert on the Mac (no database)
 uv run --native-tls --directory api python -m app.profile.cli convert \
-    --source-dir /Users/harald-thorvaldhautin/Desktop/job --out <scratchpad>/harald.json
+    --source-dir /Users/owner/Desktop/job --out <scratchpad>/harald.json
   -> Wrote <scratchpad>/harald.json: 10 fact blocks, 5 employers, 3 schools, 32 boards, photo included.
 
 ## Import inside the api container
@@ -38,9 +40,9 @@ completeness overall 100%
   skills: 100% missing []
   search: 100% missing []
   answers: 100% missing []
-identity: {"full_name": "Harald-Thorvald Hautin", "headline": "GenAI Engineer", "email": "<email redacted>", "phone": "<phone redacted>", "city": "Bordeaux"}
-employers: ['betclic', 'devtech', 'elsan', 'thales', 'hotel35']
-schools: ['EPITECH – European Institute of Technology', 'Université de Reims Champagne-Ardenne', 'Lycée Pierre Corneille, Rouen']
+identity: {"full_name": "Lucien-Ambroise Quillard", "headline": "GenAI Engineer", "email": "<email redacted>", "phone": "<phone redacted>", "city": "Nantes"}
+employers: ['lumetra', 'noxtech', 'olmea', 'velmor', 'studio17']
+schools: ['ORBITECH Institute of Technology', 'Université de Kervan Haute-Loire', 'Lycée Clément Arnaud, Angers']
 fact blocks: 10
 skills: have 20, adjacent 9, none 4, gates 6
 boards: 32
@@ -55,7 +57,7 @@ export after the re-import still identical: True
 
 ## api log
 request lines for /api/profile: 401 (before login), 200, export 200, import 409, 200, 413, export 200
-grep of the api log for the email, the phone, "Betclic", "VERIFIED": 0 matches (no profile
+grep of the api log for the email, the phone, "Lumetra", "VERIFIED": 0 matches (no profile
 contents logged)
 
 ## Teardown

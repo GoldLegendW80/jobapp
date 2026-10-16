@@ -514,7 +514,7 @@ describe("experience tab", () => {
       "lumetra",
       "zoe-co",
       "noxtech",
-      "santeva",
+      "olmea",
     ]);
     expect(sent.employers[1]).toEqual<Employer>({
       key: "zoe-co",
@@ -597,7 +597,7 @@ describe("experience tab", () => {
     const state = fakeProfile();
     const { user } = await openProfile("/profile?tab=experience");
     const end = screen.getByLabelText("End of employer 3");
-    expect(end).toHaveValue("2025-08");
+    expect(end).toHaveValue("2024-06");
     await user.click(screen.getByLabelText("Present at employer 3"));
     expect(end).toHaveValue("");
     expect(end).toBeDisabled();
@@ -667,10 +667,10 @@ describe("experience tab", () => {
     expect(start).toHaveValue("2021");
     expect(start).toHaveAccessibleDescription("Read as the year 2021.");
     expect(screen.getByLabelText("End of employer 3")).toHaveValue("2023");
-    expect(screen.getByLabelText("Start of employer 1")).toHaveValue("2025-09");
+    expect(screen.getByLabelText("Start of employer 1")).toHaveValue("2025-03");
     expect(
       screen.getByLabelText("Start of employer 1"),
-    ).toHaveAccessibleDescription("Read as September 2025.");
+    ).toHaveAccessibleDescription("Read as March 2025.");
 
     // Six digits typed on a number pad, which has no hyphen key.
     await user.clear(start);
