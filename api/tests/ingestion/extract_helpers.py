@@ -116,9 +116,11 @@ def add_step(
     script: str | None = None,
     budget: int = 1_000_000,
     after: Step | None = None,
+    part: int | None = None,
 ) -> Step:
     """An ingestion run with one extraction step that is running, and the step's agent run, as
-    the engine of G10 will create them. `after`: one more step of that step's ingestion run."""
+    the engine of G10 will create them. `after`: one more step of that step's ingestion run.
+    `part`: by default its position, and 0 for a step without a range (a document read whole)."""
     with factory() as db, db.begin():
         sha256, planned_on = db.execute(
             sa.select(IngestionDocument.sha256, IngestionDocument.text).where(
@@ -153,7 +155,7 @@ def add_step(
             kind=plan.StepKind.extract,
             document_id=document_id,
             sha256=sha256,
-            part=position,
+            part=part if part is not None else (0 if start is None else position),
             range_start=start,
             range_end=end,
             identity_hash="a" * 64,

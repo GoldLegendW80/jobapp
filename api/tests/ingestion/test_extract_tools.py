@@ -153,17 +153,19 @@ def test_read_document_on_a_part_cut_at_a_paragraph_end(
     )
     assert read_all(tools_for(factory, one)) == (first, [0])
     assert read_all(tools_for(factory, two)) == (second, [0])
-    # A document that was not cut has no range: the step reads all of it.
+    # A document that was not cut has no range: its one step, part 0, reads all of it.
     whole = add_step(factory, alice_id, document, after=one)
     assert binding_of(factory, whole) == {
         "ingestion_run_id": str(one.ingestion_run_id),
         "step_id": str(whole.step_id),
         "document_id": str(document),
-        "part": 2,
+        "part": 0,
         "start": 0,
         "end": len(first + second),
     }
     assert read_all(tools_for(factory, whole)) == (first + second, [0])
+    # A later part without a range is not a document read whole: it is never bound.
+    assert binding_of(factory, add_step(factory, alice_id, document, after=one, part=2)) is None
 
 
 def test_read_document_across_a_form_feed(
