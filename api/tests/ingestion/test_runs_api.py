@@ -25,7 +25,7 @@ from app.ingestion.runs_models import IngestionRun
 from tests.identity.api_helpers import Api
 from tests.ingestion import engine_helpers as eh
 from tests.ingestion.conftest import ALICE, BOB, RecordingQueue
-from tests.ingestion.helpers import delete, rows, set_columns, uploaded
+from tests.ingestion.helpers import delete, rows, set_columns, uploaded, user_id
 from tests.ingestion.test_estimate_api import CONSENT, ESTIMATE, credential
 
 RUNS = "/api/ingestion/runs"
@@ -393,7 +393,12 @@ def test_the_cost_of_a_step_is_shown_only_when_it_ran_on_an_api_key(
 
 
 def test_the_cost_of_a_run_counts_every_attempt_on_an_api_key_and_nothing_else(
-    app: FastAPI, factory: sessionmaker[Session], api: Api, alice: str, ready: list[str]
+    app: FastAPI,
+    factory: sessionmaker[Session],
+    api: Api,
+    alice: str,
+    bob: str,
+    ready: list[str],
 ) -> None:
     """A step keeps its last agent run only: the run's own amount adds the attempt a provider
     failure cut, leaves out what ran on a subscription and the agent runs of other runs."""
@@ -421,6 +426,9 @@ def test_the_cost_of_a_run_counts_every_attempt_on_an_api_key_and_nothing_else(
     again = started(api, alice, ready)
     assert (again["status"], again["cost_usd"]) == ("done", None)
     assert api.get(url, token=alice).json()["cost_usd"] == "0.0412"
+    # An agent run of another user is never counted, whatever its input names.
+    eh.set_agent(factory, uuid.UUID(run["current_agent_run_id"]), user_id=user_id(factory, BOB))
+    assert api.get(url, token=alice).json()["cost_usd"] == "0.0100"
 
 
 def test_the_cost_of_a_run_on_a_subscription_is_null(
