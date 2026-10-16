@@ -12,15 +12,19 @@ CONTACT_LEFT = [
 ]
 CONTACT_RIGHT = ["+33 6 39 98 42 17", "e2e-lucien.quillard@example.org", "Nantes, France"]
 EDUCATION = [
-    ("MSc Pro", "ORBITECH – Open Research Institute of Technology 2022 – 2025. Specialization: AI"),
-    ("Bachelor of Computer Science", "Université de Kervan Haute-Loire 2018 – 2022"),
-    ("Scientific Baccalaureate", "Lycée Clément Arnaud, Angers. Option ISN, Mention AB"),
+    ("Master of Engineering", "ORBITECH Institute of Technology 2020 – 2024. Major: Data Science"),
+    ("Bachelor of Mathematics", "Université de Kervan Haute-Loire 2017 – 2020"),
+    ("Baccalauréat Général", "Lycée Clément Arnaud, Angers. Mathematics and physics, Mention Bien"),
 ]
-LANGUAGES = [("French", "Mother tongue"), ("English", "Advanced (C1)"), ("Spanish", "Intermediate")]
+LANGUAGES = [
+    ("French", "Mother tongue"),
+    ("English", "Fluent (C1)"),
+    ("German", "Intermediate (B1)"),
+]
 EMPLOYERS = {
-    "lumetra": ("Lumetra Group", "September 2025 – Present"),
-    "noxtech": ("NoxTechSolutions", "August 2024 – Present"),
-    "santeva": ("SANTEVA", "January 2023 – August 2025"),
-    "corelis": ("Corelis", "June 2022 – August 2022"),
-    "studio17": ("Studio Marée 17", "April 2022 – June 2022"),
+    "lumetra": ("Lumetra Group", "March 2025 – Present"),
+    "noxtech": ("NoxTechSolutions", "May 2023 – Present"),
+    "olmea": ("OLMEA", "September 2021 – June 2024"),
+    "velmor": ("Velmor", "June 2021 – August 2021"),
+    "studio17": ("Studio Marée 17", "February 2021 – May 2021"),
 }

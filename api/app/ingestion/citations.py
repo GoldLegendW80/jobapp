@@ -1746,7 +1746,7 @@ def _words_kept(read: _Read, at: int, value: Skeleton, norm: str) -> bool:
     """Whether the value splits its words where the document does. Where the document writes a
     space between two characters of the match, the value has a space or a hyphen, and the value
     has none inside a token of the document: "Therapist" is not written in "the rapist" nor
-    "Dev Tech" in "DevTech". A hyphen in the document asks for nothing, since it may be a word
+    "Nox Tech" in "NoxTech". A hyphen in the document asks for nothing, since it may be a word
     cut at the end of a line: "University" is in "Uni-" then "versity". A dash with a space
     beside it separates two things, and the value must write a hyphen there too. One line
     break may stand between two words of a name, and inside one word only after a hyphen.

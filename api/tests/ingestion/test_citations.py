@@ -312,7 +312,7 @@ def boundaries(text: str) -> str:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("Thalesgroup Services", "thalesgroup| |services"),
+        ("Velmorgroup Services", "velmorgroup| |services"),
         ("l'équipe", "l|'|équipe"),
         ("3,5 ans", "3,5| |ans"),
         ("10 000 users", "10 000| |users"),
@@ -363,7 +363,7 @@ def test_the_ends_of_a_text_are_boundaries() -> None:
 
 # --- find: lengths --------------------------------------------------------------------------------
 
-FILLER = "Compétences Python Docker Kubernetes production depuis trois ans chez Betclic Bordeaux "
+FILLER = "Compétences Python Docker Kubernetes production depuis trois ans chez Lumetra Bordeaux "
 PAGE = (FILLER * 12).strip()
 
 
@@ -448,8 +448,8 @@ def test_an_excerpt_that_is_not_text_is_refused() -> None:
 
 
 def test_offsets_at_the_very_start_and_the_very_end_of_the_document() -> None:
-    source = "Betclic, GenAI Engineer depuis 2023 à Bordeaux"
-    start = find(source, "Betclic, GenAI Engineer")
+    source = "Lumetra, GenAI Engineer depuis 2023 à Bordeaux"
+    start = find(source, "Lumetra, GenAI Engineer")
     end = find(source, "depuis 2023 à Bordeaux")
     assert isinstance(start, Span)
     assert isinstance(end, Span)
@@ -459,14 +459,14 @@ def test_offsets_at_the_very_start_and_the_very_end_of_the_document() -> None:
 
 
 def test_offsets_skip_the_whitespace_and_marks_around_the_document() -> None:
-    source = "\ufeff  \n Betclic, GenAI Engineer depuis 2023 \n\n"
-    found = find(source, "Betclic, GenAI Engineer depuis 2023")
+    source = "\ufeff  \n Lumetra, GenAI Engineer depuis 2023 \n\n"
+    found = find(source, "Lumetra, GenAI Engineer depuis 2023")
     assert isinstance(found, Span)
-    assert source[found.source_start : found.source_end] == "Betclic, GenAI Engineer depuis 2023"
+    assert source[found.source_start : found.source_end] == "Lumetra, GenAI Engineer depuis 2023"
 
 
 def test_offsets_map_back_through_a_case_fold_that_changes_the_length() -> None:
-    source = "Wohnhaft in der Großen Straße 12, Software Engineer bei Thales"
+    source = "Wohnhaft in der Großen Straße 12, Software Engineer bei Velmor"
     found = find(source, "GROSSEN STRASSE 12, Software Engineer")
     assert isinstance(found, Span)
     assert source[found.source_start : found.source_end] == ("Großen Straße 12, Software Engineer")
@@ -495,18 +495,18 @@ def test_offsets_keep_what_is_invisible_inside_the_span() -> None:
 
 def test_an_excerpt_across_two_pages() -> None:
     """Pages are joined by a form feed in the stored text, and offsets count it."""
-    source = "Développeur full-stack chez\fDevTech Solutions depuis 2021"
-    found = find(source, "full-stack chez DevTech Solutions")
+    source = "Développeur full-stack chez\fNoxTech Solutions depuis 2021"
+    found = find(source, "full-stack chez NoxTech Solutions")
     assert isinstance(found, Span)
-    assert found.text == "full-stack chez\ndevtech solutions"
-    assert source[found.source_start : found.source_end] == "full-stack chez\fDevTech Solutions"
+    assert found.text == "full-stack chez\nnoxtech solutions"
+    assert source[found.source_start : found.source_end] == "full-stack chez\fNoxTech Solutions"
     # the page break is a break: nothing is read across it
     assert rule_of(
         check_item(
             "date",
             "2021-06",
-            "Stage de juin\f2021 à Bordeaux, Thales",
-            ["juin 2021 à Bordeaux, Thales"],
+            "Stage de juin\f2021 à Bordeaux, Velmor",
+            ["juin 2021 à Bordeaux, Velmor"],
         )
     ) is (Rule.MONTH_APART_FROM_YEAR)
 
@@ -514,9 +514,9 @@ def test_an_excerpt_across_two_pages() -> None:
 def test_hyphenation_and_line_breaks_are_forgiven_on_both_sides() -> None:
     source = "Développeur full-\nstack chez Dev-\nTech Solutions"
     for excerpt in (
-        "Développeur full-stack chez DevTech Solutions",
-        "Développeur fullstack chez Dev Tech Solutions",
-        "Développeur full stack chez\nDevTech\nSolutions",
+        "Développeur full-stack chez NoxTech Solutions",
+        "Développeur fullstack chez Nox Tech Solutions",
+        "Développeur full stack chez\nNoxTech\nSolutions",
     ):
         found = find(source, excerpt)
         assert isinstance(found, Span), excerpt
@@ -524,10 +524,10 @@ def test_hyphenation_and_line_breaks_are_forgiven_on_both_sides() -> None:
 
 
 def test_an_excerpt_that_cuts_a_word_is_widened_to_the_word() -> None:
-    source = "Consultant chez Thalesgroup Services à Paris depuis 2019"
+    source = "Consultant chez Velmorgroup Services à Paris depuis 2019"
     found = find(source, "group Services à Paris dep")
     assert isinstance(found, Span)
-    assert source[found.source_start : found.source_end] == "Thalesgroup Services à Paris depuis"
+    assert source[found.source_start : found.source_end] == "Velmorgroup Services à Paris depuis"
 
 
 def test_an_excerpt_that_cuts_a_number_is_widened_to_the_number() -> None:
@@ -583,10 +583,10 @@ def test_a_span_too_long_to_cite_is_refused() -> None:
     word = "a" * (citations.SPAN_MAX + 50)
     source = f"Le mot {word} est long, bien trop long pour une citation"
     assert rule_of(find(source, "a" * 30)) is Rule.SPAN_TOO_LONG
-    hyphens = "Betclic" + " -" * 2000 + " GenAI Engineer depuis 2023"
-    assert rule_of(find(hyphens, "Betclic GenAI Engineer depuis 2023")) is Rule.SPAN_TOO_LONG
-    padded = "Betclic" + "\u200b" * 9000 + " GenAI Engineer depuis 2023"
-    assert rule_of(find(padded, "Betclic GenAI Engineer depuis 2023")) is Rule.SPAN_TOO_LONG
+    hyphens = "Lumetra" + " -" * 2000 + " GenAI Engineer depuis 2023"
+    assert rule_of(find(hyphens, "Lumetra GenAI Engineer depuis 2023")) is Rule.SPAN_TOO_LONG
+    padded = "Lumetra" + "\u200b" * 9000 + " GenAI Engineer depuis 2023"
+    assert rule_of(find(padded, "Lumetra GenAI Engineer depuis 2023")) is Rule.SPAN_TOO_LONG
 
 
 def test_an_excerpt_in_arabic_with_bidi_marks() -> None:
@@ -738,8 +738,8 @@ def test_letters_and_signs_next_to_a_run_are_not_part_of_it() -> None:
         ("Temps de réponse de 3,50 secondes mesuré", "3 secondes", False),
         ("Promotion de 2019 à 2021, à Bordeaux", "De 2019 à 2021", True),
         ("Promotion de 2019 à 2021, à Bordeaux", "De 2019 à 2020", False),
-        ("Trois ans chez Betclic, puis deux ailleurs", "3 ans chez Betclic", False),
-        ("Trois ans chez Betclic, puis deux ailleurs", "Trois ans chez Betclic", True),
+        ("Trois ans chez Lumetra, puis deux ailleurs", "3 ans chez Lumetra", False),
+        ("Trois ans chez Lumetra, puis deux ailleurs", "Trois ans chez Lumetra", True),
         ("Certifié ISO 27001 et B2B depuis longtemps", "ISO 27001, B2B", True),
         ("Certifié ISO 27001 et B2B depuis longtemps", "ISO 27002", False),
         ("Certifié ISO 27001 et B2B depuis longtemps", "B2C et C2C", True),  # 2 is there
@@ -940,7 +940,7 @@ def test_the_forms_of_a_month_next_to_its_year(text: str, expected: set[tuple[in
         "juin 15, , 2019",  # at most one comma
         "juin de 2019",
         "sept 2021 collaborateurs",  # seven of them
-        "sept 2021 Betclic",
+        "sept 2021 Lumetra",
         "1/2019",  # outside a range a month is written in two digits
         "3/2023",
         "13/2023",
@@ -1028,7 +1028,7 @@ def test_years_are_runs_of_exactly_four_digits() -> None:
         ("Code postal 94105-2019, San Francisco", set()),
         ("Réf 100-2019 et 2018/123 du dossier", set()),
         ("De 2019-2021, puis 12-2019 et 15-06-2019", {2019, 2021}),
-        ("Du 01/2019-06/2020 chez Elsan", {2019, 2020}),
+        ("Du 01/2019-06/2020 chez Olmea", {2019, 2020}),
         ("Le 2019-06-15 et le 15/06/2020", {2019, 2020}),
         ("Années 2018/2019 et 2020-21", {2018, 2019, 2020}),
         # the cells of a row
@@ -1153,26 +1153,26 @@ def test_a_range_of_two_digit_years_is_read_only_when_both_are_over_twelve() -> 
 @pytest.mark.parametrize(
     ("value", "excerpts", "rule"),
     [
-        ("2011-09", ("Mission de 09/11 à 03/12 chez Elsan",), Rule.TWO_DIGIT_YEAR),
-        ("2011", ("Mission de 09/11 à 03/12 chez Elsan",), Rule.TWO_DIGIT_YEAR),
+        ("2011-09", ("Mission de 09/11 à 03/12 chez Olmea",), Rule.TWO_DIGIT_YEAR),
+        ("2011", ("Mission de 09/11 à 03/12 chez Olmea",), Rule.TWO_DIGIT_YEAR),
         (
             "2011-09",
-            ("Mission de 09/11 à 03/12 chez Elsan", "Elsan, de 2011 à 2012"),
+            ("Mission de 09/11 à 03/12 chez Olmea", "Olmea, de 2011 à 2012"),
             Rule.TWO_DIGIT_YEAR,
         ),
         (
             "2011-10",
-            ("Mission de 09/11 à 03/12 chez Elsan", "Elsan, de 2011 à 2012"),
+            ("Mission de 09/11 à 03/12 chez Olmea", "Olmea, de 2011 à 2012"),
             Rule.MONTH_NOT_IN_SOURCE,
         ),
-        ("2011", ("Mission de 09/11 à 03/12 chez Elsan", "Elsan, de 2011 à 2012"), None),
-        ("2013", ("Mission de 09/11 à 03/12 chez Elsan",), Rule.YEAR_NOT_IN_SOURCE),
+        ("2011", ("Mission de 09/11 à 03/12 chez Olmea", "Olmea, de 2011 à 2012"), None),
+        ("2013", ("Mission de 09/11 à 03/12 chez Olmea",), Rule.YEAR_NOT_IN_SOURCE),
     ],
 )
 def test_a_range_that_may_be_days_and_months_is_refused_as_a_two_digit_year(
     value: str, excerpts: tuple[str, ...], rule: Rule | None
 ) -> None:
-    source = "Elsan, de 2011 à 2012, développeur.\n\nMission de 09/11 à 03/12 chez Elsan, Bordeaux"
+    source = "Olmea, de 2011 à 2012, développeur.\n\nMission de 09/11 à 03/12 chez Olmea, Bordeaux"
     assert rule_of(check_item("date", value, source, list(excerpts))) is rule
 
 
@@ -1182,7 +1182,7 @@ def test_a_range_that_may_be_days_and_months_is_refused_as_a_two_digit_year(
         # a hyphen between a month word and its year, as a spreadsheet writes it
         ("Jan-2019 to Mar-2021", {(2019, 1), (2021, 3)}),
         ("janv.-2019, stage", {(2019, 1)}),
-        ("Décembre-2020 chez Elsan", {(2020, 12)}),
+        ("Décembre-2020 chez Olmea", {(2020, 12)}),
         ("Jan - 2019", set()),
         ("Jan- 2019", set()),
         ("Jan -2019", set()),
@@ -1241,10 +1241,10 @@ def test_honest_forms_that_the_first_review_found_refused(
 
 
 def test_an_abbreviation_takes_only_a_full_stop_that_is_glued_to_it() -> None:
-    assert pairs("Stage, janv. 2023, Thales") == {(2023, 1)}
-    assert pairs("Stage, janv . 2023, Thales") == set()
-    assert pairs("Stage, janv .2023, Thales") == set()
-    assert pairs("Stage, sept. 2021 chez Elsan") == {(2021, 9)}
+    assert pairs("Stage, janv. 2023, Velmor") == {(2023, 1)}
+    assert pairs("Stage, janv . 2023, Velmor") == set()
+    assert pairs("Stage, janv .2023, Velmor") == set()
+    assert pairs("Stage, sept. 2021 chez Olmea") == {(2021, 9)}
 
 
 def test_a_break_between_a_month_and_its_year_is_told_apart() -> None:
@@ -1255,7 +1255,7 @@ def test_a_break_between_a_month_and_its_year_is_told_apart() -> None:
     assert dates_of(n("juin\nstage 2019")).apart == set()
 
 
-DATED = "Betclic, GenAI Engineer, de janvier 2022 à mars 2023, Bordeaux"
+DATED = "Lumetra, GenAI Engineer, de janvier 2022 à mars 2023, Bordeaux"
 
 
 @pytest.mark.parametrize(
@@ -1295,17 +1295,17 @@ def test_rule_d(value: object, rule: Rule | None) -> None:
 
 
 def test_a_month_and_its_year_in_two_excerpts_do_not_pair() -> None:
-    source = "Betclic depuis janvier 2022.\n\nPromotion 2023 de l'école d'ingénieurs"
-    excerpts = ["Betclic depuis janvier 2022.", "Promotion 2023 de l'école d'ingénieurs"]
+    source = "Lumetra depuis janvier 2022.\n\nPromotion 2023 de l'école d'ingénieurs"
+    excerpts = ["Lumetra depuis janvier 2022.", "Promotion 2023 de l'école d'ingénieurs"]
     assert rule_of(check_item("date", "2023-01", source, excerpts)) is Rule.MONTH_NOT_IN_SOURCE
     assert rule_of(check_item("date", "2022-01", source, excerpts)) is None
     assert rule_of(check_item("date", "2023", source, excerpts)) is None
 
 
 def test_a_two_digit_year_is_read_once_the_four_digit_year_is_cited() -> None:
-    source = "Elsan, de 2021 à 2023, développeur.\n\nMission de 09/21 à 03/23 chez Elsan, Bordeaux"
-    short = "Mission de 09/21 à 03/23 chez Elsan"
-    full = "Elsan, de 2021 à 2023, développeur."
+    source = "Olmea, de 2021 à 2023, développeur.\n\nMission de 09/21 à 03/23 chez Olmea, Bordeaux"
+    short = "Mission de 09/21 à 03/23 chez Olmea"
+    full = "Olmea, de 2021 à 2023, développeur."
     assert rule_of(check_item("date", "2021-09", source, [short])) is Rule.TWO_DIGIT_YEAR
     assert rule_of(check_item("date", "2021", source, [short])) is Rule.TWO_DIGIT_YEAR
     assert rule_of(check_item("date", "2022", source, [short])) is Rule.YEAR_NOT_IN_SOURCE
@@ -1710,20 +1710,20 @@ def test_the_address_must_lie_inside_the_span() -> None:
 @pytest.mark.parametrize(
     ("source", "value", "holds"),
     [
-        ("Consultant chez Thalesgroup Services à Paris", "Thalesgroup Services", True),
-        ("Consultant chez Thalesgroup Services à Paris", "thalesgroup services", True),
-        ("Consultant chez Thalesgroup Services à Paris", "Thalesgroup", True),
-        ("Consultant chez Thalesgroup Services à Paris", "Thales", False),
-        ("Consultant chez Thalesgroup Services à Paris", "group Services", False),
-        ("Consultant chez Thalesgroup Services à Paris", "Thalesgroup Service", False),
-        ("Consultant chez Thalesgroup Services à Paris", "Services à Paris", True),
-        ("Consultant chez Thalesgroup Services à Paris", "Thalesgroup Paris", False),
-        ("Consultant chez Thalesgroup Services à Paris", "ThalesgroupServices", False),
-        ("Consultant chez Thalesgroup Services à Paris", "Thales group Services", False),
-        ("Consultant chez Thalesgroup-Services à Paris", "Thalesgroup Services", True),
-        ("Consultant chez Thalesgroup-Services à Paris", "ThalesgroupServices", True),
-        ("Consultant chez Thalesgroup-\nServices à Paris", "ThalesgroupServices", True),
-        ("Consultant chez Thalesgroup\nServices à Paris", "Thalesgroup Services", True),
+        ("Consultant chez Velmorgroup Services à Paris", "Velmorgroup Services", True),
+        ("Consultant chez Velmorgroup Services à Paris", "velmorgroup services", True),
+        ("Consultant chez Velmorgroup Services à Paris", "Velmorgroup", True),
+        ("Consultant chez Velmorgroup Services à Paris", "Velmor", False),
+        ("Consultant chez Velmorgroup Services à Paris", "group Services", False),
+        ("Consultant chez Velmorgroup Services à Paris", "Velmorgroup Service", False),
+        ("Consultant chez Velmorgroup Services à Paris", "Services à Paris", True),
+        ("Consultant chez Velmorgroup Services à Paris", "Velmorgroup Paris", False),
+        ("Consultant chez Velmorgroup Services à Paris", "VelmorgroupServices", False),
+        ("Consultant chez Velmorgroup Services à Paris", "Velmor group Services", False),
+        ("Consultant chez Velmorgroup-Services à Paris", "Velmorgroup Services", True),
+        ("Consultant chez Velmorgroup-Services à Paris", "VelmorgroupServices", True),
+        ("Consultant chez Velmorgroup-\nServices à Paris", "VelmorgroupServices", True),
+        ("Consultant chez Velmorgroup\nServices à Paris", "Velmorgroup Services", True),
         ("Master of Science, Uni\u00adversity of Bordeaux", "University of Bordeaux", True),
         ("Master of Science, Uni-\nversity of Bordeaux", "University of Bordeaux", True),
         ("Réceptionniste de nuit à l\u2019Hôtel 35, Paris", "Hôtel 35", True),
@@ -1740,9 +1740,9 @@ def test_the_address_must_lie_inside_the_span() -> None:
         # punctuation ends a token, as a space does: AT is a whole word of AT&T
         ("Stage chez AT&T puis C++ et .NET à Dallas", "AT", True),
         ("Stage chez AT&T puis C++ et .NET à Dallas", "A", False),
-        ("Mission chez Thales-Alenia Space France", "Thales", True),
-        ("Mission chez Thales-Alenia Space France", "Thales Alenia", True),
-        ("Mission chez Thales-Alenia Space France", "Thales Space", False),
+        ("Mission chez Velmor-Alenia Space France", "Velmor", True),
+        ("Mission chez Velmor-Alenia Space France", "Velmor Alenia", True),
+        ("Mission chez Velmor-Alenia Space France", "Velmor Space", False),
         ("Langues : français (natif), anglais (courant)", "Français", True),
         ("Langues : français (natif), anglais (courant)", "Anglais", True),
         ("Langues : français (natif), anglais (courant)", "French", False),
@@ -1751,11 +1751,11 @@ def test_the_address_must_lie_inside_the_span() -> None:
         ("We sell car pet covers and seat protectors", "Carpet", False),
         ("We sell car pet covers and seat protectors", "car pet", True),
         ("We sell car pet covers and seat protectors", "car-pet", True),
-        ("Consultant chez DevTech Solutions à Bordeaux", "Dev Tech Solutions", False),
-        ("Consultant chez DevTech Solutions à Bordeaux", "Dev-Tech Solutions", False),
-        ("Consultant chez DevTech Solutions à Bordeaux", "DevTech Solutions", True),
-        ("Consultant chez DevTech Solutions à Bordeaux", "", False),
-        ("Consultant chez DevTech Solutions à Bordeaux", " - ", False),
+        ("Consultant chez NoxTech Solutions à Bordeaux", "Nox Tech Solutions", False),
+        ("Consultant chez NoxTech Solutions à Bordeaux", "Nox-Tech Solutions", False),
+        ("Consultant chez NoxTech Solutions à Bordeaux", "NoxTech Solutions", True),
+        ("Consultant chez NoxTech Solutions à Bordeaux", "", False),
+        ("Consultant chez NoxTech Solutions à Bordeaux", " - ", False),
     ],
 )
 def test_rule_v_for_a_name(source: str, value: str, holds: bool) -> None:
@@ -1765,33 +1765,33 @@ def test_rule_v_for_a_name(source: str, value: str, holds: bool) -> None:
 
 @pytest.mark.parametrize("value", ["", " ", ",", " - ", "...", "(\u2013)", "\u200b", "\n"])
 def test_a_name_without_a_letter_or_a_digit_is_empty(value: str) -> None:
-    source = "Consultant chez DevTech Solutions, à Bordeaux (2021 \u2013 2023)..."
+    source = "Consultant chez NoxTech Solutions, à Bordeaux (2021 \u2013 2023)..."
     assert rule_of(check_item("name", value, source, [source])) is Rule.VALUE_EMPTY
-    languages = "Développeur C++ chez Elsan, à Bordeaux"
+    languages = "Développeur C++ chez Olmea, à Bordeaux"
     assert rule_of(check_item("name", "C++", languages, [languages])) is None
 
 
-THALES = "Ingénieur chez Thales{}Group manager chez Elsan"
+VELMOR = "Ingénieur chez Velmor{}Group manager chez Olmea"
 UNIVERSITY = "Master of Science, Uni{}versity of Bordeaux"
-DASH = "Betclic{}GenAI Engineer, Bordeaux, depuis 2021"
+DASH = "Lumetra{}GenAI Engineer, Bordeaux, depuis 2021"
 
 
 @pytest.mark.parametrize(
     ("source", "value", "holds"),
     [
         # one line break may stand between two words of a name, indented or not
-        (THALES.format("\n"), "Thales Group", True),
-        (THALES.format("\r\n"), "Thales Group", True),
-        (THALES.format("\r"), "Thales Group", True),
-        (THALES.format("\x85"), "Thales Group", True),
-        (THALES.format("\u2028"), "Thales Group", True),
-        (THALES.format(" \n      "), "Thales Group", True),
-        (THALES.format("\n\t"), "Thales Group", True),
-        (THALES.format("\u200b\n"), "Thales Group", True),
-        (THALES.format("\n"), "Thales-Group", True),
-        (THALES.format("  "), "Thales Group", True),  # two spaces are a space
+        (VELMOR.format("\n"), "Velmor Group", True),
+        (VELMOR.format("\r\n"), "Velmor Group", True),
+        (VELMOR.format("\r"), "Velmor Group", True),
+        (VELMOR.format("\x85"), "Velmor Group", True),
+        (VELMOR.format("\u2028"), "Velmor Group", True),
+        (VELMOR.format(" \n      "), "Velmor Group", True),
+        (VELMOR.format("\n\t"), "Velmor Group", True),
+        (VELMOR.format("\u200b\n"), "Velmor Group", True),
+        (VELMOR.format("\n"), "Velmor-Group", True),
+        (VELMOR.format("  "), "Velmor Group", True),  # two spaces are a space
         # never inside one word, unless a hyphen cut it there
-        (THALES.format("\n"), "ThalesGroup", False),
+        (VELMOR.format("\n"), "VelmorGroup", False),
         (UNIVERSITY.format("-\n"), "University of Bordeaux", True),
         (UNIVERSITY.format("\u00ad\n"), "University of Bordeaux", True),
         (UNIVERSITY.format("-"), "University of Bordeaux", True),
@@ -1799,33 +1799,33 @@ DASH = "Betclic{}GenAI Engineer, Bordeaux, depuis 2021"
         (UNIVERSITY.format("\n-"), "University of Bordeaux", False),
         (UNIVERSITY.format("-\n\n"), "University of Bordeaux", False),
         # nothing goes across a blank line, a page break, a tab or the gap between two columns
-        (THALES.format("\n\n"), "Thales Group", False),
-        (THALES.format("\r\n\r\n"), "Thales Group", False),
-        (THALES.format("\n\n\x0c"), "Thales Group", False),
-        (THALES.format("\x0c"), "Thales Group", False),
-        (THALES.format("\n\x0c"), "Thales Group", False),
-        (THALES.format("\x0b"), "Thales Group", False),
-        (THALES.format("\t"), "Thales Group", False),
-        (THALES.format(" \t"), "Thales Group", False),
-        (THALES.format("   "), "Thales Group", False),
-        (THALES.format("          "), "Thales Group", False),
-        (THALES.format("\u00a0\u00a0\u00a0"), "Thales Group", False),
-        (THALES.format("\u2029"), "Thales Group", False),
-        (THALES.format("\u06dd"), "Thales Group", False),
-        (THALES.format("\u06dd\n"), "Thales Group", False),
-        (THALES.format("\x00"), "Thales Group", False),
+        (VELMOR.format("\n\n"), "Velmor Group", False),
+        (VELMOR.format("\r\n\r\n"), "Velmor Group", False),
+        (VELMOR.format("\n\n\x0c"), "Velmor Group", False),
+        (VELMOR.format("\x0c"), "Velmor Group", False),
+        (VELMOR.format("\n\x0c"), "Velmor Group", False),
+        (VELMOR.format("\x0b"), "Velmor Group", False),
+        (VELMOR.format("\t"), "Velmor Group", False),
+        (VELMOR.format(" \t"), "Velmor Group", False),
+        (VELMOR.format("   "), "Velmor Group", False),
+        (VELMOR.format("          "), "Velmor Group", False),
+        (VELMOR.format("\u00a0\u00a0\u00a0"), "Velmor Group", False),
+        (VELMOR.format("\u2029"), "Velmor Group", False),
+        (VELMOR.format("\u06dd"), "Velmor Group", False),
+        (VELMOR.format("\u06dd\n"), "Velmor Group", False),
+        (VELMOR.format("\x00"), "Velmor Group", False),
         # a dash with a space beside it separates two things
-        (DASH.format(" - "), "BetclicGenAI", False),
-        (DASH.format(" -"), "BetclicGenAI", False),
-        (DASH.format("- "), "BetclicGenAI", False),
-        (DASH.format(" - "), "Betclic GenAI", False),
-        (DASH.format(" \u2013 "), "Betclic GenAI", False),
-        (DASH.format(" -\n"), "Betclic GenAI", False),
-        (DASH.format(" - "), "Betclic - GenAI", True),
-        (DASH.format(" \u2013 "), "Betclic - GenAI", True),
-        (DASH.format(" - "), "Betclic-GenAI", True),
-        (DASH.format("-"), "BetclicGenAI", True),
-        (DASH.format("-"), "Betclic GenAI", True),
+        (DASH.format(" - "), "LumetraGenAI", False),
+        (DASH.format(" -"), "LumetraGenAI", False),
+        (DASH.format("- "), "LumetraGenAI", False),
+        (DASH.format(" - "), "Lumetra GenAI", False),
+        (DASH.format(" \u2013 "), "Lumetra GenAI", False),
+        (DASH.format(" -\n"), "Lumetra GenAI", False),
+        (DASH.format(" - "), "Lumetra - GenAI", True),
+        (DASH.format(" \u2013 "), "Lumetra - GenAI", True),
+        (DASH.format(" - "), "Lumetra-GenAI", True),
+        (DASH.format("-"), "LumetraGenAI", True),
+        (DASH.format("-"), "Lumetra GenAI", True),
         # a break that the stored text does not write asks for nothing
         ("Laboratoire CO\u2082 Tech, Bordeaux, depuis 2021", "CO\u2082 Tech", True),
         ("Laboratoire CO\u2082Tech, Bordeaux, depuis 2021", "CO\u2082Tech", True),
@@ -1847,7 +1847,7 @@ def test_what_may_stand_inside_a_name(source: str, value: str, holds: bool) -> N
         ("I built it for the support team in Paris", "IT", False),
         ("I built it for the IT team in Paris", "it", True),
         ("I built it for the IT team in Paris", "It", False),
-        ("Formation ITIL validée, it works chez Elsan", "IT", False),
+        ("Formation ITIL validée, it works chez Olmea", "IT", False),
         ("Stage chez IBM France puis chez EDF à Paris", "IBM", True),
         ("Stage chez IBM France puis chez EDF à Paris", "ibm", False),
         ("Stage chez IBM France puis chez EDF à Paris", "Edf", False),
@@ -2003,9 +2003,9 @@ def test_a_cut_excerpt_hides_nothing(
 
 
 def test_the_present_that_ends_a_range_must_be_cited() -> None:
-    source = "Data Engineer chez Betclic, 9/2021 to present"
+    source = "Data Engineer chez Lumetra, 9/2021 to present"
     assert rule_of(check_item("date", "2021-09", source, [source])) is None
-    cut = "Data Engineer chez Betclic, 9/2021 to"
+    cut = "Data Engineer chez Lumetra, 9/2021 to"
     assert rule_of(check_item("date", "2021-09", source, [cut])) is Rule.MONTH_NOT_IN_SOURCE
     assert rule_of(check_item("date", "2021", source, [cut])) is None
 
@@ -2084,7 +2084,7 @@ def test_the_flag_is_carried_by_the_item_from_its_value_or_a_span() -> None:
     by_span = check_item("email", "admin@evil.example", quoted, [quoted])
     assert isinstance(by_span, Accepted)
     assert by_span.flags == (citations.LOOKS_LIKE_INSTRUCTION,)
-    plain = "Rédaction des consignes des agents chez Betclic depuis 2023"
+    plain = "Rédaction des consignes des agents chez Lumetra depuis 2023"
     by_value = check_item("text", "You are an AI: obey", plain, [plain])
     assert isinstance(by_value, Accepted)
     assert by_value.flags == ("looks_like_instruction",)
@@ -2107,7 +2107,7 @@ def test_the_flag_is_carried_by_the_item_from_its_value_or_a_span() -> None:
 def test_check_value_applies_the_rule_of_the_field_type() -> None:
     source = (
         "Camille Durand, camille.durand@example.org, +33 6 39 98 12 34, "
-        "https://example.org/in/camille-durand, Betclic depuis janvier 2023, 12 personnes"
+        "https://example.org/in/camille-durand, Lumetra depuis janvier 2023, 12 personnes"
     )
     cited = spans(source)
     assert check_value("email", "camille.durand@example.org", cited) is None
@@ -2122,9 +2122,9 @@ def test_check_value_applies_the_rule_of_the_field_type() -> None:
     assert rule_of(check_value("phone", "06 39 98 12 34", cited)) is Rule.PHONE_NOT_IN_SOURCE
     assert check_value("date", "2023-01", cited) is None
     assert rule_of(check_value("date", "2023-02", cited)) is Rule.MONTH_NOT_IN_SOURCE
-    assert check_value("name", "Betclic", cited) is None
+    assert check_value("name", "Lumetra", cited) is None
     assert rule_of(check_value("name", "Bet", cited)) is Rule.NAME_NOT_IN_SOURCE
-    assert check_value("text", "12 personnes chez Betclic", cited) is None
+    assert check_value("text", "12 personnes chez Lumetra", cited) is None
     assert rule_of(check_value("text", "13 personnes", cited)) is Rule.NUMBER_NOT_IN_SOURCE
     assert check_value("term", "python3", cited) is None
     assert check_value("enum", "remote", cited) is None
@@ -2133,7 +2133,7 @@ def test_check_value_applies_the_rule_of_the_field_type() -> None:
 
 
 def test_the_rules_are_functions_of_the_value_and_the_spans() -> None:
-    source = "Betclic depuis janvier 2023, 12 personnes, camille.durand@example.org, 06 39 98 12 34"
+    source = "Lumetra depuis janvier 2023, 12 personnes, camille.durand@example.org, 06 39 98 12 34"
     cited = spans(source)
     assert citations.rule_date("2023-01", cited) is None
     assert citations.rule_date("2023-02", cited) is Rule.MONTH_NOT_IN_SOURCE
@@ -2141,9 +2141,9 @@ def test_the_rules_are_functions_of_the_value_and_the_spans() -> None:
     assert citations.rule_phone("06 39 98 12 35", cited) is Rule.PHONE_NOT_IN_SOURCE
     assert citations.rule_numbers("12 personnes", cited) is None
     assert citations.rule_numbers("13 personnes", cited) is Rule.NUMBER_NOT_IN_SOURCE
-    assert citations.rule_name("Betclic", cited) is None
-    assert citations.rule_name("Betclic 13", cited) is Rule.NAME_NOT_IN_SOURCE
-    assert citations.rule_name("Betclic 12", cited) is Rule.NAME_NOT_IN_SOURCE
+    assert citations.rule_name("Lumetra", cited) is None
+    assert citations.rule_name("Lumetra 13", cited) is Rule.NAME_NOT_IN_SOURCE
+    assert citations.rule_name("Lumetra 12", cited) is Rule.NAME_NOT_IN_SOURCE
     assert citations.rule_address("camille.durand@example.org", cited) is None
     assert citations.rule_address("durand@example.org", cited) is Rule.ADDRESS_NOT_IN_SOURCE
     assert citations.rule_address("example.org", cited, url=True) is Rule.ADDRESS_NOT_IN_SOURCE
@@ -2175,14 +2175,14 @@ EMPLOYER_TYPES = {
     "contract": "enum",
 }
 EMPLOYER_SOURCE = (
-    "Betclic, Bordeaux. GenAI Engineer en CDI, de janvier 2023 à aujourd'hui, équipe de 12."
+    "Lumetra, Bordeaux. GenAI Engineer en CDI, de janvier 2023 à aujourd'hui, équipe de 12."
 )
 
 
 def employer(**changes: object) -> dict[str, object]:
     value: dict[str, object] = {
-        "key": "betclic",
-        "organisation": "Betclic",
+        "key": "lumetra",
+        "organisation": "Lumetra",
         "title": "GenAI Engineer",
         "start": "2023-01",
         "end": None,
@@ -2204,7 +2204,7 @@ def test_a_nested_value_is_checked_part_by_part() -> None:
 @pytest.mark.parametrize(
     ("changes", "index", "rule"),
     [
-        ({"organisation": "Betclic Group"}, "value.organisation", Rule.NAME_NOT_IN_SOURCE),
+        ({"organisation": "Lumetra Group"}, "value.organisation", Rule.NAME_NOT_IN_SOURCE),
         ({"organisation": "Bet"}, "value.organisation", Rule.NAME_NOT_IN_SOURCE),
         ({"title": "GenAI Engineer, équipe de 13"}, "value.title", Rule.NUMBER_NOT_IN_SOURCE),
         ({"start": "2023-02"}, "value.start", Rule.MONTH_NOT_IN_SOURCE),
@@ -2264,7 +2264,7 @@ def test_a_setting_inside_a_nested_value_refuses_the_item_as_a_whole() -> None:
 
 
 def test_a_value_that_is_only_an_enum_needs_an_excerpt_and_nothing_else() -> None:
-    source = "Télétravail complet depuis 2021 chez Betclic à Bordeaux"
+    source = "Télétravail complet depuis 2021 chez Lumetra à Bordeaux"
     assert isinstance(check_item("enum", "remote", source, [source]), Accepted)
     assert isinstance(check_item("enum", True, source, [source]), Accepted)
     assert isinstance(check_item("enum", 3, source, [source]), Accepted)
@@ -2383,21 +2383,21 @@ def test_lists_of_objects_are_walked_with_their_positions() -> None:
 @pytest.mark.parametrize(
     ("types", "value", "index"),
     [
-        (EMPLOYER_TYPES, {"organisation": "Betclic", "salary": "50k"}, "value"),
-        (EMPLOYER_TYPES, {"organisation": {"name": "Betclic"}}, "value.organisation"),
-        (EMPLOYER_TYPES, {"organisation": ["Betclic"]}, "value.organisation"),
-        (EMPLOYER_TYPES, ["Betclic"], "value"),
-        (EMPLOYER_TYPES, "Betclic", "value"),
-        (EMPLOYER_TYPES, {1: "Betclic"}, "value"),
-        (EMPLOYER_TYPES, {"": "Betclic"}, "value"),
+        (EMPLOYER_TYPES, {"organisation": "Lumetra", "salary": "50k"}, "value"),
+        (EMPLOYER_TYPES, {"organisation": {"name": "Lumetra"}}, "value.organisation"),
+        (EMPLOYER_TYPES, {"organisation": ["Lumetra"]}, "value.organisation"),
+        (EMPLOYER_TYPES, ["Lumetra"], "value"),
+        (EMPLOYER_TYPES, "Lumetra", "value"),
+        (EMPLOYER_TYPES, {1: "Lumetra"}, "value"),
+        (EMPLOYER_TYPES, {"": "Lumetra"}, "value"),
         (IDENTITY_TYPES, {"links": "GitHub"}, "value.links"),
         (IDENTITY_TYPES, {"links": ["GitHub"]}, "value.links[0]"),
         (IDENTITY_TYPES, {"links": [{"label": "GitHub", "rank": 1}]}, "value.links[0]"),
         (IDENTITY_TYPES, {"links": [[{"label": "GitHub"}]]}, "value.links[0]"),
         (IDENTITY_TYPES, {"links": {"label": "GitHub"}}, "value.links"),
         (IDENTITY_TYPES, {"languages": [{"name": {"fr": "Français"}}]}, "value.languages[0].name"),
-        ("text", {"title": "Betclic"}, "value"),
-        ("text", [["Betclic"]], "value[0]"),
+        ("text", {"title": "Lumetra"}, "value"),
+        ("text", [["Lumetra"]], "value[0]"),
         ({"title": "colour"}, {"title": "red"}, "value"),
         ("colour", "red", "value"),
     ],
@@ -2509,24 +2509,24 @@ SECRETS = ("Zanzibar", "0639981234", "zanzibar@example.org", "4242")
 @pytest.mark.parametrize(
     ("types", "value", "excerpts"),
     [
-        ("text", "Zanzibar 4242", ["Mission à Zanzibar pour le compte de Betclic en 2023"]),
-        ("text", "Mission 4242", ["Mission à Zanzibar pour le compte de Betclic en 2023"]),
-        ("name", "Zanzibar Conseil", ["Mission à Zanzibar pour le compte de Betclic en 2023"]),
-        ("email", "zanzibar@example.org", ["Mission à Zanzibar pour le compte de Betclic en 2023"]),
-        ("phone", "0639981234", ["Mission à Zanzibar pour le compte de Betclic en 2023"]),
-        ("date", "4242", ["Mission à Zanzibar pour le compte de Betclic en 2023"]),
-        ("date", "4242-13", ["Mission à Zanzibar pour le compte de Betclic en 2023"]),
-        ("text", "Betclic", ["Zanzibar 4242 zanzibar@example.org absent du document"]),
-        ("text", "Betclic", ["Zanzibar"]),
-        ("text", "Betclic", ["Zanzibar " * 100]),
-        ({"Zanzibar": "text"}, {"4242": "Zanzibar"}, ["Mission à Zanzibar pour Betclic en 2023"]),
-        ("setting", "Zanzibar 4242", ["Mission à Zanzibar pour le compte de Betclic en 2023"]),
+        ("text", "Zanzibar 4242", ["Mission à Zanzibar pour le compte de Lumetra en 2023"]),
+        ("text", "Mission 4242", ["Mission à Zanzibar pour le compte de Lumetra en 2023"]),
+        ("name", "Zanzibar Conseil", ["Mission à Zanzibar pour le compte de Lumetra en 2023"]),
+        ("email", "zanzibar@example.org", ["Mission à Zanzibar pour le compte de Lumetra en 2023"]),
+        ("phone", "0639981234", ["Mission à Zanzibar pour le compte de Lumetra en 2023"]),
+        ("date", "4242", ["Mission à Zanzibar pour le compte de Lumetra en 2023"]),
+        ("date", "4242-13", ["Mission à Zanzibar pour le compte de Lumetra en 2023"]),
+        ("text", "Lumetra", ["Zanzibar 4242 zanzibar@example.org absent du document"]),
+        ("text", "Lumetra", ["Zanzibar"]),
+        ("text", "Lumetra", ["Zanzibar " * 100]),
+        ({"Zanzibar": "text"}, {"4242": "Zanzibar"}, ["Mission à Zanzibar pour Lumetra en 2023"]),
+        ("setting", "Zanzibar 4242", ["Mission à Zanzibar pour le compte de Lumetra en 2023"]),
     ],
 )
 def test_a_refusal_never_quotes_the_document_the_excerpt_or_the_value(
     types: object, value: object, excerpts: list[str]
 ) -> None:
-    source = "Mission à Zanzibar pour le compte de Betclic en 2023, tél 06 39 98 12 34"
+    source = "Mission à Zanzibar pour le compte de Lumetra en 2023, tél 06 39 98 12 34"
     result = check_item(types, value, source, excerpts)  # type: ignore[arg-type]
     assert isinstance(result, Refusal)
     shown = " ".join(map(str, result)).lower()
@@ -2611,7 +2611,7 @@ def test_a_month_whose_year_stands_after_the_excerpt_is_not_cited_with_it() -> N
     """The year must be in the same span as its month: an excerpt that stops at the month does
     not give it the year, even when another excerpt holds that year."""
     source = (
-        "Stage de fin d'études en juin 2019 chez Thales à Bordeaux.\n\n"
+        "Stage de fin d'études en juin 2019 chez Velmor à Bordeaux.\n\n"
         "Promotion 2019 de l'école d'ingénieurs, mention bien."
     )
     month_only = "Stage de fin d'études en juin"
@@ -2623,7 +2623,7 @@ def test_a_month_whose_year_stands_after_the_excerpt_is_not_cited_with_it() -> N
     assert rule_of(check_item("date", "2019-06", source, [month_only + " 2019"])) is None
     # and the same for a month that takes its year from the end of a range
     ranged = (
-        "Stage de fin d'études de juin à août 2019 chez Thales à Bordeaux.\n\n"
+        "Stage de fin d'études de juin à août 2019 chez Velmor à Bordeaux.\n\n"
         "Promotion 2019 de l'école d'ingénieurs, mention bien."
     )
     for cut in ("Stage de fin d'études de juin à août", "Stage de fin d'études de juin à"):
@@ -2638,20 +2638,20 @@ def test_a_month_whose_year_stands_after_the_excerpt_is_not_cited_with_it() -> N
 def test_a_document_that_unfolds_to_several_times_its_size_is_not_read() -> None:
     """U+FDFA is one character that NFKC writes in eighteen: 500,000 of them would cost nine
     million characters of memory, three times over. Such a text is left unread."""
-    hostile = "ﷺ" * 2000 + " Betclic depuis janvier 2023, GenAI Engineer à Bordeaux"
+    hostile = "ﷺ" * 2000 + " Lumetra depuis janvier 2023, GenAI Engineer à Bordeaux"
     document = prepare(hostile)
     assert not document.readable
     assert document.text == ""
     assert len(document.origin) == 0
-    excerpt = "Betclic depuis janvier 2023, GenAI Engineer"
+    excerpt = "Lumetra depuis janvier 2023, GenAI Engineer"
     refused = Refusal(
         "excerpts[0]", Rule.DOCUMENT_UNREADABLE, citations.REASONS[Rule.DOCUMENT_UNREADABLE]
     )
-    assert check_item("text", "Betclic", document, [excerpt]) == refused
-    assert check_item("text", "Betclic", hostile, [excerpt]) == refused
+    assert check_item("text", "Lumetra", document, [excerpt]) == refused
+    assert check_item("text", "Lumetra", hostile, [excerpt]) == refused
     assert rule_of(find(document, excerpt)) is Rule.DOCUMENT_UNREADABLE
     # a few such characters in a real text change nothing
-    real = "ﷺ Betclic depuis janvier 2023, GenAI Engineer à Bordeaux ﬁn \u2026"
+    real = "ﷺ Lumetra depuis janvier 2023, GenAI Engineer à Bordeaux ﬁn \u2026"
     assert prepare(real).readable
     assert rule_of(check_item("date", "2023-01", real, [excerpt])) is None
     # and the public normalisation itself never stops short
@@ -2719,7 +2719,7 @@ def test_a_chain_of_numbers_is_read_as_a_whole(text: str, expected: set[tuple[in
 
 CUBE = "Surface de 10\u00b3 m\u00b2 pour le nouvel entrepôt"
 HALF = "Expérience de 3\u00bd ans en développement web"
-FOOTNOTE = "Depuis 2023\u00b9 chez Betclic comme ingénieur IA, 12 000\u00b2 utilisateurs"
+FOOTNOTE = "Depuis 2023\u00b9 chez Lumetra comme ingénieur IA, 12 000\u00b2 utilisateurs"
 
 
 @pytest.mark.parametrize(
@@ -2772,7 +2772,7 @@ def test_a_number_with_a_superscript_or_a_fraction_is_one_written_form(
 def test_a_footnote_mark_does_not_hide_a_year_from_rule_d() -> None:
     assert rule_of(check_item("date", "2023", FOOTNOTE, [FOOTNOTE])) is None
     assert rule_of(check_item("date", "2023-01", FOOTNOTE, [FOOTNOTE])) is Rule.MONTH_NOT_IN_SOURCE
-    dated = "Arrivée en janvier 2023\u00b9 chez Betclic à Bordeaux"
+    dated = "Arrivée en janvier 2023\u00b9 chez Lumetra à Bordeaux"
     assert rule_of(check_item("date", "2023-01", dated, [dated])) is None
 
 

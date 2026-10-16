@@ -1,6 +1,6 @@
 # Citation rules of tasks/ingestion/todo.md, executed (citation_rules.py)
 # number | field | value | verdict | expected | reason
-1 | text | Works in the GenAI team of Betclic | accept | accept | step 1 folds U+2019
+1 | text | Works in the GenAI team of Lumetra | accept | accept | step 1 folds U+2019
 2 | text | Développeur full-stack | accept | accept | the skeleton drops hyphens and whitespace on both sides
 3 | text | Développeur fullstack | accept | accept | all rules hold
 4 | date | 2021 | accept | accept | U+2013 folded; a hyphen never joins two numbers
@@ -64,8 +64,8 @@
 62 | date | 2023 | accept | accept | all rules hold
 63 | date | 2023-05 | refuse | refuse | rule D: month not in the source, propose the year alone: a full month name takes no full stop
 64 | date | 2021-09 | accept | accept | all rules hold
-65 | name | Thales | refuse | refuse | rule V: the value is not written in an excerpt: whole tokens: Thales is not Thalesgroup
-66 | name | Thalesgroup Services | accept | accept | all rules hold
+65 | name | Velmor | refuse | refuse | rule V: the value is not written in an excerpt: whole tokens: Velmor is not Velmorgroup
+66 | name | Velmorgroup Services | accept | accept | all rules hold
 67 | phone | 39 98 12 | refuse | refuse | rule P: the digits are not a phone number of an excerpt: the digits must be the whole phone number
 68 | text | Python | accept | accept | all rules hold
 69 | text | Python | refuse | refuse | excerpt must be the whole document

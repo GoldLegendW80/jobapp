@@ -1,145 +1,112 @@
-# VERIFIED FACT BASE — Lucien-Ambroise Quillard
+# VERIFIED FACT BASE: Lucien-Ambroise Quillard
 
-This is the **only** permitted source of claims. Every line of every tailored CV must
-trace to something in this file. Sources: the LinkedIn PDF export (authoritative for dates,
-titles, employers, education), the existing English CV, `profile.md` and
-`projects-deep-dive.md` (machine-derived audit of his actual repositories).
-Everything in this file is invented: the person, the employers, the schools and the projects.
+The one source of claims for this person: every line of a tailored CV must trace back to
+something in this file. Everything in it is invented: the person, the employers, the schools,
+the projects and the dates.
 
 ## HARD RULES FOR ANY CV YOU WRITE
-1. **Never invent.** No metric, percentage, team size, user count, revenue figure,
-   award, certification, publication, or client name that is not below. If a job spec
-   begs for a number you do not have, write the achievement without a number.
-2. **Never change dates, employers, or job titles.** They are legally checkable.
-3. **Reframing is allowed and expected. Fabrication is not.** You may re-describe real
-   work in the target role's vocabulary, reorder it, and drop what is irrelevant —
-   but the underlying fact must exist below.
-4. **Lumetra work is under NDA-ish constraints**: repositories are private. Describe
-   *what* was built and *how*, never internal metrics or unreleased product names
-   beyond what the profile already records ("claims desk", "triage", "matching").
-5. **Do not claim LLM fine-tuning.** He has LoRA training on a rented GPU (`lora_lab`)
-   and OCR model benchmarking. That is adjacent, real, and must be described as what it is.
-6. **Do not claim a PhD, publications, or open-source maintainership.** His public
-   GitHub (`github.com/e2e-lquillard`) holds the form-reader projects.
-7. English is written as **Advanced (C1)** on his own CV; LinkedIn says "Professional
-   Working". Use the CV's wording. Spanish: CV says Intermediate, LinkedIn "Limited
-   Working" — use **Intermediate**.
+1. **Nothing new.** No figure, team size, client, award or certificate that is not written
+   below. When a posting asks for a number that is not here, describe the work without one.
+2. **Dates, employers and job titles stay as written.** An employer can check them.
+3. **Rewording is welcome, inventing is not.** Use the vocabulary of the posting, reorder,
+   leave out what does not fit, as long as the fact itself is below.
+4. **Lumetra projects are internal.** Say what was built and with which tools; no internal
+   figures and no product names beyond the ones below.
+5. **No research claims.** No PhD, no paper, no maintainer role in a public project.
 
 ## IDENTITY
-- **Lucien-Ambroise Quillard** — Nantes, Pays de la Loire, France
+- **Lucien-Ambroise Quillard**, Nantes, Pays de la Loire, France
 - +33 6 39 98 42 17 · e2e-lucien.quillard@example.org
 - linkedin.com/in/e2e-lucien-quillard · noxtechsolutions.example
 - Current title: **GenAI Engineer**
 
-## EMPLOYMENT (LinkedIn — authoritative, do not alter)
+## EMPLOYMENT (authoritative, do not alter)
 | Employer | Role | Dates | Location |
 |---|---|---|---|
-| **Lumetra Group** | GenAI Engineer | September 2025 – Present | Nantes |
-| **NoxTechSolutions** | Auto-entrepreneur (self-employed) | August 2024 – Present | Nantes |
-| **SANTEVA** | Full-stack Developer (apprenticeship) | January 2023 – August 2025 | Nantes |
-| Corelis | Technicien informatique | June 2022 – August 2022 (3 mo) | Nantes |
-| Studio Marée 17 | Développeur applications | April 2022 – June 2022 (3 mo) | Royan |
-| LUDIKA | Game master | July 2021 – August 2021 (2 mo) | Angers |
-| PIXEL SURFSHOP | Développement mobile | April 2021 – June 2021 (3 mo) | Angers |
-| LA FOURNÉE | Vendeur caissier (student job, ~8h/week) | April 2019 – March 2021 | Angers |
+| **Lumetra Group** | GenAI Engineer | March 2025 to present | Nantes |
+| **NoxTechSolutions** | Auto-entrepreneur (self-employed) | May 2023 to present | Nantes |
+| **OLMEA** | Full-stack Developer (apprenticeship) | September 2021 to June 2024 | Saint-Nazaire |
+| Velmor | Help desk assistant | June 2021 to August 2021 (3 mo) | Nantes |
+| Studio Marée 17 | Web developer | February 2021 to May 2021 (4 mo) | La Rochelle |
+| Café Tilleul | Barista (student job, weekends) | October 2018 to January 2021 | Nantes |
 
-**Experience arithmetic (state honestly if asked):** first paid development work
-April 2021; continuous professional software engineering since **January 2023**
-(SANTEVA apprenticeship, 2 yrs 8 mo) overlapping self-employment from August 2024;
-GenAI engineering as a full-time specialism since **September 2025**.
-That is ~3.5 years professional software engineering. **Do not round these up.**
+**Experience in years (say it plainly if asked):** first paid web work in February 2021;
+software engineering without a break since **September 2021** (OLMEA apprenticeship, then
+self-employment and Lumetra); about five years in all.
 
-Short pre-2023 roles worth keeping only where relevant:
-- **Corelis** — wrote training material for a **real-time scheduling platform**.
-- **Studio Marée 17** — shipped a **React Native** web + mobile app for a sailing school.
-- PIXEL SURFSHOP — mobile development.
-- LUDIKA / LA FOURNÉE — non-technical, omit from engineering CVs.
+Short early roles, kept only where they help:
+- **Velmor**: answered the help desk of a regional bus network for a summer.
+- **Studio Marée 17**: built the booking pages of a kayak rental website.
+- Café Tilleul: not technical, left out of engineering CVs.
 
-## EDUCATION (LinkedIn — authoritative)
-- **ORBITECH – Open Research Institute of Technology**, Nantes — *MSC Pro, Transformation
-  Digitale et Innovation Technologique (Informatique)*, **September 2022 – July 2025**.
-  ⚠️ **COMPLETED.** The old CV says "2022 – 2025 (In progress)" and
-  "Specialization: AI" — the correct status is completed July 2025.
-- **Université de Kervan Haute-Loire** — *Licence (Bachelor), Informatique*, 2018 – 2022.
-- **Lycée Clément Arnaud, Angers** — *Baccalauréat Scientifique, option ISN*, 2016 – 2018.
-  (The old CV adds "Mention AB"; both may be stated.)
+## EDUCATION (authoritative)
+- **ORBITECH Institute of Technology**, Nantes – *Master of Engineering, Data Science*,
+  **September 2020 – June 2024**, with the apprenticeship at OLMEA from the second year.
+- **Université de Kervan Haute-Loire**: *Bachelor of Mathematics*, 2017 to 2020.
+- **Lycée Clément Arnaud, Angers**: *Baccalauréat Général, mathematics and physics*, 2014 to
+  2017, Mention Bien.
 
 ## LANGUAGES
-French — mother tongue · English — Advanced (C1) · Spanish — Intermediate
+French: mother tongue · English: fluent (C1) · German: intermediate (B1)
 
-## WHAT HE ACTUALLY BUILT (from the repository audit — this is the gold)
-### Lumetra Group — GenAI Engineer (Sept 2025 – present)
+## PROJECTS (from his own repositories)
+### Lumetra Group, GenAI Engineer (March 2025 to present)
 
-**`claims-desk` — flagship, production. Lead developer.**
-An agentic back-office for the insurance claims desk: a handler describes a claim in
-natural language, the agent finds the policy, proposes the next step and waits for a
-human sign-off before anything is written.
-- `agent/` — Python 3.12, **LangGraph**, one agent with typed state
-- `desk/` — **React 19 + Vite + TypeScript**, TanStack Router/Query
-- Deployed on **AWS ECS Fargate + Aurora Serverless v2 + Redis** behind an ALB
+Lumetra Group runs warehouses for regional food producers.
 
-**The agent engineering that makes it notable:**
-- **Human-in-the-loop** via LangGraph `interrupt()` + checkpointing.
-- **ID safety**: IDs read from the state, never from model output.
-- **Evaluation suites**: tool arguments, trajectories, guardrails, adversarial personas.
+**`dock-planner`: in production, main developer.**
+An assistant for warehouse planners: it reads delivery notes and carrier e-mails, proposes a
+loading dock slot and books it only after a planner approves.
+- Python, FastAPI, one tool calling agent with a typed state
+- A React and TypeScript screen for the planners
+- PostgreSQL on a managed Kubernetes cluster
+- An offline evaluation set of invented delivery notes, run before every release
 
-**`fraud-notes` (his).** A batch pipeline over invented claim notes that extracts
-suspicious patterns with evidence, to draft detection rules.
+### NoxTechSolutions, self-employed (May 2023 to present)
 
-### NoxTechSolutions — Auto-entrepreneur (Aug 2024 – present)
+Small web projects for local shops and clubs. Public GitHub (`github.com/e2e-lquillard`):
+- `tide-board`: a FastAPI and SQLite service that publishes the tide table of a sailing club.
+- `receipt-sorter`: sorts scanned receipts into folders with an open OCR model.
 
-Generative-AI consulting and custom web development. Public GitHub
-(`github.com/e2e-lquillard`):
-- `form-reader-api` — FastAPI + PostgreSQL + Alembic, **vision model** extraction of
-  scanned forms into a structured schema.
-- `form-reader-front` — React 19 + Vite + shadcn, full CRUD, Excel export.
+### OLMEA, Full-stack Developer, apprenticeship (September 2021 to June 2024)
 
-### SANTEVA — Full-stack Developer, apprenticeship (Jan 2023 – Aug 2025)
+A network of garden centres. Built the stock and order screens of the internal back office
+in C# and Angular.
 
-Private clinic network. Design and development of internal scheduling applications.
-(**Regulated sector, patient data.**)
+## TOOLCHAIN (used every week)
+Python, TypeScript, C# ·
+FastAPI, Django, React, Angular ·
+PostgreSQL, SQLite, Redis ·
+Docker, Kubernetes, GitHub Actions ·
+pytest, Playwright
 
-## TOOLCHAIN (evidenced by what is installed and used daily)
-Python (`uv`), TypeScript, C#/.NET, JavaScript ·
-LangGraph, LangChain, LangSmith, **MCP**, LiteLLM, Ollama (local inference) ·
-React 19, Vite, TanStack, shadcn, React Native ·
-FastAPI, gRPC, PostgreSQL, MongoDB, Redis ·
-AWS (ECS Fargate, Aurora), Terraform, Docker, CI/CD (GitHub Actions), pre-commit ·
-Playwright, pytest, Vitest
+## POSITIONING (invented, October 2026)
+Practical AI for operations teams: from the first prototype to the tool people open every
+morning.
 
-## POSITIONING (added 29 Sept 2026, framing confirmed by Lucien)
-Lead with the big picture, then prove it: the engineer who put agents to work on the
-claims desk of a regulated insurer, from the business problem to daily production use.
+### APPROVED WORDING (reuse as written where it fits)
 
-### APPROVED WORDING (29 Sept 2026, reviewed by Lucien; reuse verbatim where it fits)
+- **Planner bullet:** "Built the dock planning assistant: reads delivery notes, proposes a slot,
+  books it after a planner approves."
+- **Summary opener:** "Turns repetitive operations work into tools people trust."
 
-- **Claims bullet:** "Core engineer of the claims desk agent: natural-language intent,
-  human sign-off, one action per claim."
-- **Summary opener:** "Puts AI to work across a regulated business."
+## PRACTICALITIES FOR APPLICATION FORMS (invented, October 2026)
+- **Citizenship and work authorization:** French national, free to work anywhere in the EU, so
+  no sponsorship is needed in France. For Canada and the UK say it as it is: work permit needed
+  (Canada), sponsorship would be needed (UK).
+- **Location stance:** hybrid around Nantes or fully remote. Open to moving to Lyon. Two office
+  days a week is fine.
+- **Notice and start:** one month notice period. Earliest start given on forms in October 2026:
+  February 2027 (date fields: 2027-02-01). Occasional travel is fine, up to one week a month.
+- **Salary expectations:** no figure from the assistant; Lucien types it himself.
+- **Demographic and voluntary self-identification questions:** left empty; Lucien decides on
+  each one.
+- **Motivation, in Lucien's own words (invented example):** he likes small teams that put useful
+  tools in front of real users quickly, and wants his next role to do the same.
+- **How did you hear about us:** the company's careers page, or a referral when there was one.
+- **Languages:** French native, English C1, German B1.
+- **Who submits:** Lucien clicks Submit himself.
 
-## PRACTICALITIES FOR APPLICATION FORMS (confirmed by Lucien, Sept 2026)
-- **Citizenship and work authorization:** French citizen. Authorized to work in France and the EU;
-  no visa sponsorship needed in France. For Switzerland and the UK answer honestly: EU citizen,
-  permit needed but routine for EU nationals (Switzerland), sponsorship would be needed (UK).
-- **Location stance:** fully remote, hybrid in France, or hybrid abroad are all acceptable ("it
-  doesn't matter"). Preferred office: Paris. Also acceptable: Zürich, London, Singapore. Based in
-  Nantes; willing to relocate or commute to Paris; three office days a week in Paris is fine.
-- **Notice and start:** standard French notice period, 1 to 3 months. Earliest start given on forms
-  in September 2026: December 2026 (date fields: 2026-12-01). Monthly travel is fine; 25 to 50%
-  travel was accepted on an earlier form.
-- **Salary expectations:** never invent a number. Leave the field for Lucien, or write "open to
-  discussion against the band for the role" only if he says so.
-- **Demographic and voluntary self-identification questions:** leave blank or "prefer not to answer";
-  Lucien fills them himself if he wants to.
-- **Motivation, in Lucien's own words (earlier form, 1 Sept 2026, may be adapted):** the company is
-  a market leader whose products he has used for several years; he wants to bring his knowledge to
-  help the company move forward. Coding agents are central to how he builds every day.
-- **How did you hear about us:** the company's own careers page or job board, found while
-  researching forward deployed and applied AI roles; LinkedIn when the posting came from there.
-- **Languages:** French native, English C1, Spanish intermediate.
-- **Who submits:** Lucien clicks Submit himself unless he explicitly says otherwise for a given run.
+### WORDING LEVEL
 
-### WORDING LEVEL (added 6 October 2026, stated by Lucien)
-
-Outward material speaks in skills, never in inventories of what he produced. "Designs and runs LLM
-evaluations across products" is right; "implemented three evaluation suites" is wrong.
+Outward material names skills and outcomes, never lists of files or tickets.
