@@ -254,7 +254,7 @@ def test_two_steps_of_one_run_that_write_at_once_count_each_others_items(
     monkeypatch.setattr(tools, "ITEMS_PER_RUN", 1)
     first = add_step(factory, alice, add_document(factory, alice, CLEAN))
     second = add_step(factory, alice, add_document(factory, alice, CLEAN + "\n"), after=first)
-    bob = add_user(factory, "bob@example.org")  # a user has one active run at most
+    bob = add_user(factory, "e2e-bob@example.org")  # a user has one active run at most
     elsewhere = add_step(factory, bob, add_document(factory, bob, CLEAN))
     proposed = [item("email", "camille.durand@example.org", EMAIL_LINE)]
 
