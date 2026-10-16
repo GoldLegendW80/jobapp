@@ -295,6 +295,13 @@ def test_apply_passes_what_is_not_a_base_cv_through_for_the_schema_check(data: A
     assert (applied.data, applied.fixed, applied.corrections) == (data, None, ())
 
 
+@pytest.mark.parametrize("key", [["k"], {"k": 1}, 3, None])
+def test_apply_passes_an_entry_whose_key_is_not_a_text_through(key: Any) -> None:
+    data = {"fixed": {}, "experience": [{"employer_key": key, "bullets": ["x"]}]}
+    applied = upload.apply(data, TEXT)
+    assert applied.data["experience"] == data["experience"]
+
+
 def test_apply_with_no_fixed_block_keeps_an_empty_one() -> None:
     applied = upload.apply({"headline": "x"}, TEXT)
     assert applied.fixed == c.Fixed()
