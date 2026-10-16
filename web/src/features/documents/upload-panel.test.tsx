@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { MemoryRouter } from "react-router";
@@ -92,6 +92,25 @@ describe("the upload panel", () => {
     expect(files.uploads).toHaveLength(1);
     expect(files.uploads[0]?.filename).toBe("UTF-8''Morgan%20CV.pdf");
     expect(conversions(api)).toEqual([]); // the text is not read yet
+  });
+
+  it("takes a Word document dropped on it", async () => {
+    fakeDocuments({ consent: { accepted: true } });
+    const files = fakeFiles();
+    panel();
+    const docx = new File(["PK Morgan Exampleton"], "Morgan CV.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    });
+    const zone = screen.getByTestId("upload-drop");
+    fireEvent.dragOver(zone, { dataTransfer: { files: [docx] } });
+    expect(zone).toHaveAttribute("data-over", "true");
+    fireEvent.drop(zone, { dataTransfer: { files: [docx] } });
+    expect(zone).toHaveAttribute("data-over", "false");
+    await waitFor(() => {
+      expect(files.uploads.map((one) => one.filename)).toEqual([
+        "UTF-8''Morgan%20CV.docx",
+      ]);
+    });
   });
 
   it("refuses a file that is not a PDF or a Word document before sending it", async () => {

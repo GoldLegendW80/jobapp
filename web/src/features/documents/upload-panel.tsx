@@ -204,6 +204,7 @@ export function UploadPanel({
       </h3>
       <div
         data-over={over}
+        data-testid="upload-drop"
         onDragOver={(event) => {
           event.preventDefault();
           setOver(true);
