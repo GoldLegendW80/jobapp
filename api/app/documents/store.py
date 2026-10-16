@@ -18,7 +18,8 @@ circle:
 1. the person's row (`users`, `FOR NO KEY UPDATE`), only when the list of base CVs changes
    (create, make default, delete): it serializes the count, the default and the promotion;
 2. the posting row (`jobs`), only when a status moves (the jobs service takes it; the freeze of
-   D14 runs under it);
+   D14 runs under it), or shared (`lock_posting`) by a write that inserts a row referencing the
+   posting (a posting document, a writer run) while it holds lock 3;
 3. the document row (`documents`, `FOR UPDATE`): every write of a draft, a version, a
    generation or a message takes it first. Between two documents, the posting documents come
    before the base CV they name: `create_generation` holds its document and then needs a key
@@ -91,7 +92,7 @@ from app.documents.settings import DEFAULT as DEFAULT_SETTINGS
 from app.documents.settings import DocumentSettings
 from app.ingestion.models import IngestionDocument
 from app.jobs import service as jobs_service
-from app.jobs.models import Job, JobFile
+from app.jobs.models import Job, JobFile, JobStatus
 from app.mail.factcheck_rules import Sources
 
 logger = logging.getLogger("app.documents")
@@ -210,6 +211,20 @@ def _lock_person(db: Session, user_id: uuid.UUID) -> None:
     that only reference the user (their key share locks) are never blocked by it."""
     _wait(db)
     _execute(db, sa.text("SELECT 1 FROM users WHERE id = :u FOR NO KEY UPDATE"), {"u": user_id})
+
+
+@_busy
+def lock_posting(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> JobStatus | None:
+    """Lock 2, shared: the user's posting `FOR KEY SHARE`, the lock the foreign key of a row that
+    references it takes, so that lock comes before lock 3 instead of after it. Returns the
+    posting's status, None when the posting is not the user's."""
+    _wait(db)
+    query = (
+        sa.select(Job.status)
+        .where(Job.user_id == user_id, Job.id == posting_id)
+        .with_for_update(read=True, key_share=True)
+    )
+    return _execute(db, query).scalar_one_or_none()
 
 
 @_busy
