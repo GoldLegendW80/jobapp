@@ -1,6 +1,8 @@
+import { QueryClientProvider } from "@tanstack/react-query";
 import {
   act,
   fireEvent,
+  render,
   screen,
   waitFor,
   within,
@@ -421,6 +423,41 @@ describe("the Edit view", () => {
       expect(api.document.draft.summary).toBe("Typed before leaving.");
     });
     expect(api.saves.map((one) => one.ifMatch)).toEqual(["3", "3", "4"]);
+  });
+
+  it("forgets what was not saved when the person signs out", async () => {
+    const api = fake(doc());
+    const user = userEvent.setup();
+    const view = (
+      <MemoryRouter>
+        <DocumentView documentId="doc-1" />
+      </MemoryRouter>
+    );
+    const { client, unmount } = renderWithQuery(view);
+    await user.click(await screen.findByRole("tab", { name: "Edit" }));
+    api.document = {
+      ...api.document,
+      draft: { ...CV, summary: "Saved in the other tab." },
+      draft_revision: 4,
+    };
+    const summary = await screen.findByLabelText("Summary");
+    await user.clear(summary);
+    await user.type(summary, "Typed before signing out.");
+    await user.click(screen.getByRole("tab", { name: "See" }));
+    await waitFor(() => {
+      expect(api.saves).toHaveLength(1);
+    });
+    unmount();
+    // What signing out does to the cache (resetSession in auth-provider.tsx).
+    client.removeQueries({ predicate: (query) => query.queryKey[0] !== "me" });
+
+    render(<QueryClientProvider client={client}>{view}</QueryClientProvider>);
+    await user.click(await screen.findByRole("tab", { name: "Edit" }));
+    expect(await screen.findByLabelText("Summary")).toHaveValue(
+      "Saved in the other tab.",
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(api.saves).toHaveLength(1);
   });
 
   it("notes a claim typed by hand under its field and keeps it as typed", async () => {

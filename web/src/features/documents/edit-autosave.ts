@@ -32,8 +32,29 @@ export type SaveStatus =
   /** The draft changed elsewhere since this form read it: `theirs` is the current one. */
   | { state: "conflict"; theirs: DocumentOut };
 
-/** Edits not saved yet when the view closed, by document: reopening it sends them again. */
-const unsaved = new Map<string, { draft: Draft; revision: number }>();
+interface Unsaved {
+  draft: Draft;
+  revision: number;
+}
+
+/**
+ * Edits not saved yet when the view closed, by document: reopening it sends them again. Kept in
+ * the query cache, so a sign out or a sign in forgets them with every other answer.
+ */
+function unsavedOf(queryClient: QueryClient, id: string) {
+  const key = ["documents-unsaved", id];
+  return {
+    get: () => queryClient.getQueryData<Unsaved>(key),
+    set: (value: Unsaved) => {
+      // Nothing observes it: kept until sent or forgotten, never collected.
+      queryClient.setQueryDefaults(key, { gcTime: Infinity });
+      queryClient.setQueryData<Unsaved>(key, value);
+    },
+    drop: () => {
+      queryClient.removeQueries({ queryKey: key, exact: true });
+    },
+  };
+}
 
 const REFUSED: Record<string, string> = {
   empty: "This cannot be empty.",
@@ -77,7 +98,8 @@ function createSaver(
   },
 ) {
   const id = document.id;
-  const stashed = unsaved.get(id);
+  const unsaved = unsavedOf(queryClient, id);
+  const stashed = unsaved.get();
   let latest = stashed?.draft ?? withDefaults(document);
   let revision = stashed?.revision ?? document.draft_revision;
   let sent = JSON.stringify(toPayload(withDefaults(document)));
@@ -102,7 +124,7 @@ function createSaver(
     const payload = toPayload(latest);
     const sending = JSON.stringify(payload);
     if (sending === sent) {
-      unsaved.delete(id);
+      unsaved.drop();
       set.status({ state: "saved" });
       return;
     }
@@ -115,10 +137,11 @@ function createSaver(
       queryClient.setQueryData(documentKey(id), answer);
       set.saved(answer);
       if (dirty()) {
-        if (unsaved.has(id)) unsaved.set(id, { draft: latest, revision });
+        if (unsaved.get() !== undefined)
+          unsaved.set({ draft: latest, revision });
         set.status({ state: "waiting" });
       } else {
-        unsaved.delete(id);
+        unsaved.drop();
         set.status({ state: "saved" });
       }
     } catch (error) {
@@ -150,7 +173,7 @@ function createSaver(
     latest = withDefaults(next);
     revision = next.draft_revision;
     sent = JSON.stringify(toPayload(latest));
-    unsaved.delete(id);
+    unsaved.drop();
     set.draft(latest);
     set.saved(next);
     set.status({ state: "saved" });
@@ -192,7 +215,7 @@ function createSaver(
     /** The view closes: what is not saved is kept for the next time and sent now. */
     close() {
       if (timer === undefined && !inFlight && !conflict && !dirty()) return;
-      unsaved.set(id, { draft: latest, revision });
+      unsaved.set({ draft: latest, revision });
       void save();
     },
   };
