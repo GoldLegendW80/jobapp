@@ -380,14 +380,17 @@ timing() { # timing <step> <exit status> <seconds>: one line of timings.csv
 run_step() {
   local name="$1" start=$SECONDS rc=0 pid watcher
   shift
+  : >"$LOGS/$name.log"
+  # Appended to, as the watcher's line is: what the step writes after it never overwrites it.
   (
     cd "$TREE"
     export "${STEP_ENV[@]}"
     exec "$BASH" -c "$(declare -f)"$'\n''set -euo pipefail; "$@"' "$PROG" "$@"
-  ) >"$LOGS/$name.log" 2>&1 </dev/null &
+  ) >>"$LOGS/$name.log" 2>&1 </dev/null &
   pid=$!
   (
-    sleep "$STEP_TIMEOUT"
+    # A sleep stopped before its time (the step ended, or the cleanup) leaves nothing to write or stop.
+    sleep "$STEP_TIMEOUT" || exit 0
     printf '\n%s: step %s ran longer than %s s, stopped\n' "$PROG" "$name" "$STEP_TIMEOUT" >>"$LOGS/$name.log"
     kill_tree "$pid"
   ) >/dev/null 2>&1 &
