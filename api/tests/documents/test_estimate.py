@@ -87,11 +87,11 @@ def test_the_base_writer_prompt_is_counted() -> None:
 
 def test_the_worked_figures_of_the_plan() -> None:
     # "Measurements / D9" in tasks/documents/todo.md: change both together.
-    assert (estimate.prompt_chars("base"), estimate.prompt_chars("cv")) == (2_678, 3_112)
+    assert (estimate.prompt_chars("base"), estimate.prompt_chars("cv")) == (4_205, 3_112)
     base = estimate.base_profile(1_396, turns=10, submits=4)
-    assert (base.low, base.high, base.ceiling) == (28_779, 194_804, 389_608)
+    assert (base.low, base.high, base.ceiling) == (30_306, 199_894, 399_788)
     costs = pricing.costs(base, "claude-sonnet-5-5")
-    assert (costs.low, costs.high) == (Decimal("0.05"), Decimal("0.51"))
+    assert (costs.low, costs.high) == (Decimal("0.06"), Decimal("0.53"))
     pair = estimate.posting(1_396, 1_503, 6_000, turns=10, submits=4)
     assert estimate.prompt_chars("letter") == 3_789
     assert (pair.low, pair.high, pair.ceiling) == (71_773, 451_773, 903_546)
