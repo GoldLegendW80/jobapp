@@ -38,7 +38,7 @@
 # Arrangement. Four lanes start together: api (its own Postgres and Redis containers on free
 # loopback ports; ruff, the suite, the coverage floor), web (install, then lint, type check
 # and build side by side), images (api, worker and caddy built by compose under this
-# check's own image names), checks (the tests/*_test.sh side by side). The journey groups start
+# check's own image names, with compose.extra-ca.yml when JOBAPP_EXTRA_CA is set), checks (the tests/*_test.sh side by side). The journey groups start
 # when the images and the web install are done, each on a scratch stack of its own (own project,
 # own port, own database; the ports are claimed once up front, and a start that fails on a port is retried on another, three starts at most), LOCAL_CHECK_STACKS of them side by side (default: one per 4 GiB of
 # Docker memory, at most 4), with one Playwright worker each, as in CI. A slot that frees starts
@@ -745,6 +745,15 @@ EOF
   # which starts them below, under this check's names: the shared jobapp-*:latest tags are not
   # written.
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
+  # Behind a TLS inspecting proxy (README): the bundle reaches these builds only, never a stack.
+  if [[ -n "${JOBAPP_EXTRA_CA:-}" ]]; then
+    if [[ "$JOBAPP_EXTRA_CA" != /* || ! -f "$JOBAPP_EXTRA_CA" || ! -r "$JOBAPP_EXTRA_CA" ]]; then
+      echo "JOBAPP_EXTRA_CA is set but does not name a readable file by its absolute path"
+      return 1
+    fi
+    echo "JOBAPP_EXTRA_CA is set: the builds also trust its bundle (compose.extra-ca.yml)"
+    files+=(-f compose.extra-ca.yml)
+  fi
   # The browser image is for the docker marked tests only (BROWSER_TEST_IMAGE): no stack runs it.
   docker compose --progress plain -p "$PREFIX-build" "${files[@]}" build api worker caddy renderer browser
 }

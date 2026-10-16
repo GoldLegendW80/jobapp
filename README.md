@@ -50,6 +50,30 @@ ops/dev-setup.sh                                   # read only: lists what is st
   If an older clone has the line `.claude/` in `.git/info/exclude`, narrow it to
   `.claude/worktrees/`: left as it is, it hides the versioned `.claude/` config from git.
 
+**Behind a TLS inspecting proxy.** On a network that answers for every site with a certificate of
+its own, the Mac trusts that certificate and the containers of an image build do not: every build
+stops where it downloads (uv says `invalid peer certificate: UnknownIssuer`). Export the
+certificates the Mac trusts to a file outside the repository, and name it in `JOBAPP_EXTRA_CA`:
+
+```bash
+mkdir -p ~/.config/jobapp
+( umask 077
+  { security find-certificate -a -p /Library/Keychains/System.keychain
+    security find-certificate -a -p /System/Library/Keychains/SystemRootCertificates.keychain
+  } >~/.config/jobapp/extra-ca.pem )
+export JOBAPP_EXTRA_CA="$HOME/.config/jobapp/extra-ca.pem"   # an absolute path; add it to ~/.zshrc to keep it
+docker compose -p jobapp-x -f compose.yml -f compose.mac.yml -f compose.extra-ca.yml build   # your own builds: add the file last
+```
+
+`ops/local-check.sh` adds `compose.extra-ca.yml` to its image builds by itself when the variable
+is set, and refuses a path that is relative or not a readable file. The bundle reaches only the
+build steps that download (uv, pip, pnpm, the Playwright download), as a BuildKit secret: it is in
+no image layer and in no container (a search of every layer of the five images found none of it,
+2026-10-15, issue #359).
+Unset, the builds are the Jetson's own: `deploy.sh` and the deploy workflow build with
+`compose.yml` alone (`tests/extra_ca_test.sh`). The file names the inspecting certificate of your
+network: keep it out of the repository and out of pull requests.
+
 ## Deploy from any machine
 
 Owner decision of 2026-10-15: no ssh to deploy or operate, GitHub Actions instead. Any laptop

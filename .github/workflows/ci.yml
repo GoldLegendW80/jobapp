@@ -387,7 +387,7 @@ jobs:
           tests/reboot_check.sh tests/e2e_jetson.sh tests/tailscale_test.sh tests/agents_real_run_jetson.sh
           tests/agents_real_run_test.sh tests/ingestion_parser_jetson.sh
           ops/env_check.sh tests/env_check_test.sh
-          ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh
+          ops/local-check.sh ops/deploy-checked.sh tests/local_check_test.sh tests/extra_ca_test.sh
           ops/agent-test.sh tests/agent_test_test.sh
           ops/ship.sh tests/ship_test.sh
           ops/browser-egress.sh tests/browser_egress_test.sh
@@ -448,6 +448,12 @@ jobs:
         id: local_check_test
         if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
         run: tests/local_check_test.sh
+      # Issue #359: the extra CA of the image builds (JOBAPP_EXTRA_CA, compose.extra-ca.yml): the
+      # Dockerfile steps that mount it, the gate's step images and the deploy path with a fake docker.
+      - name: tests/extra_ca_test.sh
+        id: extra_ca_test
+        if: ${{ !cancelled() && steps.plan.outputs.shell == 'true' }}
+        run: tests/extra_ca_test.sh
       # Issue #280: how agents run tests beside the batch check (ops/agent-test.sh), with fake
       # docker, uv and pnpm: the -n and worker limits, the lock, the throwaway services' cleanup.
       - name: tests/agent_test_test.sh
