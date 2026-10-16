@@ -304,6 +304,40 @@ def test_documents_that_cannot_be_read_are_named_left_out_and_counted(
     assert confirmed["can_start"] is True
 
 
+def test_a_text_nothing_can_be_cited_from_is_left_out_before_any_spend(
+    api: Api, factory: sessionmaker[Session], alice: str
+) -> None:
+    """A text whose normalisation passes four times its length (U+FDFA unfolds to 18
+    characters): the checker would refuse every item of it, so no step is planned for it, short
+    or long, and the person reads why."""
+    credential(factory, ALICE)
+    good = text_file(api, alice, "a", 30_000, "good.md")
+    short = text_file(api, alice, "s", 500, "short.md")
+    set_columns(factory, short, text="Camille Durand, Lyon. " + "\ufdfa" * 400)
+    long = text_file(api, alice, "l", 500, "long.md")
+    set_columns(factory, long, text="word " * 30_000 + "\ufdfa" * 100_000)  # three parts
+    body = answer(api, alice, [short, good, long])
+    assert [(one["name"], one["code"]) for one in body["unreadable"]] == [
+        ("short.md", "text_unreadable"),
+        ("long.md", "text_unreadable"),
+    ]
+    assert {one["reason"] for one in body["unreadable"]} == {
+        estimate_router.REASONS["text_unreadable"]
+    }
+    assert [one["id"] for one in body["documents"]] == [good]
+    assert (body["characters"], body["steps"]) == (30_000, 1)
+    assert body["can_start"] is False
+    assert [one["code"] for one in body["blockers"]] == ["unreadable_documents"]
+    # The neighbours that unfold less are read: a ligature of three letters, accents, CJK.
+    near = text_file(api, alice, "n", 500, "near.md")
+    set_columns(factory, near, text="Camille Durand, Lyon. " + "\ufb03" * 400 + "é\u0301" * 50)
+    cjk = text_file(api, alice, "c", 500, "cjk.md")
+    set_columns(factory, cjk, text="\u4e00\u4e8c\u4e09 " * 10_000)
+    read = answer(api, alice, [near, cjk])
+    assert read["unreadable"] == []
+    assert read["steps"] == 2
+
+
 def test_a_selection_with_nothing_to_read_is_zero_and_cannot_start(
     api: Api, factory: sessionmaker[Session], alice: str
 ) -> None:

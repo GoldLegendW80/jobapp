@@ -19,8 +19,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import definitions, runs
 from app.agents import tools as app_tools
 from app.agents.models import AgentRun, CredentialKind
-from app.ingestion import agents, citations, documents, item_proposals, items, tools
-from app.ingestion.models import IngestionDocument
+from app.ingestion import agents, citations, documents, item_proposals, items, plan, tools
+from app.ingestion.models import IngestionDocument, TextStatus
 from app.ingestion.runs_models import (
     IngestionItem,
     IngestionRun,
@@ -342,7 +342,9 @@ NOT_REMOVABLE = [
 ]
 
 
-@pytest.mark.parametrize(("section", "name"), NOT_REMOVABLE, ids="{0[0]}.{0[1]}".format)
+@pytest.mark.parametrize(
+    ("section", "name"), NOT_REMOVABLE, ids=[".".join(one) for one in NOT_REMOVABLE]
+)
 def test_a_removal_of_an_entry_a_line_or_a_list_is_refused_whatever_its_key(
     section: str, name: str
 ) -> None:
@@ -367,7 +369,7 @@ def test_a_removal_of_an_entry_a_line_or_a_list_is_refused_whatever_its_key(
     assert not (isinstance(verdict, tools._Refused) and verdict.rule == tools.REMOVAL_OF_A_LIST)
 
 
-@pytest.mark.parametrize(("section", "name"), REMOVABLE, ids="{0[0]}.{0[1]}".format)
+@pytest.mark.parametrize(("section", "name"), REMOVABLE, ids=[".".join(one) for one in REMOVABLE])
 def test_a_removal_of_a_field_that_holds_one_value_passes(section: str, name: str) -> None:
     made, verdict = tools._judge(
         section, item(name, None, NAME_LINES, action="remove"), citations.prepare(CLEAN)
@@ -1263,6 +1265,76 @@ def test_the_bind_hook_answers_none_when_there_is_nothing_to_read(
     assert binding_of(factory, no_text) is None
     delete_document(factory, ranged.document_id)
     assert binding_of(factory, ranged) is None
+
+
+@pytest.mark.parametrize(
+    ("characters", "part", "bound"),
+    [
+        (1, 0, True),
+        (plan.PART_MAX_CHARS, 0, True),  # one part exactly, as `plan.cut` leaves it
+        (plan.PART_MAX_CHARS + 1, 0, False),  # two parts: a step without a range is no part
+        (100, 1, False),
+        (100, 2, False),
+    ],
+)
+def test_a_step_without_a_range_is_bound_only_as_the_one_part_of_a_document_read_whole(
+    factory: sessionmaker[Session], alice_id: uuid.UUID, characters: int, part: int, bound: bool
+) -> None:
+    text = ("word " * (characters // 5 + 1))[:characters]
+    step = add_step(factory, alice_id, add_document(factory, alice_id, text), part=part)
+    found = binding_of(factory, step)
+    if not bound:
+        assert found is None
+        return
+    assert found is not None
+    assert (found["part"], found["start"], found["end"]) == (0, 0, characters)
+    assert read_all(tools_for(factory, step))[0] == text
+
+
+def set_document(factory: sessionmaker[Session], document_id: uuid.UUID, **values: Any) -> None:
+    with factory() as db, db.begin():
+        db.execute(
+            sa.update(IngestionDocument).where(IngestionDocument.id == document_id).values(**values)
+        )
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"text_status": TextStatus.pending},
+        {"text_status": TextStatus.failed},
+        {"text_status": TextStatus.awaiting_transcription},
+        {"secret_warning": True},
+    ],
+    ids=["pending", "failed", "awaiting_transcription", "secret_warning_unconfirmed"],
+)
+def test_a_document_that_may_not_be_read_now_is_never_bound_and_both_tools_find_nothing(
+    factory: sessionmaker[Session], clean: Step, state: dict[str, Any]
+) -> None:
+    """Checked at the start of a run, and again at every binding and every call: a
+    transcription can set the warning while the run goes on, a newer parser can read the
+    document again."""
+    found = binding_of(factory, clean)
+    assert found is not None
+    step_tools = tools_for(factory, clean, binding=found)
+    set_document(factory, clean.document_id, **state)
+    assert binding_of(factory, clean) is None
+    assert call(step_tools, READ, offset=0) == (tools.NOT_FOUND, True)
+    assert call(step_tools, PROPOSE, section="identity", items=[EMAIL]) == (tools.NOT_FOUND, True)
+    assert all_items(factory) == 0
+    assert counters(factory, clean) == (0, 0, 0)
+
+
+def test_a_secret_warning_the_user_confirmed_is_read_like_any_document(
+    factory: sessionmaker[Session], clean: Step
+) -> None:
+    step_tools = tools_for(factory, clean)
+    set_document(factory, clean.document_id, secret_warning=True)
+    assert call(step_tools, READ, offset=0) == (tools.NOT_FOUND, True)
+    set_document(factory, clean.document_id, secret_confirmed_at=now())
+    assert binding_of(factory, clean) is not None
+    assert read_all(step_tools)[0] == CLEAN
+    assert call(step_tools, PROPOSE, section="identity", items=[EMAIL])[0]["stored"] == 1
 
 
 # --- the binding is read only, and a failure says nothing -----------------------------------------

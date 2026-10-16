@@ -686,3 +686,52 @@ def test_a_transcribed_text_that_fits_in_60_steps_is_planned_again_as_before(
     assert (mixed, "extract") in [(one.document_id, one.kind) for one in chosen.removed]
     assert (mixed, "extract") in [(one.document_id, one.kind) for one in chosen.added]
     assert len(chosen.removed) == len(chosen.added) == 30
+
+
+@pytest.mark.parametrize(
+    ("text", "columns", "read"),
+    [
+        ("A made-up letter, typed on a page.", {"secret_warning": True}, False),
+        ("A made-up letter, typed on a page. " + "ﷺ" * 400, {}, False),
+        ("A made-up letter, typed on a page.", {"secret_warning": True, "confirmed": True}, True),
+    ],
+    ids=["secret_warning_unconfirmed", "text_unreadable", "secret_warning_confirmed"],
+)
+def test_a_transcribed_text_that_may_not_be_read_fails_its_extraction_without_an_agent_run(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    text: str,
+    columns: dict[str, Any],
+    read: bool,
+) -> None:
+    """What the start of the run could not see: the transcription set a secret warning the user
+    has not confirmed, or wrote a text nothing can be cited from. Its predicted extraction fails
+    and the next document is read; `agents.bind_step` would refuse the step all the same."""
+    scan = add_scan(factory, alice, [None])
+    other = add_document(factory, alice, eh.text_of(1))
+    run_id = eh.start(factory, alice, [scan, other])
+    confirmed = {"secret_confirmed_at": now()} if columns.pop("confirmed", False) else {}
+    with factory() as db, db.begin():
+        db.execute(
+            sa.update(IngestionRunStep)
+            .where(
+                IngestionRunStep.ingestion_run_id == run_id,
+                IngestionRunStep.document_id == scan,
+                IngestionRunStep.kind == "transcribe",
+            )
+            .values(status=StepStatus.done)
+        )
+        db.execute(
+            sa.update(IngestionDocument)
+            .where(IngestionDocument.id == scan)
+            .values(text=text, text_status=TextStatus.done, **columns, **confirmed)
+        )
+    chosen = asked(factory, run_id)
+    assert chosen.step is not None
+    assert chosen.step.document_id == other
+    if read:  # the control: planned again from its text, after the steps the run keeps
+        assert chosen.failed == ()
+        assert [one.document_id for one in chosen.added] == [scan]
+    else:
+        assert [(one.document_id, one.kind) for one in chosen.failed] == [(scan, "extract")]
+        assert chosen.added == ()
