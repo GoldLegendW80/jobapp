@@ -27,8 +27,11 @@ English ones, else English, the app's default (an empty text, a tie).
 What this does not see, stated: a two digit year ("03/19") is not read as its year, so such a
 date is dropped; a month written in a third language is not read, so it goes; a name the file
 writes in two different ways is kept only in the way the reader copied, when that way is in the
-text. Pure: no I/O. Linear in the length of the text: one fold and one pass to cut tokens, then
-a substring test per value and a dictionary lookup per date.
+text; each value is looked for in the whole text, not beside its organisation (a PDF's lines may
+come out of order), so a title or a year of one role stays on another, and a name the file
+writes in another context (a client) stays as an employer. Pure: no I/O. Linear in the length
+of the text: one fold and one pass to cut tokens, then a substring test per value and a
+dictionary lookup per date.
 """
 
 from __future__ import annotations
@@ -330,7 +333,7 @@ def apply(data: Any, text: str) -> Applied:
         kept: list[Any] = []
         for i, entry in enumerate(experience):
             key = entry.get("employer_key") if isinstance(entry, Mapping) else None
-            if key not in checked.dropped_keys:
+            if not isinstance(key, str) or key not in checked.dropped_keys:
                 kept.append(entry)
                 continue
             bullets = entry.get("bullets") if isinstance(entry, Mapping) else None
