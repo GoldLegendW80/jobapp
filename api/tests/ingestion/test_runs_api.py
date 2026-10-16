@@ -169,6 +169,11 @@ def test_a_start_creates_the_run_and_queues_its_first_step(
     assert tokens["ceiling"] == 2 * tokens["high"] > 0
     assert (tokens["spent"], tokens["history"]) == (0, [])
     assert tokens["overshoot_requests"] == engine.OVERSHOOT_REQUESTS
+    assert (tokens["continue_adds"], tokens["continue_ceiling"], run["cost_usd"]) == (
+        None,
+        None,
+        None,
+    )
     counts = run["counts"]
     assert (counts["steps"], counts["running"], counts["planned"]) == (2, 1, 1)
     assert run["current_agent_run_id"] == run["steps"][0]["agent_run_id"]
@@ -387,6 +392,57 @@ def test_the_cost_of_a_step_is_shown_only_when_it_ran_on_an_api_key(
     assert [step["cost_usd"] for step in steps] == ["0.0312", None]
 
 
+def test_the_cost_of_a_run_counts_every_attempt_on_an_api_key_and_nothing_else(
+    app: FastAPI, factory: sessionmaker[Session], api: Api, alice: str, ready: list[str]
+) -> None:
+    """A step keeps its last agent run only: the run's own amount adds the attempt a provider
+    failure cut, leaves out what ran on a subscription and the agent runs of other runs."""
+    run = started(api, alice, ready)
+    url = f"{RUNS}/{run['id']}"
+    key = CredentialKind.anthropic_api_key
+    eh.set_agent(
+        factory, uuid.UUID(run["current_agent_run_id"]), cost_usd="0.0312", credential_kind=key
+    )
+    assert api.get(url, token=alice).json()["cost_usd"] == "0.0312"
+    end_step(app, factory, run, status=AgentStatus.failed, error=failures.REFUSED)
+    resumed = api.post(f"{url}/resume", token=alice).json()
+    second = uuid.UUID(resumed["current_agent_run_id"])
+    eh.set_agent(factory, second, cost_usd="0.0100", credential_kind=key)
+    end_step(app, factory, run, tokens=10)
+    third = uuid.UUID(api.get(url, token=alice).json()["current_agent_run_id"])
+    eh.set_agent(factory, third, cost_usd="0.5", credential_kind=CredentialKind.claude_subscription)
+    end_step(app, factory, run, tokens=10)
+    done = api.get(url, token=alice).json()
+    assert done["status"] == "done"
+    # The step shows its last attempt, the run every attempt on the key.
+    assert [step["cost_usd"] for step in done["steps"]] == ["0.0100", None]
+    assert done["cost_usd"] == "0.0412"
+    # Another run of the same user is counted apart: here it reuses both steps and costs nothing.
+    again = started(api, alice, ready)
+    assert (again["status"], again["cost_usd"]) == ("done", None)
+    assert api.get(url, token=alice).json()["cost_usd"] == "0.0412"
+
+
+def test_the_cost_of_a_run_on_a_subscription_is_null(
+    app: FastAPI, factory: sessionmaker[Session], api: Api, alice: str, ready: list[str]
+) -> None:
+    run = started(api, alice, ready)
+    eh.set_agent(
+        factory,
+        uuid.UUID(run["current_agent_run_id"]),
+        cost_usd="0.25",
+        credential_kind=CredentialKind.claude_subscription,
+    )
+    end_step(app, factory, run, tokens=10)
+    assert api.get(f"{RUNS}/{run['id']}", token=alice).json()["cost_usd"] is None
+
+
+def test_the_overshoot_sentence_is_the_one_g6_measured() -> None:
+    """The plan quotes this sentence (G11, and Measurements, G6) for two requests at most."""
+    assert engine.OVERSHOOT_REQUESTS == 2
+    assert runs_router.OVERSHOOT == "A run can pass its ceiling by one request, or two."
+
+
 def test_the_tokens_of_the_running_step_are_counted_in_what_was_spent(
     factory: sessionmaker[Session], api: Api, alice: str, ready: list[str]
 ) -> None:
@@ -471,13 +527,16 @@ def test_continue_raises_the_ceiling_by_h_and_the_history_holds_one_entry(
     assert (paused["status"], paused["paused_reason"]) == ("paused", "token_ceiling")
     # What the click buys, said before the click: one `H` here, the next step was never cut.
     assert paused["tokens"]["continue_adds"] == high
+    assert paused["tokens"]["continue_ceiling"] == ceiling + high
     assert run["tokens"]["continue_adds"] is None
     assert api.post(f"{RUNS}/{run['id']}/resume", token=alice).status_code == 409
     response = api.post(f"{RUNS}/{run['id']}/continue", token=alice, json={"adds": high})
     assert response.status_code == 200
     body = response.json()
     assert (body["status"], body["tokens"]["ceiling"]) == ("running", ceiling + high)
-    assert body["tokens"]["continue_adds"] is None
+    # The ceiling the page showed before the click is the one the click set.
+    assert body["tokens"]["ceiling"] == paused["tokens"]["continue_ceiling"]
+    assert (body["tokens"]["continue_adds"], body["tokens"]["continue_ceiling"]) == (None, None)
     (entry,) = body["tokens"]["history"]
     assert (entry["spent"], entry["from"], entry["to"]) == (ceiling, ceiling, ceiling + high)
     assert body["steps"][1]["status"] == "running"
@@ -503,6 +562,7 @@ def test_a_run_paused_with_nothing_left_to_read_asks_no_raise_and_a_continue_clo
     paused = api.get(url, token=alice).json()
     assert (paused["status"], paused["paused_reason"]) == ("paused", "token_ceiling")
     assert paused["tokens"]["continue_adds"] == 0
+    assert paused["tokens"]["continue_ceiling"] is None  # no raise is asked, no ceiling shown
     before = agents_started(factory)
     response = api.post(f"{url}/continue", token=alice, json={"adds": high})
     assert response.status_code == 409  # a click never looks accepted when it was not
@@ -544,6 +604,7 @@ def test_a_continue_from_a_stale_page_is_refused_and_adds_nothing(
     now = paused["tokens"]["continue_adds"]
     assert paused["paused_reason"] == "token_ceiling"
     assert now == 2 * budget > first  # the step that was cut starts again on twice its budget
+    assert paused["tokens"]["continue_ceiling"] == paused["tokens"]["ceiling"] + now
 
     before = agents_started(factory)
     for stale in (first, now - 1, now + 1):  # the other tab, then a figure under and one over
@@ -561,6 +622,7 @@ def test_a_continue_from_a_stale_page_is_refused_and_adds_nothing(
     assert agreed.status_code == 200
     body = agreed.json()
     assert body["tokens"]["ceiling"] == paused["tokens"]["ceiling"] + now  # exactly that figure
+    assert body["tokens"]["ceiling"] == paused["tokens"]["continue_ceiling"]
     assert [(one["from"], one["to"]) for one in body["tokens"]["history"]] == [
         (ceiling, ceiling + first),
         (ceiling + first, ceiling + first + now),
