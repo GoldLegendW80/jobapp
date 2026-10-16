@@ -199,6 +199,75 @@ run 1 env LOCAL_CHECK_STUB="$WORK/fail.sh" "$CHECK" --base origin/long
 out_has "secret scan: 50 commits, after $(git -C "$REPO" rev-parse 'origin/long~50') up to $(git -C "$REPO" rev-parse origin/long) (no commit in the last 200 of origin/long has a PASS record: from 50 commits before it)"
 ok "a failing step is exit 1 with the step named, the end of its log shown, its log kept, and no record"
 
+# --- the step watcher ------------------------------------------------------------------------------
+# Beside each step a watcher sleeps LOCAL_CHECK_STEP_TIMEOUT seconds, then stops the step. When the
+# step ends first, run_step stops the watcher's sleep, then the watcher; a watcher that ran between
+# the two wrote "ran longer than" into the log of a step that had passed (issue #367). The stub's
+# kill_tree makes that order certain. A fake sleep orders the rest through a fifo, with no clock:
+# the quick step ends once the watcher sleeps (7319 s, the timeout given here); with WATCH_TIME_UP=1
+# the watcher's time is up once the long step sleeps (113 s).
+mkdir -p "$WORK/watchbin"
+mkfifo "$WORK/watch.fifo"
+real_sleep="$(command -v sleep)"
+cat >"$WORK/watchbin/sleep" <<EOF
+#!/usr/bin/env bash
+case "\$1:\${WATCH_TIME_UP:-}" in
+7319:1)
+  read -r _ <"$WORK/watch.fifo"
+  exit 0
+  ;;
+7319:*) printf 'the watcher sleeps\n' >"$WORK/watch.fifo" ;;
+113:*) printf 'the step sleeps\n' >"$WORK/watch.fifo" ;;
+esac
+exec "$real_sleep" "\$@"
+EOF
+chmod +x "$WORK/watchbin/sleep"
+cat >"$WORK/watch.sh" <<'EOF'
+kill_tree() { # the worst order: the children stopped, the parent left to run to its end, then stopped
+  local pid
+  for pid in $(descendants "$1"); do kill -TERM "$pid" 2>/dev/null || true; done
+  wait "$1" 2>/dev/null || true
+  kill -TERM "$1" 2>/dev/null || true
+}
+s_quick() {
+  read -r _ <"$WATCH_FIFO"
+  echo "the step's own line"
+}
+s_long() {
+  echo "the step's own line"
+  sleep 113
+  echo "the step ended by itself"
+}
+stub_plan() {
+  if [[ "${WATCH_TIME_UP:-}" == 1 ]]; then
+    run_step long s_long || true
+  else
+    run_step quick s_quick || true
+  fi
+}
+EOF
+# The check on the bash of PATH, and on /bin/bash (3.2 on macOS).
+shells=("")
+[[ ! -x /bin/bash ]] || shells+=(/bin/bash)
+watch_env=(PATH="$WORK/watchbin:$PATH" WATCH_FIFO="$WORK/watch.fifo" LOCAL_CHECK_STEP_TIMEOUT=7319 LOCAL_CHECK_STUB="$WORK/watch.sh")
+for shell in "${shells[@]}"; do
+  # shellcheck disable=SC2086
+  run 0 env "${watch_env[@]}" $shell "$CHECK" --only api
+  grep -qE '^quick +PASS' "$WORK/out" || fail "${shell:-bash of PATH}: the quick step is not PASS: $(cat "$WORK/out")"
+  logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
+  [[ "$(cat "$logs/quick.log")" == "the step's own line" ]] ||
+    fail "${shell:-bash of PATH}: the watcher of a step that ended first wrote into its log: $(cat "$logs/quick.log")"
+  # shellcheck disable=SC2086
+  run 1 env "${watch_env[@]}" WATCH_TIME_UP=1 $shell "$CHECK" --only api
+  grep -qE '^long +FAIL' "$WORK/out" || fail "${shell:-bash of PATH}: the step past its time is not FAIL: $(cat "$WORK/out")"
+  logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
+  [[ "$(cat "$logs/long.log")" == "the step's own line"$'\n\n'"ops/local-check.sh: step long ran longer than 7319 s, stopped" ]] ||
+    fail "${shell:-bash of PATH}: the step past its time was not stopped with its reason: $(cat "$logs/long.log")"
+  ! pgrep -f 'sleep (7319|113)$' >/dev/null || fail "${shell:-bash of PATH}: a sleep of the watcher or of the step is still running"
+done
+nothing_left "the step watcher"
+ok "the watcher of a step that ends first writes nothing into its log, even when it runs on after its sleep is stopped; a step past its time is stopped, FAIL, its log says why"
+
 # --- the ports of the journey stacks ---------------------------------------------------------------
 # The stub gives the real s_journey a fake docker whose first `compose up` fails the way the
 # daemon answered in the second full run ("failed to bind port 127.0.0.1:<port>/tcp"): that
@@ -679,8 +748,6 @@ chmod +x "$WORK/fakeuv/uv"
 cat >"$WORK/ruff.sh" <<'EOF'
 stub_plan() { run_step ruff s_ruff || true; }
 EOF
-shells=("")
-[[ ! -x /bin/bash ]] || shells+=(/bin/bash)
 for shell in "${shells[@]}"; do
   # shellcheck disable=SC2086
   run 1 env LOCAL_CHECK_STUB="$WORK/two.sh" $shell "$CHECK"
