@@ -23,8 +23,7 @@ export const CONSENT_TEXT =
   "When you start a run, the app sends the text of the documents you selected to Anthropic.";
 export const REMINDER =
   "The selected documents are sent to Anthropic through your own credential.";
-export const OVERSHOOT =
-  "The run pauses at its ceiling between two requests: it can pass it by the request in flight, and by at most 2 requests of the step being read.";
+export const OVERSHOOT = "A run can pass its ceiling by one request, or two.";
 
 export function fakeEstimate(over: Partial<Estimate> = {}): Estimate {
   return {
@@ -124,6 +123,8 @@ type RunOver = Partial<Omit<Run, "tokens" | "counts">> & {
 
 export function fakeRun(over: RunOver = {}): Run {
   const { tokens, counts, ...rest } = over;
+  const ceiling = tokens?.ceiling ?? 352_440;
+  const adds = tokens?.continue_adds ?? null;
   return {
     id: "r1",
     status: "running",
@@ -131,17 +132,20 @@ export function fakeRun(over: RunOver = {}): Run {
     paused_reason: null,
     closed_reason: null,
     waiting: null,
+    cost_usd: null,
     cancel_requested: false,
     document_ids: ["d1", "d2"],
     unread_document_ids: [],
     current_agent_run_id: null,
     tokens: {
       spent: 3_760,
-      ceiling: 352_440,
+      ceiling,
       low: 61_234,
       high: 176_220,
       history: [],
       continue_adds: null,
+      // As the server builds it, unless the test says otherwise.
+      continue_ceiling: adds !== null && adds > 0 ? ceiling + adds : null,
       overshoot_requests: 2,
       overshoot: OVERSHOOT,
       ...tokens,
@@ -220,7 +224,7 @@ export function fakeRuns(initial: Partial<FakeRuns> = {}): FakeRuns {
       ...run,
       status: "running",
       paused_reason: null,
-      tokens: { ...run.tokens, continue_adds: null },
+      tokens: { ...run.tokens, continue_adds: null, continue_ceiling: null },
     }),
     startAnswers: [],
     sent: (method, path) =>
@@ -340,7 +344,11 @@ export function fakeRuns(initial: Partial<FakeRuns> = {}): FakeRuns {
             status: "cancelled",
             paused_reason: null,
             finished_at: "2026-10-13T09:30:00Z",
-            tokens: { ...run.tokens, continue_adds: null },
+            tokens: {
+              ...run.tokens,
+              continue_adds: null,
+              continue_ceiling: null,
+            },
           });
         if (action === "continue") {
           if (body?.adds !== run.tokens.continue_adds)

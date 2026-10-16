@@ -404,7 +404,16 @@ function Timeline({
   );
 }
 
-export function RunPanel({ runId, title }: { runId: string; title?: string }) {
+export function RunPanel({
+  runId,
+  title,
+  cancellable = true,
+}: {
+  runId: string;
+  title?: string;
+  /** False where the page has a Cancel of its own that stops more than this agent run. */
+  cancellable?: boolean;
+}) {
   const client = useQueryClient();
   const { detail, steps, live, status, connection, gone } = useRunStream(runId);
   const run = detail.data;
@@ -488,7 +497,7 @@ export function RunPanel({ runId, title }: { runId: string; title?: string }) {
             </span>
           ) : null}
         </CardDescription>
-        {active ? (
+        {active && cancellable ? (
           <CardAction>
             <Button
               variant="outline"
