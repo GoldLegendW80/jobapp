@@ -212,7 +212,7 @@ def test_what_the_file_does_not_state_is_removed_by_code_and_recorded(
         ("experience.2.bullets.0", "Designed the billing system of Globex.", ""),
     } <= records
     assert all(
-        r["by"] == "code" and r["reason"] == "Not in your profile"
+        r["by"] == "code" and r["reason"] == "Not in your uploaded CV"
         for r in version.corrections
         if r["code"] == FIXED_NOT_IN_UPLOAD
     )
@@ -483,11 +483,12 @@ def test_another_persons_upload_is_not_found(
         assert store.base_cvs(db, alex.user)[0].id == alex.base
 
 
-def test_the_journeys_person_converts_the_journeys_cv_on_the_default_stream(
-    factory: sessionmaker[Session], migrated_url: str, hooks: list[uuid.UUID]
-) -> None:
-    # web/e2e/documents-d24.spec.ts uploads upload_morgan.txt as a PDF for the person of
-    # `invented()` (profile_morgan_export.json); the page names no script, so the default plays.
+def _morgan_converts(
+    factory: sessionmaker[Session], migrated_url: str, text: str, script: str | None = None
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """The person of web/e2e/documents-d24.spec.ts (`invented()`, profile_morgan_export.json,
+    whose skills name no PostgreSQL) converts `text`, on the default stream unless `script` is
+    given (the page names none): (document, generation)."""
     key = new_key()
     settings = make_settings(migrated_url, credentials_key=key, agents_fake_backend=True)
     keyring = Keyring.from_text(key)
@@ -497,26 +498,52 @@ def test_the_journeys_person_converts_the_journeys_cv_on_the_default_stream(
             sa.text(
                 "INSERT INTO users (email, name, password_hash) VALUES (:e, :n, 'h') RETURNING id"
             ),
-            {"e": "e2e-documents-d24-morgan@example.org", "n": "Morgan Exampleton"},
+            {"e": f"e2e-documents-d24-{uuid.uuid4().hex[:8]}@example.org", "n": "Morgan"},
         ).scalar_one()
         profile_service.import_profile(db, user, export.stored_sections(), None, None, AT)
         credentials.save(db, keyring, user, CredentialKind.anthropic_api_key, API_KEY, AT)
         consent.record(db, user, AT)
         db.commit()
-    upload = add_upload(factory, user, MORGAN)
+    upload = add_upload(factory, user, text)
     with factory() as db:
         built = writer_base.build_from_upload(db, user, upload, at=AT)
-        runs = writer_base.start_ready(db, user, at=AT, settings=settings)
+        runs = writer_base.start_ready(db, user, at=AT, script=script, settings=settings)
         db.commit()
+    assert built.generation is not None
     who = Person(factory, settings, keyring, user, uuid.uuid4(), built.document.id)
     for run_id in runs:
         execute(who, run_id)
-    assert built.generation is not None
-    generation = generation_row(factory, built.generation.id)
+    return built.document.id, built.generation.id
+
+
+def test_the_journeys_person_converts_the_journeys_cv_on_the_default_stream(
+    factory: sessionmaker[Session], migrated_url: str, hooks: list[uuid.UUID]
+) -> None:
+    document_id, generation_id = _morgan_converts(factory, migrated_url, MORGAN)
+    generation = generation_row(factory, generation_id)
     assert generation.status is GenerationStatus.done, generation.error
-    (version,) = versions(factory, built.document.id)
-    assert version.corrections == []
-    document = document_row(factory, built.document.id)
+    (version,) = versions(factory, document_id)
+    assert version.corrections == []  # PostgreSQL is sourced by the file, not by the profile
+    assert "with FastAPI and PostgreSQL" in printed(version.content)
+    document = document_row(factory, document_id)
     assert document.is_default
     assert [e["employer_key"] for e in document.draft["experience"]] == ["quillmere", "tarnwick"]
-    assert hooks == [built.document.id]
+    assert hooks == [document_id]
+
+
+def test_a_name_neither_the_file_nor_the_profile_writes_is_corrected(
+    factory: sessionmaker[Session], migrated_url: str, hooks: list[uuid.UUID]
+) -> None:
+    # The stream keeps the name after the correction pass: code removes it.
+    without = MORGAN.replace(" and PostgreSQL", "").replace(", PostgreSQL", "")
+    assert "PostgreSQL" not in without
+    with_it, _ = _morgan_converts(factory, migrated_url, MORGAN, "documents_base_upload_invented")
+    (kept,) = versions(factory, with_it)
+    assert "with FastAPI and PostgreSQL" in printed(kept.content)
+    document_id, generation_id = _morgan_converts(
+        factory, migrated_url, without, "documents_base_upload_invented"
+    )
+    assert generation_row(factory, generation_id).status is GenerationStatus.done
+    (version,) = versions(factory, document_id)
+    assert "with FastAPI and PostgreSQL" not in printed(version.content)
+    assert any("PostgreSQL" in r["before"] for r in version.corrections)

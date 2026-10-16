@@ -543,13 +543,16 @@ def upload_context(
     at: datetime,
 ) -> submit.WriterContext:
     """The checks of an upload's submit: the experience names the employers of the fixed block
-    the text states, and the profile, that block and the text are the sources."""
+    the text states, and the profile, that block and the text are the sources. A name the text
+    writes sources an organisation or a technology ("with FastAPI and PostgreSQL") as a skills
+    term of the profile does: the text is one more entry of `known_terms`."""
     base = c.BaseCvContent(fixed=fixed)
     profile = profile_service.get_profile(db, user_id, at)
     view = profile_view.build(profile_service.sections_view(profile), profile.revision, base)
+    sources = sources_for(view, base, text, None, kind="base")
     return replace(
         context,
-        sources=sources_for(view, base, text, None, kind="base"),
+        sources=replace(sources, known_terms=(*sources.known_terms, text)),
         employer_keys=tuple(employer.key for employer in fixed.employers),
     )
 

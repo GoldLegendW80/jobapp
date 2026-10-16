@@ -19,7 +19,7 @@ when unsure:
   month goes ("2019-03" becomes "2019"); an absent year drops the date. An empty end stays empty
   (the schema reads it as "present, or not stated"): it is never checked.
 
-Every change is a `Correction` by code, of code FIXED_NOT_IN_UPLOAD.
+Every change is a `Correction` by code, of code FIXED_NOT_IN_UPLOAD and reason NOT_IN_UPLOAD.
 
 **The language** (`language_of`): French when the text holds more French function words than
 English ones, else English, the app's default (an empty text, a tie).
@@ -41,10 +41,11 @@ from pydantic import ValidationError
 
 from app.documents import content as c
 from app.documents import rules
-from app.documents.corrections import Correction, reason_for
+from app.documents.corrections import Correction
 from app.documents.models import Language
 
 FIXED_NOT_IN_UPLOAD = "fixed_not_in_upload"
+NOT_IN_UPLOAD = "Not in your uploaded CV"  # the reason shown beside each of its corrections
 
 _MONTH_NAMES: tuple[frozenset[str], ...] = tuple(
     frozenset(names.split())
@@ -227,8 +228,7 @@ class Checked:
 
 
 def _record(path: str, before: str, after: str) -> Correction:
-    reason = reason_for(FIXED_NOT_IN_UPLOAD)
-    return Correction(path, before, after, FIXED_NOT_IN_UPLOAD, "code", reason)
+    return Correction(path, before, after, FIXED_NOT_IN_UPLOAD, "code", NOT_IN_UPLOAD)
 
 
 class _Fields:
