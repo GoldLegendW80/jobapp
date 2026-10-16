@@ -12,6 +12,14 @@ module is the one place that decides which version that is, and what the apply m
   it: the sent version is the fact, and a status that goes back to `applied` after an `interview`
   or an undo freezes nothing more, so a later edit never becomes "what was sent". Leaving
   `applied` freezes and unfreezes nothing. The freeze commits or rolls back with the status.
+- `on_rendered`: the approved version whose PDF is still on its way when the posting reaches
+  `applied` is the one to freeze, not an older rendered one, and the trigger of 0015 refuses a
+  PDF on a frozen row. So `on_status` leaves that document, and the render job calls this after
+  it stores a PDF, under the document's lock: when the version just stored is the approved one,
+  the posting is `applied` and nothing of the document is frozen, it freezes that version. The
+  render of any other version freezes nothing: a version not approved never becomes what was
+  sent by landing, and an approval given after `applied` freezes only when the render of that
+  version lands after it.
 - `current`: what the apply module sends, the approved version else the latest rendered one,
   of the posting's CV and letter, with the reason a document is not there yet.
 - `freeze`: the apply module attaches a version to a submission. It never refuses on content
@@ -208,15 +216,7 @@ def on_status(db: Session, job: Job, previous: JobStatus, status: JobStatus, at:
         return
     frozen = 0
     for document in store.posting_documents(db, job.user_id, job.id):
-        store.lock_document(db, job.user_id, document.id)
-        versions = store.versions(db, job.user_id, document.id)
-        if any(v.frozen_at is not None for v in versions):
-            continue
-        picked = choose(versions)
-        if picked is None:
-            continue
-        store.freeze(db, job.user_id, picked.id, FreezeReason.applied, at)
-        frozen += 1
+        frozen += _freeze_applied(db, job.user_id, document.id, at)
     logger.info(
         "documents.freeze.applied",
         extra={
@@ -226,6 +226,54 @@ def on_status(db: Session, job: Job, previous: JobStatus, status: JobStatus, at:
             "frozen": frozen,
         },
     )
+
+
+def _awaits_render(document: Document, versions: Sequence[DocumentVersion]) -> bool:
+    """The approved version has no PDF yet and a render of the document is queued or running."""
+    approved = [v for v in versions if v.approved_at is not None]
+    return (
+        bool(approved)
+        and not rendered(approved[0])
+        and document.render_state in (RenderState.queued, RenderState.rendering)
+    )
+
+
+def _freeze_applied(db: Session, user_id: uuid.UUID, document_id: uuid.UUID, at: datetime) -> bool:
+    """The hook's choice for one document of a posting that is `applied`: True when it froze."""
+    document = store.lock_document(db, user_id, document_id)
+    versions = store.versions(db, user_id, document_id)
+    if any(v.frozen_at is not None for v in versions) or _awaits_render(document, versions):
+        return False
+    picked = choose(versions)
+    if picked is None:
+        return False
+    store.freeze(db, user_id, picked.id, FreezeReason.applied, at)
+    return True
+
+
+def on_rendered(db: Session, document: Document, version: DocumentVersion, at: datetime) -> None:
+    """The render job, after it stored a PDF on `version` of `document`, under the document's
+    lock and in the same transaction: see the module text. Only an approved `version` can
+    freeze, and then it is the hook's choice (the one approved version, now rendered). Reads
+    the posting's status after that lock, and `on_status` takes the document's lock before it
+    reads the versions, so of a status change and a stored PDF the one that commits second
+    sees the other."""
+    if document.scope is not Scope.posting or document.posting_id is None:
+        return
+    if version.approved_at is None:
+        return
+    # The sessions do not autoflush, and `lock_document` reloads the row: the caller's state first.
+    db.flush()
+    status = db.execute(
+        sa.select(Job.status).where(Job.id == document.posting_id, Job.user_id == document.user_id)
+    ).scalar_one_or_none()
+    if status is not JobStatus.applied:
+        return
+    if _freeze_applied(db, document.user_id, document.id, at):
+        logger.info(
+            "documents.freeze.rendered",
+            extra={"document_id": str(document.id), "user_id": str(document.user_id)},
+        )
 
 
 jobs_service.register_status_callback(on_status)
