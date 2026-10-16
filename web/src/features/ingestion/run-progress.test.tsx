@@ -39,7 +39,10 @@ async function show(run: Run, more: Partial<FakeRuns> = {}) {
   return { runs, state, client, user: userEvent.setup() };
 }
 
-const ceiling = (adds: number | null, over: Partial<Run> = {}) =>
+const ceiling = (
+  adds: number | null,
+  over: Parameters<typeof fakeRun>[0] = {},
+) =>
   fakeRun({
     status: "paused",
     paused_reason: "token_ceiling",
