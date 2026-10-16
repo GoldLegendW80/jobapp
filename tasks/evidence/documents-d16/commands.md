@@ -3,7 +3,7 @@
 - `ops/agent-test.sh --name d16 tests/documents -m "not docker" -n 2`: 1363 passed.
 - `uv --native-tls run ruff check app tests`, `ruff format --check app tests`: clean.
 - `pnpm --dir web run typecheck`, `pnpm --dir web run lint`: clean.
-- `pnpm --dir web exec vitest run src/features/documents`: 7 files, 145 passed (before the counter fix below; the two D16 files rerun after it: 21 passed).
+- `pnpm --dir web exec vitest run src/features/documents`: 7 files, 145 passed, before and after the counter fix below.
 - `edit-panel.test.tsx -t "typed during a save"` with the in flight guard of `edit-autosave.ts` disabled: 1 failed (the test can fail); restored: passed.
 - `edit-content.test.ts` counter cases `Zoe` with a combining diaeresis and a line with trailing spaces: 4 and 10 characters with the old count, 3 and 7 (as `content._tidy` leaves them) with the new one.
 - `python3 .github/scripts/ci_plan_test.py`, `python3 .github/scripts/e2e_groups.py`: pass.
