@@ -369,7 +369,10 @@ function RunView({ run }: { run: Run }) {
         </Figure>
         {run.cost_usd !== null ? (
           <Figure label={active ? "Cost so far" : "Cost"}>
-            about {run.cost_usd} USD, every attempt included
+            about {run.cost_usd} USD,{" "}
+            {active
+              ? "each attempt counted when it ends"
+              : "every attempt included"}
           </Figure>
         ) : null}
         {!active && run.status === "done" ? (

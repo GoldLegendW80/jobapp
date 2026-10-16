@@ -449,7 +449,12 @@ describe("the run on the page", () => {
   });
 
   it.each([
-    ["while it runs", fakeRun({ cost_usd: "0.0312" }), "Cost so far"],
+    [
+      "while it runs",
+      fakeRun({ cost_usd: "0.0312" }),
+      "Cost so far",
+      "about 0.0312 USD, each attempt counted when it ends",
+    ],
     [
       "at the end",
       fakeRun({
@@ -474,18 +479,15 @@ describe("the run on the page", () => {
         ],
       }),
       "Cost",
+      "about 0.0412 USD, every attempt included",
     ],
   ])(
     "states the cost of the run over every attempt, as the server gives it, %s",
-    async (_when, run, label) => {
+    async (_when, run, label, said) => {
       await show(run);
       const figures = within(screen.getByTestId("run-figures"));
       expect(figures.getByText(label)).toBeVisible();
-      expect(
-        figures.getByText(
-          `about ${run.cost_usd ?? ""} USD, every attempt included`,
-        ),
-      ).toBeVisible();
+      expect(figures.getByText(said)).toBeVisible();
     },
   );
 
