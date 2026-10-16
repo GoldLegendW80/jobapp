@@ -24,16 +24,35 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 COPY pyproject.toml uv.lock .python-version ./
 # The project's default groups are dev, agents and ingestion (pyproject.toml); the api needs none.
+# extra_ca: a bundle uv trusts beside the image's own, given only behind a TLS inspecting proxy (README).
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-default-groups --no-install-project
+    --mount=type=secret,id=extra_ca,required=false \
+    if [ -s /run/secrets/extra_ca ]; then \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/extra_ca >/tmp/extra-ca.pem \
+      && export SSL_CERT_FILE=/tmp/extra-ca.pem; \
+    fi \
+    && uv sync --frozen --no-default-groups --no-install-project \
+    && rm -f /tmp/extra-ca.pem
 
 FROM builder AS builder-worker
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-default-groups --group agents --group ingestion --no-install-project
+    --mount=type=secret,id=extra_ca,required=false \
+    if [ -s /run/secrets/extra_ca ]; then \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/extra_ca >/tmp/extra-ca.pem \
+      && export SSL_CERT_FILE=/tmp/extra-ca.pem; \
+    fi \
+    && uv sync --frozen --no-default-groups --group agents --group ingestion --no-install-project \
+    && rm -f /tmp/extra-ca.pem
 
 FROM builder AS dev
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project
+    --mount=type=secret,id=extra_ca,required=false \
+    if [ -s /run/secrets/extra_ca ]; then \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/extra_ca >/tmp/extra-ca.pem \
+      && export SSL_CERT_FILE=/tmp/extra-ca.pem; \
+    fi \
+    && uv sync --frozen --no-install-project \
+    && rm -f /tmp/extra-ca.pem
 RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --home-dir /app --no-create-home --shell /usr/sbin/nologin app \
     && chown app:app /app
