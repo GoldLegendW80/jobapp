@@ -32,8 +32,9 @@ the query that finds the finished step identities: until then nothing is reused.
 
 Every route takes the user from the session, never from the request. Another user's document
 answers the same 404 as one that does not exist, and an id that is not a UUID too. Nothing of a
-document is logged or put in an error but its id: no name, no text. A document's text is read
-only when it is longer than one part, to cut it where the run will, and never leaves `quote`.
+document is logged or put in an error but its id: no name, no text. A document's text is read,
+one document at a time, to cut it where the run will and to leave out a text nothing can be cited
+from (`text_unreadable`, before any spend), and never leaves `quote`.
 """
 
 import hashlib
@@ -58,7 +59,7 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.ingestion import documents, estimate, plan, pricing
+from app.ingestion import citations, documents, estimate, plan, pricing
 from app.ingestion.models import IngestionConsent, IngestionDocument, IngestionImage, TextStatus
 
 logger = logging.getLogger("app.ingestion")
@@ -114,6 +115,10 @@ REASONS: dict[str, str] = {
         "This document is made of page images, which this version cannot read yet."
     ),
     plan.Refusal.empty.value: "There is no text in this document.",
+    "text_unreadable": (
+        "This text is made of characters that cannot be checked, so a run would take nothing "
+        "from it. Paste the part you want read as plain text."
+    ),
     plan.Refusal.over_steps.value: (
         f"A run has at most {plan.RUN_MAX_STEPS} steps and this document does not fit. "
         "Start another run for it."
@@ -347,7 +352,12 @@ def quote(
             plan.check_limits(selected)
         except plan.LimitError as exc:
             raise SelectionError(exc.code, exc.message) from None
-        selected = _with_cuts(db, user_id, selected)
+        selected, left_out = _with_cuts(db, user_id, selected)
+        unreadable.extend(
+            Unreadable(document_id, names[document_id], "text_unreadable")
+            for document_id in left_out
+        )
+    if selected:
         finished = _finished_provider(db, user_id, selected, model)
         planned = plan.build(selected, model=model, finished=finished, reread=reread)
     unreadable.extend(
@@ -463,26 +473,37 @@ def check_echo(fresh: Quote, echoed: object) -> None:
 
 def _with_cuts(
     db: Session, user_id: uuid.UUID, selected: list[plan.Document]
-) -> list[plan.Document]:
-    """The documents with the parts of their text, cut where the run will cut it. Only a text
-    longer than one part is loaded, one document at a time, and only its offsets are kept."""
+) -> tuple[list[plan.Document], list[uuid.UUID]]:
+    """The documents with the parts of their text, cut where the run will cut it, and the ids of
+    the ones left out because nothing can be cited from their text
+    (`citations.prepare(text).readable` is false): a run would read every part of it and refuse
+    every item. Each text is loaded one document at a time, and only its offsets are kept. A
+    text that waits for its transcription is not whole yet: the engine checks it once it is
+    (`engine._planned_again`)."""
     cut: list[plan.Document] = []
+    unreadable: list[uuid.UUID] = []
     for document in selected:
-        if document.images:
-            parts = None  # its text is not all there yet: counted in advance, in equal parts
-        elif document.characters <= plan.PART_MAX_CHARS:
-            parts = ((0, document.characters),) if document.characters else ()
-        else:
-            text = db.execute(
-                sa.select(IngestionDocument.text).where(
-                    IngestionDocument.id == document.id, IngestionDocument.user_id == user_id
+        parts = None  # its text is not all there yet: counted in advance, in equal parts
+        if not document.images:
+            text = ""
+            if document.characters:
+                text = (
+                    db.execute(
+                        sa.select(IngestionDocument.text).where(
+                            IngestionDocument.id == document.id,
+                            IngestionDocument.user_id == user_id,
+                        )
+                    ).scalar_one()
+                    or ""
                 )
-            ).scalar_one()
-            parts = plan.cut(text or "")
+            if not citations.prepare(text).readable:
+                unreadable.append(document.id)
+                continue
+            parts = plan.cut(text)
         cut.append(
             plan.Document(document.id, document.sha256, document.characters, document.images, parts)
         )
-    return cut
+    return cut, unreadable
 
 
 # --- the routes
