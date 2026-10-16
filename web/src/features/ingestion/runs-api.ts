@@ -2,7 +2,8 @@
  * Calls of the run routes (api/app/ingestion/estimate_router.py and runs_router.py): the
  * estimate with its `quote_id`, the consent text, the start, the run of the page and its three
  * actions. Shapes mirror the routers' response models. Every figure the page shows (tokens,
- * ceiling, amounts, what a Continue adds) is read from these answers and never computed here.
+ * ceiling, amounts, what a Continue adds and the ceiling it sets) is read from these answers and
+ * never computed here.
  */
 import {
   useQuery,
@@ -174,6 +175,8 @@ export const runSchema = z.object({
   /** The sentence of a run the engine closed because it could not move it. */
   closed_reason: z.string().nullable().default(null),
   waiting: z.string().nullable(),
+  /** Every attempt of every step on an API key, when known. Null on a subscription. */
+  cost_usd: z.string().nullable().default(null),
   cancel_requested: z.boolean(),
   document_ids: z.array(z.string()),
   unread_document_ids: z.array(z.string()),
@@ -193,6 +196,8 @@ export const runSchema = z.object({
     ),
     /** What one Continue adds now, for a run paused on its ceiling. Zero: nothing left to run. */
     continue_adds: z.number().nullable(),
+    /** The ceiling one Continue would set: `ceiling + continue_adds` while it is above zero. */
+    continue_ceiling: z.number().nullable().default(null),
     overshoot_requests: z.number(),
     overshoot: z.string(),
   }),
