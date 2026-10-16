@@ -103,7 +103,7 @@
         ],
         "experience": [
          {
-          "employer_key": "quillmere-example-works",
+          "employer_key": "quillmere",
           "bullets": [
            "Run the deployment platform of the billing team, from the first commit to production.",
            "Wrote the platform's backend services in Python with FastAPI and PostgreSQL.",
@@ -111,7 +111,7 @@
           ]
          },
          {
-          "employer_key": "tarnwick-sample-studio",
+          "employer_key": "tarnwick",
           "bullets": [
            "Built internal tools in Python and React for the support team."
           ]
@@ -145,7 +145,7 @@
         "fixed": {
          "employers": [
           {
-           "key": "quillmere-example-works",
+           "key": "quillmere",
            "organisation": "Quillmere Example Works",
            "title": "Platform Engineer",
            "start": "2023-02",
@@ -153,7 +153,7 @@
            "location": "Nantes"
           },
           {
-           "key": "tarnwick-sample-studio",
+           "key": "tarnwick",
            "organisation": "Tarnwick Sample Studio",
            "title": "Software Developer",
            "start": "2021-01",

@@ -22,8 +22,9 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
 from app.agents import credentials
+from app.agents.crypto import Keyring
 from app.agents.definitions import FinalRun
-from app.agents.models import AgentRun
+from app.agents.models import AgentRun, CredentialKind
 from app.agents.tools import Scope
 from app.documents import (  # noqa: F401
     consent,
@@ -45,9 +46,13 @@ from app.documents.models import (
 )
 from app.documents.upload import FIXED_NOT_IN_UPLOAD
 from app.ingestion.models import IngestionDocument
+from app.profile import service as profile_service
+from app.profile.schemas import parse_document
+from tests.agents.conftest import API_KEY, new_key
 from tests.agents.g6_helpers import everything_stored
+from tests.conftest import make_settings
 from tests.documents.canary import find, marker
-from tests.documents.conftest import load
+from tests.documents.conftest import FIXTURES, load
 from tests.documents.store_support import AT, USER_A, USER_B, db, engine, factory, migrated_url
 from tests.documents.writer_support import (
     Person,
@@ -194,8 +199,8 @@ def test_what_the_file_does_not_state_is_removed_by_code_and_recorded(
     assert fixed["employers"][1]["start"] == "2021"  # the file says 01/2021, not March
     assert [x["name"] for x in fixed["languages"]] == ["English", "French"]
     assert [e["employer_key"] for e in content["experience"]] == [
-        "quillmere-example-works",
-        "tarnwick-sample-studio",
+        "quillmere",
+        "tarnwick",
     ]
     assert "Globex" not in str(content)
     records = {(r["field_path"], r["before"], r["after"]) for r in version.corrections}
@@ -476,3 +481,42 @@ def test_another_persons_upload_is_not_found(
     assert refused.value.code == "not_found"
     with factory() as db:
         assert store.base_cvs(db, alex.user)[0].id == alex.base
+
+
+def test_the_journeys_person_converts_the_journeys_cv_on_the_default_stream(
+    factory: sessionmaker[Session], migrated_url: str, hooks: list[uuid.UUID]
+) -> None:
+    # web/e2e/documents-d24.spec.ts uploads upload_morgan.txt as a PDF for the person of
+    # `invented()` (profile_morgan_export.json); the page names no script, so the default plays.
+    key = new_key()
+    settings = make_settings(migrated_url, credentials_key=key, agents_fake_backend=True)
+    keyring = Keyring.from_text(key)
+    export = parse_document((FIXTURES / "profile_morgan_export.json").read_bytes())
+    with factory() as db:
+        user = db.execute(
+            sa.text(
+                "INSERT INTO users (email, name, password_hash) VALUES (:e, :n, 'h') RETURNING id"
+            ),
+            {"e": "e2e-documents-d24-morgan@example.org", "n": "Morgan Exampleton"},
+        ).scalar_one()
+        profile_service.import_profile(db, user, export.stored_sections(), None, None, AT)
+        credentials.save(db, keyring, user, CredentialKind.anthropic_api_key, API_KEY, AT)
+        consent.record(db, user, AT)
+        db.commit()
+    upload = add_upload(factory, user, MORGAN)
+    with factory() as db:
+        built = writer_base.build_from_upload(db, user, upload, at=AT)
+        runs = writer_base.start_ready(db, user, at=AT, settings=settings)
+        db.commit()
+    who = Person(factory, settings, keyring, user, uuid.uuid4(), built.document.id)
+    for run_id in runs:
+        execute(who, run_id)
+    assert built.generation is not None
+    generation = generation_row(factory, built.generation.id)
+    assert generation.status is GenerationStatus.done, generation.error
+    (version,) = versions(factory, built.document.id)
+    assert version.corrections == []
+    document = document_row(factory, built.document.id)
+    assert document.is_default
+    assert [e["employer_key"] for e in document.draft["experience"]] == ["quillmere", "tarnwick"]
+    assert hooks == [built.document.id]
