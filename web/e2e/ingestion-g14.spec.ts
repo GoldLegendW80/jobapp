@@ -178,8 +178,8 @@ test("a run started in the page reads the page images, then the texts", async ()
   await expect(state()).toContainText(
     "The run is finished. Everything you selected was read.",
   );
-  // Two transcription steps and three extraction steps.
-  await expect(page.getByTestId("run-figures")).toContainText("5 of 5 read");
+  // The summary counts documents: the three, two of them read through their page images.
+  await expect(page.getByTestId("run-figures")).toContainText("3 of 3 read");
   const listed = (await (await context.request.get(RUNS)).json()) as {
     runs: { id: string }[];
   };
