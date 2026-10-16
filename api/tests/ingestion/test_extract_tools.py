@@ -6,6 +6,7 @@ step reads and writes nothing else, whatever its arguments say."""
 import dataclasses
 import hashlib
 import logging
+import re
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -1499,6 +1500,28 @@ def test_the_prompt_states_its_rules_and_asks_for_one_line() -> None:
     for sentence in sentences:
         for dash in ("—", "–", " - "):
             assert dash not in sentence
+
+
+def test_the_prompt_keeps_removals_to_the_fields_the_tool_lets_it_remove() -> None:
+    lines = agents.EXTRACT.system_prompt.splitlines()
+    (removal,) = [line for line in lines if "`remove`" in line]
+    assert "Never remove an entry or a list" in removal
+    named = [name for name in re.findall(r"`([a-z_]+)`", removal) if name not in ("remove", "end")]
+    assert named == ["headline", "city", "notice_period"]
+    for name in named:  # each example is a field the tool lets the agent remove
+        assert {slots[name].kind for slots in items.SLOTS.values() if name in slots} == {
+            items.SlotKind.scalar
+        }
+        assert any(name == one for _, one in REMOVABLE)
+    # What its last sentence tells the model: no removal is ever part of "Accept all".
+    assert "never with the other items" in removal
+    for section, name in REMOVABLE:
+        made = items.build(section, name, "remove")
+        payload = {"section": made.section, "key": made.key, "action": made.action.value}
+        assert item_proposals.bulk_exclusion(payload) is not None, name
+    # And the line about lists says what the tool does with an entry: the key is computed.
+    (keys,) = [line for line in lines if line.startswith("- `key` names the field")]
+    assert "the app computes the key of the entry from its value" in keys
 
 
 def test_the_input_of_a_step_holds_exactly_its_four_keys() -> None:
