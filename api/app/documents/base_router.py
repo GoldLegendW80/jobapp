@@ -10,7 +10,13 @@
     skeleton with a note and no generation: nothing refused.
   - `from: copy`: a copy of one of the person's base CVs (its draft, language and template;
     source `built`), rendered. 201. Another person's id answers 404.
-  - `from: upload`: 501 until task D24.
+  - `from: upload` (D24) with `ingestion_document_id`: a base CV converted from the person's
+    uploaded CV (`writer_base.build_from_upload`): the empty row at once and its `base_upload`
+    generation, started or waiting as above. 202. A file that is not the person's answers 404;
+    one whose text failed 422 with ingestion's own sentence; a file still being read 409; pages
+    of pictures, a secret warning not confirmed, or a file neither PDF nor DOCX 422, each with
+    its sentence. Each upload makes a new base CV, the default when the current default was
+    built from the profile.
   - the base CV past `DOCUMENTS_BASE_CVS_MAX`: 409 with the sentence.
 - `PATCH /api/documents/base-cvs/{id} {name?, default?}`: rename; `default: true` makes it the
   default (twice is the same answer); `default: false` is 422 (make another one the default).
@@ -63,8 +69,25 @@ logger = logging.getLogger("app.documents")
 
 PRIVATE = {"Cache-Control": "private, no-store"}
 NOT_FOUND = "CV not found."
-UPLOAD_LATER = "Converting an uploaded CV comes with a later version of the app."
 COPY_OF_MISSING = "Say which CV to copy (copy_of)."
+UPLOAD_MISSING = "Say which file to convert (ingestion_document_id)."
+UPLOAD_NOT_FOUND = "Uploaded file not found."
+# Why an uploaded file cannot be converted, by writer_base.UploadRefusedError code (status, text).
+UPLOAD_REFUSED = {
+    "not_found": (404, UPLOAD_NOT_FOUND),
+    "failed": (422, "This file could not be read. Upload it again, or another file."),
+    "reading": (409, "Your CV is still being read. Try again in a moment."),
+    "pictures": (
+        422,
+        "This CV is made of pictures of pages, so it has no text to convert. Export it as a "
+        "PDF with text, or as a Word document, and upload that.",
+    ),
+    "secret": (
+        422,
+        "This file may hold a password or a key. Confirm that you keep it, or upload another file.",
+    ),
+    "not_a_cv": (422, "Upload your CV as a PDF or a Word document (DOCX)."),
+}
 NOT_DEFAULT = "Make another CV the default instead."
 BAD_NAME = "A CV's name has 1 to 100 characters."
 COPY_PREFIX = "Copy of "
@@ -318,6 +341,27 @@ def _copy(db: Session, user: User, body: BaseCvIn, at: datetime) -> Document:
     )
 
 
+def _from_upload(db: Session, user: User, body: BaseCvIn, at: datetime) -> writer_base.Built:
+    if body.ingestion_document_id is None:
+        raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, UPLOAD_MISSING)
+    try:
+        return writer_base.build_from_upload(
+            db, user.id, body.ingestion_document_id, at=at, name=body.name, language=body.language
+        )
+    except writer_base.UploadRefusedError as refused:
+        db.rollback()
+        code, sentence = UPLOAD_REFUSED[refused.code]
+        if refused.code == "failed" and refused.reason:
+            sentence = refused.reason
+        logger.info(
+            "documents.base.upload_refused", extra={"user_id": str(user.id), "code": refused.code}
+        )
+        raise _error(code, sentence) from None
+    except store.NotFoundError:
+        db.rollback()
+        raise _error(status.HTTP_404_NOT_FOUND, UPLOAD_NOT_FOUND) from None
+
+
 @router.post(
     "/base-cvs",
     response_model=BuiltOut,
@@ -325,15 +369,13 @@ def _copy(db: Session, user: User, body: BaseCvIn, at: datetime) -> Document:
     responses={
         201: {"description": "A copy, made at once"},
         404: {"description": "The CV to copy is not the person's"},
-        409: {"description": "The most base CVs are kept"},
-        501: {"description": "From an upload: task D24"},
+        409: {"description": "The most base CVs are kept, or the upload is still being read"},
+        422: {"description": "An upload that cannot be converted, with the reason"},
     },
 )
 def create_base_cv(
     body: BaseCvIn, user: CurrentUser, request: Request, response: Response, db: Db
 ) -> BuiltOut:
-    if body.from_ == "upload":
-        raise _error(status.HTTP_501_NOT_IMPLEMENTED, UPLOAD_LATER)
     at = deps.clock(request)
     runs: list[uuid.UUID] = []
     try:
@@ -342,8 +384,12 @@ def create_base_cv(
             response.status_code = status.HTTP_201_CREATED
             generation = None
         else:
-            built = writer_base.build_from_profile(
-                db, user.id, at=at, name=body.name, language=body.language or Language.en
+            built = (
+                _from_upload(db, user, body, at)
+                if body.from_ == "upload"
+                else writer_base.build_from_profile(
+                    db, user.id, at=at, name=body.name, language=body.language or Language.en
+                )
             )
             document, generation = built.document, built.generation
             if generation is not None and generation.status is GenerationStatus.queued:
