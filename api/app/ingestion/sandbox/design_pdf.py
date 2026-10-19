@@ -136,7 +136,7 @@ def _bands(items: list[tuple[int, float, float, float, float]]):
     for item in sorted(items, key=lambda it: (it[2] + it[4], it[1])):
         quarter = (item[4] - item[2]) / 4
         core_top, core_bottom = item[2] + quarter, item[4] - quarter
-        if reach is None or core_top >= reach:
+        if reach is None or core_top > reach:
             bands.append([item])
             reach = core_bottom
         else:
