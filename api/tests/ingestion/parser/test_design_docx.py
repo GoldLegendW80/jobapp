@@ -155,6 +155,60 @@ def test_names_and_values_from_the_file_are_cleaned_and_bounded() -> None:
     assert (item["align"], item["outline"]) == (None, None)
 
 
+# A value of w:sz (half points) and of w:spacing w:before (twips), and what the style keeps of
+# each, in tenths of a point. Only ASCII digits with one minus sign at most are a number.
+NUMBERS = [
+    ("24", 120, 12),
+    (" 24 ", 120, 12),
+    ("0024", 120, 12),
+    ("0", None, 0),
+    ("-0", None, 0),
+    ("3276", 16_380, 1_638),
+    ("3277", None, 1_638),
+    ("200000", None, 100_000),
+    ("200001", None, None),
+    ("999999999", None, None),
+    ("9999999999", None, None),
+    ("-5", None, None),
+    ("--5", None, None),
+    ("-+5", None, None),
+    ("+5", None, None),
+    ("- 5", None, None),
+    ("5-", None, None),
+    ("", None, None),
+    (" ", None, None),
+    ("-", None, None),
+    ("²", None, None),
+    ("2²", None, None),
+    ("⁵", None, None),
+    ("½", None, None),
+    ("Ⅻ", None, None),
+    ("١٢", None, None),
+    ("１２", None, None),
+    ("𝟙𝟚", None, None),
+    ("12pt", None, None),
+    ("1.5", None, None),
+    ("1,5", None, None),
+    ("1e3", None, None),
+    ("1_000", None, None),
+    ("0x10", None, None),
+    ("NaN", None, None),
+    ("auto", None, None),
+]
+
+
+@pytest.mark.parametrize(("value", "size", "before"), NUMBERS, ids=[repr(r[0]) for r in NUMBERS])
+def test_a_number_the_file_writes_is_read_or_left_out_never_the_whole_file(
+    value: str, size: int | None, before: int | None
+) -> None:
+    hostile = (
+        f'<w:style w:type="paragraph" w:styleId="Odd"><w:rPr><w:sz w:val="{value}"/></w:rPr>'
+        f'<w:pPr><w:spacing w:before="{value}"/></w:pPr></w:style>'
+    )
+    item = style(ask(fx.styled_docx(style_part=fx.styles(hostile))), "Odd")
+    assert (item["size"], item["before"]) == (size, before)
+
+
 def test_the_caps_are_the_clients() -> None:
     assert design_docx.STYLES_MAX == pc.DESIGN_STYLES
     assert design_docx.SECTIONS_MAX == pc.DESIGN_SECTIONS

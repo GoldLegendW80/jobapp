@@ -19,15 +19,25 @@ tenths of a point from the top left corner of the page, every number an integer:
                            "colour": "#rrggbb", "width": stroke width}],
                "images": [{"box": [...]}]}]}
 
-- A run is the characters PDFium's text page gives in a row with one font, size and colour on
-  one line; a jump back, a gap wider than GAP_EM times the size, or another line ends it.
-  Invisible text (render mode 3: the text layer of an OCR'd scan), transparent text and text
-  outside the page are left out of the answer. The runs of a page are put in
-  reading order by `reading_order`.
+- A run is the characters PDFium's text page gives in a row with one font, size, colour and
+  direction on one line; a jump back, a gap wider than GAP_EM times the size, or another line
+  ends it. The direction is the one of four (right, up, left, down) the glyphs advance in most,
+  so text turned a quarter or a half turn, or set with a negative size, still makes runs.
+- A run's size is the height of its glyphs on the page: the size of `Tf` (its absolute value)
+  times the scale across the baseline of the text matrix and of every transformation above it
+  (`_height`), as PDF writers put the size in any of them (`1 Tf 11 0 0 11 x y Tm`, or
+  `0.1 0 0 0.1 0 0 cm` around `110 Tf`). It is clamped to 0..LENGTH_MAX, as any length is.
+- Only text that is painted is read: filled (render modes 0, 2, 4, 6, in its fill colour) or
+  stroked alone (1, 5, in its stroke colour). Invisible text (3: the text layer of an OCR'd
+  scan), text that only clips (7), transparent text and text outside the page are left out.
+  The runs of a page are put in reading order by `reading_order`.
 - `margins` are those of the text: where the runs of the page start and end.
 - A shape is a path painted with a colour that is not transparent: a fill, or a stroke that is a
-  rule (thinner than RULE_MAX on one side) or an outline. Shading, clipping and the pixels of an
-  image are never read; an image is its box only.
+  rule (thinner than RULE_MAX on one side) or an outline. A stroke's width is the one of `w`
+  scaled by the path's own matrix and the forms around it (by the square root of their
+  determinant: exact for a uniform scale, the mean of the two for an uneven one), clamped to
+  0..STROKE_MAX. Shading, clipping and the pixels of an image are never read; an image is its
+  box only.
 - `scanned` is true when no page read has a run and an image covers at least half of one of
   them: the design is then in the picture alone, and the extraction says so.
 
@@ -45,6 +55,7 @@ their own process on files they make.
 """
 
 import ctypes
+import math
 import unicodedata
 
 import pdf_render  # sandbox/pdf_render.py, beside this file: the opening, the weighing, the guards
@@ -66,7 +77,11 @@ RULE_MAX = 3.0  # points: a stroke box thinner than this on one side is a rule
 SHAPE_MIN = 2.0  # points: a path smaller than this on both sides (a dot of an icon) is left out
 COVER = pdf_render.COVER
 BUDGET_EVERY = 500  # characters or objects between two looks at the budget
-INVISIBLE = 3  # FPDF_TEXTRENDERMODE_INVISIBLE
+LENGTH_MAX = 144_000  # tenths of a point: parser_client.DESIGN_LENGTH, the most a size may be
+STROKE_MAX = 1_000  # tenths of a point: parser_client.DESIGN_STROKE
+FILLED = frozenset({0, 2, 4, 6})  # text render modes that fill the glyphs
+STROKED = frozenset({1, 5})  # text render modes that only stroke them
+RIGHT, UP, LEFT, DOWN = range(4)  # the direction a line of text runs in on the page
 GUTTER = 12.0  # points: the narrowest gap between two columns
 ORDER_DEPTH_MAX = 8
 COLUMN_BANDS_MIN = 3  # bands a block must span to be read as columns
@@ -82,6 +97,40 @@ class _Stop(Exception):  # noqa: N818, an outcome, not an error of this program
 
 def _tenths(value: float) -> int:
     return round(value * 10)
+
+
+def _bounded(points: float, high: int) -> int:
+    """`points` in tenths of a point, within 0..high: NaN and below zero are 0, infinity high."""
+    if not points > 0:
+        return 0
+    return min(_tenths(min(points, high / 10)), high)
+
+
+def _height(a: float, b: float, c: float, d: float) -> float:
+    """How far the matrix (a, b, c, d) puts one unit of text space from the baseline: the scale
+    of a glyph's height whether the text is upright, turned, slanted or narrowed."""
+    advance = math.hypot(a, b)
+    return abs(a * d - b * c) / advance if advance > 0 else math.hypot(c, d)
+
+
+def _way(x: float, y: float) -> int:
+    """The direction on the page (PDF space, y upwards) the advance (x, y) points in most."""
+    if abs(x) >= abs(y):
+        return LEFT if x < 0 else RIGHT
+    return UP if y > 0 else DOWN
+
+
+def _along(box: list[int], way: int) -> tuple[int, int, int, int]:
+    """`box` ([x0, y0, x1, y1], y downwards) turned so that a run going `way` reads along its
+    first axis: (start, low, end, high), start and end along the run, low and high across."""
+    x0, y0, x1, y1 = box
+    if way == LEFT:
+        return -x1, y0, -x0, y1
+    if way == UP:
+        return -y1, x0, -y0, x1
+    if way == DOWN:
+        return y0, x0, y1, x1
+    return x0, y0, x1, y1
 
 
 def _colour(red: int, green: int, blue: int) -> str:
@@ -211,7 +260,9 @@ class _Page:
 
     def box(self, left: float, top: float, right: float, bottom: float) -> list[int] | None:
         """[x0, y0, x1, y1] in tenths of a point from the top left corner, clipped to the page,
-        or None when nothing of it is on the page."""
+        or None when nothing of it is on the page or a side is not a number."""
+        if not all(math.isfinite(side) for side in (left, top, right, bottom)):
+            return None
         x0 = max(min(left, right) - self.left, 0.0)
         x1 = min(max(left, right) - self.left, self.width)
         y0 = max(self.top - max(top, bottom), 0.0)
@@ -237,6 +288,7 @@ class _Page:
             self.notes.add("chars_limit")
         run: dict | None = None
         rect = pdfium_c.FS_RECTF()
+        matrix = pdfium_c.FS_MATRIX()
         red, green, blue, alpha = (ctypes.c_uint() for _ in range(4))
         paint = [ctypes.byref(part) for part in (red, green, blue, alpha)]
         for index in range(min(count, CHARS_MAX)):
@@ -254,11 +306,18 @@ class _Page:
             found = pdfium_c.FPDFText_GetTextObject(text_page, index)
             if not ch or not found:
                 continue
-            if pdfium_c.FPDFTextObj_GetTextRenderMode(found) == INVISIBLE:
+            mode = pdfium_c.FPDFTextObj_GetTextRenderMode(found)
+            if mode in FILLED:
+                painted = pdfium_c.FPDFText_GetFillColor(text_page, index, *paint)
+            elif mode in STROKED:
+                painted = pdfium_c.FPDFText_GetStrokeColor(text_page, index, *paint)
+            else:
                 continue
-            if not pdfium_c.FPDFText_GetFillColor(text_page, index, *paint) or not alpha.value:
+            if not painted or not alpha.value:
                 continue
             if not pdfium_c.FPDFText_GetLooseCharBox(text_page, index, ctypes.byref(rect)):
+                continue
+            if not pdfium_c.FPDFText_GetMatrix(text_page, index, ctypes.byref(matrix)):
                 continue
             box = self.box(rect.left, rect.top, rect.right, rect.bottom)
             if box is None:
@@ -268,11 +327,17 @@ class _Page:
                 self.notes.add("fonts_limit")
                 continue
             size = pdfium_c.FPDFText_GetFontSize(text_page, index)
-            key = (font, _tenths(size), _colour(red.value, green.value, blue.value))
-            if run is not None and not self._continues(run, key, box, size, ch):
+            sign = -1.0 if size < 0 else 1.0
+            way = _way(sign * matrix.a, sign * matrix.b)
+            height = _height(matrix.a, matrix.b, matrix.c, matrix.d)
+            tenths = _bounded(abs(size) * height, LENGTH_MAX)
+            key = (font, tenths, _colour(red.value, green.value, blue.value), way)
+            turned = _along(box, way)
+            if run is not None and not self._continues(run, key, turned, ch):
                 run = self._close(run)
             if run is None:
-                run = {"key": key, "chars": [], "box": list(box), "right": box[0]}
+                run = {"key": key, "chars": [], "box": list(box), "end": turned[0]}
+                run["across"] = (turned[1], turned[3])
             run["chars"].append(ch)
             if not ch.isspace():
                 run["box"] = [
@@ -281,21 +346,25 @@ class _Page:
                     max(run["box"][2], box[2]),
                     max(run["box"][3], box[3]),
                 ]
-                run["right"] = box[2]
+                low, high = run["across"]
+                run["across"] = (min(low, turned[1]), max(high, turned[3]))
+                run["end"] = turned[2]
         self._close(run)
 
     @staticmethod
-    def _continues(run: dict, key: tuple, box: list[int], size: float, ch: str) -> bool:
+    def _continues(run: dict, key: tuple, turned: tuple, ch: str) -> bool:
+        """Whether the character `ch`, of `key` and the box `turned` (by `_along`), goes on
+        the line of `run`."""
         if run["key"] != key or len(run["chars"]) >= RUN_TEXT_MAX:
             return False
         if ch.isspace():
             return True
-        top, bottom = run["box"][1], run["box"][3]
-        overlap = min(bottom, box[3]) - max(top, box[1])
-        if overlap * 2 < min(bottom - top, box[3] - box[1]):
+        low, high = run["across"]
+        overlap = min(high, turned[3]) - max(low, turned[1])
+        if overlap * 2 < min(high - low, turned[3] - turned[1]):
             return False
-        em = max(size, 1.0) * 10
-        return run["right"] - em / 2 <= box[0] <= run["right"] + GAP_EM * em
+        em = max(key[1], 10)
+        return run["end"] - em / 2 <= turned[0] <= run["end"] + GAP_EM * em
 
     def _close(self, run: dict | None) -> None:
         if run is None:
@@ -308,7 +377,7 @@ class _Page:
         if len(text) > self.room[0]:
             raise _Stop("text_limit")
         self.room[0] -= len(text)
-        font, size, colour = run["key"]
+        font, size, colour, _ = run["key"]
         self.runs.append(
             {"text": text, "box": run["box"], "font": font, "size": size, "colour": colour}
         )
@@ -366,7 +435,7 @@ class _Page:
                 else:
                     self.images.append({"box": box})
                 continue
-            shape = _shape(found, box)
+            shape = _shape(found, box, matrix)
             if shape is not None:
                 width, height = box[2] - box[0], box[3] - box[1]
                 self.shapes.append((width * height + max(width, height), len(self.shapes), shape))
@@ -440,7 +509,13 @@ def _paint(found, getter) -> str | None:
     return _colour(red.value, green.value, blue.value) if alpha.value else None
 
 
-def _shape(found, box: list[int]) -> dict | None:
+def _scale(matrix) -> float:
+    """How much `matrix` (a, b, c, d, ...) scales a length, on average over directions."""
+    a, b, c, d = matrix[:4]
+    return math.sqrt(abs(a * d - b * c))
+
+
+def _shape(found, box: list[int], outer) -> dict | None:
     width, height = (box[2] - box[0]) / 10, (box[3] - box[1]) / 10
     if max(width, height) < SHAPE_MIN:
         return None
@@ -453,15 +528,19 @@ def _shape(found, box: list[int]) -> dict | None:
             return {"type": "fill", "box": box, "colour": colour, "width": 0}
     if stroke.value:
         colour = _paint(found, pdfium_c.FPDFPageObj_GetStrokeColor)
-        thickness = ctypes.c_float()
+        thickness, own = ctypes.c_float(), pdfium_c.FS_MATRIX()
         pdfium_c.FPDFPageObj_GetStrokeWidth(found, ctypes.byref(thickness))
-        if colour is not None and thickness.value > 0:
+        if not pdfium_c.FPDFPageObj_GetMatrix(found, ctypes.byref(own)):
+            return None
+        scale = _scale((own.a, own.b, own.c, own.d)) * (1.0 if outer is None else _scale(outer))
+        drawn = thickness.value * scale
+        if colour is not None and drawn > 0:
             kind = "rule" if min(width, height) <= RULE_MAX else "outline"
             return {
                 "type": kind,
                 "box": box,
                 "colour": colour,
-                "width": min(_tenths(thickness.value), 1000),
+                "width": _bounded(drawn, STROKE_MAX),
             }
     return None
 

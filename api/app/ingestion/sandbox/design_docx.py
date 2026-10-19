@@ -101,9 +101,15 @@ def _name(value: str | None) -> str | None:
 
 
 def _number(value: str | None, high: int = TWIPS_MAX) -> int | None:
-    if value is None or not value.strip().lstrip("-").isdigit() or len(value) > 9:
+    """The whole number `value` writes in ASCII digits, with one minus sign at most, when it
+    lies in 0..high; None for anything else ("²", "--5", "12pt", "1e3", "٣")."""
+    if value is None or len(value) > 9:
         return None
-    number = int(value)
+    text = value.strip()
+    digits = text.removeprefix("-")
+    if not (digits.isascii() and digits.isdigit()):
+        return None
+    number = int(text)
     return number if 0 <= number <= high else None
 
 
