@@ -278,7 +278,7 @@ if [[ "${EGRESS_TEST_DOCKER:-1}" == 1 ]]; then
     # Behind a TLS inspecting proxy (README): the install alone reads the bundle, as the BuildKit
     # secret of a throwaway image build; a planted line in it must then be nowhere in the image.
     canary="egress-test-canary-$$-$RANDOM$RANDOM"
-    { cat "$JOBAPP_EXTRA_CA" && printf '# %s\n' "$canary"; } >"$WORK/extra-ca.pem"
+    { cat "$JOBAPP_EXTRA_CA" && printf '\n# %s\n' "$canary"; } >"$WORK/extra-ca.pem"
     cat >"$WORK/Dockerfile" <<EOF
 FROM $base
 RUN --mount=type=secret,id=extra_ca,required=true \\
