@@ -488,7 +488,7 @@ def memory(root: str = CGROUP) -> tuple[int, int] | None:
 
 
 def past_guard(figures: tuple[int, int], pct: int) -> bool:
-    """The container (memory.current, memory.max) is at or past `pct` % of its limit."""
+    """The container's (working set, limit) of `memory()` is at or past `pct` % of its limit."""
     return figures[0] * 100 >= figures[1] * pct
 
 
