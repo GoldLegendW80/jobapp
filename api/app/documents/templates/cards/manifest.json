@@ -1,0 +1,143 @@
+{
+  "slug": "cards",
+  "version": 1,
+  "name": {
+    "en": "Cards",
+    "fr": "Cartes"
+  },
+  "description": {
+    "en": "Every section on a soft card with round corners: a heading card across the top, then two columns of cards.",
+    "fr": "Chaque section sur une carte douce aux coins arrondis : une carte de titre en haut, puis deux colonnes de cartes."
+  },
+  "tags": [
+    "two columns",
+    "sans",
+    "photo",
+    "colour"
+  ],
+  "photo": "optional",
+  "fonts": [
+    "nunito-sans"
+  ],
+  "accent": "#1c5d99",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 9.8,
+        "line_height": 1.4,
+        "section_gap": 9.0,
+        "item_gap": 4.5,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.54,
+        "line_height": 1.36,
+        "section_gap": 8.14,
+        "item_gap": 4.07,
+        "margin": 13.0
+      },
+      {
+        "body_size": 9.29,
+        "line_height": 1.32,
+        "section_gap": 7.29,
+        "item_gap": 3.64,
+        "margin": 12.0
+      },
+      {
+        "body_size": 9.03,
+        "line_height": 1.28,
+        "section_gap": 6.43,
+        "item_gap": 3.21,
+        "margin": 11.0
+      },
+      {
+        "body_size": 8.77,
+        "line_height": 1.24,
+        "section_gap": 5.57,
+        "item_gap": 2.79,
+        "margin": 10.0
+      },
+      {
+        "body_size": 8.51,
+        "line_height": 1.2,
+        "section_gap": 4.71,
+        "item_gap": 2.36,
+        "margin": 9.0
+      },
+      {
+        "body_size": 8.26,
+        "line_height": 1.16,
+        "section_gap": 3.86,
+        "item_gap": 1.93,
+        "margin": 8.0
+      },
+      {
+        "body_size": 8.0,
+        "line_height": 1.12,
+        "section_gap": 3.0,
+        "item_gap": 1.5,
+        "margin": 7.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.0,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.6,
+        "line_height": 1.45,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 16.4
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.4,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 14.8
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.36,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 13.2
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.31,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 11.6
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.26,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "09290b3d428bf113bd6e67234f584a1ca6dc23120ff033db3441bb6829024644"
+}
