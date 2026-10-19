@@ -73,7 +73,9 @@ export function QueueCard({
   const titleId = useId();
   const panelId = useId();
   const [notice, setNotice] = useState<string | null>(null);
-  const [open, setOpen] = useState(item.required_left > 0);
+  // Until the person toggles it, the answers are open while a required one is left.
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const open = toggled ?? item.required_left > 0;
   const [unsaved, setUnsaved] = useState(0);
   const [confirming, setConfirming] = useState(false);
   const [rejecting, setRejecting] = useState(false);
@@ -162,7 +164,7 @@ export function QueueCard({
               }
             : old,
         );
-        setOpen(true);
+        setToggled(true);
         setNotice(refusal.detail);
         void queryClient.invalidateQueries({ queryKey: queueKey });
         return;
@@ -296,7 +298,7 @@ export function QueueCard({
             aria-expanded={open}
             aria-controls={panelId}
             onClick={() => {
-              setOpen((was) => !was);
+              setToggled(!open);
             }}
           >
             {open ? "Hide the answers" : "Review the answers"}
