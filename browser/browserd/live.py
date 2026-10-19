@@ -31,6 +31,10 @@ The agent's side (`agent_turn`, for B5's tool calls): while the person holds the
 waits, until Give back or TAKEOVER_S, then learns that the person used the browser, so the
 person's keys and the agent's never mix.
 
+A person's own session (a lease without automation, browser B7: `look` and `signin`) has no
+agent: every viewer of it forwards the keyboard and the mouse from its start to its end, and Take
+over and Give back are refused 409 `person_session` (there is nothing to take or give back).
+
 Logs: never a grant, a ticket, a query string, nor a byte of the stream.
 """
 
@@ -384,9 +388,17 @@ class Live:
             return self.input_viewer
         return None
 
+    def person(self, lease_id: str) -> bool:
+        """That lease is the current one and a person's own session: the person holds the
+        input from its start to its end (B7)."""
+        lease = self.manager.current()
+        return lease is not None and lease.lease_id == lease_id and not lease.request.automation
+
     def take(self, lease_id: str, viewer: str) -> None:
         if lease_id != self._lease_id():
             raise LeaseError(404, "no_such_lease")
+        if self.person(lease_id):
+            raise LeaseError(409, "person_session")
         self.input_lease, self.input_viewer = lease_id, viewer
         self.input_until = self.manager.clock() + TAKEOVER_S
         self.absent_since = None
@@ -543,7 +555,7 @@ class Live:
         rfb = RfbFilter()
 
         def allow() -> bool:
-            return self.holder(viewer.lease_id) == viewer.viewer
+            return self.person(viewer.lease_id) or self.holder(viewer.lease_id) == viewer.viewer
 
         async def upstream() -> None:  # the viewer's frames, filtered, to x11vnc
             while True:
@@ -657,6 +669,8 @@ async def set_input(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
     if viewer is None:
         if match["lease_id"] != live._lease_id():
             raise LeaseError(404, "no_such_lease")
+        if live.person(match["lease_id"]):
+            raise LeaseError(409, "person_session")
         live.give_back(match["lease_id"], giver)
         return 200, {"input": "agent"}
     live.take(match["lease_id"], viewer)

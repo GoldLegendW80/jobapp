@@ -4,7 +4,9 @@ browserd (browser/browserd/app.py) runs in the `browser` container on the intern
 network, behind BROWSER_CONTROL_SECRET. Nothing else of the application speaks to it:
 
     start(...)  POST /leases            the lease's id, its token and browserd's view of it
-    end(id)     DELETE /leases/{id}     True, or False when it is no longer the current lease
+    end(id)     DELETE /leases/{id}     Ended (its reason, the profile's size), or None when
+                                        it is no longer the current lease
+    remove_profile(id, uid)  DELETE /profiles/{id}   the profile's directory removed (B7)
     current()   GET /leases/current     {lease: {...} | None, last_end: {...} | None}
     live_input(id, viewer)  POST /leases/{id}/live/input   who holds the live view's input (B4)
     tool(...)   POST /leases/{id}/tools/{name}   a tool's result (browser B5)
@@ -46,6 +48,9 @@ logger = logging.getLogger("app.browser.client")
 TIMEOUT_S = 5.0
 START_TIMEOUT_S = 35.0  # browserd's START_S of 30 s, plus a margin
 TOOL_TIMEOUT_S = 120.0  # a paced browser_type of 200 characters, a 30 s navigation, a screenshot
+# browserd's QUIT_S of 10 s for Chromium, then the trim and the measure of the profile (B7); an
+# end or a removal that takes longer is told again later (browserd then answers it is done).
+END_TIMEOUT_S = 30.0
 CODES = ("unavailable", "busy", "refused", "ended")
 FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.pdf$")  # browserd/tools/policy.py
 
@@ -59,6 +64,27 @@ class BrowserError(Exception):
         super().__init__(code)
         self.code = code
         self.holder_purpose = holder_purpose
+
+
+@dataclass(frozen=True)
+class Ended:
+    """browserd's end of a lease: why, and the profile's size once Chromium closed (B7)."""
+
+    reason: str
+    size_bytes: int | None
+
+
+def ended_of(payload: Any) -> Ended:
+    """An Ended from browserd's `last_end` or DELETE answer; what is not well formed is left
+    out (the reason "ended", no size)."""
+    found = payload if isinstance(payload, dict) else {}
+    reason, size = found.get("reason"), found.get("size_bytes")
+    return Ended(
+        reason=reason if isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,32}", reason)
+        else "ended",
+        size_bytes=size if isinstance(size, int) and not isinstance(size, bool) and size >= 0
+        else None,
+    )  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -97,8 +123,9 @@ class BrowserdClient:
         automation: bool,
         hosts: Sequence[str] = (),
         submit_selectors: Sequence[str] = (),
+        address: str | None = None,
     ) -> Started:
-        body = {
+        body: dict[str, Any] = {
             "user_id": user_id,
             "profile_id": profile_id,
             "uid": uid,
@@ -107,6 +134,8 @@ class BrowserdClient:
             "hosts": list(hosts),
             "submit_selectors": list(submit_selectors),
         }
+        if address is not None:  # B7: where a person's own session opens
+            body["address"] = address
         status, payload = await self._call("POST", "/leases", START_TIMEOUT_S, body)
         if status == 201 and isinstance(payload, dict):
             lease_id, token = payload.get("lease_id"), payload.get("lease_token")
@@ -123,12 +152,26 @@ class BrowserdClient:
                 )
         raise self._failure(status, payload)
 
-    async def end(self, lease_id: str) -> bool:
-        status, payload = await self._call("DELETE", f"/leases/{lease_id}", TIMEOUT_S)
-        if status == 204:
-            return True
+    async def end(self, lease_id: str) -> Ended | None:
+        # Chromium of a person's session gets up to 10 s to write its profile, then the profile
+        # is measured (B7): the end waits for both.
+        status, payload = await self._call("DELETE", f"/leases/{lease_id}", END_TIMEOUT_S)
+        if status in (200, 204):
+            return ended_of(payload)
         if status == 404:
-            return False
+            return None
+        raise self._failure(status, payload)
+
+    async def remove_profile(self, profile_id: str, uid: int) -> str:
+        """Removes a profile's directory: "removed" (also when there was none), or browserd's
+        reason to keep it for now ("profile_in_use", "profile_uid_mismatch")."""
+        body = {"uid": uid}
+        status, payload = await self._call("DELETE", f"/profiles/{profile_id}", END_TIMEOUT_S, body)
+        if status == 204:
+            return "removed"
+        code = payload.get("error") if isinstance(payload, dict) else None
+        if status == 409 and code in ("profile_in_use", "profile_uid_mismatch"):
+            return str(code)
         raise self._failure(status, payload)
 
     async def current(self) -> dict[str, Any]:
@@ -234,6 +277,7 @@ class BrowserdClient:
         # The route without the lease id nor a file's name; a tool's name is kept.
         route = re.sub(r"^/leases/(?!current$)[^/]+", "/leases/{id}", path)
         route = re.sub(r"/files/[^/]+$", "/files/{name}", route)
+        route = re.sub(r"^/profiles/[^/]+$", "/profiles/{id}", route)
         began = time.monotonic()
         try:
             async with httpx.AsyncClient(
