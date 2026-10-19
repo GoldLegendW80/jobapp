@@ -1,8 +1,10 @@
 """D18: what a template switch changes, through the routes the picker and the gallery call
 (SPEC-documents.md, "Base CVs", Inheritance, and "Templates", Switching). A base CV's new template
 is taken by the CVs written from it afterwards, not by those already written; one posting's switch
-leaves its base CV and its letter as they were; a template no longer served renders with
-`classic` and is absent from the gallery, which is what the picker's note reads."""
+leaves its base CV and its letter as they were; writing a CV again from another base CV takes that
+base CV's template unless the person switched it by hand since the last write; a template no
+longer served renders with `classic`, which its version records, and is absent from the gallery,
+which is what the picker's note reads."""
 
 from __future__ import annotations
 
@@ -14,6 +16,7 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.documents import content as c
 from app.documents import generate, render_job, store, templates
 from app.documents.models import (
     BaseSource,
@@ -69,6 +72,24 @@ def _write(
         generate.create(db, document, mode, trigger, None, {}, 1000, at=clock())
         db.commit()
         return db.scalar(sa.select(Document.template_slug).where(Document.id == document_id))
+
+
+def _written(
+    factory: sessionmaker[Session],
+    user: uuid.UUID,
+    document_id: uuid.UUID,
+    clock: Any,
+    base: uuid.UUID | None = None,
+) -> None:
+    """A writer's generation of the posting's CV from `base` (else its own), done as the writer's
+    final hook leaves it: the CV's last write."""
+    with factory() as db:
+        document = store.get(db, user, document_id)
+        assert document is not None
+        mode, trigger = GenerationMode.posting, GenerationTrigger.click
+        generation = generate.create(db, document, mode, trigger, base, {}, 1000, at=clock())
+        generate.finish(db, generation, c.parse("cv", CV), [], at=clock())
+        db.commit()
 
 
 def _template(factory: sessionmaker[Session], document_id: uuid.UUID) -> str:
@@ -153,7 +174,8 @@ def test_a_template_no_longer_served_renders_with_classic_and_leaves_the_gallery
         (version,) = db.execute(
             sa.select(DocumentVersion).where(DocumentVersion.document_id == cv)
         ).scalars()
-        assert version.template_version == classic.version
+        # What printed it: `classic`, with its version, never the slug that is gone.
+        assert (version.template_slug, version.template_version) == ("classic", classic.version)
         assert version.pdf_sha256 is not None  # rendered, never refused
     # What the picker reads for its note: the document's slug, absent from the gallery.
     assert api.get(f"/api/documents/{cv}", token=alex).json()["template_slug"] == retired
@@ -162,3 +184,88 @@ def test_a_template_no_longer_served_renders_with_classic_and_leaves_the_gallery
     assert "classic" in {one["slug"] for one in gallery}
     # Choosing a served template again is an ordinary switch.
     assert _patch(api, alex, cv, "compact").json()["template_slug"] == "compact"
+
+
+@pytest.mark.parametrize(
+    ("steps", "expected"),
+    [
+        (["write A", "write B"], "sidebar"),
+        (["write A", "switch compact", "write B"], "compact"),
+        (["write A", "switch compact", "write A"], "compact"),
+        # Switched before the last write: the next write from another base takes its template.
+        (["write A", "switch compact", "write B", "write C"], "banner"),
+        (["write A", "switch compact", "switch classic", "write B"], "classic"),
+        (["write A", "switch compact", "save", "prune", "write B"], "compact"),
+        (["write A", "save", "write B"], "sidebar"),
+        (["save", "switch compact", "write B"], "compact"),
+        (["save", "write B"], "sidebar"),
+    ],
+)
+def test_a_rewrite_from_another_base_cv_keeps_a_template_switched_by_hand_since_the_last_write(
+    factory: sessionmaker[Session],
+    api: Api,
+    clock: Any,
+    queue: RecordingQueue,
+    steps: list[str],
+    expected: str,
+) -> None:
+    alex, alex_id = _person(factory, api, ALEX, clock)
+    bases = {"A": _base_cv(factory, alex_id, clock)}
+    for name, slug in (("B", "sidebar"), ("C", "banner")):
+        bases[name] = _base_cv(factory, alex_id, clock)
+        assert _patch(api, alex, bases[name], slug).status_code == 200
+    cv = _posting_document(factory, alex_id, _posting(factory, alex_id), Kind.cv, clock)
+    last_base = bases["A"]
+    for step in steps:
+        verb, _, arg = step.partition(" ")
+        if verb == "write":
+            _written(factory, alex_id, cv, clock, bases[arg])
+            last_base = bases[arg]
+        elif verb == "switch":
+            assert _patch(api, alex, cv, arg).status_code == 200
+        elif verb == "save":
+            with factory() as db:
+                revision = db.scalar(sa.select(Document.draft_revision).where(Document.id == cv))
+            edited = {**CV, "summary": f"Edited by hand at revision {revision}."}
+            assert _save(api, alex, cv, edited, revision).status_code == 200
+            _render(factory, queue, clock)
+        else:
+            with factory() as db:
+                assert store.prune(db, alex_id, cv, keep=1) > 0
+                db.commit()
+    assert _template(factory, cv) == expected
+    with factory() as db:
+        assert db.scalar(sa.select(Document.base_document_id).where(Document.id == cv)) == (
+            last_base
+        )
+    # The base CVs keep their own templates whatever the posting's CV did.
+    assert [_template(factory, bases[name]) for name in "ABC"] == ["classic", "sidebar", "banner"]
+
+
+def test_a_writers_version_on_a_removed_template_records_classic_and_its_render_keeps_it(
+    factory: sessionmaker[Session], api: Api, clock: Any
+) -> None:
+    alex, alex_id = _person(factory, api, ALEX, clock)
+    _base_cv(factory, alex_id, clock)
+    cv = _posting_document(factory, alex_id, _posting(factory, alex_id), Kind.cv, clock)
+    _written(factory, alex_id, cv, clock)
+    retired = f"retired-{uuid.uuid4().hex[:6]}"
+    with factory() as db:
+        db.execute(sa.update(Document).where(Document.id == cv).values(template_slug=retired))
+        db.commit()
+    _written(factory, alex_id, cv, clock)
+    with factory() as db:
+        revision = db.scalar(sa.select(Document.draft_revision).where(Document.id == cv))
+    _render(factory, RecordingQueue(jobs=[{"args": (str(cv), revision)}]), clock)
+    with factory() as db:
+        first, second = db.execute(
+            sa.select(DocumentVersion)
+            .where(DocumentVersion.document_id == cv)
+            .order_by(DocumentVersion.number)
+        ).scalars()
+        # No third version: the render reused the writer's, so the overflow hook can follow it.
+        assert first.generation_id != second.generation_id
+        assert second.generation_id is not None
+        assert second.template_slug == "classic"
+        assert second.pdf_sha256 is not None
+    assert api.get(f"/api/documents/{cv}", token=alex).json()["template_slug"] == retired

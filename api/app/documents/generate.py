@@ -183,7 +183,8 @@ def _has_version(db: Session, document: Document) -> bool:
 
 
 def last_write(db: Session, document: Document) -> DocumentGeneration | None:
-    """The document's latest `posting` generation that is done: its last write."""
+    """The document's last write: of its `posting` generations that are done, the one whose
+    version is the newest (version numbers only grow, where two clocks can tie)."""
     found: DocumentGeneration | None = db.execute(
         sa.select(DocumentGeneration)
         .where(
@@ -192,7 +193,10 @@ def last_write(db: Session, document: Document) -> DocumentGeneration | None:
             DocumentGeneration.mode == GenerationMode.posting,
             DocumentGeneration.status == GenerationStatus.done,
         )
-        .order_by(DocumentGeneration.created_at.desc(), DocumentGeneration.id.desc())
+        .order_by(
+            DocumentGeneration.version_number.desc().nulls_last(),
+            DocumentGeneration.created_at.desc(),
+        )
         .limit(1)
     ).scalar_one_or_none()
     return found
