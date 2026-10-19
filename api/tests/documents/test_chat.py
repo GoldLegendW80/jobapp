@@ -729,3 +729,14 @@ def test_the_binding_refuses_a_run_that_is_not_its_generations_own(
         )
         assert chat.bind_for(db, other, "cv") is None  # the generation names another run
     assert DocumentMessage.__tablename__ == "document_messages"
+
+
+def test_a_run_that_leaves_the_correction_pass_unanswered_stores_nothing_and_says_so(
+    api: Api, app: FastAPI, factory: Any, queue: RecordingQueue, clock: Any, alex: Who
+) -> None:
+    sent, reply = _talk(api, app, factory, queue, clock, alex, "say I managed 20 people", "stopped")
+    generation = alex.generation(sent["generation"]["id"])
+    assert (generation.status, generation.error) == (GenerationStatus.failed, "no_result")
+    assert reply["text"] == chat.FAILED["no_result"]
+    assert c.parse("cv", alex.document().draft) == c.parse("cv", VALID)
+    assert len(alex.versions()) == 1

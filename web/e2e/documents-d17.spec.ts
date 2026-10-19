@@ -44,6 +44,52 @@ const SCRIPTS: Record<string, string> = {
 const SHORTER =
   "Platform engineer with about 3.5 years of professional engineering, running the deployment platform of the billing team at Quillmere Example Works.";
 
+// The CV D12's journey writes (api/app/agents/fake_streams/documents_cv_journey.json): the
+// chat's stream `documents_chat_cv_journey` changes its summary only.
+const WRITTEN: Record<string, unknown> = {
+  schema: 1,
+  target: "Brindle Example Labs, Senior Platform Engineer",
+  headline: "Platform Engineer for teams that ship every day",
+  summary:
+    "Platform engineer with about 3.5 years of professional engineering. At Quillmere Example Works I run the deployment platform of the billing team.",
+  highlights: [
+    "Deployment platform of the billing team",
+    "Backend services in Python",
+    "Internal tools in Python and React",
+  ],
+  competencies: [
+    "Kubernetes",
+    "Terraform",
+    "Python",
+    "FastAPI",
+    "PostgreSQL",
+    "CI/CD",
+    "Platform engineering",
+    "React",
+  ],
+  experience: [
+    {
+      employer_key: "quillmere",
+      bullets: [
+        "Run the deployment platform of the billing team, from the first commit to production.",
+        "Wrote the platform's backend services in Python with FastAPI.",
+      ],
+    },
+    {
+      employer_key: "tarnwick",
+      bullets: [
+        "Built internal tools in Python and React for the support team.",
+      ],
+    },
+  ],
+  skills: [
+    { label: "Cloud", items: ["Kubernetes", "Terraform"] },
+    { label: "Backend", items: ["Python", "FastAPI", "PostgreSQL"] },
+    { label: "Frontend", items: ["React", "TypeScript"] },
+  ],
+  notes: "",
+};
+
 let person: Person;
 let context: BrowserContext;
 let page: Page;
@@ -106,7 +152,7 @@ test("a posting's CV is rendered once, with the consent and a credential", async
   expect(accepted.status()).toBe(200);
   postingId = await addPosting(page.request, person);
   cvId = seedDocuments(person, postingId).cv;
-  await saveDraft(page.request, cvId, person.cvDraft);
+  await saveDraft(page.request, cvId, WRITTEN);
   const rendered = await waitForRender(page.request, cvId, 1);
   expect(rendered.latest?.number).toBe(1);
 });
@@ -116,7 +162,10 @@ test("shorter summary is answered with what changed and the new version", async 
   await page.getByRole("tab", { name: "Chat" }).click();
   await expect(page.getByTestId("document-chat-empty")).toBeVisible();
   await ask("shorter summary");
-  await expect(lastAnswer()).toContainText("the summary", { timeout: 60_000 });
+  await expect(lastAnswer()).toContainText("Changed the summary.", {
+    timeout: 60_000,
+  });
+  await expect(lastAnswer()).not.toContainText("skills");
   await expect(lastAnswer()).toContainText("This is version 2.");
   await expect(page.getByTestId("document-chat-writing")).toHaveCount(0);
   const drawn = await waitForRender(page.request, cvId, 2);

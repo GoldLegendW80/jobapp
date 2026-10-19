@@ -123,7 +123,7 @@ WHAT = {"cv": "CV", "letter": "cover letter", "base": "base CV"}
 DEFAULT_SCRIPTS = {kind: f"documents_chat_{kind}_valid" for kind in KINDS}
 # The conversation adds at most this share to the run's high estimate.
 CONVERSATION_SHARE = Fraction(1, 10)
-ERRORS = ("invalid_output", "token_limit", "binding_gone", "run_failed")
+ERRORS = ("invalid_output", "no_result", "token_limit", "binding_gone", "run_failed")
 FINAL = (RunStatus.done, RunStatus.failed, RunStatus.cancelled)
 HOOK_GRACE_S = 120  # as the tick's: a final hook ends within the runner's own limit
 QUOTE_MAX = 80
@@ -134,6 +134,7 @@ NO_CREDENTIAL = "Add a model credential on the Account page first, then send you
 SUGGEST_PROFILE = "If it is true, add it to your profile, then ask again."
 FAILED = {
     "invalid_output": "The assistant could not write a valid document. Nothing changed.",
+    "no_result": "The assistant stopped before its change was stored. Nothing changed. Try again.",
     "token_limit": "This change stopped at its limit. Nothing changed. Try a smaller request.",
     "binding_gone": "This document changed under the assistant. Nothing changed. Try again.",
     "run_failed": "The assistant could not answer. Nothing changed. Try again.",
@@ -759,10 +760,14 @@ def conclude(
     exhausted: bool,
     asked: Asked,
     at: datetime,
+    submits: int = 0,
 ) -> int | None:
-    """The generation of an ended run, its answer, and the revision of a render to queue."""
+    """The generation of an ended run, its answer, and the revision of a render to queue. A run
+    that submitted and stopped before a submit was stored (the correction pass left unanswered)
+    changed nothing, and says so: `no_result`."""
     render: int | None = None
-    if status is RunStatus.done and not exhausted:
+    stopped = accepted is None and submits > 0 and not exhausted
+    if status is RunStatus.done and not exhausted and not stopped:
         done = apply(db, document, generation, accepted, asked, at=at)
         generation.status = GenerationStatus.done
         generation.outcome = done.outcome
@@ -776,7 +781,8 @@ def conclude(
         text = CANCELLED
     else:
         generation.status = GenerationStatus.failed
-        generation.error = _error(run, status, exhausted)
+        stored_none = status is RunStatus.done and stopped
+        generation.error = "no_result" if stored_none else _error(run, status, exhausted)
         text = FAILED[generation.error]
     generation.finished_at = at
     db.flush()
@@ -834,6 +840,7 @@ def settle(
             taken.exhausted,
             asked,
             at,
+            taken.submits,
         )
         store.commit(db)
         return (document.id, revision) if revision is not None else None
