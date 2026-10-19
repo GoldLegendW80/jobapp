@@ -5,8 +5,9 @@ The order (tasks/ingestion/todo.md, "Lock order"): the `ingestion_runs` row (3),
 `ingestion_documents` rows (4), the `ingestion_run_steps` row (5), the user's advisory lock of
 `runs.create_run` (6), the `agent_runs` row (7). Who takes what today: `advance` 3, then 5, 6
 and 7; cancel, resume and continue 3 then 7; a tool call of a step 4 (`FOR KEY SHARE`) then 5,
-never the run row; a delete of a document 4; the runner and the reapers 7 only; the agents
-route 6 then 7.
+never the run row, and a write of items last the run's item lock (`tools._lock_items`, an
+advisory lock nothing else takes); a delete of a document 4; the runner and the reapers 7 only;
+the agents route 6 then 7.
 
 Each test holds the locks of one path in an open transaction, starts the other path in a
 thread, asserts that it waits (or that it does not), releases, and asserts the end state. Two
@@ -28,15 +29,18 @@ from app.agents.crypto import Keyring
 from app.agents.models import AgentRun
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
-from app.ingestion import deletion, engine, tools
+from app.ingestion import deletion, engine, items, tools
 from app.ingestion.models import IngestionDocument
-from app.ingestion.runs_models import IngestionRunStep, RunStatus
+from app.ingestion.runs_models import IngestionItem, IngestionRunStep, RunStatus
 from tests.agents.run_helpers import add_user, new_run, now, save_credential
 from tests.ingestion import engine_helpers as eh
 from tests.ingestion.extract_helpers import (
+    Step,
     add_document,
     add_step,
     call,
+    fixture,
+    item,
     key,
     keyring,
     settings,
@@ -44,6 +48,8 @@ from tests.ingestion.extract_helpers import (
 )
 
 _FIXTURES = (key, keyring, settings)
+CLEAN = fixture("extract_clean")
+EMAIL_LINE = "Email: camille.durand@example.org"
 WAIT_S = 0.6  # long enough to tell a path that waits from one that is merely slow to start
 END_S = 15
 
@@ -218,6 +224,57 @@ def test_a_tool_call_in_flight_and_the_delete_of_its_document(
     assert path.ends() is True  # then deletes the document (G15)
     # The next call finds nothing.
     assert call(made, "read_document", offset=0) == (tools.NOT_FOUND, True)
+
+
+def held_item(db: Session, step: Step) -> None:
+    """A write of items in flight for this step: the run's item lock, then a row inserted."""
+    tools._lock_items(db, step.ingestion_run_id)
+    db.add(
+        IngestionItem(
+            user_id=step.user_id,
+            document_id=step.document_id,
+            step_id=step.step_id,
+            section="identity",
+            key="full_name",
+            action="add",
+            value="Camille Durand",
+            value_hash=items.value_hash("Camille Durand"),
+            citations=[],
+            flags=[],
+        )
+    )
+    db.flush()
+
+
+def test_two_steps_of_one_run_that_write_at_once_count_each_others_items(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ITEMS_PER_RUN is exact with two steps of a run writing at once: the second write waits
+    for the first and counts its row. A step of another run (another user's) waits for nothing."""
+    monkeypatch.setattr(tools, "ITEMS_PER_RUN", 1)
+    first = add_step(factory, alice, add_document(factory, alice, CLEAN))
+    second = add_step(factory, alice, add_document(factory, alice, CLEAN + "\n"), after=first)
+    bob = add_user(factory, "e2e-bob@example.org")  # a user has one active run at most
+    elsewhere = add_step(factory, bob, add_document(factory, bob, CLEAN))
+    proposed = [item("email", "camille.durand@example.org", EMAIL_LINE)]
+
+    def propose(step: Step) -> Any:
+        return call(
+            tools_for(factory, step), "propose_profile_changes", section="identity", items=proposed
+        )
+
+    with factory() as db, db.begin():
+        held_item(db, first)
+        other = Path(lambda: propose(second))
+        other.waits()  # the same run: it waits for the write in flight
+        assert Path(lambda: propose(elsewhere)).ends()[0]["stored"] == 1  # another run does not
+    answer, error = other.ends()
+    assert error is False
+    assert answer == {
+        "stored": 0,
+        "already_stored": 0,
+        "refused": [{"index": 0, "reason": tools.RUN_FULL}],
+    }
 
 
 def test_the_delete_of_a_document_no_step_has_read_and_advance(
