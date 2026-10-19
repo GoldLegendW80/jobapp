@@ -1,7 +1,7 @@
 """The rules of a template derived from an uploaded CV (task D25a; SPEC-documents.md, "Design
 capture of an upload", steps 2 to 4, and "Templates"). Pure: no file, no clock, no log.
 
-**The checks.** `check(kind, files, photo, fonts, accent) -> [Problem]` is what D25b runs on the
+**The checks.** `check(files, photo, fonts, accent) -> [Problem]` is what D25b runs on the
 files the design model wrote, before anything renders: [] accepts; else the problems go back to
 the model once, then `classic` is kept. A Problem names a file, a line and a code of CODES, never
 text of the template, so it can be logged. On top of the authoring rules every template follows
@@ -25,22 +25,39 @@ text of the template, so it can be logged. On top of the authoring rules every t
 The fit check on the render (the tightest step gives a shorter page than the loosest) and the
 fields found in the PDF text are D25b's, which holds the renderer.
 
+**The tokens.** `from_pdf(DesignPdf)` and `from_docx(DesignDocx)` -> Tokens: what the layout
+extraction of D25a's sandbox kinds says of the look, as values the template system takes: the
+page (always A4, the spec's), the side margin, one or two columns and the narrower one's side,
+the body size, the line height, the name's and the headings' scale, the text colour, the accent,
+a band or column fill and the text on it, the fonts through `font_map`. Each value is read by a
+rule of its own (TOKEN_RULES below); a value that cannot be read, or falls outside BOUNDS, or a
+colour under 4.5:1, is replaced by its named default (DEFAULTS) and a Note says which and why.
+The text, the accent and the text on the fill pass the checks' contrast rule by construction.
+`steps(tokens, kind)` is the density ladder of a user template's manifest: loosest from the
+captured density, down to TIGHTEST, every step within `templates.BOUNDS`.
+
 Declared open points: a field printed in a box whose size or overflow hides it, or in a colour
 close to a background that another rule sets around it, passes these checks; the PDF text check
-of D25b is what sees it.
+of D25b is what sees it. Of the tokens: a page's columns are read from the gaps between its
+text below the top fifth, so a two column layout crossed by one full width line reads as one
+column; a sidebar is a fill touching a side edge, a band a fill across the top.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from itertools import pairwise
+from statistics import median
 
 from jinja2 import Environment, nodes
 from jinja2.exceptions import TemplateSyntaxError
 
 from app.documents import font_map, templates
+from app.ingestion.parser_client import DesignDocx, DesignPdf, TextRun
 
 CODES = (
     "authoring", "syntax", "construct", "name", "constant", "literal", "tag", "attribute",
@@ -677,3 +694,354 @@ def check(
     accent = _six(accent.lower()) if _HEX.fullmatch(accent.lower()) else WHITE
     found += check_css(files.get("style.css", ""), fonts, accent)
     return found
+
+
+# --- the tokens of a captured design ------------------------------------------------------------
+
+A4 = (5953, 8419)  # tenths of a point, as the sandbox measures
+MM = 72 / 25.4 * 10  # tenths of a point in a millimetre
+EDGE = 0.05  # of the page width: a fill this close to a side touches it
+GUTTER = 120  # tenths of a point: the least gap between two columns
+BOUNDS = {
+    "margin": templates.BOUNDS["margin"],
+    "body_size": templates.BOUNDS["body_size"],
+    "line_height": templates.BOUNDS["line_height"],
+    "name_scale": (1.2, 4.0),
+    "heading_scale": (0.8, 2.0),
+}
+DEFAULTS = {
+    "margin": 15.0,
+    "body_size": 10.0,
+    "line_height": 1.35,
+    "name_scale": 2.2,
+    "heading_scale": 1.0,
+    "text": "#1d232b",
+    "accent": "#1f4e79",
+}
+NOTE_CODES = ("unknown", "out_of_bounds", "low_contrast", "not_a4", "columns")
+
+
+@dataclass(frozen=True)
+class Note:
+    token: str  # a field of Tokens
+    code: str  # one of NOTE_CODES
+
+
+@dataclass(frozen=True)
+class Tokens:
+    page: str  # "A4": what every template prints on; a Note says when the file had another
+    margin: float  # mm, the side margin of the text
+    columns: int  # 1 or 2
+    side: str | None  # "left" or "right": the narrower of two columns
+    side_width: float | None  # mm
+    body_size: float  # pt
+    line_height: float
+    name_scale: float  # the name's size over the body's
+    heading_scale: float
+    text: str  # #rrggbb
+    accent: str
+    fill: str | None  # a band or column fill
+    on_fill: str | None  # the text on the fill
+    fonts: tuple[str, ...]  # families of font_map.FAMILIES, the body's first
+    notes: tuple[Note, ...]
+
+
+class _Reading:
+    """The values read so far, each held to its bounds or replaced by its default with a Note."""
+
+    def __init__(self) -> None:
+        self.notes: list[Note] = []
+
+    def bounded(self, token: str, value: float | None) -> float:
+        low, high = BOUNDS[token]
+        if value is None or not low <= value <= high:
+            self.notes.append(Note(token, "unknown" if value is None else "out_of_bounds"))
+            return DEFAULTS[token]
+        return round(value, 2)
+
+    def colour(self, token: str, candidates: Iterable[object], back: str = WHITE) -> str | None:
+        """The first candidate at 4.5:1 on `back`, else the default (None for the fill)."""
+        found = [c for c in candidates if isinstance(c, str)]
+        for colour in found:
+            if contrast(colour, back) >= AA:
+                return colour
+        self.notes.append(Note(token, "low_contrast" if found else "unknown"))
+        return DEFAULTS.get(token)
+
+    def page(self, width: int | None, height: int | None) -> str:
+        if width is None or height is None:
+            self.notes.append(Note("page", "unknown"))
+        elif abs(width - A4[0]) > 20 or abs(height - A4[1]) > 20:
+            self.notes.append(Note("page", "not_a4"))
+        return "A4"
+
+
+def _most(counts: Counter) -> object | None:
+    return max(counts, key=lambda key: (counts[key], str(key))) if counts else None
+
+
+def _ranked(counts: Counter) -> list:
+    return sorted(counts, key=lambda key: (-counts[key], str(key)))
+
+
+def _fonts(reading: Iterable[tuple[font_map.Mapped, int]]) -> tuple[str, ...]:
+    """The family that draws the most characters, symbol fonts left out, else the default."""
+    counts: Counter = Counter()
+    for mapped, chars in reading:
+        if not mapped.symbol:
+            counts[mapped.family] += chars
+    return tuple(_ranked(counts)[:1]) or (font_map.GENRES[font_map.DEFAULT_GENRE],)
+
+
+def _fill_kind(box: tuple[int, int, int, int], width: int, height: int) -> str | None:
+    """ "left" or "right" for a column fill touching that edge, "band" for one across the top."""
+    x0, y0, x1, y1 = box
+    if y1 - y0 >= 0.6 * height and 0.15 * width <= x1 - x0 <= 0.45 * width:
+        if x0 <= EDGE * width:
+            return "left"
+        if x1 >= (1 - EDGE) * width:
+            return "right"
+    if x1 - x0 >= 0.8 * width and y0 <= 0.3 * height and y1 - y0 <= 0.35 * height:
+        return "band"
+    return None
+
+
+def _gaps(runs: tuple[TextRun, ...], width: int, height: int) -> list[tuple[int, int]]:
+    """The gaps of at least GUTTER across the text below the top fifth of the page whose middle
+    is in the middle three fifths of its width: one gap, two columns."""
+    spans = sorted((r.box[0], r.box[2]) for r in runs if r.box[1] >= height // 5)
+    gaps: list[tuple[int, int]] = []
+    reach: int | None = None
+    for start, end in spans:
+        middle = (start + (reach or 0)) / 2
+        if reach is not None and start - reach >= GUTTER and width / 5 < middle < width * 4 / 5:
+            gaps.append((reach, start))
+        reach = end if reach is None else max(reach, end)
+    return gaps
+
+
+@dataclass(frozen=True)
+class _Layout:
+    columns: int = 1
+    side: str | None = None
+    side_width: float | None = None
+    fill: str | None = None
+    on_fill: str | None = None
+
+
+def _layout(t: _Reading, page, text: str) -> _Layout:
+    """The columns and the fill of a page: a column fill makes two columns, else one gap."""
+    fills = [
+        (kind, shape)
+        for shape in page.shapes
+        if shape.type == "fill" and contrast(shape.colour, WHITE) >= 1.1
+        if (kind := _fill_kind(shape.box, page.width, page.height))
+    ]
+    if fills:
+        kind, shape = max(
+            fills, key=lambda f: (f[1].box[2] - f[1].box[0]) * (f[1].box[3] - f[1].box[1])
+        )
+        x0, y0, x1, y1 = shape.box
+        inside: Counter = Counter()
+        for run in page.runs:
+            if (
+                x0 <= (run.box[0] + run.box[2]) / 2 <= x1
+                and y0 <= (run.box[1] + run.box[3]) / 2 <= y1
+            ):
+                inside[run.colour] += len(run.text)
+        on_fill = t.colour("on_fill", [*_ranked(inside), text, WHITE], shape.colour)
+        if on_fill and kind == "band":
+            return _Layout(fill=shape.colour, on_fill=on_fill)
+        if on_fill:
+            return _Layout(2, kind, round((x1 - x0) / MM, 1), shape.colour, on_fill)
+    gaps = _gaps(page.runs, page.width, page.height)
+    if len(gaps) > 1:
+        t.notes.append(Note("columns", "columns"))
+    if len(gaps) != 1:
+        return _Layout()
+    _, right, _, left = page.margins or (0, 0, 0, 0)
+    ((start, end),) = gaps
+    if (start + end) / 2 < page.width / 2:
+        return _Layout(2, "left", round((start - left) / MM, 1))
+    return _Layout(2, "right", round((page.width - right - end) / MM, 1))
+
+
+def from_pdf(design: DesignPdf) -> Tokens:
+    """The tokens of the first page of a PDF's layout (see the module docstring)."""
+    t = _Reading()
+    page = design.read[0] if design.read else None
+    runs = page.runs if page else ()
+    sizes: Counter = Counter()
+    for run in runs:
+        if run.size > 0:
+            sizes[run.size] += len(run.text)
+    body = _most(sizes) or 0
+    ratios = [
+        (b.box[3] - a.box[3]) / body
+        for a, b in pairwise(runs)
+        if body and a.size == b.size == body and b.box[1] > a.box[1]
+        if abs(b.box[0] - a.box[0]) <= 20
+    ]
+    ratios = [r for r in ratios if 0.9 <= r <= 2.5]
+    largest = max((r.size for r in runs), default=0)
+    headings, colours, accents = Counter(), Counter(), Counter()
+    bold = {i for i, f in enumerate(design.fonts) if f.weight >= 600}
+    for run in runs:
+        if body * 1.05 < run.size < largest:
+            headings[run.size] += len(run.text)
+        if run.size == body:
+            colours[run.colour] += len(run.text)
+    text = t.colour("text", [_most(colours)]) or DEFAULTS["text"]
+    for run in runs:
+        if run.colour != text and (run.size > body or run.font in bold):
+            accents[run.colour] += len(run.text)
+    shapes = [s.colour for s in (page.shapes if page else ()) if s.colour != text]
+    layout = _layout(t, page, text) if page else _Layout()
+    faces = [(font_map.face(**_face(design.fonts[r.font])), r) for r in runs]
+    body_font = _fonts((m, len(r.text)) for m, r in faces if r.size == body)
+    heading_font = (
+        _fonts((m, len(r.text)) for m, r in faces if r.size > body) if largest > body else ()
+    )
+    margins = page.margins if page else None
+    return Tokens(
+        page=t.page(page.width if page else None, page.height if page else None),
+        margin=t.bounded("margin", min(margins[1], margins[3]) / MM if margins else None),
+        columns=layout.columns,
+        side=layout.side,
+        side_width=layout.side_width,
+        body_size=t.bounded("body_size", body / 10 if body else None),
+        line_height=t.bounded("line_height", median(ratios) if ratios else None),
+        name_scale=t.bounded("name_scale", largest / body if body else None),
+        heading_scale=t.bounded("heading_scale", _most(headings) / body if headings else 1.0),
+        text=text,
+        accent=t.colour("accent", [*_ranked(accents), *shapes]) or DEFAULTS["accent"],
+        fill=layout.fill,
+        on_fill=layout.on_fill,
+        fonts=tuple(dict.fromkeys(body_font + heading_font)),
+        notes=tuple(t.notes),
+    )
+
+
+def _face(font) -> dict:
+    return {
+        "name": font.name,
+        "weight": font.weight,
+        "italic": font.italic,
+        "serif": font.serif,
+        "monospace": font.monospace,
+    }
+
+
+SINGLE = 1.2  # the line height of Word's single spacing, as CSS counts it
+BASED_ON = 10  # the most styles a property is looked up through
+
+
+def from_docx(design: DesignDocx) -> Tokens:
+    """The tokens of a Word document's styles: its Normal style (else the document's defaults)
+    for the body, Heading 1 (outline level 0) for the headings, Title for the name, the first
+    section for the page, the theme for what the styles leave unsaid."""
+    t = _Reading()
+    by_id = {style["id"]: style for style in design.styles}
+    paragraphs = [s for s in design.styles if s["type"] == "paragraph"]
+
+    def named(*names: str) -> Mapping | None:
+        return next((s for s in paragraphs if (s["name"] or "").casefold() in names), None)
+
+    def prop(style: Mapping | None, key: str, inherit: bool = True) -> object:
+        for _ in range(BASED_ON):
+            if style is None or style.get(key) is not None:
+                break
+            style = by_id.get(style["based_on"] or "")
+        if style is not None and style.get(key) is not None:
+            return style[key]
+        return design.defaults.get(key) if inherit else None
+
+    normal = next((s for s in paragraphs if s["default"]), None) or named("normal")
+    heading = next((s for s in paragraphs if s["outline"] == 0), None) or named("heading 1")
+    title = named("title") or heading
+    theme = design.theme or {}
+    colours = theme.get("colours") or {}
+    body = prop(normal, "size")
+    line, rule = prop(normal, "line"), prop(normal, "line_rule")
+    height = None
+    if isinstance(line, int) and rule == "auto":
+        height = line / 100 * SINGLE
+    elif isinstance(line, int) and isinstance(body, int) and body:
+        height = line / body
+    section = design.sections[0] if design.sections else None
+    margins = section["margins"] if section else None
+    columns = section["columns"] if section else 1
+    if columns == 1 and design.tables and design.table_columns == 2:
+        columns = 2
+    if columns > 2:
+        t.notes.append(Note("columns", "columns"))
+        columns = 1
+
+    def size(style: Mapping | None) -> float | None:
+        found = prop(style, "size", inherit=False) if style else None
+        return found / body if isinstance(found, int) and isinstance(body, int) and body else None
+
+    def font(style: Mapping | None, fallback: object) -> tuple[str, ...]:
+        name = (prop(style, "font") if style else None) or fallback
+        bold = 700 if style and prop(style, "bold") else 0
+        mapped = font_map.face(
+            name if isinstance(name, str) else "", bold, bool(style and prop(style, "italic"))
+        )
+        return _fonts([(mapped, 1)])
+
+    text = t.colour("text", [prop(normal, "colour"), colours.get("dk1")]) or DEFAULTS["text"]
+    accents = [prop(s, "colour", inherit=False) if s else None for s in (heading, title)]
+    return Tokens(
+        page=t.page(section["width"] if section else None, section["height"] if section else None),
+        margin=t.bounded("margin", min(margins[1], margins[3]) / MM if margins else None),
+        columns=columns,
+        side=None,
+        side_width=None,
+        body_size=t.bounded("body_size", body / 10 if isinstance(body, int) and body else None),
+        line_height=t.bounded("line_height", height),
+        name_scale=t.bounded("name_scale", size(title)),
+        heading_scale=t.bounded("heading_scale", size(heading) or 1.0),
+        text=text,
+        accent=t.colour("accent", [*accents, colours.get("accent1")]) or DEFAULTS["accent"],
+        fill=None,
+        on_fill=None,
+        fonts=tuple(
+            dict.fromkeys(font(normal, theme.get("minor")) + font(heading, theme.get("major")))
+        ),
+        notes=tuple(t.notes),
+    )
+
+
+TIGHTEST = {
+    "cv": templates.Step(7.6, 1.1, 3.0, 1.5, 6.0),
+    "letter": templates.Step(8.6, 1.15, 6.0, 3.0, 10.0),
+}
+SPAN = templates.Step(0.8, 0.1, 2.0, 1.0, 2.0)  # the least each property falls along a ladder
+COUNT = {"cv": 8, "letter": 6}
+
+
+def steps(tokens: Tokens, kind: str) -> list[dict[str, float]]:
+    """The density steps of a user template's manifest for `kind`, loosest first: from the
+    captured body size (one point more for a letter), line height and margin, the gaps in
+    proportion to the body, each held at least SPAN above TIGHTEST and within the bounds of
+    `templates.BOUNDS`, down to TIGHTEST in COUNT even steps."""
+    tight, count = TIGHTEST[kind], COUNT[kind]
+    body = tokens.body_size + (1.0 if kind == "letter" else 0.0)
+    wanted = {
+        "body_size": body,
+        "line_height": tokens.line_height,
+        "section_gap": body,
+        "item_gap": body / 2,
+        "margin": tokens.margin,
+    }
+    loosest = {
+        key: min(max(value, getattr(tight, key) + getattr(SPAN, key)), templates.BOUNDS[key][1])
+        for key, value in wanted.items()
+    }
+    return [
+        {
+            key: round(value - (value - getattr(tight, key)) * index / (count - 1), 2)
+            for key, value in loosest.items()
+        }
+        for index in range(count)
+    ]
