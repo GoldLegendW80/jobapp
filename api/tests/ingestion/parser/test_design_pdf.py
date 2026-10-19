@@ -327,6 +327,26 @@ ORDER = [
         [*column(40, 380, 4), *column(420, 560, 4)],
         list(range(8)),
     ),
+    # Declared: three titles with their dates on the right read as two columns.
+    (
+        "three title and date lines",
+        [
+            line(50, 200, 50),
+            line(450, 540, 50),
+            line(50, 180, 64),
+            line(450, 540, 64),
+            line(50, 190, 78),
+            line(450, 540, 78),
+        ],
+        [0, 2, 4, 1, 3, 5],
+    ),
+    ("a gutter of exactly 12 points", [*column(40, 180, 3), *column(192, 400, 3)], list(range(6))),
+    ("a gap of 11.9 points", [*column(40, 180, 3), *column(191.9, 400, 3)], [0, 3, 1, 4, 2, 5]),
+    (
+        "a photo box beside the name",
+        [box(40, 30, 120, 110), line(140, 400, 40, 22), line(140, 400, 70)],
+        [0, 1, 2],
+    ),
 ]
 
 

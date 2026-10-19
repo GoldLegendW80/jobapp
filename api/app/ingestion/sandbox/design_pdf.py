@@ -22,7 +22,7 @@ tenths of a point from the top left corner of the page, every number an integer:
 - A run is the characters PDFium's text page gives in a row with one font, size and colour on
   one line; a jump back, a gap wider than GAP_EM times the size, or another line ends it.
   Invisible text (render mode 3: the text layer of an OCR'd scan), transparent text and text
-  outside the page are left out and never reach the model. The runs of a page are put in
+  outside the page are left out of the answer. The runs of a page are put in
   reading order by `reading_order`.
 - `margins` are those of the text: where the runs of the page start and end.
 - A shape is a path painted with a colour that is not transparent: a fill, or a stroke that is a
