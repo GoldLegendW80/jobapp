@@ -72,7 +72,7 @@ def test_step_1_folds_every_dash(char: str) -> None:
 def test_the_folds_run_before_nfkc() -> None:
     # NFKC alone turns U+00B4 into a space and a combining accent, U+2033 into two primes.
     assert n("l\u00b4equipe") == "l'equipe"
-    assert n("\u2033Brain\u2033") == '"brain"'
+    assert n("\u2033Talvo\u2033") == '"talvo"'
 
 
 def test_the_folds_run_again_after_nfkc() -> None:
@@ -779,14 +779,14 @@ def test_rule_n(source: str, value: str, holds: bool) -> None:
         ("Version 0.9 puis 1.10 du moteur de recherche", "Version : 1.1", False),
         ("Version 0.9 puis 1.10 du moteur de recherche", "versions 0.9 et 1.10", True),
         ("Version 0.9 puis 1.10 du moteur de recherche", "version 0.90", False),
-        ("Livraison de la v2 du moteur de recherche Brain", "Brain v2", True),
-        ("Livraison de la v2 du moteur de recherche Brain", "Brain version 2", True),
-        ("Livraison de la v2 du moteur de recherche Brain", "Brain version 2.0", False),
-        ("Livraison de la v2 du moteur de recherche Brain", "2 moteurs", True),
+        ("Livraison de la v2 du moteur de recherche Talvo", "Talvo v2", True),
+        ("Livraison de la v2 du moteur de recherche Talvo", "Talvo version 2", True),
+        ("Livraison de la v2 du moteur de recherche Talvo", "Talvo version 2.0", False),
+        ("Livraison de la v2 du moteur de recherche Talvo", "2 moteurs", True),
         ("Migration vers Python version 3.10 en 2024", "Python 3.1", False),
         ("Migration vers Python version 3.10 en 2024", "Python 3.10 en 2024", True),
         # a word that only ends in v is not the mark of a version
-        ("Le dev 1.10 du moteur de recherche Brain", "dev 1.1", True),
+        ("Le dev 1.10 du moteur de recherche Talvo", "dev 1.1", True),
         # without the word, a number with a full stop is a decimal: the stated cost
         ("Migration vers Python 3.10 en production", "Python 3.1", True),
     ],
@@ -1485,10 +1485,10 @@ def test_rule_v_for_a_url(value: str, holds: bool) -> None:
         ("Voir <https://camille.example.org/projets> ici", True),
         ("Voir HTTPS://WWW.camille.example.org/projets ici", True),
         ("Links: https://camille.example.org/projets https://x.example", True),
-        ("Voir camille.example.org/projets/brain pour la suite", False),
+        ("Voir camille.example.org/projets/talvo pour la suite", False),
         ("Voir camille.example.org/projets.html pour la suite", False),
         ("Voir camille.example.org/projets?id=42 pour la suite", False),
-        ("Voir camille.example.org/projets#brain pour la suite", False),
+        ("Voir camille.example.org/projets#talvo pour la suite", False),
         ("Voir camille.example.org/projets:8080 pour la suite", False),
         ("Voir camille.example.org/projets&x=1 pour la suite", False),
         ("Voir camille.example.org/projets=1 pour la suite", False),
@@ -1664,7 +1664,7 @@ def test_an_address_in_a_text_written_without_spaces() -> None:
         (
             "url",
             "camille.example.org/projets",
-            "Portfolio : https://camille.example.org/projets/brain en ligne",
+            "Portfolio : https://camille.example.org/projets/talvo en ligne",
             "Portfolio : https://camille.example.org/projets",
         ),
         (
@@ -1726,14 +1726,14 @@ def test_the_address_must_lie_inside_the_span() -> None:
         ("Consultant chez Velmorgroup\nServices à Paris", "Velmorgroup Services", True),
         ("Master of Science, Uni\u00adversity of Bordeaux", "University of Bordeaux", True),
         ("Master of Science, Uni-\nversity of Bordeaux", "University of Bordeaux", True),
-        ("Réceptionniste de nuit à l\u2019Hôtel 35, Paris", "Hôtel 35", True),
-        ("Réceptionniste de nuit à l\u2019Hôtel 35, Paris", "L'Hôtel 35", True),
-        ("Réceptionniste de nuit à l\u2019Hôtel 35, Paris", "Hotel 35", False),
-        ("Réceptionniste de nuit à l\u2019Hôtel 35, Paris", "Hôtel 3", False),
-        ("Réceptionniste de nuit à l\u2019Hôtel 35, Paris", "Hôtel 5", False),
-        ("Réceptionniste de nuit à l\u2019Hôtel 35, Paris", "Hôtel 36", False),
-        ("Réceptionniste de nuit à l\u2019Hôtel 35, Paris", "Hôtel35", False),
-        ("Réceptionniste de nuit à l\u2019Hôtel 35 000, Paris", "Hôtel 35", False),
+        ("Réceptionniste de nuit à l\u2019Hôtel 47, Paris", "Hôtel 47", True),
+        ("Réceptionniste de nuit à l\u2019Hôtel 47, Paris", "L'Hôtel 47", True),
+        ("Réceptionniste de nuit à l\u2019Hôtel 47, Paris", "Hotel 47", False),
+        ("Réceptionniste de nuit à l\u2019Hôtel 47, Paris", "Hôtel 4", False),
+        ("Réceptionniste de nuit à l\u2019Hôtel 47, Paris", "Hôtel 7", False),
+        ("Réceptionniste de nuit à l\u2019Hôtel 47, Paris", "Hôtel 48", False),
+        ("Réceptionniste de nuit à l\u2019Hôtel 47, Paris", "Hôtel47", False),
+        ("Réceptionniste de nuit à l\u2019Hôtel 47 000, Paris", "Hôtel 47", False),
         ("Stage chez AT&T puis C++ et .NET à Dallas", "AT&T", True),
         ("Stage chez AT&T puis C++ et .NET à Dallas", "C++", True),
         ("Stage chez AT&T puis C++ et .NET à Dallas", ".NET", True),
