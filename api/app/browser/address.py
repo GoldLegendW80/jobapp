@@ -35,7 +35,7 @@ def check_address(raw: Any) -> str | None:
         parts = urlsplit(text)
     except ValueError:  # an unbalanced bracket
         return None
-    if "@" in parts.netloc or parts.hostname is None:
+    if "@" in parts.netloc or "[" in parts.netloc or parts.hostname is None:
         return None
     host = parts.hostname
     if len(host) > 253 or not all(LABEL.fullmatch(label) for label in host.split(".")):
