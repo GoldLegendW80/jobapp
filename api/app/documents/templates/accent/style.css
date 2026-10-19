@@ -1,0 +1,167 @@
+/* accent: one column in DM Sans, a raspberry accent on everything that leads the eye: the bar
+   over the header, the headline, the section headings and their square, every list marker
+   (round for the experience, square for the competencies, a diamond for the achievements in
+   their tinted box), the organisations and the skill labels. The body text stays near black. The
+   density comes from the step on :root. */
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "DM Sans", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #22191d;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p { overflow-wrap: anywhere; }
+
+.bar {
+  width: 16mm;
+  border-top: 4pt solid var(--accent);
+  margin-bottom: 6pt;
+}
+.head {
+  display: flex;
+  gap: 12pt;
+  align-items: center;
+}
+.photo {
+  width: 22mm;
+  height: 22mm;
+  object-fit: cover;
+  border-radius: 50%;
+  border: 2pt solid var(--accent);
+  flex: 0 0 auto;
+}
+.headtext { flex: 1 1 auto; }
+.name {
+  font-size: 2.6em;
+  font-weight: 700;
+  line-height: 1.06;
+  letter-spacing: -0.01em;
+}
+.headline {
+  font-size: 1.14em;
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 2pt;
+}
+.contact {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1pt 12pt;
+  margin-top: 4pt;
+  color: #4f454a;
+  font-size: 0.94em;
+}
+.contact li::before {
+  content: "";
+  display: inline-block;
+  width: 3.5pt;
+  height: 3.5pt;
+  background: var(--accent);
+  margin: 0 5pt 0.18em 0;
+}
+
+.block { margin-top: var(--section-gap); }
+.label {
+  font-size: 1.16em;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: var(--item-gap);
+}
+.label::before {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  background: var(--accent);
+  margin-right: 0.45em;
+}
+
+.summary { text-align: justify; }
+
+.block ul { list-style: none; }
+.block ul li {
+  position: relative;
+  padding-left: 1.05em;
+  margin-bottom: 1.2pt;
+}
+.block ul li::before {
+  content: "";
+  position: absolute;
+  left: 0.2em;
+  top: 0.5em;
+  width: 0.36em;
+  height: 0.36em;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.block ul.highlights {
+  background: #fbeef3;
+  border-left: 3pt solid var(--accent);
+  padding: 4pt 8pt;
+}
+.block ul.highlights li::before {
+  border-radius: 0;
+  width: 0.42em;
+  height: 0.42em;
+  top: 0.46em;
+  transform: rotate(45deg);
+}
+
+.block ul.competencies {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5pt 14pt;
+}
+.block ul.competencies li { margin-bottom: 0; }
+.block ul.competencies li::before { border-radius: 0; }
+
+.entry { margin-bottom: var(--item-gap); }
+.entry:last-child { margin-bottom: 0; }
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10pt;
+  align-items: baseline;
+}
+.entry-title { font-size: 1.06em; font-weight: 700; }
+.org { color: var(--accent); }
+.entry .org { font-weight: 600; }
+.period, .place { color: #5f5459; font-size: 0.94em; }
+.entry-head .period { flex: 0 0 auto; text-align: right; font-weight: 600; }
+
+.schools {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--item-gap) 14pt;
+}
+.school .entry-title { font-size: 1em; }
+
+.skill-group {
+  display: grid;
+  grid-template-columns: 36mm 1fr;
+  gap: 8pt;
+  margin-bottom: 1.5pt;
+}
+.group-label { font-size: 1em; font-weight: 700; color: var(--accent); }
+
+.block ul.languages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2pt 18pt;
+}
+
+.letter-body { padding-top: 16pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; color: #5f5459; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; color: var(--accent); }
+.subject strong { color: #22191d; }
+.paragraph { text-align: justify; white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); }
