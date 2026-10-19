@@ -364,3 +364,5 @@ if importlib.util.find_spec("claude_agent_sdk") is not None:
     # The worker, which runs the tool: importing it registers it with the runner. The api image
     # holds no Claude Agent SDK and never runs this agent.
     from app.apply import answer_tools as _tools  # noqa: F401
+
+from app.apply import form_agent as _form_agent  # noqa: E402, F401  (A8's agent)

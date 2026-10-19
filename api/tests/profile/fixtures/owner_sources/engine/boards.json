@@ -1,0 +1,168 @@
+{
+  "title_re": "forward.deployed|applied ai|ai engineer|genai|generative ai|llm|agent|solutions? architect|solutions? engineer|deployment engineer|machine learning engineer|ai platform engineer|ai product engineer|ai software engineer|developer advocate|developer relations",
+  "exclude_re": "\\bcyber\\b|\\bcybersecurity\\b|\\bsecurity\\b|\\bpentest\\b|\\bthreat\\b|\\bstaff\\b|\\bprincipal\\b|\\bdirector\\b|\\bhead\\b|\\bvp\\b|\\brvp\\b|\\bintern\\b|\\binternship\\b|\\bmanager\\b|\\brecruit\\b|\\bsales\\b|\\baccount executive\\b|\\bresearch scientist\\b|\\bscientist\\b|\\bphd\\b|\\bdesigner\\b|\\bmarketing\\b|\\blegal\\b|\\bfinance\\b|\\bcounsel\\b|\\blead\\b|\\bpentester\\b|\\breliability\\b|\\binfrastructure\\b|\\bpartner\\b|\\bnew grad\\b|\\brotational\\b|\\bassociate\\b|\\boperations\\b|\\bgtm\\b|\\bstrategist\\b|\\bpresales\\b|\\bdelivery\\b|\\bspecialist\\b|\\brobotics\\b|\\bdefense\\b|\\bdefence\\b|\\bgovernment\\b|\\bpublic sector\\b|\\bnato\\b|\\bquants\\b|\\bads\\b|arabic[ -]speaking|cantonese[ -]speaking|dutch[ -]speaking|german[ -]speaking|italian[ -]speaking|spanish[ -]speaking|norwegian[ -]speaking|swedish[ -]speaking|flemish[ -]speaking|korean[ -]speaking|portuguese[ -]speaking|greek[ -]speaking",
+  "location_re": "paris|france|emea|europe|singapore|london|united kingdom|\\buk\\b|zurich|zürich|geneva|lausanne|luxembourg|bordeaux|\\beu\\b",
+  "boards": [
+    {
+      "company": "Mistral AI",
+      "ats": "ashby",
+      "org": "mistral.ai"
+    },
+    {
+      "company": "OpenAI",
+      "ats": "ashby",
+      "org": "openai"
+    },
+    {
+      "company": "Anthropic",
+      "ats": "greenhouse",
+      "org": "anthropic"
+    },
+    {
+      "company": "Cohere",
+      "ats": "ashby",
+      "org": "cohere"
+    },
+    {
+      "company": "ElevenLabs",
+      "ats": "ashby",
+      "org": "elevenlabs"
+    },
+    {
+      "company": "LangChain",
+      "ats": "ashby",
+      "org": "langchain"
+    },
+    {
+      "company": "Harvey",
+      "ats": "ashby",
+      "org": "harvey"
+    },
+    {
+      "company": "Writer",
+      "ats": "ashby",
+      "org": "writer"
+    },
+    {
+      "company": "Notion",
+      "ats": "ashby",
+      "org": "notion"
+    },
+    {
+      "company": "Dust",
+      "ats": "ashby",
+      "org": "dust"
+    },
+    {
+      "company": "Perplexity",
+      "ats": "ashby",
+      "org": "perplexity"
+    },
+    {
+      "company": "Cursor",
+      "ats": "ashby",
+      "org": "cursor"
+    },
+    {
+      "company": "Replit",
+      "ats": "ashby",
+      "org": "replit"
+    },
+    {
+      "company": "Sierra",
+      "ats": "ashby",
+      "org": "sierra"
+    },
+    {
+      "company": "Decagon",
+      "ats": "ashby",
+      "org": "decagon"
+    },
+    {
+      "company": "H Company",
+      "ats": "ashby",
+      "org": "hcompany"
+    },
+    {
+      "company": "Photoroom",
+      "ats": "ashby",
+      "org": "photoroom"
+    },
+    {
+      "company": "DeepJudge",
+      "ats": "ashby",
+      "org": "deepjudge"
+    },
+    {
+      "company": "Lakera",
+      "ats": "ashby",
+      "org": "lakera.ai"
+    },
+    {
+      "company": "Poolside",
+      "ats": "ashby",
+      "org": "poolside"
+    },
+    {
+      "company": "Weave",
+      "ats": "ashby",
+      "org": "weave"
+    },
+    {
+      "company": "Alan",
+      "ats": "ashby",
+      "org": "alan"
+    },
+    {
+      "company": "Qonto",
+      "ats": "ashby",
+      "org": "qonto"
+    },
+    {
+      "company": "Doctolib",
+      "ats": "ashby",
+      "org": "doctolib"
+    },
+    {
+      "company": "GitLab",
+      "ats": "greenhouse",
+      "org": "gitlab"
+    },
+    {
+      "company": "Databricks",
+      "ats": "greenhouse",
+      "org": "databricks",
+      "exclude_re": "senior|\\bsr\\b|lakebase|migrations|manufacturing|media|china|enterprise accounts|cpg"
+    },
+    {
+      "company": "Scale AI",
+      "ats": "greenhouse",
+      "org": "scaleai"
+    },
+    {
+      "company": "xAI",
+      "ats": "greenhouse",
+      "org": "xai"
+    },
+    {
+      "company": "Elastic",
+      "ats": "greenhouse",
+      "org": "elastic"
+    },
+    {
+      "company": "Datadog",
+      "ats": "greenhouse",
+      "org": "datadog"
+    },
+    {
+      "company": "Palantir",
+      "ats": "lever",
+      "org": "palantir"
+    },
+    {
+      "company": "Sonar",
+      "ats": "lever",
+      "org": "sonarsource"
+    }
+  ]
+}

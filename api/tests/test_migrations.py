@@ -13,6 +13,7 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from alembic.util.exc import CommandError
+from sqlalchemy.engine import make_url
 
 from app.config import ConfigError, get_settings
 from app.models_base import NAMING_CONVENTION, Base
@@ -93,6 +94,67 @@ def test_concurrent_upgrades_do_not_race(migrated_env: str) -> None:
     finally:
         engine.dispose()
     assert rows == [(HEAD,)]
+
+
+def held_version_table(url: str) -> tuple[sa.Engine, sa.Connection]:
+    """A connection that holds `alembic_version` as a long writing transaction of the running
+    release would hold a table: every upgrade reads that table first, so it waits."""
+    engine = sa.create_engine(url, poolclass=sa.pool.NullPool)
+    holder = engine.connect()
+    holder.execute(sa.text("LOCK TABLE alembic_version IN ACCESS EXCLUSIVE MODE"))
+    return engine, holder
+
+
+def test_a_migration_behind_a_lock_rolls_back_once_its_lock_timeout_is_spent(
+    migrated_env: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Without the lock timeout this statement timeout ends the wait, with another code.
+    bounded = make_url(migrated_env).update_query_dict({"options": "-c statement_timeout=30000"})
+    monkeypatch.setenv("DATABASE_URL", bounded.render_as_string(hide_password=False))
+    get_settings.cache_clear()
+    command.upgrade(alembic_config(), "head")
+    command.downgrade(alembic_config(), "-1")
+    below = current_revision(migrated_env)
+    short = alembic_config()
+    short.attributes["lock_timeout"] = "50ms"
+    engine, holder = held_version_table(migrated_env)
+    try:
+        with pytest.raises(sa.exc.OperationalError) as refused:
+            command.upgrade(short, "head")
+        assert getattr(refused.value.orig, "sqlstate", None) == "55P03"  # lock_not_available
+    finally:
+        holder.close()
+        engine.dispose()
+    assert current_revision(migrated_env) == below  # the whole upgrade was rolled back
+    command.upgrade(short, "head")  # the lock is gone: the same upgrade applies
+    assert current_revision(migrated_env) == HEAD
+
+
+def test_the_upgrade_of_a_deploy_waits_for_a_lock_at_most_the_lock_timeout_of_env(
+    migrated_env: str,
+) -> None:
+    """`alembic upgrade head` as ops/migrate.sh runs it, with no attribute: it fails on the
+    LOCK_TIMEOUT of alembic/env.py instead of queueing behind the transaction that holds."""
+    command.upgrade(alembic_config(), "head")
+    command.downgrade(alembic_config(), "-1")
+    below = current_revision(migrated_env)
+    env = {**os.environ, "DATABASE_URL": migrated_env}
+    engine, holder = held_version_table(migrated_env)
+    try:
+        done = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=API_DIR,
+            env=env,
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+    finally:
+        holder.close()
+        engine.dispose()
+    assert done.returncode != 0
+    assert b"lock timeout" in done.stderr + done.stdout
+    assert current_revision(migrated_env) == below
 
 
 def test_models_match_migrations(migrated_env: str) -> None:

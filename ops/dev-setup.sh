@@ -12,14 +12,15 @@
 # merge gate refuses to start under 12 and uses about 3 while it runs); the pinned shellcheck
 # image of the gate, present or pullable (`docker manifest inspect`, nothing is pulled); uv;
 # Node at least the version of `.nvmrc` when the file exists, else of `engines.node` in
-# web/package.json; pnpm of the major version `packageManager` of web/package.json names;
-# python3 at least 3.12 (the scripts of .github/scripts parse the api's code); pre-commit, and
-# its hook installed in this clone; Claude Code (`claude`), as a warning. Only with --jetson: the
-# ssh alias `jetson` (DEV_SETUP_JETSON_ALIAS), reachable with BatchMode, so never a password
-# prompt; nothing needs it any more (owner decision of 2026-10-15: deploys and operations go
-# through GitHub, README "Deploy from any machine"), only the owner's own steps on the Jetson
-# (sudo, a restore). --skip-jetson, the default now, is still accepted. The new machine guide is
-# the section "Develop on a new machine" of the README, and CLAUDE.md is where Claude Code starts.
+# web/package.json; pnpm of the major version `packageManager` of web/package.json names, or pnpm
+# 10 or later above it (it runs the pinned version itself); python3 at least 3.12 (the scripts of
+# .github/scripts parse the api's code); pre-commit, and its hook installed in this clone; Claude
+# Code (`claude`), as a warning. Only with --jetson: the ssh alias `jetson`
+# (DEV_SETUP_JETSON_ALIAS), reachable with BatchMode, so never a password prompt; nothing needs it
+# any more (owner decision of 2026-10-15: deploys and operations go through GitHub, README
+# "Deploy from any machine"), only the owner's own steps on the Jetson (sudo, a restore).
+# --skip-jetson, the default now, is still accepted. The new machine guide is the section
+# "Develop on a new machine" of the README, and CLAUDE.md is where Claude Code starts.
 #
 # The last line is `DEV SETUP: OK` (exit 0) or `DEV SETUP: <n> missing` (exit 1). Wrong
 # arguments: exit 64.
@@ -181,16 +182,30 @@ pnpm_want=""
 if [[ -f "$PACKAGE_JSON" ]]; then
   pnpm_want="$(grep -Eo '"packageManager"[[:space:]]*:[[:space:]]*"pnpm@[0-9][0-9.]*' "$PACKAGE_JSON" | grep -Eo '[0-9][0-9.]*$' | head -n 1)"
 fi
+# Node 25 and later no longer ship corepack; npm comes with Node.
+pnpm_fix() {
+  if have corepack; then
+    printf 'npm install -g pnpm@%s (or corepack enable && corepack prepare pnpm@%s --activate)' "$1" "$1"
+  else
+    printf 'npm install -g pnpm@%s' "$1"
+  fi
+}
 if ! have pnpm; then
-  miss "pnpm is not installed" "corepack enable && corepack prepare pnpm@${pnpm_want:-9} --activate"
+  miss "pnpm is not installed" "$(pnpm_fix "${pnpm_want:-9}")"
 else
-  pnpm_have="$(first_version "$(pnpm --version 2>/dev/null)")"
+  # Asked from / with the pnpm 10 and 11 switches off: under web/, pnpm would download the pin.
+  pnpm_have="$(first_version "$(cd / && npm_config_manage_package_manager_versions=false pnpm_config_pm_on_fail=ignore pnpm --version 2>/dev/null)")"
+  pnpm_have_major="${pnpm_have%%.*}"
+  pnpm_want_major="${pnpm_want%%.*}"
   if [[ -z "$pnpm_want" ]]; then
     warn "pnpm $pnpm_have, but web/package.json names no packageManager" "check web/package.json"
-  elif [[ "${pnpm_have%%.*}" == "${pnpm_want%%.*}" ]]; then
+  elif [[ "$pnpm_have_major" == "$pnpm_want_major" ]]; then
     ok "pnpm $pnpm_have (web/package.json pins $pnpm_want)"
+  # pnpm 10 and later run the pinned version themselves by default (pmOnFail=download from 11).
+  elif ((10#${pnpm_have_major:-0} >= 10 && 10#${pnpm_have_major:-0} > 10#$pnpm_want_major)); then
+    ok "pnpm $pnpm_have, runs the pinned $pnpm_want itself (packageManager of web/package.json)"
   else
-    miss "pnpm $pnpm_have, web/package.json pins $pnpm_want" "corepack enable && corepack prepare pnpm@$pnpm_want --activate"
+    miss "pnpm $pnpm_have, web/package.json pins $pnpm_want" "$(pnpm_fix "$pnpm_want")"
   fi
 fi
 

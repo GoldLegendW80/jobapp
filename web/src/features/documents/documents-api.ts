@@ -284,6 +284,10 @@ export const templateSchema = z.object({
   kinds: z.array(z.string()),
   /** Kind to address; empty for a person's own template. */
   thumbnails: z.record(z.string(), z.string()),
+  /** Kind to the editor's counters in characters (the manifest's soft limits); null: none. */
+  soft_limits: z
+    .record(z.string(), z.record(z.string(), z.number().nullable()))
+    .optional(),
 });
 export type Template = z.infer<typeof templateSchema>;
 
@@ -305,6 +309,10 @@ export const spendSchema = z.object({
   postings_30_days: z.number(),
   to_write: z.number(),
   to_write_estimate: estimateSchema,
+  /** Of `to_write`, those under the person's own threshold: what lowering it would add. Optional
+   * because answers recorded before it (other tasks' test doubles) lack it; then nothing is shown. */
+  newly: z.number().optional(),
+  newly_estimate: estimateSchema.optional(),
   priced: z.boolean(),
   cost_note: z.string(),
   today: tokensSpent,

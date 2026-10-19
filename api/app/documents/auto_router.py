@@ -16,8 +16,10 @@
   time zone of `sweep_schedule`), postings waiting, the postings of the last
   `DOCUMENTS_AUTO_LOOKBACK_DAYS` (30) days at or
   above the threshold (the one asked, else the person's) and how many of them have no CV yet
-  with the estimate of writing them, and the tokens and cost of the module's runs today and
-  over the last 30 days, from `agent_runs` joined through `document_generations.run_id`.
+  with the estimate of writing them, of those the ones under the person's own threshold (what
+  lowering it to the one asked would add, shown before the person saves it) with their estimate,
+  and the tokens and cost of the module's runs today and over the last 30 days, from
+  `agent_runs` joined through `document_generations.run_id`.
 Every route is the signed in person's. Every answer is `Cache-Control: private, no-store`.
 Logs carry ids and codes, never a text.
 """
@@ -56,7 +58,6 @@ from app.identity import deps
 from app.identity.models import User
 from app.ingestion import pricing
 from app.jobs import sweep
-from app.jobs.models import Job
 
 logger = logging.getLogger("app.documents")
 
@@ -115,8 +116,9 @@ def _give_way(db: Session, document: Document, at: datetime, *, follows: bool = 
     """An open generation of the document: an automatic one not started gives way to the click
     (cancelled, never started, so never counted); a running one, or another click, is a 409,
     unless the document `follows` the CV (a letter of both kinds: then it is left as it is).
-    The document is locked first, the lock the tick takes before it starts a generation, so the
-    read below is never older than a start the tick committed."""
+    The caller holds the posting (`store.lock_posting`); the document is locked before the read,
+    the lock the tick takes before it starts a generation, so the read below is never older than a
+    start the tick committed."""
     store.lock_document(db, document.user_id, document.id)
     current = store.open_generation(db, document.user_id, document.id)
     if current is None:
@@ -144,14 +146,15 @@ def write_now(
     job_id: uuid.UUID, body: WriteIn, user: CurrentUser, request: Request, db: Db
 ) -> WriteOut:
     at = deps.clock(request)
-    if db.scalar(sa.select(Job.id).where(Job.user_id == user.id, Job.id == job_id)) is None:
-        raise _error(status.HTTP_404_NOT_FOUND, POSTING_NOT_FOUND)
     kinds = [Kind(kind) for kind in dict.fromkeys(body.kinds)]
     made: list[tuple[Kind, DocumentGeneration]] = []
     reason = writer_base.wait_reason(db, user.id)
     runs: list[uuid.UUID] = []
     both = Kind.cv in kinds and Kind.letter in kinds
     try:
+        # Lock 2 before lock 3 (store.py), as a render storing this CV and a move to applied.
+        if store.lock_posting(db, user.id, job_id) is None:
+            raise _error(status.HTTP_404_NOT_FOUND, POSTING_NOT_FOUND)
         cv_base = body.base_document_id
         for kind in kinds:
             document = store.get_or_create(
@@ -253,6 +256,8 @@ class SpendOut(BaseModel):
     postings_30_days: int  # found in the last 30 days at or above `min_fit`
     to_write: int  # of those, the eligible ones whose CV has no version yet
     to_write_estimate: EstimateOut
+    newly: int  # of `to_write`, those under the person's own threshold
+    newly_estimate: EstimateOut
     priced: bool  # an API key: the costs are costs, else estimates at API prices
     cost_note: str
     today: TokensSpent
@@ -316,9 +321,11 @@ def spend(
     found_day = eligibility.found_day(at)
     candidates = tick.eligible(db, user.id, asked, search, found_day, lookback)
     docs = tick.posting_docs(db, user.id)
-    to_write = sum(
-        1 for found in candidates if docs.ids.get((found.id, Kind.cv)) not in docs.written
-    )
+    unwritten = [
+        found for found in candidates if docs.ids.get((found.id, Kind.cv)) not in docs.written
+    ]
+    to_write = len(unwritten)
+    newly = sum(1 for found in unwritten if found.fit is not None and found.fit < setting.min_fit)
     figures = consent.figures(db, user.id, found_day)
     each = figures.posting
     zone_start = datetime.combine(today, time(), tzinfo=eligibility.zone(timezone))
@@ -334,6 +341,8 @@ def spend(
         to_write_estimate=_estimate_out(
             estimate.times(each, to_write), figures.model, figures.priced
         ),
+        newly=newly,
+        newly_estimate=_estimate_out(estimate.times(each, newly), figures.model, figures.priced),
         priced=figures.priced,
         cost_note=pricing.ESTIMATE_NOTE if figures.priced else pricing.QUOTA_NOTE,
         today=_spent(db, user.id, zone_start.astimezone(UTC)),

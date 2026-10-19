@@ -3,7 +3,7 @@ tests/e2e_jetson.sh, 2026-10-09T07:56:02Z
 == before
    no jobapp-test-pg-* container stuck in Created
    public URL: https://colleges-politics-reforms-deleted.trycloudflare.com
-   email=hthautin@gmail.com
+   email=e2e-owner@example.org
    name=Harald
    role=admin
    is_active=true
