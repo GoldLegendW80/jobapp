@@ -6,7 +6,9 @@
 #   tests/agents_real_run_test.sh
 #
 # Covers: without OWNER, or with an OWNER that is not an e-mail address, nothing runs (here and in
-# the four other Jetson scripts that put OWNER into SQL); a dry run leaves every file under
+# the four other Jetson scripts that put OWNER into SQL); in those five scripts the owner's address,
+# refused or accepted, reaches no output and no file they write, even when the fake Jetson quotes
+# it on stderr and under bash -x, on every refusal that used to name it; a dry run leaves every file under
 # tasks/evidence/agents-a5/ byte for byte as committed and starts nothing; a real run is refused
 # before any ssh call when an evidence file it would write exists; an account that is not an
 # admin with a subscription credential is refused before
@@ -77,6 +79,9 @@ cat >"$BIN/ssh" <<'FAKE'
 set -euo pipefail
 printf '%s\n' "$*" >>"$STUB_CALLS"
 cmd="${*:4}"
+# STUB_ECHO: as hostile as a remote error, which may quote its command line and its SQL on stderr.
+if [[ -n "${STUB_ECHO:-}" && "$cmd" == *@* ]]; then printf 'bash: line 1: %s\n' "$cmd" >&2; fi
+labels() { grep -o "'[a-z_0-9]*='" <<<"$1" | tr -d "'" || true; }
 count() { if [[ -f "$STUB_STATE/$1" ]]; then cat "$STUB_STATE/$1"; else echo 0; fi; }
 bump() { echo $(($(count "$1") + 1)) >"$STUB_STATE/$1"; }
 case "$cmd" in
@@ -85,6 +90,24 @@ case "$cmd" in
     for i in 1 2 3; do
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$((1760000000 + i))" 150994944 123731968 5200 0 0 0
     done
+    ;;
+  *"exec -T api python -c"*) # a program of tests/ingestion_transcribe_jetson.sh, told by its text
+    program="$(cat)"
+    case "$program" in
+      *has_consented*)
+        printf '{"agent": true, "user": %s, "role": "admin", "credential": "claude_subscription", "consented": %s, "ingestion_run": %s, "agent_runs": 0}\n' \
+          "$([[ "${STUB_ACCOUNT:-}" == missing ]] && echo false || echo true)" \
+          "$([[ "${STUB_CONSENT:-}" == no ]] && echo false || echo true)" \
+          "$([[ "${STUB_BUSY:-}" == 1 ]] && echo true || echo false)"
+        ;;
+      *"def seed("*) printf '{"document_id": "%s", "agent_run_id": "%s", "enqueued": true, "run_status": "running"}\n' "$STUB_RUN" "$STUB_RUN" ;;
+      *"def distance("*) echo '{"agent_status": "done", "document_status": "done", "images_left": 0, "items_stored": 0, "run_status": "done"}' ;;
+      *"get_one(AgentRun"*) echo done ;;
+      *)
+        echo "fake ssh: unexpected program" >&2
+        exit 97
+        ;;
+    esac
     ;;
   *"exec -T api python"*) # the start of a run
     cat >/dev/null
@@ -102,10 +125,13 @@ case "$cmd" in
     ;;
   *"exec -T db sh -c"*)
     sql="$(cat)"
+    if [[ -n "${STUB_ECHO:-}" ]]; then grep -F '@' <<<"$sql" | sed 's/^/LINE 1: /' >&2 || true; fi
     case "$sql" in
       *"'owner_role='"*)
-        printf 'users=2|owner_role=%s|jobs=3|per_status=found:3|fit_sum=240|max_updated_at=2026-10-10|rows_md5=aa|job_events=5,max_id:9|files=2|sweeps=1|profile_revision=6|profile_md5=bb|credential=%s,updated_at:2026-10-10\n' \
-          "${STUB_ROLE:-admin}" "${STUB_KIND:-claude_subscription}"
+        credential="${STUB_KIND:-claude_subscription},updated_at:2026-10-10"
+        if [[ "${STUB_KIND:-}" == none ]]; then credential=none; fi
+        printf 'users=2|owner_role=%s|jobs=3|per_status=found:3|fit_sum=240|max_updated_at=2026-10-10|rows_md5=aa|job_events=5,max_id:9|files=2|sweeps=1|profile_revision=6|profile_md5=bb|credential=%s\n' \
+          "${STUB_ROLE:-admin}" "$credential"
         ;;
       *"'agent_runs='"*)
         bump snapshots
@@ -115,11 +141,20 @@ case "$cmd" in
         printf 'agent_runs=%s|agent_runs_owner=%s|agent_runs_active=0|agent_events=34|proposals=1|proposals_owner=pending:1|proposals_decided=%s|agent_threads=1|agent_messages=2|credential_verified=true\n' \
           "$runs" "$runs" "$decided"
         ;;
-      *"from jobs j where id"*) echo 'shortlisted|100|3707|f|2|1|1' ;;
+      *"from jobs j where id"*) if [[ "${STUB_JOB:-}" != missing ]]; then echo 'shortlisted|100|3707|f|2|1|1'; fi ;;
       *"order by created_at desc limit 1"*) echo "$STUB_RUN" ;;
       *"select status, (select count"*) echo 'done|13' ;;
       *jsonb_build_object*)
         if [[ "${STUB_METRICS:-ok}" == bad ]]; then echo 'not JSON'; else printf '{"run_id": "%s", "status": "done", "events": 13}\n' "$STUB_RUN"; fi
+        ;;
+      # The SQL of tests/e2e_jetson.sh, e2e_jobs_jetson.sh and e2e_jobs_sweep_jetson.sh.
+      *"'mac_ips='"*) echo 'email=0|mac_ips=0|all=0' ;;
+      *"not success"*) echo 0 ;;
+      *"e2e-%@example.org"*) labels "$sql" | sed 's/$/0/' | paste -s -d '|' - ;;
+      *"'password_hash_md5='"* | *"'fits_manual='"*) # the owner's account or jobs: one of each, the address as stored
+        if [[ "${STUB_ACCOUNT:-}" != missing ]]; then
+          labels "$sql" | sed -e "s/^email=\$/email=${STUB_OWNER:-}/" -e 's/=$/=1/' | paste -s -d '|' -
+        fi
         ;;
       *)
         echo "fake ssh: unexpected SQL" >&2
@@ -152,7 +187,24 @@ cat >"$BIN/docker" <<'FAKE'
 printf 'local docker %s\n' "$*" >>"$STUB_CALLS"
 exit 97
 FAKE
-chmod +x "$BIN/ssh" "$BIN/docker"
+# The local commands of the four other Jetson scripts: no journey, no address lookup, no Pillow.
+cat >"$BIN/pnpm" <<'FAKE'
+#!/usr/bin/env bash
+printf 'local pnpm %s\n' "$*" >>"$STUB_CALLS"
+echo "fake playwright: no test run"
+FAKE
+cat >"$BIN/curl" <<'FAKE'
+#!/usr/bin/env bash
+printf 'local curl %s\n' "$*" >>"$STUB_CALLS"
+exit 6
+FAKE
+cat >"$BIN/uv" <<'FAKE'
+#!/usr/bin/env bash
+printf 'local uv %s\n' "$*" >>"$STUB_CALLS"
+cat >/dev/null
+echo '{"jpeg": "AAAA", "width": 1109, "height": 1568, "quality": 80, "text": "a made up line\nanother"}'
+FAKE
+chmod +x "$BIN/ssh" "$BIN/docker" "$BIN/pnpm" "$BIN/curl" "$BIN/uv"
 
 PRIVATE="PRIVATE-TEXT-OF-AN-ERROR"
 # script [VAR=value ...]: the script against the fake Jetson, the pauses cut to nothing
@@ -210,23 +262,97 @@ printf '%s %s\n' "${0##*/}" "$*" >>"$STUB_CALLS"
 exit 97
 FAKE
 chmod +x "$OBIN/fake"
-for c in ssh docker npx pnpm curl tailscale; do ln -s fake "$OBIN/$c"; done
+for c in ssh docker npx pnpm curl tailscale uv; do ln -s fake "$OBIN/$c"; done
+# The planted token: every OWNER below carries it, and no output and no file of the scripts may.
+TOKEN="Kq83zTn"
+# Copies of the five scripts under a throwaway root, so whatever they write lands there and never
+# under the committed tasks/evidence/; ./deploy.sh url answers an address that does not resolve.
+TROOT="$WORK/root"
+mkdir -p "$TROOT/tests"
+for s in "${OWNER_SCRIPTS[@]}"; do cp -p "$s" "$TROOT/$s"; done
+printf '#!/usr/bin/env bash\necho https://jetson.invalid\n' >"$TROOT/deploy.sh"
+chmod +x "$TROOT/deploy.sh"
+no_token_written() { # no file under the throwaway root holds the token
+  local rc=0
+  grep -r -i -l -F -- "$TOKEN" "$TROOT" >"$WORK/hits" || rc=$?
+  [[ "$rc" == 1 ]] || fail "$1: the planted token is in a file the script wrote (grep exit $rc): $(cat "$WORK/hits")"
+}
 # shellcheck disable=SC2016,SC1003 # the values are literal, never expanded
-REFUSED=(e2e-owner @example.org e2e-owner@ e2e-owner@@example.org "e2e-owner@example.org';--Kq83zTn"
-  "e2e-owner'@example.org" "e2e owner@example.org" " e2e-owner@example.org" "e2e-owner@example.org "
-  $'e2e-owner@example.org\nselect 1' $'e2e-owner@example.org\t' "e2e-owner@example.org;"
-  'e2e-$(id)@example.org' 'e2e-`id`@example.org' 'e2e-owner@example.org\' 'e2e-owner@exa"mple.org'
-  e2e-owner@example.org% e2e-owner@exa_mple.org "e2e-owner@example,org")
+REFUSED=(e2e-Kq83zTn @Kq83zTn.example.org e2e-Kq83zTn@ e2e-Kq83zTn@@example.org "e2e-Kq83zTn@example.org';--"
+  "e2e-Kq83zTn'@example.org" "e2e Kq83zTn@example.org" " e2e-Kq83zTn@example.org" "e2e-Kq83zTn@example.org "
+  $'e2e-Kq83zTn@example.org\nselect 1' $'e2e-Kq83zTn@example.org\t' "e2e-Kq83zTn@example.org;"
+  'e2e-Kq83zTn$(id)@example.org' 'e2e-Kq83zTn`id`@example.org' 'e2e-Kq83zTn@example.org\' 'e2e-Kq83zTn@exa"mple.org'
+  e2e-Kq83zTn@example.org% e2e-Kq83zTn@exa_mple.org "e2e-Kq83zTn@example,org")
+for v in "${REFUSED[@]}"; do
+  [[ "$v" == *"$TOKEN"* ]] || fail "the refused value '$v' does not carry the planted token"
+done
 for s in "${OWNER_SCRIPTS[@]}"; do
   for v in "${REFUSED[@]}"; do
     reset
-    run 1 env PATH="$OBIN:$PATH" DEPLOY_HOST=jetson.invalid STUB_CALLS="$CALLS" OWNER="$v" "$s" "$JOB"
+    run 1 env PATH="$OBIN:$PATH" DEPLOY_HOST=jetson.invalid STUB_CALLS="$CALLS" OWNER="$v" "$TROOT/$s" "$JOB"
     out_has "OWNER is not an email address"
-    out_lacks "Kq83zTn"
+    out_lacks "$TOKEN"
     [[ "$(calls)" == 0 ]] || fail "$s made a call with the OWNER '$v': $(head -n 3 "$CALLS")"
+    [[ ! -e "$TROOT/tasks" ]] || fail "$s wrote a file with the OWNER '$v': $(find "$TROOT/tasks" -type f | head -n 3)"
   done
 done
-ok "${#REFUSED[@]} malformed OWNER values stop each of the ${#OWNER_SCRIPTS[@]} scripts before any call, unprinted"
+ok "${#REFUSED[@]} malformed OWNER values, each with the planted token, stop each of the ${#OWNER_SCRIPTS[@]} scripts before any call: not printed, no file written"
+
+step "B0c: an OWNER that passes the checks is never printed nor written, even where the Jetson quotes it"
+GOOD="e2e-$TOKEN@example.org"
+[[ "$GOOD" =~ $OWNER_FORM ]] || fail "the form refuses $GOOD"
+# owner_run <plain|traced> <script> <exit> <a line the run reaches> <the log it writes, or -> [VAR=value ...]
+# One run of a copy against the fake Jetson, which quotes the address on stderr as a remote error
+# would. Traced runs go under bash -x: the trace before the log starts reaches only the terminal.
+owner_run() {
+  local mode="$1" s="$2" want="$3" reached="$4" log="$5" cmd=("$TROOT/$2")
+  shift 5
+  if [[ "$mode" == traced ]]; then cmd=(bash -x "$TROOT/$s"); fi
+  reset
+  rm -rf "$TROOT/tasks"
+  run "$want" env PATH="$BIN:$PATH" DEPLOY_HOST=jetson.invalid STUB_CALLS="$CALLS" STUB_STATE="$STATE" \
+    STUB_RUN="$RUN" STUB_PRIVATE="$PRIVATE" STUB_ECHO=1 STUB_OWNER="$GOOD" IDLE_S=0 POLL_S=0 OWNER="$GOOD" "$@" \
+    "${cmd[@]}" "$JOB"
+  if [[ "$mode" == plain ]]; then out_lacks "$TOKEN"; fi
+  out_has "$reached"
+  out_has "(the owner's address)"
+  if [[ "$log" != - ]]; then [[ -s "$TROOT/$log" ]] || fail "$s $* wrote no $log"; fi
+  no_token_written "$s $*"
+}
+for mode in plain traced; do
+  owner_run "$mode" tests/agents_real_run_jetson.sh 0 "runs added: 1" tasks/evidence/agents-a5/run-owner.log \
+    REAL_RUN=1 RUNS=chat LABEL=owner
+  owner_run "$mode" tests/ingestion_transcribe_jetson.sh 0 "The line for Measurements" \
+    tasks/evidence/ingestion-g14/run-owner.log REAL_RUN=1 LABEL=owner POLL_S=1
+  owner_run "$mode" tests/e2e_jetson.sh 1 "index in tasks/evidence/identity/index.md" tasks/evidence/identity/run.log
+  owner_run "$mode" tests/e2e_jobs_jetson.sh 0 PASS tasks/evidence/jobs-j4-jetson/run.log
+  owner_run "$mode" tests/e2e_jobs_sweep_jetson.sh 0 PASS tasks/evidence/jobs-j5-jetson/run.log
+done
+ok "a real run of each of the 5 scripts to its end, plain and under bash -x: the address is not printed, no log holds it"
+owner_run plain tests/agents_real_run_jetson.sh 0 PASS -
+owner_run plain tests/ingestion_transcribe_jetson.sh 0 "every check passed" - POLL_S=1
+ok "the dry runs of tests/agents_real_run_jetson.sh and tests/ingestion_transcribe_jetson.sh: not printed"
+A5_LOG=tasks/evidence/agents-a5/run-owner.log
+G14_LOG=tasks/evidence/ingestion-g14/run-owner.log
+owner_run plain tests/agents_real_run_jetson.sh 1 "the owner's account has no model credential" "$A5_LOG" \
+  REAL_RUN=1 RUNS=chat LABEL=owner STUB_KIND=none
+owner_run plain tests/agents_real_run_jetson.sh 1 "the owner's account has the role member" "$A5_LOG" \
+  REAL_RUN=1 RUNS=chat LABEL=owner STUB_ROLE=member
+owner_run plain tests/agents_real_run_jetson.sh 1 "no job $JOB in the owner's account" "$A5_LOG" \
+  REAL_RUN=1 RUNS=chat LABEL=owner STUB_JOB=missing
+owner_run plain tests/ingestion_transcribe_jetson.sh 1 "the owner's account is not on jetson.invalid" "$G14_LOG" \
+  REAL_RUN=1 LABEL=owner POLL_S=1 STUB_ACCOUNT=missing
+owner_run plain tests/ingestion_transcribe_jetson.sh 1 "the owner's account has not accepted" "$G14_LOG" \
+  REAL_RUN=1 LABEL=owner POLL_S=1 STUB_CONSENT=no
+owner_run plain tests/ingestion_transcribe_jetson.sh 1 "a run of the owner's account is under way" "$G14_LOG" \
+  REAL_RUN=1 LABEL=owner POLL_S=1 STUB_BUSY=1
+owner_run plain tests/e2e_jetson.sh 1 "the owner's account is not on jetson.invalid" tasks/evidence/identity/run.log \
+  STUB_ACCOUNT=missing
+owner_run plain tests/e2e_jobs_jetson.sh 1 "no jobs in the owner's account on jetson.invalid" \
+  tasks/evidence/jobs-j4-jetson/run.log STUB_ACCOUNT=missing
+owner_run plain tests/e2e_jobs_sweep_jetson.sh 1 "no jobs in the owner's account on jetson.invalid" \
+  tasks/evidence/jobs-j5-jetson/run.log STUB_ACCOUNT=missing
+ok "the 9 refusals that named the account after the log started now say \"the owner's account\""
 
 step "B1: a dry run leaves the committed evidence as it is"
 reset
