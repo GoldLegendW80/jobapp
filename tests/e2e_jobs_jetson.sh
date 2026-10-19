@@ -57,9 +57,10 @@ masked() {
 }
 
 sql() { # the SQL on stdin in the Jetson's database, unaligned, fields separated by |
+  # terse: no LINE context, which quotes the owner's address cut to 60 columns where masked cannot find it
   # shellcheck disable=SC2016 # $POSTGRES_* expand in the db container
   ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && docker compose -f compose.yml exec -T db sh -c" \
-    "'psql -X -q -v ON_ERROR_STOP=1 -tA -F \"|\" -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'"
+    "'psql -X -q -v ON_ERROR_STOP=1 -v VERBOSITY=terse -tA -F \"|\" -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'"
 }
 
 snapshot() { # Harald's jobs, one field per line

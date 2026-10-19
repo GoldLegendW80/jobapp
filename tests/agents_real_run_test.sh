@@ -7,8 +7,9 @@
 #
 # Covers: without OWNER, or with an OWNER that is not an e-mail address, nothing runs (here and in
 # the four other Jetson scripts that put OWNER into SQL); in those five scripts the owner's address,
-# refused or accepted, reaches no output and no file they write, even when the fake Jetson quotes
-# it on stderr and in the refusals that used to name it (under bash -x: no file); a dry run leaves every file under
+# refused or accepted, reaches no output and no file they write, whole or cut, even when the fake
+# Jetson quotes it on stderr (in other cases, and cut to 60 columns as psql does) and in the
+# refusals that used to name it (under bash -x: no file); a dry run leaves every file under
 # tasks/evidence/agents-a5/ byte for byte as committed and starts nothing; a real run is refused
 # before any ssh call when an evidence file it would write exists; an account that is not an
 # admin with a subscription credential is refused before
@@ -81,6 +82,29 @@ printf '%s\n' "$*" >>"$STUB_CALLS"
 cmd="${*:4}"
 # STUB_ECHO: as hostile as a remote error, which may quote its command line and its SQL on stderr.
 if [[ -n "${STUB_ECHO:-}" && "$cmd" == *@* ]]; then printf 'bash: line 1: %s\n' "$cmd" >&2; fi
+other_case() { # the address as the service stores it (lower case), and upper case
+  printf 'NOTICE:  %s, %s\n' "$(tr '[:upper:]' '[:lower:]' <<<"$STUB_OWNER")" "$(tr '[:lower:]' '[:upper:]' <<<"$STUB_OWNER")"
+}
+# psql_context <sql>: the LINE psql prints for an error on a line that holds the address, cut to 60
+# columns with "..." at each cut, for a cut at each of its characters: its head shown, then its tail.
+psql_context() {
+  local n=0 line pre k from to head tail
+  while IFS= read -r line; do
+    n=$((n + 1))
+    [[ "$line" == *"$STUB_OWNER"* ]] || continue
+    pre="${line%%"$STUB_OWNER"*}"
+    for ((k = 1; k < ${#STUB_OWNER}; k++)); do
+      to=$((${#pre} + k))
+      from=$((to > 60 ? to - 60 : 0))
+      head=""
+      if ((from > 0)); then head="..."; fi
+      printf 'LINE %s: %s%s...\n' "$n" "$head" "${line:from:to-from}"
+      tail=""
+      if ((to + 60 < ${#line})); then tail="..."; fi
+      printf 'LINE %s: ...%s%s\n' "$n" "${line:to:60}" "$tail"
+    done
+  done <<<"$1"
+}
 labels() { grep -o "'[a-z_0-9]*='" <<<"$1" | tr -d "'" || true; }
 count() { if [[ -f "$STUB_STATE/$1" ]]; then cat "$STUB_STATE/$1"; else echo 0; fi; }
 bump() { echo $(($(count "$1") + 1)) >"$STUB_STATE/$1"; }
@@ -93,6 +117,7 @@ case "$cmd" in
     ;;
   *"exec -T api python -c"*) # a program of tests/ingestion_transcribe_jetson.sh, told by its text
     program="$(cat)"
+    if [[ -n "${STUB_ECHO:-}" && "$cmd" == *"$STUB_OWNER"* ]]; then other_case >&2; fi
     case "$program" in
       *has_consented*)
         printf '{"agent": true, "user": %s, "role": "admin", "credential": "claude_subscription", "consented": %s, "ingestion_run": %s, "agent_runs": 0}\n' \
@@ -125,7 +150,10 @@ case "$cmd" in
     ;;
   *"exec -T db sh -c"*)
     sql="$(cat)"
-    if [[ -n "${STUB_ECHO:-}" ]]; then grep -F '@' <<<"$sql" | sed 's/^/LINE 1: /' >&2 || true; fi
+    if [[ -n "${STUB_ECHO:-}" && "$sql" == *"$STUB_OWNER"* ]]; then
+      other_case >&2
+      if [[ "$cmd" != *"VERBOSITY=terse"* ]]; then psql_context "$sql" >&2; fi
+    fi
     case "$sql" in
       *"'owner_role='"*)
         credential="${STUB_KIND:-claude_subscription},updated_at:2026-10-10"
@@ -263,8 +291,11 @@ exit 97
 FAKE
 chmod +x "$OBIN/fake"
 for c in ssh docker npx pnpm curl tailscale uv; do ln -s fake "$OBIN/$c"; done
-# The planted token: every OWNER below carries it, and no output and no file of the scripts may.
+# The planted token: every OWNER below carries it, and no output and no file of the scripts may,
+# whole or cut: psql, for one, quotes a line cut to 60 columns. Each cut holds one end of the token.
 TOKEN="Kq83zTn"
+CUTS=("${TOKEN:0:4}" "${TOKEN:3:4}")
+out_lacks_token() { for c in "${CUTS[@]}"; do out_lacks "$c"; done; }
 # Copies of the five scripts under a throwaway root, so whatever they write lands there and never
 # under the committed tasks/evidence/; ./deploy.sh url answers an address that does not resolve.
 TROOT="$WORK/root"
@@ -272,10 +303,10 @@ mkdir -p "$TROOT/tests"
 for s in "${OWNER_SCRIPTS[@]}"; do cp -p "$s" "$TROOT/$s"; done
 printf '#!/usr/bin/env bash\necho https://jetson.invalid\n' >"$TROOT/deploy.sh"
 chmod +x "$TROOT/deploy.sh"
-no_token_written() { # no file under the throwaway root holds the token
+no_token_written() { # no file under the throwaway root holds the token, whole or cut
   local rc=0
-  grep -r -i -l -F -- "$TOKEN" "$TROOT" >"$WORK/hits" || rc=$?
-  [[ "$rc" == 1 ]] || fail "$1: the planted token is in a file the script wrote (grep exit $rc): $(cat "$WORK/hits")"
+  grep -r -i -l -F -e "${CUTS[0]}" -e "${CUTS[1]}" "$TROOT" >"$WORK/hits" || rc=$?
+  [[ "$rc" == 1 ]] || fail "$1: the planted token, whole or cut, is in a file the script wrote (grep exit $rc): $(cat "$WORK/hits")"
 }
 # shellcheck disable=SC2016,SC1003 # the values are literal, never expanded
 REFUSED=(e2e-Kq83zTn @Kq83zTn.example.org e2e-Kq83zTn@ e2e-Kq83zTn@@example.org "e2e-Kq83zTn@example.org';--"
@@ -291,7 +322,7 @@ for s in "${OWNER_SCRIPTS[@]}"; do
     reset
     run 1 env PATH="$OBIN:$PATH" DEPLOY_HOST=jetson.invalid STUB_CALLS="$CALLS" OWNER="$v" "$TROOT/$s" "$JOB"
     out_has "OWNER is not an email address"
-    out_lacks "$TOKEN"
+    out_lacks_token
     [[ "$(calls)" == 0 ]] || fail "$s made a call with the OWNER '$v': $(head -n 3 "$CALLS")"
     [[ ! -e "$TROOT/tasks" ]] || fail "$s wrote a file with the OWNER '$v': $(find "$TROOT/tasks" -type f | head -n 3)"
   done
@@ -305,12 +336,15 @@ for s in "${OWNER_SCRIPTS[@]}"; do
   ! grep -n -E -- "$PRINTS_OWNER" "$s" >"$WORK/prints" || fail "$s prints the owner's address: $(cat "$WORK/prints")"
   # shellcheck disable=SC2016 # the line of the script, literal
   grep -q -F 'exec > >(masked | tee "$LOG") 2>&1' "$s" || fail "$s does not mask the address in its log"
+  { grep -n -F 'psql ' "$s" || true; } | { grep -v -F -e '-v VERBOSITY=terse' || true; } >"$WORK/psql"
+  [[ ! -s "$WORK/psql" ]] || fail "$s runs psql without -v VERBOSITY=terse, which quotes a cut of the address: $(cat "$WORK/psql")"
 done
 GOOD="e2e-$TOKEN@example.org"
 [[ "$GOOD" =~ $OWNER_FORM ]] || fail "the form refuses $GOOD"
 # owner_run <plain|traced> <script> <exit> <a line the run reaches> <the log it writes, or -> [VAR=value ...]
 # One run of a copy against the fake Jetson, which quotes the address on stderr as a remote error
-# would. Traced runs go under bash -x: the trace before the log starts reaches only the terminal.
+# would: whole, in other cases, and cut as psql does unless terse. Traced runs go under bash -x: the
+# trace before the log starts reaches only the terminal.
 owner_run() {
   local mode="$1" s="$2" want="$3" reached="$4" log="$5" cmd=("$TROOT/$2")
   shift 5
@@ -320,7 +354,7 @@ owner_run() {
   run "$want" env PATH="$BIN:$PATH" DEPLOY_HOST=jetson.invalid STUB_CALLS="$CALLS" STUB_STATE="$STATE" \
     STUB_RUN="$RUN" STUB_PRIVATE="$PRIVATE" STUB_ECHO=1 STUB_OWNER="$GOOD" IDLE_S=0 POLL_S=0 OWNER="$GOOD" "$@" \
     "${cmd[@]}" "$JOB"
-  if [[ "$mode" == plain ]]; then out_lacks "$TOKEN"; fi
+  if [[ "$mode" == plain ]]; then out_lacks_token; fi
   out_has "$reached"
   out_has "(the owner's address)"
   if [[ "$log" != - ]]; then [[ -s "$log" ]] || fail "$s $* wrote no ${log#"$TROOT"/}"; fi

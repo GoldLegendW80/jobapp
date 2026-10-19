@@ -61,9 +61,10 @@ masked() {
 
 # sql: run the SQL on stdin in the Jetson's database, unaligned, fields separated by |.
 sql() {
+  # terse: no LINE context, which quotes the owner's address cut to 60 columns where masked cannot find it
   # shellcheck disable=SC2016 # $POSTGRES_* expand in the db container
   ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && docker compose -f compose.yml exec -T db sh -c" \
-    "'psql -X -q -v ON_ERROR_STOP=1 -tA -F \"|\" -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'"
+    "'psql -X -q -v ON_ERROR_STOP=1 -v VERBOSITY=terse -tA -F \"|\" -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'"
 }
 
 snapshot() { # one line per field of Harald's account, nothing secret (the hash only as md5)
@@ -71,6 +72,7 @@ snapshot() { # one line per field of Harald's account, nothing secret (the hash 
 select 'name=' || u.name, 'role=' || u.role, 'is_active=' || u.is_active,
        'created_at=' || u.created_at, 'updated_at=' || u.updated_at,
        'last_login_at=' || coalesce(u.last_login_at::text, 'null'),
+       'email_exact=' || (u.email::text = '$HARALD'),
        'password_hash_md5=' || md5(u.password_hash),
        'sessions=' || (select count(*) from sessions s where s.user_id = u.id),
        'sessions_md5=' || coalesce((select md5(string_agg(s.id::text || s.expires_at::text, ',' order by s.id))
