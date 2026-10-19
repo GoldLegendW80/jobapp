@@ -1,0 +1,173 @@
+/* elegant: one column in Lora, the name and the headings in Playfair Display, a mauve accent.
+   A thin double frame 6 mm inside the paper's edge on every page (a fixed box, which the
+   renderer repeats on each page); the page margin is 0 and --margin becomes the padding of the
+   text inside the frame. Thin rules everywhere else: under the heading, after each section
+   title, around the achievements, under each competency and skill row, between the roles. The
+   density comes from the step on :root: --body-size, --line-height, --section-gap, --item-gap,
+   --margin. */
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Lora", serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #2a2622;
+}
+body { margin: 0; padding: var(--margin); }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p, h1, h3 { overflow-wrap: anywhere; }
+
+.frame {
+  position: fixed;
+  top: 6mm;
+  right: 6mm;
+  bottom: 6mm;
+  left: 6mm;
+  border: 2.8pt double #a8968a;
+}
+
+.head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 7mm;
+  align-items: end;
+  padding-bottom: 7pt;
+  border-bottom: 0.5pt solid #a8968a;
+}
+.name {
+  font-family: "Playfair Display", serif;
+  font-size: 2.9em;
+  font-weight: 400;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+}
+.headline {
+  font-style: italic;
+  font-size: 1.1em;
+  color: var(--accent);
+  margin-top: 3pt;
+}
+.contact {
+  list-style: none;
+  max-width: 68mm;
+  border-left: 0.5pt solid #a8968a;
+  padding-left: 5mm;
+  font-size: 0.9em;
+  color: #57504a;
+}
+
+.block { margin-top: var(--section-gap); }
+.label {
+  display: flex;
+  align-items: baseline;
+  gap: 8pt;
+  font-family: "Playfair Display", serif;
+  font-size: 1.3em;
+  font-style: italic;
+  font-weight: 400;
+  line-height: 1.2;
+  color: var(--accent);
+  margin-bottom: var(--item-gap);
+}
+.label::after {
+  content: "";
+  flex: 1 1 auto;
+  border-bottom: 0.5pt solid #c9bbb0;
+}
+
+.summary { text-align: justify; }
+
+.block .highlights {
+  list-style: none;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  border-top: 0.5pt solid #a8968a;
+  border-bottom: 0.5pt solid #a8968a;
+}
+.highlights li {
+  padding: 4pt 6pt;
+  font-style: italic;
+  text-align: center;
+}
+.highlights li + li { border-left: 0.5pt solid #c9bbb0; }
+
+.block .competencies {
+  list-style: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 8mm;
+}
+.competencies li {
+  border-bottom: 0.5pt solid #ddd2c8;
+  padding: 1.5pt 0;
+}
+
+.entry + .entry {
+  border-top: 0.5pt solid #ddd2c8;
+  margin-top: var(--item-gap);
+  padding-top: var(--item-gap);
+}
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10pt;
+}
+.entry-title { font-size: 1.04em; font-weight: 700; }
+.org { font-weight: 400; font-style: italic; color: var(--accent); }
+.period {
+  flex: 0 0 auto;
+  text-align: right;
+  font-variant: small-caps;
+  letter-spacing: 0.05em;
+  color: #57504a;
+}
+.place { font-size: 0.94em; font-style: italic; color: #57504a; }
+.entry ul { padding-left: 1.1em; margin-top: 1.5pt; }
+.entry li { margin-bottom: 1pt; }
+.entry li::marker { color: var(--accent); }
+
+.school { margin-bottom: 2pt; }
+
+.skill-group {
+  display: grid;
+  grid-template-columns: 36mm minmax(0, 1fr);
+  gap: 8pt;
+  border-bottom: 0.5pt solid #ddd2c8;
+  padding: 1.5pt 0;
+}
+.group-label {
+  font-size: 1em;
+  font-weight: 400;
+  font-variant: small-caps;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+}
+
+.languages {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 2pt;
+}
+.languages li { padding: 0 9pt; }
+.languages li:first-child { padding-left: 0; }
+.languages li + li { border-left: 0.5pt solid #a8968a; }
+.languages strong { font-weight: 700; }
+
+.letter-body { padding-top: 14pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; font-style: italic; color: #57504a; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; font-style: italic; }
+.subject strong { font-style: normal; color: var(--accent); }
+.paragraph { text-align: justify; white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature {
+  font-family: "Playfair Display", serif;
+  font-size: 1.5em;
+  font-style: italic;
+  margin-top: var(--section-gap);
+}

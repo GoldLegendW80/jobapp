@@ -1,0 +1,24 @@
+{#- elegant, the letter: the CV's frame and heading (the name in the display serif, the contact
+    lines behind a hairline), then the date, the recipient, the subject in italics, the
+    salutation, the paragraphs, the closing and the name in the display serif. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+<div class="frame"></div>
+<header class="head">
+<div class="headtext">
+<h1 class="name">{{ name }}</h1>
+{% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+</div>
+{{ base.contact_lines() }}
+</header>
+<div class="letter-body">
+{{ base.letter_date() }}
+{% if content.recipient %}<p class="recipient">{{ content.recipient }}</p>{% endif %}
+{% if content.subject %}<p class="subject"><strong>{{ base.label("subject") }}</strong> {{ content.subject }}</p>{% endif %}
+{% if content.salutation %}<p class="salutation">{{ content.salutation }}</p>{% endif %}
+{{ base.paragraphs(content.paragraphs) }}
+{% if content.closing %}<p class="closing">{{ content.closing }}</p>{% endif %}
+<p class="signature">{{ name }}</p>
+</div>
+{% endblock %}
