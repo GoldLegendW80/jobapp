@@ -7,8 +7,11 @@ of its document's kind (the CV writer, or the letter writer of task D8):
 1. `create(db, document, mode, trigger, base_document_id, estimate, token_ceiling, ...)`: the row,
    `queued` (or `waiting` with its reason). `estimate` and `token_ceiling` are computed by the
    caller (D9's estimate.py, D10's tick); nothing here prices a run. The first generation of a
-   posting's CV, and a generation from another base CV, sets the document's template and base to
-   the base CV's; a letter's first generation takes the template of the posting's CV.
+   posting's CV sets the document's template and base to the base CV's. A generation from
+   another base CV sets the base, and the template too unless the person switched it by hand
+   since the CV's last write (`switched_by_hand`): then hers stays. A posting CV's generation
+   records the template it gave in its estimate (`WRITE_TEMPLATE`). A letter's first generation
+   takes the template of the posting's CV.
 2. `start(db, generation, at=...)`: the writer run, `internal` and bound to the generation, with
    `token_budget` = the generation's ceiling (the runner stops it there and counts each API
    message once). The caller commits, then `enqueue_run`.
@@ -44,8 +47,17 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    them, through the same steps. A version made by a `shorten` generation, or by hand, never
    starts another: the pass runs once, and what still overflows is kept and shown. The pass is
    part of the posting's spend: it starts only with the person's consent and credential, and its
-   ceiling is the letter's, what the pair has left after the CV's run (`letter_ceiling`); with
-   nothing left, or a spend unknown, there is no pass.
+   ceiling is the letter's, what the pair has left after the CV's run (`shortening_ceiling`);
+   with nothing left, or a spend unknown, there is no pass.
+5. "Make it fit" (`make_fit`, the route `POST /api/documents/{id}/fit`): the person asks for a
+   `shorten` generation of a posting CV whose latest version overflows, whoever made that
+   version (a writer, a template switch, a hand edit, a shortening). It passes the checks of
+   the pass above and refuses with a reason of `FIT_REFUSALS` instead of skipping: the consent,
+   a credential, a write to draw on and a known ceiling left. That ceiling is what the CV's last
+   write has left after its run and after the shortening passes made since
+   (`shortening_ceiling`): passes clicked one after another share the one budget the automatic
+   pass had. A person whose runs are all busy is refused too: nothing starts a queued pass
+   later.
 
 Logs carry ids, modes, statuses, counts and codes, never a text.
 """
@@ -78,6 +90,7 @@ from app.documents.models import (
     Document,
     DocumentGeneration,
     DocumentVersion,
+    FitResult,
     GenerationMode,
     GenerationOutcome,
     GenerationStatus,
@@ -99,6 +112,21 @@ LETTER_FOLLOWS = "letter_follows"
 # A key of a click's CV generation estimate: the recorded stream the following letter replays on
 # the fake backend (a journey names the streams of both kinds in one click).
 LETTER_SCRIPT = "letter_script"
+# A key of a posting CV generation's estimate: the template it gave the document, so a later write
+# from another base CV can tell a hand switch made since (`switched_by_hand`).
+WRITE_TEMPLATE = "write_template"
+# Why "Make it fit" starts no shortening pass (`make_fit`).
+FIT_REFUSALS = (
+    "not_shortened",
+    "not_drawn",
+    "fits",
+    "consent",
+    "credential",
+    "not_written",
+    "spend_unknown",
+    "token_ceiling",
+    "runs_busy",
+)
 # The service of a run's context that queues renders (tests); else a Queue on REDIS_URL.
 QUEUE_SERVICE = "documents_queue"
 # The recorded streams a writer replays on the fake backend when its caller names none.
@@ -154,6 +182,44 @@ def _has_version(db: Session, document: Document) -> bool:
     return found is not None
 
 
+def last_write(db: Session, document: Document) -> DocumentGeneration | None:
+    """The document's latest `posting` generation that is done: its last write."""
+    found: DocumentGeneration | None = db.execute(
+        sa.select(DocumentGeneration)
+        .where(
+            DocumentGeneration.user_id == document.user_id,
+            DocumentGeneration.document_id == document.id,
+            DocumentGeneration.mode == GenerationMode.posting,
+            DocumentGeneration.status == GenerationStatus.done,
+        )
+        .order_by(DocumentGeneration.created_at.desc(), DocumentGeneration.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return found
+
+
+def switched_by_hand(db: Session, document: Document) -> bool:
+    """Did the person switch the CV's template since its last write (spec, "Base CVs",
+    Inheritance)? Read two ways, so neither a pruned version nor a switch back hides it: the
+    template the last write gave is not the document's, or a `template` version came after it
+    (any, for a CV the writer never wrote)."""
+    last = last_write(db, document)
+    gave = last.estimate.get(WRITE_TEMPLATE) if last is not None else None
+    if gave is not None and gave != document.template_slug:
+        return True
+    since = last.version_number if last is not None and last.version_number is not None else 0
+    found = db.execute(
+        sa.select(DocumentVersion.id)
+        .where(
+            DocumentVersion.document_id == document.id,
+            DocumentVersion.origin == Origin.template,
+            DocumentVersion.number > since,
+        )
+        .limit(1)
+    ).first()
+    return found is not None
+
+
 def create(
     db: Session,
     document: Document,
@@ -184,9 +250,11 @@ def create(
                 base = store.get(db, user_id, base_document_id)
                 if base is None or base.scope != Scope.base:
                     raise store.NotFoundError(base_document_id)
-                if first or base.id != document.base_document_id:
+                another = base.id != document.base_document_id
+                if first or (another and not switched_by_hand(db, document)):
                     document.template_slug = base.template_slug
-                    document.base_document_id = base.id
+                document.base_document_id = base.id
+            estimate = {**estimate, WRITE_TEMPLATE: document.template_slug}
         elif first and document.posting_id is not None:
             cv = next(
                 (
@@ -315,6 +383,8 @@ def finish(
     document = store.lock_document(db, user_id, generation.document_id)
     records = list(corrections)
     revision: int | None = None
+    # What the render will print it with, so its snapshot reuses this version and its link.
+    template = render_job.template_of(db, user_id, document.template_slug)
     if document.draft_revision == generation.base_draft_revision:
         store.save_draft(
             db, user_id, document.id, c.dump(content), document.draft_revision, Author.writer, at=at
@@ -328,6 +398,8 @@ def finish(
             generation_id=generation.id,
             corrections=records,
             profile_revision=_profile_revision(db, user_id),
+            template_slug=template.slug,
+            template_version=template.version,
         )
         generation.outcome = GenerationOutcome.draft_replaced
         document, fresh = render_job.mark_queued(
@@ -345,6 +417,8 @@ def finish(
             corrections=records,
             profile_revision=_profile_revision(db, user_id),
             content=c.dump(content),
+            template_slug=template.slug,
+            template_version=template.version,
         )
         generation.outcome = GenerationOutcome.kept_as_version
     generation.status = GenerationStatus.done
@@ -501,7 +575,9 @@ def start_letter(
         if _has_version(db, letter) and not asked:
             return None  # the person's letter is not written again behind their back
         figures = {
-            k: v for k, v in parent.estimate.items() if k not in (LETTER_FOLLOWS, LETTER_SCRIPT)
+            k: v
+            for k, v in parent.estimate.items()
+            if k not in (LETTER_FOLLOWS, LETTER_SCRIPT, WRITE_TEMPLATE)
         }
         reason = writer_base.wait_reason(db, cv.user_id)
         ceiling = letter_ceiling(db, parent)
@@ -601,6 +677,60 @@ def long_fields(content: c.CvContent | c.LetterContent, limits: rules.SoftLimits
     return [issue.field for issue in over]
 
 
+class FitRefusedError(Exception):
+    """Why no shortening pass starts: `reason` is one of FIT_REFUSALS."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def shortening_ceiling(db: Session, parent: DocumentGeneration) -> int | None:
+    """What a shortening pass after the write `parent` may spend (module docstring, 4 and 5):
+    what the pair has left after the CV's run (`letter_ceiling`), less what every shortening
+    pass since that write spent, never under zero. None when one of those counts is missing
+    (no run, or a count the runner did not write): no pass then."""
+    left = letter_ceiling(db, parent)
+    if left is None:
+        return None
+    passes = db.execute(
+        sa.select(AgentRun.input_tokens, AgentRun.output_tokens)
+        .select_from(DocumentGeneration)
+        .outerjoin(AgentRun, AgentRun.id == DocumentGeneration.run_id)
+        .where(
+            DocumentGeneration.document_id == parent.document_id,
+            DocumentGeneration.mode == GenerationMode.shorten,
+            DocumentGeneration.created_at >= parent.created_at,
+        )
+    ).all()
+    for spent_in, spent_out in passes:
+        if spent_in is None or spent_out is None:
+            return None
+        left -= spent_in + spent_out
+    return max(0, left)
+
+
+def _pass_ceiling(
+    db: Session, user_id: uuid.UUID, parent: DocumentGeneration | None
+) -> tuple[DocumentGeneration, int]:
+    """The write a shortening pass draws on and its ceiling, else FitRefusedError: the consent
+    and a credential first (`writer_base.wait_reason`), then a write to draw on and a known
+    ceiling left."""
+    from app.documents import writer_base  # writer_base imports this module
+
+    waiting = writer_base.wait_reason(db, user_id)
+    if waiting is not None:
+        raise FitRefusedError(waiting.value)
+    if parent is None:
+        raise FitRefusedError("not_written")
+    ceiling = shortening_ceiling(db, parent)
+    if ceiling is None:
+        raise FitRefusedError("spend_unknown")
+    if ceiling == 0:
+        raise FitRefusedError("token_ceiling")
+    return parent, ceiling
+
+
 def shorten(
     sessions: sessionmaker[Session],
     document_id: uuid.UUID,
@@ -611,8 +741,6 @@ def shorten(
     """Create and start the one `shorten` generation of an overflowing version that a writer's
     `posting` generation made, with the consent, a credential and a ceiling left (module
     docstring, 4). Returns the run to enqueue, else None."""
-    from app.documents import writer_base  # writer_base imports this module
-
     with sessions() as db:
         found = db.execute(
             sa.select(Document.user_id, Document.posting_id).where(Document.id == document_id)
@@ -645,16 +773,12 @@ def shorten(
             return (
                 None  # saved by hand during the render: the person's draft is not ours to shorten
             )
-        ceiling = letter_ceiling(db, parent)
-        waiting = writer_base.wait_reason(db, owner)
-        if not ceiling or waiting is not None:
-            if waiting is not None:
-                reason = waiting.value
-            else:
-                reason = "spend_unknown" if ceiling is None else "token_ceiling"
+        try:
+            _, ceiling = _pass_ceiling(db, owner, parent)
+        except FitRefusedError as refused:
             logger.info(
                 "documents.generation.shorten_skipped",
-                extra={"document_id": str(document_id), "reason": reason},
+                extra={"document_id": str(document_id), "reason": refused.reason},
             )
             return None
         template = render_job.template_of(db, owner, document.template_slug)
@@ -676,6 +800,70 @@ def shorten(
             return None
         store.commit(db)
         return run.id
+
+
+def _latest_version(db: Session, document: Document) -> DocumentVersion | None:
+    found: DocumentVersion | None = db.execute(
+        sa.select(DocumentVersion)
+        .where(DocumentVersion.document_id == document.id)
+        .order_by(DocumentVersion.number.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return found
+
+
+def make_fit(
+    db: Session,
+    user_id: uuid.UUID,
+    document_id: uuid.UUID,
+    *,
+    at: datetime,
+    settings: Settings | None = None,
+) -> tuple[DocumentGeneration, AgentRun]:
+    """The `shorten` generation of "Make it fit" (module docstring, 5) for a posting CV whose
+    latest version overflows, started. The caller commits, then `enqueue_run`. Raises
+    store.NotFoundError for a document that is not the person's, store.GenerationOpenError while
+    one is open, FitRefusedError with its reason otherwise."""
+    found = store.get(db, user_id, document_id)
+    if found is None:
+        raise store.NotFoundError(document_id)
+    if found.scope != Scope.posting or found.kind != Kind.cv or found.posting_id is None:
+        raise FitRefusedError("not_shortened")
+    # Lock 2 before lock 3 (store.py): the run's row references the posting.
+    if store.lock_posting(db, user_id, found.posting_id) is None:
+        raise store.NotFoundError(document_id)
+    document = store.lock_document(db, user_id, document_id)
+    current = store.open_generation(db, user_id, document_id)
+    if current is not None:
+        raise store.GenerationOpenError(current)
+    latest = _latest_version(db, document)
+    drawn = c.content_hash(document.kind, c.parse(document.kind, document.draft))
+    if latest is None or latest.fit is None or latest.content_hash != drawn:
+        raise FitRefusedError("not_drawn")  # the page the person sees is not this draft's yet
+    if latest.fit is FitResult.one_page:
+        raise FitRefusedError("fits")
+    parent, ceiling = _pass_ceiling(db, user_id, last_write(db, document))
+    template = render_job.template_of(db, user_id, document.template_slug)
+    fields = long_fields(c.parse("cv", latest.content), template.kinds["cv"].soft_limits)
+    generation = create(
+        db,
+        document,
+        GenerationMode.shorten,
+        GenerationTrigger.click,
+        parent.base_document_id,
+        parent.estimate,
+        ceiling,
+        at=at,
+    )
+    try:
+        run = start(db, generation, at=at, long_fields=fields, settings=settings)
+    except agent_runs.ActiveRunsError:
+        raise FitRefusedError("runs_busy") from None
+    logger.info(
+        "documents.generation.fit",
+        extra={"generation_id": str(generation.id), "run_id": str(run.id)},
+    )
+    return generation, run
 
 
 async def on_overflow(document_id: uuid.UUID, version_id: uuid.UUID) -> None:

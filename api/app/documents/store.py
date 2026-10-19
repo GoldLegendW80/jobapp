@@ -776,6 +776,7 @@ def snapshot(
     generation_id: uuid.UUID | None = None,
     corrections: Iterable[Correction | Mapping[str, Any]] = (),
     template_version: int = 1,
+    template_slug: str | None = None,
     profile_revision: int | None = None,
     legacy_file_id: uuid.UUID | None = None,
     pdf_sha256: bytes | None = None,
@@ -784,12 +785,14 @@ def snapshot(
 ) -> tuple[DocumentVersion, bool]:
     """The draft as a version: `(version, made)`. `content`, given, is stored in place of the
     draft, which stays as it is (D7: a generation whose draft was edited during its run), and
-    always makes a version. Without a generation, when the latest version has the draft's
-    content hash, language, template and template version and is not frozen, it
-    is reused (`made` is False); a generation always makes one. A legacy version points at its
-    job file (`legacy_file_id`, with the file's `pdf_sha256`). The others beyond `keep` are
-    pruned."""
+    always makes a version. `template_slug`, given, is the template the version is printed
+    with when it is not the document's own (a template no longer served prints with `classic`).
+    Without a generation, when the latest version has the draft's content hash, language,
+    template and template version and is not frozen, it is reused (`made` is False); a
+    generation always makes one. A legacy version points at its job file (`legacy_file_id`, with
+    the file's `pdf_sha256`). The others beyond `keep` are pruned."""
     document = lock_document(db, user_id, document_id)
+    printed_with = template_slug if template_slug is not None else document.template_slug
     kind = _kind(document)
     model = _model(kind, document.draft if content is None else content)
     digest = c.content_hash(kind, model)
@@ -802,7 +805,7 @@ def snapshot(
         and latest.frozen_at is None
         and latest.content_hash == digest
         and latest.language == document.language
-        and latest.template_slug == document.template_slug
+        and latest.template_slug == printed_with
         and latest.template_version == template_version
     ):
         return latest, False
@@ -818,7 +821,7 @@ def snapshot(
         content_schema=c.SCHEMA,
         content_hash=digest,
         language=document.language,
-        template_slug=document.template_slug,
+        template_slug=printed_with,
         template_version=template_version,
         origin=origin,
         generation_id=generation_id,
