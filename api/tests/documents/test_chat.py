@@ -565,6 +565,7 @@ def test_the_chat_writers_have_exactly_their_tools_and_a_foreign_call_is_refused
         ),
         "base": (
             "read_profile_section",
+            "get_upload_text",
             "get_draft",
             "get_conversation",
             "set_template",

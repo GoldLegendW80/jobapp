@@ -33,11 +33,13 @@ DOCUMENTS_MESSAGES_KEPT messages (`store.add_message` prunes the oldest).
 **The result** (`settle`, from the final hook, in one transaction under the document's lock):
 the submit goes through D7's pipeline (`submit.handle`: the schema, the dash fix, the fact
 check, one correction pass, then code removes what remains; a chat message is never a source).
-The draft is replaced with a version of origin `chat` when nobody wrote it since the message,
-else the result is kept as a version beside the person's draft. A base CV keeps its own fixed
-block: what the writer sent as `fixed` is replaced by the draft's. A template asked through
-`set_template` is applied with the result (the version carries it), or alone as a version of
-origin `template` with the same content (`render_job.switch`). A run that ends any other way
+A base CV converted from an upload is checked against the file's text too, as its conversion
+was (`writer_base_tools`), and its writer reads that text (`get_upload_text`). The draft is
+replaced with a version of origin `chat` when nobody wrote it since the message, else the result
+is kept as a version beside the person's draft. A base CV keeps its own fixed block: what the
+writer sent as `fixed` is replaced by the draft's. A template asked through `set_template` is
+applied with the result (the version carries it), or alone as a version of origin `template`
+with the same content (`render_job.switch`). A run that ends any other way
 changes nothing (`failed` with a code of `ERRORS`, or `cancelled`). Every end writes the
 assistant's message: what changed, what the fact check corrected (and the profile, when a claim
 it does not state went), the version number, or why nothing changed; an unknown template
@@ -117,7 +119,7 @@ TOOLS: dict[str, tuple[str, ...]] = {
         *CHAT_TOOLS,
         "submit_letter",
     ),
-    "base": ("read_profile_section", *CHAT_TOOLS, "submit_base"),
+    "base": ("read_profile_section", "get_upload_text", *CHAT_TOOLS, "submit_base"),
 }
 SUBMITS = {"cv": "submit_cv", "letter": "submit_letter", "base": "submit_base"}
 WHAT = {"cv": "CV", "letter": "cover letter", "base": "base CV"}
@@ -167,9 +169,10 @@ def kind_of(document: Document) -> ChatKind:
 
 def bind_for(db: Session, run: AgentRun, kind: ChatKind) -> Mapping[str, Any] | None:
     """What a chat run is bound to: `{generation_id, document_id, posting_id, base_document_id,
-    mode, message_id}`. None (the run fails before any model call) unless the generation is this
-    run's own, running, of mode chat and of this person, on one of their documents of `kind`; a
-    posting's document needs the run's job to be its posting, a base CV a run with no job."""
+    mode, message_id, upload_id}` (`upload_id` the file a base CV was converted from, else None).
+    None (the run fails before any model call) unless the generation is this run's own, running,
+    of mode chat and of this person, on one of their documents of `kind`; a posting's document
+    needs the run's job to be its posting, a base CV a run with no job."""
     try:
         generation_id = uuid.UUID(str(run.input.get("generation_id")))
     except ValueError:
@@ -197,6 +200,7 @@ def bind_for(db: Session, run: AgentRun, kind: ChatKind) -> Mapping[str, Any] | 
     elif run.job_id is not None:
         return None
     base = generation.base_document_id or document.base_document_id
+    upload = document.source_document_id if document.scope == Scope.base else None
     return {
         "generation_id": str(generation.id),
         "document_id": str(document.id),
@@ -204,6 +208,7 @@ def bind_for(db: Session, run: AgentRun, kind: ChatKind) -> Mapping[str, Any] | 
         "base_document_id": str(base) if base is not None else None,
         "mode": GenerationMode.chat.value,
         "message_id": generation.message_id,
+        "upload_id": str(upload) if upload is not None else None,
     }
 
 
@@ -447,6 +452,8 @@ def _reads(db: Session, document: Document) -> int:
     """The characters a chat run reads besides the conversation."""
     user_id = document.user_id
     total = estimate.profile_chars(db, user_id) + len(json.dumps(document.draft))
+    if document.scope == Scope.base:
+        total += len(writer_base.upload_text(db, user_id, document.source_document_id) or "")
     if document.scope == Scope.posting and document.posting_id is not None:
         total += estimate.posting_chars(db, user_id, document.posting_id)
         base = document.base_document_id
