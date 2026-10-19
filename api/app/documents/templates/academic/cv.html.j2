@@ -1,0 +1,100 @@
+{#- academic: one column, plain headings, the education before the experience. The name, the
+    headline and the contact lines over a black rule; then each section under a plain bold
+    heading, its text indented: the profile, the education and the experience with the dates in
+    a column on the left, the achievements numbered, the key competencies in one run, the skills
+    one group a line and the languages. An empty section is not printed. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+<header class="head">
+<h1 class="name">{{ name }}</h1>
+{% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+{{ base.contact_lines() }}
+</header>
+
+{% if content.summary %}
+<section class="block">
+<h2 class="label">{{ base.label("summary") }}</h2>
+<div class="text">
+<p class="summary">{{ content.summary }}</p>
+</div>
+</section>
+{% endif %}
+
+{% if schools %}
+<section class="block">
+<h2 class="label">{{ base.label("education") }}</h2>
+<div class="text">
+{% for item in schools %}
+<div class="dated school">
+<p class="when">{{ item.period }}</p>
+<div class="what">
+<h3 class="entry-title">{{ item.degree }}</h3>
+<p class="org">{{ item.school }}{% if item.school and item.location %}, {% endif %}{{ item.location }}</p>
+</div>
+</div>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if roles %}
+<section class="block">
+<h2 class="label">{{ base.label("experience") }}</h2>
+<div class="text">
+{% for role in roles %}
+<article class="dated entry">
+<p class="when">{{ role.period }}</p>
+<div class="what">
+<h3 class="entry-title">{{ role.title }}</h3>
+<p class="org">{{ role.organisation }}{% if role.organisation and role.location %}, {% endif %}{{ role.location }}</p>
+{{ base.bullets(role.bullets) }}
+</div>
+</article>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if content.highlights %}
+<section class="block">
+<h2 class="label">{{ base.label("highlights") }}</h2>
+<div class="text">
+{{ base.bullets(content.highlights, "highlights") }}
+</div>
+</section>
+{% endif %}
+
+{% if content.competencies %}
+<section class="block">
+<h2 class="label">{{ base.label("competencies") }}</h2>
+<div class="text">
+{{ base.bullets(content.competencies, "competencies") }}
+</div>
+</section>
+{% endif %}
+
+{% if content.skills %}
+<section class="block">
+<h2 class="label">{{ base.label("skills") }}</h2>
+<div class="text">
+{% for group in content.skills %}
+{{ base.skill_group(group) }}
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if languages %}
+<section class="block">
+<h2 class="label">{{ base.label("languages") }}</h2>
+<div class="text">
+<ul class="languages">
+{% for item in languages %}
+{{ base.language(item) }}
+{% endfor %}
+</ul>
+</div>
+</section>
+{% endif %}
+{% endblock %}

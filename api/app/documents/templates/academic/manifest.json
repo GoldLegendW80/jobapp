@@ -1,0 +1,144 @@
+{
+  "slug": "academic",
+  "version": 1,
+  "name": {
+    "en": "Academic",
+    "fr": "Universitaire"
+  },
+  "description": {
+    "en": "One column with plain headings, the education before the experience and the dates in a column on the left. Reads well for applicant tracking systems.",
+    "fr": "Une colonne aux titres sobres, la formation avant l'expérience et les dates dans une colonne à gauche. Se lit bien par un logiciel de recrutement."
+  },
+  "tags": [
+    "one column",
+    "serif",
+    "no photo",
+    "ats friendly",
+    "colour"
+  ],
+  "photo": "none",
+  "fonts": [
+    "tinos"
+  ],
+  "accent": "#1f3a5f",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.6,
+        "line_height": 1.36,
+        "section_gap": 10.0,
+        "item_gap": 5.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.31,
+        "line_height": 1.32,
+        "section_gap": 9.07,
+        "item_gap": 4.5,
+        "margin": 16.86
+      },
+      {
+        "body_size": 10.03,
+        "line_height": 1.29,
+        "section_gap": 8.14,
+        "item_gap": 4.0,
+        "margin": 15.71
+      },
+      {
+        "body_size": 9.74,
+        "line_height": 1.25,
+        "section_gap": 7.21,
+        "item_gap": 3.5,
+        "margin": 14.57
+      },
+      {
+        "body_size": 9.46,
+        "line_height": 1.21,
+        "section_gap": 6.29,
+        "item_gap": 3.0,
+        "margin": 13.43
+      },
+      {
+        "body_size": 9.17,
+        "line_height": 1.17,
+        "section_gap": 5.36,
+        "item_gap": 2.5,
+        "margin": 12.29
+      },
+      {
+        "body_size": 8.89,
+        "line_height": 1.14,
+        "section_gap": 4.43,
+        "item_gap": 2.0,
+        "margin": 11.14
+      },
+      {
+        "body_size": 8.6,
+        "line_height": 1.1,
+        "section_gap": 3.5,
+        "item_gap": 1.5,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.6,
+        "line_height": 1.45,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 22.0
+      },
+      {
+        "body_size": 11.2,
+        "line_height": 1.41,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 20.0
+      },
+      {
+        "body_size": 10.8,
+        "line_height": 1.37,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.4,
+        "line_height": 1.32,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 10.0,
+        "line_height": 1.28,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.24,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 12.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "1abb47827acce4962d0dad64d26fc8713cfeb87043b48f8d8189ae8609de4730"
+}
