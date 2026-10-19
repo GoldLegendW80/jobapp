@@ -8,9 +8,15 @@ browserd refuses a bad address and starts nothing; cookies and local storage of 
 session (a cookie without an expiry date among them) are in the next agent's lease and after the
 container is recreated; SIGTERM to browserd during a session without CDP closes Chromium within
 10 s and keeps that session's cookies; a Chromium without CDP killed from outside ends the lease
-`browser_crashed` with the profile intact; the memory guard ends a session without CDP
-`memory_guard`; a profile of 1.2 GB is trimmed under 1 GB at the lease end without losing its
-cookies, and the end answers the new size.
+`browser_crashed` with the profile intact, and one whose window closes ends it
+`browser_closed`; the memory guard ends a session without CDP `memory_guard`; a profile of
+1.2 GB is trimmed under 1 GB at the lease end without losing its cookies, and the end answers the
+new size.
+
+Hardening (issue #424): an end whose helper raises leaves no browser on the display for the next
+lease (the end reaps, and every start reaps what an end could not); chrome://inspect is blocked by
+the managed policy, a remote debugging switch kept on in the profile's Local State opens no port
+in a person's session, and a port opened in one ends it `debugging_port`.
 
 The fixture site is tests/browser_pages/b7/site.html: its title says who is signed in, which the
 test reads from the display's window list (xwininfo), since nothing may attach to a session
@@ -33,6 +39,10 @@ SITE = f"{PAGES}/b7/site.html"
 A, UID_A = str(uuid.uuid4()), 20011
 B, UID_B = str(uuid.uuid4()), 20012
 C, UID_C = str(uuid.uuid4()), 20013
+D, UID_D = str(uuid.uuid4()), 20021
+E, UID_E = str(uuid.uuid4()), 20022
+F, UID_F = str(uuid.uuid4()), 20023
+G, UID_G = str(uuid.uuid4()), 20024
 GB = 1 << 30
 
 LISTENING = """
@@ -258,3 +268,150 @@ def test_a_profile_over_1_gb_is_trimmed_and_its_size_answered(stack: Stack) -> N
     gone = stack.execute("browser", "ls", f"{cache}/b7-big", user=str(UID_A), check=False)
     assert not gone.startswith("0:")
     assert "session cookie: yes, lasting cookie: yes" in read_site(stack, A, UID_A)
+
+
+# --- hardening, issue #424 -----------------------------------------------------------------------
+
+FAILING_END = """
+import asyncio, json, subprocess, sys, uuid
+from browserd import chromium, signin
+from browserd import config as c
+from browserd.leases import Request
+profile, uid, address, end, failing = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5].split(",")
+real = chromium.as_uid
+
+async def as_uid(who, *argv, timeout=15):
+    if argv[3] in failing:
+        raise OSError(argv[3] + " could not start")
+    return await real(who, *argv, timeout=timeout)
+
+def titles():
+    return subprocess.run(["xwininfo", "-display", ":1", "-root", "-tree"],
+                          capture_output=True, text=True).stdout
+
+async def main():
+    body = {"user_id": "t", "profile_id": profile, "uid": uid, "purpose": "signin",
+            "automation": False, "address": address}
+    browser = signin.PersonChromium(Request.parse(body), str(uuid.uuid4()), None,
+                                    c.Config.from_env())
+    await browser.start()
+    shown = any("signed in as" in titles() for _ in range(600))
+    chromium.as_uid = as_uid
+    try:
+        await getattr(browser, end)()
+    except OSError as exc:
+        raised = str(exc)
+    else:
+        raised = ""
+    print(json.dumps({"shown": shown, "raised": raised}))
+
+asyncio.run(main())
+"""  # noqa: E501
+
+
+@pytest.mark.parametrize(
+    ("end_with", "failing", "left_by_the_end"),
+    [("stop", "quit", False), ("kill", "killpg", False), ("stop", "quit,kill", True)],
+)
+def test_an_end_whose_helper_raises_leaves_no_browser_for_the_next_lease(
+    stack: Stack, end_with: str, failing: str, left_by_the_end: bool
+) -> None:
+    """D's session ends with its helper raising (the quit, the kill of its group, and in the last
+    case the reap of the end too). Nothing of D is on the display when E's lease runs: the end
+    reaped it, or E's start did."""
+    assert stack.current()["lease"] is None
+    address = f"{SITE}?login=e2e-browser-d"
+    out = json.loads(stack.python(FAILING_END, D, str(UID_D), address, end_with, failing))
+    assert out == {"shown": True, "raised": f"{failing.split(',')[0]} could not start"}
+    left = [p for p in processes(stack) if p[0] == UID_D]
+    assert bool(left) is left_by_the_end
+    assert ("signed in as e2e-browser-d" in window_titles(stack)) is left_by_the_end
+    sign_in(stack, E, UID_E, "e2e-browser-e")
+    assert "signed in as e2e-browser-d" not in window_titles(stack)
+    assert not [p for p in processes(stack) if p[0] == UID_D]
+    end(stack)
+
+
+SWITCH_ON = """
+import json, sys
+path = f"/profiles/{sys.argv[1]}/data/Local State"
+state = json.load(open(path))
+state.setdefault("devtools", {})["remote_debugging"] = {"user-enabled": True}
+json.dump(state, open(path, "w"))
+"""
+
+SWITCH = """
+import json, sys
+state = json.load(open(f"/profiles/{sys.argv[1]}/data/Local State"))
+print(json.dumps(state.get("devtools", {}).get("remote_debugging")))
+"""
+
+ALL_LISTENING = """
+for name in ("/proc/net/tcp", "/proc/net/tcp6"):
+    for line in open(name).read().splitlines()[1:]:
+        f = line.split()
+        if f[3] == "0A":
+            print(int(f[1].rsplit(":", 1)[1], 16), f[7])
+"""
+
+
+@pytest.mark.parametrize(
+    "page", ["chrome://inspect/#remote-debugging", "chrome://inspect", "CHROME://INSPECT/#devices",
+             "chrome://%69nspect/", "chrome:inspect", "view-source:chrome://inspect"],
+)  # fmt: skip
+def test_chrome_inspect_is_blocked_by_the_managed_policy(stack: Stack, page: str) -> None:
+    """Its "Allow remote debugging" switch opens a DevTools port at the next start (measured
+    for B7); an agent's lease still has CDP (this navigation goes through it)."""
+    stack.lease(F, UID_F)
+    seen = stack.probe("navigate", page, "20")
+    end(stack)
+    assert seen["ok"] is False
+    assert "ERR_BLOCKED_BY_ADMINISTRATOR" in seen["detail"]
+
+
+def test_a_switch_kept_on_in_the_profile_opens_no_port_in_a_persons_session(
+    stack: Stack,
+) -> None:
+    """The switch as Chromium keeps it in Local State (a profile from before the policy): prep
+    turns it off before every start, so neither session listens, on 9222 or any port, from its
+    page shown to well after (the watch would have ended it `debugging_port`)."""
+    sign_in(stack, F, UID_F, "e2e-browser-f")
+    end(stack)
+    for purpose in ("signin", "takeover"):
+        stack.python(SWITCH_ON, F, user=str(UID_F))
+        assert json.loads(stack.python(SWITCH, F, user=str(UID_F))) == {"user-enabled": True}
+        session(stack, purpose, F, UID_F, SITE)
+        wait_title(stack, "signed in as e2e-browser-f")
+        for _ in range(10):  # docker exec round trips, no sleep
+            assert listening(stack, UID_F) == []
+            assert not [line for line in stack.python(ALL_LISTENING).splitlines()
+                        if line.split()[0] == "9222"]  # fmt: skip
+            assert stack.current()["lease"]["purpose"] == purpose
+        assert json.loads(stack.python(SWITCH, F, user=str(UID_F))) == {"user-enabled": False}
+        end(stack)
+
+
+def test_a_port_opened_in_a_persons_session_ends_it(stack: Stack) -> None:
+    sign_in(stack, G, UID_G, "e2e-browser-g")
+    listener = (
+        "import socket, time\ns = socket.socket()\ns.bind(('127.0.0.1', 9222))\n"
+        "s.listen()\ntime.sleep(600)"
+    )
+    subprocess.run(
+        ["docker", "exec", "-d", "-u", str(UID_G), stack.container("browser"), "python", "-c",
+         listener],
+        check=True,
+    )  # fmt: skip
+    ended = stack.wait_ended()
+    assert ended["last_end"]["reason"] == "debugging_port"
+    assert not [p for p in processes(stack) if p[0] == UID_G]
+
+
+def test_a_window_that_closes_ends_the_session_browser_closed(stack: Stack) -> None:
+    """Chromium quitting by itself (status 0) is not a crash; a kill from outside still is
+    (test_a_session_without_cdp_killed_from_outside_ends_browser_crashed)."""
+    profile, uid = str(uuid.uuid4()), 20025
+    session(stack, "signin", profile, uid, f"{PAGES}/b7/close.html")
+    ended = stack.wait_ended(attempts=300)
+    assert ended["last_end"]["reason"] == "browser_closed"
+    assert not [p for p in processes(stack) if p[0] == uid]
