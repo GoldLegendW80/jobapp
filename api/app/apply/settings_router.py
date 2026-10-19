@@ -9,7 +9,8 @@
   hash of the list shown. PUT replaces the whole list if `revision` is still the stored one (else
   409 `stale`); 422 `no_company` or `same_company` for a list that cannot be saved.
 - GET /api/apply/answer-bank: the person's saved answers. PUT `{question_key, answer}` changes one
-  (`answer` null forgets it); 404 for a key the person has not saved.
+  (`answer` null, empty or blank forgets it, as the bank's own rule does); 404 for a key the
+  person has not saved.
 
 Every route reads and writes the session's person only (CSRF on every write, by the middleware),
 so another person's caps, settings and answers are never named here; every answer is
@@ -72,7 +73,7 @@ class SettingsIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode_after_like: Literal["review"] | None = None
-    paused: bool | None = None
+    paused: Annotated[bool, Field(strict=True)] | None = None
     min_fit: Annotated[int, Field(strict=True, ge=0, le=100)] | None = None
 
 
@@ -110,7 +111,7 @@ class BankIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question_key: Annotated[str, Field(min_length=1, max_length=bank.KEY_MAX)]
-    answer: Annotated[str, Field(min_length=1, max_length=bank.VALUE_MAX)] | None
+    answer: Annotated[str, Field(max_length=bank.VALUE_MAX)] | None
 
 
 class BankEntryOut(BaseModel):
@@ -220,7 +221,7 @@ def read_bank(user: CurrentUser, db: Db) -> BankOut:
 
 @router.put("/api/apply/answer-bank", response_model=BankOut, responses={404: {}})
 def change_bank(body: BankIn, request: Request, user: CurrentUser, db: Db) -> BankOut:
-    """One saved answer changed, or forgotten when `answer` is null."""
+    """One saved answer changed, or forgotten when `answer` is null or blank."""
     entry = db.execute(
         sa.select(AnswerBankEntry)
         .where(
@@ -230,10 +231,11 @@ def change_bank(body: BankIn, request: Request, user: CurrentUser, db: Db) -> Ba
     ).scalar_one_or_none()
     if entry is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_ANSWER)
-    if body.answer is None:
+    text = (body.answer or "").strip()
+    if not text:
         db.delete(entry)
     else:
-        entry.answer = body.answer.strip() or entry.answer
+        entry.answer = text
         entry.updated_at = deps.clock(request)
     db.commit()
     return _bank_out(db, user)
