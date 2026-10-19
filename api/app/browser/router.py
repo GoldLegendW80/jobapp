@@ -166,15 +166,18 @@ def _unavailable() -> HTTPException:
 
 @router.get("", response_model=BrowserOut)
 async def get_browser(request: Request, user: CurrentUser, store: Store) -> BrowserOut:
+    try:
+        view = await store.current(str(user.id))
+    except StoreUnavailableError:
+        view = None
+    # Read after `current`, which may have just ended a lease and written its size (B7).
     found = await run_in_threadpool(profiles.view, request.app.state.sessionmaker, user.id)
     profile = ProfileOut(
         exists=found is not None,
         size_bytes=found.size_bytes if found else 0,
         last_used_at=found.last_used_at if found else None,
     )
-    try:
-        view = await store.current(str(user.id))
-    except StoreUnavailableError:
+    if view is None:
         return BrowserOut(available=False, profile=profile, lease=None, holder=None, queue=[])
     now = store.clock()
     holder: Literal["you", "other"] | None = (
