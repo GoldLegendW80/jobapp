@@ -91,8 +91,8 @@ choice made by the build that stands until the owner says otherwise.
 ## Browser and apply (2026-10-14)
 
 - Full auto: "Guarded defaults". Off until turned on; then only postings at or above the person's
-  fit threshold, one application per company per 30 days, a 15 minute hold with Cancel before
-  each submit, Ashby, Greenhouse and Lever first, the first 3 runs are rehearsals.
+  fit threshold, one application per company per 30 days, a hold of at least 15 minutes with
+  Cancel before each submit, Ashby, Greenhouse and Lever first, the first 3 runs are rehearsals.
 - Daily limit "by fit score only", plus a safety ceiling of 30 submissions a day.
 - Accounts on job sites: the person signs in or signs up himself in the live view; the browser
   profile is saved per person; on request the agent completes the person's profile on that site.
@@ -127,5 +127,6 @@ them ([tasks/apply/todo.md](../tasks/apply/todo.md), [tasks/browser/todo.md](../
    Full auto), within the run's token budget and every guardrail: the gate, the caps, the safety
    ceiling and the check by model before a submit. This answers the question of #343.
 5. Planner default, not asked, which the owner may change: an approval or a Full auto Like that
-   only the pace per host holds back stays valid, and the gate checks everything again before the
-   click; a Full auto Like stays valid at most 7 days, and only while Full auto stays on.
+   only the pace per host holds back stays valid, at most 7 days after it was given, and the gate
+   checks everything again before the click; a Full auto Like stays valid at most 7 days in any
+   case, and only while Full auto stays on.
