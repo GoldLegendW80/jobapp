@@ -1,5 +1,6 @@
 {
   "WebRtcIPHandling": "disable_non_proxied_udp",
   "QuicAllowed": false,
-  "URLBlocklist": ["chrome://inspect"]
+  "URLBlocklist": ["chrome://inspect"],
+  "PasswordManagerEnabled": false
 }

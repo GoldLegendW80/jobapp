@@ -51,7 +51,8 @@ RUN useradd --no-create-home --home-dir /nonexistent --uid 1000 --shell /usr/sbi
 # WebRtcUdpPortRange stays unset on purpose. The profile's preferences (browserd/prep.py) say
 # the same again. chrome://inspect is blocked: its remote debugging switch opens a DevTools port
 # in a session started without one (measured for B7); RemoteDebuggingAllowed and
-# DeveloperToolsAvailability would also take CDP from the agents' leases.
+# DeveloperToolsAvailability would also take CDP from the agents' leases. Chromium never offers
+# to save a password (PasswordManagerEnabled): the app stores none.
 COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json
 
 COPY browserd /opt/browserd/browserd

@@ -133,7 +133,7 @@ def test_person_sessions_have_no_debugging_port(stack: Stack) -> None:
         assert stack.current()["lease"]["purpose"] == purpose
         assert listening(stack, UID_A) == []
         argv = browser_argv(stack, UID_A)
-        assert not [a for a in argv if "remote-debugging" in a]
+        assert not [a for a in argv if "remote-debugging" in a or "AutomationControlled" in a]
         assert not [cmd for owner, _, cmd in processes(stack) if owner == UID_A and "debug" in cmd]
         end(stack)
 

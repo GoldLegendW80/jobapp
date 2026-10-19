@@ -470,6 +470,7 @@ def test_prepare_clears_stale_locks_and_writes_the_languages(tmp_path: Path) -> 
     assert prefs["intl"]["accept_languages"] == "de-DE,de,en"
     assert prefs["session"]["restore_on_startup"] == 1
     assert prefs["credentials_enable_service"] is False
+    assert prefs["profile"]["password_manager_enabled"] is False
     assert prefs["bookmark_bar"] == {"x": 1}
     assert prefs["download"]["default_directory"] == f"{lease}/downloads"
     assert prefs["webrtc"] == {"ip_handling_policy": "disable_non_proxied_udp"}
@@ -498,6 +499,7 @@ def test_the_image_installs_the_managed_webrtc_policy() -> None:
         "WebRtcIPHandling": "disable_non_proxied_udp",
         "QuicAllowed": False,
         "URLBlocklist": ["chrome://inspect"],
+        "PasswordManagerEnabled": False,
     }
     dockerfile = (ROOT / "browser/Dockerfile").read_text()
     assert "COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json" in dockerfile

@@ -37,13 +37,19 @@ def switches(
     Chromium's own (B1: "X11; Linux x86_64" with the client hint architecture "arm"): a
     fingerprint that lies is never set. WebGL stays off under Xvfb (no SwiftShader): the
     owner's question in B2's pull request. `port` None: no debugging port at all (a person's
-    own session, browserd/signin.py). The address comes last, after `--`, so Chromium never
-    reads it as a switch; the first `--` stops the option loop of Debian's wrapper script
-    (/usr/bin/chromium), which would otherwise drop the second one."""
+    own session, browserd/signin.py), and no --disable-blink-features=AutomationControlled
+    either: nothing automates that session, and Chromium would show the person an infobar about
+    an unsupported switch. The address comes last, after `--`, so Chromium never reads it as a
+    switch; the first `--` stops the option loop of Debian's wrapper script (/usr/bin/chromium),
+    which would otherwise drop the second one."""
     debugging = (
         []
         if port is None
-        else ["--remote-debugging-address=127.0.0.1", f"--remote-debugging-port={port}"]
+        else [
+            "--remote-debugging-address=127.0.0.1",
+            f"--remote-debugging-port={port}",
+            "--disable-blink-features=AutomationControlled",
+        ]
     )
     return [
         "chromium",
@@ -52,7 +58,6 @@ def switches(
         *debugging,
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-blink-features=AutomationControlled",
         "--window-size=1440,900",
         "--window-position=0,0",
         "--start-maximized",
