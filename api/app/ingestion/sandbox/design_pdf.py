@@ -22,7 +22,9 @@ tenths of a point from the top left corner of the page, every number an integer:
 - A run is the characters PDFium's text page gives in a row with one font, size, colour and
   direction on one line; a jump back, a gap wider than GAP_EM times the size, or another line
   ends it. The direction is the one of four (right, up, left, down) the glyphs advance in most,
-  so text turned a quarter or a half turn, or set with a negative size, still makes runs.
+  so text turned a quarter or a half turn, or set with a negative size, still makes runs. Text
+  turned about 28 to 62 degrees off an axis comes back letter by letter: PDFium's character
+  boxes are upright, and overlap too much along such a line.
 - A run's size is the height of its glyphs on the page: the size of `Tf` (its absolute value)
   times the scale across the baseline of the text matrix and of every transformation above it
   (`_height`), as PDF writers put the size in any of them (`1 Tf 11 0 0 11 x y Tm`, or

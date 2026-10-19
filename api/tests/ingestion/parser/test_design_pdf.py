@@ -195,6 +195,8 @@ SIZES = [
         b"",
         110,
     ),
+    ("turned by 20 degrees", said(b"BT /F2 11 Tf 0.9397 0.342 -0.342 0.9397 100 300 Tm"), b"", 110),
+    ("turned by 70 degrees", said(b"BT /F2 11 Tf 0.342 0.9397 -0.9397 0.342 300 300 Tm"), b"", 110),
     ("slanted, as a made up italic", said(b"BT /F2 11 Tf 1 0 0.21 1 56 700 Tm"), b"", 110),
     ("narrowed by Tz", said(b"BT /F2 11 Tf 50 Tz 1 0 0 1 56 700 Tm"), b"", 110),
     ("narrowed in Tm", said(b"BT /F2 11 Tf 0.5 0 0 1 56 700 Tm"), b"", 110),
@@ -212,6 +214,16 @@ def test_the_size_of_a_run_is_its_height_on_the_page(
 
 HUGE = b"99999999999999999999999999999999999999999"
 ZILLION = b"1000000000000000000000"
+
+
+def test_text_turned_by_an_eighth_is_cut_into_letters_that_keep_their_size() -> None:
+    """A declared open point: from about 28 to 62 degrees off an axis, the upright boxes PDFium
+    gives overlap too much along the line to follow it."""
+    turned = said(b"BT /F2 11 Tf 0.7071 0.7071 -0.7071 0.7071 100 300 Tm")
+    (page,) = ask(fx.build([turned])).read
+    assert len(page.runs) > 3
+    assert {run.size for run in page.runs} == {110}
+
 
 # Odd and extreme matrices: never a failure of the answer, every size within its bounds.
 EXTREMES = [
