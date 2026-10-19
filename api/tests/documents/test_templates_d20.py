@@ -4,14 +4,15 @@ lengths, `mono` with accented text in its monospace runs, `executive` with its s
 in French; the contrast of every text colour of the four, no dash printed as a separator, and each
 of the four distinct in layout from every other template (not a recolour). Marked `docker`: the
 same cases through the real renderer, with the geometry and the fonts of the PDF (pypdfium2
-character boxes and font names), and the text order of the two tagged ats friendly.
+character boxes and font names), a long name and long contact lines kept whole in the header,
+and the text order of the two tagged ats friendly.
 
-The plan asks for `grid` with twelve competencies: the content holds at most eight
-(`content.COMPETENCIES_MAX`, D2), so the case runs with the eight it accepts beside twelve skills
-of the same spread of lengths, all in the grid of tags.
+`grid` runs with eight competencies, the content's cap (`content.COMPETENCIES_MAX`, D2), beside
+twelve skills of the same spread of lengths, all in the grid of tags.
 """
 
 import ctypes
+import dataclasses
 import re
 import unicodedata
 from html import unescape
@@ -31,6 +32,7 @@ from tests.documents.test_templates import (
     ON,
     SLUGS,
     assert_authoring,
+    at_soft_limits,
     d1,
     d1_view,
     fitted,
@@ -233,13 +235,60 @@ def test_every_text_colour_reaches_4_5_to_1_on_every_background(slug: str) -> No
     assert all(ratio >= 4.5 for ratio in low.values()), {k: v for k, v in low.items() if v < 4.5}
 
 
+CSS_CONTENT = re.compile(
+    r"""(?<![-\w])content\s*:\s*((?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^;}"'])*)""", re.S
+)
+CSS_STRING = re.compile(r""""((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'""", re.S)
+CSS_ESCAPE = re.compile(r"\\([0-9a-fA-F]{1,6})[ \t\n]?|\\(.)", re.S)
+
+
+def css_escape(match: re.Match[str]) -> str:
+    if match[1] is None:
+        return match[2]
+    code = int(match[1], 16)
+    return chr(code) if 0 < code <= 0x10FFFF else "\ufffd"
+
+
+def css_content_strings(css: str) -> list[str]:
+    """Every string of every CSS `content` declaration, in double or single quotes, with its
+    escapes decoded (`\\2013` is an en dash); comments are not read."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    return [
+        CSS_ESCAPE.sub(css_escape, double or single)
+        for value in CSS_CONTENT.findall(css)
+        for double, single in CSS_STRING.findall(value)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("css", "strings"),
+    [
+        ('a::before { content: "\u2013"; }', ["\u2013"]),
+        ("a::before { content: '\u2013'; }", ["\u2013"]),
+        ("a::before{content:'\u2014'}", ["\u2014"]),
+        ('a::before { content: "\\2013"; }', ["\u2013"]),
+        ("a::before { content: '\\2014 x'; }", ["\u2014x"]),
+        ("a::after { content: ' - ' attr(title); }", [" - "]),
+        ("a::after { content: \"it's\" ' \\\" '; }", ["it's", ' " ']),
+        ("a::after { content: 'a' \" - \"; }", ["a", " - "]),
+        ('a::before { content: ""; } b { color: red; }', [""]),
+        ("a::before { content: counter(item); }", []),
+        ('/* content: "\u2013" */ a { color: red; }', []),
+        ("a { justify-content: space-between; align-content: center; }", []),
+    ],
+)
+def test_css_content_strings_reads_both_quotes_and_escapes(css: str, strings: list[str]) -> None:
+    assert css_content_strings(css) == strings
+
+
 @pytest.mark.parametrize("slug", SLUGS)
 def test_no_dash_is_printed_as_a_separator(slug: str) -> None:
     """The text a template prints of its own: its manifest's names and descriptions, the text of
-    its CSS `content`, and the page it builds from the sample in both languages."""
+    its CSS `content` (either quotes, escapes decoded), and the page it builds from the sample in
+    both languages."""
     found = template(slug)
     own = [*found.name.values(), *found.description.values()]
-    own += re.findall(r"content:\s*\"([^\"]*)\"", found.files["style.css"])
+    own += css_content_strings(found.files["style.css"])
     for kind in templates.KINDS:
         for language in templates.LANGUAGES:
             sample = thumbnails.sample()[kind]
@@ -376,14 +425,128 @@ def test_executive_small_caps_in_french_keep_their_accents_and_text(renderer: An
     assert bottom(heading) >= capital[1] - 0.4
 
 
+def baselines(pdf: bytes, needle: str) -> list[set[float]]:
+    """For each place `needle` is printed on page 1 (white space ignored), the baselines its
+    glyphs stand on: one baseline when it is whole on a line. pdfium reads a hyphen that ends a
+    line as U+FFFE, read here as the hyphen it was."""
+    document = pdfium.PdfDocument(pdf)
+    try:
+        textpage = document[0].get_textpage()
+        text = textpage.get_text_range().replace("\ufffe", "-")
+        chars = [i for i, ch in enumerate(text) if not ch.isspace()]
+        compact = "".join(text[i] for i in chars)
+        target = "".join(needle.split())
+        found, start = [], compact.find(target)
+        while start >= 0:
+            lines = set()
+            for i in chars[start : start + len(target)]:
+                x, y = ctypes.c_double(), ctypes.c_double()
+                pdfium.raw.FPDFText_GetCharOrigin(textpage.raw, i, ctypes.byref(x), ctypes.byref(y))
+                lines.add(round(y.value, 1))
+            found.append(lines)
+            start = compact.find(target, start + len(target))
+        return found
+    finally:
+        document.close()
+
+
+def assert_whole_on_one_line(pdf: bytes, view: ProfileView) -> None:
+    """The name and every contact line are printed whole, each on a single line where it stands
+    highest on the page (the header: a letter prints the name again to sign it, a CV may print
+    the city again with a role)."""
+    for text in [
+        view.identity.full_name,
+        *(line["text"] for line in templates.contact_lines(view)),
+    ]:
+        found = baselines(pdf, text)
+        assert found, f"{text!r} not printed whole"
+        header = max(found, key=max)
+        assert len(header) == 1, (text, sorted(header))
+
+
+# The journey's person (documents-helpers.ts `invented`): a 17 character name and a 43 character
+# e-mail with hyphens, here with two addresses of 39 and 34 characters as well.
+LONG_CONTACT = Identity(
+    full_name="Morgan Exampleton",
+    email="e2e-documents-d20-mvfaxmjmk2bzq@example.org",
+    phone="+33 6 00 00 00 00",
+    city="Nantes",
+    country="France",
+    website="https://morgan-exampleton.example.org/portfolio",
+    links=(("Code", "https://code.example.org/morgan-exampleton"),),
+)
+SHORT_HEADLINE = "Platform Engineer"
+
+# Every header the review of these templates quoted (the journey's person under its short
+# headline, D1's Alex and an ordinary dotted address under the soft limit one), then the
+# journey's person under the soft limit headline. Rows are added, never removed.
+HEADERS = {
+    "journey, short headline": (LONG_CONTACT, False),
+    "alex, soft limit headline": (None, True),
+    "ordinary address, soft limit headline": (
+        dataclasses.replace(LONG_CONTACT, email="morgan.exampleton@example.org"),
+        True,
+    ),
+    "journey, soft limit headline": (LONG_CONTACT, True),
+}
+
+
+def with_headline(found: templates.Template, kind: str, language: str, soft: bool) -> c.Content:
+    """D1's typical CV, or its letter in the language, under the short headline or under the
+    typical CV's headline filled to the template's soft limit."""
+    _, _, typical = d1("cv-typical")
+    limit = found.kinds["cv"].soft_limits.headline
+    headline = at_soft_limits(typical, found.kinds["cv"].soft_limits).headline
+    assert len(headline) == limit
+    content = typical if kind == "cv" else d1(f"letter-{language}")[2]
+    data = content.model_dump() | {"headline": headline if soft else SHORT_HEADLINE}
+    return type(content).model_validate(data)
+
+
 @docker
+@pytest.mark.parametrize("header", HEADERS)
+@pytest.mark.parametrize("language", templates.LANGUAGES)
+@pytest.mark.parametrize("kind", templates.KINDS)
+@pytest.mark.parametrize("slug", D20)
+def test_a_long_name_and_long_contact_lines_stay_whole_in_the_header(
+    renderer: Any, slug: str, kind: str, language: str, header: str
+) -> None:
+    """A long name beside long contact lines, under a short headline or one at the soft limit,
+    at the step the fit chooses and at the loosest step (the largest type): the name stays on
+    one line and each contact line whole, so an applicant tracking system reads the e-mail
+    address and the links as they are."""
+    found = template(slug)
+    identity, soft = HEADERS[header]
+    view = d1_view()
+    if identity is not None:
+        view = dataclasses.replace(view, identity=identity)
+    content = with_headline(found, kind, language, soft)
+    result = fitted(renderer, found, kind, content, view, language)
+    assert result.fit, result.pages
+    assert_whole_on_one_line(result.pdf, view)
+    if result.step:
+        loosest = found.steps(kind)[0]
+        html = templates.build_html(found, kind, content, view, language, loosest, ON)
+        assert_whole_on_one_line(renderer.render(html).pdf, view)
+
+
+@docker
+@pytest.mark.parametrize("filled", [False, True], ids=["typical", "at its soft limits"])
 @pytest.mark.parametrize("slug", ATS)
-def test_an_ats_friendly_template_reads_in_the_order_of_the_page(renderer: Any, slug: str) -> None:
-    """The PDF text, as an applicant tracking system extracts it: the name first, the sections
-    in the order of the page, the roles in order, and every bullet whole on its way."""
+def test_an_ats_friendly_template_reads_in_the_order_of_the_page(
+    renderer: Any, slug: str, filled: bool
+) -> None:
+    """The PDF text, as an applicant tracking system extracts it: the name first, the name and
+    each contact line whole on a line, the sections in the order of the page, the roles in
+    order, and every bullet whole on its way; for D1's typical CV and for it filled to the
+    template's soft limits."""
     _, language, content = d1("cv-typical")
-    result = fitted(renderer, template(slug), "cv", content, d1_view(), language)
+    found = template(slug)
+    if filled:
+        content = at_soft_limits(content, found.kinds["cv"].soft_limits)
+    result = fitted(renderer, found, "cv", content, d1_view(), language)
     assert result.fit
+    assert_whole_on_one_line(result.pdf, d1_view())
     # pdfium reads a hyphen that ends a line as U+FFFE, in every template.
     text = " ".join(pdf_text(result.pdf).replace("\ufffe", "-").split())
     assert text.startswith("Alex Example"), text[:60]

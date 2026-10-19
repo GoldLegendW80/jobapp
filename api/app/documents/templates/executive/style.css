@@ -17,12 +17,14 @@ li, p { overflow-wrap: anywhere; }
 
 .head {
   display: flex;
+  /* The contact block drops under the name when the two do not fit side by side. */
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-end;
-  gap: 16pt;
+  gap: 4pt 16pt;
   padding-bottom: 7pt;
 }
-.headtext { flex: 1 1 auto; }
+.headtext { flex: 1 1 auto; min-width: 50%; }
 .name {
   font-size: 2.6em;
   font-weight: 600;
@@ -35,10 +37,13 @@ li, p { overflow-wrap: anywhere; }
   font-style: italic;
   color: #7d5a1e;
   margin-top: 3pt;
+  /* The name alone sizes the column: the headline wraps in whatever width is left. */
+  contain: inline-size;
 }
 .contact {
   list-style: none;
   flex: 0 1 auto;
+  margin-left: auto;
   text-align: right;
   font-size: 0.92em;
   color: #4a4f5c;

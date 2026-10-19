@@ -7,7 +7,7 @@
   },
   "description": {
     "en": "One column in a refined serif, in two tones of navy and bronze: small caps headings along a fine rule, the contact lines on the right of the name. Reads well for applicant tracking systems.",
-    "fr": "Une colonne dans un caractère à empattements soigné, en deux tons de bleu marine et de bronze : des titres en petites capitales le long d'un filet, les coordonnées à droite du nom. Se lit bien par un logiciel de recrutement."
+    "fr": "Une colonne dans un caractère à empattements soigné, en deux tons de bleu marine et de bronze : des titres en petites capitales le long d'un filet, les coordonnées à droite du nom. Bien lu par les logiciels de recrutement."
   },
   "tags": [
     "one column",
@@ -140,5 +140,5 @@
       "paragraph": 900
     }
   },
-  "thumbnail_of": "77e95882ae99c16f07d8429132f57fd87546723555f655227807db8a93ddcf6d"
+  "thumbnail_of": "61f43edd49ef285d3d74ee08b42107f6f96d38c0c1f5bcca1a5c80e4c5f9c2e4"
 }
