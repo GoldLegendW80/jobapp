@@ -10,6 +10,7 @@ and at the end of this file."""
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Any
 
@@ -35,9 +36,11 @@ from app.documents.models import (
     Origin,
 )
 from tests.documents import writer_support as writers
+from tests.documents.canary import find, marker
 from tests.documents.render_support import CV, FakeRenderer, RecordingQueue, context, pdf_of
 from tests.documents.store_support import AT
 from tests.documents.test_auto_api import Who, queue
+from tests.documents.two_sessions import in_thread, wait_until_blocked
 from tests.identity.api_helpers import Api
 from tests.identity.conftest import api, app, clock, engine, factory, migrated_url
 
@@ -108,6 +111,7 @@ def written(
     *,
     spent: tuple[int | None, int | None] = SPENT,
     result: FitResult = FitResult.overflow,
+    content: dict[str, Any] = CV,
 ) -> uuid.UUID:
     """The posting's CV as a writer's `posting` generation left it, its run's counts `spent`, its
     version drawn with `result`."""
@@ -124,7 +128,7 @@ def written(
             at=who.clock(),
         )
         run = generate.start(db, generation, at=who.clock())
-        generate.finish(db, generation, c.parse("cv", CV), [], at=who.clock())
+        generate.finish(db, generation, c.parse("cv", content), [], at=who.clock())
         db.commit()
         document_id, run_id = document.id, run.id
     _counts(who, run_id, spent)
@@ -511,3 +515,61 @@ def test_the_writer_shortens_a_switched_cv_and_the_sent_version_stays(
     )
     assert writers.generation_row(factory, generation_id).status is GenerationStatus.done
     assert len(writers.document_row(factory, document).draft["summary"]) <= 330
+
+
+def test_a_switch_committed_while_the_click_waits_is_read_under_the_lock(
+    alex: Who, api: Api, engine: sa.Engine
+) -> None:
+    """The click waits for the document's lock, then reads the latest version again: the
+    switch made meanwhile has no page yet, so the old page is never what gets shortened."""
+    document = written(alex, alex.posting(80))
+    outcome: dict[str, Any] = {}
+    with alex.factory() as other:
+        store.lock_document(other, alex.user, document)
+        thread = in_thread(lambda: api.request("POST", fit(document), token=alex.token), outcome)
+        wait_until_blocked(engine, [thread], 1)
+        render_job.switch(other, alex.user, document, at=alex.clock(), template_slug="compact")
+        store.commit(other)
+    thread.join()
+    assert "error" not in outcome, outcome.get("error")
+    response = outcome["result"]
+    assert (response.status_code, response.json()["detail"]) == (
+        409,
+        auto_router.FIT_REFUSED["not_drawn"][1],
+    )
+    assert shortenings(alex) == []
+
+
+def test_two_clicks_at_once_start_one_shortening(alex: Who, api: Api, engine: sa.Engine) -> None:
+    document = written(alex, alex.posting(80))
+    outcome: dict[str, Any] = {}
+    with alex.factory() as other:
+        store.lock_document(other, alex.user, document)
+        thread = in_thread(lambda: api.request("POST", fit(document), token=alex.token), outcome)
+        wait_until_blocked(engine, [thread], 1)
+        generate.make_fit(other, alex.user, document, at=alex.clock())
+        store.commit(other)
+    thread.join()
+    assert "error" not in outcome, outcome.get("error")
+    response = outcome["result"]
+    assert (response.status_code, response.json()["detail"]) == (409, auto_router.RUNNING)
+    assert len(shortenings(alex)) == 1
+
+
+def test_the_cv_text_never_reaches_a_log_a_job_or_the_run_input(
+    alex: Who, api: Api, queue: RecordingQueue, caplog: pytest.LogCaptureFixture
+) -> None:
+    planted = marker()
+    caplog.set_level(logging.DEBUG)
+    document = written(alex, alex.posting(80), content={**CV, "summary": f"Engineer {planted}."})
+    with alex.factory() as db:
+        found = store.get(db, alex.user, document)
+        assert found is not None
+        assert planted in found.draft["summary"]
+    assert api.request("POST", fit(document), token=alex.token).status_code == 202
+    [made] = shortenings(alex)
+    with alex.factory() as db:
+        run = db.get(AgentRun, made.run_id)
+        assert run is not None
+        values = [queue.jobs, run.input, made.estimate]
+    assert not find([planted], logs=caplog.records, values=values)
