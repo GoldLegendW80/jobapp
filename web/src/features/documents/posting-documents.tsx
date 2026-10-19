@@ -24,21 +24,28 @@ import { PostingDocumentCard } from "./posting-document-card";
 import {
   cardState,
   documentOf,
+  isBusy,
+  LETTER_FOLLOW_MS,
   postingPollInterval,
 } from "./posting-documents-state";
 
 /**
  * The "Documents" section of the job page (SPEC-documents.md, "Job detail page"): the posting's
  * CV and letter as two cards. The documents are read again while a generation is open or a page is
- * being drawn, and the posting is read again when the work ends (it may have become `cv_ready`).
+ * being drawn, and for a short while after the CV's generation closes, until the letter that follows
+ * it has its own. The posting is read again when the work ends: the render that ends it may have
+ * moved the posting to `cv_ready`.
  */
 export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   const queryClient = useQueryClient();
   const [choice, setChoice] = useState<string>();
+  // CV generations seen closing; 0 when no letter is expected or its generation is read.
+  const [letterWindow, setLetterWindow] = useState(0);
   const documents = useQuery({
     queryKey: postingDocumentsKey(job.id),
     queryFn: ({ signal }) => getPostingDocuments(job.id, signal),
-    refetchInterval: (current) => postingPollInterval(current.state.data),
+    refetchInterval: (current) =>
+      postingPollInterval(current.state.data, letterWindow > 0),
   });
   const spend = useQuery({
     queryKey: spendKey(),
@@ -62,9 +69,7 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
     profile.data !== undefined &&
     profile.data.sections.experience.employers.length === 0;
 
-  const open = (documents.data?.documents ?? []).some((one) =>
-    isOpen(one.generation),
-  );
+  const open = (documents.data?.documents ?? []).some(isBusy);
   const wasOpen = useRef(open);
   useEffect(() => {
     if (wasOpen.current && !open) {
@@ -73,6 +78,27 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
     }
     wasOpen.current = open;
   }, [open, queryClient, job.id]);
+
+  const cvGeneration = documentOf(documents.data, "cv")?.generation ?? null;
+  const cvOpen = isOpen(cvGeneration);
+  const letterOpen = isOpen(documentOf(documents.data, "letter")?.generation);
+  const [cvWasOpen, setCvWasOpen] = useState(cvOpen);
+  if (cvOpen !== cvWasOpen) {
+    setCvWasOpen(cvOpen);
+    if (!cvOpen && cvGeneration?.status !== "failed" && !letterOpen)
+      setLetterWindow((count) => count + 1);
+  }
+  // The letter's own generation is read from here on: the wait for it is over.
+  if (letterWindow > 0 && letterOpen) setLetterWindow(0);
+  useEffect(() => {
+    if (letterWindow === 0) return;
+    const timer = setTimeout(() => {
+      setLetterWindow(0);
+    }, LETTER_FOLLOW_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [letterWindow]);
 
   const threshold = spend.data
     ? { auto: spend.data.auto, min: spend.data.min_fit }
@@ -90,6 +116,8 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   // Neither document exists: one click writes the CV and the letter that follows it.
   const cvDocument = documentOf(documents.data, "cv");
   const cvReady = (cvDocument?.latest ?? null) !== null;
+  const letterWritten =
+    (documentOf(documents.data, "letter")?.latest ?? null) !== null;
   const untouched = (["cv", "letter"] as const).every((kind) =>
     ["empty", "under", "manual"].includes(
       cardState(documentOf(documents.data, kind), job.fit, threshold).tag,
@@ -152,6 +180,7 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
                 choice={choice}
                 onChoose={setChoice}
                 cvReady={cvReady}
+                letterWritten={letterWritten}
               />
             ))}
           </div>
