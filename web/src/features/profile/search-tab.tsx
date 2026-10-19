@@ -19,6 +19,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { NativeSelect } from "@/components/ui/native-select";
+import { DocumentsSearchOptions } from "@/features/documents/generation-settings-card";
 import { cn } from "@/lib/utils";
 
 import {
@@ -187,6 +188,7 @@ export function SearchTab({
           <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
           <BoardsTable form={form} />
           <NeverApply form={form} />
+          <DocumentsSearchOptions form={form} />
           <SaveBar
             label="Search"
             saving={saving}

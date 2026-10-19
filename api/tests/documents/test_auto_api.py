@@ -2,7 +2,8 @@
 (written), with today's ceiling reached (written, not counted), from another base CV, in place of
 an automatic generation that waited (which gives way), while one runs (409), without a credential
 (waiting, started by the next tick); another person's posting and base CV (404); the spend of the
-module's runs only, never another person's, and `?min_fit=` over the last 30 days only."""
+module's runs only, never another person's, `?min_fit=` over the last 30 days only, and what a
+lower threshold would add (D13's card shows it before the person saves it)."""
 
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, CredentialKind
-from app.documents import consent, generate, store, tick
+from app.documents import consent, estimate, generate, store, tick
 from app.documents.models import (
     Author,
     BaseSource,
@@ -374,6 +375,43 @@ def test_the_spend_counts_the_modules_runs_only_and_never_another_persons(
     assert (body["today"]["input"], body["today"]["output"]) == (1000, 200)
     assert Decimal(body["last_30_days"]["cost_usd"]) == Decimal("0.5")
     assert body["priced"] is True
+
+
+def test_a_lower_threshold_counts_the_postings_it_adds_with_their_estimate(
+    alex: Who, api: Api, factory: sessionmaker[Session], clock: Any
+) -> None:
+    with factory() as db:
+        db.execute(
+            sa.text(
+                "UPDATE profiles SET sections = jsonb_set(sections, '{search}', "
+                "CAST(:s AS jsonb)) WHERE user_id = :u"
+            ),
+            {"s": '{"documents": {"min_fit": 65}}', "u": alex.user},
+        )
+        db.commit()
+    for fit in (80, 65, 64, 55):
+        alex.posting(fit)
+    alex.posting(50, days_ago=30)
+    alex.posting(None)
+
+    def asked(min_fit: int | None = None) -> dict[str, Any]:
+        params = {} if min_fit is None else {"min_fit": min_fit}
+        response = api.request("GET", SPEND, params=params, token=alex.token)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    saved = asked()
+    assert (saved["min_fit"], saved["to_write"], saved["newly"]) == (65, 2, 0)
+    assert saved["newly_estimate"]["tokens"] == {"low": 0, "high": 0}
+    with factory() as db:
+        each = consent.figures(db, alex.user, clock().date()).posting
+    two = estimate.times(each, 2)
+    for lowered in (asked(55), asked(0)):
+        assert (lowered["to_write"], lowered["newly"]) == (4, 2)
+        assert lowered["newly_estimate"]["tokens"] == {"low": two.low, "high": two.high}
+        assert lowered["newly_estimate"]["cost"] is not None  # an API key
+    assert (asked(64)["newly"], asked(65)["newly"], asked(100)["newly"]) == (1, 0, 0)
+    assert asked(80)["to_write"] == 1
 
 
 # Around both midnights: UTC, and Paris (summer, UTC+2, and winter, UTC+1). `found_on` is the UTC
