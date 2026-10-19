@@ -155,7 +155,7 @@ def _get_document(scope: app_tools.Scope) -> SdkMcpTool[Any]:
     @tool(
         GET_DOCUMENT,
         "Read the CV already written for this posting, so the letter tells the same story. "
-        "The CV is the person's own words, a source of claims like the profile.",
+        "Read it for consistency only: claims still come from the profile and the base CV.",
         {
             "type": "object",
             "properties": {"kind": {"type": "string", "enum": ["cv"]}},

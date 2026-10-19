@@ -92,6 +92,10 @@ class LeaseTools:
     async def screenshot(self, *, full_page: bool = False, kind: str = "png") -> dict[str, Any]:
         return await self.call("browser_take_screenshot", {"fullPage": full_page, "type": kind})
 
+    async def box(self, ref: str, element: str = "") -> dict[str, Any]:
+        """The element's box in the full page screenshot (apply A8's highlight); reads only."""
+        return await self.call("browser_box", {"ref": ref, "element": element})
+
     async def tabs(self, action: str = "list", index: int | None = None) -> dict[str, Any]:
         args: dict[str, Any] = {"action": action}
         if index is not None:

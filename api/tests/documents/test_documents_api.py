@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import uuid
 from typing import Any
 
@@ -17,7 +18,8 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.documents import render_job, store
+from app.body_limit import DEFAULT_MAX_BYTES, TOO_LARGE, limit_for
+from app.documents import content, render_job, store
 from app.documents.models import (
     Document,
     DocumentVersion,
@@ -188,6 +190,50 @@ def test_posting_documents_name_a_failed_generation_until_a_later_one_replaces_i
     assert api.get(url, token=alex).json()["documents"][0]["generation"] is None
     other = api.get(url, token=two["blake"])
     assert other.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("modes", "shown"),
+    [
+        # A chat or a shortening that fails is not the writing of the document: no "Try again".
+        ((("posting", "done"), ("chat", "failed")), None),
+        ((("posting", "done"), ("shorten", "failed")), None),
+        # Nor does one that ends well hide a writing that failed before it.
+        ((("posting", "failed"), ("chat", "done")), "failed"),
+        ((("posting", "failed"), ("shorten", "failed")), "failed"),
+        ((("chat", "failed"), ("posting", "failed")), "failed"),
+        ((("posting", "failed"), ("posting", "done")), None),
+    ],
+)
+def test_posting_documents_name_only_a_failed_writing_of_the_document(
+    two: dict[str, Any],
+    api: Api,
+    factory: sessionmaker[Session],
+    clock: Any,
+    modes: tuple[tuple[str, str], ...],
+    shown: str | None,
+) -> None:
+    alex, document = two["alex"], two["document"]
+    with factory() as db:
+        for mode, status in modes:
+            made = store.create_generation(
+                db,
+                two["alex_id"],
+                document,
+                GenerationMode(mode),
+                GenerationTrigger.click,
+                at=clock(),
+                estimate={},
+                token_ceiling=1000,
+                status=GenerationStatus(status),
+            )
+            made.error = "run_failed" if status == "failed" else None
+            db.commit()
+            clock.advance(seconds=1)
+    generation = api.get(f"/api/jobs/{two['posting']}/documents", token=alex).json()["documents"][
+        0
+    ]["generation"]
+    assert (generation or {}).get("status") == shown
 
 
 def test_another_persons_document_does_not_exist(
@@ -471,6 +517,24 @@ def test_a_switch_is_stored_when_the_render_queue_is_full(
     _deferred(factory, queue, full)
 
 
+def test_a_draft_body_over_its_class_is_413_and_one_at_the_class_is_saved(
+    two: dict[str, Any], api: Api
+) -> None:
+    path = f"/api/documents/{two['document']}/draft"
+    limit = limit_for("PUT", path)
+    assert limit is not None
+    assert content.RAW_MAX_BYTES < limit < DEFAULT_MAX_BYTES
+    body = json.dumps(CV).encode()
+    at_limit = body[:-1] + b" " * (limit - len(body)) + b"}"
+    headers = {"If-Match": "1", "Content-Type": "application/json"}
+    over = api.request("PUT", path, token=two["alex"], content=at_limit + b" ", headers=headers)
+    assert over.status_code == 413, over.text
+    assert over.json() == {"detail": TOO_LARGE}
+    saved = api.request("PUT", path, token=two["alex"], content=at_limit, headers=headers)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["draft_revision"] == 2
+
+
 def test_a_patch_that_changes_nothing_asks_for_no_render(
     full: dict[str, Any], api: Api, factory: sessionmaker[Session], queue: RecordingQueue
 ) -> None:
@@ -519,6 +583,15 @@ def test_a_patch_that_changes_nothing_asks_for_no_render(
         (('Alex"; x=1', "Lumen\r\nSet-Cookie"), "CV", "Alex_x_1_Lumen_Set_Cookie_CV"),
         (("Bjørn Øster", "Fjærland"), "Letter", "Bjorn_Oster_Fjaerland_Letter"),
         (("Paweł Wałęsa", ""), "CV", "Pawel_Walesa_CV"),
+        (("Ŋuolja Áilu", "ŊUOLJA"), "CV", "Nguolja_Ailu_NgUOLJA_CV"),
+        (("Leŋŋa", ""), "Letter", "Lengnga_Letter"),
+        (("Əliyev Rəşad", "ƏLİ"), "CV", "Eliyev_Resad_ELI_CV"),
+        (("Ǝmeka", "ǝ"), "CV", "Emeka_e_CV"),
+        (("Ɗanjuma Ɓello", "Ƙano Ƴola"), "CV", "Danjuma_Bello_Kano_Yola_CV"),
+        (("Ɛfua Ɔsei", "Ɣeƒe"), "CV", "Efua_Osei_Gefe_CV"),
+        (("Ɖoe ɖa", "Ʋɔ"), "CV", "Doe_da_Vo_CV"),
+        (("ǅuro", "Ǿresund"), "CV", "Dzuro_Oresund_CV"),
+        (("ʃʒʔ Alex", ""), "CV", "Alex_CV"),
     ],
 )
 def test_the_file_name_spells_letters_in_ascii(

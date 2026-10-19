@@ -14,7 +14,8 @@
 # checks before any network call; the CLI run in the api container with the Funnel URL, quoted),
 # `admin unlock` (argument checks first; psql in the db container, values bound, count printed),
 # and `jobs import` and `profile import` (argument checks; conversion on the Mac of a synthetic job
-# folder, the document streamed to the CLI in the api container; a bad source never sent).
+# folder, the document streamed to the CLI in the api container; a bad source never sent), and
+# `documents import-legacy` (argument checks; the CLI run in the api container, --dry-run passed on).
 # Issue #81: ops/migrate.sh against a fake docker (a one off container of the new image, the no-op
 # at head, a failing migration, a timeout, a kill, a concurrent run, a first install, masked credentials),
 # the order of cmd_deploy (build, migrate, compose up), and the deploy step of deploy.yml cut out of
@@ -212,6 +213,14 @@ done
 run 0 ./deploy.sh --help
 out_has "jobs mark-overrides <email> \[--apply\]"
 ok "jobs mark-overrides: missing email, unknown option, extra argument refused before any network call; --help documents it"
+for args in "documents" "documents import" "documents import-legacy" "documents import-legacy a@b.c --force" "documents import-legacy a@b.c --dry-run x" "documents import-legacy --dry-run a@b.c" "documents import-legacy no-at-sign" "documents import-legacy -x@example.org"; do
+  # shellcheck disable=SC2086 # word splitting wanted
+  run 1 nohost ./deploy.sh $args
+  grep -q "documents import-legacy" "$WORK/out" || fail "documents $args: $(cat "$WORK/out")"
+done
+run 0 ./deploy.sh --help
+out_has "documents import-legacy <email> \[--dry-run\]"
+ok "documents import-legacy: missing or bad email, unknown option, extra argument refused before any network call; --help documents it"
 run 1 ./deploy.sh deploy --bogus-flag
 out_has "unknown option for deploy: --bogus-flag"
 ok "unknown deploy option refused before any network call"
@@ -401,6 +410,11 @@ case "$cmd" in
     echo "Dry run: would mark 0 fits as set by hand (they differ from the computed fit)."
     exit "${FAKE_CLI_EXIT:-0}"
     ;;
+  *"exec -T api python -m app.documents.cli import-legacy"*)
+    echo "$cmd" >>"$FAKE_CALLS"
+    echo "Imported 0 CVs and 0 letters from 0 postings with legacy files."
+    exit "${FAKE_CLI_EXIT:-0}"
+    ;;
   *"exec -T api python -m app.identity.cli"*)
     echo "$cmd" >>"$FAKE_CALLS"
     echo "Setup link for zoe@example.org, valid 7 days, single use:"
@@ -452,7 +466,7 @@ ts_status() {
   "Health": [],
   "MagicDNSSuffix": "taild83d16.ts.net",
   "CurrentTailnet": {
-    "Name": "hthautin@example.org",
+    "Name": "e2e-owner@example.org",
     "MagicDNSSuffix": "taild83d16.ts.net",
     "MagicDNSEnabled": true
   },
@@ -615,6 +629,19 @@ grep -qF -- "mark-overrides --email zoe@example.org --apply" "$WORK/calls" ||
   fail "mark-overrides --apply remote command: $(cat "$WORK/calls")"
 run_split 2 fake FAKE_CLI_EXIT=2 ./deploy.sh jobs mark-overrides zoe@example.org
 ok "jobs mark-overrides runs app.jobs.cli mark-overrides in the api container, dry run unless --apply, exit code passed through"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh documents import-legacy zoe@example.org --dry-run
+grep -qF -- "exec -T api python -m app.documents.cli import-legacy zoe@example.org --dry-run" "$WORK/calls" ||
+  fail "import-legacy --dry-run remote command: $(cat "$WORK/calls")"
+grep -q "(dry run)" "$WORK/stdout" "$WORK/stderr" || fail "the dry run is not announced"
+: >"$WORK/calls"
+run_split 0 fake ./deploy.sh documents import-legacy zoe@example.org
+grep -qF -- "exec -T api python -m app.documents.cli import-legacy zoe@example.org" "$WORK/calls" ||
+  fail "import-legacy remote command: $(cat "$WORK/calls")"
+grep -qF -- "--dry-run" "$WORK/calls" && fail "a run sent --dry-run: $(cat "$WORK/calls")"
+grep -q "Imported 0 CVs" "$WORK/stdout" || fail "the CLI's summary is not shown: $(cat "$WORK/stdout")"
+run_split 1 fake FAKE_CLI_EXIT=1 ./deploy.sh documents import-legacy zoe@example.org
+ok "documents import-legacy runs app.documents.cli import-legacy in the api container, --dry-run passed on, exit code passed through"
 : >"$WORK/calls"
 run_split 1 fake JOBAPP_SOURCE_DIR="$WORK/empty-folder" ./deploy.sh jobs import zoe@example.org
 grep -q "is not a folder (set JOBAPP_SOURCE_DIR" "$WORK/stderr" || fail "missing source: $(cat "$WORK/stderr")"

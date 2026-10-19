@@ -1,6 +1,6 @@
 """The Applications settings of a person (A11; SPEC-apply, "API" and "Frontend", Settings).
 
-- GET /api/apply/settings: the mode after a Like (Full auto is not offered until A13), the pause
+- GET /api/apply/settings: the mode after a Like (Full auto is not offered until A13a), the pause
   switch, the fit threshold "Apply automatically from" (`min_fit`, the person's or the default),
   the Advanced values (the safety ceiling, the hold), and, read only, the two other thresholds
   ("Show postings from", "Write documents from") from the person's search options.

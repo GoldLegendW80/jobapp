@@ -74,10 +74,8 @@ CONTINUE_CHANGED = (
 ADDS_MAX = 2**53 - 1  # the largest whole number every JSON client holds exactly
 CONSENT_REQUIRED = "Read and accept the consent text before a run sends documents to Anthropic."
 ACTIVE_RUN = "A run is already in progress. Wait for it, or cancel it."
-OVERSHOOT = (
-    "The run pauses at its ceiling between two requests: it can pass it by the request in "
-    f"flight, and by at most {engine.OVERSHOOT_REQUESTS} requests of the step being read."
-)
+# The one wording of the overshoot: what G6 measured, quoted by the plan as written here.
+OVERSHOOT = "A run can pass its ceiling by one request, or two."
 LIST_MAX = 20
 _401 = {401: {"model": ErrorOut, "description": "Not signed in"}}
 _404 = {404: {"model": ErrorOut, "description": "No such run (or not yours)"}}
@@ -162,6 +160,11 @@ class TokensOut(BaseModel):
         "the run closes by itself within a minute, and a Continue sent meanwhile adds nothing, "
         "closes it at once and is answered 409 `continue_changed` with `continue_adds` 0."
     )
+    continue_ceiling: int | None = Field(
+        description="The ceiling one Continue would set now: `ceiling + continue_adds` while "
+        "`continue_adds` is above zero, null otherwise. After the click is accepted, `ceiling` "
+        "is this figure."
+    )
     overshoot_requests: int
     overshoot: str
 
@@ -178,6 +181,11 @@ class RunOut(BaseModel):
         "it. Null for every other end."
     )
     waiting: str | None = Field(description="`slots` while the user has four agent runs active.")
+    cost_usd: str | None = Field(
+        description="What the run's agent runs on an Anthropic API key cost, every attempt of "
+        "every step included, as recorded when each one ended. Null when none of them has a "
+        "known cost on an API key (a subscription, or nothing ended yet)."
+    )
     cancel_requested: bool
     document_ids: list[uuid.UUID]
     unread_document_ids: list[uuid.UUID]
@@ -242,6 +250,18 @@ def _cost(agent: Any) -> str | None:
     if agent.credential_kind is not CredentialKind.anthropic_api_key:
         return None
     return str(Decimal(agent.cost_usd).quantize(Decimal("0.0001")))
+
+
+def _run_cost(db: Session, run: IngestionRun) -> str | None:
+    # A step keeps only its last agent run: every attempt is found by the run id of its input.
+    total = db.scalar(
+        sa.select(sa.func.sum(AgentRun.cost_usd)).where(
+            AgentRun.user_id == run.user_id,
+            AgentRun.input["ingestion_run_id"].astext == str(run.id),
+            AgentRun.credential_kind == CredentialKind.anthropic_api_key,
+        )
+    )
+    return None if total is None else str(Decimal(total).quantize(Decimal("0.0001")))
 
 
 def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
@@ -323,6 +343,11 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
             )
             or 0
         )
+    adds = (
+        engine.continue_adds(db, run, [row[0] for row in rows], now)
+        if run.status is RunStatus.paused and run.paused_reason == engine.TOKEN_CEILING
+        else None
+    )
     return RunOut(
         id=run.id,
         status=run.status,
@@ -330,6 +355,7 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
         paused_reason=run.paused_reason if run.status is RunStatus.paused else None,
         closed_reason=run.closed_reason,
         waiting=run.waiting,
+        cost_usd=_run_cost(db, run),
         cancel_requested=run.cancel_requested_at is not None,
         document_ids=list(run.document_ids),
         unread_document_ids=[one for one in run.document_ids if one not in read],
@@ -340,9 +366,8 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
             low=run.estimate_low,
             high=run.estimate_high,
             history=[CeilingEntryOut.model_validate(entry) for entry in run.ceiling_history],
-            continue_adds=engine.continue_adds(db, run, [row[0] for row in rows], now)
-            if run.status is RunStatus.paused and run.paused_reason == engine.TOKEN_CEILING
-            else None,
+            continue_adds=adds,
+            continue_ceiling=run.token_ceiling + adds if adds else None,
             overshoot_requests=engine.OVERSHOOT_REQUESTS,
             overshoot=OVERSHOOT,
         ),

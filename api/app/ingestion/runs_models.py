@@ -52,7 +52,7 @@ from sqlalchemy.dialects import postgresql as pg
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.ingestion import plan
-from app.ingestion.models import IngestionDocument
+from app.ingestion.models import IngestionDocument, TextStatus
 from app.models_base import Base
 
 SHA256_BYTES = 32
@@ -118,6 +118,21 @@ def stored_text_sha256() -> sa.ColumnElement[bytes]:
     """The same hash, of the text `ingestion_documents` stores now, computed by Postgres (the
     text does not leave the database). NULL for a document without text."""
     return sa.func.sha256(sa.func.convert_to(IngestionDocument.text, "UTF8"))
+
+
+def may_be_read() -> sa.ColumnElement[bool]:
+    """A condition on `ingestion_documents`: true for a document a step may read now. Its text is
+    read (`done`: not pending, failed or waiting for a transcription) and no secret warning waits
+    for the user's confirmation (SPEC-ingestion.md, Privacy). The start of a run checks the same
+    on the row (`estimate_router._why_not`); the engine, `agents.bind_step` and both tools check
+    it again, since a transcription can set the warning while the run goes on."""
+    return sa.and_(
+        IngestionDocument.text_status == TextStatus.done,
+        sa.or_(
+            IngestionDocument.secret_warning.is_(False),
+            IngestionDocument.secret_confirmed_at.is_not(None),
+        ),
+    )
 
 
 class IngestionRun(Base):

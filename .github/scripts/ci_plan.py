@@ -116,6 +116,7 @@ LANES: dict[str, dict[str, tuple[str, ...]]] = {
             "browser_egress_test",
             "dev_setup_test",
             "remote_ops_test",
+            "extra_ca_test",
         ),
         # ingestion: every web/e2e/ingestion-*.spec.ts through one config, so a task of that
         # module adds a spec without a new step here or in ci.yml (e2e_groups.py, SPEC_PREFIX).

@@ -90,7 +90,7 @@ echo "${FAKE_NODE_VERSION:-v22.12.0}"
 EOF
 fake pnpm <<'EOF'
 #!/usr/bin/env bash
-printf 'pnpm %s\n' "$*" >>"$CALLS"
+printf 'pnpm %s (in %s, switch %s, on fail %s)\n' "$*" "$PWD" "${npm_config_manage_package_manager_versions:-on}" "${pnpm_config_pm_on_fail:-download}" >>"$CALLS"
 echo "${FAKE_PNPM_VERSION:-9.15.9}"
 EOF
 fake python3 <<'EOF'
@@ -155,6 +155,13 @@ misses() { # misses <n>: exactly n MISS lines and the matching last line
   last_line_is "DEV SETUP: $1 missing"
 }
 calls_lack() { if grep -qE -- "$1" "$CALLS"; then fail "a call matches '$1': $(cat "$CALLS")"; fi; }
+# The one pnpm call: its version, from / (no packageManager above) with both version switches off.
+pnpm_asked_from_root() {
+  local want='pnpm --version (in /, switch false, on fail ignore)' others
+  grep -qxF "$want" "$CALLS" || fail "pnpm --version not asked from / with the switches off: $(cat "$CALLS")"
+  others="$(grep '^pnpm ' "$CALLS" | grep -vxF "$want" || true)"
+  [[ -z "$others" ]] || fail "another pnpm call: $others"
+}
 
 # --- everything in place --------------------------------------------------------------------
 run 0
@@ -191,10 +198,15 @@ connects="$(grep '^ssh ' "$CALLS" | grep -v '^ssh -G ' | grep -v 'BatchMode=yes'
 out_lacks "gho_"
 out_lacks "FAKETOKEN"
 out_lacks "e2e-someone"
+pnpm_asked_from_root
 FAKE_SSH_FAILS=1 run 1 --jetson
 out_lacks "100.64.0.99"
 out_lacks "someone"
-ok "read only: no pull, run, sign in, install or project edit; ssh only with BatchMode; no token, account or host printed"
+cd "$REPO/web"
+run 0
+pnpm_asked_from_root
+cd "$ROOT"
+ok "read only: no pull, run, sign in, install or project edit; ssh only with BatchMode; pnpm asked from / with its version switches off, also when started in web/; no token, account or host printed"
 
 # --- each missing piece is named with its fix --------------------------------------------------
 FAKE_GH_SIGNED_OUT=1 run 1
@@ -262,14 +274,52 @@ FAKE_NODE_VERSION=v24.1.0 run 0
 rm "$REPO/.nvmrc"
 ok "node: under engines.node is a MISS (22.11.9, 20, 8), at or above passes (22.12.0, 22.13.1, 23, 100); .nvmrc wins when it exists"
 
-for v in 8.15.9 10.0.0; do
+for v in 8.15.9 7.33.0; do
   FAKE_PNPM_VERSION="$v" run 1
   misses 1
-  out_has "web/package.json pins 9.15.9"
-  out_has "corepack prepare pnpm@9.15.9 --activate"
+  out_has "MISS  pnpm $v, web/package.json pins 9.15.9"
+  out_has "fix: npm install -g pnpm@9.15.9"
+  out_lacks "corepack"
 done
 FAKE_PNPM_VERSION=9.0.1 run 0
-ok "pnpm: another major than packageManager is a MISS with the corepack fix, the same major passes"
+out_has "ok    pnpm 9.0.1 (web/package.json pins 9.15.9)"
+for v in 10.0.0 10.17.1 11.2.0; do
+  FAKE_PNPM_VERSION="$v" run 0
+  out_has "ok    pnpm $v, runs the pinned 9.15.9 itself (packageManager of web/package.json)"
+done
+ok "pnpm: the pinned major passes, 10 or later runs the 9.15.9 pin itself and passes, an older major is a MISS fixed with npm"
+
+pin_pnpm() { # pin_pnpm <version>: the packageManager of the throwaway web/package.json
+  printf '{\n  "name": "web",\n  "packageManager": "pnpm@%s",\n  "engines": {\n    "node": ">=22.12.0"\n  }\n}\n' "$1" >"$REPO/web/package.json"
+}
+pin_pnpm 8.15.9
+FAKE_PNPM_VERSION=9.15.9 run 1
+misses 1
+out_has "MISS  pnpm 9.15.9, web/package.json pins 8.15.9"
+FAKE_PNPM_VERSION=10.17.1 run 0
+pin_pnpm 11.1.0
+FAKE_PNPM_VERSION=10.17.1 run 1
+misses 1
+out_has "fix: npm install -g pnpm@11.1.0"
+pin_pnpm 9.15.9
+ok "pnpm above the pinned major passes only from 10 on (9 over an 8 pin is a MISS), and under the pin is a MISS (10 under 11)"
+
+mv "$BIN/pnpm" "$WORK/pnpm.saved"
+run 1
+out_has "MISS  pnpm is not installed"
+out_has "fix: npm install -g pnpm@9.15.9"
+out_lacks "corepack"
+mv "$WORK/pnpm.saved" "$BIN/pnpm"
+fake corepack <<'EOF'
+#!/usr/bin/env bash
+printf 'corepack %s\n' "$*" >>"$CALLS"
+EOF
+FAKE_PNPM_VERSION=8.15.9 run 1
+misses 1
+out_has "fix: npm install -g pnpm@9.15.9 (or corepack enable && corepack prepare pnpm@9.15.9 --activate)"
+calls_lack '^corepack '
+rm "$BIN/corepack"
+ok "the pnpm fix needs no corepack (npm install -g); corepack comes second only where it is installed, and is not run"
 
 for v in 3.9.6 3.11.9 2.7.18; do
   FAKE_PYTHON_VERSION="$v" run 1

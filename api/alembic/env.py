@@ -2,6 +2,7 @@
 
 A caller can pass an open connection in `config.attributes["connection"]` (tests do); otherwise
 an engine is built from settings with NullPool, so a migration run holds one connection only.
+`config.attributes["lock_timeout"]` (a Postgres duration) replaces LOCK_TIMEOUT for that run.
 """
 
 from logging.config import fileConfig
@@ -21,6 +22,8 @@ target_metadata = Base.metadata
 # Two concurrent `alembic upgrade` runs (a deploy retried while the first still runs) queue on
 # this transaction-scoped advisory lock instead of racing on the version table.
 MIGRATION_LOCK_ID = 7_406_202_610
+# Set after the advisory lock, which a second upgrade still waits for without a bound.
+LOCK_TIMEOUT = "5s"
 
 
 def run_migrations_offline() -> None:
@@ -40,6 +43,8 @@ def _run(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
     with context.begin_transaction():
         connection.execute(text("select pg_advisory_xact_lock(:id)"), {"id": MIGRATION_LOCK_ID})
+        timeout = config.attributes.get("lock_timeout", LOCK_TIMEOUT)
+        connection.execute(text("select set_config('lock_timeout', :t, true)"), {"t": timeout})
         context.run_migrations()
 
 

@@ -13,12 +13,21 @@ from the start of the part, in characters). `next_offset` is null at the end of 
 1. built by the item model of G5 (`items.build`: section, key, action and value validated and
    cleaned; a setting, `skills.years_experience` and an unknown key refused);
 2. checked by the citation checker of G4 against the whole stored text of the step's document
-   (`citations.check_item`, with the value as proposed), which gives the citations to store:
+   (`citations.check_item`), twice: with the value as proposed, which the model wrote, and with
+   the value as cleaned, which is the one stored, so that no cleaning of the section model can
+   carry a stored value past what the excerpts hold. The check gives the citations to store:
    offsets in the stored text and the document's own words between them;
 3. stored once per `(step_id, section, key, value_hash)`.
+A removal names a field that holds one value (`headline`, `city`): the agent cannot see the
+profile, so a removal of an entry, of a line or of a whole list is refused
+(REMOVAL_OF_A_LIST), whatever key it gives. A removal carries no value, so the checker only finds
+its excerpts: what keeps a dictated removal out of the profile is that a removal is never part of
+"Accept all" (`item_proposals.bulk_exclusion`).
 It takes the document row `FOR KEY SHARE`, then the step row `FOR UPDATE` (the module's lock
 order: 4 then 5), and never the run row. A deletion of the document waits for a call in flight,
-and the call after it finds no document.
+and the call after it finds no document. Last, before it counts the items of the run against
+ITEMS_PER_RUN, it takes the run's item lock (`_lock_items`, a transaction advisory lock that
+nothing else takes), so two steps of one run that write at once count each other's rows.
 
 A step is tied to a text, not to a file. A document keeps its row, its id and the hash of its
 file when its text changes (the same file uploaded again over a row that may be replaced, a
@@ -39,6 +48,12 @@ whatever the budget says. What is counted, on the step row:
 - `items_count`: the rows stored.
 The budget of REFUSALS_PER_STEP is spent by the first two together; a `setting` refusal spends
 nothing of it. The refusals of one key are counted for the agent run, in memory.
+
+What bounds the tokens a step spends, hostile document or not, is the runner and nothing here:
+the step's `token_budget`, which G10 gives, and the 40 turns and 900 seconds of the definition.
+Inside one step these tools limit no call: the same offset can be read again and again, a call
+of more than ITEMS_PER_CALL items is refused whole without spending the refusal budget, and the
+"run is full" answers are not counted.
 
 What a tool answers goes to the model, which may repeat it in a `text` event, and `text` events
 are stored. So every answer but the text of `read_document` is made of constants: a sentence of
@@ -72,6 +87,7 @@ from app.ingestion.runs_models import (
     IngestionRunStep,
     RunStatus,
     StepStatus,
+    may_be_read,
     stored_text_sha256,
     text_sha256,
 )
@@ -104,8 +120,13 @@ DO_NOT_RETRY = "not accepted, do not retry this item"
 RUN_FULL = "not stored: this run already holds the most items it may, propose nothing more"
 
 INVALID_ITEM = "invalid_item"
+REMOVAL_OF_A_LIST = "removal_of_a_list"
 REASONS: Mapping[str, str] = {
     INVALID_ITEM: "an item is an object with key, action, value and citations",
+    REMOVAL_OF_A_LIST: (
+        "only a field that holds one value can be removed, never an entry or a list: "
+        "propose an entry as the document states it now"
+    ),
     items.INVALID_VALUE: "the value does not fit this field",
 }
 # Sentences of the two modules underneath that may be repeated to the model: constants, every one.
@@ -157,18 +178,23 @@ def _locate(
     db: Session, scope: Scope, at: Bound, *, lock: bool
 ) -> tuple[IngestionRunStep, int, bytes] | None:
     """The step of this run, the length of its document's text and the hash of that text, or
-    None when either is no longer there for this user: the document deleted or without text, its
-    text no longer the one the step was planned on (the same file uploaded again over the row,
-    or read again: the row keeps its id and the hash of its file, so only the hash of the text
-    tells), the step not this agent run's, not an extraction step, not running or without a
-    text hash, its ingestion run not running. With `lock`, the document row is taken
-    `FOR KEY SHARE` and then the step row `FOR UPDATE`, in that order. The run row is read, never
-    locked: the step row is the fence, the run's status a second look."""
+    None when either is no longer there for this user: the document deleted, without text or
+    not to be read now (`may_be_read`), its text no longer the one the step was planned on (the
+    same file uploaded again over the row, or read again: the row keeps its id and the hash of
+    its file, so only the hash of the text tells), the step not this agent run's, not an
+    extraction step, not running or without a text hash, its ingestion run not running. With
+    `lock`, the document row is taken `FOR KEY SHARE` and then the step row `FOR UPDATE`, in that
+    order. The run row is read, never locked: the step row is the fence, the run's status a
+    second look."""
     document = sa.select(
         IngestionDocument.sha256,
         sa.func.char_length(IngestionDocument.text),
         stored_text_sha256(),
-    ).where(IngestionDocument.id == at.document_id, IngestionDocument.user_id == scope.user_id)
+    ).where(
+        IngestionDocument.id == at.document_id,
+        IngestionDocument.user_id == scope.user_id,
+        may_be_read(),
+    )
     step = (
         sa.select(IngestionRunStep)
         .join(IngestionRun, IngestionRun.id == IngestionRunStep.ingestion_run_id)
@@ -345,6 +371,8 @@ def _judge(
     """One proposed item: built, then checked. The item and its citations, or why not."""
     if not isinstance(entry, Mapping):
         return None, _Refused(INVALID_ITEM)
+    if _removes_a_list(section, entry):
+        return None, _Refused(REMOVAL_OF_A_LIST, "action")
     try:
         item = items.build(section, entry.get("key"), entry.get("action"), entry.get("value"))
     except items.ItemError as exc:
@@ -354,14 +382,26 @@ def _judge(
         one.get("excerpt") if isinstance(one, Mapping) else None
         for one in (cited if isinstance(cited, list | tuple) else ())
     ]
-    # The value as proposed, not as cleaned: the checker reads what the model wrote.
     checked = citations.check_item(item.field_types, entry.get("value"), document, excerpts)
     if isinstance(checked, citations.Refusal):
         return item, _Refused(str(checked.rule.value), checked.index, checked.reason)
+    stored = citations.check_item(item.field_types, item.value, document, excerpts)
+    if isinstance(stored, citations.Refusal):
+        return item, _Refused(str(stored.rule.value), stored.index, stored.reason)
     for citation in checked.citations:
         if document.source[citation.start : citation.end] != citation.excerpt:  # pragma: no cover
             return item, _Refused(citations.Rule.EXCERPT_NOT_FOUND.value, "excerpts")
-    return item, checked
+    return item, checked._replace(flags=tuple(dict.fromkeys(checked.flags + stored.flags)))
+
+
+def _removes_a_list(section: str, entry: Mapping[str, Any]) -> bool:
+    """Whether the item removes an entry, a line or a whole list. A removal of a setting or of an
+    unknown key is left to the item model, which names it."""
+    key = entry.get("key")
+    if entry.get("action") != items.Action.remove.value or not isinstance(key, str):
+        return False
+    slot = items.SLOTS[section].get(key.partition(":")[0])
+    return slot is not None and slot.kind not in (items.SlotKind.scalar, items.SlotKind.setting)
 
 
 def _bucket(section: str, entry: object, item: items.Item | None) -> str | None:
@@ -381,7 +421,16 @@ def _bucket(section: str, entry: object, item: items.Item | None) -> str | None:
     return hashlib.sha256(f"{section}\x00{key}".encode("utf-8", "surrogatepass")).hexdigest()
 
 
+def _lock_items(db: Session, ingestion_run_id: uuid.UUID) -> None:
+    """The run's item lock, until the end of the transaction: the writes of the steps of one
+    ingestion run count and insert one after the other. Taken after the step row, by this tool
+    only, so it waits for nothing but another write of the same run."""
+    key = f"ingestion-items:{ingestion_run_id}"
+    db.execute(sa.select(sa.func.pg_advisory_xact_lock(sa.func.hashtextextended(key, 0))))
+
+
 def _items_of_run(db: Session, ingestion_run_id: uuid.UUID) -> int:
+    """The items the steps of the run stored: exact under `_lock_items`."""
     return int(
         db.execute(
             sa.select(sa.func.count())
@@ -449,6 +498,7 @@ def _propose(scope: Scope, state: _StepState, raw: object) -> tuple[str, bool]:
             return NOT_FOUND, True
         if not document.readable:
             logger.warning("ingestion document unreadable", extra=log)
+        _lock_items(db, step.ingestion_run_id)
         in_run = _items_of_run(db, step.ingestion_run_id)
         for index, entry in enumerate(proposed):
             item, verdict = _judge(section, entry, document)

@@ -53,7 +53,8 @@ export function RunProgress() {
               The server could not be reached just now. This page keeps trying.
             </p>
           ) : null}
-          <RunView run={run.data} />
+          {/* A new run is a new view: no message of the run before stays above it. */}
+          <RunView key={run.data.id} run={run.data} />
         </>
       ) : run.isError ? (
         <div className="flex flex-col items-start gap-3">
@@ -117,7 +118,9 @@ function RunView({ run }: { run: Run }) {
   const [changed, setChanged] = useState<string>();
   const [watching, setWatching] = useState(false);
 
-  const settle = (updated: Run) => {
+  const settle = async (updated: Run) => {
+    // A read sent before the click would land after this answer and bring the old state back.
+    await client.cancelQueries({ queryKey: runKey(updated.id) });
     client.setQueryData(runKey(updated.id), updated);
     refreshRuns(client);
   };
@@ -141,7 +144,7 @@ function RunView({ run }: { run: Run }) {
         what.name === "continue" ? continueRefusal(error) : undefined;
       if (refusal) {
         // Never a success: the ceiling did not move. The figure of now is shown instead.
-        if (refusal.run) settle(refusal.run);
+        if (refusal.run) void settle(refusal.run);
         else void client.invalidateQueries({ queryKey: runKey(run.id) });
         setChanged(
           refusal.continueAdds > 0
@@ -175,6 +178,7 @@ function RunView({ run }: { run: Run }) {
     run.steps.find((step) => step.status === "planned");
   const onCeiling = run.paused_reason === PAUSED_ON_CEILING;
   const adds = run.tokens.continue_adds;
+  const raised = run.tokens.continue_ceiling;
   const busy = action.isPending;
   const cancel = (
     <Button
@@ -217,8 +221,9 @@ function RunView({ run }: { run: Run }) {
             {tokens(run.tokens.ceiling)} tokens.
           </p>
           <p data-testid="continue-adds">
-            Continue raises the ceiling by {tokens(adds)} tokens, and the run
-            goes on. Cancel ends it here.
+            Continue raises the ceiling by {tokens(adds)} tokens
+            {raised !== null ? `, to ${tokens(raised)} tokens,` : null} and the
+            run goes on. Cancel ends it here.
           </p>
         </>
       );
@@ -270,7 +275,10 @@ function RunView({ run }: { run: Run }) {
       ? "The run is finished, but not everything was read."
       : "The run is finished. Everything you selected was read.";
   } else if (run.status === "failed") {
-    headline = "The run failed. Nothing was read.";
+    // A run the engine closed keeps what it had read: its reason says so.
+    headline = run.closed_reason
+      ? "The run failed."
+      : "The run failed. Nothing was read.";
     body = run.closed_reason ? <p>{run.closed_reason}</p> : null;
   } else {
     headline = "The run was cancelled.";
@@ -328,15 +336,25 @@ function RunView({ run }: { run: Run }) {
         className="grid gap-x-6 gap-y-2 sm:grid-cols-2"
         data-testid="run-figures"
       >
-        <Figure label="Steps">
-          {tokens(run.counts.done)} of {tokens(run.counts.steps)} read
-          {run.counts.reused > 0
-            ? `, ${tokens(run.counts.reused)} reused from an earlier run`
-            : null}
-          {run.counts.failed > 0
-            ? `, ${tokens(run.counts.failed)} not read`
-            : null}
-        </Figure>
+        {active ? (
+          <Figure label="Steps">
+            {tokens(run.counts.done)} of {tokens(run.counts.steps)} read
+            {run.counts.reused > 0
+              ? `, ${tokens(run.counts.reused)} reused from an earlier run`
+              : null}
+            {run.counts.failed > 0
+              ? `, ${tokens(run.counts.failed)} not read`
+              : null}
+          </Figure>
+        ) : (
+          <Figure label="Documents">
+            {tokens(run.document_ids.length - run.unread_document_ids.length)}{" "}
+            of {tokens(run.document_ids.length)} read
+            {reusedDocuments(run) > 0
+              ? `, ${tokens(reusedDocuments(run))} reused from an earlier run`
+              : null}
+          </Figure>
+        )}
         <Figure label="Found so far">
           {plural(run.counts.items, "item", "items")}
           {run.counts.refused > 0
@@ -349,6 +367,14 @@ function RunView({ run }: { run: Run }) {
             ? `. The run pauses at ${tokens(run.tokens.ceiling)} tokens`
             : null}
         </Figure>
+        {run.cost_usd !== null ? (
+          <Figure label={active ? "Cost so far" : "Cost"}>
+            about {run.cost_usd} USD,{" "}
+            {active
+              ? "each attempt counted when it ends"
+              : "every attempt included"}
+          </Figure>
+        ) : null}
         {!active && run.status === "done" ? (
           <Figure label="Proposals">
             {plural(run.counts.proposals, "proposal", "proposals")} to review
@@ -422,7 +448,8 @@ function RunView({ run }: { run: Run }) {
           </summary>
           {watching ? (
             <div className="mt-2 min-w-0">
-              <RunPanel runId={run.current_agent_run_id} />
+              {/* The run's own Cancel stops the whole run: the panel offers none. */}
+              <RunPanel runId={run.current_agent_run_id} cancellable={false} />
             </div>
           ) : null}
         </details>
@@ -437,6 +464,14 @@ function stateOf(run: Run): string {
     return run.paused_reason === PAUSED_ON_CEILING ? "ceiling" : "paused";
   if (run.status === "done" && run.partial) return "partial";
   return run.status;
+}
+
+/** The selected documents whose every step was reused from an earlier run. */
+function reusedDocuments(run: Run): number {
+  return run.document_ids.filter((documentId) => {
+    const steps = run.steps.filter((step) => step.document_id === documentId);
+    return steps.length > 0 && steps.every((step) => step.status === "reused");
+  }).length;
 }
 
 /** Why a selected document has nothing read, in a sentence. */

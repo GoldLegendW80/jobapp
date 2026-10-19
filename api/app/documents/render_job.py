@@ -30,8 +30,13 @@ ids only and returns None:
    that fits one page moves the posting from `found` or `shortlisted` to `cv_ready` in the same
    transaction (`lock_job` first, the lock order of store.py, then `set_status` with `via:
    "documents"`). A posting locked by another transaction is tried once more, then the PDF is
-   stored without the move and the skip is logged. An overflow stores its PDF all the same
-   (never a refusal) and calls `on_overflow`.
+   stored without the move and the skip is logged. "Once only" is read from the posting's
+   own status events (a move `via: "documents"` to `cv_ready` is never made twice), which
+   version retention does not prune. A document locked by another transaction (a save, a
+   switch) is waited for again, STORE_ATTEMPTS times in all, each wait bounded by the lock
+   timeout. An overflow stores its PDF all the same (never a refusal) and calls `on_overflow`,
+   unless the person switched the look during the render: the switched version's own render
+   calls it then. An error of the hook is logged, never the render's.
 
 A render that fails puts the state back to `idle` with a code of `ERRORS` in `render_error`,
 which the api turns into a plain sentence (`MESSAGES`); nothing raises to arq. A worker stopped
@@ -60,8 +65,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app.documents import content as c
 from app.documents import fit as fitting
+from app.documents import freeze, profile_view, render_client, store, templates
 from app.documents import photo as photos
-from app.documents import profile_view, render_client, store, templates
 from app.documents.corrections import Correction
 from app.documents.models import (
     Author,
@@ -77,7 +82,7 @@ from app.documents.models import (
 from app.documents.render_client import Rendered, RenderError
 from app.documents.sources import DocumentSources, PostingView, sources_for
 from app.jobs import service as jobs_service
-from app.jobs.models import Job, JobStatus
+from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
 from app.profile import service as profile_service
 
 logger = logging.getLogger("app.documents.render")
@@ -91,6 +96,7 @@ ATTEMPTS = 2  # for RETRIED only
 FOLLOW_UPS = 1  # renders of a version switched during the job's render, in the same job
 RETRIED = frozenset({"renderer_unavailable"})
 RETRY_AFTER_S = 2.0
+STORE_ATTEMPTS = 3  # the store's waits for a document locked elsewhere, each at the lock timeout
 # The longest a job may take: a fit of eight steps walked one by one, each render at its
 # timeout plus the client's margin, tried twice, and the two transactions; then all of it once
 # more for a version switched during it (FOLLOW_UPS).
@@ -562,6 +568,7 @@ def _store_once(
         return Stored("replaced", again=again)
     if current:
         _idle(document)
+    freeze.on_rendered(db, document, version, at)
     moved = False
     if job is not None and job.status in MOVES_FROM:
         earlier = db.execute(
@@ -573,13 +580,45 @@ def _store_once(
                 DocumentVersion.id != version.id,
             )
         ).scalar_one()
-        if earlier == 0:
+        if earlier == 0 and not _moved_before(db, job):
             moved = jobs_service.set_status(db, job, JobStatus.cv_ready, at, via="documents")
     store.commit(db)
     return Stored("one_page" if fitted.fit else "overflow", moved, again)
 
 
+def _moved_before(db: Session, job: Job) -> bool:
+    """The posting was moved to `cv_ready` by a render already: its status event says so."""
+    query = (
+        sa.select(JobEvent.id)
+        .where(
+            JobEvent.job_id == job.id,
+            JobEvent.user_id == job.user_id,
+            JobEvent.kind == JobEventKind.status,
+            JobEvent.data["via"].astext == "documents",
+            JobEvent.data["to"].astext == JobStatus.cv_ready.value,
+        )
+        .limit(1)
+    )
+    return db.execute(query).first() is not None
+
+
 def _store(
+    sessions: sessionmaker[Session], claim: Claim, fitted: fitting.Fitted, at: datetime
+) -> Stored:
+    """`_store_once` until it is not refused a lock: the PDF is lost only when the document
+    stayed locked through STORE_ATTEMPTS waits (then `render_failed`)."""
+    for attempt in range(1, STORE_ATTEMPTS):
+        try:
+            return _store_moving(sessions, claim, fitted, at)
+        except store.DocumentBusyError:
+            logger.warning(
+                "documents.render.store_busy",
+                extra={"document_id": str(claim.document_id), "attempt": attempt},
+            )
+    return _store_moving(sessions, claim, fitted, at)
+
+
+def _store_moving(
     sessions: sessionmaker[Session], claim: Claim, fitted: fitting.Fitted, at: datetime
 ) -> Stored:
     for _ in range(2):
@@ -642,11 +681,23 @@ async def _render_once(ctx: dict[str, Any], document_id: uuid.UUID, revision: in
         )
         return Stored(error.code)
     stored = await asyncio.to_thread(_store, sessions, claim, fitted, clock())
-    if stored.outcome == "overflow":
-        called = on_overflow(document_id, claim.version_id)
+    if stored.outcome == "overflow" and not stored.again:
+        await _overflowed(document_id, claim.version_id)
+    return stored
+
+
+async def _overflowed(document_id: uuid.UUID, version_id: uuid.UUID) -> None:
+    """`on_overflow`, after the PDF was stored: its error is logged and is not the render's, so
+    a switch asked meanwhile stays `queued` for the next job or the cron."""
+    try:
+        called = on_overflow(document_id, version_id)
         if inspect.isawaitable(called):
             await called
-    return stored
+    except Exception as error:
+        logger.error(
+            "documents.render.overflow_hook",
+            extra={"document_id": str(document_id), "error": type(error).__name__},
+        )
 
 
 async def _render(ctx: dict[str, Any], document_id: uuid.UUID, revision: int) -> str:

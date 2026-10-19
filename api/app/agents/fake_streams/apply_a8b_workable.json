@@ -1,0 +1,256 @@
+{
+ "description": "The form agent (apply A8) on the fake Workable like form: reads it, fills its six profile fields, designates its submit; the journey's stream.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__read_form",
+     "mcp__app__resolve_answer",
+     "mcp__app__fill_field",
+     "mcp__app__next_step",
+     "mcp__app__designate_submit"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000101",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_form_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_form_01",
+       "name": "mcp__app__read_form",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000102",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_form_2",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_form_02",
+       "name": "mcp__app__fill_field",
+       "input": {
+        "ref": "e6"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_form_03",
+       "name": "mcp__app__fill_field",
+       "input": {
+        "ref": "e10"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_form_04",
+       "name": "mcp__app__fill_field",
+       "input": {
+        "ref": "e14"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_form_05",
+       "name": "mcp__app__fill_field",
+       "input": {
+        "ref": "e17"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_form_06",
+       "name": "mcp__app__fill_field",
+       "input": {
+        "ref": "e21"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_form_07",
+       "name": "mcp__app__fill_field",
+       "input": {
+        "ref": "e24"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 4400,
+      "output_tokens": 420,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000103",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_form_3",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_form_08",
+       "name": "mcp__app__read_form",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 5600,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000104",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_form_4",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_form_09",
+       "name": "mcp__app__designate_submit",
+       "input": {
+        "ref": "e28"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 6400,
+      "output_tokens": 60,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000105",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_form_5",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "Submit designated."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 6600,
+      "output_tokens": 20,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 9000,
+    "duration_api_ms": 8000,
+    "num_turns": 5,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0,
+    "usage": {
+     "input_tokens": 26000,
+     "output_tokens": 580,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "result": "Submit designated."
+   }
+  }
+ ]
+}

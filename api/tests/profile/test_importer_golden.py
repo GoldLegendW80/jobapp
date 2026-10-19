@@ -1,18 +1,20 @@
 """The importer against Harald's real files (../profile, ../engine, ../data/jobs.csv, read only).
 
 Skipped, with the reason, where those files do not exist (CI, containers). Set JOBAPP_SOURCE_DIR
-to the job folder to point at them explicitly. Regenerate the golden fixture after an intended
-change of the sources or of the converter with:
+to the job folder to point at them explicitly. The golden output of those files holds personal
+data, so it lives beside them, never in this public repository: <job folder>/jobapp-golden/
+profile_export.json. Write it the first time, and regenerate it after an intended change of the
+sources or of the converter, with:
 
     UPDATE_GOLDEN=1 uv run --native-tls pytest tests/profile/test_importer_golden.py
 
-then review the diff of tests/profile/fixtures/harald_export.json by eye.
+then review its diff by eye. tests/profile/fixtures/owner_export.json is a different file: the
+importer output of the invented sources in tests/profile/fixtures/owner_sources (test_importer.py).
 """
 
 import ast
 import base64
 import csv
-import io
 import json
 import os
 import re
@@ -22,14 +24,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from PIL import Image, ImageChops, ImageStat
+from PIL import ImageChops, ImageStat
 
 from app.profile import matching
 from app.profile.importer import SourcePaths, convert, regex_terms, wrap_skill_term
 from app.profile.schemas import ExportDocument
 from tests.profile import images
 
-FIXTURE = Path(__file__).parent / "fixtures" / "harald_export.json"
 NOW = datetime(2026, 10, 8, tzinfo=UTC)
 
 
@@ -45,6 +46,7 @@ def _find_job_root() -> Path | None:
 
 
 ROOT = _find_job_root()
+GOLDEN = ROOT / "jobapp-golden" / "profile_export.json" if ROOT else None
 pytestmark = pytest.mark.skipif(
     ROOT is None,
     reason="Harald's engine files (profile/facts.md, engine/assemble.py) are not on this machine; "
@@ -68,28 +70,15 @@ def out(document: ExportDocument) -> dict[str, Any]:
     return json.loads(document.to_json())
 
 
-def golden_view(body: dict[str, Any]) -> dict[str, Any]:
-    """The document as checked in, the photo by what it shows rather than 40 KB of base64.
-
-    The importer re-encodes the photo (photo.normalize), so its bytes depend on the libjpeg and
-    zlib builds bundled with Pillow, not only on the sources: the golden file records the
-    decoded image (format, mode, dimensions) and test_photo_is_the_engine_photo checks the
-    pixels against the engine photo.
-    """
-    view = json.loads(json.dumps(body))
-    if view.get("photo"):
-        with Image.open(io.BytesIO(base64.b64decode(view["photo"]["base64"]))) as image:
-            view["photo"]["base64"] = f"<{image.format} {image.mode} {image.width}x{image.height}>"
-    return view
-
-
 def test_golden(out: dict[str, Any]) -> None:
-    view = golden_view(out)
-    text = json.dumps(view, ensure_ascii=False, indent=2) + "\n"
+    assert GOLDEN is not None
+    text = json.dumps(images.golden_view(out), ensure_ascii=False, indent=2) + "\n"
     if os.environ.get("UPDATE_GOLDEN"):
-        FIXTURE.parent.mkdir(exist_ok=True)
-        FIXTURE.write_text(text, encoding="utf-8")
-    assert FIXTURE.read_text(encoding="utf-8") == text
+        GOLDEN.parent.mkdir(exist_ok=True)
+        GOLDEN.write_text(text, encoding="utf-8")
+    if not GOLDEN.is_file():
+        pytest.skip(f"no golden output yet: run with UPDATE_GOLDEN=1 to write {GOLDEN}")
+    assert GOLDEN.read_text(encoding="utf-8") == text
 
 
 # --- everything in the sources is in the output -------------------------------------------------
@@ -112,7 +101,6 @@ def test_every_employer_is_there_with_its_dates(
     out: dict[str, Any], constants: dict[str, Any]
 ) -> None:
     employers = out["sections"]["experience"]["employers"]
-    assert [e["key"] for e in employers] == ["betclic", "devtech", "elsan", "thales", "hotel35"]
     assert [e["key"] for e in employers] == list(constants["EMPLOYERS"])
     names = [
         "january", "february", "march", "april", "may", "june", "july", "august",

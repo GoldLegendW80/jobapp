@@ -45,6 +45,7 @@ from app.ingestion.runs_models import (
     IngestionRunStep,
     RunStatus,
     StepStatus,
+    may_be_read,
     stored_text_sha256,
 )
 
@@ -89,8 +90,11 @@ def bind_step(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
     another agent run or another user), its ingestion run is not `running`, or its document is
     gone, has no text, or stores another text than the one the step was planned on
     (`text_sha256`: a replaced text keeps the row and the hash of its file, so only the hash of
-    the text tells). A step that carries no text hash is never bound. Reads only, takes no
-    lock."""
+    the text tells). None as well when the document may not be read now (`may_be_read`: its text
+    not `done`, or a secret warning not confirmed), and for a step without a range unless it is
+    a document read whole: part 0 of a text no longer than one part (`plan.PART_MAX_CHARS`), as
+    `plan.cut` would leave it. A step that carries no text hash is never bound. Reads only,
+    takes no lock."""
     try:
         step_id = uuid.UUID(str(run.input.get("step_id")))
     except ValueError:
@@ -115,12 +119,17 @@ def bind_step(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
             IngestionDocument.user_id == run.user_id,
             IngestionDocument.sha256 == step.sha256,
             stored_text_sha256() == bytes(step.text_sha256),
+            may_be_read(),
         )
     ).scalar_one_or_none()
-    if total is None:  # no such document for this user, no text, or not the text planned on
+    if total is None:  # no such document for this user, no text, not that text, not readable now
         return None
-    start = min(step.range_start or 0, total)
-    end = total if step.range_end is None else min(step.range_end, total)
+    if step.range_start is None or step.range_end is None:
+        if step.part != 0 or total > plan.PART_MAX_CHARS:
+            return None
+        start, end = 0, total
+    else:
+        start, end = min(step.range_start, total), min(step.range_end, total)
     return {
         "ingestion_run_id": str(step.ingestion_run_id),
         "step_id": str(step.id),

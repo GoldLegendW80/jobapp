@@ -21,6 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { errorDetail, isApiError } from "@/lib/api";
 
 import {
   documentsKey,
@@ -86,7 +87,8 @@ export function RunStart() {
         Loading
       </p>
     );
-  if (runs.isError || documents.isError)
+  // Nothing to show yet: a background read that fails keeps this part and its dialog.
+  if (runs.data === undefined || documents.data === undefined)
     return (
       <Alert variant="destructive">
         <AlertTitle>This step could not be loaded</AlertTitle>
@@ -120,6 +122,11 @@ export function RunStart() {
         Before anything is sent, you see what it would cost in tokens and you
         decide.
       </p>
+      {runs.isError || documents.isError ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          The server could not be reached just now. This page keeps trying.
+        </p>
+      ) : null}
       {items.length === 0 ? (
         <p className="text-sm">
           You have no document yet. Add some in the Documents step first.
@@ -206,6 +213,13 @@ export function RunStart() {
   );
 }
 
+/** The server's sentence for a selection it refuses (over a limit of a run): what to change. */
+function selectionRefusal(error: unknown): string | undefined {
+  return isApiError(error) && error.kind === "http" && error.status === 422
+    ? errorDetail(error)
+    : undefined;
+}
+
 /**
  * A document the run can read now: its text is there, or its page images wait for the agent,
  * which transcribes them in the first steps of the run. The estimate has the last word on it.
@@ -266,10 +280,11 @@ function StartDialog({
     },
     onError: (error) => {
       setFailure(
-        actionFailure(
-          error,
-          "The estimate could not be computed. Try again in a moment.",
-        ),
+        selectionRefusal(error) ??
+          actionFailure(
+            error,
+            "The estimate could not be computed. Try again in a moment.",
+          ),
       );
     },
   });

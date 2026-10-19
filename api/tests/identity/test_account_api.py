@@ -476,12 +476,12 @@ def test_rename_returns_the_user_and_shows_in_me(
 ) -> None:
     this, other = signed_in
     before = user_row(factory)
-    response = rename(api, this, "  Harald   Thorvald\tHautin \n")
+    response = rename(api, this, "  Lucien   Ambroise\tQuillard \n")
     assert response.status_code == 200, response.text
     body = response.json()
     assert set(body) == {"id", "email", "name", "role", "created_at", "last_login_at"}
-    assert body["name"] == "Harald Thorvald Hautin"
-    assert api.me(other).json()["name"] == "Harald Thorvald Hautin"  # every browser sees it
+    assert body["name"] == "Lucien Ambroise Quillard"
+    assert api.me(other).json()["name"] == "Lucien Ambroise Quillard"  # every browser sees it
     after = user_row(factory)
     assert after.updated_at > before.updated_at
     assert after.password_hash == before.password_hash

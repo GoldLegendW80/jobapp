@@ -27,8 +27,16 @@ RUN apt-get update \
       python3 python3-venv ca-certificates tzdata tini \
  && rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m venv /opt/venv \
- && /opt/venv/bin/pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}"
+# extra_ca: a bundle pip trusts beside the image's own, given only behind a TLS inspecting proxy
+# (README); the apt step above reads deb.debian.org over http and needs none.
+RUN --mount=type=secret,id=extra_ca,required=false \
+    if [ -s /run/secrets/extra_ca ]; then \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/extra_ca >/tmp/extra-ca.pem \
+      && export PIP_CERT=/tmp/extra-ca.pem SSL_CERT_FILE=/tmp/extra-ca.pem; \
+    fi \
+ && python3 -m venv /opt/venv \
+ && /opt/venv/bin/pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" \
+ && rm -f /tmp/extra-ca.pem
 
 # Users: browserd runs as root with SETUID and SETGID only (compose.yml drops every other
 # capability), Xvfb as `browser` (uid 1000), each person's Chromium as the profile's own uid

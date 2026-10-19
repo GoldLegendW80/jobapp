@@ -44,7 +44,7 @@
 # a task of its own. This script only measures.
 #
 # Settings as deploy.sh: DEPLOY_HOST (default jetson), DEPLOY_DIR (default ~/jobapp).
-# OWNER (default hthautin@gmail.com), LABEL, WAIT_S, POLL_S.
+# OWNER (required: the e-mail address of the owner's account), LABEL, WAIT_S, POLL_S.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -52,7 +52,7 @@ cd "$ROOT"
 HOST="${DEPLOY_HOST:-jetson}"
 RDIR="${DEPLOY_DIR:-jobapp}"
 RDIR="${RDIR#\~/}"
-OWNER="${OWNER:-hthautin@gmail.com}"
+OWNER="${OWNER:-}"
 RAW_LABEL="${LABEL:-}"
 LABEL="${LABEL:+-$LABEL}"
 REAL="${REAL_RUN:-0}"
@@ -79,6 +79,7 @@ die() {
   exit 1
 }
 
+[[ -n "$OWNER" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 [[ "$OWNER" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
 [[ "$RAW_LABEL" =~ ^[A-Za-z0-9_-]*$ ]] || die "LABEL holds letters, digits, _ and - only"
 [[ "$WAIT_S" =~ ^[0-9]+$ && "$POLL_S" =~ ^[1-9][0-9]*$ ]] || die "WAIT_S and POLL_S are whole seconds"

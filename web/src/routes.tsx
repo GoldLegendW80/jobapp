@@ -13,6 +13,7 @@ import { HomePage } from "@/features/public/home-page";
 import { PrivacyPage } from "@/features/public/privacy-page";
 import { TermsPage } from "@/features/public/terms-page";
 import { PostingDocumentPage } from "@/features/documents/posting-document-page";
+import { TemplatesPage } from "@/features/documents/templates-page";
 import { FillPage } from "@/features/ingestion/fill-page";
 import { JobDetailPage } from "@/features/jobs/job-detail-page";
 import { JobsPage } from "@/features/jobs/jobs-page";
@@ -63,6 +64,7 @@ export const routes: RouteObject[] = [
             path: "jobs/:id/documents/:kind",
             element: <PostingDocumentPage />,
           },
+          { path: "documents/templates", element: <TemplatesPage /> },
           { path: "account", element: <AccountPage /> },
           { path: "profile", element: <ProfilePage /> },
           { path: "profile/cv/:id?", element: <ProfilePage /> },
