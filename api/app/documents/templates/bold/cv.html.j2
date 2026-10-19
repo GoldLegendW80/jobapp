@@ -1,14 +1,15 @@
-{#- bold: one column. A very large name (with the photo on its right when there is one), the
-    headline and the contact lines, a thick rule; then each section under a heavy heading set in
-    white capitals on a black bar: the profile, the achievements in three columns under thick
-    red bars, the key competencies in three columns, the experience, the education in two
-    columns, the skills and the languages. An empty section is not printed. -#}
+{#- bold: one column. A very large name (smaller past 30 and 60 characters; with the photo on its
+    right when there is one), the headline and the contact lines, a thick rule; then each
+    section under a heavy heading set in white capitals on a black bar: the profile, the
+    achievements in three columns under thick red bars, the key competencies in three columns,
+    the experience, the education in two columns, the skills and the languages. An empty
+    section is not printed. -#}
 {% extends "_base/page.html.j2" %}
 {% import "_base/macros.html.j2" as base with context %}
 {% block body %}
 <header class="head">
 <div class="headtext">
-<h1 class="name">{{ name }}</h1>
+<h1 class="name{% if name | length > 60 %} longer{% elif name | length > 30 %} long{% endif %}">{{ name }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
 {{ base.contact_lines() }}
 </div>

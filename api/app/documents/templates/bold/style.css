@@ -1,5 +1,5 @@
-/* bold: one column in Work Sans, black and a strong red accent. A very large name that wraps
-   anywhere rather than leave the page (a long name takes two or three lines), a thick black
+/* bold: one column in Work Sans, black and a strong red accent. A very large name, set smaller
+   past 30 and 60 characters, that wraps anywhere rather than leave the page, a thick black
    rule under the heading, heavy headings in white capitals on black bars, thick red bars over
    the achievements, black bars beside the competencies. Markers and separators are borders of
    empty boxes, so the PDF text holds none. The density comes from the step on :root:
@@ -31,6 +31,8 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
   line-height: 0.98;
   letter-spacing: -0.02em;
 }
+.name.long { font-size: 2.6em; }
+.name.longer { font-size: 1.9em; }
 .headline {
   font-size: 1.22em;
   font-weight: 600;
@@ -122,16 +124,15 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
 .place { font-size: 0.94em; color: #3d3f47; }
 .entry ul { list-style: none; margin-top: 1.5pt; }
 .entry li {
-  position: relative;
   padding-left: 11pt;
   margin-bottom: 1pt;
 }
 .entry li::before {
   content: "";
-  position: absolute;
-  left: 1pt;
-  top: 0.5em;
+  display: inline-block;
+  vertical-align: middle;
   border: 2pt solid var(--accent);
+  margin: 0 7pt 1pt -10pt;
 }
 
 .schools {

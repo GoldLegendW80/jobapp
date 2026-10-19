@@ -6,7 +6,7 @@
 {% block body %}
 <header class="head">
 <div class="headtext">
-<h1 class="name">{{ name }}</h1>
+<h1 class="name{% if name | length > 60 %} longer{% elif name | length > 30 %} long{% endif %}">{{ name }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
 {{ base.contact_lines() }}
 </div>

@@ -100,17 +100,14 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
 .entry li::marker { color: var(--accent); }
 
 .competencies { list-style: none; }
-.competencies li {
-  position: relative;
-  padding-left: 10pt;
-}
+.competencies li { padding-left: 10pt; }
 .competencies li::before {
   content: "";
-  position: absolute;
-  left: 0;
-  top: 0.45em;
+  display: inline-block;
+  vertical-align: middle;
   border: 2pt solid var(--accent);
   border-radius: 50%;
+  margin: 0 6pt 1pt -10pt;
 }
 
 .school + .school { margin-top: var(--item-gap); }
