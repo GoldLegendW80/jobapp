@@ -4,10 +4,13 @@
   the person's profile (size and last use; never a file of it), their own current lease, who
   holds the browser as seen by this person (`you`, `other`, or null: never who, nor why), and
   their places in the queue with the estimated wait.
-- POST /api/browser/sessions `{purpose: "look" | "signin"}` starts a session of the person in the
-  live view (`look` is browserd's purpose `takeover`, the person at the keyboard): 201 with the
-  lease when the browser was free or already theirs, 202 with the place in the queue otherwise.
-  It is idempotent: a waiting page asks again to keep its place and to take the turn.
+- POST /api/browser/sessions `{purpose: "look" | "signin", address?}` starts a session of the
+  person in the live view (`look` is browserd's purpose `takeover`, the person at the keyboard):
+  201 with the lease when the browser was free or already theirs, 202 with the place in the
+  queue otherwise. It is idempotent: a waiting page asks again to keep its place and to take the
+  turn. Both run Chromium with no debugging port and the person holding the input (B7); a
+  `signin` may open at the address the person typed, an http or https address with a host
+  (app/browser/address.py), else 422 `bad_address` and nothing starts.
 - DELETE /api/browser/sessions/current ends the person's own session, or takes them out of the
   queue: 204, or 404 when there was neither.
 
@@ -22,9 +25,11 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from app.browser import profiles
+from app.browser.address import check_address
 from app.browser.client import BrowserdClient, BrowserError
 from app.browser.leases import (
     DbProfiles,
@@ -40,6 +45,7 @@ from app.identity.schemas import ErrorOut
 
 UNAVAILABLE = "The browser is not available right now."
 NO_SESSION = "You have no browser session."
+BAD_ADDRESS = "Type the address of the site, starting with https:// or http://."
 
 # The purposes a person starts from the page, and browserd's name of each.
 PERSON_PURPOSES = {"look": "takeover", "signin": "signin"}
@@ -90,6 +96,8 @@ class ProfileOut(BaseModel):
 class LeaseOut(BaseModel):
     id: str
     purpose: str
+    # False: a person's own session, where the person holds the input from start to end (B7).
+    automation: bool
     state: Literal["starting", "active", "waiting_person"]
     wait_reason: str | None
     wait_site: str | None
@@ -117,6 +125,7 @@ class SessionIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     purpose: Literal["look", "signin"]
+    address: str | None = None
 
 
 class SessionOut(BaseModel):
@@ -132,6 +141,7 @@ def _lease_out(lease: Lease, now: float) -> LeaseOut:
     return LeaseOut(
         id=lease.lease_id,
         purpose=SHOWN.get(lease.purpose, lease.purpose),
+        automation=lease.automation,
         state=lease.state,  # type: ignore[arg-type]
         wait_reason=lease.wait_reason,
         wait_site=lease.wait_site,
@@ -191,13 +201,28 @@ async def _answers(store: Leases) -> bool:
     "/sessions",
     response_model=SessionOut,
     status_code=status.HTTP_201_CREATED,
-    responses={202: {"model": SessionOut, "description": "Waiting in the queue"}, **_503},
+    responses={
+        202: {"model": SessionOut, "description": "Waiting in the queue"},
+        422: {"model": ErrorOut, "description": BAD_ADDRESS},
+        **_503,
+    },
 )
 async def start_session(
     body: SessionIn, response: Response, user: CurrentUser, store: Store
-) -> SessionOut:
+) -> SessionOut | JSONResponse:
+    address = None
+    if body.address is not None:
+        address = check_address(body.address) if body.purpose == "signin" else None
+        if address is None:
+            return JSONResponse(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                content={"detail": BAD_ADDRESS, "code": "bad_address"},
+                headers={"Cache-Control": "no-store"},
+            )
     try:
-        got = await store.acquire(str(user.id), PERSON_PURPOSES[body.purpose], automation=False)
+        got = await store.acquire(
+            str(user.id), PERSON_PURPOSES[body.purpose], automation=False, address=address
+        )
     except (BrowserError, StoreUnavailableError):
         raise _unavailable() from None
     if got.lease is not None:

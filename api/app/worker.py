@@ -18,6 +18,8 @@ Sweeps queue (app.queue.SWEEPS):
   window.
 - reap_sweeps: cron every minute, and once at start: fails running sweeps with no heartbeat for
   sweep.STALE_AFTER (worker crash, lost queue message).
+- cron:browser_removals: every minute, the profile directories queued for removal are removed
+  through browserd (browser B7, app/browser/removals.py). On this queue for its free slots.
 
 Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 - run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time; a third waits in
@@ -106,6 +108,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue
 from app.agents import definitions
 from app.agents import runs as agent_runs
+from app.browser import removals as browser_removals
 from app.config import Settings, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
@@ -403,6 +406,7 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
                 timeout=240,
             ),
             cron(reap_sweeps, name="cron:reap_sweeps", second=30, timeout=60),
+            cron(browser_removals.drain, name="cron:browser_removals", second=20, timeout=60),
         ],
         # Two users' sweeps at once (each reads CONCURRENCY boards), plus room for the cron jobs.
         max_jobs=MAX_SWEEPS + 2,
