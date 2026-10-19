@@ -14,7 +14,16 @@ committed between the tick's read and its start (one run either way, no exceptio
 person still handled). A run that ended without its final hook (reaped, killed, cancelled while
 queued): untouched within the grace, then settled, the next posting started and the posting
 retried once. One person's failure never ends the pass; a start that raised is never counted; a
-waiting automatic base CV with `auto` off; no base CV and no employer still cancels."""
+waiting automatic base CV with `auto` off; no base CV and no employer still cancels.
+
+The letter of a written CV is work for the tick after the CV moved its posting to `cv_ready`: the
+one the chain left `queued` (the person's runs all busy) and the one it never created (the hook
+cut short), never one of a posting applied meanwhile or of a `cv_ready` posting without a written
+CV; and it gets what the pair's ceiling has left after the CV's run.
+
+The posting's lock before the document's: a move to applied beside the tick's letter start and
+beside a recovered CV retried at once (two sessions, both commit), and a move to applied
+committed after the pass read the status (the CV or the letter cancelled, never started)."""
 
 from __future__ import annotations
 
@@ -28,7 +37,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import credentials, failures, runner
+from app.agents import credentials, failures, runner, runs
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind
 from app.documents import (  # noqa: F401 (writers registers the writers)
@@ -52,7 +61,7 @@ from app.documents.models import (
     Kind,
     Scope,
 )
-from app.jobs.models import Job
+from app.jobs.models import Job, JobStatus
 from tests.agents.conftest import API_KEY, new_key
 from tests.conftest import make_settings
 from tests.documents.canary import find, marker
@@ -69,6 +78,7 @@ from tests.documents.store_support import (
     migrated_url,
     short_locks,
 )
+from tests.documents.two_sessions import in_thread, mark_applied, wait_until_blocked
 from tests.documents.writer_support import Person, execute
 
 __all__ = ["engine", "factory", "migrated_url", "short_locks"]
@@ -201,8 +211,16 @@ class World:
                 query = query.where(Document.posting_id == posting)
             return [dict(row._mapping) for row in db.execute(query)]
 
-    def finish(self, status: str = "done", error: str | None = None, at: datetime = AT) -> None:
-        """Every running generation of the person ends with `status` (as the writer's hook)."""
+    def finish(
+        self,
+        status: str = "done",
+        error: str | None = None,
+        at: datetime = AT,
+        *,
+        counted: bool = True,
+    ) -> None:
+        """Every running generation of the person ends with `status` (as the writer's hook), and
+        its run with the token counts the runner writes (none when not `counted`)."""
         with self.factory() as db:
             db.execute(
                 sa.text(
@@ -211,9 +229,15 @@ class World:
                 ),
                 {"s": status, "e": error, "u": self.user, "at": at},
             )
+            counts = (
+                ", input_tokens = coalesce(input_tokens, 0), "
+                "output_tokens = coalesce(output_tokens, 0)"
+                if counted
+                else ""
+            )
             db.execute(
                 sa.text(
-                    "UPDATE agent_runs SET status = 'done' WHERE user_id = :u "
+                    f"UPDATE agent_runs SET status = 'done'{counts} WHERE user_id = :u "
                     "AND status IN ('queued', 'running')"
                 ),
                 {"u": self.user},
@@ -611,6 +635,7 @@ def test_the_cron_job_takes_ids_only_and_queues_the_runs(world: World) -> None:
 def click(who: World, posting: uuid.UUID) -> None:
     """A "Write now" of the posting's CV, as `auto_router.write_now` does it, in its own session."""
     with who.factory() as db:
+        store.lock_posting(db, who.user, posting)
         document = store.get_or_create(db, who.user, posting, Kind.cv, at=AT)
         auto_router._give_way(db, document, AT)
         figures = estimate.for_posting(db, who.user, posting, None)
@@ -920,3 +945,226 @@ def test_without_a_base_cv_or_an_employer_what_waits_is_still_cancelled(
     assert [g["status"] for g in posting_cv(who.generations(posting))] == [
         GenerationStatus.cancelled
     ]
+
+
+# --- the letter of a written CV -----------------------------------------------------------------
+
+
+def _letters(world: World, posting: uuid.UUID) -> list[dict[str, Any]]:
+    return [g for g in world.generations(posting) if g["kind"] is Kind.letter]
+
+
+def _busy(world: World) -> list[uuid.UUID]:
+    """The person's runs all taken by runs of another kind (as ingestion's or a chat's)."""
+    with world.factory() as db:
+        made = [
+            runs.create_run(db, world.user, "documents_cv", None, {}, "m", AT).id
+            for _ in range(runs.ACTIVE_PER_USER)
+        ]
+        db.commit()
+    return made
+
+
+def _free(world: World, busy: list[uuid.UUID]) -> None:
+    with world.factory() as db:
+        db.execute(sa.text("UPDATE agent_runs SET status = 'done' WHERE id = ANY(:r)"), {"r": busy})
+        db.commit()
+
+
+def test_a_letter_the_busy_chain_left_queued_starts_after_the_cv_moved_the_posting(
+    world: World,
+) -> None:
+    posting = world.posting(80)
+    (cv_run,) = world.tick()
+    world.finish()
+    busy = _busy(world)
+    assert generate.start_letter(world.factory, cv_run, AT, world.settings) is None
+    assert [(g["status"], g["trigger"]) for g in _letters(world, posting)] == [
+        (GenerationStatus.queued, GenerationTrigger.auto)
+    ]
+    world.set_job(posting, status=JobStatus.cv_ready)  # the CV's one page render
+    assert world.tick(AT + timedelta(minutes=1)) == []  # still busy: kept, not cancelled
+    assert [g["status"] for g in _letters(world, posting)] == [GenerationStatus.queued]
+    _free(world, busy)
+    started = world.tick(AT + timedelta(minutes=2))
+    (letter,) = _letters(world, posting)
+    assert letter["status"] is GenerationStatus.running
+    assert started == [letter["run_id"]]
+
+
+def test_a_cv_done_without_its_letter_gets_it_from_the_tick_once_the_posting_is_cv_ready(
+    world: World,
+) -> None:
+    posting = world.posting(80)
+    world.tick()
+    world.finish()  # the hook was cut short: no letter, nothing waits
+    world.set_job(posting, status=JobStatus.cv_ready)
+    started = world.tick(AT + timedelta(minutes=1))
+    (letter,) = _letters(world, posting)
+    assert (letter["status"], letter["trigger"]) == (
+        GenerationStatus.running,
+        GenerationTrigger.auto,
+    )
+    assert started == [letter["run_id"]]
+
+
+@pytest.mark.parametrize("status", [JobStatus.staged, JobStatus.applied, JobStatus.skipped])
+def test_a_queued_letter_of_a_posting_moved_past_cv_ready_is_cancelled_never_started(
+    world: World, status: JobStatus
+) -> None:
+    posting = world.posting(80)
+    (cv_run,) = world.tick()
+    world.finish()
+    busy = _busy(world)
+    generate.start_letter(world.factory, cv_run, AT, world.settings)
+    _free(world, busy)
+    world.set_job(posting, status=status)
+    assert world.tick(AT + timedelta(minutes=1)) == []
+    assert [g["status"] for g in _letters(world, posting)] == [GenerationStatus.cancelled]
+
+
+def _queued_letter(world: World) -> tuple[uuid.UUID, uuid.UUID]:
+    """A `cv_ready` posting whose letter the busy chain left `queued`, the runs free again:
+    (posting, letter generation)."""
+    posting = world.posting(80)
+    (cv_run,) = world.tick()
+    world.finish()
+    busy = _busy(world)
+    generate.start_letter(world.factory, cv_run, AT, world.settings)
+    _free(world, busy)
+    world.set_job(posting, status=JobStatus.cv_ready)
+    (letter,) = _letters(world, posting)
+    return posting, letter["id"]
+
+
+def test_a_move_to_applied_waits_behind_the_ticks_letter_start_and_both_commit(
+    world: World, engine: sa.Engine
+) -> None:
+    """The tick claims the letter, then its run's row needs the posting; a move to applied locks
+    the posting, then the freeze locks the letter. With the letter locked first, a circle
+    Postgres broke (the person's move answered 409). The claim now takes the posting first."""
+    posting, letter = _queued_letter(world)
+    outcome: dict[str, Any] = {}
+    with world.factory() as db:
+        generation = db.get(DocumentGeneration, letter)
+        assert generation is not None
+        assert tick._claim(db, generation, at=AT)
+        mover = in_thread(lambda: mark_applied(world.factory, world.user, posting, AT), outcome)
+        wait_until_blocked(engine, [mover], 1)
+        run = generate.start(db, generation, at=AT, settings=world.settings)
+        store.commit(db)
+    mover.join()
+    assert "error" not in outcome, outcome.get("error")
+    (row,) = _letters(world, posting)
+    assert (row["status"], row["run_id"]) == (GenerationStatus.running, run.id)
+    with world.factory() as db:
+        assert db.get(Job, posting).status is JobStatus.applied  # type: ignore[union-attr]
+
+
+def test_a_move_to_applied_waits_behind_a_recovered_cv_retried_at_once_and_both_commit(
+    world: World, engine: sa.Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pass keeps the CV it recovered locked, and a CV that stopped at its ceiling is retried
+    at once: its run's row needs the posting. A move to applied in between locked the posting,
+    then waited for the CV: a circle. The recovery now takes the posting first."""
+    posting = world.posting(80)
+    world.tick()
+    ended = AT + timedelta(seconds=10)
+    end_runs(world, "failed", failures.TOKEN_LIMIT, ended)
+    real = tick.recover
+    outcome: dict[str, Any] = {}
+    movers: list[Any] = []
+
+    def recover_then_apply(db: Session, user_id: uuid.UUID, at: datetime) -> int:
+        settled = real(db, user_id, at)
+        movers.append(
+            in_thread(lambda: mark_applied(world.factory, world.user, posting, AT), outcome)
+        )
+        wait_until_blocked(engine, movers, 1)
+        return settled
+
+    monkeypatch.setattr(tick, "recover", recover_then_apply)
+    started = world.tick(ended + timedelta(seconds=tick.HOOK_GRACE_S + 1))
+    movers[0].join()
+    assert "error" not in outcome, outcome.get("error")
+    cv = posting_cv(world.generations(posting))
+    assert [g["status"] for g in cv] == [GenerationStatus.failed, GenerationStatus.running]
+    assert started == [cv[-1]["run_id"]]
+    with world.factory() as db:
+        assert db.get(Job, posting).status is JobStatus.applied  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("kind", [Kind.cv, Kind.letter])
+def test_a_move_to_applied_after_the_ticks_read_cancels_what_it_would_start(
+    world: World, monkeypatch: pytest.MonkeyPatch, kind: Kind
+) -> None:
+    if kind is Kind.letter:
+        posting, _ = _queued_letter(world)
+    else:
+        posting = world.posting(80)
+    real = tick.eligible
+    moved: list[uuid.UUID] = []
+
+    def read_then_apply(*args: Any, **kwargs: Any) -> Any:
+        found = real(*args, **kwargs)
+        if not moved:
+            # committed after the pass read the status, before its start
+            mark_applied(world.factory, world.user, posting, AT)
+            moved.append(posting)
+        return found
+
+    monkeypatch.setattr(tick, "eligible", read_then_apply)
+    assert world.tick(AT + timedelta(minutes=1)) == []
+    assert moved == [posting]
+    owned = [g for g in world.generations(posting) if g["kind"] is kind]
+    assert [(g["status"], g["run_id"]) for g in owned][-1:] == [(GenerationStatus.cancelled, None)]
+    assert runs_of(world, posting) == (1 if kind is Kind.letter else 0)  # the CV's run only
+
+
+def test_a_cv_ready_posting_without_a_written_cv_gets_nothing(world: World) -> None:
+    posting = world.posting(80, status="cv_ready")
+    assert world.tick() == []
+    assert world.generations(posting) == []
+
+
+def test_the_ticks_letter_gets_what_the_pairs_ceiling_has_left_after_the_cvs_run(
+    world: World,
+) -> None:
+    posting = world.posting(80)
+    (cv_run,) = world.tick()
+    with world.factory() as db:
+        db.execute(
+            sa.text(
+                "UPDATE agent_runs SET input_tokens = 30000, output_tokens = 4000 WHERE id = :r"
+            ),
+            {"r": cv_run},
+        )
+        db.commit()
+    world.finish()
+    world.tick(AT + timedelta(minutes=1))
+    (cv,) = posting_cv(world.generations(posting))
+    (letter,) = _letters(world, posting)
+    assert letter["token_ceiling"] == cv["token_ceiling"] - 34_000
+
+
+def test_a_letter_after_a_cv_run_without_a_count_gets_no_budget_then_one_retry(
+    world: World,
+) -> None:
+    posting = world.posting(80)
+    world.tick()
+    world.finish(counted=False)  # the hook cut short, and the run wrote no count
+    world.set_job(posting, status=JobStatus.cv_ready)
+    assert world.tick(AT + timedelta(minutes=1)) == []
+    (letter,) = _letters(world, posting)
+    assert (letter["status"], letter["token_ceiling"], letter["run_id"]) == (
+        GenerationStatus.failed,
+        0,
+        None,
+    )
+    with world.factory() as db:
+        assert db.get(DocumentGeneration, letter["id"]).error == "token_limit"  # type: ignore[union-attr]
+        high = estimate.for_posting(db, world.user, posting, world.base).high
+    started = world.tick(AT + timedelta(minutes=2))
+    _, again = _letters(world, posting)
+    assert (again["status"], again["token_ceiling"]) == (GenerationStatus.running, high)
+    assert started == [again["run_id"]]

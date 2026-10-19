@@ -1,7 +1,10 @@
 """D8: the letter writer, end to end on the fake backend (no model, no key): each recorded stream
 `documents_letter_*` and its outcome (the version, its corrections and their reasons), the
 recipient default, the paragraph limit, the CV the letter reads (none yet is not an error), the
-bound run, and the letter that follows a CV. Real Postgres at head (the identity fixtures)."""
+bound run, and the letter that follows a CV: what the pair's ceiling has left (no budget when the
+CV's run has no count), the posting's lock before the CV's (two sessions against a render's
+order), two chains at once, a posting past `cv_ready`, the consent and the credential read again.
+Real Postgres at head (the identity fixtures)."""
 
 from __future__ import annotations
 
@@ -15,22 +18,36 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import definitions, failures, fake_backend, runs
+from app.agents import credentials, definitions, failures, fake_backend, runs
 from app.agents import tools as app_tools
-from app.agents.models import RunStatus
-from app.documents import generate, render_job, store, submit, writer_cv, writer_letter
+from app.agents.models import AgentRun, CredentialKind, RunStatus
+from app.documents import (
+    consent,
+    generate,
+    render_job,
+    store,
+    submit,
+    tick,
+    writer_cv,
+    writer_letter,
+)
 from app.documents.models import (
     Author,
     Document,
     DocumentGeneration,
+    FreezeReason,
     GenerationMode,
     GenerationOutcome,
     GenerationStatus,
     GenerationTrigger,
+    GenerationWait,
     Kind,
     Language,
     Origin,
 )
+from app.jobs import service as jobs_service
+from app.jobs.models import JobStatus
+from tests.agents.conftest import API_KEY
 from tests.agents.g6_helpers import everything_stored
 from tests.documents.canary import find, marker
 from tests.documents.render_support import FakeRenderer, context
@@ -43,6 +60,7 @@ from tests.documents.store_support import (
     factory,
     migrated_url,
 )
+from tests.documents.two_sessions import in_thread, wait_until_blocked
 from tests.documents.writer_support import (
     POSTING,
     Person,
@@ -80,7 +98,11 @@ def lumen_posting(who: Person) -> Person:
 
 @pytest.fixture
 def alex(factory: sessionmaker[Session], migrated_url: str) -> Person:
-    return lumen_posting(person(factory, migrated_url, USER_A))
+    who = lumen_posting(person(factory, migrated_url, USER_A))
+    with who.factory() as db:
+        consent.record(db, who.user, AT)  # what every run needs, the letter's chain included
+        db.commit()
+    return who
 
 
 def _submitted(script: str) -> list[dict[str, Any]]:
@@ -535,19 +557,24 @@ def _letter_generations(who: Person) -> list[DocumentGeneration]:
         )
 
 
-def test_the_letter_follows_the_cv_with_the_same_estimate_ceiling_and_base(alex: Person) -> None:
-    cv, cv_generation, _ = write(alex, "documents_cv_valid", ceiling=77_000)
+def test_the_letter_follows_the_cv_with_its_estimate_and_base_and_what_the_ceiling_has_left(
+    alex: Person,
+) -> None:
+    cv, cv_generation, cv_run = write(alex, "documents_cv_valid", ceiling=77_000)
     [letter] = _letter_generations(alex)
     parent = generation_row(alex.factory, cv_generation)
+    spent = _spent(alex, cv_run)
+    assert spent > 0
     assert letter.status is GenerationStatus.running
     assert letter.mode is GenerationMode.posting
     assert letter.estimate == parent.estimate
-    assert letter.token_ceiling == 77_000
+    # The pair shares one ceiling: the CV's run spent first, the letter gets what is left.
+    assert letter.token_ceiling == 77_000 - spent
     assert letter.base_document_id == alex.base
     assert letter.trigger is parent.trigger
     run = run_row(alex.factory, letter.run_id)
     assert run.agent == writer_letter.NAME
-    assert run.input["token_budget"] == 77_000
+    assert run.input["token_budget"] == 77_000 - spent
     assert run.input["script"] == "documents_letter_valid"
     agents = [job for job in alex.queue.jobs if job["function"] == "run_agent"]
     assert [job["args"] for job in agents] == [(str(letter.run_id),)]
@@ -650,3 +677,256 @@ def test_a_queue_that_is_down_leaves_the_letter_started_and_raises_nothing(alex:
     assert letter.status is GenerationStatus.running
     assert run_row(alex.factory, letter.run_id).status is RunStatus.queued
     assert alex.queue.jobs == []
+
+
+# --- the chain: the ceiling, the locks, the posting's status, the consent and the credential ----
+
+
+def _spent(who: Person, run_id: uuid.UUID) -> int:
+    run = run_row(who.factory, run_id)
+    return (run.input_tokens or 0) + (run.output_tokens or 0)
+
+
+def _cv_done(
+    who: Person, *, spent: tuple[int, int] = (0, 0), ceiling: int = 100_000
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    """A CV generation whose run ended done and spent `spent` (input, output), as the runner
+    records it, before the final hook chains anything: (document id, generation id, run id)."""
+    document, generation, run = start(who, "documents_cv_valid", ceiling=ceiling)
+    with who.factory() as db:
+        db.execute(
+            sa.text(
+                "UPDATE agent_runs SET status = 'done', input_tokens = :i, output_tokens = :o "
+                "WHERE id = :r"
+            ),
+            {"i": spent[0], "o": spent[1], "r": run},
+        )
+        db.execute(
+            sa.text(
+                "UPDATE document_generations SET status = 'done', finished_at = :at WHERE id = :g"
+            ),
+            {"at": AT, "g": generation},
+        )
+        db.commit()
+    return document, generation, run
+
+
+def _chain(who: Person, run_id: uuid.UUID) -> uuid.UUID | None:
+    return generate.start_letter(who.factory, run_id, AT, who.settings)
+
+
+@pytest.mark.parametrize(
+    ("spent", "left"),
+    [
+        ((0, 0), 1_000),
+        ((600, 300), 100),
+        ((700, 300), 0),
+        ((900, 300), 0),  # the run passed its budget by a request: never under zero
+    ],
+)
+def test_the_letters_ceiling_is_the_pairs_minus_what_the_cvs_run_spent(
+    alex: Person, spent: tuple[int, int], left: int
+) -> None:
+    _, generation, run = _cv_done(alex, spent=spent, ceiling=1_000)
+    assert _chain(alex, run) is not None
+    [letter] = _letter_generations(alex)
+    assert letter.token_ceiling == left
+    assert run_row(alex.factory, letter.run_id).input["token_budget"] == left
+    with alex.factory() as db:
+        assert generate.letter_ceiling(db, db.get(DocumentGeneration, generation)) == left
+
+
+@pytest.mark.parametrize("counts", [(None, None), (600, None), (None, 300)])
+def test_a_cv_run_without_its_count_gives_the_letter_no_budget_and_it_fails_at_its_limit(
+    alex: Person, counts: tuple[int | None, int | None]
+) -> None:
+    _, generation, run = _cv_done(alex, ceiling=1_000)
+    with alex.factory() as db:
+        db.execute(
+            sa.text("UPDATE agent_runs SET input_tokens = :i, output_tokens = :o WHERE id = :r"),
+            {"i": counts[0], "o": counts[1], "r": run},
+        )
+        db.commit()
+    assert _chain(alex, run) is None
+    [letter] = _letter_generations(alex)
+    assert (letter.status, letter.error, letter.token_ceiling, letter.run_id) == (
+        GenerationStatus.failed,
+        "token_limit",
+        0,
+        None,
+    )
+    with alex.factory() as db:
+        assert generate.letter_ceiling(db, db.get(DocumentGeneration, generation)) is None
+        no_run = DocumentGeneration(run_id=None, token_ceiling=1_000)
+        assert generate.letter_ceiling(db, no_run) is None
+
+
+def test_the_chain_waits_behind_a_render_holding_the_posting_and_both_commit(
+    alex: Person, engine: sa.Engine
+) -> None:
+    """D6's render stores a one page CV under the posting's lock, then the CV's (`_store_once`).
+    The chain once locked the CV, then needed the posting for the letter's row and run: with the
+    render between the two, a circle Postgres broke. The chain now takes the posting first."""
+    cv, _, run = _cv_done(alex)
+    outcome: dict[str, Any] = {}
+    with alex.factory() as render:
+        assert jobs_service.lock_job(render, alex.user, alex.posting) is not None
+        thread = in_thread(lambda: _chain(alex, run), outcome)
+        wait_until_blocked(engine, [thread], 1)
+        store.lock_document(render, alex.user, cv)
+        store.commit(render)
+    thread.join()
+    assert "error" not in outcome, outcome.get("error")
+    [letter] = _letter_generations(alex)
+    assert outcome["result"] == letter.run_id
+    assert letter.status is GenerationStatus.running
+
+
+def test_two_chains_of_one_cv_at_once_start_one_letter(alex: Person, engine: sa.Engine) -> None:
+    cv, _, run = _cv_done(alex)
+    outcomes: list[dict[str, Any]] = [{}, {}]
+    with alex.factory() as gate:
+        store.lock_document(gate, alex.user, cv)  # both chains queue behind it, then race
+        threads = [in_thread(lambda: _chain(alex, run), o) for o in outcomes]
+        wait_until_blocked(engine, threads, 2)
+        gate.rollback()
+    for thread in threads:
+        thread.join()
+    assert [o.get("error") for o in outcomes] == [None, None]
+    [letter] = _letter_generations(alex)
+    assert sorted((o["result"] for o in outcomes), key=str) == sorted(
+        [letter.run_id, None], key=str
+    )
+
+
+def _set_status(who: Person, status: JobStatus) -> None:
+    with who.factory() as db:
+        db.execute(
+            sa.text("UPDATE jobs SET status = CAST(:s AS job_status) WHERE id = :j"),
+            {"s": status.value, "j": who.posting},
+        )
+        db.commit()
+
+
+@pytest.mark.parametrize(
+    ("status", "follows"),
+    [
+        (JobStatus.found, True),
+        (JobStatus.shortlisted, True),
+        (JobStatus.cv_ready, True),
+        (JobStatus.staged, False),
+        (JobStatus.applied, False),
+        (JobStatus.interview, False),
+        (JobStatus.rejected, False),
+        (JobStatus.closed, False),
+        (JobStatus.skipped, False),
+    ],
+)
+def test_a_cv_written_again_past_cv_ready_writes_no_letter(
+    alex: Person, status: JobStatus, follows: bool
+) -> None:
+    _set_status(alex, status)
+    write(alex, "documents_cv_valid")
+    assert len(_letter_generations(alex)) == (1 if follows else 0)
+
+
+def test_both_kinds_asked_on_an_applied_posting_write_a_letter_and_the_sent_one_stays(
+    alex: Person,
+) -> None:
+    document, first, _ = write_letter(alex, "documents_letter_valid")
+    [sent] = versions(alex.factory, document)
+    with alex.factory() as db:
+        store.freeze(db, alex.user, sent.id, FreezeReason.applied, AT)
+        db.commit()
+    _set_status(alex, JobStatus.applied)
+    with alex.factory() as db:
+        cv = store.get_or_create(db, alex.user, alex.posting, Kind.cv, at=AT)
+        generation = generate.create(
+            db,
+            cv,
+            GenerationMode.posting,
+            GenerationTrigger.click,
+            None,
+            {"low": 1, "high": 2, generate.LETTER_FOLLOWS: True},
+            100_000,
+            at=AT,
+        )
+        run = generate.start(
+            db, generation, at=AT, script="documents_cv_valid", settings=alex.settings
+        )
+        db.commit()
+    execute(alex, run.id)
+    [again] = [g for g in _letter_generations(alex) if g.id != first]
+    execute(alex, again.run_id)
+    assert generation_row(alex.factory, again.id).status is GenerationStatus.done
+    found = versions(alex.factory, document)
+    assert [(v.number, v.frozen_at is not None) for v in found] == [(1, True), (2, False)]
+    assert (found[0].content_hash, found[0].content) == (sent.content_hash, sent.content)
+
+
+def test_a_revoked_consent_stops_the_letter_with_its_reason_until_it_is_given_again(
+    alex: Person,
+) -> None:
+    _, _, run = _cv_done(alex)
+    with alex.factory() as db:
+        db.execute(sa.text("DELETE FROM document_consents WHERE user_id = :u"), {"u": alex.user})
+        db.commit()
+    assert _chain(alex, run) is None
+    [letter] = _letter_generations(alex)
+    assert (letter.status, letter.wait_reason, letter.run_id) == (
+        GenerationStatus.waiting,
+        GenerationWait.consent,
+        None,
+    )
+    with alex.factory() as db:
+        consent.record(db, alex.user, AT)
+        db.commit()
+    assert tick.tick(alex.factory, AT, alex.settings, only=[alex.user]) == [
+        generation_row(alex.factory, letter.id).run_id
+    ]
+
+
+def test_a_removed_credential_stops_the_letter_with_its_reason_until_one_is_added(
+    alex: Person,
+) -> None:
+    _, _, run = _cv_done(alex)
+    with alex.factory() as db:
+        assert credentials.delete(db, alex.user)
+        db.commit()
+    assert _chain(alex, run) is None
+    [letter] = _letter_generations(alex)
+    assert (letter.status, letter.wait_reason, letter.run_id) == (
+        GenerationStatus.waiting,
+        GenerationWait.credential,
+        None,
+    )
+    with alex.factory() as db:
+        credentials.save(db, alex.keyring, alex.user, CredentialKind.anthropic_api_key, API_KEY, AT)
+        db.commit()
+    assert tick.tick(alex.factory, AT, alex.settings, only=[alex.user]) == [
+        generation_row(alex.factory, letter.id).run_id
+    ]
+
+
+def test_a_busy_person_gets_the_letter_queued_and_the_tick_starts_it(alex: Person) -> None:
+    _, _, run = _cv_done(alex)
+    with alex.factory() as db:
+        busy = [
+            runs.create_run(db, alex.user, "documents_cv", alex.posting, {}, "m", AT).id
+            for _ in range(runs.ACTIVE_PER_USER)
+        ]
+        db.commit()
+    assert _chain(alex, run) is None
+    [letter] = _letter_generations(alex)
+    assert (letter.status, letter.wait_reason, letter.run_id) == (
+        GenerationStatus.queued,
+        None,
+        None,
+    )
+    assert tick.tick(alex.factory, AT, alex.settings, only=[alex.user]) == []  # still busy
+    with alex.factory() as db:
+        db.execute(sa.update(AgentRun).where(AgentRun.id.in_(busy)).values(status=RunStatus.done))
+        db.commit()
+    assert tick.tick(alex.factory, AT, alex.settings, only=[alex.user]) == [
+        generation_row(alex.factory, letter.id).run_id
+    ]

@@ -28,11 +28,14 @@ from app.documents.models import (
     GenerationTrigger,
     GenerationWait,
     Kind,
+    Origin,
 )
+from app.jobs import service as jobs_service
 from tests.agents.conftest import API_KEY, new_key
 from tests.conftest import make_settings
 from tests.documents.conftest import load
 from tests.documents.render_support import RecordingQueue, give_profile
+from tests.documents.two_sessions import in_thread, wait_until_blocked
 from tests.identity.api_helpers import Api, make_user
 from tests.identity.conftest import api, app, clock, engine, factory, migrated_url
 
@@ -176,6 +179,9 @@ def test_a_recorded_stream_named_by_the_click_is_the_writers_and_the_letters(
     with factory() as db:
         cv = db.execute(sa.select(DocumentGeneration)).scalar_one()
         cv.status = GenerationStatus.done  # the CV is written: the letter follows
+        ran = db.get(AgentRun, cv.run_id)
+        assert ran is not None
+        ran.input_tokens, ran.output_tokens = 0, 0  # the counts the runner writes
         db.commit()
         assert db.get(AgentRun, cv.run_id).input["script"] == "documents_cv_journey"  # type: ignore[union-attr]
         assert cv.estimate[generate.LETTER_SCRIPT] == "documents_letter_journey"
@@ -250,6 +256,36 @@ def test_an_automatic_generation_that_waits_gives_way_to_a_click_and_a_running_o
     }
     busy = api.request("POST", write(first), token=alex.token, json={"kinds": ["cv"]})
     assert busy.status_code == 409
+
+
+def test_a_click_waits_behind_a_render_holding_the_posting_and_both_commit(
+    alex: Who, api: Api, factory: sessionmaker[Session], engine: sa.Engine, clock: Any
+) -> None:
+    """D6's render stores a one page CV under the posting's lock, then the CV's (`_store_once`).
+    A click on that CV, which has a version, once locked the CV, then needed the posting for its
+    run's row: with the render between the two, a circle Postgres broke. The click now takes the
+    posting first."""
+    job = alex.posting(40)
+    with factory() as db:
+        cv = store.get_or_create(db, alex.user, job, Kind.cv, at=clock())
+        store.snapshot(db, alex.user, cv.id, Origin.edited, at=clock())
+        db.commit()
+        cv_id = cv.id
+    outcome: dict[str, Any] = {}
+    with factory() as render:
+        assert jobs_service.lock_job(render, alex.user, job) is not None
+        thread = in_thread(
+            lambda: api.request("POST", write(job), token=alex.token, json={"kinds": ["cv"]}),
+            outcome,
+        )
+        wait_until_blocked(engine, [thread], 1)
+        store.lock_document(render, alex.user, cv_id)
+        store.commit(render)
+    thread.join()
+    assert "error" not in outcome, outcome.get("error")
+    response = outcome["result"]
+    assert response.status_code == 202, response.text
+    assert [(g["kind"], g["status"]) for g in response.json()["generations"]] == [("cv", "running")]
 
 
 def test_without_a_credential_a_click_waits_and_the_tick_starts_it(
