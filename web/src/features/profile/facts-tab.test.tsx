@@ -82,14 +82,14 @@ describe("facts tab", () => {
     await user.click(blockButton(/, block 1$/));
     const text = screen.getByLabelText("Text of block 1");
     await user.clear(text);
-    await user.type(text, "## Trading{enter}{enter}- **Brain** first");
+    await user.type(text, "## Freight{enter}{enter}- **Talvo** first");
     const preview = screen.getByRole("region", { name: "Preview of block 1" });
     expect(
-      within(preview).getByRole("heading", { name: "Trading" }),
+      within(preview).getByRole("heading", { name: "Freight" }),
     ).toBeVisible();
-    expect(within(preview).getByText("Brain").tagName).toBe("STRONG");
+    expect(within(preview).getByText("Talvo").tagName).toBe("STRONG");
     expect(within(preview).getByRole("listitem")).toHaveTextContent(
-      "Brain first",
+      "Talvo first",
     );
 
     const views = screen.getByRole("group", { name: "Editor view of block 1" });

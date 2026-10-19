@@ -78,14 +78,38 @@ def _read(db: Session, user_id: uuid.UUID) -> ProfileRef | None:
     return None if row is None else ProfileRef(profile_id=str(row.profile_id), uid=row.uid)
 
 
-def mark_used(sessions: sessionmaker[Session], user_id: uuid.UUID, at: datetime) -> None:
+def mark_used(
+    sessions: sessionmaker[Session],
+    user_id: uuid.UUID,
+    at: datetime,
+    size_bytes: int | None = None,
+    profile_id: str | None = None,
+) -> None:
+    """The last use; at a lease end (B7) also the size browserd measured, written to that
+    profile only: a row made again after "Forget all logins" never gets the old one's size."""
+    values: dict[str, object] = {"last_used_at": at}
+    if size_bytes is not None:
+        values["size_bytes"] = size_bytes
+    where = [BrowserProfile.user_id == user_id]
+    if profile_id is not None:
+        where.append(BrowserProfile.profile_id == uuid.UUID(profile_id))
     with sessions() as db:
-        db.execute(
-            sa.update(BrowserProfile)
-            .where(BrowserProfile.user_id == user_id)
-            .values(last_used_at=at)
-        )
+        db.execute(sa.update(BrowserProfile).where(*where).values(**values))
         db.commit()
+
+
+def remove(sessions: sessionmaker[Session], user_id: uuid.UUID) -> ProfileRef | None:
+    """Deletes the person's profile row (B7, "Forget all logins"): B3's trigger queues the
+    directory's removal, and the next lease makes a new row, so a new empty directory under a
+    new uid. The row deleted, or None when there was none."""
+    with sessions() as db:
+        row = db.execute(
+            sa.delete(BrowserProfile)
+            .where(BrowserProfile.user_id == user_id)
+            .returning(BrowserProfile.profile_id, BrowserProfile.uid)
+        ).one_or_none()
+        db.commit()
+    return None if row is None else ProfileRef(profile_id=str(row.profile_id), uid=row.uid)
 
 
 def view(sessions: sessionmaker[Session], user_id: uuid.UUID) -> ProfileView | None:

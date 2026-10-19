@@ -82,7 +82,7 @@ FULL: dict[str, dict[str, Any]] = {
     "facts": {
         "blocks": [
             {"title": "Hard rules", "body": "1. Every claim traces to this base.\n2. No metric."},
-            {"title": "What was built", "body": "## Trading\n\nAn agent-driven back-office."},
+            {"title": "What was built", "body": "## Freight\n\nAn agent-driven back-office."},
         ]
     },
     "skills": {

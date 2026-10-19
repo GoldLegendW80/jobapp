@@ -574,7 +574,7 @@ DOTTED = "Software Engineer, 01.2023 to present"
 OLMEA = "Mission de 09/21 à 03/23 chez Olmea, Bordeaux"
 OLMEA2 = "Olmea, de 2021 à 2023, développeur.\n\nMission de 09/21 à 03/23 chez Olmea, Bordeaux"
 SCHOOL = "Licence informatique, 2019-20, Université de Bordeaux"
-SUMMER = "Stage de juin à août 2019 chez Hotel 35"
+SUMMER = "Stage de juin à août 2019 chez Hotel 47"
 SPRING = "Internship, Jan to Mar 2023, Velmor Group"
 OMAR = "Projet Omar 2023, refonte du site interne"
 GROUP = "Consultant chez Velmorgroup Services à Paris"
@@ -664,10 +664,10 @@ EXAMPLES = [
     ),
     (
         20,
-        "Réceptionniste de nuit à l\u2019Hôtel 35, Paris",
+        "Réceptionniste de nuit à l\u2019Hôtel 47, Paris",
         "name",
-        "Hôtel 35",
-        ["Réceptionniste de nuit à l'Hôtel 35, Paris"],
+        "Hôtel 47",
+        ["Réceptionniste de nuit à l'Hôtel 47, Paris"],
         "accept",
     ),
     (
@@ -727,10 +727,10 @@ EXAMPLES = [
     ),
     (
         40,
-        "Projet \u2033Brain\u2033 chez Lumetra, en production",
+        "Projet \u2033Talvo\u2033 chez Lumetra, en production",
         "text",
-        "Brain in production",
-        ['Projet "Brain" chez Lumetra, en production'],
+        "Talvo in production",
+        ['Projet "Talvo" chez Lumetra, en production'],
         "accept",
     ),
     (41, DOTTED, "date", "2023-01", None, "accept"),
@@ -804,7 +804,7 @@ EXAMPLES = [
     (71, "Stack : Python 3, FastAPI, Postgres 16", "term", "python3", None, "accept"),
     (
         72,
-        "Portfolio : https://camille.example.org/projets/brain en ligne",
+        "Portfolio : https://camille.example.org/projets/talvo en ligne",
         "url",
         "https://camille.example.org/projets",
         None,

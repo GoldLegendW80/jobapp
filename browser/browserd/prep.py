@@ -1,8 +1,15 @@
 """Run as the profile's own uid, never as root: `python -m browserd.prep prepare <profile dir>
-<lease dir> <languages>`, `killpg <pgid>`, `kill <pid ...>`, `rmtree <lease dir>`. browserd is
-root with SETUID and SETGID only (no DAC_OVERRIDE, no CHOWN, no KILL), so it cannot read or
-write a profile nor signal its Chromium itself; this child does it under the profile's uid,
-then exits.
+<lease dir> <languages>`, `killpg <pgid>`, `kill <pid ...>`, `quit <pid>`, `rmtree <lease dir>`,
+`measure <profile dir> <trim bytes>`, `rmprofile <profile dir>`. browserd is root with SETUID
+and SETGID only (no DAC_OVERRIDE, no CHOWN, no KILL), so it cannot read or write a profile nor
+signal its Chromium itself; this child does it under the profile's uid, then exits.
+
+- `quit`: SIGINT to Chromium's browser process alone, its clean exit (measured for B7:
+  SIGTERM, to the process or to its group, exits without writing the cookies of the last
+  seconds, and SIGINT writes them, a cookie without an expiry date included);
+- `measure`: the profile's size in bytes (regular files, links never followed), printed; over
+  the trim size its caches (CACHES) are removed first, never its cookies, storage or session;
+- `rmprofile`: the profile directory removed whole ("Forget all logins", an account deleted).
 
 - the profile directory, created with mode 0700 by its uid (/profiles is 1733: anyone may create
   an entry, nobody may list it, only the owner may remove theirs);
@@ -18,11 +25,32 @@ then exits.
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
+import stat
 import sys
 
 LOCKS = ("SingletonLock", "SingletonSocket", "SingletonCookie")
+PROFILE = re.compile(r"/profiles/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+# What Chromium rebuilds by itself: its disk caches (the cache lives in the profile, which is
+# not under XDG_CONFIG_HOME), shader caches, crash reports. Cookies, Local Storage, IndexedDB,
+# Session Storage, Sessions and Preferences are never in this list.
+CACHES = (
+    "cache",
+    "data/Default/Cache",
+    "data/Default/Code Cache",
+    "data/Default/GPUCache",
+    "data/Default/DawnGraphiteCache",
+    "data/Default/DawnWebGPUCache",
+    "data/Default/Service Worker/CacheStorage",
+    "data/Default/Service Worker/ScriptCache",
+    "data/GrShaderCache",
+    "data/GraphiteDawnCache",
+    "data/ShaderCache",
+    "data/component_crx_cache",
+    "data/Crashpad",
+)
 
 
 def merge(into: dict, extra: dict) -> dict:
@@ -78,6 +106,32 @@ def prepare(profile: str, lease: str, languages: str) -> None:
     os.replace(tmp, path)
 
 
+def size_of(root: str) -> int:
+    """Bytes of the regular files under root; a link is never followed, an entry that vanishes
+    while it is read counts nothing."""
+    total = 0
+    for folder, _, files in os.walk(root):
+        for name in files:
+            try:
+                info = os.lstat(os.path.join(folder, name))
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                total += info.st_size
+    return total
+
+
+def measure(profile: str, trim_bytes: int) -> int:
+    size = size_of(profile)
+    if size > trim_bytes:
+        for cache in CACHES:
+            path = os.path.join(profile, cache)
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path, ignore_errors=True)
+        size = size_of(profile)
+    return size
+
+
 if __name__ == "__main__":
     if os.getuid() == 0:
         sys.exit("prep runs as the profile's uid, never as root")
@@ -90,7 +144,15 @@ if __name__ == "__main__":
         for pid in args:
             with contextlib.suppress(ProcessLookupError):
                 os.kill(int(pid), signal.SIGKILL)
+    elif command == "quit":
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(int(args[0]), signal.SIGINT)
     elif command == "rmtree" and args[0].startswith("/leases/"):
         shutil.rmtree(args[0], ignore_errors=True)
+    elif command == "measure" and PROFILE.fullmatch(args[0]):
+        print(measure(args[0], int(args[1])))
+    elif command == "rmprofile" and PROFILE.fullmatch(args[0]):
+        if os.path.lexists(args[0]):
+            shutil.rmtree(args[0])
     else:
         sys.exit(f"unknown command {command}")

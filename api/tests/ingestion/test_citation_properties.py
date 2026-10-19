@@ -802,10 +802,10 @@ def some_email(rng: random.Random) -> str:
 def some_url(rng: random.Random) -> str:
     """A host, sometimes a port, a path of segments that hold the marks of the grammar, sometimes
     a query and a fragment. No scheme: the caller writes one or not."""
-    segments = ("in", "camille-durand", "projets", "Brain", "cv_2023", "a.b", "~cd", "a%20b", "x+y")
+    segments = ("in", "camille-durand", "projets", "Talvo", "cv_2023", "a.b", "~cd", "a%20b", "x+y")
     port = rng.choice(("", "", "", ":8080"))
     path = "".join("/" + rng.choice(segments) for _ in range(rng.randint(0, 3)))
-    query = rng.choice(("", "", "?id=42", "?id=42&lang=fr", "?q=Brain"))
+    query = rng.choice(("", "", "?id=42", "?id=42&lang=fr", "?q=Talvo"))
     fragment = rng.choice(("", "", "#top"))
     return f"{rng.choice(HOSTS)}{port}{path}{query if path else ''}{fragment if path else ''}"
 
@@ -944,7 +944,7 @@ def test_a_url_that_goes_on_or_started_earlier_is_refused(seed: int) -> None:
         letter = rng.choice(LETTERS + DIGITS)
         after = rng.choice(
             (
-                *("/x", "/Brain", ".html", "?id=4", "#top", "&a=1", "=1", "-x", "_x", "x", "2"),
+                *("/x", "/Talvo", ".html", "?id=4", "#top", "&a=1", "=1", "-x", "_x", "x", "2"),
                 *("%20", "+x", "@x", "/~x", "/?x", "//x", ":8080" if ":" not in url else "/y"),
             )
         )

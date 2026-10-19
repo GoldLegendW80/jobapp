@@ -3,7 +3,8 @@
   POST /leases/{id}/tools/{name}   args as JSON; `X-Lease-Token` required. 200 with the tool's
                                    result (`ok` true, or false with the refusal's code); 404
                                    unknown tool or not the current lease, 403 a wrong token or
-                                   capability, 409 the lease waits for the person, 410 the lease
+                                   capability, 409 the lease waits for the person or is a
+                                   person's own session (`person_session`, B7), 410 the lease
                                    ended during the call
   PUT  /leases/{id}/files/{name}   a document for browser_file_upload: a PDF by its magic bytes,
                                    at most 20 MB (413 past it, before a byte is read), at most
@@ -79,6 +80,8 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
         raise LeaseError(404, "unknown_tool")
     token = req.headers.get("x-lease-token", "")
     lease = svc.manager.check_token(lease_id, token)
+    if not lease.request.automation:  # B7: a person's own session has no agent
+        raise LeaseError(409, "person_session")
     args = req.json()
     if not isinstance(args, dict):
         raise LeaseError(400, "bad_args")
@@ -115,6 +118,8 @@ async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
     name, lease_id = match["name"], match["lease_id"]
     token = req.headers.get("x-lease-token", "")
     lease = svc.manager.check_token(lease_id, token)
+    if not lease.request.automation:
+        raise LeaseError(409, "person_session")
     state = state_of(lease)
     code = policy.file_verdict(name, req.body, state.files)
     if code:
