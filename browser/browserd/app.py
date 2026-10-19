@@ -4,7 +4,8 @@ control API of SPEC-browser:
   POST   /leases          {user_id, profile_id, uid, purpose, automation, languages, timezone}
                           201 {lease_id, lease_token, ...} once Chromium answers on CDP;
                           409 {error: busy, holder_purpose} while another lease runs
-  DELETE /leases/{id}     204, Chromium closed cleanly; 404 when it is not the current lease
+  DELETE /leases/{id}     200 {lease_id, reason, size_bytes}, Chromium closed cleanly and the
+                          profile measured (B7); 404 when it is not the current lease
   GET    /leases/current  {lease: {...} | null, last_end: {lease_id, reason} | null}
   GET    /healthz         {ok, display, lease}
   POST   /leases/{id}/tools/{name}, PUT /leases/{id}/files/{name}   the tool API (B5,
@@ -27,7 +28,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from browserd import live
+from browserd import live, signin
 from browserd.leases import LeaseError, Manager, Request
 from browserd.tools import routes as tools
 
@@ -80,7 +81,8 @@ async def create_lease(svc: Service, req: HttpRequest, _: re.Match[str]) -> tupl
 async def delete_lease(svc: Service, _: HttpRequest, match: re.Match[str]) -> tuple[int, Any]:
     if not await svc.manager.release(match["lease_id"], "released"):
         raise LeaseError(404, "no_such_lease")
-    return 204, None
+    # B7: the lease's end, with the profile's size measured once its Chromium closed.
+    return 200, svc.manager.last_end
 
 
 async def current_lease(svc: Service, _: HttpRequest, __: re.Match[str]) -> tuple[int, Any]:
@@ -109,11 +111,12 @@ CONTROL = [
     Route("GET", re.compile(r"/healthz"), healthz),
 ]
 
-# The router list. B4 and B5 each add one line here, nothing else of this file.
+# The router list. B4, B5 and B7 each add one line here, nothing else of this file.
 ROUTES: list[Route] = [
     *CONTROL,
     *live.ROUTES,  # B4: browserd/live.py, who holds the live view's keyboard and mouse
     *(Route(*spec) for spec in tools.ROUTES),  # B5: browserd/tools/routes.py
+    *(Route(*spec) for spec in signin.ROUTES),  # B7: DELETE /profiles/{id}, browserd/signin.py
 ]
 
 REASONS = {200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 401: "Unauthorized",
