@@ -3,8 +3,9 @@ refuse tables of a name, a field and a date against the text, with their neighbo
 accents, punctuation, spacing, a longer name, a shorter one, a number inside a longer number,
 another script, French and English months, two digit years), an employer's start kept open only
 where the text writes it open (each written form of a start against each open and closed
-neighbour), the fixed block and the experience entries it drops, the language of a text, and the
-cost on the largest text."""
+neighbour) in an affirmative clause (each open form in each affirmative clause, and in each
+negated, ended or unknown one, English and French), the fixed block and the experience entries
+it drops, the language of a text, and the cost on the largest text."""
 
 from __future__ import annotations
 
@@ -281,7 +282,7 @@ WRITTEN_OPEN = [
     "since {d}, in Nantes",
     "SINCE {d}.",
     "Depuis {d}",
-    "depuis {d}, Lyon",
+    "depuis {d}, Nantes",
     "Dès {d}",
     "From {d}",
     "Starting {d}",
@@ -323,10 +324,9 @@ WRITTEN_CLOSED = [
 
 def _employer(text: str, start: str | None, end: str | None = None) -> tuple[Any, ...]:
     """The start and end kept of one employer of `text`, and the records made."""
-    fixed = _fixed(
-        employers=[{"key": "e", "organisation": "Example Corp", "start": start, "end": end}]
-    )
-    checked = upload.check_fixed(fixed, f"Example Corp, Engineer\n{text}\n")
+    employer = {"key": "e", "organisation": "Example Corp", "title": "Engineer", "start": start}
+    fixed = _fixed(employers=[{**employer, "end": end, "location": "Nantes"}])
+    checked = upload.check_fixed(fixed, f"Example Corp, Engineer, Nantes\n{text}\n")
     (kept,) = checked.fixed.employers
     return kept.start, kept.end, [(r.field_path, r.before, r.after) for r in checked.corrections]
 
@@ -368,8 +368,10 @@ def test_a_start_the_text_does_not_write_open_loses_its_period(form: str) -> Non
         ("since ٢٠٢٣\n2023 to 2025", "2023", None, (None, None)),
         ("since 120230\n2023 to 2025", "2023", None, (None, None)),
         ("Since 2023 – present", "2023", None, ("2023", None)),
+        # A name outside the fixed block is not affirmative.
+        ("Example Labs, 2018 to present\n2018 to 2020", "2018", None, (None, None)),
         # Declared: an open end of another role with the same start keeps this one current.
-        ("Example Labs, 2018 to present\n2018 to 2020", "2018", None, ("2018", None)),
+        ("2018 to present\n2018 to 2020", "2018", None, ("2018", None)),
         ("", None, None, (None, None)),
     ],
 )
@@ -377,6 +379,158 @@ def test_the_review_probes_of_an_open_start(
     text: str, start: str | None, end: str | None, kept: tuple[str | None, str | None]
 ) -> None:
     assert _employer(text, start, end)[:2] == kept
+
+
+# The clauses around an open form `{f}`: each must keep the start of every written form open.
+AFFIRMATIVE_CLAUSES = [
+    "{f}",
+    "Example Corp, {f}",
+    "Example Corp, Engineer, Nantes, {f}",
+    "Engineer at Example Corp, {f}",
+    "Example Corp | Engineer | {f}",
+    "I have worked at Example Corp {f}",
+    "I have been working as an Engineer at Example Corp {f}",
+    "I've been at Example Corp {f}",
+    "I’m an Engineer at Example Corp {f}",
+    "Still at Example Corp {f}",
+    "Example Corp (full-time, remote), {f}",
+    "Je travaille chez Example Corp {f}",
+    "En poste chez Example Corp {f}",
+    "Engineer chez Example Corp, en CDI, {f}",
+    "Example Corp, Nantes, à temps plein, {f}",
+    "{f} (2 years 8 months)",
+    "{f} (2 ans 8 mois)",
+    "{f}\nRun the deployment platform.",  # a line that starts with a capital is another clause
+    "Not at Example Labs.\n\nExample Corp, {f}",
+]
+# The clauses that must not: a negation or an ending, before or after the form, English and
+# French, any case or apostrophe, and words outside the affirmative vocabulary and the names.
+REFUSING_CLAUSES = [
+    "I have not worked at Example Corp {f}",
+    "I HAVE NOT WORKED AT EXAMPLE CORP {f}",
+    "I haven't worked at Example Corp {f}",
+    "I haven’t been at Example Corp {f}",
+    "I have never worked at Example Corp {f}",
+    "Not at Example Corp {f}",
+    "No longer at Example Corp {f}",
+    "no longer employed at Example Corp, {f}",
+    "Example Corp, not employed {f}",
+    "Example Corp, not an Engineer {f}",
+    "Example Corp, Engineer, not anymore, {f}",
+    "Former Engineer at Example Corp, {f}",
+    "Formerly at Example Corp {f}",
+    "Ex-Engineer at Example Corp {f}",
+    "Example Corp, Engineer, previously {f}",
+    "I left Example Corp {f}",
+    "Quit Example Corp {f}",
+    "Retired from Example Corp {f}",
+    "Example Corp, without a job {f}",
+    "{f}, I have not worked at Example Corp",
+    "{f}, no longer at Example Corp",
+    "Example Corp {f} (not anymore)",
+    "{f}\nnot at Example Corp anymore",  # a line that starts lower case goes on the clause
+    "Je ne travaille plus chez Example Corp {f}",
+    "JE NE TRAVAILLE PLUS CHEZ EXAMPLE CORP {f}",
+    "Je n'ai pas travaillé chez Example Corp {f}",
+    "Je n’y suis plus {f}",
+    "Plus chez Example Corp {f}",
+    "Example Corp, plus en poste {f}",
+    "Jamais en poste chez Example Corp {f}",
+    "Ancien Engineer chez Example Corp {f}",
+    "Anciennement chez Example Corp {f}",
+    "J'ai quitté Example Corp {f}",
+    "Example Corp, Engineer, poste terminé {f}",
+    "Sans emploi {f}",
+    "{f}, je ne suis plus chez Example Corp",
+    "Unemployed {f}",
+    "Example Corp, on leave {f}",
+    "Example Corp, closed {f}",
+    "Example Corp, en congé {f}",
+    "Example Corp, Engineer, Lyon, {f}",  # a location the reader did not keep
+    "Morgan Exampleton, Engineer at Example Corp {f}",
+    "Example Corp, {f}, run the deployment platform",
+]
+ONE_LINE_OPEN = [form for form in WRITTEN_OPEN if "\n" not in form]
+
+
+@pytest.mark.parametrize("clause", AFFIRMATIVE_CLAUSES)
+def test_an_open_form_in_an_affirmative_clause_stays_ongoing(clause: str) -> None:
+    got = {
+        (form, written): _employer(clause.format(f=form.format(d=written)), stored)
+        for form in ONE_LINE_OPEN
+        for written, stored in STARTS
+    }
+    assert got == {
+        (form, written): (stored, None, []) for form in ONE_LINE_OPEN for written, stored in STARTS
+    }
+
+
+@pytest.mark.parametrize("clause", REFUSING_CLAUSES)
+def test_an_open_form_in_a_negated_ended_or_unknown_clause_loses_its_period(clause: str) -> None:
+    got = {
+        (form, written): _employer(clause.format(f=form.format(d=written)), stored)
+        for form in ONE_LINE_OPEN
+        for written, stored in STARTS
+    }
+    assert got == {
+        (form, written): (None, None, [("fixed.employers.0.start", stored, "")])
+        for form in ONE_LINE_OPEN
+        for written, stored in STARTS
+    }
+
+
+# Every input a review quoted, with the employer it used: never deleted.
+@pytest.mark.parametrize(
+    ("text", "kept"),
+    [
+        ("I have not worked at Example Corp since 2018", None),
+        ("No longer at Example Corp since 2018", None),
+        ("Example Corp, not employed since 2018", None),
+        ("Je ne travaille plus chez Example Corp depuis 2018", None),
+        ("I have worked at Example Corp since 2018", "2018"),
+        ("Example Corp, Since 2018", "2018"),
+        ("Example Corp, Depuis 2018", "2018"),
+        ("Example Corp, 2018 to present", "2018"),
+        # Their neighbours over a line break: a line that starts lower case goes on the clause.
+        ("I have not worked at Example Corp\nsince 2018", None),
+        ("Je ne travaille plus chez Example Corp\ndepuis 2018", None),
+        ("Since 2018, I have\nnot worked at Example Corp", None),
+        ("Example Corp\nsince 2018", "2018"),
+        ("Example Corp\nSince 2018", "2018"),
+        # Declared: a line that starts with a capital is another clause.
+        ("Example Corp\n\nno longer there\nSince 2018", "2018"),
+        ("I have not worked at Example Corp\nSince 2018", "2018"),
+        ("Je ne travaille plus chez\nExample Corp depuis 2018", "2018"),
+    ],
+)
+def test_the_round_3_review_probes_of_a_negated_open_start(text: str, kept: str | None) -> None:
+    fixed = _fixed(employers=[{"key": "example", "organisation": "Example Corp", "start": "2018"}])
+    (employer,) = upload.check_fixed(fixed, text).fixed.employers
+    assert (employer.start, employer.end) == (kept, None)
+
+
+@pytest.mark.parametrize(
+    ("employers", "text", "kept"),
+    [
+        # The names that make a clause affirmative are those the text states.
+        ([{"location": "Nantes"}], "Example Corp, Nantes, since 2018", "2018"),
+        ([{"location": "Rennes"}], "Example Corp, Nantes, since 2018", None),
+        ([{"title": "Lead Engineer"}], "Lead at Example Corp since 2018", None),
+        # A negation or an ending a name holds still refuses the clause: the stated cost.
+        ([{"organisation": "Example Plus"}], "Example Plus, depuis 2018", None),
+        ([{"organisation": "Example Plus"}], "Example Plus, 2018 to present", None),
+        ([{"organisation": "No Example Corp"}], "No Example Corp, since 2018", None),
+        # Declared: another employer's names make the clause of the same start affirmative.
+        ([{}, {"key": "labs", "organisation": "Example Labs"}], "Example Labs, since 2018", "2018"),
+    ],
+)
+def test_the_names_of_an_affirmative_clause(
+    employers: list[dict[str, Any]], text: str, kept: str | None
+) -> None:
+    first = {"key": "example", "organisation": "Example Corp", "start": "2018"}
+    fixed = _fixed(employers=[{**first, **employers[0]}, *employers[1:]])
+    checked = upload.check_fixed(fixed, f"{text}\nExample Corp\n")
+    assert (checked.fixed.employers[0].start, checked.fixed.employers[0].end) == (kept, None)
 
 
 def test_a_dropped_end_records_the_start_it_takes_and_one_record_per_field() -> None:
@@ -533,3 +687,22 @@ def test_the_largest_text_is_read_whole() -> None:
         "2020-11",
     )
     assert upload.language_of(text) is Language.en
+
+
+@pytest.mark.parametrize(
+    ("unit", "kept"),
+    [
+        ("Example Corp, Engineer, since 2018\n", "2018"),
+        ("I have not worked at Example Corp since 2018\n", None),
+        # One clause of about 500,000 characters: its other years make each period unsure.
+        ("Example Corp, Engineer, since 2018, ", None),
+    ],
+)
+def test_the_largest_text_of_open_forms_is_read_whole(unit: str, kept: str | None) -> None:
+    fixed = _fixed(
+        employers=[
+            {"key": "e", "organisation": "Example Corp", "title": "Engineer", "start": "2018"}
+        ]
+    )
+    checked = upload.check_fixed(fixed, unit * (500_000 // len(unit)))
+    assert checked.fixed.employers[0].start == kept

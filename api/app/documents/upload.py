@@ -18,15 +18,25 @@ when unsure:
   "2019-03", "2019/03", "March 2019", "Mar. 2019", "mars 2019", "févr. 2019". Otherwise the
   month goes ("2019-03" becomes "2019"); an absent year drops the date;
 - an employer's start without an end prints as "to present", so it stays only when the reader
-  left the end empty and the text writes that start open (`_open_starts`): an open end right
-  after it, on its line or after "to", "until", "à", "jusqu'à" or a dash ("2023 to present",
-  "02/2023" then a dash and "Present", "mars 2022 à aujourd'hui", "2022 à ce jour", "2023 to
-  date"), or "since", "depuis", "from", "starting" or "dès" right before it with no end after
-  it ("Since 2023", "Depuis mars 2022"). Otherwise the start goes too and the period prints
-  nothing: an end the text does not state ("2018 to 2020" read with the end "2021") never makes
-  an ended role a current one. The cost of refusing when unsure: a start followed by a dash and
-  nothing else, or an open end on the next line with no dash or "to" before it, loses its
-  period. A school's empty end stays empty (it prints its start alone).
+  left the end empty and the text writes that start open in an affirmative clause
+  (`_open_starts`). The open forms: an open end right after the start, on its line or after
+  "to", "until", "à", "jusqu'à" or a dash ("2023 to present", "02/2023" then a dash and
+  "Present", "mars 2022 à aujourd'hui", "2022 à ce jour", "2023 to date"), or "since",
+  "depuis", "from", "starting" or "dès" right before it with no end after it ("Since 2023",
+  "Depuis mars 2022"). The clause is the form's line, joined to the next when that one starts
+  with a lower case letter; beside the form it may hold only the words of the employers' names,
+  titles and locations the text states, figures of one or two digits and `_AFFIRMATIVE` ("I
+  have worked at Example Corp since 2018", "En poste chez Example Corp depuis 2018", "(2 years
+  8 months)"), and never a negation or an ending (`_ENDINGS`, "n't", "n'"), even one a name
+  holds: "I have not worked at Example Corp since 2018", "Example Corp, no longer employed
+  since 2018", "Je ne travaille plus chez Example Corp depuis 2018" or "Retired since 2018"
+  write no open start. Otherwise the start goes too and the period prints nothing: an end the
+  text does not state ("2018 to 2020" read with the end "2021") never makes an ended role a
+  current one. The cost of refusing when unsure: a start followed by a dash and nothing else, an
+  open end on the next line with no dash or "to" before it, or a clause holding any other word
+  ("Since 2018, in Lyon" when the location kept is not Lyon, a second sentence on the line, a
+  name holding a negation: "Example Plus, depuis 2018") loses its period. A school's empty end
+  stays empty (it prints its start alone).
 
 Every change is a `Correction` by code, of code FIXED_NOT_IN_UPLOAD and reason NOT_IN_UPLOAD.
 
@@ -41,11 +51,13 @@ goes; open ends outside the words above lose the period ("à nos jours", "to the
 since date reads as an end) and "de 2018" alone ("de" is also "of"); a name the file writes in
 two different ways is kept only in the way the reader copied, when that way is in the text;
 each value is looked for in the whole text, not beside its organisation (a PDF's lines may come
-out of order), so a title or a year of one role stays on another, an open end written beside
-the same start of another role keeps a role current, and a name the file writes in another
-context (a client) stays as an employer. Pure: no I/O. Linear in the length of the text: one
-fold and one pass to cut tokens, one pass over the words for the open starts, then a substring
-test per value and a dictionary lookup per date.
+out of order), so a title or a year of one role stays on another, an open end written in an
+affirmative clause beside the same start of another role keeps a role current, and a name the
+file writes in another context (a client) stays as an employer; a negation on the line before
+one that starts with a capital ("I have not worked at\nExample Corp since 2018") is another
+clause, so that start stays open. Pure: no I/O. Linear in the length of the text: one fold and
+one pass to cut tokens, two passes over the words for the clauses and one for the open starts,
+then a substring test per value and a dictionary lookup per date.
 """
 
 from __future__ import annotations
@@ -144,6 +156,40 @@ _ENGLISH = frozenset(
     ]
 )
 
+# Beside an open period and the names, the only words of a clause that writes it open (folded).
+_AFFIRMATIVE = frozenset(
+    word
+    for words in (
+        "i ve m am is are we me my our have has been being still currently",
+        "work works worked working employed employee employer job role position post",
+        "at with for in as on the a an and",
+        "full part time permanent contract contractor freelance freelancer self intern internship",
+        "apprentice apprenticeship remote hybrid onsite site based",
+        "year years yr yrs month months mo mos",
+        "je j suis ai ete nous sommes mon ma notre toujours actuellement",
+        "travaille employe salarie salariee poste cdi cdd temps plein partiel alternance stage",
+        "stagiaire independant distance teletravail",
+        "en chez au aux sein de du des d la le l les un une et comme pour",
+        "an ans annee annees mois",
+        "since from starting depuis to until till through jusqu",  # the period words of `checks`
+        "present now today date current aujourd hui ce jour",
+    )
+    for word in words.split()
+)
+# Negations and endings: a clause holding one never writes a period open, even where a name
+# holds the word ("n't" and "n'" are read by `_ends`).
+_ENDINGS = frozenset(
+    word
+    for words in (
+        "not no never nor cannot without none longer anymore",
+        "former formerly ex previously left quit ended retired resigned",
+        "ne pas plus jamais ni aucun aucune sans",
+        "ancien ancienne anciennement quitte quittee termine terminee fini finie parti partie",
+        "retraite retraitee",
+    )
+    for word in words.split()
+)
+
 
 @dataclass(frozen=True, slots=True)
 class _Text:
@@ -239,10 +285,10 @@ def _breaks_line(gap: str) -> bool:
     return "".join(gap.splitlines()) != gap
 
 
-def _ends_open(text: str, words: list[rules.Word], k: int) -> bool:
-    """Does an open end follow the date that ends before word `k`?"""
+def _open_end_after(text: str, words: list[rules.Word], k: int) -> int | None:
+    """The index after the open end that follows the date ending before word `k`, else None."""
     if k >= len(words):
-        return False
+        return None
     gap = text[words[k - 1].end : words[k].start]
     mark = gap.strip()
     until = checks._role(text, words[k]) == "until" and not mark
@@ -252,11 +298,10 @@ def _ends_open(text: str, words: list[rules.Word], k: int) -> bool:
         if words[k - 1].folded == "jusqu" and k < len(words) and words[k].folded in ("a", "au"):
             k += 1
     elif not dash and (mark or _breaks_line(gap)):
-        return False
+        return None
+    stop = checks._open_end(words, k, len(words))
     # "date" closes a period only after "to" or "à": alone it is a word ("Date of birth").
-    return checks._open_end(words, k, len(words)) is not None and (
-        until or words[k].folded != "date"
-    )
+    return stop if stop is not None and (until or words[k].folded != "date") else None
 
 
 def _ends_after(text: str, words: list[rules.Word], k: int) -> bool:
@@ -284,10 +329,73 @@ class _OpenStarts:
         return (int(year), int(month)) in self.dates or (int(year), None) in self.dates
 
 
-def _open_starts(text: str) -> _OpenStarts:
-    """The starts `text` writes open (module docstring), read in one pass over its words with
-    the period vocabulary of `checks`."""
+def _apostrophe(gap: str) -> bool:
+    return gap == "'" or gap in rules._APOSTROPHES
+
+
+def _ends(text: str, words: list[rules.Word], i: int) -> bool:
+    """Is word `i` a negation or an ending: a word of `_ENDINGS`, the "t" of "n't" or the "n"
+    of "n'"?"""
+    word = words[i].folded
+    if word == "t" and i > 0:
+        return _apostrophe(text[words[i - 1].end : words[i].start])
+    if word == "n" and i + 1 < len(words):
+        return _apostrophe(text[words[i].end : words[i + 1].start])
+    return word in _ENDINGS
+
+
+def _starts_clause(text: str, words: list[rules.Word], i: int) -> bool:
+    """Does word `i` start a clause: it starts a line, unless that line goes on the sentence of
+    the one before (one line break, then a lower case letter)?"""
+    if i == 0:
+        return True
+    pieces = (text[words[i - 1].end : words[i].start] + "x").splitlines()
+    if len(pieces) == 1:
+        return False
+    goes_on = len(pieces) == 2 and not pieces[1][:-1].strip() and text[words[i].start].islower()
+    return not goes_on
+
+
+@dataclass(frozen=True, slots=True)
+class _Clauses:
+    """Where the clause of each word starts (`first`) and ends (`after`, exclusive), and running
+    counts over the words of the text: negations and endings (`_ends`), and words that are not
+    affirmative (outside `_AFFIRMATIVE` and the names, not a figure of one or two digits)."""
+
+    first: tuple[int, ...]
+    after: tuple[int, ...]
+    endings: tuple[int, ...]
+    others: tuple[int, ...]
+
+    def affirm(self, start: int, stop: int) -> bool:
+        """Is the period of words `start` to `stop` in a clause that holds no negation or
+        ending, and no other word that is not affirmative?"""
+        a, b = self.first[start], self.after[stop - 1]
+        others = self.others[b] - self.others[a] - (self.others[stop] - self.others[start])
+        return self.endings[b] == self.endings[a] and others == 0
+
+
+def _clauses(text: str, words: list[rules.Word], names: frozenset[str]) -> _Clauses:
+    first: list[int] = []
+    endings, others = [0], [0]
+    for i, word in enumerate(words):
+        first.append(i if _starts_clause(text, words, i) else first[-1])
+        endings.append(endings[-1] + _ends(text, words, i))
+        w = word.folded
+        figure = w.isascii() and w.isdigit() and len(w) <= 2
+        others.append(others[-1] + (not (figure or w in _AFFIRMATIVE or w in names)))
+    after = [len(words)] * len(words)
+    for i in range(len(words) - 2, -1, -1):
+        after[i] = after[i + 1] if first[i + 1] == first[i] else i + 1
+    return _Clauses(tuple(first), tuple(after), tuple(endings), tuple(others))
+
+
+def _open_starts(text: str, names: frozenset[str]) -> _OpenStarts:
+    """The starts `text` writes open in an affirmative clause (module docstring), `names` the
+    folded words of the fixed block's employers the text states, read in one pass over its
+    words with the period vocabulary of `checks`."""
     words = rules.words_of(text)
+    clauses = _clauses(text, words, names)
     found: set[tuple[int, int | None]] = set()
     i = 0
     while i < len(words):
@@ -298,10 +406,14 @@ def _open_starts(text: str) -> _OpenStarts:
             i += 1
             continue
         claim, k = date
-        # "de 2018" is as often "of 2018": only "de 2018 à aujourd'hui" reads as open.
-        since = role == "since" and words[i].folded != "de" and not _ends_after(text, words, k)
-        if role != "until" and (since or _ends_open(text, words, k)):
-            found.add(claim)
+        if role != "until":
+            stop = _open_end_after(text, words, k)
+            # "de 2018" is as often "of 2018": only "de 2018 à aujourd'hui" reads as open.
+            since = role == "since" and words[i].folded != "de"
+            if stop is None and since and not _ends_after(text, words, k):
+                stop = k
+            if stop is not None and clauses.affirm(i, stop):
+                found.add(claim)
         i = k
     return _OpenStarts(frozenset(found), frozenset(year for year, _ in found))
 
@@ -348,7 +460,14 @@ class _Fields:
 def check_fixed(fixed: c.Fixed, text: str) -> Checked:
     """The fixed block of an upload, kept as far as `text` states it (module docstring)."""
     read = _read(text)
-    opens = _open_starts(text)
+    names = frozenset(
+        word.folded
+        for e in fixed.employers
+        for value in (e.organisation, e.title, e.location)
+        if present(value, read)
+        for word in rules.words_of(value)
+    )
+    opens = _open_starts(text, names)
     records: list[Correction] = []
     employers: list[c.FixedEmployer] = []
     dropped: set[str] = set()
