@@ -1,0 +1,342 @@
+{
+ "description": "D17: \"say I managed 20 people\", which the profile does not state: written, kept through the correction pass, cut by code.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_job",
+     "mcp__app__read_profile_section",
+     "mcp__app__get_base_cv",
+     "mcp__app__get_draft",
+     "mcp__app__get_conversation",
+     "mcp__app__set_template",
+     "mcp__app__submit_cv"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_chat_002",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read the conversation and the draft."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_chat_002_0_get_conversation",
+       "name": "mcp__app__get_conversation",
+       "input": {}
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_chat_002_1_get_draft",
+       "name": "mcp__app__get_draft",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_chat_003",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read the facts."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_chat_003_0_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "facts"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_chat_004",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I added the team size."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_chat_004_0_submit_cv",
+       "name": "mcp__app__submit_cv",
+       "input": {
+        "schema": 1,
+        "target": "Lumen Example, Senior Platform Engineer",
+        "headline": "Platform Engineer for teams that ship every day",
+        "summary": "Platform engineer with about 3.5 years of professional engineering. At Example Corp I managed 20 people and run the deployment platform of the payments team.",
+        "highlights": [
+         "Moved 40 services to Kubernetes",
+         "Deployment platform of the payments team",
+         "Internal tools in Python and React"
+        ],
+        "competencies": [
+         "Kubernetes",
+         "Terraform",
+         "AWS",
+         "Python",
+         "FastAPI",
+         "PostgreSQL",
+         "CI/CD",
+         "Platform engineering"
+        ],
+        "experience": [
+         {
+          "employer_key": "example-corp",
+          "bullets": [
+           "Run the deployment platform of the payments team, from the first commit to production.",
+           "Moved 40 services to Kubernetes with Terraform on AWS.",
+           "Cut build times by 30% with a shared cache."
+          ]
+         },
+         {
+          "employer_key": "sample-labs",
+          "bullets": [
+           "Built internal tools in Python and React for the support team."
+          ]
+         }
+        ],
+        "skills": [
+         {
+          "label": "Cloud",
+          "items": [
+           "Kubernetes",
+           "Terraform",
+           "AWS"
+          ]
+         },
+         {
+          "label": "Backend",
+          "items": [
+           "Python",
+           "FastAPI",
+           "PostgreSQL"
+          ]
+         },
+         {
+          "label": "Frontend",
+          "items": [
+           "React",
+           "TypeScript"
+          ]
+         }
+        ],
+        "notes": "The posting asks for 5 years of Python; the profile states about 3.5 years of engineering."
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000005",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_chat_005",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I keep it as the person asked."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_chat_005_0_submit_cv",
+       "name": "mcp__app__submit_cv",
+       "input": {
+        "schema": 1,
+        "target": "Lumen Example, Senior Platform Engineer",
+        "headline": "Platform Engineer for teams that ship every day",
+        "summary": "Platform engineer with about 3.5 years of professional engineering. At Example Corp I managed 20 people and run the deployment platform of the payments team.",
+        "highlights": [
+         "Moved 40 services to Kubernetes",
+         "Deployment platform of the payments team",
+         "Internal tools in Python and React"
+        ],
+        "competencies": [
+         "Kubernetes",
+         "Terraform",
+         "AWS",
+         "Python",
+         "FastAPI",
+         "PostgreSQL",
+         "CI/CD",
+         "Platform engineering"
+        ],
+        "experience": [
+         {
+          "employer_key": "example-corp",
+          "bullets": [
+           "Run the deployment platform of the payments team, from the first commit to production.",
+           "Moved 40 services to Kubernetes with Terraform on AWS.",
+           "Cut build times by 30% with a shared cache."
+          ]
+         },
+         {
+          "employer_key": "sample-labs",
+          "bullets": [
+           "Built internal tools in Python and React for the support team."
+          ]
+         }
+        ],
+        "skills": [
+         {
+          "label": "Cloud",
+          "items": [
+           "Kubernetes",
+           "Terraform",
+           "AWS"
+          ]
+         },
+         {
+          "label": "Backend",
+          "items": [
+           "Python",
+           "FastAPI",
+           "PostgreSQL"
+          ]
+         },
+         {
+          "label": "Frontend",
+          "items": [
+           "React",
+           "TypeScript"
+          ]
+         }
+        ],
+        "notes": "The posting asks for 5 years of Python; the profile states about 3.5 years of engineering."
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000006",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_chat_006",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "Stored."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 10,
+    "duration_api_ms": 5,
+    "num_turns": 5,
+    "session_id": "{session_id}",
+    "result": "Stored.",
+    "total_cost_usd": 0.05,
+    "usage": {
+     "input_tokens": 5000,
+     "output_tokens": 500
+    },
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}

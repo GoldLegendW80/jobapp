@@ -1,0 +1,22 @@
+Documents D17, run on 2026-10-19 from the branch documents/d17-document-chat (merged with origin/main).
+
+ops/agent-test.sh --name d17 tests/documents -m "not docker" -n 2
+  1970 passed in 176.66s (after the merge of origin/main; test_chat.py: 45 passed after the last change)
+(cd api && uv run ruff check app tests && uv run ruff format --check app tests)
+  All checks passed
+pnpm --dir web run typecheck && pnpm --dir web run lint && pnpm --dir web exec vitest run src/features/documents
+  typecheck clean, lint clean, 13 files, 282 tests passed
+python3 .github/scripts/ci_plan_test.py && python3 .github/scripts/e2e_groups.py
+  both pass
+
+Journeys on a stack of its own (project d17-<random>, images tagged d17-*:latest built with
+JOBAPP_EXTRA_CA through compose.extra-ca.yml, AGENTS_FAKE_BACKEND=true, compose.mac.yml),
+then taken down with its volumes and the d17 images removed:
+ops/agent-test.sh --name d17 --playwright -c e2e/documents-all.config.ts documents-d17.spec.ts
+  3 passed (9.7s)
+ops/agent-test.sh --name d17 --playwright -c e2e/documents-all.config.ts
+  43 passed (1.4m)
+
+Screenshots: chat-* (the answer to "shorter summary": "Changed the summary. This is version 2.")
+and template-* (after "use the banner template": version 3 of origin template, Banner), phone and
+desktop, light and dark.

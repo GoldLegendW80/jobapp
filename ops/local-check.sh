@@ -24,10 +24,11 @@
 #             lists, the e2e groups and CI plan tests, every tests/*_test.sh that ci.yml runs
 #             (one that neither runs nor is left out with a reason fails the step shell-tests);
 #             the journey group apps and one group per web/e2e/<group>-all.config.ts other than
-#             identity (today ingestion, mail and apply; mail on a stack that also runs
+#             identity (today ingestion, mail, apply and browser; mail on a stack that also runs
 #             the fake Google of tests/gmail-stub.compose.yml, never a real account; apply on a
 #             stack that also runs the fake ATS forms server of tests/ats-forms-stub.compose.yml,
-#             never a real job site).
+#             never a real job site; browser on a stack that runs its browser and the static
+#             pages of tests/browser-pages.compose.yml).
 #   journeys  the web lint, type check, vitest and build; the journey groups identity and sweep.
 #
 # The lists that ci.yml holds (the files of its Shellcheck step, the tests/*_test.sh steps) are read from
@@ -754,7 +755,7 @@ EOF
     echo "JOBAPP_EXTRA_CA is set: the builds also trust its bundle (compose.extra-ca.yml)"
     files+=(-f compose.extra-ca.yml)
   fi
-  # The browser image is for the docker marked tests only (BROWSER_TEST_IMAGE): no stack runs it.
+  # The browser image runs in the apply and browser stacks, and in the docker marked tests (BROWSER_TEST_IMAGE).
   docker compose --progress plain -p "$PREFIX-build" "${files[@]}" build api worker caddy renderer browser
 }
 
@@ -888,6 +889,11 @@ s_journey() {
     export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
     files+=(-f tests/ats-forms-stub.compose.yml)
     export COMPOSE_PROFILES=browser # the browser that fills the fake forms (apply A7's journey)
+    ;;
+  browser)
+    # The stack's own browser, and the static pages it opens (never a real site).
+    files+=(-f tests/browser-pages.compose.yml)
+    export COMPOSE_PROFILES=browser
     ;;
   esac
   specs="$(journey_specs "$group")"
