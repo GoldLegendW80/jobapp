@@ -225,7 +225,7 @@ export function PostingDocumentCard({
             Write it again from this CV
           </Button>
         ) : null}
-        {state.tag === "overflow" && document !== undefined ? (
+        {state.tag === "overflow" && kind === "cv" && document !== undefined ? (
           <Button
             size="sm"
             variant="secondary"
@@ -316,7 +316,9 @@ function StateLine({
       return (
         <Alert variant="destructive" data-testid="card-state">
           <AlertDescription>
-            Longer than one page. The writer can shorten it to fit.
+            {kind === "cv"
+              ? "Longer than one page. The writer can shorten it to fit."
+              : "Longer than one page. Shorten the longest fields in Edit, or choose a more compact template."}
           </AlertDescription>
         </Alert>
       );
