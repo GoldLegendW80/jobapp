@@ -1,0 +1,29 @@
+{
+  "target": "Platform Engineer at Lumen Example (invented posting)",
+  "headline": "Platform engineer who makes releases calm and services observable",
+  "summary": "Platform engineer with years of work on deployment pipelines, managed Postgres and the on call practice of product teams.",
+  "highlights": [
+    "Cut release preparation from days to an hour",
+    "Owned the on call rotation of three services"
+  ],
+  "competencies": ["CI and CD", "Observability", "PostgreSQL", "Python"],
+  "experience": [
+    {
+      "employer_key": "example-corp",
+      "role": "Senior Platform Engineer",
+      "bullets": [
+        "Designed the deployment pipeline every product team uses, with staged rollouts.",
+        "Moved the billing services to managed Postgres after two rehearsals."
+      ]
+    },
+    {
+      "employer_key": "sample-labs",
+      "role": "Software Engineer",
+      "bullets": ["Built the metrics stack of the data team."]
+    }
+  ],
+  "skills": [
+    {"label": "Languages", "items": ["Python", "Go"]},
+    {"label": "Platforms", "items": ["Kubernetes", "PostgreSQL"]}
+  ]
+}

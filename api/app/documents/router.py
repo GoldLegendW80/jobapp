@@ -47,7 +47,7 @@ from sqlalchemy.orm import Session
 from app import queue as queues
 from app.db import get_session
 from app.documents import content as c
-from app.documents import corrections, render_client, render_job, store, templates
+from app.documents import corrections, freeze, render_client, render_job, store, templates
 from app.documents.models import (
     Author,
     Document,
@@ -237,7 +237,7 @@ def _summary(version: DocumentVersion) -> dict[str, Any]:
         "fit": version.fit,
         "fit_step": version.fit_step,
         "pages": version.pages,
-        "has_pdf": version.pdf_sha256 is not None and version.legacy_file_id is None,
+        "has_pdf": freeze.rendered(version),
         "approved_at": version.approved_at,
         "frozen_at": version.frozen_at,
         "frozen_reason": version.frozen_reason,
@@ -589,14 +589,15 @@ def read_pdf(
     db: Db,
 ) -> Response:
     """The version's PDF, inline, named after the person and the company. A frozen version's is
-    the stored one, byte for byte."""
+    the stored one, byte for byte, an imported one's the command line's file."""
     document = _own(db, user, document_id)
-    version = _version(db, user, document_id, number, pdf=True)
-    if version.pdf is None:
+    version = _version(db, user, document_id, number)
+    pdf = freeze.pdf(db, user.id, version.id)
+    if pdf is None:
         raise _error(status.HTTP_404_NOT_FOUND, NO_PDF)
     name = file_name(db, document, deps.clock(request))
     return Response(
-        content=bytes(version.pdf),
+        content=pdf,
         media_type="application/pdf",
         headers={**FILE_HEADERS, "Content-Disposition": f'inline; filename="{name}"'},
     )
@@ -615,10 +616,10 @@ def read_page1(
     width: Annotated[int, Query(ge=PREVIEW_MIN, le=PREVIEW_MAX)] = PREVIEW_WIDTH,
 ) -> Response:
     """Page 1 of the version's PDF as a PNG, for phones and cards."""
-    version = _version(db, user, document_id, number, pdf=True)
-    if version.pdf is None:
+    version = _version(db, user, document_id, number)
+    pdf = freeze.pdf(db, user.id, version.id)
+    if pdf is None:
         raise _error(status.HTTP_404_NOT_FOUND, NO_PDF)
-    pdf = bytes(version.pdf)
     db.close()  # the drawing takes a moment: the connection goes back to the pool first
     with _previews:
         png = render_client.page1_png(pdf, width)

@@ -147,7 +147,7 @@ ssh jetson                        # then, once: the browser's host firewall (sud
 cd ~/jobapp && sudo bash ops/browser-egress.sh install jobapp_egress
 tests/reboot_check.sh             # a reboot (sudo) and its recovery check
 # and the commands of ./deploy.sh that take an argument: restore <file> --into-live, admin create <email>,
-# admin unlock, profile import, jobs import, backup-schedule install
+# admin unlock, profile import, jobs import, documents import-legacy, backup-schedule install
 ./deploy.sh                       # the first deploy and a new .env
 ```
 
@@ -1239,6 +1239,13 @@ through the CLI. The import is idempotent: rows are matched by slug, then by the
 was sent (status applied, or an applied_on date) keeps its files byte for byte, a different file
 under the same name being reported as a warning. It prints created, updated, unchanged, skipped,
 files added, replaced, unchanged and kept, and the warnings (slugs and file names only).
+
+Then the command line's CVs and letters become the postings' documents, once:
+`./deploy.sh documents import-legacy you@example.org --dry-run` prints what would be imported,
+the same without `--dry-run` imports it (`python -m app.documents.cli import-legacy` in the api
+container). Each cv.json and letter.json becomes version 1 of the posting's CV or letter, template
+classic; a sent posting keeps its cv.pdf and letter.pdf byte for byte, frozen; a JSON that does not
+validate is kept as a draft with notes. Running it again changes nothing.
 
 `GET /api/jobs` lists the caller's jobs with filters (`status` and `type` repeated, `company`,
 `q` full text, `fit_min`, `fit_max`, `found_from`, `found_to`), `sort` (found_on, fit, company,
