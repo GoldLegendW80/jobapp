@@ -248,11 +248,23 @@ def test_a_ticket_for_a_lease_that_ended(
     assert auth(api, a, stale).status_code == 403  # type: ignore[attr-defined]
 
 
+def agent_lease(app: FastAPI, api: Api, user_id: uuid.UUID) -> str:
+    """An agent's lease of the person (take over is for those only since B7)."""
+    store: Leases = app.state.browser_leases
+
+    async def take() -> str:
+        got = await store.acquire(str(user_id), "apply_fill", True)
+        assert got.lease is not None
+        return got.lease.lease_id
+
+    return str(api.client.portal.call(take))  # type: ignore[union-attr]
+
+
 def test_take_over_and_give_back(
-    api: Api, browserd: FakeBrowserd, user_a: tuple[uuid.UUID, str]
+    app: FastAPI, api: Api, browserd: FakeBrowserd, user_a: tuple[uuid.UUID, str]
 ) -> None:
-    _, a = user_a
-    lease_id = start(api, a)
+    a_id, a = user_a
+    lease_id = agent_lease(app, api, a_id)
     taken = api.post("/api/browser/takeover", token=a, json={"viewer": VIEWER})
     assert (taken.status_code, taken.json()) == (200, {"input": "you"})
     assert taken.headers["cache-control"] == "no-store"
