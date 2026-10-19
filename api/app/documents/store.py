@@ -889,35 +889,6 @@ def attach_pdf(
     return found
 
 
-@_busy
-def set_template(
-    db: Session,
-    user_id: uuid.UUID,
-    document_id: uuid.UUID,
-    slug: str,
-    *,
-    at: datetime,
-    template_version: int = 1,
-) -> DocumentVersion:
-    """Switch the document's template: a new version with origin `template` and the same
-    content (the frozen ones untouched). A user template must be the person's own; its
-    version is its row's."""
-    owned = _check_slug(db, user_id, slug)
-    document = lock_document(db, user_id, document_id)
-    document.template_slug = slug
-    document.updated_at = at
-    db.flush()
-    made, _ = snapshot(
-        db,
-        user_id,
-        document_id,
-        Origin.template,
-        at=at,
-        template_version=owned.version if owned is not None else template_version,
-    )
-    return made
-
-
 def _check_slug(db: Session, user_id: uuid.UUID, slug: str) -> DocumentUserTemplate | None:
     if not _SLUG.match(slug):
         raise TemplateUnknownError(slug)

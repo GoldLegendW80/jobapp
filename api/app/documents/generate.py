@@ -9,9 +9,11 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    caller (D9's estimate.py, D10's tick); nothing here prices a run. The first generation of a
    posting's CV sets the document's template and base to the base CV's. A generation from
    another base CV sets the base, and the template too unless the person switched it by hand
-   since the CV's last write (`switched_by_hand`): then hers stays. A posting CV's generation
-   records the template it gave in its estimate (`WRITE_TEMPLATE`). A letter's first generation
-   takes the template of the posting's CV.
+   since the CV's last write (`switched_by_hand`): then hers stays (`name_base`, which D10's
+   tick also calls when it names the default for a CV that waited without a base CV). A posting
+   CV's generation records the template it gave in its estimate (`WRITE_TEMPLATE`), and so does
+   the tick when it names one. A letter's first generation takes the template of the posting's
+   CV.
 2. `start(db, generation, at=...)`: the writer run, `internal` and bound to the generation, with
    `token_budget` = the generation's ceiling (the runner stops it there and counts each API
    message once). The caller commits, then `enqueue_run`.
@@ -224,6 +226,20 @@ def switched_by_hand(db: Session, document: Document) -> bool:
     return found is not None
 
 
+def name_base(db: Session, document: Document, base: Document) -> bool:
+    """`base` becomes the posting CV's base CV. It gives its template at the CV's first write, or
+    as another base CV unless the person switched the template by hand since the last write
+    (spec, "Base CVs", Inheritance): True when it gave it. The caller records what it gave as
+    the write's template (`WRITE_TEMPLATE`), so no later write reads it as a switch by hand."""
+    first = not _has_version(db, document)
+    another = base.id != document.base_document_id
+    document.base_document_id = base.id
+    if first or (another and not switched_by_hand(db, document)):
+        document.template_slug = base.template_slug
+        return True
+    return False
+
+
 def create(
     db: Session,
     document: Document,
@@ -243,7 +259,6 @@ def create(
     user_id = document.user_id
     document = store.lock_document(db, user_id, document.id)
     if mode is GenerationMode.posting and document.scope == Scope.posting:
-        first = not _has_version(db, document)
         if document.kind == Kind.cv:
             if base_document_id is None:
                 base_document_id = document.base_document_id
@@ -254,12 +269,9 @@ def create(
                 base = store.get(db, user_id, base_document_id)
                 if base is None or base.scope != Scope.base:
                     raise store.NotFoundError(base_document_id)
-                another = base.id != document.base_document_id
-                if first or (another and not switched_by_hand(db, document)):
-                    document.template_slug = base.template_slug
-                document.base_document_id = base.id
+                name_base(db, document, base)
             estimate = {**estimate, WRITE_TEMPLATE: document.template_slug}
-        elif first and document.posting_id is not None:
+        elif document.posting_id is not None and not _has_version(db, document):
             cv = next(
                 (
                     found

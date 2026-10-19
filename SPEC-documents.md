@@ -392,7 +392,7 @@ Mobile friendly. Text shown to users uses no dashes as separators.
 | The fact check finds unsupported claims | "Corrected by the fact check: 2" | rewritten by the writer or removed by code, recorded; never refused |
 | The person edits while a generation runs | "Written while you were editing: kept as version N" | the draft is not overwritten |
 | The renderer is down or slow | "Preview not available right now" | render state back to `idle` with `renderer_unavailable` or `timeout`; retried by the next save or tick |
-| The content overflows at the tightest step | the PDF in red, the longest fields named, "Make it fit" | one automatic `shorten` pass; then `overflow`; no `cv_ready` move |
+| The content overflows at the tightest step | the PDF in red, the longest fields named, "Make it fit" | one automatic `shorten` pass; then `overflow`; no `cv_ready` move; each "Make it fit" click runs one more pass within what the last write left of its token ceiling |
 | An employer was removed from the profile | the block says "No longer in your profile" | the next generation leaves it out; a hand draft keeps it with a note; frozen versions keep their PDF |
 | The upload cannot be read | ingestion's own message | no base CV from it; "New CV from my profile" stays offered |
 | The design capture fails or breaks the template rules | "We kept the default design for this CV", with "Try again" and the gallery | the base CV keeps `classic` after one repair pass; the converted content is kept; nothing is refused |
@@ -407,7 +407,7 @@ Mobile friendly. Text shown to users uses no dashes as separators.
 | Content | the hard limits of "Content"; 20 KB per document |
 | PDF | 4 MB; the photo resized to 600 pixels on its long side |
 | Render | 30 s; one at a time per renderer process; one queued render per document |
-| Generation | one open per document; 10 turns; 5 minutes; the token ceiling; 4 submits; one correction pass; one shortening pass |
+| Generation | one open per document; 10 turns; 5 minutes; the token ceiling; 4 submits; one correction pass; one automatic shortening pass; the passes clicked ("Make it fit") share what the last write left of its token ceiling |
 | Automatic generation | the fit score threshold (default 70); the safety ceiling of 100 postings a day (1 to 500); one at a time per person; postings found in the last 30 days |
 | Base CVs | 10 per person; one default; one uploaded file per base CV |
 | Design capture | one run with images; the first two pages of the upload; one repair pass and one fidelity pass |

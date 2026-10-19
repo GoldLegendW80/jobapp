@@ -3,8 +3,8 @@
 is taken by the CVs written from it afterwards, not by those already written; one posting's switch
 leaves its base CV and its letter as they were; writing a CV again from another base CV takes that
 base CV's template unless the person switched it by hand since the last write; a template no
-longer served renders with `classic`, which its version records, and is absent from the gallery,
-which is what the picker's note reads."""
+longer served renders with `classic`, which its version records, is absent from the gallery,
+which is what the picker's note reads, and is no switch by hand."""
 
 from __future__ import annotations
 
@@ -269,3 +269,35 @@ def test_a_writers_version_on_a_removed_template_records_classic_and_its_render_
         assert second.template_slug == "classic"
         assert second.pdf_sha256 is not None
     assert api.get(f"/api/documents/{cv}", token=alex).json()["template_slug"] == retired
+
+
+def test_a_template_no_longer_served_is_never_read_as_a_switch_by_hand(
+    factory: sessionmaker[Session], api: Api, clock: Any, queue: RecordingQueue
+) -> None:
+    alex, alex_id = _person(factory, api, ALEX, clock)
+    first = _base_cv(factory, alex_id, clock)
+    other = _base_cv(factory, alex_id, clock)
+    assert _patch(api, alex, other, "banner").status_code == 200
+    # The first base CV's template was served when it got it, and is gone since.
+    retired = f"retired-{uuid.uuid4().hex[:6]}"
+    with factory() as db:
+        db.execute(sa.update(Document).where(Document.id == first).values(template_slug=retired))
+        db.commit()
+    cv = _posting_document(factory, alex_id, _posting(factory, alex_id), Kind.cv, clock)
+    _written(factory, alex_id, cv, clock, first)
+    with factory() as db:
+        revision = db.scalar(sa.select(Document.draft_revision).where(Document.id == cv))
+    edited = {**CV, "summary": "Edited by hand after the write."}
+    assert _save(api, alex, cv, edited, revision).status_code == 200
+    _render(factory, queue, clock)
+    with factory() as db:
+        printed = db.scalars(
+            sa.select(DocumentVersion.template_slug).where(DocumentVersion.document_id == cv)
+        ).all()
+        assert printed == ["classic", "classic"]
+        document = store.get(db, alex_id, cv)
+        assert document is not None
+        assert document.template_slug == retired
+        assert not generate.switched_by_hand(db, document)
+    _written(factory, alex_id, cv, clock, other)
+    assert _template(factory, cv) == "banner"
