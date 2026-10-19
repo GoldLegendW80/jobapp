@@ -411,7 +411,7 @@ PDF = b"%PDF-1.7\n" + b"0" * 100
     ("name", "data", "held", "code"),
     [
         ("cv.pdf", PDF, {}, None),
-        ("Harald_Hautin-CV.v2.pdf", PDF, {}, None),
+        ("Lucien_Quillard-CV.v2.pdf", PDF, {}, None),
         ("cv.pdf", b"%PDF-" + b"0" * (policy.FILE_MAX - 5), {}, None),
         ("cv.pdf", b"%PDF-" + b"0" * (policy.FILE_MAX - 4), {}, "file_too_large"),
         ("cv.pdf", b"PK\x03\x04", {}, "not_a_pdf"),

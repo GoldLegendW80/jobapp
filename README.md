@@ -1027,7 +1027,7 @@ The whole identity surface runs as one journey on the Jetson through the public 
 throwaway `e2e-*@example.org` accounts only:
 
 ```bash
-./deploy.sh && tests/e2e_jetson.sh
+./deploy.sh && OWNER=<the e-mail address of your account on the Jetson> tests/e2e_jetson.sh
 ```
 
 It runs `web/e2e/identity-all.config.ts` (identity, invites, users, account, profile and throttle

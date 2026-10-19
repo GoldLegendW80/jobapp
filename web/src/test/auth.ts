@@ -7,7 +7,7 @@ import { server } from "./server";
 export const admin: User = {
   id: "00000000-0000-4000-8000-000000000001",
   email: "harald@example.org",
-  name: "Harald Hautin",
+  name: "Harald Example",
   role: "admin",
   created_at: "2026-10-08T10:00:00Z",
   last_login_at: null,

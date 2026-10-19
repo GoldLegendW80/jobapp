@@ -5,7 +5,7 @@
 #
 #   tests/agents_real_run_test.sh
 #
-# Covers: a dry run leaves every file under tasks/evidence/agents-a5/ byte for byte as committed
+# Covers: without OWNER nothing runs; a dry run leaves every file under tasks/evidence/agents-a5/ byte for byte as committed
 # and starts nothing; a real run is refused before any ssh call when an evidence file it would
 # write exists; an account that is not an admin with a subscription credential is refused before
 # any start; the message text, a token shaped value and the text of a log message are counted and
@@ -156,7 +156,8 @@ PRIVATE="PRIVATE-TEXT-OF-AN-ERROR"
 # script [VAR=value ...]: the script against the fake Jetson, the pauses cut to nothing
 script() {
   env PATH="$BIN:$PATH" DEPLOY_HOST=jetson.invalid STUB_CALLS="$CALLS" STUB_STATE="$STATE" \
-    STUB_RUN="$RUN" STUB_PRIVATE="$PRIVATE" IDLE_S=0 POLL_S=0 "$@" "$SCRIPT" "$JOB"
+    STUB_RUN="$RUN" STUB_PRIVATE="$PRIVATE" IDLE_S=0 POLL_S=0 OWNER=e2e-owner@example.org "$@" \
+    "$SCRIPT" "$JOB"
 }
 DEFAULT_FRAGMENT="e two strongest poin" # 20 characters of the default MESSAGE, from its 14th
 grep -q -F -- "$DEFAULT_FRAGMENT" "$SCRIPT" || fail "the default MESSAGE of the script changed: update DEFAULT_FRAGMENT"
@@ -174,6 +175,17 @@ unchanged() {
   sums >"$WORK/sums.after"
   diff -u "$WORK/sums.before" "$WORK/sums.after" >&2 || fail "$1 changed a file under $COMMITTED"
 }
+
+step "B0: without OWNER the script stops before any call (it has no default address)"
+reset
+run 1 env -u OWNER PATH="$BIN:$PATH" DEPLOY_HOST=jetson.invalid STUB_CALLS="$CALLS" STUB_STATE="$STATE" \
+  "$SCRIPT" "$JOB"
+out_has "OWNER is not set: run it again with OWNER="
+[[ "$(calls)" == 0 ]] || fail "a call was made without OWNER"
+run 1 script OWNER=
+out_has "OWNER is not set"
+[[ "$(calls)" == 0 ]] || fail "a call was made with an empty OWNER"
+ok "OWNER unset or empty: stopped with the reason, no call made"
 
 step "B1: a dry run leaves the committed evidence as it is"
 reset

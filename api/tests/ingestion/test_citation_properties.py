@@ -46,9 +46,9 @@ WORDS = [
     "données",
     "plateforme",
     "Bordeaux",
-    "Betclic",
-    "Thales",
-    "Elsan",
+    "Lumetra",
+    "Velmor",
+    "Olmea",
     "client",
     "service",
     "pilotage",
@@ -597,10 +597,10 @@ def some_date(rng: random.Random) -> tuple[int, int, int]:
 
 def wrapped(rng: random.Random, form: str) -> str:
     """The form inside a sentence without any other digit or month word."""
-    before = rng.choice(("Poste occupé", "Mission chez Betclic", "Engineer at Thales", "Stage"))
+    before = rng.choice(("Poste occupé", "Mission chez Lumetra", "Engineer at Velmor", "Stage"))
     link = rng.choice((", ", " : ", " ", " depuis ", " (", "\n"))
     after = rng.choice(
-        (", à Bordeaux en équipe", " chez Elsan à Paris", "\nDéveloppeur web senior")
+        (", à Bordeaux en équipe", " chez Olmea à Paris", "\nDéveloppeur web senior")
     )
     return f"{before}{link}{form}{after}"
 
@@ -742,9 +742,9 @@ def test_a_two_digit_year_is_never_read_on_its_own(seed: int) -> None:
         connector = rng.choice((" à ", " to ", " - ", "-", " until "))
         short = (
             f"Mission de {start_month:02d}/{start_year % 100:02d}{connector}"
-            f"{end_month:02d}/{end_year % 100:02d} chez Elsan"
+            f"{end_month:02d}/{end_year % 100:02d} chez Olmea"
         )
-        full = f"Elsan, de {start_year} à {end_year}, développeur."
+        full = f"Olmea, de {start_year} à {end_year}, développeur."
         source = f"{full}\n\n{short}, Bordeaux"
         for year, month in ((start_year, start_month), (end_year, end_month)):
             alone = check_item("date", f"{year}-{month:02d}", source, [short])
@@ -760,7 +760,7 @@ def test_a_two_digit_year_is_never_read_on_its_own(seed: int) -> None:
                     continue
                 wrong = check_item("date", f"{year}-{other:02d}", source, [full, short])
                 assert refused(wrong, Rule.MONTH_NOT_IN_SOURCE), (seed, source, other, wrong)
-        apostrophe = f"Betclic, {EN_SHORT[start_month - 1]} '{start_year % 100:02d} to present"
+        apostrophe = f"Lumetra, {EN_SHORT[start_month - 1]} '{start_year % 100:02d} to present"
         result = check_item("date", f"{start_year}-{start_month:02d}", apostrophe, [apostrophe])
         assert refused(result, Rule.TWO_DIGIT_YEAR), (seed, apostrophe, result)
 
@@ -1063,7 +1063,7 @@ def test_a_phone_number_is_all_its_digits_and_no_part_of_them(seed: int) -> None
 
 # --- 6. names ------------------------------------------------------------------------------------
 
-NAME_WORDS = ("Thalesgroup", "Services", "Betclic", "DevTech", "Solutions", "Université", "Elsan")
+NAME_WORDS = ("Velmorgroup", "Services", "Lumetra", "NoxTech", "Solutions", "Université", "Olmea")
 
 
 @seeded
@@ -1224,7 +1224,7 @@ SOUP = (
     + ["/", "/", "-", "-", ".", ",", "'", ":", "(", ")", "\u2013", "\u2192"]
     + [" ", " ", " ", " ", "\n", "   ", " à ", " to ", " et ", " and ", " jusqu'à ", " au "]
     + ["the ", " of ", "present", "aujourd'hui", "en cours", "collaborateurs", "S", "x", "v", "T"]
-    + ["version ", "camille@example.org", "www.example.org/x", "https://", "Betclic", "Thales"]
+    + ["version ", "camille@example.org", "www.example.org/x", "https://", "Lumetra", "Velmor"]
 )
 
 
@@ -1279,7 +1279,7 @@ def test_what_a_part_of_a_line_supports_the_line_supports(seed: int) -> None:
             "phone": [*pieces, "0639981234", "39981234", "33639981234"],
             "email": [*pieces, "camille@example.org", "amille@example.org", "camille@example"],
             "url": [*pieces, "example.org/x", "example.org", "www.example.org", "org/x"],
-            "name": [*pieces, "Betclic", "Bet", "Thales", "janv"],
+            "name": [*pieces, "Lumetra", "Bet", "Velmor", "janv"],
             "text": [*pieces, "10 000", "10", "3,5", "5", "1.1", "version 1.1", "2019"],
         }
         for excerpt in every_part(rng, line, sample=8):

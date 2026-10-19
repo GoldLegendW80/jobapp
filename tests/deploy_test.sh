@@ -466,7 +466,7 @@ ts_status() {
   "Health": [],
   "MagicDNSSuffix": "taild83d16.ts.net",
   "CurrentTailnet": {
-    "Name": "hthautin@example.org",
+    "Name": "e2e-owner@example.org",
     "MagicDNSSuffix": "taild83d16.ts.net",
     "MagicDNSEnabled": true
   },

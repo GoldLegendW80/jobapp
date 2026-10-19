@@ -50,7 +50,7 @@ Running 4 tests using 1 worker
    e2e rows before the cleanup: users=1|jobs=138|events=436|profiles=1|sweeps=1|invites=1|login_attempts=0
    e2e rows after the cleanup: users=0|jobs=0|events=0|profiles=0|sweeps=0|invites=0|login_attempts=0
    Harald's jobs: identical before and after (10 fields)
-   failed sign ins of hthautin@gmail.com in the 15 minute window: 0
+   failed sign ins of e2e-owner@example.org in the 15 minute window: 0
    no jobapp-test-pg-* container stuck in Created
    screenshots: 4
    PASS

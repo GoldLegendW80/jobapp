@@ -49,7 +49,7 @@
 # kind: the script never starts a run with the Anthropic API key of a member.
 #
 # Settings as deploy.sh: DEPLOY_HOST (default jetson), DEPLOY_DIR (default ~/jobapp).
-# OWNER (default hthautin@gmail.com), RUNS (default "triage chat"), MESSAGE, LABEL.
+# OWNER (required: the e-mail address of the owner's account), RUNS (default "triage chat"), MESSAGE, LABEL.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -57,7 +57,7 @@ cd "$ROOT"
 HOST="${DEPLOY_HOST:-jetson}"
 RDIR="${DEPLOY_DIR:-jobapp}"
 RDIR="${RDIR#\~/}"
-OWNER="${OWNER:-hthautin@gmail.com}"
+OWNER="${OWNER:-}"
 RUNS="${RUNS:-triage chat}"
 MESSAGE="${MESSAGE:-What are the two strongest points of my profile for this role, and the one gap I should address in the letter?}"
 RAW_LABEL="${LABEL:-}"
@@ -96,6 +96,7 @@ die() {
 }
 
 [[ "$JOB" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] || die "usage: [REAL_RUN=1] $0 <job-id>"
+[[ -n "$OWNER" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 [[ "$OWNER" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
 [[ "$RAW_LABEL" =~ ^[A-Za-z0-9_-]*$ ]] || die "LABEL holds letters, digits, _ and - only"
 [[ "$IDLE_S" =~ ^[0-9]+$ && "$POLL_S" =~ ^[0-9]+$ ]] || die "IDLE_S and POLL_S are whole seconds"
