@@ -24,17 +24,31 @@ from browserd.leases import LeaseError, Request
 
 log = logging.getLogger("browserd")
 
+# At a lease end a profile over this size loses its caches (SPEC-browser: "over 1 GB").
+TRIM_BYTES = 1 << 30
+MEASURE_S = 120  # the walk and the trim of a large profile, as its uid
 
-def switches(request: Request, lease_dir: str, port: int) -> list[str]:
+
+def switches(
+    request: Request, lease_dir: str, port: int | None, address: str = "about:blank"
+) -> list[str]:
     """SPEC-browser's switches. Never --no-sandbox, never --headless. The user agent is
     Chromium's own (B1: "X11; Linux x86_64" with the client hint architecture "arm"): a
     fingerprint that lies is never set. WebGL stays off under Xvfb (no SwiftShader): the
-    owner's question in B2's pull request."""
+    owner's question in B2's pull request. `port` None: no debugging port at all (a person's
+    own session, browserd/signin.py). The address comes last, after `--`, so Chromium never
+    reads it as a switch; the first `--` stops the option loop of Debian's wrapper script
+    (/usr/bin/chromium), which would otherwise drop the second one."""
+    debugging = (
+        []
+        if port is None
+        else ["--remote-debugging-address=127.0.0.1", f"--remote-debugging-port={port}"]
+    )
     return [
         "chromium",
+        "--",
         f"--user-data-dir={c.PROFILES}/{request.profile_id}/data",
-        "--remote-debugging-address=127.0.0.1",
-        f"--remote-debugging-port={port}",
+        *debugging,
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-blink-features=AutomationControlled",
@@ -60,7 +74,8 @@ def switches(request: Request, lease_dir: str, port: int) -> list[str]:
         # a DNS query out of the proxy, a WebRTC STUN server's name for instance.
         "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
         "--disable-quic",
-        "about:blank",
+        "--",
+        address,
     ]
 
 
@@ -85,21 +100,36 @@ def free_port() -> int:
 
 
 async def as_uid(uid: int, *argv: str, timeout: float = 15) -> int:  # noqa: ASYNC109
+    return (await uid_output(uid, *argv, timeout=timeout))[0]
+
+
+async def uid_output(uid: int, *argv: str, timeout: float = 15) -> tuple[int, str]:  # noqa: ASYNC109
+    """Runs argv under that uid; its exit code and what it printed (at most a few lines)."""
     proc = await asyncio.create_subprocess_exec(
         *argv,
         user=uid,
         group=uid,
         extra_groups=[],
         stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env={"PATH": "/usr/bin:/bin", "PYTHONPATH": "/opt/browserd"},
         cwd="/",
     )
-    _, err = await asyncio.wait_for(proc.communicate(), timeout)
+    out, err = await asyncio.wait_for(proc.communicate(), timeout)
     if proc.returncode:
         log.warning("%s as uid %d: %s", argv[0], uid, err.decode(errors="replace")[-300:])
-    return proc.returncode or 0
+    return proc.returncode or 0, out.decode(errors="replace")[-200:]
+
+
+async def measure_profile(request: Request) -> int | None:
+    """At a lease end, once its Chromium is gone: the profile trimmed of its caches when it is
+    over TRIM_BYTES, then its size in bytes (browserd.prep, as the profile's uid)."""
+    code, out = await uid_output(
+        request.uid, sys.executable, "-m", "browserd.prep", "measure",
+        f"{c.PROFILES}/{request.profile_id}", str(TRIM_BYTES), timeout=MEASURE_S,
+    )  # fmt: skip
+    return int(out.strip()) if code == 0 and out.strip().isdigit() else None
 
 
 async def kill_group(uid: int, pgid: int) -> None:
@@ -275,6 +305,7 @@ class Chromium:
         self.cdp: Any = None
         self.stopping = False
         self.on_crash: Any = None  # set by the service: ends the lease `browser_crashed`
+        self.on_end: Any = None  # set by the service: ends the lease with the reason given
         self.on_event: Any = None
         self._tasks: list[asyncio.Task[Any]] = []
 
@@ -282,7 +313,7 @@ class Chromium:
     def lease_dir(self) -> str:
         return f"{c.LEASES}/{self.lease_id}"
 
-    async def start(self) -> "Chromium":
+    async def prepare(self) -> None:
         request = self.request
         profile = f"{c.PROFILES}/{request.profile_id}"
         with contextlib.suppress(FileNotFoundError):
@@ -294,14 +325,24 @@ class Chromium:
         if await as_uid(request.uid, sys.executable, "-m", "browserd.prep", "prepare", profile,
                         self.lease_dir, languages):  # fmt: skip
             raise RuntimeError("profile preparation failed")
-        self.port = free_port()
+
+    async def spawn(
+        self, port: int | None, address: str = "about:blank"
+    ) -> asyncio.subprocess.Process:
+        request = self.request
         self.proc = await asyncio.create_subprocess_exec(
-            *switches(request, self.lease_dir, self.port),
+            *switches(request, self.lease_dir, port, address),
             user=request.uid, group=request.uid, extra_groups=[], start_new_session=True,
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
             # cwd "/": the chdir happens before the uid change, as root without DAC_OVERRIDE.
             stderr=asyncio.subprocess.DEVNULL, env=child_env(request), cwd="/",
         )  # fmt: skip
+        return self.proc
+
+    async def start(self) -> "Chromium":
+        await self.prepare()
+        self.port = free_port()
+        await self.spawn(self.port)
         if not await cdp_ready(self.port, c.START_S):
             await self.kill()
             raise RuntimeError("Chromium gave no CDP endpoint")
@@ -446,11 +487,16 @@ def memory(root: str = CGROUP) -> tuple[int, int] | None:
     return None
 
 
+def past_guard(figures: tuple[int, int], pct: int) -> bool:
+    """The container (memory.current, memory.max) is at or past `pct` % of its limit."""
+    return figures[0] * 100 >= figures[1] * pct
+
+
 async def guard_memory(browser: Any, pct: int, event: Any, reader: Any = memory) -> bool:
     """Closes the newest tab when the container is past `pct` % of its limit (a blank tab is
     opened first when it was the only one). True when a tab was closed."""
     figures = reader()
-    if figures is None or figures[0] * 100 < figures[1] * pct:
+    if figures is None or not past_guard(figures, pct):
         return False
     pages = browser.contexts[0].pages if browser.contexts else []
     if not pages:

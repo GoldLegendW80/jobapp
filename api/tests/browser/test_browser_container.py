@@ -143,7 +143,8 @@ class Stack:
     def end(self) -> None:
         lease = self.current()["lease"]
         if lease:
-            assert self.call("DELETE", f"/leases/{lease['lease_id']}")["status"] == 204
+            # 200 with the end and the profile's size since browser B7.
+            assert self.call("DELETE", f"/leases/{lease['lease_id']}")["status"] == 200
 
     def wait_ended(self, attempts: int = 120) -> dict:
         """Polls GET /leases/current (each call is a round trip through docker exec, no sleep)

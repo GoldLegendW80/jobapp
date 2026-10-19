@@ -16,7 +16,8 @@ person's apply lock and the application's row lock, the checks of the spec in or
    the application `ready`;
 3. never apply (`guardrails.never_apply`, the sweep's event included);
 4. duplicates (`guardrails.duplicates`, this application excluded);
-5. `caps.check` (a stub answering None until A11);
+5. `caps.check`: the person's pause, company caps, and Full auto's one per company rule and
+   safety ceiling (A11; each refusal leaves the application `ready`);
 6. documents: `documents.current` returns the versions the hash covers, else `documents_changed`
    (a newer version written since the fill: nothing frozen, nothing refused on content). In Full
    auto, apply's own rule (`documents_need_review`);
@@ -29,9 +30,9 @@ field approved, stores the hash on the application and moves it to `approved` (t
 is approved the same way; the submit lease records `rehearsed` before the click. The gate never
 freezes a document: the freeze is in the transaction that records the click (`submit.record`).
 
-A refusal by a kill switch, the authorisation or the documents leaves the application `ready`; a
-refusal by never apply or a duplicate ends it `blocked` with the code (`posting_closed` for a
-closed posting), as at the start (A2).
+A refusal by a kill switch, the authorisation, the caps or the documents leaves the application
+`ready`; a refusal by never apply or a duplicate ends it `blocked` with the code
+(`posting_closed` for a closed posting), as at the start (A2).
 
 The decision is not the last word: the submit lease runs the checks that can change after it
 again under the same locks, when it starts and just before the click (`submit.recheck`: the
@@ -122,7 +123,7 @@ KEEP = frozenset(
         "manual",
         "full_auto_unavailable",
     }
-)
+).union(caps.KEEP)
 # The authorisation each mode needs.
 KIND_OF_MODE = {
     Mode.review: AuthorisationKind.person_approval,

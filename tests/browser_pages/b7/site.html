@@ -1,0 +1,63 @@
+<!doctype html>
+<!-- Browser B7's fixture site, "Example Portal": signing in sets a cookie without an expiry date
+     (a session cookie), a cookie that lasts 30 days and a local storage entry, then the page and
+     its title say who is signed in. `?login=<name>` signs in at load (the container tests: a
+     session without CDP cannot be clicked), the form signs in by hand (the journey), "Sign out"
+     clears all three. The query is dropped from the address once read, so a restored tab never
+     signs in again: what the page shows after a restart is what the profile kept. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Example Portal: signed out</title>
+</head>
+<body>
+<h1>Example Portal</h1>
+<p id="status">Signed out</p>
+<p id="kept"></p>
+<form id="login">
+  <label>Your name <input id="name" name="name" autocomplete="off"></label>
+  <button type="submit">Sign in</button>
+</form>
+<button id="logout" type="button">Sign out</button>
+<script>
+  const NAME = /^[a-z0-9@._-]{1,64}$/;
+  function cookie(name) {
+    const found = document.cookie.split("; ").find((part) => part.startsWith(name + "="));
+    return found ? decodeURIComponent(found.slice(name.length + 1)) : "";
+  }
+  function show() {
+    const who = cookie("b7_session");
+    const lasting = cookie("b7_remember");
+    const stored = localStorage.getItem("b7_who") || "";
+    document.getElementById("status").textContent = who ? "Signed in as " + who : "Signed out";
+    document.getElementById("kept").textContent =
+      "session cookie: " + (who ? "yes" : "no") + ", lasting cookie: " + (lasting ? "yes" : "no") +
+      ", storage: " + (stored ? "yes" : "no");
+    document.title = who ? "Example Portal: signed in as " + who : "Example Portal: signed out";
+  }
+  function signIn(name) {
+    if (!NAME.test(name)) return;
+    document.cookie = "b7_session=" + encodeURIComponent(name) + "; path=/";
+    document.cookie = "b7_remember=" + encodeURIComponent(name) + "; max-age=2592000; path=/";
+    localStorage.setItem("b7_who", name);
+    show();
+  }
+  const asked = new URLSearchParams(location.search).get("login");
+  if (asked) {
+    signIn(asked);
+    history.replaceState(null, "", location.pathname);
+  }
+  document.getElementById("login").addEventListener("submit", (event) => {
+    event.preventDefault();
+    signIn(document.getElementById("name").value.trim());
+  });
+  document.getElementById("logout").addEventListener("click", () => {
+    document.cookie = "b7_session=; max-age=0; path=/";
+    document.cookie = "b7_remember=; max-age=0; path=/";
+    localStorage.removeItem("b7_who");
+    show();
+  });
+  show();
+</script>
+</body>
+</html>
