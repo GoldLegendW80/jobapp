@@ -57,7 +57,7 @@ INFO  [alembic.runtime.migration] Will assume transactional DDL.
    migrations: 5s
 exit=0
 remote .env restored identical
-600 yessai
+600 lucien
 
 ### case B: local .env.jetson missing, remote .env present
 

@@ -109,7 +109,7 @@ export function BrowserCard() {
             Your browser is starting.
           </p>
         ) : lease ? (
-          <LiveBrowser key={lease.id} />
+          <LiveBrowser key={lease.id} person={!lease.automation} />
         ) : place ? (
           <p role="status" className="text-sm text-muted-foreground">
             {waitText(place)}

@@ -12,7 +12,7 @@ Who uses it: Harald, as operator. Friends never see this layer.
 
 | | |
 |---|---|
-| Host | `ssh jetson` (yessai@192.168.1.47, Wi-Fi) |
+| Host | `ssh jetson` (192.168.1.47, Wi-Fi) |
 | Board | Jetson Orin Nano Developer Kit Super, 6 cores, 7.4G RAM, 49G free disk |
 | OS | Ubuntu 22.04, L4T R36.4.7 (JetPack 6), aarch64 |
 | Docker | 29.8.0, Compose v5.5.1, `nvidia` runtime registered (not used by this app) |
@@ -218,7 +218,7 @@ What remains possible (measured once each, by the author in `tasks/evidence/plat
 
 ## Decisions (2026-10-08)
 
-1. Docker group: add `yessai` to the `docker` group once. Harald runs `ssh -t jetson 'sudo usermod -aG docker yessai'` (needs his password), then reconnects.
+1. Docker group: add the Jetson user to the `docker` group once. Harald runs `ssh -t jetson 'sudo usermod -aG docker $USER'` (needs his password), then reconnects.
 2. Public access: Cloudflare quick tunnel, everything free; a changing URL is accepted. Superseded on 2026-10-10 by Tailscale Funnel (see Public access).
 3. Fixed IP: reserving 192.168.1.47 on the router is recommended, not blocking.
 4. Git remote: private GitHub repo with CI and pre-commit, as above. The `gh` token lacks the `workflow` scope, which pushing `.github/workflows/` requires: Harald runs `gh auth refresh -s workflow` once (granted 2026-10-09).

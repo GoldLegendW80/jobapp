@@ -40,6 +40,8 @@ const STATUS: Record<InputHolder, string> = {
   assistant: "You are watching your browser. Take over to use it yourself.",
   you: "You have the keyboard and the mouse. Give back when you are done.",
 };
+const OWN_SESSION =
+  "This is your own session: you have the keyboard and the mouse.";
 
 function sentence(error: unknown): string {
   return errorDetail(error) ?? describeError(error);
@@ -50,17 +52,25 @@ function sentence(error: unknown): string {
  * noVNC over /vnc/websockify with a one use ticket, view only until "Take over", which gives this
  * tab the keyboard and the mouse (the agent's next action waits) until "Give back". `status` is the
  * caller's sentence for the status line while the assistant has the browser ("The assistant is
- * filling the form"). Used by Account's "Your browser" card and by the apply module's job page.
+ * filling the form"). `person`: the person's own session (no assistant, browser B7), where this
+ * view has the keyboard and the mouse from the start and there is nothing to take over or give
+ * back. Used by Account's "Your browser" card and by the apply module's job page.
  */
-export function LiveBrowser({ status }: { status?: string }) {
+export function LiveBrowser({
+  status,
+  person = false,
+}: {
+  status?: string;
+  person?: boolean;
+}) {
   const [viewer] = useState(() => crypto.randomUUID());
   const target = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLElement>(null);
   const keyboard = useRef<HTMLTextAreaElement>(null);
   const screen = useRef<Screen | null>(null);
   const [phase, setPhase] = useState<Phase>("connecting");
-  const [input, setInput] = useState<InputHolder>("assistant");
-  const inputRef = useRef<InputHolder>("assistant");
+  const [input, setInput] = useState<InputHolder>(person ? "you" : "assistant");
+  const inputRef = useRef<InputHolder>(person ? "you" : "assistant");
   const [problem, setProblem] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -114,10 +124,10 @@ export function LiveBrowser({ status }: { status?: string }) {
   // Leaving the page while holding the input gives it back, so the agent does not wait for it.
   useEffect(
     () => () => {
-      if (inputRef.current === "you")
+      if (inputRef.current === "you" && !person)
         void giveBack(viewer).catch(() => undefined);
     },
-    [viewer],
+    [viewer, person],
   );
 
   const holder = (next: InputHolder) => {
@@ -170,9 +180,11 @@ export function LiveBrowser({ status }: { status?: string }) {
       ? "Connecting to your browser."
       : phase === "closed"
         ? "The live view is closed."
-        : input === "you"
-          ? STATUS.you
-          : (status ?? STATUS.assistant);
+        : person
+          ? OWN_SESSION
+          : input === "you"
+            ? STATUS.you
+            : (status ?? STATUS.assistant);
 
   return (
     <section
@@ -200,7 +212,7 @@ export function LiveBrowser({ status }: { status?: string }) {
         </p>
       )}
       <div className="flex flex-wrap gap-2">
-        {input === "you" ? (
+        {person ? null : input === "you" ? (
           <Button
             type="button"
             disabled={busy}
