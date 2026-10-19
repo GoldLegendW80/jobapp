@@ -5,8 +5,9 @@
 #
 #   tests/agents_real_run_test.sh
 #
-# Covers: without OWNER nothing runs; a dry run leaves every file under tasks/evidence/agents-a5/ byte for byte as committed
-# and starts nothing; a real run is refused before any ssh call when an evidence file it would
+# Covers: without OWNER, or with an OWNER that is not an e-mail address, nothing runs (here and in
+# the four other Jetson scripts that put OWNER into SQL); a dry run leaves every file under
+# tasks/evidence/agents-a5/ byte for byte as committed and starts nothing; a real run is refused before any ssh call when an evidence file it would
 # write exists; an account that is not an admin with a subscription credential is refused before
 # any start; the message text, a token shaped value and the text of a log message are counted and
 # never printed; a short message is not a false failure; a start that gives no answer is reported
@@ -186,6 +187,45 @@ run 1 script OWNER=
 out_has "OWNER is not set"
 [[ "$(calls)" == 0 ]] || fail "a call was made with an empty OWNER"
 ok "OWNER unset or empty: stopped with the reason, no call made"
+
+step "B0b: an OWNER that is not an e-mail address stops every Jetson script that puts it into SQL"
+OWNER_FORM='^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$'
+OWNER_CHECK=" =~ $OWNER_FORM ]] || die \"OWNER is not an email address\""
+OWNER_SCRIPTS=(tests/agents_real_run_jetson.sh tests/ingestion_transcribe_jetson.sh tests/e2e_jetson.sh
+  tests/e2e_jobs_jetson.sh tests/e2e_jobs_sweep_jetson.sh)
+for s in "${OWNER_SCRIPTS[@]}"; do
+  grep -q -F -- "$OWNER_CHECK" "$s" || fail "$s does not check the form of OWNER with $OWNER_FORM"
+done
+for v in e2e-owner@example.org e2e-lucien.quillard@example.org e2e-owner+jetson@example.org \
+  E2E-Owner@Example.ORG e2e_owner@mail.example.org 0@example.org; do
+  [[ "$v" =~ $OWNER_FORM ]] || fail "the form refuses the address $v"
+done
+# Every command the scripts run is a fake that records the call: a refused value reaches none.
+OBIN="$WORK/bin-owner"
+mkdir -p "$OBIN"
+cat >"$OBIN/fake" <<'FAKE'
+#!/usr/bin/env bash
+printf '%s %s\n' "${0##*/}" "$*" >>"$STUB_CALLS"
+exit 97
+FAKE
+chmod +x "$OBIN/fake"
+for c in ssh docker npx pnpm curl tailscale; do ln -s fake "$OBIN/$c"; done
+# shellcheck disable=SC2016,SC1003 # the values are literal, never expanded
+REFUSED=(e2e-owner @example.org e2e-owner@ e2e-owner@@example.org "e2e-owner@example.org';--Kq83zTn"
+  "e2e-owner'@example.org" "e2e owner@example.org" " e2e-owner@example.org" "e2e-owner@example.org "
+  $'e2e-owner@example.org\nselect 1' $'e2e-owner@example.org\t' "e2e-owner@example.org;"
+  'e2e-$(id)@example.org' 'e2e-`id`@example.org' 'e2e-owner@example.org\' 'e2e-owner@exa"mple.org'
+  e2e-owner@example.org% e2e-owner@exa_mple.org "e2e-owner@example,org")
+for s in "${OWNER_SCRIPTS[@]}"; do
+  for v in "${REFUSED[@]}"; do
+    reset
+    run 1 env PATH="$OBIN:$PATH" DEPLOY_HOST=jetson.invalid STUB_CALLS="$CALLS" OWNER="$v" "$s" "$JOB"
+    out_has "OWNER is not an email address"
+    out_lacks "Kq83zTn"
+    [[ "$(calls)" == 0 ]] || fail "$s made a call with the OWNER '$v': $(head -n 3 "$CALLS")"
+  done
+done
+ok "${#REFUSED[@]} malformed OWNER values stop each of the ${#OWNER_SCRIPTS[@]} scripts before any call, unprinted"
 
 step "B1: a dry run leaves the committed evidence as it is"
 reset
