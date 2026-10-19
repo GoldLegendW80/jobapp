@@ -5,7 +5,9 @@ clock and a fake browser (api/tests/browser/test_browserd_leases.py).
 Time rules (SPEC-browser, "Leases"): the purpose's maximum counts active time only; the idle
 timer (no tool call and no input for BROWSER_IDLE_S) ends a lease; while the lease is
 `waiting_person` neither runs, the wait has its own deadline (BROWSER_SESSION_MAX_S), and the
-lease then resumes with the active time it had left. B12 sets and clears the wait.
+lease then resumes with the active time it had left. B12 sets and clears the wait
+(browserd/handoff.py): a wait for a sign in that reaches its deadline ends `signin_timeout`, and
+`swap` changes the lease's Chromium while it waits, one closed wholly before the other starts.
 
 A person's own session (`takeover`, which the page calls `look`, and `signin`; B7) never runs
 with automation, whatever the caller asks: its Chromium has no debugging port
@@ -21,6 +23,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import math
 import re
 import secrets
 import time
@@ -153,6 +156,8 @@ class Lease:
     # what the tool layer keeps for this lease (its documents, its tab), dropped with it.
     gate_hash: bytes = b""
     scratch: dict[str, Any] = field(default_factory=dict)
+    # B12: the person holds the live view's input of this agent's lease (the sign in hand off).
+    person_input: bool = False
 
     def active_s(self, now: float) -> float:
         running = now - self.active_since if self.state == "active" else 0.0
@@ -178,10 +183,17 @@ class Lease:
         )
         self.active_since = self.last_input = now
 
+    def wait_left_s(self, now: float) -> int | None:
+        if self.state != "waiting_person" or self.wait_deadline is None:
+            return None
+        return max(0, math.ceil(self.wait_deadline - now))
+
     def expired(self, now: float) -> str | None:
         """Why the lease must end now, or None."""
         if self.state == "waiting_person":
-            return "person_timeout" if self.wait_deadline and now >= self.wait_deadline else None
+            if self.wait_deadline is None or now < self.wait_deadline:
+                return None
+            return "signin_timeout" if self.wait_reason == "signin" else "person_timeout"
         if self.active_s(now) >= self.max_s:
             return "lease_max"
         if now - self.last_input >= self.idle_s:
@@ -198,6 +210,9 @@ class Lease:
             "automation": self.request.automation,
             "state": self.state,
             "wait_reason": self.wait_reason,
+            # B12: the api reads the wait back after a Redis restart, never a fresh deadline.
+            "wait_site": self.wait_site,
+            "wait_left_s": self.wait_left_s(now),
             "active_s": round(self.active_s(now), 1),
             "max_s": self.max_s,
             "idle_s": self.idle_s,
@@ -229,6 +244,7 @@ class Manager:
         self.removing: set[str] = set()  # profiles whose directory is being removed (signin.py)
         self.last_end: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
+        self._swap = asyncio.Lock()  # B12: one Chromium closes wholly before another starts
         self._calls: set[asyncio.Task[Any]] = set()
 
     def holder_purpose(self) -> str | None:
@@ -316,10 +332,10 @@ class Manager:
         """Ends the lease (all of them when lease_id is None): calls cancelled, Chromium closed
         cleanly (profile flushed), or killed when it no longer answers; then, but at a shutdown,
         the profile trimmed and measured: `last_end` carries its size (B7)."""
-        lease, browser = self.lease, self.browser
+        lease = self.lease
         if lease is None or (lease_id is not None and lease.lease_id != lease_id):
             return False
-        self.lease, self.browser, self.ending = None, None, lease.request
+        self.lease, self.ending = None, lease.request
         end = self.last_end = {"lease_id": lease.lease_id, "reason": reason}
         try:
             for task in list(self._calls):
@@ -328,11 +344,14 @@ class Manager:
                 drop = getattr(kept, "end", None)
                 if callable(drop):
                     drop()
-            if browser is not None:
-                if reason == "browser_crashed":
-                    await browser.kill()
-                else:
-                    await browser.stop()
+            # After a swap under way (B12): it starts nothing more once the lease is gone.
+            async with self._swap:
+                browser, self.browser = self.browser, None
+                if browser is not None:
+                    if reason == "browser_crashed":
+                        await browser.kill()
+                    else:
+                        await browser.stop()
             if self._measure is not None and reason != "shutdown":
                 try:
                     end["size_bytes"] = await self._measure(lease.request)
@@ -341,6 +360,34 @@ class Manager:
         finally:
             self.ending = None
         return True
+
+    async def swap(self, lease: Lease, request: Request) -> bool:
+        """The sign in hand off (B12, browserd/handoff.py): the lease's Chromium is closed
+        wholly (profile written, its process group gone), then `request` starts another for the
+        same lease, with or without a debugging port. `release` takes the same lock, so two never
+        run at once. False when the lease ended meanwhile (the new one, if any, closed again); a
+        start that fails ends the lease `browser_failed`."""
+        async with self._swap:
+            if self.lease is not lease:
+                return False
+            old, self.browser = self.browser, None
+            if old is not None:
+                await old.stop()
+            if self.lease is not lease:
+                return False
+            try:
+                new = await self._start(request, lease.lease_id)
+            except Exception as exc:
+                log.warning("lease swap failed: %s", type(exc).__name__)
+                new = None
+            if new is not None and self.lease is lease:
+                self.browser = new
+                return True
+            if new is not None:
+                await new.stop()
+        if new is None:
+            await self.release(lease.lease_id, "browser_failed")
+        return False
 
     async def tick(self) -> str | None:
         lease = self.lease

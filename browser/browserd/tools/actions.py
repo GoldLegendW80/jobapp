@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from browserd import detect, pages
-from browserd.tools import pacing, policy
+from browserd.tools import pacing, policy, request_signin
 
 log = logging.getLogger("browserd")
 
@@ -579,5 +579,5 @@ TOOLS: dict[str, Tool] = {
     "browser_wait_for": wait_for,
     "browser_take_screenshot": take_screenshot,
     "browser_tabs": tabs,
-    # "browser_request_signin": request_signin.run,  # B12: browserd/tools/request_signin.py
+    "browser_request_signin": request_signin.run,  # B12: browserd/tools/request_signin.py
 }
