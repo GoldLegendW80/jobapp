@@ -152,6 +152,11 @@ export function profileOnDisk(profileId: string): boolean {
   return out.trim() === "True";
 }
 
+/** The logs of the api, the worker, Caddy and the browser of the journey's stack. */
+export function appLogs(): string {
+  return compose("logs", "--no-color", "api", "worker", "caddy", "browser");
+}
+
 /** Restarts the browser container, its volume kept (`docker compose restart`, same config). */
 export function restartBrowser(): void {
   compose("restart", "browser");

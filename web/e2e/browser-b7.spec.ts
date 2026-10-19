@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import {
+  appLogs,
   debuggingOf,
   endLease,
   PAGES,
@@ -30,6 +31,7 @@ import {
  * the local storage, and so does one after a restart of the browser container (person B's
  * "Forget all logins" in between leaves A's profile alone). A forgets all logins: the profile's
  * directory goes, and the next lease starts on a new directory, under a new uid, signed out.
+ * Neither the typed address nor the name typed on the site is in a log of the stack.
  *
  * Run it with the group (web/e2e/browser-all.config.ts says how).
  */
@@ -226,4 +228,11 @@ test("A forgets all logins and the next lease starts empty", async () => {
   expect(fresh.text).toContain("Signed out");
   expect(fresh.text).toContain(NOTHING);
   for (const seen of errors) expect(seen).toEqual([]);
+});
+
+test("nothing A typed reaches a log of the stack", () => {
+  const logs = appLogs();
+  expect(logs.length).toBeGreaterThan(0);
+  expect(logs).not.toContain(NAME);
+  expect(logs).not.toContain("b7/site.html");
 });
