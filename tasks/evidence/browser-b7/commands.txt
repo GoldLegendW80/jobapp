@@ -1,0 +1,31 @@
+Browser B7b, 2026-10-19, on the Mac (Docker Desktop, Apple silicon), the tree of the pull request
+after merging main. Images built under tags of this run (b7b-*), behind the TLS inspecting proxy
+with compose.extra-ca.yml; the stack as the local check's group `browser` starts it.
+
+  docker compose -p b7b-build -f compose.yml -f tests/ats-stub.compose.yml -f compose.mac.yml \
+    -f b7b-images.yml -f compose.extra-ca.yml build api worker caddy renderer browser
+  .github/scripts/ci_env.sh 8080 > .env; echo AGENTS_FAKE_BACKEND=true >> .env
+  COMPOSE_PROFILES=browser HTTP_PORT=8190 docker compose -p b7b-9024 -f compose.yml \
+    -f tests/ats-stub.compose.yml -f compose.mac.yml -f b7b-images.yml \
+    -f tests/browser-pages.compose.yml up -d --no-build --wait --wait-timeout 300
+  docker compose -p b7b-9024 -f compose.yml exec -T api alembic upgrade head
+  E2E_CADDY_URL=http://127.0.0.1:8190 E2E_COMPOSE_PROJECT=b7b-9024 \
+    ops/agent-test.sh --name b7b --playwright -c e2e/browser-all.config.ts
+
+✓   1 e2e/browser-b3.spec.ts:89:1 › person A starts a session and holds the browser (1.4s)
+✓   2 e2e/browser-b3.spec.ts:112:1 › person B gets a place in the queue and never A's lease (67ms)
+✓   3 e2e/browser-b3.spec.ts:131:1 › A ends the session and B takes the turn (1.3s)
+✓   4 e2e/browser-b4.spec.ts:100:1 › A watches the browser draw the page, takes over and types (11.1s)
+✓   5 e2e/browser-b4.spec.ts:133:1 › B never sees A's browser (447ms)
+✓   6 e2e/browser-b4.spec.ts:170:1 › Caddy's log holds no ticket (138ms)
+✓   7 e2e/browser-b7.spec.ts:118:1 › A signs in to the site through the live view, on a phone (7.5s)
+✓   8 e2e/browser-b7.spec.ts:180:1 › the login is in an assistant's lease, and after a restart of the browser (12.1s)
+✓   9 e2e/browser-b7.spec.ts:206:1 › A forgets all logins and the next lease starts empty (6.1s)
+✓  10 e2e/browser-b7.spec.ts:233:1 › nothing A typed reaches a log of the stack (119ms)
+10 passed (59.8s)
+
+The probe's traceback in the output (FileNotFoundError: /tmp/browserd/current.json) is the
+expected failure of `browserd.probe` during the sign in session: browserd wrote no CDP port for it.
+Screenshots: address-refused, signed-in and forget, each at desktop and mobile, light and dark
+(B4's watching and typing under tasks/evidence/browser-b4/). Afterwards the stack was taken down
+with its volumes and the b7b-* images removed.

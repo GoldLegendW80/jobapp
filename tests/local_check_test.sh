@@ -366,6 +366,28 @@ done < <(grep '^up ' "$STUB_CALLS")
 grep -q 'tests/ats-forms-stub.compose.yml' "$STUB_CALLS" || fail "the apply stack did not include the fake forms server"
 ok "the retry of the apply stack takes a new port for the fake forms server too"
 
+# The browser group starts the stack's browser (profile browser) and the pages it opens.
+cat >"$WORK/ports-browser.sh" <<'EOF'
+docker() {
+  echo "docker $*" >>"$STUB_CALLS"
+  case " $* " in
+  *" up "*) echo "up $HTTP_PORT ${COMPOSE_PROFILES:-none}" >>"$STUB_CALLS" ;;
+  esac
+  return 0
+}
+journey_play() { true; }
+stub_plan() {
+  pick_journey_ports browser
+  run_step journeys-browser s_journey browser || true
+}
+EOF
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/ports-browser.sh" "$CHECK" --only journeys
+out_has "journeys-browser           PASS"
+grep -q '^docker compose .*-f tests/browser-pages.compose.yml.* up ' "$STUB_CALLS" || fail "the browser stack did not include the pages of tests/browser-pages.compose.yml"
+grep -qE '^up [0-9]+ browser$' "$STUB_CALLS" || fail "the browser stack started without the compose profile browser"
+ok "the browser stack runs its browser and the static pages"
+
 # --- the journey groups are found in web/e2e (issue #279) -------------------------------------------
 # A tree whose web/e2e holds the names of this repository's group configs and spec files (empty
 # files), one group config more (zeta) and files that are no group config. The real lane_journeys
