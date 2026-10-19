@@ -61,6 +61,8 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
   margin-top: 4pt;
   color: #3c4a5a;
 }
+/* a line wraps between contact lines, never inside an address unless it alone is wider */
+.contact li { overflow-wrap: break-word; max-width: 100%; }
 
 .columns {
   display: grid;

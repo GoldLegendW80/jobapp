@@ -30,6 +30,7 @@ from tests.documents.test_templates import (
     ON,
     SLUGS,
     assert_authoring,
+    at_soft_limits,
     d1,
     d1_view,
     fitted,
@@ -265,13 +266,22 @@ def test_the_contrast_pairs_read_a_rule_with_its_own_background_alone() -> None:
     assert ("#1c5d99", "#dce8f4") in painted_pairs("cards")
 
 
+# The text of a CSS `content`, in double or in single quotes.
+CONTENT = re.compile(r"""content:\s*(?:"([^"]*)"|'([^']*)')""")
+
+
+def test_the_dash_test_reads_content_in_both_quotes() -> None:
+    css = """a::before { content: "x \u2014 y"; } b::after { content: ' - '; }"""
+    assert [a or b for a, b in CONTENT.findall(css)] == ["x \u2014 y", " - "]
+
+
 @pytest.mark.parametrize("slug", D21)
 def test_no_dash_is_printed_as_a_separator(slug: str) -> None:
     """The text a template prints of its own: its manifest's names and descriptions, the text of
     its CSS `content`, and the page it builds from the sample in both languages."""
     found = template(slug)
     own = [*found.name.values(), *found.description.values()]
-    own += re.findall(r"content:\s*\"([^\"]*)\"", found.files["style.css"])
+    own += [a or b for a, b in CONTENT.findall(found.files["style.css"])]
     for kind in templates.KINDS:
         for language in templates.LANGUAGES:
             sample = thumbnails.sample()[kind]
@@ -483,13 +493,20 @@ def test_academic_with_three_schools_fits_with_the_education_above_the_experienc
     assert bottom(degrees[-1]) > top(experience)
 
 
+def typical(slug: str, full: bool) -> c.CvContent:
+    """D1's typical CV, with every field filled to the template's soft limits when `full`."""
+    content = d1("cv-typical")[2]
+    return at_soft_limits(content, template(slug).kinds["cv"].soft_limits) if full else content
+
+
 @docker
 @pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_academic_reads_in_the_order_of_the_page(renderer: Any, language: str) -> None:
+@pytest.mark.parametrize("full", [False, True], ids=["typical", "soft-limits"])
+def test_academic_reads_in_the_order_of_the_page(renderer: Any, language: str, full: bool) -> None:
     """The PDF text, as an applicant tracking system extracts it: the name first, the sections in
     the order of the page (the education before the experience), the roles in order, every
-    bullet whole."""
-    _, _, content = d1("cv-typical")
+    bullet whole; on the typical CV and on the typical CV filled to the soft limits."""
+    content = typical("academic", full)
     result = fitted(renderer, template("academic"), "cv", content, d1_view(), language)
     assert result.fit
     text = " ".join(pdf_text(result.pdf).replace("\ufffe", "-").split())
@@ -523,14 +540,17 @@ class Texts(HTMLParser):
 
 @docker
 @pytest.mark.parametrize("slug", D21)
-@pytest.mark.parametrize("name", ["cv-typical", "letter-en"])
+@pytest.mark.parametrize("name", ["cv-typical", "cv-soft-limits", "letter-en"])
 def test_the_pdf_text_follows_the_order_of_the_document(
     renderer: Any, slug: str, name: str
 ) -> None:
     """Every text of the built page is found in the PDF text in the order of the document: no
     part of the layout is painted, and so extracted, out of its place (a positioned marker once
     sent the competencies of `cards` and the bullets of `bold` to the end of the page)."""
-    kind, language, content = d1(name)
+    if name == "cv-soft-limits":
+        kind, language, content = "cv", "en", typical(slug, full=True)
+    else:
+        kind, language, content = d1(name)
     found = template(slug)
     result = fitted(renderer, found, kind, content, d1_view(), language)
     assert result.fit
@@ -543,6 +563,75 @@ def test_the_pdf_text_follows_the_order_of_the_document(
         place = text.find(chunk, at)
         assert place >= 0, (chunk, text[at : at + 80])
         at = place + len(chunk)
+
+
+LONG_CONTACT = Identity(
+    full_name="Alex Example",
+    email="e2e-alexandra.example-sampleton@example.org",
+    phone="+33 6 00 00 00 00",
+    city="Saint-Rémy-de-Provence",
+    country="France",
+    website="https://example.org/people/alexandra-example-sampleton/portfolio",
+    links=(("Code", "https://code.example.org/alexandra-example-sampleton"),),
+)
+
+
+def baselines(pdf: bytes, needle: str) -> list[float]:
+    """The baseline of each character of the first `needle` of page 1 (white space and case
+    ignored; a hyphen that ends a line read as one): one value when it stands on one line."""
+    document = pdfium.PdfDocument(pdf)
+    try:
+        textpage = document[0].get_textpage()
+        text = textpage.get_text_range().replace("\ufffe", "-")
+        chars = [i for i, ch in enumerate(text) if not ch.isspace()]
+        compact = "".join(text[i] for i in chars).casefold()
+        target = "".join(needle.split()).casefold()
+        start = compact.find(target)
+        assert start >= 0, needle
+        found = []
+        for index in chars[start : start + len(target)]:
+            x, y = ctypes.c_double(), ctypes.c_double()
+            pdfium_c.FPDFText_GetCharOrigin(textpage.raw, index, x, y)
+            found.append(y.value)
+        return found
+    finally:
+        document.close()
+
+
+@docker
+@pytest.mark.parametrize("slug", D21)
+@pytest.mark.parametrize("kind", templates.KINDS)
+@pytest.mark.parametrize("language", templates.LANGUAGES)
+@pytest.mark.parametrize("who", ["alex", "long"])
+def test_the_heading_wraps_between_contact_lines_never_inside_one(
+    renderer: Any, slug: str, kind: str, language: str, who: str
+) -> None:
+    """The review of D20: a header that could not wrap split the name and broke an e-mail
+    address in two. Here the headline is at its soft limit (the CV filled to every soft limit),
+    with D1's contact lines and with long ones (a 43 character address, a 64 character link):
+    the document fits, the name stands on one line, and so does each contact line."""
+    found = template(slug)
+    view = d1_view()
+    if who == "long":
+        view = ProfileView(
+            revision=view.revision,
+            identity=LONG_CONTACT,
+            employers=view.employers,
+            schools=view.schools,
+            languages=view.languages,
+        )
+    if kind == "cv":
+        content: Any = typical(slug, full=True)
+    else:
+        letter = d1("letter-en")[2]
+        limit = found.kinds["letter"].soft_limits.headline or 90
+        headline = (letter.headline + ", ") * 10
+        content = letter.model_copy(update={"headline": headline[:limit].rstrip(", ")})
+    result = fitted(renderer, found, kind, content, view, language)
+    assert result.fit, result.pages
+    for needle in ["Alex Example", *(line["text"] for line in templates.contact_lines(view))]:
+        ys = baselines(result.pdf, str(needle))
+        assert max(ys) - min(ys) < 1.0, (needle, sorted({round(y) for y in ys}))
 
 
 def frames(pdf: bytes) -> list[list[float]]:

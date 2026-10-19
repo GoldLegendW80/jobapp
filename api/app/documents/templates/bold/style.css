@@ -1,9 +1,10 @@
 /* bold: one column in Work Sans, black and a strong red accent. A very large name, set smaller
    past 30 and 60 characters, that wraps anywhere rather than leave the page, a thick black
    rule under the heading, heavy headings in white capitals on black bars, thick red bars over
-   the achievements, black bars beside the competencies. Markers and separators are borders of
-   empty boxes, so the PDF text holds none. The density comes from the step on :root:
-   --body-size, --line-height, --section-gap, --item-gap, --margin. */
+   the achievements, black bars beside the competencies. Markers are borders of empty boxes
+   and the contact lines are split by red bars, borders too, so the PDF text holds none. The
+   density comes from the step on :root: --body-size, --line-height, --section-gap,
+   --item-gap, --margin. */
 @page { size: A4; }
 * { box-sizing: border-box; }
 html {
@@ -50,13 +51,13 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
   font-weight: 600;
   color: #3d3f47;
 }
-.contact li + li::before {
-  content: "";
-  display: inline-block;
-  vertical-align: middle;
-  border: 2pt solid var(--accent);
-  margin: 0 7pt 1pt;
+.contact li + li {
+  border-left: 3pt solid var(--accent);
+  margin-left: 7pt;
+  padding-left: 7pt;
 }
+/* a line wraps between contact lines, never inside an address unless it alone is wider */
+.contact li { overflow-wrap: break-word; max-width: 100%; }
 .photo {
   display: block;
   width: 30mm;

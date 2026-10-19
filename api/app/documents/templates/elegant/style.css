@@ -1,10 +1,10 @@
-/* elegant: one column in Lora, the name and the headings in Playfair Display, a mauve accent.
-   A thin double frame 6 mm inside the paper's edge on every page (a fixed box, which the
-   renderer repeats on each page); the page margin is 0 and --margin becomes the padding of the
-   text inside the frame. Thin rules everywhere else: under the heading, after each section
-   title, around the achievements, under each competency and skill row, between the roles. The
-   density comes from the step on :root: --body-size, --line-height, --section-gap, --item-gap,
-   --margin. */
+/* elegant: one column in Lora, the name and the headings in Playfair Display, a mauve accent. A
+   thin double frame 6 mm inside the paper's edge on every page (a fixed box, which the renderer
+   repeats on each page); the page margin is 0 and --margin becomes the padding of the text inside
+   the frame. The contact lines over the name as a letterhead, split by hairlines. Thin rules
+   everywhere else: under the heading, after each section title, around the achievements, under
+   each competency and skill row, between the roles. The density comes from the step on :root:
+   --body-size, --line-height, --section-gap, --item-gap, --margin. */
 @page { size: A4; margin: 0; }
 * { box-sizing: border-box; }
 html {
@@ -29,12 +29,13 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
 
 .head {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  column-gap: 7mm;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr);
   padding-bottom: 7pt;
   border-bottom: 0.5pt solid #a8968a;
 }
+/* The contact lines stand over the name as a letterhead; a grid row moves them without
+   changing the order the page is painted, and so extracted, in: the name stays first. */
+.headtext { grid-row: 2; }
 .name {
   font-family: "Playfair Display", serif;
   font-size: 2.9em;
@@ -49,13 +50,25 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
   margin-top: 3pt;
 }
 .contact {
+  grid-row: 1;
   list-style: none;
-  max-width: 68mm;
-  border-left: 0.5pt solid #a8968a;
-  padding-left: 5mm;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 1pt;
+  padding-bottom: 3pt;
+  margin-bottom: 7pt;
+  border-bottom: 0.5pt solid #ddd2c8;
   font-size: 0.9em;
   color: #57504a;
 }
+.contact li + li {
+  border-left: 0.5pt solid #a8968a;
+  margin-left: 7pt;
+  padding-left: 7pt;
+}
+/* a line wraps between contact lines, never inside an address unless it alone is wider */
+.contact li { overflow-wrap: break-word; max-width: 100%; }
 
 .block { margin-top: var(--section-gap); }
 .label {

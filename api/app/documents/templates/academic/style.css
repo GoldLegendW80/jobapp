@@ -36,7 +36,7 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
   row-gap: 1pt;
   margin-top: 3pt;
 }
-.contact li { padding-right: 8pt; }
+.contact li { padding-right: 8pt; overflow-wrap: break-word; max-width: 100%; }
 .contact li + li { border-left: 0.6pt solid #111111; padding-left: 8pt; }
 
 .block { margin-top: var(--section-gap); }
