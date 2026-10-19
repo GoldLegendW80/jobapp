@@ -55,6 +55,11 @@ ONE_COMPANY = [
     "Example and Robotics",
     "Example & Robotics",
     "Example et Robotics",
+    # Letters of other scripts drawn like Latin ones, folded as the never apply rules fold them.
+    "\u0415xample Robotics",
+    "\u0395xample Robotics",
+    "\u1d07xample Robotics",
+    "\u0415\u0445\u0430mple R\u043eb\u043et\u0456\u0441s",
 ]
 
 # Other companies: each must keep its own key.
@@ -68,7 +73,6 @@ OTHERS = [
     "Example",
     "Northwind Labs",
     "Example Robotics Paris",
-    "Еxample Robotics",  # a Cyrillic E: a declared open point, kept apart
 ]
 
 

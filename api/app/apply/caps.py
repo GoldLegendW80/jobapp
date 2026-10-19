@@ -121,10 +121,11 @@ def _setting(name: str) -> Any:
 
 
 def company_key(text: str) -> str:
-    """The company as caps compare it: folded (compatibility forms, accents, case), cut into
-    words of letters and digits, runs of single letters joined ("S.A.S." is "sas"), joining words
-    and trailing legal forms dropped, the rest glued: "Exämple Robotics, Inc." and
-    "example-robotics" are "examplerobotics". Empty when nothing is left."""
+    """The company as caps compare it: folded as the never apply rules fold (compatibility
+    forms, accents, case, letters of other scripts drawn like Latin ones), cut into words of
+    letters and digits, runs of single letters joined ("S.A.S." is "sas"), joining words and
+    trailing legal forms dropped, the rest glued: "Exämple Robotics, Inc." and "example-robotics"
+    are "examplerobotics". Empty when nothing is left."""
     folded = guardrails.fold(text or "")
     words = "".join(c if c.isalnum() else " " for c in folded).split()
     merged: list[str] = []
