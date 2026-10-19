@@ -67,7 +67,7 @@ Plan: [plan.md](plan.md). Spec: [SPEC-platform.md](../SPEC-platform.md).
 
 **Description:** `deploy.sh` with `deploy` (default) and `logs <service>`: rsync to `jetson:~/jobapp`, copy `.env` with mode 600, remote `docker compose up -d --build`, then migrations. Fail fast on arm64 and memory.
 
-**Prerequisite (Harald):** `ssh -t jetson 'sudo usermod -aG docker yessai'`, then reconnect.
+**Prerequisite (Harald):** `ssh -t jetson 'sudo usermod -aG docker $USER'`, then reconnect.
 
 **Acceptance criteria:**
 - [x] `./deploy.sh` from the Mac builds api on the Jetson and brings api, db, redis to healthy
