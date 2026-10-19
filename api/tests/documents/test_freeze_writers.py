@@ -15,7 +15,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.documents import freeze, generate, render_job, store
+from app.documents import consent, freeze, generate, render_job, store
 from app.documents.models import Author, DocumentVersion, FreezeReason, GenerationStatus, Kind
 from tests.documents.render_support import FakeRenderer, context
 from tests.documents.store_support import AT, USER_A, db, engine, factory, migrated_url
@@ -137,6 +137,9 @@ def test_the_shortening_pass_writes_a_new_version_over_a_frozen_overflow(
     alex: Person, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(generate, "RUNTIME", alex.runtime())
+    with alex.factory() as db:  # the shortening pass is a model call: it needs the consent
+        consent.record(db, alex.user, AT)
+        db.commit()
     document, _, _ = write(alex, "documents_cv_overflow")
     _render(alex, document, FakeRenderer(pages=2))  # overflows: the pass is queued
     [shorten_run] = [
