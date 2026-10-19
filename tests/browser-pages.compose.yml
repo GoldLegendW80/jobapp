@@ -1,0 +1,42 @@
+# Scratch stacks of the browser journeys only (web/e2e/browser-all.config.ts, the local check's
+# group `browser`): the static pages of tests/browser_pages/ as the public side of the stack's own
+# browser, so no journey ever opens a real site.
+#   COMPOSE_PROFILES=browser HTTP_PORT=8097 docker compose -p jobapp-b7 -f compose.yml \
+#     -f tests/browser-pages.compose.yml up -d --wait
+# - pages (tests/browser_pages/server.py, the same server as tests/browser.compose.yml's) is on
+#   the `egress` network, the side the browser container joins, so the browser reaches it and
+#   nothing else of the stack does; it publishes no port. It listens on 8080, a port of the egress
+#   proxy's set, and the browser lets it through its proxy although its address is private
+#   (BROWSER_PROXY_ALLOW_PRIVATE, refused by browserd under APP_ENV=production).
+# - `egress` is compose.yml's own network, so this file names it and does not define it.
+services:
+  pages:
+    # Standard library only: the same pinned base image as the other stubs.
+    image: python:3.12.15-slim-trixie
+    user: "1000:1000"
+    command: ["python", "-I", "/pages/server.py", "/pages"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      # Relative to the project directory, the folder of compose.yml.
+      - ./tests/browser_pages:/pages:ro
+    networks:
+      - egress
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/b7/site.html', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+      start_interval: 1s
+    mem_limit: 128m
+
+  browser:
+    environment:
+      BROWSER_PROXY_ALLOW_PRIVATE: pages
