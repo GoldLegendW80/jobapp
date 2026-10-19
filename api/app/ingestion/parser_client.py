@@ -55,6 +55,7 @@ import asyncio
 import base64
 import binascii
 import contextlib
+import functools
 import hashlib
 import json
 import logging
@@ -72,7 +73,10 @@ logger = logging.getLogger("app.ingestion.parser_client")
 
 HOST = "parser"
 PORT = 7070
-KINDS = ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render", "mail_html", "ping")
+KINDS = (
+    "pdf_text", "docx", "linkedin_zip", "image", "pdf_render", "mail_html", "design_pdf",
+    "design_docx", "ping",
+)  # fmt: skip
 
 MIB = 1024 * 1024
 MAX_HEADER = 4096
@@ -186,7 +190,8 @@ _TIMEOUT_CODES = frozenset({"wall_limit", "cpu_limit", "read_timeout"})
 # code: never a failure of the server, and so never a second try (review of PR #157, B2 and
 # B3). The server's own log line still says `crashed`, `cpu_limit` or `wall_limit`, and so
 # does the line this client logs. Every other kind, and every other code, is as before.
-FILE_DEATH_KINDS = frozenset({"image", "pdf_render"})
+# design_pdf (documents D25a) hands the file to PDFium as pdf_render does.
+FILE_DEATH_KINDS = frozenset({"image", "pdf_render", "design_pdf"})
 FILE_DEATHS = MappingProxyType(
     {"crashed": "bomb", "cpu_limit": "too_slow", "wall_limit": "too_slow"}
 )
@@ -826,6 +831,429 @@ def check_mail_html(answer: Any) -> MailHtml:
     )
 
 
+# --- reading an answer: the layout of an uploaded CV (documents D25a) ---------------------------
+
+# The caps of sandbox/design_pdf.py and design_docx.py, stated again (tests/ingestion/parser
+# keeps them in step): the child that read the file may be the process the file took over.
+# Together they hold an answer under DESIGN_MAX_ANSWER, the most a design call reads.
+DESIGN_KINDS = ("design_pdf", "design_docx")
+DESIGN_MAX_ANSWER = 1_000_000
+DESIGN_PAGES = 2
+DESIGN_RUNS = 1_500
+DESIGN_SHAPES = 400
+DESIGN_IMAGES = 50
+DESIGN_TEXT = 40_000
+DESIGN_RUN_TEXT = 300
+DESIGN_FONTS = 64
+DESIGN_FONT_NAME = 128
+DESIGN_STYLES = 400
+DESIGN_SECTIONS = 20
+DESIGN_SHOWN = 40
+DESIGN_NAME = 64
+DESIGN_LENGTH = 144_000  # tenths of a point: the 200 inches of pdf_render.PAGE_MAX_INCHES
+DESIGN_COUNT = 10_000_000
+DESIGN_NOTE_CODES = frozenset(
+    {
+        "time_limit", "text_limit", "runs_limit", "shapes_limit", "images_limit",
+        "objects_limit", "chars_limit", "fonts_limit", "pages_not_read", "styles_limit",
+        "sections_limit", "formats_limit",
+    }
+)  # fmt: skip
+DESIGN_PROPS = (
+    "font", "size", "bold", "italic", "caps", "colour", "before", "after", "line", "line_rule",
+    "align", "border", "shading",
+)  # fmt: skip
+DESIGN_RUN_PROPS = ("font", "size", "bold", "italic", "caps", "colour")
+_COLOUR = re.compile(r"#[0-9a-f]{6}")
+_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\ud800-\udfff]")
+_SCHEME = frozenset(
+    (
+        "dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5",
+        "accent6", "hlink", "folHlink",
+    )
+)  # fmt: skip
+_CHOICES = MappingProxyType(
+    {
+        "line_rule": frozenset({"auto", "exact", "at_least"}),
+        "align": frozenset({"left", "center", "right", "justify"}),
+    }
+)
+
+
+@dataclass(frozen=True)
+class DesignFont:
+    """A font of the runs, as the PDF declares it: `name` as embedded (a subset prefix
+    included), `weight` 0 when the file does not say."""
+
+    name: str
+    weight: int
+    italic: bool
+    serif: bool
+    monospace: bool
+    symbolic: bool
+    embedded: bool
+
+
+@dataclass(frozen=True)
+class TextRun:
+    """Characters of one font, size and colour on one line. Lengths in tenths of a point,
+    boxes [x0, y0, x1, y1] from the top left corner of the page."""
+
+    text: str
+    box: tuple[int, int, int, int]
+    font: int  # an index of DesignPdf.fonts
+    size: int
+    colour: str
+
+
+@dataclass(frozen=True)
+class Shape:
+    type: str  # fill, rule or outline
+    box: tuple[int, int, int, int]
+    colour: str
+    width: int
+
+
+@dataclass(frozen=True)
+class DesignPage:
+    index: int
+    width: int
+    height: int
+    margins: tuple[int, int, int, int] | None  # top, right, bottom, left of the text
+    runs: tuple[TextRun, ...]  # in reading order
+    shapes: tuple[Shape, ...]
+    images: tuple[tuple[int, int, int, int], ...]  # boxes only: no pixel is ever read
+
+
+@dataclass(frozen=True)
+class DesignPdf:
+    """The layout of the first pages of a PDF (kind `design_pdf`)."""
+
+    pages: int
+    scanned: bool
+    truncated: bool
+    notes: tuple[Note, ...]
+    fonts: tuple[DesignFont, ...]
+    read: tuple[DesignPage, ...]
+    usage: Mapping[str, int] | None = None
+
+
+@dataclass(frozen=True)
+class DesignDocx:
+    """The styles of a Word document (kind `design_docx`). Each style, format and the defaults
+    are read only mappings of the keys sandbox/design_docx.py names."""
+
+    truncated: bool
+    notes: tuple[Note, ...]
+    theme: Mapping[str, Any] | None
+    defaults: Mapping[str, Any]
+    styles: tuple[Mapping[str, Any], ...]
+    sections: tuple[Mapping[str, Any], ...]
+    tables: int
+    table_columns: int
+    drawings: int
+    paragraphs: int
+    paragraph_styles: tuple[tuple[str, int], ...]
+    formats: tuple[Mapping[str, Any], ...]
+    usage: Mapping[str, int] | None = None
+
+
+def _flag(value: Any, rule: str) -> bool:
+    if type(value) is not bool:
+        _bad(rule)
+    return value
+
+
+def _plain(value: Any, most: int, rule: str, *, empty: bool = False) -> str:
+    """A string of at most `most` characters, without a control character or a surrogate."""
+    if not isinstance(value, str) or len(value) > most or (not value and not empty):
+        _bad(rule)
+    if _CONTROL.search(value):
+        _bad(rule)
+    return value
+
+
+def _colour(value: Any, rule: str = "colour") -> str:
+    if not isinstance(value, str) or not _COLOUR.fullmatch(value):
+        _bad(rule)
+    return value
+
+
+def _optional(value: Any, check: Callable[[Any], Any]) -> Any:
+    return None if value is None else check(value)
+
+
+def _exact(found: Any, keys: frozenset[str] | set[str], rule: str) -> dict[str, Any]:
+    if not isinstance(found, dict) or set(found) != keys:
+        _bad(rule)
+    return found
+
+
+def _list(value: Any, most: int, rule: str) -> list:
+    if not isinstance(value, list) or len(value) > most:
+        _bad(rule)
+    return value
+
+
+def _box(value: Any, width: int, height: int) -> tuple[int, int, int, int]:
+    if not isinstance(value, list) or len(value) != 4:
+        _bad("box")
+    x0, y0, x1, y1 = (_integer(part, 0, DESIGN_LENGTH, "box") for part in value)
+    if not (x0 <= x1 <= width and y0 <= y1 <= height):
+        _bad("box")
+    return x0, y0, x1, y1
+
+
+def _design_notes(value: Any) -> tuple[Note, ...]:
+    notes = []
+    for item in _list(value, MAX_NOTES, "notes"):
+        if not isinstance(item, dict) or not {"code"} <= set(item) <= {"code", "count"}:
+            _bad("notes")
+        if not isinstance(item["code"], str) or item["code"] not in DESIGN_NOTE_CODES:
+            _bad("note_code")
+        values = {}
+        if "count" in item:
+            values["count"] = _integer(item["count"], 1, DESIGN_PAGES, "values")
+        notes.append(Note(item["code"], MappingProxyType(values)))
+    return tuple(notes)
+
+
+_FONT_KEYS = frozenset({"name", "weight", "italic", "serif", "monospace", "symbolic", "embedded"})
+_PAGE_KEYS = frozenset({"index", "width", "height", "margins", "runs", "shapes", "images"})
+_RUN_KEYS = frozenset({"text", "box", "font", "size", "colour"})
+_SHAPE_KEYS = frozenset({"type", "box", "colour", "width"})
+_DESIGN_PDF_KEYS = frozenset(
+    {"ok", "kind", "pages", "scanned", "truncated", "notes", "fonts", "read", "usage"}
+)
+
+
+def _font(item: Any) -> DesignFont:
+    item = _exact(item, _FONT_KEYS, "font")
+    weight = _integer(item["weight"], 0, 900, "font")
+    if 0 < weight < 100:
+        _bad("font")
+    return DesignFont(
+        _plain(item["name"], DESIGN_FONT_NAME, "font", empty=True),
+        weight,
+        *(_flag(item[key], "font") for key in ("italic", "serif", "monospace", "symbolic")),
+        _flag(item["embedded"], "font"),
+    )
+
+
+def _page(item: Any, fonts: int, seen: set[int], total: int) -> DesignPage:
+    item = _exact(item, _PAGE_KEYS, "page")
+    index = _integer(item["index"], 0, min(total, DESIGN_PAGES) - 1, "page")
+    if seen and index <= max(seen):
+        _bad("page")
+    seen.add(index)
+    width = _integer(item["width"], 1, DESIGN_LENGTH, "page")
+    height = _integer(item["height"], 1, DESIGN_LENGTH, "page")
+    runs = []
+    for run in _list(item["runs"], DESIGN_RUNS, "runs"):
+        run = _exact(run, _RUN_KEYS, "runs")
+        runs.append(
+            TextRun(
+                _plain(run["text"], DESIGN_RUN_TEXT, "run_text"),
+                _box(run["box"], width, height),
+                _integer(run["font"], 0, fonts - 1, "runs"),
+                _integer(run["size"], 0, DESIGN_LENGTH, "runs"),
+                _colour(run["colour"]),
+            )
+        )
+    shapes = []
+    for shape in _list(item["shapes"], DESIGN_SHAPES, "shapes"):
+        shape = _exact(shape, _SHAPE_KEYS, "shapes")
+        if shape["type"] not in ("fill", "rule", "outline"):
+            _bad("shapes")
+        box = _box(shape["box"], width, height)
+        shapes.append(
+            Shape(
+                shape["type"],
+                box,
+                _colour(shape["colour"]),
+                _integer(shape["width"], 0, 1000, "shapes"),
+            )
+        )
+    images = tuple(
+        _box(_exact(image, {"box"}, "images")["box"], width, height)
+        for image in _list(item["images"], DESIGN_IMAGES, "images")
+    )
+    margins = item["margins"]
+    if margins is not None:
+        if not isinstance(margins, list) or len(margins) != 4 or not runs:
+            _bad("margins")
+        margins = tuple(_integer(side, 0, max(width, height), "margins") for side in margins)
+    elif runs:
+        _bad("margins")
+    return DesignPage(index, width, height, margins, tuple(runs), tuple(shapes), images)
+
+
+def check_design_pdf(answer: Any) -> DesignPdf:
+    """The layout an answer of the kind `design_pdf` holds, or the error it stands for. As for
+    check_parsed, nothing of `answer` is trusted: every box inside its page, every font an
+    index of the table, every text within its caps, every colour `#rrggbb`."""
+    if not isinstance(answer, dict) or type(answer.get("ok")) is not bool:
+        _bad("ok")
+    if not answer["ok"]:
+        _refusal(answer)
+    if not _DESIGN_PDF_KEYS - {"usage"} <= set(answer) <= _DESIGN_PDF_KEYS:
+        _bad("keys")
+    if answer["kind"] != "design_pdf":
+        _bad("kind")
+    total = _integer(answer["pages"], 1, MAX_PAGES, "pages")
+    fonts = tuple(_font(item) for item in _list(answer["fonts"], DESIGN_FONTS, "fonts"))
+    seen: set[int] = set()
+    pages = tuple(
+        _page(item, len(fonts), seen, total)
+        for item in _list(answer["read"], DESIGN_PAGES, "pages")
+    )
+    if sum(len(run.text) for page in pages for run in page.runs) > DESIGN_TEXT:
+        _bad("text_too_long")
+    scanned = _flag(answer["scanned"], "scanned")
+    if scanned and any(page.runs for page in pages):
+        _bad("scanned")
+    return DesignPdf(
+        pages=total,
+        scanned=scanned,
+        truncated=_flag(answer["truncated"], "truncated"),
+        notes=_design_notes(answer["notes"]),
+        fonts=fonts,
+        read=pages,
+        usage=_usage(answer.get("usage")),
+    )
+
+
+_STYLE_KEYS = frozenset({"id", "name", "type", "based_on", "default", "outline", *DESIGN_PROPS})
+_SECTION_KEYS = frozenset({"width", "height", "margins", "columns"})
+_FORMAT_KEYS = frozenset({"style", "chars", *DESIGN_RUN_PROPS})
+_DESIGN_DOCX_KEYS = frozenset(
+    {
+        "ok", "kind", "truncated", "notes", "theme", "defaults", "styles", "sections", "tables",
+        "table_columns", "drawings", "paragraphs", "paragraph_styles", "formats", "usage",
+    }
+)  # fmt: skip
+_NAME = functools.partial(_plain, most=DESIGN_NAME, rule="name")
+
+
+def _prop(key: str, value: Any) -> Any:
+    if value is None:
+        return None
+    if key == "font":
+        return _NAME(value)
+    if key in ("bold", "italic", "caps"):
+        return _flag(value, "props")
+    if key in ("colour", "border", "shading"):
+        return _colour(value, "props")
+    if key in _CHOICES:
+        if value not in _CHOICES[key]:
+            _bad("props")
+        return value
+    return _integer(value, 0, 100_000, "props")
+
+
+def _props(found: Mapping[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    return {key: _prop(key, found[key]) for key in keys}
+
+
+def _style(item: Any) -> Mapping[str, Any]:
+    item = _exact(item, _STYLE_KEYS, "styles")
+    if item["type"] not in ("paragraph", "character", "table", "numbering"):
+        _bad("styles")
+    return MappingProxyType(
+        {
+            "id": _NAME(item["id"]),
+            "name": _optional(item["name"], _NAME),
+            "type": item["type"],
+            "based_on": _optional(item["based_on"], _NAME),
+            "default": _flag(item["default"], "styles"),
+            "outline": _optional(item["outline"], lambda v: _integer(v, 0, 9, "styles")),
+            **_props(item, DESIGN_PROPS),
+        }
+    )
+
+
+def _section(item: Any) -> Mapping[str, Any]:
+    item = _exact(item, _SECTION_KEYS, "sections")
+    length = functools.partial(_integer, low=0, high=DESIGN_LENGTH, rule="sections")
+    margins = item["margins"]
+    if margins is not None:
+        if not isinstance(margins, list) or len(margins) != 4:
+            _bad("sections")
+        margins = tuple(length(side) for side in margins)
+    return MappingProxyType(
+        {
+            "width": _optional(item["width"], length),
+            "height": _optional(item["height"], length),
+            "margins": margins,
+            "columns": _integer(item["columns"], 1, 45, "sections"),
+        }
+    )
+
+
+def _theme(value: Any) -> Mapping[str, Any] | None:
+    if value is None:
+        return None
+    value = _exact(value, {"major", "minor", "colours"}, "theme")
+    colours = value["colours"]
+    if not isinstance(colours, dict) or not set(colours) <= _SCHEME:
+        _bad("theme")
+    return MappingProxyType(
+        {
+            "major": _optional(value["major"], _NAME),
+            "minor": _optional(value["minor"], _NAME),
+            "colours": MappingProxyType({k: _colour(v, "theme") for k, v in colours.items()}),
+        }
+    )
+
+
+def check_design_docx(answer: Any) -> DesignDocx:
+    """The styles an answer of the kind `design_docx` holds, or the error it stands for. As for
+    check_parsed, nothing of `answer` is trusted."""
+    if not isinstance(answer, dict) or type(answer.get("ok")) is not bool:
+        _bad("ok")
+    if not answer["ok"]:
+        _refusal(answer)
+    if not _DESIGN_DOCX_KEYS - {"usage"} <= set(answer) <= _DESIGN_DOCX_KEYS:
+        _bad("keys")
+    if answer["kind"] != "design_docx":
+        _bad("kind")
+    defaults = _exact(answer["defaults"], set(DESIGN_PROPS), "defaults")
+    count = functools.partial(_integer, low=0, high=DESIGN_COUNT, rule="counts")
+    used = []
+    for item in _list(answer["paragraph_styles"], DESIGN_SHOWN, "paragraph_styles"):
+        item = _exact(item, {"style", "count"}, "paragraph_styles")
+        used.append((_plain(item["style"], DESIGN_NAME, "name", empty=True), count(item["count"])))
+    formats = []
+    for item in _list(answer["formats"], DESIGN_SHOWN, "formats"):
+        item = _exact(item, _FORMAT_KEYS, "formats")
+        formats.append(
+            MappingProxyType(
+                {
+                    "style": _optional(item["style"], _NAME),
+                    **_props(item, DESIGN_RUN_PROPS),
+                    "chars": count(item["chars"]),
+                }
+            )
+        )
+    return DesignDocx(
+        truncated=_flag(answer["truncated"], "truncated"),
+        notes=_design_notes(answer["notes"]),
+        theme=_theme(answer["theme"]),
+        defaults=MappingProxyType(_props(defaults, DESIGN_PROPS)),
+        styles=tuple(_style(item) for item in _list(answer["styles"], DESIGN_STYLES, "styles")),
+        sections=tuple(
+            _section(item) for item in _list(answer["sections"], DESIGN_SECTIONS, "sections")
+        ),
+        tables=count(answer["tables"]),
+        table_columns=count(answer["table_columns"]),
+        drawings=count(answer["drawings"]),
+        paragraphs=count(answer["paragraphs"]),
+        paragraph_styles=tuple(used),
+        formats=tuple(formats),
+        usage=_usage(answer.get("usage")),
+    )
+
+
 # --- reading an answer: a ping ------------------------------------------------------------------
 
 _PING_KEYS = frozenset({"ok", "kind", "sandbox", "received", "sha256", "usage"})
@@ -1076,6 +1504,8 @@ async def parse(
         raise ValueError("ping is not a parse: use ping()")
     if kind == "mail_html":
         raise ValueError("mail_html is not a document: use sanitise_mail_html()")
+    if kind in DESIGN_KINDS:
+        raise ValueError(f"{kind} is a layout, not a text: use read_design()")
     return await _call(
         kind, data, options, host, port, timeout_s, lambda answer: check_parsed(answer, kind)
     )
@@ -1123,6 +1553,22 @@ async def sanitise_mail_html(
         check_mail_html,
         MAIL_HTML_MAX_ANSWER,
     )
+
+
+async def read_design(
+    kind: str,
+    data: bytes,
+    *,
+    host: str = HOST,
+    port: int = PORT,
+    timeout_s: float = TIMEOUT_S,
+) -> DesignPdf | DesignDocx:
+    """The layout of an uploaded CV for the design capture (documents D25a): `design_pdf` for a
+    PDF, `design_docx` for a Word document. Raises a ParserError otherwise, as parse() does."""
+    if kind not in DESIGN_KINDS:
+        raise ValueError(f"not a design kind: {kind!r}")
+    check = check_design_pdf if kind == "design_pdf" else check_design_docx
+    return await _call(kind, data, None, host, port, timeout_s, check, DESIGN_MAX_ANSWER)
 
 
 # --- command line -------------------------------------------------------------------------------
