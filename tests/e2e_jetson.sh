@@ -41,6 +41,7 @@ die() {
   exit 1
 }
 [[ -n "$HARALD" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
+[[ "$HARALD" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
 
 # sql: run the SQL on stdin in the Jetson's database, unaligned, fields separated by |.
 sql() {

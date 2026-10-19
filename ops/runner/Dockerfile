@@ -7,7 +7,7 @@
 # plugins are bind-mounted read-only from the host by ./deploy.sh runner install, so they always
 # match the daemon they talk to. Built on the Jetson by ./deploy.sh runner install:
 #
-#   docker build --build-arg RUNNER_USER=yessai --build-arg RUNNER_UID=1000 \
+#   docker build --build-arg RUNNER_USER="$(id -un)" --build-arg RUNNER_UID=1000 \
 #     --build-arg RUNNER_GID=1000 -t jobapp-runner:2.338.0 - < context.tar
 #
 # The runner itself (binaries, registration, self-updates) lives in a named volume at
