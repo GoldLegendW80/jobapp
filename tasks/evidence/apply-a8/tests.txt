@@ -19,3 +19,9 @@ test_lever_is_filled_approved_and_submitted_once_through_the_gate fail: the lett
 
 The journey apply-a8.spec.ts was not run from this machine: it cannot build the stack's images (TLS
 interception breaks the package downloads inside the image builds). No screenshot yet.
+
+Second slice (generic strategy, issue #332), 2026-10-15, on this machine:
+- ops/agent-test.sh --name a8b tests/apply -m "not docker" -n 2: see the pull request body for the final count
+- tests/apply/test_a8_generic.py: designation tables 24 accepted and 32 refused, 7 and 7 page text rows,
+  the whole path on the modelled Workable like, two step, iframe and e-mail asking forms
+- the apply journeys were not run from this machine (it cannot build the stack's images)

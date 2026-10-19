@@ -74,7 +74,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.apply import caps, gate, guardrails, run, shots, states
 from app.apply.answers import Answer
-from app.apply.ats import adapter_for
+from app.apply.ats import adapter_for, generic
 from app.apply.ats import base as ats_base
 from app.apply.models import Application, Authorisation, ShotKind, State
 from app.browser.client import BrowserError
@@ -544,19 +544,41 @@ async def ready_to_click(services: Services, plan: Plan, tools: run.RunTools) ->
     opened = await _open(services, plan, tools)
     if isinstance(opened, Stop):
         return opened
-    adapter = opened
-    refilled = await refill(adapter, tools, plan.rows)
-    if isinstance(refilled, Stop):
-        return refilled
-    checked = await _read_back(adapter, tools, plan.rows)
+    # The generic strategy (A8): its approved designation, and each earlier step refilled, read
+    # back and left by its recorded Next, with no model.
+    adapter = generic.configured(opened, plan.rows)
+    stages = generic.stages(adapter, plan.rows) if adapter is not None else []
+    if adapter is None or not stages:
+        return Stop(State.ready, "form_changed")
+    for rows in stages[:-1]:
+        step = await _refilled(adapter, tools, rows)
+        if isinstance(step, Stop):
+            return step
+        if await generic.advance(adapter, tools, step):  # type: ignore[arg-type]
+            return Stop(State.ready, "form_changed")
+    rows = stages[-1]
+    checked = await _refilled(adapter, tools, rows)
     if isinstance(checked, Stop):
         return checked
     shot = await shots.take(tools)
+    lit = await generic.highlighted(tools, checked.submit_refs[0], shot)
     await tools.wait_for(time=DWELL_S)
-    final = await _read_back(adapter, tools, plan.rows)  # fresh refs for the click
+    final = await _read_back(adapter, tools, rows)  # fresh refs for the click
     if isinstance(final, Stop):
         return final
-    return Read(adapter, final.submit_refs[0], shot)
+    if code := await generic.recheck(adapter, tools, final):
+        logger.info("apply.designation_refused", extra={"code": code})
+        return Stop(State.ready, "form_changed")
+    return Read(adapter, final.submit_refs[0], lit or shot)
+
+
+async def _refilled(
+    adapter: ats_base.Adapter, tools: run.RunTools, rows: list[Row]
+) -> ats_base.Discovery | Stop:
+    refilled = await refill(adapter, tools, rows)
+    if isinstance(refilled, Stop):
+        return refilled
+    return await _read_back(adapter, tools, rows)
 
 
 async def outcome(
