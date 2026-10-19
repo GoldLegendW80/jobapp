@@ -851,6 +851,7 @@ DESIGN_SECTIONS = 20
 DESIGN_SHOWN = 40
 DESIGN_NAME = 64
 DESIGN_LENGTH = 144_000  # tenths of a point: the 200 inches of pdf_render.PAGE_MAX_INCHES
+DESIGN_STROKE = 1_000  # tenths of a point: the widest stroke of a shape
 DESIGN_COUNT = 10_000_000
 DESIGN_NOTE_CODES = frozenset(
     {
@@ -1071,7 +1072,7 @@ def _page(item: Any, fonts: int, seen: set[int], total: int) -> DesignPage:
                 shape["type"],
                 box,
                 _colour(shape["colour"]),
-                _integer(shape["width"], 0, 1000, "shapes"),
+                _integer(shape["width"], 0, DESIGN_STROKE, "shapes"),
             )
         )
     images = tuple(

@@ -132,6 +132,202 @@ def test_only_the_first_two_pages_are_read_and_the_count_is_the_files() -> None:
     assert ask(fx.pages(1)).pages == 1
 
 
+# --- sizes, directions and strokes under every matrix -------------------------------------------
+
+
+def said(start: bytes, end: bytes = b"ET") -> bytes:
+    """The line "Alex Example engineer" after `start` (the size and the matrices) and before
+    `end`."""
+    return start + b" (Alex Example engineer) Tj " + end
+
+
+TENTH = b"q 0.1 0 0 0.1 0 0 cm /Fm1 Do Q"
+TENFOLD = b"q 10 0 0 10 0 0 cm /Fm1 Do Q"
+
+# One line "Alex Example engineer" at 11 points on the page, the size written where PDF writers
+# put it: (name, content, form, the run's size in tenths).
+SIZES = [
+    ("in Tf", said(b"BT /F2 11 Tf 1 0 0 1 56 700 Tm"), b"", 110),
+    ("in Tm, as Quartz writes", said(b"BT /F2 1 Tf 11 0 0 11 56 700 Tm"), b"", 110),
+    (
+        "in a Tm per word",
+        b"BT /F2 1 Tf 11 0 0 11 56 700 Tm (Alex) Tj 11 0 0 11 80.2 700 Tm (Example) Tj "
+        b"11 0 0 11 122 700 Tm (engineer) Tj ET",
+        b"",
+        110,
+    ),
+    (
+        "in cm, as Ghostscript writes",
+        said(b"q 0.1 0 0 0.1 0 0 cm BT /F2 110 Tf 1 0 0 1 560 7000 Tm", b"ET Q"),
+        b"",
+        110,
+    ),
+    (
+        "in a cm that enlarges",
+        said(b"q 10 0 0 10 0 0 cm BT /F2 1.1 Tf 1 0 0 1 5.6 70 Tm", b"ET Q"),
+        b"",
+        110,
+    ),
+    (
+        "in Tf, Tm and cm",
+        said(b"q 2 0 0 2 0 0 cm BT /F2 0.5 Tf 11 0 0 11 28 350 Tm", b"ET Q"),
+        b"",
+        110,
+    ),
+    ("in a form drawn at a tenth", TENTH, said(b"BT /F2 110 Tf 1 0 0 1 560 2000 Tm"), 110),
+    ("a large Tf in a small Tm", said(b"BT /F2 11000 Tf 0.001 0 0 0.001 56 700 Tm"), b"", 110),
+    (
+        "20000 Tf in a 0.001 Tm, 20 points",
+        said(b"BT /F2 20000 Tf 0.001 0 0 0.001 56 700 Tm"),
+        b"",
+        200,
+    ),
+    ("a negative Tf, read leftwards", said(b"BT /F2 -11 Tf 1 0 0 1 300 700 Tm"), b"", 110),
+    ("a negative Tm, read leftwards", said(b"BT /F2 1 Tf -11 0 0 -11 300 700 Tm"), b"", 110),
+    ("a negative Tf in a negative Tm", said(b"BT /F2 -11 Tf -1 0 0 -1 56 700 Tm"), b"", 110),
+    ("mirrored top to bottom", said(b"BT /F2 11 Tf 1 0 0 -1 56 700 Tm"), b"", 110),
+    ("a half turn", said(b"BT /F2 11 Tf -1 0 0 -1 300 700 Tm"), b"", 110),
+    ("a quarter turn, reading up", said(b"BT /F2 11 Tf 0 1 -1 0 300 300 Tm"), b"", 110),
+    ("a quarter turn, reading down", said(b"BT /F2 11 Tf 0 -1 1 0 300 600 Tm"), b"", 110),
+    (
+        "a quarter turn in cm",
+        said(b"q 0 1 -1 0 595 0 cm BT /F2 11 Tf 1 0 0 1 300 300 Tm", b"ET Q"),
+        b"",
+        110,
+    ),
+    ("slanted, as a made up italic", said(b"BT /F2 11 Tf 1 0 0.21 1 56 700 Tm"), b"", 110),
+    ("narrowed by Tz", said(b"BT /F2 11 Tf 50 Tz 1 0 0 1 56 700 Tm"), b"", 110),
+    ("narrowed in Tm", said(b"BT /F2 11 Tf 0.5 0 0 1 56 700 Tm"), b"", 110),
+    ("widened in cm", said(b"q 2 0 0 1 0 0 cm BT /F2 11 Tf 1 0 0 1 28 700 Tm", b"ET Q"), b"", 110),
+]
+
+
+@pytest.mark.parametrize(("name", "content", "form", "size"), SIZES, ids=[row[0] for row in SIZES])
+def test_the_size_of_a_run_is_its_height_on_the_page(
+    name: str, content: bytes, form: bytes, size: int
+) -> None:
+    (page,) = ask(fx.build([content], form=form)).read
+    assert [(run.text, run.size) for run in page.runs] == [("Alex Example engineer", size)], name
+
+
+HUGE = b"99999999999999999999999999999999999999999"
+ZILLION = b"1000000000000000000000"
+
+# Odd and extreme matrices: never a failure of the answer, every size within its bounds.
+EXTREMES = [
+    ("a page sized glyph", b"BT /F2 1 Tf 20000 0 0 20000 0 0 Tm (A) Tj ET", [("A", 144_000)]),
+    ("a cm of 100000", b"q 100000 0 0 100000 0 0 cm BT /F2 9 Tf (A) Tj ET Q", [("A", 144_000)]),
+    ("a Tf of minus a million", b"BT /F2 -1000000 Tf 1 0 0 1 0 842 Tm (A) Tj ET", [("A", 144_000)]),
+    (
+        "under a twentieth of a point",
+        b"BT /F2 0.04 Tf 1 0 0 1 56 700 Tm (Alex) Tj ET",
+        [("Alex", 0)],
+    ),
+    ("a Tm of nothing", b"BT /F2 11 Tf 0 0 0 0 56 700 Tm (Alex) Tj ET", []),
+    ("a Tf of nothing", b"BT /F2 0 Tf 1 0 0 1 56 700 Tm (Alex) Tj ET", []),
+    (
+        "numbers past a float",
+        b"q %s 0 0 %s 0 0 cm BT /F2 %s Tf (A) Tj ET Q" % (HUGE, HUGE, HUGE),
+        None,
+    ),
+    (
+        "a CTM past a float",
+        b"q %s 0 0 %s 0 0 cm " % (ZILLION, ZILLION) * 2 + b"BT /F2 11 Tf (A) Tj ET Q Q",
+        None,
+    ),
+]
+
+
+@pytest.mark.parametrize(("name", "content", "runs"), EXTREMES, ids=[row[0] for row in EXTREMES])
+def test_an_odd_matrix_never_fails_the_answer(name: str, content: bytes, runs: list | None) -> None:
+    found = ask(fx.build([content]))
+    found_runs = [(run.text, run.size) for page in found.read for run in page.runs]
+    assert all(0 <= size <= pc.DESIGN_LENGTH for _, size in found_runs), name
+    if runs is not None:
+        assert found_runs == runs, name
+
+
+RED_RULE = b"1 0 0 RG %s w %s %s m %s %s l S"
+
+# A red rule 1.5 points wide, the width written where PDF writers put it: (name, content, form).
+STROKES = [
+    ("in w", RED_RULE % (b"1.5", b"56", b"500", b"500", b"500"), b""),
+    (
+        "in cm, as Ghostscript writes",
+        b"q 0.1 0 0 0.1 0 0 cm " + RED_RULE % (b"15", b"560", b"5000", b"5000", b"5000") + b" Q",
+        b"",
+    ),
+    (
+        "in a cm that enlarges",
+        b"q 10 0 0 10 0 0 cm " + RED_RULE % (b"0.15", b"5.6", b"50", b"50", b"50") + b" Q",
+        b"",
+    ),
+    (
+        "in a turned cm",
+        b"q 0 1 -1 0 595 0 cm " + RED_RULE % (b"1.5", b"100", b"100", b"100", b"500") + b" Q",
+        b"",
+    ),
+    (
+        "in a mirrored cm",
+        b"q -1 0 0 -1 595 842 cm " + RED_RULE % (b"1.5", b"56", b"300", b"500", b"300") + b" Q",
+        b"",
+    ),
+    ("in a form drawn at a tenth", TENTH, RED_RULE % (b"15", b"560", b"1000", b"4000", b"1000")),
+    ("in a form drawn tenfold", TENFOLD, RED_RULE % (b"0.15", b"-94.4", b"0", b"-50", b"0")),
+]
+
+
+@pytest.mark.parametrize(("name", "content", "form"), STROKES, ids=[row[0] for row in STROKES])
+def test_the_width_of_a_stroke_is_its_width_on_the_page(
+    name: str, content: bytes, form: bytes
+) -> None:
+    (page,) = ask(fx.build([content], form=form)).read
+    assert [(shape.type, shape.colour, shape.width) for shape in page.shapes] == [
+        ("rule", "#ff0000", 15)
+    ], name
+
+
+def test_an_uneven_scale_gives_a_stroke_the_mean_of_its_two_and_a_huge_one_is_clamped() -> None:
+    uneven = b"q 1 0 0 0.25 0 0 cm 1 0 0 RG 4 w 56 2000 m 500 2000 l S Q"
+    (page,) = ask(fx.build([uneven])).read
+    assert [shape.width for shape in page.shapes] == [20]
+    huge = b"q 1000 0 0 1000 0 0 cm 1 0 0 RG 5 w 0 0.4 m 0.5 0.4 l S Q"
+    (page,) = ask(fx.build([huge])).read
+    assert [shape.width for shape in page.shapes] == [design_pdf.STROKE_MAX]
+
+
+def test_only_painted_text_is_read_in_the_colour_it_is_painted() -> None:
+    def painted(mode: int, words: str) -> bytes:
+        return b"BT /F2 11 Tf 0 0 0 rg 1 0 0 RG %d Tr 1 0 0 1 56 %d Tm (%s) Tj ET\n" % (
+            mode,
+            700 - 20 * mode,
+            words.encode(),
+        )
+
+    names = ["Fill", "Stroke", "Both", "Hidden", "Fill clip", "Stroke clip", "Both clip"]
+    content = b"".join(painted(mode, name) for mode, name in enumerate(names))
+    data = fx.build([content + painted(7, "Clip " + fx.CANARY)])
+    (page,) = ask(data).read
+    assert [(run.text, run.colour) for run in page.runs] == [
+        ("Fill", "#000000"),
+        ("Stroke", "#ff0000"),
+        ("Both", "#000000"),
+        ("Fill clip", "#000000"),
+        ("Stroke clip", "#ff0000"),
+        ("Both clip", "#000000"),
+    ]
+    assert fx.CANARY not in json.dumps(raw(data))
+
+
+def test_a_scan_whose_text_layer_only_clips_is_a_scan() -> None:
+    data = fx.build(
+        [fx.picture(0, 0, 595, 842) + fx.text("Alex Example " + fx.CANARY, 56, 700, mode=7)]
+    )
+    found = ask(data)
+    assert found.scanned is True
+    assert fx.CANARY not in json.dumps(raw(data))
+
+
 # --- caps ---------------------------------------------------------------------------------------
 
 
@@ -217,6 +413,8 @@ def test_the_caps_are_the_clients() -> None:
         (design_pdf.RUN_TEXT_MAX, pc.DESIGN_RUN_TEXT),
         (design_pdf.FONTS_MAX, pc.DESIGN_FONTS),
         (design_pdf.FONT_NAME_MAX, pc.DESIGN_FONT_NAME),
+        (design_pdf.LENGTH_MAX, pc.DESIGN_LENGTH),
+        (design_pdf.STROKE_MAX, pc.DESIGN_STROKE),
     ]
     assert all(mine == theirs for mine, theirs in pairs), pairs
 

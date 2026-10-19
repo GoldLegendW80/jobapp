@@ -358,7 +358,8 @@ def test_the_pdf_reader_has_half_the_address_space_of_the_other_kinds() -> None:
 
 
 def test_a_kind_without_its_file_is_not_supported_yet(tmp_path: Path) -> None:
-    for kind in ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render", "design_pdf"):
+    kinds = ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render", "design_pdf", "design_docx")
+    for kind in kinds:
         assert main.load_handler(kind, str(tmp_path)) is None
         assert main.run_handler(kind, b"%PDF-", {}, str(tmp_path)) == {
             "ok": False,
