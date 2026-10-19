@@ -16,8 +16,9 @@ import sqlalchemy as sa
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.agents.models import RunStatus
+from app.documents import chat, generate, render_job, store, submit, templates
 from app.documents import content as c
-from app.documents import generate, render_job, store, templates
 from app.documents.models import (
     BaseSource,
     Document,
@@ -90,6 +91,32 @@ def _written(
         generation = generate.create(db, document, mode, trigger, base, {}, 1000, at=clock())
         generate.finish(db, generation, c.parse("cv", CV), [], at=clock())
         db.commit()
+
+
+def _chatted(
+    factory: sessionmaker[Session],
+    user: uuid.UUID,
+    document_id: uuid.UUID,
+    clock: Any,
+    template: str | None,
+) -> int:
+    """A chat message whose run submitted new content and, when named, asked `template` through
+    `set_template`, ended as the chat's final hook ends it; the version it made."""
+    with factory() as db:
+        document = store.lock_document(db, user, document_id)
+        mode, trigger = GenerationMode.chat, GenerationTrigger.chat
+        generation = store.create_generation(
+            db, user, document_id, mode, trigger, at=clock(), estimate={}, token_ceiling=1000
+        )
+        edited = {**CV, "summary": f"Changed in a chat at revision {document.draft_revision}."}
+        accepted = submit.Accepted(c.parse("cv", edited), ())
+        asked = chat.Asked(template=template)
+        chat.conclude(
+            db, document, generation, RunStatus.done, None, accepted, False, asked, clock()
+        )
+        db.commit()
+        assert generation.version_number is not None
+        return generation.version_number
 
 
 def _template(factory: sessionmaker[Session], document_id: uuid.UUID) -> str:
@@ -199,6 +226,13 @@ def test_a_template_no_longer_served_renders_with_classic_and_leaves_the_gallery
         (["write A", "save", "write B"], "sidebar"),
         (["save", "switch compact", "write B"], "compact"),
         (["save", "write B"], "sidebar"),
+        # A chat that switches the template with its new content is the person's switch too.
+        (["write A", "chat compact", "write B"], "compact"),
+        (["write A", "chat compact", "chat classic", "write B"], "classic"),
+        (["write A", "chat compact", "chat classic", "prune", "write B"], "classic"),
+        (["write A", "chat compact", "write B", "write C"], "banner"),
+        (["write A", "chat", "write B"], "sidebar"),
+        (["chat compact", "write B"], "compact"),
     ],
 )
 def test_a_rewrite_from_another_base_cv_keeps_a_template_switched_by_hand_since_the_last_write(
@@ -223,6 +257,8 @@ def test_a_rewrite_from_another_base_cv_keeps_a_template_switched_by_hand_since_
             last_base = bases[arg]
         elif verb == "switch":
             assert _patch(api, alex, cv, arg).status_code == 200
+        elif verb == "chat":
+            _chatted(factory, alex_id, cv, clock, arg or None)
         elif verb == "save":
             with factory() as db:
                 revision = db.scalar(sa.select(Document.draft_revision).where(Document.id == cv))
@@ -301,3 +337,30 @@ def test_a_template_no_longer_served_is_never_read_as_a_switch_by_hand(
         assert not generate.switched_by_hand(db, document)
     _written(factory, alex_id, cv, clock, other)
     assert _template(factory, cv) == "banner"
+
+
+def test_a_chats_version_on_a_template_no_longer_served_records_classic_and_its_render_keeps_it(
+    factory: sessionmaker[Session], api: Api, clock: Any
+) -> None:
+    _, alex_id = _person(factory, api, ALEX, clock)
+    _base_cv(factory, alex_id, clock)
+    cv = _posting_document(factory, alex_id, _posting(factory, alex_id), Kind.cv, clock)
+    retired = f"retired-{uuid.uuid4().hex[:6]}"
+    with factory() as db:
+        db.execute(sa.update(Document).where(Document.id == cv).values(template_slug=retired))
+        db.commit()
+    number = _chatted(factory, alex_id, cv, clock, None)
+    with factory() as db:
+        revision = db.scalar(sa.select(Document.draft_revision).where(Document.id == cv))
+    _render(factory, RecordingQueue(jobs=[{"args": (str(cv), revision)}]), clock)
+    with factory() as db:
+        (version,) = db.execute(
+            sa.select(DocumentVersion).where(DocumentVersion.document_id == cv)
+        ).scalars()
+        # The render reused the chat's version: printed with `classic`, which it records.
+        assert (version.number, version.template_slug) == (number, "classic")
+        assert version.pdf_sha256 is not None
+        document = store.get(db, alex_id, cv)
+        assert document is not None
+        assert document.template_slug == retired
+        assert not generate.switched_by_hand(db, document)

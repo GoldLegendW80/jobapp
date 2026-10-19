@@ -114,8 +114,8 @@ LETTER_FOLLOWS = "letter_follows"
 # A key of a click's CV generation estimate: the recorded stream the following letter replays on
 # the fake backend (a journey names the streams of both kinds in one click).
 LETTER_SCRIPT = "letter_script"
-# A key of a posting CV generation's estimate: the template it gave the document, so a later write
-# from another base CV can tell a hand switch made since (`switched_by_hand`).
+# A key of a generation's estimate: the template it gave the document (a posting CV's write, or a
+# chat's `set_template`), so a later write from another base CV can tell a hand switch since.
 WRITE_TEMPLATE = "write_template"
 # Why "Make it fit" starts no shortening pass (`make_fit`).
 FIT_REFUSALS = (
@@ -206,9 +206,9 @@ def last_write(db: Session, document: Document) -> DocumentGeneration | None:
 
 def switched_by_hand(db: Session, document: Document) -> bool:
     """Did the person switch the CV's template since its last write (spec, "Base CVs",
-    Inheritance)? Read two ways, so neither a pruned version nor a switch back hides it: the
-    template the last write gave is not the document's, or a `template` version came after it
-    (any, for a CV the writer never wrote)."""
+    Inheritance)? Read so that neither a pruned version nor a switch back hides it: the template
+    the last write gave is not the document's, or a `template` version, or a chat that switched
+    it with its new content, came after it (any, for a CV the writer never wrote)."""
     last = last_write(db, document)
     gave = last.estimate.get(WRITE_TEMPLATE) if last is not None else None
     if gave is not None and gave != document.template_slug:
@@ -223,7 +223,21 @@ def switched_by_hand(db: Session, document: Document) -> bool:
         )
         .limit(1)
     ).first()
-    return found is not None
+    if found is not None:
+        return True
+    by_chat = db.execute(
+        sa.select(DocumentGeneration.id)
+        .where(
+            DocumentGeneration.user_id == document.user_id,
+            DocumentGeneration.document_id == document.id,
+            DocumentGeneration.mode == GenerationMode.chat,
+            DocumentGeneration.status == GenerationStatus.done,
+            DocumentGeneration.version_number > since,
+            DocumentGeneration.estimate.has_key(WRITE_TEMPLATE),
+        )
+        .limit(1)
+    ).first()
+    return by_chat is not None
 
 
 def name_base(db: Session, document: Document, base: Document) -> bool:
