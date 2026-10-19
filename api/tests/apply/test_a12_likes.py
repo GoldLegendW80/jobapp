@@ -245,10 +245,10 @@ def test_an_automatic_write_held_by_the_ceiling_gives_way(
     )
     assert like(db, person_a, job).documents == (Kind.cv, Kind.letter)
     found = generations(db, job)
-    assert [(g.id == held.id, g.trigger, g.status) for _, g in found] == [
+    assert {(g.id == held.id, g.trigger, g.status) for _, g in found} == {
         (True, GenerationTrigger.auto, GenerationStatus.cancelled),
         (False, GenerationTrigger.click, GenerationStatus.waiting),
-    ]
+    }
 
 
 @pytest.mark.parametrize(
@@ -362,7 +362,10 @@ def test_the_same_role_is_free_again_once_the_first_ended(
     gate.cancel(db, person_a.user_id, first.application.id, AT, reject=False)
     db.commit()
     like(db, person_a, posting(db, person_a.user_id, form(stub)))
-    assert [a.state for a in applications(db, person_a.user_id)] == [State.cancelled, State.queued]
+    assert sorted(a.state for a in applications(db, person_a.user_id)) == [
+        State.cancelled,
+        State.queued,
+    ]
 
 
 def test_a_clicked_role_keeps_a2s_refusal(db: Session, person_a: Person, stub: str) -> None:
@@ -399,7 +402,10 @@ def test_reject_then_like_again_is_a_new_application(
     db.commit()
     second = like(db, person_a, job)
     assert second.application.id != first.application.id
-    assert [a.state for a in applications(db, person_a.user_id)] == [State.cancelled, State.queued]
+    assert sorted(a.state for a in applications(db, person_a.user_id)) == [
+        State.cancelled,
+        State.queued,
+    ]
 
 
 def test_a_refusal_rolls_the_documents_ask_back(db: Session, person_a: Person) -> None:

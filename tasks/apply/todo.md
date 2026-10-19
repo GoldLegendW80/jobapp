@@ -313,7 +313,7 @@ Nothing yet.
 First slice (issue #248, measured on 2026-10-15: caps, pace, settings API; the page is the second slice). The caps and the pace call no model (0 tokens). `caps.check` reads the person's settings, caps and the clicked applications of the longest window (two queries); the pace reads every person's `click` events of the last 24 hours on one host (at most the daily count plus the clicks since). The company key table holds 46 spellings of one company (on 2026-10-19 a Cyrillic E moved there from the neighbours, with 3 more letters drawn like Latin ones, since the key folds as the never apply rules now do), 9 neighbours kept apart and 13 more pairs and empty cases; the A11 tests (127) run in about 9 s with `-n 2`. The pace's property test plays 300 attempts at random times over the injected clock: no two clicks closer than 180 s, never more than 20 in any 24 hours.
 
 ### A12
-Nothing yet.
+First slice (A12a, issue #249, measured on 2026-10-19: `likes.py` and `queue_router.py`; the page, the Like on the jobs list and the journey are A12b). A Like calls no model (0 tokens): it reads the posting, the person's settings, the live applications of the person and `documents.current`, and writes at most one application, one generation and two events. The A12 tests (38) run in about 30 s with `-n 2`; the whole apply folder (3,643) in about 2 min 13 s.
 
 ### A13a
 Nothing yet.
