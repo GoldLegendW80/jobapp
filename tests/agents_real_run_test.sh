@@ -7,8 +7,9 @@
 #
 # Covers: without OWNER, or with an OWNER that is not an e-mail address, nothing runs (here and in
 # the four other Jetson scripts that put OWNER into SQL); a dry run leaves every file under
-# tasks/evidence/agents-a5/ byte for byte as committed and starts nothing; a real run is refused before any ssh call when an evidence file it would
-# write exists; an account that is not an admin with a subscription credential is refused before
+# tasks/evidence/agents-a5/ byte for byte as committed and starts nothing; a real run is refused
+# before any ssh call when an evidence file it would write exists; an account that is not an
+# admin with a subscription credential is refused before
 # any start; the message text, a token shaped value and the text of a log message are counted and
 # never printed; a short message is not a false failure; a start that gives no answer is reported
 # as unknown, not as refused; the remote Python's stderr stays out of the log; the same kind
