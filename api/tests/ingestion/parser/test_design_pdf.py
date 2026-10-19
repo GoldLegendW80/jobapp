@@ -232,15 +232,15 @@ def test_a_budget_spent_before_a_page_is_too_slow_and_spent_inside_one_keeps_it(
     assert 0 < len(found.read[0].runs) < design_pdf.RUNS_MAX
 
 
-@pytest.mark.parametrize(
-    ("name", "data", "code"),
-    [
-        ("not a pdf", b"PK\x03\x04 a zip", "unreadable"),
-        ("cut in the middle", pdfs.truncated_pdf(), "unreadable"),
-        ("content past the cap", scans.content_pdf([scans.deflated_paths(8 * scans.MIB)]), "bomb"),
-        ("a password", pdfs.encrypted(pdfs.text_pdf(1), "AES-256", "secret"), "protected"),
-    ],
-)
+HOSTILE = [
+    ("not a pdf", b"PK\x03\x04 a zip", "unreadable"),
+    ("cut in the middle", pdfs.truncated_pdf(), "unreadable"),
+    ("content past the cap", scans.content_pdf([scans.deflated_paths(8 * scans.MIB)]), "bomb"),
+    ("a password", pdfs.encrypted(pdfs.text_pdf(1), "AES-256", "secret"), "protected"),
+]
+
+
+@pytest.mark.parametrize(("name", "data", "code"), HOSTILE, ids=[row[0] for row in HOSTILE])
 def test_a_hostile_file_ends_as_a_code_of_the_file(name: str, data: bytes, code: str) -> None:
     assert refusal(data) == ("file", code), name
 

@@ -349,7 +349,7 @@ def test_the_pdf_reader_has_half_the_address_space_of_the_other_kinds() -> None:
     from their own measurements, and since G8 the renderer; the image reader has 320 MiB,
     where 25 megapixels of progressive JPEG reached 203. The ping keeps the 512 MiB the
     healthcheck expects."""
-    for kind in ("pdf_text", "docx", "linkedin_zip", "pdf_render"):
+    for kind in ("pdf_text", "docx", "linkedin_zip", "pdf_render", "design_pdf", "design_docx"):
         assert main.LIMITS[kind] == {**main.DEFAULT_LIMITS, "as": 256 * main.MIB}
     assert main.LIMITS["image"] == {**main.DEFAULT_LIMITS, "as": 320 * main.MIB}
     assert (main.IMAGE_AS, main.PDF_RENDER_AS) == (320 * main.MIB, 256 * main.MIB)
@@ -358,7 +358,7 @@ def test_the_pdf_reader_has_half_the_address_space_of_the_other_kinds() -> None:
 
 
 def test_a_kind_without_its_file_is_not_supported_yet(tmp_path: Path) -> None:
-    for kind in ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render"):
+    for kind in ("pdf_text", "docx", "linkedin_zip", "image", "pdf_render", "design_pdf"):
         assert main.load_handler(kind, str(tmp_path)) is None
         assert main.run_handler(kind, b"%PDF-", {}, str(tmp_path)) == {
             "ok": False,
@@ -374,7 +374,8 @@ def test_the_table_names_the_five_handlers_and_the_tasks_add_their_files() -> No
     assert set(present) >= {"main.py", "server.py", "pdf_text.py"}
     assert main.HANDLERS["ping"] is None
     assert sorted(name for name in main.HANDLERS.values() if name) == [
-        "docx", "image", "linkedin_zip", "mail_html", "pdf_render", "pdf_text",
+        "design_docx", "design_pdf", "docx", "image", "linkedin_zip", "mail_html", "pdf_render",
+        "pdf_text",
     ]  # fmt: skip
 
 

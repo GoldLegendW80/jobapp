@@ -143,22 +143,25 @@ class _Target(docx._Bounded):
         space, name = docx._split(tag)
         local = name if space in docx._W else (f"a:{name}" if space in _A else f"?:{name}")
         self.stack.append(local)
-        self.open(local, attributes)
+        self.on_open(local, attributes)
 
     def end(self, tag: str) -> None:
         self.depth -= 1
-        self.close(self.stack.pop() if self.stack else "")
+        self.on_close(self.stack.pop() if self.stack else "")
 
     def data(self, text: str) -> None:
-        self.text(text)
+        self.on_text(text)
 
-    def open(self, name: str, attributes: dict[str, str]) -> None:
+    def close(self) -> None:
         return None
 
-    def close(self, name: str) -> None:
+    def on_open(self, name: str, attributes: dict[str, str]) -> None:
         return None
 
-    def text(self, text: str) -> None:
+    def on_close(self, name: str) -> None:
+        return None
+
+    def on_text(self, text: str) -> None:
         return None
 
 
@@ -169,7 +172,7 @@ class _Theme(_Target):
         self.fonts: dict[str, str | None] = {"major": None, "minor": None}
         self.slot: str | None = None
 
-    def open(self, name: str, attributes: dict[str, str]) -> None:
+    def on_open(self, name: str, attributes: dict[str, str]) -> None:
         if not name.startswith("a:"):
             return
         name = name[2:]
@@ -185,7 +188,7 @@ class _Theme(_Target):
             if "a:minorFont" in self.stack or "a:majorFont" in self.stack:
                 self.fonts[which] = self.fonts[which] or _name(attributes.get("typeface"))
 
-    def close(self, name: str) -> None:
+    def on_close(self, name: str) -> None:
         if name[2:] == self.slot:
             self.slot = None
 
@@ -207,8 +210,8 @@ class _Properties:
                 return self.theme.fonts["major" if found.startswith("major") else "minor"]
         return None
 
-    def colour(self, attributes: dict[str, str]) -> str | None:
-        found = _hex(_attribute(attributes, "val"))
+    def colour(self, attributes: dict[str, str], key: str = "val") -> str | None:
+        found = _hex(_attribute(attributes, key))
         if found:
             return found
         slot = _THEME_COLOURS.get(_attribute(attributes, "themeColor") or "")
@@ -245,7 +248,7 @@ class _Properties:
             elif name == "shd":
                 props["shading"] = _hex(_attribute(attributes, "fill")) or props["shading"]
         elif within == "pBdr" and name == "bottom" and (value or "none") not in ("none", "nil"):
-            props["border"] = self.colour(attributes) or "#000000"
+            props["border"] = self.colour(attributes, "color") or "#000000"
 
 
 class _Styles(_Target):
@@ -273,7 +276,7 @@ class _Styles(_Target):
             return self.current, within
         return None, ""
 
-    def open(self, name: str, attributes: dict[str, str]) -> None:
+    def on_open(self, name: str, attributes: dict[str, str]) -> None:
         if name == "style" and self.stack[:-1] == ["styles"]:
             if len(self.styles) == STYLES_MAX:
                 self.full = True
@@ -311,7 +314,7 @@ class _Styles(_Target):
         if props is not None:
             self.reader.read(props, name, attributes, within)
 
-    def close(self, name: str) -> None:
+    def on_close(self, name: str) -> None:
         if name == "style" and self.current is not None and self.stack == ["styles"]:
             if self.current["id"]:
                 self.styles.append(self.current)
@@ -342,7 +345,7 @@ class _Document(_Target):
         else:
             self.notes.add("formats_limit")
 
-    def open(self, name: str, attributes: dict[str, str]) -> None:
+    def on_open(self, name: str, attributes: dict[str, str]) -> None:
         if self.skip:
             return
         if name == "?:Fallback":
@@ -395,7 +398,7 @@ class _Document(_Target):
             count = _number(_attribute(attributes, "num"), 45)
             section["columns"] = count if count else 1
 
-    def close(self, name: str) -> None:
+    def on_close(self, name: str) -> None:
         if self.skip:
             if len(self.stack) + 1 == self.skip:
                 self.skip = 0
@@ -408,7 +411,7 @@ class _Document(_Target):
         elif name == "r":
             self.run = None
 
-    def text(self, text: str) -> None:
+    def on_text(self, text: str) -> None:
         if self.skip or not self.stack or self.stack[-1] != "t" or self.run is None:
             return
         key = self.key or (self.run_style, *(None for _ in RUN_PROPS))
