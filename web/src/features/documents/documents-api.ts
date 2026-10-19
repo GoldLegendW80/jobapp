@@ -284,6 +284,10 @@ export const templateSchema = z.object({
   kinds: z.array(z.string()),
   /** Kind to address; empty for a person's own template. */
   thumbnails: z.record(z.string(), z.string()),
+  /** Kind to the editor's counters in characters (the manifest's soft limits); null: none. */
+  soft_limits: z
+    .record(z.string(), z.record(z.string(), z.number().nullable()))
+    .optional(),
 });
 export type Template = z.infer<typeof templateSchema>;
 
