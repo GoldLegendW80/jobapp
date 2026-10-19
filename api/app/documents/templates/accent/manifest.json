@@ -31,53 +31,53 @@
         "margin": 15.0
       },
       {
-        "body_size": 9.8,
-        "line_height": 1.39,
-        "section_gap": 10.3,
+        "body_size": 9.7,
+        "line_height": 1.38,
+        "section_gap": 10.1,
         "item_gap": 4.6,
-        "margin": 14.0
+        "margin": 13.9
       },
       {
-        "body_size": 9.5,
-        "line_height": 1.35,
-        "section_gap": 9.6,
-        "item_gap": 4.3,
-        "margin": 13.0
-      },
-      {
-        "body_size": 9.3,
-        "line_height": 1.32,
-        "section_gap": 8.9,
-        "item_gap": 3.9,
-        "margin": 12.0
+        "body_size": 9.4,
+        "line_height": 1.33,
+        "section_gap": 9.1,
+        "item_gap": 4.1,
+        "margin": 12.7
       },
       {
         "body_size": 9.1,
-        "line_height": 1.28,
-        "section_gap": 8.1,
-        "item_gap": 3.6,
-        "margin": 11.0
+        "line_height": 1.29,
+        "section_gap": 8.2,
+        "item_gap": 3.7,
+        "margin": 11.6
       },
       {
         "body_size": 8.9,
         "line_height": 1.25,
-        "section_gap": 7.4,
-        "item_gap": 3.2,
-        "margin": 10.0
+        "section_gap": 7.3,
+        "item_gap": 3.3,
+        "margin": 10.4
       },
       {
         "body_size": 8.6,
         "line_height": 1.21,
-        "section_gap": 6.7,
+        "section_gap": 6.4,
         "item_gap": 2.9,
-        "margin": 9.0
+        "margin": 9.3
       },
       {
-        "body_size": 8.4,
-        "line_height": 1.18,
-        "section_gap": 6.0,
-        "item_gap": 2.5,
-        "margin": 8.0
+        "body_size": 8.3,
+        "line_height": 1.16,
+        "section_gap": 5.4,
+        "item_gap": 2.4,
+        "margin": 8.1
+      },
+      {
+        "body_size": 8.0,
+        "line_height": 1.12,
+        "section_gap": 4.5,
+        "item_gap": 2.0,
+        "margin": 7.0
       }
     ],
     "soft_limits": {
@@ -140,5 +140,5 @@
       "paragraph": 900
     }
   },
-  "thumbnail_of": "beef97fdfed88a426b05b141169ffb64609ac759b91172afbf699d8dba61a081"
+  "thumbnail_of": "4c5048ca1e48c4f7f8d43005d5a98aa767f88d16d125e9c6e9eb9723be79c48f"
 }
