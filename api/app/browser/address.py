@@ -31,7 +31,10 @@ def check_address(raw: Any) -> str | None:
     head, sep, _ = text.partition("://")
     if not sep or head.lower() not in ("http", "https"):
         return None
-    parts = urlsplit(text)
+    try:
+        parts = urlsplit(text)
+    except ValueError:  # an unbalanced bracket
+        return None
     if "@" in parts.netloc or parts.hostname is None:
         return None
     host = parts.hostname
