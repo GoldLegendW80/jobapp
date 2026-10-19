@@ -944,14 +944,32 @@ def _quote(text: str) -> str:
     return f'"{flat if len(flat) <= QUOTE_MAX else flat[: QUOTE_MAX - 3].rstrip() + "..."}"'
 
 
+def difference(before: str, after: str) -> tuple[str, str]:
+    """The words of `before` that `after` replaced, and those that replaced them: what is left
+    once the words both start and end with are set aside. Linear."""
+    old, new = before.split(), after.split()
+    head = 0
+    while head < min(len(old), len(new)) and old[head] == new[head]:
+        head += 1
+    tail = 0
+    while tail < min(len(old), len(new)) - head and old[-1 - tail] == new[-1 - tail]:
+        tail += 1
+    return " ".join(old[head : len(old) - tail]), " ".join(new[head : len(new) - tail])
+
+
 def _correction(record: Correction, content: Any, orgs: Mapping[str, str]) -> str:
     where = _field_label(record.field_path, content, orgs)
     reason = record.reason[:1].lower() + record.reason[1:]
     if record.reason == fixes.KEPT:
         return f"{_quote(record.before)} in {where} was kept as written, for you to check."
-    if not record.after:
-        return f"{_quote(record.before)} was removed from {where}: {reason}."
-    return f"{_quote(record.before)} became {_quote(record.after)} in {where}: {reason}."
+    removed, added = difference(record.before, record.after)
+    if not removed and not added:
+        return f"A change was made to {where}: {reason}."
+    if not added:
+        return f"{_quote(removed)} was removed from {where}: {reason}."
+    if not removed:
+        return f"{_quote(added)} was added to {where}: {reason}."
+    return f"{_quote(removed)} became {_quote(added)} in {where}: {reason}."
 
 
 def _gallery_line(offered: Iterable[tuple[str, str]]) -> str:
