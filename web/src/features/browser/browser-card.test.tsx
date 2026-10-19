@@ -10,9 +10,11 @@ import { BrowserCard } from "./browser-card";
 import { type Browser, waitText } from "./browser-api";
 import { screenFactory, type Screen } from "./screen";
 
+// An assistant's lease of the person: the live view is view only until Take over.
 const LEASE = {
   id: "0b6f7c1e-4a43-4f0e-9a51-1f2f3c4d5e6f",
-  purpose: "look",
+  purpose: "apply_fill",
+  automation: true,
   state: "active" as const,
   wait_reason: null,
   wait_site: null,
@@ -29,6 +31,9 @@ const FREE: Browser = {
   queue: [],
 };
 const MINE: Browser = { ...FREE, lease: LEASE, holder: "you" };
+// "Look at my browser" (browser B7): the person's own session, the person's input throughout.
+const LOOK = { ...LEASE, purpose: "look", automation: false };
+const LOOKING: Browser = { ...FREE, lease: LOOK, holder: "you" };
 const TICKET = "t".repeat(43);
 
 interface Calls {
@@ -56,8 +61,8 @@ function fakeServer(state: { browser: Browser; session?: unknown }): Calls {
       calls.headers.push(request.headers);
       if (state.session)
         return HttpResponse.json(state.session, { status: 202 });
-      state.browser = MINE;
-      return HttpResponse.json({ lease: LEASE, queue: null }, { status: 201 });
+      state.browser = LOOKING;
+      return HttpResponse.json({ lease: LOOK, queue: null }, { status: 201 });
     }),
     http.delete("*/api/browser/sessions/current", () => {
       calls.deletes += 1;
@@ -145,10 +150,10 @@ async function connected() {
 }
 
 describe("your browser card", () => {
-  it("starts a session and shows the live view, view only", async () => {
+  it("starts the person's own session with the keyboard and the mouse", async () => {
     const calls = fakeServer({ browser: FREE });
     const user = userEvent.setup();
-    renderWithQuery(<BrowserCard />);
+    const { unmount } = renderWithQuery(<BrowserCard />);
     await user.click(
       await screen.findByRole("button", { name: "Look at my browser" }),
     );
@@ -158,9 +163,32 @@ describe("your browser card", () => {
     expect(view.url).toBe(
       `ws://${window.location.host}/vnc/websockify?ticket=${TICKET}`,
     );
-    expect(view.screen.viewOnly).toBe(true);
+    expect(view.screen.viewOnly).toBe(false);
     const asked = only(calls.tickets as Array<{ viewer: string }>);
     expect(asked.viewer).toMatch(/^[0-9a-f-]{36}$/);
+    expect(
+      screen.getByText(
+        "This is your own session: you have the keyboard and the mouse.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Give back" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Keyboard" }));
+    await user.type(screen.getByLabelText("Type into your browser"), "a");
+    expect(view.screen.keys).toEqual([0x61]);
+    unmount();
+    expect(calls.takeovers).toEqual([]);
+    expect(calls.givebacks).toEqual([]);
+  });
+
+  it("an assistant's lease is view only until Take over", async () => {
+    const calls = fakeServer({ browser: MINE });
+    renderWithQuery(<BrowserCard />);
+    const view = await connected();
+    expect(view.screen.viewOnly).toBe(true);
+    expect(only(calls.tickets as Array<{ viewer: string }>).viewer).toMatch(
+      /^[0-9a-f-]{36}$/,
+    );
     expect(
       screen.getByText(
         "You are watching your browser. Take over to use it yourself.",
