@@ -1,0 +1,22 @@
+Morgan Exampleton
+Platform Engineer, Nantes
+
+Experience
+Quillmere Example Works, Platform Engineer, Nantes
+February 2023 to present
+Run the deployment platform of the billing team, from the first commit to production.
+Wrote the platform's backend services in Python with FastAPI and PostgreSQL.
+Moved 30 services to Kubernetes with Terraform.
+
+Tarnwick Sample Studio, Software Developer, Rennes
+01/2021 to 01/2023
+Built internal tools in Python and React for the support team.
+
+Education
+Example Institute of Technology, MSc Computer Science, 2018 to 2020
+
+Skills
+Kubernetes, Terraform, Python, FastAPI, PostgreSQL, React, TypeScript
+
+Languages
+English, fluent. French, native.

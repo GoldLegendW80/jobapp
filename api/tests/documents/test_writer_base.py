@@ -69,7 +69,7 @@ def test_the_definition_is_internal_bound_private_and_priced_by_credential() -> 
     assert agent.private_io
     assert not agent.live_text
     assert agent.bind is writer_base.bind_generation
-    assert agent.tools == ("read_profile_section", "submit_base")
+    assert agent.tools == ("read_profile_section", "get_upload_text", "submit_base")
     assert agent.model_by_credential == {"anthropic_api_key": "claude-sonnet-5-5"}
     assert agent.max_turns == 10
     assert agent.wall_time_s == 300
