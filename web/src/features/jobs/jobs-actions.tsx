@@ -50,6 +50,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { LikeButton } from "@/features/apply/like-button";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import {
@@ -228,6 +229,7 @@ export function BulkBar({ selection }: { selection: Selection }) {
               Apply
             </Button>
           </form>
+          <LikeButton ids={selection.ids} onDone={selection.clear} />
           <Button
             variant="outline"
             size="sm"

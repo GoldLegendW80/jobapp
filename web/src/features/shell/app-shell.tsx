@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet } from "react-router";
 
+import { QueueCount } from "@/features/apply/queue-count";
 import { useMe } from "@/features/auth/auth-context";
 import { HealthDot } from "@/features/health/health-dot";
 import { APP_NAME } from "@/lib/use-title";
@@ -43,6 +44,10 @@ export function AppShell() {
             </NavLink>
             <NavLink to="/profile" className={navLink}>
               Profile
+            </NavLink>
+            <NavLink to="/applications" className={navLink}>
+              Applications
+              <QueueCount />
             </NavLink>
             <NavLink to="/runs" className={navLink}>
               Runs
