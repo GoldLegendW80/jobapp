@@ -167,7 +167,7 @@ def pages(count: int) -> bytes:
 
 
 def outside() -> bytes:
-    """A line on the page and one written past its right edge, and white text on white."""
+    """A line on the page and one written past its right edge."""
     return build([text("On the page", 56, 780) + text("Past the edge " + CANARY, 700, 760)])
 
 
