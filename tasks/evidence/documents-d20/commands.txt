@@ -1,0 +1,14 @@
+Task D20, 2026-10-19, on the Mac (renderer image of D3 built under its own tag jobapp-renderer:d20-test with the extra CA as a build secret, removed afterwards).
+
+docker build -q --secret id=extra_ca,src="$JOBAPP_EXTRA_CA" -t jobapp-renderer:d20-test renderer
+cd api
+thumbnails.make(<slug>) through the test stack's renderer (the Stack of tests/documents/test_renderer_container.py) for accent, executive, grid, mono
+  every thumbnail fits at step 0
+RENDERER_TEST_IMAGE=jobapp-renderer:d20-test uv run pytest -q -m docker tests/documents/test_templates.py tests/documents/test_template_reading_order.py tests/documents/test_templates_d19.py tests/documents/test_templates_d20.py -k "accent or executive or grid or mono"
+  150 passed, 696 deselected
+ops/agent-test.sh --name d20 tests/documents -m "not docker" -n 2
+  2030 passed
+uv run ruff check app tests; uv run ruff format --check app tests
+  All checks passed, 535 files already formatted
+
+Files: <slug>-cv-typical.pdf (D1's cv-typical, English, at its fitted step) and <slug>-letter-en.pdf.
