@@ -52,6 +52,8 @@ TOOL_TIMEOUT_S = 120.0  # a paced browser_type of 200 characters, a 30 s navigat
 # end or a removal that takes longer is told again later (browserd then answers it is done).
 END_TIMEOUT_S = 30.0
 CODES = ("unavailable", "busy", "refused", "ended")
+# browserd's answers that keep a profile's directory for now (browser/browserd/signin.py).
+REMOVAL_KEPT = {(409, "profile_in_use"), (409, "profile_uid_mismatch"), (503, "not_removed")}
 FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.pdf$")  # browserd/tools/policy.py
 
 
@@ -163,16 +165,20 @@ class BrowserdClient:
         raise self._failure(status, payload)
 
     async def remove_profile(self, profile_id: str, uid: int) -> str:
-        """Removes a profile's directory: "removed" (also when there was none), or browserd's
-        reason to keep it for now ("profile_in_use", "profile_uid_mismatch")."""
+        """Removes a profile's directory: "removed" (also when there was none), or why browserd
+        kept that one: "profile_in_use", "profile_uid_mismatch", "not_removed" (it tried), or
+        "failed" (any other answer about it). Raises BrowserError only when browserd did not
+        answer or refused the secret, which holds for every other directory too."""
         body = {"uid": uid}
         status, payload = await self._call("DELETE", f"/profiles/{profile_id}", END_TIMEOUT_S, body)
         if status == 204:
             return "removed"
+        if status == 401:
+            raise self._failure(status, payload)
         code = payload.get("error") if isinstance(payload, dict) else None
-        if status == 409 and code in ("profile_in_use", "profile_uid_mismatch"):
+        if (status, code) in REMOVAL_KEPT:
             return str(code)
-        raise self._failure(status, payload)
+        return "failed"
 
     async def current(self) -> dict[str, Any]:
         status, payload = await self._call("GET", "/leases/current", TIMEOUT_S)

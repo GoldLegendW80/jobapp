@@ -15,6 +15,7 @@ second one. The keys, all under `jobapp:browser:`:
     seen:<lease id> when browserd last answered that it still holds that lease (`held`), and
                     since when it has not answered (`unanswered`, cleared by the next answer)
     ending          the leases ended here whose end browserd has not confirmed yet
+    forgets:<user id>:<day>  how many "Forget all logins" the person spent that UTC day (B7)
 
 `acquire(user_id, purpose, automation)` is idempotent per person and purpose, also for two calls
 at once (two tabs): the one that loses the turn to the other answers that same lease, and leaves no
@@ -59,6 +60,7 @@ injected clock.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import math
@@ -87,6 +89,7 @@ SYNCED = PREFIX + "synced"
 TICKET = PREFIX + "ticket:"
 SEEN = PREFIX + "seen:"
 ENDING = PREFIX + "ending"
+FORGETS = PREFIX + "forgets:"
 
 # Active seconds per purpose: browserd's table (browser/browserd/config.py, the test compares).
 LEASE_MAX_S = {
@@ -416,6 +419,29 @@ class Leases:
             return await self._end(r, raw, lease, reason, self.clock())
         except (RedisError, OSError, TimeoutError):
             raise StoreUnavailableError from None
+
+    async def take_forget(self, user_id: str, per_day: int) -> str | None:
+        """Spends one of the person's `per_day` Forgets of the UTC day of this store's clock and
+        answers the day's key, for give_back_forget; None, and nothing spent, when none is left.
+        Two calls at once never both spend the last one."""
+        day = datetime.fromtimestamp(self.clock(), UTC).date().isoformat()
+        key = f"{FORGETS}{user_id}:{day}"
+        try:
+            r = await self._pool()
+            spent = int(await r.incr(key))
+            await r.expire(key, 2 * 86400)
+            if spent > per_day:
+                await r.decr(key)
+                return None
+        except (RedisError, OSError, TimeoutError):
+            raise StoreUnavailableError from None
+        return key
+
+    async def give_back_forget(self, key: str) -> None:
+        """A Forget that found nothing to forget gives its place back (best effort)."""
+        with contextlib.suppress(RedisError, OSError, TimeoutError):
+            r = await self._pool()
+            await r.decr(key)
 
     async def cancel(self, user_id: str, purposes: Collection[str] | None = None) -> int:
         """Takes the person out of the queue (for those purposes); how many places were left."""
