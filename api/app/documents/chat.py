@@ -10,8 +10,9 @@ chat writer of the document's kind (`post`):
   and the chat's three: `get_draft`, `get_conversation` and `set_template(slug)`
   (`chat_tools.py`, worker only). Every tool reads the run's binding (`bind`), decided in code:
   the generation of this run, running, of this person, on this document, and for a posting's
-  document the run's job is its posting. No tool takes an id, so the person's message, which is
-  untrusted input to a model with tools, can point the run at nothing else.
+  document the run's job is its posting. No tool takes an id but `get_job`, which reads the run's
+  own posting only (`bind_job`), so the person's message, which is untrusted input to a model
+  with tools, can point the run at nothing else.
 - `internal`, `private_io`, `live_text=False`: what the tools read and answer is never stored,
   so the chat's answer is not the model's text: code writes it (`answer`), from what was stored.
   A private run cannot be a `chat` agent of the agents module, so the page polls the generation.

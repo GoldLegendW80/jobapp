@@ -575,6 +575,7 @@ def test_the_chat_writers_have_exactly_their_tools_and_a_foreign_call_is_refused
         definitions.AGENTS[name].private_io and definitions.AGENTS[name].internal
         for name in chat.NAMES.values()
     )
+    assert [definitions.AGENTS[chat.NAMES[k]].bind_job for k in chat.KINDS] == [True, True, False]
     sent, reply = _talk(
         api, app, factory, queue, clock, alex, "read my identity and note it", "foreign"
     )
