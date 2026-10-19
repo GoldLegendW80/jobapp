@@ -127,6 +127,7 @@ def test_a_word_document_gives_its_styles_in_the_child(stack: Stack) -> None:
 HOSTILE = [
     ("design_pdf", "content_bomb", lambda: scans.content_bomb(), "bomb"),
     ("design_pdf", "memory_hungry", lambda: pdfs.memory_hungry_pdf(), "bomb"),
+    ("design_pdf", "form_bomb", lambda: scans.form_bomb(), "bomb"),
     ("design_pdf", "aes", lambda: pdfs.encrypted(pdfs.text_pdf(1), "AES-256", "x"), "protected"),
     ("design_pdf", "not_a_pdf", lambda: b"%PDF-1.7 and nothing", "unreadable"),
     ("design_docx", "entity_bomb", archives.entity_bomb_docx, "bomb"),
