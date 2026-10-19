@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -295,12 +296,12 @@ def person_chromium(monkeypatch: pytest.MonkeyPatch, proc: FakeProc) -> tuple[An
     async def finish() -> None:
         seen.append("finish")
 
-    async def kill() -> None:
+    async def kill_group() -> None:
         seen.append("kill")
         proc.done.set()
 
     monkeypatch.setattr(browser, "_finish", finish)
-    monkeypatch.setattr(browser, "kill", kill)
+    monkeypatch.setattr(browser, "_kill_group", kill_group)
     return browser, seen
 
 
@@ -315,7 +316,7 @@ def test_a_chromium_that_does_not_quit_is_killed(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(signin, "QUIT_S", 0)
     browser, seen = person_chromium(monkeypatch, FakeProc(exits=False))
     run(browser.stop())
-    assert seen == [(20001, ("quit", "4242")), "kill"]
+    assert seen == [(20001, ("quit", "4242")), "kill", "finish"]
 
 
 def test_the_memory_guard_ends_the_whole_session(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -334,20 +335,278 @@ def test_the_memory_guard_ends_the_whole_session(monkeypatch: pytest.MonkeyPatch
     assert events == [{"event": "session_ended", "reason": "memory", "used_mib": 0}]
 
 
-def test_the_exit_of_chromium_ends_the_lease_browser_crashed() -> None:
-    crashed: list[str] = []
-    browser = signin.PersonChromium(request("signin"), str(uuid.uuid4()), None, Config())
-    browser.proc = FakeProc(exits=True)  # type: ignore[assignment]
+class ExitedProc:
+    def __init__(self, code: int) -> None:
+        self.pid, self.returncode = 4242, code
+
+    async def wait(self) -> int:
+        return self.returncode
+
+
+@pytest.mark.parametrize("kind", [signin.PersonChromium, chromium.Chromium])
+@pytest.mark.parametrize(
+    ("code", "reason"),
+    [(0, "browser_closed"), (-9, "browser_crashed"), (-11, "browser_crashed"),
+     (1, "browser_crashed"), (139, "browser_crashed")],
+)  # fmt: skip
+def test_the_exit_of_chromium_ends_the_lease_closed_or_crashed(
+    kind: Any, code: int, reason: str
+) -> None:
+    """Status 0 is Chromium quitting by itself (its window closed): not a crash."""
+    ended: list[str] = []
+    browser = kind(request("signin"), str(uuid.uuid4()), None, Config())
+    browser.proc = ExitedProc(code)
 
     async def on_crash() -> None:
-        crashed.append("browser_crashed")
+        ended.append("browser_crashed")
 
-    browser.on_crash = on_crash
+    async def on_end(why: str) -> None:
+        ended.append(why)
+
+    browser.on_crash, browser.on_end = on_crash, on_end
     run(browser._watch_exit())
-    assert crashed == ["browser_crashed"]
+    assert ended == [reason]
     browser.stopping = True
     run(browser._watch_exit())
-    assert crashed == ["browser_crashed"]  # a stop asked for is not a crash
+    assert ended == [reason]  # an end asked for is neither
+
+
+# --- an end whose helper fails, and the reap before every start -----------------------------------
+
+
+class Helpers:
+    """chromium's helpers as the uid, recorded; `failing` names the commands that raise."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *failing: str) -> None:
+        self.seen: list[str] = []
+        self.failing = set(failing)
+        self.strays: list[dict[int, list[int]]] = []
+        monkeypatch.setattr(chromium, "as_uid", self.as_uid)
+        monkeypatch.setattr(chromium, "profile_uids", self.profile_uids)
+        monkeypatch.setattr(chromium, "REAP_TRIES", 0)
+
+    async def as_uid(self, uid: int, *argv: str, timeout: float = 15) -> int:  # noqa: ASYNC109
+        command = argv[3]
+        self.seen.append(command)
+        if command in self.failing:
+            raise OSError(f"{command} could not start")
+        return 0
+
+    def profile_uids(self) -> dict[int, list[int]]:
+        return self.strays.pop(0) if self.strays else {}
+
+
+class StuckProc:
+    """A Chromium that exits only once its group is killed."""
+
+    def __init__(self) -> None:
+        self.pid, self.returncode = 4242, None
+
+    async def wait(self) -> int:
+        await asyncio.Event().wait()
+        return -9
+
+
+def made(kind: Any, proc: Any) -> Any:
+    browser = kind(request("signin"), str(uuid.uuid4()), None, Config())
+    browser.proc = proc
+    return browser
+
+
+@pytest.mark.parametrize(
+    ("kind", "failing", "end", "expected"),
+    [
+        (signin.PersonChromium, ("quit",), "stop", ["quit", "kill", "rmtree"]),
+        (signin.PersonChromium, ("killpg",), "stop", ["quit", "killpg", "kill", "rmtree"]),
+        (signin.PersonChromium, ("killpg",), "kill", ["killpg", "kill", "rmtree"]),
+        (chromium.Chromium, ("killpg",), "stop", ["killpg", "kill", "rmtree"]),
+        (chromium.Chromium, ("killpg",), "kill", ["killpg", "kill", "rmtree"]),
+    ],
+)
+def test_an_end_whose_helper_raises_still_reaps_every_process_of_the_uid(
+    monkeypatch: pytest.MonkeyPatch, kind: Any, failing: tuple[str, ...], end: str,
+    expected: list[str],
+) -> None:  # fmt: skip
+    """The reap ("kill" of every process left under a profile uid) runs after a helper failed,
+    so that Chromium is not on the display in the next lease."""
+    monkeypatch.setattr(signin, "QUIT_S", 0)
+    monkeypatch.setattr(chromium.c, "CLOSE_S", 0)
+    helpers = Helpers(monkeypatch, *failing)
+    helpers.strays = [{20001: [4242, 4243]}]
+    browser = made(kind, StuckProc())
+    with pytest.raises(OSError, match="could not start"):
+        run(getattr(browser, end)())
+    assert helpers.seen == expected
+    assert browser.stopping
+
+
+def test_the_end_runs_every_step_when_the_reap_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    helpers = Helpers(monkeypatch, "kill")
+    helpers.strays = [{20001: [4242]}]
+    browser = made(signin.PersonChromium, ExitedProc(0))
+    run(browser.stop())  # the end itself does not raise
+    assert helpers.seen == ["kill", "rmtree"]
+
+
+def test_the_manager_ends_a_lease_whose_browser_failed_to_stop() -> None:
+    class Failing:
+        async def stop(self) -> None:
+            raise OSError("quit could not start")
+
+        async def kill(self) -> None:
+            raise OSError("killpg could not start")
+
+    async def start(_: Request, __: str) -> Any:
+        return Failing()
+
+    async def measure(_: Request) -> int:
+        return 12
+
+    mgr = Manager(Config(secret=b"s"), start, Clock(), measure=measure)
+
+    async def go() -> None:
+        for reason in ("released", "browser_crashed"):
+            lease, _ = await mgr.acquire(request("signin"))
+            assert await mgr.release(lease.lease_id, reason)
+            assert mgr.last_end == {"lease_id": lease.lease_id, "reason": reason, "size_bytes": 12}
+            assert (mgr.current(), mgr.ending) == (None, None)
+
+    run(go())
+
+
+def test_every_start_reaps_what_an_earlier_lease_left(monkeypatch: pytest.MonkeyPatch) -> None:
+    helpers = Helpers(monkeypatch)
+    monkeypatch.setattr(chromium, "bind_uid", lambda *_: None)
+    monkeypatch.setattr(chromium.c, "PROFILES", "/nonexistent-424")
+    helpers.strays = [{20002: [77, 78]}, {}]
+    browser = made(chromium.Chromium, None)
+    run(browser.prepare())
+    assert helpers.seen == ["kill", "prepare"]
+
+
+def test_a_start_is_refused_while_a_process_of_a_profile_uid_survives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helpers = Helpers(monkeypatch)
+    helpers.strays = [{20002: [77]}, {20002: [77]}, {20002: [77]}]
+    browser = made(signin.PersonChromium, None)
+    with pytest.raises(RuntimeError, match="survived the reap"):
+        run(browser.start())
+    assert helpers.seen == ["kill"]  # nothing prepared, nothing started
+
+
+def test_a_session_that_exits_at_its_start_is_finished(monkeypatch: pytest.MonkeyPatch) -> None:
+    helpers = Helpers(monkeypatch)
+    browser = made(signin.PersonChromium, None)
+
+    async def prepare() -> None:
+        return None
+
+    async def spawn(*_: Any) -> Any:
+        browser.proc = ExitedProc(1)
+        return browser.proc
+
+    monkeypatch.setattr(browser, "prepare", prepare)
+    monkeypatch.setattr(browser, "spawn", spawn)
+    with pytest.raises(RuntimeError, match="exited at its start"):
+        run(browser.start())
+    assert helpers.seen == ["rmtree"]
+    assert browser.stopping
+
+
+def test_an_agents_start_that_fails_after_the_spawn_kills_and_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(chromium.c, "CLOSE_S", 0)
+    helpers = Helpers(monkeypatch)
+    browser = made(chromium.Chromium, None)
+
+    async def prepare() -> None:
+        return None
+
+    async def spawn(*_: Any) -> Any:
+        browser.proc = StuckProc()
+        return browser.proc
+
+    async def no_cdp(*_: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(browser, "prepare", prepare)
+    monkeypatch.setattr(browser, "spawn", spawn)
+    monkeypatch.setattr(chromium, "cdp_ready", no_cdp)
+    with pytest.raises(RuntimeError, match="no CDP endpoint"):
+        run(browser.start())
+    assert helpers.seen == ["killpg", "rmtree"]
+
+
+# --- no port in a person's session ----------------------------------------------------------------
+
+
+def test_a_port_opened_in_a_persons_session_ends_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(signin, "PORTS_EVERY_S", 0)
+    browser = made(signin.PersonChromium, None)
+    ended: list[str] = []
+    events: list[dict] = []
+
+    async def on_end(reason: str) -> None:
+        ended.append(reason)
+
+    browser.on_end, browser.on_event = on_end, events.append
+    seen = iter([[], [], [9222]])
+    asked: list[int] = []
+
+    def reader(uid: int) -> list[int]:
+        asked.append(uid)
+        return next(seen)
+
+    run(browser._watch_ports(reader))
+    assert ended == ["debugging_port"]
+    assert asked == [20001, 20001, 20001]
+    assert events == [{"event": "session_ended", "reason": "listening_port", "ports": [9222]}]
+
+
+TCP = """  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:2406 00000000:0000 0A 00000000:00000000 00:00000000 00000000 20001        0 1 1
+   1: 0100007F:2407 00000000:0000 0A 00000000:00000000 00:00000000 00000000 20002        0 2 1
+   2: 0100007F:2408 0100007F:9C40 01 00000000:00000000 00:00000000 00000000 20001        0 3 1
+"""  # noqa: E501
+TCP6 = """  sl  local_address remote_address st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout
+   0: 00000000000000000000000001000000:24D4 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000 20001        0 4 1
+"""  # noqa: E501
+
+
+def test_listening_ports_are_the_uids_own_listening_sockets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tables = {"/proc/net/tcp": TCP, "/proc/net/tcp6": TCP6}
+
+    def fake_open(name: str, *_: Any, **__: Any) -> Any:
+        import io
+
+        if name not in tables:
+            raise FileNotFoundError(name)
+        return io.StringIO(tables[name])
+
+    monkeypatch.setattr(chromium, "open", fake_open, raising=False)
+    assert chromium.listening_ports(20001) == [9222, 9428]  # the connected socket is not one
+    assert chromium.listening_ports(20002) == [9223]
+    assert chromium.listening_ports(20003) == []
+    del tables["/proc/net/tcp6"]
+    assert chromium.listening_ports(20001) == [9222]
+
+
+@pytest.mark.parametrize(
+    ("stat", "is_zombie"),
+    [(b"77 (chromium) S 1 77", False), (b"77 (chromium) Z 1 77", True),
+     (b"77 (a) Z (b) R 1 77", False), (b"77 (a) R (b) Z 1 77", True)],
+)  # fmt: skip
+def test_a_zombie_is_read_after_the_last_parenthesis(
+    monkeypatch: pytest.MonkeyPatch, stat: bytes, is_zombie: bool
+) -> None:
+    import io
+
+    monkeypatch.setattr(chromium, "open", lambda *_, **__: io.BytesIO(stat), raising=False)
+    assert chromium.zombie("77") is is_zombie
 
 
 # --- DELETE /profiles/{id} ------------------------------------------------------------------------
@@ -506,3 +765,54 @@ def test_prep_refuses_a_path_that_is_not_a_profile() -> None:
     for path in ("/profiles/.uids", f"/profiles/{PROFILE_A}/..", "/", "/profiles", "/leases/x",
                  f"/profiles/{PROFILE_A}/data", f"/var/{PROFILE_A}"):  # fmt: skip
         assert not prep.PROFILE.fullmatch(path)
+
+
+@pytest.fixture
+def umask() -> Iterator[None]:
+    """prep.prepare sets the process's umask, as the uid's own child does: put back after."""
+    before = os.umask(0o022)
+    os.umask(before)
+    yield
+    os.umask(before)
+
+
+def test_prepare_turns_off_the_remote_debugging_switch_kept_in_local_state(
+    tmp_path: Path, umask: None
+) -> None:
+    """chrome://inspect's switch, once on, opens a DevTools port at every later start (measured
+    for B7): prep turns it off before every start and keeps the rest of Local State."""
+    profile, lease = tmp_path / "profile", tmp_path / "lease"
+    (profile / "data").mkdir(parents=True)
+    local = profile / "data" / "Local State"
+    local.write_text(json.dumps({
+        "devtools": {"remote_debugging": {"user-enabled": True}, "other": 1},
+        "browser": {"enabled_labs_experiments": []},
+    }))  # fmt: skip
+    prep.prepare(str(profile), str(lease), "fr-FR,fr")
+    assert json.loads(local.read_text()) == {
+        "devtools": {"remote_debugging": {"user-enabled": False}, "other": 1},
+        "browser": {"enabled_labs_experiments": []},
+    }
+
+
+@pytest.mark.parametrize("content", [None, "not json", "[1, 2]"])
+def test_a_local_state_without_the_switch_is_left_as_it_is(
+    tmp_path: Path, umask: None, content: str | None
+) -> None:
+    profile, lease = tmp_path / "profile", tmp_path / "lease"
+    (profile / "data").mkdir(parents=True)
+    local = profile / "data" / "Local State"
+    if content is not None:
+        local.write_text(content)
+    prep.prepare(str(profile), str(lease), "fr-FR,fr")
+    assert (local.read_text() if local.exists() else None) == content
+
+
+def test_the_managed_policy_blocks_chrome_inspect_and_keeps_cdp() -> None:
+    """The policies that would also block CDP (measured for B7: RemoteDebuggingAllowed false
+    ignores --remote-debugging-port, DeveloperToolsAvailability 2 breaks Playwright's pages) are
+    never set: the agents' leases need CDP."""
+    policy = json.loads((ROOT / "browser/policies/browserd.json").read_text())
+    assert policy["URLBlocklist"] == ["chrome://inspect"]
+    assert "RemoteDebuggingAllowed" not in policy
+    assert "DeveloperToolsAvailability" not in policy

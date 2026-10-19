@@ -18,7 +18,8 @@ signal its Chromium itself; this child does it under the profile's uid, then exi
   when it calls this;
 - the preferences Chromium reads at start: the languages (`--lang` is ignored on Linux, B1),
   continue where you left off (session cookies survive a restart), no password saving, no card
-  autofill, downloads into the lease's directory without a prompt;
+  autofill, downloads into the lease's directory without a prompt; in Local State, the remote
+  debugging switch of chrome://inspect off;
 - the lease's directory, mode 0700, for downloads.
 """
 
@@ -103,6 +104,25 @@ def prepare(profile: str, lease: str, languages: str) -> None:
     tmp = f"{path}.browserd"
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(prefs, handle)
+    os.replace(tmp, path)
+    remote_debugging_off(f"{profile}/data/Local State")
+
+
+def remote_debugging_off(path: str) -> None:
+    """chrome://inspect's "Allow remote debugging" is kept in Local State and opens a DevTools
+    port at every later start, with no --remote-debugging-port (measured for B7): it is turned
+    off. A Local State that is missing or not JSON holds no such setting."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            state = json.load(handle)
+    except (FileNotFoundError, ValueError):
+        return
+    if not isinstance(state, dict):
+        return
+    merge(state, {"devtools": {"remote_debugging": {"user-enabled": False}}})
+    tmp = f"{path}.browserd"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(state, handle)
     os.replace(tmp, path)
 
 

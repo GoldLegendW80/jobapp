@@ -1,4 +1,5 @@
 {
   "WebRtcIPHandling": "disable_non_proxied_udp",
-  "QuicAllowed": false
+  "QuicAllowed": false,
+  "URLBlocklist": ["chrome://inspect"]
 }

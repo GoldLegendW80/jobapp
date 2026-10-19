@@ -49,7 +49,9 @@ RUN useradd --no-create-home --home-dir /nonexistent --uid 1000 --shell /usr/sbi
 # Chromium's managed policy, which no profile state can undo: WebRTC sends no UDP outside the
 # proxy (WebRtcIPHandling; Debian's Chromium ignores the switch of the same name) and no QUIC.
 # WebRtcUdpPortRange stays unset on purpose. The profile's preferences (browserd/prep.py) say
-# the same again.
+# the same again. chrome://inspect is blocked: its remote debugging switch opens a DevTools port
+# in a session started without one (measured for B7); RemoteDebuggingAllowed and
+# DeveloperToolsAvailability would also take CDP from the agents' leases.
 COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json
 
 COPY browserd /opt/browserd/browserd

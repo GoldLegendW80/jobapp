@@ -494,7 +494,11 @@ def test_the_image_installs_the_managed_webrtc_policy() -> None:
     image ships the policy, which no profile state can undo (the container test reads it back
     from chrome://policy)."""
     policy = json.loads((ROOT / "browser/policies/browserd.json").read_text())
-    assert policy == {"WebRtcIPHandling": "disable_non_proxied_udp", "QuicAllowed": False}
+    assert policy == {
+        "WebRtcIPHandling": "disable_non_proxied_udp",
+        "QuicAllowed": False,
+        "URLBlocklist": ["chrome://inspect"],
+    }
     dockerfile = (ROOT / "browser/Dockerfile").read_text()
     assert "COPY policies/browserd.json /etc/chromium/policies/managed/browserd.json" in dockerfile
 

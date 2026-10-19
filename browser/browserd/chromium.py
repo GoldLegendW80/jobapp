@@ -27,6 +27,7 @@ log = logging.getLogger("browserd")
 # At a lease end a profile over this size loses its caches (SPEC-browser: "over 1 GB").
 TRIM_BYTES = 1 << 30
 MEASURE_S = 120  # the walk and the trim of a large profile, as its uid
+REAP_TRIES = 100  # 50 ms apart: what a reap killed is gone in 5 s, or the next start is refused
 
 
 def switches(
@@ -139,15 +140,40 @@ async def kill_group(uid: int, pgid: int) -> None:
 
 
 def profile_uids() -> dict[int, list[int]]:
-    """Processes running under a profile uid, by uid, read from /proc."""
+    """Live processes running under a profile uid, by uid, read from /proc. A zombie (exited, not
+    yet waited for by its parent) is left out: it holds no window and cannot be killed."""
     found: dict[int, list[int]] = {}
     for entry in os.listdir("/proc"):
         if entry.isdigit():
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(OSError, ValueError):
                 uid = os.stat(f"/proc/{entry}").st_uid
-                if c.UID_MIN <= uid <= c.UID_MAX:
+                if c.UID_MIN <= uid <= c.UID_MAX and not zombie(entry):
                     found.setdefault(uid, []).append(int(entry))
     return found
+
+
+def zombie(pid: str) -> bool:
+    with open(f"/proc/{pid}/stat", "rb") as handle:
+        line = handle.read()
+    # The state follows the command name, which is in parentheses and may hold any byte.
+    return line[line.rindex(b")") + 2 :][:1] == b"Z"
+
+
+def listening_ports(uid: int) -> list[int]:
+    """The TCP ports a process of that uid listens on, read from the container's /proc/net/tcp
+    and tcp6 (a socket's uid is its owner's); a table that cannot be read counts nothing."""
+    ports: list[int] = []
+    for name in ("/proc/net/tcp", "/proc/net/tcp6"):
+        try:
+            with open(name) as handle:
+                rows = handle.read().splitlines()[1:]
+        except OSError:
+            continue
+        for row in rows:
+            fields = row.split()
+            if len(fields) > 7 and fields[3] == "0A" and fields[7] == str(uid):
+                ports.append(int(fields[1].rsplit(":", 1)[1], 16))
+    return ports
 
 
 def make_uid_records(root: str = c.UIDS) -> None:
@@ -239,12 +265,28 @@ def seed_uid_records(profiles: str = c.PROFILES, root: str = c.UIDS, lstat=os.ls
 
 
 async def reap_strays() -> int:
-    """At start, and after a lease: any process left under a profile uid is killed (a Chromium
-    that outlived a browserd restart). Returns how many were found."""
+    """At start, before every lease and after it: any process left under a profile uid is killed
+    (a Chromium that outlived a browserd restart or an end that failed), then waited for, at most
+    REAP_TRIES times. Returns how many were found."""
     strays = profile_uids()
     for uid, pids in strays.items():
         await as_uid(uid, sys.executable, "-m", "browserd.prep", "kill", *map(str, pids))
+    for _ in range(REAP_TRIES if strays else 0):
+        if not profile_uids():
+            break
+        await asyncio.sleep(0.05)
     return sum(len(p) for p in strays.values())
+
+
+async def clear_display() -> None:
+    """Before every start: no process of a profile uid is left, so nothing of an earlier lease,
+    perhaps another person's, is on the display the live view shows. A start is refused while
+    one survives the reap."""
+    killed = await reap_strays()
+    if killed:
+        log.warning("killed %d process(es) left under a profile uid before a start", killed)
+    if profile_uids():
+        raise RuntimeError("a process of a profile uid survived the reap")
 
 
 async def start_display() -> asyncio.subprocess.Process:
@@ -314,6 +356,7 @@ class Chromium:
         return f"{c.LEASES}/{self.lease_id}"
 
     async def prepare(self) -> None:
+        await clear_display()
         request = self.request
         profile = f"{c.PROFILES}/{request.profile_id}"
         with contextlib.suppress(FileNotFoundError):
@@ -343,16 +386,19 @@ class Chromium:
         await self.prepare()
         self.port = free_port()
         await self.spawn(self.port)
-        if not await cdp_ready(self.port, c.START_S):
+        try:
+            if not await cdp_ready(self.port, c.START_S):
+                raise RuntimeError("Chromium gave no CDP endpoint")
+            self.browser = await self.playwright.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{self.port}", timeout=c.START_S * 1000
+            )
+            self.cdp = await self.browser.new_browser_cdp_session()
+            context = self.browser.contexts[0]
+            context.on("page", self._on_page)
+            self._write_state()
+        except BaseException:
             await self.kill()
-            raise RuntimeError("Chromium gave no CDP endpoint")
-        self.browser = await self.playwright.chromium.connect_over_cdp(
-            f"http://127.0.0.1:{self.port}", timeout=c.START_S * 1000
-        )
-        self.cdp = await self.browser.new_browser_cdp_session()
-        context = self.browser.contexts[0]
-        context.on("page", self._on_page)
-        self._write_state()
+            raise
         self._tasks = [
             asyncio.create_task(self._watch_exit()),
             asyncio.create_task(self._watch()),
@@ -382,10 +428,16 @@ class Chromium:
             self._tasks.append(asyncio.ensure_future(page.close()))
 
     async def _watch_exit(self) -> None:
+        """An exit nobody asked for ends the lease: `browser_closed` when Chromium quit by itself
+        (status 0: its window closed, by the person or by a page), `browser_crashed` otherwise."""
         if self.proc is None:
             return
-        await self.proc.wait()
-        if not self.stopping and self.on_crash:
+        code = await self.proc.wait()
+        if self.stopping:
+            return
+        if code == 0 and self.on_end:
+            await self.on_end("browser_closed")
+        elif code != 0 and self.on_crash:
             await self.on_crash()
 
     async def _watch(self) -> None:
@@ -406,41 +458,53 @@ class Chromium:
 
     async def stop(self) -> None:
         """Browser.close over CDP (profile flushed, B1: 0.32 s), the process group killed if it
-        has not exited within CLOSE_S, the lease's directory removed."""
+        has not exited within CLOSE_S, then the end finished whatever failed before it."""
         self.stopping = True
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(self.cdp.send("Browser.close"), c.CLOSE_S)
-        if self.proc and self.proc.returncode is None:
-            try:
-                await asyncio.wait_for(self.proc.wait(), c.CLOSE_S)
-            except TimeoutError:
-                await self.kill()
-        await self._finish()
+        try:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self.cdp.send("Browser.close"), c.CLOSE_S)
+            if self.proc and self.proc.returncode is None:
+                try:
+                    await asyncio.wait_for(self.proc.wait(), c.CLOSE_S)
+                except TimeoutError:
+                    await self._kill_group()
+        finally:
+            await self._finish()
 
     async def kill(self) -> None:
         self.stopping = True
+        try:
+            await self._kill_group()
+        finally:
+            await self._finish()
+
+    async def _kill_group(self) -> None:
         if self.proc and self.proc.returncode is None:
             await kill_group(self.request.uid, self.proc.pid)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self.proc.wait(), c.CLOSE_S)
-        await self._finish()
 
     async def _finish(self) -> None:
+        """Every end runs it once, whatever failed before: the watchers stopped, Playwright let
+        go, every process of a profile uid killed (nothing of this lease stays on the display),
+        the lease's directory removed. A step that fails is logged and the next one still runs;
+        a process that survives is reaped again before the next start (clear_display)."""
         for task in self._tasks:
             if task is not asyncio.current_task():
                 task.cancel()
         with contextlib.suppress(Exception):
             await asyncio.wait_for(self.browser.close(), 2)
-        self._clear_state()
-        await reap_strays()
-        await as_uid(
-            self.request.uid,
-            sys.executable,
-            "-m",
-            "browserd.prep",
-            "rmtree",
-            self.lease_dir,
-        )
+        with contextlib.suppress(OSError):
+            self._clear_state()
+        try:
+            await reap_strays()
+        except Exception as exc:
+            log.warning("lease %s: processes not reaped: %s", self.lease_id, type(exc).__name__)
+        try:
+            await as_uid(self.request.uid, sys.executable, "-m", "browserd.prep", "rmtree",
+                         self.lease_dir)  # fmt: skip
+        except Exception as exc:
+            log.warning("lease %s: directory not removed: %s", self.lease_id, type(exc).__name__)
 
 
 def memory() -> tuple[int, int] | None:
