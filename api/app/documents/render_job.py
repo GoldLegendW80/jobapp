@@ -65,8 +65,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app.documents import content as c
 from app.documents import fit as fitting
+from app.documents import freeze, profile_view, render_client, store, templates
 from app.documents import photo as photos
-from app.documents import profile_view, render_client, store, templates
 from app.documents.corrections import Correction
 from app.documents.models import (
     Author,
@@ -568,6 +568,7 @@ def _store_once(
         return Stored("replaced", again=again)
     if current:
         _idle(document)
+    freeze.on_rendered(db, document, version, at)
     moved = False
     if job is not None and job.status in MOVES_FROM:
         earlier = db.execute(
