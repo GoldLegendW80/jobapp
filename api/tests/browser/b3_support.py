@@ -65,7 +65,12 @@ class FakeBrowserd:
     """browserd's real control routes and lease manager; `down` makes every call fail to
     connect, as a stopped container does. The secret is checked as browserd checks it."""
 
-    def __init__(self, clock: Clock, secret: str) -> None:
+    def __init__(
+        self,
+        clock: Clock,
+        secret: str,
+        measure: Callable[[Request], Awaitable[int | None]] | None = None,
+    ) -> None:
         self.secret = secret
         self.down = False
         self.starts: list[Request] = []
@@ -77,7 +82,9 @@ class FakeBrowserd:
             self.chromiums.append(FakeChromium())
             return self.chromiums[-1]
 
-        self.manager = Manager(Config(secret=secret.encode(), idle_s=IDLE_S), start, clock)
+        self.manager = Manager(
+            Config(secret=secret.encode(), idle_s=IDLE_S), start, clock, measure=measure
+        )
         self.service = browserd_app.Service(self.manager, secret.encode())
         self.tokens: list[str] = []
 
@@ -122,7 +129,9 @@ class MemoryProfiles:
             self.rows[user_id] = ProfileRef(str(uuid.uuid4()), 20000 + len(self.rows))
         return self.rows[user_id]
 
-    async def mark_used(self, user_id: str, at: float) -> None:
+    async def mark_used(
+        self, user_id: str, at: float, size_bytes: int | None = None, profile_id: str | None = None
+    ) -> None:
         self.used[user_id] = at
 
 

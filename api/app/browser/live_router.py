@@ -19,7 +19,8 @@ the keyboard and the mouse.
   `{viewer}` gives it back to the agent, when that viewer is the one that holds it (a tab that
   unmounts after another took over does not take the input from it). The agent's next tool call
   waits meanwhile (browserd's `Live.agent_turn`). The input also goes back to the agent when the
-  holder's last view has been closed for a few seconds (a closed tab runs no cleanup).
+  holder's last view has been closed for a few seconds (a closed tab runs no cleanup). On the
+  person's own session (B7) both answer 409: the person holds the input from start to end.
 
 Nobody but the holder of the lease gets a ticket, a grant or the input: there is no lease id in
 any path or body, the user comes from the session. No ticket, grant or query string is logged.
@@ -49,6 +50,7 @@ TICKET_KEY = PREFIX + "live:"
 LIVE_PATH = "/vnc/websockify"
 GRANT_HEADER = "X-Live-Grant"
 NOT_HOLDER = "You are not using the browser right now."
+OWN_SESSION = "This is your own session: you already have the keyboard and the mouse."
 
 router = APIRouter(prefix="/api/browser", tags=["browser"], dependencies=[Depends(no_store)])
 
@@ -217,6 +219,8 @@ async def _set_input(
     store: Leases, user_id: str, viewer: str | None, giver: str | None = None
 ) -> InputOut:
     lease = await _held(store, user_id)
+    if not lease.automation:  # B7: the person's own session, their input from start to end
+        raise HTTPException(status.HTTP_409_CONFLICT, OWN_SESSION)
     try:
         holder = await store.client.live_input(lease.lease_id, viewer, giver)
     except BrowserError as exc:
@@ -226,11 +230,14 @@ async def _set_input(
     return InputOut(input="you" if holder == "person" else "assistant")
 
 
-@router.post("/takeover", response_model=InputOut, responses={**_403, **_503})
+_409 = {409: {"model": ErrorOut, "description": OWN_SESSION}}
+
+
+@router.post("/takeover", response_model=InputOut, responses={**_403, **_409, **_503})
 async def take_over(body: InputIn, user: CurrentUser, store: Store) -> InputOut:
     return await _set_input(store, str(user.id), str(body.viewer))
 
 
-@router.post("/giveback", response_model=InputOut, responses={**_403, **_503})
+@router.post("/giveback", response_model=InputOut, responses={**_403, **_409, **_503})
 async def give_back(body: InputIn, user: CurrentUser, store: Store) -> InputOut:
     return await _set_input(store, str(user.id), None, str(body.viewer))

@@ -10,6 +10,8 @@ import { request } from "@/lib/api";
 const leaseSchema = z.object({
   id: z.string(),
   purpose: z.string(),
+  // false: the person's own session, where the person has the input from start to end.
+  automation: z.boolean(),
   state: z.enum(["starting", "active", "waiting_person"]),
   wait_reason: z.string().nullable(),
   wait_site: z.string().nullable(),
@@ -67,11 +69,18 @@ export function getBrowser(signal?: AbortSignal): Promise<Browser> {
   });
 }
 
-/** "Look at my browser": a session of the person, or their place in the queue. */
-export function startSession(purpose: "look" | "signin"): Promise<Session> {
+/**
+ * A session of the person, or their place in the queue: "Look at my browser", or "Sign in to a
+ * site" at the `address` the person typed (the api answers 422 `bad_address` when it is not an
+ * http or https address with a host, and starts nothing).
+ */
+export function startSession(
+  purpose: "look" | "signin",
+  address?: string,
+): Promise<Session> {
   return request("/browser/sessions", {
     method: "POST",
-    body: { purpose },
+    body: address === undefined ? { purpose } : { purpose, address },
     timeoutMs: START_TIMEOUT_MS,
     validate: (data) => sessionSchema.parse(data),
   });
@@ -79,6 +88,11 @@ export function startSession(purpose: "look" | "signin"): Promise<Session> {
 
 export function endSession(): Promise<void> {
   return request("/browser/sessions/current", { method: "DELETE" });
+}
+
+/** "Forget all logins": ends any session of the person and deletes their browser's profile. */
+export function forgetLogins(): Promise<void> {
+  return request("/browser/profile", { method: "DELETE" });
 }
 
 /** A ticket for one websocket of the live view, bound to this tab's `viewer` id. */
@@ -119,4 +133,14 @@ export function waitText(place: QueuePlace): string {
   return minutes === 1
     ? "Your browser starts in about a minute."
     : `Your browser starts in about ${minutes} minutes.`;
+}
+
+const MB = 1_000_000;
+
+/** The profile's size as Forget all logins says it, in whole megabytes (decimal units). */
+export function sizeText(bytes: number): string {
+  if (bytes < MB) return "less than 1 MB";
+  const megabytes = Math.round(bytes / MB);
+  if (megabytes < 1000) return `about ${String(megabytes)} MB`;
+  return `about ${(bytes / (1000 * MB)).toFixed(1)} GB`;
 }
