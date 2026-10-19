@@ -59,8 +59,8 @@ const CANCEL = {
  * where the application stands, why it came back, the documents with their check, what is left,
  * the form before the click, and the answers to read and correct. Approve goes through the same
  * gate route and confirmation as the posting's Apply section, with the hash of the form shown
- * here; Reject asks first and can also skip the posting. `onLeave` is called when the item left
- * the queue by a click of this card.
+ * here; Reject asks first and can also skip the posting. `onLeave` is called when the card is
+ * gone after a Reject or a Cancel of its own.
  */
 export function QueueCard({
   item,
@@ -86,6 +86,15 @@ export function QueueCard({
     enabled: reviewable,
   });
   const approval = approvalQuery.data;
+
+  // Set by a Reject or a Cancel that succeeded: the page takes the focus once the card is gone.
+  const leaving = useRef(false);
+  useEffect(
+    () => () => {
+      if (leaving.current) onLeave();
+    },
+    [onLeave],
+  );
 
   // The state moved (the fill ended, another tab decided): read the form again.
   const seen = useRef(item.state);
@@ -174,8 +183,8 @@ export function QueueCard({
           : `Rejected ${item.title} at ${item.company}. Nothing was sent.`,
       );
       void queryClient.invalidateQueries({ queryKey: jobsKey });
+      leaving.current = true;
       refresh();
-      onLeave();
     },
     onError: (error) => {
       setRejecting(false);
@@ -192,8 +201,8 @@ export function QueueCard({
       toast.success(
         `Cancelled ${item.title} at ${item.company}. Nothing was sent.`,
       );
+      leaving.current = true;
       refresh();
-      onLeave();
     },
     onError: (error) => {
       setCancelling(false);

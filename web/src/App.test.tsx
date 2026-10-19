@@ -36,6 +36,7 @@ describe("App shell", () => {
     expect(links.map((link) => link.textContent)).toEqual([
       "Jobs",
       "Profile",
+      "Applications",
       "Runs",
       "Admin",
     ]);

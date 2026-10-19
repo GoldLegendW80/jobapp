@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, LoaderCircle } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -45,9 +45,9 @@ export function QueuePage() {
   const waiting = items.filter(isWaiting);
   const underWay = items.filter((item) => !isWaiting(item));
   // A card that left the queue by a click hands the focus to the page's title.
-  const leave = () => {
+  const leave = useCallback(() => {
     heading.current?.focus();
-  };
+  }, []);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
