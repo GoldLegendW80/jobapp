@@ -299,6 +299,13 @@ done
 ok "${#REFUSED[@]} malformed OWNER values, each with the planted token, stop each of the ${#OWNER_SCRIPTS[@]} scripts before any call: not printed, no file written"
 
 step "B0c: an OWNER that passes the checks is never printed nor written, even where the Jetson quotes it"
+# The mask below would hide a message that names the address: no output command may name it at all.
+PRINTS_OWNER='(^[[:space:]]*|(\|\||&&|;)[[:space:]]*)(die|info|step|printf|echo) [^#]*[$][{]?(OWNER|HARALD)([^A-Za-z0-9_]|$)'
+for s in "${OWNER_SCRIPTS[@]}"; do
+  ! grep -n -E -- "$PRINTS_OWNER" "$s" >"$WORK/prints" || fail "$s prints the owner's address: $(cat "$WORK/prints")"
+  # shellcheck disable=SC2016 # the line of the script, literal
+  grep -q -F 'exec > >(masked | tee "$LOG") 2>&1' "$s" || fail "$s does not mask the address in its log"
+done
 GOOD="e2e-$TOKEN@example.org"
 [[ "$GOOD" =~ $OWNER_FORM ]] || fail "the form refuses $GOOD"
 # owner_run <plain|traced> <script> <exit> <a line the run reaches> <the log it writes, or -> [VAR=value ...]

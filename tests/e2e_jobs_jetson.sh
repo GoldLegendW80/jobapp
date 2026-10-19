@@ -40,6 +40,22 @@ die() {
 [[ -n "$HARALD" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 [[ "$HARALD" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
 
+# The owner's address never reaches the output, even quoted by a remote error or a bash -x trace.
+masked() {
+  LC_ALL=C awk -v owner="$HARALD" -v shown="(the owner's address)" '
+    BEGIN { o = tolower(owner); n = length(o) }
+    {
+      line = $0
+      out = ""
+      while (n && (i = index(tolower(line), o))) {
+        out = out substr(line, 1, i - 1) shown
+        line = substr(line, i + n)
+      }
+      print out line
+      fflush()
+    }'
+}
+
 sql() { # the SQL on stdin in the Jetson's database, unaligned, fields separated by |
   # shellcheck disable=SC2016 # $POSTGRES_* expand in the db container
   ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && docker compose -f compose.yml exec -T db sh -c" \
@@ -100,7 +116,7 @@ stuck_containers() {
 
 CLEAN="users=0|jobs=0|events=0|profiles=0|invites=0|login_attempts=0"
 mkdir -p "$EVIDENCE"
-exec > >(tee "$LOG") 2>&1
+exec > >(masked | tee "$LOG") 2>&1
 printf 'tests/e2e_jobs_jetson.sh, %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 step "before"
@@ -114,7 +130,7 @@ if [[ "$left" != "$CLEAN" ]]; then
   info "removed e2e rows of an earlier run: $left"
 fi
 snapshot | tr '|' '\n' >"$WORK/before"
-grep -q '^jobs=[1-9]' "$WORK/before" || die "no jobs for $HARALD on $HOST"
+grep -q '^jobs=[1-9]' "$WORK/before" || die "no jobs in the owner's account on $HOST"
 sed 's/^/   /' "$WORK/before"
 rm -f "$EVIDENCE"/*.png
 
@@ -140,7 +156,7 @@ failures="$(sql <<SQL
 select count(*) from login_attempts where email = '$HARALD' and not success and at > now() - interval '15 minutes';
 SQL
 )"
-info "failed sign ins of $HARALD in the 15 minute window: $failures"
+info "failed sign ins of the owner's account in the 15 minute window: $failures"
 [[ "$failures" == "0" ]] || status=1
 stuck_containers
 info "screenshots: $(find "$EVIDENCE" -name '*.png' | wc -l | tr -d ' ')"

@@ -43,6 +43,22 @@ die() {
 [[ -n "$HARALD" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 [[ "$HARALD" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
 
+# The owner's address never reaches the output, even quoted by a remote error or a bash -x trace.
+masked() {
+  LC_ALL=C awk -v owner="$HARALD" -v shown="(the owner's address)" '
+    BEGIN { o = tolower(owner); n = length(o) }
+    {
+      line = $0
+      out = ""
+      while (n && (i = index(tolower(line), o))) {
+        out = out substr(line, 1, i - 1) shown
+        line = substr(line, i + n)
+      }
+      print out line
+      fflush()
+    }'
+}
+
 # sql: run the SQL on stdin in the Jetson's database, unaligned, fields separated by |.
 sql() {
   # shellcheck disable=SC2016 # $POSTGRES_* expand in the db container
@@ -52,7 +68,7 @@ sql() {
 
 snapshot() { # one line per field of Harald's account, nothing secret (the hash only as md5)
   sql <<SQL
-select 'email=' || u.email, 'name=' || u.name, 'role=' || u.role, 'is_active=' || u.is_active,
+select 'name=' || u.name, 'role=' || u.role, 'is_active=' || u.is_active,
        'created_at=' || u.created_at, 'updated_at=' || u.updated_at,
        'last_login_at=' || coalesce(u.last_login_at::text, 'null'),
        'password_hash_md5=' || md5(u.password_hash),
@@ -109,7 +125,7 @@ stuck_containers() {
 }
 
 mkdir -p "$EVIDENCE"
-exec > >(tee "$LOG") 2>&1
+exec > >(masked | tee "$LOG") 2>&1
 printf 'tests/e2e_jetson.sh, %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 step "before"
@@ -123,7 +139,7 @@ if [[ "$left" != "users=0|sessions=0|profiles=0|invites=0|login_attempts=0" ]]; 
   info "removed e2e rows of an earlier run: $left"
 fi
 snapshot | tr '|' '\n' >"$WORK/before"
-[[ -s "$WORK/before" ]] || die "no account $HARALD on $HOST"
+[[ -s "$WORK/before" ]] || die "the owner's account is not on $HOST"
 sed 's/^/   /' "$WORK/before"
 rm -f "$EVIDENCE"/*.png
 

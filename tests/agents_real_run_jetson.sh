@@ -188,6 +188,22 @@ select 'agent_runs=' || (select count(*) from agent_runs),
 SQL
 }
 
+# The owner's address never reaches the output, even quoted by a remote error or a bash -x trace.
+masked() {
+  LC_ALL=C awk -v owner="$OWNER" -v shown="(the owner's address)" '
+    BEGIN { o = tolower(owner); n = length(o) }
+    {
+      line = $0
+      out = ""
+      while (n && (i = index(tolower(line), o))) {
+        out = out substr(line, 1, i - 1) shown
+        line = substr(line, i + n)
+      }
+      print out line
+      fflush()
+    }'
+}
+
 md5_of() { # the md5 of the text $1, on macOS and Linux
   if command -v md5sum >/dev/null; then printf '%s' "$1" | md5sum | cut -d' ' -f1; else printf '%s' "$1" | md5 -q; fi
 }
@@ -483,9 +499,9 @@ oom_kills() {
 
 if [[ "$REAL" == "1" ]]; then
   mkdir -p "$EVIDENCE"
-  exec > >(tee "$LOG") 2>&1
+  exec > >(masked | tee "$LOG") 2>&1
 else
-  exec 2>&1 # a dry run keeps no log: the terminal is its only output
+  exec > >(masked) 2>&1 # a dry run keeps no log: the terminal is its only output
 fi
 printf 'tests/agents_real_run_jetson.sh, %s, %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   "$([[ "$REAL" == "1" ]] && echo "real runs: $RUNS" || echo "dry run, nothing written outside a temporary directory")"
@@ -508,11 +524,11 @@ agents >"$WORK/agents.before"
 sed 's/^/   /' "$WORK/fixed.before" "$WORK/agents.before"
 role="$(field owner_role "$WORK/fixed.before")"
 credential="$(field credential "$WORK/fixed.before")"
-[[ "$credential" != none ]] || die "$OWNER has no model credential"
+[[ "$credential" != none ]] || die "the owner's account has no model credential"
 # Never a run with another user's Anthropic API key: the account is an admin and the credential
 # its own subscription, whatever OWNER says.
 [[ "$role" == "$OWNER_ROLE" && "${credential%%,*}" == "$OWNER_CREDENTIAL" ]] ||
-  die "refused, nothing was started: $OWNER has the role ${role:-none} and a credential of kind ${credential%%,*}; runs are started only for an account with the role $OWNER_ROLE and a credential of kind $OWNER_CREDENTIAL"
+  die "refused, nothing was started: the owner's account has the role ${role:-none} and a credential of kind ${credential%%,*}; runs are started only for an account with the role $OWNER_ROLE and a credential of kind $OWNER_CREDENTIAL"
 [[ "$(field agent_runs_active "$WORK/agents.before")" == 0 ]] || die "a run is queued or running: wait for it"
 job="$(sql <<SQL
 select status, fit, length(coalesce(posting_text, '')),
@@ -522,7 +538,7 @@ select status, fit, length(coalesce(posting_text, '')),
 from jobs j where id = '$JOB' and user_id = (select id from users where email = '$OWNER');
 SQL
 )"
-[[ -n "$job" ]] || die "no job $JOB for $OWNER"
+[[ -n "$job" ]] || die "no job $JOB in the owner's account"
 IFS='|' read -r jstatus fit posting forbidden jruns jproposals jthreads <<<"$job"
 info "job $JOB (status $jstatus, fit $fit, posting $posting characters)"
 info "on this job before: runs=$jruns proposals=$jproposals threads=$jthreads"
