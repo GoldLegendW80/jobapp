@@ -31,53 +31,53 @@
         "margin": 18.0
       },
       {
-        "body_size": 9.91,
+        "body_size": 9.9,
         "line_height": 1.38,
         "section_gap": 9.0,
         "item_gap": 4.49,
-        "margin": 16.93
+        "margin": 16.86
       },
       {
-        "body_size": 9.63,
+        "body_size": 9.6,
         "line_height": 1.33,
         "section_gap": 8.0,
         "item_gap": 3.97,
-        "margin": 15.86
+        "margin": 15.71
       },
       {
-        "body_size": 9.34,
+        "body_size": 9.3,
         "line_height": 1.29,
         "section_gap": 7.0,
         "item_gap": 3.46,
-        "margin": 14.79
+        "margin": 14.57
       },
       {
-        "body_size": 9.06,
-        "line_height": 1.25,
+        "body_size": 9.0,
+        "line_height": 1.24,
         "section_gap": 6.0,
         "item_gap": 2.94,
-        "margin": 13.71
+        "margin": 13.43
       },
       {
-        "body_size": 8.77,
-        "line_height": 1.21,
+        "body_size": 8.7,
+        "line_height": 1.2,
         "section_gap": 5.0,
         "item_gap": 2.43,
-        "margin": 12.64
+        "margin": 12.29
       },
       {
-        "body_size": 8.49,
-        "line_height": 1.16,
+        "body_size": 8.4,
+        "line_height": 1.15,
         "section_gap": 4.0,
         "item_gap": 1.91,
-        "margin": 11.57
+        "margin": 11.14
       },
       {
-        "body_size": 8.2,
-        "line_height": 1.12,
+        "body_size": 8.1,
+        "line_height": 1.11,
         "section_gap": 3.0,
         "item_gap": 1.4,
-        "margin": 10.5
+        "margin": 10.0
       }
     ],
     "soft_limits": {
@@ -140,5 +140,5 @@
       "paragraph": 900
     }
   },
-  "thumbnail_of": "e1b713d6bfad0e69db399cdb5ea095d829e25724df031dc405710da0045671c8"
+  "thumbnail_of": "ccc6f1690f497f2724efae1ef14b75137b03937f4bd89859f0cd4f322ae13dc1"
 }

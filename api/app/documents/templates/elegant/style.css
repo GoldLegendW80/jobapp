@@ -38,7 +38,7 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
 .headtext { grid-row: 2; }
 .name {
   font-family: "Playfair Display", serif;
-  font-size: 2.9em;
+  font-size: 2.75em;
   font-weight: 400;
   line-height: 1.05;
   letter-spacing: 0.01em;
@@ -56,8 +56,8 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
   flex-wrap: wrap;
   justify-content: flex-end;
   row-gap: 1pt;
-  padding-bottom: 3pt;
-  margin-bottom: 7pt;
+  padding-bottom: 2pt;
+  margin-bottom: 5pt;
   border-bottom: 0.5pt solid #ddd2c8;
   font-size: 0.9em;
   color: #57504a;
@@ -100,7 +100,7 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
   border-bottom: 0.5pt solid #a8968a;
 }
 .highlights li {
-  padding: 4pt 6pt;
+  padding: 3pt 6pt;
   font-style: italic;
   text-align: center;
 }
