@@ -10,6 +10,8 @@ import { request } from "@/lib/api";
 const leaseSchema = z.object({
   id: z.string(),
   purpose: z.string(),
+  // false: the person's own session, where the person has the input from start to end.
+  automation: z.boolean(),
   state: z.enum(["starting", "active", "waiting_person"]),
   wait_reason: z.string().nullable(),
   wait_site: z.string().nullable(),

@@ -6,6 +6,15 @@ Time rules (SPEC-browser, "Leases"): the purpose's maximum counts active time on
 timer (no tool call and no input for BROWSER_IDLE_S) ends a lease; while the lease is
 `waiting_person` neither runs, the wait has its own deadline (BROWSER_SESSION_MAX_S), and the
 lease then resumes with the active time it had left. B12 sets and clears the wait.
+
+A person's own session (`takeover`, which the page calls `look`, and `signin`; B7) never runs
+with automation, whatever the caller asks: its Chromium has no debugging port
+(browserd/signin.py), the person holds the input from its start to its end, and every tool call
+on it is refused 409 `person_session`. Its address, when the person typed one, is checked as
+signin.check_address checks it.
+
+While a lease ends (its Chromium closing, the profile measured) browserd is still busy: a new
+lease is refused 409 and the profile is not removed until the end is done.
 """
 
 import asyncio
@@ -30,6 +39,7 @@ Clock = Callable[[], float]
 LANGUAGE = re.compile(r"^[a-z]{2,3}(-[A-Z]{2})?$")
 TIMEZONE = re.compile(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$")
 USER_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+PERSON_PURPOSES = ("takeover", "signin")
 
 
 class LeaseError(Exception):
@@ -66,6 +76,8 @@ class Request:
     # B5: the hosts the tools may navigate to, and the apply adapter's own submit elements.
     hosts: tuple[str, ...] = ()
     submit_selectors: tuple[str, ...] = ()
+    # B7: where a person's own session opens, http or https only (signin.check_address).
+    address: str | None = None
 
     @classmethod
     def parse(cls, body: Any) -> "Request":
@@ -99,16 +111,25 @@ class Request:
             selectors = policy.parse_selectors(body.get("submit_selectors"))
         except ValueError as exc:
             raise LeaseError(400, f"bad_{exc}") from None
+        automation = bool(body.get("automation", True)) and purpose not in PERSON_PURPOSES
+        address = body.get("address")
+        if address is not None:
+            from browserd.signin import check_address  # signin imports this module
+
+            address = check_address(address)
+            if address is None or automation:
+                raise LeaseError(400, "bad_address")
         return cls(
             user_id=user_id,
             profile_id=profile_id,
             uid=uid,
             purpose=purpose,
-            automation=bool(body.get("automation", True)),
+            automation=automation,
             languages=tuple(languages),
             timezone=timezone,
             hosts=hosts,
             submit_selectors=selectors,
+            address=address,
         )
 
 
@@ -197,19 +218,29 @@ class Manager:
         config: Config,
         start: Callable[[Request, str], Awaitable[Browser]],
         clock: Clock = time.monotonic,
+        measure: Callable[[Request], Awaitable[int | None]] | None = None,
     ) -> None:
         self.config, self._start, self.clock = config, start, clock
+        self._measure = measure  # B7: the profile's size at a lease end (chromium.measure_profile)
         self.lease: Lease | None = None
         self.browser: Browser | None = None
         self.starting: Request | None = None
+        self.ending: Request | None = None
+        self.removing: set[str] = set()  # profiles whose directory is being removed (signin.py)
         self.last_end: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
         self._calls: set[asyncio.Task[Any]] = set()
 
     def holder_purpose(self) -> str | None:
-        if self.lease:
-            return self.lease.request.purpose
-        return self.starting.purpose if self.starting else None
+        for request in (self.lease.request if self.lease else None, self.starting, self.ending):
+            if request is not None:
+                return request.purpose
+        return None
+
+    def uses(self, profile_id: str) -> bool:
+        """A lease of that profile runs, starts or ends."""
+        held = (self.lease.request if self.lease else None, self.starting, self.ending)
+        return any(r is not None and r.profile_id == profile_id for r in held)
 
     async def acquire(self, request: Request) -> tuple[Lease, str]:
         # A second lease is refused with the holder's purpose, never its id or its person.
@@ -220,6 +251,8 @@ class Manager:
             holder = self.holder_purpose()
             if holder:
                 raise LeaseError(409, "busy", holder_purpose=holder)
+            if request.profile_id in self.removing:
+                raise LeaseError(409, "profile_removing")
             self.starting = request
             try:
                 lease_id = str(uuid.uuid4())
@@ -261,6 +294,8 @@ class Manager:
         """Runs one tool call on the lease (B5's tools go through here): it counts as input, and
         a lease that ends while it runs cancels it, so the call answers LeaseEnded."""
         lease = self.check_token(lease_id, token)
+        if not lease.request.automation:
+            raise LeaseError(409, "person_session")
         if lease.state != "active":
             raise LeaseError(409, "waiting_person")
         lease.touch(self.clock())
@@ -279,23 +314,32 @@ class Manager:
 
     async def release(self, lease_id: str | None, reason: str) -> bool:
         """Ends the lease (all of them when lease_id is None): calls cancelled, Chromium closed
-        cleanly (profile flushed), or killed when it no longer answers."""
+        cleanly (profile flushed), or killed when it no longer answers; then, but at a shutdown,
+        the profile trimmed and measured: `last_end` carries its size (B7)."""
         lease, browser = self.lease, self.browser
         if lease is None or (lease_id is not None and lease.lease_id != lease_id):
             return False
-        self.lease, self.browser = None, None
-        self.last_end = {"lease_id": lease.lease_id, "reason": reason}
-        for task in list(self._calls):
-            task.cancel()
-        for kept in lease.scratch.values():  # the tools' state: documents dropped now (B5)
-            end = getattr(kept, "end", None)
-            if callable(end):
-                end()
-        if browser is not None:
-            if reason == "browser_crashed":
-                await browser.kill()
-            else:
-                await browser.stop()
+        self.lease, self.browser, self.ending = None, None, lease.request
+        end = self.last_end = {"lease_id": lease.lease_id, "reason": reason}
+        try:
+            for task in list(self._calls):
+                task.cancel()
+            for kept in lease.scratch.values():  # the tools' state: documents dropped now (B5)
+                drop = getattr(kept, "end", None)
+                if callable(drop):
+                    drop()
+            if browser is not None:
+                if reason == "browser_crashed":
+                    await browser.kill()
+                else:
+                    await browser.stop()
+            if self._measure is not None and reason != "shutdown":
+                try:
+                    end["size_bytes"] = await self._measure(lease.request)
+                except Exception as exc:
+                    log.warning("profile not measured: %s", type(exc).__name__)
+        finally:
+            self.ending = None
         return True
 
     async def tick(self) -> str | None:

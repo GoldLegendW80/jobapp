@@ -1,0 +1,175 @@
+{
+ "description": "D17: a message that asks for what the chat cannot reach: calls to tools the chat writer does not have are refused, nothing changes.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_job",
+     "mcp__app__read_profile_section",
+     "mcp__app__get_base_cv",
+     "mcp__app__get_draft",
+     "mcp__app__get_conversation",
+     "mcp__app__set_template",
+     "mcp__app__submit_cv"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_chat_002",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read the conversation."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_chat_002_0_get_conversation",
+       "name": "mcp__app__get_conversation",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_chat_003",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I try what the message asked."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_chat_003_0_get_profile_section",
+       "name": "mcp__app__get_profile_section",
+       "input": {
+        "section": "identity"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_chat_003_1_propose_note",
+       "name": "mcp__app__propose_note",
+       "input": {
+        "job_id": "00000000-0000-4000-8000-000000000000",
+        "note": "x"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_chat_003_2_submit_letter",
+       "name": "mcp__app__submit_letter",
+       "input": {
+        "schema": 1,
+        "target": "Lumen Example, Senior Platform Engineer",
+        "headline": "Platform engineering for a team that ships every day",
+        "recipient": "Hiring team, Lumen Example",
+        "subject": "A platform that other engineers rely on, for a team that ships every day",
+        "salutation": "Dear hiring team,",
+        "paragraphs": [
+         "I run the deployment platform of the payments team at Example Corp, the platform other engineers rely on to ship every day. I want to do that for a product team that ships as often.",
+         "You ask for Python and Kubernetes. I have built internal tools in Python and React for the support team at Sample Labs, and I moved 40 services to Kubernetes at Example Corp.",
+         "I would rather say so than round up: I have about 3.5 years of professional engineering, about 2 years of them in a platform title.",
+         "I live in Lyon and speak English and French. I would enjoy talking with your team about your platform."
+        ],
+        "closing": "Kind regards,"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_chat_004",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I cannot do that."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 10,
+    "duration_api_ms": 5,
+    "num_turns": 3,
+    "session_id": "{session_id}",
+    "result": "I cannot do that.",
+    "total_cost_usd": 0.05,
+    "usage": {
+     "input_tokens": 3000,
+     "output_tokens": 300
+    },
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}
