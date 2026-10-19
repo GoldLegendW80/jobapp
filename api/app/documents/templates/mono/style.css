@@ -1,0 +1,163 @@
+/* mono: one column, IBM Plex Sans for the running text and IBM Plex Mono for the accents: the
+   name, the headings (a green hash mark before each), the organisations, the dates, the list
+   markers, the key competencies and the skills, which sit in a tinted block with a green bar
+   on its left, one line per group, as in a code listing. The density comes from the step on
+   :root. */
+@page { size: A4; }
+* { box-sizing: border-box; }
+html {
+  font-family: "IBM Plex Sans", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #1f2328;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; }
+a { color: inherit; text-decoration: none; }
+li, p { overflow-wrap: anywhere; }
+
+.head {
+  padding-bottom: 6pt;
+  border-bottom: 1pt solid #d0d7de;
+}
+.name {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 2.3em;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.headline {
+  font-size: 1.1em;
+  font-weight: 600;
+  color: var(--accent);
+  margin-top: 2pt;
+}
+.contact {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1pt 14pt;
+  margin-top: 4pt;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.86em;
+  color: #4f5660;
+}
+
+.block { margin-top: var(--section-gap); }
+.label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 1.08em;
+  font-weight: 600;
+  margin-bottom: var(--item-gap);
+}
+.label::before {
+  content: "#";
+  color: var(--accent);
+  margin-right: 0.6em;
+}
+
+.summary { text-align: justify; }
+
+.block ul { list-style: none; }
+.block ul li {
+  position: relative;
+  padding-left: 1.3em;
+  margin-bottom: 1pt;
+}
+.block ul li::before {
+  content: ">";
+  position: absolute;
+  left: 0.15em;
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.block ul.competencies {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1pt 14pt;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.94em;
+}
+.block ul.competencies li { margin-bottom: 0; }
+.block ul.competencies li::before { content: "+"; }
+
+.entry { margin-bottom: var(--item-gap); }
+.entry:last-child { margin-bottom: 0; }
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10pt;
+  align-items: baseline;
+}
+.entry-title { font-size: 1.04em; font-weight: 700; }
+.org {
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 600;
+  color: var(--accent);
+}
+.entry .org { font-size: 0.94em; }
+.period {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.86em;
+  color: #4f5660;
+}
+.place { color: #4f5660; font-size: 0.92em; }
+.entry-head .period { flex: 0 0 auto; text-align: right; }
+
+.schools {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--item-gap) 14pt;
+}
+.school .entry-title { font-size: 1em; }
+.school .org { font-size: 0.92em; }
+
+.code {
+  background: #f4f6f8;
+  border-left: 3pt solid var(--accent);
+  border-radius: 2pt;
+  padding: 4pt 8pt;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.9em;
+}
+.skill-group {
+  display: grid;
+  grid-template-columns: 30mm 1fr;
+  gap: 6pt;
+}
+.group-label {
+  font-size: 1em;
+  font-weight: 600;
+  color: #1c6b31;
+}
+.group-label::after { content: ":"; color: #4f5660; }
+
+.block ul.languages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2pt 18pt;
+}
+.block ul.languages li { padding-left: 0; }
+.block ul.languages li::before { content: none; }
+
+.letter-body { padding-top: 16pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date {
+  text-align: right;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.92em;
+  color: #4f5660;
+}
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; }
+.subject strong { font-family: "IBM Plex Mono", monospace; color: var(--accent); }
+.paragraph { text-align: justify; white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature {
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 700;
+  margin-top: var(--section-gap);
+}
