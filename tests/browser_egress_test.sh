@@ -16,13 +16,23 @@
 # check passes then fails on a removed rule, on a rule put above the jump and on a bridge that
 # moved, --boot applies the recorded bridge with no Docker, uninstall leaves nothing.
 # Set EGRESS_TEST_DOCKER=0 to skip the Docker part.
+# Behind a TLS inspecting proxy, JOBAPP_EXTRA_CA (README) reaches the package install of that part
+# alone, as the BuildKit secret of a throwaway image build; a line planted in it is then looked for
+# in the files, variables, labels and history of that image, and must be in none.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 SCRIPT=ops/browser-egress.sh
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+IMAGE="" # the throwaway image of the packages, built behind JOBAPP_EXTRA_CA only
+CREATED="" # a container of it, created to read its files and never started
+cleanup() {
+  if [[ -n "$CREATED" ]]; then docker rm -f "$CREATED" >/dev/null 2>&1 || true; fi
+  if [[ -n "$IMAGE" ]]; then docker rmi -f "$IMAGE" >/dev/null 2>&1 || true; fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 passed=0
 step() { printf '\n== %s\n' "$*"; }
@@ -259,9 +269,42 @@ if [[ "${EGRESS_TEST_DOCKER:-1}" == 1 ]]; then
   step "real iptables in a throwaway container's own network namespace"
   # Never the host's: the container has its own namespace, NET_ADMIN there only. A fake docker
   # answers `network inspect` with BRIDGE, read from a file the test rewrites.
-  cat >"$WORK/inner.sh" <<'EOF'
-set -euo pipefail
-apk add --no-cache -q bash iptables ip6tables iptables-legacy >/dev/null
+  base=alpine:3.20
+  image="$base"
+  install="apk add --no-cache -q bash iptables ip6tables iptables-legacy >/dev/null"
+  if [[ -n "${JOBAPP_EXTRA_CA:-}" ]]; then
+    [[ "$JOBAPP_EXTRA_CA" == /* && -f "$JOBAPP_EXTRA_CA" && -r "$JOBAPP_EXTRA_CA" ]] ||
+      fail "JOBAPP_EXTRA_CA is set but does not name a readable file by its absolute path"
+    # Behind a TLS inspecting proxy (README): the install alone reads the bundle, as the BuildKit
+    # secret of a throwaway image build; a planted line in it must then be nowhere in the image.
+    canary="egress-test-canary-$$-$RANDOM$RANDOM"
+    { cat "$JOBAPP_EXTRA_CA" && printf '# %s\n' "$canary"; } >"$WORK/extra-ca.pem"
+    cat >"$WORK/Dockerfile" <<EOF
+FROM $base
+RUN --mount=type=secret,id=extra_ca,required=true \\
+    cat /etc/ssl/certs/ca-certificates.crt /run/secrets/extra_ca >/tmp/extra-ca.pem \\
+    && SSL_CERT_FILE=/tmp/extra-ca.pem $install \\
+    && rm -f /tmp/extra-ca.pem
+EOF
+    IMAGE="jobapp-egress-test:$$-$RANDOM"
+    # --no-cache: a layer cached from an earlier build would hide what this one keeps.
+    docker build -q --no-cache --secret id=extra_ca,src="$WORK/extra-ca.pem" -t "$IMAGE" - \
+      <"$WORK/Dockerfile" >"$WORK/out" 2>&1 || fail "the install behind JOBAPP_EXTRA_CA failed: $(tail -n 20 "$WORK/out")"
+    rm -f "$WORK/extra-ca.pem"
+    CREATED="$(docker create "$IMAGE" true)"
+    docker export -o "$WORK/files.tar" "$CREATED" || fail "the files of $IMAGE could not be read"
+    docker rm -f "$CREATED" >/dev/null
+    CREATED=""
+    { docker image inspect "$IMAGE" && docker history --no-trunc "$IMAGE"; } >"$WORK/meta" ||
+      fail "the metadata of $IMAGE could not be read"
+    hits="$(cat "$WORK/files.tar" "$WORK/meta" | grep -a -c -F -- "$canary" || true)"
+    [[ "$hits" == 0 ]] || fail "the bundle of JOBAPP_EXTRA_CA is in the image: its planted line found $hits times in its files or metadata"
+    rm -f "$WORK/files.tar"
+    ok "behind JOBAPP_EXTRA_CA: the packages installed by a throwaway image build, the bundle in none of its files, variables, labels or history"
+    image="$IMAGE"
+    install=":"
+  fi
+  { printf 'set -euo pipefail\n%s\n' "$install" && cat <<'EOF'; } >"$WORK/inner.sh"
 mkdir -p /fake/bin
 # Alpine's iptables is the nf_tables one; the Jetson's is legacy (1.8.7): link the legacy tools,
 # and stop if one is missing (a dangling link would fall through to the nf_tables tool).
@@ -330,7 +373,7 @@ done
 iptables -S DOCKER-USER | grep -- '-s 203.0.113.9/32 -j DROP' >/dev/null && say "user rule kept after uninstall"
 EOF
   docker run --rm --cap-add NET_ADMIN --network bridge --label jobapp-egress-test \
-    -v "$ROOT:/repo:ro" -v "$WORK/inner.sh:/inner.sh:ro" alpine:3.20 sh /inner.sh >"$WORK/out" 2>&1 ||
+    -v "$ROOT:/repo:ro" -v "$WORK/inner.sh:/inner.sh:ro" "$image" sh /inner.sh >"$WORK/out" 2>&1 ||
     fail "the container run failed: $(tail -n 20 "$WORK/out")"
   for s in "installed" "check passes" "second apply identical" "four jumps" "user rule kept" "jump first" \
     "ip6 DOCKER-USER made" "check fails on a removed rule" "apply repairs" "check fails on a rule above the jump" \

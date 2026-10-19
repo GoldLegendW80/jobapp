@@ -69,7 +69,10 @@ docker compose -p jobapp-x -f compose.yml -f compose.mac.yml -f compose.extra-ca
 is set, and refuses a path that is relative or not a readable file. The bundle reaches only the
 build steps that download (uv, pip, pnpm, the Playwright download), as a BuildKit secret: it is in
 no image layer and in no container (a search of every layer of the five images found none of it,
-2026-10-15, issue #359).
+2026-10-15, issue #359). `tests/browser_egress_test.sh`, which installs iptables in a throwaway
+Alpine container, does the same: with the variable set, it installs them in a throwaway image
+build that alone gets the bundle as a BuildKit secret, then fails if a line planted in the bundle
+shows in that image's files, variables, labels or history.
 Unset, the builds are the Jetson's own: `deploy.sh` and the deploy workflow build with
 `compose.yml` alone (`tests/extra_ca_test.sh`). The file names the inspecting certificate of your
 network: keep it out of the repository and out of pull requests.
