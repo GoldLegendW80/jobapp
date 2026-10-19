@@ -247,7 +247,7 @@ The agent gives `{excerpt}` per citation; the server stores `{document_id, excer
 | 17 | `Une base de 10\u202F000 utilisateurs actifs` | text | `10k active users` | the source | refuse | `number_not_in_source`: a number of the value is not a number of an excerpt: 10 is not a number of the source |
 | 18 | `3,5 ans d\u2019expérience en ingénierie logicielle` | text | `3.5 years of software engineering` | `3,5 ans d'expérience en ingénierie logicielle` | accept | all rules hold |
 | 19 | `Three years of experience with Python` | text | `3 years of Python` | the source | refuse | `number_not_in_source`: a number of the value is not a number of an excerpt: a number written in words does not support a digit |
-| 20 | `Réceptionniste de nuit à l\u2019Hôtel 35, Paris` | name | `Hôtel 35` | `Réceptionniste de nuit à l'Hôtel 35, Paris` | accept | all rules hold |
+| 20 | `Réceptionniste de nuit à l\u2019Hôtel 47, Paris` | name | `Hôtel 47` | `Réceptionniste de nuit à l'Hôtel 47, Paris` | accept | all rules hold |
 | 21 | `Reference 12023, internal tooling team` | text | `Built it in 2023` | the source | refuse | `number_not_in_source`: a number of the value is not a number of an excerpt: 2023 is not a number of the source |
 | 22 | `Certiﬁcation ISO 27001 obtenue` | text | `Certification ISO 27001` | `Certification ISO 27001 obtenue` | accept | NFKC unfolds the ligature |
 | 23 | `Master of Science, Uni\u00ADversity of Bordeaux` | name | `University of Bordeaux` | `Master of Science, University of Bordeaux` | accept | step 2 strips the soft hyphen |
@@ -267,7 +267,7 @@ The agent gives `{excerpt}` per citation; the server stores `{document_id, excer
 | 37 | `Site web : www.my-site.example, portfolio en ligne` | url | `mysite.example` | the source | refuse | `address_not_in_source`: the address is not written in an excerpt |
 | 38 | `Site web : www.my-site.example, portfolio en ligne` | url | `https://my-site.example/` | the source | accept | all rules hold |
 | 39 | `Au sein de l\u00B4équipe GenAI de Lumetra à Bordeaux` | text | `GenAI team` | `Au sein de l'équipe GenAI de Lumetra` | accept | U+00B4 folded before NFKC could split it |
-| 40 | `Projet \u2033Brain\u2033 chez Lumetra, en production` | text | `Brain in production` | `Projet "Brain" chez Lumetra, en production` | accept | U+2033 folded to a double quote before NFKC |
+| 40 | `Projet \u2033Talvo\u2033 chez Lumetra, en production` | text | `Talvo in production` | `Projet "Talvo" chez Lumetra, en production` | accept | U+2033 folded to a double quote before NFKC |
 | 41 | `Software Engineer, 01.2023 to present` | date | `2023-01` | the source | accept | rule D reads runs of digits: 01 and 2023 |
 | 42 | `Software Engineer, 01.2023 to present` | date | `2023` | the source | accept | all rules hold |
 | 43 | `Software Engineer, 01.2023 to present` | text | `Software engineer since 2023` | the source | accept | a fraction of four digits is not a decimal: reading e |
@@ -283,8 +283,8 @@ The agent gives `{excerpt}` per citation; the server stores `{document_id, excer
 | 53 | `Olmea, de 2021 à 2023, développeur.\n\nMission de 09/21 à 03/23 chez Olmea, Bordeaux` | date | `2021-09` | `Olmea, de 2021 à 2023, développeur.` and `Mission de 09/21 à 03/23 chez Olmea` | accept | the month sits next to a two digit year and another excerpt gives 2021 |
 | 54 | `Master, 2010-11, Université de Bordeaux` | date | `2010-11` | the source | refuse | `month_not_in_source`: month not in the source, propose the year alone: 11 is over 10: it can be a later year, so no month |
 | 55 | `Master, 2010-11, Université de Bordeaux` | date | `2010` | the source | accept | all rules hold |
-| 56 | `Stage de juin à août 2019 chez Hotel 35` | date | `2019-06` | the source | accept | a range sharing its year |
-| 57 | `Stage de juin à août 2019 chez Hotel 35` | date | `2019-08` | the source | accept | all rules hold |
+| 56 | `Stage de juin à août 2019 chez Hotel 47` | date | `2019-06` | the source | accept | a range sharing its year |
+| 57 | `Stage de juin à août 2019 chez Hotel 47` | date | `2019-08` | the source | accept | all rules hold |
 | 58 | `Internship, Jan to Mar 2023, Velmor Group` | date | `2023-01` | the source | accept | all rules hold |
 | 59 | `Chef de projet, juill. 2022 à déc. 2023` | date | `2022-07` | the source | accept | all rules hold |
 | 60 | `Chef de projet, juill. 2022 à déc. 2023` | date | `2023-12` | the source | accept | all rules hold |
@@ -299,7 +299,7 @@ The agent gives `{excerpt}` per citation; the server stores `{document_id, excer
 | 69 | `Python` | text | `Python` | `Pyth` | refuse | `excerpt_not_whole_document`: excerpt must be the whole document |
 | 70 | `Poste exigeant 25 % de déplacements en Europe` | setting | `25` | the source | refuse | `setting`: not proposable by the agent: a setting is not proposable |
 | 71 | `Stack : Python 3, FastAPI, Postgres 16` | term | `python3` | the source | accept | a search term is not a claim: rule N does not apply |
-| 72 | `Portfolio : https://camille.example.org/projets/brain en ligne` | url | `https://camille.example.org/projets` | the source | refuse | `address_not_in_source`: the address is not written in an excerpt: the address goes on after the value |
+| 72 | `Portfolio : https://camille.example.org/projets/talvo en ligne` | url | `https://camille.example.org/projets` | the source | refuse | `address_not_in_source`: the address is not written in an excerpt: the address goes on after the value |
 | 73 | `Écrivez à camille.durand@example.org. Merci d\u2019avance` | email | `camille.durand@example.org` | the source | accept | all rules hold |
 | 74 | `Budget de 1 234,56 euros par mois en moyenne` | text | `1234.56 euros` | the source | accept | all rules hold |
 | 75 | `En 2021 150 personnes ont rejoint le projet` | text | `150 people in 2021` | the source | accept | reading e: 2021 and 150 |
@@ -408,7 +408,7 @@ The agent gives `{excerpt}` per citation; the server stores `{document_id, excer
 | 178 | `Arrivé le 03/04/2023 dans l\u2019équipe produit` | date | `2023-04` | `04/2023 dans l'équipe produit` | refuse | `month_not_in_source`: month not in the source, propose the year alone: a date that the excerpt cuts is not read |
 | 179 | `Tél : 06-39-98-12-34, Bordeaux centre ville` | phone | `39 98 12 34` | `39-98-12-34, Bordeaux centre ville` | refuse | `phone_not_in_source`: the digits are not a phone number of an excerpt: a phone number that the excerpt cuts is not read |
 | 180 | `Une équipe de sept 2021 collaborateurs en Europe` | date | `2021-09` | `Une équipe de sept 2021` | refuse | `month_not_in_source`: month not in the source, propose the year alone: what follows the year counts even when the excerpt stops at the year |
-| 181 | `Portfolio : https://camille.example.org/projets/brain en ligne` | url | `https://camille.example.org/projets` | `Portfolio : https://camille.example.org/projets` | refuse | `address_not_in_source`: the address is not written in an excerpt: the address goes on after the excerpt |
+| 181 | `Portfolio : https://camille.example.org/projets/talvo en ligne` | url | `https://camille.example.org/projets` | `Portfolio : https://camille.example.org/projets` | refuse | `address_not_in_source`: the address is not written in an excerpt: the address goes on after the excerpt |
 | 182 | `Version 0.9 puis version 1.10 du moteur de recherche` | text | `Moteur 1.1` | `1.10 du moteur de recherche` | refuse | `number_not_in_source`: a number of the value is not a number of an excerpt: the word version stands right before the excerpt |
 | 183 | `Dossier 7-03/04/2023, équipe produit` | date | `2023-04` | the source | refuse | `month_not_in_source`: month not in the source, propose the year alone: a hyphen before a date does not hide its first number |
 | 184 | `Mission 01/2019-06/2020 chez Velmor, Bordeaux` | date | `2020-06` | the source | accept | a hyphen between two dates written with slashes |

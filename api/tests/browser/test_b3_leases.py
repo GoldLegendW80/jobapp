@@ -825,8 +825,8 @@ def test_start_failures_are_typed(status: int, body: bytes, code: str, holder: s
 
 def test_the_client_sends_the_secret_and_reads_end_and_current() -> None:
     seen: list[httpx.Request] = []
-    assert asyncio.run(answering(204, seen=seen).end(A)) is True
-    assert asyncio.run(answering(404, b'{"error": "no_such_lease"}').end(A)) is False
+    assert asyncio.run(answering(204, seen=seen).end(A)) is not None
+    assert asyncio.run(answering(404, b'{"error": "no_such_lease"}').end(A)) is None
     assert seen[0].headers["authorization"] == "Bearer s3cret"
     assert seen[0].url.path == f"/leases/{A}"
     for status, body in ((500, b""), (200, b"{}"), (200, b"no")):

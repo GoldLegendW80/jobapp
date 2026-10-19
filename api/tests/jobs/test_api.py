@@ -188,8 +188,8 @@ def mixed(factory: sessionmaker[Session], alice: Signed) -> list[Job]:
          {"location": "Remote", "applied_on": date(2026, 9, 1)}),
         ("Anthropic", "Data Engineer", s.skipped, 40, (9, 29), {"notes": "call back on monday"}),
         ("Société Générale", "Ingénieur IA", s.found, None, (10, 7), {"contract_type": t.VIE}),
-        ("Betclic", "ML Engineer", s.found, 9, (10, 1), {"contract_type": t.CDD}),
-        ("betclic", "AI Intern", s.closed, 10, (10, 2), {"contract_type": t.Stage}),
+        ("Brightwave", "ML Engineer", s.found, 9, (10, 1), {"contract_type": t.CDD}),
+        ("brightwave", "AI Intern", s.closed, 10, (10, 2), {"contract_type": t.Stage}),
         ("OpenAI", "Engineer, Agents", s.interview, 90, (8, 12),
          {"applied_on": date(2026, 8, 31)}),
         ("Cohere", "FDE", s.staged, 89, (10, 7), {}),
@@ -227,7 +227,7 @@ def test_each_filter_alone(api: Api, alice: Signed, mixed: list[Job]) -> None:
     assert total(type="VIE") == 1
     assert total(type=["CDD", "Stage", "Freelance"]) == 3
     assert total(company="mistral") == 2
-    assert total(company="BETCLIC") == 2  # case-insensitive
+    assert total(company="BRIGHTWAVE") == 2  # case-insensitive
     assert total(company="100%") == 1  # % and _ are literal
     assert total(company="_") == 1
     assert total(company="  ") == 12  # blank is no filter
@@ -245,7 +245,7 @@ def test_filters_combined(api: Api, alice: Signed, mixed: list[Job]) -> None:
     assert companies(page) == ["Mistral AI"]
     assert page["items"][0]["title"] == "Applied AI Engineer"
     page = ok(api, alice, type="CDI", found_from="2026-10-01", fit_max=89, sort="fit")
-    assert [i["fit"] for i in page["items"]] == [89, 88]  # Betclic is a CDD, Zeta unscored
+    assert [i["fit"] for i in page["items"]] == [89, 88]  # Brightwave is a CDD, Zeta unscored
     assert ok(api, alice, q="engineer", status="found", type="CDD")["total"] == 1
 
 
@@ -283,7 +283,7 @@ def test_counts_ignore_the_status_filter_and_histogram_follows_filters(
     hist = page["fit_histogram"]
     assert [b["count"] for b in hist["buckets"]] == [2, 1, 0, 0, 1, 1, 0, 0, 2, 3]
     assert hist["unscored"] == 2
-    filtered = ok(api, alice, status="found", company="betclic")
+    filtered = ok(api, alice, status="found", company="brightwave")
     assert filtered["total"] == 1
     # Status counts: the company filter applies, the status filter does not.
     assert filtered["counts_by_status"]["found"] == 1
@@ -304,7 +304,7 @@ def test_sorts(api: Api, alice: Signed, mixed: list[Job], factory: sessionmaker[
     assert fits == [100, 95, 90, 89, 88, 55, 40, 10, 9, 0, None, None]
     names = companies(ok(api, alice, sort="company"))
     assert names == [
-        "100% Remote_Co", "Anthropic", "Anthropic", "betclic", "Betclic", "Cohere", "Cohere",
+        "100% Remote_Co", "Anthropic", "Anthropic", "brightwave", "Brightwave", "Cohere", "Cohere",
         "Mistral AI", "Mistral AI", "OpenAI", "Société Générale", "Zeta",
     ]  # fmt: skip
     titles = [i["title"] for i in ok(api, alice, sort="company")["items"][1:3]]

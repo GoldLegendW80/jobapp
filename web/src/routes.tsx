@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { AccountPage } from "@/features/account/account-page";
 import { AdminUsersPage } from "@/features/admin/users-page";
 import { RunPage, RunsPage } from "@/features/agents/runs-page";
+import { ApplicationsSettingsPage } from "@/features/apply/settings-page";
 import { AuthProvider } from "@/features/auth/auth-provider";
 import { PublicOnly, RequireAdmin, RequireAuth } from "@/features/auth/guards";
 import { LinkPage } from "@/features/auth/link-page";
@@ -70,6 +71,10 @@ export const routes: RouteObject[] = [
           { path: "profile/fill", element: <FillPage /> },
           { path: "runs", element: <RunsPage /> },
           { path: "runs/:id", element: <RunPage /> },
+          {
+            path: "settings/applications",
+            element: <ApplicationsSettingsPage />,
+          },
           {
             path: "admin/users",
             element: (

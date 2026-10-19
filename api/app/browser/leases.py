@@ -46,6 +46,11 @@ never taken back from browserd, so the api and browserd agree again as soon as i
 Redis has lost its keys (a restart), the first call reads browserd's `GET /leases/current` and
 takes its lease back as the holder.
 
+At every end browserd measures the profile once Chromium closed (B7); the size it answers (to
+the end this store asked for, or in `last_end` for an end browserd decided) is written to that
+profile's row with its last use. A person's own session may open at an address the person typed
+(B7, checked by app/browser/address.py): it goes to browserd with the start, never to Redis.
+
 `current(user_id)` answers the person's own lease, whether someone else holds the browser (never
 who, nor why), and the person's places in the queue. The estimated wait is rounded up to whole
 minutes, so a waiter learns how long another person's lease has run to the minute at best, never
@@ -69,7 +74,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.browser import profiles
-from app.browser.client import BrowserdClient, BrowserError
+from app.browser.client import BrowserdClient, BrowserError, ended_of
 from app.browser.profiles import ProfileRef
 
 logger = logging.getLogger("app.browser.leases")
@@ -282,7 +287,9 @@ class View:
 class Profiles(Protocol):
     async def ensure(self, user_id: str) -> ProfileRef: ...
 
-    async def mark_used(self, user_id: str, at: float) -> None: ...
+    async def mark_used(
+        self, user_id: str, at: float, size_bytes: int | None = None, profile_id: str | None = None
+    ) -> None: ...
 
 
 class DbProfiles:
@@ -294,9 +301,13 @@ class DbProfiles:
     async def ensure(self, user_id: str) -> ProfileRef:
         return await asyncio.to_thread(profiles.ensure, self.sessions, uuid.UUID(user_id))
 
-    async def mark_used(self, user_id: str, at: float) -> None:
+    async def mark_used(
+        self, user_id: str, at: float, size_bytes: int | None = None, profile_id: str | None = None
+    ) -> None:
         when = datetime.fromtimestamp(at, UTC)
-        await asyncio.to_thread(profiles.mark_used, self.sessions, uuid.UUID(user_id), when)
+        await asyncio.to_thread(
+            profiles.mark_used, self.sessions, uuid.UUID(user_id), when, size_bytes, profile_id
+        )
 
 
 def _member(user_id: str, purpose: str) -> str:
@@ -336,11 +347,13 @@ class Leases:
         *,
         hosts: Sequence[str] = (),
         submit_selectors: Sequence[str] = (),
+        address: str | None = None,
     ) -> Acquired:
         """The caller's lease, started now or already held, or its place in the queue. Raises
         BrowserError when browserd cannot start it, StoreUnavailableError without Redis.
         `hosts` and `submit_selectors` (B5) are given to browserd by the call that starts the
-        lease: the hosts its tools may open, the adapter's own submit elements."""
+        lease: the hosts its tools may open, the adapter's own submit elements; `address` (B7)
+        is where a person's own session opens."""
         if purpose not in TIERS:
             raise ValueError(purpose)
         try:
@@ -368,7 +381,7 @@ class Leases:
                 await r.set(TICKET + member, "1", ex=TICKET_TTL_S)
                 await r.zadd(QUEUES[TIERS[purpose]], {member: await r.incr(SEQ)}, nx=True)
                 if await r.eval(CLAIM, 1 + len(QUEUES), HOLDER, *QUEUES, member, raw, TICKET):
-                    return await self._start(r, turn, raw, hosts, submit_selectors)
+                    return await self._start(r, turn, raw, hosts, submit_selectors, address)
                 mine = await self._own(r, user_id, purpose)
                 if mine is not None:
                     return Acquired(lease=mine)
@@ -476,6 +489,7 @@ class Leases:
         raw: str,
         hosts: Sequence[str] = (),
         submit_selectors: Sequence[str] = (),
+        address: str | None = None,
     ) -> Acquired:
         try:
             profile = await self.profiles.ensure(turn.user_id)
@@ -487,6 +501,7 @@ class Leases:
                 automation=turn.automation,
                 hosts=hosts,
                 submit_selectors=submit_selectors,
+                address=address,
             )
         except BrowserError as exc:
             await r.eval(CAS, 1, HOLDER, raw, "")
@@ -531,6 +546,7 @@ class Leases:
             if raw is None:
                 return None
         lease = Lease.loads(raw)
+        size: int | None = None
         if lease.state == "starting":
             reason = lease.expired(now)
         else:
@@ -538,7 +554,7 @@ class Leases:
             # timer only when it cannot be asked, counted from browserd's last sign of the lease.
             reason = lease.overdue(now)
             if reason is None:
-                reason = await self._gone_in_browserd(lease)
+                reason, size = await self._gone_in_browserd(lease)
             if reason is None or reason == _CANNOT_ASK:
                 answer = "held" if reason is None else "unanswered"
                 seen = await r.eval(SIGHT, 1, SEEN + lease.lease_id, answer, now, SEEN_TTL_S)
@@ -547,7 +563,7 @@ class Leases:
                     reason = lease.expired(now, alive_at)
         if reason is None:
             return lease
-        await self._end(r, raw, lease, reason, now)
+        await self._end(r, raw, lease, reason, now, size)
         return None
 
     async def _sync(self, r: Any, now: float) -> str | None:
@@ -604,41 +620,58 @@ class Leases:
         await r.delete(TICKET + member)
         return lease
 
-    async def _gone_in_browserd(self, lease: Lease) -> str | None:
-        """Why browserd no longer holds this lease, None when it does, _CANNOT_ASK when browserd
-        does not answer."""
+    async def _gone_in_browserd(self, lease: Lease) -> tuple[str | None, int | None]:
+        """Why browserd no longer holds this lease (None when it does, _CANNOT_ASK when browserd
+        does not answer), and the profile's size it measured at that end, when it says."""
         try:
             found = await self.client.current()
         except BrowserError:
-            return _CANNOT_ASK
+            return _CANNOT_ASK, None
         current = found["lease"]
         if current is not None and current.get("lease_id") == lease.lease_id:
-            return None
+            return None, None
         last = found["last_end"]
         if last is not None and last.get("lease_id") == lease.lease_id:
-            reason = str(last.get("reason") or "ended")
-            return reason if re.fullmatch(r"[a-z_]{1,32}", reason) else "ended"
-        return "ended"
+            ended = ended_of(last)
+            return ended.reason, ended.size_bytes
+        return "ended", None
 
-    async def _end(self, r: Any, raw: str, lease: Lease, reason: str, now: float) -> bool:
+    async def _end(
+        self, r: Any, raw: str, lease: Lease, reason: str, now: float, size: int | None = None
+    ) -> bool:
         if not await r.eval(CAS, 1, HOLDER, raw, ""):
             return False
         if lease.state != "starting":
             await r.lpush(DURATIONS, max(0, int(now - lease.started_at)))
             await r.ltrim(DURATIONS, 0, HISTORY - 1)
             await r.delete(SEEN + lease.lease_id)
-            await self._tell_end(r, lease.lease_id)
+            told = await self._tell_end(r, lease.lease_id)
+            size = told if told is not None else size
         logger.info("browser lease ended: purpose=%s reason=%s", lease.purpose, reason)
+        if size is not None and lease.profile_id:
+            await self._mark_size(lease, size)
         return True
 
-    async def _tell_end(self, r: Any, lease_id: str) -> None:
-        """Ends the lease in browserd; when it does not confirm, the end waits in ENDING."""
+    async def _mark_size(self, lease: Lease, size: int) -> None:
+        """The profile's size and last use (B7); a failure to write them never stops an end."""
         try:
-            await self.client.end(lease_id)
+            await self.profiles.mark_used(
+                lease.user_id, self.clock(), size_bytes=size, profile_id=lease.profile_id
+            )
+        except Exception as exc:
+            logger.warning("browser profile size not written: %s", type(exc).__name__)
+
+    async def _tell_end(self, r: Any, lease_id: str) -> int | None:
+        """Ends the lease in browserd, and answers the profile's size it measured; when browserd
+        does not confirm, the end waits in ENDING."""
+        try:
+            ended = await self.client.end(lease_id)
         except BrowserError as exc:
             logger.warning("browserd did not confirm the end of a lease: %s", exc.code)
             await r.sadd(ENDING, lease_id)
             await r.expire(ENDING, SEEN_TTL_S)
+            return None
+        return ended.size_bytes if ended is not None else None
 
     async def _tell_ending(self, r: Any) -> None:
         """Tells browserd the ends it did not confirm yet, until it does (or no longer knows)."""

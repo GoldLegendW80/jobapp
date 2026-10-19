@@ -15,7 +15,7 @@ import os
 import sys
 import time
 
-from browserd import chromium, live, proxy
+from browserd import chromium, live, proxy, signin
 from browserd import config as c
 from browserd.app import Service, handler_for
 from browserd.leases import Manager, Request
@@ -61,10 +61,15 @@ async def main() -> None:
     manager: Manager
 
     async def start(request: Request, lease_id: str) -> chromium.Chromium:
-        browser = chromium.Chromium(request, lease_id, playwright, cfg)
+        # B7: a person's own session runs with no debugging port.
+        kind = chromium.Chromium if request.automation else signin.PersonChromium
+        browser = kind(request, lease_id, playwright, cfg)
 
         async def crashed() -> None:
             await manager.release(lease_id, "browser_crashed")
+
+        async def ended(reason: str) -> None:
+            await manager.release(lease_id, reason)
 
         def event(item: dict) -> None:
             lease = manager.current()
@@ -72,10 +77,10 @@ async def main() -> None:
                 lease.events.append(item)
             log.info("lease event %s", item)
 
-        browser.on_crash, browser.on_event = crashed, event
+        browser.on_crash, browser.on_end, browser.on_event = crashed, ended, event
         return await browser.start()
 
-    manager = Manager(cfg, start)
+    manager = Manager(cfg, start, measure=chromium.measure_profile)
     service = Service(manager, cfg.secret)
     service.display_ok = lambda: display.returncode is None
     egress = await proxy.serve(proxy.Proxy(cfg.proxy_allow), c.PROXY_PORT)

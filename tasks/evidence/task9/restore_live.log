@@ -1,13 +1,13 @@
 
 == verify latest on jetson
-   ok: /home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump, 13KB, 34 entries, dumped from database 'jobapp'
-file=/home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump
+   ok: /home/lucien/jobapp-backups/jobapp-2026-10-08T164632.dump, 13KB, 34 entries, dumped from database 'jobapp'
+file=/home/lucien/jobapp-backups/jobapp-2026-10-08T164632.dump
 
-== restore /home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump into the live database on jetson
-   verified /home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump (34 entries)
+== restore /home/lucien/jobapp-backups/jobapp-2026-10-08T164632.dump into the live database on jetson
+   verified /home/lucien/jobapp-backups/jobapp-2026-10-08T164632.dump (34 entries)
 
 == pre-restore backup of the live database jobapp
-   backup: /home/yessai/jobapp-backups/jobapp-2026-10-08T164635-pre-restore.dump
+   backup: /home/lucien/jobapp-backups/jobapp-2026-10-08T164635-pre-restore.dump
    size: 13KB (12870 bytes), database 7.9MB
    verified: pg_restore --list (34 entries) and a full read
 
@@ -37,7 +37,7 @@ INFO  [alembic.runtime.migration] Will assume transactional DDL.
  public.sessions        |    0
  public.users           |    0
 
-   restored /home/yessai/jobapp-backups/jobapp-2026-10-08T164632.dump into jobapp; the previous content is in /home/yessai/jobapp-backups/jobapp-2026-10-08T164635-pre-restore.dump
+   restored /home/lucien/jobapp-backups/jobapp-2026-10-08T164632.dump into jobapp; the previous content is in /home/lucien/jobapp-backups/jobapp-2026-10-08T164635-pre-restore.dump
 
 == health through caddy on jetson loopback
    /api/health: {"status":"ok"}
