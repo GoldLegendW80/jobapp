@@ -221,7 +221,8 @@ stop_sampler() {
 }
 
 memory_json() { # the summary of the samples file $1 as JSON
-  awk -F'\t' 'NF == 7 {
+  # LC_ALL=C: macOS awk prints %.1f with the locale's decimal separator (1,5 in French), not JSON.
+  LC_ALL=C awk -F'\t' 'NF == 7 {
       n++; w = $2 / 1048576; a = $3 / 1048576
       if (n == 1 || w < wmin) wmin = w
       if (w > wmax) wmax = w
@@ -410,9 +411,15 @@ one_run() { # one_run <triage|chat> <key>
   stop_sampler
   run_metrics "$run" >"$WORK/$key.run.json"
   memory_json "$samples" >"$WORK/$key.memory.json"
-  jq -n --slurpfile run "$WORK/$key.run.json" --slurpfile memory "$WORK/$key.memory.json" \
-    '$run[0] + {memory: $memory[0]}' >"$WORK/$key.json"
-  jq . "$WORK/$key.json" | sed 's/^/   /'
+  # set -e does not hold here (one_run is called before ||): a record that does not build fails the call.
+  if jq -n --slurpfile run "$WORK/$key.run.json" --slurpfile memory "$WORK/$key.memory.json" \
+    '$run[0] + {memory: $memory[0]}' >"$WORK/$key.json"; then
+    jq . "$WORK/$key.json" | sed 's/^/   /'
+  else
+    rm -f "$WORK/$key.json"
+    info "FAIL: the metrics of this run do not read as JSON, so metrics.json leaves it out"
+    CHECKS_OK=0
+  fi
   if [[ "$kind" == chat ]]; then
     info "message sent: ${#MESSAGE} characters, md5 $(md5_of "$MESSAGE") (the stored user message must show the same)"
   fi

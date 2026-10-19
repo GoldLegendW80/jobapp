@@ -11,7 +11,9 @@
 # any start; the message text, a token shaped value and the text of a log message are counted and
 # never printed; a short message is not a false failure; a start that gives no answer is reported
 # as unknown, not as refused; the remote Python's stderr stays out of the log; the same kind
-# twice keeps both sets of samples; a proposal decided meanwhile fails the call.
+# twice keeps both sets of samples, and metrics.json holds both runs with their memory figures
+# as JSON numbers under a decimal comma locale; metrics that do not read as JSON fail the call; a
+# proposal decided meanwhile fails the call.
 # Needs jq.
 set -euo pipefail
 
@@ -114,7 +116,9 @@ case "$cmd" in
       *"from jobs j where id"*) echo 'shortlisted|100|3707|f|2|1|1' ;;
       *"order by created_at desc limit 1"*) echo "$STUB_RUN" ;;
       *"select status, (select count"*) echo 'done|13' ;;
-      *jsonb_build_object*) printf '{"run_id": "%s", "status": "done", "events": 13}\n' "$STUB_RUN" ;;
+      *jsonb_build_object*)
+        if [[ "${STUB_METRICS:-ok}" == bad ]]; then echo 'not JSON'; else printf '{"run_id": "%s", "status": "done", "events": 13}\n' "$STUB_RUN"; fi
+        ;;
       *)
         echo "fake ssh: unexpected SQL" >&2
         exit 97
@@ -266,9 +270,17 @@ out_has "MESSAGE is empty"
 ok "an empty MESSAGE is refused before any ssh call"
 
 step "N7, N4, N8: a real run against the fake Jetson, the same kind twice"
+# The run goes under a locale whose awk writes 1.5 as 1,5 (macOS awk follows it), when this machine has one.
+COMMA=""
+for locale in fr_FR.UTF-8 de_DE.UTF-8 fr_FR.utf8 de_DE.utf8; do
+  if [[ "$(LC_ALL="$locale" awk 'BEGIN { printf "%.1f", 1.5 }' 2>/dev/null)" == "1,5" ]]; then
+    COMMA="$locale"
+    break
+  fi
+done
 reset
 E="$WORK/twice"
-run 0 script REAL_RUN=1 RUNS="chat chat" EVIDENCE="$E"
+run 0 script REAL_RUN=1 RUNS="chat chat" EVIDENCE="$E" ${COMMA:+"LC_ALL=$COMMA"}
 out_has "PASS"
 out_has "runs added: 2 (started here: 2)"
 out_has "count only"
@@ -281,9 +293,12 @@ out_lacks "$DEFAULT_FRAGMENT"
 for f in run.log metrics.json memory-chat.tsv memory-chat-2.tsv; do
   [[ -s "$E/$f" ]] || fail "$f is missing or empty"
 done
-[[ "$(jq '.runs | length' "$E/metrics.json")" == 2 ]] || fail "metrics.json does not hold both runs"
+[[ "$(jq '.runs | length' "$E/metrics.json")" == 2 ]] || fail "metrics.json does not hold both runs: $(grep -m 1 '^jq: ' "$WORK/out" || true)"
+[[ "$(jq '[.runs[].memory.worker_peak_mib] == [144, 144]' "$E/metrics.json")" == true ]] ||
+  fail "the memory of the runs in metrics.json is not the 144 MiB the samples hold"
 ! grep -q -F -- "$PRIVATE" "$E/run.log" || fail "run.log holds the text of a log message"
 ok "RUNS=\"chat chat\": both sets of samples kept (memory-chat.tsv, memory-chat-2.tsv), 2 runs in metrics.json"
+ok "the memory figures are JSON numbers under ${COMMA:-the inherited locale (no locale here writes a decimal comma)}"
 ok "the text of a log message is replaced by (message not printed)"
 reset
 run 1 script REAL_RUN=1 RUNS=chat EVIDENCE="$E"
@@ -294,6 +309,12 @@ E="$WORK/decided"
 run 1 script REAL_RUN=1 RUNS=triage EVIDENCE="$E" STUB_DECIDE=1
 out_has "FAIL: a proposal was decided while the script ran"
 ok "a proposal decided during the call fails it"
+reset
+E="$WORK/unreadable"
+run 1 script REAL_RUN=1 RUNS=chat EVIDENCE="$E" STUB_METRICS=bad
+out_has "FAIL: the metrics of this run do not read as JSON"
+[[ ! -e "$E/metrics.json" ]] || fail "metrics.json was written without the run"
+ok "metrics of a run that do not read as JSON fail the call, never a PASS with no run in metrics.json"
 
 step "N4: the stderr of the remote start stays out of the log"
 reset
