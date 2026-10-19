@@ -7,7 +7,8 @@ database, and gives the same answer for the same input. `tick.py` reads the rows
 
 **Eligible** (`refusal(...) is None`), all of:
 - automatic generation is on (`search.documents.auto`);
-- the posting is `found` or `shortlisted`;
+- the posting is `found` or `shortlisted` (`OPEN_STATUSES`); for the letter of a written CV,
+  `cv_ready` too (`LETTER_STATUSES`): the CV's own render moved it there, the pair is not done;
 - its fit score is present and at or above the threshold (`search.documents.min_fit`): a fit
   exactly at the threshold is written, one under is not, no fit is not;
 - no never apply rule of the search section matches its company and title (the sweep moves a
@@ -42,6 +43,7 @@ from typing import Protocol
 from app.jobs.models import JobStatus
 
 OPEN_STATUSES = frozenset({JobStatus.found, JobStatus.shortlisted})
+LETTER_STATUSES = OPEN_STATUSES | {JobStatus.cv_ready}
 STOPPED_AT_CEILING = "token_limit"  # generate.ERRORS: the run stopped at its ceiling
 RETRIES = 1  # a failed automatic generation is written once more, never twice
 DEFAULT_TIMEZONE = "Europe/Paris"  # schemas.SweepSchedule's default
@@ -88,11 +90,12 @@ def refusal(
     rules: Iterable[Rule],
     last_day: date,
     lookback_days: int,
+    statuses: frozenset[JobStatus] = OPEN_STATUSES,
 ) -> Refusal | None:
     """None when the posting is eligible, else the first reason it is not (module docstring)."""
     if not setting.auto:
         return Refusal.auto_off
-    if posting.status not in OPEN_STATUSES:
+    if posting.status not in statuses:
         return Refusal.status
     if posting.fit is None:
         return Refusal.no_fit
