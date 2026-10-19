@@ -17,6 +17,7 @@
 #    failed sign in left for Harald's email in the 15 minute window.
 #
 # Settings as deploy.sh: DEPLOY_HOST (default jetson), DEPLOY_DIR (default ~/jobapp).
+# OWNER (required): the e-mail address of the owner's account on the Jetson.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -24,7 +25,7 @@ cd "$ROOT"
 HOST="${DEPLOY_HOST:-jetson}"
 RDIR="${DEPLOY_DIR:-jobapp}"
 RDIR="${RDIR#\~/}"
-HARALD="hthautin@gmail.com"
+HARALD="${OWNER:-}"
 ADMIN="e2e-admin@example.org"
 E2E_LIKE="e2e-%@example.org"
 EVIDENCE="$ROOT/tasks/evidence/jobs-j5-jetson"
@@ -38,6 +39,7 @@ die() {
   printf 'e2e_jobs_sweep_jetson.sh: %s\n' "$*" >&2
   exit 1
 }
+[[ -n "$HARALD" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 
 sql() { # the SQL on stdin in the Jetson's database, unaligned, fields separated by |
   # shellcheck disable=SC2016 # $POSTGRES_* expand in the db container

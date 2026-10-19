@@ -1,0 +1,13 @@
+{
+  "target": "Platform Engineer at Lumen Example (invented posting)",
+  "headline": "Platform engineer",
+  "recipient": "Hiring team, Lumen Example",
+  "subject": "Calm releases for your platform team",
+  "salutation": "Dear hiring team,",
+  "paragraphs": [
+    "Your posting asks for someone who can make releases boring and incidents rare. That is the work I have done at Example Corp.",
+    "I designed the deployment pipeline every product team now uses, and moved the billing services to managed Postgres.",
+    "I would be glad to talk about the platform you are building."
+  ],
+  "closing": "Kind regards,"
+}

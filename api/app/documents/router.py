@@ -23,6 +23,7 @@ import re
 import threading
 import unicodedata
 import uuid
+from dataclasses import asdict
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -47,7 +48,7 @@ from sqlalchemy.orm import Session
 from app import queue as queues
 from app.db import get_session
 from app.documents import content as c
-from app.documents import corrections, render_client, render_job, store, templates
+from app.documents import corrections, freeze, render_client, render_job, store, templates
 from app.documents.models import (
     Author,
     Document,
@@ -55,6 +56,7 @@ from app.documents.models import (
     DocumentVersion,
     FitResult,
     FreezeReason,
+    GenerationMode,
     GenerationStatus,
     GenerationWait,
     Kind,
@@ -201,6 +203,8 @@ class TemplateOut(BaseModel):
     accent: str | None
     kinds: list[str]
     thumbnails: dict[str, str]  # kind -> address; empty for a person's own
+    # kind -> the counters of the editor (`rules.SoftLimits`), in characters; null: no counter
+    soft_limits: dict[str, dict[str, int | None]]
 
 
 class TemplatesOut(BaseModel):
@@ -236,7 +240,7 @@ def _summary(version: DocumentVersion) -> dict[str, Any]:
         "fit": version.fit,
         "fit_step": version.fit_step,
         "pages": version.pages,
-        "has_pdf": version.pdf_sha256 is not None and version.legacy_file_id is None,
+        "has_pdf": freeze.rendered(version),
         "approved_at": version.approved_at,
         "frozen_at": version.frozen_at,
         "frozen_reason": version.frozen_reason,
@@ -328,18 +332,32 @@ SPELLED = str.maketrans(
     {
         "ø": "o", "Ø": "O", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ß": "ss", "ẞ": "SS",
         "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D", "þ": "th", "Þ": "Th",
-        "\u0131": "i", "ħ": "h", "Ħ": "H", "ŧ": "t", "Ŧ": "T",
+        "\u0131": "i", "ħ": "h", "Ħ": "H", "ŧ": "t", "Ŧ": "T", "ŋ": "ng", "Ŋ": "Ng",
+        "ə": "e", "Ə": "E", "ǝ": "e", "Ǝ": "E", "ɛ": "e", "Ɛ": "E", "ɔ": "o", "Ɔ": "O",
+        "\u0263": "g", "Ɣ": "G", "Ɖ": "D",
     }
 )  # fmt: skip
+# The other letters NFKD leaves whole carry their base letter in their name ("LATIN SMALL
+# LETTER D WITH HOOK"); what is left (IPA letters) is dropped.
+_BASE_LETTER = re.compile(r"LATIN (SMALL|CAPITAL) LETTER ([A-Z]) WITH ")
+
+
+def _spell(char: str) -> str:
+    if char.isascii() or unicodedata.normalize("NFKD", char).encode("ascii", "ignore"):
+        return char
+    found = _BASE_LETTER.match(unicodedata.name(char, ""))
+    if found is None:
+        return char
+    return found[2] if found[1] == "CAPITAL" else found[2].lower()
 
 
 def ascii_name(*parts: str, suffix: str = "") -> str:
     """Words of ASCII letters and digits joined by `_`: accents folded, letters with no
-    decomposition spelled (ø as o, æ as ae, ß as ss), the rest dropped. The parts are cut to
-    NAME_MAX with room for `suffix`, which is never cut."""
+    decomposition spelled (ø as o, æ as ae, ß as ss, ŋ as ng, ɗ as d), the rest dropped. The
+    parts are cut to NAME_MAX with room for `suffix`, which is never cut."""
     words: list[str] = []
     for part in parts:
-        spelled = part.translate(SPELLED)
+        spelled = "".join(map(_spell, part.translate(SPELLED)))
         folded = unicodedata.normalize("NFKD", spelled).encode("ascii", "ignore").decode()
         words += re.findall(r"[A-Za-z0-9]+", folded)
     room = NAME_MAX - (len(suffix) + 1 if suffix else 0)
@@ -390,11 +408,17 @@ def _revision(value: str | None) -> int:
 def _failed_generation(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID
 ) -> DocumentGeneration | None:
-    """The document's latest generation when it failed (a later one that did not hides it), so
-    the card can say why and offer "Try again"."""
+    """The document's latest `posting` generation when it failed (a later one that did not hides
+    it), so the card can say why and offer "Try again", which writes the document again. A chat
+    or a shortening is not the writing of the document, so "Try again" would not repeat it: its
+    failure is not named here."""
     last = db.execute(
         sa.select(DocumentGeneration)
-        .where(DocumentGeneration.user_id == user_id, DocumentGeneration.document_id == document_id)
+        .where(
+            DocumentGeneration.user_id == user_id,
+            DocumentGeneration.document_id == document_id,
+            DocumentGeneration.mode == GenerationMode.posting,
+        )
         .order_by(DocumentGeneration.created_at.desc(), DocumentGeneration.id.desc())
         .limit(1)
     ).scalar_one_or_none()
@@ -568,14 +592,15 @@ def read_pdf(
     db: Db,
 ) -> Response:
     """The version's PDF, inline, named after the person and the company. A frozen version's is
-    the stored one, byte for byte."""
+    the stored one, byte for byte, an imported one's the command line's file."""
     document = _own(db, user, document_id)
-    version = _version(db, user, document_id, number, pdf=True)
-    if version.pdf is None:
+    version = _version(db, user, document_id, number)
+    pdf = freeze.pdf(db, user.id, version.id)
+    if pdf is None:
         raise _error(status.HTTP_404_NOT_FOUND, NO_PDF)
     name = file_name(db, document, deps.clock(request))
     return Response(
-        content=bytes(version.pdf),
+        content=pdf,
         media_type="application/pdf",
         headers={**FILE_HEADERS, "Content-Disposition": f'inline; filename="{name}"'},
     )
@@ -594,10 +619,10 @@ def read_page1(
     width: Annotated[int, Query(ge=PREVIEW_MIN, le=PREVIEW_MAX)] = PREVIEW_WIDTH,
 ) -> Response:
     """Page 1 of the version's PDF as a PNG, for phones and cards."""
-    version = _version(db, user, document_id, number, pdf=True)
-    if version.pdf is None:
+    version = _version(db, user, document_id, number)
+    pdf = freeze.pdf(db, user.id, version.id)
+    if pdf is None:
         raise _error(status.HTTP_404_NOT_FOUND, NO_PDF)
-    pdf = bytes(version.pdf)
     db.close()  # the drawing takes a moment: the connection goes back to the pool first
     with _previews:
         png = render_client.page1_png(pdf, width)
@@ -688,6 +713,10 @@ def save_settings(
 # --- templates ----------------------------------------------------------------------------------
 
 
+def _soft_limits(template: templates.Template) -> dict[str, dict[str, int | None]]:
+    return {kind: asdict(spec.soft_limits) for kind, spec in template.kinds.items()}
+
+
 def _thumbnails(template: templates.Template) -> dict[str, str]:
     return {
         kind: f"/api/document-templates/{template.slug}/thumbnail?kind={kind}&v={template.version}"
@@ -697,8 +726,8 @@ def _thumbnails(template: templates.Template) -> dict[str, str]:
 
 @templates_router.get("", response_model=TemplatesOut)
 def list_templates(user: CurrentUser, db: Db, response: Response) -> TemplatesOut:
-    """The gallery: every bundled template (manifest fields, both languages), then the
-    person's own, marked `user`."""
+    """The gallery: every bundled template (manifest fields, both languages, each kind's
+    counters for the editor), then the person's own, marked `user`."""
     response.headers.update(PRIVATE)
     out = [
         TemplateOut(
@@ -712,6 +741,7 @@ def list_templates(user: CurrentUser, db: Db, response: Response) -> TemplatesOu
             accent=template.accent,
             kinds=list(template.kinds),
             thumbnails=_thumbnails(template),
+            soft_limits=_soft_limits(template),
         )
         for template in sorted(templates.registry().values(), key=lambda t: t.slug)
     ]
@@ -728,6 +758,8 @@ def list_templates(user: CurrentUser, db: Db, response: Response) -> TemplatesOu
                 accent=None,
                 kinds=list(templates.KINDS),
                 thumbnails={},
+                # What the render and the writer use: the default's while the row cannot be read.
+                soft_limits=_soft_limits(render_job.template_of(db, user.id, own.slug)),
             )
         )
     return TemplatesOut(templates=out)

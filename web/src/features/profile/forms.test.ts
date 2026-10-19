@@ -382,7 +382,7 @@ describe("experience schema", () => {
       end: "",
       autoKey: false,
     });
-    expect(form.employers[2]).toMatchObject({ present: false, end: "2025-08" });
+    expect(form.employers[2]).toMatchObject({ present: false, end: "2024-06" });
     const out = fromExperienceForm(
       experience({
         employers: [employer({ present: true, end: "2025-01", contract: "" })],
@@ -394,9 +394,9 @@ describe("experience schema", () => {
 
 describe("slugify", () => {
   it.each([
-    ["Betclic Group", "betclic-group"],
+    ["Lumetra Group", "lumetra-group"],
     ["  Zoë Ångström & Co. ", "zoe-angstrom-co"],
-    ["ÉLSAN (Bordeaux)", "elsan-bordeaux"],
+    ["ÓLMEA (Saint-Nazaire)", "olmea-saint-nazaire"],
     ["東京", ""],
     ["", ""],
     ["a".repeat(39) + " bcd", "a".repeat(39)],

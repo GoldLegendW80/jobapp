@@ -91,8 +91,8 @@ export function PostingDocumentPage() {
         </Alert>
       ) : document === undefined ? (
         <p className="text-sm text-muted-foreground">
-          The {NAMES[known].toLowerCase()} of this posting has not been written
-          yet. Write it from the posting page.
+          The {known === "cv" ? "CV" : "letter"} of this posting has not been
+          written yet. Write it from the posting page.
         </p>
       ) : (
         <DocumentView

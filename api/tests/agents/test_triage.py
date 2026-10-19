@@ -33,7 +33,7 @@ from tests.agents.run_helpers import (
 from tests.conftest import make_settings
 
 RULE = "Never cybersecurity roles"
-FACTS = {"blocks": [{"title": "Betclic", "body": "Core engineer of Brain, an agent platform."}]}
+FACTS = {"blocks": [{"title": "Lumetra", "body": "Built the dock planning assistant, an agent."}]}
 SKILLS = {
     "years_experience": 3.5,
     "have": [{"name": "agents", "terms": ["agent", "agents"]}],

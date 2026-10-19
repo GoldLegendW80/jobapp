@@ -48,7 +48,7 @@ d1spike-load
 {"fixtures": 10, "probes": 33, "edges": 5}
 
 == bring the evidence back
-+ rsync jetson:~/d1-spike-7341/work/{evidence,*.json,sizes.txt} /private/tmp/claude-501/-Users-harald-thorvaldhautin-Desktop-job/3ce0f209-6e15-4b87-9024-6adcfa180e07/scratchpad/wt/d1/tasks/evidence/documents-d1/
++ rsync jetson:~/d1-spike-7341/work/{evidence,*.json,sizes.txt} /private/tmp/claude-501/-Users-owner-Desktop-job/3ce0f209-6e15-4b87-9024-6adcfa180e07/scratchpad/wt/d1/tasks/evidence/documents-d1/
 
 == clean up
 rm: cannot remove '/home/yessai/d1-spike-7341/work/pdf-weasy/probe-table.pdf': Permission denied

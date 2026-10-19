@@ -3,8 +3,10 @@
 refuses, the retry budget and the counters, the bind hook, and that a tool bound to one user's
 step reads and writes nothing else, whatever its arguments say."""
 
+import dataclasses
 import hashlib
 import logging
+import re
 import uuid
 from collections.abc import Iterator
 from typing import Any
@@ -18,8 +20,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import definitions, runs
 from app.agents import tools as app_tools
 from app.agents.models import AgentRun, CredentialKind
-from app.ingestion import agents, citations, documents, item_proposals, items, tools
-from app.ingestion.models import IngestionDocument
+from app.ingestion import agents, citations, documents, item_proposals, items, plan, tools
+from app.ingestion.models import IngestionDocument, TextStatus
 from app.ingestion.runs_models import (
     IngestionItem,
     IngestionRun,
@@ -153,17 +155,19 @@ def test_read_document_on_a_part_cut_at_a_paragraph_end(
     )
     assert read_all(tools_for(factory, one)) == (first, [0])
     assert read_all(tools_for(factory, two)) == (second, [0])
-    # A document that was not cut has no range: the step reads all of it.
+    # A document that was not cut has no range: its one step, part 0, reads all of it.
     whole = add_step(factory, alice_id, document, after=one)
     assert binding_of(factory, whole) == {
         "ingestion_run_id": str(one.ingestion_run_id),
         "step_id": str(whole.step_id),
         "document_id": str(document),
-        "part": 2,
+        "part": 0,
         "start": 0,
         "end": len(first + second),
     }
     assert read_all(tools_for(factory, whole)) == (first + second, [0])
+    # A later part without a range is not a document read whole: it is never bound.
+    assert binding_of(factory, add_step(factory, alice_id, document, after=one, part=2)) is None
 
 
 def test_read_document_across_a_form_feed(
@@ -321,6 +325,92 @@ def test_a_removal_is_stored_without_a_value(factory: sessionmaker[Session], cle
     )
     (row,) = stored_items(factory, clean)
     assert (row.action, row.value, row.key) == ("remove", None, "full_name")
+
+
+# The slots an agent may remove (one value each) and those it may not (an entry, a line, a whole
+# list): every slot of every section, so a slot added later is sorted by its kind.
+REMOVABLE = [
+    (section, name)
+    for section, slots in items.SLOTS.items()
+    for name, slot in slots.items()
+    if slot.kind is items.SlotKind.scalar and not slot.derived
+]
+NOT_REMOVABLE = [
+    (section, name)
+    for section, slots in items.SLOTS.items()
+    for name, slot in slots.items()
+    if slot.kind not in (items.SlotKind.scalar, items.SlotKind.setting)
+]
+
+
+@pytest.mark.parametrize(
+    ("section", "name"), NOT_REMOVABLE, ids=[".".join(one) for one in NOT_REMOVABLE]
+)
+def test_a_removal_of_an_entry_a_line_or_a_list_is_refused_whatever_its_key(
+    section: str, name: str
+) -> None:
+    document = citations.prepare(CLEAN)
+    # The list alone, the whole key of an entry as `items.entry_key` writes it, a key with an
+    # empty or a free identity: the agent cannot see the profile, so none of them is accepted.
+    for key in (name, f"{name}:example-works-2021", f"{name}:", f"{name}:Camille Durand"):
+        made, verdict = tools._judge(
+            section, item(key, None, NAME_LINES, action="remove"), document
+        )
+        assert (made, verdict) == (None, tools._Refused(tools.REMOVAL_OF_A_LIST, "action")), key
+    # Near misses of the name are no slot at all: refused by the item model, never stored.
+    for key in (name.upper(), f" {name}", f"{name}s:x", f"{section}.{name}"):
+        made, verdict = tools._judge(
+            section, item(key, None, NAME_LINES, action="remove"), document
+        )
+        assert made is None
+        assert isinstance(verdict, tools._Refused)
+        assert verdict.rule in (items.UNKNOWN_KEY, tools.REMOVAL_OF_A_LIST), key
+    # An add of the same slot is not a removal: whatever it gives, it is not refused as one.
+    made, verdict = tools._judge(section, item(name, {}, NAME_LINES), document)
+    assert not (isinstance(verdict, tools._Refused) and verdict.rule == tools.REMOVAL_OF_A_LIST)
+
+
+@pytest.mark.parametrize(("section", "name"), REMOVABLE, ids=[".".join(one) for one in REMOVABLE])
+def test_a_removal_of_a_field_that_holds_one_value_passes(section: str, name: str) -> None:
+    made, verdict = tools._judge(
+        section, item(name, None, NAME_LINES, action="remove"), citations.prepare(CLEAN)
+    )
+    assert made is not None
+    assert (made.key, made.action, made.value) == (name, items.Action.remove, None)
+    assert isinstance(verdict, citations.Accepted)
+
+
+def test_a_removal_of_a_setting_is_still_named_a_setting() -> None:
+    document = citations.prepare(CLEAN)
+    for section, name in (("skills", "years_experience"), ("search", "min_fit")):
+        made, verdict = tools._judge(
+            section, item(name, None, NAME_LINES, action="remove"), document
+        )
+        assert made is None
+        assert isinstance(verdict, tools._Refused)
+        assert (verdict.rule, verdict.at) == (items.SETTING, "key")
+
+
+def test_a_removal_of_an_entry_is_answered_with_its_rule_and_counted(
+    factory: sessionmaker[Session], clean: Step
+) -> None:
+    removal = item("employers:example-works-2021", None, EMPLOYER_LINE, action="remove")
+    answer, error = call(tools_for(factory, clean), PROPOSE, section="experience", items=[removal])
+    assert error is False
+    assert answer == {
+        "stored": 0,
+        "already_stored": 0,
+        "refused": [
+            refusal(
+                0,
+                tools.REMOVAL_OF_A_LIST,
+                "action",
+                tools.REASONS[tools.REMOVAL_OF_A_LIST],
+            )
+        ],
+    }
+    assert all_items(factory) == 0
+    assert counters(factory, clean) == (0, 1, 0)  # a refusal like the others: it spends the budget
 
 
 def test_a_stored_item_becomes_a_proposal_through_the_item_model(
@@ -557,6 +647,197 @@ def test_an_item_whose_excerpt_is_only_in_another_document(
         (1, "excerpt_not_found"),
     ]
     assert all_items(factory) == 0
+
+
+# --- the value checked is the value stored --------------------------------------------------------
+
+# A document, and true items whose value the section model cleans into another one (case, spaces,
+# Unicode composition, fields it adds as null, duplicate terms) next to items it keeps as given.
+CLEANED_TEXT = (
+    "  Zoë Müller  \n"
+    "Email: Zoë.Müller@Example.org\n"
+    "E-mail : CAMILLE@EXAMPLE.ORG\n"
+    "Phone: +33 1 99 00 12 34\n"
+    "Website: https://camille.example.org\n"
+    "Title: Data\u00a0Engineer\u2003 lead\n"
+    "Languages: French native, English fluent (C1)\n"
+    "Portfolio link: GitHub https://github.example.org/camille\n"
+    "Example Works, Data Engineer, January 2021 to March 2023, Lyon\n"
+    "Cafe\u0301 Example, Barista, 2019, Paris\n"
+    "Example School, MSc Computer Science, 2015 to 2017, Grenoble, thesis on stream joins\n"
+    "Projects: Warehouse pipeline. Built the ingestion pipeline for 12 regional warehouses.\n"
+    "Skills: Python, SQL, Kafka and Airflow in production\n"
+    "Looking for: Data Engineer or Platform Engineer roles, remote or Lyon.\n"
+    "Authorised to work in France without sponsorship, as an EU citizen.\n"
+    "Notice period: three months. Available from 2026-01.\n"
+)
+TRUE_ITEMS: list[tuple[str, dict[str, Any]]] = [
+    (
+        "identity",
+        item("full_name", "  Zoë Müller ", "  Zoë Müller  \nEmail: Zoë.Müller@Example.org"),
+    ),
+    ("identity", item("email", "Zoë.Müller@Example.org", "Email: Zoë.Müller@Example.org")),
+    ("identity", item("email", "CAMILLE@EXAMPLE.ORG", "E-mail : CAMILLE@EXAMPLE.ORG")),
+    ("identity", item("phone", "+33 1 99 00 12 34", "Phone: +33 1 99 00 12 34")),
+    (
+        "identity",
+        item("website", "https://camille.example.org", "Website: https://camille.example.org"),
+    ),
+    (
+        "identity",
+        item("headline", "Data\u00a0Engineer\u2003 lead", "Title: Data\u00a0Engineer\u2003 lead"),
+    ),
+    (
+        "identity",
+        item("languages", {"name": "French"}, "Languages: French native, English fluent (C1)"),
+    ),
+    (
+        "identity",
+        item(
+            "languages",
+            {"name": "English", "level": "fluent (C1)"},
+            "Languages: French native, English fluent (C1)",
+        ),
+    ),
+    (
+        "identity",
+        item(
+            "links",
+            {"label": "GitHub", "url": "https://github.example.org/camille"},
+            "Portfolio link: GitHub https://github.example.org/camille",
+        ),
+    ),
+    (
+        "experience",
+        item(
+            "employers",
+            {
+                "organisation": "Example Works",
+                "title": "Data Engineer",
+                "start": "2021",
+                "end": "2023",
+            },
+            "Example Works, Data Engineer, January 2021 to March 2023, Lyon",
+        ),
+    ),
+    (
+        "experience",
+        item(
+            "employers",
+            {"organisation": "Cafe\u0301 Example", "title": "Barista", "start": "2019"},
+            "Cafe\u0301 Example, Barista, 2019, Paris",
+        ),
+    ),
+    (
+        "experience",
+        item(
+            "education",
+            {
+                "school": "Example School",
+                "degree": "MSc Computer Science",
+                "start": "2015",
+                "end": "2017",
+                "details": "thesis on stream joins",
+            },
+            "Example School, MSc Computer Science, 2015 to 2017, Grenoble, thesis on stream joins",
+        ),
+    ),
+    (
+        "facts",
+        item(
+            "blocks",
+            {
+                "title": "Warehouse pipeline",
+                "body": "Built the ingestion pipeline for 12 regional warehouses.",
+            },
+            "Warehouse pipeline. Built the ingestion pipeline for 12 regional warehouses.",
+        ),
+    ),
+    (
+        "skills",
+        item(
+            "have",
+            {"name": "Data", "terms": ["Python", "SQL", "Kafka", "python"]},
+            "Skills: Python, SQL, Kafka and Airflow in production",
+        ),
+    ),
+    (
+        "search",
+        item(
+            "title_include",
+            {"terms": ["Data Engineer", "Platform Engineer"]},
+            "Looking for: Data Engineer or Platform Engineer roles, remote or Lyon.",
+        ),
+    ),
+    (
+        "answers",
+        item(
+            "work_authorization",
+            {
+                "country": "France",
+                "answer": "Authorised to work in France without sponsorship, as an EU citizen.",
+            },
+            "Authorised to work in France without sponsorship, as an EU citizen.",
+        ),
+    ),
+    ("answers", item("notice_period", "three months", "Notice period: three months. Available")),
+    (
+        "answers",
+        item("earliest_start", "2026-01", "Notice period: three months. Available from 2026-01."),
+    ),
+]
+
+
+def checked_as_stored(row: IngestionItem, document: citations.Document) -> object:
+    """The check of a stored row: its cleaned value against the excerpts it stores."""
+    excerpts = [one["excerpt"] for one in row.citations]
+    return citations.check_item(tools.as_item(row).field_types, row.value, document, excerpts)
+
+
+def test_every_stored_value_passes_the_check_as_the_proposed_one_did(
+    factory: sessionmaker[Session], alice_id: uuid.UUID
+) -> None:
+    step = add_step(factory, alice_id, add_document(factory, alice_id, CLEANED_TEXT))
+    step_tools = tools_for(factory, step)
+    for section in dict.fromkeys(section for section, _ in TRUE_ITEMS):
+        proposed = [entry for of, entry in TRUE_ITEMS if of == section]
+        answer, error = call(step_tools, PROPOSE, section=section, items=proposed)
+        assert (error, answer["refused"], answer["stored"]) == (False, [], len(proposed)), section
+    rows = stored_items(factory, step)
+    assert len(rows) == len(TRUE_ITEMS)
+    proposed_values = [entry["value"] for _, entry in TRUE_ITEMS]
+    assert sum(row.value not in proposed_values for row in rows) >= 8  # cleaned into another value
+    document = citations.prepare(CLEANED_TEXT)
+    for row in rows:
+        assert isinstance(checked_as_stored(row, document), citations.Accepted), row.key
+
+
+def test_a_cleaned_value_that_its_excerpts_do_not_hold_is_refused_and_not_stored(
+    factory: sessionmaker[Session], clean: Step, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No section model does this today: a later cleaning that rewrites a value (another
+    address here) is refused by the check of the value stored, whatever passed before it."""
+    real = items.build
+
+    def rewriting(*args: Any, **kwargs: Any) -> items.Item:
+        made = real(*args, **kwargs)
+        return dataclasses.replace(made, value="c.durand@example.org")
+
+    monkeypatch.setattr(items, "build", rewriting)
+    answer, error = call(tools_for(factory, clean), PROPOSE, section="identity", items=[EMAIL])
+    assert error is False
+    assert answer["stored"] == 0
+    assert [(one["index"], one["rule"], one["at"]) for one in answer["refused"]] == [
+        (0, citations.Rule.ADDRESS_NOT_IN_SOURCE.value, "value")
+    ]
+    assert all_items(factory) == 0
+    assert counters(factory, clean) == (0, 1, 0)
+    # The same item, cleaned as today, passes: the refusal came from the rewritten value alone.
+    monkeypatch.setattr(items, "build", real)
+    assert (
+        call(tools_for(factory, clean), PROPOSE, section="identity", items=[EMAIL])[0]["stored"]
+        == 1
+    )
 
 
 def test_calls_and_items_of_the_wrong_shape(factory: sessionmaker[Session], clean: Step) -> None:
@@ -987,6 +1268,76 @@ def test_the_bind_hook_answers_none_when_there_is_nothing_to_read(
     assert binding_of(factory, ranged) is None
 
 
+@pytest.mark.parametrize(
+    ("characters", "part", "bound"),
+    [
+        (1, 0, True),
+        (plan.PART_MAX_CHARS, 0, True),  # one part exactly, as `plan.cut` leaves it
+        (plan.PART_MAX_CHARS + 1, 0, False),  # two parts: a step without a range is no part
+        (100, 1, False),
+        (100, 2, False),
+    ],
+)
+def test_a_step_without_a_range_is_bound_only_as_the_one_part_of_a_document_read_whole(
+    factory: sessionmaker[Session], alice_id: uuid.UUID, characters: int, part: int, bound: bool
+) -> None:
+    text = ("word " * (characters // 5 + 1))[:characters]
+    step = add_step(factory, alice_id, add_document(factory, alice_id, text), part=part)
+    found = binding_of(factory, step)
+    if not bound:
+        assert found is None
+        return
+    assert found is not None
+    assert (found["part"], found["start"], found["end"]) == (0, 0, characters)
+    assert read_all(tools_for(factory, step))[0] == text
+
+
+def set_document(factory: sessionmaker[Session], document_id: uuid.UUID, **values: Any) -> None:
+    with factory() as db, db.begin():
+        db.execute(
+            sa.update(IngestionDocument).where(IngestionDocument.id == document_id).values(**values)
+        )
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"text_status": TextStatus.pending},
+        {"text_status": TextStatus.failed},
+        {"text_status": TextStatus.awaiting_transcription},
+        {"secret_warning": True},
+    ],
+    ids=["pending", "failed", "awaiting_transcription", "secret_warning_unconfirmed"],
+)
+def test_a_document_that_may_not_be_read_now_is_never_bound_and_both_tools_find_nothing(
+    factory: sessionmaker[Session], clean: Step, state: dict[str, Any]
+) -> None:
+    """Checked at the start of a run, and again at every binding and every call: a
+    transcription can set the warning while the run goes on, a newer parser can read the
+    document again."""
+    found = binding_of(factory, clean)
+    assert found is not None
+    step_tools = tools_for(factory, clean, binding=found)
+    set_document(factory, clean.document_id, **state)
+    assert binding_of(factory, clean) is None
+    assert call(step_tools, READ, offset=0) == (tools.NOT_FOUND, True)
+    assert call(step_tools, PROPOSE, section="identity", items=[EMAIL]) == (tools.NOT_FOUND, True)
+    assert all_items(factory) == 0
+    assert counters(factory, clean) == (0, 0, 0)
+
+
+def test_a_secret_warning_the_user_confirmed_is_read_like_any_document(
+    factory: sessionmaker[Session], clean: Step
+) -> None:
+    step_tools = tools_for(factory, clean)
+    set_document(factory, clean.document_id, secret_warning=True)
+    assert call(step_tools, READ, offset=0) == (tools.NOT_FOUND, True)
+    set_document(factory, clean.document_id, secret_confirmed_at=now())
+    assert binding_of(factory, clean) is not None
+    assert read_all(step_tools)[0] == CLEAN
+    assert call(step_tools, PROPOSE, section="identity", items=[EMAIL])[0]["stored"] == 1
+
+
 # --- the binding is read only, and a failure says nothing -----------------------------------------
 
 
@@ -1149,6 +1500,28 @@ def test_the_prompt_states_its_rules_and_asks_for_one_line() -> None:
     for sentence in sentences:
         for dash in ("—", "–", " - "):
             assert dash not in sentence
+
+
+def test_the_prompt_keeps_removals_to_the_fields_the_tool_lets_it_remove() -> None:
+    lines = agents.EXTRACT.system_prompt.splitlines()
+    (removal,) = [line for line in lines if "`remove`" in line]
+    assert "Never remove an entry or a list" in removal
+    named = [name for name in re.findall(r"`([a-z_]+)`", removal) if name not in ("remove", "end")]
+    assert named == ["headline", "city", "notice_period"]
+    for name in named:  # each example is a field the tool lets the agent remove
+        assert {slots[name].kind for slots in items.SLOTS.values() if name in slots} == {
+            items.SlotKind.scalar
+        }
+        assert any(name == one for _, one in REMOVABLE)
+    # What its last sentence tells the model: no removal is ever part of "Accept all".
+    assert "never with the other items" in removal
+    for section, name in REMOVABLE:
+        made = items.build(section, name, "remove")
+        payload = {"section": made.section, "key": made.key, "action": made.action.value}
+        assert item_proposals.bulk_exclusion(payload) is not None, name
+    # And the line about lists says what the tool does with an entry: the key is computed.
+    (keys,) = [line for line in lines if line.startswith("- `key` names the field")]
+    assert "the app computes the key of the entry from its value" in keys
 
 
 def test_the_input_of_a_step_holds_exactly_its_four_keys() -> None:

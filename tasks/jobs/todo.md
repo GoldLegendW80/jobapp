@@ -61,7 +61,7 @@ Spec: [SPEC-jobs.md](../../SPEC-jobs.md). Depends on profile (matching rules in 
 **Files:** `api/app/jobs/{places.json,world.json}`, `web/src/features/jobs/map*`. **Scope:** M
 
 ## J7: Harald's real data and the Jetson journey
-**Acceptance:** Harald's data imported on the Jetson for hthautin@gmail.com, counts equal to the CSV; one real sweep for an e2e user; Playwright journey through the public URL; screenshots.
+**Acceptance:** Harald's data imported on the Jetson for his own account, counts equal to the CSV; one real sweep for an e2e user; Playwright journey through the public URL; screenshots.
 **Scope:** S
 
 ## Checkpoint J

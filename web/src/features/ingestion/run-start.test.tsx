@@ -1,7 +1,7 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { http, HttpResponse } from "msw";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
 import { fakeDocument, fakeDocuments, fakePrompt } from "@/test/ingestion";
@@ -17,6 +17,9 @@ import {
   type FakeRuns,
 } from "@/test/ingestion-runs";
 import { renderApp } from "@/test/render";
+import { server } from "@/test/server";
+
+import { IDLE_POLL_MS } from "./runs-api";
 
 const ESTIMATE = "/api/ingestion/runs/estimate";
 const CONSENT = "/api/ingestion/consent";
@@ -66,6 +69,10 @@ const accepted = {
   accepted: true,
   accepted_at: "2026-10-01T08:00:00Z",
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("the start of a run", () => {
   it("sends nothing until a document is chosen and the estimate is asked for", async () => {
@@ -526,5 +533,93 @@ describe("the start of a run", () => {
     expect(
       screen.getByRole("button", { name: "See the estimate" }),
     ).toBeEnabled();
+  });
+
+  it.each([
+    "A run reads at most 30 documents, and 31 are selected. Select fewer and start again for the others.",
+    "A run reads at most 1,500,000 characters, and the selection holds 1,612,345. Select fewer documents and start again for the others.",
+    "A run reads at most 60 page images, and the selection holds 61. Select fewer documents and start again for the others.",
+  ])(
+    "a selection over a limit: the dialog says what to change and starts nothing (%s)",
+    async (sentence) => {
+      const { runs, user } = await openStep();
+      server.use(
+        http.post(ESTIMATE, () =>
+          HttpResponse.json({ detail: sentence }, { status: 422 }),
+        ),
+      );
+      await user.click(
+        await screen.findByRole("button", { name: "Select all" }),
+      );
+      await user.click(
+        screen.getByRole("button", { name: "See the estimate" }),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: "Before the run starts",
+      });
+      expect(await within(dialog).findByText(sentence)).toBeVisible();
+      expect(within(dialog).queryByTestId("estimate")).toBeNull();
+      expect(startButton(dialog)).toBeDisabled();
+      expect(dialog).not.toHaveTextContent(DASH);
+      expect(runs.sent("POST", RUNS)).toEqual([]);
+      expect(runs.sent("POST", CONSENT)).toEqual([]);
+    },
+  );
+
+  it("a first read of the runs that fails says this step could not be loaded", async () => {
+    fakeSession(member);
+    fakeDocuments(DOCUMENTS);
+    fakePrompt();
+    fakeRuns();
+    server.use(
+      http.get(RUNS, () =>
+        HttpResponse.json({ detail: "Unavailable." }, { status: 503 }),
+      ),
+    );
+    renderApp("/profile/fill?step=review");
+    expect(
+      await screen.findByText("This step could not be loaded"),
+    ).toBeVisible();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("a background read of the runs that fails keeps the open dialog and says the page keeps trying", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { runs, dialog, user } = await openDialog();
+    server.use(
+      http.get(RUNS, () =>
+        HttpResponse.json({ detail: "Unavailable." }, { status: 503 }),
+      ),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS);
+    });
+    expect(
+      await screen.findByText(
+        "The server could not be reached just now. This page keeps trying.",
+      ),
+    ).toBeInTheDocument();
+    // The dialog, its estimate and its box are the ones the user was reading.
+    expect(dialog).toBeVisible();
+    expect(within(dialog).getByTestId("estimate")).toBeVisible();
+    expect(screen.queryByText("This step could not be loaded")).toBeNull();
+    expect(runs.sent("POST", ESTIMATE)).toHaveLength(1);
+    // The next read succeeds: the notice goes, and the start still works.
+    server.resetHandlers();
+    fakeSession(member);
+    fakeDocuments(DOCUMENTS);
+    fakePrompt();
+    const again = fakeRuns();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(IDLE_POLL_MS);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/This page keeps trying/)).toBeNull();
+    });
+    expect(again.sent("GET", RUNS)).not.toHaveLength(0);
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: /I have read this/ }),
+    );
+    expect(startButton(dialog)).toBeEnabled();
   });
 });

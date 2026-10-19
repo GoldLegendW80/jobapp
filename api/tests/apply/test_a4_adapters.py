@@ -16,6 +16,7 @@ import pytest
 from app.apply import answers
 from app.apply.ats import ADAPTERS, adapter_for, base
 from app.apply.ats.ashby import Ashby
+from app.apply.ats.generic import Generic
 from app.apply.ats.greenhouse import Greenhouse
 from tests.apply.a4_support import FakeForm, Spec, ashby_form, greenhouse_form
 from tests.profile.conftest import full
@@ -412,12 +413,13 @@ def test_without_a_stub_base_the_stub_addresses_are_nobodys() -> None:
         f"{STUB}/greenhouse/northwind-labs/jobs/4012345",
     ):
         assert adapter_for(url) is None
-    assert [cls.name for cls in ADAPTERS] == ["ashby", "greenhouse"]
+    assert [cls.name for cls in ADAPTERS] == ["ashby", "greenhouse", "lever", "generic"]
 
 
-def test_an_unknown_page_has_no_adapter() -> None:
+def test_an_unknown_page_with_a_field_gets_the_generic_strategy() -> None:
     page = '- generic [ref=e1]:\n  - textbox "Email" [ref=e2]\n  - button "Submit" [ref=e3]'
-    assert adapter_for("https://careers.example.org/job/1", page) is None
+    # No named adapter: the generic strategy of A8 (Review first only) takes a page with a field.
+    assert isinstance(adapter_for("https://careers.example.org/job/1", page), Generic)
 
 
 # --- page sentences: accept and refuse --------------------------------------------------------
@@ -833,10 +835,10 @@ def test_a_framed_fill_never_types_into_the_company_page_around_the_frame() -> N
     assert refs and all(r.startswith("f1e") for r in refs)
 
 
-def test_a_top_level_lookalike_on_another_host_gets_no_adapter() -> None:
-    assert adapter_for("https://careers.evil.example/apply", snap("greenhouse")) is None
-    assert adapter_for("https://careers.evil.example/apply", snap("ashby")) is None
-    for cls in ADAPTERS:
+def test_a_top_level_lookalike_on_another_host_gets_no_named_adapter() -> None:
+    for kind in ("greenhouse", "ashby"):
+        assert isinstance(adapter_for("https://careers.evil.example/apply", snap(kind)), Generic)
+    for cls in ADAPTERS[:-1]:
         assert not cls().recognises(snap("greenhouse")) and not cls().recognises(snap("ashby"))
 
 

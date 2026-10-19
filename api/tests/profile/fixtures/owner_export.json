@@ -1,0 +1,1266 @@
+{
+  "format": "jobapp-profile",
+  "version": 1,
+  "exported_at": "2026-10-08T00:00:00Z",
+  "sections": {
+    "identity": {
+      "full_name": "Lucien-Ambroise Quillard",
+      "headline": "GenAI Engineer",
+      "email": "e2e-lucien.quillard@example.org",
+      "phone": "+33 6 39 98 42 17",
+      "city": "Nantes",
+      "country": "France",
+      "linkedin_url": "https://www.linkedin.com/in/e2e-lucien-quillard/",
+      "website": "https://noxtechsolutions.example/",
+      "links": [
+        {
+          "label": "github.com/e2e-lquillard",
+          "url": "https://github.com/e2e-lquillard"
+        }
+      ],
+      "languages": [
+        {
+          "name": "French",
+          "level": "Mother tongue"
+        },
+        {
+          "name": "English",
+          "level": "Fluent (C1)"
+        },
+        {
+          "name": "German",
+          "level": "Intermediate (B1)"
+        }
+      ]
+    },
+    "experience": {
+      "employers": [
+        {
+          "start": "2025-03",
+          "end": null,
+          "key": "lumetra",
+          "organisation": "Lumetra Group",
+          "title": "GenAI Engineer",
+          "location": "Nantes",
+          "contract": null
+        },
+        {
+          "start": "2023-05",
+          "end": null,
+          "key": "noxtech",
+          "organisation": "NoxTechSolutions",
+          "title": "Auto-entrepreneur (self-employed)",
+          "location": "Nantes",
+          "contract": "freelance"
+        },
+        {
+          "start": "2021-09",
+          "end": "2024-06",
+          "key": "olmea",
+          "organisation": "OLMEA",
+          "title": "Full-stack Developer (apprenticeship)",
+          "location": "Saint-Nazaire",
+          "contract": "apprenticeship"
+        },
+        {
+          "start": "2021-06",
+          "end": "2021-08",
+          "key": "velmor",
+          "organisation": "Velmor",
+          "title": "Help desk assistant",
+          "location": "Nantes",
+          "contract": null
+        },
+        {
+          "start": "2021-02",
+          "end": "2021-05",
+          "key": "studio17",
+          "organisation": "Studio Marée 17",
+          "title": "Web developer",
+          "location": "La Rochelle",
+          "contract": null
+        }
+      ],
+      "education": [
+        {
+          "start": "2020-09",
+          "end": "2024-06",
+          "school": "ORBITECH Institute of Technology",
+          "degree": "Master of Engineering",
+          "location": "Nantes",
+          "details": "2020 – 2024. Major: Data Science"
+        },
+        {
+          "start": null,
+          "end": null,
+          "school": "Université de Kervan Haute-Loire",
+          "degree": "Bachelor of Mathematics",
+          "location": null,
+          "details": "2017 – 2020"
+        },
+        {
+          "start": null,
+          "end": null,
+          "school": "Lycée Clément Arnaud, Angers",
+          "degree": "Baccalauréat Général",
+          "location": null,
+          "details": "Mathematics and physics, Mention Bien"
+        }
+      ]
+    },
+    "facts": {
+      "blocks": [
+        {
+          "title": "VERIFIED FACT BASE: Lucien-Ambroise Quillard",
+          "body": "The one source of claims for this person: every line of a tailored CV must trace back to\nsomething in this file. Everything in it is invented: the person, the employers, the schools,\nthe projects and the dates."
+        },
+        {
+          "title": "HARD RULES FOR ANY CV YOU WRITE",
+          "body": "1. **Nothing new.** No figure, team size, client, award or certificate that is not written\n   below. When a posting asks for a number that is not here, describe the work without one.\n2. **Dates, employers and job titles stay as written.** An employer can check them.\n3. **Rewording is welcome, inventing is not.** Use the vocabulary of the posting, reorder,\n   leave out what does not fit, as long as the fact itself is below.\n4. **Lumetra projects are internal.** Say what was built and with which tools; no internal\n   figures and no product names beyond the ones below.\n5. **No research claims.** No PhD, no paper, no maintainer role in a public project."
+        },
+        {
+          "title": "IDENTITY",
+          "body": "- **Lucien-Ambroise Quillard**, Nantes, Pays de la Loire, France\n- +33 6 39 98 42 17 · e2e-lucien.quillard@example.org\n- linkedin.com/in/e2e-lucien-quillard · noxtechsolutions.example\n- Current title: **GenAI Engineer**"
+        },
+        {
+          "title": "EMPLOYMENT (authoritative, do not alter)",
+          "body": "| Employer | Role | Dates | Location |\n|---|---|---|---|\n| **Lumetra Group** | GenAI Engineer | March 2025 to present | Nantes |\n| **NoxTechSolutions** | Auto-entrepreneur (self-employed) | May 2023 to present | Nantes |\n| **OLMEA** | Full-stack Developer (apprenticeship) | September 2021 to June 2024 | Saint-Nazaire |\n| Velmor | Help desk assistant | June 2021 to August 2021 (3 mo) | Nantes |\n| Studio Marée 17 | Web developer | February 2021 to May 2021 (4 mo) | La Rochelle |\n| Café Tilleul | Barista (student job, weekends) | October 2018 to January 2021 | Nantes |\n\n**Experience in years (say it plainly if asked):** first paid web work in February 2021;\nsoftware engineering without a break since **September 2021** (OLMEA apprenticeship, then\nself-employment and Lumetra); about five years in all.\n\nShort early roles, kept only where they help:\n- **Velmor**: answered the help desk of a regional bus network for a summer.\n- **Studio Marée 17**: built the booking pages of a kayak rental website.\n- Café Tilleul: not technical, left out of engineering CVs."
+        },
+        {
+          "title": "EDUCATION (authoritative)",
+          "body": "- **ORBITECH Institute of Technology**, Nantes – *Master of Engineering, Data Science*,\n  **September 2020 – June 2024**, with the apprenticeship at OLMEA from the second year.\n- **Université de Kervan Haute-Loire**: *Bachelor of Mathematics*, 2017 to 2020.\n- **Lycée Clément Arnaud, Angers**: *Baccalauréat Général, mathematics and physics*, 2014 to\n  2017, Mention Bien."
+        },
+        {
+          "title": "LANGUAGES",
+          "body": "French: mother tongue · English: fluent (C1) · German: intermediate (B1)"
+        },
+        {
+          "title": "PROJECTS (from his own repositories)",
+          "body": "### Lumetra Group, GenAI Engineer (March 2025 to present)\n\nLumetra Group runs warehouses for regional food producers.\n\n**`dock-planner`: in production, main developer.**\nAn assistant for warehouse planners: it reads delivery notes and carrier e-mails, proposes a\nloading dock slot and books it only after a planner approves.\n- Python, FastAPI, one tool calling agent with a typed state\n- A React and TypeScript screen for the planners\n- PostgreSQL on a managed Kubernetes cluster\n- An offline evaluation set of invented delivery notes, run before every release\n\n### NoxTechSolutions, self-employed (May 2023 to present)\n\nSmall web projects for local shops and clubs. Public GitHub (`github.com/e2e-lquillard`):\n- `tide-board`: a FastAPI and SQLite service that publishes the tide table of a sailing club.\n- `receipt-sorter`: sorts scanned receipts into folders with an open OCR model.\n\n### OLMEA, Full-stack Developer, apprenticeship (September 2021 to June 2024)\n\nA network of garden centres. Built the stock and order screens of the internal back office\nin C# and Angular."
+        },
+        {
+          "title": "TOOLCHAIN (used every week)",
+          "body": "Python, TypeScript, C# ·\nFastAPI, Django, React, Angular ·\nPostgreSQL, SQLite, Redis ·\nDocker, Kubernetes, GitHub Actions ·\npytest, Playwright"
+        },
+        {
+          "title": "POSITIONING (invented, October 2026)",
+          "body": "Practical AI for operations teams: from the first prototype to the tool people open every\nmorning.\n\n### APPROVED WORDING (reuse as written where it fits)\n\n- **Planner bullet:** \"Built the dock planning assistant: reads delivery notes, proposes a slot,\n  books it after a planner approves.\"\n- **Summary opener:** \"Turns repetitive operations work into tools people trust.\""
+        },
+        {
+          "title": "PRACTICALITIES FOR APPLICATION FORMS (invented, October 2026)",
+          "body": "- **Citizenship and work authorization:** French national, free to work anywhere in the EU, so\n  no sponsorship is needed in France. For Canada and the UK say it as it is: work permit needed\n  (Canada), sponsorship would be needed (UK).\n- **Location stance:** hybrid around Nantes or fully remote. Open to moving to Lyon. Two office\n  days a week is fine.\n- **Notice and start:** one month notice period. Earliest start given on forms in October 2026:\n  February 2027 (date fields: 2027-02-01). Occasional travel is fine, up to one week a month.\n- **Salary expectations:** no figure from the assistant; Lucien types it himself.\n- **Demographic and voluntary self-identification questions:** left empty; Lucien decides on\n  each one.\n- **Motivation, in Lucien's own words (invented example):** he likes small teams that put useful\n  tools in front of real users quickly, and wants his next role to do the same.\n- **How did you hear about us:** the company's careers page, or a referral when there was one.\n- **Languages:** French native, English C1, German B1.\n- **Who submits:** Lucien clicks Submit himself.\n\n### WORDING LEVEL\n\nOutward material names skills and outcomes, never lists of files or tickets."
+        }
+      ]
+    },
+    "skills": {
+      "years_experience": 5.0,
+      "have": [
+        {
+          "advanced_regex": false,
+          "terms": [
+            "agent",
+            "agentic",
+            "langgraph",
+            "langchain",
+            "multi-agent",
+            "tool use",
+            "tool calling",
+            "function calling",
+            "orchestration",
+            "autonomous",
+            "agent ia",
+            "agents ia",
+            "agentique"
+          ],
+          "name": "agents"
+        },
+        {
+          "advanced_regex": true,
+          "terms": [
+            "\\bllm(?:s|es)?\\b",
+            "\\blarge language model(?:s|es)?\\b",
+            "\\bgenai(?:s|es)?\\b",
+            "\\bgen ai(?:s|es)?\\b",
+            "\\bgenerative ai(?:s|es)?\\b",
+            "\\bfoundation model(?:s|es)?\\b",
+            "\\bprompt(?:s|es)?\\b",
+            "\\bprompt engineering(?:s|es)?\\b",
+            "\\bgpt(?:s|es)?\\b",
+            "\\bclaude(?:s|es)?\\b",
+            "\\bbedrock(?:s|es)?\\b",
+            "\\bcopilot(?:s|es)?\\b",
+            "\\bassistant(?:s|es)?\\b",
+            "\\bchatbot(?:s|es)?\\b",
+            "\\bconversational(?:s|es)?\\b",
+            "\\bintelligence artificielle(?:s|es)?\\b",
+            "\\bia générative(?:s|es)?\\b",
+            "\\bgénératif(?:s|es)?\\b",
+            "\\bmodèles de langage(?:s|es)?\\b",
+            "(?<!\\w)(?:\\bia\\b)(?:s|es)?(?!\\w)"
+          ],
+          "name": "llm_apps"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "mcp",
+            "model context protocol",
+            "tool integration",
+            "integration",
+            "connector",
+            "api integration"
+          ],
+          "name": "mcp_integrations"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "eval",
+            "evaluation",
+            "benchmark",
+            "benchmarking",
+            "langsmith",
+            "guardrail",
+            "red team",
+            "red-team",
+            "adversarial",
+            "observability",
+            "tracing"
+          ],
+          "name": "evals"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "python",
+            "fastapi",
+            "pydantic",
+            "django",
+            "flask"
+          ],
+          "name": "python"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "typescript",
+            "react",
+            "javascript",
+            "node",
+            "node.js",
+            "nodejs",
+            "next.js",
+            "front-end",
+            "frontend",
+            "front end",
+            "full-stack",
+            "fullstack",
+            "full stack",
+            "web application",
+            "développement web"
+          ],
+          "name": "typescript_react"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "c#",
+            ".net",
+            "dotnet",
+            "grpc"
+          ],
+          "name": "dotnet"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "rust"
+          ],
+          "name": "rust"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "aws",
+            "terraform",
+            "terragrunt",
+            "docker",
+            "kubernetes",
+            "k8s",
+            "ci/cd",
+            "infrastructure as code",
+            "cloud",
+            "serverless",
+            "lambda",
+            "ecs",
+            "devops"
+          ],
+          "name": "cloud_iac"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "postgres",
+            "postgresql",
+            "mongodb",
+            "mongo",
+            "sql",
+            "redis",
+            "kafka",
+            "database",
+            "data pipeline",
+            "etl"
+          ],
+          "name": "data_stores"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "customer",
+            "client",
+            "stakeholder",
+            "consult",
+            "consulting",
+            "pre-sales",
+            "presales",
+            "workshop",
+            "forward deployed",
+            "forward-deployed",
+            "deployment",
+            "onsite",
+            "on-site",
+            "enterprise",
+            "executive",
+            "trusted advisor",
+            "solution architect",
+            "solutions architect",
+            "discovery"
+          ],
+          "name": "customer_facing"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "prototype",
+            "prototyping",
+            "proof of concept",
+            "poc",
+            "pilot",
+            "production",
+            "ship",
+            "shipping",
+            "end-to-end",
+            "end to end",
+            "0 to 1",
+            "zero to one",
+            "mvp",
+            "iterate",
+            "fast-paced",
+            "hands-on",
+            "hands on",
+            "prototyper",
+            "mise en production",
+            "preuve de concept"
+          ],
+          "name": "prototype_to_prod"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "regulated",
+            "regulation",
+            "compliance",
+            "gambling",
+            "betting",
+            "fintech",
+            "financial services",
+            "finance",
+            "banking",
+            "insurance",
+            "healthcare",
+            "health",
+            "medical",
+            "sovereign",
+            "high-stakes",
+            "mission-critical"
+          ],
+          "name": "regulated_domains"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "computer vision",
+            "ocr",
+            "object detection",
+            "yolo",
+            "diffusion",
+            "image generation",
+            "vision",
+            "multimodal",
+            "video",
+            "video generation",
+            "thumbnail",
+            "media generation",
+            "ffmpeg",
+            "creative automation",
+            "vision par ordinateur"
+          ],
+          "name": "vision_media"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "human-in-the-loop",
+            "human in the loop",
+            "safety",
+            "approval",
+            "audit",
+            "trust",
+            "responsible ai",
+            "governance",
+            "permission"
+          ],
+          "name": "hitl_safety"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "api",
+            "rest",
+            "microservice",
+            "backend",
+            "back-end",
+            "back end",
+            "distributed systems",
+            "scalable"
+          ],
+          "name": "backend_apis"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "french",
+            "english",
+            "bilingual",
+            "francophone",
+            "anglais",
+            "français"
+          ],
+          "name": "french_english"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "claude code",
+            "codex",
+            "cursor",
+            "ai coding",
+            "coding agent",
+            "coding assistant",
+            "developer productivity",
+            "developer tools",
+            "devex",
+            "developer experience"
+          ],
+          "name": "coding_agents"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "entity resolution",
+            "data quality",
+            "matching",
+            "deduplication",
+            "automation",
+            "automate",
+            "workflow",
+            "business process",
+            "internal tools",
+            "automatisation",
+            "automatiser",
+            "outils internes"
+          ],
+          "name": "workflow_automation"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "fraud",
+            "anti-cheat",
+            "anti cheat",
+            "cheat",
+            "collusion",
+            "bot detection",
+            "aml",
+            "anti-money",
+            "risk scoring",
+            "trust and safety",
+            "trust & safety",
+            "abuse"
+          ],
+          "name": "fraud_risk"
+        }
+      ],
+      "adjacent": [
+        {
+          "advanced_regex": false,
+          "terms": [
+            "rag",
+            "retrieval",
+            "retrieval-augmented",
+            "vector",
+            "vector database",
+            "embedding",
+            "semantic search",
+            "knowledge base",
+            "pinecone",
+            "weaviate",
+            "elasticsearch",
+            "génération augmentée"
+          ],
+          "name": "rag"
+        },
+        {
+          "advanced_regex": true,
+          "terms": [
+            "(?<!\\w)(?:fine[- ]?tun\\w*)(?:s|es)?(?!\\w)",
+            "(?<!\\w)(?:finetun\\w*)(?:s|es)?(?!\\w)",
+            "\\blora(?:s|es)?\\b",
+            "\\brlhf(?:s|es)?\\b",
+            "\\bsft(?:s|es)?\\b",
+            "\\btraining pipeline(?:s|es)?\\b",
+            "\\bmodel training(?:s|es)?\\b",
+            "\\bpost-training(?:s|es)?\\b",
+            "\\breinforcement learning(?:s|es)?\\b"
+          ],
+          "name": "fine_tuning"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "mlops",
+            "model serving",
+            "inference",
+            "gpu",
+            "vllm",
+            "triton",
+            "latency",
+            "throughput",
+            "sagemaker",
+            "vertex"
+          ],
+          "name": "mlops_inference"
+        },
+        {
+          "advanced_regex": true,
+          "terms": [
+            "\\bjava(?:s|es)?\\b",
+            "\\bgolang(?:s|es)?\\b",
+            "(?<!\\w)(?:\\bgo\\b)(?:s|es)?(?!\\w)",
+            "\\bkotlin(?:s|es)?\\b",
+            "\\bscala(?:s|es)?\\b",
+            "(?<!\\w)(?:c\\+\\+)(?:s|es)?(?!\\w)",
+            "\\bruby(?:s|es)?\\b",
+            "\\bphp(?:s|es)?\\b"
+          ],
+          "name": "other_languages"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "security",
+            "cyber",
+            "cybersecurity",
+            "pentest",
+            "penetration testing",
+            "threat",
+            "vulnerability",
+            "siem"
+          ],
+          "name": "security"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "voice",
+            "speech",
+            "tts",
+            "text-to-speech",
+            "asr",
+            "audio"
+          ],
+          "name": "voice_speech"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "a/b test",
+            "ab test",
+            "canary",
+            "slo",
+            "sre",
+            "on-call",
+            "incident",
+            "monitoring",
+            "rollout"
+          ],
+          "name": "release_ops"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "founder",
+            "founding",
+            "early-stage",
+            "early stage",
+            "startup experience",
+            "seed"
+          ],
+          "name": "startup_founder"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "statistics",
+            "statistical",
+            "causal inference",
+            "forecasting",
+            "time series",
+            "data scientist",
+            "experimentation",
+            "apprentissage automatique",
+            "statistique"
+          ],
+          "name": "data_science"
+        }
+      ],
+      "none": [
+        {
+          "advanced_regex": false,
+          "terms": [
+            "pytorch",
+            "tensorflow",
+            "jax",
+            "cuda",
+            "research scientist",
+            "publication",
+            "paper",
+            "neurips",
+            "icml",
+            "novel architecture"
+          ],
+          "name": "ml_research"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "distributed training",
+            "pretraining",
+            "pre-training",
+            "training infrastructure",
+            "model parallel",
+            "large-scale training"
+          ],
+          "name": "distributed_training"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "quota",
+            "pipeline generation",
+            "book of business",
+            "territory",
+            "revenue target",
+            "closing deals"
+          ],
+          "name": "sales_quota"
+        },
+        {
+          "advanced_regex": false,
+          "terms": [
+            "robotics",
+            "embedded",
+            "firmware",
+            "hardware",
+            "ros"
+          ],
+          "name": "hardware_robotics"
+        }
+      ],
+      "gates": [
+        {
+          "advanced_regex": true,
+          "terms": [
+            "phd (is )?required|requires? (a )?phd|must (hold|have) a phd|ph\\.d\\. required"
+          ],
+          "name": "phd_required",
+          "penalty": 25
+        },
+        {
+          "advanced_regex": true,
+          "terms": [
+            "security clearance|clearance required|habilitation|secret clearance|top secret"
+          ],
+          "name": "clearance",
+          "penalty": 25
+        },
+        {
+          "advanced_regex": true,
+          "terms": [
+            "(fluent|native|professional) (in )?german|german[- ]speaking|german (is )?required"
+          ],
+          "name": "german_required",
+          "penalty": 25
+        },
+        {
+          "advanced_regex": true,
+          "terms": [
+            "(fluent|native|professional) (in )?spanish|spanish[- ]speaking"
+          ],
+          "name": "spanish_required",
+          "penalty": 25
+        },
+        {
+          "advanced_regex": true,
+          "terms": [
+            "(arabic|cantonese|dutch|italian|norwegian|swedish|flemish|korean|portuguese|greek|japanese|mandarin|hindi)[- ]speaking"
+          ],
+          "name": "other_language",
+          "penalty": 25
+        },
+        {
+          "advanced_regex": true,
+          "terms": [
+            "authorized to work in the (us|united states)|us citizen|u\\.s\\. citizen|green card"
+          ],
+          "name": "us_work_authorization",
+          "penalty": 25
+        }
+      ]
+    },
+    "search": {
+      "title_include": {
+        "advanced_regex": true,
+        "terms": [
+          "forward.deployed",
+          "applied ai",
+          "ai engineer",
+          "genai",
+          "generative ai",
+          "llm",
+          "agent",
+          "solutions? architect",
+          "solutions? engineer",
+          "deployment engineer",
+          "machine learning engineer",
+          "ai platform engineer",
+          "ai product engineer",
+          "ai software engineer",
+          "developer advocate",
+          "developer relations"
+        ]
+      },
+      "title_exclude": {
+        "advanced_regex": true,
+        "terms": [
+          "\\bcyber\\b",
+          "\\bcybersecurity\\b",
+          "\\bsecurity\\b",
+          "\\bpentest\\b",
+          "\\bthreat\\b",
+          "\\bstaff\\b",
+          "\\bprincipal\\b",
+          "\\bdirector\\b",
+          "\\bhead\\b",
+          "\\bvp\\b",
+          "\\brvp\\b",
+          "\\bintern\\b",
+          "\\binternship\\b",
+          "\\bmanager\\b",
+          "\\brecruit\\b",
+          "\\bsales\\b",
+          "\\baccount executive\\b",
+          "\\bresearch scientist\\b",
+          "\\bscientist\\b",
+          "\\bphd\\b",
+          "\\bdesigner\\b",
+          "\\bmarketing\\b",
+          "\\blegal\\b",
+          "\\bfinance\\b",
+          "\\bcounsel\\b",
+          "\\blead\\b",
+          "\\bpentester\\b",
+          "\\breliability\\b",
+          "\\binfrastructure\\b",
+          "\\bpartner\\b",
+          "\\bnew grad\\b",
+          "\\brotational\\b",
+          "\\bassociate\\b",
+          "\\boperations\\b",
+          "\\bgtm\\b",
+          "\\bstrategist\\b",
+          "\\bpresales\\b",
+          "\\bdelivery\\b",
+          "\\bspecialist\\b",
+          "\\brobotics\\b",
+          "\\bdefense\\b",
+          "\\bdefence\\b",
+          "\\bgovernment\\b",
+          "\\bpublic sector\\b",
+          "\\bnato\\b",
+          "\\bquants\\b",
+          "\\bads\\b",
+          "arabic[ -]speaking",
+          "cantonese[ -]speaking",
+          "dutch[ -]speaking",
+          "german[ -]speaking",
+          "italian[ -]speaking",
+          "spanish[ -]speaking",
+          "norwegian[ -]speaking",
+          "swedish[ -]speaking",
+          "flemish[ -]speaking",
+          "korean[ -]speaking",
+          "portuguese[ -]speaking",
+          "greek[ -]speaking"
+        ]
+      },
+      "location": {
+        "advanced_regex": true,
+        "terms": [
+          "paris",
+          "france",
+          "emea",
+          "europe",
+          "singapore",
+          "london",
+          "united kingdom",
+          "\\buk\\b",
+          "zurich",
+          "zürich",
+          "geneva",
+          "lausanne",
+          "luxembourg",
+          "bordeaux",
+          "\\beu\\b"
+        ]
+      },
+      "contract_types": [
+        "CDI",
+        "CDD",
+        "VIE",
+        "Freelance"
+      ],
+      "remote_stance": "any",
+      "min_fit": 70,
+      "days": 30,
+      "boards": [
+        {
+          "company": "Mistral AI",
+          "ats": "ashby",
+          "org": "mistral.ai",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "OpenAI",
+          "ats": "ashby",
+          "org": "openai",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Anthropic",
+          "ats": "greenhouse",
+          "org": "anthropic",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Cohere",
+          "ats": "ashby",
+          "org": "cohere",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "ElevenLabs",
+          "ats": "ashby",
+          "org": "elevenlabs",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "LangChain",
+          "ats": "ashby",
+          "org": "langchain",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Harvey",
+          "ats": "ashby",
+          "org": "harvey",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Writer",
+          "ats": "ashby",
+          "org": "writer",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Notion",
+          "ats": "ashby",
+          "org": "notion",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Dust",
+          "ats": "ashby",
+          "org": "dust",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Perplexity",
+          "ats": "ashby",
+          "org": "perplexity",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Cursor",
+          "ats": "ashby",
+          "org": "cursor",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Replit",
+          "ats": "ashby",
+          "org": "replit",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Sierra",
+          "ats": "ashby",
+          "org": "sierra",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Decagon",
+          "ats": "ashby",
+          "org": "decagon",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "H Company",
+          "ats": "ashby",
+          "org": "hcompany",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Photoroom",
+          "ats": "ashby",
+          "org": "photoroom",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "DeepJudge",
+          "ats": "ashby",
+          "org": "deepjudge",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Lakera",
+          "ats": "ashby",
+          "org": "lakera.ai",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Poolside",
+          "ats": "ashby",
+          "org": "poolside",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Weave",
+          "ats": "ashby",
+          "org": "weave",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Alan",
+          "ats": "ashby",
+          "org": "alan",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Qonto",
+          "ats": "ashby",
+          "org": "qonto",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Doctolib",
+          "ats": "ashby",
+          "org": "doctolib",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "GitLab",
+          "ats": "greenhouse",
+          "org": "gitlab",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Databricks",
+          "ats": "greenhouse",
+          "org": "databricks",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": true,
+            "terms": [
+              "senior",
+              "\\bsr\\b",
+              "lakebase",
+              "migrations",
+              "manufacturing",
+              "media",
+              "china",
+              "enterprise accounts",
+              "cpg"
+            ]
+          }
+        },
+        {
+          "company": "Scale AI",
+          "ats": "greenhouse",
+          "org": "scaleai",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "xAI",
+          "ats": "greenhouse",
+          "org": "xai",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Elastic",
+          "ats": "greenhouse",
+          "org": "elastic",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Datadog",
+          "ats": "greenhouse",
+          "org": "datadog",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Palantir",
+          "ats": "lever",
+          "org": "palantir",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        },
+        {
+          "company": "Sonar",
+          "ats": "lever",
+          "org": "sonarsource",
+          "enabled": true,
+          "extra_exclude": {
+            "advanced_regex": false,
+            "terms": []
+          }
+        }
+      ],
+      "never_apply": [
+        "No cybersecurity roles: cyber, security, pentest, threat (Harald, 2026-10-06)"
+      ],
+      "sweep_schedule": {
+        "enabled": false,
+        "days": [
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+          "sunday"
+        ],
+        "times": [
+          "06:17"
+        ],
+        "timezone": "Europe/Paris"
+      },
+      "documents": {
+        "auto": true,
+        "min_fit": 70,
+        "daily_ceiling": 100
+      }
+    },
+    "answers": {
+      "work_authorization": [
+        {
+          "country": "France",
+          "answer": "French national, free to work anywhere in the EU, so no sponsorship is needed in France.",
+          "needs_sponsorship": false
+        },
+        {
+          "country": "European Union",
+          "answer": "French national, free to work anywhere in the EU, so no sponsorship is needed in France.",
+          "needs_sponsorship": false
+        },
+        {
+          "country": "Canada",
+          "answer": "Work permit needed.",
+          "needs_sponsorship": true
+        },
+        {
+          "country": "United Kingdom",
+          "answer": "Sponsorship would be needed.",
+          "needs_sponsorship": true
+        }
+      ],
+      "notice_period": "One month notice period.",
+      "earliest_start": "February 2027 (date fields: 2027-02-01)",
+      "salary_policy": "No figure from the assistant; Lucien types it himself.",
+      "preferred_name": null,
+      "pronouns": null,
+      "years_experience_stated": null,
+      "highest_degree": null,
+      "highest_degree_year": null,
+      "willing_onsite": null,
+      "willing_hybrid": null,
+      "previously_applied_default": null,
+      "background_check_consent": null,
+      "reference_check_consent": null,
+      "eeo_policy": "decline",
+      "eeo_answers": [],
+      "salary_stance": null,
+      "salary_ranges": [],
+      "relocation": "Hybrid around Nantes or fully remote. Open to moving to Lyon. Two office days a week is fine.",
+      "travel": "Occasional travel is fine, up to one week a month.",
+      "motivation": "He likes small teams that put useful tools in front of real users quickly, and wants his next role to do the same.",
+      "heard_about": "The company's careers page, or a referral when there was one.",
+      "leave_blank": [
+        "Demographic and voluntary self-identification questions: left empty; Lucien decides on each one."
+      ]
+    }
+  },
+  "photo": {
+    "mime": "image/jpeg",
+    "base64": "<JPEG RGB 420x420>"
+  }
+}

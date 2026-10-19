@@ -22,7 +22,7 @@ function makeInvite(overrides: Partial<AdminInvite> = {}): AdminInvite {
     kind: "invite",
     role: "member",
     status: "active",
-    created_by_name: "Harald Hautin",
+    created_by_name: "Harald Example",
     created_at: new Date(now).toISOString(),
     expires_at: new Date(now + 7 * 24 * HOUR + 60_000).toISOString(),
     used_at: null,
@@ -234,7 +234,7 @@ describe("invites list", () => {
     expect(active).toHaveTextContent("Admin");
     expect(active).toHaveTextContent("Active");
     expect(active).toHaveTextContent("in 7 days");
-    expect(active).toHaveTextContent("by Harald Hautin");
+    expect(active).toHaveTextContent("by Harald Example");
     expect(
       within(active).getByRole("button", {
         name: "Revoke the link for active@example.org",

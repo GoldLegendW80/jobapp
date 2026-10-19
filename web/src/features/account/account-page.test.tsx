@@ -86,7 +86,7 @@ describe("account page", () => {
       return { ...utils, user: userEvent.setup() };
     })();
     await user.click(
-      screen.getByRole("button", { name: /Account menu, Harald Hautin/ }),
+      screen.getByRole("button", { name: /Account menu, Harald Example/ }),
     );
     await user.click(await screen.findByRole("menuitem", { name: "Account" }));
     expect(
@@ -385,7 +385,7 @@ describe("profile name card", () => {
     const { user } = await openAccount();
     const form = within(nameForm());
     const input = form.getByLabelText("Name");
-    expect(input).toHaveValue("Harald Hautin");
+    expect(input).toHaveValue("Harald Example");
     expect(form.getByText("harald@example.org")).toBeInTheDocument();
     const save = form.getByRole("button", { name: "Save name" });
     expect(save).toBeDisabled();
