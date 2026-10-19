@@ -30,9 +30,9 @@ fields found in the PDF text are D25b's, which holds the renderer.
 extraction of D25a's sandbox kinds says of the look, as values the template system takes: the
 page (always A4, the spec's), the side margin, one or two columns and the narrower one's side,
 the body size, the line height, the name's and the headings' scale, the text colour, the accent,
-a band or column fill and the text on it, the fonts through `font_map`. Each value is read by a
-rule of its own (TOKEN_RULES below); a value that cannot be read, or falls outside BOUNDS, or a
-colour under 4.5:1, is replaced by its named default (DEFAULTS) and a Note says which and why.
+a band or column fill and the text on it, the fonts through `font_map`. A value that cannot be
+read, or falls outside BOUNDS, or a colour under 4.5:1, is replaced by its named default
+(DEFAULTS) and a Note says which and why (NOTE_CODES).
 The text, the accent and the text on the fill pass the checks' contrast rule by construction.
 `steps(tokens, kind)` is the density ladder of a user template's manifest: loosest from the
 captured density, down to TIGHTEST, every step within `templates.BOUNDS`.
@@ -63,8 +63,9 @@ from app.ingestion.parser_client import DesignDocx, DesignPdf, TextRun
 CODES = (
     "authoring", "syntax", "construct", "name", "constant", "literal", "tag", "attribute",
     "unprinted", "density_unread", "density_pinned", "property", "size", "colour", "contrast",
-    "content", "font", "page", "structure",
+    "content", "font", "page", "structure", "too_large",
 )  # fmt: skip
+FILE_MAX = 64_000  # characters of one file; the bundled ones hold under 10,000
 
 
 @dataclass(frozen=True)
@@ -406,9 +407,11 @@ def check_html(kind: str, file: str, source: str) -> list[Problem]:
     walk = _Walk(file, kind)
     try:
         tree = Environment(autoescape=True).parse(source)
+        walk.body(tree.body, {}, ())
     except TemplateSyntaxError as error:
         return [Problem(file, error.lineno or 0, "syntax", "Jinja that does not parse")]
-    walk.body(tree.body, {}, ())
+    except RecursionError:
+        return [Problem(file, 0, "syntax", "Jinja nested deeper than Python reads")]
     parser = _Html(walk)
     for line, data in walk.html:
         parser.line = line
@@ -692,11 +695,15 @@ def check(
     for line in templates.problems(files, photo):
         file, _, detail = line.partition(": ")
         found.append(Problem(file, 0, "authoring", detail))
+    large = [name for name in templates.FILES if len(files.get(name, "")) > FILE_MAX]
+    found += [Problem(name, 0, "too_large", f"over {FILE_MAX} characters") for name in large]
     for kind in templates.KINDS:
         name = f"{kind}.html.j2"
-        found += check_html(kind, name, files.get(name, ""))
+        if name not in large:
+            found += check_html(kind, name, files.get(name, ""))
     accent = _six(accent.lower()) if _HEX.fullmatch(accent.lower()) else WHITE
-    found += check_css(files.get("style.css", ""), fonts, accent)
+    if "style.css" not in large:
+        found += check_css(files.get("style.css", ""), fonts, accent)
     return found
 
 

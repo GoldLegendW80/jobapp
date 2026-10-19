@@ -325,3 +325,25 @@ def test_a_problem_never_carries_text_of_the_template():
     assert len(found) >= 8
     assert not [p for p in found if marker in str(p) or marker in p.code]
     assert {p.code for p in found} <= set(template_rules.CODES)
+
+
+@pytest.mark.parametrize(
+    ("files", "code"),
+    [
+        (_cv(SUMMARY, SUMMARY + "<p></p>" * 9200), "too_large"),
+        ({**FILES, "style.css": FILES["style.css"] + ".x{}" * 16000}, "too_large"),
+        (_cv(SUMMARY, SUMMARY + "{% if name %}" * 2000 + "{% endif %}" * 2000), "syntax"),
+        (_cv(SUMMARY, SUMMARY + "{{ " + "(" * 3000 + "name" + ")" * 3000 + " }}"), "syntax"),
+    ],
+)
+def test_the_largest_and_deepest_files_end_as_a_problem_not_an_error(files, code):
+    assert code in {problem.code for problem in _check(files)}
+
+
+def test_a_file_at_the_cap_of_the_shapes_the_rules_read_is_checked_whole():
+    rows = '<div class="row"><p class="x">{{ content.summary }}</p></div>\n'
+    sheet = ".x { color: #1d232b; margin: var(--section-gap) 0; }\n"
+    files = _cv(SUMMARY, SUMMARY + rows * 900)
+    files["style.css"] += sheet * 1000
+    assert all(len(text) <= template_rules.FILE_MAX for text in files.values())
+    assert _check(files) == []
