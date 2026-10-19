@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -101,6 +101,27 @@ describe("sign in to a site", () => {
     expect(
       screen.getByRole("button", { name: "Close my browser" }),
     ).toBeInTheDocument();
+  });
+
+  it("does not close again a live view the server already closed", async () => {
+    const state = { browser: SIGNING_IN };
+    fakeApi(state);
+    server.use(
+      http.delete("*/api/browser/sessions/current", () => {
+        state.browser = FREE;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithQuery(<BrowserCard />);
+    const view = await connected(opened);
+    // The session ends: browserd closes the socket before the page drops the view.
+    act(() => {
+      view.events.disconnect();
+    });
+    await user.click(screen.getByRole("button", { name: "Close my browser" }));
+    await screen.findByRole("button", { name: "Sign in to a site" });
+    expect(view.screen.disconnects).toBe(0);
   });
 
   it("submits with Enter", async () => {

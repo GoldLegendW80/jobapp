@@ -147,6 +147,7 @@ test("A signs in to the site through the live view, on a phone", async () => {
   expect(seen.processes).toBeGreaterThan(0);
   expect(seen.listening).toEqual([]);
   expect(seen.switches).toEqual([]);
+  // browserd wrote no CDP port for this lease: the probe fails (its traceback is expected).
   expect(() => probe("navigate", SITE, "5")).toThrow();
   await expect
     .poll(windowTitles, { timeout: 30_000 })

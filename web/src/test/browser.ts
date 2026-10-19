@@ -35,8 +35,10 @@ export function ownLease(purpose: "look" | "signin"): Lease {
 export class FakeScreen implements Screen {
   viewOnly = true;
   disconnected = false;
+  disconnects = 0;
   disconnect() {
     this.disconnected = true;
+    this.disconnects += 1;
   }
   focus() {}
   typeKey() {}
@@ -47,7 +49,7 @@ export class FakeScreen implements Screen {
 
 export interface Opened {
   screen: FakeScreen;
-  events: { connect(): void };
+  events: { connect(): void; disconnect(): void };
 }
 
 /** Every live view the page opens, drawn by a fake noVNC screen; restored by vi.restoreAllMocks. */
