@@ -137,7 +137,7 @@ def test_the_wait_ends_at_its_own_deadline() -> None:
         clock.now += 1799
         assert await mgr.tick() is None
         clock.now += 1
-        assert await mgr.tick() == "person_timeout"
+        assert await mgr.tick() == "signin_timeout"
 
     run(go())
 
