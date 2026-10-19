@@ -150,6 +150,12 @@ UNPRINTED = [
     (_cv(ROLE, "{% if not roles %}" + ROLE + "{% endif %}"), "cv", "roles[].period"),
     (_cv(ROLE, "{% if roles and photo %}" + ROLE + "{% endif %}"), "cv", "roles[].bullets"),
     (_cv(ROLE, "{% if roles and role.title %}" + ROLE + "{% endif %}"), "cv", "roles[].location"),
+    (
+        _cv(ROLE, "{% if (roles and photo) or content.summary %}" + ROLE + "{% endif %}"),
+        "cv",
+        "roles[].title",
+    ),
+    (_cv(ROLE, "{% if not (roles or schools) %}" + ROLE + "{% endif %}"), "cv", "roles[].title"),
     (_cv(ROLE, "{% if roles %}{% else %}" + ROLE + "{% endif %}"), "cv", "roles[].location"),
     (_cv(ROLE, "{% if content.summary %}" + ROLE + "{% endif %}"), "cv", "roles[].title"),
     (_cv(ROLE, "{% if loop.first %}" + ROLE + "{% endif %}"), "cv", "roles[].title"),
@@ -183,6 +189,8 @@ def test_a_field_not_printed_or_printed_only_under_another_test_is_refused(files
 
 HTML_ACCEPTED = [
     _cv(ROLE, "{% if roles or schools %}" + ROLE + "{% endif %}"),
+    _cv(ROLE, "{% if photo or (roles and role) %}" + ROLE + "{% endif %}"),
+    _cv(ROLE, "{% if (roles or schools) and role %}" + ROLE + "{% endif %}"),
     _cv(
         ROLE,
         '<div class="entry"><h3>{{ role.title }}, {{ role.organisation }}</h3>'
@@ -230,6 +238,11 @@ CSS_REFUSED = [
     (_css(".x::before { content: attr(title); }"), "content"),
     (_css('.x::before { content: "\\2013"; }'), "content"),
     (_css('.x::before { content: "12"; }'), "content"),
+    (_css('.x::before { content: "•" "Senior"; }'), "content"),
+    (_css('.x::before { content: "•" attr(title); }'), "content"),
+    (_css('.x { list-style-type: "Senior "; }'), "content"),
+    (_css('.x { list-style: "\\2605  " inside; }'), "content"),
+    (_css(".x { list-style: url(data:image/png;base64,AAAA); }"), "property"),
     (_css(":root { --body-size: 9pt; }"), "density_pinned"),
     (_css(":root { --accent: #ff0000; }"), "density_pinned"),
     (_css("", "font-size: var(--body-size);", "font-size: 10pt;"), "density_unread"),
@@ -283,6 +296,7 @@ CSS_ACCEPTED = [
     _css(":root { --rail: 27mm; } .x { grid-template-columns: var(--rail) minmax(0, 1fr); }"),
     _css("/* a comment with { braces } and ; */ .x { color: #1d232b; }"),
     _css(".x { position: absolute; left: 0; top: 0.2em; }"),
+    _css('.x { list-style: "• " inside; } .y { list-style-type: none; }'),
 ]
 
 

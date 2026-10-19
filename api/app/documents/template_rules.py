@@ -18,7 +18,8 @@ text of the template, so it can be logged. On top of the authoring rules every t
 - the CSS: only the properties of PROPERTIES; sizes in `em` or `%` or the density property, so
   the fit loop tightens them; each density property read and none set; colours `#rrggbb` (or
   the accent) that a background of the sheet, or the page's white, holds at 4.5:1 (WCAG 2 AA);
-  nothing that hides a field (`display: none`, negative offsets); `content` only punctuation;
+  nothing that hides a field (`display: none`, negative offsets); `content` and any other
+  string only punctuation, no `url(`;
   font families only those of the manifest; `@page` only `size: A4` and a margin, and a margin
   set there means `--margin` is read elsewhere.
 
@@ -159,15 +160,20 @@ _SLOT = "\ue000"  # where an output stands in the HTML between the constructs
 
 @dataclass(frozen=True)
 class _Guard:
-    """A test around an output, reduced to what it is about: `paths` (any of them, for `or`;
-    all of them, for `and`), or nothing it could vouch for (`not`, an `else`, a loop test)."""
+    """A test around an output, as what makes it true: a field (true when that field, or an
+    item of it, is not empty), any or all of other guards; or nothing it vouches for (`not`, an
+    `else`, a loop's place). `about(path)`: the test is true whenever `path` is printed."""
 
-    paths: tuple[str, ...] = ()
-    every: bool = False
+    path: str | None = None
+    any: tuple[_Guard, ...] = ()
+    all: tuple[_Guard, ...] = ()
 
     def about(self, path: str) -> bool:
-        hits = [path == p or path.startswith((p + ".", p + "[]")) for p in self.paths]
-        return bool(hits) and (all(hits) if self.every else any(hits))
+        if self.path:
+            return path == self.path or path.startswith((self.path + ".", self.path + "[]"))
+        if self.any:
+            return any(guard.about(path) for guard in self.any)
+        return bool(self.all) and all(guard.about(path) for guard in self.all)
 
 
 _NEVER = _Guard()
@@ -233,26 +239,22 @@ class _Walk:
             if node.test is not None or node.recursive:
                 self.refuse(node, "construct", "a for with a test or recursive")
             inner = {**scope, node.target.name: f"{source}[]", "loop": "loop"}
-            self.body(node.body, inner, (*guards, _Guard((source,))))
+            self.body(node.body, inner, (*guards, _Guard(source)))
             self.body(node.else_, scope, (*guards, _NEVER))
         else:
             self.refuse(node, "construct", f"the construct {type(node).__name__}")
 
     def test(self, node: nodes.Expr, scope: dict[str, str]) -> _Guard:
         if isinstance(node, nodes.And | nodes.Or):
-            left, right = self.test(node.left, scope), self.test(node.right, scope)
-            every = isinstance(node, nodes.And)
-            mixed = {left.every, right.every} != {every} and left.paths and right.paths
-            if not (left.paths and right.paths) or mixed:
-                return _NEVER if every else _Guard(left.paths + right.paths)
-            return _Guard(left.paths + right.paths, every)
+            parts = (self.test(node.left, scope), self.test(node.right, scope))
+            return _Guard(all=parts) if isinstance(node, nodes.And) else _Guard(any=parts)
         if isinstance(node, nodes.Not):
             self.test(node.node, scope)
             return _NEVER
         path = self.expr(node, scope)
-        if path == "loop" or (path or "").startswith("loop."):
+        if path is None or path == "loop" or path.startswith("loop."):
             return _NEVER
-        return _Guard((path,)) if path else _NEVER
+        return _Guard(path)
 
     def expr(self, node: nodes.Expr, scope: dict[str, str]) -> str | None:
         """The field path `node` names, None (and a problem) when it names none."""
@@ -605,6 +607,10 @@ def _value(d: _Declaration, names: frozenset[str], backs: set[str], accent: str)
         return None
     if d.prop not in PROPERTIES:
         return "property", "a property outside the allowed list"
+    if "url(" in value:
+        return "property", f"{d.prop}: url(), a template from an upload embeds nothing"
+    if d.prop != "font-family" and not all(set(text) <= CONTENT_CHARS for text in d.strings):
+        return "content", f"{d.prop}: a string other than punctuation"
     relative = _within(value, ("em",), 0.5, 4) or _within(value, ("%",), 50, 400)
     if d.prop == "font-size" and value not in ("var(--body-size)", "inherit") and not relative:
         return "size", "font-size: em from 0.5 to 4, % or var(--body-size)"
@@ -622,10 +628,8 @@ def _value(d: _Declaration, names: frozenset[str], backs: set[str], accent: str)
         return "property", "position: static, relative or absolute"
     if d.prop in ("left", "top", "right", "bottom") and value.startswith("-"):
         return "property", f"{d.prop}: a negative offset"
-    if d.prop == "content" and value not in ("none", "normal"):
-        text = d.strings[0] if value == _STRING and len(d.strings) == 1 else None
-        if text is None or not all(ch in CONTENT_CHARS for ch in text):
-            return "content", "content: punctuation only"
+    if d.prop == "content" and value not in ("none", "normal", _STRING):
+        return "content", "content: punctuation only"
     if d.prop == "font-family":
         items = iter(d.strings)
         for item in value.split(","):
