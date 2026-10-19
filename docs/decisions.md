@@ -13,7 +13,8 @@ choice made by the build that stands until the owner says otherwise.
 - Never apply to a cybersecurity role, whatever the fit score.
 - Never send mail by itself: the person clicks Send (Full auto, when built, is the one opt in
   exception for forms and mails, with its guardrails, decided 2026-10-10).
-- Nothing is submitted without the person's approval: no model ever clicks Submit; the one click
+- Nothing is submitted without the person's approval: in Full auto, the Like the person gives
+  while Full auto is on is that approval (2026-10-10); no model ever clicks Submit; the one click
   path is the apply gate.
 - Tests use only `e2e-*@example.org` accounts and never touch real user data.
 - The owner types sudo, passwords and 2FA codes himself. Agents never read `.env` files or
@@ -109,3 +110,22 @@ choice made by the build that stands until the owner says otherwise.
 - 2026-10-15: the filter of form questions the answer agent may answer is a positive topic
   anchor (the job, the company, the team, motivation, experience); the person answers everything
   else in the approval screen.
+
+## The short path to Full auto (2026-10-19)
+
+The owner's answers of 2026-10-19 (issue #405). The plans and specs of browser and apply follow
+them ([tasks/apply/todo.md](../tasks/apply/todo.md), [tasks/browser/todo.md](../tasks/browser/todo.md)).
+
+1. Full auto ships first for Ashby, Greenhouse and Lever, before browser B12 and the sign in half
+   of apply A10 (A10b). Until then a sign in wall sends the item to the review queue as "Needs
+   you".
+2. The check by model is apply's own: one model call per item (A13c, about 6,500 tokens), since
+   mail M20 is paused. Until A13c lands, an item with free text written by the agent goes to the
+   review queue.
+3. A rehearsal the person answers Yes to lands in the review queue, ready for a one click Approve.
+4. The generic form agent takes over by itself on `form_changed` in both modes (Review first and
+   Full auto), within the run's token budget and every guardrail: the gate, the caps, the safety
+   ceiling and the check by model before a submit. This answers the question of #343.
+5. Planner default, not asked, which the owner may change: an approval or a Full auto Like that
+   only the pace per host holds back stays valid, and the gate checks everything again before the
+   click; a Full auto Like stays valid at most 7 days, and only while Full auto stays on.

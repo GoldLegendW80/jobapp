@@ -36,8 +36,9 @@ below.
    colons or a new sentence. Hyphenated words are fine.
 2. **Never apply to a cybersecurity role**, and build no cybersecurity specific feature.
 3. **Never send mail by itself.** The person clicks Send.
-4. **Nothing is submitted without the person's approval.** No model clicks Submit; the one click
-   path is the apply gate.
+4. **Nothing is submitted without the person's approval.** In Full auto, the Like the person
+   gives while Full auto is on is that approval (owner, 2026-10-10). No model ever clicks Submit;
+   the one click path is the apply gate.
 5. **Tests use only `e2e-*@example.org` accounts**, never real user data, never a real Google
    host, never a real job site (fakes: `tests/gmail-stub.compose.yml`,
    `tests/ats-forms-stub.compose.yml`).
