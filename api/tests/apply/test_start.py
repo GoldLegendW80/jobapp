@@ -722,3 +722,95 @@ def test_retry_delays(value: str, ok: str | None) -> None:
             Settings(**base)  # type: ignore[arg-type]
     else:
         assert Settings(**base).apply_retry_delays_s == ok  # type: ignore[arg-type]
+
+
+# --- issue #296 ----------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", ["applied", "interview", "rejected"])
+def test_an_applied_posting_without_a_date_is_the_same_role(
+    db: Session, a: uuid.UUID, status: str
+) -> None:
+    posting(db, a, "Applied AI Engineer", status=status, applied_on=None)
+    second = posting(db, a, "Applied AI Engineer (H/F)")
+    assert refused(db, a, second, Mode.review) == "same_role"
+    assert refused(db, a, second, Mode.full_auto) == "same_role"
+    assert start(db, a, second, Mode.manual).warnings == ("same_role",)
+
+
+def test_another_role_applied_without_a_date_is_not_the_same_role(
+    db: Session, a: uuid.UUID
+) -> None:
+    posting(db, a, "Applied AI Engineer", status="applied", applied_on=None)
+    assert start(db, a, posting(db, a, "Agent Engineer")).warnings == ()
+
+
+def test_one_careers_page_applied_warns_in_apply_myself(db: Session, a: uuid.UUID) -> None:
+    posting(db, a, "Agent Engineer", "https://example.org/careers", status="applied")
+    job = posting(db, a, "Applied AI Engineer", "https://www.example.org/careers/?utm_source=x")
+    assert refused(db, a, job, Mode.review) == "same_address"
+    assert refused(db, a, job, Mode.full_auto) == "same_address"
+    started = start(db, a, job, Mode.manual)
+    assert started.warnings == ("same_address",)
+    assert started.application.canonical_key == "url:http://example.org/careers"
+
+
+def test_one_careers_page_with_a_live_application_is_still_the_same_form(
+    db: Session, a: uuid.UUID
+) -> None:
+    # The second unique index holds one live application per form address, ordinary or not.
+    first = posting(db, a, "Agent Engineer", "https://example.org/careers")
+    live = start(db, a, first).application
+    job = posting(db, a, "Applied AI Engineer", "https://www.example.org/careers/")
+    for mode in Mode:
+        with pytest.raises(service.RefusedError) as caught:
+            start(db, a, job, mode)
+        assert caught.value.refusal.code == "same_form"
+        assert caught.value.refusal.application_id == live.id
+
+
+def _hold_person_lock(session: Session, user_id: uuid.UUID) -> None:
+    session.execute(
+        sa.select(sa.func.pg_advisory_xact_lock(sa.func.hashtextextended(f"apply:{user_id}", 0)))
+    )
+
+
+def _hold_live_insert(session: Session, user_id: uuid.UUID, job: uuid.UUID, key: str) -> None:
+    """A writer that skipped the locks: an uncommitted live application on `key`."""
+    session.execute(
+        sa.text(
+            "INSERT INTO applications (user_id, posting_id, mode, state, ats, form_url, "
+            "canonical_key) VALUES (:u, :p, 'review', 'queued', 'greenhouse', 'https://x', :k)"
+        ),
+        {"u": user_id, "p": job, "k": key},
+    )
+
+
+@pytest.mark.parametrize("held", ["the person's lock", "another writer's insert"])
+def test_a_start_past_the_lock_timeout_is_busy_with_a_code(
+    api: Api, factory: sessionmaker[Session], a: uuid.UUID, short_locks: None, held: str
+) -> None:
+    token = api.login_token(USER_A)
+    with factory() as setup:
+        job = posting(setup, a, url=GH.format(4012777))
+        other = posting(setup, a, "Agent Engineer")
+    holder = factory()
+    try:
+        if held == "the person's lock":
+            _hold_person_lock(holder, a)
+        else:
+            # the insert of the start waits on the form's unique index: a raw lock timeout
+            _hold_live_insert(holder, a, other, "greenhouse:4012777")
+        answer = api.post(f"/api/postings/{job}/applications", token=token, json={})
+    finally:
+        holder.rollback()
+        holder.close()
+    assert answer.status_code == 409, answer.text
+    assert answer.json()["code"] == "busy"
+    assert (
+        answer.json()["detail"]
+        == "This posting is busy with another change. Try again in a moment."
+    )
+    assert answer.headers["cache-control"] == "no-store"
+    with factory() as check:
+        assert count(check, "applications", a) == 0
