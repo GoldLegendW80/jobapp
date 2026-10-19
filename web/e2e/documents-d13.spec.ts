@@ -23,12 +23,12 @@ import {
  * Documents D13 against the real stack through Caddy, driven through the page: an invented
  * account with a made up model credential, the consent and a base CV (the writers on the fake
  * backend), a posting with fit 80 and one with fit 65. One pass of D10's tick
- * (`python -m app.documents.tick <email>` in the api container) starts the CV of the first, so
- * the Search tab's card says one posting was written today against the safety ceiling. Open
- * Advanced, see the count at 70, move the threshold to 60 and see what it adds before saving,
- * save; a ceiling of 501 is refused with its sentence; reload and see 60. The writing rules are
- * saved at once and read back after a reload. Screenshots at every viewport check that nothing
- * overflows on a phone.
+ * (`python -m app.documents.tick <email>` in the api container) starts the CV of the first, if
+ * the worker's own tick has not, so the Search tab's card says one posting was written today
+ * against the safety ceiling. Open Advanced, see the count at 70, move the threshold to 60 and
+ * see what it adds before saving, save; a ceiling of 501 is refused with its sentence; reload and
+ * see 60. The writing rules are saved at once and read back after a reload. Screenshots at every
+ * viewport check that nothing overflows on a phone.
  *
  * Locally, as documents-d6.spec.ts (AGENTS_FAKE_BACKEND=1 on the worker), then:
  *   E2E_CADDY_URL=http://127.0.0.1:8099 E2E_COMPOSE_PROJECT=jobapp-d13 \
@@ -127,7 +127,8 @@ test("an invented person has a base CV, and the tick writes the posting at fit 8
   });
   await setFit(middle, 65);
 
-  expect(tick(person.email)).toContain("started 1");
+  // The worker's own tick may start the posting first: the card's Today line is the proof.
+  expect(tick(person.email)).toMatch(/^started [01],/);
 });
 
 test("the card shows today's count, and what a threshold of 60 adds before it is saved", async () => {

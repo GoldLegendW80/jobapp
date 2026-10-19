@@ -169,23 +169,69 @@ describe("writing rules", () => {
     expect(card().textContent).not.toMatch(DASHES);
   });
 
-  it("holds the controls while a save runs", async () => {
+  it("shows a change at once, and saves one made during a save after it, in order", async () => {
     const { user, rules } = await openRules({ banned_phrases: ["synergy"] });
     let release = () => {};
     rules.held = new Promise((resolve) => {
       release = resolve;
     });
     await user.click(dashes());
-    await waitFor(() => {
-      expect(dashes()).toBeDisabled();
-    });
+    expect(dashes()).toBeChecked();
+    expect(dashes()).toBeEnabled();
     expect(
       screen.getByRole("button", { name: "Remove synergy" }),
-    ).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
+    ).toBeEnabled();
+    await user.type(input(), "rockstar{Enter}");
+    expect(phrases()).toEqual(["synergy", "rockstar"]);
+    expect(input()).toHaveValue("");
+    expect(dashes()).toBeChecked();
+    expect(rules.puts).toHaveLength(1);
     release();
-    await screen.findByText("Writing rules saved.");
-    expect(dashes()).toBeEnabled();
+    await waitFor(() => {
+      expect(rules.value).toEqual({
+        no_dash_separators: true,
+        banned_phrases: ["synergy", "rockstar"],
+      });
+    });
+    expect(rules.puts).toEqual([
+      { no_dash_separators: true, banned_phrases: ["synergy"] },
+      { no_dash_separators: true, banned_phrases: ["synergy", "rockstar"] },
+    ]);
+    await waitFor(() => {
+      expect(card().querySelector('[aria-busy="true"]')).toBeNull();
+    });
+    expect(dashes()).toBeChecked();
+    expect(phrases()).toEqual(["synergy", "rockstar"]);
+  });
+
+  it("keeps the phrase being typed when the switch or a Remove is saved", async () => {
+    const { user, rules } = await openRules({ banned_phrases: ["synergy"] });
+    await user.type(input(), "go get");
+    await user.click(dashes());
+    await waitFor(() => {
+      expect(rules.puts).toHaveLength(1);
+    });
+    await user.click(screen.getByRole("button", { name: "Remove synergy" }));
+    await waitFor(() => {
+      expect(rules.value.banned_phrases).toEqual([]);
+    });
+    await waitFor(() => {
+      expect(card().querySelector('[aria-busy="true"]')).toBeNull();
+    });
+    expect(input()).toHaveValue("go get");
+  });
+
+  it("puts the switch back when its save is refused", async () => {
+    const { user, rules } = await openRules();
+    rules.refuse = { status: 503, detail: "Try again in a moment." };
+    await user.click(dashes());
+    expect(
+      await screen.findByText(
+        "The writing rules were not saved. Try again in a moment.",
+      ),
+    ).toBeVisible();
+    expect(dashes()).not.toBeChecked();
+    expect(rules.value.no_dash_separators).toBe(false);
   });
 
   it("shows the api's sentence when a save is refused, and the saved rules", async () => {

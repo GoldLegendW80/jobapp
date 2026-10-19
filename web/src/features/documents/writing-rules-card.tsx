@@ -1,9 +1,9 @@
 /**
  * The card "Writing rules" of the Search tab (SPEC-documents.md, Decision 9): the rules code
  * enforces on the CVs and letters the writer makes, through `GET` and `PUT /api/documents/settings`. Each change
- * is saved at once, the whole value at a time, with the controls held while it saves; the card
- * shows what the api answered (between two tabs the last save wins: the api keeps no revision).
- * It sits inside the Search form, so nothing here submits it.
+ * shows at once and is saved at once, the whole value at a time, one save after the other in the
+ * order asked; a refused save puts back what the api answered last (between two tabs the last
+ * save wins: the api keeps no revision). It sits inside the Search form, so nothing here submits it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, Plus, X } from "lucide-react";
@@ -37,11 +37,20 @@ const fold = (text: string): string =>
     .filter((word) => word !== "")
     .join(" ");
 
-export function WritingRulesCard() {
-  const query = useQuery({
+/** One save: the whole value, and the phrase it adds, put back in its box when it is refused. */
+interface Save {
+  value: DocumentSettings;
+  added?: string;
+}
+
+const useSettings = () =>
+  useQuery({
     queryKey: settingsKey,
     queryFn: ({ signal }) => getSettings(signal),
   });
+
+export function WritingRulesCard() {
+  const query = useSettings();
   return (
     <Group
       title="Writing rules"
@@ -62,38 +71,49 @@ export function WritingRulesCard() {
   );
 }
 
-function Rules({ saved }: { saved: DocumentSettings }) {
+function Rules({ saved: first }: { saved: DocumentSettings }) {
   const client = useQueryClient();
   const id = useId();
+  // Its own read of the cache, so that a render of this card alone sees the api's last answer.
+  const saved = useSettings().data ?? first;
   const [phrase, setPhrase] = useState("");
   const [problem, setProblem] = useState<string>();
+  // The value of the last change, set in the click itself so the switch moves with it.
+  const [asked, setAsked] = useState<DocumentSettings>();
   const mutation = useMutation({
-    mutationFn: putSettings,
+    mutationFn: ({ value }: Save) => putSettings(value),
+    // Each PUT is the whole value: one at a time, so the last one asked is the last one kept.
+    scope: { id: "documents-settings" },
     onSuccess: (value) => {
       client.setQueryData(settingsKey, value);
       toast.success("Writing rules saved.");
     },
+    onError: (_error, { added }) => {
+      if (added !== undefined) setPhrase((now) => (now === "" ? added : now));
+    },
+    onSettled: (_data, _error, { value }) => {
+      setAsked((now) => (now === value ? undefined : now));
+    },
   });
   const busy = mutation.isPending;
-  const phrases = saved.banned_phrases;
+  const shown = asked ?? saved;
+  const phrases = shown.banned_phrases;
   const full = phrases.length >= PHRASES_MAX;
 
-  const save = (value: DocumentSettings) => {
-    mutation.mutate(value, {
-      onSuccess: () => {
-        setPhrase("");
-      },
-    });
+  const save = (value: DocumentSettings, added?: string) => {
+    setAsked(value);
+    mutation.mutate({ value, added });
   };
   const add = () => {
     const text = phrase.split(/\s+/u).filter(Boolean).join(" ");
-    if (text === "" || busy || full) return;
+    if (text === "" || full) return;
     if (phrases.some((one) => fold(one) === fold(text))) {
       setProblem("This phrase is already in the list.");
       return;
     }
     setProblem(undefined);
-    save({ ...saved, banned_phrases: [...phrases, text] });
+    setPhrase("");
+    save({ ...shown, banned_phrases: [...phrases, text] }, text);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
@@ -109,13 +129,12 @@ function Rules({ saved }: { saved: DocumentSettings }) {
           <input
             type="checkbox"
             role="switch"
-            aria-checked={saved.no_dash_separators}
+            aria-checked={shown.no_dash_separators}
             aria-describedby={`${id}-dash`}
             className="size-4 accent-primary"
-            checked={saved.no_dash_separators}
-            disabled={busy}
+            checked={shown.no_dash_separators}
             onChange={(event) => {
-              save({ ...saved, no_dash_separators: event.target.checked });
+              save({ ...shown, no_dash_separators: event.target.checked });
             }}
           />
           No dashes as separators
@@ -158,11 +177,10 @@ function Rules({ saved }: { saved: DocumentSettings }) {
                   size="icon"
                   className="size-6 shrink-0 rounded-full"
                   aria-label={`Remove ${one}`}
-                  disabled={busy}
                   onClick={() => {
                     setProblem(undefined);
                     save({
-                      ...saved,
+                      ...shown,
                       banned_phrases: phrases.filter((other) => other !== one),
                     });
                   }}
@@ -197,7 +215,7 @@ function Rules({ saved }: { saved: DocumentSettings }) {
             <Button
               type="button"
               variant="outline"
-              disabled={busy || phrase.trim() === ""}
+              disabled={phrase.trim() === ""}
               onClick={add}
             >
               {busy ? (
