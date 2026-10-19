@@ -171,6 +171,46 @@ export function localPath(draft: Draft, sent: string): Path {
   return out;
 }
 
+/**
+ * The key of every input the forms of edit-forms.tsx draw for `draft`: a refusal at any other key
+ * has no field to be shown under. edit-panel.test.tsx compares it with the inputs drawn.
+ */
+export function fieldKeys(
+  draft: Draft,
+  letter: boolean,
+  base: boolean,
+): Set<string> {
+  const keys = new Set<string>(
+    letter
+      ? ["target", "headline", "recipient", "subject", "salutation", "closing"]
+      : ["target", "headline", "summary", "notes"],
+  );
+  const entries = (list: Path, fields: string[] = []) => {
+    listAt(draft, list).forEach((_, index) => {
+      const at = pathKey([...list, index]);
+      if (fields.length === 0) keys.add(at);
+      for (const field of fields) keys.add(`${at}.${field}`);
+    });
+  };
+  if (letter) {
+    entries(["paragraphs"]);
+    return keys;
+  }
+  entries(["highlights"]);
+  entries(["competencies"]);
+  listAt(draft, ["experience"]).forEach((_, index) => {
+    entries(["experience", index, "bullets"]);
+  });
+  entries(["skills"], ["label", "items"]);
+  if (base) {
+    const period = ["start", "end", "location"];
+    entries(["fixed", "employers"], ["organisation", "title", ...period]);
+    entries(["fixed", "schools"], ["school", "degree", ...period]);
+    entries(["fixed", "languages"], ["name", "level"]);
+  }
+  return keys;
+}
+
 /** An employer of the fixed facts: the profile's, else the base CV's `fixed` block. */
 export interface EmployerFact {
   key: string;

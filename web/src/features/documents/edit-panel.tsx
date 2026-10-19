@@ -34,6 +34,7 @@ import {
 import { useAutosave, type SaveStatus, type Saver } from "./edit-autosave";
 import {
   differences,
+  fieldKeys,
   listAt,
   notesByField,
   withDefaults,
@@ -42,7 +43,7 @@ import {
 } from "./edit-content";
 import type { Form } from "./edit-lists";
 import { CvForm, LetterForm, ProfileFacts } from "./edit-forms";
-import { isOpen } from "./labels";
+import { fieldLabel, isOpen } from "./labels";
 
 /** The Edit view: the structured form of the draft, saved by itself (SPEC-documents.md, "Pages"). */
 export const available = true;
@@ -83,7 +84,12 @@ function employersOf(
   return out;
 }
 
-export function EditPanel({ document, generation }: PanelProps) {
+export function EditPanel(props: PanelProps) {
+  // The saver is bound to one document: another document gets a form of its own.
+  return <EditForm key={props.document.id} {...props} />;
+}
+
+function EditForm({ document, generation }: PanelProps) {
   const id = useId();
   const queryClient = useQueryClient();
   const { draft, status, saved, round, saver } = useAutosave(document);
@@ -149,7 +155,12 @@ export function EditPanel({ document, generation }: PanelProps) {
   return (
     <div className="flex flex-col gap-4" data-testid="edit-panel">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <SaveLine status={status} document={document} saver={saver} />
+        <SaveLine
+          status={status}
+          shown={fieldKeys(draft, letter, document.scope === "base")}
+          document={document}
+          saver={saver}
+        />
         <div className="flex w-full flex-col gap-1.5 sm:w-48">
           <Label htmlFor={`${id}-language`}>Language of the page</Label>
           <NativeSelect
@@ -217,25 +228,44 @@ export function EditPanel({ document, generation }: PanelProps) {
   );
 }
 
+/** A refusal at a key with no input of the form (`shown`) is said here, else under its field. */
 function SaveLine({
   status,
+  shown,
   document,
   saver,
 }: {
   status: SaveStatus;
+  shown: Set<string>;
   document: DocumentOut;
   saver: Saver;
 }) {
   if (status.state === "failed") {
+    const refused = [...status.fields];
+    const below = refused.some(([key]) => shown.has(key));
+    const here = refused
+      .filter(([key]) => !shown.has(key))
+      .map(([key, sentence]) => ({
+        key,
+        line:
+          key === ""
+            ? sentence
+            : `${fieldLabel(key).replace(/_/g, " ")}: ${sentence}`,
+      }));
     return (
       <Alert variant="destructive" className="w-full">
         <AlertTitle>Not saved</AlertTitle>
         <AlertDescription className="flex flex-col items-start gap-2">
-          <span>
-            {status.fields.size > 0
-              ? "A field below cannot be saved as it is. Your text stays here."
-              : status.message}
-          </span>
+          {refused.length === 0 ? <span>{status.message}</span> : null}
+          {below ? <span>A field below cannot be saved as it is.</span> : null}
+          {here.length === 0 ? null : (
+            <ul className="flex flex-col gap-1">
+              {here.map((one) => (
+                <li key={one.key}>{one.line}</li>
+              ))}
+            </ul>
+          )}
+          {refused.length === 0 ? null : <span>Your text stays here.</span>}
           <Button variant="outline" size="sm" onClick={() => void saver.save()}>
             <RotateCw aria-hidden="true" />
             Try again

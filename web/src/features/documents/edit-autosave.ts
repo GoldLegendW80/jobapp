@@ -27,7 +27,7 @@ export type SaveStatus =
   | { state: "saved" }
   | { state: "waiting" }
   | { state: "saving" }
-  /** `fields`: what the api refused, by the form's path. */
+  /** `fields`: what the api refused, by the form's path; "" is the whole document. */
   | { state: "failed"; message: string; fields: Map<string, string> }
   /** The draft changed elsewhere since this form read it: `theirs` is the current one. */
   | { state: "conflict"; theirs: DocumentOut };
@@ -60,9 +60,10 @@ const REFUSED: Record<string, string> = {
   empty: "This cannot be empty.",
   too_long: "This is longer than allowed.",
   too_many: "There are more entries than allowed.",
-  bad_format: "Write a year or a month: 2021 or 2021-03.",
-  duplicate_employer: "This employer is named twice.",
-  content_too_large: "The whole document is too large to save.",
+  bad_format: "This is not written in the expected form.",
+  duplicate_employer: "An employer is named twice.",
+  content_too_large:
+    "The whole document is too large to save. Shorten or remove some text.",
 };
 
 function refusal(error: unknown, draft: Draft): Map<string, string> {
@@ -73,9 +74,12 @@ function refusal(error: unknown, draft: Draft): Map<string, string> {
   for (const one of detail as { path?: unknown; code?: unknown }[]) {
     if (typeof one.path !== "string") continue;
     const code = typeof one.code === "string" ? one.code : "";
+    const period = code === "bad_format" && /(^|\.)(start|end)$/.test(one.path);
     fields.set(
       fieldKey(localPath(draft, one.path)),
-      REFUSED[code] ?? "This cannot be saved as it is.",
+      period
+        ? "Write a year or a month: 2021 or 2021-03."
+        : (REFUSED[code] ?? "This cannot be saved as it is."),
     );
   }
   return fields;

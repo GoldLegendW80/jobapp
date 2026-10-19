@@ -19,9 +19,13 @@ import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
 import { DocumentView } from "./document-view";
-import type { DocumentOut, VersionSummary } from "./documents-api";
+import {
+  documentKey,
+  type DocumentOut,
+  type VersionSummary,
+} from "./documents-api";
 import { AUTOSAVE_MS } from "./edit-autosave";
-import type { Draft } from "./edit-content";
+import { fieldKeys, withDefaults, type Draft } from "./edit-content";
 
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
 const SEPARATOR = /[–—]| - /;
@@ -93,6 +97,49 @@ const LIMITS = {
     paragraph: null,
   },
   letter: { headline: 90, paragraph: 900, summary: null },
+};
+
+const BASE: Partial<DocumentOut> = {
+  scope: "base",
+  posting_id: null,
+  name: "Main CV",
+  draft: {
+    ...CV,
+    fixed: {
+      employers: [
+        {
+          key: "example-corp",
+          organisation: "Example Corp",
+          title: "Platform engineer",
+          start: "2021-03",
+          end: null,
+          location: "Lyon",
+        },
+      ],
+      schools: [
+        {
+          school: "Example University",
+          degree: "MSc Computer Science",
+          start: "2014",
+          end: "2016",
+          location: "",
+        },
+      ],
+      languages: [{ name: "French", level: "native" }],
+    },
+  },
+};
+
+const LETTER: Partial<DocumentOut> = {
+  kind: "letter",
+  draft: {
+    schema: 1,
+    recipient: "Hiring team, Example Robotics",
+    subject: "Platform engineer",
+    salutation: "Hello,",
+    paragraphs: ["First paragraph.", "Second paragraph."],
+    closing: "Kind regards,",
+  },
 };
 
 function doc(overrides: Partial<DocumentOut> = {}): DocumentOut {
@@ -748,5 +795,148 @@ describe("the Edit view", () => {
       within(facts).getByLabelText("Start, employer 1"),
     ).toHaveAccessibleDescription(/Write a year or a month: 2021 or 2021-03\./);
     expect(within(facts).getByLabelText("Start, employer 1")).toHaveValue("20");
+  });
+
+  it.each<{
+    path: string;
+    code: string;
+    shape: Partial<DocumentOut>;
+    said: string;
+  }>([
+    {
+      path: "",
+      code: "content_too_large",
+      shape: {},
+      said: "The whole document is too large to save. Shorten or remove some text.",
+    },
+    {
+      path: "experience",
+      code: "duplicate_employer",
+      shape: {},
+      said: "Experience: An employer is named twice.",
+    },
+    {
+      path: "fixed.employers",
+      code: "duplicate_employer",
+      shape: BASE,
+      said: "Fixed, employers: An employer is named twice.",
+    },
+    {
+      path: "fixed.employers.0.key",
+      code: "bad_format",
+      shape: BASE,
+      said: "Fixed, employers, item 1, key: This is not written in the expected form.",
+    },
+    {
+      path: "experience.0.employer_key",
+      code: "too_long",
+      shape: {},
+      said: "Experience, item 1, employer key: This is longer than allowed.",
+    },
+    {
+      path: "highlights.4",
+      code: "too_long",
+      shape: {},
+      said: "Highlights, item 5: This is longer than allowed.",
+    },
+  ])(
+    "says $code at '$path', where no field is drawn, in the save line",
+    async ({ path, code, shape, said }) => {
+      const api = fake(doc(shape));
+      api.refuse = [{ path, code, message: "refused" }];
+      const user = userEvent.setup();
+      const panel = await openEdit(user);
+      await retype(user, "Headline", "Staff platform engineer");
+      expect(await screen.findByText("Not saved")).toBeVisible();
+      expect(screen.getByText(said)).toBeVisible();
+      expect(screen.getByText("Your text stays here.")).toBeVisible();
+      expect(screen.queryByText(/A field below/)).toBeNull();
+      expect(panel.querySelector("[aria-invalid]")).toBeNull();
+    },
+  );
+
+  it("marks a refused field below and says the refusal no field shows", async () => {
+    const api = fake(doc());
+    api.refuse = [
+      { path: "headline", code: "too_long", message: "refused" },
+      { path: "experience", code: "duplicate_employer", message: "refused" },
+    ];
+    const user = userEvent.setup();
+    await openEdit(user);
+    await retype(user, "Headline", "Staff platform engineer");
+    expect(await screen.findByText("Not saved")).toBeVisible();
+    expect(
+      screen.getByText("A field below cannot be saved as it is."),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Experience: An employer is named twice."),
+    ).toBeVisible();
+    expect(screen.getByLabelText("Headline")).toHaveAccessibleDescription(
+      /This is longer than allowed\./,
+    );
+  });
+
+  it.each<[string, Partial<DocumentOut>]>([
+    ["a base CV", BASE],
+    ["a CV for a posting", {}],
+    ["a letter", LETTER],
+  ])(
+    "draws an input for every key fieldKeys names, and no other, on %s",
+    async (_, shape) => {
+      const start = doc(shape);
+      fake(start);
+      const user = userEvent.setup();
+      const panel = await openEdit(user);
+      const target = await screen.findByLabelText(/^What this .* is for/);
+      const prefix = target.id.slice(0, -"target".length);
+      const drawn = [...panel.querySelectorAll("input, textarea")].map((one) =>
+        one.id.slice(prefix.length).replace(/-/g, "."),
+      );
+      expect(new Set(drawn)).toEqual(
+        fieldKeys(
+          withDefaults(start),
+          start.kind === "letter",
+          start.scope === "base",
+        ),
+      );
+    },
+  );
+
+  it("gives another document a form of its own, so its saves never reach the first", async () => {
+    fake(doc());
+    const other = doc({
+      id: "doc-2",
+      draft: { ...CV, headline: "Data engineer" },
+    });
+    const puts: string[] = [];
+    server.use(
+      http.get("*/api/documents/doc-2", () => HttpResponse.json(other)),
+      http.put("*/api/documents/:id/draft", ({ params }) => {
+        puts.push(String(params.id));
+        return HttpResponse.json({ ...other, draft_revision: 4 });
+      }),
+    );
+    const user = userEvent.setup();
+    const view = (id: string) => (
+      <MemoryRouter>
+        <DocumentView documentId={id} />
+      </MemoryRouter>
+    );
+    const { client, rerender } = renderWithQuery(view("doc-1"));
+    await user.click(await screen.findByRole("tab", { name: "Edit" }));
+    expect(await screen.findByLabelText("Headline")).toHaveValue(
+      "Platform engineer",
+    );
+    client.setQueryData(documentKey("doc-2"), other);
+    rerender(
+      <QueryClientProvider client={client}>
+        {view("doc-2")}
+      </QueryClientProvider>,
+    );
+    expect(screen.getByLabelText("Headline")).toHaveValue("Data engineer");
+    await retype(user, "Summary", "Typed in the second document.");
+    await waitFor(() => {
+      expect(puts).toEqual(["doc-2"]);
+    });
   });
 });
