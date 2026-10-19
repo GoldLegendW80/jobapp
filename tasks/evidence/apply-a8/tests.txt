@@ -1,0 +1,21 @@
+Apply A8, first slice (the Lever adapter), checks run on 2026-10-15 on a Mac, after merging origin/main.
+
+ops/agent-test.sh --name a8 tests/apply -m "not docker" -q -n 2         2783 passed
+  of which tests/apply/test_a8_lever.py                                   118 passed
+(cd api && uv run ruff check app tests)                                  All checks passed
+(cd api && uv run ruff format --check app tests)                         514 files already formatted
+pnpm --dir web run typecheck && pnpm --dir web run lint                  clean
+python3 .github/scripts/ci_plan_test.py                                  passed
+python3 .github/scripts/e2e_groups.py                                    29 specs in CI, 6 excluded, 13 by a local check group
+
+A whole Lever fill on the modelled form (a8_support.lever_form, the fields of tests/ats_forms/a8/lever.js):
+  parse shown at once:      47 tool calls (33 snapshots, 1 upload, 12 typings, 1 select)
+  parse after 3 reads:      51 tool calls (35 snapshots, 2 waits of 0.5 s)
+  filled 10, left 3 (current company, how they heard of the job, gender)
+
+Without the one line change of base.py (a value read back up to 10,000 characters instead of 500),
+test_the_letter_goes_into_additional_information and
+test_lever_is_filled_approved_and_submitted_once_through_the_gate fail: the letter never reads back.
+
+The journey apply-a8.spec.ts was not run from this machine: it cannot build the stack's images (TLS
+interception breaks the package downloads inside the image builds). No screenshot yet.

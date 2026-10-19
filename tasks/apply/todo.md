@@ -264,7 +264,7 @@ First slice (approval, read back, submit, confirmation, freeze, status, kill swi
 Nothing yet.
 
 ### A8
-Nothing yet. (The tokens per application of the generic strategy.)
+First slice (the Lever adapter, issue #245, measured on 2026-10-15 on the modelled Lever form of `api/tests/apply/a8_support.py`, the field list of `tests/ats_forms/a8/lever.js`): the adapter calls no model (0 tokens); the answer agent of A5 runs only for what is left, as on Ashby. A whole fill takes 47 tool calls (33 snapshots, 1 upload, 12 typings, 1 native select) when the resume parse shows at once, and 51 when it shows after 3 reads (2 waits of 0.5 s); 4 of the 12 typings clear what the parse wrote (name, e-mail, phone, current company) before the profile's values are typed. On the profile sample the form ends with 10 fields filled (the CV, 7 text fields, the sponsorship select and the letter in "Additional information") and 3 left for the person (current company, how they heard of the job, gender by the EEO policy). The journey `apply-a8.spec.ts` has not run yet (see the pull request). The tokens per application of the generic strategy's form agent: nothing yet, it is the next slice.
 
 ### A9
 Nothing yet.
