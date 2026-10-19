@@ -42,7 +42,10 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    which creates one `shorten` generation for a version a writer's `posting` generation made,
    and starts it: the writer is asked to bring the fields over the template's soft limits under
    them, through the same steps. A version made by a `shorten` generation, or by hand, never
-   starts another: the pass runs once, and what still overflows is kept and shown.
+   starts another: the pass runs once, and what still overflows is kept and shown. The pass is
+   part of the posting's spend: it starts only with the person's consent and credential, and its
+   ceiling is the letter's, what the pair has left after the CV's run (`letter_ceiling`); with
+   nothing left, or a spend unknown, there is no pass.
 
 Logs carry ids, modes, statuses, counts and codes, never a text.
 """
@@ -422,11 +425,12 @@ def settle(
 
 
 def letter_ceiling(db: Session, cv_generation: DocumentGeneration) -> int | None:
-    """The token ceiling of the letter that follows `cv_generation`: the pair's ceiling minus the
-    tokens its run spent (the run's own count, never an estimate), never under zero. A budget of
-    zero lets the letter's run make no call: it stops at its limit and is retried as one. None
-    when the spend is unknown (no run, or a count missing): the letter gets no budget then,
-    never the whole pair's (`no_budget`)."""
+    """The token ceiling of the letter that follows `cv_generation`, and of the CV's one
+    shortening pass (module docstring, 4): the pair's ceiling minus the tokens its run spent
+    (the run's own count, never an estimate), never under zero. A budget of zero lets the
+    letter's run make no call: it stops at its limit and is retried as one. None when the
+    spend is unknown (no run, or a count missing): the letter gets no budget then, never the
+    whole pair's (`no_budget`). With None or zero, no shortening pass starts."""
     run = db.get(AgentRun, cv_generation.run_id) if cv_generation.run_id is not None else None
     if run is None or run.input_tokens is None or run.output_tokens is None:
         return None
@@ -605,7 +609,10 @@ def shorten(
     settings: Settings,
 ) -> uuid.UUID | None:
     """Create and start the one `shorten` generation of an overflowing version that a writer's
-    `posting` generation made. Returns the run to enqueue, else None."""
+    `posting` generation made, with the consent, a credential and a ceiling left (module
+    docstring, 4). Returns the run to enqueue, else None."""
+    from app.documents import writer_base  # writer_base imports this module
+
     with sessions() as db:
         found = db.execute(
             sa.select(Document.user_id, Document.posting_id).where(Document.id == document_id)
@@ -638,6 +645,18 @@ def shorten(
             return (
                 None  # saved by hand during the render: the person's draft is not ours to shorten
             )
+        ceiling = letter_ceiling(db, parent)
+        waiting = writer_base.wait_reason(db, owner)
+        if not ceiling or waiting is not None:
+            if waiting is not None:
+                reason = waiting.value
+            else:
+                reason = "spend_unknown" if ceiling is None else "token_ceiling"
+            logger.info(
+                "documents.generation.shorten_skipped",
+                extra={"document_id": str(document_id), "reason": reason},
+            )
+            return None
         template = render_job.template_of(db, owner, document.template_slug)
         fields = long_fields(c.parse("cv", version.content), template.kinds["cv"].soft_limits)
         try:
@@ -648,7 +667,7 @@ def shorten(
                 parent.trigger,
                 parent.base_document_id,
                 parent.estimate,
-                parent.token_ceiling,
+                ceiling,
                 at=at,
             )
             run = start(db, generation, at=at, long_fields=fields, settings=settings)

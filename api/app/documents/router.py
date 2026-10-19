@@ -329,18 +329,32 @@ SPELLED = str.maketrans(
     {
         "ø": "o", "Ø": "O", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ß": "ss", "ẞ": "SS",
         "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D", "þ": "th", "Þ": "Th",
-        "\u0131": "i", "ħ": "h", "Ħ": "H", "ŧ": "t", "Ŧ": "T",
+        "\u0131": "i", "ħ": "h", "Ħ": "H", "ŧ": "t", "Ŧ": "T", "ŋ": "ng", "Ŋ": "Ng",
+        "ə": "e", "Ə": "E", "ǝ": "e", "Ǝ": "E", "ɛ": "e", "Ɛ": "E", "ɔ": "o", "Ɔ": "O",
+        "\u0263": "g", "Ɣ": "G", "Ɖ": "D",
     }
 )  # fmt: skip
+# The other letters NFKD leaves whole carry their base letter in their name ("LATIN SMALL
+# LETTER D WITH HOOK"); what is left (IPA letters) is dropped.
+_BASE_LETTER = re.compile(r"LATIN (SMALL|CAPITAL) LETTER ([A-Z]) WITH ")
+
+
+def _spell(char: str) -> str:
+    if char.isascii() or unicodedata.normalize("NFKD", char).encode("ascii", "ignore"):
+        return char
+    found = _BASE_LETTER.match(unicodedata.name(char, ""))
+    if found is None:
+        return char
+    return found[2] if found[1] == "CAPITAL" else found[2].lower()
 
 
 def ascii_name(*parts: str, suffix: str = "") -> str:
     """Words of ASCII letters and digits joined by `_`: accents folded, letters with no
-    decomposition spelled (ø as o, æ as ae, ß as ss), the rest dropped. The parts are cut to
-    NAME_MAX with room for `suffix`, which is never cut."""
+    decomposition spelled (ø as o, æ as ae, ß as ss, ŋ as ng, ɗ as d), the rest dropped. The
+    parts are cut to NAME_MAX with room for `suffix`, which is never cut."""
     words: list[str] = []
     for part in parts:
-        spelled = part.translate(SPELLED)
+        spelled = "".join(map(_spell, part.translate(SPELLED)))
         folded = unicodedata.normalize("NFKD", spelled).encode("ascii", "ignore").decode()
         words += re.findall(r"[A-Za-z0-9]+", folded)
     room = NAME_MAX - (len(suffix) + 1 if suffix else 0)
