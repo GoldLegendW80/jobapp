@@ -1,0 +1,17 @@
+Camille Exemple
+Ingénieure plateforme, Lyon
+
+Expérience professionnelle
+Brumeval Exemple, Ingénieure plateforme, Lyon
+Depuis mars 2022
+Responsable de la plateforme de déploiement de l'équipe paiements.
+Migration de 25 services vers Kubernetes avec Terraform.
+
+Formation
+École Exemple d'Ingénieurs, Diplôme d'ingénieur, 2016 à 2021
+
+Compétences
+Kubernetes, Terraform, Python, PostgreSQL
+
+Langues
+Français : langue maternelle. Anglais : courant.
