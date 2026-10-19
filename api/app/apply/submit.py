@@ -10,8 +10,10 @@ application to `approved`. No model is called anywhere here.
    `authorisation_expired`; never apply; duplicates, this application excluded, so a posting
    applied or closed since, or the same role or form clicked since on another posting, ends
    `blocked` or `posting_closed` as in `decide`; the caps); and the hash of the stored fields is
-   still the one the gate approved (else back to `ready`, `stale`). The PDFs of the versions the
-   approval covered (never newer ones).
+   still the one the gate approved (else back to `ready`, `stale`). The pace of the form's host
+   (`caps.next_slot`): a host not free yet keeps the application `approved`, waiting `host_pace`
+   with the time it goes, and the tick asks again. The PDFs of the versions the approval covered
+   (never newer ones).
 2. A lease of purpose `apply_submit` (the only one that carries the gate's capability, browser
    B5). Behind another person's lease it stays `approved`; the tick asks again.
 3. The form opened, read (`adapter.discover`, anchors and steps for the person first), and refilled
@@ -30,8 +32,10 @@ application to `approved`. No model is called anywhere here.
    is `cancelled` with its code. Then `recheck` again, as in step 1: the person's apply lock makes
    two approved postings of one role go one at a time, and the second sees the first
    `submitting` or `submitted`. A rehearsal (`dry_run`) ends here as `rehearsed`, so it reports
-   these refusals too. Otherwise `submitting` is committed, then the one click: `gate_click` with
-   the lease's capability on the adapter's submit element.
+   these refusals too. Then the host's slot, under its lock (`caps.reserve`: another person's
+   click since step 1 keeps it `approved` and waiting, as in step 1). Otherwise `submitting` is
+   committed with its `click` event, then the one click: `gate_click` with the lease's capability
+   on the adapter's submit element.
 6. The page is read every `POLL_S` until `CONFIRM_WAIT_S` (60 s, by the injected clock, and at
    most `MAX_POLLS` reads): the adapter's confirmation is `submitted`, the form's errors are
    `refused_by_site`, nothing is `submit_unknown`. Never a second click.
@@ -250,6 +254,9 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
     ) != bytes(application.answers_hash):
         _stop(db, application, Stop(State.ready, "stale"), now)
         return "stale"
+    if not application.dry_run and (until := caps.next_slot(db, application, now)) is not None:
+        run._wait(db, application, "host_pace", now, until=until.isoformat())
+        return "paced"
     pdfs: dict[str, bytes] = {}
     for kind, name in (("cv", run.CV_NAME), ("letter", run.LETTER_NAME)):
         record = (application.document_versions or {}).get(kind)
@@ -311,6 +318,9 @@ def arm(
         states.move(application, State.rehearsed, now)
         gate._event(db, application, "rehearsed", now)
         return "rehearsed"
+    if (until := caps.reserve(db, application, now)) is not None:
+        run._wait(db, application, "host_pace", now, until=until.isoformat())
+        return "paced"
     states.move(application, State.submitting, now)
     application.needs = None
     gate._event(db, application, "click", now, attempt=application.attempt)
