@@ -8,7 +8,7 @@
 # Covers: without OWNER, or with an OWNER that is not an e-mail address, nothing runs (here and in
 # the four other Jetson scripts that put OWNER into SQL); in those five scripts the owner's address,
 # refused or accepted, reaches no output and no file they write, even when the fake Jetson quotes
-# it on stderr and under bash -x, on every refusal that used to name it; a dry run leaves every file under
+# it on stderr and in the refusals that used to name it (under bash -x: no file); a dry run leaves every file under
 # tasks/evidence/agents-a5/ byte for byte as committed and starts nothing; a real run is refused
 # before any ssh call when an evidence file it would write exists; an account that is not an
 # admin with a subscription credential is refused before
@@ -323,24 +323,24 @@ owner_run() {
   if [[ "$mode" == plain ]]; then out_lacks "$TOKEN"; fi
   out_has "$reached"
   out_has "(the owner's address)"
-  if [[ "$log" != - ]]; then [[ -s "$TROOT/$log" ]] || fail "$s $* wrote no $log"; fi
+  if [[ "$log" != - ]]; then [[ -s "$log" ]] || fail "$s $* wrote no ${log#"$TROOT"/}"; fi
   no_token_written "$s $*"
 }
 for mode in plain traced; do
-  owner_run "$mode" tests/agents_real_run_jetson.sh 0 "runs added: 1" tasks/evidence/agents-a5/run-owner.log \
+  owner_run "$mode" tests/agents_real_run_jetson.sh 0 "runs added: 1" "$TROOT/tasks/evidence/agents-a5/run-owner.log" \
     REAL_RUN=1 RUNS=chat LABEL=owner
   owner_run "$mode" tests/ingestion_transcribe_jetson.sh 0 "The line for Measurements" \
-    tasks/evidence/ingestion-g14/run-owner.log REAL_RUN=1 LABEL=owner POLL_S=1
-  owner_run "$mode" tests/e2e_jetson.sh 1 "index in tasks/evidence/identity/index.md" tasks/evidence/identity/run.log
-  owner_run "$mode" tests/e2e_jobs_jetson.sh 0 PASS tasks/evidence/jobs-j4-jetson/run.log
-  owner_run "$mode" tests/e2e_jobs_sweep_jetson.sh 0 PASS tasks/evidence/jobs-j5-jetson/run.log
+    "$TROOT/tasks/evidence/ingestion-g14/run-owner.log" REAL_RUN=1 LABEL=owner POLL_S=1
+  owner_run "$mode" tests/e2e_jetson.sh 1 "screenshots, index in" "$TROOT/tasks/evidence/identity/run.log"
+  owner_run "$mode" tests/e2e_jobs_jetson.sh 0 PASS "$TROOT/tasks/evidence/jobs-j4-jetson/run.log"
+  owner_run "$mode" tests/e2e_jobs_sweep_jetson.sh 0 PASS "$TROOT/tasks/evidence/jobs-j5-jetson/run.log"
 done
-ok "a real run of each of the 5 scripts to its end, plain and under bash -x: the address is not printed, no log holds it"
+ok "a real run of each of the 5 scripts to its end: the address in no output and no file; under bash -x, in no file"
 owner_run plain tests/agents_real_run_jetson.sh 0 PASS -
 owner_run plain tests/ingestion_transcribe_jetson.sh 0 "every check passed" - POLL_S=1
 ok "the dry runs of tests/agents_real_run_jetson.sh and tests/ingestion_transcribe_jetson.sh: not printed"
-A5_LOG=tasks/evidence/agents-a5/run-owner.log
-G14_LOG=tasks/evidence/ingestion-g14/run-owner.log
+A5_LOG="$TROOT/tasks/evidence/agents-a5/run-owner.log"
+G14_LOG="$TROOT/tasks/evidence/ingestion-g14/run-owner.log"
 owner_run plain tests/agents_real_run_jetson.sh 1 "the owner's account has no model credential" "$A5_LOG" \
   REAL_RUN=1 RUNS=chat LABEL=owner STUB_KIND=none
 owner_run plain tests/agents_real_run_jetson.sh 1 "the owner's account has the role member" "$A5_LOG" \
@@ -353,12 +353,12 @@ owner_run plain tests/ingestion_transcribe_jetson.sh 1 "the owner's account has 
   REAL_RUN=1 LABEL=owner POLL_S=1 STUB_CONSENT=no
 owner_run plain tests/ingestion_transcribe_jetson.sh 1 "a run of the owner's account is under way" "$G14_LOG" \
   REAL_RUN=1 LABEL=owner POLL_S=1 STUB_BUSY=1
-owner_run plain tests/e2e_jetson.sh 1 "the owner's account is not on jetson.invalid" tasks/evidence/identity/run.log \
+owner_run plain tests/e2e_jetson.sh 1 "the owner's account is not on jetson.invalid" "$TROOT/tasks/evidence/identity/run.log" \
   STUB_ACCOUNT=missing
 owner_run plain tests/e2e_jobs_jetson.sh 1 "no jobs in the owner's account on jetson.invalid" \
-  tasks/evidence/jobs-j4-jetson/run.log STUB_ACCOUNT=missing
+  "$TROOT/tasks/evidence/jobs-j4-jetson/run.log" STUB_ACCOUNT=missing
 owner_run plain tests/e2e_jobs_sweep_jetson.sh 1 "no jobs in the owner's account on jetson.invalid" \
-  tasks/evidence/jobs-j5-jetson/run.log STUB_ACCOUNT=missing
+  "$TROOT/tasks/evidence/jobs-j5-jetson/run.log" STUB_ACCOUNT=missing
 ok "the 9 refusals that named the account after the log started now say \"the owner's account\""
 
 step "B1: a dry run leaves the committed evidence as it is"

@@ -42,7 +42,7 @@ die() {
 [[ -n "$HARALD" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 [[ "$HARALD" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
 
-# The owner's address never reaches the output, even quoted by a remote error or a bash -x trace.
+# Replaces the owner's address in all that is printed through it, remote errors and bash -x traces included.
 masked() {
   LC_ALL=C awk -v owner="$HARALD" -v shown="(the owner's address)" '
     BEGIN { o = tolower(owner); n = length(o) }

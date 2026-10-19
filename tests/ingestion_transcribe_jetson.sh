@@ -86,7 +86,7 @@ die() {
 command -v jq >/dev/null || die "jq is needed"
 command -v uv >/dev/null || die "uv is needed (the page is drawn with the api's own Pillow)"
 
-# The owner's address never reaches the output, even quoted by a remote error or a bash -x trace.
+# Replaces the owner's address in all that is printed through it, remote errors and bash -x traces included.
 masked() {
   LC_ALL=C awk -v owner="$OWNER" -v shown="(the owner's address)" '
     BEGIN { o = tolower(owner); n = length(o) }

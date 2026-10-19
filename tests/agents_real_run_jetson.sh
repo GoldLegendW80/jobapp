@@ -188,7 +188,7 @@ select 'agent_runs=' || (select count(*) from agent_runs),
 SQL
 }
 
-# The owner's address never reaches the output, even quoted by a remote error or a bash -x trace.
+# Replaces the owner's address in all that is printed through it, remote errors and bash -x traces included.
 masked() {
   LC_ALL=C awk -v owner="$OWNER" -v shown="(the owner's address)" '
     BEGIN { o = tolower(owner); n = length(o) }
