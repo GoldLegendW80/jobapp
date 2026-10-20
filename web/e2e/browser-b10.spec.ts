@@ -326,7 +326,7 @@ test("C meets LinkedIn's security check: paused with its date, no second sweep, 
         const found = body.items.find((item) => item.posting_id === row!.id);
         return found ? `${found.state} ${found.error_code}` : "none";
       },
-      { timeout: 120_000, intervals: [2_000] },
+      { timeout: 120_000, intervals: [5_000] },
     )
     .toBe("blocked linkedin_paused");
   await page.reload();
