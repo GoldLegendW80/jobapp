@@ -932,6 +932,13 @@ s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` 
     files+=(-f tests/browser-pages.compose.yml)
     export COMPOSE_PROFILES=browser
     ;;
+  opportunities)
+    # The fake ATS forms server the deck's postings point at (never a real job site), published
+    # on a claimed loopback port as for apply; no browser: a Like only queues its application.
+    ATS_FORMS_STUB_PORT="$(claim_port)" || return 1
+    export ATS_FORMS_STUB_PORT E2E_ATS_FORMS_URL="http://127.0.0.1:$ATS_FORMS_STUB_PORT"
+    files+=(-f tests/ats-forms-stub.compose.yml)
+    ;;
   esac
   specs="$(journey_specs "$part")"
   stack_up "$part" "$project" "${files[@]}" &&
