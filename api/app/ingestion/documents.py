@@ -152,6 +152,19 @@ EXPORT_TOO_MANY = (
     f"This export would take you past the {USER_MAX_DOCUMENTS} documents you can keep here. "
     "Delete some documents, then add the export again."
 )
+
+
+def export_refused(names: Sequence[str]) -> str:
+    """The reason an export's row stays failed: files of it that would replace a document a
+    run has read were not stored, the others were."""
+    one = len(names) == 1
+    return (
+        f"The other files of this export were added. A run has read {', '.join(names)}, "
+        f"already among your documents, so the export did not replace {'it' if one else 'them'}. "
+        f"Delete {'it' if one else 'them'} first, then add the export again."
+    )
+
+
 TRUNCATED_NOTE = f"Only the first {TEXT_MAX_CHARS:,} characters were read."
 UNSUPPORTED = (
     "This type of file cannot be read. Accepted: PDF, Word (DOCX), plain text, Markdown, JSON, "
@@ -523,7 +536,7 @@ def _store(
         return Stored(document, created=False)
     replaced = document is not None
     if document is not None:
-        refused = next((one for one in (check(db, document) for check in _checks) if one), None)
+        refused = _refusal(db, document)
         if refused:
             _log("document replacement refused", document)
             return Stored(document, created=False, refused=refused)
@@ -661,21 +674,33 @@ def store_export(
     left as it is (the same export added twice makes no second copy), unless that row is
     replaceable. Raises DocumentError when the files do not fit the user's document count or
     quota, counted as if the archive were already gone; the caller then rolls back, so nothing
-    of the export is kept and the archive's row stays."""
+    of the export is kept and the archive's row stays.
+
+    A replaceable row that a replacement check refuses (a run has read it) is left as it is and
+    its Stored carries `refused`; then the archive's row stays too, its bytes gone, for the
+    caller to fail with export_refused, so the page says which files were not replaced."""
     fresh = cost = 0
+    kept = False
     for entry in entries:
-        existing = _by_hash(db, user_id, entry.digest)
+        existing = _by_hash(db, user_id, entry.digest, lock=True)
         fresh += existing is None
-        if existing is None or replaceable(existing):
+        if existing is not None and replaceable(existing) and _refusal(db, existing):
+            kept = True
+        elif existing is None or replaceable(existing):
             cost += entry.content.stored_bytes
     used = usage(db, user_id)
-    if used.documents - 1 + fresh > USER_MAX_DOCUMENTS:
+    if used.documents - (not kept) + fresh > USER_MAX_DOCUMENTS:
         raise DocumentError(422, EXPORT_TOO_MANY, "too-many-documents")
     if used.bytes - archive.size + cost > USER_MAX_BYTES:
         raise DocumentError(413, QUOTA, "quota")
     name = archive.name
     _log("document unpacked", archive, files=len(entries), new=fresh)
-    db.delete(archive)
+    if kept:
+        db.execute(
+            sa.update(IngestionDocument).where(IngestionDocument.id == archive.id).values(raw=None)
+        )
+    else:
+        db.delete(archive)
     db.flush()
     return [
         _store(
@@ -820,6 +845,10 @@ def confirm_secret(
 # Returns the sentence that refuses to replace the document's text, or None to let it through.
 ReplacementCheck = Callable[[Session, IngestionDocument], str | None]
 _checks: list[ReplacementCheck] = []
+
+
+def _refusal(db: Session, document: IngestionDocument) -> str | None:
+    return next((one for one in (check(db, document) for check in _checks) if one), None)
 
 
 def register_replacement_check(check: ReplacementCheck) -> None:
