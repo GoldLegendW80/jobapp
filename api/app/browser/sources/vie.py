@@ -11,8 +11,18 @@ offer, read from the snapshot of the page, no model. Modelled on the live site o
   paragraph "Published on DD/MM/YYYY", then "The job", "The ideal profile" and "Further
   information"; "INTERESTED IN THIS POSITION? APPLY NOW!" ends the text.
 
-The source's location, when set, keeps the offers whose location names it (case and accents
-ignored): the site's own search box takes words only. Fail closed as google_careers.py.
+The source's location, when set, keeps the offers whose location names it (`in_place`): the
+site's own search box takes words only. Both are cut into words (letters and digits, case and
+accents ignored), and the location's words must appear in the offer's, in order and next to each
+other: "paris" keeps "PARIS", "new york" and "york" keep "NEW YORK", "sao paulo" keeps "SÃO
+PAULO", while "us" never keeps "RUSSIA - MOSCOW" nor "UNITED STATES" (the site names countries in
+full), and "nice" never keeps "VENICE". A location without a word keeps nothing.
+
+Fail closed as google_careers.py, and: the place heading must have the site's "COUNTRY - CITY"
+shape (` - ` between two parts with letters, no lower case letter) and the title heading must not
+(two headings swapped, or another heading taken for the place, is `layout_changed`); an offer page
+whose level 1 heading is not the card's title is skipped (not stored, the source goes on); an
+offer link must be on the results page's own site.
 """
 
 import re
@@ -29,6 +39,8 @@ from app.browser.sources import (
     Wanted,
     host_of,
     posting,
+    same_site,
+    same_title,
     visible_lines,
 )
 from app.profile.schemas import BrowserSource
@@ -52,6 +64,8 @@ def offer_url(href: str, page_url: str) -> str | None:
     parts = urlsplit(urljoin(page_url, href))
     if parts.scheme not in ("http", "https") or not OFFER_PATH.search(parts.path):
         return None
+    if not same_site(parts, page_url):
+        return None
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
 
@@ -66,6 +80,34 @@ def location_of(text: str) -> str:
 def fold(text: str) -> str:
     return "".join(
         c for c in unicodedata.normalize("NFKD", text.casefold()) if not unicodedata.combining(c)
+    )
+
+
+WORD = re.compile(r"[^\W_]+")
+
+
+def words(text: str) -> list[str]:
+    """The folded words of a text: runs of letters and digits."""
+    return WORD.findall(fold(text))
+
+
+def in_place(query: str, location: str) -> bool:
+    """Whether the offer's location names the source's location (module docstring)."""
+    want, have = words(query), words(location)
+    if not want:
+        return False
+    size = len(want)
+    return any(have[i : i + size] == want for i in range(len(have) - size + 1))
+
+
+def place_shaped(text: str) -> bool:
+    """Whether a heading has the site's "COUNTRY - CITY" shape."""
+    country, sep, city = text.strip().partition(" - ")
+    return (
+        bool(sep)
+        and any(c.isalpha() for c in country)
+        and any(c.isalpha() for c in city)
+        and not any(c.islower() for c in text)
     )
 
 
@@ -88,11 +130,13 @@ def parse_results(root: Node, page_url: str) -> tuple[list[Card], str | None]:
         second = [h for h in headings if h.level() == 2]
         if not company or len(second) < 2 or not second[0].label().strip():
             raise SourceError("layout_changed")
+        place = second[1].label() or " ".join(t.label() for t in second[1].children)
+        if not place_shaped(place) or place_shaped(second[0].label()):
+            raise SourceError("layout_changed")
         url = offer_url(link.url, page_url) or ""
         if url in seen:
             continue
         seen.add(url)
-        place = second[1].label() or " ".join(t.label() for t in second[1].children)
         cards.append(
             Card(
                 title=second[0].label().strip(),
@@ -105,14 +149,17 @@ def parse_results(root: Node, page_url: str) -> tuple[list[Card], str | None]:
     return cards, more
 
 
-def parse_offer(root: Node, title: str) -> tuple[str, str]:
-    """The text of an offer page and its published date (YYYY-MM-DD, "" when not shown)."""
+def parse_offer(root: Node, title: str) -> tuple[str, str] | None:
+    """The text of an offer page and its published date (YYYY-MM-DD, "" when not shown); None
+    when the page's level 1 heading is not `title` (not that offer's page)."""
     main = root.find("main")
     heading = None
     if main is not None:
         heading = next((n for n in main.walk() if n.role == "heading" and n.level() == 1), None)
     if main is None or heading is None or not heading.label().strip():
         raise SourceError("layout_changed")
+    if not same_title(heading.label(), title):
+        return None
     lines = visible_lines(main, stop=lambda n: n.label().startswith(END))
     published = ""
     for line in lines:
@@ -136,7 +183,7 @@ class Vie:
     ) -> None:
         start = results_url(source, base)
         root, page_url = await pages.open(start)
-        place = fold(source.location) if source.location else None
+        place = source.location or None
         todo: list[Card] = []
         seen: set[str] = set()
         number = 1
@@ -145,7 +192,7 @@ class Vie:
             read.result_pages = number
             fresh = [card for card in cards if card.url not in seen]
             seen.update(card.url for card in cards)
-            todo += [c for c in fresh if place is None or place in fold(c.location)]
+            todo += [c for c in fresh if place is None or in_place(place, c.location)]
             if not fresh or more is None or number >= RESULT_PAGES_MAX:
                 break
             # The whole list first, the offers after: leaving the page loses the grown list.
@@ -155,8 +202,9 @@ class Vie:
             if not wanted(card):
                 continue
             page, _ = await pages.open(card.url)
-            text, published = parse_offer(page, card.title)
-            read.postings.append((card.company, posting(card, text, published)))
+            offer = parse_offer(page, card.title)
+            if offer is not None:
+                read.postings.append((card.company, posting(card, *offer)))
 
 
 READER = Vie()

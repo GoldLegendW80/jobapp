@@ -12,8 +12,10 @@ the snapshot of the page, no model. Modelled on the live site on 2026-10-20 (PR 
 
 Fail closed: a results page without the heading, a card with a posting link but no title or
 company, a list of cards empty while the status counts some, or a posting page without its
-heading is `layout_changed`. A posting address is kept without its query (the search's), so the
-same posting found twice is one row.
+heading is `layout_changed`. A posting page whose heading is not the card's title (an expired
+posting sent back to the results, or to another posting) is skipped: not stored, the source goes
+on. A posting address must be on the results page's own site (scheme, host and port) and is kept
+without its query (the search's), so the same posting found twice is one row.
 """
 
 import re
@@ -30,6 +32,8 @@ from app.browser.sources import (
     host_of,
     own_texts,
     posting,
+    same_site,
+    same_title,
     visible_lines,
 )
 from app.profile.schemas import BrowserSource
@@ -38,7 +42,7 @@ HOST = "www.google.com"
 RESULTS = "https://www.google.com/about/careers/applications/jobs/results/"
 RESULTS_HEADING = "Jobs search results"
 POSTING_PATH = re.compile(r"/jobs/results/\d{1,30}-[a-z0-9]+(?:-[a-z0-9]+)*/?$")
-STATUS = re.compile(r"Showing ([\d,]+) to ([\d,]+) of ([\d,]+)")
+STATUS = re.compile(r"Showing (\d[\d,]*) to (\d[\d,]*) of (\d[\d,]*)")
 MORE = re.compile(r"\+\s*\d+\s+more")
 LEGAL = "Information collected"
 
@@ -69,6 +73,8 @@ def posting_url(href: str, page_url: str) -> str | None:
     )
     parts = urlsplit(urljoin(root, href))
     if parts.scheme not in ("http", "https") or not POSTING_PATH.search(parts.path):
+        return None
+    if not same_site(parts, page_url):
         return None
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
 
@@ -123,14 +129,17 @@ def parse_results(root: Node, page_url: str) -> tuple[list[Card], bool]:
     return cards, last < total
 
 
-def parse_posting(root: Node, title: str) -> str:
-    """The text of a posting page, from its title to the legal paragraphs."""
+def parse_posting(root: Node, title: str) -> str | None:
+    """The text of a posting page, from its title to the legal paragraphs; None when the page's
+    heading is not `title` (not that posting's page)."""
     main = root.find("main")
     heading = None
     if main is not None:
         heading = next((n for n in main.walk() if n.role == "heading" and n.level() == 2), None)
     if main is None or heading is None or not heading.label().strip():
         raise SourceError("layout_changed")
+    if not same_title(heading.label(), title):
+        return None
     lines = visible_lines(main, stop=lambda n: n.label().startswith(LEGAL))
     if title not in lines[:1]:
         lines.insert(0, title)
@@ -155,9 +164,9 @@ class GoogleCareers:
                 if not wanted(card):
                     continue
                 page, _ = await pages.open(card.url)
-                read.postings.append(
-                    (card.company, posting(card, parse_posting(page, card.title), ""))
-                )
+                text = parse_posting(page, card.title)
+                if text is not None:
+                    read.postings.append((card.company, posting(card, text, "")))
             if not more or not fresh:
                 return
 

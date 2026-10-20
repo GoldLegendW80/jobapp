@@ -1,6 +1,7 @@
 """Browser B8: the extractors of Google Careers and Business France VIE on snapshots written after
 the live pages (tests/browser/b8_pages.py), and the run of the sources with fake tools and a fake
-lease store. Pure: no Redis, no database, no browser, no sleep (the pacing's sleep is recorded)."""
+lease store. Pure but for the pacing's Redis tests at the end: no database, no browser, no sleep
+(the pacing's sleep is recorded and moves an injected clock)."""
 
 import asyncio
 import random
@@ -12,12 +13,16 @@ import pytest
 from pydantic import ValidationError
 
 from app.browser.client import BrowserError
-from app.browser.leases import Acquired, Lease, Waiting
+from app.browser.leases import Acquired, Lease, StoreUnavailableError, Waiting
 from app.browser.sources import (
+    PAGE_LOAD_S,
     PAGE_PAUSE_S,
     POSTING_PAGES_MAX,
     RESULT_PAGES_MAX,
     Card,
+    MemoryPacer,
+    Pacer,
+    RedisPacer,
     Runner,
     SourceError,
     parse_snapshot,
@@ -29,6 +34,7 @@ from app.browser.sources import google_careers as gc
 from app.jobs import slug as slugs
 from app.profile.schemas import BrowserSource, SearchSection
 from tests.browser import b8_pages as pages
+from tests.browser.b3_support import flush, pool_of, redis_url  # noqa: F401  (fixture)
 
 PAGE = "https://www.google.com/about/careers/applications/jobs/results/?q=ai"
 VIE_PAGE = "https://mon-vie-via.businessfrance.fr/en/offres/recherche?query=ai"
@@ -166,6 +172,17 @@ def test_google_snapshot_cut_before_the_status_reads_the_cards_and_tries_the_nex
         ("mailto:jobs@example.org", False),
         ("https://www.instagram.com/lifeatgoogle/", False),
         ("", False),
+        # B6: only on the results page's own site (scheme, host, port, no user).
+        ("https://WWW.GOOGLE.COM/about/careers/applications/jobs/results/7-x", True),
+        ("https://evil.example/jobs/results/1001-ai-engineer-1", False),
+        ("https://careers.google.com/jobs/results/1001-ai-engineer-1", False),
+        ("https://www.google.com.evil.example/jobs/results/1-a", False),
+        ("//evil.example/about/careers/applications/jobs/results/1-a", False),
+        ("http://www.google.com/about/careers/applications/jobs/results/7-x", False),
+        ("https://www.google.com:8443/about/careers/applications/jobs/results/7-x", False),
+        ("https://www.google.com:99999/about/careers/applications/jobs/results/7-x", False),
+        ("https://someone@www.google.com/about/careers/applications/jobs/results/7-x", False),
+        ("https://google.com/about/careers/applications/jobs/results/7-x", False),
     ],
 )
 def test_google_posting_url(href: str, kept: bool) -> None:
@@ -180,6 +197,53 @@ def test_google_results_url() -> None:
     assert gc.results_url(g(), 3, "http://pages:8080/b8").endswith(
         "/b8/google/jobs/results/?q=ai&hl=en_US&page=3"
     )
+
+
+@pytest.mark.parametrize(
+    ("status", "more"),
+    [
+        ("Showing , to , of , rows", True),  # no figures: read as no status, never a crash
+        ("Showing 1 to 20 of 1,234 rows", True),
+        ("Showing 1,221 to 1,234 of 1,234 rows", False),
+        ("Showing 1 to 3 of 3 rows", False),
+    ],
+)
+def test_google_status_figures(status: str, more: bool) -> None:
+    text = pages.google_results(pages.offers(3)).replace("Showing 1 to 3 of 3 rows", status)
+    cards, found = gc.parse_results(parse_snapshot(text), PAGE)
+    assert len(cards) == 3
+    assert found is more
+
+
+@pytest.mark.parametrize(
+    ("heading", "title", "same"),
+    [
+        ("AI Engineer 1", "AI Engineer 1", True),
+        ("ai engineer 1", "AI Engineer 1", True),
+        ("  AI   Engineer\u00a01 ", "AI Engineer 1", True),
+        ("ＡＩ Engineer 1", "AI Engineer 1", True),
+        ("Ingénieur IA", "INGÉNIEUR IA", True),
+        ("AI Engineer 10", "AI Engineer 1", False),
+        ("AI Engineer", "AI Engineer 1", False),
+        ("Ingenieur IA", "Ingénieur IA", False),
+        ("Jobs search results", "AI Engineer 1", False),
+        ("Search results", "AI Engineer 1", False),
+        ("", "", False),
+        ("AI Engineer 1", "", False),
+    ],
+)
+def test_same_title(heading: str, title: str, same: bool) -> None:
+    from app.browser.sources import same_title
+
+    assert same_title(heading, title) is same
+
+
+def test_google_posting_page_of_another_posting_is_skipped() -> None:
+    one, two = pages.offers(2)
+    assert gc.parse_posting(parse_snapshot(pages.google_posting(two)), one.title) is None
+    # The results page an expired posting sends back to.
+    results = pages.google_results(pages.offers(3))
+    assert gc.parse_posting(parse_snapshot(results), one.title) is None
 
 
 def test_google_posting_text() -> None:
@@ -221,19 +285,41 @@ def test_vie_results_of_0_1_and_25(count: int) -> None:
 
 
 def test_vie_show_more_is_a_ref() -> None:
-    root = parse_snapshot(pages.vie_results(pages.offers(6), total=192, more=True))
+    made = pages.offers(6, location="FRANCE - PARIS")
+    root = parse_snapshot(pages.vie_results(made, total=192, more=True))
     assert vie.parse_results(root, VIE_PAGE)[1] == "f7e9184"
+
+
+VIE_TWO = pages.offers(2, location="FRANCE - PARIS")
+
+
+def swapped(o: pages.Offer) -> pages.Offer:
+    """The card with its title and place headings swapped."""
+    return pages.Offer(title=o.location, company=o.company, location=o.title, number=o.number)
 
 
 @pytest.mark.parametrize(
     "text",
     [
-        pages.vie_results(pages.offers(2)).replace("offers found", "offres trouvées"),
-        pages.vie_results(pages.offers(2)).replace("[level=3]", "[level=4]"),
-        pages.vie_results(pages.offers(2)).replace("[level=2] [ref=f7e1", "[level=6] [ref=f7e1"),
+        pages.vie_results(VIE_TWO).replace("offers found", "offres trouvées"),
+        pages.vie_results(VIE_TWO).replace("[level=3]", "[level=4]"),
+        pages.vie_results(VIE_TWO).replace("[level=2] [ref=f7e1", "[level=6] [ref=f7e1"),
+        # B5: the place heading has the COUNTRY - CITY shape, the title heading does not.
+        pages.vie_results([swapped(o) for o in VIE_TWO]),
+        pages.vie_results(pages.offers(2, location="Paris, France")),
+        pages.vie_results(pages.offers(2, location="France - Paris")),
+        pages.vie_results(pages.offers(2, location="FRANCE PARIS")),
+        pages.vie_results(pages.offers(2, location="FRANCE -")),
+        pages.vie_results(pages.offers(2, location=" - PARIS")),
+        pages.vie_results(pages.offers(2, location="12 - 34")),
+        pages.vie_results(pages.offers(2, title="DATA - PARIS", location="FRANCE - PARIS")),
         "",
     ],
-)
+    ids=[
+        "french", "no_company", "no_title_level", "swapped", "comma_place", "mixed_case_place",
+        "no_separator", "no_city", "no_country", "digits_only", "title_shaped", "empty",
+    ],
+)  # fmt: skip
 def test_vie_layout_changed(text: str) -> None:
     with pytest.raises(SourceError) as caught:
         vie.parse_results(parse_snapshot(text), VIE_PAGE)
@@ -256,6 +342,77 @@ def test_vie_location(raw: str, shown: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("text", "shaped"),
+    [
+        ("FRANCE - PARIS", True),
+        ("UNITED STATES - NEW YORK", True),
+        ("BELGIUM - LOUVAIN/LEUVEN", True),
+        ("CÔTE D'IVOIRE - ABIDJAN", True),
+        ("ROYAUME-UNI - LONDRES", True),
+        ("  ITALY -  MILAN ", True),
+        ("CHINE - SHANGHAI 2", True),
+        ("SINGAPORE", False),
+        ("France - Paris", False),
+        ("FRANCE - Paris", False),
+        ("FRANCE-PARIS", False),
+        ("FRANCE – PARIS", False),
+        ("FRANCE -", False),
+        ("- PARIS", False),
+        ("1 - 2", False),
+        ("AI Engineer 1", False),
+        ("", False),
+    ],
+)
+def test_vie_place_shape(text: str, shaped: bool) -> None:
+    assert vie.place_shaped(text) is shaped
+
+
+@pytest.mark.parametrize(
+    ("query", "location", "kept"),
+    [
+        ("paris", "Paris, France", True),
+        ("Paris", "Paris, France", True),
+        ("PARIS", "Paris, France", True),
+        ("  paris ", "Paris, France", True),
+        ("france", "Paris, France", True),
+        ("paris france", "Paris, France", True),
+        ("paris, france", "Paris, France", True),
+        ("new york", "New York, United States", True),
+        ("york", "New York, United States", True),  # a word of the city: kept (documented)
+        ("united states", "New York, United States", True),
+        ("Sao Paulo", "São Paulo, Brazil", True),
+        ("são paulo", "Sao Paulo, Brazil", True),
+        ("leuven", "Louvain/Leuven, Belgium", True),
+        ("saint-denis", "Saint Denis, Reunion", True),
+        ("zürich", "Zurich, Switzerland", True),
+        ("us", "Moscow, Russia", False),
+        ("us", "New York, United States", False),
+        ("us", "Sydney, Australia", False),
+        ("us", "Nicosia, Cyprus", False),
+        ("us", "Minsk, Belarus", False),
+        ("nice", "Venice, Italy", False),
+        ("nice", "Nice, France", True),
+        ("paris", "Parisot, France", False),
+        ("par", "Paris, France", False),
+        ("york new", "New York, United States", False),
+        ("new france", "New York, United States", False),
+        ("states united", "New York, United States", False),
+        ("milan", "Paris, France", False),
+        ("", "Paris, France", False),
+        ("-", "Paris, France", False),
+        ("___", "Paris, France", False),
+        ("paris", "", False),
+        ("paris", "-", False),
+        ("Pa ris", "Paris, France", False),
+        ("paris " * 50, "Paris, France", False),
+        ("paris", "Paris, France " * 1000, True),
+    ],
+)
+def test_vie_location_filter_on_words(query: str, location: str, kept: bool) -> None:
+    assert vie.in_place(query, location) is kept
+
+
+@pytest.mark.parametrize(
     ("href", "kept"),
     [
         ("/en/offres/247265", True),
@@ -266,6 +423,12 @@ def test_vie_location(raw: str, shown: str) -> None:
         ("/en/offres/24a", False),
         ("#", False),
         ("/en/offres/247265/postuler", False),
+        ("https://mon-vie-via.businessfrance.fr/en/offres/9", True),
+        ("https://evil.example/en/offres/247265", False),
+        ("https://www.businessfrance.fr/en/offres/247265", False),
+        ("//evil.example/en/offres/247265", False),
+        ("http://mon-vie-via.businessfrance.fr/en/offres/9", False),
+        ("https://x@mon-vie-via.businessfrance.fr/en/offres/9", False),
     ],
 )
 def test_vie_offer_url(href: str, kept: bool) -> None:
@@ -277,11 +440,34 @@ def test_vie_offer_url(href: str, kept: bool) -> None:
 )
 def test_vie_offer_text_and_date(published: str, iso: str) -> None:
     offer = pages.offers(1)[0]
-    text, date = vie.parse_offer(parse_snapshot(pages.vie_offer(offer, published)), offer.title)
+    parsed = vie.parse_offer(parse_snapshot(pages.vie_offer(offer, published)), offer.title)
+    assert parsed is not None
+    text, date = parsed
     assert date == iso
     assert "Missions : build agents with Python." in text
     assert "OFFRES A LA UNE" not in text
     assert "Another offer" not in text
+
+
+def test_vie_offer_page_of_another_offer_or_the_results_is_skipped() -> None:
+    one, two = pages.offers(2, location="FRANCE - PARIS")
+    assert vie.parse_offer(parse_snapshot(pages.vie_offer(two)), one.title) is None
+    assert vie.parse_offer(parse_snapshot(pages.vie_results([one, two])), one.title) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pages.vie_offer(pages.offers(1)[0]).replace("[level=1]", "[level=4]"),
+        pages.vie_offer(pages.offers(1)[0]).replace("- main", "- region"),
+        "",
+    ],
+    ids=["no_heading_in_main", "no_main", "empty"],
+)
+def test_vie_offer_layout_changed(text: str) -> None:
+    with pytest.raises(SourceError) as caught:
+        vie.parse_offer(parse_snapshot(text), "AI Engineer 1")
+    assert caught.value.code == "layout_changed"
 
 
 # --- the schema ----------------------------------------------------------------------------------
@@ -321,13 +507,15 @@ def test_bad_browser_sources_are_refused(bad: dict[str, Any]) -> None:
 
 @dataclass
 class FakeTools:
-    """URL to snapshot; a click shows `after_click`; `end_after` ends the lease after N calls."""
+    """URL to snapshot; a click shows `after_click`; `end_after` ends the lease after N calls;
+    `store_gone_after` makes the snapshot after N calls find the lease store gone."""
 
     pages: dict[str, str]
     after_click: list[str] = field(default_factory=list)
     end_after: int | None = None
     calls: list[str] = field(default_factory=list)
     current: str = ""
+    store_gone_after: int | None = None
 
     def _count(self) -> None:
         if self.end_after is not None and len(self.calls) >= self.end_after:
@@ -348,12 +536,14 @@ class FakeTools:
         return {"ok": True}
 
     async def snapshot(self) -> dict[str, Any]:
+        if self.store_gone_after is not None and len(self.calls) > self.store_gone_after:
+            raise StoreUnavailableError  # LeaseTools._held without Redis
         return {"ok": True, "url": self.current, "snapshot": self.pages[self.current]}
 
 
 class FakeLeases:
-    def __init__(self, busy: bool = False) -> None:
-        self.busy = busy
+    def __init__(self, busy: bool = False, max_s: int = 900) -> None:
+        self.busy, self.max_s = busy, max_s
         self.acquired: list[tuple[str, str, list[str]]] = []
         self.released: list[str] = []
         self.cancelled: list[str] = []
@@ -364,7 +554,7 @@ class FakeLeases:
             return Acquired(waiting=Waiting(purpose, 1, 60))
         lease = Lease(
             lease_id=f"lease-{len(self.acquired)}", user_id=user, purpose=purpose,
-            automation=True, profile_id="p", max_s=900, idle_s=300, started_at=0.0,
+            automation=True, profile_id="p", max_s=self.max_s, idle_s=300, started_at=0.0,
         )  # fmt: skip
         return Acquired(lease=lease, token="invented-token")
 
@@ -409,9 +599,14 @@ def google_site(count: int, total: int | None = None) -> dict[str, str]:
     return site
 
 
-def run_sources(
+def run_sources(*args: Any, **kwargs: Any) -> Any:
+    return asyncio.run(arun_sources(*args, **kwargs))
+
+
+async def arun_sources(
     plan: Plan, tools: FakeTools, leases: FakeLeases | None = None, *, deadline: float = 1e9,
-    clock: list[float] | None = None,
+    clock: list[float] | None = None, pacer: Pacer | None = None,
+    store_fails: set[str] | None = None, rng: random.Random | None = None,
 ) -> tuple[Stats, list[tuple[str, list[Any]]], list[float], FakeLeases]:  # fmt: skip
     leases = leases or FakeLeases()
     slept: list[float] = []
@@ -423,6 +618,8 @@ def run_sources(
         now[0] += seconds
 
     async def store(name: str, found: Any) -> None:
+        if name in (store_fails or set()):
+            raise RuntimeError("the database went away")
         stored.append((name, list(found)))
         stats.new += len(found)
 
@@ -434,10 +631,11 @@ def run_sources(
         leases,  # type: ignore[arg-type]
         lambda user, lease, token: tools,
         sleep=sleep,
-        rng=random.Random(7),  # noqa: S311  a seeded pacing, not a secret
+        rng=rng or random.Random(7),  # noqa: S311  a seeded pacing, not a secret
         monotonic=lambda: now[0],
+        pacer=pacer or MemoryPacer(lambda: now[0]),
     )
-    asyncio.run(runner(plan, stats, store, progress, deadline))
+    await runner(plan, stats, store, progress, deadline)
     return stats, stored, slept, leases
 
 
@@ -445,7 +643,9 @@ def test_a_source_reads_results_then_postings_paced_and_stores_them() -> None:
     tools = FakeTools(google_site(3))
     stats, stored, slept, leases = run_sources(Plan([g(enabled=True)]), tools)
     assert len(tools.calls) == 4  # one results page, three posting pages
-    assert len(slept) == 3  # every page but the first of the lease
+    # Every page waits out the pause since the host's previous page; the host was idle before
+    # the first one, which opens at once.
+    assert len(slept) == 3
     assert all(PAGE_PAUSE_S[0] <= s <= PAGE_PAUSE_S[1] for s in slept)
     [(name, found)] = stored
     assert name == "google_careers:ai"
@@ -567,3 +767,209 @@ def test_source_name() -> None:
 
 def test_card_is_a_value() -> None:
     assert Card("a", "b", "c", "d") == Card("a", "b", "c", "d")
+
+
+# --- round 2: pacing per host, the lease's budget, a failure per source ---------------------------
+
+
+def empty_google(source: BrowserSource) -> dict[str, str]:
+    return {gc.results_url(source, 1): pages.google_results([])}
+
+
+def test_the_first_page_of_a_lease_waits_out_the_hosts_previous_page() -> None:
+    other = g(query="robotics")
+    tools = FakeTools(google_site(3) | empty_google(other))
+    _, _, slept, leases = run_sources(Plan([g(), other]), tools)
+    assert len(leases.acquired) == 2  # two leases, one host
+    assert len(tools.calls) == 5
+    assert len(slept) == 4  # the second lease's first page is paced too
+    assert all(PAGE_PAUSE_S[0] <= s <= PAGE_PAUSE_S[1] for s in slept)
+
+
+def test_a_host_idle_for_longer_than_the_pause_opens_at_once() -> None:
+    pacer = MemoryPacer(lambda: clock[0])
+    clock = [0.0]
+    assert asyncio.run(pacer.reserve("h", 10.0)) == 0.0
+    assert asyncio.run(pacer.reserve("h", 10.0)) == 10.0  # a slot after the one just taken
+    assert asyncio.run(pacer.reserve("other", 10.0)) == 0.0  # per host
+    clock[0] = 100.0
+    assert asyncio.run(pacer.reserve("h", 10.0)) == 0.0
+
+
+def test_two_people_and_two_workers_share_the_pace_of_a_host(redis_url: str) -> None:  # noqa: F811
+    flush(redis_url)
+    clock = [0.0]
+    pool, close = pool_of(redis_url)
+
+    async def go() -> list[float]:
+        try:
+            one, two = RedisPacer(pool, lambda: clock[0]), RedisPacer(pool, lambda: clock[0])
+            waits = [await one.reserve("www.google.com", 10.0)]
+            waits.append(await two.reserve("www.google.com", 12.0))  # another worker, at once
+            waits.append(await one.reserve("www.google.com", 5.0))
+            waits.append(await two.reserve("mon-vie-via.businessfrance.fr", 5.0))
+            return waits
+        finally:
+            await close()
+
+    assert asyncio.run(go()) == [0.0, 12.0, 17.0, 0.0]
+
+    # Person A's source, then person B's on the same host: B's first page is paced after A's.
+    flush(redis_url)
+    pool, close = pool_of(redis_url)
+    shared = [0.0]
+
+    async def people() -> tuple[list[float], list[float]]:
+        try:
+            pacer = RedisPacer(pool, lambda: shared[0])
+            a, b = FakeTools(google_site(1)), FakeTools(google_site(1))
+            _, _, slept_a, _ = await arun_sources(Plan([g()]), a, clock=shared, pacer=pacer)
+            _, _, slept_b, _ = await arun_sources(Plan([g()]), b, clock=shared, pacer=pacer)
+            return slept_a, slept_b
+        finally:
+            await close()
+
+    slept_a, slept_b = asyncio.run(people())
+    assert len(slept_a) == 1
+    assert len(slept_b) == 2  # B's first page waited for A's last one
+    assert PAGE_PAUSE_S[0] <= slept_b[0] <= PAGE_PAUSE_S[1]
+
+
+def test_the_pacer_without_redis_is_browser_unavailable() -> None:
+    async def gone() -> Any:
+        raise ConnectionError("no redis")
+
+    pacer = RedisPacer(gone, lambda: 0.0)
+    stats, stored, _, leases = run_sources(
+        Plan([g(), g(query="b")]), FakeTools(google_site(1)), pacer=pacer
+    )
+    assert [s["error"] for s in stats.sources] == ["browser_unavailable", "browser_unavailable"]
+    assert not stored
+    assert leases.released == ["lease-1"]
+
+
+class Slowest(random.Random):
+    """The longest pause every time: the worst case of the lease's budget."""
+
+    def uniform(self, a: float, b: float) -> float:
+        return b
+
+
+@pytest.mark.parametrize("max_s", [900, 300, 120])
+def test_the_page_caps_fit_inside_the_lease(max_s: int) -> None:
+    """The source stops opening pages when the lease's remaining active time cannot hold another
+    paced page, reports lease_budget, stores what it read, and the next source runs on a lease of
+    its own: no source ever ends the others by running its lease out."""
+    site = google_site(POSTING_PAGES_MAX, total=POSTING_PAGES_MAX)
+    other = BrowserSource.model_validate({"kind": "vie", "query": "ai"})
+    made = pages.offers(1, location="FRANCE - PARIS")
+    site[vie.results_url(other)] = pages.vie_results(made)
+    site[f"https://mon-vie-via.businessfrance.fr/en/offres/{made[0].number}"] = pages.vie_offer(
+        made[0]
+    )
+    clock = [0.0]
+    starts: list[float] = []
+    tools = FakeTools(site)
+    navigate = tools.navigate
+
+    async def timed(url: str) -> dict[str, Any]:
+        starts.append(clock[0])
+        clock[0] += PAGE_LOAD_S  # every page takes the longest load
+        return await navigate(url)
+
+    tools.navigate = timed  # type: ignore[method-assign]
+    stats, stored, _, leases = run_sources(
+        Plan([g(), other]), tools, FakeLeases(max_s=max_s), clock=clock, rng=Slowest()
+    )
+    first, second = stats.sources
+    assert first["error"] == "lease_budget"
+    assert second["error"] is None  # not lease_ended: the next source ran
+    assert len(leases.acquired) == 2
+    assert stored[0][0] == "google_careers:ai"
+    assert 0 < len(stored[0][1]) < POSTING_PAGES_MAX
+    google_pages = len(stored[0][1]) + 1
+    # Every page of the first lease ended within its maximum of active time.
+    assert starts[google_pages - 1] + PAGE_LOAD_S <= max_s
+
+
+def test_a_reader_failing_on_an_odd_page_is_layout_changed_and_the_sweep_goes_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def odd(root: Any, title: str) -> str:
+        raise ValueError("invalid literal for int()")
+
+    site = google_site(2)
+    other = BrowserSource.model_validate({"kind": "vie", "query": "ai"})
+    made = pages.offers(1, location="FRANCE - PARIS")
+    site[vie.results_url(other)] = pages.vie_results(made)
+    site[f"https://mon-vie-via.businessfrance.fr/en/offres/{made[0].number}"] = pages.vie_offer(
+        made[0]
+    )
+    monkeypatch.setattr(gc, "parse_posting", odd)
+    stats, stored, _, leases = run_sources(Plan([g(), other]), FakeTools(site))
+    assert [s["error"] for s in stats.sources] == ["layout_changed", None]
+    assert [name for name, _ in stored] == ["vie:ai"]  # nothing of the failed source
+    assert leases.released == ["lease-1", "lease-2"]
+
+
+def test_the_lease_store_gone_mid_source_is_browser_unavailable() -> None:
+    tools = FakeTools(google_site(3), store_gone_after=2)  # results, one posting, then gone
+    stats, stored, _, leases = run_sources(Plan([g(), g(query="b")]), tools)
+    assert [s["error"] for s in stats.sources] == ["browser_unavailable", "browser_unavailable"]
+    assert len(leases.acquired) == 1  # the next source does not start without the store
+    assert [len(found) for _, found in stored] == [1]  # what was read completely is kept
+
+
+def test_a_store_failure_is_store_failed_and_the_next_source_runs() -> None:
+    other = g(query="robotics")
+    site = google_site(2) | {gc.results_url(other, 1): pages.google_results(pages.offers(1))}
+    stats, stored, _, _ = run_sources(
+        Plan([g(), other]), FakeTools(site), store_fails={"google_careers:ai"}
+    )
+    assert [s["error"] for s in stats.sources] == ["store_failed", None]
+    assert stats.sources[0]["postings"] == 0
+    assert [name for name, _ in stored] == ["google_careers:robotics"]
+
+
+def test_a_store_failure_after_the_lease_ended_still_stops_the_sweeps_sources() -> None:
+    tools = FakeTools(google_site(3), end_after=3)
+    stats, _, _, leases = run_sources(
+        Plan([g(), g(query="b")]), tools, store_fails={"google_careers:ai"}
+    )
+    assert [s["error"] for s in stats.sources] == ["store_failed", "lease_ended"]
+    assert len(leases.acquired) == 1
+
+
+def test_an_expired_posting_sent_to_the_results_is_skipped_not_stored() -> None:
+    site = google_site(3)
+    site[f"{gc.RESULTS}1002-ai-engineer-2"] = site[gc.results_url(g(), 1)]
+    stats, stored, _, _ = run_sources(Plan([g()]), FakeTools(site))
+    assert stats.sources[0]["error"] is None
+    assert [p.title for _, p in stored[0][1]] == ["AI Engineer 1", "AI Engineer 3"]
+
+
+# --- BROWSER_SOURCES_BASE_URL ------------------------------------------------------------------
+
+DB_URL = "postgresql+psycopg://jobapp:secret@db:5432/jobapp"
+
+
+def test_the_fixture_address_is_read_outside_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import load_settings
+
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("BROWSER_SOURCES_BASE_URL", " http://pages:8080/b8/ ")
+    assert load_settings().browser_sources_base_url == "http://pages:8080/b8"
+    monkeypatch.setenv("BROWSER_SOURCES_BASE_URL", "  ")
+    assert load_settings().browser_sources_base_url is None
+
+
+def test_the_fixture_address_is_refused_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import ConfigError, load_settings
+
+    monkeypatch.setenv("DATABASE_URL", DB_URL)
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("SECRET_KEY", "x" * 48)
+    monkeypatch.setenv("BROWSER_SOURCES_BASE_URL", "http://pages:8080/b8")
+    with pytest.raises(ConfigError, match=r"BROWSER_SOURCES_BASE_URL .* must not be set in prod"):
+        load_settings()
