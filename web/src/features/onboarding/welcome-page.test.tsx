@@ -330,6 +330,65 @@ describe("the wizard", () => {
     expect(calls.complete).toBe(1);
   });
 
+  it("offers the starter list on the summary, and its boards count in the first search", async () => {
+    fakeSession(member);
+    const profile = fakeProfile(null);
+    fakeOnboarding(withRoles, SETTINGS, profile);
+    const starter = {
+      targets: true,
+      entries: [
+        {
+          key: "ashby:fake-ok",
+          kind: "board",
+          company: "Example Robotics",
+          ats: "ashby",
+          org: "fake-ok",
+          source: null,
+          query: null,
+          location: null,
+          why: "Artificial intelligence, France",
+          added: false,
+        },
+      ],
+      unmatched: [],
+      blocked: 0,
+      version: 1,
+      checked_on: "2026-10-20",
+    };
+    server.use(
+      http.get("*/api/opportunities/starter", () => HttpResponse.json(starter)),
+      http.post("*/api/opportunities/starter", () => {
+        // as the api does: the board goes to the search section, enabled
+        profile.revision += 1;
+        profile.sections.search = {
+          ...EMPTY.search,
+          boards: [
+            {
+              company: "Example Robotics",
+              ats: "ashby",
+              org: "fake-ok",
+              enabled: true,
+              extra_exclude: { terms: [], advanced_regex: false },
+            },
+          ],
+        };
+        starter.entries = starter.entries.map((e) => ({ ...e, added: true }));
+        return HttpResponse.json({ list: starter, added: ["ashby:fake-ok"] });
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp("/welcome?step=summary");
+    await screen.findByText(/Step 7 of 7/);
+    const list = await screen.findByRole("region", {
+      name: "Boards and sites to search",
+    });
+    expect(await within(list).findByText("Example Robotics")).toBeVisible();
+    expect(screen.getByText(/covers 0 boards/)).toBeInTheDocument();
+    await user.click(within(list).getByRole("button", { name: "Add all" }));
+    expect(await screen.findByText(/covers 1 board from/)).toBeInTheDocument();
+    expect(within(list).getByText("Added")).toBeVisible();
+  });
+
   it("Skip for now puts it off and goes home", async () => {
     fakeSession(member);
     fakeProfile(null);

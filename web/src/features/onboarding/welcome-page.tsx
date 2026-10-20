@@ -35,6 +35,7 @@ import {
   saveLikeMode,
   type OnboardingState,
 } from "./onboarding-api";
+import { StarterBoards } from "./starter-boards";
 import {
   StepApply,
   StepLooking,
@@ -355,6 +356,7 @@ function Wizard({
             onChange={(changed) => {
               goTo(changed, true);
             }}
+            footer={<StarterBoards />}
           />
         ) : null}
       </section>
