@@ -378,6 +378,7 @@ while read -r _ _ stub url; do
   [[ "$url" == "http://127.0.0.1:$stub" ]] || fail "the address of the fake forms server ($url) does not follow its port ($stub)"
 done < <(grep '^up ' "$STUB_CALLS")
 grep -q 'tests/ats-forms-stub.compose.yml' "$STUB_CALLS" || fail "the opportunities stack did not include the fake forms server"
+grep -q 'tests/feeds-stub.compose.yml' "$STUB_CALLS" || fail "the opportunities stack did not include the fake feeds server (O7)"
 ok "the retry of the opportunities stack takes a new port for the fake forms server too"
 
 # The browser group starts the stack's browser (profile browser) and the pages it opens.

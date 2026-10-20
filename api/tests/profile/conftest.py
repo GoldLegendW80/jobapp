@@ -151,6 +151,18 @@ FULL: dict[str, dict[str, Any]] = {
             "salary": {"min": 55000, "max": 70000, "currency": "EUR"},
             "daily_rate": {"min": 500, "max": 650, "currency": "EUR"},
         },
+        "feeds": [
+            {
+                "kind": "remoteok",
+                "terms": {"terms": ["python"], "advanced_regex": False},
+                "enabled": True,
+            },
+            {
+                "kind": "hackernews_freelance",
+                "terms": {"terms": [], "advanced_regex": False},
+                "enabled": False,
+            },
+        ],
     },
     "answers": {
         "work_authorization": [

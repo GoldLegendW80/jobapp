@@ -171,7 +171,11 @@ def _start(
             search = sweep.load_search(db, user_id)
         except sweep.InvalidSearchError:
             return sweep.SEARCH_INVALID
-        if not (sweep.enabled_boards(search) or sweep.enabled_sources(search)):
+        if not (
+            sweep.enabled_boards(search)
+            or sweep.enabled_sources(search)
+            or sweep.enabled_feeds(search)
+        ):
             return sweep.NO_BOARDS
         try:
             row = sweep.start(db, user_id, SweepTrigger.manual, now)
@@ -240,7 +244,9 @@ def _list(
         search = sweep.user_search(db, user_id)
         plan = sweep.schedule_of(search)
         active = plan.enabled and bool(
-            sweep.enabled_boards(search) or sweep.enabled_sources(search)
+            sweep.enabled_boards(search)
+            or sweep.enabled_sources(search)
+            or sweep.enabled_feeds(search)
         )
         return SweepList(
             items=[sweep_out(row) for row in rows],

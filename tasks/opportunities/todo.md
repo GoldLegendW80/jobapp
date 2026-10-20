@@ -239,7 +239,7 @@ Nothing yet. (The wizard's time from an empty account to the first card.)
 Nothing yet.
 
 ### O7
-Nothing yet. (Items per feed per sweep, the share marked Freelance, the time of a sweep with the three feeds.)
+On the fake feeds server (tests/feeds_stub.py), in the api tests on the Mac on 2026-10-20: the recorded `ok` variant gives 6 Remote OK postings (2 freelance), 3 We Work Remotely (2 freelance) and 3 client missions of the Hacker News freelance thread; 5,000 items is refused as `too_many` before any is stored. Still to measure on the Jetson after the deploy (Checkpoint O, the owner's real feeds): items per feed per sweep, the share marked Freelance, the time of a sweep with the three feeds, and whether We Work Remotely's feed answers the Jetson (the spec's 403 note).
 
 ### O7b
 Nothing yet. (Pages read and seconds per sweep and platform, the missions found per platform, any checkpoint met.)

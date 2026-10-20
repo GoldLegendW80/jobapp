@@ -104,6 +104,9 @@ class Posting:
     # What the ATS API states (opportunities O3); None when it states nothing usable.
     pay: pays.Pay | None = None
     work_mode: str | None = None
+    # The contract a feed states (opportunities O7: a freelance mission); None reads it from the
+    # title, location and URL as the engine did (importer.kind).
+    contract_type: str | None = None
 
     def engine_tuple(self) -> tuple[str, str, str, str, str]:
         return (self.title, self.location, self.url, self.published, self.text)
