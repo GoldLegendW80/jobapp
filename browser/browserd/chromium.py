@@ -512,21 +512,52 @@ class Chromium:
             log.warning("lease %s: directory not removed: %s", self.lease_id, type(exc).__name__)
 
 
-def memory() -> tuple[int, int] | None:
-    """(memory.current, memory.max) of the container's cgroup (v2), or None without a limit."""
-    try:
-        with (
-            open("/sys/fs/cgroup/memory.current") as cur,
-            open("/sys/fs/cgroup/memory.max") as top,
-        ):
-            current, limit = cur.read().strip(), top.read().strip()
-    except OSError:
-        return None
-    return None if limit == "max" else (int(current), int(limit))
+CGROUP = "/sys/fs/cgroup"
+# Under CGROUP, v2 then v1: usage, limit, memory.stat and its key of the inactive file cache.
+CGROUP_FILES = (
+    ("memory.current", "memory.max", "memory.stat", "inactive_file"),
+    (
+        "memory/memory.usage_in_bytes",
+        "memory/memory.limit_in_bytes",
+        "memory/memory.stat",
+        "total_inactive_file",
+    ),
+)
+
+
+def working_set(usage: int, stat: str, key: str) -> int:
+    """`usage` less the inactive file cache (`key` in the text of memory.stat), never below zero:
+    docker stats' figure. Without the key, `usage` whole, the page cache counted."""
+    for line in stat.splitlines():
+        name, _, value = line.partition(" ")
+        if name == key and value.strip().isdecimal():
+            return max(0, usage - int(value))
+    return usage
+
+
+def memory(root: str = CGROUP) -> tuple[int, int] | None:
+    """(working set, limit) of the container's cgroup, v2 else v1, or None without a limit. The
+    inactive page cache is left out: the kernel reclaims it before it kills a process, and on a
+    Mac it held about 770 MiB of the browser's 1024m at rest."""
+    for usage, limit, stats, key in CGROUP_FILES:
+        try:
+            with open(f"{root}/{usage}") as cur, open(f"{root}/{limit}") as top:
+                current, ceiling = cur.read().strip(), top.read().strip()
+        except OSError:
+            continue
+        if not (current.isdecimal() and ceiling.isdecimal()):
+            return None
+        try:
+            with open(f"{root}/{stats}") as figures:
+                listed = figures.read()
+        except OSError:
+            listed = ""
+        return working_set(int(current), listed, key), int(ceiling)
+    return None
 
 
 def past_guard(figures: tuple[int, int], pct: int) -> bool:
-    """The container (memory.current, memory.max) is at or past `pct` % of its limit."""
+    """The container's (working set, limit) of `memory()` is at or past `pct` % of its limit."""
     return figures[0] * 100 >= figures[1] * pct
 
 

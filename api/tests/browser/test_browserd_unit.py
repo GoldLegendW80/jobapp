@@ -455,6 +455,99 @@ def test_the_memory_guard_closes_the_newest_tab_past_the_share() -> None:
     run(go())
 
 
+# memory_stat/v2-docker-desktop.txt: the browser container's memory.stat recorded on Docker
+# Desktop (kernel 7.0.12-linuxkit, arm64) with a lease running and a file of the profiles volume
+# freshly written, at memory.current 1024716800 of memory.max 1073741824. v1-layout.txt: a
+# cgroup v1 memory.stat laid out as the kernel's cgroup v1 memory documentation lists it (no v1
+# host here), its local inactive_file unlike its total_ one so the key read shows.
+MEMORY_STAT = Path(__file__).parent / "memory_stat"
+V2_STAT = (MEMORY_STAT / "v2-docker-desktop.txt").read_text(encoding="utf-8")
+V1_STAT = (MEMORY_STAT / "v1-layout.txt").read_text(encoding="utf-8")
+V2_CURRENT, V2_INACTIVE, LIMIT = 1024716800, 718323712, 1073741824
+V1_USAGE, V1_TOTAL_INACTIVE = 1059061760, 756023296
+
+
+def without(stat: str, key: str) -> str:
+    return "".join(line for line in stat.splitlines(True) if line.split(" ")[0] != key)
+
+
+def cgroup(root: Path, files: dict[str, str]) -> str:
+    for name, text in files.items():
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(text, encoding="utf-8")
+    return str(root)
+
+
+def v2(stat: str | None = V2_STAT, current: str = f"{V2_CURRENT}\n", top: str = f"{LIMIT}\n"):
+    files = {"memory.current": current, "memory.max": top}
+    return files if stat is None else {**files, "memory.stat": stat}
+
+
+def v1(stat: str | None = V1_STAT, usage: str = f"{V1_USAGE}\n"):
+    files = {"memory/memory.usage_in_bytes": usage, "memory/memory.limit_in_bytes": f"{LIMIT}\n"}
+    return files if stat is None else {**files, "memory/memory.stat": stat}
+
+
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        (v2(), (V2_CURRENT - V2_INACTIVE, LIMIT)),
+        (v1(), (V1_USAGE - V1_TOTAL_INACTIVE, LIMIT)),
+        # Without the inactive file figure, the usage whole: the guard trips no later than before.
+        (v2(stat=None), (V2_CURRENT, LIMIT)),
+        (v2(stat=""), (V2_CURRENT, LIMIT)),
+        (v2(stat=without(V2_STAT, "inactive_file")), (V2_CURRENT, LIMIT)),
+        (
+            v2(stat=V2_STAT.replace(f"inactive_file {V2_INACTIVE}", "inactive_file x")),
+            (V2_CURRENT, LIMIT),
+        ),
+        (
+            v2(stat=V2_STAT.replace(f"inactive_file {V2_INACTIVE}", "inactive_file -5")),
+            (V2_CURRENT, LIMIT),
+        ),
+        (v2(stat="inactive_file_x 5\nactive_file 9\n"), (V2_CURRENT, LIMIT)),
+        (v1(stat=None), (V1_USAGE, LIMIT)),
+        # v1's local inactive_file is not docker stats' figure: total_inactive_file only.
+        (v1(stat=without(V1_STAT, "total_inactive_file")), (V1_USAGE, LIMIT)),
+        # A cache figure above the usage (two files read a moment apart): zero, never below.
+        (v2(current="600000000\n"), (0, LIMIT)),
+        (v2(current=f"{V2_INACTIVE}\n"), (0, LIMIT)),
+        (v2(current=f"{V2_INACTIVE + 1}\n"), (1, LIMIT)),
+        (v2(top="max\n"), None),
+        (v2(current="\n"), None),
+        (v2(current="12x\n"), None),
+        ({"memory.current": f"{V2_CURRENT}\n"}, None),
+        ({}, None),
+    ],
+)
+def test_memory_is_the_working_set_of_docker_stats(
+    tmp_path: Path, files: dict[str, str], expected: tuple[int, int] | None
+) -> None:
+    assert chromium.memory(cgroup(tmp_path, files)) == expected
+
+
+def test_the_guard_leaves_the_page_cache_and_closes_on_allocation(tmp_path: Path) -> None:
+    """The recorded container held 95% of its limit, two thirds of it inactive page cache: the
+    guard reads 28% and closes nothing. The same usage held by allocated memory closes a tab."""
+    assert V2_CURRENT * 100 >= LIMIT * 95  # what the guard read before: past 90%
+    cache = cgroup(tmp_path / "cache", v2())
+    allocated = cgroup(
+        tmp_path / "allocated", v2(stat=without(V2_STAT, "inactive_file") + "inactive_file 0\n")
+    )
+    events: list[dict] = []
+
+    async def go() -> None:
+        browser = FakeBrowserContexts(2)
+        record = lambda **e: events.append(e)  # noqa: E731
+        assert not await chromium.guard_memory(browser, 90, record, lambda: chromium.memory(cache))
+        assert len(browser.contexts[0].pages) == 2
+        assert await chromium.guard_memory(browser, 90, record, lambda: chromium.memory(allocated))
+        assert len(browser.contexts[0].pages) == 1
+
+    run(go())
+    assert events == [{"event": "tab_closed", "reason": "memory", "used_mib": V2_CURRENT >> 20}]
+
+
 def test_prepare_clears_stale_locks_and_writes_the_languages(tmp_path: Path) -> None:
     """Items 5 and 7: a lock of another host name removed; intl.accept_languages written (the
     switch --lang is ignored on Linux); a person's own preferences kept."""

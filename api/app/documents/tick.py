@@ -478,12 +478,17 @@ def _cancel(generation: DocumentGeneration, at: datetime) -> None:
 
 
 def _name_base(db: Session, item: Waiting, default: Document) -> None:
-    """A CV that waited for the first base CV is written from the default one, and takes its
-    template while it has no version."""
+    """A CV that waited without a base CV (none yet, or its own deleted) is written from the
+    default one, which gives its template as `generate.create` does; the write records the
+    template given as its own, so no later write reads the tick's change as a switch by hand. A
+    switch by hand made while it waited stays one."""
     document = store.lock_document(db, item.generation.user_id, item.generation.document_id)
-    if document.base_document_id is None:
-        document.base_document_id = default.id
-        document.template_slug = default.template_slug
+    if document.base_document_id is None and generate.name_base(db, document, default):
+        # A new dict: an assignment is what marks the JSONB column changed.
+        item.generation.estimate = {
+            **item.generation.estimate,
+            generate.WRITE_TEMPLATE: document.template_slug,
+        }
     item.generation.base_document_id = document.base_document_id
 
 
