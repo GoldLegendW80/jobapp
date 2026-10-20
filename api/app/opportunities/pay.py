@@ -1,0 +1,309 @@
+"""The pay and the work mode a posting states (opportunities O3, SPEC-opportunities "The card").
+
+Pure and linear in the size of the text. Never a guess: a figure is kept only when the posting
+states it in a shape of the allow list below, with its currency and its period; anything else is
+refused and nothing is stored.
+
+**Pay in a posting's text** (`pays`, `pay_of`). One statement is an amount or a range of two
+amounts, with a currency named (a code of the profile's CURRENCIES, "euro" or "euros", or a sign:
+€, £, $ read as USD, US$, C$ and CA$, A$ and AU$, S$ and SG$, NZ$, HK$) and a period named,
+after the figures or just before them:
+- ranges: "60,000 to 70,000 EUR a year", "60k-70k € per year" (a hyphen or a dash between two
+  figures is a range), "de 500 à 650 € par jour", "between $50 and $60 an hour", "60-70k€" (a "k"
+  on the second figure alone counts for both);
+- one figure: "€600/day", "TJM 600 €", "45 K€ brut annuel", "$120,000 a year";
+- figures: thousands grouped by comma, dot, apostrophe, space, thin or non breaking space, "k" or
+  "K" for thousands, up to two decimals ("1,5k €" is 1,500); a figure that is not whole once
+  read is refused;
+- periods after: "a year", "per year", "/year", "/yr", "per annum", "p.a.", "annually", "yearly",
+  "annual", "par an", "/an", "annuel", "a month", "/mo", "par mois", "monthly", "mensuel", "a
+  day", "/day", "/j", "par jour", "daily", "journalier", "an hour", "/h", "/hr", "par heure", "de
+  l'heure", "hourly", "horaire", with "brut", "gross", "net", "base", "HT" or "TTC" in between;
+  before: "TJM", "taux journalier", "daily rate", "day rate", "annual salary", "salaire annuel",
+  "rémunération annuelle", "monthly salary", "salaire mensuel", "hourly rate", "taux horaire".
+Refused: no currency ("60,000 a year"), no period ("60k-70k €"), two currencies or two periods in
+one statement, a reversed range, a figure under 1 or over 10,000,000, a percentage, a figure that
+continues a run of digits (a phone number, a postcode, a date: "06 12 34 56 78 €"), a statement
+right after a bonus word ("bonus", "prime", "equity", "stock", "RSU", "BSPCE", "commission",
+"variable", "signing", "relocation", "allowance", "indemnité") in its clause, and one figure
+after an open bound ("up to", "from", "starting at", "jusqu'à", "à partir de", "dès", "minimum",
+"maximum", "at least", "au moins", "more than", "over", "plus de"). "Competitive" and "selon
+profil" hold no figure, so nothing is found.
+
+A text may state several pays (a salary and a daily rate, or one pay in two currencies): `pays`
+returns every one in order; `pay_of` keeps one, the first with a period that fits the contract
+(a freelance mission: a day or an hour first; any other contract: a year or a month first), else
+the first stated.
+
+**Work mode** (`work_mode_of`), from a location: "Remote", "Télétravail" (remote), "Hybrid",
+"Hybride", "Télétravail partiel", "partial remote" (hybrid), "On site", "Onsite", "In office",
+"Sur site", "Présentiel" (office), as whole words in any case. Two modes named, or a mode right
+after "no", "not", "non", "pas de", "sans" or "without", is refused (None).
+
+Not found (declared open point): a pay written only in an image, a PDF attachment or a table cell
+the text extraction lost; a pay with a currency the allow list does not name; an hourly rate with
+cents.
+"""
+
+import re
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+
+from app.profile.schemas import CURRENCIES
+
+PAY_MAX = 10_000_000
+PERIODS = ("year", "month", "day", "hour")
+WORK_MODES = ("remote", "hybrid", "office")
+FREELANCE_PERIODS = ("day", "hour")
+
+
+@dataclass(frozen=True)
+class Pay:
+    min: int
+    max: int
+    currency: str
+    period: str
+
+
+# --- the shapes ---------------------------------------------------------------------------------
+
+
+_SIGNS = {
+    "€": "EUR",
+    "£": "GBP",
+    "$": "USD",
+    "us$": "USD",
+    "c$": "CAD",
+    "ca$": "CAD",
+    "a$": "AUD",
+    "au$": "AUD",
+    "s$": "SGD",
+    "sg$": "SGD",
+    "nz$": "NZD",
+    "hk$": "HKD",
+    "euro": "EUR",
+    "euros": "EUR",
+}
+_CODES = "|".join(CURRENCIES)
+# Codes in capitals only ("try" or "mad" in a sentence is no currency), right after a figure's
+# "k" too ("60kEUR"); "euro" and "euros" in any case.
+_CURRENCY = (
+    r"(?:(?-i:US|CA|AU|SG|NZ|HK|[CAS])\$|[€£$]|"
+    rf"(?:(?<![^\W\d_])|(?<=[kK]))(?-i:{_CODES})(?![^\W\d_])|(?<![^\W\d_])euros?(?![^\W\d_]))"
+)
+# A figure: thousands in groups of three (at most four groups), or plain digits, then up to two
+# decimals. Never inside a longer run of digits (the lookarounds), so a phone number, a postcode
+# or a date gives no figure.
+_NUMBER = (
+    r"(?<!\d)(?<!\d[,.'\u2019\u00a0\u202f\u2009 ])"
+    r"(?:\d{1,3}(?:[,.'\u2019\u00a0\u202f\u2009 ]\d{3}){1,4}|\d{1,8})(?:[.,]\d{1,2})?"
+    r"(?!\d)(?![,.'\u2019\u00a0\u202f\u2009 ]\d)(?!\s?%)"
+)
+_THOUSANDS = r"(?:\s?[kK](?=[€£$]|EUR|eur)|\s?[kK](?![^\W_]))"
+_RANGE_WORD = r"\s{0,3}(?:-|\u2013|\u2014|~|to|à|and|et)\s{0,3}"
+_FILLER = r"(?:\s{0,3}(?<![^\W\d_])(?:brut|bruts|gross|net|base|fixe|HT|TTC)(?![^\W\d_]))"
+_WORD_START = r"(?<![^\W\d_])"
+_PERIOD_AFTER = (
+    r"\s{0,3}(?:/\s{0,2}|"
+    rf"{_WORD_START}(?:(?:per|a|an|par|by\s+the|by)\s{{1,3}}|de\s+l['\u2019]\s{{0,2}}))"
+    r"(?P<after_noun>year|yr|y|annum|an|année|annee|month|mo|mois|day|d|jour|journée|j|hour|hr|h|heure)"
+    r"(?![^\W\d_])"
+    rf"|\s{{0,3}}{_WORD_START}(?P<after_adj>p\.\s?a\.|pa|annually|yearly|annual|annuel|annuelle|"
+    r"annuels|monthly|mensuel|mensuelle|daily|journalier|hourly|horaire)(?![^\W\d_])"
+)
+_PERIOD_BEFORE = (
+    r"(?P<before>TJM|taux\s+journalier(?:\s+moyen)?|daily\s+rate|day\s+rate|"
+    r"annual\s+(?:base\s+)?(?:salary|compensation|pay)|salaire\s+(?:brut\s+)?annuel|"
+    r"rémunération\s+(?:brute\s+)?annuelle|monthly\s+(?:salary|pay)|"
+    r"salaire\s+(?:brut\s+)?mensuel|hourly\s+(?:rate|wage|pay)|taux\s+horaire)"
+    r"(?![^\W\d_])\s{0,3}(?::\s{0,3})?"
+    r"(?:(?:of|de|du|between|entre|from|around|environ)\s{1,3})?"
+)
+_STATEMENT = re.compile(
+    rf"(?:{_PERIOD_BEFORE})?"
+    rf"(?P<cur1>{_CURRENCY})?\s{{0,2}}(?P<n1>{_NUMBER})(?P<k1>{_THOUSANDS})?\s{{0,2}}"
+    rf"(?P<cur2>{_CURRENCY})?"
+    rf"(?:{_RANGE_WORD}(?P<cur3>{_CURRENCY})?\s{{0,2}}(?P<n2>{_NUMBER})(?P<k2>{_THOUSANDS})?"
+    rf"\s{{0,2}}(?P<cur4>{_CURRENCY})?)?"
+    rf"(?:{_FILLER}{{0,2}}(?:{_PERIOD_AFTER}))?",
+    re.IGNORECASE,
+)
+
+_PERIOD_WORDS = {
+    "year": ("year", "yr", "y", "annum", "an", "année", "annee", "p.a.", "pa", "annually",
+             "yearly", "annual", "annuel", "annuelle", "annuels"),
+    "month": ("month", "mo", "mois", "monthly", "mensuel", "mensuelle"),
+    "day": ("day", "d", "jour", "journée", "j", "daily", "journalier"),
+    "hour": ("hour", "hr", "h", "heure", "hourly", "horaire"),
+}  # fmt: skip
+_PERIOD_OF = {word: period for period, words in _PERIOD_WORDS.items() for word in words}
+_BEFORE_PERIOD = (
+    (re.compile(r"tjm|journalier|daily|day", re.IGNORECASE), "day"),
+    (re.compile(r"annual|annuel", re.IGNORECASE), "year"),
+    (re.compile(r"monthly|mensuel", re.IGNORECASE), "month"),
+    (re.compile(r"hourly|horaire", re.IGNORECASE), "hour"),
+)
+
+# What the clause before a statement must not hold (at most WINDOW characters, cut at the last
+# clause mark). A bonus word refuses any statement; an open bound refuses one figure.
+WINDOW = 40
+_CLAUSE_MARK = re.compile(r"[.,;\n+|•(]|\bplus\b(?!\s+de)|\band\b|\bet\b", re.IGNORECASE)
+_BONUS = re.compile(
+    r"(?<![^\W\d_])(?:bonus|bonuses|prime|primes|equity|stock|stocks|rsu|rsus|bspce|commission|"
+    r"commissions|variable|signing|relocation|allowance|indemnité|indemnite)(?![^\W\d_])",
+    re.IGNORECASE,
+)
+_OPEN_BOUND = re.compile(
+    r"(?<![^\W\d_])(?:up\s+to|from|starting\s+(?:at|from)|jusqu['\u2019]\s?à|jusqu['\u2019]\s?a|"
+    r"à\s+partir\s+de|a\s+partir\s+de|dès|minimum|min|maximum|max|at\s+least|au\s+moins|"
+    r"more\s+than|over|plus\s+de)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _amount(digits: str, thousands: bool) -> Decimal | None:
+    """A figure as written: the last separator followed by one or two digits is the decimal mark,
+    every other separator groups thousands."""
+    text = "".join(digits.split())
+    text = text.replace("\u00a0", "").replace("\u202f", "").replace("\u2009", "")
+    decimals = ""
+    match = re.search(r"[.,](\d{1,2})$", text)
+    if match and not re.fullmatch(r"\d{1,3}(?:[.,']\d{3})+", text):
+        decimals = match.group(1)
+        text = text[: match.start()]
+    whole = re.sub(r"[,.'\u2019]", "", text)
+    try:
+        value = Decimal(f"{whole}.{decimals or '0'}")
+    except InvalidOperation:
+        return None
+    return value * 1000 if thousands else value
+
+
+def _currency(token: str | None) -> str | None:
+    if token is None:
+        return None
+    key = token.strip().lower()
+    return _SIGNS.get(key) or (key.upper() if key.upper() in CURRENCIES else None)
+
+
+def _period(match: re.Match[str]) -> str | None:
+    """The one period the statement names, None when it names none or two."""
+    named: set[str] = set()
+    word = match.group("after_noun") or match.group("after_adj")
+    if word:
+        period = _PERIOD_OF.get(re.sub(r"\s", "", word.lower()))
+        if period is None:
+            return None
+        named.add(period)
+    if match.group("before"):
+        named.update(p for pattern, p in _BEFORE_PERIOD if pattern.search(match.group("before")))
+    return named.pop() if len(named) == 1 else None
+
+
+def _clause_before(text: str, start: int) -> str:
+    window = text[max(0, start - WINDOW) : start]
+    marks = list(_CLAUSE_MARK.finditer(window))
+    return window[marks[-1].end() :] if marks else window
+
+
+def _statement(text: str, match: re.Match[str]) -> Pay | None:
+    currencies = {_currency(match.group(name)) for name in ("cur1", "cur2", "cur3", "cur4")} - {
+        None
+    }
+    if len(currencies) != 1 or any(
+        match.group(name) and _currency(match.group(name)) is None
+        for name in ("cur1", "cur2", "cur3", "cur4")
+    ):
+        return None
+    period = _period(match)
+    if period is None:
+        return None
+    before = _clause_before(text, match.start())
+    if _BONUS.search(before):
+        return None
+    ranged = match.group("n2") is not None
+    if not ranged and _OPEN_BOUND.search(before):
+        return None
+    k1, k2 = bool(match.group("k1")), bool(match.group("k2"))
+    low = _amount(match.group("n1"), k1)
+    high = _amount(match.group("n2"), k2) if ranged else low
+    if low is None or high is None:
+        return None
+    if ranged and k2 and not k1 and low < 1000:
+        low *= 1000  # "60-70k€": the "k" counts for both
+    if low != low.to_integral_value() or high != high.to_integral_value():
+        return None
+    if low < 1 or high > PAY_MAX or low > high:
+        return None
+    return Pay(min=int(low), max=int(high), currency=currencies.pop(), period=period)
+
+
+def pays(text: str | None) -> list[Pay]:
+    """Every pay the text states in an accepted shape, in order."""
+    found: list[Pay] = []
+    for match in _STATEMENT.finditer(text or ""):
+        if not match.group("n1"):
+            continue
+        pay = _statement(text or "", match)
+        if pay is not None:
+            found.append(pay)
+    return found
+
+
+def pay_of(text: str | None, *, freelance: bool = False) -> Pay | None:
+    """The one pay to store for a posting: the first whose period fits its contract, else the
+    first stated, else None."""
+    found = pays(text)
+    fits = [p for p in found if (p.period in FREELANCE_PERIODS) == freelance]
+    return (fits or found or [None])[0]
+
+
+def pay_text(low: int, high: int, currency: str, period: str) -> str:
+    """The pay as the card says it: "45,000 to 55,000 EUR a year", "600 EUR a day"."""
+    per = "an hour" if period == "hour" else f"a {period}"
+    figures = f"{low:,}" if low == high else f"{low:,} to {high:,}"
+    return f"{figures} {currency} {per}"
+
+
+# --- work mode ----------------------------------------------------------------------------------
+
+_MODES = re.compile(
+    r"(?<![^\W\d_])(?P<neg>(?:no|not|non|pas\s+de|pas\s+en|sans|without)[\s-]{1,3})?"
+    r"(?:(?P<hybrid>hybrid|hybride|t[ée]l[ée]travail\s+partiel|partial(?:ly)?\s+remote)"
+    r"|(?P<remote>remote|t[ée]l[ée]travail)"
+    r"|(?P<office>on[\s-]?site|in[\s-]office|sur\s+site|pr[ée]sentiel))(?![^\W\d_])",
+    re.IGNORECASE,
+)
+
+
+def work_mode_of(location: str | None) -> str | None:
+    """The work mode a location names, None when it names none, two, or one negated."""
+    named: set[str] = set()
+    for match in _MODES.finditer(location or ""):
+        if match.group("neg"):
+            return None
+        named.add(next(m for m in WORK_MODES if match.group(m)))
+    return named.pop() if len(named) == 1 else None
+
+
+# --- what an ATS states -------------------------------------------------------------------------
+
+
+def stated_pay(low: object, high: object, currency: object, period: str | None) -> Pay | None:
+    """A pay an ATS API states as figures, a currency code and a period, checked as the text's:
+    whole numbers from 1 to PAY_MAX, min at most max, a known currency, a period."""
+    if period not in PERIODS or not isinstance(currency, str):
+        return None
+    code = currency.strip().upper()
+    if code not in CURRENCIES:
+        return None
+    figures: list[int] = []
+    for value in (low, high):
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+        if value != int(value):
+            return None
+        figures.append(int(value))
+    if figures[0] < 1 or figures[1] > PAY_MAX or figures[0] > figures[1]:
+        return None
+    return Pay(min=figures[0], max=figures[1], currency=code, period=period)

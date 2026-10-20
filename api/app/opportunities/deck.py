@@ -21,14 +21,16 @@ it is now, so a Pass, a new posting or a threshold changed between two pages nev
 come twice, and the walk always ends. `left` counts the cards from the start of this page on.
 
 **Filters**, any combination: contract types (`ContractType` values), `remote` or `on_site`
-(until O3 stores the work mode, `remote` is the sweep's own rule: the location names "remote"),
+(`remote` is the work mode stated as remote, opportunities O3, or for a posting that states
+none, the sweep's own rule: the location names "remote"),
 and the source (`ashby` matches every `ashby:<org>` board, `ashby:mistral` that board alone).
 
 **The card.** Id, title, company, location, contract type, source and address, fit, found_on,
 the match reason (`match_reason`: up to three competencies the posting asks that are not gaps,
 the first gap, and what of the person's seniority, industries and company types the posting
 matches, the words of the score's bonus, scoring.bonus, read against the profile as it is
-now), and `pay` and `work_mode`, None until O3 lands them.
+now), and the pay (`pay.pay_text`) and the work mode the posting states (O3), None when it
+states none.
 
 The never apply decision runs in Python over the light columns of every candidate (id, company,
 title, fit, found_on, whether the sweep skipped it for a rule, and in Full auto the first
@@ -52,7 +54,7 @@ from sqlalchemy.orm import Session, undefer
 from app.apply import caps, guardrails
 from app.apply.models import Application, Mode, State
 from app.jobs import scoring, sweep
-from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus
+from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus, WorkMode
 from app.jobs.sweep import NeverApplyRule
 from app.profile.schemas import SearchSection
 
@@ -182,8 +184,12 @@ def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters, mode: Mode) 
     if filters.types:
         query = query.where(Job.contract_type.in_(filters.types))
     if filters.remote is not None:
+        # The stated work mode (O3) first; a posting that states none, by the sweep's own rule.
         names_remote = sa.func.strpos(sa.func.lower(Job.location), "remote") > 0
-        query = query.where(names_remote if filters.remote == "remote" else ~names_remote)
+        remote = sa.or_(
+            Job.work_mode == WorkMode.remote, sa.and_(Job.work_mode.is_(None), names_remote)
+        )
+        query = query.where(remote if filters.remote == "remote" else ~remote)
     if filters.source is not None:
         query = query.where(
             sa.or_(
