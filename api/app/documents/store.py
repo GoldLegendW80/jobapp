@@ -50,7 +50,7 @@ import hashlib
 import logging
 import re
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import asdict
 from datetime import date, datetime
 from typing import Any
@@ -228,6 +228,24 @@ def lock_posting(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> JobS
         .with_for_update(read=True)
     )
     return _execute(db, query).scalar_one_or_none()
+
+
+@_busy
+def lock_postings(db: Session, user_id: uuid.UUID, posting_ids: Collection[uuid.UUID]) -> None:
+    """Lock 2 for many postings at once: the user's postings `FOR SHARE`, in id order, the order
+    every other transaction that locks several job rows follows (jobs.service lock order). A
+    pass that will lock several postings takes them here first; `lock_posting` later finds them
+    held."""
+    if not posting_ids:
+        return
+    _wait(db)
+    query = (
+        sa.select(Job.id)
+        .where(Job.user_id == user_id, Job.id.in_(list(posting_ids)))
+        .order_by(Job.id)
+        .with_for_update(read=True)
+    )
+    _execute(db, query).all()
 
 
 @_busy

@@ -456,7 +456,7 @@ describe("rescore", () => {
     });
     await user.click(within(dialog).getByRole("button", { name: "Rescore" }));
     await screen.findByText(
-      "Rescored 2,400 postings: 12 changed, 2,348 unchanged, 40 fits set by hand kept, 33 postings without text skipped, 3 postings being changed skipped, rescore again to include them.",
+      "Rescored 2,400 postings: 12 changed, 2,348 unchanged, 40 fits set by hand kept, 33 postings without text skipped. 3 postings were busy and kept their score. Rescore again to include them.",
     );
     expect(sent).toEqual([
       { overwrite_manual: false },

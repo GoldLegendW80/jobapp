@@ -18,8 +18,10 @@ import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.documents import store
 from app.jobs import service
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
+from app.jobs.schemas import ImportJob
 from tests.agents.test_proposals_service import STATUS, propose
 from tests.identity.api_helpers import Api
 from tests.jobs.conftest import NOW
@@ -281,3 +283,105 @@ def test_every_multi_row_lock_of_the_jobs_service_is_ordered_by_id(
     first_proposal = next(i for i, s in enumerate(locks) if "FROM proposals" in s)
     assert "FROM jobs" in locks[0]
     assert first_proposal > 0
+
+
+# --- a bulk write and the documents tick lock the same postings in one order (round 2) ----------
+
+SLUGS = ("lock-order-a", "lock-order-b", "lock-order-c")
+
+
+def import_items() -> list[ImportJob]:
+    return [
+        ImportJob(slug=slug, company="Example Robotics", title=f"Role {slug}", notes="imported")
+        for slug in SLUGS
+    ]
+
+
+def overlapping(factory: sessionmaker[Session], owner: uuid.UUID) -> list[uuid.UUID]:
+    return [new_job(factory, owner, slug=slug, title=f"Role {slug}") for slug in SLUGS]
+
+
+def tick_pass(factory: sessionmaker[Session], owner: uuid.UUID, ids: list[uuid.UUID]) -> None:
+    """What documents.tick.person does to postings: lock 2 on all of them (in the order the pass
+    asks, reversed here), then the single posting locks of each claim."""
+    with factory() as db:
+        store.lock_postings(db, owner, ids[::-1])
+        for posting_id in ids:
+            store.lock_posting(db, owner, posting_id)
+        db.commit()
+
+
+def import_pass(factory: sessionmaker[Session], owner: uuid.UUID) -> None:
+    with factory() as db:
+        service.import_jobs(db, owner, import_items(), NOW)
+        db.commit()
+
+
+def notes_of(factory: sessionmaker[Session], ids: list[uuid.UUID]) -> set[str]:
+    with factory() as db:
+        return set(db.scalars(sa.select(Job.notes).where(Job.id.in_(ids))))
+
+
+def test_an_import_waits_for_a_tick_pass_on_the_same_postings_and_both_finish(
+    factory: sessionmaker[Session], alice: Signed
+) -> None:
+    """The tick holds lock 2 on every posting; the import queues on its first row, holding none,
+    so no cycle can form (no 40P01), and it completes once the pass commits."""
+    ids = overlapping(factory, alice.id)
+    errors: list[BaseException] = []
+    with factory() as tick:
+        store.lock_postings(tick, alice.id, ids[::-1])
+        importing = run_in_thread(errors, lambda: import_pass(factory, alice.id))
+        wait_until_blocked(factory)
+        for posting_id in ids:
+            store.lock_posting(tick, alice.id, posting_id)  # the pass goes on, in any order
+        tick.commit()
+    join_all(importing)
+    assert errors == []
+    assert notes_of(factory, ids) == {"imported"}
+
+
+def test_a_tick_pass_waits_for_an_import_on_the_same_postings_and_both_finish(
+    factory: sessionmaker[Session], alice: Signed
+) -> None:
+    ids = overlapping(factory, alice.id)
+    errors: list[BaseException] = []
+    with factory() as importer:
+        service.import_jobs(importer, alice.id, import_items(), NOW)  # holds every row
+        ticking = run_in_thread(errors, lambda: tick_pass(factory, alice.id, ids))
+        wait_until_blocked(factory)
+        importer.commit()
+    join_all(ticking)
+    assert errors == []
+    assert notes_of(factory, ids) == {"imported"}
+
+
+def test_import_and_mark_overridden_lock_their_rows_by_id_before_updating(
+    factory: sessionmaker[Session], alice: Signed
+) -> None:
+    ids = overlapping(factory, alice.id)
+    statements: list[str] = []
+    with factory() as db:
+        engine = db.get_bind()
+
+        def record(_c: Any, _cur: Any, statement: str, *_: Any) -> None:
+            statements.append(statement)
+
+        sa.event.listen(engine, "before_cursor_execute", record)
+        try:
+            service.import_jobs(db, alice.id, import_items(), NOW)
+            first_update = next(i for i, s in enumerate(statements) if s.startswith("UPDATE jobs"))
+            jobs = list(db.scalars(sa.select(Job).where(Job.id.in_(ids))))
+            statements.clear()
+            service.mark_overridden(
+                db, [service.OverrideCandidate(job=job, computed=0) for job in jobs], NOW
+            )
+            db.rollback()
+        finally:
+            sa.event.remove(engine, "before_cursor_execute", record)
+    locks = _locked_ids_of(statements)
+    assert len(locks) == 1
+    assert "FROM jobs" in locks[0]
+    assert "ORDER BY" in locks[0]
+    assert ".id" in locks[0].split("ORDER BY")[1]
+    assert first_update > 0

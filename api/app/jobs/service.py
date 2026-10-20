@@ -653,11 +653,11 @@ class _Index:
     """The user's rows as the import goes: by slug, by URL, by duplicate key, and their files."""
 
     def __init__(self, db: Session, user_id: uuid.UUID) -> None:
-        self.jobs = list(
-            db.execute(
-                jobs_of(user_id).options(undefer(Job.posting_text)).order_by(Job.created_at, Job.id)
-            ).scalars()
-        )
+        # Every row is locked first, in id order (the lock order below), because the import
+        # updates many of them with plain UPDATEs: it must not wait for one row while holding
+        # another in a different order than the documents tick (documents.tick.person).
+        locked = _lock(db, jobs_of(user_id).options(undefer(Job.posting_text)).order_by(Job.id))
+        self.jobs = sorted(locked, key=lambda job: (job.created_at, job.id))
         self.by_slug = {job.slug: job for job in self.jobs}
         self.by_url = {job.url: job for job in self.jobs if job.url}
         self.keys = {job.id: self.key_of(job) for job in self.jobs}
@@ -913,13 +913,19 @@ NOTE_COALESCE = timedelta(minutes=2)
 
 # --- the row lock: what it marks, how long it waits (J8) ----------------------------------------
 
-# The lock order (issue #166): a transaction that locks several rows takes the jobs first, in id
-# order (lock_jobs, undo_bulk, rescore_batch), then their status proposals, in id order
-# (supersede_status_proposals; accept locks its one job, then its one proposal). The paths that
-# lock proposals alone (agents.proposals.create and reject) hold no job row. The lock is
-# FOR NO KEY UPDATE (issue #341): no holder deletes a job or changes its key, so a row that
-# references a posting (an event, a document, a run) can be inserted while the posting is held,
-# and the foreign key KEY SHARE of that insert is no longer half of a deadlock.
+# The lock order (issue #166), for the rows of the jobs table: a transaction that locks several
+# job rows takes them in id order, whatever it does to them next. In the jobs service that is
+# lock_jobs, undo_bulk, rescore_batch, import_jobs and mark_overridden (they lock through _lock
+# before any UPDATE); in the agents, the status proposals follow the jobs, in id order
+# (supersede_status_proposals; accept locks its one job, then its one proposal), and the paths
+# that lock proposals alone (agents.proposals.create and reject) hold no job row. In the
+# documents, the tick pass takes its postings FOR SHARE in id order up front (store.lock_postings,
+# called by tick.person); the single posting locks of a click or a letter hold one posting at a
+# time. Paths outside these (a transaction that gathers several postings by another road) are
+# not covered: Postgres breaks such a cycle (40P01) and the app answers 503, see is_retryable.
+# The lock is FOR NO KEY UPDATE (issue #341): no holder deletes a job or changes its key, so a
+# row that references a posting (an event, a document, a run) can be inserted while the posting
+# is held, and the foreign key KEY SHARE of that insert is no longer half of a deadlock.
 LOCK_TIMEOUT_MS = 5_000  # how long a lock on a job row waits, per transaction (SET LOCAL)
 BUSY = "This job is being changed. Try again."
 RETRY_BUSY = "The server is busy. Try again in a moment."
@@ -951,8 +957,8 @@ def is_lock_timeout(exc: BaseException) -> bool:
 
 def is_retryable(exc: BaseException) -> bool:
     """Whether `exc` is a statement timeout (SQLSTATE 57014) or a deadlock Postgres broke
-    (40P01): the transaction was rolled back whole, so the same request may simply be sent
-    again. Every other database error keeps its behaviour."""
+    (40P01): the transaction was rolled back whole, so none of its database changes
+    stayed. Every other database error keeps its behaviour."""
     return isinstance(exc, DBAPIError) and getattr(exc.orig, "sqlstate", None) in _RETRYABLE
 
 
@@ -1439,7 +1445,16 @@ def override_candidates(
 
 
 def mark_overridden(db: Session, candidates: Sequence[OverrideCandidate], now: datetime) -> int:
-    """Mark these fits as set by hand (fit unchanged), with a `fit` event each."""
+    """Mark these fits as set by hand (fit unchanged), with a `fit` event each. The rows are
+    locked first, in id order (the lock order below), then updated."""
+    if candidates:
+        _lock(
+            db,
+            sa.select(Job)
+            .where(Job.id.in_([c.job.id for c in candidates]))
+            .options(undefer(Job.posting_text))
+            .order_by(Job.id),
+        )
     for candidate in candidates:
         job = candidate.job
         add_event(
