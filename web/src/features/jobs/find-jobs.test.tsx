@@ -239,6 +239,7 @@ describe("Find jobs", () => {
             source("google_careers", "agents", 0, 0, "layout_changed"),
             source("vie", "data", 0, 0, "browser_busy"),
             source("vie", "ml", 1, 1, "lease_ended"),
+            { ...source("vie", "cv", 0, 0, "not_started"), result_pages: 0 },
           ],
         }),
       ],
@@ -267,6 +268,7 @@ describe("Find jobs", () => {
       "Google Careers, agents: 0 postings found, 0 new. The page looked different from what the app knows, so nothing was kept from it.",
       "Business France VIE, data: 0 postings found, 0 new. Your browser was in use, so this site waits for the next search.",
       "Business France VIE, ml: 1 posting found, 1 new. You took your browser back, so this site stopped. What was read is kept, the rest comes at the next search.",
+      "Business France VIE, cv: not read this time, it comes at the next search.",
     ]);
   });
 

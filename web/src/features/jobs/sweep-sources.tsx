@@ -1,7 +1,8 @@
 /**
  * The browser sources of a sweep in its summary (browser B8, `stats.sources` of
  * api/app/browser/sources): per job site read in the person's browser, what it found, what was
- * new, and in plain words why it stopped early when it did.
+ * new, and in plain words why it stopped early when it did. A site the sweep never began
+ * (`not_started`, after another stopped the sweep's sites) shows only that.
  */
 import { Globe } from "lucide-react";
 
@@ -25,8 +26,10 @@ export function SweepSources({ sources }: { sources: SweepSource[] }) {
           <li key={`${source.kind}:${source.query}:${index}`}>
             <span className="font-medium">{sourceName(source)}</span>
             <span className="text-muted-foreground">
-              {`: ${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`}
-              {source.error
+              {source.error === "not_started"
+                ? `: ${SOURCE_PROBLEMS.not_started}`
+                : `: ${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`}
+              {source.error && source.error !== "not_started"
                 ? ` ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
                 : ""}
             </span>

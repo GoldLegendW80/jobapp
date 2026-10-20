@@ -34,7 +34,9 @@ under the source: a person asked for their browser, the one preemption of SPEC-b
 service", or a timer; what was read completely is stored, the sweep's other sources do not run,
 and the next sweep starts again), `time_budget` (the sweep's time limit is near: what was read is
 stored), `page_failed` (a page did not load), `browser_busy`, `browser_unavailable` (browserd or
-the lease store did not answer, also in the middle of a source).
+the lease store did not answer, also in the middle of a source), and `not_started` for every
+source after one that stopped the sweep's sources (`lease_ended`, `browser_busy`,
+`browser_unavailable`): it never asked for the browser and read nothing.
 
 BROWSER_SOURCES_BASE_URL (tests only, refused in production) points every source at a fixture
 server instead of the real host (tests/browser_pages/b8/).
@@ -90,6 +92,9 @@ ERRORS = (
 )
 # The codes after which no other source of this sweep starts: the browser is wanted elsewhere.
 STOPS_SWEEP = ("lease_ended", "browser_busy", "browser_unavailable")
+# What a source reports when an earlier source stopped the sweep's sources before it began: it
+# never asked for the browser and read nothing (never raised, so not in ERRORS).
+NOT_STARTED = "not_started"
 
 
 class SourceError(Exception):
@@ -488,7 +493,7 @@ class Runner:
                 "result_pages": 0,
                 "found": 0,
                 "postings": 0,
-                "error": stop,
+                "error": None if stop is None else NOT_STARTED,
             }
             stats.sources.append(entry)
             if stop is not None:

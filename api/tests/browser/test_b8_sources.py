@@ -756,16 +756,26 @@ def test_a_lease_ended_mid_source_keeps_what_was_read_and_stops_the_sweeps_sourc
     tools = FakeTools(google_site(3), end_after=3)  # results, two postings, then the end
     other = g(query="robotics")
     stats, stored, _, leases = run_sources(Plan([g(), other]), tools)
-    assert [s["error"] for s in stats.sources] == ["lease_ended", "lease_ended"]
+    assert [s["error"] for s in stats.sources] == ["lease_ended", "not_started"]
     assert len(stored) == 1
     assert len(stored[0][1]) == 2
     assert len(leases.acquired) == 1  # the second source never asks for the browser
 
 
+def test_sources_after_the_one_whose_lease_ended_are_not_started() -> None:
+    tools = FakeTools(google_site(3), end_after=3)
+    plan = Plan([g(), g(query="robotics"), g(query="data", location="Paris")])
+    stats, _, _, leases = run_sources(plan, tools)
+    assert [s["error"] for s in stats.sources] == ["lease_ended", "not_started", "not_started"]
+    assert [(s["result_pages"], s["found"]) for s in stats.sources[1:]] == [(0, 0), (0, 0)]
+    assert [s["query"] for s in stats.sources] == ["ai", "robotics", "data"]
+    assert len(leases.acquired) == 1
+
+
 def test_a_busy_browser_is_not_waited_for() -> None:
     leases = FakeLeases(busy=True)
     stats, stored, _, _ = run_sources(Plan([g(), g(query="b")]), FakeTools({}), leases)
-    assert [s["error"] for s in stats.sources] == ["browser_busy", "browser_busy"]
+    assert [s["error"] for s in stats.sources] == ["browser_busy", "not_started"]
     assert leases.cancelled
     assert not stored
     assert len(leases.acquired) == 1
@@ -927,7 +937,7 @@ def test_the_pacer_without_redis_is_browser_unavailable() -> None:
     stats, stored, _, leases = run_sources(
         Plan([g(), g(query="b")]), FakeTools(google_site(1)), pacer=pacer
     )
-    assert [s["error"] for s in stats.sources] == ["browser_unavailable", "browser_unavailable"]
+    assert [s["error"] for s in stats.sources] == ["browser_unavailable", "not_started"]
     assert not stored
     assert leases.released == ["lease-1"]
 
@@ -999,7 +1009,7 @@ def test_a_reader_failing_on_an_odd_page_is_layout_changed_and_the_sweep_goes_on
 def test_the_lease_store_gone_mid_source_is_browser_unavailable() -> None:
     tools = FakeTools(google_site(3), store_gone_after=2)  # results, one posting, then gone
     stats, stored, _, leases = run_sources(Plan([g(), g(query="b")]), tools)
-    assert [s["error"] for s in stats.sources] == ["browser_unavailable", "browser_unavailable"]
+    assert [s["error"] for s in stats.sources] == ["browser_unavailable", "not_started"]
     assert len(leases.acquired) == 1  # the next source does not start without the store
     assert [len(found) for _, found in stored] == [1]  # what was read completely is kept
 
@@ -1020,7 +1030,7 @@ def test_a_store_failure_after_the_lease_ended_still_stops_the_sweeps_sources() 
     stats, _, _, leases = run_sources(
         Plan([g(), g(query="b")]), tools, store_fails={"google_careers:ai"}
     )
-    assert [s["error"] for s in stats.sources] == ["store_failed", "lease_ended"]
+    assert [s["error"] for s in stats.sources] == ["store_failed", "not_started"]
     assert len(leases.acquired) == 1
 
 

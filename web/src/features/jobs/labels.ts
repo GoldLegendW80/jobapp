@@ -153,6 +153,7 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "What this site found could not be saved, so nothing was kept from it.",
   page_failed: "A page did not load. What was read before is kept.",
   browser_unavailable: "The browser could not be reached.",
+  not_started: "not read this time, it comes at the next search.",
 };
 
 export function sourceName(source: {
