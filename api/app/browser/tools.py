@@ -10,6 +10,9 @@ tool layer (browser/browserd/tools/actions.py) with Playwright MCP's argument na
 its result: `ok` true, or false with the refusal's code (`submit`, `danger`, `host_not_allowed`,
 `stale_ref`, ...). A refusal is a result, not an error.
 
+`call` refuses browserd's sign in tool (`bad_tool`): only app.browser.handoff.request_signin
+asks it, through `ask_signin`, so the api's copy of the lease waits with browserd's.
+
 `gate_click` is the one call that may click a submit element: it needs the gate's capability,
 which `Leases.acquire` returns on the starting call of an `apply_submit` or `profile_edit` lease
 only (`Acquired.capability`). It is a function of its own and not a method of `LeaseTools`, so a
@@ -20,6 +23,9 @@ from typing import Any
 
 from app.browser.client import BrowserdClient, BrowserError
 from app.browser.leases import Leases
+
+SIGNIN_TOOL = "browser_request_signin"
+SIGNIN_REFUSED = "Ask for a sign in through request_signin (app.browser.handoff), not as a tool."
 
 
 class LeaseTools:
@@ -37,8 +43,18 @@ class LeaseTools:
             raise BrowserError("ended")
 
     async def call(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        if name == SIGNIN_TOOL:
+            return {"ok": False, "error": "bad_tool", "message": SIGNIN_REFUSED}
+        return await self._call(name, args or {})
+
+    async def ask_signin(self, site: str, reason: str) -> dict[str, Any]:
+        """browserd's sign in tool, for app.browser.handoff.request_signin only: it sets the
+        api's copy of the lease waiting and polls, which a bare tool call would not."""
+        return await self._call(SIGNIN_TOOL, {"site": site, "reason": reason})
+
+    async def _call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         await self._held()
-        return await self.client.tool(self.lease_id, self._token, name, args or {})
+        return await self.client.tool(self.lease_id, self._token, name, args)
 
     async def put_file(self, name: str, data: bytes) -> dict[str, Any]:
         """Places a PDF on the lease under `name`, for `upload`."""
