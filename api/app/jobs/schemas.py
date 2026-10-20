@@ -566,7 +566,8 @@ class BoardFailureOut(BaseModel):
 class SourceOut(BaseModel):
     """One browser source of the sweep (browser B8, app/browser/sources): the postings it read
     completely (`found`), the new ones among them, and why it stopped early (`error`: None, or
-    layout_changed, lease_ended, time_budget, page_failed, browser_busy, browser_unavailable)."""
+    layout_changed, store_failed, lease_budget, lease_ended, time_budget, page_failed,
+    browser_busy, browser_unavailable)."""
 
     kind: str
     query: str

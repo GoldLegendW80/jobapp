@@ -2,12 +2,15 @@
 through browserd's DELETE /leases/{id}, when a person asks for their own browser; every other
 lease still ends first. Real Redis, browserd's own lease logic behind a transport (b3_support)."""
 
+from typing import Any
+
+import httpx
 import pytest
 
-from app.browser.client import BrowserError
+from app.browser.client import BrowserdClient, BrowserError
 from app.browser.tools import LeaseTools
-from tests.browser.b3_support import World, flush, redis_url  # noqa: F401  (fixture)
-from tests.browser.test_b3_leases import A, B, run
+from tests.browser.b3_support import BASE, World, flush, redis_url  # noqa: F401  (fixture)
+from tests.browser.test_b3_leases import A, B, C, run
 
 
 @pytest.fixture
@@ -60,5 +63,36 @@ def test_only_a_persons_own_session_preempts_a_sweep(world: World, purpose: str)
         got = await world.store.acquire(B, purpose, True)
         assert got.lease is None
         assert (await world.store.current(A)).lease is not None
+
+    run(world, go)
+
+
+def test_no_other_waiter_takes_the_turn_while_the_sweep_ends(world: World) -> None:
+    """While the preempted sweep ends (browserd's DELETE /leases/{id} answers only once Chromium
+    closed), person C's claim for apply_fill runs: it finds the takeover queued at the head of
+    tier 0 and waits, and the takeover gets the lease."""
+    seen: dict[str, Any] = {}
+
+    async def go() -> None:
+        async def handle(request: httpx.Request) -> httpx.Response:
+            # browserd has closed the sweep's Chromium, its answer is not back yet: the worst
+            # moment, as C's start would then find browserd free.
+            answer = await world.browserd.handle(request)
+            if request.method == "DELETE" and "competing" not in seen:
+                seen["competing"] = await world.store.acquire(C, "apply_fill", True)
+            return answer
+
+        client = BrowserdClient(BASE, world.secret, transport=httpx.MockTransport(handle))
+        store = world.make_store(client=client)
+        swept = await store.acquire(A, "sweep", True)
+        assert swept.lease is not None
+        got = await store.acquire(B, "takeover", False)
+        competing = seen["competing"]
+        assert competing.lease is None
+        assert competing.waiting is not None
+        assert got.lease is not None
+        assert got.lease.purpose == "takeover"
+        assert got.lease.user_id == B
+        assert (await world.store.current(C)).lease is None
 
     run(world, go)

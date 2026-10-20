@@ -9,9 +9,16 @@ source of the person's `search.browser_sources` in turn:
 2. Read. The source's module (google_careers.py, vie.py) reads at most RESULT_PAGES_MAX result
    pages and the posting page of each posting the search keeps and the person does not have yet
    (POSTING_PAGES_MAX at most), through the tools of B5 (`browser_navigate`, `browser_snapshot`,
-   and for VIE one `browser_click` on "Show more offers"). Every page but the first of a lease
-   waits PAGE_PAUSE_S first (uniform, injected sleep and random source): with one browser for
-   everyone, one lease at a time, that is the pace per host across people too.
+   and for VIE one `browser_click` on "Show more offers"). Pacing is per host across people and
+   leases (Pacer): before every page, the first of a lease included, the source waits until a
+   pause drawn from PAGE_PAUSE_S (uniform) has passed since the previous page of that host,
+   whoever opened it. The last page time of each host is kept in Redis (RedisPacer, one script,
+   so two workers never take the same slot); a host idle for longer than the pause is opened at
+   once. A page is not started when the lease's remaining active time cannot hold its wait plus
+   PAGE_LOAD_S (`lease_budget`), so a source ends its lease itself instead of running it out
+   and stopping the sweep's other sources. The residue: a page that takes longer than
+   PAGE_LOAD_S (browserd's 30 s navigation limit plus the snapshot) could still cross the
+   maximum; it then reports `lease_ended` as before.
 3. Store. The postings go through the sweep's own store (sweep.store_postings: the search's
    filters, duplicates by URL or identity, status `found`, scored, never apply rules applied,
    the posting text saved), as source `<kind>:<query>`, in one transaction per source.
@@ -19,11 +26,15 @@ source of the person's `search.browser_sources` in turn:
 
 What a source reports in the sweep's `stats.sources` (one entry each, `error` None when it read
 everything it was allowed to): `layout_changed` (a page did not have the structure the extractor
-knows: nothing of that source is stored, the sweep goes on), `lease_ended` (the lease ended under
-the source: a person asked for their browser, the one preemption of SPEC-browser "The service",
-or a timer; what was read completely is stored, the sweep's other sources do not run, and the
-next sweep starts again), `time_budget` (the sweep's time limit is near: what was read is
-stored), `page_failed` (a page did not load), `browser_busy`, `browser_unavailable`.
+knows, or the reader failed in any other way: nothing of that source is stored, the sweep goes
+on), `store_failed` (the store of the source's postings failed: nothing of it is stored, the
+next source runs), `lease_budget` (the lease's remaining time could not hold another page: what
+was read is stored, the next source runs on a lease of its own), `lease_ended` (the lease ended
+under the source: a person asked for their browser, the one preemption of SPEC-browser "The
+service", or a timer; what was read completely is stored, the sweep's other sources do not run,
+and the next sweep starts again), `time_budget` (the sweep's time limit is near: what was read is
+stored), `page_failed` (a page did not load), `browser_busy`, `browser_unavailable` (browserd or
+the lease store did not answer, also in the middle of a source).
 
 BROWSER_SOURCES_BASE_URL (tests only, refused in production) points every source at a fixture
 server instead of the real host (tests/browser_pages/b8/).
@@ -36,13 +47,17 @@ next page is still read). A snapshot of one element (`target`) would close it.
 import asyncio
 import contextlib
 import logging
+import math
 import random
 import re
 import time
+import unicodedata
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
+
+from redis.exceptions import RedisError
 
 from app.browser.client import BrowserError
 from app.browser.leases import Leases, StoreUnavailableError
@@ -52,13 +67,21 @@ from app.profile.schemas import BrowserSource
 logger = logging.getLogger("app.browser.sources")
 
 RESULT_PAGES_MAX = 10  # result pages per source per sweep (tasks/browser/todo.md, B8)
-POSTING_PAGES_MAX = 40  # posting pages per source per sweep: 40 pages of 5 to 15 s fit a lease
+# Posting pages per source per sweep. The sweep lease's 900 s of active time binds first: a page
+# costs its pause (5 to 15 s) plus its load (PAGE_LOAD_S at worst, about 3 s usually), so a lease
+# holds 15 pages at worst and about 60 usually; Pages stops before the lease runs out.
+POSTING_PAGES_MAX = 40
 PAGE_PAUSE_S = (5.0, 15.0)
 PAGE_BUDGET_S = 60.0  # a page is not started this close to the sweep's time limit
+# What one page may take once started: browserd's 30 s navigation, the snapshot, a margin.
+PAGE_LOAD_S = 45.0
+PACE_TTL_S = 3600  # a host's last page time is forgotten after an hour without a page
 TEXT_MAX = 200_000  # sweep.POSTING_TEXT_MAX
 
 ERRORS = (
     "layout_changed",
+    "store_failed",
+    "lease_budget",
     "lease_ended",
     "time_budget",
     "page_failed",
@@ -208,6 +231,31 @@ def own_texts(node: Node) -> list[str]:
     return [text.strip() for text in found if text.strip()]
 
 
+def same_title(heading: str, title: str) -> bool:
+    """Whether a posting page's heading is the card's title: equal once both are NFKC normalised,
+    casefolded and their whitespace collapsed. An empty title is never one."""
+
+    def norm(text: str) -> str:
+        return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+    return bool(norm(title)) and norm(heading) == norm(title)
+
+
+def same_site(parts: SplitResult, page_url: str) -> bool:
+    """Whether a link (split) is on the page's own site: same scheme, host and port, no user."""
+    page = urlsplit(page_url)
+    try:
+        ports = parts.port, page.port
+    except ValueError:
+        return False
+    return (
+        parts.username is None
+        and parts.password is None
+        and bool(parts.hostname)
+        and (parts.scheme, parts.hostname, ports[0]) == (page.scheme, page.hostname, ports[1])
+    )
+
+
 # --- what an extractor answers ----------------------------------------------------------------
 
 
@@ -248,8 +296,61 @@ class Tools(Protocol):
 Sleep = Callable[[float], Awaitable[None]]
 
 
+class Pacer(Protocol):
+    async def reserve(self, host: str, pause: float) -> float:
+        """Takes the host's next page slot, `pause` after its previous page (now when that is
+        past), and answers the seconds to wait for it."""
+        ...
+
+
+class MemoryPacer:
+    """The pacer of one process (tests, a runner without Redis): RedisPacer's rule in memory."""
+
+    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+        self.clock = clock
+        self.last: dict[str, float] = {}
+
+    async def reserve(self, host: str, pause: float) -> float:
+        now = self.clock()
+        start = max(now, self.last.get(host, -math.inf) + pause)
+        self.last[host] = start
+        return start - now
+
+
+PACE = """
+local last = tonumber(redis.call('GET', KEYS[1]) or '')
+local now = tonumber(ARGV[1])
+local start = now
+if last ~= nil and last + tonumber(ARGV[2]) > start then start = last + tonumber(ARGV[2]) end
+redis.call('SET', KEYS[1], string.format('%.3f', start), 'EX', tonumber(ARGV[3]))
+return string.format('%.3f', start)
+"""
+PACE_KEY = "jobapp:browser:pace:"
+
+
+class RedisPacer:
+    """The pace per host across people, leases and workers: the host's last page time in Redis,
+    read and moved by one script. Raises StoreUnavailableError without Redis."""
+
+    def __init__(
+        self, pool: Callable[[], Awaitable[Any]], clock: Callable[[], float] = time.time
+    ) -> None:
+        self.pool, self.clock = pool, clock
+
+    async def reserve(self, host: str, pause: float) -> float:
+        now = self.clock()
+        try:
+            r = await self.pool()
+            start = await r.eval(PACE, 1, PACE_KEY + host, f"{now:.3f}", f"{pause:.3f}", PACE_TTL_S)
+        except (RedisError, OSError, TimeoutError):
+            raise StoreUnavailableError from None
+        raw = start.decode() if isinstance(start, bytes) else str(start)
+        return max(0.0, float(raw) - now)
+
+
 class Pages:
-    """One lease's pages: paced, within the sweep's deadline, a lease that ended is SourceError."""
+    """One lease's pages: paced per host, within the sweep's deadline and the lease's maximum, a
+    lease that ended is SourceError."""
 
     def __init__(
         self,
@@ -259,19 +360,26 @@ class Pages:
         sleep: Sleep,
         rng: random.Random,
         monotonic: Callable[[], float],
+        host: str = "",
+        pacer: Pacer | None = None,
+        lease_until: float = math.inf,
     ) -> None:
         self.tools, self.deadline = tools, deadline
         self.sleep, self.rng, self.monotonic = sleep, rng, monotonic
+        self.host, self.pacer = host, pacer or MemoryPacer(monotonic)
+        self.lease_until = lease_until  # monotonic time at which the lease's active time ends
         self.count = 0
         self.pauses: list[float] = []
 
     async def _act(self, action: Callable[[], Awaitable[dict[str, Any]]]) -> tuple[Node, str]:
         if self.monotonic() + PAGE_BUDGET_S >= self.deadline:
             raise SourceError("time_budget")
-        if self.count:
-            pause = self.rng.uniform(*PAGE_PAUSE_S)
-            self.pauses.append(pause)
-            await self.sleep(pause)
+        wait = await self.pacer.reserve(self.host, self.rng.uniform(*PAGE_PAUSE_S))
+        if self.monotonic() + wait + PAGE_LOAD_S > self.lease_until:
+            raise SourceError("lease_budget")
+        self.pauses.append(wait)
+        if wait > 0:
+            await self.sleep(wait)
         self.count += 1
         try:
             done = await action()
@@ -342,10 +450,12 @@ class Runner:
         sleep: Sleep = asyncio.sleep,
         rng: random.Random | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        pacer: Pacer | None = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
         self.sleep, self.rng = sleep, rng or random.SystemRandom()
         self.monotonic = monotonic
+        self.pacer = pacer or MemoryPacer()
 
     async def __call__(
         self,
@@ -371,9 +481,9 @@ class Runner:
                 continue
             stats.current_board = source_name(source)
             await progress()
-            entry["error"] = await self._one(plan, stats, source, entry, store, deadline)
-            if entry["error"] in STOPS_SWEEP:
-                stop = entry["error"]
+            entry["error"], ended = await self._one(plan, stats, source, entry, store, deadline)
+            if ended in STOPS_SWEEP:
+                stop = ended
             await progress()
 
     async def _one(
@@ -384,21 +494,24 @@ class Runner:
         entry: dict[str, Any],
         store: StoreFound,
         deadline: float,
-    ) -> str | None:
+    ) -> tuple[str | None, str | None]:
+        """The code the source reports, and the code of how its read ended (they differ only when
+        the store failed after a read that ended the lease: the sweep's other sources then still
+        do not start)."""
         reader = readers()[source.kind]
         user = str(plan.user_id)
+        host = reader.host(self.base_url)
+        asked = self.monotonic()  # the lease's active time counts from its start, after this
         try:
-            got = await self.leases.acquire(
-                user, "sweep", automation=True, hosts=[reader.host(self.base_url)]
-            )
+            got = await self.leases.acquire(user, "sweep", automation=True, hosts=[host])
         except BrowserError:
-            return "browser_unavailable"
+            return "browser_unavailable", "browser_unavailable"
         except StoreUnavailableError:
-            return "browser_unavailable"
+            return "browser_unavailable", "browser_unavailable"
         if got.lease is None or got.token is None:
             # Waiting, or a sweep lease of this person already held by another run: never wait.
             await self._give_back(user, None if got.lease is None else "")
-            return "browser_busy"
+            return "browser_busy", "browser_busy"
         lease_id = got.lease.lease_id
         pages = Pages(
             self.tools_for(user, lease_id, got.token),
@@ -406,17 +519,30 @@ class Runner:
             sleep=self.sleep,
             rng=self.rng,
             monotonic=self.monotonic,
+            host=host,
+            pacer=self.pacer,
+            lease_until=asked + got.lease.max_s,
         )
         read = Read()
         code: str | None = None
 
         def wanted(card: Card) -> bool:
-            return self._wanted(plan, card, len(read.postings))
+            # The posting pages opened so far: every page of the lease but the result pages
+            # (a skipped posting's page counts too).
+            return self._wanted(plan, card, pages.count - read.result_pages)
 
         try:
             await reader.read(pages, source, wanted, read, self.base_url)
         except SourceError as exc:
             code = exc.code
+        except StoreUnavailableError:
+            code = "browser_unavailable"  # the lease store went away under the source
+        except Exception as exc:
+            # A reader's failure on a page it did not expect: fail closed, store nothing.
+            logger.warning(
+                "browser source failed: kind=%s error=%s", source.kind, type(exc).__name__
+            )
+            code = "layout_changed"
         finally:
             entry["result_pages"] = read.result_pages
             try:
@@ -425,13 +551,18 @@ class Runner:
                 logger.warning("a sweep lease could not be released: the store is unavailable")
         if code == "layout_changed":
             logger.warning("browser source layout changed: kind=%s", source.kind)
-            return code
-        entry["found"] = len(read.postings)
+            return code, code
         if read.postings:
             new_before = stats.new
-            await store(source_name(source), read.postings)
+            try:
+                await store(source_name(source), read.postings)
+            except Exception as exc:
+                # sweep._store_found puts the stats and the known postings back: nothing stored.
+                logger.warning("browser source not stored: error=%s", type(exc).__name__)
+                return "store_failed", code
+            entry["found"] = len(read.postings)
             entry["postings"] = stats.new - new_before
-        return code
+        return code, code
 
     async def _give_back(self, user: str, held: str | None) -> None:
         if held is None:
@@ -439,10 +570,10 @@ class Runner:
                 await self.leases.cancel(user, ["sweep"])
 
     @staticmethod
-    def _wanted(plan: Any, card: Card, read_so_far: int) -> bool:
+    def _wanted(plan: Any, card: Card, opened: int) -> bool:
         """Whether the posting page is worth a visit: the person does not have it yet, and the
         page budget is not spent. The search's filters decide again at the store."""
-        if read_so_far >= POSTING_PAGES_MAX:
+        if opened >= POSTING_PAGES_MAX:
             return False
         from app.jobs import slug as slugs
 
@@ -476,4 +607,5 @@ def runner_for(settings: Any, redis: Any, sessions: Any) -> Runner:
         leases,
         lambda user, lease, token: LeaseTools(leases, client, user, lease, token),
         base_url=settings.browser_sources_base_url,
+        pacer=RedisPacer(pool),
     )

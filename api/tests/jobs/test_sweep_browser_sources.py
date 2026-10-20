@@ -9,9 +9,10 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.browser.sources import Runner
+from app.browser.sources import MemoryPacer, Runner
 from app.browser.sources import google_careers as gc
 from app.jobs import sweep, sweep_router
 from app.jobs.models import JobStatus, SweepStatus
@@ -52,14 +53,18 @@ def sweep_source() -> Any:
 
 
 def runner(tools: FakeTools, leases: FakeLeases | None = None) -> Runner:
-    async def sleep(_: float) -> None:
-        return None
+    clock = [0.0]
+
+    async def sleep(seconds: float) -> None:
+        clock[0] += seconds
 
     return Runner(
         leases or FakeLeases(),  # type: ignore[arg-type]
         lambda user, lease, token: tools,
         sleep=sleep,
         rng=random.Random(1),  # noqa: S311  a seeded pacing, not a secret
+        monotonic=lambda: clock[0],
+        pacer=MemoryPacer(lambda: clock[0]),
     )
 
 
@@ -166,3 +171,46 @@ def test_sources_alone_start_a_sweep_and_disabled_ones_do_not(
     set_profile(factory, alice, search(browser_sources=[linked]))
     row = run(factory, new_sweep(factory, alice), fake_ats, browser=runner(FakeTools({})))
     assert row.error == sweep.NO_BOARDS
+
+
+# --- round 2: a failure of one source never fails the sweep -------------------------------------
+
+
+@pytest.mark.parametrize("failure", ["reader_bug", "store_gone", "store_failed"])
+def test_a_source_failure_is_reported_and_the_sweep_is_done(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    fake_ats: FakeAts,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    tools = FakeTools(site(offer("AI Engineer")))
+    if failure == "reader_bug":
+
+        def odd(root: Any, page_url: str) -> Any:
+            raise ValueError("invalid literal for int() with base 10: ''")
+
+        monkeypatch.setattr(gc, "parse_results", odd)
+    elif failure == "store_gone":
+        tools.store_gone_after = 0
+    else:
+
+        def broken(*args: Any) -> None:
+            raise OperationalError("INSERT", {}, Exception("the database went away"))
+
+        monkeypatch.setattr(sweep, "_store_found", broken)
+    set_profile(
+        factory, alice, search(board("fake-ok", "ashby", "Acme AI"), browser_sources=[SOURCE])
+    )
+    row = run(factory, new_sweep(factory, alice), fake_ats, browser=runner(tools))
+    assert (row.status, row.error) == (SweepStatus.done, None)
+    expected = {
+        "reader_bug": "layout_changed",
+        "store_gone": "browser_unavailable",
+        "store_failed": "store_failed",
+    }[failure]
+    assert row.stats["sources"][0]["error"] == expected
+    assert row.stats["boards_ok"] == 1
+    jobs = jobs_of(factory, alice)
+    assert jobs  # the boards' rows are kept
+    assert all(job.source != "google_careers:ai" for job in jobs)

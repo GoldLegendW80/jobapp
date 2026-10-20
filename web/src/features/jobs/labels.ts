@@ -147,6 +147,10 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   lease_ended:
     "You took your browser back, so this site stopped. What was read is kept, the rest comes at the next search.",
   time_budget: "The search ran out of time. What was read is kept.",
+  lease_budget:
+    "The browser's time for this site ran out. What was read is kept, the rest comes at the next search.",
+  store_failed:
+    "What this site found could not be saved, so nothing was kept from it.",
   page_failed: "A page did not load. What was read before is kept.",
   browser_unavailable: "The browser could not be reached.",
 };
