@@ -660,14 +660,13 @@ def test_wide_punctuation_never_becomes_markup(slug: str, kind: str) -> None:
         0,
         ON,
     )
+    # as many words in the plain name: a template may set each word of the name in an element
+    plain_name = " ".join(["plain"] * len(long[:120].split()))
     plain = templates.build_html(
         found,
         kind,
         wide_document(kind, "plain words", "plain"),
-        # as many words in the name: a template may print each word in a box of its own
-        wide_view(
-            " ".join("plain" for _ in long[:120].split()), "x.org/plain", "e2e-alex@example.org"
-        ),
+        wide_view(plain_name, "x.org/plain", "e2e-alex@example.org"),
         "en",
         0,
         ON,

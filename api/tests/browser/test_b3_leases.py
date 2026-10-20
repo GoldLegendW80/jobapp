@@ -115,7 +115,7 @@ def test_maximum_boundary_counts_active_time_only() -> None:
     assert lease.expired(now + 100 + 60) == "lease_max"
 
 
-@pytest.mark.parametrize(("after", "expected"), [(1799, None), (1800, "person_timeout")])
+@pytest.mark.parametrize(("after", "expected"), [(1799, None), (1800, "signin_timeout")])
 def test_wait_deadline_boundary(after: int, expected: str | None) -> None:
     lease = apply_lease()
     lease.wait_person(10.0, "signin", "x", SESSION_MAX_S)
