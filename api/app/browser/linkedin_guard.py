@@ -30,6 +30,7 @@ from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONPATH
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.jobs import sweep as sweeps
@@ -48,6 +49,10 @@ KIND = "linkedin"
 _OPENED = '$.sources[*] ? (@.kind == "linkedin" && @.result_pages >= 1)'
 _CHECKPOINT = '$.sources[*] ? (@.kind == "linkedin" && @.error == "linkedin_checkpoint")'
 _SIGNIN = '$.sources[*] ? (@.kind == "linkedin" && @.error == "linkedin_signin")'
+
+
+def _has(path: str) -> Any:
+    return sa.func.jsonb_path_exists(Sweep.stats, sa.cast(path, JSONPATH))
 
 
 @dataclass(frozen=True)
@@ -91,7 +96,7 @@ def paused_until(db: Session, user_id: uuid.UUID, now: datetime) -> datetime | N
         sa.select(sa.func.max(_ended())).where(
             Sweep.user_id == user_id,
             Sweep.started_at > now - PAUSE - timedelta(days=1),
-            sa.func.jsonb_path_exists(Sweep.stats, _CHECKPOINT),
+            _has(_CHECKPOINT),
         )
     ).scalar_one_or_none()
     if ended is None or ended + PAUSE <= now:
@@ -101,8 +106,8 @@ def paused_until(db: Session, user_id: uuid.UUID, now: datetime) -> datetime | N
 
 def _last_sweep(db: Session, user_id: uuid.UUID) -> tuple[datetime, bool] | None:
     row = db.execute(
-        sa.select(_ended(), sa.func.jsonb_path_exists(Sweep.stats, _SIGNIN))
-        .where(Sweep.user_id == user_id, sa.func.jsonb_path_exists(Sweep.stats, _OPENED))
+        sa.select(_ended(), _has(_SIGNIN))
+        .where(Sweep.user_id == user_id, _has(_OPENED))
         .order_by(Sweep.started_at.desc())
         .limit(1)
     ).first()
@@ -149,7 +154,7 @@ def swept_today(
         Sweep.user_id == user_id,
         Sweep.started_at >= start,
         Sweep.started_at < start + timedelta(days=1),
-        sa.func.jsonb_path_exists(Sweep.stats, _OPENED),
+        _has(_OPENED),
     )
     if but is not None:
         query = query.where(Sweep.id != but)

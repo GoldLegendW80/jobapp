@@ -311,6 +311,8 @@ class LinkedIn:
             seen.update(card.url for card in cards)
             for card in fresh:
                 if not wanted(card):
+                    if read.known(card):
+                        read.noted.append((card.company, posting(card, "", "")))
                     continue
                 page, at = await self._open(pages, card.url, read, number, base)
                 if not same_page(at, card.url):

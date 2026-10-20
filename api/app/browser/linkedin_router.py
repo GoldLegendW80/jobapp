@@ -120,13 +120,13 @@ def put_linkedin(body: LinkedInIn, request: Request, user: CurrentUser, db: Db) 
         if entry.get("text_version") != guard.TEXT_VERSION or not entry.get("accepted_at"):
             raise HTTPException(status.HTTP_409_CONFLICT, NOT_ACCEPTED)
         if not entry.get("query"):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, NO_QUERY)
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, NO_QUERY)
     elif index is None and body.accept_version is None and not entry.get("query"):
         db.rollback()
         return _out(guard.state(db, user.id, now))  # off, and nothing to keep
     entry["enabled"] = body.enabled
     if not entry.get("query"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, NO_QUERY)
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, NO_QUERY)
     if index is None:
         sources.append(entry)
     else:
@@ -135,7 +135,7 @@ def put_linkedin(body: LinkedInIn, request: Request, user: CurrentUser, db: Db) 
     try:
         data = validate_section("search", search)
     except ValidationError:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, INVALID) from None
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, INVALID) from None
     try:
         service.save_section(db, user.id, "search", data, profile.revision, now)
     except service.StaleRevisionError:

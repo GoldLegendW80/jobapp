@@ -160,7 +160,7 @@ def test_sources_alone_start_a_sweep_and_disabled_ones_do_not(
     set_profile(factory, alice, search(browser_sources=[{**SOURCE, "enabled": False}]))
     row = run(factory, new_sweep(factory, alice), fake_ats, browser=runner(FakeTools({})))
     assert (row.status, row.error) == (SweepStatus.failed, sweep.NO_BOARDS)
-    linked = {**SOURCE, "kind": "linkedin"}  # B10's: accepted, not run by B8
+    linked = {**SOURCE, "kind": "linkedin"}  # B10's: enabled, never accepted: not planned
     set_profile(factory, alice, search(browser_sources=[linked]))
     row = run(factory, new_sweep(factory, alice), fake_ats, browser=runner(FakeTools({})))
     assert row.error == sweep.NO_BOARDS

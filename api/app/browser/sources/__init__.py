@@ -430,6 +430,10 @@ class Read:
 
     postings: list[tuple[str, ats.Posting]] = field(default_factory=list)
     result_pages: int = 0
+    # Cards the person has already (browser B10): stored without a page so the row names this
+    # source too (sweep.store_postings notes it on the duplicate); `known` tells them.
+    noted: list[tuple[str, ats.Posting]] = field(default_factory=list)
+    known: Callable[[Card], bool] = lambda card: False
 
 
 class Reader(Protocol):
@@ -565,7 +569,7 @@ class Runner:
             lease_until=asked + got.lease.max_s,
             pause=getattr(reader, "pause", PAGE_PAUSE_S),
         )
-        read = Read()
+        read = Read(known=lambda card: self._known(plan, card))
         code: str | None = None
 
         def wanted(card: Card) -> bool:
@@ -594,10 +598,10 @@ class Runner:
         if code == "layout_changed":
             logger.warning("browser source layout changed: kind=%s", source.kind)
             return code, code
-        if read.postings:
+        if read.postings or read.noted:
             new_before = stats.new
             try:
-                await store(source_name(source), read.postings)
+                await store(source_name(source), [*read.postings, *read.noted])
             except Exception as exc:
                 # sweep._store_found puts the stats and the known postings back: nothing stored.
                 logger.warning("browser source not stored: error=%s", type(exc).__name__)
@@ -609,6 +613,14 @@ class Runner:
         if held is None:
             with contextlib.suppress(StoreUnavailableError):
                 await self.leases.cancel(user, ["sweep"])
+
+    @staticmethod
+    def _known(plan: Any, card: Card) -> bool:
+        from app.jobs import slug as slugs
+
+        return bool(
+            plan.known.has(slugs.PostingKey.of(card.company, card.title, card.location, card.url))
+        )
 
     @staticmethod
     def _wanted(plan: Any, card: Card, opened: int) -> bool:
