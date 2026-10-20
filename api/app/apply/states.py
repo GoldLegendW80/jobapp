@@ -7,8 +7,10 @@ refused it, with its code), `posting_closed`.
 
 `TRANSITIONS` is the whole table: a move not in it raises `TransitionError`, and `move` is the
 one function that changes `applications.state`. The ends (`models.ENDED`: failed, rehearsed,
-cancelled, blocked, posting_closed) have no way out, and neither has `submitted`. A new attempt
-after an end is a new application. Two rules of the spec are in the table itself:
+cancelled, blocked, posting_closed) have no way out, and neither has `submitted`, with one
+exception: a Full auto rehearsal the person answers Yes to goes from `rehearsed` to `ready`
+(A13a, `full_auto.confirm_rehearsal`; `move` refuses it in any other mode). A new attempt after
+an end is a new application. Two rules of the spec are in the table itself:
 
 - `submit_unknown` never goes back to `submitting`: the app never submits it again by itself.
   The person says "It was submitted" (to `submitted`) or "Try again", which is a new approval
@@ -33,7 +35,7 @@ Tightened by apply A6 (issue #296):
 
 from datetime import datetime
 
-from app.apply.models import ENDED, Application, State
+from app.apply.models import ENDED, Application, Mode, State
 
 S = State
 
@@ -62,6 +64,8 @@ TRANSITIONS: dict[State, frozenset[State]] = {
     S.submit_unknown: frozenset({S.submitted, S.ready}),
     S.submitted: frozenset(),
     **{end: frozenset() for end in ENDED},
+    # The Yes to a Full auto rehearsal: to the review queue, `mode` review and `dry_run` false.
+    S.rehearsed: frozenset({S.ready}),
 }
 
 # The states in which the app has clicked Submit: they hold the posting for good.
@@ -89,6 +93,10 @@ def move(application: Application, to: State, now: datetime, *, by_gate: bool = 
     if to in DECIDED and not by_gate:
         raise TransitionError(
             f"an application cannot move from {current.value} to {to.value} without a decision"
+        )
+    if current is S.rehearsed and application.mode is not Mode.full_auto:
+        raise TransitionError(
+            f"an application cannot move from {current.value} to {to.value} outside Full auto"
         )
     if to is S.submitting and application.dry_run:
         raise TransitionError(

@@ -14,6 +14,7 @@ import {
   CONTRACT_TYPES,
   REMOTE_STANCES,
   type Board,
+  type BrowserSource,
   type Category,
   type Facts,
   type Gate,
@@ -316,6 +317,8 @@ export const searchSchema = z
         }),
       )
       .max(NEVER_APPLY_MAX, `Keep at most ${NEVER_APPLY_MAX} rules.`),
+    // Browser B8: not edited here yet, carried through unchanged so a save never drops them.
+    browser_sources: z.array(z.custom<BrowserSource>()),
     // Not edited here (Jobs owns it): carried through unchanged so a save never resets it.
     sweep_schedule: z.object({
       enabled: z.boolean(),
@@ -369,6 +372,7 @@ export const toSearchForm = (search: Search): SearchForm => ({
     extra_exclude: toTermList(b.extra_exclude),
   })),
   never_apply: search.never_apply.map((value) => ({ value })),
+  browser_sources: (search.browser_sources ?? []).map((s) => ({ ...s })),
   sweep_schedule: {
     ...search.sweep_schedule,
     days: [...search.sweep_schedule.days],
@@ -398,6 +402,10 @@ export const fromSearchForm = (values: SearchForm): Search => ({
     extra_exclude: fromTermList(b.extra_exclude),
   })),
   never_apply: values.never_apply.map((r) => cleanLine(r.value)),
+  // Left out when empty: the api's default, so a section saved before B8 round trips as it was.
+  ...(values.browser_sources.length > 0
+    ? { browser_sources: values.browser_sources.map((s) => ({ ...s })) }
+    : {}),
   sweep_schedule: {
     ...values.sweep_schedule,
     days: [...values.sweep_schedule.days],

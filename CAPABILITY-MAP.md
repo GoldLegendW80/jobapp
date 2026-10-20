@@ -14,6 +14,7 @@ Intent: [docs/intent/jetson-job-app.md](../docs/intent/jetson-job-app.md). Appro
 | documents | CV and letter per job: generation, manual editing, PDF render, one-page check | agents, profile, jobs |
 | browser | Headed Chromium under Xvfb, Playwright MCP endpoint, noVNC live view in the UI, one persistent browser profile per user | platform |
 | apply | Apply button, agent fills and submits the form, status update, run report | agents, documents, browser |
+| opportunities | Swipe deck (Like, Pass, undo), first login wizard, freelance and project sources, simple by default; at the end, the rename of jobs to opportunities | jobs, profile, apply, ingestion, documents, browser |
 
 Build order: platform → identity → profile → jobs → agents → ingestion → mail → documents → browser → apply
 

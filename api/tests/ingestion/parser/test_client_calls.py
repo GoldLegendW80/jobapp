@@ -754,7 +754,7 @@ def test_what_is_not_the_death_of_the_child_stays_a_failure_of_the_server(code: 
     assert pc.blame("pdf_render", child) is child
     assert set(pc.FILE_DEATHS) <= pc.SERVER_CODES
     assert set(pc.FILE_DEATHS.values()) <= pc.FILE_CODES
-    assert frozenset({"image", "pdf_render"}) == pc.FILE_DEATH_KINDS
+    assert frozenset({"image", "pdf_render", "design_pdf"}) == pc.FILE_DEATH_KINDS
 
 
 def test_through_the_real_server_an_image_child_that_dies_is_the_files_failure() -> None:

@@ -709,7 +709,7 @@ def test_a_child_of_the_two_kinds_of_g8_that_dies_is_the_files_failure_and_leave
     (`crashed`) as the file's `bomb`, so the document is failed at once and never read twice.
     What is not a death of the child stays the server's: a sandbox that could not be set
     (exit 70) and a child that left without an answer."""
-    assert set(parser_client.FILE_DEATH_KINDS) == {"image", "pdf_render"}
+    assert set(parser_client.FILE_DEATH_KINDS) == {"image", "pdf_render", "design_pdf"}
     assert stack.raw(options)["header"] == header, "the server's own answer did not change"
     found = stack.parse(options)
     failure, code = outcome
@@ -871,6 +871,8 @@ def test_the_kinds_without_a_handler_answer_not_supported_yet(stack: Stack) -> N
         "image.py",
         "pdf_render.py",
         "mail_html.py",  # mail M3: the HTML of a mail, tests/mail/test_parser_container.py
+        "design_pdf.py",  # documents D25a: tests/ingestion/parser/test_design_container.py
+        "design_docx.py",
     }
     # The image as it is built (the client runs it with nothing mounted there): all five.
     shipped = set(json.loads(stack.inside("client", files).stdout.replace("'", '"')))

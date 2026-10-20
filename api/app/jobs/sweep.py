@@ -55,8 +55,8 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -81,7 +81,13 @@ from app.jobs.models import (
 )
 from app.profile import matching
 from app.profile.models import Profile
-from app.profile.schemas import Board, SearchSection, SkillsSection, SweepSchedule
+from app.profile.schemas import (
+    Board,
+    BrowserSource,
+    SearchSection,
+    SkillsSection,
+    SweepSchedule,
+)
 
 logger = logging.getLogger("app.sweep")
 
@@ -255,6 +261,15 @@ def enabled_boards(search: SearchSection | None) -> list[Board]:
     return [board for board in search.boards if board.enabled] if search else []
 
 
+def enabled_sources(search: SearchSection | None) -> list[BrowserSource]:
+    """The browser sources a sweep runs (browser B8): enabled, of a kind B8 reads, each once."""
+    found: dict[tuple[str, str, str], BrowserSource] = {}
+    for source in search.browser_sources if search else []:
+        if source.enabled and source.kind in ("google_careers", "vie"):
+            found.setdefault((source.kind, source.query, source.location or ""), source)
+    return list(found.values())
+
+
 # --- stats --------------------------------------------------------------------------------------
 
 
@@ -277,6 +292,8 @@ class Stats:
     # The slot of a scheduled sweep (schedule.Slot.key), kept for its whole life: what makes
     # a slot fire once.
     schedule_slot: str | None = None
+    # One entry per browser source run after the boards (browser B8, app/browser/sources).
+    sources: list[dict[str, Any]] = field(default_factory=list)
 
     def as_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -327,6 +344,7 @@ class Plan:
     skills: SkillsSection | None
     known: Known
     schedule_slot: str | None = None
+    sources: list[BrowserSource] = field(default_factory=list)
 
 
 INSERT_CHUNK = 500
@@ -345,21 +363,41 @@ def store_board(
     New jobs go in with INSERT ... ON CONFLICT DO NOTHING, INSERT_CHUNK at a time: a posting
     the database already holds (added meanwhile by another request, caught by the unique slug or
     URL index) is not inserted and counts as a duplicate. Their events follow in one batch."""
-    since = plan.filter.since(now.astimezone(SWEEP_TZ).date())
-    board_exclude = SearchFilter.board_exclude(board)
-    source = f"{board.ats}:{board.org}"
     stats.invalid += result.invalid
+    store_postings(
+        db,
+        plan,
+        f"{board.ats}:{board.org}",
+        [(board.company, posting) for posting in result.postings],
+        SearchFilter.board_exclude(board),
+        stats,
+        now,
+    )
+
+
+def store_postings(
+    db: Session,
+    plan: Plan,
+    source: str,
+    postings: Sequence[tuple[str, ats.Posting]],
+    board_exclude: Matcher | None,
+    stats: Stats,
+    now: datetime,
+) -> None:
+    """store_board's steps for (company, posting) pairs of one source: a board, or a browser
+    source (browser B8), whose postings each name their company."""
+    since = plan.filter.since(now.astimezone(SWEEP_TZ).date())
     pending: list[_NewJob] = []
-    for posting in result.postings:
+    for company, posting in postings:
         stats.seen += 1
         if plan.filter.reason(posting, board_exclude, since) is not None:
             continue
         stats.matched += 1
-        key = slugs.PostingKey.of(board.company, posting.title, posting.location, posting.url)
+        key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
         if plan.known.has(key):
             stats.duplicates += 1
             continue
-        new = _new_job(plan, board, posting, source, now)
+        new = _new_job(plan, company, posting, source, now)
         plan.known.add(key, new.row["slug"])
         pending.append(new)
     for first in range(0, len(pending), INSERT_CHUNK):
@@ -390,23 +428,23 @@ class _NewJob:
     rule: NeverApplyRule | None
 
 
-def _new_job(plan: Plan, board: Board, posting: ats.Posting, source: str, now: datetime) -> _NewJob:
+def _new_job(plan: Plan, company: str, posting: ats.Posting, source: str, now: datetime) -> _NewJob:
     """The row of a new job, already scored and rule-checked, and its events: created, sweep,
     then the ones service.apply_score, set_status and set_notes would have written."""
     text = posting.text[:POSTING_TEXT_MAX]
-    rule = next((r for r in plan.rules if r.matches(board.company, posting.title)), None)
+    rule = next((r for r in plan.rules if r.matches(company, posting.title)), None)
     score = (
         scoring.score(text, plan.skills, title=posting.title)
         if plan.skills is not None and text.strip()
         else None
     )
     job_id = uuid.uuid4()
-    slug = slugs.unique_slug(slugs.slugify(board.company, posting.title), plan.known.slugs)
+    slug = slugs.unique_slug(slugs.slugify(company, posting.title), plan.known.slugs)
     row = {
         "id": job_id,
         "user_id": plan.user_id,
         "slug": slug,
-        "company": board.company,
+        "company": company,
         "title": posting.title,
         "location": posting.location,
         "url": posting.url,
@@ -486,6 +524,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
         except (InvalidSearchError, re.error):
             search, search_filter, error = None, None, SEARCH_INVALID
         boards = enabled_boards(search)
+        sources = enabled_sources(search)
         slot = sweep.stats.get("schedule_slot")
         stats = Stats(
             boards_total=len(boards),
@@ -494,7 +533,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             schedule_slot=slot if isinstance(slot, str) else None,
         )
         sweep.stats = stats.as_json()
-        if search is None or search_filter is None or not boards:
+        if search is None or search_filter is None or not (boards or sources):
             if error == SEARCH_INVALID:
                 logger.warning(
                     "sweep failed: the stored search section does not validate",
@@ -512,6 +551,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             skills=service.user_skills(db, sweep.user_id),
             known=Known(db, sweep.user_id),
             schedule_slot=stats.schedule_slot,
+            sources=sources,
         )
         db.commit()
     return plan
@@ -548,6 +588,13 @@ def finish_done(
 
 
 Clock = Callable[[], datetime]
+# The browser sources' run (app/browser/sources, `run_sources`): given the plan, the stats, the
+# store of one source's postings and the progress save, after the boards and within the
+# sweep's time limit, whose monotonic deadline it is given last.
+StoreFound = Callable[[str, Sequence[tuple[str, ats.Posting]]], Awaitable[None]]
+BrowserHook = Callable[
+    [Plan, Stats, StoreFound, Callable[[], Awaitable[None]], float], Awaitable[None]
+]
 
 
 async def run_sweep(
@@ -559,6 +606,7 @@ async def run_sweep(
     concurrency: int = CONCURRENCY,
     timeout_s: float = SWEEP_TIMEOUT_S,
     heartbeat_s: float = HEARTBEAT_S,
+    browser: BrowserHook | None = None,
 ) -> None:
     """Run one sweep to its end (module docstring). Never raises for a board's failure; any other
     error fails the sweep and is re-raised only for cancellation."""
@@ -629,6 +677,17 @@ async def run_sweep(
                     del outcome
                     slots.release()
                     await progress()
+                if plan.sources and browser is not None:
+                    # Browser B8: the person's browser sources, after the boards.
+
+                    async def store_found(
+                        source: str, found: Sequence[tuple[str, ats.Posting]]
+                    ) -> None:
+                        await asyncio.to_thread(
+                            _store_found, sessions, plan, source, found, stats, clock()
+                        )
+
+                    await browser(plan, stats, store_found, progress, started + timeout_s)
             finally:
                 for task in tasks:
                     task.cancel()
@@ -693,6 +752,31 @@ def _store(
     try:
         with sessions() as db:
             store_board(db, plan, board, result, stats, now)
+            db.commit()
+    except Exception:
+        for name, value in counters.items():
+            setattr(stats, name, value)
+        plan.known.urls, plan.known.identities, plan.known.slugs = known
+        raise
+
+
+def _store_found(
+    sessions: sessionmaker[Session],
+    plan: Plan,
+    source: str,
+    found: Sequence[tuple[str, ats.Posting]],
+    stats: Stats,
+    now: datetime,
+) -> None:
+    """One browser source's postings in one transaction, put back as `_store` does. A posting
+    the site gives no date counts as published the day it was found (Google Careers shows none)."""
+    today = now.astimezone(SWEEP_TZ).date().isoformat()
+    found = [(company, replace(p, published=p.published or today)) for company, p in found]
+    counters = {name: getattr(stats, name) for name in COUNTERS}
+    known = (set(plan.known.urls), set(plan.known.identities), set(plan.known.slugs))
+    try:
+        with sessions() as db:
+            store_postings(db, plan, source, found, None, stats, now)
             db.commit()
     except Exception:
         for name, value in counters.items():
@@ -805,7 +889,9 @@ def scheduled_due(
                     extra={"user_id": str(user_id)},
                 )
             continue
-        if not search.sweep_schedule.enabled or not enabled_boards(search):
+        if not search.sweep_schedule.enabled or not (
+            enabled_boards(search) or enabled_sources(search)
+        ):
             continue
         for slot in schedule.due(search.sweep_schedule, now, window):
             if not slot_taken(db, user_id, slot.key):
