@@ -4,11 +4,13 @@
 the person on the posting in any state but `cancelled` (a live one, a submitted one and an ended
 one all keep the posting out; a cancelled Like puts it back); a fit at or above "Show postings
 from" (`search.min_fit`, 70 by default), or no fit yet on a posting without text (nothing to
-score it from); and no never apply rule of the person matching its company or title through
-apply's folded matcher (`apply.guardrails.matching_rule`, its patterns built once per call),
-so a title the sweep's whole word match missed (a soft hyphen inside a word, full width letters)
-never shows. When the stored rules cannot be read, the deck is empty and says so
-(`rules_unreadable`): it fails closed.
+score it from); and not refused by apply's own decision, `apply.guardrails.never_apply`, in the
+person's mode after a Like: a never apply rule folded onto its company or title (and in Full auto
+onto the first FULL_AUTO_TEXT_CHARS of its text), or a sweep that once skipped it for a rule
+(`swept`, whatever the rules say today). So a card the deck shows is never one a Like refuses as
+`never_apply_role`, and a title the sweep's whole word match missed (a soft hyphen inside a word,
+full width letters) never shows. When the stored rules cannot be read, the deck is empty and says
+so (`rules_unreadable`): it fails closed.
 
 **Order.** Fit, highest first (no fit last), then the newest `found_on`, then the id: a total
 order, so a reload shows the same card and the cursor names a place in it.
@@ -26,15 +28,16 @@ and the source (`ashby` matches every `ashby:<org>` board, `ashby:mistral` that 
 the match reason (`match_reason`: up to three competencies the posting asks that are not gaps,
 and the first gap), and `pay` and `work_mode`, None until O3 lands them.
 
-The never apply match runs in Python over the light columns of every candidate (id, company,
-title, fit, found_on): linear in the person's postings, one fold per title and rule. Only the
-page's rows are read in full.
+The never apply decision runs in Python over the light columns of every candidate (id, company,
+title, fit, found_on, whether the sweep skipped it for a rule, and in Full auto the first
+FULL_AUTO_TEXT_CHARS of the text, cut by Postgres `left`, which counts characters as Python
+slicing counts code points): linear in the person's postings. Only the page's rows are read in
+full.
 """
 
 import base64
 import binascii
 import json
-import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -45,9 +48,9 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.apply import caps, guardrails
-from app.apply.models import Application, State
+from app.apply.models import Application, Mode, State
 from app.jobs import sweep
-from app.jobs.models import ContractType, Job, JobStatus
+from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus
 from app.jobs.sweep import NeverApplyRule
 from app.profile.schemas import SearchSection
 
@@ -122,7 +125,7 @@ def decode_cursor(text: str) -> SortKey:
         if fit is not None and (type(fit) is not int or not 0 <= fit <= 100):
             raise ValueError(fit)
         return sort_key(fit, date.fromisoformat(day), uuid.UUID(posting_id))
-    except (binascii.Error, UnicodeDecodeError, TypeError, ValueError) as exc:
+    except (binascii.Error, UnicodeDecodeError, AttributeError, TypeError, ValueError) as exc:
         raise InvalidCursorError("damaged cursor") from exc
 
 
@@ -142,14 +145,26 @@ def match_reason(competencies: Sequence[str], gaps: Sequence[str]) -> Reason:
     return Reason(matches=shown, gap=gap, text=" ".join(parts) or None)
 
 
-def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters) -> sa.Select:
+def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters, mode: Mode) -> sa.Select:
     text = sa.func.coalesce(sa.func.btrim(Job.posting_text, BLANK), "")
     applied = sa.exists().where(
         Application.user_id == user_id,
         Application.posting_id == Job.id,
         Application.state != State.cancelled,
     )
-    query = sa.select(Job.id, Job.company, Job.title, Job.fit, Job.found_on).where(
+    swept = sa.exists().where(  # the query of `guardrails.swept_never_apply`
+        JobEvent.user_id == user_id,
+        JobEvent.job_id == Job.id,
+        JobEvent.kind == JobEventKind.status,
+        JobEvent.data["via"].astext == "never_apply",
+    )
+    head = (
+        sa.func.left(Job.posting_text, guardrails.FULL_AUTO_TEXT_CHARS)
+        if mode is Mode.full_auto
+        else sa.null()  # never_apply reads no text outside Full auto
+    )
+    columns = (Job.id, Job.company, Job.title, Job.fit, Job.found_on)
+    query = sa.select(*columns, head.label("posting_text"), swept.label("swept")).where(
         Job.user_id == user_id,
         Job.status.in_(DECK_STATUSES),
         sa.or_(Job.fit >= min_fit, sa.and_(Job.fit.is_(None), text == "")),
@@ -170,19 +185,10 @@ def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters) -> sa.Select
     return query
 
 
-def _patterns(rules: Sequence[NeverApplyRule]) -> list[re.Pattern[str]]:
-    """Apply's pattern of each rule (`guardrails.matching_rule` builds the same ones per call),
-    built once per deck instead of once per posting."""
-    built = (guardrails._term_pattern(rule.terms) for rule in rules)
-    return [pattern for pattern in built if pattern is not None]
-
-
-def _excluded(patterns: Sequence[re.Pattern[str]], company: str, title: str) -> bool:
-    """`guardrails.matching_rule(rules, company, title) is not None`, on the built patterns."""
-    if not patterns:
-        return False
-    folded = " \n ".join(guardrails.fold(text) for text in (company, title) if text)
-    return any(pattern.search(folded) is not None for pattern in patterns)
+def _excluded(row: sa.Row, rules: Sequence[NeverApplyRule], mode: Mode) -> bool:
+    """Apply's own decision on the candidate's light row, which carries every column
+    `guardrails.never_apply` reads (company, title, and posting_text cut to its Full auto head)."""
+    return guardrails.never_apply(row, rules, swept=row.swept, mode=mode) is not None
 
 
 def _search(db: Session, user_id: uuid.UUID) -> tuple[int, list[NeverApplyRule] | None]:
@@ -208,16 +214,15 @@ def deck(
     after = decode_cursor(cursor) if cursor else None
     limit = max(1, min(limit, LIMIT_MAX))
     min_fit, rules = _search(db, user_id)
-    mode = caps.settings_of(db, user_id).mode_after_like.value
+    mode = Mode(caps.settings_of(db, user_id).mode_after_like.value)
     if rules is None:
-        return Deck([], None, 0, mode, min_fit, rules_unreadable=True)
+        return Deck([], None, 0, mode.value, min_fit, rules_unreadable=True)
 
-    patterns = _patterns(rules)
-    rows = db.execute(_candidates(user_id, min_fit, filters)).all()
+    rows = db.execute(_candidates(user_id, min_fit, filters, mode)).all()
     keyed = sorted(
         (sort_key(row.fit, row.found_on, row.id), row)
         for row in rows
-        if not _excluded(patterns, row.company, row.title)
+        if not _excluded(row, rules, mode)
     )
     if after is not None:
         keyed = [(key, row) for key, row in keyed if key > after]
@@ -240,4 +245,4 @@ def deck(
         if last is not None and len(keyed) > len(page)
         else None
     )
-    return Deck(cards, next_cursor, len(keyed), mode, min_fit, rules_unreadable=False)
+    return Deck(cards, next_cursor, len(keyed), mode.value, min_fit, rules_unreadable=False)

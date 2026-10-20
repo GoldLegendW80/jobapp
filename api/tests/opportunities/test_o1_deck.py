@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.apply import guardrails
-from app.apply.models import Application, State
+from app.apply.models import Application, Mode, State
 from app.jobs import service as jobs_service
 from app.jobs.models import ContractType, Job, JobStatus
 from app.jobs.sweep import NeverApplyRule
@@ -297,6 +297,8 @@ def test_a_pass_between_two_pages_skips_no_card(
         "WzEsMiwzXQ",
         "a" * 301,
         decks.encode_cursor(70, FOUND_ON, uuid.UUID(int=0))[:-2],
+        base64.urlsafe_b64encode(b'[1,"2026-10-07",5]').decode().rstrip("="),
+        base64.urlsafe_b64encode(b'[null,"2026-10-07",{}]').decode().rstrip("="),
     ],
 )
 def test_a_damaged_cursor_is_a_422(api: Api, person_a: Person, cursor: str) -> None:
@@ -631,10 +633,119 @@ def add_application_in(session: Session, owner: Person, posting_id: uuid.UUID) -
     return application.id
 
 
-@pytest.mark.parametrize("company", ["Example Robotics", "Example CyberDefense", ""])
-def test_the_deck_s_built_patterns_match_as_apply_s_matcher(company: str) -> None:
+# --- the deck decides as apply's never_apply -----------------------------------------------------
+
+COMPANIES = ["Example Robotics", "Example CyberDefense", ""]
+HEAD = guardrails.FULL_AUTO_TEXT_CHARS
+TEXTS = [
+    None,
+    "Example Robotics builds warehouse robots.",
+    "You will join our security team.",  # the rule in the first characters
+    "x" * (HEAD - 6) + " cyber",  # the rule ends on the last character read
+    "x" * (HEAD - 5) + " cyber",  # the rule cut by the limit: "cybe" is read
+    "é" * (HEAD - 7) + " threat",  # characters, not bytes, are counted
+    "Agents. " + "y" * HEAD + " pentest",  # the rule after the head
+]
+TITLES = [*REFUSED_BY_OWNER, *KEPT_BY_OWNER, "Secu\u00adrity Engineer", "Applied AI Engineer"]
+
+
+def _set_mode(factory: sessionmaker[Session], owner: Person, mode: str) -> None:
+    with factory() as session, session.begin():
+        session.execute(
+            sa.text(
+                "INSERT INTO apply_settings (user_id, mode_after_like, updated_at) "
+                "VALUES (:u, :m, now()) ON CONFLICT (user_id) "
+                "DO UPDATE SET mode_after_like = :m"
+            ),
+            {"u": owner.user_id, "m": mode},
+        )
+
+
+def _swept_back(factory: sessionmaker[Session], owner: Person, posting_id: uuid.UUID) -> None:
+    """The sweep skips the posting for a rule, then the person puts it back to found."""
+    with factory() as session, session.begin():
+        job = jobs_service.lock_job(session, owner.user_id, posting_id)
+        assert job is not None
+        jobs_service.set_status(session, job, JobStatus.skipped, AT, via="never_apply")
+        jobs_service.set_status(session, job, JobStatus.found, AT)
+
+
+def _whole_deck(factory: sessionmaker[Session], owner: Person) -> set[uuid.UUID]:
+    ids: list[uuid.UUID] = []
+    cursor = None
+    with factory() as session:
+        while True:
+            page = decks.deck(session, owner.user_id, cursor=cursor)
+            ids.extend(card.posting.id for card in page.cards)
+            if page.next_cursor is None:
+                break
+            cursor = page.next_cursor
+    assert len(ids) == len(set(ids))
+    return set(ids)
+
+
+@pytest.mark.parametrize("mode", [Mode.review, Mode.full_auto])
+def test_the_deck_decides_as_apply_s_never_apply(
+    factory: sessionmaker[Session], person_a: Person, mode: Mode
+) -> None:
     rules = [NeverApplyRule.parse(OWNER_RULE), NeverApplyRule.parse("Nothing here")]
-    patterns = decks._patterns(rules)
-    for title in [*REFUSED_BY_OWNER, *KEPT_BY_OWNER, "", "Secu­rity Engineer"]:
-        expected = guardrails.matching_rule(rules, company, title) is not None
-        assert decks._excluded(patterns, company, title) is expected, (company, title)
+    set_profile(factory, person_a.user_id, deck_search(never_apply=[r.text for r in rules]))
+    _set_mode(factory, person_a, mode.value)
+    postings: list[uuid.UUID] = []
+    for index, title in enumerate(TITLES):
+        for offset in range(len(TEXTS)):
+            company = COMPANIES[(index + offset) % len(COMPANIES)]
+            text = TEXTS[(index + offset) % len(TEXTS)]
+            postings.append(
+                add_posting(factory, person_a, company=company, title=title, posting_text=text)
+            )
+            if (index + offset) % 5 == 0:
+                _swept_back(factory, person_a, postings[-1])
+    with factory() as session:
+        expected = set()
+        for posting_id in postings:
+            job = session.get(Job, posting_id)
+            assert job is not None
+            refused = guardrails.never_apply(
+                job,
+                rules,
+                swept=guardrails.swept_never_apply(session, person_a.user_id, posting_id),
+                mode=mode,
+            )
+            if refused is None:
+                expected.add(posting_id)
+    shown = _whole_deck(factory, person_a)
+    assert shown == expected
+    assert 0 < len(shown) < len(postings)
+
+
+def test_in_full_auto_a_rule_in_the_text_keeps_the_posting_out(
+    api: Api, person_a: Person, factory: sessionmaker[Session]
+) -> None:
+    set_profile(factory, person_a.user_id, deck_search())
+    posting = add_posting(
+        factory, person_a, title="AI Engineer", posting_text="You will join our security team."
+    )
+    assert deck_ids(api, person_a) == [str(posting)]
+    _set_mode(factory, person_a, "full_auto")
+    body = get_deck(api, person_a).json()
+    assert (body["cards"], body["left"], body["mode"]) == ([], 0, "full_auto")
+
+
+def test_a_swept_posting_put_back_to_found_stays_out(
+    api: Api, person_a: Person, factory: sessionmaker[Session]
+) -> None:
+    set_profile(factory, person_a.user_id, deck_search())
+    posting = add_posting(factory, person_a, title="Security Engineer")
+    kept = add_posting(factory, person_a, title="Applied AI Engineer")
+    with factory() as session, session.begin():
+        job = jobs_service.lock_job(session, person_a.user_id, posting)
+        assert job is not None
+        jobs_service.set_status(session, job, JobStatus.skipped, AT, via="never_apply")
+    set_profile(factory, person_a.user_id, deck_search(never_apply=["No sales roles: sales"]))
+    back = api.request(
+        "PATCH", f"/api/jobs/{posting}", token=person_a.token, json={"status": "found"}
+    )
+    assert back.status_code == 200, back.text
+    assert status_of(factory, posting) is JobStatus.found
+    assert deck_ids(api, person_a) == [str(kept)]
