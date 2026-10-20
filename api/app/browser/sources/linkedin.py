@@ -21,7 +21,10 @@ reader asked for and whose heading speaks of a security check or unusual activit
 `/authwall`, `/uas/` or `/signup`, or a sign in heading on a page that is not what was asked, is
 `linkedin_signin`: the source is skipped and the person told ("LinkedIn needs you to sign in");
 this module never starts a sign in hand off (that is B12b's, when the person opens it). Both set
-`result_pages` to the page they met, so the guard counts the sweep of the day.
+`result_pages` to the page they met, so the guard counts the sweep of the day. Every counted
+result page and every wall goes through `read.met` the moment it is met, before the read goes on
+or ends: the sweep's progress then holds the day's count and the code, and the guard's wall hook
+records a checkpoint (`linkedin_guard.record_checkpoint`), so a kill right after keeps both.
 
 Fail closed: a results page without its heading, or a card with a posting link but no title or
 company, is `layout_changed`; a posting page without "About the job" is too. A posting page
@@ -34,6 +37,7 @@ API on that board is the same row by address); the LinkedIn address ends the pos
 
 import re
 import unicodedata
+from typing import NoReturn
 from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
 from app.browser.sources import (
@@ -283,12 +287,19 @@ class LinkedIn:
     def host(self, base_url: str | None) -> str:
         return host_of(base_url) if base_url else HOST
 
+    @staticmethod
+    async def _wall(read: Read, code: str, number: int) -> NoReturn:
+        """Count the page the wall was met on, save it and the code (and start the pause of a
+        checkpoint) through `read.met`, then end the read."""
+        read.result_pages = max(read.result_pages, number)
+        await read.met(code)
+        raise SourceError(code)
+
     async def _open(self, pages: Pages, url: str, read: Read, number: int, base: str | None):
         root, opened = await pages.open(url)
         code = wall_by_url(opened or url, base)
         if code is not None:
-            read.result_pages = max(read.result_pages, number)
-            raise SourceError(code)
+            await self._wall(read, code, number)
         return root, opened
 
     async def read(
@@ -303,10 +314,10 @@ class LinkedIn:
             except SourceError:
                 code = wall_by_heading(root)
                 if code is not None:
-                    read.result_pages = max(read.result_pages, number)
-                    raise SourceError(code) from None
+                    await self._wall(read, code, number)
                 raise
             read.result_pages = number
+            await read.met(None)
             fresh = [card for card in cards if card.url not in seen]
             seen.update(card.url for card in cards)
             for card in fresh:
@@ -318,14 +329,14 @@ class LinkedIn:
                 if not same_page(at, card.url):
                     code = wall_by_heading(page)
                     if code is not None:
-                        raise SourceError(code)
+                        await self._wall(read, code, number)
                     continue  # redirected to another page: not that posting
                 try:
                     found = parse_posting(page, card.title, at)
                 except SourceError:
                     code = wall_by_heading(page)
                     if code is not None:
-                        raise SourceError(code) from None
+                        await self._wall(read, code, number)
                     raise
                 if found is None:
                     continue

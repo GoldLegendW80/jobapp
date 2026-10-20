@@ -69,6 +69,7 @@ from app.apply.caps_models import (
     LikeMode,
 )
 from app.apply.models import Application, ApplicationEvent, Mode, State
+from app.browser import linkedin_guard
 from app.jobs import service as jobs_service
 from app.jobs import sweep
 from app.jobs.models import Job
@@ -447,6 +448,16 @@ def host_of(ats: str, form_url: str) -> str:
     if host == "linkedin.com" or host.endswith(".linkedin.com"):
         return "linkedin"
     return host or "unknown"
+
+
+def linkedin_refusal(db: Session, application: Application, now: datetime) -> str | None:
+    """LinkedIn's guard on an application whose form is on LinkedIn (browser B10, until A16
+    brings Easy Apply): `linkedin_off` or `linkedin_paused` when the person's switch, acceptance
+    or a checkpoint's pause forbids LinkedIn work now, None otherwise and for every other host.
+    Apply's prepare (before any lease), the gate and the submit lease's recheck call it."""
+    if host_of(application.ats, application.form_url) != "linkedin":
+        return None
+    return linkedin_guard.refusal(db, application.user_id, now)
 
 
 def pace_of(host: str) -> Pace:

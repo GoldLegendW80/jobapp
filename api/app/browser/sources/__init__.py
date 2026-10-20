@@ -434,6 +434,14 @@ class Read:
     # source too (sweep.store_postings notes it on the duplicate); `known` tells them.
     noted: list[tuple[str, ats.Posting]] = field(default_factory=list)
     known: Callable[[Card], bool] = lambda card: False
+    # Called by a reader the moment it counts a result page (None) or meets a wall (its code),
+    # before it goes on or raises: the Runner saves `result_pages` and the code with the sweep's
+    # progress and runs the kind's wall hook, so a kill after that page keeps both (browser B10).
+    met: Callable[[str | None], Awaitable[None]] = field(default=lambda code: _nothing())
+
+
+async def _nothing() -> None:
+    return None
 
 
 class Reader(Protocol):
@@ -469,6 +477,9 @@ ToolsFor = Callable[[str, str, str], Tools]
 # A check before a source of a kind takes the browser (browser B10: LinkedIn's guard): given the
 # plan, the code the source reports when it must not run, None when it may.
 Check = Callable[[Any], Awaitable[str | None]]
+# What runs when a reader of a kind meets a wall (browser B10: LinkedIn's checkpoint starts the
+# pause), given the plan and the wall's code.
+Wall = Callable[[Any, str], Awaitable[None]]
 
 
 class Runner:
@@ -485,9 +496,11 @@ class Runner:
         monotonic: Callable[[], float] = time.monotonic,
         pacer: Pacer | None = None,
         checks: dict[str, Check] | None = None,
+        walls: dict[str, Wall] | None = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
         self.checks = checks or {}
+        self.walls = walls or {}
         self.sleep, self.rng = sleep, rng or random.SystemRandom()
         self.monotonic = monotonic
         self.pacer = pacer or MemoryPacer()
@@ -515,7 +528,9 @@ class Runner:
                 continue
             stats.current_board = source_name(source)
             await progress()
-            entry["error"], ended = await self._one(plan, stats, source, entry, store, deadline)
+            entry["error"], ended = await self._one(
+                plan, stats, source, entry, store, deadline, progress
+            )
             if ended in STOPS_SWEEP:
                 stop = ended
             await progress()
@@ -528,6 +543,7 @@ class Runner:
         entry: dict[str, Any],
         store: StoreFound,
         deadline: float,
+        progress: Callable[[], Awaitable[None]],
     ) -> tuple[str | None, str | None]:
         """The code the source reports, and the code of how its read ended (they differ only when
         the store failed after a read that ended the lease: the sweep's other sources then still
@@ -569,7 +585,20 @@ class Runner:
             lease_until=asked + got.lease.max_s,
             pause=getattr(reader, "pause", PAGE_PAUSE_S),
         )
-        read = Read(known=lambda card: self._known(plan, card))
+        wall = self.walls.get(source.kind)
+
+        async def met(code: str | None) -> None:
+            entry["result_pages"] = read.result_pages
+            if code is not None:
+                entry["error"] = code
+                if wall is not None:
+                    try:
+                        await wall(plan, code)
+                    except Exception as exc:
+                        logger.warning("browser source wall failed: error=%s", type(exc).__name__)
+            await progress()
+
+        read = Read(known=lambda card: self._known(plan, card), met=met)
         code: str | None = None
 
         def wanted(card: Card) -> bool:
@@ -664,4 +693,5 @@ def runner_for(settings: Any, redis: Any, sessions: Any) -> Runner:
         base_url=settings.browser_sources_base_url,
         pacer=RedisPacer(pool),
         checks={"linkedin": linkedin_guard.sweep_check(sessions)},
+        walls={"linkedin": linkedin_guard.sweep_wall(sessions)},
     )

@@ -48,18 +48,25 @@ async def arun(
     check: Any = "allow",
     pacer: MemoryPacer | None = None,
     plan: Plan | None = None,
+    log: list[Any] | None = None,
 ) -> tuple[Stats, list[tuple[str, list[Any]]], list[float], FakeLeases]:
     leases, slept, stored, now = FakeLeases(), [], [], [0.0]
+    log = log if log is not None else []
 
     async def sleep(seconds: float) -> None:
         slept.append(seconds)
         now[0] += seconds
 
     async def store(name: str, found: Any) -> None:
+        log.append(("store", len(list(found))))
         stored.append((name, list(found)))
 
     async def progress() -> None:
-        return None
+        entry = stats.sources[-1] if stats.sources else {}
+        log.append(("progress", entry.get("result_pages"), entry.get("error")))
+
+    async def wall(plan: Any, code: str) -> None:
+        log.append(("wall", code))
 
     async def allow(plan: Any) -> str | None:
         return None
@@ -74,6 +81,7 @@ async def arun(
         monotonic=lambda: now[0],
         pacer=pacer or MemoryPacer(lambda: now[0]),
         checks=checks,
+        walls={"linkedin": wall},
     )
     await runner(plan or Plan([src()]), stats, store, progress, 1e9)
     return stats, stored, slept, leases
@@ -347,6 +355,31 @@ def test_the_checkpoint_stops_the_source() -> None:
     assert stats.sources[0]["error"] == "linkedin_checkpoint"
     [(_, kept)] = stored  # the posting read before the checkpoint is kept
     assert len(kept) == 1
+
+
+def test_the_checkpoint_and_the_days_count_are_saved_before_the_read_returns() -> None:
+    # A kill after the checkpoint page (before the postings are stored) keeps the pause and the
+    # sweep of the day: the wall hook (record_checkpoint) and a progress save holding the page
+    # and the code both come before the store.
+    made = pages.offers(2)
+    tools = RedirectTools(
+        site(made), {pages.view(made[1]): "https://www.linkedin.com/checkpoint/challenge/x"}
+    )
+    tools.pages[pages.view(made[1])] = pages.CHECKPOINT
+    log: list[Any] = []
+    run(tools, log=log)
+    first_page = log.index(("progress", 1, None))
+    walled = log.index(("wall", "linkedin_checkpoint"))
+    saved = log.index(("progress", 1, "linkedin_checkpoint"))
+    stored = log.index(("store", 1))
+    assert first_page < walled < saved < stored
+
+
+def test_the_sign_in_wall_is_saved_but_starts_no_pause() -> None:
+    log: list[Any] = []
+    run(FakeTools({pages.search_url(): pages.SIGNIN}), log=log)
+    assert ("progress", 1, "linkedin_signin") in log
+    assert ("wall", "linkedin_signin") in log  # the hook sees it; only a checkpoint pauses
 
 
 @pytest.mark.parametrize("code", ["linkedin_off", "linkedin_paused", "linkedin_daily"])

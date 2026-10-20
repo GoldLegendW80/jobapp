@@ -10,13 +10,18 @@ apply's Easy Apply (A16) and apply's profile work (A18a, A18b). A new version of
 (TEXT_VERSION raised) makes every earlier acceptance stale: nothing runs until the person
 accepts again.
 
-The pause: a checkpoint or unusual activity page met by the sweep (sources/linkedin.py answers
-`linkedin_checkpoint`) stops all LinkedIn work for PAUSE from the end of that sweep (from its
-start while it still runs). It is read from the sweeps table (the sweep's stats name the
-code), so it is kept in Postgres across any restart and no request of the person can lift
-it. One sweep a day at most: a sweep of the same day (SWEEP_TZ) that opened a LinkedIn page
-(`result_pages` at least 1, a sign in wall or a checkpoint included) refuses the next one with
-`linkedin_daily`.
+The pause: a checkpoint or unusual activity page met on LinkedIn stops all LinkedIn work for
+PAUSE from the moment it was met. `record_checkpoint(db, user_id, at)` is the one way to start
+it: it adds a row to `linkedin_checkpoints` (app/browser/models.py), which no route writes or
+deletes, so the pause is kept in Postgres across any restart and no request of the person can
+lift it. The sweep records it through `sweep_wall` as soon as its reader meets the page (before
+the read returns its postings, so a kill after the checkpoint keeps the pause); apply's Easy
+Apply (A16) and apply's profile work (A18a) call `record_checkpoint` the same way, with their
+`origin`, in a transaction they commit before anything else. Nothing lifts it early: the owner
+may delete the person's rows of `linkedin_checkpoints` in SQL (README, runbook).
+One sweep a day at most: a sweep of the same day (SWEEP_TZ) that opened a LinkedIn page
+(`result_pages` at least 1, a sign in wall or a checkpoint included, saved with the sweep's
+progress as soon as the page is met) refuses the next one with `linkedin_daily`.
 
 Every query is by the person's own id: another person's switch, acceptance or pause is never
 read.
@@ -33,6 +38,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONPATH
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.browser.models import CHECKPOINT_ORIGINS, LinkedInCheckpoint
 from app.jobs import sweep as sweeps
 from app.jobs.models import Sweep
 from app.profile.schemas import BrowserSource, SearchSection
@@ -45,9 +51,8 @@ TEXT_VERSION = 1
 PAUSE = timedelta(days=7)
 KIND = "linkedin"
 
-# The sweeps whose stats hold a LinkedIn source that opened a page, and one that met a checkpoint.
+# The sweeps whose stats hold a LinkedIn source that opened a page, and one that met the wall.
 _OPENED = '$.sources[*] ? (@.kind == "linkedin" && @.result_pages >= 1)'
-_CHECKPOINT = '$.sources[*] ? (@.kind == "linkedin" && @.error == "linkedin_checkpoint")'
 _SIGNIN = '$.sources[*] ? (@.kind == "linkedin" && @.error == "linkedin_signin")'
 
 
@@ -90,18 +95,26 @@ def _ended() -> Any:
     return sa.func.coalesce(Sweep.finished_at, Sweep.started_at)
 
 
+def record_checkpoint(db: Session, user_id: uuid.UUID, at: datetime, origin: str = "sweep") -> None:
+    """Start the person's PAUSE from `at`: a LinkedIn checkpoint was met by `origin` (the sweep,
+    `easy_apply` for A16, `profile` for A18a). The caller commits, before anything else."""
+    if origin not in CHECKPOINT_ORIGINS:
+        raise ValueError(f"unknown origin {origin!r}")
+    db.add(LinkedInCheckpoint(user_id=user_id, at=at, origin=origin))
+    db.flush()
+
+
 def paused_until(db: Session, user_id: uuid.UUID, now: datetime) -> datetime | None:
     """The end of the pause a checkpoint started, None when no pause is active."""
-    ended = db.execute(
-        sa.select(sa.func.max(_ended())).where(
-            Sweep.user_id == user_id,
-            Sweep.started_at > now - PAUSE - timedelta(days=1),
-            _has(_CHECKPOINT),
+    met = db.execute(
+        sa.select(sa.func.max(LinkedInCheckpoint.at)).where(
+            LinkedInCheckpoint.user_id == user_id,
+            LinkedInCheckpoint.at > now - PAUSE,
         )
     ).scalar_one_or_none()
-    if ended is None or ended + PAUSE <= now:
+    if met is None or met + PAUSE <= now:
         return None
-    return ended + PAUSE
+    return met + PAUSE
 
 
 def _last_sweep(db: Session, user_id: uuid.UUID) -> tuple[datetime, bool] | None:
@@ -183,3 +196,21 @@ def sweep_check(
         return await asyncio.to_thread(run, plan.user_id, getattr(plan, "sweep_id", None))
 
     return check
+
+
+def sweep_wall(
+    sessions: sessionmaker[Session], clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+) -> Callable[[Any, str], Awaitable[None]]:
+    """The sources' Runner hook of a LinkedIn wall (sources.Wall): a checkpoint is recorded and
+    committed in a session of its own, off the event loop, the moment the reader meets it."""
+
+    def run(user_id: uuid.UUID) -> None:
+        with sessions() as db:
+            record_checkpoint(db, user_id, clock(), "sweep")
+            db.commit()
+
+    async def wall(plan: Any, code: str) -> None:
+        if code == "linkedin_checkpoint":
+            await asyncio.to_thread(run, plan.user_id)
+
+    return wall

@@ -53,6 +53,7 @@ def checked(
         monotonic=lambda: clock[0],
         pacer=MemoryPacer(lambda: clock[0]),
         checks={"linkedin": guard.sweep_check(factory, lambda: now or datetime.now(UTC))},
+        walls={"linkedin": guard.sweep_wall(factory, lambda: now or datetime.now(UTC))},
     )
 
 
@@ -108,18 +109,50 @@ def test_a_new_version_of_the_sentence_stops_work_until_accepted(
     assert refusal(factory, alice) == "linkedin_off"
 
 
+def checkpoint(
+    factory: sessionmaker[Session], user: uuid.UUID, at: datetime, origin: str = "sweep"
+) -> None:
+    with factory() as db:
+        guard.record_checkpoint(db, user, at, origin)
+        db.commit()
+
+
 def test_a_checkpoint_pauses_7_days_kept_in_postgres(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
     set_profile(factory, alice, search(browser_sources=[linkedin()]))
-    add_sweep(factory, alice, {"error": "linkedin_checkpoint"}, NOW - timedelta(days=1))
-    ended = NOW - timedelta(days=1) + timedelta(minutes=5)
+    met = NOW - timedelta(days=1)
+    checkpoint(factory, alice, met)
     # A new session on a new connection: what a restart of the api and the worker reads.
     assert refusal(factory, alice) == "linkedin_paused"
-    assert refusal(factory, alice, ended + timedelta(days=7, seconds=-1)) == "linkedin_paused"
-    assert refusal(factory, alice, ended + timedelta(days=7)) is None
+    assert refusal(factory, alice, met + timedelta(days=7, seconds=-1)) == "linkedin_paused"
+    assert refusal(factory, alice, met + timedelta(days=7)) is None
     with factory() as db:
-        assert guard.state(db, alice, NOW).paused_until == ended + guard.PAUSE
+        assert guard.state(db, alice, NOW).paused_until == met + guard.PAUSE
+
+
+@pytest.mark.parametrize("origin", ["sweep", "easy_apply", "profile"])
+def test_record_checkpoint_is_the_one_way_for_every_path(
+    factory: sessionmaker[Session], alice: uuid.UUID, origin: str
+) -> None:
+    set_profile(factory, alice, search(browser_sources=[linkedin()]))
+    checkpoint(factory, alice, NOW, origin)
+    assert refusal(factory, alice, NOW + timedelta(hours=1)) == "linkedin_paused"
+    with factory() as db, pytest.raises(ValueError, match="origin"):
+        guard.record_checkpoint(db, alice, NOW, "someone")
+    # The sweep's own stats no longer start a pause: only the table does.
+    add_sweep(factory, alice, {"error": "linkedin_checkpoint"}, NOW + timedelta(days=30))
+    assert refusal(factory, alice, NOW + timedelta(days=31)) is None
+
+
+def test_a_checkpoint_met_by_a_sweep_is_recorded_in_postgres(
+    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+) -> None:
+    set_profile(factory, alice, search(browser_sources=[linkedin()]))
+    tools = FakeTools({pages.search_url(): pages.CHECKPOINT})
+    row = run(factory, new_sweep(factory, alice), fake_ats, browser=checked(factory, tools))
+    assert row.stats["sources"][0]["error"] == "linkedin_checkpoint"
+    assert refusal(factory, alice, datetime.now(UTC)) == "linkedin_paused"
 
 
 def test_one_sweep_a_day(factory: sessionmaker[Session], alice: uuid.UUID) -> None:
@@ -151,7 +184,7 @@ def test_person_b_never_reads_a(
         assert guard.state(db, alice, NOW).needs_signin is True
     # A's checkpoint never pauses B.
     set_profile(factory, bob, search(browser_sources=[linkedin()]))
-    add_sweep(factory, alice, {"error": "linkedin_checkpoint"}, NOW - timedelta(hours=1))
+    checkpoint(factory, alice, NOW - timedelta(hours=1))
     assert refusal(factory, alice) == "linkedin_paused"
     assert refusal(factory, bob) is None
 
