@@ -137,6 +137,8 @@ async def request(tab: Any, args: dict[str, Any]) -> dict[str, Any]:
     await handoff.lock.acquire()  # free, so taken at once: a `done` waits for the swap below
     # Shielded: a release that cancels this call never interrupts a Chromium half started.
     await asyncio.shield(_to_person(svc, lease, handoff))
+    if svc.manager.current() is not lease:  # a swap that failed, or a cancel meanwhile
+        return failure("lease_ended", "The lease ended.")
     return failure(
         "waiting_person",
         WAITING.format(site=site),
@@ -155,13 +157,23 @@ async def _to_person(svc: Any, lease: Lease, handoff: HandOff) -> None:
 
 
 async def _to_agent(svc: Any, lease: Lease, handoff: HandOff) -> bool:
+    """Chromium again with CDP; the tools' navigation guard is on its context before any tab is
+    sent to the noted address, so a redirect off the list never loads (B5). A guard that cannot
+    be installed leaves the tab where Chromium opened it."""
+    from browserd.tools import actions, routes  # actions imports this module (request_signin)
+
     if not await svc.manager.swap(lease, lease.request):
         return False
     with contextlib.suppress(Exception):  # the agent's next snapshot shows where the tab is
-        page = await open_address(svc.manager.browser, handoff.address)
-        tools = lease.scratch.get("tools")
-        if tools is not None:
-            tools.page = page
+        tab = actions.Tab(
+            request=lease.request,
+            state=routes.state_of(lease),
+            browser=svc.manager.browser,
+            pacer=routes.PACER,
+            lease_tag=lease.lease_id[:8],
+        )
+        await tab.guard()
+        tab.state.page = await open_address(svc.manager.browser, handoff.address)
     return True
 
 

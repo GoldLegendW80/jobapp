@@ -20,6 +20,7 @@ lease is refused 409 and the profile is not removed until the end is done.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -365,29 +366,36 @@ class Manager:
         """The sign in hand off (B12, browserd/handoff.py): the lease's Chromium is closed
         wholly (profile written, its process group gone), then `request` starts another for the
         same lease, with or without a debugging port. `release` takes the same lock, so two never
-        run at once. False when the lease ended meanwhile (the new one, if any, closed again); a
-        start that fails ends the lease `browser_failed`."""
-        async with self._swap:
-            if self.lease is not lease:
-                return False
-            old, self.browser = self.browser, None
-            if old is not None:
-                await old.stop()
-            if self.lease is not lease:
-                return False
-            try:
+        run at once. False when the lease ended meanwhile (the new one, if any, closed again).
+        Whatever fails on the way (a stop, a start) ends the lease `browser_failed`: a lease
+        never stays with no Chromium, and none starts beside one that may still run."""
+        swapped = False
+        try:
+            async with self._swap:
+                if self.lease is not lease:
+                    return False
+                old, self.browser = self.browser, None
+                if old is not None:
+                    try:
+                        await old.stop()
+                    except BaseException:
+                        with contextlib.suppress(Exception):
+                            await old.kill()
+                        raise
+                if self.lease is not lease:
+                    return False
                 new = await self._start(request, lease.lease_id)
-            except Exception as exc:
-                log.warning("lease swap failed: %s", type(exc).__name__)
-                new = None
-            if new is not None and self.lease is lease:
-                self.browser = new
-                return True
-            if new is not None:
+                if self.lease is lease:
+                    self.browser, swapped = new, True
+                    return True
                 await new.stop()
-        if new is None:
-            await self.release(lease.lease_id, "browser_failed")
-        return False
+                return False
+        except Exception as exc:
+            log.warning("lease swap failed: %s", type(exc).__name__)
+            return False
+        finally:
+            if not swapped:
+                await self.release(lease.lease_id, "browser_failed")
 
     async def tick(self) -> str | None:
         lease = self.lease

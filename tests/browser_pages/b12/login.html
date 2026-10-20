@@ -3,7 +3,9 @@
      in during the hand off (api/tests/browser/test_handoff.py). Signing in sets a cookie without
      an expiry date; the page, and its title (read from the display, since nothing attaches to the
      person's Chromium), say who is signed in and the query string the page was opened with, which
-     the hand off must keep. The name field is the first one Tab reaches. -->
+     the hand off must keep. The name field is the first one Tab reaches. Signing in also opens a
+     window off the agent's allow list, and shows a link off it, which the agent's Chromium must
+     never follow after the hand off. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -17,6 +19,7 @@
 </form>
 <p id="status">Signed out</p>
 <p id="where"></p>
+<p><a id="elsewhere" href="http://client:8080/" hidden>Elsewhere</a></p>
 <script>
   const NAME = /^[a-z0-9@._-]{1,64}$/;
   function cookie(name) {
@@ -29,6 +32,7 @@
     const where = "job " + (query.get("job") || "none") + ", step " + (query.get("step") || "none");
     document.getElementById("status").textContent = who ? "Signed in as " + who : "Signed out";
     document.getElementById("where").textContent = "Opened at " + where;
+    document.getElementById("elsewhere").hidden = !who;
     document.title = (who ? "Example Jobs: signed in as " + who : "Example Jobs: signed out") +
       ", " + where;
   }
@@ -38,6 +42,7 @@
     if (!NAME.test(name)) return;
     document.cookie = "b12_session=" + encodeURIComponent(name) + "; path=/";
     show();
+    window.open("http://client:8080/", "_blank", "popup");
   });
   show();
 </script>

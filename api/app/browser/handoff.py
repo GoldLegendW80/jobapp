@@ -17,7 +17,9 @@ binding of the browser tools, calls when it meets a login or sign up wall on the
     turn_ended        the caller's `budget_s` ran out first: the lease still waits, the caller
                       ends its turn and its module queues the work again (B12b's later hand off)
 
-A second call while one waits (browserd answers 409 `waiting_person`) polls the same hand off.
+A second call while one waits (browserd answers 409 `waiting_person`) polls the same hand off,
+until the deadline browserd still counts (its `wait_left_s`; a whole BROWSER_SESSION_MAX_S only
+when browserd cannot say).
 `Outcome.text()` is the sentence an agent reads: the page's title in it is data, quoted, cut and
 stripped of control characters. Nothing here logs the site, the reason or the title.
 """
@@ -36,7 +38,6 @@ from app.browser.tools import LeaseTools
 
 POLL_S = 2.0
 TITLE_MAX = 120
-TOOL = "browser_request_signin"
 # The outcomes after which the work waits as `needs_person: signin` in its own module.
 NEEDS_PERSON = ("nobody_watching", "signin_cancelled", "signin_timeout", "turn_ended")
 TEXTS = {
@@ -92,9 +93,10 @@ async def request_signin(
 ) -> Outcome:
     """Asks the person to sign in on the lease `tools` holds, and waits for the end of the hand
     off at most until its deadline (and `budget_s`, when the caller cannot wait that long).
-    Raises BrowserError when browserd cannot be reached at the first call."""
+    Raises BrowserError when browserd cannot be reached at the first call, or the lease ends in
+    it (`ended`: a Chromium that could not be swapped, a cancel)."""
     try:
-        answer = await tools.call(TOOL, {"site": site, "reason": reason})
+        answer = await tools.ask_signin(site, reason)
     except BrowserError as exc:
         if exc.code != "waiting_person":
             raise
@@ -109,8 +111,22 @@ async def request_signin(
             detail=plain(message, 200) if isinstance(message, str) else "",
         )
     left = _seconds(answer.get("left_s"))
+    if left is None:  # a second call: the hand off under way has its own seconds left
+        left = await _left_now(tools)
     left = tools.leases.session_max_s if left is None else min(left, tools.leases.session_max_s)
     return await _poll(tools, site, clock() + left + MAX_GRACE_S, budget_s, clock, sleep)
+
+
+async def _left_now(tools: LeaseTools) -> int | None:
+    """browserd's seconds left on the wait of this lease, None when it cannot say."""
+    try:
+        found = await tools.client.current()
+    except BrowserError:
+        return None
+    lease = found.get("lease")
+    if not isinstance(lease, dict) or lease.get("lease_id") != tools.lease_id:
+        return None
+    return _seconds(lease.get("wait_left_s"))
 
 
 async def _poll(

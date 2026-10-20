@@ -345,6 +345,68 @@ def test_a_second_call_while_one_waits_follows_the_same_hand_off(world: World) -
     run(world, go)
 
 
+def test_a_second_call_polls_until_browserds_deadline_not_a_fresh_one(world: World) -> None:
+    async def go() -> None:
+        with_pages(world.browserd, Site())
+        tools = await lease_of(world)
+        watch(world.browserd, tools.lease_id)
+        began = world.clock()
+        first = await request_signin(
+            tools, "Example Portal", "x", budget_s=1000, clock=world.clock, sleep=person(world)
+        )
+        assert first.code == "turn_ended"
+
+        async def goes_down() -> None:
+            world.browserd.down = True
+
+        again = await request_signin(
+            tools, "Example Portal", "x", clock=world.clock, sleep=person(world, goes_down)
+        )
+        assert again.code == "signin_timeout"
+        # One deadline from the first call: a fresh one would end past 1000 + SESSION_MAX_S.
+        assert world.clock() - began <= SESSION_MAX_S + MAX_GRACE_S + 60
+
+    run(world, go)
+
+
+def test_a_swap_that_fails_ends_the_lease_and_the_call_at_once(world: World) -> None:
+    async def go() -> None:
+        started = with_pages(world.browserd, Site())
+        start = world.browserd.manager._start
+
+        async def only_once(request: Request, lease_id: str) -> Any:
+            if started:
+                raise RuntimeError("Chromium did not start")
+            return await start(request, lease_id)
+
+        world.browserd.manager._start = only_once
+        tools = await lease_of(world)
+        watch(world.browserd, tools.lease_id)
+        sleep = person(world)
+        with pytest.raises(BrowserError) as ended:  # browserd's 410: the lease ended in the call
+            await request_signin(tools, "Example Portal", "x", clock=world.clock, sleep=sleep)
+        assert ended.value.code == "ended"
+        assert sleep.calls == []  # type: ignore[attr-defined]
+        assert world.browserd.manager.last_end["reason"] == "browser_failed"
+
+    run(world, go)
+
+
+def test_a_bare_tool_call_of_the_sign_in_is_refused_before_browserd(world: World) -> None:
+    async def go() -> None:
+        started = with_pages(world.browserd, Site())
+        tools = await lease_of(world)
+        watch(world.browserd, tools.lease_id)
+        answer = await tools.call("browser_request_signin", {"site": "Example Portal"})
+        assert answer["ok"] is False
+        assert answer["error"] == "bad_tool"
+        assert len(started) == 1  # Chromium never restarted
+        assert world.browserd.manager.current().state == "active"
+        assert (await world.store.current(A)).lease.state == "active"
+
+    run(world, go)
+
+
 def test_the_lease_stays_as_while_b_waits_in_the_queue(world: World) -> None:
     async def go() -> None:
         with_pages(world.browserd, Site())
@@ -527,7 +589,7 @@ def waiting(api: Api, app: FastAPI, browserd: FakeBrowserd, user_id: uuid.UUID) 
         assert got.token is not None
         watch(browserd, got.lease.lease_id)
         tools = LeaseTools(store, store.client, str(user_id), got.lease.lease_id, got.token)
-        answer = await tools.call("browser_request_signin", {"site": "Example Portal"})
+        answer = await tools.ask_signin("Example Portal", "")
         assert answer["error"] == "waiting_person"
         await store.wait_person(str(user_id), got.lease.lease_id, "signin", "Example Portal")
 

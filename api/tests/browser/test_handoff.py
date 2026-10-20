@@ -8,7 +8,9 @@ answers `waiting_person`, Chromium runs again with no listening port and no debu
 the tab's address, its query string kept; the person signs in with the live view's keyboard
 (the RFB key events of a real viewer, as noVNC sends them); "done" brings Chromium back with CDP
 at the same address and the agent's snapshot reads the cookie the person's sign in set; "done"
-twice restarts once; Cancel releases the lease `signin_cancelled` with no Chromium left; the
+twice restarts once; after "done" the allow list is back (the window the person opened off the
+list is never listed nor read, and a link off it clicked by the agent answers
+`host_not_allowed`); Cancel releases the lease `signin_cancelled` with no Chromium left; the
 typed name is in no log of browserd.
 
 The deadline on an injected clock, the Redis restart and the api's routes run without Docker in
@@ -24,6 +26,7 @@ from typing import Any
 
 import pytest
 
+from tests.browser.test_b5_container import ref
 from tests.browser.test_b7_container import browser_argv, listening, wait_title
 from tests.browser.test_browser_container import PAGES, Stack, processes, stack
 
@@ -247,6 +250,33 @@ def test_the_person_signs_in_without_cdp_and_the_agent_reads_the_cookie(
     assert f"Signed in as {name}" in seen["snapshot"]
     assert f"Opened at {WHERE}" in seen["snapshot"]
     assert name not in stack.run("logs", "browser")
+
+
+def test_after_done_the_allow_list_is_back_with_cdp(stack: Stack, agent: Agent) -> None:
+    name = f"e2e-{secrets.token_hex(5)}"
+    assert agent.tool("browser_navigate", url=LOGIN)["ok"]
+    answer = agent.watched_call(site="Example Jobs", reason="The form needs an account.")
+    assert answer["error"] == "waiting_person", answer
+    wait_title(stack, f"Example Jobs: signed out, {WHERE}")
+    # The person's own navigation is free: signing in opens a window on client:8080, off the
+    # agent's list (the proxy refuses that address, so the window stays off the list).
+    agent.type(name)
+    wait_title(stack, f"Example Jobs: signed in as {name}, {WHERE}")
+    assert agent.handoff("done")["status"] == 200
+
+    listed = agent.tool("browser_tabs", action="list")
+    assert listed["ok"], listed
+    assert [t["url"] for t in listed["tabs"]] == [LOGIN], listed
+    seen = agent.tool("browser_snapshot")
+    assert seen["ok"], seen
+    assert f"Signed in as {name}" in seen["snapshot"]
+
+    # A link off the list, clicked by the agent: the route guard is on the new CDP context.
+    away = agent.tool("browser_click", ref=ref(seen["snapshot"], "link", "Elsewhere"))
+    assert away["error"] == "host_not_allowed", away
+    assert away["url"] == LOGIN, away
+    tabs = agent.tool("browser_tabs", action="list")["tabs"]
+    assert [t["url"] for t in tabs] == [LOGIN], tabs
 
 
 def test_cancel_releases_the_lease_and_leaves_no_chromium(stack: Stack) -> None:

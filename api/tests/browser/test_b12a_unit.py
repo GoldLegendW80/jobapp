@@ -483,3 +483,84 @@ def test_open_address_takes_a_restored_tab_of_that_address_else_navigates_the_ne
         assert blank.went == FORM
 
     run(go())
+
+
+def test_a_stop_that_fails_in_the_swap_ends_the_lease_and_starts_nothing() -> None:
+    async def go() -> None:
+        w = World()
+        lease = await w.lease()
+        w.watch(lease.lease_id)
+        agent = w.started[0]
+
+        async def fails() -> None:
+            raise RuntimeError("Browser.close did not answer")
+
+        agent.stop = fails  # type: ignore[method-assign]
+        answer = await ask(lease)
+        assert answer["error"] == "lease_ended"
+        assert agent.killed
+        assert len(w.started) == 1  # nothing started beside a Chromium that may still run
+        assert w.manager.current() is None
+        assert w.manager.last_end["reason"] == "browser_failed"
+        assert not w.running
+
+    run(go())
+
+
+class Guarded:
+    """A Chromium's only context as Playwright shows it, and the order things are done to it."""
+
+    def __init__(self, done: list[str], refuse: bool = False) -> None:
+        self.done, self.refuse = done, refuse
+        self.pages: list[Any] = [self.page()]
+
+    def page(self) -> Any:
+        async def goto(url: str, **_: Any) -> None:
+            self.done.append("goto")
+            blank.url = url
+
+        async def bring_to_front() -> None:
+            return None
+
+        blank = SimpleNamespace(url="about:blank", goto=goto, bring_to_front=bring_to_front)
+        return blank
+
+    async def route(self, *_: Any) -> None:
+        if self.refuse:
+            raise RuntimeError("the context is gone")
+        self.done.append("guard")
+
+    def on(self, *_: Any) -> None:
+        return None
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_done_guards_the_new_context_before_it_opens_the_noted_address(refuse: bool) -> None:
+    async def go() -> None:
+        w = World()
+        done: list[str] = []
+        start = w.manager._start
+
+        async def with_context(request: Request, lease_id: str) -> Any:
+            chromium = await start(request, lease_id)
+            chromium.browser = SimpleNamespace(contexts=[Guarded(done, refuse)])
+            return chromium
+
+        w.manager._start = with_context
+        lease = await w.lease()
+        w.watch(lease.lease_id)
+        await ask(lease)
+        status, body = await route(w.svc, "done", lease.lease_id)
+        assert (status, body["restarted"]) == (200, True)
+        state = lease.scratch["tools"]
+        context = w.manager.browser.browser.contexts[0]
+        if refuse:  # no guard, no navigation: the tab stays where Chromium opened it
+            assert done == []
+            assert context.pages[0].url == "about:blank"
+        else:
+            assert done == ["guard", "goto"]
+            assert state.guarded is context
+            assert state.page is context.pages[0]
+            assert state.page.url == FORM
+
+    run(go())

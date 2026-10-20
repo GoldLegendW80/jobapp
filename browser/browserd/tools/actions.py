@@ -145,7 +145,9 @@ class Tab:
         self.state.blocked.append(request.url[:200])
         asyncio.ensure_future(stop_loading(frame))  # noqa: RUF006  fire and forget, the page owns it
 
-    async def page(self) -> Any:
+    async def guard(self) -> Any:
+        """The context the lease's tabs live in, with the navigation guard installed on it once
+        (a Chromium started again, browserd/handoff.py, is a new context: guarded again)."""
         context = self.browser.browser.contexts[0]
         if self.state.guarded is not context:
             await context.route("**/*", self._guard)
@@ -156,6 +158,10 @@ class Tab:
                 lambda tab: asyncio.ensure_future(close_off_list(tab, hosts, tag)),
             )
             self.state.guarded = context
+        return context
+
+    async def page(self) -> Any:
+        context = await self.guard()
         current = self.state.page
         if current is None or current.is_closed() or current not in context.pages:
             current = context.pages[0] if context.pages else await context.new_page()
