@@ -14,7 +14,8 @@ const leaseSchema = z.object({
   automation: z.boolean(),
   state: z.enum(["starting", "active", "waiting_person"]),
   wait_reason: z.string().nullable(),
-  wait_site: z.string().nullable(),
+  // The host of the address browserd noted for a sign in (B12b), never the assistant's words.
+  wait_host: z.string().nullable(),
   wait_deadline: z.string().nullable(),
   // The whole minutes a sign in hand off still waits for the person, rounded up (browser B12a).
   wait_minutes_left: z.number().nullable().optional(),

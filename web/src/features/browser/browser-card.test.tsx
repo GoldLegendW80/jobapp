@@ -17,7 +17,7 @@ const LEASE = {
   automation: true,
   state: "active" as const,
   wait_reason: null,
-  wait_site: null,
+  wait_host: null,
   wait_deadline: null,
   started_at: "2026-10-14T10:00:00Z",
   active_s: 3,

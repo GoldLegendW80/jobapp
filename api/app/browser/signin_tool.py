@@ -14,7 +14,9 @@ and nothing started; otherwise the wait for the person, polled until "I'm signed
 deadline or the run's own budget (`Hold.budget`). The model reads `Outcome.text()`; the agent's
 module learns the outcome through `Hold.ended` (the work then waits as `needs_person: signin`
 unless the person signed in). `Hold.wall` lets a module ask only when its own read of the page
-saw a sign in wall, so a page that asks the assistant to call the tool gets nothing asked.
+saw a sign in wall, so a page that asks the assistant to call the tool gets nothing asked. The
+person never reads `site`: the banner names the host of the address browserd noted (a page can
+draw any wall and steer the model's words, not the tab's host).
 """
 
 from collections.abc import Callable
@@ -58,8 +60,8 @@ class Hold:
     tools: LeaseTools
     # The seconds the run can still wait, None when it outlives any wait.
     budget: Callable[[], float | None] = lambda: None
-    # Whether the module's last read of the page saw a sign in wall.
-    wall: Callable[[], bool] = lambda: True
+    # Whether the module's last read of the page saw a sign in wall (unsaid: nothing is asked).
+    wall: Callable[[], bool] = lambda: False
     ended: Callable[[Outcome], None] = lambda outcome: None
 
 

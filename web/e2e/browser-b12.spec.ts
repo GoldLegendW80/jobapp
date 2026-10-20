@@ -18,9 +18,10 @@ import {
  * `browser`), no mocks. An assistant's run of person A (in the worker's container, as a run of
  * an agent with browser tools: browser-b12-helpers.ts) holds a lease on B12a's fixture site
  * (tests/browser_pages/b12/login.html, "Example Jobs") behind its login wall, and calls the tool
- * `browser_request_signin`:
- * 1. while A watches on Account: the banner "Sign in to Example Jobs" with the minutes left and
- *    the live view, A at the keyboard (a phone sized screen); B sees no banner; A signs in with
+ * `browser_request_signin` with the site "Google", as a page that steered the model would have it:
+ * 1. while A watches on Account: the banner "Sign in to pages" (the tab's host, never the
+ *    model's words) with the minutes left and the live view, A at the keyboard (a phone sized
+ *    screen), Take over gone; B sees no banner; A signs in with
  *    the live view's keyboard and clicks I'm signed in; the run reads "The person signed in" and
  *    goes on on the signed in page, with its lease active again;
  * 2. a second run starts already signed in (the profile kept the login); A clicks Cancel and the
@@ -37,7 +38,7 @@ const A = `e2e-browser-b12a-${run}@example.org`;
 const B = `e2e-browser-b12b-${run}@example.org`;
 const NAME = `e2e-b12-${run}`;
 const SITE = `${PAGES}/b12/login.html?job=42&step=apply`;
-const BANNER = { name: "Sign in to Example Jobs" };
+const BANNER = { name: `Sign in to ${new URL(PAGES).hostname}` };
 const CSRF = { "X-Requested-With": "jobapp" };
 const shots = makeShots("browser-b12", "handoff");
 
@@ -91,21 +92,23 @@ async function watchedRun(): Promise<AgentRun> {
 test("A watches, signs in through the banner's live view, and the run goes on", async () => {
   await pageA.setViewportSize({ width: 390, height: 844 });
   const agent = await watchedRun();
+  const takeOver = pageA.getByRole("button", { name: "Take over" });
   try {
+    await expect(takeOver).toBeVisible();
     agent.ask();
     const banner = pageA.getByRole("region", BANNER);
     await expect(banner).toBeVisible({ timeout: 30_000 });
     await expect(banner).toContainText(/\d+ minutes? left\./);
     await expect(banner).not.toContainText(/—|–| - /);
+    await expect(banner).not.toContainText("Google");
     await expect(
       banner.getByText(
         "You have the keyboard and the mouse: sign in, then click I'm signed in.",
       ),
     ).toBeVisible({ timeout: 45_000 });
-    await expect(
-      pageA.getByRole("button", { name: "Take over" }),
-    ).not.toBeVisible();
+    await expect(takeOver).toHaveCount(0);
     await shots(pageA, "banner-phone");
+    await expect(takeOver).toHaveCount(0);
 
     // B, at the same moment, sees no banner of A's.
     await pageB.goto("/account");

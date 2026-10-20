@@ -579,6 +579,8 @@ def build_env(
             "DISABLE_TELEMETRY": "1",
             "DISABLE_ERROR_REPORTING": "1",
             "CLAUDE_AGENT_SDK_CLIENT_APP": "jobapp/0.1",
+            # A sign in hand off waits in one tool call: BROWSER_SESSION_MAX_S (at most 7200 s).
+            "MCP_TOOL_TIMEOUT": str((7200 + 600) * 1000),
         }
     )
     if kind is CredentialKind.anthropic_api_key:

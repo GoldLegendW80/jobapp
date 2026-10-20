@@ -11,11 +11,11 @@ import {
 // While an assistant drives the person's browser, a sign in hand off may begin at any moment.
 const WATCH_MS = 5_000;
 
-export type Handoff = { site: string; minutesLeft: number | null };
+export type Handoff = { host: string; minutesLeft: number | null };
 
 /**
  * The sign in hand off waiting for this person (browser B12a's state in GET /api/browser): the
- * site and the whole minutes left, or null. Only the person's own lease, driven by an assistant,
+ * host browserd noted for it and the whole minutes left, or null. Only the person's own lease, driven by an assistant,
  * waiting for a sign in; never another person's (the api says `holder: "other"` and no lease).
  */
 export function handoffOf(browser: Browser | undefined): Handoff | null {
@@ -28,7 +28,7 @@ export function handoffOf(browser: Browser | undefined): Handoff | null {
     return null;
   const minutesLeft = lease.wait_minutes_left ?? null;
   if (minutesLeft !== null && minutesLeft <= 0) return null;
-  return { site: lease.wait_site?.trim() || "the site", minutesLeft };
+  return { host: lease.wait_host?.trim() || "the site", minutesLeft };
 }
 
 function watched(browser: Browser | undefined): boolean {

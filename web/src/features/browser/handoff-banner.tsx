@@ -17,9 +17,10 @@ function minutesText(minutes: number | null): string {
 
 /**
  * The sign in hand off for the person (SPEC-browser, "The sign in hand off"; browser B12b): an
- * assistant met a login or sign up wall while the person watched and waits for them. The site,
- * the minutes left, "Open the live view" (the person at the keyboard, in a browser started
- * without any debugging port), "I'm signed in" and "Cancel". Nothing when no hand off waits.
+ * assistant met a login or sign up wall while the person watched and waits for them. The host
+ * of the tab's address (never the assistant's words, which a page can steer), the minutes left,
+ * "Open the live view" (the person at the keyboard, in a browser started without any debugging
+ * port), "I'm signed in" and "Cancel". Nothing when no hand off waits.
  * `liveOpen`: the live view shows from the start (Account, where the person was watching).
  */
 export function HandoffBanner({ liveOpen = false }: { liveOpen?: boolean }) {
@@ -36,7 +37,7 @@ export function HandoffBanner({ liveOpen = false }: { liveOpen?: boolean }) {
     >
       <h3 id={title} className="flex items-center gap-2 font-medium">
         <KeyRound aria-hidden className="size-4 shrink-0" />
-        <span className="break-words">Sign in to {handoff.site}</span>
+        <span className="break-words">Sign in to {handoff.host}</span>
       </h3>
       <p className="text-sm">
         The assistant waits for you. Sign in or sign up yourself in the live

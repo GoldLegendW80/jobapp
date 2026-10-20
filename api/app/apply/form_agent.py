@@ -293,7 +293,7 @@ class FormSession:
         again; else the lease is gone or still waits for the person, and nothing reads it."""
         if outcome.code == "signed_in":
             self.pending = ""
-        elif outcome.needs_person or outcome.code == "ended":
+        elif outcome.needs_person or outcome.code in ("ended", "lease_ended"):
             self.signin_over = True
 
     async def finish(self) -> FormReport:

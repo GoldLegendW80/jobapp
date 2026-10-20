@@ -146,7 +146,15 @@ async def test_a_wall_read_then_nobody_watching_answers_at_once_and_the_fill_wai
 
 
 @pytest.mark.parametrize(
-    "code", ["signin_cancelled", "signin_timeout", "turn_ended", "ended", "nobody_watching"]
+    "code",
+    [
+        "signin_cancelled",
+        "signin_timeout",
+        "turn_ended",
+        "ended",
+        "lease_ended",
+        "nobody_watching",
+    ],
 )
 @sync
 async def test_every_end_but_signed_in_stops_the_fill_as_needs_person_signin(
@@ -274,6 +282,30 @@ async def test_browserd_unreachable_at_the_call_ends_the_hand_off(run: Any) -> N
 
     assert await _call(made) == (handoff.TEXTS["ended"], True)
     assert session.signin_over
+
+
+@sync
+async def test_browserd_lease_ended_ends_the_fill_without_reading(run: Any) -> None:
+    tools = FakeTools(answer={"ok": False, "error": "lease_ended", "message": "The lease ended."})
+    session = _session(tools)
+    made = run(session)
+    await session.read_form()
+
+    assert await _call(made) == (handoff.TEXTS["ended"], True)
+    assert session.signin_over
+    reads = session.adapter.reads
+    report = await session.finish()
+    assert session.adapter.reads == reads
+    assert (report.stopped, report.needs_person) == ("needs_person", "signin")
+
+
+@sync
+async def test_a_module_that_says_nothing_of_a_wall_asks_nothing() -> None:
+    tools = FakeTools()
+    assert await signin_tool.ask(signin_tool.Hold(tools), {"site": SITE, "reason": REASON}) == (
+        signin_tool.NO_WALL
+    )
+    assert tools.asked == []
 
 
 @sync

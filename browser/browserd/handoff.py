@@ -17,10 +17,12 @@ up in the live view, on a Chromium without a debugging port. SPEC-browser, "The 
     deadline Manager.tick ends the lease `signin_timeout` (leases.Lease.expired).
 
 Never both attached: Manager.swap closes one Chromium wholly before it starts the other, and the
-person's input is on only while the Chromium without CDP runs. `site` and `reason` are text for
-the person, kept plain (control and format characters dropped, spaces collapsed, cut); the tool
-takes nothing else, so no credential can be given to it. Logs: the lease's tag, never the site,
-the reason, the address, nor a typed character (keys go from the viewer to the display only).
+person's input is on only while the Chromium without CDP runs. `site` and `reason` are kept
+plain (control and format characters dropped, spaces collapsed, cut); the tool takes nothing else,
+so no credential can be given to it. The person is shown the host of the noted address
+(`Lease.wait_host`), never `site`: a page can steer the model's words, not the tab's host. Logs:
+the lease's tag, never the site, the reason, the address, nor a typed character (keys go from the
+viewer to the display only).
 """
 
 import asyncio
@@ -132,7 +134,8 @@ async def request(tab: Any, args: dict[str, Any]) -> dict[str, Any]:
         return failure("bad_address", NO_ADDRESS)
     handoff = HandOff(site=site, reason=reason, address=address)
     lease.scratch[KEY] = handoff
-    lease.wait_person(svc.manager.clock(), SIGNIN, site, svc.manager.config.session_max_s)
+    host = urlsplit(address).hostname or ""
+    lease.wait_person(svc.manager.clock(), SIGNIN, host, svc.manager.config.session_max_s)
     log.info("lease %s: sign in hand off begins", tab.lease_tag)
     await handoff.lock.acquire()  # free, so taken at once: a `done` waits for the swap below
     # Shielded: a release that cancels this call never interrupts a Chromium half started.

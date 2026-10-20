@@ -49,10 +49,10 @@ async def main(email, address):
             say(step="stopped")
             return
         run_id = uuid.uuid4()
-        signin_tool.hold(lambda scope: signin_tool.Hold(tools) if scope.run_id == run_id else None)
+        signin_tool.hold(lambda scope: signin_tool.Hold(tools, wall=lambda: True) if scope.run_id == run_id else None)
         scope = app_tools.Scope(sessions=sessions, user_id=user_id, run_id=run_id)
         made = app_tools.FACTORIES[signin_tool.TOOL](scope)
-        answer = await made.handler({"site": "Example Jobs", "reason": "The application asks to sign in first."})
+        answer = await made.handler({"site": "Google", "reason": "The application asks to sign in first."})
         text = answer["content"][0]["text"]
         page = ""
         if not answer.get("is_error"):

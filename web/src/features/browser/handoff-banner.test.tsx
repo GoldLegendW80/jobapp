@@ -18,7 +18,7 @@ const ACTIVE = {
   automation: true,
   state: "active" as const,
   wait_reason: null,
-  wait_site: null,
+  wait_host: null,
   wait_deadline: null,
   wait_minutes_left: null,
   started_at: "2026-10-20T10:00:00Z",
@@ -29,7 +29,7 @@ const WAITING = {
   ...ACTIVE,
   state: "waiting_person" as const,
   wait_reason: "signin",
-  wait_site: "Example Jobs",
+  wait_host: "jobs.example.org",
   wait_deadline: "2026-10-20T10:30:00Z",
   wait_minutes_left: 12,
 };
@@ -130,10 +130,13 @@ describe("handoffOf", () => {
     expect(handoffOf(browser)).toBeNull();
   });
 
-  it("names the site and the minutes left, and a blank site as the site", () => {
-    expect(handoffOf(MINE)).toEqual({ site: "Example Jobs", minutesLeft: 12 });
+  it("names the host and the minutes left, and a blank host as the site", () => {
+    expect(handoffOf(MINE)).toEqual({
+      host: "jobs.example.org",
+      minutesLeft: 12,
+    });
     expect(
-      handoffOf({ ...MINE, lease: { ...WAITING, wait_site: "  " } })?.site,
+      handoffOf({ ...MINE, lease: { ...WAITING, wait_host: "  " } })?.host,
     ).toBe("the site");
   });
 });
@@ -144,7 +147,7 @@ describe("HandoffBanner", () => {
     renderWithQuery(<HandoffBanner />);
 
     const banner = await screen.findByRole("region", {
-      name: "Sign in to Example Jobs",
+      name: "Sign in to jobs.example.org",
     });
     expect(banner).toHaveTextContent("12 minutes left.");
     expect(banner.textContent).not.toMatch(/\u2014|\u2013| - /);
@@ -153,13 +156,34 @@ describe("HandoffBanner", () => {
     expect(views).toHaveLength(0);
   });
 
+  it("names the tab's host, never a site name the assistant was steered to", async () => {
+    fakeServer({
+      browser: {
+        ...MINE,
+        lease: {
+          ...WAITING,
+          wait_host: "pages",
+          wait_site: "Google",
+        } as Browser["lease"],
+      },
+    });
+    renderWithQuery(<HandoffBanner />);
+
+    const banner = await screen.findByRole("region", {
+      name: "Sign in to pages",
+    });
+    expect(banner.textContent).not.toContain("Google");
+  });
+
   it("says one minute in the singular", async () => {
     fakeServer({
       browser: { ...MINE, lease: { ...WAITING, wait_minutes_left: 1 } },
     });
     renderWithQuery(<HandoffBanner />);
     expect(
-      await screen.findByRole("region", { name: "Sign in to Example Jobs" }),
+      await screen.findByRole("region", {
+        name: "Sign in to jobs.example.org",
+      }),
     ).toHaveTextContent("1 minute left.");
   });
 
@@ -238,7 +262,7 @@ describe("HandoffBanner", () => {
     const calls = fakeServer({ browser: MINE });
     const user = userEvent.setup();
     renderWithQuery(<HandoffBanner />);
-    await screen.findByRole("region", { name: "Sign in to Example Jobs" });
+    await screen.findByRole("region", { name: "Sign in to jobs.example.org" });
 
     await user.tab();
     expect(
@@ -268,7 +292,7 @@ describe("BrowserCard during a hand off", () => {
     renderWithQuery(<BrowserCard />);
 
     const banner = await screen.findByRole("region", {
-      name: "Sign in to Example Jobs",
+      name: "Sign in to jobs.example.org",
     });
     await waitFor(() => {
       expect(views).toHaveLength(1);
