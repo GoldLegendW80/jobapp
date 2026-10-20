@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import caps, gate, likes, run, service
+from app.apply import caps, gate, likes, queue_router, run, service
 from app.apply.caps_models import ApplySettings, LikeMode
 from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.documents import freeze as documents
@@ -44,6 +44,7 @@ from tests.apply.test_a5_run import WHY, fill, services
 from tests.apply.test_a6_gate import _password, run_submit, submit_services
 from tests.conftest import make_settings
 from tests.documents.conftest import load
+from tests.documents.test_tick import World, posting_cv
 from tests.identity.api_helpers import Api
 from tests.profile.conftest import full
 
@@ -232,49 +233,86 @@ def _auto(db: Session, user_id: uuid.UUID, job: uuid.UUID, **kw: Any) -> Documen
     return made
 
 
-def test_an_automatic_write_held_by_the_ceiling_gives_way(
-    db: Session, person_a: Person, stub: str
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        (GenerationStatus.waiting, GenerationWait.daily_ceiling),
+        (GenerationStatus.waiting, GenerationWait.consent),
+        (GenerationStatus.waiting, GenerationWait.credential),
+        (GenerationStatus.waiting, GenerationWait.base_cv),
+        (GenerationStatus.queued, None),
+    ],
+)
+def test_an_automatic_write_not_started_gives_way(
+    db: Session,
+    person_a: Person,
+    stub: str,
+    status: GenerationStatus,
+    reason: GenerationWait | None,
 ) -> None:
     job = posting(db, person_a.user_id, form(stub), kinds=())
-    held = _auto(
-        db,
-        person_a.user_id,
-        job,
-        status=GenerationStatus.waiting,
-        wait_reason=GenerationWait.daily_ceiling,
-    )
+    held = _auto(db, person_a.user_id, job, status=status, wait_reason=reason)
     assert like(db, person_a, job).documents == (Kind.cv, Kind.letter)
     found = generations(db, job)
-    assert {(g.id == held.id, g.trigger, g.status) for _, g in found} == {
-        (True, GenerationTrigger.auto, GenerationStatus.cancelled),
-        (False, GenerationTrigger.click, GenerationStatus.waiting),
+    # No consent yet: the click waits for it, never for the daily ceiling.
+    assert {(g.id == held.id, g.trigger, g.status, g.wait_reason) for _, g in found} == {
+        (True, GenerationTrigger.auto, GenerationStatus.cancelled, None),
+        (False, GenerationTrigger.click, GenerationStatus.waiting, GenerationWait.consent),
     }
 
 
 @pytest.mark.parametrize(
-    ("trigger", "reason"),
+    ("trigger", "status", "reason"),
     [
-        (GenerationTrigger.click, GenerationWait.consent),  # the person's own click waits
-        (GenerationTrigger.auto, GenerationWait.consent),  # held for the consent, not the ceiling
-        (GenerationTrigger.auto, GenerationWait.base_cv),  # the base CV is being built
+        (GenerationTrigger.click, GenerationStatus.waiting, GenerationWait.consent),
+        (GenerationTrigger.click, GenerationStatus.queued, None),
+        (GenerationTrigger.chat, GenerationStatus.queued, None),
+        (GenerationTrigger.auto, GenerationStatus.running, None),
     ],
 )
 def test_a_write_on_its_way_is_not_asked_again(
-    db: Session, person_a: Person, stub: str, trigger: GenerationTrigger, reason: GenerationWait
+    db: Session,
+    person_a: Person,
+    stub: str,
+    trigger: GenerationTrigger,
+    status: GenerationStatus,
+    reason: GenerationWait | None,
 ) -> None:
     job = posting(db, person_a.user_id, form(stub), kinds=())
-    _auto(
-        db,
-        person_a.user_id,
-        job,
-        trigger=trigger,
-        status=GenerationStatus.waiting,
-        wait_reason=reason,
-    )
+    made = _auto(db, person_a.user_id, job, trigger=trigger, status=status, wait_reason=reason)
     liked = like(db, person_a, job)
     assert liked.documents == ()
-    assert len(generations(db, job)) == 1
+    [(_, found)] = generations(db, job)
+    assert (found.id, found.status) == (made.id, status)
     assert applications(db, person_a.user_id)[0].id == liked.application.id
+
+
+def test_a_like_before_the_consent_is_not_held_by_the_ceiling_after_it(
+    factory: sessionmaker[Session], migrated_url: str, stub: str
+) -> None:
+    """The Like takes over the automatic write waiting for the consent: once the consent comes,
+    the tick starts the Like's click though the daily ceiling holds the automatic writes."""
+    who = World(factory, migrated_url, "e2e-apply-ceiling@example.org", consent=False)
+    who.search(daily_ceiling=1)
+    first, liked = who.posting(95), who.posting(90)
+    who.set_job(liked, url=form(stub))
+    who.tick()
+    assert {(g["trigger"], g["wait_reason"]) for g in posting_cv(who.generations())} == {
+        (GenerationTrigger.auto, GenerationWait.consent)
+    }
+    with factory() as db:
+        assert likes.on_like(db, who.user, liked, now=AT).documents == (Kind.cv, Kind.letter)
+    who.consent()
+    who.tick()
+    assert {
+        (g["trigger"], g["status"], g["wait_reason"]) for g in posting_cv(who.generations(liked))
+    } == {
+        (GenerationTrigger.auto, GenerationStatus.cancelled, None),
+        (GenerationTrigger.click, GenerationStatus.running, None),
+    }
+    with factory() as db:
+        assert documents.current(db, who.user, liked).cv.coming == documents.WRITING
+    assert [g["status"] for g in posting_cv(who.generations(first))] == [GenerationStatus.running]
 
 
 @pytest.mark.parametrize(
@@ -584,6 +622,35 @@ def test_the_routes(
         assert db.get(Job, jobs[0]).status is JobStatus.applied  # type: ignore[union-attr]
         assert db.get(Application, second).error_code == "rejected"  # type: ignore[union-attr]
         assert api.get("/api/apply/queue", token=token_a).json()["items"] == []
+
+
+def test_the_queue_and_its_count_are_one_moment(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    api_app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A change committed between the items' read and the count's is in neither."""
+    _password(factory, person_a)
+    liked = like(db, person_a, posting(db, person_a.user_id, form(stub))).application.id
+    real = queue_router._refused_decisions
+
+    def committed_meanwhile(read: Session, *args: Any) -> Any:
+        with factory() as other:
+            other.execute(
+                sa.text("UPDATE applications SET state = 'needs_person' WHERE id = :a"),
+                {"a": liked},
+            )
+            other.commit()
+        return real(read, *args)
+
+    monkeypatch.setattr(queue_router, "_refused_decisions", committed_meanwhile)
+    with TestClient(api_app, follow_redirects=False) as client:
+        api = Api(client)
+        answer = api.get("/api/apply/queue", token=api.login_token(person_a.email)).json()
+    assert ([i["state"] for i in answer["items"]], answer["waiting_on_you"]) == (["queued"], 0)
 
 
 def test_reject_without_skip_keeps_the_posting_and_a_late_status_is_kept(

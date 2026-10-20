@@ -12,9 +12,10 @@ plans. A Like is the application itself:
 2. The documents the posting lacks are asked of the documents module, as its "Write now" click
    asks them (trigger `click`: never held by the fit threshold or the daily ceiling, held by the
    consent and a credential; the documents tick starts it): the CV and its letter, or the letter
-   alone once a CV is there. An automatic write the daily ceiling holds back, or one not started,
-   gives way, as it does to the click. A document already there, or on its way for another
-   reason, is not asked again.
+   alone once a CV is there. An automatic write not started gives way, whatever it waits for
+   (`generate.give_way`, as to the click), so the asked one is never held by the daily ceiling,
+   even once a consent or a base CV it waited for comes. A document already there, being
+   rendered, or written by a running generation or a click, is not asked again.
 3. `service.start` with the mode in force (`apply_settings.mode_after_like`; Full auto makes a
    Review first item until A13a writes its checks): its refusals (no address, duplicates) roll
    the ask back with them; else the application is created `queued` and committed with the ask
@@ -44,11 +45,9 @@ from app.apply.models import ENDED, Application, Mode
 from app.documents import estimate, generate, store, writer_base
 from app.documents import freeze as documents
 from app.documents.models import (
-    Document,
     GenerationMode,
     GenerationStatus,
     GenerationTrigger,
-    GenerationWait,
     Kind,
 )
 from app.jobs import service as jobs_service
@@ -62,8 +61,6 @@ SENTENCES = {
 # The mode of the application a Like creates. A11 refuses to turn Full auto on until A13a; a
 # stored `full_auto` makes a Review first item until then, never an item no approval can pass.
 LIKE_MODES = {LikeMode.review: Mode.review, LikeMode.full_auto: Mode.review}
-# An automatic write that has not started gives way to a Like, as to a click.
-NOT_STARTED = (GenerationStatus.waiting, GenerationStatus.queued)
 
 
 def sentence(code: str) -> str:
@@ -95,23 +92,8 @@ def _same_role_live(db: Session, user_id: uuid.UUID, posting: Job) -> uuid.UUID 
 
 
 def _missing(slot: documents.Slot) -> bool:
-    return slot.version is None and slot.coming in (None, GenerationWait.daily_ceiling.value)
-
-
-def _give_way(db: Session, document: Document, at: datetime) -> bool:
-    """Whether the document is free for the Like's write: nothing open, or an automatic write
-    not started, cancelled here (never started, so never counted)."""
-    store.lock_document(db, document.user_id, document.id)
-    open_one = store.open_generation(db, document.user_id, document.id)
-    if open_one is None:
-        return True
-    if open_one.trigger is not GenerationTrigger.auto or open_one.status not in NOT_STARTED:
-        return False
-    open_one.status = GenerationStatus.cancelled
-    open_one.wait_reason = None
-    open_one.finished_at = at
-    db.flush()
-    return True
+    """No version and none being rendered: `generate.give_way` decides on its open generation."""
+    return slot.version is None and slot.coming != documents.RENDERING
 
 
 def _cv_base(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> uuid.UUID | None:
@@ -134,11 +116,11 @@ def ask_documents(
         return ()
     store.lock_posting(db, user_id, posting_id)
     first = store.get_or_create(db, user_id, posting_id, kinds[0], at=at)
-    if not _give_way(db, first, at):
+    if not generate.give_way(db, first, at):
         return ()
     if kinds == (Kind.cv, Kind.letter):
         # The letter follows the new CV (generate.start_letter); an automatic one gives way.
-        _give_way(db, store.get_or_create(db, user_id, posting_id, Kind.letter, at=at), at)
+        generate.give_way(db, store.get_or_create(db, user_id, posting_id, Kind.letter, at=at), at)
     base_id = _cv_base(db, user_id, posting_id) if kinds[0] is Kind.letter else None
     figures = estimate.for_posting(db, user_id, posting_id, base_id)
     stored: dict[str, object] = dict(estimate.as_json(figures))

@@ -147,6 +147,26 @@ def runtime() -> Runtime:
 # --- create and start -------------------------------------------------------------------------
 
 
+def give_way(db: Session, document: Document, at: datetime) -> bool:
+    """Whether the document is free for a click (the "Write now" route, a Like): nothing open, or
+    an automatic generation not started, whatever it waits for, cancelled here (never started, so
+    never counted). False for a running generation, or a click or chat one: left as it is.
+    The caller holds the posting (`store.lock_posting`); the document is locked before the read,
+    the lock the tick takes before it starts a generation, so the read below is never older than a
+    start the tick committed."""
+    store.lock_document(db, document.user_id, document.id)
+    current = store.open_generation(db, document.user_id, document.id)
+    if current is None:
+        return True
+    if current.status is GenerationStatus.running or current.trigger is not GenerationTrigger.auto:
+        return False
+    current.status = GenerationStatus.cancelled
+    current.wait_reason = None
+    current.finished_at = at
+    db.flush()
+    return True
+
+
 def _has_version(db: Session, document: Document) -> bool:
     found = db.execute(
         sa.select(DocumentVersion.id).where(DocumentVersion.document_id == document.id).limit(1)

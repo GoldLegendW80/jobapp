@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 
 import { caddyLog, fieldValue } from "./browser-b4-helpers";
+import { endLease, startAgentLease } from "./browser-b7-helpers";
 import { probe } from "./browser-helpers";
 import {
   caddyUrl,
@@ -14,13 +15,16 @@ import {
 
 /**
  * Browser B4 against the real stack through Caddy, the browser service included (compose profile
- * `browser`), no mocks: person A opens Account, "Look at my browser", sees the canvas draw the
- * page the lease's Chromium shows, takes over, types into its field, and the value reads back
- * from that Chromium; after Give back nothing typed reaches it. Person B gets no ticket, and A's
- * ticket opens nothing from B's session. Caddy's log holds no ticket.
+ * `browser`), no mocks: an assistant's lease of person A runs (started through the api's lease
+ * store, as the worker does: since B7 a person's own session has no debugging port and nothing
+ * to take over); A opens Account, sees the canvas draw the page the lease's Chromium shows, view
+ * only, takes over, types into its field, and the value reads back from that Chromium; after
+ * Give back nothing typed reaches it. Person B gets no ticket, and A's ticket opens nothing from
+ * B's session. Caddy's log holds no ticket.
  *
- * The page is a `data:` document (no network, no real site). Run it as browser-b3.spec.ts says,
- * with this file's name.
+ * The page is a `data:` document (no network, no real site) whose field covers the whole tab, so
+ * a click anywhere on the page lands in it. Run it with the group
+ * (web/e2e/browser-all.config.ts says how).
  */
 test.describe.configure({ mode: "serial", timeout: 120_000 });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
@@ -31,7 +35,8 @@ const B = `e2e-browser-b-${run}@example.org`;
 const CSRF = { "X-Requested-With": "jobapp" };
 const PAGE =
   "data:text/html,<body style='margin:0;background:rgb(255,0,170)'>" +
-  "<input id=q autofocus style='font-size:40px;margin:80px'></body>";
+  "<input id=q autofocus style='position:fixed;inset:0;width:100%;height:100%;" +
+  "border:0;font-size:40px;background:rgb(255,0,170)'></body>";
 const shots = makeShots("browser-b4", "live");
 
 let contexts: BrowserContext[] = [];
@@ -81,6 +86,7 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
+  endLease(A);
   for (const page of [pageA, pageB]) {
     await page.request.delete("/api/browser/sessions/current", {
       headers: CSRF,
@@ -92,8 +98,8 @@ test.afterAll(async () => {
 });
 
 test("A watches the browser draw the page, takes over and types", async () => {
+  startAgentLease(A);
   await pageA.goto("/account");
-  await pageA.getByRole("button", { name: "Look at my browser" }).click();
   await expect(
     pageA.getByText(
       "You are watching your browser. Take over to use it yourself.",
