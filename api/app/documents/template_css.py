@@ -1,43 +1,51 @@
 """The style sheet of a template written from an upload (task D25a; SPEC-documents.md, "Design
 capture of an upload", step 4, and "Templates"). Pure: no file, no clock, no log.
 
-`check(css, fonts, accent, file, pages) -> [Problem]`. The sheet is read by a tokenizer of its
-own (no CSS parser is installed) that stops at the first input it does not know: `url(`, an
-escape outside a string, a comment or a string not closed, a character outside the ASCII set of
-the rules below. A sheet it stops on is refused whole, so nothing after a construct the browser
-would read another way is ever judged. Then everything is held to allow lists:
+`check(css, fonts, accent, file) -> [Problem]`. A static filter of allow lists: it never models
+the browser's cascade or layout. Whether every field is truly visible (its contrast on the
+painted background, not covered, inside the page) is judged on a render by D25b (issue #220).
+
+The sheet is read by a tokenizer of its own (no CSS parser is installed) that stops at the first
+input it does not know: `url(`, an escape outside a string, a comment or a string not closed, a
+character outside the ASCII set of the rules below, functions nested deeper than
+FUNCTION_DEPTH, a sheet over SHEET_MAX characters. A sheet it stops on is refused whole. Then
+everything is held to allow lists:
 - the structure: rules and an exact `@page`, no other at-rule, no block inside a block;
 - the selectors (SELECTORS): type selectors of ELEMENTS, classes, `*`, `:root`, `:first-child`,
   `:last-child`, the combinators space, `>`, `+`, `~`, a final `::before`, `::after` or
   `::marker`; at most MAX_COMPOUNDS parts of MAX_CLASSES classes;
 - the properties of VALUES, each with its own allow list of values; sizes of text in `em` or
   `%` or the density property, every other length from 0 up to CAPS; colours `#rrggbb` or the
-  accent; strings only punctuation; functions only `var()` and, in a grid template, `minmax()`;
-- custom properties: `var()` reads a density property, `--accent`, or a custom property the
-  sheet sets once to one length, number or `#rrggbb` (minimal's `--rail`), read in its place;
-  a density property or `--accent` set by the sheet is refused (the step sets them);
+  accent; strings only punctuation; functions only `var()`, `minmax()` in a grid template and
+  one `rotate()` of a decoration;
+- nothing lays a box over another: `position` only static or relative, no offset (`left`,
+  `top`, `right`, `bottom`), no `z-index`, no negative margin, no `transform` on an element,
+  grid placement only by `grid-column` (an item placed on one axis is put by the browser where
+  it overlaps no other; `grid-row` and `grid-area` can put two items in one cell);
+- a `::before` or `::after` is a decoration: punctuation of CONTENT_CHARS with a colour, a font,
+  space around it and at most one rotate; no fill, border, size or position (DECORATION); a
+  `::marker` takes only a colour and a font (MARKER); `content` is set on nothing else;
+- custom properties: set only on `:root` or `html`, once each, to one length, number or
+  `#rrggbb` (minimal's `--rail`), and read in their place by `var()`; `var()` reads too a
+  density property or `--accent`, which the sheet never sets (the step sets them);
 - the density: each property of DENSITY read, `--body-size` by a `font-size`, `--line-height`
   by a `line-height`, `--margin` too when `@page` sets a margin;
 - the fonts: a `font-family` starts with a family of the manifest;
-- the contrast (WCAG 2 AA, 4.5:1), in three ways: a rule that sets both a text colour and a
-  background holds them against each other; on the rendered pages (`pages`, the elements of a
-  render with every field filled, built by `template_rules`) each element holding text has its
-  colour and its backdrop computed as the cascade does; a selector that matched no element, or
-  whose match depends on the shape of the content (`:first-child`, `:last-child`, `+`, `~`), is
-  held against what its own parts say: the backgrounds of the parts it names (else the page's
-  white), or for a background the colours of the rules inside it.
+- the contrast: a rule that sets both a text colour and a background holds them at 4.5:1 (WCAG 2
+  AA). A colour on a background another rule sets is the render check's.
 
-Declared open points: the cascade is computed on one shape of the content (every field filled,
-two items per list); `position: absolute` can lay a box over another background than its
-parent's; a size made small by nesting `em` sizes is not measured; the colour of a `::marker`,
-`::before` or `::after` (punctuation only) is not held to the contrast rule.
+Declared open points, left to D25b's render check: a text colour on a background set by another
+rule (the page's white, a band, a column); a box made smaller than its text (`width`, `height`,
+`flex`), whose text then runs over its neighbours, under the background of a later flex or grid
+item or of a `position: relative` box; a size made small by nesting `em` sizes; a box pushed off
+the page by its margins.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from app.documents import font_map
 
@@ -62,7 +70,9 @@ TAGS = frozenset(
 )  # fmt: skip
 ELEMENTS = TAGS | {"html", "body", "a", "img"}  # the macros write `a` and `img`, the page the rest
 PUNCTUATION = frozenset(",:;·•|/().&")
-CONTENT_CHARS = PUNCTUATION | frozenset("\u00a0 ◦▪")
+CONTENT_CHARS = PUNCTUATION | frozenset("\u00a0 ◦▪#>+")
+SHEET_MAX = 64_000  # characters, template_rules.FILE_MAX
+FUNCTION_DEPTH = 2  # minmax(var(--rail), 1fr)
 DENSITY = ("--body-size", "--line-height", "--section-gap", "--item-gap", "--margin")
 DENSITY_LENGTHS = frozenset(("--body-size", "--section-gap", "--item-gap", "--margin"))
 GENERIC = frozenset(("serif", "sans-serif", "monospace"))
@@ -77,7 +87,8 @@ PSEUDO_ELEMENTS = frozenset(("before", "after", "marker"))
 _HEX = re.compile(r"[0-9a-f]{3}|[0-9a-f]{6}")
 _NAME_START = re.compile(r"--[A-Za-z0-9_-]+|-?[A-Za-z_][A-Za-z0-9_-]*")
 _NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)")
-_UNIT = re.compile(r"%|[A-Za-z]+")
+# an ident after a number is its unit, as CSS reads it: `1px-0px` is one number of unit `px-0px`
+_UNIT = re.compile(r"%|-?[A-Za-z_][A-Za-z0-9_-]*|--[A-Za-z0-9_-]*")
 _HASH = re.compile(r"#[A-Za-z0-9_-]+")
 _DELIMS = frozenset("{}();:,.>+~*/!")
 
@@ -128,9 +139,13 @@ def _string(css: str, at: int, line: int) -> tuple[str, int]:
 
 def tokens(css: str) -> list[Token]:
     """The tokens of a sheet, comments dropped; raises _Stop at the first unknown input."""
+    if len(css) > SHEET_MAX:
+        raise _Stop(0, "too_large", f"a sheet over {SHEET_MAX} characters")
     found: list[Token] = []
-    i, line, n = 0, 1, len(css)
+    i, line, n, depth = 0, 1, len(css), 0
     while i < n:
+        if depth > FUNCTION_DEPTH:
+            raise _Stop(line, "structure", f"functions nested deeper than {FUNCTION_DEPTH}")
         ch = css[i]
         if css.startswith("/*", i):
             end = css.find("*/", i + 2)
@@ -179,6 +194,7 @@ def tokens(css: str) -> list[Token]:
                     raise _Stop(line, "property", "url(), a template from an upload embeds nothing")
                 found.append(Token("function", name.group(), line))
                 i += 1
+                depth += 1
             else:
                 found.append(Token("ident", name.group(), line))
             continue
@@ -198,9 +214,15 @@ def tokens(css: str) -> list[Token]:
             continue
         if ch in _DELIMS:
             found.append(Token("delim", ch, line))
+            if ch == "(":
+                depth += 1
+            elif ch == ")" and depth:
+                depth -= 1
             i += 1
             continue
         raise _Stop(line, "structure", "a character the rules of a sheet do not use")
+    if depth > FUNCTION_DEPTH:
+        raise _Stop(line, "structure", f"functions nested deeper than {FUNCTION_DEPTH}")
     return found
 
 
@@ -413,8 +435,8 @@ def parse(css: str, file: str) -> tuple[list[Rule], list[Problem]]:
 # --- the values ---------------------------------------------------------------------------------
 
 # A value read into parts: ("kw", ident), ("num", n), ("len", n, unit), ("colour", "#rrggbb"),
-# ("str", text), ("sep", "," or "/"), ("var", a density property), ("minmax", parts), ("fn", name),
-# ("delim", ch).
+# ("str", text), ("sep", "," or "/"), ("var", a density property), ("minmax", parts),
+# ("rotate", parts), ("fn", name), ("delim", ch).
 Part = tuple
 
 
@@ -463,8 +485,8 @@ def parts(value: Sequence[Token], customs: Mapping[str, Part], accent: str) -> l
             name = token.text.lower()
             if name == "var":
                 out.append(_var(inner, customs, accent))
-            elif name == "minmax":
-                out.append(("minmax", tuple(parts(inner, customs, accent))))
+            elif name in ("minmax", "rotate"):
+                out.append((name, tuple(parts(inner, customs, accent))))
             else:
                 out.append(("fn", name))
         else:
@@ -526,7 +548,7 @@ DISPLAY = frozenset(
     ("block", "inline", "inline-block", "flex", "grid", "list-item", "table", "table-row",
      "table-cell", "table-row-group", "table-header-group")
 )  # fmt: skip
-POSITION = frozenset(("static", "relative", "absolute"))
+POSITION = frozenset(("static", "relative"))
 
 
 def _border(found: list[Part]) -> bool:
@@ -549,7 +571,7 @@ def _flex(found: list[Part]) -> bool:
 def _track(part: Part) -> bool:
     if part[0] == "minmax":
         inner = [p for p in part[1] if p[0] != "sep"]
-        return len(inner) == 2 and all(_track(p) for p in inner)
+        return len(inner) == 2 and all(p[0] != "minmax" and _track(p) for p in inner)
     words = ("auto", "min-content", "max-content")
     return _length(part) or _within(part, "fr", 0, 20) or (part[0] == "kw" and part[1] in words)
 
@@ -589,7 +611,7 @@ VALUES = {
     ),
     **dict.fromkeys(
         ("margin-top", "margin-right", "margin-bottom", "margin-left", "width", "height",
-         "min-width", "min-height", "left", "top", "right", "bottom", "flex-basis",
+         "min-width", "min-height", "flex-basis",
          "column-width"), _lengths(1, "auto")
     ),
     **dict.fromkeys(
@@ -636,8 +658,7 @@ VALUES = {
     "grid-auto-rows": _tracks,
     "grid-auto-flow": _kw("row", "column", "dense"),
     "grid-column": _grid_line,
-    "grid-row": _grid_line,
-    "grid-area": _grid_line,
+    "contain": _kw("none", "inline-size"),
     "columns": _columns,
     "column-count": _columns,
     **dict.fromkeys(("break-inside", "page-break-inside"), _kw("auto", "avoid")),
@@ -659,7 +680,7 @@ VALUES = {
 }  # fmt: skip
 SPECIAL = frozenset(
     ("color", "background", "background-color", "display", "position", "content", "font-family",
-     "font-size", "line-height", "letter-spacing")
+     "font-size", "line-height", "letter-spacing", "transform")
 )  # fmt: skip
 PROPERTIES = frozenset(VALUES) | SPECIAL
 
@@ -684,7 +705,12 @@ def _special(prop: str, found: list[Part], names: frozenset[str]) -> tuple[str, 
             return "property", "display: a value that shows the box"
     elif prop == "position":
         if not (one and one[0] == "kw" and one[1] in POSITION):
-            return "property", "position: static, relative or absolute"
+            return "property", "position: static or relative"
+    elif prop == "transform":
+        inner = one[1] if one and one[0] == "rotate" else ()
+        turn = len(inner) == 1 and _within(inner[0], "deg", -360, 360)
+        if not turn:
+            return "property", "transform: one rotate(), from -360deg to 360deg"
     elif prop == "content":
         if not (one and (one[0] == "str" or one in (("kw", "none"), ("kw", "normal")))):
             return "content", "content: punctuation only"
@@ -730,15 +756,59 @@ def _shown(prop: str) -> str:
     return "a custom property" if prop.startswith("--") else prop
 
 
+DECORATIONS = frozenset(("before", "after"))
+DECORATION = frozenset(
+    ("content", "color", "font-family", "font-size", "font-weight", "font-style", "font-variant",
+     "font-variant-caps", "letter-spacing", "line-height", "vertical-align", "white-space",
+     "display", "text-transform", "text-decoration", "transform", "margin", "margin-top",
+     "margin-right", "margin-bottom", "margin-left", "padding", "padding-top", "padding-right",
+     "padding-bottom", "padding-left")
+)  # fmt: skip
+MARKER = frozenset(
+    ("content", "color", "font-family", "font-size", "font-weight", "font-style", "font-variant",
+     "font-variant-caps")
+)  # fmt: skip
+# what moves or places a box over another; position and transform are held in _special
+OVERLAY = frozenset(
+    ("left", "top", "right", "bottom", "inset", "inset-block", "inset-inline", "z-index",
+     "grid-row", "grid-row-start", "grid-row-end", "grid-area", "grid-column-start",
+     "grid-column-end", "float", "translate", "rotate", "scale", "offset", "margin-trim")
+)  # fmt: skip
+FUNCTIONS = {
+    "minmax": ("grid-template-columns", "grid-template-rows"),
+    "rotate": ("transform",),
+}
+
+
+def _target_problem(prop: str, targets: frozenset[str | None]) -> tuple[str, str] | None:
+    """What a property may not set on what the rule's selectors match: `targets` holds their
+    pseudo-elements, None for an element."""
+    if targets & DECORATIONS and prop not in DECORATION:
+        return "property", f"{prop}: a ::before or ::after holds punctuation only, no box"
+    if "marker" in targets and prop not in MARKER:
+        return "property", f"{prop}: a ::marker takes only a colour and a font"
+    if None in targets and prop in ("content", "transform"):
+        return "property", f"{prop}: only on a ::before or ::after"
+    return None
+
+
 def value_problem(
-    d: Declaration, customs: Mapping[str, Part], accent: str, names: frozenset[str]
+    d: Declaration,
+    customs: Mapping[str, Part],
+    accent: str,
+    names: frozenset[str],
+    targets: frozenset[str | None] = frozenset((None,)),
 ) -> tuple[str, str] | None:
-    """The code and the detail of what is wrong with one declaration of a rule, None when
-    nothing."""
+    """The code and the detail of what is wrong with one declaration of a rule whose selectors
+    match `targets` (see _target_problem), None when nothing."""
     if d.prop in DENSITY or d.prop == "--accent":
         return "density_pinned", f"{d.prop} is set by the density step, not by the sheet"
+    if d.prop in OVERLAY:
+        return "property", f"{d.prop}: it can lay a box over another"
     if not d.prop.startswith("--") and d.prop not in PROPERTIES:
         return "property", "a property outside the allowed list"
+    if not d.prop.startswith("--") and (wrong := _target_problem(d.prop, targets)):
+        return wrong
     try:
         found = parts(d.value, customs, accent)
     except _Bad as bad:
@@ -746,10 +816,7 @@ def value_problem(
     if d.prop != "font-family" and any(
         p[0] == "str" and not set(p[1]) <= CONTENT_CHARS for p in found
     ):
-        return (
-            "content",
-            f"{_shown(d.prop)}: a string other than punctuation",
-        )
+        return "content", f"{_shown(d.prop)}: a string other than punctuation"
     if d.prop.startswith("--"):
         if _custom(found):
             return None
@@ -757,18 +824,12 @@ def value_problem(
     if found == [("kw", "inherit")]:
         return None
     if any(p[0] == "fn" for p in found):
-        return _CODE.get(d.prop, "property"), f"{d.prop}: a function outside var() and minmax()"
-    if any(p[0] == "minmax" for p in found) and d.prop not in (
-        "grid-template-columns",
-        "grid-template-rows",
-    ):
-        return "property", f"{d.prop}: minmax() outside a grid template"
+        return _CODE.get(d.prop, "property"), f"{d.prop}: a function outside the allowed list"
+    for name, props in FUNCTIONS.items():
+        if d.prop not in props and any(p[0] == name for p in found):
+            return "property", f"{d.prop}: {name}() outside {props[0]}"
     if d.prop in SPECIAL:
         return _special(d.prop, found, names)
-    if d.prop in ("left", "top", "right", "bottom") and any(
-        p[0] in ("len", "num") and p[1] < 0 for p in found
-    ):
-        return "property", f"{d.prop}: a negative offset"
     if not VALUES[d.prop](found):
         return "property", f"{d.prop}: a value outside the allowed list"
     return None
@@ -803,123 +864,14 @@ def contrast(one: str, other: str) -> float:
     return (light + 0.05) / (dark + 0.05)
 
 
-@dataclass(eq=False)
-class Element:
-    """An element of a rendered page: what the selectors read, and whether it holds text."""
-
-    tag: str
-    classes: frozenset[str]
-    parent: Element | None = None
-    children: list[Element] = field(default_factory=list)
-    text: bool = False
-
-    def add(self, tag: str, classes: frozenset[str]) -> Element:
-        child = Element(tag, classes, self)
-        self.children.append(child)
-        return child
-
-    def walk(self) -> Iterable[Element]:
-        stack = [self]
-        while stack:
-            element = stack.pop()
-            yield element
-            stack.extend(reversed(element.children))
-
-
-@dataclass(frozen=True)
-class _Paint:
-    """A colour or a background a declaration of a rule sets, as the cascade weighs it."""
-
-    selector: Selector
-    colour: str | None  # #rrggbb; None: inherit (a colour) or transparent (a background)
-    important: bool
-    order: int
-    line: int
-
-    @property
-    def weight(self) -> tuple:
-        return (self.important, self.selector.specificity, self.order)
-
-
-class _Matcher:
-    def __init__(self, relaxed: bool, above: dict[int, frozenset[str]] | None = None) -> None:
-        self.relaxed = relaxed
-        self.memo: dict[tuple[int, int, int], bool] = {}
-        self.above = {} if above is None else above  # per element, the keys of its ancestors
-        self.needs: dict[int, frozenset[str]] = {}
-
-    def ancestors(self, e: Element) -> frozenset[str]:
-        """The keys of the ancestors of `e`."""
-        chain, node = [], e
-        while node is not None and id(node) not in self.above:
-            chain.append(node)
-            node = node.parent
-        for node in reversed(chain):
-            parent = node.parent
-            keys = () if parent is None else (*self.above[id(parent)], *_element_keys(parent))
-            self.above[id(node)] = frozenset(keys)
-        return self.above[id(e)]
-
-    def candidate(self, s: Selector, e: Element) -> bool:
-        """Whether the ancestors of `e` have every key the selector asks of them."""
-        if id(s) not in self.needs:
-            self.needs[id(s)] = _ancestry(s)
-        return self.needs[id(s)] <= self.ancestors(e)
-
-    def compound(self, c: Compound, e: Element) -> bool:
-        if (c.tag and c.tag != e.tag) or not c.classes <= e.classes:
-            return False
-        if "root" in c.pseudo and e.tag != "html":
-            return False
-        if self.relaxed or e.parent is None:
-            return not (e.parent is None and c.pseudo - {"root"})
-        siblings = e.parent.children
-        return ("first-child" not in c.pseudo or siblings[0] is e) and (
-            "last-child" not in c.pseudo or siblings[-1] is e
-        )
-
-    def matches(self, s: Selector, e: Element, k: int | None = None) -> bool:
-        if k is None:
-            if not self.candidate(s, e):
-                return False
-            k = len(s.compounds) - 1
-        key = (id(s), k, id(e))
-        if key in self.memo:
-            return self.memo[key]
-        self.memo[key] = found = self._matches(s, e, k)
-        return found
-
-    def _matches(self, s: Selector, e: Element, k: int) -> bool:
-        if not self.compound(s.compounds[k], e):
-            return False
-        if k == 0:
-            return True
-        combinator, parent = s.combinators[k - 1], e.parent
-        if combinator == ">":
-            return parent is not None and self.matches(s, parent, k - 1)
-        if combinator == " ":
-            while parent is not None:
-                if self.matches(s, parent, k - 1):
-                    return True
-                parent = parent.parent
-            return False
-        siblings = parent.children if parent else []
-        if self.relaxed:
-            others = [x for x in siblings if x is not e]
-        else:
-            before = siblings[: next(i for i, x in enumerate(siblings) if x is e)]
-            others = before[-1:] if combinator == "+" else before
-        return any(self.matches(s, x, k - 1) for x in others)
-
-
-def _paints(rules: Sequence[Rule], customs, accent) -> tuple[list[_Paint], list[_Paint]]:
-    """The colours and the backgrounds the rules set, in the order of the sheet."""
-    colours: list[_Paint] = []
-    backs: list[_Paint] = []
-    order = 0
+def _contrast(rules: Sequence[Rule], customs, accent: str, file: str) -> list[Problem]:
+    """A rule that sets both a text colour and a background: the two at AA or more. Of two
+    declarations of one property, the important one wins, else the later."""
+    problems: list[Problem] = []
     for rule in rules:
         if rule.selectors is None:
             continue
+        own: dict[str, tuple[bool, str, int]] = {}
         for d in rule.declarations:
             if d.prop not in ("color", "background", "background-color"):
                 continue
@@ -927,300 +879,69 @@ def _paints(rules: Sequence[Rule], customs, accent) -> tuple[list[_Paint], list[
                 found = parts(d.value, customs, accent)
             except _Bad:
                 continue
-            if len(found) != 1:
+            slot = "color" if d.prop == "color" else "back"
+            if slot in own and own[slot][0] and not d.important:
                 continue
-            value = found[0][1] if _colour(found[0]) else None
-            order += 1
-            for selector in rule.selectors:
-                if selector.element is None:
-                    paint = _Paint(selector, value, d.important, order, d.line)
-                    (colours if d.prop == "color" else backs).append(paint)
-    return colours, backs
-
-
-class _Index:
-    """Selectors by two keys an element they match must have: one of its subject's, and another
-    of its subject's or of an ancestor's (None when there is none), so an element meets only
-    the selectors whose two keys it and its ancestors have."""
-
-    def __init__(self, selectors: Iterable[Selector]) -> None:
-        self.buckets: dict[str, dict[str | None, list[Selector]]] = {}
-        for selector in selectors:
-            subject = selector.compounds[-1]
-            first = _key(subject)
-            rest = ({*_needs(subject)} | _ancestry(selector)) - {first}
-            bucket = self.buckets.setdefault(first, {})
-            bucket.setdefault(min(rest, default=None), []).append(selector)
-
-    def candidates(self, e: Element, above: frozenset[str]) -> Iterable[Selector]:
-        keys = _element_keys(e)
-        seconds = {None, *keys, *above}
-        for key in dict.fromkeys(keys):
-            bucket = self.buckets.get(key)
-            if bucket:
-                for second in seconds if len(seconds) < len(bucket) else list(bucket):
-                    if second in seconds:
-                        yield from bucket.get(second, ())
-
-
-class _Cascade:
-    def __init__(self, colours: list[_Paint], backs: list[_Paint]) -> None:
-        self.strict = _Matcher(relaxed=False)
-        self.colour_ids = {id(p) for p in colours}
-        # per distinct selector, the strongest colour and background it sets
-        self.selectors: dict[int, Selector] = {}
-        self.best: dict[int, list[_Paint | None]] = {}
-        for paint in (*colours, *backs):
-            slot = 0 if id(paint) in self.colour_ids else 1
-            self.selectors[id(paint.selector)] = paint.selector
-            pair = self.best.setdefault(id(paint.selector), [None, None])
-            if pair[slot] is None or paint.weight > pair[slot].weight:
-                pair[slot] = paint
-        self.index = _Index(self.selectors.values())
-        self.matched: set[int] = set()
-        self.colour_of: dict[int, tuple[str, int]] = {}
-        self.back_of: dict[int, tuple[str | None, int]] = {}
-
-    def winners(self, e: Element) -> tuple[_Paint | None, _Paint | None]:
-        best: list[_Paint | None] = [None, None]
-        for selector in self.index.candidates(e, self.strict.ancestors(e)):
-            if not self.strict.matches(selector, e):
-                continue
-            self.matched.add(id(selector))
-            for slot, paint in enumerate(self.best[id(selector)]):
-                if paint is not None and (best[slot] is None or paint.weight > best[slot].weight):
-                    best[slot] = paint
-        return best[0], best[1]
-
-    def run(self, root: Element) -> None:
-        """The colour and the own background of every element, parents first."""
-        for e in root.walk():
-            colour, back = self.winners(e)
-            parent = self.colour_of.get(id(e.parent)) if e.parent else None
-            if colour is not None and colour.colour:
-                self.colour_of[id(e)] = (colour.colour, colour.line)
-            else:
-                self.colour_of[id(e)] = parent or (BLACK, 0)
-            own = back.colour if back is not None else None
-            self.back_of[id(e)] = (own, back.line if back is not None and own else 0)
-
-    def backdrop(self, e: Element) -> tuple[str, int]:
-        node: Element | None = e
-        while node is not None:
-            own, line = self.back_of.get(id(node), (None, 0))
-            if own:
-                return own, line
-            node = node.parent
-        return WHITE, 0
-
-
-def _element_keys(e: Element) -> list[str]:
-    return [f".{c}" for c in e.classes] + [e.tag, "*"]
-
-
-def _key(compound: Compound) -> str:
-    """The one key a part is indexed by: a class of it, else its tag, else `*`."""
-    first = min(compound.classes, default=None)
-    return f".{first}" if first else (compound.tag or "*")
-
-
-def _keys(compound: Compound) -> list[str]:
-    """Every key a part a rule covers can be indexed by."""
-    found = [f".{c}" for c in compound.classes] + [compound.tag or "*", "*"]
-    return [*found, "html"] if "root" in compound.pseudo else found
-
-
-def _subsets(classes: frozenset[str]) -> Iterable[frozenset[str]]:
-    items = sorted(classes)
-    for mask in range(1 << len(items)):
-        yield frozenset(c for i, c in enumerate(items) if mask >> i & 1)
-
-
-class _Fallback:
-    """What a selector's own parts say when no rendered element tells: the backgrounds of the
-    parts it names (a background rule whose part covers one of them), and the colours of the
-    rules a background's part holds."""
-
-    def __init__(self, colours: list[_Paint], backs: list[_Paint]) -> None:
-        self.backs: dict[tuple, set[str]] = {}
-        for paint in backs:
-            if paint.colour:
-                subject = paint.selector.compounds[-1]
-                shape = (subject.tag, subject.classes, "root" in subject.pseudo)
-                self.backs.setdefault(shape, set()).add(paint.colour)
-        self.parts: dict[str, dict[Compound, set[str]]] = {}
-        for paint in colours:
-            for part in paint.selector.compounds if paint.colour else ():
-                for key in {*_needs(part), "*"}:
-                    self.parts.setdefault(key, {}).setdefault(part, set()).add(paint.colour)
-        root = Compound("html", frozenset(), frozenset(("root",)))
-        self.root_backs = self.covering(root)
-        self.root_colours = {
-            p.colour
-            for p in colours
-            if p.colour and len(p.selector.compounds) == 1 and p.selector.compounds[0].covers(root)
-        } or {BLACK}
-        self.memo: dict[Compound, set[str]] = {}
-
-    def covering(self, part: Compound) -> set[str]:
-        """The background colours of the rules whose part covers `part`."""
-        found: set[str] = set()
-        roots = (False, True) if "root" in part.pseudo or part.tag == "html" else (False,)
-        for tag in {None, part.tag}:
-            for classes in _subsets(part.classes):
-                for root in roots:
-                    found |= self.backs.get((tag, classes, root), set())
-        return found
-
-    def behind(self, selector: Selector) -> set[str]:
-        """The backgrounds behind a colour: of its nearest part that has one, else the root's."""
-        for part in reversed(selector.compounds):
-            if part not in self.memo:
-                self.memo[part] = self.covering(part)
-            if self.memo[part]:
-                return self.memo[part]
-        return self.root_backs or {WHITE}
-
-    def held(self, subject: Compound) -> set[str]:
-        """The colours a background holds: of the rules with a part it covers, else the root's."""
-        needs = _needs(subject) or ["*"]
-        bucket = min((self.parts.get(key, {}) for key in needs), key=len)
-        found = {c for part, cs in bucket.items() if subject.covers(part) for c in cs}
-        return found or self.root_colours
-
-
-def _needs(part: Compound) -> list[str]:
-    """The keys every element a part matches has: its classes and its tag."""
-    return [f".{c}" for c in part.classes] + ([part.tag] if part.tag else [])
-
-
-def _ancestry(selector: Selector) -> frozenset[str]:
-    """The keys that some ancestor of any element the selector matches must have."""
-    found: set[str] = set()
-    for k in range(len(selector.compounds) - 1, 0, -1):
-        if selector.combinators[k - 1] in (" ", ">"):
-            found |= set(_needs(selector.compounds[k - 1]))
-    return frozenset(found)
-
-
-def _contrast(
-    rules: Sequence[Rule], customs, accent: str, file: str, pages: Sequence[Element]
-) -> list[Problem]:
-    colours, backs = _paints(rules, customs, accent)
-    problems: list[Problem] = []
-
-    def low(one: str, other: str, line: int, detail: str) -> None:
-        if contrast(one, other) < AA:
-            problems.append(Problem(file, line, "contrast", detail))
-
-    for rule in rules:
-        if rule.selectors is None:
-            continue
-        own: dict[str, tuple[str, int]] = {}
-        for d in rule.declarations:
-            try:
-                found = parts(d.value, customs, accent)
-            except _Bad:
-                continue
-            painted = d.prop in ("color", "background", "background-color")
-            if painted and len(found) == 1 and _colour(found[0]):
-                own["color" if d.prop == "color" else "back"] = (found[0][1], d.line)
-        if "color" in own and "back" in own:
-            (colour, line), (back, _) = own["color"], own["back"]
-            low(colour, back, line, "color: under 4.5 to 1 on its own background")
-
-    cascade = _Cascade(colours, backs)
-    elements: list[Element] = []
-    for root in pages:
-        cascade.run(root)
-        elements += list(root.walk())
-    for e in elements:
-        if e.text:
-            colour, line = cascade.colour_of[id(e)]
-            back, back_line = cascade.backdrop(e)
-            detail = "color: under 4.5 to 1 on the background it lands on"
-            low(colour, back, line or back_line, detail)
-
-    under: dict[int, set[str]] = {}
-    for e in reversed(elements):
-        found = {cascade.colour_of[id(e)][0]} if e.text else set()
-        for child in e.children:
-            if not cascade.back_of[id(child)][0]:
-                found |= under[id(child)]
-        under[id(e)] = found
-    relaxed = _Matcher(relaxed=True, above=cascade.strict.above)
-    shaped = _Index(s for s in cascade.selectors.values() if s.shaped)
-    reach: dict[int, list[Element]] = {}
-    for e in elements:
-        for selector in shaped.candidates(e, relaxed.ancestors(e)):
-            if relaxed.matches(selector, e):
-                reach.setdefault(id(selector), []).append(e)
-
-    fallback = _Fallback(colours, backs)
-    against: dict[tuple[int, bool], set[str]] = {}
-    for paint in (*colours, *backs):
-        if paint.colour is None:
-            continue
-        selector, is_colour = paint.selector, id(paint) in cascade.colour_ids
-        if id(selector) in cascade.matched and not selector.shaped:
-            continue
-        key = (id(selector), is_colour)
-        if key not in against:
-            if id(selector) in reach:
-                against[key] = set()
-                for e in reach[id(selector)]:
-                    against[key] |= {cascade.backdrop(e)[0]} if is_colour else under[id(e)]
-            elif is_colour:
-                against[key] = fallback.behind(selector)
-            else:
-                against[key] = fallback.held(selector.compounds[-1])
-        for other in against[key]:
-            detail = "color: under 4.5 to 1 on a background its rules can put it on"
-            low(paint.colour, other, paint.line, detail)
-    return list(dict.fromkeys(problems))
+            colour = found[0][1] if len(found) == 1 and _colour(found[0]) else ""
+            own[slot] = (d.important, colour, d.line)
+        colour, back = own.get("color"), own.get("back")
+        if colour and back and colour[1] and back[1] and contrast(colour[1], back[1]) < AA:
+            detail = "color: under 4.5 to 1 on the background of its own rule"
+            problems.append(Problem(file, colour[2], "contrast", detail))
+    return problems
 
 
 # --- the whole sheet ----------------------------------------------------------------------------
 
 
-def check(
-    css: str,
-    fonts: tuple[str, ...],
-    accent: str,
-    file: str = "style.css",
-    pages: Sequence[Element] = (),
-) -> list[Problem]:
-    """The problems of a template's style sheet (see the module docstring); `pages` are the
-    rendered pages the cascade is computed on, none for a sheet alone."""
+def _on_root(selector: Selector) -> bool:
+    """Whether a selector is exactly `:root` or `html`."""
+    if len(selector.compounds) != 1 or selector.element is not None:
+        return False
+    part = selector.compounds[0]
+    root = part.tag == "html" or (part.tag is None and "root" in part.pseudo)
+    return root and not part.classes and part.pseudo <= {"root"}
+
+
+def check(css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css") -> list[Problem]:
+    """The problems of a template's style sheet (see the module docstring)."""
     rules, problems = parse(css, file)
     if not rules:
         return problems or _density(rules, file)
     names = frozenset(font_map.FAMILIES[f].name.casefold() for f in fonts if f in font_map.FAMILIES)
     customs: dict[str, Part] = {}
+    seen: set[str] = set()
     for rule in rules:
         for d in rule.declarations:
             if rule.selectors is None or not d.prop.startswith("--"):
                 continue
             if d.prop in DENSITY or d.prop == "--accent":
                 continue
+            if not rule.selectors or not all(map(_on_root, rule.selectors)):
+                detail = "a custom property set on another selector than :root"
+                problems.append(Problem(file, d.line, "property", detail))
+                continue
+            if d.prop in seen:
+                problems.append(Problem(file, d.line, "property", "a custom property set twice"))
+                continue
+            seen.add(d.prop)
             try:
                 found = parts(d.value, {}, accent)
             except _Bad:
                 continue
-            if d.prop in customs:
-                problems.append(Problem(file, d.line, "property", "a custom property set twice"))
-            elif _custom(found):
+            if _custom(found):
                 customs[d.prop] = found[0]
     for rule in rules:
         for d in rule.declarations:
             if rule.selectors is None:
                 wrong = _page_problem(d, customs, accent)
             else:
-                wrong = value_problem(d, customs, accent, names)
+                targets = frozenset(s.element for s in rule.selectors)
+                wrong = value_problem(d, customs, accent, names, targets)
             if wrong:
                 problems.append(Problem(file, d.line, *wrong))
     problems += _density(rules, file)
-    problems += _contrast(rules, customs, accent, file, pages)
+    problems += _contrast(rules, customs, accent, file)
     return problems
 
 

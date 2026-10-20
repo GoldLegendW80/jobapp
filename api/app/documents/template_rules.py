@@ -19,19 +19,30 @@ text of the template, so it can be logged. On top of the authoring rules every t
 - no literal text: the HTML between the Jinja constructs holds tags of TAGS with a `class`, and
   between them only punctuation of PUNCTUATION (no letter, no digit, no dash); a tag, an
   attribute, a comment or a character reference cut by a construct is refused, since what the
-  check reads there is not what the render prints;
+  check reads there is not what the render prints; the markup of each `if`, `elif`, `else` and
+  `for` body is balanced on its own, so no shape of the content leaves a tag open; `if` and
+  `for` nest at most JINJA_DEPTH deep;
 - every field printed: each field of REQUIRED is printed, by a macro or an output, where every
   test around it is about that field (`{% if roles %}` around a role, not `{% if photo %}`);
 - the render: a file that passed the above is rendered in process on canary content, every
   field filled with a token of its own and every field empty. The HTML printed is parsed: its
   text is only canaries, whitespace and punctuation, its tags those of TAGS (and the macros'
-  `a` and `img`), its attributes those of an allow list, its elements nested as the browser's
-  tree builder keeps them, and every field of REQUIRED shows its canary;
-- the CSS: `template_css.check`, its own tokenizer and allow lists, the contrast computed on the
-  rendered pages (see that module).
+  `a` and `img`), its attributes those of an allow list, and every field of REQUIRED shows its
+  canary. Its elements follow the content model the browser's tree builder keeps as written
+  (the HTML standard's "in body" and table insertion modes): no element the builder would close,
+  move or wrap is accepted, rather than a model of the repair. So no block (_CLOSES_P) while a
+  `p` is open below the nearest cell or table, a `li` only as a child of `ul` or `ol`, a heading
+  never right inside a heading, an `a` never inside an `a`, the parts of a table only in their
+  place (`tr` only in `thead` or `tbody`), no text in a table outside a cell, no `/>` on an
+  element that is not void, no `rowspan` (cells of two rows could then share a slot);
+- the CSS: `template_css.check`, a static filter of allow lists (see that module): nothing
+  lays a box over another, a `::before` or `::after` holds only punctuation.
 
-The fit check on the render (the tightest step gives a shorter page than the loosest) and the
-fields found in the PDF text are D25b's, which holds the renderer.
+What the static filter guarantees: no text of the template, every field printed, nothing it
+lets through can place a box over another or draw one from a pseudo-element. Whether every field
+is truly visible (contrast on the painted background, a box smaller than its text, inside the
+page) is judged on the render by D25b (issue #220), with the fit check and the fields found in
+the PDF text, since D25b holds the renderer.
 
 **The tokens.** `from_pdf(DesignPdf)` and `from_docx(DesignDocx)` -> Tokens: what the layout
 extraction of D25a's sandbox kinds says of the look, as values the template system takes: the
@@ -44,11 +55,9 @@ The text, the accent and the text on the fill pass the checks' contrast rule by 
 `steps(tokens, kind)` is the density ladder of a user template's manifest: loosest from the
 captured density, down to TIGHTEST, every step within `templates.BOUNDS`.
 
-Declared open points: a field printed in a box whose size or overflow hides it, a size made
-small by nesting `em` sizes, and a colour that lands on a background only in a shape of the
-content the canary renders do not have, pass these checks; neither does the PDF text check of
-D25b see them (the text is in the PDF), so they are left to a render check of D25b or to the
-Compare view. Of the tokens: a page's columns are read from the gaps between its text below the
+Declared open points, left to D25b's render check (see template_css): a text colour on a
+background set by another rule, a box smaller than its text, a size made small by nesting `em`
+sizes. Of the tokens: a page's columns are read from the gaps between its text below the
 top fifth, so a two column layout crossed by one full width line reads as one column; a sidebar
 is a fill touching a side edge, a band a fill across the top.
 """
@@ -70,7 +79,7 @@ from jinja2.exceptions import TemplateSyntaxError
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
 from app.documents import font_map, template_css, templates
-from app.documents.template_css import AA, PUNCTUATION, TAGS, WHITE, Element, Problem, contrast
+from app.documents.template_css import AA, PUNCTUATION, TAGS, WHITE, Problem, contrast
 from app.ingestion.parser_client import DesignDocx, DesignPdf, TextRun
 
 __all__ = ["AA", "TAGS", "WHITE", "Problem", "check", "check_css", "contrast"]
@@ -84,6 +93,7 @@ FILE_MAX = 64_000  # characters of one file; the bundled ones hold under 10,000
 RENDER_MAX = 400_000  # characters of a canary render; the bundled ones print under 20,000
 ELEMENTS_MAX = 6_000  # elements of a canary render; the bundled ones print under 200
 DEPTH_MAX = 48  # elements nested in a canary render; the bundled ones nest under 12
+JINJA_DEPTH = 12  # if and for nested in a file; the bundled ones nest under 5
 
 
 # --- the Jinja tree -----------------------------------------------------------------------------
@@ -194,6 +204,7 @@ class _Walk:
         self.problems: list[Problem] = []
         self.printed: set[str] = set()
         self.html: list[tuple[int, str]] = []
+        self.depth = 0
 
     def refuse(self, node: nodes.Node, code: str, detail: str) -> None:
         self.problems.append(Problem(self.file, getattr(node, "lineno", 0) or 0, code, detail))
@@ -250,32 +261,48 @@ class _Walk:
                 else:
                     self.html.append((child.lineno, _SLOT))
                     self.output(child, scope, guards)
-        elif isinstance(node, nodes.If):
-            self.body(node.body, scope, (*guards, self.test(node.test, scope)))
-            for branch in node.elif_:
-                self.test(branch.test, scope)
-                self.body(branch.body, scope, (*guards, _NEVER))
-            self.body(node.else_, scope, (*guards, _NEVER))
-        elif isinstance(node, nodes.For):
-            source = self.expr(node.iter, scope)
-            what = self.fields.get(source or "")
-            if not isinstance(node.target, nodes.Name) or what not in ("list", "items"):
-                self.refuse(node, "construct", "a for over a list field, into one name")
+        elif isinstance(node, nodes.If | nodes.For):
+            if self.depth >= JINJA_DEPTH:
+                self.refuse(node, "construct", f"if and for nested deeper than {JINJA_DEPTH}")
                 return
-            outer = scope.get(_ITEM)
-            if outer and not (source or "").startswith(outer + "."):
-                self.refuse(node, "construct", "a for inside a for only over its item's own list")
-                return
-            if node.test is not None or node.recursive:
-                self.refuse(node, "construct", "a for with a test or recursive")
-            item = f"{source}[]"
-            inner = {**scope, node.target.name: item, "loop": "loop", _ITEM: item}
-            self.body(node.body, inner, (*guards, _Guard(source)))
-            self.body(node.else_, scope, (*guards, _NEVER))
+            bodies = (node.body, *(b.body for b in getattr(node, "elif_", ())), node.else_)
+            if not all(map(_balanced, bodies)):
+                detail = "markup an if or a for opens or closes in one branch only"
+                self.refuse(node, "structure", detail)
+            self.depth += 1
+            if isinstance(node, nodes.If):
+                self.branches(node, scope, guards)
+            else:
+                self.loop(node, scope, guards)
+            self.depth -= 1
         elif isinstance(node, nodes.Block):
             self.refuse(node, "construct", "a block inside the body block")
         else:
             self.refuse(node, "construct", f"the construct {type(node).__name__}")
+
+    def branches(self, node: nodes.If, scope: dict[str, str], guards: tuple) -> None:
+        self.body(node.body, scope, (*guards, self.test(node.test, scope)))
+        for branch in node.elif_:
+            self.test(branch.test, scope)
+            self.body(branch.body, scope, (*guards, _NEVER))
+        self.body(node.else_, scope, (*guards, _NEVER))
+
+    def loop(self, node: nodes.For, scope: dict[str, str], guards: tuple) -> None:
+        source = self.expr(node.iter, scope)
+        what = self.fields.get(source or "")
+        if not isinstance(node.target, nodes.Name) or what not in ("list", "items"):
+            self.refuse(node, "construct", "a for over a list field, into one name")
+            return
+        outer = scope.get(_ITEM)
+        if outer and not (source or "").startswith(outer + "."):
+            self.refuse(node, "construct", "a for inside a for only over its item's own list")
+            return
+        if node.test is not None or node.recursive:
+            self.refuse(node, "construct", "a for with a test or recursive")
+        item = f"{source}[]"
+        inner = {**scope, node.target.name: item, "loop": "loop", _ITEM: item}
+        self.body(node.body, inner, (*guards, _Guard(source)))
+        self.body(node.else_, scope, (*guards, _NEVER))
 
     def test(self, node: nodes.Expr, scope: dict[str, str]) -> _Guard:
         if isinstance(node, nodes.And | nodes.Or):
@@ -410,7 +437,7 @@ class _Html(HTMLParser):
         for key, value in attrs:
             if key == "class" and value is not None and _CLASS.fullmatch(value.strip()):
                 continue
-            if key in ("colspan", "rowspan") and (value or "").isdigit():
+            if key == "colspan" and (value or "").isdigit():
                 continue
             self._refuse("attribute", "an attribute other than a class name")
 
@@ -428,6 +455,38 @@ class _Html(HTMLParser):
 
     handle_pi = handle_decl
     unknown_decl = handle_decl
+
+
+class _Balance(HTMLParser):
+    """Whether markup closes, in order, every element it opens."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.open: list[str] = []
+        self.broken = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in _VOID:
+            self.open.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.broken |= tag not in _VOID
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.open and self.open[-1] == tag:
+            self.open.pop()
+        else:
+            self.broken = True
+
+
+def _balanced(body: list[nodes.Node]) -> bool:
+    """Whether the markup of a body, its nested bodies included, is balanced on its own."""
+    parser = _Balance()
+    for node in body:
+        for data in node.find_all(nodes.TemplateData):
+            parser.feed(data.data)
+    parser.close()
+    return not (parser.broken or parser.open or parser.rawdata)
 
 
 def check_html(kind: str, file: str, source: str) -> list[Problem]:
@@ -464,13 +523,14 @@ def check_html(kind: str, file: str, source: str) -> list[Problem]:
 
 PHOTO_CANARY = "data:image/png;base64,AAAA"
 _VOID = frozenset(("br", "hr", "img"))
-# What the browser's tree builder closes or moves: a `p` holding one of these is closed before
-# it; the cells and rows of a table outside their parents are moved out of it.
+# The content model the browser's tree builder keeps as written: a start tag of _CLOSES_P closes
+# a `p` open below the nearest of _SCOPE; a table part outside its place in _TABLE is moved.
 _CLOSES_P = frozenset(
     ("div", "section", "article", "aside", "header", "footer", "main", "p", "ul", "ol", "li",
      "h1", "h2", "h3", "h4", "h5", "h6", "hr", "table")
 )  # fmt: skip
-_TABLE = {"table": ("thead", "tbody", "tr"), "thead": ("tr",), "tbody": ("tr",), "tr": ("td", "th")}
+_SCOPE = frozenset(("td", "th", "table", "html"))
+_TABLE = {"table": ("thead", "tbody"), "thead": ("tr",), "tbody": ("tr",), "tr": ("td", "th")}
 _TABLE_PARTS = frozenset(("thead", "tbody", "tr", "td", "th"))
 _HEADINGS = frozenset(("h1", "h2", "h3", "h4", "h5", "h6"))
 
@@ -545,75 +605,87 @@ def _environment(files: Mapping[str, str]) -> ImmutableSandboxedEnvironment:
 
 
 class _Rendered(HTMLParser):
-    """The body of a canary render as elements, and what in it breaks the allow lists."""
+    """The body of a canary render, read for what in it breaks the allow lists."""
 
-    def __init__(self, file: str, kind: str, tokens: Mapping[str, str]) -> None:
+    def __init__(self, file: str, tokens: Mapping[str, str]) -> None:
         super().__init__(convert_charrefs=True)
         self.file = file
         self.tokens = tokens
         self.name = tokens["name"]
         self.found: set[str] = set()
         self.problems: dict[tuple[str, str], None] = {}
-        self.root = Element("html", frozenset())
-        self.open = self.root.add("body", frozenset((kind,)))
-        self.depth = 2
+        self.open = ["html", "body"]
         self.count = 2
 
     def refuse(self, code: str, detail: str) -> None:
         self.problems[(code, detail)] = None
 
-    def _attributes(self, tag: str, attrs: list[tuple[str, str | None]]) -> frozenset[str]:
-        classes: frozenset[str] = frozenset()
+    def _attributes(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         for key, value in attrs:
             text = value or ""
             if key == "class" and _CLASS.fullmatch(text.strip()):
-                classes = frozenset(text.split())
-            elif not self._kept(tag, key, text):
+                continue
+            if not self._kept(tag, key, text):
                 self.refuse("attribute", "an attribute outside the allowed list, once rendered")
-        return classes
 
     def _kept(self, tag: str, key: str, text: str) -> bool:
-        if key in ("colspan", "rowspan"):
+        if key == "colspan":
             return tag in ("td", "th") and text.isdigit()
         if tag == "a":
             return key == "href" and text == self.tokens["contact[].href"]
         return tag == "img" and (key, text) in (("src", PHOTO_CANARY), ("alt", self.name))
 
+    def _in_p(self) -> bool:
+        """Whether a `p` is open below the nearest cell or table."""
+        for tag in reversed(self.open):
+            if tag == "p":
+                return True
+            if tag in _SCOPE:
+                return False
+        return False
+
+    def _structure(self, tag: str) -> str | None:
+        """Why the tree builder would not keep `tag` where it starts, None when it would."""
+        parent = self.open[-1]
+        if tag in _CLOSES_P and self._in_p():
+            return "a block inside a p, which the browser closes before it"
+        if tag == "li" and parent not in ("ul", "ol"):
+            return "a li outside a ul or an ol"
+        if tag in _HEADINGS and parent in _HEADINGS:
+            return "a heading inside a heading, which the browser closes before it"
+        if tag == "a" and "a" in self.open:
+            return "an a inside an a, which the browser closes before it"
+        allowed = _TABLE.get(parent, ())
+        if (allowed or tag in _TABLE_PARTS) and tag not in allowed:
+            return "a table part outside its place"
+        return None
+
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag not in TAGS | {"a", "img"}:
             self.refuse("tag", "a tag outside the allowed list, once rendered")
-        parent = self.open
-        if parent.tag == "p" and tag in _CLOSES_P:
-            self.refuse("structure", "a block inside a p, which the browser closes before it")
-        same = parent.tag == tag and tag in ("li", "a", "p")
-        if same or (tag in _HEADINGS and parent.tag in _HEADINGS):
-            self.refuse("structure", "an element inside one the browser closes before it")
-        allowed = _TABLE.get(parent.tag, ())
-        if (allowed or tag in _TABLE_PARTS) and tag not in allowed:
-            self.refuse("structure", "a table part outside its place")
-        element = parent.add(tag, self._attributes(tag, attrs))
+        wrong = self._structure(tag)
+        if wrong:
+            self.refuse("structure", wrong)
+        self._attributes(tag, attrs)
         self.count += 1
         if tag not in _VOID:
-            self.open = element
-            self.depth += 1
-            if self.depth > DEPTH_MAX:
+            self.open.append(tag)
+            if len(self.open) > DEPTH_MAX:
                 self.refuse("structure", f"elements nested deeper than {DEPTH_MAX}")
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.handle_starttag(tag, attrs)
         if tag not in _VOID:
-            self.handle_endtag(tag)
+            self.refuse("structure", "a /> on an element the browser keeps open")
+        self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag: str) -> None:
         if tag in _VOID:
             self.refuse("structure", "an end tag of a void element")
             return
-        if self.open.tag != tag or self.open.parent is self.root:
+        if self.open[-1] != tag or len(self.open) <= 2:
             self.refuse("structure", "an end tag that closes another element")
             return
-        assert self.open.parent is not None  # noqa: S101, the body is never closed here
-        self.open = self.open.parent
-        self.depth -= 1
+        self.open.pop()
 
     def handle_data(self, data: str) -> None:
         rest = data
@@ -621,10 +693,9 @@ class _Rendered(HTMLParser):
             if token in rest:
                 self.found.add(key)
                 rest = rest.replace(token, "")
-                self.open.text = True
         if not all(ch.isspace() or ch in PUNCTUATION for ch in rest):
             self.refuse("literal", "text that is not a field, once rendered")
-        if rest.strip() and _TABLE.get(self.open.tag):
+        if data.strip() and self.open[-1] in _TABLE:
             self.refuse("structure", "text in a table outside its cells")
 
     def handle_comment(self, data: str) -> None:
@@ -637,16 +708,12 @@ class _Rendered(HTMLParser):
     unknown_decl = handle_decl
 
 
-def render_check(
-    kind: str, files: Mapping[str, str], photo: str
-) -> tuple[list[Problem], Element | None]:
-    """The problems of the canary renders of `kind` (every field filled, then every field
-    empty) and the elements of the filled one, for the contrast."""
+def render_check(kind: str, files: Mapping[str, str], photo: str) -> list[Problem]:
+    """The problems of the canary renders of `kind`: every field filled, then every field
+    empty."""
     file = f"{kind}.html.j2"
     env = _environment(files)
     tokens = canaries(kind)
-    page = ""
-    pages: list[Element] = []
     problems: list[Problem] = []
     for full in (True, False):
         context = _context(kind, full, photo)
@@ -654,44 +721,37 @@ def render_check(
             printed = env.get_template(file).render(context)
             wrapper = env.get_template(PAGE).render(context)
         except Exception:  # anything the render raises: the template is refused, not the caller
-            return [Problem(file, 0, "construct", "a template that does not render")], None
+            return [Problem(file, 0, "construct", "a template that does not render")]
         if len(printed) > RENDER_MAX:
-            return [Problem(file, 0, "too_large", f"a render over {RENDER_MAX} characters")], None
+            return [Problem(file, 0, "too_large", f"a render over {RENDER_MAX} characters")]
         opening = f'<body class="{kind}">'
         head = wrapper[: wrapper.index(opening) + len(opening)]
         tail = wrapper[wrapper.rindex("</body>") :]
         if not (printed.startswith(head) and printed.endswith(tail)):
             problems.append(Problem(file, 0, "construct", "a page other than the base page"))
             continue
-        page = printed[len(head) : len(printed) - len(tail)]
-        parser = _Rendered(file, kind, tokens)
-        parser.feed(page)
+        parser = _Rendered(file, tokens)
+        parser.feed(printed[len(head) : len(printed) - len(tail)])
         parser.close()
-        if parser.rawdata or parser.open is not parser.root.children[0]:
+        if parser.rawdata or len(parser.open) != 2:
             parser.refuse("structure", "markup not closed, once rendered")
         if parser.count > ELEMENTS_MAX:
             parser.refuse("too_large", f"a render of over {ELEMENTS_MAX} elements")
         problems += [Problem(file, 0, code, detail) for code, detail in parser.problems]
         if full:
-            pages.append(parser.root)
             for field in REQUIRED[kind]:
                 key = field if FIELDS[kind][field] == "text" else f"{field}[]"
                 if key not in parser.found:
                     detail = f"{field} is not printed, or only under another test"
                     problems.append(Problem(file, 0, "unprinted", detail))
-    problems = list(dict.fromkeys(problems))
-    return problems, (pages[0] if pages and not problems else None)
+    return list(dict.fromkeys(problems))
 
 
 def check_css(
-    css: str,
-    fonts: tuple[str, ...],
-    accent: str,
-    file: str = "style.css",
-    pages: tuple[Element, ...] = (),
+    css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css"
 ) -> list[Problem]:
     """The problems of a template's style sheet: `template_css.check`."""
-    return template_css.check(css, fonts, accent, file, pages)
+    return template_css.check(css, fonts, accent, file)
 
 
 def check(
@@ -704,7 +764,6 @@ def check(
         found.append(Problem(file, 0, "authoring", detail))
     large = [name for name in templates.FILES if len(files.get(name, "")) > FILE_MAX]
     found += [Problem(name, 0, "too_large", f"over {FILE_MAX} characters") for name in large]
-    pages: list[Element] = []
     for kind in templates.KINDS:
         name = f"{kind}.html.j2"
         if name in large:
@@ -712,12 +771,10 @@ def check(
         source = check_html(kind, name, files.get(name, ""))
         found += source
         if not source and not found:
-            rendered, page = render_check(kind, files, photo)
-            found += rendered
-            pages += [page] if page is not None else []
+            found += render_check(kind, files, photo)
     accent = accent.lower() if re.fullmatch(r"#[0-9a-f]{6}", accent.lower()) else WHITE
     if "style.css" not in large:
-        found += check_css(files.get("style.css", ""), fonts, accent, pages=tuple(pages))
+        found += check_css(files.get("style.css", ""), fonts, accent)
     return found
 
 

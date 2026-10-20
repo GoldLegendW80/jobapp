@@ -331,11 +331,10 @@ def test_whatever_the_layout_the_tokens_are_within_bounds_readable_and_a_valid_l
         assert 1 <= len(tokens.fonts) <= 2
         assert set(tokens.fonts) <= set(font_map.FAMILIES)
         assert {note.code for note in tokens.notes} <= set(NOTE_CODES)
-        sheet = f"p {{ color: {tokens.text}; }} h2 {{ color: var(--accent); }}"
+        sheet = f"p {{ color: {tokens.text}; background: #ffffff; }}"
+        sheet += " h2 { color: var(--accent); background: #ffffff; }"
         if tokens.fill:
-            sheet += (
-                f" .side {{ background: {tokens.fill}; }} .side p {{ color: {tokens.on_fill}; }}"
-            )
+            sheet += f" .side {{ background: {tokens.fill}; color: {tokens.on_fill}; }}"
         found = template_rules.check_css(sheet, tokens.fonts, tokens.accent)
         assert not [p for p in found if p.code in ("contrast", "colour")]
         for kind in templates.KINDS:
