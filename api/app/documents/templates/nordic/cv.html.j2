@@ -1,0 +1,72 @@
+{#- nordic: one column on wide margins in a muted palette. A light name, the headline and the
+    contact lines over a sage hairline, then each section under a heading of spaced capitals
+    with a short sage bar above it: the competencies as quiet tags, each skill group as a row of
+    its label and its items. An empty section is not printed. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+<header class="head">
+<h1 class="name">{{ name }}</h1>
+{% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+{{ base.contact_lines() }}
+</header>
+
+{% if content.summary %}
+<section class="block">
+<h2 class="label">{{ base.label("summary") }}</h2>
+<p class="summary">{{ content.summary }}</p>
+</section>
+{% endif %}
+
+{% if content.highlights %}
+<section class="block">
+<h2 class="label">{{ base.label("highlights") }}</h2>
+{{ base.bullets(content.highlights, "highlights") }}
+</section>
+{% endif %}
+
+{% if content.competencies %}
+<section class="block">
+<h2 class="label">{{ base.label("competencies") }}</h2>
+{{ base.bullets(content.competencies, "competencies") }}
+</section>
+{% endif %}
+
+{% if roles %}
+<section class="block">
+<h2 class="label">{{ base.label("experience") }}</h2>
+{% for role in roles %}
+{{ base.employer(role) }}
+{% endfor %}
+</section>
+{% endif %}
+
+{% if schools %}
+<section class="block">
+<h2 class="label">{{ base.label("education") }}</h2>
+{% for item in schools %}
+{{ base.school(item) }}
+{% endfor %}
+</section>
+{% endif %}
+
+{% if content.skills %}
+<section class="block skills">
+<h2 class="label">{{ base.label("skills") }}</h2>
+{% for group in content.skills %}
+{{ base.skill_group(group) }}
+{% endfor %}
+</section>
+{% endif %}
+
+{% if languages %}
+<section class="block">
+<h2 class="label">{{ base.label("languages") }}</h2>
+<ul class="languages">
+{% for item in languages %}
+{{ base.language(item) }}
+{% endfor %}
+</ul>
+</section>
+{% endif %}
+{% endblock %}
