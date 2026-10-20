@@ -13,10 +13,13 @@ html {
   line-height: var(--line-height);
   color: #2a2622;
 }
-body { margin: 0; padding: var(--margin); }
+/* the padding repeats on every page, not only at the top of the first and the foot of the last */
+body { margin: 0; padding: var(--margin); box-decoration-break: clone; }
 p, ul, h1, h2, h3 { margin: 0; padding: 0; }
 a { color: inherit; text-decoration: none; }
 li, p, h1, h3 { overflow-wrap: anywhere; }
+/* a name breaks between its words; inside a word only when that word alone is wider than the line */
+.w { display: inline-block; max-width: 100%; }
 
 .frame {
   position: fixed;

@@ -219,7 +219,26 @@ def test_bold_sets_a_long_name_smaller(name: str, size: str) -> None:
     view = with_name(d1_view(), name)
     for kind, data in (("cv", content), ("letter", d1("letter-en")[2])):
         html = templates.build_html(template("bold"), kind, data, view, language, 0, ON)
-        assert f'<h1 class="name{size}">{name}</h1>' in html, kind
+        assert f'<h1 class="name{size}">{in_words(name)}</h1>' in html, kind
+
+
+def in_words(name: str) -> str:
+    return " ".join(f'<span class="w">{word}</span>' for word in name.split())
+
+
+@pytest.mark.parametrize("slug", D21)
+def test_each_word_of_the_name_is_a_box_of_its_own(slug: str) -> None:
+    """A box per word (`.w`, inline-block) moves a word whole to the next line: the line breaks
+    at a space, never at the hyphen of a double-barrelled name."""
+    name = "Anne-Sophie de La Tour-Échantillon"
+    view = with_name(d1_view(), name)
+    for kind, data in (("cv", d1("cv-typical")[2]), ("letter", d1("letter-en")[2])):
+        html = templates.build_html(template(slug), kind, data, view, "en", 0, ON)
+        assert re.search(rf'<h1 class="name[^"]*">{re.escape(in_words(name))}</h1>', html), kind
+    assert re.search(
+        r"\.w\s*\{\s*display:\s*inline-block;\s*max-width:\s*100%;",
+        template(slug).files["style.css"],
+    )
 
 
 # --- static: every template of the set ----------------------------------------------------------
@@ -577,6 +596,16 @@ LONG_CONTACT = Identity(
 )
 
 
+def heading_content(slug: str, kind: str) -> Any:
+    """The CV filled to every soft limit, or D1's letter with its headline at the soft limit."""
+    if kind == "cv":
+        return typical(slug, full=True)
+    letter = d1("letter-en")[2]
+    limit = template(slug).kinds["letter"].soft_limits.headline or 90
+    headline = (letter.headline + ", ") * 10
+    return letter.model_copy(update={"headline": headline[:limit].rstrip(", ")})
+
+
 def baselines(pdf: bytes, needle: str) -> list[float]:
     """The baseline of each character of the first `needle` of page 1 (white space and case
     ignored; a hyphen that ends a line read as one): one value when it stands on one line."""
@@ -621,14 +650,7 @@ def test_the_heading_wraps_between_contact_lines_never_inside_one(
             schools=view.schools,
             languages=view.languages,
         )
-    if kind == "cv":
-        content: Any = typical(slug, full=True)
-    else:
-        letter = d1("letter-en")[2]
-        limit = found.kinds["letter"].soft_limits.headline or 90
-        headline = (letter.headline + ", ") * 10
-        content = letter.model_copy(update={"headline": headline[:limit].rstrip(", ")})
-    result = fitted(renderer, found, kind, content, view, language)
+    result = fitted(renderer, found, kind, heading_content(slug, kind), view, language)
     assert result.fit, result.pages
     for needle in ["Alex Example", *(line["text"] for line in templates.contact_lines(view))]:
         ys = baselines(result.pdf, str(needle))
@@ -675,3 +697,106 @@ def test_elegant_draws_its_frame_on_every_page(renderer: Any, kind: str) -> None
             assert 1 <= len(spans) <= 2, spans  # a double border: its two lines, or one path
             outer = min(spans)
             assert all(abs(a - b) <= 1.5 for a, b in zip(outer, expected, strict=True)), spans
+
+
+# --- docker: a name breaks between its words ----------------------------------------------------
+
+HYPHENATED = [
+    "Marie-Christine Dupont-Aignan",  # 29 characters
+    "Anne-Sophie de La Tour-Échantillon",  # 34 characters
+    "Marie-Christine Exemplaire-Fontaine",  # 35 characters
+]
+
+
+@docker
+@pytest.mark.parametrize("slug", D21)
+@pytest.mark.parametrize("kind", templates.KINDS)
+@pytest.mark.parametrize("language", templates.LANGUAGES)
+@pytest.mark.parametrize("name", HYPHENATED)
+def test_a_name_breaks_only_between_its_words(
+    renderer: Any, slug: str, kind: str, language: str, name: str
+) -> None:
+    """The review of D21: a double-barrelled name printed `Dupont-` on one line and `Aignan` on
+    the next. At the loosest step and at the fitted one, with the heading full (the CV at every
+    soft limit, the letter's headline at its limit), each word of the name stands on one line."""
+    found = template(slug)
+    view = with_name(d1_view(), name)
+    content = heading_content(slug, kind)
+    loosest = renderer.render(templates.build_html(found, kind, content, view, language, 0, ON))
+    result = fitted(renderer, found, kind, content, view, language)
+    assert result.fit, result.pages
+    for pdf in (loosest.pdf, result.pdf):
+        ys = baselines(pdf, name)
+        at = 0
+        for word in name.split():
+            line = ys[at : at + len(word)]
+            at += len(word)
+            assert max(line) - min(line) < 1.0, (word, sorted({round(y) for y in line}))
+
+
+# --- docker: every glyph inside the page's frame ------------------------------------------------
+
+
+def glyph_boxes(pdf: bytes) -> list[list[Box]]:
+    """Per page, the box of every character that is drawn (not white space, not generated)."""
+    document = pdfium.PdfDocument(pdf)
+    try:
+        out = []
+        for page in document:
+            textpage = page.get_textpage()
+            boxes = []
+            for index in range(textpage.count_chars()):
+                if pdfium_c.FPDFText_IsGenerated(textpage.raw, index):
+                    continue
+                if chr(pdfium_c.FPDFText_GetUnicode(textpage.raw, index)).isspace():
+                    continue
+                boxes.append(textpage.get_charbox(index))
+            out.append(boxes)
+        return out
+    finally:
+        document.close()
+
+
+def two_page_letter() -> c.LetterContent:
+    """D1's English letter with five paragraphs at the soft limit: two pages at the loosest step."""
+    letter = d1("letter-en")[2]
+    text = " ".join(letter.paragraphs) + " "
+    paragraph = (text * (900 // len(text) + 1))[:900].rsplit(" ", 1)[0] + "."
+    return letter.model_copy(update={"paragraphs": [paragraph] * 5})
+
+
+@docker
+@pytest.mark.parametrize("slug", D21)
+@pytest.mark.parametrize("kind", templates.KINDS)
+def test_every_glyph_of_every_page_stays_inside_the_frame(
+    renderer: Any, slug: str, kind: str
+) -> None:
+    """A document of two pages at the loosest step: on each page, every glyph lies inside the
+    page's margin, and in `elegant` inside the inner edge of its frame (6 mm and a 2.8 pt border)
+    with the step's margin as the padding on every page, not only on the first."""
+    found = template(slug)
+    if kind == "cv":
+        _, language, content = d1("cv-long")
+    else:
+        language, content = "en", two_page_letter()
+    step = found.steps(kind)[0]
+    rendered = renderer.render(
+        templates.build_html(found, kind, content, d1_view(), language, 0, ON)
+    )
+    assert rendered.pages == 2, rendered.pages
+    inset = (6 * MM + 2.8) if slug == "elegant" else step.margin * MM
+    if slug == "elegant":
+        assert step.margin * MM > inset + 3 * MM  # the text keeps clear of the frame
+        inset = step.margin * MM
+    pages = glyph_boxes(rendered.pdf)
+    assert len(pages) == 2
+    for number, boxes in enumerate(pages, 1):
+        assert boxes, number
+        left = min(box[0] for box in boxes)
+        lowest = min(box[1] for box in boxes)
+        right = max(box[2] for box in boxes)
+        highest = max(box[3] for box in boxes)
+        assert left >= inset - 0.5, (number, left / MM)
+        assert lowest >= inset - 0.5, (number, lowest / MM)
+        assert right <= A4[0] - inset + 0.5, (number, right / MM)
+        assert highest <= A4[1] - inset + 0.5, (number, highest / MM)
