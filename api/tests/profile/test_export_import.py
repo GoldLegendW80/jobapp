@@ -310,7 +310,7 @@ def test_import_writes_one_revision_per_section_in_order(
     assert all(r.data == FULL[r.section] and r.created_at == clock.now for r in rows[1:])
     # Each revision is readable and restorable like a normal save.
     listed = api.get("/api/profile/revisions?section=answers", token=alice).json()
-    assert [item["revision"] for item in listed["items"]] == [1 + len(SECTIONS)]
+    assert [item["revision"] for item in listed["items"]] == [2 + SECTIONS.index("answers")]
 
 
 def test_import_normalises_like_a_save(api: Api, alice: str) -> None:
@@ -748,8 +748,8 @@ def test_photo_size_check_without_the_body_limit() -> None:
         decode_photo("image/png", "")
 
 
-def test_service_import_needs_all_six_sections(factory: sessionmaker[Session]) -> None:
+def test_service_import_needs_all_seven_sections(factory: sessionmaker[Session]) -> None:
     user = make_user(factory, email=ALICE)
     partial = {name: FULL[name] for name in SECTIONS[:-1]}
-    with factory() as db, pytest.raises(ValueError, match="exactly the six sections"):
+    with factory() as db, pytest.raises(ValueError, match="exactly the seven sections"):
         service.import_profile(db, user.id, partial, None, None, datetime.now(UTC))
