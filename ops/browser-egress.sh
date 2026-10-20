@@ -159,7 +159,8 @@ bridge_of() { # bridge_of <network>: the bridge Docker made for it
   out="$(docker network inspect -f '{{index .Options "com.docker.network.bridge.name"}}|{{.Id}}' "$1" 2>/dev/null)" ||
     return 1
   name="${out%%|*}" id="${out#*|}"
-  [[ -n "$name" ]] || name="br-${id:0:12}"
+  # A network without the option (every compose network) prints "<no value>", not an empty name.
+  [[ -n "$name" && "$name" != "<no value>" ]] || name="br-${id:0:12}"
   valid_bridge "$name" && printf '%s\n' "$name"
 }
 

@@ -97,9 +97,9 @@ describe("the document view", () => {
       screen.queryByRole("region", { name: /Corrected by the fact check/ }),
     ).toBeNull();
 
-    // Edit is offered (D16); no other view until the task that owns it replaces its placeholder.
+    // Edit (D16), Chat (D17) and Template (D18) are offered; Compare waits for its task.
     expect(screen.getByRole("tab", { name: "Edit" })).toBeVisible();
-    expect(screen.queryByRole("tab", { name: "Chat" })).toBeNull();
+    expect(screen.getByRole("tab", { name: "Chat" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "Template" })).toBeVisible();
     expect(screen.queryByRole("tab", { name: "Compare" })).toBeNull();
     expect(document.body.textContent).not.toMatch(SEPARATOR);

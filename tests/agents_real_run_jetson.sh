@@ -140,9 +140,10 @@ remote() { # a command in the stack's directory on the Jetson
 }
 
 sql() { # the SQL on stdin in the Jetson's database, unaligned, fields separated by |
+  # terse: no LINE context, which quotes the owner's address cut to 60 columns where masked cannot find it
   # shellcheck disable=SC2016 # $POSTGRES_* expand in the db container
   ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && docker compose -f compose.yml exec -T db sh -c" \
-    "'psql -X -q -v ON_ERROR_STOP=1 -tA -F \"|\" -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'"
+    "'psql -X -q -v ON_ERROR_STOP=1 -v VERBOSITY=terse -tA -F \"|\" -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'"
 }
 
 fixed() { # what must not change: the owner's jobs and profile, one field per line
@@ -186,6 +187,22 @@ select 'agent_runs=' || (select count(*) from agent_runs),
        'credential_verified=' || coalesce((select (verified_at is not null)::text from model_credentials
                                            where user_id = (select id from me)), 'none');
 SQL
+}
+
+# Replaces the owner's address in all that is printed through it, remote errors and bash -x traces included.
+masked() {
+  LC_ALL=C awk -v owner="$OWNER" -v shown="(the owner's address)" '
+    BEGIN { o = tolower(owner); n = length(o) }
+    {
+      line = $0
+      out = ""
+      while (n && (i = index(tolower(line), o))) {
+        out = out substr(line, 1, i - 1) shown
+        line = substr(line, i + n)
+      }
+      print out line
+      fflush()
+    }'
 }
 
 md5_of() { # the md5 of the text $1, on macOS and Linux
@@ -483,9 +500,9 @@ oom_kills() {
 
 if [[ "$REAL" == "1" ]]; then
   mkdir -p "$EVIDENCE"
-  exec > >(tee "$LOG") 2>&1
+  exec > >(masked | tee "$LOG") 2>&1
 else
-  exec 2>&1 # a dry run keeps no log: the terminal is its only output
+  exec > >(masked) 2>&1 # a dry run keeps no log: the terminal is its only output
 fi
 printf 'tests/agents_real_run_jetson.sh, %s, %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   "$([[ "$REAL" == "1" ]] && echo "real runs: $RUNS" || echo "dry run, nothing written outside a temporary directory")"
@@ -508,11 +525,11 @@ agents >"$WORK/agents.before"
 sed 's/^/   /' "$WORK/fixed.before" "$WORK/agents.before"
 role="$(field owner_role "$WORK/fixed.before")"
 credential="$(field credential "$WORK/fixed.before")"
-[[ "$credential" != none ]] || die "$OWNER has no model credential"
+[[ "$credential" != none ]] || die "the owner's account has no model credential"
 # Never a run with another user's Anthropic API key: the account is an admin and the credential
 # its own subscription, whatever OWNER says.
 [[ "$role" == "$OWNER_ROLE" && "${credential%%,*}" == "$OWNER_CREDENTIAL" ]] ||
-  die "refused, nothing was started: $OWNER has the role ${role:-none} and a credential of kind ${credential%%,*}; runs are started only for an account with the role $OWNER_ROLE and a credential of kind $OWNER_CREDENTIAL"
+  die "refused, nothing was started: the owner's account has the role ${role:-none} and a credential of kind ${credential%%,*}; runs are started only for an account with the role $OWNER_ROLE and a credential of kind $OWNER_CREDENTIAL"
 [[ "$(field agent_runs_active "$WORK/agents.before")" == 0 ]] || die "a run is queued or running: wait for it"
 job="$(sql <<SQL
 select status, fit, length(coalesce(posting_text, '')),
@@ -522,7 +539,7 @@ select status, fit, length(coalesce(posting_text, '')),
 from jobs j where id = '$JOB' and user_id = (select id from users where email = '$OWNER');
 SQL
 )"
-[[ -n "$job" ]] || die "no job $JOB for $OWNER"
+[[ -n "$job" ]] || die "no job $JOB in the owner's account"
 IFS='|' read -r jstatus fit posting forbidden jruns jproposals jthreads <<<"$job"
 info "job $JOB (status $jstatus, fit $fit, posting $posting characters)"
 info "on this job before: runs=$jruns proposals=$jproposals threads=$jthreads"

@@ -86,6 +86,22 @@ die() {
 command -v jq >/dev/null || die "jq is needed"
 command -v uv >/dev/null || die "uv is needed (the page is drawn with the api's own Pillow)"
 
+# Replaces the owner's address in all that is printed through it, remote errors and bash -x traces included.
+masked() {
+  LC_ALL=C awk -v owner="$OWNER" -v shown="(the owner's address)" '
+    BEGIN { o = tolower(owner); n = length(o) }
+    {
+      line = $0
+      out = ""
+      while (n && (i = index(tolower(line), o))) {
+        out = out substr(line, 1, i - 1) shown
+        line = substr(line, i + n)
+      }
+      print out line
+      fflush()
+    }'
+}
+
 if [[ "$REAL" == "1" ]]; then OUT="$EVIDENCE"; else OUT="$WORK"; fi
 LOG="$OUT/run$LABEL.log"
 METRICS="$OUT/metrics$LABEL.json"
@@ -97,7 +113,7 @@ if [[ "$REAL" == "1" ]]; then
   [[ -z "$existing" ]] || die "refused, nothing was started: evidence of an earlier run exists and would be overwritten:$existing. Give this run a new LABEL."
   mkdir -p "$OUT"
 fi
-exec > >(tee "$LOG") 2>&1
+exec > >(masked | tee "$LOG") 2>&1
 
 remote() { # a command in the stack's directory on the Jetson
   ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && $1"
@@ -493,16 +509,16 @@ info "deployed commit: $(remote 'git rev-parse --short HEAD 2>/dev/null || cat .
 state="$(before | tail -n 1)"
 jq -e . >/dev/null <<<"$state" || die "the api container did not answer"
 [[ "$(jq -r .agent <<<"$state")" == true ]] || die "the deployed api does not know document_transcribe: deploy G14 first"
-[[ "$(jq -r .user <<<"$state")" == true ]] || die "no account $OWNER"
+[[ "$(jq -r .user <<<"$state")" == true ]] || die "the owner's account is not on $HOST"
 role="$(jq -r .role <<<"$state")"
 credential="$(jq -r .credential <<<"$state")"
 info "owner: role $role, credential of kind $credential"
 [[ "$role" == "$OWNER_ROLE" && "$credential" == "$OWNER_CREDENTIAL" ]] ||
   die "refused, nothing was started: runs are started only for an account with the role $OWNER_ROLE and a credential of kind $OWNER_CREDENTIAL"
 [[ "$(jq -r .consented <<<"$state")" == true ]] ||
-  die "refused, nothing was started: $OWNER has not accepted the current consent text of the ingestion (do it in the app)"
+  die "refused, nothing was started: the owner's account has not accepted the current consent text of the ingestion (do it in the app)"
 [[ "$(jq -r .ingestion_run <<<"$state")" == false && "$(jq -r .agent_runs <<<"$state")" == 0 ]] ||
-  die "refused, nothing was started: a run of $OWNER is under way"
+  die "refused, nothing was started: a run of the owner's account is under way"
 
 step "The page"
 draw_page >"$WORK/page.json"
