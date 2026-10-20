@@ -414,7 +414,8 @@ stub_plan() {
 }
 EOF
 : >"$STUB_CALLS.specs"
-run 0 env LOCAL_CHECK_STUB="$WORK/groups.sh" "$CHECK" --base origin/groups --only checks --only journeys
+# No shards here: the shards have a test of their own below.
+run 0 env LOCAL_CHECK_JOURNEY_SHARDS="" LOCAL_CHECK_STUB="$WORK/groups.sh" "$CHECK" --base origin/groups --only checks --only journeys
 real_groups="$(for path in "$ROOT"/web/e2e/*-all.config.ts; do name="${path##*/}"; echo "${name%-all.config.ts}"; done)"
 [[ -n "$real_groups" ]] || fail "this repository has no web/e2e/*-all.config.ts"
 want_checks="$(printf '%s\n' apps; printf '%s\nzeta\n' "$real_groups" | grep -vxF identity | LC_ALL=C sort)"
@@ -493,6 +494,70 @@ grep -qE "^$check_id,$tree,good,[0-9]+,PASS\$" "$RECORDS/timings.csv" || fail "t
 grep -qE "^$check_id,$tree,total,[0-9]+,FAIL\$" "$RECORDS/timings.csv" || fail "the failed run has no total line"
 [[ "$(grep -c '^check,' "$RECORDS/timings.csv")" == 1 ]] || fail "timings.csv has its header more than once"
 ok "timings.csv: one line per step and one for the total (check id, tree, step, seconds, PASS or FAIL), across runs"
+
+# --- a group split across stacks: Playwright shards, one step each -----------------------------------
+# The same tree of group configs, apply in two shards (the default) and zeta in three: each shard is
+# a step journeys-<group>.<i> of the set, on a stack of its own, and the group itself is no step.
+: >"$STUB_CALLS.specs"
+run 0 env LOCAL_CHECK_JOURNEY_SHARDS="apply:2 zeta:3" LOCAL_CHECK_STUB="$WORK/groups.sh" "$CHECK" --base origin/groups --only checks --only journeys
+for want in "-c e2e/apply-all.config.ts --shard=1/2" "-c e2e/apply-all.config.ts --shard=2/2" \
+  "-c e2e/zeta-all.config.ts --shard=1/3" "-c e2e/zeta-all.config.ts --shard=3/3"; do
+  grep -qxF -- "$want" "$STUB_CALLS.specs" || fail "no stack ran '$want': $(tr '\n' ' ' <"$STUB_CALLS.specs")"
+done
+! grep -qxF -- "-c e2e/apply-all.config.ts" "$STUB_CALLS.specs" || fail "the sharded group apply also ran whole"
+for step in journeys-apply.1 journeys-apply.2 journeys-zeta.1 journeys-zeta.2 journeys-zeta.3; do
+  grep -qxF "$step" "$STUB_CALLS.expected" || fail "$step is not a step of the set"
+  out_has "$step"
+done
+! grep -qxE 'journeys-(apply|zeta)' "$STUB_CALLS.expected" || fail "a sharded group is a step of the set too"
+grep -qxF journeys-mail "$STUB_CALLS.expected" || fail "a group with no shard lost its step"
+# Without the variable the script's own default holds: apply in two.
+# shellcheck disable=SC2016 # the line of the script, read as text
+grep -qF 'JOURNEY_SHARDS="${LOCAL_CHECK_JOURNEY_SHARDS-apply:2}"' "$CHECK" || fail "apply is not split in two by default"
+ok "a group of JOURNEY_SHARDS runs as Playwright shards, one stack and one step each, and its other groups stay whole"
+
+# --- a failed journey part is run once more on a fresh stack -----------------------------------------
+# flaky fails its first run and passes again; broken fails both. The run again comes after every part
+# has run, and the quiet phase counts a part that passed again as passed, listed under flaky.
+cat >"$WORK/again.sh" <<'STUB'
+s_chromium() { true; }
+journey_groups() { [[ "$1" != checks ]] || printf '%s\n' $STUB_GROUPS; }
+s_journey() {
+  echo "$1${2:+ $2}" >>"$STUB_CALLS.started"
+  case "$1" in
+  flaky*) [[ "${2:-}" == again ]] ;;
+  broken*) return 1 ;;
+  esac
+}
+stub_plan() {
+  STACKS=2
+  echo 0 >"$WORK/images.done"
+  echo 0 >"$WORK/web.done"
+  lane_journeys
+  quiet_phase
+}
+STUB
+again_run() { # again_run <expected exit> <groups>
+  : >"$STUB_CALLS.started"
+  run "$1" env LOCAL_CHECK_JOURNEY_SHARDS="" STUB_GROUPS="$2" LOCAL_CHECK_STUB="$WORK/again.sh" "$CHECK" --only checks
+}
+again_run 0 "good flaky"
+out_has "journeys-flaky             FAIL"
+out_has "journeys-flaky-again       PASS"
+out_has "journeys-flaky: counted as passed"
+out_has "flaky: journeys-flaky"
+[[ "$(last_line)" == "LOCAL CHECK: STUB PARTIAL PASS "* ]] || fail "a part that passed again: $(last_line)"
+[[ "$(tail -n 1 "$STUB_CALLS.started")" == "flaky again" ]] || fail "the run again: $(tr '\n' ' ' <"$STUB_CALLS.started")"
+! grep -qx "good again" "$STUB_CALLS.started" || fail "a part that passed ran again"
+
+again_run 1 "good broken"
+out_has "journeys-broken-again      FAIL"
+out_lacks "flaky: journeys-broken"
+[[ "$(last_line)" == *" journeys-broken,journeys-broken-again" ]] || fail "a part that failed again: $(last_line)"
+
+again_run 1 "broken1 broken2 broken3"
+! grep -q " again" "$STUB_CALLS.started" || fail "three failed parts ran again: $(tr '\n' ' ' <"$STUB_CALLS.started")"
+ok "a failed journey part runs once more on a fresh stack: passed again it counts as passed and is listed flaky, failed again it fails, and three failed parts run no more"
 
 # --- the docker marked tests run on the images the step images built (issue #280) -----------------
 # The real s_pytest_docker with a fake uv that writes what it was given: the three image names
@@ -639,6 +704,28 @@ run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_SUBNETS="172.17.0.0/16 $NET0" "
 run 0 env LOCAL_CHECK_STUB="$WORK/slots.sh" STUB_SUBNETS="$NET0 10.213.9.0/27 192.168.0.0/20" "$CHECK" --only journeys
 [[ "$(subnets_up)" == "10.213.10.0/27 10.213.10.0/27 " ]] || fail "slots 0 and 1 in use: subnets $(subnets_up), expected slot 2 twice"
 ok "a slot whose subnets a network already holds is skipped, and Pool overlaps moves the stack to another slot, three starts at most"
+
+# A shard and its run again, with the same fake docker: each its own compose project, stack log and
+# Playwright output, so a first stack that was never taken down (a step stopped on its timeout)
+# is never the stack of the run again.
+sed '/^stub_plan() {/,/^}/d' "$WORK/slots.sh" >"$WORK/again-stack.sh"
+cat >>"$WORK/again-stack.sh" <<'EOF2'
+stub_plan() {
+  : >"$TREE/compose.yml"
+  mkdir -p "$TREE/web"
+  run_step journeys-apply.1 s_journey apply.1 || true
+  run_step journeys-apply.1-again s_journey apply.1 again || true
+}
+EOF2
+: >"$STUB_CALLS"
+run 0 env LOCAL_CHECK_STUB="$WORK/again-stack.sh" "$CHECK" --only checks
+logs="$(sed -n 's/^logs: //p' "$WORK/out" | head -n 1)"
+grep -qE ' compose -p [^ ]+-apply-1 .* up ' "$STUB_CALLS" || fail "the shard did not start its own project: $(grep ' up ' "$STUB_CALLS")"
+grep -qE ' compose -p [^ ]+-apply-1-again .* up ' "$STUB_CALLS" || fail "the run again reused the first project: $(grep ' up ' "$STUB_CALLS")"
+grep -qF -- "--output=test-results/apply.1-again" "$STUB_CALLS" || fail "the run again writes over the first run's results"
+grep -qF -- "-c e2e/apply-all.config.ts --shard=1/2" "$STUB_CALLS" || fail "the shard does not run its share: $(grep '^pnpm' "$STUB_CALLS")"
+[[ -f "$logs/stack-apply.1.log" && -f "$logs/stack-apply.1-again.log" ]] || fail "the stack logs of the shard and of its run again: $(ls "$logs")"
+ok "a shard and its run again each have a compose project, a stack log and a Playwright output of their own"
 
 # --- flaky tests of the parallel suite: run again alone ---------------------------------------------
 # A fake uv on PATH stands for pytest: the parallel run (with xdist) fails the tests named in

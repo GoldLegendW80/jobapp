@@ -361,6 +361,12 @@ printf 'br-ffffffffffff' >/fake/bridge
 [ "$(jumps)" = 4 ] && ! saved | grep br-0123456789ab >/dev/null && say "new bridge replaces the old jumps"
 grep -qx 'BRIDGE=br-ffffffffffff' /fake/root/etc/jobapp-browser-egress.conf && grep -qx 'RESOLVERS=192.168.1.1' /fake/root/etc/jobapp-browser-egress.conf && say "recorded"
 grep -q 'Before=docker.service' /fake/root/etc/systemd/system/jobapp-browser-egress.service && say "boot unit"
+# Docker's answer for a network without a bridge name option, as compose makes them.
+printf '<no value>' >/fake/bridge
+"$C" apply >/dev/null && "$C" check >/dev/null && [ "$(jumps)" = 4 ] && saved | grep 'br-0123456789ab' >/dev/null &&
+  grep -qx 'BRIDGE=br-0123456789ab' /fake/root/etc/jobapp-browser-egress.conf && say "no name option: the bridge from the id"
+printf 'br-ffffffffffff' >/fake/bridge
+"$C" apply >/dev/null
 for t in iptables ip6tables; do
   $t -D DOCKER-USER -i br-ffffffffffff -j JOBAPP-EGRESS; $t -D INPUT -i br-ffffffffffff -j JOBAPP-EGRESS-IN
   $t -F JOBAPP-EGRESS; $t -X JOBAPP-EGRESS; $t -F JOBAPP-EGRESS-IN; $t -X JOBAPP-EGRESS-IN
@@ -378,7 +384,7 @@ EOF
   for s in "installed" "check passes" "second apply identical" "four jumps" "user rule kept" "jump first" \
     "ip6 DOCKER-USER made" "check fails on a removed rule" "apply repairs" "check fails on a rule above the jump" \
     "apply puts the jump first again" "check fails when the bridge moved" "new bridge replaces the old jumps" \
-    "recorded" "boot unit" "boot applies the recorded bridge without docker" "uninstall leaves nothing" \
+    "recorded" "boot unit" "no name option: the bridge from the id" "boot applies the recorded bridge without docker" "uninstall leaves nothing" \
     "user rule kept after uninstall"; do
     grep -qx "STEP $s" "$WORK/out" || fail "real iptables: '$s' missing: $(tail -n 30 "$WORK/out")"
   done

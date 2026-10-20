@@ -43,7 +43,11 @@ in the job folder that holds this repository (it is not part of the repository).
    (`web/e2e/ingestion-all.config.ts` runs them all). A module adds a journey group of its own
    by adding `web/e2e/<group>-all.config.ts` (a `SPEC_PREFIX` or a `SPECS` array): the batch
    check finds it and runs it as the step `journeys-<group>`, with no list to edit
-   (`journey_groups` in `ops/local-check.sh`, issue #279). Every step of `ci.yml`
+   (`journey_groups` in `ops/local-check.sh`, issue #279). A long group can be split across
+   stacks in `JOURNEY_SHARDS` of that script (`apply:2` today): its Playwright shards are the
+   steps `journeys-<group>.1`, `journeys-<group>.2`. A journey step that fails runs once more on
+   a fresh stack (`journeys-<group>-again`, `journeys-<group>.1-again`); passing then, it counts as passed and is listed under
+   `flaky` (issue #433). Every step of `ci.yml`
    has an `id` and is listed in `.github/scripts/ci_plan.py`: a new check under its unit in
    `LANES`, with a condition on that unit's plan output, anything else in `SUPPORT`.
    `ci_plan_test.py` fails on a step that is in no list, on a check that does not follow its

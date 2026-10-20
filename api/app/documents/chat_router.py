@@ -75,7 +75,7 @@ class MessageIn(BaseModel):
     # The cap is the setting's, checked once control characters are dropped (`chat.clean`).
     text: Annotated[str, Field(max_length=20_000)]
     channel: Literal["content"] = "content"
-    script: Annotated[str, Field(pattern=r"^[a-z0-9_]{1,19}$")] | None = None
+    script: Annotated[str, Field(max_length=19, pattern=r"^[a-z0-9_]{1,19}$")] | None = None
 
 
 class MessageOut(BaseModel):
