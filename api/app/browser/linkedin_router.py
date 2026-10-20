@@ -137,7 +137,9 @@ def put_linkedin(body: LinkedInIn, request: Request, user: CurrentUser, db: Db) 
     except ValidationError:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, INVALID) from None
     try:
-        service.save_section(db, user.id, "search", data, profile.revision, now)
+        service.save_section(
+            db, user.id, "search", data, profile.revision, now, linkedin_consent=True
+        )
     except service.StaleRevisionError:
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, BUSY) from None
