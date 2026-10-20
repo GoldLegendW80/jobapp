@@ -561,7 +561,15 @@ def test_adding_puts_enabled_boards_and_sources_in_the_search(
         }
     ]
     assert sections["search"]["browser_sources"] == [
-        {"kind": "google_careers", "query": "AI engineer", "location": "Paris", "enabled": True}
+        {
+            "kind": "google_careers",
+            "query": "AI engineer",
+            "location": "Paris",
+            "enabled": True,
+            # browser B10 shape: the acceptance fields, null for a source that is not linkedin
+            "accepted_at": None,
+            "text_version": None,
+        }
     ]
     handled = sections["preferences"]["onboarding"]["starter_handled"]
     assert handled == ["ashby:fake-ok", "source:google_careers"]

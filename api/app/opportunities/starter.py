@@ -554,7 +554,14 @@ def _board(entry: Entry) -> dict[str, Any]:
 
 
 def _source(entry: Entry) -> dict[str, Any]:
-    return {"kind": entry.source, "query": entry.query, "location": entry.location, "enabled": True}
+    return {
+        "kind": entry.source,
+        "query": entry.query,
+        "location": entry.location,
+        "enabled": True,
+        "accepted_at": None,
+        "text_version": None,
+    }
 
 
 def choose(
