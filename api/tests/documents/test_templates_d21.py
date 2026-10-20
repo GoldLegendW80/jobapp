@@ -705,6 +705,8 @@ HYPHENATED = [
     "Marie-Christine Dupont-Aignan",  # 29 characters
     "Anne-Sophie de La Tour-Échantillon",  # 34 characters
     "Marie-Christine Exemplaire-Fontaine",  # 35 characters
+    "Alexandra Sampleton-Whitfield",  # 29 characters, one hyphen
+    "Jean-Baptiste Exemplaire",  # 24 characters, two lines in bold's letter
 ]
 
 
