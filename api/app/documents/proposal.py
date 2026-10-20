@@ -140,7 +140,7 @@ def create(
             "document_id": str(document.id),
             "generation_id": str(generation.id),
             "status": generation.status.value,
-            "created": created,
+            "new": created,
         },
     )
     return Created(document, generation, run_id, created)

@@ -364,7 +364,7 @@ def test_a_valid_proposal_replaces_the_draft_and_is_never_rendered(alex: Person)
     assert generation_row(alex.factory, generation).base_document_id == alex.base
     assert alex.queue.jobs == []  # no render queued
     [version] = versions(alex.factory, document)
-    assert version.pdf is None
+    assert version.pdf_sha256 is None
     assert version.fit is None
 
 
