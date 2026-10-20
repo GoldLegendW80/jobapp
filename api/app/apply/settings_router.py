@@ -3,7 +3,10 @@
 - GET /api/apply/settings: the mode after a Like (`review` or `full_auto`, A13a), the pause
   switch, the fit threshold "Apply automatically from" (`min_fit`, the person's or the default),
   the Advanced values (the safety ceiling, the hold), and, read only, the two other thresholds
-  ("Show postings from", "Write documents from") from the person's search options.
+  ("Show postings from", "Write documents from") from the person's search options. For the Full
+  auto card (A13b): the hold in force (`hold_s`, never below the server's minimum `hold_min_s`),
+  the rehearsals (`rehearsals`, how many the server asks for, and `rehearsals_done`) and
+  `full_auto_since`.
   PUT changes `mode_after_like`, `paused`, `min_fit` and `hold_s` (never below `APPLY_HOLD_S`:
   422 `hold_too_short`); anything else is a 422. Turning Full auto on records the time
   (`full_auto_since`); turning it off sends the person's `held` items to the review queue
@@ -68,9 +71,13 @@ class SettingsOut(BaseModel):
     min_fit_chosen: bool
     safety_ceiling: int
     hold_s: int
+    hold_min_s: int
     company_days: int
     show_postings_from: int | None
     write_documents_from: int | None
+    rehearsals: int
+    rehearsals_done: int
+    full_auto_since: datetime | None
 
 
 class SettingsIn(BaseModel):
@@ -145,10 +152,14 @@ def _settings_out(db: Session, user: User) -> SettingsOut:
         min_fit=values.min_fit,
         min_fit_chosen=values.min_fit_chosen,
         safety_ceiling=values.safety_ceiling,
-        hold_s=values.hold_s,
+        hold_s=full_auto.hold_s(values),
+        hold_min_s=int(caps._setting("apply_hold_s")),
         company_days=values.company_days,
         show_postings_from=values.show_postings_from,
         write_documents_from=values.write_documents_from,
+        rehearsals=int(caps._setting("apply_rehearsals")),
+        rehearsals_done=values.rehearsals_done,
+        full_auto_since=values.full_auto_since,
     )
 
 
