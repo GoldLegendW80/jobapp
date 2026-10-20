@@ -586,8 +586,13 @@ def test_not_called_when_the_queues_job_timeout_ends_the_run(
             try:
                 await enqueue(workers, too_long)
                 await wait_for(lambda: run_row(factory, too_long).status is RunStatus.failed)
+                # One second is shorter than a whole run takes on a loaded machine (issue #104):
+                # the run that must end well gets the time of a real one.
+                for each in workers:
+                    each.functions["run_agent"].timeout_s = 60
+                    each.in_progress_timeout_s = 70
                 await enqueue(workers, after_it)
-                await wait_for(lambda: len(calls) == 1)
+                await wait_for(lambda: len(calls) == 1, within=90)
             except BaseException as exc:
                 failure.append(exc)
             finally:
@@ -597,7 +602,7 @@ def test_not_called_when_the_queues_job_timeout_ends_the_run(
             asyncio.get_running_loop().create_task(play(workers))
 
         serving = worker.serve(worker_settings, [spec], stop=stop, ctx=ctx, on_ready=ready)
-        await asyncio.wait_for(serving, 60)
+        await asyncio.wait_for(serving, 180)
         if failure:
             raise failure[0]
 
