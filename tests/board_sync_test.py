@@ -9,9 +9,12 @@ from __future__ import annotations
 import csv
 import importlib.util
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "ops" / "board-sync.py"
 spec = importlib.util.spec_from_file_location("board_sync", SCRIPT)
@@ -347,8 +350,20 @@ class BatchAndSnapshot(unittest.TestCase):
             path = os.path.join(d, "batch")
             self.assertEqual(bs.read_batch(path), set())
             Path(path).write_text("499\n483\n\n")
+            self.assertEqual(bs.read_batch(path), set())  # no pid: not a ship's batch
+            Path(d, "pid").write_text(f"{os.getpid()}\n")
             self.assertEqual(bs.read_batch(path), {499, 483})
         self.assertEqual(bs.numbers("499,483 #12"), {499, 483, 12})
+
+    def test_batch_of_a_killed_ship_is_ignored(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "batch")
+            Path(path).write_text("499\n")
+            dead = subprocess.Popen([sys.executable, "-c", "pass"])
+            dead.wait()  # reaped: its pid names no process now
+            for pid in (str(dead.pid), "garbage", "0"):
+                Path(d, "pid").write_text(pid + "\n")
+                self.assertEqual(bs.read_batch(path), set(), pid)
 
     def test_snapshot_files_and_columns(self):
         issues = [
@@ -435,6 +450,141 @@ class BatchAndSnapshot(unittest.TestCase):
                     ],
                 ],
             )
+
+
+def done(code: int = 0, out: str = "", err: str = "") -> subprocess.CompletedProcess:
+    return subprocess.CompletedProcess(["gh"], code, out, err)
+
+
+class TimeBound(unittest.TestCase):
+    """The calls of gql and the deadline, on a fake subprocess.run and a fake clock."""
+
+    def setUp(self):
+        self.now = [1000.0]
+        self.calls: list[tuple[list[str], float]] = []
+        self.sleeps: list[float] = []
+        self.answers: list = []
+
+        def run(cmd, timeout=None, **kw):
+            self.calls.append((cmd, timeout))
+            answer = self.answers.pop(0)
+            if isinstance(answer, BaseException):
+                self.now[0] += timeout
+                raise answer
+            return answer
+
+        def sleep(seconds):
+            self.sleeps.append(seconds)
+            self.now[0] += seconds
+
+        patches = [
+            mock.patch.object(bs.subprocess, "run", side_effect=run),
+            mock.patch.object(bs.time, "sleep", side_effect=sleep),
+            mock.patch.object(bs.time, "monotonic", side_effect=lambda: self.now[0]),
+            mock.patch.object(bs, "DEADLINE", None),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def timeout(self):
+        return subprocess.TimeoutExpired(["gh", "api", "graphql"], 60)
+
+    def test_every_call_has_a_timeout(self):
+        self.answers = [done(0, '{"data": {"x": 1}}')]
+        self.assertEqual(bs.gql("query{x}"), {"x": 1})
+        self.assertEqual(self.calls[0][1], bs.CALL_SECONDS)
+        self.answers = [done(0, "abc\n")]
+        self.assertEqual(bs.git("rev-parse", "HEAD"), "abc")
+        self.assertEqual(self.calls[1][1], bs.CALL_SECONDS)
+
+    def test_a_timeout_is_retried_like_a_502(self):
+        self.answers = [
+            self.timeout(),
+            done(1, "", "HTTP 502: Bad Gateway"),
+            done(0, '{"data": {"ok": true}}'),
+        ]
+        self.assertEqual(bs.gql("query{ok}"), {"ok": True})
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(self.sleeps, [3, 6])
+
+    def test_timeouts_every_time_exit_with_one_line(self):
+        self.answers = [self.timeout() for _ in range(6)]
+        with self.assertRaises(SystemExit) as e:
+            bs.gql("query{x}")
+        self.assertIn("gh api graphql failed: timeout", str(e.exception.code))
+        self.assertEqual(len(self.calls), 6)
+
+    def test_other_errors_are_not_retried(self):
+        self.answers = [done(1, "", "HTTP 401: Bad credentials")]
+        with self.assertRaises(SystemExit):
+            bs.gql("query{x}")
+        self.assertEqual(len(self.calls), 1)
+
+    def test_no_call_starts_after_the_deadline(self):
+        bs.DEADLINE = self.now[0] + 100
+        self.now[0] += 101
+        with self.assertRaises(bs.OutOfTime):
+            bs.gql("query{x}")
+        self.assertEqual(self.calls, [])
+
+    def test_a_call_never_runs_past_the_deadline(self):
+        bs.DEADLINE = self.now[0] + 20
+        self.answers = [done(0, '{"data": {}}')]
+        bs.gql("query{x}")
+        self.assertEqual(self.calls[0][1], 20)
+
+    def test_no_retry_sleeps_past_the_deadline(self):
+        bs.DEADLINE = self.now[0] + 70
+        self.answers = [self.timeout(), self.timeout()]
+        with self.assertRaises(bs.OutOfTime):
+            bs.gql("query{x}")
+        # the first call takes its full 60 s, then a 3 s pause fits; the second call gets the
+        # 7 s left, times out, and the 6 s pause would cross the deadline
+        self.assertEqual([t for _, t in self.calls], [60, 7])
+        self.assertEqual(self.sleeps, [3])
+
+    def test_main_stops_at_the_deadline_with_one_line(self):
+        self.answers = [done(0, "/repo/.git\n")]  # main_checkout
+        with (
+            tempfile.TemporaryDirectory() as d,
+            mock.patch.object(bs, "sync", side_effect=bs.OutOfTime("gh api")),
+            self.assertRaises(SystemExit) as e,
+        ):
+            bs.main(["--out", d, "--deadline", "5"])
+        self.assertTrue(
+            str(e.exception.code).startswith(
+                "board-sync: stopped at the deadline of 5 s"
+            )
+        )
+        self.assertNotIn("\n", str(e.exception.code))
+
+    def test_a_git_timeout_exits_with_one_line(self):
+        self.answers = [done(0, "/repo/.git\n")]
+        with (
+            tempfile.TemporaryDirectory() as d,
+            mock.patch.object(
+                bs,
+                "sync",
+                side_effect=subprocess.TimeoutExpired(
+                    ["/usr/bin/git", "-C", "x", "fetch"], 60
+                ),
+            ),
+            self.assertRaises(SystemExit) as e,
+        ):
+            bs.main(["--out", d])
+        self.assertEqual(
+            str(e.exception.code), "board-sync: git fetch gave no answer in 60 s"
+        )
+
+    def test_setup_without_apply_refuses(self):
+        self.answers = [done(0, "/repo/.git\n")]
+        with mock.patch.object(bs, "sync") as sync, self.assertRaises(SystemExit) as e:
+            bs.main(["--setup"])
+        self.assertIn(
+            "--setup writes the board, so it needs --apply", str(e.exception.code)
+        )
+        sync.assert_not_called()
 
 
 class Wiring(unittest.TestCase):

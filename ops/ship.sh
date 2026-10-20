@@ -46,8 +46,12 @@
 #    of the main checkout, one pull request number per line (again after a drop), and
 #    ops/board-sync.py --apply puts every card in its stage from GitHub facts: once at the start
 #    of the gate (the batch shows as Gating), once right after the merges (also after a stop
-#    between two merges) and once after the deploy. Best effort: a sync that fails prints one
-#    line and the ship goes on; it never changes the exit status.
+#    between two merges) and once after the deploy. The batch file goes when the merges end (the
+#    gate is over); a run that stops before that (a failed gate, INT or TERM) removes it and syncs
+#    once more on its way out, so its batch leaves Gating. Best effort and bounded: each sync runs
+#    in its own process group with INT and TERM at their defaults, and is killed (KILL to the
+#    group) after SHIP_SYNC_SECONDS (default 300; board-sync.py stops itself at 240); a sync that
+#    fails or is killed prints one line and the ship goes on; it never changes the exit status.
 # 6. The main checkout (checked clean and on main before the gate, and again here) gets
 #    git pull --ff-only; its tree must equal the gate's tree, then ops/deploy-checked.sh <commit>.
 # 7. The Jetson, as the deploy run saw it, without ssh (owner decision of 2026-10-15): the last
@@ -67,7 +71,7 @@
 # arguments.
 #
 # For tests/ship_test.sh: SHIP_POLL_SECONDS (default 5, the wait between two reads of a pull
-# request whose mergeable state GitHub has not computed yet).
+# request whose mergeable state GitHub has not computed yet) and SHIP_SYNC_SECONDS (above).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -76,6 +80,7 @@ GATE_SCRIPT="ops/local-check.sh"
 POLL_SECONDS="${SHIP_POLL_SECONDS:-5}"
 KEEP_LOGS=10
 BOARD_SYNC="ops/board-sync.py" # the board, from GitHub facts (step 5)
+SYNC_SECONDS="${SHIP_SYNC_SECONDS:-300}"
 
 say() { printf '%s\n' "$*"; }
 usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -259,11 +264,43 @@ SYNC_FAILED=()
 write_batch() { # the batch the gate checks, for ops/board-sync.py (Gating)
   printf '%s\n' ${BATCH[@]+"${BATCH[@]}"} >"$LOCK/batch" 2>/dev/null || say "board  cannot write $LOCK/batch"
 }
-board_sync() { # board_sync <when>: ops/board-sync.py --apply; a failure is one line, never a stop
-  local log="$LOGS/board-$((SYNCS + 1)).log" code=0
+end_batch() { # the gate is over: the batch leaves Gating at the next sync
+  rm -f "$LOCK/batch"
+}
+# group <command ...>: exec it in a process group of its own, INT and TERM at their defaults (a
+# background job of bash ignores INT, and on_signal ignores both before it syncs).
+group() { # run as a background job: the job's own process execs python, so $! is the group
+  exec python3 -c 'import os, signal, sys
+os.setpgrp()
+for s in (signal.SIGINT, signal.SIGTERM):
+    signal.signal(s, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])' "$@"
+}
+SYNC_PID=""
+kill_sync() { # KILL the process group of the running sync, if any
+  if [[ -n "$SYNC_PID" ]]; then kill -KILL -- "-$SYNC_PID" 2>/dev/null || true; fi
+}
+board_sync() { # board_sync <when>: ops/board-sync.py --apply, bounded; a failure is one line, never a stop
+  local log="$LOGS/board-$((SYNCS + 1)).log" code=0 start="$SECONDS" killed=0
   SYNCS=$((SYNCS + 1))
-  "$ROOT/$BOARD_SYNC" --apply >"$log" 2>&1 </dev/null || code=$?
-  if ((code)); then
+  group "$ROOT/$BOARD_SYNC" --apply >"$log" 2>&1 </dev/null &
+  SYNC_PID=$!
+  # The watchdog: no signal needs to reach the sync, KILL to its group ends it.
+  while kill -0 "$SYNC_PID" 2>/dev/null; do
+    if ((SECONDS - start >= SYNC_SECONDS)); then
+      kill_sync
+      killed=1
+      break
+    fi
+    sleep 0.2
+  done
+  wait "$SYNC_PID" 2>/dev/null || code=$?
+  kill_sync # whatever it started and left behind
+  SYNC_PID=""
+  if ((killed)); then
+    say "board  sync $1 failed (killed after ${SYNC_SECONDS} s, $log)"
+    SYNC_FAILED+=("$1")
+  elif ((code)); then
     say "board  sync $1 failed (exit $code, $log): $(tail -n 1 "$log" | redact)"
     SYNC_FAILED+=("$1")
   fi
@@ -489,8 +526,16 @@ HAVE_LOCK=0
 WORK=""
 GATE_TREE=""
 cleanup() {
+  kill_sync
   if [[ -n "$GATE_TREE" ]]; then git -C "$MAIN" worktree remove --force "$GATE_TREE" >/dev/null 2>&1 || true; fi
   if [[ -n "$WORK" ]]; then rm -rf "$WORK"; fi
+  # A run that stopped while its batch showed as Gating (a failed gate, INT, TERM): one more
+  # bounded sync without the batch file. INT or TERM now only cut that sync short.
+  if ((HAVE_LOCK && SYNCS)) && [[ -e "$LOCK/batch" ]]; then
+    end_batch
+    trap 'kill_sync' INT TERM
+    board_sync "after the stop" >&2 # stderr: the last line of stdout stays SHIP: ...
+  fi
   if ((HAVE_LOCK)); then rm -rf "$LOCK"; fi
 }
 trap cleanup EXIT
@@ -768,7 +813,10 @@ stop_merging() { # stop_merging <index in the batch of the first one not merged>
   note merged "$(joined ${MERGED[@]+"${MERGED[@]/#/#}"})"
   note "not merged" "$(joined "${rest[@]/#/#}")"
   ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
-  ((${#MERGED[@]} == 0)) || board_sync "after the merges"
+  if ((${#MERGED[@]})); then
+    end_batch
+    board_sync "after the merges"
+  fi
   board_note
   die "$2: main is not the checked tree, nothing deployed"
 }
@@ -799,7 +847,10 @@ on_signal() {
       note interrupted "while merging #$at, which is ${state:-unknown} on GitHub"
     fi
     ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
-    ((${#MERGED[@]} == 0)) || board_sync "after the merges"
+    if ((${#MERGED[@]})); then
+      end_batch
+      board_sync "after the merges"
+    fi
     board_note
     summary
     say "SHIP: FAIL interrupted during the merges: nothing deployed"
@@ -843,6 +894,7 @@ MERGING=0
 trap 'exit 130' INT TERM
 note merged "$(joined "${MERGED[@]/#/#}")"
 ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
+end_batch
 board_sync "after the merges"
 
 # figure <key> <JOBAPP-VERIFY line>: the value of one key, `-` when the line lacks it.

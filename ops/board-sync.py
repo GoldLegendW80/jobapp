@@ -6,7 +6,7 @@ The stage of a task is computed from GitHub facts only, so the command is safe t
   Needs you       open, label `owner`, no open pull request
   Paused          open, label `paused`
   Blocked         open, a "Depends on #N" line names an open issue or pull request
-  Spec            open, title or label says spec or plan
+  Spec            open, label `spec`
   Ready           open, nothing started
   Building        open, an agent works on it (--building, or the card already said so)
   In review       its pull request has no verdict yet
@@ -19,14 +19,21 @@ The stage of a task is computed from GitHub facts only, so the command is safe t
   Epic            a lane's tracking issue
 
 Usage:
-  ops/board-sync.py [--apply] [--setup] [--gating 499,483] [--building 446] [--out DIR]
+  ops/board-sync.py [--apply [--setup]] [--gating 499,483] [--building 446] [--out DIR]
+                    [--deadline SECONDS]
 
 Without --apply nothing is written to the board (a dry run that still writes the snapshot).
---setup replaces the options of the Status and Module fields (their values are then set again
-by this same run). The snapshot (tasks.csv, daily.csv, history.csv, meta.csv) goes to --out,
+--setup (only with --apply) replaces the options of the Status and Module fields (their values
+are then set again by this same run). The snapshot (tasks.csv, daily.csv, history.csv, meta.csv) goes to --out,
 by default .local-check/board/ of the main checkout (git ignored); a dashboard reads it.
 The batch ops/ship.sh gates is read from .local-check/ship.lock/batch of the main checkout
-(one pull request number per line) when that file exists, in addition to --gating.
+(one pull request number per line) when that file exists and ship.lock/pid names a running
+process (the lock of a killed ship is ignored), in addition to --gating.
+
+Time bound: every gh and git call has a timeout (CALL_SECONDS, LOG_SECONDS), a call that times
+out is retried by gql like a 502, and no call or retry starts after --deadline seconds (default
+DEADLINE_SECONDS): the run then stops with one line and exit 1. Each write is one whole batched
+mutation, so a stop leaves no batch half written; the snapshot is written only after every read.
 
 The pure part (the stage of an issue or a pull request from its facts, the module of a title,
 the dependencies of a body, the verdict of the reviews, the plan of the board) takes no network
@@ -109,6 +116,11 @@ LANE_MODULE = {
     "lane:captain": "platform",
 }
 IN_FLIGHT = ("Building", "In review", "Fix & re-check", "Approved", "Gating")
+CALL_SECONDS = 60  # one gh api graphql, gh run list or git call
+LOG_SECONDS = 60  # gh run view --log
+DEADLINE_SECONDS = (
+    240  # the whole run (ops/ship.sh kills it after SHIP_SYNC_SECONDS, 300)
+)
 
 
 # --- the pure part: facts in, stages out ---------------------------------------------------------
@@ -348,8 +360,28 @@ def numbers(text: str) -> set[int]:
     return {int(n) for n in re.findall(r"\d+", text or "")}
 
 
+def running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # alive, owned by someone else
+    except OSError:
+        return False
+    return True
+
+
 def read_batch(path: str) -> set[int]:
-    """The pull request numbers of the batch file ops/ship.sh writes (none when it is absent)."""
+    """The pull request numbers of the batch file ops/ship.sh writes (none when it is absent, or
+    when the pid file next to it names no running process: the lock of a killed ship)."""
+    try:
+        with open(os.path.join(os.path.dirname(path), "pid")) as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return set()
+    if pid <= 0 or not running(pid):
+        return set()
     try:
         with open(path) as f:
             return numbers(f.read())
@@ -446,21 +478,67 @@ def write_snapshot(
 # --- the GitHub and git calls ----------------------------------------------------------------------
 
 
+class OutOfTime(Exception):
+    """The deadline passed: no call and no retry starts any more."""
+
+
+DEADLINE: float | None = (
+    None  # time.monotonic() after which nothing starts (None: no bound)
+)
+
+
+def left() -> float:
+    return float("inf") if DEADLINE is None else DEADLINE - time.monotonic()
+
+
+def call(
+    cmd: list[str], timeout: float = CALL_SECONDS, **kw
+) -> subprocess.CompletedProcess:
+    """subprocess.run with a timeout, never past the deadline (OutOfTime when it has passed)."""
+    remaining = left()
+    if remaining <= 0:
+        raise OutOfTime(named(cmd))
+    check = kw.pop("check", False)
+    return subprocess.run(cmd, timeout=min(timeout, remaining), check=check, **kw)
+
+
+def named(cmd: list[str]) -> str:
+    """The program and its subcommand, without the -C <path> of git: "git fetch", "gh run"."""
+    words = [os.path.basename(cmd[0])] + list(cmd[1:])
+    if words[1:2] == ["-C"]:
+        del words[1:3]
+    return " ".join(words[:2])
+
+
+RETRY = r"HTTP 50[234]|timeout|unexpected end of JSON|EOF|stream error"
+
+
 def gql(query: str, variables: dict | None = None) -> dict:
     body = json.dumps({"query": query, "variables": variables or {}})
-    for attempt in range(6):  # GitHub answers 502 (or resets the stream) now and then
-        out = subprocess.run(
-            ["gh", "api", "graphql", "--input", "-"],
-            input=body,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if out.returncode == 0 or not re.search(
-            r"HTTP 50[234]|timeout|unexpected end of JSON|EOF|stream error", out.stderr
-        ):
+    attempts = 6
+    for attempt in range(
+        attempts
+    ):  # GitHub answers 502 (or resets the stream) now and then
+        try:
+            out = call(
+                ["gh", "api", "graphql", "--input", "-"],
+                input=body,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            out = subprocess.CompletedProcess(
+                [], 1, "", "timeout: no answer from gh api graphql"
+            )
+        if out.returncode == 0 or not re.search(RETRY, out.stderr):
             break
-        time.sleep(3 * (attempt + 1))
+        if attempt == attempts - 1:
+            break
+        pause = 3 * (attempt + 1)
+        if left() <= pause:
+            raise OutOfTime("gh api graphql, while retrying")
+        time.sleep(pause)
     if out.returncode:
         sys.exit(f"gh api graphql failed: {out.stderr.strip()[:2000]}")
     data = json.loads(out.stdout)
@@ -513,7 +591,7 @@ FIELDS_Q = _query("""query{user(login:"@OWNER"){projectV2(number:@NUMBER){id fie
 
 
 def git(*args: str) -> str:
-    return subprocess.run(
+    return call(
         ["/usr/bin/git", "-C", APP, *args], capture_output=True, text=True, check=True
     ).stdout.strip()
 
@@ -522,7 +600,7 @@ def main_checkout() -> str:
     """The main checkout of the repository (where .local-check lives, as for ops/ship.sh)."""
     try:
         common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
-    except (subprocess.CalledProcessError, OSError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return APP
     return os.path.dirname(common)
 
@@ -530,7 +608,7 @@ def main_checkout() -> str:
 def deployed(cache_dir: str) -> tuple[str, str]:
     """The commit and time of the last successful deploy, from its JOBAPP-VERIFY line."""
     runs = json.loads(
-        subprocess.run(
+        call(
             [
                 "gh",
                 "run",
@@ -558,8 +636,9 @@ def deployed(cache_dir: str) -> tuple[str, str]:
     if os.path.exists(cache):
         with open(cache) as f:
             return f.read().strip(), run["createdAt"]
-    log = subprocess.run(
+    log = call(
         ["gh", "run", "view", str(run["databaseId"]), "-R", f"{OWNER}/{REPO}", "--log"],
+        timeout=LOG_SECONDS,
         capture_output=True,
         text=True,
         check=False,
@@ -659,14 +738,41 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument(
         "--out", default=os.path.join(state, "board"), help="the snapshot folder"
     )
+    ap.add_argument(
+        "--deadline",
+        type=float,
+        default=DEADLINE_SECONDS,
+        help=f"seconds after which no call starts and the run stops (default {DEADLINE_SECONDS})",
+    )
     args = ap.parse_args(argv)
+    if args.setup and not args.apply:
+        sys.exit(
+            "board-sync: --setup writes the board, so it needs --apply (nothing done)"
+        )
+    global DEADLINE
+    DEADLINE = time.monotonic() + args.deadline
+    try:
+        sync(args, state)
+    except OutOfTime as e:
+        sys.exit(
+            f"board-sync: stopped at the deadline of {args.deadline:g} s ({e}): "
+            "every batch written so far is whole, the rest waits for the next sync"
+        )
+    except subprocess.TimeoutExpired as e:
+        sys.exit(f"board-sync: {named(e.cmd)} gave no answer in {e.timeout:g} s")
+
+
+def sync(args: argparse.Namespace, state: str) -> None:
     os.makedirs(args.out, exist_ok=True)
     gating = numbers(args.gating) | read_batch(
         os.path.join(state, "ship.lock", "batch")
     )
     building = numbers(args.building)
 
-    subprocess.run(["/usr/bin/git", "-C", APP, "fetch", "-q", "origin"], check=False)
+    try:
+        call(["/usr/bin/git", "-C", APP, "fetch", "-q", "origin"], check=False)
+    except subprocess.TimeoutExpired:
+        print("git fetch gave no answer: origin/main may be behind", file=sys.stderr)
     commit, deployed_at = deployed(args.out)
     live = set(git("rev-list", commit).split()) if commit else set()
     main_tip = git("rev-parse", "origin/main")

@@ -189,6 +189,8 @@ while (($#)); do
   shift 2
 done
 printf '%s %s\n' "$WHO" "${merges[*]-}" >>"$STATE/gate.log"
+# the batch file ship.sh wrote for the board, as this gate run saw it
+printf '%s\n' "$(tr '\n' ' ' <"$MAIN/.local-check/ship.lock/batch" 2>/dev/null | sed 's/ $//')" >>"$STATE/gate_batch.log"
 run="$(wc -l <"$STATE/gate.log" | tr -d ' ')"
 if [[ -e "$STATE/gate_exit" ]]; then
   echo "ops/local-check.sh: another check is running (process 1). One at a time."
@@ -268,11 +270,13 @@ if [[ -f "$STATE/deploy_last" ]]; then cat "$STATE/deploy_last"; fi
 exit "$code"
 EOF
 # As ops/board-sync.py: one line per call, its arguments and the batch file ship.sh wrote
-# (.local-check/ship.lock/batch of the main checkout), then the exit of $STATE/board_exit.
+# (.local-check/ship.lock/batch of the main checkout), then a sleep of $STATE/board_sleep
+# seconds (a hung GitHub), then the exit of $STATE/board_exit.
 cat >"$TOP/fake-board-sync" <<'EOF'
 #!/usr/bin/env bash
 batch="$(dirname "$0")/../.local-check/ship.lock/batch"
 printf '%s batch=%s\n' "$*" "$(tr '\n' ' ' <"$batch" 2>/dev/null | sed 's/ $//')" >>"$STATE/board.log"
+if [[ -s "$STATE/board_sleep" ]]; then sleep "$(cat "$STATE/board_sleep")"; fi
 code="$(cat "$STATE/board_exit" 2>/dev/null || echo 0)"
 [[ "$code" == 0 ]] || echo "gh api graphql failed: HTTP 502, token=$CANARY"
 exit "$code"
@@ -504,7 +508,7 @@ main_sha="$(git -C "$MAIN" rev-parse HEAD)"
 out_has "jetson:   8 services, 8 healthy, 0 missing; alembic 0042_ship; memory 3120 of 7620 MB used; 0 error lines in 10 minutes; browser off"
 out_has "check  the figures of the deploy run (JOBAPP-VERIFY)"
 [[ ! -e "$STATE/ssh.log" ]] || fail "ship.sh called ssh: $(cat "$STATE/ssh.log")"
-board_calls "--apply batch=32 31" "--apply batch=32 31" "--apply batch=32 31"
+board_calls "--apply batch=32 31" "--apply batch=" "--apply batch="
 out_has "board:    3 sync(s)"
 log_lacks gh.log "project "
 out_lacks "$CANARY"
@@ -544,7 +548,8 @@ out_lacks "$CANARY"
 for n in 41 42 44; do [[ ! -e "$STATE/comment-$n.txt" ]] || fail "#$n got a comment"; done
 [[ "$(last_line)" == "SHIP: OK" ]] || fail "bisect then ship: $(last_line)"
 out_lacks "flaky:"
-board_calls "--apply batch=41 42 43 44" "--apply batch=41 42 44" "--apply batch=41 42 44"
+board_calls "--apply batch=41 42 43 44" "--apply batch=" "--apply batch="
+[[ "$(tail -n 1 "$STATE/gate_batch.log")" == "41 42 44" ]] || fail "the batch file after the drop: $(cat "$STATE/gate_batch.log")"
 ok "bisect: the same failure twice, then the shortest failing prefix drops #43 (5 gate runs), comment with step, order and a redacted tail, the rest shipped"
 
 fresh
@@ -654,7 +659,9 @@ echo 3 >"$STATE/gate_exit"
 run 1 ship --approved
 out_has "SHIP: FAIL the gate refused to start, a check holds the lock or the disk is short"
 log_lacks gh.log "pr comment"
-ok "a gate that cannot start (lock, disk) stops the run without blaming anyone"
+board_calls "--apply batch=55" "--apply batch="
+[[ ! -e "$MAIN/.local-check/ship.lock" ]] || fail "the lock was left after a failed gate"
+ok "a gate that cannot start (lock, disk) stops the run without blaming anyone, and one more sync on the way out takes the batch off Gating"
 
 # === refusals around the merge ======================================================================
 fresh
@@ -708,7 +715,7 @@ run 1 ship --approved
 out_has "SHIP: FAIL ops/deploy-checked.sh failed (exit 1): ops/deploy-checked.sh: the deploy run failed"
 out_lacks "jetson:"
 out_lacks "check  the figures"
-board_calls "--apply batch=66" "--apply batch=66" "--apply batch=66"
+board_calls "--apply batch=66" "--apply batch=" "--apply batch="
 out_has "board:    3 sync(s)"
 ok "a failed deploy with no figures exits 1, no Jetson check, the board synced after the merge and after the deploy"
 
@@ -731,7 +738,7 @@ out_has "jetson:   5 services, 1 healthy, 1 missing; alembic 0041_old"
 out_has "alembic is not at head"
 out_has "5 error lines in 10 minutes"
 out_lacks "$CANARY"
-board_calls "--apply batch=67" "--apply batch=67" "--apply batch=67"
+board_calls "--apply batch=67" "--apply batch=" "--apply batch="
 ok "an unwell Jetson (stopped, restarting, unhealthy and missing services, alembic, error lines) exits 1, prints figures only, the board synced already"
 
 fresh
@@ -792,7 +799,7 @@ out_has "not merged: #82, #83"
 out_has "SHIP: FAIL gh pr merge #82 failed"
 [[ ! -e "$STATE/deploy.log" ]] || fail "deployed after a stop between two merges"
 [[ "$(git -C "$MAIN" rev-parse HEAD)" == "$main_before" ]] || fail "the main checkout was pulled after a stop"
-board_calls "--apply batch=81 82 83" "--apply batch=81 82 83"
+board_calls "--apply batch=81 82 83" "--apply batch="
 out_has "board:    2 sync(s)"
 log_lacks gh.log "pr merge 83"
 ok "a merge refused midway: merged and not merged named, the board synced after the merges, no pull, no deploy"
@@ -827,11 +834,61 @@ out_has "merged:   #93, #94"
 out_has "not merged: #95"
 out_has "interrupted: while merging #94, which is MERGED on GitHub"
 out_has "SHIP: FAIL interrupted during the merges: nothing deployed"
-board_calls "--apply batch=93 94 95" "--apply batch=93 94 95"
+board_calls "--apply batch=93 94 95" "--apply batch="
 log_lacks gh.log "pr merge 95"
 [[ ! -e "$STATE/deploy.log" ]] || fail "deployed after an interrupt"
 [[ ! -e "$MAIN/.local-check/ship.lock" ]] || fail "the lock was left after an interrupt"
 ok "TERM during the merges prints what merged and what did not, syncs the board, exits 130, deploys nothing"
+
+# === a sync that hangs: the watchdog kills it, the ship goes on =====================================
+no_sleeper() { # no_sleeper: the fake sync's sleep was killed with its group
+  ! pgrep -f "sleep 37.25" >/dev/null || fail "a sync was left running: $(pgrep -fl 'sleep 37.25')"
+}
+fresh
+mkpr 96
+echo 37.25 >"$STATE/board_sleep"
+started="$SECONDS"
+SHIP_SYNC_SECONDS=1 run 0 ship --approved
+((SECONDS - started < 30)) || fail "three hung syncs took $((SECONDS - started)) s with SHIP_SYNC_SECONDS=1"
+[[ "$(last_line)" == "SHIP: OK" ]] || fail "a hung sync failed the ship: $(last_line)"
+[[ "$(grep -c '^board  sync .* failed (killed after 1 s, ' "$OUT")" == 3 ]] || fail "one line per killed sync expected: $(grep '^board' "$OUT")"
+out_has "board  sync at the start of the gate failed (killed after 1 s, "
+out_has "board:    3 sync(s), failed at the start of the gate, after the merges, after the deploy"
+out_has "merged:   #96"
+[[ "$(cat "$STATE/deploy.log")" == "deploy $(git -C "$MAIN" rev-parse HEAD)" ]] || fail "a hung sync stopped the deploy"
+board_calls "--apply batch=96" "--apply batch=" "--apply batch="
+[[ ! -e "$MAIN/.local-check/ship.lock" ]] || fail "the lock was left after a hung sync"
+no_sleeper
+ok "a sync that hangs is killed after SHIP_SYNC_SECONDS with its process group, one line each time: merged, deployed, checked, SHIP: OK, no lock left"
+
+fresh
+for n in 97 98; do mkpr "$n"; done
+echo 97 >"$STATE/term_after_merge"
+echo 37.25 >"$STATE/board_sleep"
+started="$SECONDS"
+SHIP_SYNC_SECONDS=1 run 130 ship --approved
+((SECONDS - started < 30)) || fail "the TERM path waited $((SECONDS - started)) s on a hung sync"
+out_has "merged:   #97"
+out_has "not merged: #98"
+out_has "board  sync after the merges failed (killed after 1 s, "
+out_has "SHIP: FAIL interrupted during the merges: nothing deployed"
+board_calls "--apply batch=97 98" "--apply batch="
+[[ ! -e "$STATE/deploy.log" ]] || fail "deployed after an interrupt"
+[[ ! -e "$MAIN/.local-check/ship.lock" ]] || fail "the lock was left after TERM and a hung sync"
+no_sleeper
+ok "TERM during the merges with a hung sync: on_signal's sync is killed by the watchdog (it ignores INT and TERM), exit 130, no lock left"
+
+fresh
+mkpr 99
+echo 3 >"$STATE/gate_exit"
+echo 37.25 >"$STATE/board_sleep"
+SHIP_SYNC_SECONDS=1 run 1 ship --approved
+out_has "SHIP: FAIL the gate refused to start"
+out_has "board  sync after the stop failed (killed after 1 s, "
+board_calls "--apply batch=99" "--apply batch="
+[[ ! -e "$MAIN/.local-check/ship.lock" ]] || fail "the lock was left"
+no_sleeper
+ok "the sync on the way out of a failed gate is bounded too (its line goes to stderr, after SHIP: FAIL), no lock left"
 
 fresh
 mkpr 86

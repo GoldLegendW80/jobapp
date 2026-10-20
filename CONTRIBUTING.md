@@ -150,7 +150,9 @@ in the job folder that holds this repository (it is not part of the repository).
    It merges only when main and every head are still what the PASS record lists (`gh pr merge
    --repo <owner/repo> --match-head-commit`), and keeps the board current with
    `ops/board-sync.py --apply` at the start of the gate (the batch shows as Gating), right after
-   the merges and after the deploy (a failed sync prints one line, never fails the ship). Then it pulls the main checkout (which
+   the merges and after the deploy, plus once on the way out of a run that stopped before the
+   merges, so its batch leaves Gating (each sync is killed after `SHIP_SYNC_SECONDS`, 300 by
+   default; a failed or killed sync prints one line, never fails the ship). Then it pulls the main checkout (which
    must be clean and on `main`), deploys only when its tree is the gate's tree, and checks the
    Jetson without ssh, from the `JOBAPP-VERIFY` line the deploy run printed (its last step,
    `ops/jetson-verify.sh`, with the deploy's compose profile: every service running and healthy,
