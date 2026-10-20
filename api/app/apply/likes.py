@@ -15,7 +15,9 @@ plans. A Like is the application itself:
    alone once a CV is there. An automatic write not started gives way, whatever it waits for
    (`generate.give_way`, as to the click), so the asked one is never held by the daily ceiling,
    even once a consent or a base CV it waited for comes. A document already there, being
-   rendered, or written by a running generation or a click, is not asked again.
+   rendered, or written by a running generation or a click, is not asked again: all of it is
+   read under the locks of the posting's documents, so no run settles between the read and
+   the ask.
 3. `service.start` with the mode in force (`apply_settings.mode_after_like`; Full auto makes a
    Review first item until A13a writes its checks): its refusals (no address, duplicates) roll
    the ask back with them; else the application is created `queued` and committed with the ask
@@ -106,7 +108,12 @@ def _cv_base(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> uuid.UUI
 def ask_documents(
     db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, at: datetime
 ) -> tuple[Kind, ...]:
-    """Step 2 of the module docstring, in the caller's transaction, under the posting's lock."""
+    """Step 2 of the module docstring, in the caller's transaction, under the posting's row lock
+    (so no posting document appears meanwhile). Every choice below reads the documents under
+    lock 3, CV then letter (store.py, as `freeze.on_status`): no run settles or starts under it."""
+    store.lock_posting(db, user_id, posting_id)
+    for found in store.posting_documents(db, user_id, posting_id):
+        store.lock_document(db, user_id, found.id)
     current = documents.current(db, user_id, posting_id)
     if _missing(current.cv):
         kinds = (Kind.cv, Kind.letter) if _missing(current.letter) else (Kind.cv,)
@@ -114,7 +121,6 @@ def ask_documents(
         kinds = (Kind.letter,)
     else:
         return ()
-    store.lock_posting(db, user_id, posting_id)
     first = store.get_or_create(db, user_id, posting_id, kinds[0], at=at)
     if not generate.give_way(db, first, at):
         return ()

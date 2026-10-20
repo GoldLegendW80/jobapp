@@ -1,0 +1,144 @@
+{
+  "slug": "accent",
+  "version": 1,
+  "name": {
+    "en": "Accent",
+    "fr": "Accent"
+  },
+  "description": {
+    "en": "One column in a clean sans serif: the headings, the headline and every list marker in a raspberry accent, the achievements in a tinted box. Reads well for applicant tracking systems.",
+    "fr": "Une colonne dans un caractère sans empattements : les titres, l'accroche et chaque puce en couleur framboise, les réalisations dans un encadré teinté. Bien lu par les logiciels de recrutement."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "photo",
+    "colour",
+    "ats friendly"
+  ],
+  "photo": "optional",
+  "fonts": [
+    "dm-sans"
+  ],
+  "accent": "#b8195a",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.0,
+        "line_height": 1.42,
+        "section_gap": 11.0,
+        "item_gap": 5.0,
+        "margin": 15.0
+      },
+      {
+        "body_size": 9.7,
+        "line_height": 1.38,
+        "section_gap": 10.1,
+        "item_gap": 4.6,
+        "margin": 13.9
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.33,
+        "section_gap": 9.1,
+        "item_gap": 4.1,
+        "margin": 12.7
+      },
+      {
+        "body_size": 9.1,
+        "line_height": 1.29,
+        "section_gap": 8.2,
+        "item_gap": 3.7,
+        "margin": 11.6
+      },
+      {
+        "body_size": 8.9,
+        "line_height": 1.25,
+        "section_gap": 7.3,
+        "item_gap": 3.3,
+        "margin": 10.4
+      },
+      {
+        "body_size": 8.6,
+        "line_height": 1.21,
+        "section_gap": 6.4,
+        "item_gap": 2.9,
+        "margin": 9.3
+      },
+      {
+        "body_size": 8.3,
+        "line_height": 1.16,
+        "section_gap": 5.4,
+        "item_gap": 2.4,
+        "margin": 8.1
+      },
+      {
+        "body_size": 8.0,
+        "line_height": 1.12,
+        "section_gap": 4.5,
+        "item_gap": 2.0,
+        "margin": 7.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.0,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 20.0
+      },
+      {
+        "body_size": 10.6,
+        "line_height": 1.46,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.41,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.37,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.32,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 12.0
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "97388d3c03ed1c67c3d543cdb0449d12b17b28105262df8f6ca3d0f596e0f3a6"
+}

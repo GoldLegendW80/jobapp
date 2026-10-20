@@ -1,0 +1,36 @@
+Task D20, 2026-10-19, on the Mac (renderer image of D3 built under its own tag jobapp-renderer:d20-test with the extra CA as a build secret, removed afterwards).
+
+docker build -q --secret id=extra_ca,src="$JOBAPP_EXTRA_CA" -t jobapp-renderer:d20-test renderer
+cd api
+thumbnails.make(<slug>) through the test stack's renderer (the Stack of tests/documents/test_renderer_container.py) for accent, executive, grid, mono
+  every thumbnail fits at step 0
+RENDERER_TEST_IMAGE=jobapp-renderer:d20-test uv run pytest -q -m docker tests/documents/test_templates.py tests/documents/test_template_reading_order.py tests/documents/test_templates_d19.py tests/documents/test_templates_d20.py -k "accent or executive or grid or mono"
+  150 passed, 696 deselected
+ops/agent-test.sh --name d20 tests/documents -m "not docker" -n 2
+  2030 passed
+uv run ruff check app tests; uv run ruff format --check app tests
+  All checks passed, 535 files already formatted
+
+Files: <slug>-cv-typical.pdf (D1's cv-typical, English, at its fitted step) and <slug>-letter-en.pdf.
+
+Round 2 (review B1 and its notes), 2026-10-19, on the Mac, the renderer under its own tag as above, removed afterwards.
+
+RENDERER_TEST_IMAGE=jobapp-renderer:d20-test uv run pytest -q -m docker tests/documents/test_templates_d20.py
+  the header test, 64 cases (4 templates, CV and letter, English and French, 4 headers): name and every contact line on one baseline
+  the ats reading order test, at the typical content and at its soft limits
+thumbnails.make(<slug>) for accent, executive and serif, whose manifests changed (thumbnail_of updated)
+ops/agent-test.sh --name d20 --playwright -c e2e/documents-all.config.ts e2e/documents-d20.spec.ts, on a stack of its own
+  6 passed
+ops/agent-test.sh --name d20 --playwright -c e2e/documents-all.config.ts, the documents group
+  49 passed
+Files: <slug>-cv-page1.png and <slug>-letter-page1.png, page 1 of each journey render.
+
+After merging origin/main (2811ba5), 2026-10-20:
+ops/agent-test.sh --name d20r2 tests/documents -m "not docker" -n 2
+  2100 passed
+uv run ruff check app tests; uv run ruff format --check app tests
+  All checks passed, 553 files already formatted
+pnpm --dir web exec vitest run src/features/documents
+  14 files, 293 passed (the branch changes nothing under web/src)
+python3 .github/scripts/ci_plan_test.py; python3 .github/scripts/e2e_groups.py
+  pass
