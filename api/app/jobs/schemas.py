@@ -528,6 +528,8 @@ class RescoreOut(BaseModel):
     unchanged: int
     skipped_manual: int
     skipped_no_text: int
+    # Held by another change at that moment: kept as they were, a new rescore scores them.
+    skipped_busy: int
     # Jobs not looked at yet (the time budget or the row cap stopped this call): call again
     # with after = next_after. 0 and null when done.
     remaining: int

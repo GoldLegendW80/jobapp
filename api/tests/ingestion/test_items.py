@@ -129,6 +129,7 @@ def test_settings_are_typed_setting() -> None:
         "search.min_fit",
         "search.days",
         "search.boards[].enabled",
+        *[path for path in types if path.startswith("search.browser_sources")],
         "experience.employers[].key",
     ]
     assert all(types[path] is FieldType.SETTING for path in settings)
@@ -173,6 +174,7 @@ BOARD = {"company": "Acme", "ats": "ashby", "org": "acme"}
     ("section", "key", "value"),
     [
         ("search", "sweep_schedule", {"enabled": True}),
+        ("search", "browser_sources", {"kind": "vie", "query": "data", "enabled": True}),
         ("search", "min_fit", 80),
         ("search", "days", 3),
         ("skills", "years_experience", 4),
@@ -191,7 +193,7 @@ def test_an_agent_never_proposes_a_setting(section: str, key: str, value: Any) -
         assert error.reason == items.REASONS[items.SETTING]
 
 
-@pytest.mark.parametrize("key", ["sweep_schedule", "min_fit", "days"])
+@pytest.mark.parametrize("key", ["sweep_schedule", "browser_sources", "min_fit", "days"])
 def test_a_setting_cannot_be_removed_either(key: str) -> None:
     assert refusal("search", key, None, "remove").rule == items.SETTING
 

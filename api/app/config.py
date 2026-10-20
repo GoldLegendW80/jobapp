@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     browser_session_max_s: int = Field(default=1800, ge=60, le=7200)
     # Past this share of the browser container's memory limit, browserd closes the newest tab.
     browser_mem_guard_pct: int = Field(default=90, ge=50, le=99)
+    # Tests only: the browser sources of the sweep (B8, app/browser/sources) read the fixture
+    # pages under this address instead of Google Careers and mon-vie-via. Refused in production.
+    browser_sources_base_url: str | None = None
     # Documents (SPEC-documents.md, app/documents/). Every setting of the module, added at once
     # by task D2 so that no later task edits this file. A render: its wall time in seconds, the
     # renders one renderer process runs at once, the largest PDF kept.
@@ -223,6 +226,7 @@ class Settings(BaseSettings):
     @field_validator(
         "ats_base_url",
         "apply_stub_base_url",
+        "browser_sources_base_url",
         "model_api_base_url",
         "google_auth_url",
         "google_token_base_url",
@@ -306,6 +310,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "AGENTS_FAKE_BACKEND replaces the model with recorded streams and must not be "
                 "set in production"
+            )
+        if self.app_env == "production" and self.browser_sources_base_url is not None:
+            raise ValueError(
+                "BROWSER_SOURCES_BASE_URL points the browser sources at test pages and must not "
+                "be set in production"
             )
         for name in ("google_auth_url", "google_token_base_url", "google_api_base_url"):
             if self.app_env == "production" and getattr(self, name) is not None:

@@ -61,10 +61,11 @@ NO_JOB = "This run is not about a job, so nothing can be proposed."
 EMPTY_SECTION = "The profile has no {section} section yet."
 
 # What get_profile_section shows of a section. Identity is an allow list: a contact field
-# added to the profile later never reaches the model by default. Search drops the board list
-# and the schedule (not needed to judge a posting); the other sections are shown whole.
+# added to the profile later never reaches the model by default. Search drops the board list,
+# the browser sources and the schedule (not needed to judge a posting); the other sections are
+# shown whole.
 SHOWN_FIELDS = {"identity": ("headline", "city", "country", "languages")}
-HIDDEN_FIELDS = {"search": ("boards", "sweep_schedule")}
+HIDDEN_FIELDS = {"search": ("boards", "browser_sources", "sweep_schedule")}
 
 
 def full_name(name: str) -> str:
