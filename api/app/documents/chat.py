@@ -943,6 +943,43 @@ def recover(db: Session, document: Document, at: datetime) -> bool:
     return True
 
 
+def cancel(
+    db: Session, user_id: uuid.UUID, generation_id: uuid.UUID, *, at: datetime
+) -> tuple[DocumentGeneration, bool]:
+    """Stop the person's chat generation, under its document's lock, in the caller's
+    transaction. A run still queued is cancelled here with its answer; a running one is asked to
+    stop, and its final hook settles it `cancelled` (`settle`); an ended one is left as it is.
+    Returns the generation and whether a run was stopped or asked to stop. Raises
+    store.NotFoundError (not the person's chat generation) and store.DocumentBusyError."""
+    found = db.execute(
+        sa.select(DocumentGeneration.document_id).where(
+            DocumentGeneration.id == generation_id,
+            DocumentGeneration.user_id == user_id,
+            DocumentGeneration.mode == GenerationMode.chat,
+        )
+    ).scalar_one_or_none()
+    if found is None:
+        raise store.NotFoundError(generation_id)
+    document = store.lock_document(db, user_id, found)
+    generation = db.execute(
+        sa.select(DocumentGeneration)
+        .where(DocumentGeneration.id == generation_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one()
+    if generation.status is not GenerationStatus.running or generation.run_id is None:
+        return generation, False
+    stopped = agent_runs.request_cancel(db, user_id, generation.run_id, at)
+    if stopped is agent_runs.CancelOutcome.cancelled:
+        run = db.get(AgentRun, generation.run_id, populate_existing=True)
+        conclude(db, document, generation, RunStatus.cancelled, run, None, False, Asked(), at)
+    logger.info(
+        "documents.chat.cancel",
+        extra={"generation_id": str(generation.id), "outcome": stopped.value},
+    )
+    return generation, stopped is not agent_runs.CancelOutcome.final
+
+
 # --- the answer ---------------------------------------------------------------------------------
 
 LABELS = {
