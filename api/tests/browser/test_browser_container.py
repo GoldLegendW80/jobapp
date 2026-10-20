@@ -11,7 +11,8 @@ a failure; the egress proxy (the pages server reached, the app's client, loopbac
 private addresses refused, by port and by address on ports it allows); WebRTC sending no
 UDP outside the proxy (a STUN and TURN listener receives nothing); two profiles (B's Chromium
 cannot read A's directory); a stale lock of another host cleared; a crash and a hang ending the
-lease `browser_crashed`; processes left under a profile uid killed; idle timeout; no lease
+lease `browser_crashed`; the memory guard on the working set (page cache alone closes no tab,
+allocated memory does); processes left under a profile uid killed; idle timeout; no lease
 across a restart; SIGTERM within 10 s.
 
 The test path into Chromium is browserd.probe, run with `docker exec` inside the container: CDP
@@ -461,6 +462,94 @@ def test_a_stale_lock_of_another_host_is_cleared(stack: Stack) -> None:
     )
     assert "otherhost-4242" not in target
     stack.end()
+
+
+# A new file of the profiles volume (ext4, not a tmpfs) written until memory.current reaches 95%
+# of the limit: page cache charged to the container, which the kernel reclaims on demand.
+FILL_PAGE_CACHE = """
+import json, os, sys, time
+from browserd import chromium
+def current():
+    with open('/sys/fs/cgroup/memory.current') as f:
+        return int(f.read())
+with open('/sys/fs/cgroup/memory.max') as f:
+    limit = int(f.read())
+chunk, written = bytes(1 << 20), 0
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    while current() * 100 < limit * 95 and written < 2 * limit:
+        written += os.write(fd, chunk)
+    os.fsync(fd)
+finally:
+    os.close(fd)
+print(json.dumps({"current": current(), "limit": limit, "working_set": chromium.memory()[0],
+                  "at": time.monotonic()}))
+"""
+READ_MEMORY = """
+import json, time
+from browserd import chromium
+with open('/sys/fs/cgroup/memory.current') as f:
+    print(json.dumps({"current": int(f.read()), "at": time.monotonic()}))
+"""
+# Memory allocated and touched up to argv[1] % of the limit by the working set, held until the
+# test closes its stdin.
+HOLD = """
+import json, sys
+from browserd import chromium
+used, limit = chromium.memory()
+held = bytearray(max(0, limit * int(sys.argv[1]) // 100 - used))
+held[::4096] = b"\\1" * len(range(0, len(held), 4096))
+print(json.dumps({"held": len(held), "working_set": chromium.memory()[0]}), flush=True)
+sys.stdin.read()
+"""
+
+
+def memory_events(stack: Stack) -> list[dict]:
+    lease = stack.current()["lease"]
+    assert lease is not None, "the lease ended"
+    return [e for e in lease["events"] if e.get("reason") == "memory"]
+
+
+def test_page_cache_alone_never_trips_the_memory_guard_and_allocation_does(stack: Stack) -> None:
+    """Page cache past 95% of the limit by memory.current closes no tab over three rounds of the
+    guard (every 2 s, Chromium._watch, counted on the container's clock); memory a process
+    allocates past 90% of the working set closes one."""
+    stack.lease(A, 20001)
+    cache = f"/profiles/.page-cache-{secrets.token_hex(4)}"
+    try:
+        filled = json.loads(stack.python(FILL_PAGE_CACHE, cache))
+        limit = filled["limit"]
+        assert filled["current"] * 100 >= limit * 95
+        assert filled["working_set"] * 100 < limit * 60
+        for _ in range(400):
+            assert memory_events(stack) == []
+            now = json.loads(stack.python(READ_MEMORY))
+            if now["at"] - filled["at"] >= 7:
+                break
+        else:
+            raise AssertionError("three rounds of the guard did not pass")
+        # Still past 90% by memory.current: the figure read before would have closed a tab.
+        assert now["current"] * 100 >= limit * 90
+        assert memory_events(stack) == []
+        hold = ["docker", "exec", "-i", stack.container("browser"), "python", "-c", HOLD, "92"]
+        with subprocess.Popen(
+            hold, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+        ) as holder:
+            try:
+                held = json.loads(holder.stdout.readline())
+                assert held["working_set"] * 100 >= limit * 90, held
+                for _ in range(400):
+                    events = memory_events(stack)
+                    if events:
+                        break
+            finally:
+                holder.stdin.close()
+                holder.wait(timeout=60)
+        assert [(e["event"], e["reason"]) for e in events] == [("tab_closed", "memory")]
+        assert events[0]["used_mib"] * 100 >= (limit >> 20) * 90
+    finally:
+        stack.execute("browser", "rm", "-f", cache)
+        stack.end()
 
 
 def test_a_crash_ends_the_lease_browser_crashed(stack: Stack) -> None:

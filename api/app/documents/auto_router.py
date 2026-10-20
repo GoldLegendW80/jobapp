@@ -1,6 +1,6 @@
-""" "Write now" and the spend of the automatic generation (task D10; SPEC-documents.md, "API",
-"Automatic generation", "The spend"). Included by `routers.py` before D6's
-`/api/documents/{document_id}`.
+""" "Write now", "Make it fit" and the spend of the automatic generation (tasks D10 and D18;
+SPEC-documents.md, "API", "Automatic generation", "Templates", "The spend"). Included by
+`routers.py` before D6's `/api/documents/{document_id}`.
 
 - `POST /api/jobs/{id}/documents/write {kinds, base_document_id?}`: a click. It writes the
   posting's CV, its letter, or both, whatever the fit, the threshold or today's safety ceiling.
@@ -12,6 +12,13 @@
   written from the old CV. An automatic letter that has not started gives way the same.
   `base_document_id` names another of the person's base CVs to write the CV from. 202 with the
   generations; 404 for another person's posting or base CV; 409 while one is running.
+- `POST /api/documents/{id}/fit`: "Make it fit", a click. The `shorten` generation of a posting's
+  CV whose latest version overflows, whoever made that version (a template switch included),
+  started at once (`generate.make_fit`). It needs what the automatic pass needs: the consent, a
+  credential, a write of the CV to draw on and a known ceiling left; each missing one is a 409
+  with the sentence of `FIT_REFUSED`, nothing created. A frozen latest version stays as it is:
+  the shorter one is a new version on top. 202 with the generation; 404 for another person's
+  document; 409 while one is open; 422 for a letter or a base CV.
 - `GET /api/documents/spend?min_fit=`: postings written today against the safety ceiling (in the
   time zone of `sweep_schedule`), postings waiting, the postings of the last
   `DOCUMENTS_AUTO_LOOKBACK_DAYS` (30) days at or
@@ -66,6 +73,43 @@ POSTING_NOT_FOUND = "Posting not found."
 BASE_NOT_FOUND = "CV not found."
 RUNNING = "This document is being written. Wait for it to finish."
 BUSY = "This posting is busy. Try again in a moment."
+DOCUMENT_NOT_FOUND = "Document not found."
+EDIT_INSTEAD = "Shorten the longest fields in Edit, or choose a more compact template."
+WRITE_AGAIN = "Write it again, or shorten the longest fields in Edit."
+# What "Make it fit" answers for each reason of generate.FIT_REFUSALS.
+FIT_REFUSED = {
+    "not_shortened": (
+        status.HTTP_422_UNPROCESSABLE_CONTENT,
+        f"Only a posting's CV has a shortening pass. {EDIT_INSTEAD}",
+    ),
+    "not_drawn": (
+        status.HTTP_409_CONFLICT,
+        "The page of this version is not drawn yet. Wait for the preview, then try again.",
+    ),
+    "fits": (status.HTTP_409_CONFLICT, "This CV already fits on one page."),
+    "consent": (
+        status.HTTP_409_CONFLICT,
+        "Confirm what is sent to the writer first, in the CV tab of your profile.",
+    ),
+    "credential": (status.HTTP_409_CONFLICT, "Add a model credential in your account first."),
+    "not_written": (
+        status.HTTP_409_CONFLICT,
+        f"The writer has not written this CV, so it has no budget to shorten it. {EDIT_INSTEAD}",
+    ),
+    "spend_unknown": (
+        status.HTTP_409_CONFLICT,
+        "What the writer spent on this CV is not known, so it has no limit to shorten it within."
+        f" {WRITE_AGAIN}",
+    ),
+    "token_ceiling": (
+        status.HTTP_409_CONFLICT,
+        f"The writing of this CV has used its token limit. {WRITE_AGAIN}",
+    ),
+    "runs_busy": (
+        status.HTTP_409_CONFLICT,
+        "The assistant is busy with other documents. Try again in a moment.",
+    ),
+}
 
 
 def _private(response: Response) -> None:
@@ -234,6 +278,60 @@ def write_now(
         "documents.write",
         extra={"job_id": str(job_id), "generations": len(made), "started": len(runs)},
     )
+    return out
+
+
+# --- Make it fit --------------------------------------------------------------------------------
+
+
+class FitOut(BaseModel):
+    id: uuid.UUID
+    status: GenerationStatus
+    wait_reason: GenerationWait | None
+    error: str | None
+
+
+@router.post(
+    "/api/documents/{document_id}/fit",
+    response_model=FitOut,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        404: {"description": "Not the person's document"},
+        409: {"description": "A generation is open, or a check refuses: the sentence says which"},
+        422: {"description": "A letter or a base CV: no shortening pass"},
+    },
+)
+def make_it_fit(document_id: uuid.UUID, user: CurrentUser, request: Request, db: Db) -> FitOut:
+    try:
+        generation, run = generate.make_fit(db, user.id, document_id, at=deps.clock(request))
+        out = FitOut(
+            id=generation.id,
+            status=generation.status,
+            wait_reason=generation.wait_reason,
+            error=generation.error,
+        )
+        store.commit(db)
+    except store.NotFoundError:
+        db.rollback()
+        raise _error(status.HTTP_404_NOT_FOUND, DOCUMENT_NOT_FOUND) from None
+    except store.GenerationOpenError:
+        db.rollback()
+        raise _error(status.HTTP_409_CONFLICT, RUNNING) from None
+    except store.DocumentBusyError:
+        db.rollback()
+        raise _error(status.HTTP_409_CONFLICT, BUSY) from None
+    except generate.FitRefusedError as refused:
+        db.rollback()
+        code, sentence = FIT_REFUSED[refused.reason]
+        logger.info(
+            "documents.fit.refused",
+            extra={"document_id": str(document_id), "reason": refused.reason},
+        )
+        raise _error(code, sentence) from None
+    try:
+        anyio.from_thread.run(generate.enqueue_run, request.app.state.queue, run.id)
+    except queues.QueueUnavailableError:
+        logger.warning("documents.fit.run_not_queued", extra={"run_id": str(run.id)})
     return out
 
 
