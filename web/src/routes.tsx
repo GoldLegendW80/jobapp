@@ -19,6 +19,7 @@ import { FillPage } from "@/features/ingestion/fill-page";
 import { JobDetailPage } from "@/features/jobs/job-detail-page";
 import { JobsPage } from "@/features/jobs/jobs-page";
 import { JobsMapPage } from "@/features/jobs/map/jobs-map-page";
+import { DeckPage } from "@/features/opportunities/deck/deck-page";
 import { ProfilePage } from "@/features/profile/profile-page";
 import { AppShell } from "@/features/shell/app-shell";
 import { NotFoundPage } from "@/features/shell/not-found-page";
@@ -65,6 +66,7 @@ export const routes: RouteObject[] = [
             path: "jobs/:id/documents/:kind",
             element: <PostingDocumentPage />,
           },
+          { path: "discover", element: <DeckPage /> },
           { path: "documents/templates", element: <TemplatesPage /> },
           { path: "account", element: <AccountPage /> },
           { path: "profile", element: <ProfilePage /> },

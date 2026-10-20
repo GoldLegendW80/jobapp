@@ -39,6 +39,9 @@ export function AppShell() {
             aria-label="Main"
             className="flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1"
           >
+            <NavLink to="/discover" className={navLink}>
+              Discover
+            </NavLink>
             <NavLink to="/jobs" className={navLink}>
               Jobs
             </NavLink>
