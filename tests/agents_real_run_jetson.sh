@@ -7,11 +7,6 @@
 #   REAL_RUN=1 LABEL=second tests/agents_real_run_jetson.sh <job-id>     one triage run, then one chat message
 #   REAL_RUN=1 RUNS=chat LABEL=third MESSAGE='...' tests/agents_real_run_jetson.sh <job-id>
 #
-# Follow up, issue #39: the start of a run below calls underscore prefixed functions of the
-# routers (runs_router._create, chat_router._open and _send). A public operator entry point shared
-# with the routers, or an api test that runs the embedded Python against the test database, will
-# keep this script from drifting away from the endpoints.
-#
 # What it does, in order:
 # 1. Before: every Compose service healthy, the deployed commit, the worker's code has the chat
 #    lock hook (issue #27), the owner is an admin account with a credential of the subscription
@@ -22,10 +17,12 @@
 #    events (count and highest id), files and sweeps (count only), and the agent tables.
 # 2. For each run: a sampler on the Jetson writes, every second, the worker's and the api's
 #    cgroup memory, the host's available memory and the Claude Code processes (count, RSS).
-#    The run is started with no web session: inside the api container, the functions the HTTP
-#    endpoints call (runs_router._create, chat_router._open and _send, then Queue.enqueue on the
-#    agents queue), so the credential check, the per user advisory lock, the thread lock and the
-#    pending answer check are the app's own. Then the run row is polled to its end, at most the
+#    The run is started with no web session by python -m app.agents.cli start in the api
+#    container, which calls the functions the HTTP endpoints call (app/agents/operator.py), so
+#    the checks, the per user advisory lock, the thread lock, the pending answer check and the
+#    enqueue are the app's own. The owner's address and the message reach it on stdin, and it
+#    refuses, in the transaction that creates the run, an account without the role admin and a
+#    credential of the subscription kind. Then the run row is polled to its end, at most the
 #    agent's wall time plus a minute. Never retried.
 # 3. Metrics from the database: status, model, tokens, cost, turns, duration, event kinds, tool
 #    calls, denials, proposals. Never a prompt, a posting, a profile, an answer or a proposal text.
@@ -41,6 +38,8 @@
 # tasks/evidence/agents-a5/: run.log, metrics.json, memory-<run>.tsv (LABEL adds a suffix), and
 # refuses to start, before any connection to the Jetson, when one of those files already exists:
 # the committed files are the record of the runs of 2026-10-10, so a new real run needs a new LABEL.
+# A real run that is refused or fails after its start keeps its run.log (and its samples), so the
+# same LABEL is refused next time too: use a new LABEL, or delete those files first.
 #
 # Limits. At most two runs per call, each triage or chat, and never a second run after a failed
 # one; nothing limits the number of calls. The same kind twice (RUNS="chat chat") keeps both
@@ -49,7 +48,9 @@
 # kind: the script never starts a run with the Anthropic API key of a member.
 #
 # Settings as deploy.sh: DEPLOY_HOST (default jetson), DEPLOY_DIR (default ~/jobapp).
-# OWNER (required: the e-mail address of the owner's account), RUNS (default "triage chat"), MESSAGE, LABEL.
+# OWNER (required: the e-mail address of the owner's account), RUNS (default "triage chat"), MESSAGE, LABEL,
+# FRAGMENT (the text looked for in the logs, default 20 characters of MESSAGE from its 14th),
+# WAIT_S (whole seconds a run may take, default 660), IDLE_S (default 5) and POLL_S (default 3).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -99,7 +100,8 @@ die() {
 [[ -n "$OWNER" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 [[ "$OWNER" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
 [[ "$RAW_LABEL" =~ ^[A-Za-z0-9_-]*$ ]] || die "LABEL holds letters, digits, _ and - only"
-[[ "$IDLE_S" =~ ^[0-9]+$ && "$POLL_S" =~ ^[0-9]+$ ]] || die "IDLE_S and POLL_S are whole seconds"
+[[ "$IDLE_S" =~ ^[0-9]+$ && "$POLL_S" =~ ^[0-9]+$ && "$WAIT_S" =~ ^[0-9]+$ ]] ||
+  die "IDLE_S, POLL_S and WAIT_S are whole seconds"
 # One key per run, the name of its files: the kind, suffixed by its index when the kind repeats.
 KEYS=()
 seen=""
@@ -132,7 +134,7 @@ if [[ "$REAL" == "1" ]]; then
     path="$(samples_of "$key")"
     if [[ -e "$path" ]]; then existing="$existing ${path#"$ROOT"/}"; fi
   done
-  [[ -z "$existing" ]] || die "refused, nothing was started: evidence of an earlier run exists and would be overwritten:$existing. Give this run a new LABEL."
+  [[ -z "$existing" ]] || die "refused, nothing was started: evidence of an earlier run exists and would be overwritten:$existing. Give this run a new LABEL, or delete those files."
 fi
 
 remote() { # a command in the stack's directory on the Jetson
@@ -258,92 +260,8 @@ memory_json() { # the summary of the samples file $1 as JSON
 }
 
 start() { # start <triage|chat>: prints one line of JSON {http, run_id, ...}; no session, no HTTP
-  ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && docker compose -f compose.yml exec -T api python - $1 $OWNER $JOB $(printf '%s' "$MESSAGE" | base64 | tr -d '\n')" <<'PY'
-"""The operator's stand-in for POST /api/agents/runs and POST /api/agents/threads/{id}/messages:
-the same functions, in the same order, with the same transactions and the same enqueue."""
-import asyncio
-import base64
-import json
-import sys
-import uuid
-
-import sqlalchemy as sa
-from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-
-from app import queue as queues
-from app.agents import chat_router, definitions, runs, runs_router
-from app.agents.schemas import MessageIn
-from app.config import get_settings
-from app.db import build_engine, build_sessionmaker
-from app.identity import service as identity_service
-from app.identity.models import User
-from app.main import credentials_keyring
-
-action, email, job_id = sys.argv[1], sys.argv[2], uuid.UUID(sys.argv[3])
-text = base64.b64decode(sys.argv[4]).decode()
-settings = get_settings()
-engine = build_engine(settings)
-sessions = build_sessionmaker(engine)
-out: dict[str, object] = {}
-
-
-def create() -> uuid.UUID | None:
-    with sessions() as db:
-        user_id = db.scalar(sa.select(User.id).where(User.email == email))
-    if user_id is None:
-        out.update(http=404, detail="no such user")
-        return None
-    if credentials_keyring(settings) is None:
-        out.update(http=503, detail=runs_router.NOT_CONFIGURED)
-        return None
-    now = identity_service.utcnow
-    if action == "triage":
-        agent = definitions.get("triage", settings.app_env)
-        data = agent.validate_input({})
-        started = runs_router._create(sessions, user_id, agent, job_id, data, now())
-        return started.id
-    opened = chat_router._open(sessions, user_id, job_id, now())
-    if opened is None:
-        out.update(http=404, detail=chat_router.JOB_NOT_FOUND)
-        return None
-    thread, created = opened
-    out.update(thread_id=str(thread.id), thread_created=created)
-    body = MessageIn(text=text)
-    sent = chat_router._send(sessions, user_id, thread.id, body.text.strip(), now())
-    if isinstance(sent, JSONResponse):
-        out.update(http=sent.status_code, **json.loads(sent.body))
-        return None
-    out.update(message_id=sent.message.id)
-    return sent.run.id
-
-
-async def enqueue(run_id: uuid.UUID) -> None:
-    queue = queues.Queue(settings.redis_url.get_secret_value())
-    try:
-        queued = await queue.enqueue(
-            "run_agent", str(run_id), queue=queues.AGENTS, job_id=queues.agent_run_job_id(run_id)
-        )
-        out.update(http=202, run_id=str(run_id), enqueued=queued)
-    except queues.QueueUnavailableError:
-        runs_router._fail_queued(sessions, run_id, identity_service.utcnow())
-        out.update(http=503, run_id=str(run_id), detail=runs.QUEUE_DOWN)
-    finally:
-        await queue.close()
-
-
-try:
-    made = create()
-    if made is not None:
-        asyncio.run(enqueue(made))
-except HTTPException as exc:
-    out.update(http=exc.status_code, detail=str(exc.detail))
-except Exception as exc:  # the class name only: a message could quote the input or a statement
-    out.update(http=500, error_class=type(exc).__name__)
-finally:
-    engine.dispose()
-print(json.dumps(out))
-PY
+  jq -cn --arg owner "$OWNER" --arg message "$MESSAGE" '{owner: $owner, message: $message}' |
+    ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && docker compose -f compose.yml exec -T api python -m app.agents.cli start $1 $JOB --role $OWNER_ROLE --credential-kind $OWNER_CREDENTIAL"
 }
 
 run_metrics() { # one JSON object for the run $1: numbers, names and ids only, never a text
@@ -406,7 +324,7 @@ one_run() { # one_run <triage|chat> <key>
     info "FAIL: unknown, check the run row: the start gave no answer (exit $rc), so a run may be queued or running. Run id: ${run:-not known}. Do not start another one before reading it."
     return 1
   fi
-  info "started through the app's own service functions: $(jq -c 'del(.detail)' <<<"$started")"
+  info "started through python -m app.agents.cli start: $(jq -c 'del(.detail)' <<<"$started")"
   if [[ "$http" != "202" ]]; then
     stop_sampler
     info "FAIL: refused: $(jq -r '.detail // .error_class // "no detail"' <<<"$started")"
