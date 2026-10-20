@@ -3,14 +3,19 @@ site" (`signin`). Its Chromium runs on the person's profile with no debugging po
 but the person drives it and a site sees an ordinary browser while the person types.
 
 Without CDP the session is watched through its process (SPEC-browser, "Chromium lifecycle"):
-- the exit of Chromium ends the lease `browser_crashed` (chromium.Chromium._watch_exit), the
-  profile left as it is;
+- the exit of Chromium ends the lease (chromium.Chromium._watch_exit), the profile left as it
+  is: `browser_closed` when it quit by itself (its window closed), `browser_crashed` otherwise;
 - the memory guard reads the container's memory every MEMORY_EVERY_S and, past
   BROWSER_MEM_GUARD_PCT, ends the whole session `memory_guard` (no tab can be closed without
   CDP);
+- a TCP port that a process of the session's uid listens on ends it `debugging_port` within
+  PORTS_EVERY_S. Chromium's own remote debugging switch (chrome://inspect, kept in Local State)
+  is blocked by the image's managed policy and turned off by prep before every start (measured
+  for B7, tasks/browser/todo.md); this watch catches any other way;
 - the end asks Chromium to quit (SIGINT to its browser process, prep's `quit`), waits QUIT_S for
   it to write the profile, then kills its process group. SIGTERM is not used: Chromium then exits
-  without writing the cookies of the last seconds (measured for B7, tasks/browser/todo.md).
+  without writing the cookies of the last seconds (measured for B7, tasks/browser/todo.md). The
+  end is finished (every process of the uid killed) even when a step of it fails.
 
 The typed address of "Sign in to a site" (check_address) is http or https with a host, printable
 ASCII, at most ADDRESS_MAX characters; it is given to Chromium after `--` (chromium.switches).
@@ -40,6 +45,7 @@ log = logging.getLogger("browserd")
 QUIT_S = 10  # Chromium's clean exit after SIGINT, then its process group is killed
 SETTLE_S = 1.0  # a Chromium that exits this soon after its start did not start
 MEMORY_EVERY_S = 2
+PORTS_EVERY_S = 0.5
 ADDRESS_MAX = 2048
 # A host name of letters, digits and hyphens (an IPv4 address is one too), labels of 1 to 63.
 LABEL = re.compile(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?")
@@ -84,15 +90,19 @@ class PersonChromium(chromium.Chromium):
     async def start(self) -> "PersonChromium":
         await self.prepare()
         proc = await self.spawn(None, self.request.address or "about:blank")
-        exited = asyncio.ensure_future(proc.wait())
-        done, _ = await asyncio.wait({exited}, timeout=SETTLE_S)
-        if done:
-            await self._finish()
-            raise RuntimeError("Chromium exited at its start")
-        exited.cancel()
+        try:
+            exited = asyncio.ensure_future(proc.wait())
+            done, _ = await asyncio.wait({exited}, timeout=SETTLE_S)
+            if done:
+                raise RuntimeError("Chromium exited at its start")
+            exited.cancel()
+        except BaseException:
+            await self.kill()
+            raise
         self._tasks = [
             asyncio.create_task(self._watch_exit()),
             asyncio.create_task(self._watch_memory()),
+            asyncio.create_task(self._watch_ports()),
         ]
         return self
 
@@ -106,19 +116,30 @@ class PersonChromium(chromium.Chromium):
                     await self.on_end("memory_guard")
                 return
 
+    async def _watch_ports(self, reader: Any = chromium.listening_ports) -> None:
+        while not self.stopping:
+            await asyncio.sleep(PORTS_EVERY_S)
+            ports = reader(self.request.uid)
+            if ports:
+                self._event(event="session_ended", reason="listening_port", ports=sorted(ports)[:5])
+                if not self.stopping and self.on_end:
+                    await self.on_end("debugging_port")
+                return
+
     async def stop(self) -> None:
         self.stopping = True
         proc = self.proc
-        if proc is not None and proc.returncode is None:
-            await chromium.as_uid(
-                self.request.uid, sys.executable, "-m", "browserd.prep", "quit", str(proc.pid)
-            )
-            try:
-                await asyncio.wait_for(proc.wait(), QUIT_S)
-            except TimeoutError:
-                await self.kill()
-                return
-        await self._finish()
+        try:
+            if proc is not None and proc.returncode is None:
+                await chromium.as_uid(
+                    self.request.uid, sys.executable, "-m", "browserd.prep", "quit", str(proc.pid)
+                )
+                try:
+                    await asyncio.wait_for(proc.wait(), QUIT_S)
+                except TimeoutError:
+                    await self._kill_group()
+        finally:
+            await self._finish()
 
 
 async def remove_profile(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:

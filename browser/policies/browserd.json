@@ -1,4 +1,16 @@
 {
   "WebRtcIPHandling": "disable_non_proxied_udp",
-  "QuicAllowed": false
+  "QuicAllowed": false,
+  "URLBlocklist": ["chrome://*"],
+  "URLAllowlist": [
+    "chrome://policy",
+    "chrome://sandbox",
+    "chrome://newtab",
+    "chrome://new-tab-page",
+    "chrome://new-tab-page-third-party",
+    "chrome://top-chrome"
+  ],
+  "PolicyTestPageEnabled": false,
+  "ExtensionInstallBlocklist": ["*"],
+  "PasswordManagerEnabled": false
 }
