@@ -269,7 +269,9 @@ def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
         return None
     from app.browser import sources
 
-    return sources.runner_for(ctx["settings"], ctx["redis"], sessions_of(ctx))
+    return sources.runner_for(
+        ctx["settings"], ctx["redis"], sessions_of(ctx), lambda: agent_context(ctx)
+    )
 
 
 def _reap(sessions: sessionmaker[Session], now: datetime) -> int:

@@ -34,7 +34,10 @@ under the source: a person asked for their browser, the one preemption of SPEC-b
 service", or a timer; what was read completely is stored, the sweep's other sources do not run,
 and the next sweep starts again), `time_budget` (the sweep's time limit is near: what was read is
 stored), `page_failed` (a page did not load), `browser_busy`, `browser_unavailable` (browserd or
-the lease store did not answer, also in the middle of a source).
+the lease store did not answer, also in the middle of a source). A company career site (B9,
+site.py) adds `bad_address`, `no_credential` (skipped before any lease), `ats_board` (the site's
+postings sit on Ashby, Greenhouse or Lever: the entry's `board` names the API board to add
+instead), `token_budget` and `agent_failed` (what the finder reported and code kept is stored).
 
 BROWSER_SOURCES_BASE_URL (tests only, refused in production) points every source at a fixture
 server instead of the real host (tests/browser_pages/b8/).
@@ -87,6 +90,12 @@ ERRORS = (
     "page_failed",
     "browser_busy",
     "browser_unavailable",
+    # Company career sites (B9, site.py).
+    "bad_address",
+    "no_credential",
+    "ats_board",
+    "token_budget",
+    "agent_failed",
 )
 # The codes after which no other source of this sweep starts: the browser is wanted elsewhere.
 STOPS_SWEEP = ("lease_ended", "browser_busy", "browser_unavailable")
@@ -384,6 +393,8 @@ class Pages:
         self.lease_until = lease_until  # monotonic time at which the lease's active time ends
         self.count = 0
         self.pauses: list[float] = []
+        # The last page's snapshot text and address (the finder agent of B9 reads them).
+        self.last_text, self.last_url = "", ""
 
     async def _act(self, action: Callable[[], Awaitable[dict[str, Any]]]) -> tuple[Node, str]:
         if self.monotonic() + PAGE_BUDGET_S >= self.deadline:
@@ -404,6 +415,7 @@ class Pages:
             raise SourceError("lease_ended" if exc.code == "ended" else "page_failed") from None
         if not shot.get("ok") or not isinstance(shot.get("snapshot"), str):
             raise SourceError("page_failed")
+        self.last_text, self.last_url = shot["snapshot"], str(shot.get("url") or "")
         return parse_snapshot(shot["snapshot"]), str(shot.get("url") or "")
 
     async def open(self, url: str) -> tuple[Node, str]:
@@ -422,6 +434,9 @@ class Read:
 
     postings: list[tuple[str, ats.Posting]] = field(default_factory=list)
     result_pages: int = 0
+    user_id: str = ""
+    # What the source adds to its entry in the sweep's stats (B9: the board, the refusals).
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class Reader(Protocol):
@@ -465,8 +480,10 @@ class Runner:
         rng: random.Random | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         pacer: Pacer | None = None,
+        finder: Any = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
+        self.finder = finder  # B9: the finder agent of `site` sources (finder.FinderAgent)
         self.sleep, self.rng = sleep, rng or random.SystemRandom()
         self.monotonic = monotonic
         self.pacer = pacer or MemoryPacer()
@@ -511,9 +528,17 @@ class Runner:
         """The code the source reports, and the code of how its read ended (they differ only when
         the store failed after a read that ended the lease: the sweep's other sources then still
         do not start)."""
-        reader = readers()[source.kind]
         user = str(plan.user_id)
-        host = reader.host(self.base_url)
+        if source.kind == "site":
+            from app.browser.sources import site
+
+            reader: Reader = site.Site(self.finder)
+            host, skip = await reader.check(source, user, entry)  # type: ignore[attr-defined]
+            if skip is not None:
+                return skip, None
+        else:
+            reader = readers()[source.kind]
+            host = reader.host(self.base_url)
         asked = self.monotonic()  # the lease's active time counts from its start, after this
         try:
             got = await self.leases.acquire(user, "sweep", automation=True, hosts=[host])
@@ -536,7 +561,7 @@ class Runner:
             pacer=self.pacer,
             lease_until=asked + got.lease.max_s,
         )
-        read = Read()
+        read = Read(user_id=user)
         code: str | None = None
 
         def wanted(card: Card) -> bool:
@@ -558,6 +583,7 @@ class Runner:
             code = "layout_changed"
         finally:
             entry["result_pages"] = read.result_pages
+            entry.update(read.extra)
             try:
                 await self.leases.release(user, lease_id, reason="sweep_done")
             except StoreUnavailableError:
@@ -594,8 +620,9 @@ class Runner:
         )
 
 
-def runner_for(settings: Any, redis: Any, sessions: Any) -> Runner:
-    """The hook as the worker runs it: the lease store and the tools of B3 and B5 on its Redis."""
+def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = None) -> Runner:
+    """The hook as the worker runs it: the lease store and the tools of B3 and B5 on its Redis,
+    and the finder agent of B9 on the runner's context (`agent_context`, worker.agent_context)."""
     from app.browser.client import BrowserdClient
     from app.browser.leases import DbProfiles, lease_max_table
     from app.browser.tools import LeaseTools
@@ -620,4 +647,11 @@ def runner_for(settings: Any, redis: Any, sessions: Any) -> Runner:
         lambda user, lease, token: LeaseTools(leases, client, user, lease, token),
         base_url=settings.browser_sources_base_url,
         pacer=RedisPacer(pool),
+        finder=None if agent_context is None else _finder(agent_context),
     )
+
+
+def _finder(agent_context: Any) -> Any:
+    from app.browser import finder
+
+    return finder.RuntimeFinder(agent_context)
