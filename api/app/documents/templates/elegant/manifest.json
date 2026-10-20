@@ -1,0 +1,144 @@
+{
+  "slug": "elegant",
+  "version": 1,
+  "name": {
+    "en": "Elegant",
+    "fr": "Élégant"
+  },
+  "description": {
+    "en": "One column inside a thin double frame, the name and the headings in a display serif, thin rules between the parts.",
+    "fr": "Une colonne dans un fin cadre double, le nom et les titres dans un caractère à empattements de titrage, de fins filets entre les parties."
+  },
+  "tags": [
+    "one column",
+    "serif",
+    "no photo",
+    "colour"
+  ],
+  "photo": "none",
+  "fonts": [
+    "lora",
+    "playfair-display"
+  ],
+  "accent": "#7b3f4f",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.2,
+        "line_height": 1.42,
+        "section_gap": 10.0,
+        "item_gap": 5.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 9.9,
+        "line_height": 1.38,
+        "section_gap": 9.0,
+        "item_gap": 4.49,
+        "margin": 16.86
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.33,
+        "section_gap": 8.0,
+        "item_gap": 3.97,
+        "margin": 15.71
+      },
+      {
+        "body_size": 9.3,
+        "line_height": 1.29,
+        "section_gap": 7.0,
+        "item_gap": 3.46,
+        "margin": 14.57
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.24,
+        "section_gap": 6.0,
+        "item_gap": 2.94,
+        "margin": 13.43
+      },
+      {
+        "body_size": 8.7,
+        "line_height": 1.2,
+        "section_gap": 5.0,
+        "item_gap": 2.43,
+        "margin": 12.29
+      },
+      {
+        "body_size": 8.4,
+        "line_height": 1.15,
+        "section_gap": 4.0,
+        "item_gap": 1.91,
+        "margin": 11.14
+      },
+      {
+        "body_size": 8.1,
+        "line_height": 1.11,
+        "section_gap": 3.0,
+        "item_gap": 1.4,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.4,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 22.0
+      },
+      {
+        "body_size": 11.0,
+        "line_height": 1.46,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 20.0
+      },
+      {
+        "body_size": 10.6,
+        "line_height": 1.41,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.37,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.32,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 12.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "e5bfe3c435156e20b03949ed363a68966412573c183b0ddbc72e19cdb5b3444e"
+}
