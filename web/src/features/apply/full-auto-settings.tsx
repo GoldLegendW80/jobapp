@@ -161,6 +161,10 @@ export function FullAutoModeCard({ settings }: { settings: ApplySettings }) {
               handle yet, with a question left, a captcha or a sign in, waits
               for you in Applications instead.
             </p>
+            <p>
+              A company cap you set on this page replaces the one per company
+              rule for that company.
+            </p>
             {!on || rehearsalsLeft(settings) > 0 ? (
               <p>{rehearsalsSentence(settings)}</p>
             ) : null}

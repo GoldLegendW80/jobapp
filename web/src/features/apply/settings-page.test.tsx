@@ -250,6 +250,9 @@ describe("the Applications page", () => {
     expect(panel).toHaveTextContent(
       'Your next 3 Likes are rehearsals: the app fills the form and checks it, submits nothing, and asks you "Does this look right?" in Applications.',
     );
+    expect(panel).toHaveTextContent(
+      "A company cap you set on this page replaces the one per company rule for that company.",
+    );
     expect(api.puts).toEqual([]);
 
     await user.click(

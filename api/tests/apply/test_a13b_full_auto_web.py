@@ -151,7 +151,12 @@ def test_the_summary_counts_submitted_held_and_sent_to_review_with_the_reason(
 
 
 def test_the_summary_names_why_an_item_went_to_review(
-    api: Api, db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+    api: Api,
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    person_b: Person,
+    stub: str,
 ) -> None:
     turn_on(db, person_a)
     app_id = filled(db, factory, person_a, stub)
@@ -165,6 +170,8 @@ def test_the_summary_names_why_an_item_went_to_review(
     shown = item(queue(api, person_a), app_id)
     assert shown is not None
     assert shown["reason"]["code"] == "below_min_fit"
+    other = api.get("/api/apply/summary", token=api.login_token(person_b.email)).json()
+    assert other["sent_to_review"] == []
 
 
 def test_the_settings_name_the_hold_floor_and_the_rehearsals(
