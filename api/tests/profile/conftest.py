@@ -128,7 +128,14 @@ FULL: dict[str, dict[str, Any]] = {
         ],
         "never_apply": ["No cybersecurity roles."],
         "browser_sources": [
-            {"kind": "vie", "query": "data engineer", "location": "Germany", "enabled": False}
+            {
+                "kind": "vie",
+                "query": "data engineer",
+                "location": "Germany",
+                "enabled": False,
+                "accepted_at": None,
+                "text_version": None,
+            }
         ],
         "sweep_schedule": {
             "enabled": False,

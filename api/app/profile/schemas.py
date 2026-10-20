@@ -764,13 +764,33 @@ class BrowserSource(_Section):
     """A job source read through the person's browser (browser B8, app/browser/sources): the
     words typed in the site's search box, and its location box when the site has one. B8 runs
     `google_careers` and `vie`, B9 `site` (the query is the careers page's address, read by the
-    finder agent); `linkedin` (B10) is accepted and waits for its task. Off until the person
-    turns it on."""
+    finder agent), B10 `linkedin`. Off until the person turns it on.
+
+    A `linkedin` source (B10) also records the acceptance of the risk sentence: when
+    (`accepted_at`, ISO 8601 with its offset) and which version (`text_version`), written by
+    PUT /api/browser/linkedin; the other kinds have neither."""
 
     kind: Literal["google_careers", "vie", "site", "linkedin"]
     query: Line
     location: OptLine = None
     enabled: bool = False
+    accepted_at: Annotated[str, Field(max_length=40)] | None = None
+    text_version: Annotated[StrictInt, Field(ge=1, le=1000)] | None = None
+
+    @model_validator(mode="after")
+    def _acceptance(self) -> "BrowserSource":
+        if self.kind != "linkedin" and (self.accepted_at, self.text_version) != (None, None):
+            raise ValueError("only a linkedin source records an acceptance")
+        if (self.accepted_at is None) != (self.text_version is None):
+            raise ValueError("accepted_at and text_version go together")
+        if self.accepted_at is not None:
+            try:
+                when = datetime.fromisoformat(self.accepted_at)
+            except ValueError:
+                raise ValueError("accepted_at is not an ISO 8601 date and time") from None
+            if when.tzinfo is None:
+                raise ValueError("accepted_at needs its offset")
+        return self
 
 
 # What the person aims for (opportunities O4). Seniority, industries and company types add a
@@ -884,6 +904,14 @@ class SearchSection(_Section):
     @classmethod
     def _unique_boards(cls, value: list[Board]) -> list[Board]:
         return _unique(value, lambda b: f"{b.ats}:{b.org.lower()}", "board (same ATS and org)")
+
+    @field_validator("browser_sources")
+    @classmethod
+    def _one_linkedin(cls, value: list[BrowserSource]) -> list[BrowserSource]:
+        # The LinkedIn switch is one per person (browser B10): one entry holds it.
+        if sum(source.kind == "linkedin" for source in value) > 1:
+            raise ValueError("at most one linkedin source")
+        return value
 
 
 # --- answers ------------------------------------------------------------------------------------

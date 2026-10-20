@@ -17,6 +17,12 @@ passed and the starter list's entries handled).
 The photo is not a section: storing or removing it adds no revision, but updates `updated_at`.
 It is only ever stored as a `photo.Photo`, the output of `photo.normalize` (re-encoded, metadata
 stripped), by an upload and by an import alike.
+The LinkedIn consent (browser B10) cannot be written through a section: on the `search`
+section's `linkedin` entry, `enabled`, `accepted_at` and `text_version` keep their stored values
+(off and none when nothing is stored) on every save and import, unless the caller passes
+`linkedin_consent=True`, which only PUT /api/browser/linkedin does (it shows the sentence and
+records the person's accept). The words and the location of the entry are saved as sent, and an
+entry left out removes it, which turns LinkedIn off.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
@@ -86,6 +92,42 @@ def sections_view(profile: Profile) -> dict[str, dict[str, Any] | None]:
     return {name: stored.get(name) for name in SECTIONS}
 
 
+CONSENT_FIELDS = ("enabled", "accepted_at", "text_version")
+LINKEDIN = "linkedin"
+
+
+def _keep_consent(stored: dict[str, Any] | None, data: dict[str, Any]) -> dict[str, Any]:
+    """`data` (a validated search section) with its linkedin entry's consent fields put back to
+    the stored ones: off and none when no linkedin entry is stored."""
+    sources = data.get("browser_sources")
+    if not isinstance(sources, list) or not any(
+        isinstance(s, dict) and s.get("kind") == LINKEDIN for s in sources
+    ):
+        return data
+    before = next(
+        (
+            s
+            for s in (stored or {}).get("browser_sources") or []
+            if isinstance(s, dict) and s.get("kind") == LINKEDIN
+        ),
+        None,
+    )
+    kept = {
+        "enabled": bool(before.get("enabled")) if before else False,
+        "accepted_at": before.get("accepted_at") if before else None,
+        "text_version": before.get("text_version") if before else None,
+    }
+    if (kept["accepted_at"] is None) != (kept["text_version"] is None):
+        kept = {"enabled": False, "accepted_at": None, "text_version": None}
+    return {
+        **data,
+        "browser_sources": [
+            {**s, **kept} if isinstance(s, dict) and s.get("kind") == LINKEDIN else s
+            for s in sources
+        ],
+    }
+
+
 def save_section(
     db: Session,
     user_id: uuid.UUID,
@@ -93,18 +135,23 @@ def save_section(
     data: dict[str, Any],
     base_revision: int,
     now: datetime,
+    *,
+    linkedin_consent: bool = False,
 ) -> Profile:
     """Replace one section with already validated `data` and record the revision.
 
     Raises StaleRevisionError (with the current profile, still locked) when `base_revision`
     is not the stored revision, and ReservedFieldError when a `preferences` save changes the
-    onboarding dates.
+    onboarding dates. The LinkedIn consent of a `search` section is kept as stored unless
+    `linkedin_consent` (the module docstring).
     """
     if section not in SECTIONS:
         raise ValueError(f"unknown section {section!r}")
     profile = _locked(db, user_id, now)
     if profile.revision != base_revision:
         raise StaleRevisionError(profile)
+    if section == "search" and not linkedin_consent:
+        data = _keep_consent((profile.sections or {}).get("search"), data)
     if section == "preferences" and data.get("onboarding") != _onboarding(profile):
         raise ReservedFieldError("onboarding")
     return _write(db, profile, section, data, now)
@@ -158,7 +205,13 @@ def import_profile(
     profile = _locked(db, user_id, now)
     if base_revision is not None and profile.revision != base_revision:
         raise StaleRevisionError(profile)
-    sections = {**sections, "preferences": {**sections["preferences"]}}
+    # An imported file never carries a LinkedIn acceptance (another account's, or an old one),
+    # nor onboarding dates (the stored ones stay).
+    sections = {
+        **sections,
+        "search": _keep_consent((profile.sections or {}).get("search"), sections["search"]),
+        "preferences": {**sections["preferences"]},
+    }
     sections["preferences"]["onboarding"] = _onboarding(profile)
     revision = profile.revision
     for name in SECTIONS:

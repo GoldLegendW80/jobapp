@@ -195,6 +195,9 @@ def test_the_day_starts_at_midnight_in_the_persons_time_zone(
         ("lever", "https://jobs.lever.co/example-robotics/1", "lever", 180, 20),
         ("other", "https://www.linkedin.com/jobs/view/1", "linkedin", 600, 15),
         ("other", "https://fr.linkedin.com/jobs/view/1", "linkedin", 600, 15),
+        # the host decides before the ATS: a LinkedIn address is LinkedIn whatever its query says
+        ("greenhouse", "https://www.linkedin.com/jobs/view/1?gh_jid=1", "linkedin", 600, 15),
+        ("other", "https://www.linkedin.com/jobs/view/1?gh_jid=1", "linkedin", 600, 15),
         ("other", "https://linkedin.com.example.org/jobs/1", "linkedin.com.example.org", 180, 20),
         ("other", "https://www.Careers.Example.org/apply/1", "careers.example.org", 180, 20),
         ("other", "", "unknown", 180, 20),
