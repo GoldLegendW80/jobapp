@@ -323,7 +323,7 @@ PERKS = [
     ("€90 a month", None),  # under the month floor
     ("€900 a year", None),  # under the year floor
     ("2026 € a year", None),  # a year next to a sign
-    ("2026€ par mois", None),
+    ("2026€ par mois", one(2026, period="month")),  # O3b: a month is never a year
     ("€20 a day", one(20)),  # the floors themselves are kept
     ("€100 a month", one(100, period="month")),
     ("€1,000 a year", one(1000, period="year")),
@@ -336,6 +336,157 @@ PERKS = [
     ("Machine Learning Engineer, $150k-$200k a year", y(150000, 200000, "USD")),
     ("Salary €60k-€70k a year and a learning budget", y(60000, 70000)),
     ("Up to €60,000 to €70,000 per year", y(60000, 70000)),  # a range: no open bound
+]
+
+# O3b (issue #504, the re-check of PR #498), follow-up 1: profit shares, a thirteenth month,
+# sign-on payments, options and on target earnings are bonuses, never a base pay.
+BONUS_WORDS = [
+    ("Intéressement 3 000 € par an", None),
+    ("Intéressement : 3 000 € par an", None),
+    ("interessement 3 000 € par an", None),
+    ("Participation aux bénéfices 2 500 € par an", None),
+    ("Participation, 2 500 € par an", None),
+    ("Abondement PEE 1 500 € par an", None),
+    ("Abondement de 1 500 € par an", None),
+    ("13e mois, 3 000 € par an", None),
+    ("13ème mois : 3 000 € par an", None),
+    ("13 ème mois 3 000 € par an", None),
+    ("Treizième mois de 3 000 € par an", None),
+    ("13th month salary $5,000 a year", None),
+    ("Profit sharing $5,000 a year", None),
+    ("Profit-sharing: $5,000 a year", None),
+    ("Gain sharing $2,000 a year", None),
+    ("Sign-on $10,000 a year", None),
+    ("Sign on bonus $10,000 a year", None),
+    ("Signon $10,000 a year", None),
+    ("Options worth $50,000 a year", None),
+    ("Stock options: $50,000 a year", None),
+    ("OTE $150,000 a year", None),
+    ("OTE: €90,000 per year", None),
+    ("On target earnings of $150,000 a year", None),
+    ("On-target earnings $150,000 a year", None),
+    ("€60,000 a year in options", None),
+    ("45 000 € brut par an d'intéressement", None),
+    ("Salaire 45 000 € brut par an, intéressement en sus", one(45000, period="year")),
+    ("€60,000 a year. Options available.", one(60000, period="year")),
+    ("Notes: €60,000 a year", one(60000, period="year")),  # "ote" inside a word
+    ("Base salary $150,000 a year, OTE $200,000 a year", one(150000, "USD", "year")),
+    ("Participative culture, €60,000 a year", one(60000, period="year")),
+    ("13 000 € par an", one(13000, period="year")),
+    ("Optional remote, €60,000 a year", one(60000, period="year")),
+    ("Signal processing engineer, €60,000 a year", one(60000, period="year")),
+]
+
+# Follow-up 2: the year guard reads a yearly statement only, and a pay word earlier in the
+# clause is a sign of a pay ("2000 € par mois" is a French intern's or junior's pay).
+YEAR_GUARD = [
+    ("2000 € par mois", one(2000, period="month")),
+    ("2000€/mois", one(2000, period="month")),
+    ("2000 €/mois", one(2000, period="month")),
+    ("2000 € a month", one(2000, period="month")),
+    ("Salaire 2000 € par mois", one(2000, period="month")),
+    ("Gratification 2000 € par mois", one(2000, period="month")),
+    ("1900 € par mois", one(1900, period="month")),
+    ("2100 € par mois", one(2100, period="month")),
+    ("1950€ mensuel", one(1950, period="month")),
+    ("2 000 € par mois", one(2000, period="month")),
+    ("2000 € par jour", one(2000)),
+    ("2000 €/h", one(2000, period="hour")),
+    ("Salaire 2026 € par an", one(2026, period="year")),
+    ("Salary 2000 € a year", one(2000, period="year")),
+    ("Rémunération 2000 € par an", one(2000, period="year")),
+    ("Remuneration: 2000 € per year", one(2000, period="year")),
+    ("Gratification de stage 2000 € par an", one(2000, period="year")),
+    ("Wage 2026 € a year", one(2026, period="year")),
+    ("Salary 2026 $ a year", one(2026, "USD", "year")),
+    ("2026 € a year", None),
+    ("2000 € par an", None),
+    ("2026€/an", None),
+    ("En 2026 € par an", None),
+    ("Depuis 2019 € par an", None),
+    ("Paid 2026 € a year", None),  # "paid" names no pay
+    ("Salaire. 2026 € par an", None),  # the pay word ends with its clause
+    ("2025-2026 € per year", None),
+    ("2000 € par mois de prime", None),
+    ("Prime 2000 € par mois", None),
+    ("Salaire 2000 € par mois. Prime 2000 € par mois", one(2000, period="month")),
+]
+
+# Follow-up 3: a mark right after a bonus word ends no clause, nor does a line break the figure
+# follows at once; a line break followed by words does.
+LABEL_MARKS = [
+    ("Bonus; €5,000 per year", None),
+    ("Bonus ;€5,000 per year", None),
+    ("Bonus | €5,000 per year", None),
+    ("Bonus • €5,000 per year", None),
+    ("Bonus + €5,000 per year", None),
+    ("Bonus\n€5,000 per year", None),
+    ("Bonus\r\n€5,000 per year", None),
+    ("Bonus\n\n€5,000 per year", None),
+    ("Bonus:\n€5,000 per year", None),
+    ("Bonus;\n€5,000 per year", None),
+    ("Bonus.\n€5,000 per year", None),
+    ("Bonus,  , €5,000 per year", None),
+    ("Bonus (annual) €5,000 per year", None),
+    ("Prime ; 3 000 € par an", None),
+    ("Prime | 3 000 € par an", None),
+    ("Prime\n3 000 € par an", None),
+    ("Equity • $50,000 a year", None),
+    ("Mutuelle ; 50 € par mois", None),
+    ("Benefits\nSalary: €60,000 a year", one(60000, period="year")),
+    ("Bonus\nSalary: €60,000 a year", one(60000, period="year")),
+    ("Bonus\n\nSalary\n€60,000 a year", one(60000, period="year")),
+    ("Great bonus. €60,000 a year", one(60000, period="year")),
+    ("Salary; €60,000 per year", one(60000, period="year")),
+    ("Salaire | 45 000 € par an", one(45000, period="year")),
+    ("Remote • €60,000 a year", one(60000, period="year")),
+    ("Mutuelle.\nSalaire : 2 500 € par mois", one(2500, period="month")),
+    ("Prime\nSalaire 2 500 € par mois", one(2500, period="month")),
+    ("Tickets restaurant\nTJM 600 €", one(600)),
+    ("Salary\n€60,000 a year", one(60000, period="year")),
+    ("Salaire :\n45 000 € par an", one(45000, period="year")),
+]
+
+# Follow-up 4: after the statement, a bonus or perk word is its subject only at once or after a
+# linking word; after "with", "avec", "hors", "excluding" it is an addition, and a capitalised
+# word after "for a" or "as a" is a role.
+AFTER_CLAUSE = [
+    ("Salary: €70,000 per year with great benefits", one(70000, period="year")),
+    ("$150,000 a year with equity", one(150000, "USD", "year")),
+    ("40 000 € brut par an hors variable", one(40000, period="year")),
+    ("40 000 € brut par an avec mutuelle", one(40000, period="year")),
+    ("Salary: €50,000 per year for a Training Manager", one(50000, period="year")),
+    ("$150,000 a year excluding bonus", one(150000, "USD", "year")),
+    ("€60,000 a year with a learning budget", one(60000, period="year")),
+    ("45 000 € par an avec tickets restaurant", one(45000, period="year")),
+    ("45 000 € par an hors prime", one(45000, period="year")),
+    ("€60,000 a year as a Senior Equity Analyst", one(60000, period="year")),
+    ("600 € par jour avec mutuelle", one(600)),
+    ("$140,000 per year with stock options", one(140000, "USD", "year")),
+    ("€60,000 per year, with bonus", one(60000, period="year")),
+    ("€60,000 a year + bonus", one(60000, period="year")),
+    ("€60,000 a year without commission", one(60000, period="year")),
+    ("$120,000 a year in equity", None),
+    ("$120,000 a year in stock", None),
+    ("€60,000 a year in RSUs", None),
+    ("€60,000 a year of equity", None),
+    ("€60,000 a year including equity", None),
+    ("€60,000 a year y compris variable", None),
+    ("€3,000 per year for conferences", None),
+    ("€1,500 a year for training", None),
+    ("€1,000 a year for a training budget", None),
+    ("€1,000 a year for your home office", None),
+    ("€500 a year for the gym", None),
+    ("€10k per month in cloud credits", None),
+    ("€2,000 per year towards childcare", None),
+    ("45 000 € par an de prime", None),
+    ("3 000 € par an d'intéressement", None),
+    ("1 500 € par an en tickets restaurant", None),
+    ("500 € par an pour la formation", None),
+    ("45 K€ brut annuel variable", None),
+    ("€5,000 a year bonus", None),
+    ("$10,000 a year signing bonus", None),
+    ("€2,000 per year as a bonus", None),
 ]
 
 # Texts with no figure the list accepts.
@@ -360,7 +511,17 @@ NOTHING = [
 
 @pytest.mark.parametrize(
     ("text", "expected"),
-    RANGE_WORDS + RANGE_K + DAILY + FRENCH_RANGE + FRENCH_YEAR + DOLLAR_YEAR + PERKS,
+    RANGE_WORDS
+    + RANGE_K
+    + DAILY
+    + FRENCH_RANGE
+    + FRENCH_YEAR
+    + DOLLAR_YEAR
+    + PERKS
+    + BONUS_WORDS
+    + YEAR_GUARD
+    + LABEL_MARKS
+    + AFTER_CLAUSE,
 )
 def test_one_statement(text: str, expected: Pay | None) -> None:
     assert pays(text) == ([expected] if expected else [])
