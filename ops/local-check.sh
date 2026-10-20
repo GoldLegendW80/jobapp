@@ -370,7 +370,7 @@ fi
 # 3.2 and 5). A new bash inherits nothing of that state, so the status of a step is the same
 # however run_step is called. The step is given every function of this script (declare -f) and the
 # variables named in STEP_ENV; a name it lacks stops it (nounset) and the step fails.
-STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST NET_BASE STACK_NETWORKS)
+STEP_ENV=(ROOT MAIN RECORDS TREE WORK LOGS PREFIX CHECK_ID PROG JOBS WEB_JOBS STACKS base_sha head_sha SCAN_FROM scan_line ALONE_TEST NET_BASE STACK_NETWORKS JOURNEY_SHARDS)
 TIMINGS="$RECORDS/timings.csv"
 timing() { # timing <step> <exit status> <seconds>: one line of timings.csv
   local result=PASS
@@ -651,6 +651,7 @@ passed() { # passed <step>: true when that step ran and passed
 # again and every step of the phase has the machine to itself.
 quiet_phase() {
   local api=0
+  journeys_again
   if wanted api && [[ -f "$WORK/api.env" ]]; then api=1; fi
   if wanted journeys && [[ "$(cat "$WORK/web.done" 2>/dev/null)" == 0 ]]; then
     run_step vitest s_vitest || true
@@ -662,8 +663,9 @@ quiet_phase() {
   if flaky_candidates >"$WORK/flaky-ids" && run_step pytest-flaky s_pytest_flaky; then
     awk -F '\t' -v OFS='\t' '$1 == "pytest" { $2 = 0 } { print }' "$WORK/results" >"$WORK/results.new"
     mv "$WORK/results.new" "$WORK/results"
-    mv "$WORK/flaky-ids" "$WORK/flaky"
-    echo "pytest: counted as passed, its failed tests passed when run again alone: $(tr '\n' ' ' <"$WORK/flaky")"
+    cat "$WORK/flaky-ids" >>"$WORK/flaky"
+    echo "pytest: counted as passed, its failed tests passed when run again alone: $(tr '\n' ' ' <"$WORK/flaky-ids")"
+    rm -f "$WORK/flaky-ids"
   fi
   if passed pytest; then
     run_step pytest-alone s_pytest_alone || true
@@ -797,12 +799,44 @@ journey_groups() { # journey_groups <checks|journeys>: the groups of that CI job
 
 # One journey group on a scratch stack of its own, as the CI steps "Start the stack and migrate",
 # the group's Playwright command, "Stack logs" and "Tear down the scratch stack".
-journey_specs() { # the Playwright arguments of a group, as ci.yml has them
-  case "$1" in
-  apps) echo "jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts --workers=1" ;;
-  sweep) echo "jobs-sweep.spec.ts --workers=1" ;;
-  *) echo "-c e2e/$1-all.config.ts" ;;
+journey_specs() { # journey_specs <part>: the Playwright arguments of a group (as ci.yml has them) or of one of its shards
+  local group="${1%%.*}" shard=""
+  [[ "$1" != *.* ]] || shard=" --shard=${1#*.}/$(shard_count "$group")"
+  case "$group" in
+  apps) echo "jobs.spec.ts jobs-map.spec.ts agents-runs.spec.ts agents-triage.spec.ts agents-chat.spec.ts agents-streaming.spec.ts --workers=1$shard" ;;
+  sweep) echo "jobs-sweep.spec.ts --workers=1$shard" ;;
+  *) echo "-c e2e/$group-all.config.ts$shard" ;;
   esac
+}
+
+# The apply group fills forms at a person's pace (browserd/tools/pacing.py), one fill at a time on
+# its stack's one browser: alone it took 1135 s of a 1697 s check (2026-10-20), the longest step by
+# far. A group named in JOURNEY_SHARDS (<group>:<shards>, separated by spaces) is split by
+# Playwright's --shard across that many stacks side by side, each a step journeys-<group>.<i> of
+# its own; with fullyParallel false (every <group>-all.config.ts) Playwright puts each spec file of
+# the group in exactly one shard, so a spec added to the group runs without a list to edit here.
+# A group name holds no dot: the dot separates the group from its shard.
+JOURNEY_SHARDS="${LOCAL_CHECK_JOURNEY_SHARDS-apply:2}"
+
+shard_count() { # shard_count <group>: how many stacks the group is split across, 1 when it is not
+  local spec n=1
+  for spec in $JOURNEY_SHARDS; do
+    [[ "${spec%%:*}" != "$1" ]] || n="${spec#*:}"
+  done
+  [[ "$n" =~ ^[1-9][0-9]*$ ]] || n=1
+  printf '%s\n' "$n"
+}
+
+journey_parts() { # journey_parts <group ...>: each group, or its shards <group>.1 to <group>.<n>
+  local group n i
+  for group in "$@"; do
+    n="$(shard_count "$group")"
+    if ((n == 1)); then
+      printf '%s\n' "$group"
+    else
+      for i in $(seq 1 "$n"); do printf '%s.%s\n' "$group" "$i"; done
+    fi
+  done
 }
 
 journey_play() ( # journey_play <group> <Playwright arguments>
@@ -819,11 +853,11 @@ journey_play() ( # journey_play <group> <Playwright arguments>
 # A start that fails on "Pool overlaps" (a network left by a check that died) is taken down and
 # started again on another network slot, within the same three starts: the bad slot stays claimed,
 # and `slot`, s_journey's local, names the new one so that s_journey frees that one.
-stack_up() { # stack_up <group> <project> <compose file arguments>
-  local group="$1" project="$2" port="" out attempt=1 rc why
+stack_up() { # stack_up <part> <project> <compose file arguments>: a group, or one shard of it
+  local part="$1" project="$2" port="" out attempt=1 rc why group="${1%%.*}"
   shift 2
-  out="$WORK/up-$group.log"
-  [[ ! -s "$WORK/ports/$group" ]] || port="$(cat "$WORK/ports/$group")"
+  out="$WORK/up-$part.log"
+  [[ ! -s "$WORK/ports/$part" ]] || port="$(cat "$WORK/ports/$part")"
   while :; do
     if [[ -z "$port" ]] || ! port_free "$port"; then port="$(claim_port)" || return 1; fi
     export HTTP_PORT="$port" E2E_CADDY_URL="http://127.0.0.1:$port"
@@ -846,7 +880,7 @@ stack_up() { # stack_up <group> <project> <compose file arguments>
     attempt=$((attempt + 1))
     if [[ "$why" == pool ]]; then # same file, new subnets: the compose arguments stay valid
       slot="$(claim_net_slot)" || return 1
-      stack_networks "$group" "$slot" >/dev/null
+      stack_networks "$part" "$slot" >/dev/null
       continue
     fi
     port=""
@@ -861,11 +895,14 @@ stack_up() { # stack_up <group> <project> <compose file arguments>
   done
 }
 
-s_journey() {
-  local group="$1" project="$PREFIX-$1" rc=0 files=() specs one slot
+s_journey() { # s_journey <part> [again]: a group or one of its shards; `again` keeps the first run's stack log
+  # The run again is a compose project of its own: the first run's stack may still be up (a step
+  # stopped by STEP_TIMEOUT is killed before its `down`), so it is never reused.
+  local part="$1" group="${1%%.*}" run="$1${2:+-$2}" rc=0 files=() specs one slot project
+  project="$PREFIX-${run//./-}"
   while IFS= read -r one; do files+=("$one"); done < <(stack_files)
   slot="$(claim_net_slot)" || return 1
-  files+=(-f "$(stack_networks "$group" "$slot")")
+  files+=(-f "$(stack_networks "$part" "$slot")")
   export E2E_COMPOSE_PROJECT="$project" E2E_EVIDENCE=ci
   case "$group" in
   apps)
@@ -896,11 +933,11 @@ s_journey() {
     export COMPOSE_PROFILES=browser
     ;;
   esac
-  specs="$(journey_specs "$group")"
-  stack_up "$group" "$project" "${files[@]}" &&
+  specs="$(journey_specs "$part")"
+  stack_up "$part" "$project" "${files[@]}" &&
     docker compose -p "$project" -f compose.yml exec -T api alembic upgrade head &&
-    journey_play "$group" "$specs" || rc=$?
-  docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color >"$LOGS/stack-$group.log" 2>&1 || true
+    journey_play "$run" "$specs" || rc=$?
+  docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml logs --no-color >"$LOGS/stack-$run.log" 2>&1 || true
   # The slot is free again only when its stack is gone: one that could not be taken down keeps
   # its networks, so it keeps its slot until the trap removes everything under the prefix.
   if docker compose -p "$project" -f compose.yml -f tests/ats-stub.compose.yml down -v --remove-orphans --timeout 0; then
@@ -911,8 +948,21 @@ s_journey() {
   return "$rc"
 }
 
+# A journey part that failed is run once more on a fresh stack, as soon as every part has run
+# (beside the end of the api lane, not after it): on 2026-10-20 two gates of one batch failed on
+# one journey group each (browser, then nothing but a timing test) and each cost a whole new check
+# of 28 minutes, where the run again of that group alone took 3. The run again is the step
+# journeys-<part>-again; when it passes, the quiet phase counts the part as passed and lists it
+# under `flaky` in the summary and the record, as the flaky tests of pytest. More than
+# JOURNEY_AGAIN_MAX failed parts is no flake (a broken stack, a broken change): none runs again.
+JOURNEY_AGAIN_MAX=2
+
+failed_step() { # failed_step <step>: true when that step ran and failed
+  awk -F '\t' -v name="$1" '$1 == name && $2 != 0 { bad = 1 } END { exit !bad }' "$WORK/results"
+}
+
 lane_journeys() {
-  local groups=() group running=() why=""
+  local groups=() group parts=() part running=() why="" again=()
   if wanted checks; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups checks); fi
   if wanted journeys; then while IFS= read -r group; do groups+=("$group"); done < <(journey_groups journeys); fi
   ((${#groups[@]})) || return 0
@@ -920,20 +970,45 @@ lane_journeys() {
   [[ "$(cat "$WORK/images.done")" == 0 ]] || why="the images were not built"
   [[ "$(cat "$WORK/web.done")" == 0 ]] || why="the web dependencies were not installed"
   [[ -n "$why" ]] || run_step chromium s_chromium || why="Chromium for Playwright was not installed"
+  while IFS= read -r part; do parts+=("$part"); done < <(journey_parts "${groups[@]}")
   if [[ -n "$why" ]]; then
-    for group in "${groups[@]}"; do not_run "journeys-$group" "$why"; done
+    for part in "${parts[@]}"; do not_run "journeys-$part" "$why"; done
     return 0
   fi
-  pick_journey_ports "${groups[@]}" || {
-    for group in "${groups[@]}"; do not_run "journeys-$group" "no free loopback port for the stacks"; done
+  pick_journey_ports "${parts[@]}" || {
+    for part in "${parts[@]}"; do not_run "journeys-$part" "no free loopback port for the stacks"; done
     return 0
   }
-  for group in $(longest_first "${groups[@]}"); do
+  for part in $(longest_first "${parts[@]}"); do
     while (($(alive "${running[@]+"${running[@]}"}") >= STACKS)); do sleep 1; done
-    run_step "journeys-$group" s_journey "$group" &
+    run_step "journeys-$part" s_journey "$part" &
     running+=($!)
   done
   wait
+  for part in "${parts[@]}"; do
+    if failed_step "journeys-$part"; then again+=("$part"); fi
+  done
+  ((${#again[@]} >= 1 && ${#again[@]} <= JOURNEY_AGAIN_MAX)) || return 0
+  running=()
+  for part in "${again[@]}"; do
+    while (($(alive "${running[@]+"${running[@]}"}") >= STACKS)); do sleep 1; done
+    run_step "journeys-$part-again" s_journey "$part" again &
+    running+=($!)
+  done
+  wait
+}
+
+# In the quiet phase, once no lane writes $WORK/results any more: a part whose run again passed
+# counts as passed, and is listed under `flaky`.
+journeys_again() {
+  local name part
+  awk -F '\t' '$1 ~ /^journeys-.*-again$/ && $2 == 0 { print $1 }' "$WORK/results" | while IFS= read -r name; do
+    part="${name%-again}"
+    awk -F '\t' -v OFS='\t' -v name="$part" '$1 == name { $2 = 0 } { print }' "$WORK/results" >"$WORK/results.new"
+    mv "$WORK/results.new" "$WORK/results"
+    printf '%s\n' "$part" >>"$WORK/flaky"
+    echo "$part: counted as passed, it failed and passed when run again on a fresh stack"
+  done
 }
 
 alive() { # alive <process id ...>: how many of them still run
@@ -1087,12 +1162,14 @@ expected_steps() {
   if wanted checks || wanted journeys; then printf '%s\n' web-install images chromium; fi
   if wanted checks; then
     printf '%s\n' pre-commit secret-scan shellcheck e2e-groups ci-plan shell-tests
-    journey_groups checks | sed 's/^/journeys-/'
+    # shellcheck disable=SC2046 # group names are single words
+    journey_parts $(journey_groups checks) | sed 's/^/journeys-/'
     (cd "$TREE" && shell_tests) | sed 's/^tests\///; s/\.sh$//'
   fi
   if wanted journeys; then
     printf '%s\n' lint typecheck build vitest
-    journey_groups journeys | sed 's/^/journeys-/'
+    # shellcheck disable=SC2046 # group names are single words
+    journey_parts $(journey_groups journeys) | sed 's/^/journeys-/'
   fi
 }
 
