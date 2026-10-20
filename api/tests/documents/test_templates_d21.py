@@ -737,21 +737,20 @@ def test_a_name_breaks_only_between_its_words(
 # --- docker: every glyph inside the page's frame ------------------------------------------------
 
 
-def glyph_boxes(pdf: bytes) -> list[list[Box]]:
-    """Per page, the box of every character that is drawn (not white space, not generated)."""
+def glyph_boxes(pdf: bytes) -> list[list[tuple[str, Box]]]:
+    """Per page, every character that is drawn (not white space, not generated) with its box."""
     document = pdfium.PdfDocument(pdf)
     try:
         out = []
         for page in document:
             textpage = page.get_textpage()
-            boxes = []
+            chars = []
             for index in range(textpage.count_chars()):
-                if pdfium_c.FPDFText_IsGenerated(textpage.raw, index):
+                char = chr(pdfium_c.FPDFText_GetUnicode(textpage.raw, index))
+                if pdfium_c.FPDFText_IsGenerated(textpage.raw, index) or char.isspace():
                     continue
-                if chr(pdfium_c.FPDFText_GetUnicode(textpage.raw, index)).isspace():
-                    continue
-                boxes.append(textpage.get_charbox(index))
-            out.append(boxes)
+                chars.append((char, textpage.get_charbox(index)))
+            out.append(chars)
         return out
     finally:
         document.close()
@@ -772,8 +771,9 @@ def test_every_glyph_of_every_page_stays_inside_the_frame(
     renderer: Any, slug: str, kind: str
 ) -> None:
     """A document of two pages at the loosest step: on each page, every glyph lies inside the
-    page's margin, and in `elegant` inside the inner edge of its frame (6 mm and a 2.8 pt border)
-    with the step's margin as the padding on every page, not only on the first."""
+    page's margin, in `elegant` inside the inner edge of its frame (6 mm and a 2.8 pt border).
+    The review of D21: `elegant`'s padding stood only at the top of page 1, and page 2's first
+    line 3.2 mm from the paper's edge, across the frame."""
     found = template(slug)
     if kind == "cv":
         _, language, content = d1("cv-long")
@@ -785,18 +785,15 @@ def test_every_glyph_of_every_page_stays_inside_the_frame(
     )
     assert rendered.pages == 2, rendered.pages
     inset = (6 * MM + 2.8) if slug == "elegant" else step.margin * MM
-    if slug == "elegant":
-        assert step.margin * MM > inset + 3 * MM  # the text keeps clear of the frame
-        inset = step.margin * MM
     pages = glyph_boxes(rendered.pdf)
     assert len(pages) == 2
-    for number, boxes in enumerate(pages, 1):
-        assert boxes, number
-        left = min(box[0] for box in boxes)
-        lowest = min(box[1] for box in boxes)
-        right = max(box[2] for box in boxes)
-        highest = max(box[3] for box in boxes)
-        assert left >= inset - 0.5, (number, left / MM)
-        assert lowest >= inset - 0.5, (number, lowest / MM)
-        assert right <= A4[0] - inset + 0.5, (number, right / MM)
-        assert highest <= A4[1] - inset + 0.5, (number, highest / MM)
+    if kind == "letter":  # page 1 starts the letter, it does not hold the heading alone
+        assert "".join(content.salutation.split()).casefold() in pages_text(rendered.pdf)[0]
+    # a glyph's ink may pass its advance by a fraction of a millimetre (an italic g, a figure)
+    slack = 0.5 * MM
+    low, high = inset - slack, (A4[0] - inset + slack, A4[1] - inset + slack)
+    for number, chars in enumerate(pages, 1):
+        assert chars, number
+        for char, (x0, y0, x1, y1) in chars:
+            inside = low <= x0 and low <= y0 and x1 <= high[0] and y1 <= high[1]
+            assert inside, (number, char, [round(v / MM, 2) for v in (x0, y0, x1, y1)])

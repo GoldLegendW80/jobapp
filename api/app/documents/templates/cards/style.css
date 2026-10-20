@@ -1,5 +1,5 @@
 /* cards: Nunito Sans, an ocean blue accent. Every section is a soft card, and so is each role:
-   a pale blue fill, a light border and round corners, never cut by the end of a page
+   a pale blue fill, a light border and round corners, in the CV never cut by the end of a page
    (`break-inside: avoid` moves a card whole to the next page, so an overflow shows as a second
    page). The heading card is a deeper blue across the top; under it a grid of two columns of
    cards, the story on the left and a 62 mm column of details on the right. The density comes
@@ -124,7 +124,14 @@ li, p, h1, h3 { overflow-wrap: anywhere; }
 .languages { list-style: none; }
 .languages strong { font-weight: 700; }
 
-.letter-body { margin-top: var(--section-gap); padding: 6mm 7mm; }
+/* the letter's card is the one card that may cross a page end, its edges drawn again on each
+   page: kept whole, a letter longer than a page left page 1 with the heading card alone */
+.letter-body {
+  margin-top: var(--section-gap);
+  padding: 6mm 7mm;
+  break-inside: auto;
+  box-decoration-break: clone;
+}
 .letter-body p { margin-bottom: var(--item-gap); }
 .date { text-align: right; color: #3c4a5a; }
 .recipient { margin-top: var(--section-gap); }
