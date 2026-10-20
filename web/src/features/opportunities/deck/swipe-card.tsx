@@ -9,7 +9,13 @@ import { WORDING } from "@/lib/wording";
 import { cn } from "@/lib/utils";
 
 import type { Card } from "../opportunities-api";
-import { contractLine, placeLine, reasonLine, sourceLine } from "./card-text";
+import {
+  cardLabel,
+  contractLine,
+  placeLine,
+  reasonLine,
+  sourceLine,
+} from "./card-text";
 import type { Swipe } from "./use-deck";
 
 /** How far, in pixels, a drag must go for the card to leave; under it the card springs back. */
@@ -43,7 +49,6 @@ export function SwipeCard({
   const [dx, setDx] = useState(0);
   const [dragging, setDragging] = useState(false);
   const start = useRef<{ x: number; pointer: number } | null>(null);
-  const titleId = useId();
   const reasonId = useId();
 
   // A swipe answered with the card still here (a refusal): back to the middle.
@@ -91,7 +96,7 @@ export function SwipeCard({
 
   return (
     <article
-      aria-labelledby={titleId}
+      aria-label={cardLabel(card)}
       aria-describedby={reason ? reasonId : undefined}
       data-testid="deck-card"
       data-dx={dx}
@@ -130,10 +135,7 @@ export function SwipeCard({
       ) : null}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
-          <h2
-            id={titleId}
-            className="text-xl leading-tight font-semibold text-balance"
-          >
+          <h2 className="text-xl leading-tight font-semibold text-balance">
             {card.title}
           </h2>
           <p className="text-base text-muted-foreground">{card.company}</p>

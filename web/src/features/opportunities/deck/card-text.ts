@@ -38,9 +38,11 @@ const WORK_MODES: Record<string, string> = {
 export function placeLine(card: Pick<Card, "location" | "work_mode">): string {
   const mode = card.work_mode ? WORK_MODES[card.work_mode] : undefined;
   const location = card.location.trim();
-  if (mode && location && !location.toLowerCase().includes(mode.toLowerCase()))
-    return `${location}, ${mode}`;
-  return mode ?? location;
+  if (!mode) return location;
+  if (!location) return mode;
+  return location.toLowerCase().includes(mode.toLowerCase())
+    ? location
+    : `${location}, ${mode}`;
 }
 
 export const contractLine = (card: Pick<Card, "contract_type">) =>
