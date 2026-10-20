@@ -394,6 +394,43 @@ describe("the Documents section of a posting", () => {
     expect(api.posted[0]?.path).toBe("/api/documents/cv-doc/fit");
   });
 
+  it("shows the api's sentence when Make it fit is refused", async () => {
+    fakePosting([
+      ready("cv", { latest: fakeVersion({ number: 3, fit: "overflow" }) }),
+    ]);
+    server.use(
+      http.post("*/api/documents/:id/fit", () =>
+        HttpResponse.json(
+          { detail: "Add a model credential in your account first." },
+          { status: 409 },
+        ),
+      ),
+    );
+    const { user, section } = await openSection();
+    const cv = within(section).getByTestId("posting-cv");
+    await user.click(within(cv).getByRole("button", { name: "Make it fit" }));
+    expect(
+      await within(cv).findByText(
+        "Add a model credential in your account first.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("offers no Make it fit on a letter, which has no shortening pass", async () => {
+    fakePosting([
+      ready("cv"),
+      ready("letter", { latest: fakeVersion({ number: 3, fit: "overflow" }) }),
+    ]);
+    const { section } = await openSection();
+    const letter = within(section).getByTestId("posting-letter");
+    expect(letter).toHaveTextContent(
+      "Longer than one page. Shorten the longest fields in Edit, or choose a more compact template.",
+    );
+    expect(
+      within(letter).queryByRole("button", { name: "Make it fit" }),
+    ).toBeNull();
+  });
+
   it("shows the date a frozen version was sent", async () => {
     fakePosting([
       ready("cv", {

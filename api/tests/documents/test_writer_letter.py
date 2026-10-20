@@ -567,7 +567,11 @@ def test_the_letter_follows_the_cv_with_its_estimate_and_base_and_what_the_ceili
     assert spent > 0
     assert letter.status is GenerationStatus.running
     assert letter.mode is GenerationMode.posting
-    assert letter.estimate == parent.estimate
+    # The CV's figures; the template its write gave the CV is the CV's own record.
+    assert parent.estimate[generate.WRITE_TEMPLATE] == "classic"
+    assert letter.estimate == {
+        k: v for k, v in parent.estimate.items() if k != generate.WRITE_TEMPLATE
+    }
     # The pair shares one ceiling: the CV's run spent first, the letter gets what is left.
     assert letter.token_ceiling == 77_000 - spent
     assert letter.base_document_id == alex.base
