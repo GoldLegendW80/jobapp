@@ -390,6 +390,11 @@ def supersede_status_proposals(
     )
     if keep is not None:
         condition = sa.and_(condition, Proposal.id != uuid.UUID(str(keep)))
+    # The rows are locked in id order before the update (an UPDATE locks them in scan order):
+    # the second half of the one lock order, jobs by id, then proposals by id (issue #166).
+    db.execute(
+        sa.select(Proposal.id).where(condition).order_by(Proposal.id).with_for_update(no_key=True)
+    ).all()
     db.execute(
         sa.update(Proposal)
         .where(condition)
@@ -905,9 +910,21 @@ NOTE_COALESCE = timedelta(minutes=2)
 
 # --- the row lock: what it marks, how long it waits (J8) ----------------------------------------
 
+# The lock order (issue #166): a transaction that locks several rows takes the jobs first, in id
+# order (lock_jobs, undo_bulk, rescore_batch), then their status proposals, in id order
+# (supersede_status_proposals; accept locks its one job, then its one proposal). The paths that
+# lock proposals alone (agents.proposals.create and reject) hold no job row. The lock is
+# FOR NO KEY UPDATE (issue #341): no holder deletes a job or changes its key, so a row that
+# references a posting (an event, a document, a run) can be inserted while the posting is held,
+# and the foreign key KEY SHARE of that insert is no longer half of a deadlock.
 LOCK_TIMEOUT_MS = 5_000  # how long a lock on a job row waits, per transaction (SET LOCAL)
 BUSY = "This job is being changed. Try again."
+RETRY_BUSY = "The server is busy. Try again in a moment."
+RETRY_AFTER_S = 2  # the Retry-After of a 503 RETRY_BUSY
 _LOCK_NOT_AVAILABLE = "55P03"  # Postgres' lock_not_available, what lock_timeout raises
+# query_canceled (the statement timeout, a wait on several rows one after the other) and
+# deadlock_detected (Postgres broke a cycle the lock order did not prevent): both are retryable.
+_RETRYABLE = frozenset({"57014", "40P01"})
 _LOCKED_KEY = "jobs.locked_ids"
 
 
@@ -927,6 +944,13 @@ def is_lock_timeout(exc: BaseException) -> bool:
     return (
         isinstance(exc, DBAPIError) and getattr(exc.orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE
     )
+
+
+def is_retryable(exc: BaseException) -> bool:
+    """Whether `exc` is a statement timeout (SQLSTATE 57014) or a deadlock Postgres broke
+    (40P01): the transaction was rolled back whole, so the same request may simply be sent
+    again. Every other database error keeps its behaviour."""
+    return isinstance(exc, DBAPIError) and getattr(exc.orig, "sqlstate", None) in _RETRYABLE
 
 
 def _marks(session: Session) -> dict[SessionTransaction, set[uuid.UUID]]:
@@ -994,14 +1018,14 @@ def _begin_locking(db: Session) -> None:
     )
 
 
-def _lock(db: Session, query: sa.Select[tuple[Job]]) -> list[Job]:
-    """Run a `FOR UPDATE` select under the lock timeout and mark the rows it returns as read
-    under the lock. A lock wait over the timeout raises JobBusyError."""
+def _lock(db: Session, query: sa.Select[tuple[Job]], *, skip_locked: bool = False) -> list[Job]:
+    """Run a `FOR NO KEY UPDATE` select under the lock timeout and mark the rows it returns as
+    read under the lock. A lock wait over the timeout raises JobBusyError. With `skip_locked`
+    a row another transaction holds is left out at once instead of waited for."""
     _begin_locking(db)
+    locking = query.with_for_update(no_key=True, skip_locked=skip_locked)
     try:
-        jobs = list(
-            db.execute(query.with_for_update().execution_options(populate_existing=True)).scalars()
-        )
+        jobs = list(db.execute(locking.execution_options(populate_existing=True)).scalars())
     except DBAPIError as exc:
         if is_lock_timeout(exc):
             raise JobBusyError(BUSY) from exc
@@ -1303,6 +1327,7 @@ class RescoreOutcome:
     unchanged: int = 0
     skipped_manual: int = 0  # fit set by hand, kept (competencies and gaps still refreshed)
     skipped_no_text: int = 0
+    skipped_busy: int = 0  # held by another transaction: not waited for, the next rescore does it
     last_id: uuid.UUID | None = None  # the last job looked at, where a next call resumes
 
 
@@ -1319,15 +1344,30 @@ def rescore_batch(
     outcome: RescoreOutcome,
 ) -> int:
     """Rescore up to `limit` of the user's jobs in id order after `after` (only `ids` when
-    given), adding to `outcome`. Returns how many jobs it looked at (0 when none are left)."""
-    query = jobs_of(user_id).options(undefer(Job.posting_text)).order_by(Job.id).limit(limit)
+    given), adding to `outcome`. Returns how many jobs it looked at (0 when none are left).
+
+    A job another transaction holds (a status change, an accept) is not waited for: it keeps
+    its score, counts in `skipped_busy` and is scored again by the next rescore. So a held row
+    neither stalls the batch until the statement timeout nor fails the jobs around it."""
+    window = sa.select(Job.id).where(Job.user_id == user_id).order_by(Job.id).limit(limit)
     if ids is not None:
-        query = query.where(Job.id.in_(list(ids)))
+        window = window.where(Job.id.in_(list(ids)))
     if after is not None:
-        query = query.where(Job.id > after)
-    jobs = list(db.execute(query.with_for_update()).scalars())
+        window = window.where(Job.id > after)
+    looked = list(db.scalars(window))
+    if not looked:
+        return 0
+    jobs = _lock(
+        db,
+        jobs_of(user_id)
+        .where(Job.id.in_(looked))
+        .options(undefer(Job.posting_text))
+        .order_by(Job.id),
+        skip_locked=True,
+    )
+    outcome.skipped_busy += len(looked) - len(jobs)
+    outcome.last_id = looked[-1]
     for job in jobs:
-        outcome.last_id = job.id
         result = computed_score(job, skills)
         if result is None:
             outcome.skipped_no_text += 1
@@ -1344,7 +1384,7 @@ def rescore_batch(
         else:
             outcome.unchanged += 1
     db.flush()
-    return len(jobs)
+    return len(looked)
 
 
 def count_after(

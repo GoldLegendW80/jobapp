@@ -135,5 +135,9 @@ export function rescoreSummary(result: RescoreResult): string {
     parts.push(
       `${plural(result.skipped_no_text, "posting")} without text skipped`,
     );
+  if (result.skipped_busy)
+    parts.push(
+      `${plural(result.skipped_busy, "posting")} being changed skipped, rescore again to include them`,
+    );
   return `Rescored ${plural(result.scored, "posting")}: ${parts.join(", ")}.`;
 }

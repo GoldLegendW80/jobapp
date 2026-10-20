@@ -219,7 +219,19 @@ def create_app(
         route: JobBusyError (lock_job, lock_jobs, undo_bulk) and a raw SQLSTATE 55P03 from any
         later statement of the same transaction (the proposal row an accept locks after the job).
         Nothing is rolled back here: the session is closed, so rolled back, as the error leaves
-        the request's dependencies. Every other database error goes on to `unhandled`."""
+        the request's dependencies. A statement timeout (57014, a wait on many rows one after the
+        other) or a deadlock Postgres broke (40P01) answers 503 with Retry-After: the transaction
+        was rolled back whole, so sending the request again is safe (issue #166). Every other
+        database error goes on to `unhandled`."""
+        if jobs_service.is_retryable(exc):
+            return JSONResponse(
+                status_code=503,
+                content={"detail": jobs_service.RETRY_BUSY},
+                headers={
+                    "Cache-Control": "no-store",
+                    "Retry-After": str(jobs_service.RETRY_AFTER_S),
+                },
+            )
         if not isinstance(exc, jobs_service.JobBusyError) and not jobs_service.is_lock_timeout(exc):
             raise exc
         return JSONResponse(
