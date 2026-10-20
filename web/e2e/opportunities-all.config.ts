@@ -8,6 +8,7 @@ import { defineConfig, devices } from "@playwright/test";
  * journey ever reads a real job site or platform.
  *
  *   opportunities-o2   the swipe deck: Like into the queue, Pass, undo, isolation (task O2)
+ *   opportunities-o4   seniority, industries, pay and preferences, the bonus a rescore adds (task O4)
  *
  * A task of the module adds its spec as opportunities-o<n>.spec.ts and it runs here: the local
  * check (ops/local-check.sh, group opportunities) names this config, not the specs, and
