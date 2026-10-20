@@ -689,7 +689,7 @@ def store_export(
         elif existing is None or replaceable(existing):
             cost += entry.content.stored_bytes
     used = usage(db, user_id)
-    if used.documents - (not kept) + fresh > USER_MAX_DOCUMENTS:
+    if used.documents - (0 if kept else 1) + fresh > USER_MAX_DOCUMENTS:
         raise DocumentError(422, EXPORT_TOO_MANY, "too-many-documents")
     if used.bytes - archive.size + cost > USER_MAX_BYTES:
         raise DocumentError(413, QUOTA, "quota")
