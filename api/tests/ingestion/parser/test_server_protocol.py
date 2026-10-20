@@ -111,6 +111,22 @@ def no_child_left() -> bool:
         return True
 
 
+async def until(condition: Callable[[], bool], bound_s: float = 20) -> None:
+    """Wait for `condition`, polling. What the server does after its answer has no moment the
+    client can see, so a fixed wait only guesses it (it lost the guess under load, issue #104):
+    the bound only turns a server that never gets there into a failure."""
+    deadline = time.monotonic() + bound_s
+    while not condition():
+        assert time.monotonic() < deadline, "condition not met in time"
+        await asyncio.sleep(0.01)
+
+
+def holding(release: Path, **options: Any) -> dict:
+    """The options of a child that runs until the test creates `release`: a job that is still
+    running when the test looks, however slow the machine."""
+    return {"act": "hold", "path": str(release), **options}
+
+
 # --- a job, as the worker sends it --------------------------------------------------------------
 
 
@@ -255,8 +271,7 @@ def test_a_header_cut_before_its_end_is_refused_and_an_empty_connection_is_left(
             _, writer = await asyncio.open_connection("127.0.0.1", port)
             writer.close()
             await writer.wait_closed()
-            await asyncio.sleep(0.1)
-            assert (instance.connections, instance.jobs) == (0, 0)
+            await until(lambda: (instance.connections, instance.jobs) == (0, 0))
             assert (await job(port, b"abc"))["received"] == 3
 
     run(test)
@@ -305,8 +320,7 @@ def test_a_client_that_connects_and_sends_nothing_is_given_up() -> None:
             header, _, _ = await exchange(port, b"")
             assert header == {**REFUSED, "code": "read_timeout"}
             assert 0.25 < time.monotonic() - started < 3
-            await asyncio.sleep(0.05)
-            assert instance.connections == 0
+            await until(lambda: instance.connections == 0)
             assert (await job(port, b"abc"))["received"] == 3
 
     run(test)
@@ -317,8 +331,8 @@ def test_a_document_that_stops_arriving_is_given_up() -> None:
         async with serving(read_timeout_s=0.3) as (instance, port):
             header, _, _ = await exchange(port, line_of(size=1000) + b"x" * 10)
             assert header == {**REFUSED, "code": "read_timeout"}
-            await asyncio.sleep(0.05)
-            assert instance.jobs == 0
+            # The slot is given back once the refusal has seen the client close, after the answer.
+            await until(lambda: instance.jobs == 0)
 
     run(test)
 
@@ -340,8 +354,7 @@ def test_a_request_that_trickles_in_has_one_deadline_for_the_whole_of_it() -> No
             assert json.loads(await answer) == {**REFUSED, "code": "read_timeout"}
             assert time.monotonic() - started < 5
             writer.close()
-            await asyncio.sleep(0.05)
-            assert instance.jobs == 0
+            await until(lambda: instance.jobs == 0)
 
     run(test)
 
@@ -358,9 +371,8 @@ def test_a_client_that_closes_in_the_middle_of_its_document_starts_no_child(
             await writer.drain()
             writer.close()
             await writer.wait_closed()
-            await asyncio.sleep(0.3)
+            await until(lambda: (instance.connections, instance.jobs) == (0, 0))
             assert not trace.exists()
-            assert (instance.connections, instance.jobs) == (0, 0)
             assert (await job(port, b"abc"))["received"] == 3
 
     run(test)
@@ -385,16 +397,16 @@ def test_two_jobs_sent_at_once_run_one_after_the_other() -> None:
     run(test)
 
 
-def test_a_ping_is_answered_at_once_while_a_job_runs() -> None:
+def test_a_ping_is_answered_at_once_while_a_job_runs(tmp_path: Path) -> None:
     async def test() -> None:
-        async with serving() as (_, port):
-            long_job = asyncio.ensure_future(job(port, b"x", act="sleep", s=3))
-            await asyncio.sleep(0.3)
-            started = time.monotonic()
+        async with serving() as (instance, port):
+            release = tmp_path / "release"
+            long_job = asyncio.ensure_future(job(port, b"x", **holding(release)))
+            await until(instance.slot.locked)
             for _ in range(3):
                 assert (await job(port, kind="ping"))["kind"] == "ping"
-            assert time.monotonic() - started < 2.5
             assert not long_job.done(), "the pings were answered during the job, not after it"
+            release.touch()
             assert (await long_job)["received"] == 1
 
     run(test)
@@ -402,9 +414,9 @@ def test_a_ping_is_answered_at_once_while_a_job_runs() -> None:
 
 def test_a_ping_with_bytes_waits_its_turn_like_a_job() -> None:
     async def test() -> None:
-        async with serving() as (_, port):
+        async with serving() as (instance, port):
             long_job = asyncio.ensure_future(job(port, b"x", act="sleep", s=0.8))
-            await asyncio.sleep(0.2)
+            await until(instance.slot.locked)
             echo = await job(port, b"four", kind="ping")
             assert long_job.done()
             assert echo["received"] == 4
@@ -413,14 +425,18 @@ def test_a_ping_with_bytes_waits_its_turn_like_a_job() -> None:
     run(test)
 
 
-def test_a_job_that_waits_longer_than_the_queue_allows_is_answered_busy() -> None:
+def test_a_job_that_waits_longer_than_the_queue_allows_is_answered_busy(tmp_path: Path) -> None:
     async def test() -> None:
         async with serving(queue_wait_s=0.3) as (instance, port):
-            long_job = asyncio.ensure_future(job(port, b"x", act="sleep", s=1.5))
-            await asyncio.sleep(0.2)
+            release = tmp_path / "release"
+            long_job = asyncio.ensure_future(job(port, b"x", **holding(release)))
+            await until(instance.slot.locked)
             started = time.monotonic()
+            # The job before it runs until it is released: this answer did not wait for its end.
             assert await job(port, b"y") == {**REFUSED, "code": "busy"}
-            assert 0.25 < time.monotonic() - started < 1.2
+            assert time.monotonic() - started > 0.25
+            assert not long_job.done()
+            release.touch()
             assert (await long_job)["received"] == 1
             assert instance.jobs == 0
             assert (await job(port, b"abc"))["received"] == 3
@@ -428,18 +444,21 @@ def test_a_job_that_waits_longer_than_the_queue_allows_is_answered_busy() -> Non
     run(test)
 
 
-def test_a_job_that_finds_the_queue_full_is_answered_busy_at_once() -> None:
+def test_a_job_that_finds_the_queue_full_is_answered_busy_at_once(tmp_path: Path) -> None:
     async def test() -> None:
         async with serving(max_jobs=2) as (instance, port):
-            running = asyncio.ensure_future(job(port, b"x", act="sleep", s=1.0))
+            release = tmp_path / "release"
+            running = asyncio.ensure_future(job(port, b"x", **holding(release)))
+            await until(instance.slot.locked)
             waiting = asyncio.ensure_future(job(port, b"y"))
-            await asyncio.sleep(0.3)
-            assert instance.jobs == 2
-            started = time.monotonic()
-            # Its document is not read: the answer comes although nothing of it was sent.
+            await until(lambda: instance.jobs == 2)
+            # Its document is not read: the answer comes although nothing of it was sent (reading
+            # it would end in read_timeout, 10 s later), and while both jobs are still there.
             header, _, _ = await exchange(port, line_of(size=5 * MIB))
             assert header == {**REFUSED, "code": "busy"}
-            assert time.monotonic() - started < 0.5
+            assert instance.jobs == 2
+            assert not running.done()
+            release.touch()
             assert (await running)["received"] == 1
             assert (await waiting)["received"] == 1
 
@@ -450,13 +469,12 @@ def test_connections_over_the_cap_are_answered_busy() -> None:
     async def test() -> None:
         async with serving(max_connections=2, read_timeout_s=5) as (instance, port):
             idle = [await asyncio.open_connection("127.0.0.1", port) for _ in range(2)]
-            await asyncio.sleep(0.1)
-            assert instance.connections == 2
+            await until(lambda: instance.connections == 2)
             header, _, _ = await exchange(port, line_of("ping"))
             assert header == {**REFUSED, "code": "busy"}
             for _, writer in idle:
                 writer.close()
-            await asyncio.sleep(0.2)
+            await until(lambda: instance.connections == 0)
             assert (await job(port, kind="ping"))["kind"] == "ping"
 
     run(test)
@@ -467,7 +485,7 @@ def test_connections_over_the_cap_are_answered_busy() -> None:
 
 def test_a_child_that_outlives_the_wall_clock_is_killed_and_reaped() -> None:
     async def test() -> None:
-        async with serving(wall_s=0.5) as (_, port):
+        async with serving(wall_s=0.5) as (instance, port):
             started = time.monotonic()
             assert await job(port, b"x", act="sleep", s=30) == {**REFUSED, "code": "wall_limit"}
             assert 0.45 < time.monotonic() - started < 5
@@ -476,6 +494,8 @@ def test_a_child_that_outlives_the_wall_clock_is_killed_and_reaped() -> None:
             header = await job(port, b"x", act="close_then_sleep", s=30)
             assert header == {**REFUSED, "code": "wall_limit"}
             assert no_child_left()
+            # The next job runs: 0.5 s is shorter than a child takes to start on a loaded machine.
+            instance.wall_s = server.WALL_S
             assert (await job(port, b"abc"))["received"] == 3
 
     run(test)
@@ -602,8 +622,7 @@ def test_a_client_that_leaves_during_its_job_frees_the_slot_at_once() -> None:
             _, writer = await asyncio.open_connection("127.0.0.1", port)
             writer.write(line_of(size=1, options={"act": "sleep", "s": 30}) + b"x")
             await writer.drain()
-            await asyncio.sleep(0.5)
-            assert instance.slot.locked()
+            await until(instance.slot.locked)
             writer.close()
             started = time.monotonic()
             assert (await job(port, b"abc"))["received"] == 3
@@ -616,15 +635,16 @@ def test_a_client_that_leaves_during_its_job_frees_the_slot_at_once() -> None:
 def test_a_client_that_leaves_while_it_waits_never_gets_a_child(tmp_path: Path) -> None:
     async def test() -> None:
         async with serving() as (instance, port):
-            trace = tmp_path / "ran"
-            running = asyncio.ensure_future(job(port, b"x", act="sleep", s=0.8))
-            await asyncio.sleep(0.2)
+            trace, release = tmp_path / "ran", tmp_path / "release"
+            running = asyncio.ensure_future(job(port, b"x", **holding(release)))
+            await until(instance.slot.locked)
             _, writer = await asyncio.open_connection("127.0.0.1", port)
             writer.write(line_of(size=1, options={"act": "touch", "path": str(trace)}) + b"x")
             await writer.drain()
-            await asyncio.sleep(0.2)
-            assert instance.jobs == 2
+            await until(lambda: instance.jobs == 2)
             writer.close()
+            await until(lambda: instance.jobs == 1)
+            release.touch()
             assert (await running)["received"] == 1
             assert (await job(port, b"abc"))["received"] == 3
             assert not trace.exists()
@@ -643,8 +663,7 @@ def test_a_byte_after_the_document_cancels_the_job() -> None:
             writer.write(line_of(size=1, options={"act": "sleep", "s": 30}) + b"xy")
             assert await reader.read() == b""
             writer.close()
-            await asyncio.sleep(0.1)
-            assert not instance.slot.locked()
+            await until(lambda: not instance.slot.locked())
             assert no_child_left()
 
     run(test)
