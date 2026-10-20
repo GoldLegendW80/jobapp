@@ -22,18 +22,28 @@ after the figures or just before them:
   before: "TJM", "taux journalier", "daily rate", "day rate", "annual salary", "salaire annuel",
   "rémunération annuelle", "monthly salary", "salaire mensuel", "hourly rate", "taux horaire".
 Refused: no currency ("60,000 a year"), no period ("60k-70k €"), two currencies or two periods in
-one statement, a reversed range, a figure under 1 or over 10,000,000, a percentage, a figure that
-continues a run of digits (a phone number, a postcode, a date: "06 12 34 56 78 €"), a statement
-right after a bonus word ("bonus", "prime", "equity", "stock", "RSU", "BSPCE", "commission",
-"variable", "signing", "relocation", "allowance", "indemnité") in its clause, and one figure
-after an open bound ("up to", "from", "starting at", "jusqu'à", "à partir de", "dès", "minimum",
-"maximum", "at least", "au moins", "more than", "over", "plus de"). "Competitive" and "selon
-profil" hold no figure, so nothing is found.
+one statement, a reversed range, a figure under 1 or over 10,000,000, a figure under the floor of
+its period (under 1,000 a year, 100 a month or 20 a day: a perk, never a pay), a percentage, a
+figure that continues a run of digits (a phone number, a postcode, a date: "06 12 34 56 78 €"), a
+plain four digit figure from 1900 to 2100 written right before its currency with no other sign
+of a pay (no currency before it, no "brut", "net", "gross" or "HT" after it, no "TJM" or "annual
+salary" before it: "2026 € a year" is a year), and one figure after an open bound ("up to",
+"from", "starting at", "jusqu'à", "à partir de", "dès", "minimum", "maximum", "at least", "au
+moins", "more than", "over", "plus de").
+A bonus or a benefit is never a pay: a statement is refused when its clause, before it or right
+after it, names a bonus ("bonus", "prime", "equity", "stock", "RSU", "BSPCE", "commission",
+"variable", "signing", "relocation", "allowance", "indemnité") or a perk, in English or French
+("tickets restaurant", "titres restaurant", "meal", "lunch", "voucher", "Swile", "mutuelle",
+"budget", "stipend", "membership", "gym", "credits", "conference", "formation", "training",
+"transport", "Navigo", "home office", "insurance", "per diem", ...): "Tickets restaurant 9 € par
+jour", "Learning budget of €1,000 a year", "€3,000 per year for conferences". A comma or a
+parenthesis right after such a word does not end the clause ("Bonus, €5,000 per year").
+"Competitive" and "selon profil" hold no figure, so nothing is found.
 
 A text may state several pays (a salary and a daily rate, or one pay in two currencies): `pays`
-returns every one in order; `pay_of` keeps one, the first with a period that fits the contract
-(a freelance mission: a day or an hour first; any other contract: a year or a month first), else
-the first stated.
+returns every one in order, each already past every refusal above; `pay_of` keeps one, the first
+with a period that fits the contract (a freelance mission: a day or an hour first; any other
+contract: a year or a month first), else the first `pays` returns, never a refused figure.
 
 **Work mode** (`work_mode_of`), from a location: "Remote", "Télétravail" (remote), "Hybrid",
 "Hybride", "Télétravail partiel", "partial remote" (hybrid), "On site", "Onsite", "In office",
@@ -45,6 +55,7 @@ the text extraction lost; a pay with a currency the allow list does not name; an
 cents.
 """
 
+import math
 import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -144,15 +155,37 @@ _BEFORE_PERIOD = (
     (re.compile(r"hourly|horaire", re.IGNORECASE), "hour"),
 )
 
-# What the clause before a statement must not hold (at most WINDOW characters, cut at the last
-# clause mark). A bonus word refuses any statement; an open bound refuses one figure.
+# What the clause around a statement must not hold (at most WINDOW characters before it, cut at
+# the last clause mark, and WINDOW after it, cut at the first). A bonus or a perk word refuses any
+# statement; an open bound refuses one figure.
 WINDOW = 40
 _CLAUSE_MARK = re.compile(r"[.,;\n+|•(]|\bplus\b(?!\s+de)|\band\b|\bet\b", re.IGNORECASE)
-_BONUS = re.compile(
-    r"(?<![^\W\d_])(?:bonus|bonuses|prime|primes|equity|stock|stocks|rsu|rsus|bspce|commission|"
-    r"commissions|variable|signing|relocation|allowance|indemnité|indemnite)(?![^\W\d_])",
+_BONUS_WORDS = (
+    r"bonus|bonuses|prime|primes|equity|stock|stocks|rsu|rsus|bspce|commission|commissions|"
+    r"variable|signing|relocation|allowance|allowances|indemnité|indemnités|indemnite|indemnites"
+)
+_PERK_WORDS = (
+    r"tickets?\s+restaurants?|titres?[\s-]+restaurants?|restaurant|meal|meals|lunch|lunches|"
+    r"déjeuner|dejeuner|repas|voucher|vouchers|swile|mutuelle|mutuelles|budget|budgets|stipend|"
+    r"stipends|membership|memberships|gym|sport|sports|wellness|wellbeing|credit|credits|crédit|"
+    r"crédits|conference|conferences|conférence|conférences|formation|formations|training|"
+    r"trainings|transport|transports|navigo|mobilité|mobilités|home\s+office|coworking|"
+    r"insurance|assurance|pension|retraite|perk|perks|benefit|benefits|avantage|avantages|"
+    r"reimbursement|reimbursed|remboursement|remboursé|remboursée|per\s+diem|equipment|"
+    r"équipement|childcare|crèche|creche"
+)
+_REFUSED = re.compile(
+    rf"(?<![^\W\d_])(?:{_BONUS_WORDS}|{_PERK_WORDS})(?![^\W\d_])",
     re.IGNORECASE,
 )
+# A refused word that ends the text: a comma or a parenthesis right after it ends no clause.
+_REFUSED_END = re.compile(
+    rf"(?<![^\W\d_])(?:{_BONUS_WORDS}|{_PERK_WORDS})\s*$",
+    re.IGNORECASE,
+)
+# The floor of a plausible pay per period: anything under it is a perk or a typo, never a pay.
+FLOOR = {"year": 1000, "month": 100, "day": 20, "hour": 1}
+_YEAR_FIGURE = re.compile(r"(?:19|20)\d\d|2100")
 _OPEN_BOUND = re.compile(
     r"(?<![^\W\d_])(?:up\s+to|from|starting\s+(?:at|from)|jusqu['\u2019]\s?à|jusqu['\u2019]\s?a|"
     r"à\s+partir\s+de|a\s+partir\s+de|dès|minimum|min|maximum|max|at\s+least|au\s+moins|"
@@ -202,8 +235,34 @@ def _period(match: re.Match[str]) -> str | None:
 
 def _clause_before(text: str, start: int) -> str:
     window = text[max(0, start - WINDOW) : start]
-    marks = list(_CLAUSE_MARK.finditer(window))
-    return window[marks[-1].end() :] if marks else window
+    for mark in reversed(list(_CLAUSE_MARK.finditer(window))):
+        if mark.group() in ",(" and _REFUSED_END.search(window, 0, mark.start()):
+            continue  # "Bonus, €5,000 per year": the clause goes on
+        return window[mark.end() :]
+    return window
+
+
+def _clause_after(text: str, end: int) -> str:
+    window = text[end : end + WINDOW]
+    mark = _CLAUSE_MARK.search(window)
+    return window[: mark.start()] if mark else window
+
+
+def _a_year(match: re.Match[str]) -> bool:
+    """A plain four digit figure from 1900 to 2100 written right before its currency, with no
+    other sign of a pay: a year next to a sign ("2026 € a year"), not a pay."""
+    if match.group("before") or match.group("cur1") or match.group("cur3"):
+        return False
+    if re.search(_FILLER, match.group(0)):
+        return False
+    pairs = (("n1", "k1", "cur2"), ("n2", "k2", "cur4"))
+    return any(
+        match.group(n) is not None
+        and not match.group(k)
+        and match.group(cur) is not None
+        and _YEAR_FIGURE.fullmatch(match.group(n)) is not None
+        for n, k, cur in pairs
+    )
 
 
 def _statement(text: str, match: re.Match[str]) -> Pay | None:
@@ -219,10 +278,12 @@ def _statement(text: str, match: re.Match[str]) -> Pay | None:
     if period is None:
         return None
     before = _clause_before(text, match.start())
-    if _BONUS.search(before):
+    if _REFUSED.search(before) or _REFUSED.search(_clause_after(text, match.end())):
         return None
     ranged = match.group("n2") is not None
     if not ranged and _OPEN_BOUND.search(before):
+        return None
+    if _a_year(match):
         return None
     k1, k2 = bool(match.group("k1")), bool(match.group("k2"))
     low = _amount(match.group("n1"), k1)
@@ -233,7 +294,7 @@ def _statement(text: str, match: re.Match[str]) -> Pay | None:
         low *= 1000  # "60-70k€": the "k" counts for both
     if low != low.to_integral_value() or high != high.to_integral_value():
         return None
-    if low < 1 or high > PAY_MAX or low > high:
+    if low < max(1, FLOOR[period]) or high > PAY_MAX or low > high:
         return None
     return Pay(min=int(low), max=int(high), currency=currencies.pop(), period=period)
 
@@ -291,7 +352,8 @@ def work_mode_of(location: str | None) -> str | None:
 
 def stated_pay(low: object, high: object, currency: object, period: str | None) -> Pay | None:
     """A pay an ATS API states as figures, a currency code and a period, checked as the text's:
-    whole numbers from 1 to PAY_MAX, min at most max, a known currency, a period."""
+    whole numbers from 1 to PAY_MAX, min at most max, a known currency, a period. Never raises:
+    any other value (a string, a bool, NaN, an infinity, a float too large) is no pay."""
     if period not in PERIODS or not isinstance(currency, str):
         return None
     code = currency.strip().upper()
@@ -301,7 +363,10 @@ def stated_pay(low: object, high: object, currency: object, period: str | None) 
     for value in (low, high):
         if isinstance(value, bool) or not isinstance(value, int | float):
             return None
-        if value != int(value):
+        # NaN, an infinity or 1e400 (json reads them all) never reach int(): bounds first.
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if not 1 <= value <= PAY_MAX or value != int(value):
             return None
         figures.append(int(value))
     if figures[0] < 1 or figures[1] > PAY_MAX or figures[0] > figures[1]:

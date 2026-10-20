@@ -24,6 +24,8 @@ Paths: /ashby/posting-api/job-board/{org}, /greenhouse/v1/boards/{org}/jobs,
 - fake-pay (opportunities O3): a posting whose ATS states its pay and work mode (Ashby's
   compensation and workplaceType, Lever's salaryRange and workplaceType; Greenhouse states
   none), a freelance mission whose text states a daily rate, one that states no pay
+- fake-pay-bad (opportunities O3, review of PR #498): a posting whose ATS states a pay of NaN and
+  Infinity (json.dumps writes both), one permanent role whose only figure is a meal voucher
 - fake-b10: the posting that browser B10's journey also finds on its LinkedIn fixture
   (tests/browser_pages/b10/), the same Apply address: one row naming both sources
 - anything else: 404
@@ -117,6 +119,22 @@ def postings(org: str) -> list[dict[str, Any]]:
              "lever": {"workplaceType": "unspecified"}},
             {"title": "AI Engineer, Pay Not Stated", "location": "Paris", "url": f"{base}/3",
              "published": _day(2), "text": "Competitive salary, selon profil. Agents."},
+        ]  # fmt: skip
+    if org == "fake-pay-bad":
+        nan, inf = float("nan"), float("inf")
+        return [
+            {"title": "AI Engineer, Pay Broken", "location": "Paris, France", "url": f"{base}/1",
+             "published": _day(1), "text": "Build agents with Python and LLM evaluation.",
+             "ashby": {"compensation": {"summaryComponents": [
+                 {"compensationType": "Salary", "interval": "1 YEAR", "currencyCode": "EUR",
+                  "minValue": nan, "maxValue": inf}]}, "workplaceType": "Hybrid"},
+             "lever": {"salaryRange": {"min": nan, "max": -inf, "currency": "EUR",
+                                       "interval": "per-year-salary"},
+                       "workplaceType": "on-site"}},
+            {"title": "AI Engineer, Meal Vouchers", "location": "Paris", "url": f"{base}/2",
+             "published": _day(1),
+             "text": "CDI. Tickets restaurant 9 € par jour. Agents et Python.",
+             "lever": {"workplaceType": "unspecified"}},
         ]  # fmt: skip
     if org == "fake-b10":
         return [

@@ -21,8 +21,9 @@ it is now, so a Pass, a new posting or a threshold changed between two pages nev
 come twice, and the walk always ends. `left` counts the cards from the start of this page on.
 
 **Filters**, any combination: contract types (`ContractType` values), `remote` or `on_site`
-(`remote` is the work mode stated as remote, opportunities O3, or for a posting that states
-none, the sweep's own rule: the location names "remote"),
+(the work mode the posting states, opportunities O3: `remote` keeps the remote ones, `on_site`
+the office ones, and a hybrid posting matches neither; for a posting that states none, the
+sweep's own rule: `remote` when the location names "remote", `on_site` otherwise),
 and the source (`ashby` matches every `ashby:<org>` board, `ashby:mistral` that board alone).
 
 **The card.** Id, title, company, location, contract type, source and address, fit, found_on,
@@ -184,12 +185,14 @@ def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters, mode: Mode) 
     if filters.types:
         query = query.where(Job.contract_type.in_(filters.types))
     if filters.remote is not None:
-        # The stated work mode (O3) first; a posting that states none, by the sweep's own rule.
+        # The stated work mode (O3) first: remote is remote, on site is office, and a hybrid
+        # posting is neither. A posting that states none, by the sweep's own rule.
         names_remote = sa.func.strpos(sa.func.lower(Job.location), "remote") > 0
-        remote = sa.case(
-            (Job.work_mode.is_not(None), Job.work_mode == WorkMode.remote), else_=names_remote
+        wanted = WorkMode.remote if filters.remote == "remote" else WorkMode.office
+        by_location = names_remote if filters.remote == "remote" else ~names_remote
+        query = query.where(
+            sa.case((Job.work_mode.is_not(None), Job.work_mode == wanted), else_=by_location)
         )
-        query = query.where(remote if filters.remote == "remote" else ~remote)
     if filters.source is not None:
         query = query.where(
             sa.or_(

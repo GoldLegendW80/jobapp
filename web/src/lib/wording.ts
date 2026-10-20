@@ -55,6 +55,14 @@ export const WORDING = {
   pay: "Pay",
   workMode: "Work mode",
   notStated: "Not stated",
+  payLowest: "Lowest pay",
+  payHighest: "Highest pay",
+  payFrom: "From",
+  payTo: "To",
+  payCurrency: "Currency",
+  payPer: "Per",
+  payInvalid:
+    "The pay needs whole numbers from 1 to 10,000,000, the lowest first, a currency and a period. Leave both figures empty for none.",
 } as const;
 
 /** The empty deck line; it names the fit threshold in force so the number is never a mystery. */
