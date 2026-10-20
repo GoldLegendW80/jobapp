@@ -362,6 +362,7 @@ class Runner:
                 "query": source.query,
                 "location": source.location,
                 "result_pages": 0,
+                "found": 0,
                 "postings": 0,
                 "error": stop,
             }
@@ -425,6 +426,7 @@ class Runner:
         if code == "layout_changed":
             logger.warning("browser source layout changed: kind=%s", source.kind)
             return code
+        entry["found"] = len(read.postings)
         if read.postings:
             new_before = stats.new
             await store(source_name(source), read.postings)

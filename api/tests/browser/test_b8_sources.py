@@ -104,6 +104,22 @@ def test_google_results_of_0_1_and_25(count: int) -> None:
     assert more is False
 
 
+def test_google_icons_printed_without_the_aria_hidden_attribute() -> None:
+    """Playwright 1.55 (browserd's pin) prints an aria-hidden icon as a plain `generic`: the
+    company and the locations are read all the same, and the posting text leaves the icons out
+    (tests/browser_pages/b8/ in a real Chromium showed this form)."""
+    made = pages.offers(2, location="Paris, France; Munich, Germany")
+    text = pages.google_results(made).replace(" [aria-hidden]", "")
+    cards, _ = gc.parse_results(parse_snapshot(text), PAGE)
+    assert [(c.company, c.location) for c in cards] == [
+        ("Example Robotics", "Paris, France; Munich, Germany")
+    ] * 2
+    posting = pages.google_posting(made[0]).replace(" [aria-hidden]", "")
+    lines = gc.parse_posting(parse_snapshot(posting), made[0].title).splitlines()
+    assert "Example Robotics" in lines
+    assert not set(lines) & gc.ICONS
+
+
 def test_google_next_page_when_the_status_counts_more() -> None:
     root = parse_snapshot(pages.google_results(pages.offers(20), total=57))
     assert gc.parse_results(root, PAGE)[1] is True
@@ -453,7 +469,7 @@ def test_a_source_reads_results_then_postings_paced_and_stores_them() -> None:
     assert found[0][1].text.startswith("AI Engineer 1")
     assert stats.sources[0] | {} == {
         "kind": "google_careers", "query": "ai", "location": None,
-        "result_pages": 1, "postings": 3, "error": None,
+        "result_pages": 1, "found": 3, "postings": 3, "error": None,
     }  # fmt: skip
     assert leases.acquired[0][1:] == ("sweep", ["www.google.com"])
     assert leases.released == ["lease-1"]
