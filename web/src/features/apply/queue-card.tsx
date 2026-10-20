@@ -73,9 +73,12 @@ export function QueueCard({
   const titleId = useId();
   const panelId = useId();
   const [notice, setNotice] = useState<string | null>(null);
-  // Until the person toggles it, the answers are open while a required one is left.
+  // Until the person toggles it, the answers are open once a required one was seen left, and
+  // stay open after it is answered: the person may still be on the optional ones.
   const [toggled, setToggled] = useState<boolean | null>(null);
-  const open = toggled ?? item.required_left > 0;
+  const [requiredSeen, setRequiredSeen] = useState(item.required_left > 0);
+  if (item.required_left > 0 && !requiredSeen) setRequiredSeen(true);
+  const open = toggled ?? requiredSeen;
   const [unsaved, setUnsaved] = useState(0);
   const [confirming, setConfirming] = useState(false);
   const [rejecting, setRejecting] = useState(false);

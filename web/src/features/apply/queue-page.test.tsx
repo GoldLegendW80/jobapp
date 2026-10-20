@@ -136,6 +136,12 @@ describe("the review queue page", () => {
     expect(api.puts).toEqual([
       { id: item.id, field: "why", value: "I build agents." },
     ]);
+    // The queue now reads nothing required left: the answers stay open under the person's hands.
+    await waitFor(() => {
+      expect(within(ready).queryByText(/field left for you/)).toBeNull();
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(within(ready).getByText("I build agents.")).toBeVisible();
 
     await user.click(approve);
     const dialog = await screen.findByRole("alertdialog");
