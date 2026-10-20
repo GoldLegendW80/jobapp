@@ -227,7 +227,7 @@ Nothing yet. (The deck query's time on 5,000 postings of one person, and its pla
 Vitest on 2026-10-20: 27 tests of the deck page (`deck-page.test.tsx`) and 34 of the card words (`card-text.test.ts`), all passing. The journey `opportunities-o2.spec.ts` and its screenshots (`tasks/evidence/opportunities-o2/`) were not run yet: the gate held the machine.
 
 ### O3
-Nothing yet. (The share of the owner's found postings with a pay found, by source.)
+`pay.pays` on adversarial texts (digit runs, thousands groups, currency signs, period words, a mix), on the Mac on 2026-10-20: about 0.015 s at 50,000 characters, 0.03 s at 100,000, 0.06 to 0.1 s at 200,000, 0.3 to 0.45 s at 1,000,000 (the posting text's cap): linear. Still to measure on the Jetson after the deploy: the share of the owner's found postings with a pay found, by source.
 
 ### O4
 Nothing yet. (The score bonus on the owner's postings: how many move by how many points, and the cap chosen.)
