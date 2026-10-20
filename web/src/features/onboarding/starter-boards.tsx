@@ -225,14 +225,13 @@ export function StarterBoards() {
           {byAddress}
         </>
       )}
-      <p className="sr-only" role="status" aria-live="polite">
+      <p
+        className="text-sm text-muted-foreground empty:hidden"
+        role="status"
+        aria-live="polite"
+      >
         {said}
       </p>
-      {said ? (
-        <p className="text-sm text-muted-foreground" aria-hidden="true">
-          {said}
-        </p>
-      ) : null}
     </section>
   );
 }
