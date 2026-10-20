@@ -2,9 +2,10 @@
 # Tests of ops/ship.sh (issue #278) on throwaway repositories: a bare "origin" whose
 # refs/pull/<n>/head hold the pull requests, a main checkout that holds ship.sh next to a fake gate
 # (ops/local-check.sh: real git merges, a record, failures on demand) and a fake deploy
-# (ops/deploy-checked.sh, which prints the JOBAPP-VERIFY line of its run as the real one does),
-# and a fake gh on PATH that reads and writes a small state folder. The fake gh merges into the
-# bare origin as GitHub would. Nothing reaches GitHub or the Jetson, and nothing uses ssh: the
+# (ops/deploy-checked.sh, which prints the JOBAPP-VERIFY line of its run as the real one does), a
+# fake board sync (ops/board-sync.py, which logs its calls and the batch file), and a fake gh on
+# PATH that reads and writes a small state folder. The fake gh merges into the bare origin as
+# GitHub would. Nothing reaches GitHub or the Jetson, and nothing uses ssh: the
 # figures of the Jetson come from the deploy's output (ops/jetson-verify.sh is tested by
 # tests/remote_ops_test.sh).
 #
@@ -152,13 +153,6 @@ case "$1 $2" in
   d="$(pr_dir "${n%/files}")"
   jq -R '{filename: .}' "$d/files" | jq -s . | out
   ;;
-"project item-add")
-  url="${args[${#args[@]} - 5]}"
-  printf '{"id": "ITEM_%s"}\n' "${url##*/}" | out
-  ;;
-"project item-edit")
-  [[ ! -e "$STATE/card_fail" ]] || exit 1
-  ;;
 *)
   echo "fake gh: unexpected call: $*" >&2
   exit 2
@@ -273,7 +267,22 @@ if [[ "$code" == 0 ]]; then echo "deployed $1, health ok"; else echo "ops/deploy
 if [[ -f "$STATE/deploy_last" ]]; then cat "$STATE/deploy_last"; fi
 exit "$code"
 EOF
-chmod +x "$TOP/fake-gate" "$TOP/fake-deploy"
+# As ops/board-sync.py: one line per call, its arguments and the batch file ship.sh wrote
+# (.local-check/ship.lock/batch of the main checkout), then the exit of $STATE/board_exit.
+cat >"$TOP/fake-board-sync" <<'EOF'
+#!/usr/bin/env bash
+batch="$(dirname "$0")/../.local-check/ship.lock/batch"
+printf '%s batch=%s\n' "$*" "$(tr '\n' ' ' <"$batch" 2>/dev/null | sed 's/ $//')" >>"$STATE/board.log"
+code="$(cat "$STATE/board_exit" 2>/dev/null || echo 0)"
+[[ "$code" == 0 ]] || echo "gh api graphql failed: HTTP 502, token=$CANARY"
+exit "$code"
+EOF
+chmod +x "$TOP/fake-gate" "$TOP/fake-deploy" "$TOP/fake-board-sync"
+board_calls() { # board_calls <line ...>: the calls of the fake board-sync, exactly
+  local want
+  want="$(printf '%s\n' "$@")"
+  [[ "$(cat "$STATE/board.log" 2>/dev/null)" == "$want" ]] || fail "board-sync calls: $(cat "$STATE/board.log" 2>/dev/null), expected: $want"
+}
 
 # verify_line <services> <healthy> <missing> <unhealthy> <alembic> <head> <errors> <browser>
 # <unwell> <absent> <result>: a line as ops/jetson-verify.sh prints it.
@@ -301,6 +310,7 @@ fresh() {
   cp "$ROOT/ops/ship.sh" "$MAIN/ops/ship.sh"
   cp "$TOP/fake-gate" "$MAIN/ops/local-check.sh"
   cp "$TOP/fake-deploy" "$MAIN/ops/deploy-checked.sh"
+  cp "$TOP/fake-board-sync" "$MAIN/ops/board-sync.py"
   printf '.local-check/\n' >"$MAIN/.gitignore"
   printf 'one\n' >"$MAIN/file.txt"
   git -C "$MAIN" add -A
@@ -417,12 +427,13 @@ out_lacks "#25"
 out_has "defer  #22: it changes ops/local-check.sh as #17 does"
 out_has "plan   gate: the ops/local-check.sh of #17 at $(h 17) (it changes the gate)"
 out_has "plan   ops/local-check.sh --merge 17 --merge 11 --merge 18 --merge 20 --merge 21;"
-out_has "plan   move to Done on the board right after the merges: #1017, #1011, #1018, #1020, #1021"
+out_has "plan   ops/board-sync.py --apply at the start of the gate (the batch in $MAIN/.local-check/ship.lock/batch), after the merges and after the deploy"
+[[ ! -e "$STATE/board.log" ]] || fail "--plan ran board-sync: $(cat "$STATE/board.log")"
 [[ "$before" == "$(snapshot)" ]] || fail "--plan changed the repositories or the checkout"
-for f in gate.log deploy.log ssh.log; do [[ ! -e "$STATE/$f" ]] || fail "--plan ran $f"; done
+for f in gate.log deploy.log ssh.log board.log; do [[ ! -e "$STATE/$f" ]] || fail "--plan ran $f"; done
 ! grep -qE '^(pr merge|pr comment|project )' "$STATE/gh.log" || fail "--plan wrote to GitHub: $(cat "$STATE/gh.log")"
 ok "--approved picks approved heads only (drafts, other verdicts, old or short heads, conflicts, UNKNOWN after 5 reads skipped; CRLF and later comments fine), gate changer first, a second one deferred"
-ok "--plan touches nothing: no merge, comment, card, gate, deploy, ssh, ref or file"
+ok "--plan touches nothing: no merge, comment, board sync, gate, deploy, ssh, ref or file"
 
 run 0 ship --plan 20 11
 out_has "plan   ship in this order: #20 $(h 20), #11 $(h 11)"
@@ -477,7 +488,7 @@ out_has "skip   #72: waits for #72"
 out_has "skip   #71: waits for #72"
 ok "a pull request that depends on itself waits, and so do its dependents"
 
-# === the whole way: gate of the pull request that changes it, merge, pull, deploy, Jetson, cards ===
+# === the whole way: gate of the pull request that changes it, merge, pull, deploy, Jetson, board ===
 fresh
 mkpr 31
 gate_pr 32
@@ -493,14 +504,14 @@ main_sha="$(git -C "$MAIN" rev-parse HEAD)"
 out_has "jetson:   8 services, 8 healthy, 0 missing; alembic 0042_ship; memory 3120 of 7620 MB used; 0 error lines in 10 minutes; browser off"
 out_has "check  the figures of the deploy run (JOBAPP-VERIFY)"
 [[ ! -e "$STATE/ssh.log" ]] || fail "ship.sh called ssh: $(cat "$STATE/ssh.log")"
-out_has "cards:    Done: #1032, #1031"
-log_has gh.log "project item-add 1 --owner GoldLegendW80 --url https://github.com/GoldLegendW80/jobapp/issues/1032 --format json --jq .id"
-log_has gh.log "project item-edit --project-id PVT_kwHOA9eVYc4BmeB8 --id ITEM_1031 --field-id PVTSSF_lAHOA9eVYc4BmeB8zhlG8_A --single-select-option-id 98236657"
+board_calls "--apply batch=32 31" "--apply batch=32 31" "--apply batch=32 31"
+out_has "board:    3 sync(s)"
+log_lacks gh.log "project "
 out_lacks "$CANARY"
 [[ "$(git -C "$MAIN" worktree list | wc -l | tr -d ' ')" == 1 ]] || fail "the gate worktree was left: $(git -C "$MAIN" worktree list)"
 [[ ! -e "$MAIN/.local-check/ship.lock" ]] || fail "the lock was left"
 [[ -z "$(git -C "$MAIN" status --porcelain)" ]] || fail "the main checkout is dirty after a ship"
-ok "approved to production: PR gate from its head, merges in order with --match-head-commit, pull, deploy of that commit, Jetson figures, cards to Done, no log line printed"
+ok "approved to production: PR gate from its head, merges in order with --match-head-commit, pull, deploy of that commit, Jetson figures, the board synced at the gate (batch file), after the merges and after the deploy, no log line printed"
 
 # === bisect ===========================================================================================
 fresh
@@ -533,6 +544,7 @@ out_lacks "$CANARY"
 for n in 41 42 44; do [[ ! -e "$STATE/comment-$n.txt" ]] || fail "#$n got a comment"; done
 [[ "$(last_line)" == "SHIP: OK" ]] || fail "bisect then ship: $(last_line)"
 out_lacks "flaky:"
+board_calls "--apply batch=41 42 43 44" "--apply batch=41 42 44" "--apply batch=41 42 44"
 ok "bisect: the same failure twice, then the shortest failing prefix drops #43 (5 gate runs), comment with step, order and a redacted tail, the rest shipped"
 
 fresh
@@ -696,10 +708,9 @@ run 1 ship --approved
 out_has "SHIP: FAIL ops/deploy-checked.sh failed (exit 1): ops/deploy-checked.sh: the deploy run failed"
 out_lacks "jetson:"
 out_lacks "check  the figures"
-log_has gh.log "project item-add 1 --owner GoldLegendW80 --url https://github.com/GoldLegendW80/jobapp/issues/1066"
-log_has gh.log "project item-edit --project-id PVT_kwHOA9eVYc4BmeB8 --id ITEM_1066"
-out_has "cards:    Done: #1066"
-ok "a failed deploy with no figures exits 1, no Jetson check, the cards moved right after the merge"
+board_calls "--apply batch=66" "--apply batch=66" "--apply batch=66"
+out_has "board:    3 sync(s)"
+ok "a failed deploy with no figures exits 1, no Jetson check, the board synced after the merge and after the deploy"
 
 fresh
 mkpr 66
@@ -720,8 +731,8 @@ out_has "jetson:   5 services, 1 healthy, 1 missing; alembic 0041_old"
 out_has "alembic is not at head"
 out_has "5 error lines in 10 minutes"
 out_lacks "$CANARY"
-log_has gh.log "project item-edit --project-id PVT_kwHOA9eVYc4BmeB8 --id ITEM_1067"
-ok "an unwell Jetson (stopped, restarting, unhealthy and missing services, alembic, error lines) exits 1, prints figures only, the cards moved already"
+board_calls "--apply batch=67" "--apply batch=67" "--apply batch=67"
+ok "an unwell Jetson (stopped, restarting, unhealthy and missing services, alembic, error lines) exits 1, prints figures only, the board synced already"
 
 fresh
 mkpr 71
@@ -758,13 +769,17 @@ ok "a result=fail is a failure even when every figure ship.sh knows reads well"
 
 fresh
 mkpr 69
-touch "$STATE/card_fail"
-run 1 ship --approved
-out_has "but these cards did not move to Done: #1069"
-out_has "cards:    Done: none; not moved: #1069"
-[[ -s "$STATE/deploy.log" ]] || fail "a card that did not move stopped the deploy"
+echo 1 >"$STATE/board_exit"
+run 0 ship --approved
+[[ "$(last_line)" == "SHIP: OK" ]] || fail "a failed board sync failed the ship: $(last_line)"
+[[ "$(grep -c '^board  sync .* failed (exit 1, ' "$OUT")" == 3 ]] || fail "one line per failed sync expected: $(grep '^board' "$OUT")"
+out_has "board  sync at the start of the gate failed (exit 1, "
+out_has "board:    3 sync(s), failed at the start of the gate, after the merges, after the deploy"
+out_has "[line withheld: it may hold a secret]"
+out_lacks "$CANARY"
+[[ -s "$STATE/deploy.log" ]] || fail "a failed board sync stopped the deploy"
 out_has "jetson:   8 services, 8 healthy"
-ok "a card that does not move exits 1 and names it, after the deploy and the Jetson check"
+ok "a board sync that fails prints one redacted line each time and changes nothing else: merged, deployed, checked, SHIP: OK"
 
 # === a stop between two merges, and gh failing after GitHub merged ==================================
 fresh
@@ -777,10 +792,10 @@ out_has "not merged: #82, #83"
 out_has "SHIP: FAIL gh pr merge #82 failed"
 [[ ! -e "$STATE/deploy.log" ]] || fail "deployed after a stop between two merges"
 [[ "$(git -C "$MAIN" rev-parse HEAD)" == "$main_before" ]] || fail "the main checkout was pulled after a stop"
-log_has gh.log "project item-edit --project-id PVT_kwHOA9eVYc4BmeB8 --id ITEM_1081"
-log_lacks gh.log "ITEM_1082"
+board_calls "--apply batch=81 82 83" "--apply batch=81 82 83"
+out_has "board:    2 sync(s)"
 log_lacks gh.log "pr merge 83"
-ok "a merge refused midway: merged and not merged named, cards of the merged moved, no pull, no deploy"
+ok "a merge refused midway: merged and not merged named, the board synced after the merges, no pull, no deploy"
 
 fresh
 for n in 84 85; do mkpr "$n"; done
@@ -812,11 +827,11 @@ out_has "merged:   #93, #94"
 out_has "not merged: #95"
 out_has "interrupted: while merging #94, which is MERGED on GitHub"
 out_has "SHIP: FAIL interrupted during the merges: nothing deployed"
-log_has gh.log "project item-edit --project-id PVT_kwHOA9eVYc4BmeB8 --id ITEM_1093"
+board_calls "--apply batch=93 94 95" "--apply batch=93 94 95"
 log_lacks gh.log "pr merge 95"
 [[ ! -e "$STATE/deploy.log" ]] || fail "deployed after an interrupt"
 [[ ! -e "$MAIN/.local-check/ship.lock" ]] || fail "the lock was left after an interrupt"
-ok "TERM during the merges prints what merged and what did not, moves the cards of the merged, exits 130, deploys nothing"
+ok "TERM during the merges prints what merged and what did not, syncs the board, exits 130, deploys nothing"
 
 fresh
 mkpr 86

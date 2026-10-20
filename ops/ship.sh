@@ -42,10 +42,12 @@
 #    MERGED counts as merged whatever gh exited with (a state that cannot be read is read once
 #    more). A head that moved stops the run before the first merge; a stop between two merges, or
 #    INT or TERM during them, names what merged and what did not.
-# 5. The issues the merged pull requests close (GitHub's closingIssuesReferences, the "Closes #N"
-#    of their bodies) move to Done on the project board (project 1 of GoldLegendW80) right after
-#    the merges, since GitHub closes them then; also after a stop between two merges. A card that
-#    does not move is named and makes the exit status 1, but stops nothing.
+# 5. The board (issue #500). The batch the gate checks is written to .local-check/ship.lock/batch
+#    of the main checkout, one pull request number per line (again after a drop), and
+#    ops/board-sync.py --apply puts every card in its stage from GitHub facts: once at the start
+#    of the gate (the batch shows as Gating), once right after the merges (also after a stop
+#    between two merges) and once after the deploy. Best effort: a sync that fails prints one
+#    line and the ship goes on; it never changes the exit status.
 # 6. The main checkout (checked clean and on main before the gate, and again here) gets
 #    git pull --ff-only; its tree must equal the gate's tree, then ops/deploy-checked.sh <commit>.
 # 7. The Jetson, as the deploy run saw it, without ssh (owner decision of 2026-10-15): the last
@@ -73,12 +75,7 @@ PROG="ops/ship.sh"
 GATE_SCRIPT="ops/local-check.sh"
 POLL_SECONDS="${SHIP_POLL_SECONDS:-5}"
 KEEP_LOGS=10
-# The project board: project 1 of GoldLegendW80, its Status field and the option Done.
-BOARD_OWNER="GoldLegendW80"
-BOARD_NUMBER=1
-BOARD_ID="PVT_kwHOA9eVYc4BmeB8"
-STATUS_FIELD="PVTSSF_lAHOA9eVYc4BmeB8zhlG8_A"
-STATUS_DONE="98236657"
+BOARD_SYNC="ops/board-sync.py" # the board, from GitHub facts (step 5)
 
 say() { printf '%s\n' "$*"; }
 usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -255,33 +252,24 @@ changes_gate() { # changes_gate <n>: true when the pull request changes ops/loca
     die "gh cannot list the files of #$1"
   grep -qxF "$GATE_SCRIPT" <<<"$files"
 }
-issues_of() { # issues_of <n>: "<number> <url>" of each issue the pull request closes
-  gh pr view "$1" --json closingIssuesReferences --jq '.closingIssuesReferences[] | "\(.number) \(.url)"'
-}
 
-# --- 5. the board: move_cards runs right after the merges (GitHub closes the issues then) ---------
-STUCK=()
-move_cards() { # move_cards <n ...>: the issues these merged pull requests close, to Done
-  local n number url item moved=() seen=" " issues
-  for n in "$@"; do
-    issues="$(issues_of "$n")" || {
-      STUCK+=("the issues of #$n")
-      continue
-    }
-    while read -r number url; do
-      [[ -n "$number" && "$seen" != *" $number "* ]] || continue
-      seen="$seen$number "
-      if item="$(gh project item-add "$BOARD_NUMBER" --owner "$BOARD_OWNER" --url "$url" --format json --jq .id 2>/dev/null)" &&
-        [[ -n "$item" ]] &&
-        gh project item-edit --project-id "$BOARD_ID" --id "$item" --field-id "$STATUS_FIELD" \
-          --single-select-option-id "$STATUS_DONE" >/dev/null 2>&1; then
-        moved+=("#$number")
-      else
-        STUCK+=("#$number")
-      fi
-    done <<<"$issues"
-  done
-  note cards "Done: $(joined ${moved[@]+"${moved[@]}"})$( ((${#STUCK[@]} == 0)) || printf '; not moved: %s' "$(joined "${STUCK[@]}")")"
+# --- 5. the board: the batch file and board-sync, best effort ------------------------------------
+SYNCS=0
+SYNC_FAILED=()
+write_batch() { # the batch the gate checks, for ops/board-sync.py (Gating)
+  printf '%s\n' ${BATCH[@]+"${BATCH[@]}"} >"$LOCK/batch" 2>/dev/null || say "board  cannot write $LOCK/batch"
+}
+board_sync() { # board_sync <when>: ops/board-sync.py --apply; a failure is one line, never a stop
+  local log="$LOGS/board-$((SYNCS + 1)).log" code=0
+  SYNCS=$((SYNCS + 1))
+  "$ROOT/$BOARD_SYNC" --apply >"$log" 2>&1 </dev/null || code=$?
+  if ((code)); then
+    say "board  sync $1 failed (exit $code, $log): $(tail -n 1 "$log" | redact)"
+    SYNC_FAILED+=("$1")
+  fi
+}
+board_note() {
+  note board "$SYNCS sync(s)$( ((${#SYNC_FAILED[@]} == 0)) || printf ', failed %s' "$(joined "${SYNC_FAILED[@]}")")"
 }
 
 # --- 1. selection -----------------------------------------------------------------------------------
@@ -486,14 +474,7 @@ if ((PLAN)); then
   [[ ! -d "$RECORDS/lock" ]] ||
     say "plan   a batch check holds $RECORDS/lock now ($(cat "$RECORDS/lock/holder" 2>/dev/null || echo "holder unknown")): the gate of a real run would refuse to start"
   say "plan   ops/deploy-checked.sh <that commit>, then the figures its run printed (JOBAPP-VERIFY): compose health, alembic head, memory, error lines of 10 minutes, browser"
-  cards=()
-  for n in "${ORDER[@]}"; do
-    issues="$(issues_of "$n")" || die "gh cannot read the issues #$n closes"
-    while read -r number _; do
-      [[ -n "$number" ]] && cards+=("#$number")
-    done <<<"$issues"
-  done
-  say "plan   move to Done on the board right after the merges: $(joined ${cards[@]+"${cards[@]}"})"
+  say "plan   $BOARD_SYNC --apply at the start of the gate (the batch in $RECORDS/ship.lock/batch), after the merges and after the deploy"
   summary
   say "SHIP: PLAN, nothing was done"
   exit 0
@@ -531,6 +512,9 @@ ls -1t "$RECORDS/ship" | tail -n "+$((KEEP_LOGS + 1))" | while IFS= read -r old;
   rm -rf "${RECORDS:?}/ship/$old"
 done
 say "ship   $(labels "${ORDER[@]}") (logs $LOGS)"
+BATCH=("${ORDER[@]}")
+write_batch
+board_sync "at the start of the gate"
 
 if [[ -n "$GATE_PR" ]]; then
   git -C "$MAIN" fetch -q origin "pull/$GATE_PR/head" 2>/dev/null || die "cannot fetch the head of #$GATE_PR"
@@ -620,6 +604,7 @@ drop() { # drop <n> <failing steps> <gate log>: out of the batch, with a comment
     keep+=("$m")
   done
   BATCH=(${keep[@]+"${keep[@]}"})
+  write_batch
   DROPPED+=("#$n ($2)")
   say "drop   #$n: $2"
   for m in "${out[@]:1}"; do
@@ -783,12 +768,13 @@ stop_merging() { # stop_merging <index in the batch of the first one not merged>
   note merged "$(joined ${MERGED[@]+"${MERGED[@]/#/#}"})"
   note "not merged" "$(joined "${rest[@]/#/#}")"
   ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
-  ((${#MERGED[@]} == 0)) || move_cards "${MERGED[@]}"
+  ((${#MERGED[@]} == 0)) || board_sync "after the merges"
+  board_note
   die "$2: main is not the checked tree, nothing deployed"
 }
 # INT or TERM during the merges: say what merged and what did not (the one in flight is asked
-# of GitHub, since gh may have merged it just before the signal), move the cards of the merged
-# ones, exit 130.
+# of GitHub, since gh may have merged it just before the signal), sync the board when one merged,
+# exit 130.
 MERGING=0
 MERGE_AT=0
 on_signal() {
@@ -808,12 +794,13 @@ on_signal() {
     note merged "$(joined ${MERGED[@]+"${MERGED[@]/#/#}"})"
     note "not merged" "$(joined "${rest[@]/#/#}")"
     if [[ -z "$at" ]]; then
-      note interrupted "after the last merge, before the cards and the deploy"
+      note interrupted "after the last merge, before the board sync and the deploy"
     else
       note interrupted "while merging #$at, which is ${state:-unknown} on GitHub"
     fi
     ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
-    ((${#MERGED[@]} == 0)) || move_cards "${MERGED[@]}"
+    ((${#MERGED[@]} == 0)) || board_sync "after the merges"
+    board_note
     summary
     say "SHIP: FAIL interrupted during the merges: nothing deployed"
     printf '%s: interrupted during the merges\n' "$PROG" >&2
@@ -856,7 +843,7 @@ MERGING=0
 trap 'exit 130' INT TERM
 note merged "$(joined "${MERGED[@]/#/#}")"
 ((${#MERGE_WARNINGS[@]} == 0)) || note warnings "$(joined "${MERGE_WARNINGS[@]}")"
-move_cards "${MERGED[@]}"
+board_sync "after the merges"
 
 # figure <key> <JOBAPP-VERIFY line>: the value of one key, `-` when the line lacks it.
 figure() {
@@ -908,6 +895,8 @@ note main "$(short "$commit") tree $tree"
 say "deploy ops/deploy-checked.sh $commit"
 deploy_status=0
 "$MAIN/ops/deploy-checked.sh" "$commit" >"$LOGS/deploy.log" 2>&1 </dev/null || deploy_status=$?
+board_sync "after the deploy"
+board_note
 deploy_last="$(tail -n 1 "$LOGS/deploy.log" | redact)"
 # The figures of the run (step 7), whatever its result: a run whose verify step failed is red.
 verify="$(grep -E '^JOBAPP-VERIFY services=[0-9]+( [a-z_]+=[A-Za-z0-9_.:,-]+)*$' "$LOGS/deploy.log" | tail -n 1 || true)"
@@ -923,6 +912,5 @@ say "check  the figures of the deploy run (JOBAPP-VERIFY)"
 [[ -n "$verify" ]] ||
   die "the deploy run printed no JOBAPP-VERIFY line ($LOGS/deploy.log): deployed, the Jetson is not checked (ops/remote.sh status)"
 check_jetson "$verify"
-((${#STUCK[@]} == 0)) || die "deployed and checked, but these cards did not move to Done: $(joined "${STUCK[@]}")"
 summary
 say "SHIP: OK"

@@ -8,6 +8,11 @@ in the job folder that holds this repository (it is not part of the repository).
 
 1. A task of `tasks/todo.md` or of a module's `tasks/<module>/todo.md` gets its own branch from `main`, named `<module>/<task-id>-<slug>`,
    for example `jobs/j4-rescore`, `platform/7-ci` or `profile/p5-import-preview`.
+   The agent that starts the task puts its card in Building with
+   `ops/card.sh <issue url> doing <module> now`. Every other move on the board (one column per
+   step: Needs you, Paused, Blocked, Spec, Ready, Building, In review, Fix & re-check, Approved,
+   Gating, Merged, Live, Dropped, Epic) is made by `ops/board-sync.py` from GitHub facts, never
+   by hand (docs/agents/orchestration.md, The board).
 2. Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat(jobs): ...`,
    `fix(identity): ...`, `ci: ...`, `docs: ...`) and end with the agent's attribution line:
 
@@ -143,8 +148,9 @@ in the job folder that holds this repository (it is not part of the repository).
    comment with the step blamed and the last 30 lines of its log (each line that may hold a
    secret withheld), and the rest is checked again; a main that fails alone stops the run.
    It merges only when main and every head are still what the PASS record lists (`gh pr merge
-   --repo <owner/repo> --match-head-commit`), and moves the issues the merged pull requests
-   close to Done on the board right after the merges. Then it pulls the main checkout (which
+   --repo <owner/repo> --match-head-commit`), and keeps the board current with
+   `ops/board-sync.py --apply` at the start of the gate (the batch shows as Gating), right after
+   the merges and after the deploy (a failed sync prints one line, never fails the ship). Then it pulls the main checkout (which
    must be clean and on `main`), deploys only when its tree is the gate's tree, and checks the
    Jetson without ssh, from the `JOBAPP-VERIFY` line the deploy run printed (its last step,
    `ops/jetson-verify.sh`, with the deploy's compose profile: every service running and healthy,
