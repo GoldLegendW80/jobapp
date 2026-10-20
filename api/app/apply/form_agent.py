@@ -10,8 +10,9 @@ profile, moves through its steps and names its submit element. It asks of the ru
   of 410,000 tokens) written in the run's input; a run that reaches either is stopped by the
   runner, and what it filled before stays, with no designation;
 - five tools (app/apply/form_tools.py), bound to the run (`Scope.run_id`) and through it to the
-  fill's lease, held here in `_SESSIONS` while the run lasts. No tool takes a value: the model
-  names elements by ref and code does the rest.
+  fill's lease, held here in `_SESSIONS` while the run lasts, and browser B12b's
+  `browser_request_signin` (app/browser/signin_tool.py), lent the same lease. No tool takes a
+  value: the model names elements by ref and code does the rest.
   * `read_form`: the fields (ref, label, kind, options, required, filled or not, never a value),
     the buttons (ref, name) and the page's text, as data;
   * `resolve_answer(ref)`: `answers.resolve` on that field: whether the profile answers it and from
@@ -22,6 +23,10 @@ profile, moves through its steps and names its submit element. It asks of the ru
     layer, which refuses a submit; the step and its fields recorded for the refill;
   * `designate_submit(ref)`: the designation, accepted only when `generic.check_designation` and
     the detector (`generic.marked`) agree.
+  * `browser_request_signin(site, reason)`: only after a read saw a sign in wall; the person
+    signs in in the live view and the run reads the form again, or, nobody watching, a Cancel
+    or the deadline, the fill stops there as `needs_person: signin` without reading the page.
+    The run's wall time holds that wait (`SIGNIN_WAIT_S`).
   There is no click on anything else, no typing of the model's text, no navigation and no mail:
   a page that asks the assistant to do something else gets nothing done, and a page that names
   an AI reader is reported (`generic.addressed`).
@@ -43,6 +48,7 @@ import importlib.util
 import json
 import secrets
 import threading
+import time
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable
@@ -60,12 +66,14 @@ from app.apply import agents as answer_agents
 from app.apply import answers
 from app.apply.ats import base as ats_base
 from app.apply.ats import generic
+from app.config import Settings
 
 if TYPE_CHECKING:
     from app.agents.runner import RunContext
 
 NAME = "apply_form"
-TOOLS = ("read_form", "resolve_answer", "fill_field", "next_step", "designate_submit")
+SIGNIN = "browser_request_signin"  # app/browser/signin_tool.py's TOOL
+TOOLS = ("read_form", "resolve_answer", "fill_field", "next_step", "designate_submit", SIGNIN)
 PROMPT_PATH = Path(__file__).parent / "prompts" / "form.md"
 MODEL = answer_agents.MODEL
 MODEL_API_KEY = answer_agents.MODEL_API_KEY
@@ -73,6 +81,15 @@ MAX_TURNS = 30
 TOKEN_BUDGET = 820_000
 # Inside the fill's lease, whose tool calls are paced (browser B5): a form of 30 fields and 3 steps.
 WALL_TIME_S = 900.0
+# A sign in hand off's wait, which the lease does not count as active time (browser B12a).
+SIGNIN_WAIT_S = float(Settings.model_fields["browser_session_max_s"].default)
+# What the run keeps after a hand off's wait, to read the form again or end its turn.
+SIGNIN_MARGIN_S = 60.0
+WALL = (
+    "A sign in or sign up wall is shown. Call browser_request_signin with the site's name and "
+    "why, then read the form again."
+)
+SIGNIN_OVER = "The person was not signed in. Stop now."
 TEXT_MAX = 4_000
 BUTTONS_MAX = 40
 FIRST_MESSAGE = (
@@ -121,13 +138,19 @@ class FormSession:
     stopped: str = ""
     pending: str = ""
     addressed: bool = False
+    signin_over: bool = False  # a hand off that ended without the person signed in
+    deadline: float | None = None  # monotonic: the end of the run's wall time
 
     async def _read(self) -> tuple[ats_base.Discovery | None, str]:
+        if self.signin_over:
+            return None, SIGNIN_OVER
         found, code = await self.adapter.read(self.tools)
         if found is None:
             return None, f"The page could not be read ({code})."
         if found.pending:
             self.pending = found.pending
+            if found.pending == "signin":
+                return None, WALL
             return None, "A step only the person can take is shown. Stop now."
         if found.root is not None and generic.addressed(" ".join(found.root.words())):
             self.addressed = True
@@ -257,12 +280,32 @@ class FormSession:
         self.designated = node.name
         return "Designated. The person approves it before anything is sent. Stop now.", False
 
+    def signin_wall(self) -> bool:
+        return self.pending == "signin" and not self.signin_over
+
+    def signin_budget(self) -> float | None:
+        if self.deadline is None:
+            return None
+        return max(0.0, self.deadline - time.monotonic() - SIGNIN_MARGIN_S)
+
+    def signin_ended(self, outcome: Any) -> None:
+        """The end of a hand off (app.browser.handoff.Outcome): signed in, the form is read
+        again; else the lease is gone or still waits for the person, and nothing reads it."""
+        if outcome.code == "signed_in":
+            self.pending = ""
+        elif outcome.needs_person or outcome.code == "ended":
+            self.signin_over = True
+
     async def finish(self) -> FormReport:
         """What the run left on the page, read by code: the outcomes of every step, the last
         step's fields as shown now, the designation checked again on this read."""
         report = FormReport(
             steps=list(self.steps), refused=dict(self.refused), addressed=self.addressed
         )
+        if self.signin_over:
+            report.outcomes, report.skipped = list(self.closed), list(self.skipped)
+            report.stopped, report.needs_person = "needs_person", "signin"
+            return report
         found, code = await self.adapter.read(self.tools)
         report.outcomes = list(self.closed)
         report.skipped = list(self.skipped)
@@ -335,7 +378,7 @@ def _definition() -> FormDefinition:
         model=MODEL,
         model_by_credential={CredentialKind.anthropic_api_key.value: MODEL_API_KEY},
         max_turns=MAX_TURNS,
-        wall_time_s=WALL_TIME_S,
+        wall_time_s=WALL_TIME_S + SIGNIN_WAIT_S,
         effort="medium",
         internal=True,
         live_text=False,
@@ -396,6 +439,7 @@ class RuntimeFormAgent:
             raise
         if isinstance(created, str):
             return Ran(stopped=created)
+        session.deadline = time.monotonic() + APPLY_FORM.wall_time_s
         with _LOCK:
             _KEYS.add(key)
             _SESSIONS[created] = session
