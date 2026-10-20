@@ -1,27 +1,34 @@
 """The rules of a template derived from an uploaded CV (task D25a; SPEC-documents.md, "Design
-capture of an upload", steps 2 to 4, and "Templates"). Pure: no file, no clock, no log.
+capture of an upload", steps 2 to 4, and "Templates"). Pure: no clock, no log; the only files
+read are the bundled `_base` ones.
 
 **The checks.** `check(files, photo, fonts, accent) -> [Problem]` is what D25b runs on the
 files the design model wrote, before anything renders: [] accepts; else the problems go back to
 the model once, then `classic` is kept. A Problem names a file, a line and a code of CODES, never
 text of the template, so it can be logged. On top of the authoring rules every template follows
 (`templates.problems`; the manifest is `templates.from_files`'s, which D25b calls to store it):
-- each `.j2` file is read as Jinja's tree (parsed, never rendered), and only an allow list
-  passes: `extends` of `_base/page.html.j2`, `import` of `_base/macros.html.j2` as `base`,
-  the block `body`, `if`, `for`, the macros of MACROS with their arguments, the fields of
-  FIELDS, `join` with punctuation, `and`, `or`, `not`. Any other construct, name or constant is
-  refused, so a template cannot hold a sentence of the person in an expression;
-- no literal text: the HTML between the Jinja constructs holds tags of TAGS with a `class`,
-  and between them only punctuation of PUNCTUATION (no letter, no digit, no dash);
+- each `.j2` file is read as Jinja's own parser reads it (never rendered at this stage), and
+  only an allow list passes. At the top level: `extends` of `_base/page.html.j2`, `import` of
+  `_base/macros.html.j2` as `base`, the block `body`, whitespace; anything else there is
+  refused, since Jinja drops what an extending template holds outside its blocks. In the body:
+  `if`, `for` over a list field (a `for` inside a `for` only over its item's own list), the
+  macros of MACROS with their arguments, the fields of FIELDS read as keys (`group["items"]`,
+  never the dict method `group.items`), `join` with punctuation over a list field, `and`, `or`,
+  `not`. Any other construct, name or constant is refused, so a template cannot hold a sentence
+  of the person in an expression;
+- no literal text: the HTML between the Jinja constructs holds tags of TAGS with a `class`, and
+  between them only punctuation of PUNCTUATION (no letter, no digit, no dash); a tag, an
+  attribute, a comment or a character reference cut by a construct is refused, since what the
+  check reads there is not what the render prints;
 - every field printed: each field of REQUIRED is printed, by a macro or an output, where every
   test around it is about that field (`{% if roles %}` around a role, not `{% if photo %}`);
-- the CSS: only the properties of PROPERTIES; sizes in `em` or `%` or the density property, so
-  the fit loop tightens them; each density property read and none set; colours `#rrggbb` (or
-  the accent) that a background of the sheet, or the page's white, holds at 4.5:1 (WCAG 2 AA);
-  nothing that hides a field (`display: none`, negative offsets); `content` and any other
-  string only punctuation, no `url(`;
-  font families only those of the manifest; `@page` only `size: A4` and a margin, and a margin
-  set there means `--margin` is read elsewhere.
+- the render: a file that passed the above is rendered in process on canary content, every
+  field filled with a token of its own and every field empty. The HTML printed is parsed: its
+  text is only canaries, whitespace and punctuation, its tags those of TAGS (and the macros'
+  `a` and `img`), its attributes those of an allow list, its elements nested as the browser's
+  tree builder keeps them, and every field of REQUIRED shows its canary;
+- the CSS: `template_css.check`, its own tokenizer and allow lists, the contrast computed on the
+  rendered pages (see that module).
 
 The fit check on the render (the tightest step gives a shorter page than the loosest) and the
 fields found in the PDF text are D25b's, which holds the renderer.
@@ -37,11 +44,13 @@ The text, the accent and the text on the fill pass the checks' contrast rule by 
 `steps(tokens, kind)` is the density ladder of a user template's manifest: loosest from the
 captured density, down to TIGHTEST, every step within `templates.BOUNDS`.
 
-Declared open points: a field printed in a box whose size or overflow hides it, or in a colour
-close to a background that another rule sets around it, passes these checks; the PDF text check
-of D25b is what sees it. Of the tokens: a page's columns are read from the gaps between its
-text below the top fifth, so a two column layout crossed by one full width line reads as one
-column; a sidebar is a fill touching a side edge, a band a fill across the top.
+Declared open points: a field printed in a box whose size or overflow hides it, a size made
+small by nesting `em` sizes, and a colour that lands on a background only in a shape of the
+content the canary renders do not have, pass these checks; neither does the PDF text check of
+D25b see them (the text is in the PDF), so they are left to a render check of D25b or to the
+Compare view. Of the tokens: a page's columns are read from the gaps between its text below the
+top fifth, so a two column layout crossed by one full width line reads as one column; a sidebar
+is a fill touching a side edge, a band a fill across the top.
 """
 
 from __future__ import annotations
@@ -50,33 +59,31 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from functools import cache
 from html.parser import HTMLParser
 from itertools import pairwise
 from statistics import median
+from typing import Any
 
-from jinja2 import Environment, nodes
+from jinja2 import DictLoader, StrictUndefined, nodes
 from jinja2.exceptions import TemplateSyntaxError
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 
-from app.documents import font_map, templates
+from app.documents import font_map, template_css, templates
+from app.documents.template_css import AA, PUNCTUATION, TAGS, WHITE, Element, Problem, contrast
 from app.ingestion.parser_client import DesignDocx, DesignPdf, TextRun
+
+__all__ = ["AA", "TAGS", "WHITE", "Problem", "check", "check_css", "contrast"]
 
 CODES = (
     "authoring", "syntax", "construct", "name", "constant", "literal", "tag", "attribute",
     "unprinted", "density_unread", "density_pinned", "property", "size", "colour", "contrast",
-    "content", "font", "page", "structure", "too_large",
+    "content", "font", "page", "structure", "selector", "too_large",
 )  # fmt: skip
 FILE_MAX = 64_000  # characters of one file; the bundled ones hold under 10,000
-
-
-@dataclass(frozen=True)
-class Problem:
-    file: str
-    line: int  # 0: the whole file
-    code: str  # one of CODES
-    detail: str  # a fixed phrase, a field or a CSS name of the allow lists
-
-    def __str__(self) -> str:
-        return f"{self.file}:{self.line}: {self.detail}"
+RENDER_MAX = 400_000  # characters of a canary render; the bundled ones print under 20,000
+ELEMENTS_MAX = 6_000  # elements of a canary render; the bundled ones print under 200
+DEPTH_MAX = 48  # elements nested in a canary render; the bundled ones nest under 12
 
 
 # --- the Jinja tree -----------------------------------------------------------------------------
@@ -155,8 +162,8 @@ MACRO_PRINTS = {
     "letter_date": ("date",),
 }
 _CLASS = re.compile(r"[a-z][a-z0-9-]{0,39}( [a-z][a-z0-9-]{0,39}){0,3}")
-PUNCTUATION = frozenset(",:;·•|/().&")
-_SLOT = "\ue000"  # where an output stands in the HTML between the constructs
+_SLOT = ""  # where an output stands in the HTML between the constructs
+_ITEM = " item"  # the scope key of the enclosing loop's item path: no Jinja name has a space
 
 
 @dataclass(frozen=True)
@@ -202,23 +209,41 @@ class _Walk:
             if field.startswith(path + ".") and what in ("text", "list"):
                 self.mark(field, guards)
 
+    def top(self, tree: nodes.Template) -> None:
+        """The top level of a file: extends, import, the body block and whitespace only."""
+        extends = body = False
+        for node in tree.body:
+            if isinstance(node, nodes.Output) and all(
+                isinstance(child, nodes.TemplateData) and not child.data.strip()
+                for child in node.nodes
+            ):
+                continue
+            if isinstance(node, nodes.Extends) and not extends:
+                extends = True
+                if not (isinstance(node.template, nodes.Const) and node.template.value == PAGE):
+                    self.refuse(node, "construct", f"extends only {PAGE}")
+            elif isinstance(node, nodes.Import):
+                ok = isinstance(node.template, nodes.Const) and node.template.value == MACROS_FILE
+                if not (ok and node.target == "base" and node.with_context):
+                    self.refuse(
+                        node, "construct", f"import only {MACROS_FILE} as base with context"
+                    )
+            elif isinstance(node, nodes.Block) and node.name == "body" and not body:
+                body = True
+                if node.scoped or node.required:
+                    self.refuse(node, "construct", "the body block, neither scoped nor required")
+                self.body(node.body, {}, ())
+            else:
+                self.refuse(node, "construct", "at the top level only extends, import and body")
+        if not extends:
+            self.problems.append(Problem(self.file, 0, "construct", f"a file that extends {PAGE}"))
+
     def body(self, items: list[nodes.Node], scope: dict[str, str], guards: tuple) -> None:
         for item in items:
             self.statement(item, scope, guards)
 
     def statement(self, node: nodes.Node, scope: dict[str, str], guards: tuple) -> None:
-        if isinstance(node, nodes.Extends):
-            if not (isinstance(node.template, nodes.Const) and node.template.value == PAGE):
-                self.refuse(node, "construct", f"extends only {PAGE}")
-        elif isinstance(node, nodes.Import):
-            ok = isinstance(node.template, nodes.Const) and node.template.value == MACROS_FILE
-            if not (ok and node.target == "base" and node.with_context):
-                self.refuse(node, "construct", f"import only {MACROS_FILE} as base with context")
-        elif isinstance(node, nodes.Block):
-            if node.name != "body":
-                self.refuse(node, "construct", "a block other than body")
-            self.body(node.body, scope, guards)
-        elif isinstance(node, nodes.Output):
+        if isinstance(node, nodes.Output):
             for child in node.nodes:
                 if isinstance(child, nodes.TemplateData):
                     self.html.append((child.lineno, child.data))
@@ -237,11 +262,18 @@ class _Walk:
             if not isinstance(node.target, nodes.Name) or what not in ("list", "items"):
                 self.refuse(node, "construct", "a for over a list field, into one name")
                 return
+            outer = scope.get(_ITEM)
+            if outer and not (source or "").startswith(outer + "."):
+                self.refuse(node, "construct", "a for inside a for only over its item's own list")
+                return
             if node.test is not None or node.recursive:
                 self.refuse(node, "construct", "a for with a test or recursive")
-            inner = {**scope, node.target.name: f"{source}[]", "loop": "loop"}
+            item = f"{source}[]"
+            inner = {**scope, node.target.name: item, "loop": "loop", _ITEM: item}
             self.body(node.body, inner, (*guards, _Guard(source)))
             self.body(node.else_, scope, (*guards, _NEVER))
+        elif isinstance(node, nodes.Block):
+            self.refuse(node, "construct", "a block inside the body block")
         else:
             self.refuse(node, "construct", f"the construct {type(node).__name__}")
 
@@ -260,7 +292,7 @@ class _Walk:
     def expr(self, node: nodes.Expr, scope: dict[str, str]) -> str | None:
         """The field path `node` names, None (and a problem) when it names none."""
         if isinstance(node, nodes.Name):
-            if node.name in scope:
+            if node.name in scope and node.name != _ITEM:
                 return scope[node.name]
             if node.name in self.fields:
                 return node.name
@@ -275,6 +307,9 @@ class _Walk:
                 return None
             if parent == "loop" and key in ("first", "last"):
                 return f"loop.{key}"
+            if isinstance(node, nodes.Getattr) and hasattr(dict, key):
+                self.refuse(node, "name", 'a field that is a method of a dict: read it as ["key"]')
+                return None
             path = f"{parent}.{key}" if isinstance(key, str) else None
             if path not in self.fields:
                 self.refuse(node, "name", f"a field that {parent} has not")
@@ -298,6 +333,8 @@ class _Walk:
                 self.refuse(node, "construct", "a filter other than join with punctuation")
             elif path and self.fields.get(path) == "list":
                 self.mark(path, guards)
+            elif path:
+                self.refuse(node, "construct", "a join over a field that is not a list of text")
             return
         path = self.expr(node, scope)
         if path and self.fields.get(path) == "text":
@@ -356,15 +393,6 @@ def _punctuation(value: object) -> bool:
     return isinstance(value, str) and all(ch.isspace() or ch in PUNCTUATION for ch in value)
 
 
-TAGS = frozenset(
-    (
-        "div", "section", "article", "aside", "header", "footer", "main", "span", "p", "ul", "ol",
-        "li", "h1", "h2", "h3", "h4", "h5", "h6", "strong", "em", "b", "i", "small", "br", "hr",
-        "table", "thead", "tbody", "tr", "td", "th",
-    )
-)  # fmt: skip
-
-
 class _Html(HTMLParser):
     """The HTML between the constructs, fed in order, the outputs as _SLOT."""
 
@@ -403,19 +431,26 @@ class _Html(HTMLParser):
 
 
 def check_html(kind: str, file: str, source: str) -> list[Problem]:
-    """The problems of one `.j2` file of `kind`, every field of REQUIRED printed included."""
+    """The problems of one `.j2` file of `kind`, read as source: the constructs, the HTML
+    between them, every field of REQUIRED printed."""
     walk = _Walk(file, kind)
+    if _SLOT in source:
+        walk.problems.append(Problem(file, 0, "literal", "a character of the private use area"))
     try:
-        tree = Environment(autoescape=True).parse(source)
-        walk.body(tree.body, {}, ())
+        tree = ImmutableSandboxedEnvironment(autoescape=True).parse(source)
+        walk.top(tree)
     except TemplateSyntaxError as error:
         return [Problem(file, error.lineno or 0, "syntax", "Jinja that does not parse")]
     except RecursionError:
         return [Problem(file, 0, "syntax", "Jinja nested deeper than Python reads")]
     parser = _Html(walk)
+    cut: set[int] = set()
     for line, data in walk.html:
         parser.line = line
         parser.feed(data)
+        if parser.rawdata and line not in cut:
+            cut.add(line)
+            walk.problems.append(Problem(file, line, "literal", "markup cut by a Jinja construct"))
     parser.close()
     walk.problems += [
         Problem(file, 0, "unprinted", f"{field} is not printed, or only under another test")
@@ -425,266 +460,238 @@ def check_html(kind: str, file: str, source: str) -> list[Problem]:
     return walk.problems
 
 
-# --- the CSS ------------------------------------------------------------------------------------
+# --- the render on canary content ---------------------------------------------------------------
 
-DENSITY = ("--body-size", "--line-height", "--section-gap", "--item-gap", "--margin")
-PROPERTIES = frozenset(
-    (
-        "margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding",
-        "padding-top", "padding-right", "padding-bottom", "padding-left", "box-sizing",
-        "font-family", "font-size", "font-weight", "font-style", "font-variant",
-        "font-variant-caps", "line-height", "letter-spacing", "text-transform", "text-align",
-        "text-decoration", "vertical-align", "white-space", "overflow-wrap", "word-break",
-        "color", "background", "background-color", "display", "gap", "row-gap", "column-gap",
-        "align-items", "align-self", "align-content", "justify-content", "justify-items",
-        "justify-self", "flex", "flex-wrap", "flex-direction", "flex-grow", "flex-shrink",
-        "flex-basis", "order", "grid-template-columns", "grid-template-rows", "grid-column",
-        "grid-row", "grid-area", "grid-auto-flow", "grid-auto-rows", "columns", "column-count",
-        "column-width", "break-inside", "break-before", "break-after", "page-break-inside",
-        "page-break-before", "page-break-after", "width", "height", "min-width", "min-height",
-        "max-width", "object-fit", "object-position", "border", "border-top", "border-right",
-        "border-bottom", "border-left", "border-color", "border-style", "border-width",
-        "border-radius", "border-collapse", "border-spacing", "list-style", "list-style-type",
-        "list-style-position", "position", "left", "top", "right", "bottom", "content",
+PHOTO_CANARY = "data:image/png;base64,AAAA"
+_VOID = frozenset(("br", "hr", "img"))
+# What the browser's tree builder closes or moves: a `p` holding one of these is closed before
+# it; the cells and rows of a table outside their parents are moved out of it.
+_CLOSES_P = frozenset(
+    ("div", "section", "article", "aside", "header", "footer", "main", "p", "ul", "ol", "li",
+     "h1", "h2", "h3", "h4", "h5", "h6", "hr", "table")
+)  # fmt: skip
+_TABLE = {"table": ("thead", "tbody", "tr"), "thead": ("tr",), "tbody": ("tr",), "tr": ("td", "th")}
+_TABLE_PARTS = frozenset(("thead", "tbody", "tr", "td", "th"))
+_HEADINGS = frozenset(("h1", "h2", "h3", "h4", "h5", "h6"))
+
+
+def _letters(n: int) -> str:
+    return "".join(chr(ord("a") + (n // 26**k) % 26) for k in (2, 1, 0))
+
+
+def canaries(kind: str) -> dict[str, str]:
+    """A token per text field path and per label: letters only, an upper case at each end so
+    it is never a class name, the same length so none holds another."""
+    keys = [p for p, what in FIELDS[kind].items() if what == "text"]
+    keys += [f"labels.{key}" for key in LABELS] + ["contact[].href"]
+    return {key: f"Q{_letters(n)}Z" for n, key in enumerate(keys)}
+
+
+def _context(kind: str, full: bool, photo: str) -> dict[str, Any]:
+    fields, tokens = FIELDS[kind], canaries(kind)
+
+    def value(path: str) -> Any:
+        what = fields[path]
+        if what == "text":
+            return tokens[path] if full else ""
+        if what == "flag":
+            return PHOTO_CANARY if full and photo != "none" else None
+        if what in ("list", "items"):
+            return [value(f"{path}[]") for _ in range(2)] if full else []
+        prefix = f"{path}."
+        record = {}
+        for child in fields:
+            rest = child.removeprefix(prefix)
+            if child.startswith(prefix) and "." not in rest and not rest.endswith("[]"):
+                record[rest] = value(child)
+        if path == "contact[]":
+            record["href"] = tokens["contact[].href"]
+        return record
+
+    top = [p for p in fields if "." not in p and "[" not in p]
+    context = {p: value(p) for p in top}
+    if full:
+        context["contact"][1]["href"] = None
+    context |= {
+        "lang": "en",
+        "kind": kind,
+        "style": "",
+        "accent": "#000000",
+        "labels": {key: tokens[f"labels.{key}"] for key in LABELS},
+    }
+    return context
+
+
+@cache
+def _base_files() -> Mapping[str, str]:
+    return {
+        f"_base/{path.name}": path.read_text(encoding="utf-8")
+        for path in sorted(templates.BASE.glob("*.j2"))
+    }
+
+
+def _environment(files: Mapping[str, str]) -> ImmutableSandboxedEnvironment:
+    """The environment `templates.environment` builds for a template, for these files."""
+    env = ImmutableSandboxedEnvironment(
+        loader=DictLoader({**_base_files(), **{n: files.get(n, "") for n in templates.FILES}}),
+        autoescape=True,
+        undefined=StrictUndefined,
+        trim_blocks=True,
+        lstrip_blocks=True,
     )
-)  # fmt: skip
-DISPLAY = frozenset(
-    ("block", "inline", "inline-block", "flex", "grid", "list-item", "table", "table-row",
-     "table-cell", "table-row-group", "table-header-group")
-)  # fmt: skip
-POSITION = frozenset(("static", "relative", "absolute"))
-GENERIC = frozenset(("serif", "sans-serif", "monospace"))
-CONTENT_CHARS = PUNCTUATION | frozenset("\u00a0 ◦▪")
-AA = 4.5  # WCAG 2, contrast of body text
-WHITE = "#ffffff"
-_STRING = "\ue001"  # where a string stands in a value
-_HEX = re.compile(r"#(?:[0-9a-f]{3}|[0-9a-f]{6})")
-_EM = re.compile(r"(-?\d*\.?\d+)(em|%)?")
+    for name in templates.UNESCAPING:
+        env.filters.pop(name, None)
+    return env
 
 
-@dataclass(frozen=True)
-class _Declaration:
-    page: bool  # inside @page
-    prop: str
-    value: str  # lower case, comments gone, `!important` gone, each string as _STRING
-    strings: tuple[str, ...]  # the strings of the value, their escapes read
-    line: int
+class _Rendered(HTMLParser):
+    """The body of a canary render as elements, and what in it breaks the allow lists."""
+
+    def __init__(self, file: str, kind: str, tokens: Mapping[str, str]) -> None:
+        super().__init__(convert_charrefs=True)
+        self.file = file
+        self.tokens = tokens
+        self.name = tokens["name"]
+        self.found: set[str] = set()
+        self.problems: dict[tuple[str, str], None] = {}
+        self.root = Element("html", frozenset())
+        self.open = self.root.add("body", frozenset((kind,)))
+        self.depth = 2
+        self.count = 2
+
+    def refuse(self, code: str, detail: str) -> None:
+        self.problems[(code, detail)] = None
+
+    def _attributes(self, tag: str, attrs: list[tuple[str, str | None]]) -> frozenset[str]:
+        classes: frozenset[str] = frozenset()
+        for key, value in attrs:
+            text = value or ""
+            if key == "class" and _CLASS.fullmatch(text.strip()):
+                classes = frozenset(text.split())
+            elif not self._kept(tag, key, text):
+                self.refuse("attribute", "an attribute outside the allowed list, once rendered")
+        return classes
+
+    def _kept(self, tag: str, key: str, text: str) -> bool:
+        if key in ("colspan", "rowspan"):
+            return tag in ("td", "th") and text.isdigit()
+        if tag == "a":
+            return key == "href" and text == self.tokens["contact[].href"]
+        return tag == "img" and (key, text) in (("src", PHOTO_CANARY), ("alt", self.name))
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in TAGS | {"a", "img"}:
+            self.refuse("tag", "a tag outside the allowed list, once rendered")
+        parent = self.open
+        if parent.tag == "p" and tag in _CLOSES_P:
+            self.refuse("structure", "a block inside a p, which the browser closes before it")
+        same = parent.tag == tag and tag in ("li", "a", "p")
+        if same or (tag in _HEADINGS and parent.tag in _HEADINGS):
+            self.refuse("structure", "an element inside one the browser closes before it")
+        allowed = _TABLE.get(parent.tag, ())
+        if (allowed or tag in _TABLE_PARTS) and tag not in allowed:
+            self.refuse("structure", "a table part outside its place")
+        element = parent.add(tag, self._attributes(tag, attrs))
+        self.count += 1
+        if tag not in _VOID:
+            self.open = element
+            self.depth += 1
+            if self.depth > DEPTH_MAX:
+                self.refuse("structure", f"elements nested deeper than {DEPTH_MAX}")
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs)
+        if tag not in _VOID:
+            self.handle_endtag(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _VOID:
+            self.refuse("structure", "an end tag of a void element")
+            return
+        if self.open.tag != tag or self.open.parent is self.root:
+            self.refuse("structure", "an end tag that closes another element")
+            return
+        assert self.open.parent is not None  # noqa: S101, the body is never closed here
+        self.open = self.open.parent
+        self.depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        rest = data
+        for key, token in self.tokens.items():
+            if token in rest:
+                self.found.add(key)
+                rest = rest.replace(token, "")
+                self.open.text = True
+        if not all(ch.isspace() or ch in PUNCTUATION for ch in rest):
+            self.refuse("literal", "text that is not a field, once rendered")
+        if rest.strip() and _TABLE.get(self.open.tag):
+            self.refuse("structure", "text in a table outside its cells")
+
+    def handle_comment(self, data: str) -> None:
+        self.refuse("literal", "an HTML comment, once rendered")
+
+    def handle_decl(self, decl: str) -> None:
+        self.refuse("tag", "a declaration, once rendered")
+
+    handle_pi = handle_decl
+    unknown_decl = handle_decl
 
 
-def _string(css: str, at: int) -> tuple[str, int, bool]:
-    """The string that starts at `at`, its escapes read; where it ends; whether it is closed."""
-    quote, out, i = css[at], [], at + 1
-    while i < len(css):
-        ch = css[i]
-        if ch == quote:
-            return "".join(out), i + 1, True
-        if ch == "\n":
-            break
-        if ch == "\\":
-            digits = re.match(r"[0-9a-fA-F]{1,6}\s?", css[i + 1 : i + 8])
-            if digits:
-                point = int(digits.group().strip(), 16)
-                out.append(chr(point) if 0 < point <= 0x10FFFF else "�")
-                i += 1 + len(digits.group())
-                continue
-            out.append(css[i + 1 : i + 2].strip("\n"))
-            i += 2
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out), i, False
-
-
-def _sheet(css: str, file: str) -> tuple[list[_Declaration], list[Problem]]:
-    """The declarations of a style sheet in one pass, and its structure problems: a nested
-    block, an at-rule other than @page, an escape outside a string, an unclosed string."""
-    found: list[_Declaration] = []
+def render_check(
+    kind: str, files: Mapping[str, str], photo: str
+) -> tuple[list[Problem], Element | None]:
+    """The problems of the canary renders of `kind` (every field filled, then every field
+    empty) and the elements of the filled one, for the contrast."""
+    file = f"{kind}.html.j2"
+    env = _environment(files)
+    tokens = canaries(kind)
+    page = ""
+    pages: list[Element] = []
     problems: list[Problem] = []
-    buffer: list[str] = []
-    strings: list[str] = []
-    line, depth, page, i = 1, 0, False, 0
-
-    def refuse(detail: str) -> None:
-        problems.append(Problem(file, line, "structure", detail))
-
-    def flush() -> None:
-        text = "".join(buffer).strip()
-        if text:
-            prop, colon, value = text.partition(":")
-            value = value.lower().replace("!important", "").strip()
-            if not colon:
-                refuse("a declaration without a colon")
-            else:
-                found.append(_Declaration(page, prop.strip().lower(), value, tuple(strings), line))
-        buffer.clear()
-        strings.clear()
-
-    while i < len(css):
-        ch = css[i]
-        if css.startswith("/*", i):
-            end = css.find("*/", i + 2)
-            end = len(css) if end < 0 else end + 2
-            line += css.count("\n", i, end)
-            buffer.append(" ")
-            i = end
+    for full in (True, False):
+        context = _context(kind, full, photo)
+        try:
+            printed = env.get_template(file).render(context)
+            wrapper = env.get_template(PAGE).render(context)
+        except Exception:  # anything the render raises: the template is refused, not the caller
+            return [Problem(file, 0, "construct", "a template that does not render")], None
+        if len(printed) > RENDER_MAX:
+            return [Problem(file, 0, "too_large", f"a render over {RENDER_MAX} characters")], None
+        opening = f'<body class="{kind}">'
+        head = wrapper[: wrapper.index(opening) + len(opening)]
+        tail = wrapper[wrapper.rindex("</body>") :]
+        if not (printed.startswith(head) and printed.endswith(tail)):
+            problems.append(Problem(file, 0, "construct", "a page other than the base page"))
             continue
-        if ch in "\"'":
-            text, i, closed = _string(css, i)
-            if not closed:
-                refuse("a string that is not closed")
-            strings.append(text)
-            buffer.append(_STRING)
-            continue
-        if ch == "\\":
-            refuse("an escape outside a string")
-        elif ch == "{":
-            depth += 1
-            if depth == 1:
-                prelude = "".join(buffer).strip().lower()
-                page = prelude.startswith("@page")
-                if prelude.startswith("@") and not page:
-                    refuse("an at-rule other than @page")
-                buffer.clear()
-                strings.clear()
-            else:
-                refuse("a block inside a block")
-        elif ch == "}":
-            if depth == 1:
-                flush()
-            depth = max(depth - 1, 0)
-        elif ch == ";" and depth == 1:
-            flush()
-        elif ch == ";" and depth == 0:
-            refuse("an at-rule other than @page")
-            buffer.clear()
-            strings.clear()
-        else:
-            line += ch == "\n"
-            buffer.append(ch)
-        i += 1
-    if depth:
-        refuse("a block that is not closed")
-    return found, problems
-
-
-def _six(colour: str) -> str:
-    return colour if len(colour) == 7 else "#" + "".join(ch * 2 for ch in colour[1:])
-
-
-def luminance(colour: str) -> float:
-    """The relative luminance of `#rrggbb` (WCAG 2)."""
-    channels = (int(colour[k : k + 2], 16) / 255 for k in (1, 3, 5))
-    r, g, b = (c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels)
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-
-def contrast(one: str, other: str) -> float:
-    """The contrast ratio of two `#rrggbb` colours, from 1 to 21 (WCAG 2)."""
-    light, dark = sorted((luminance(one), luminance(other)), reverse=True)
-    return (light + 0.05) / (dark + 0.05)
-
-
-def _within(value: str, units: tuple[str | None, ...], low: float, high: float) -> bool:
-    found = _EM.fullmatch(value)
-    return bool(found) and found.group(2) in units and low <= float(found.group(1)) <= high
-
-
-def _colour(value: str, accent: str) -> str | None:
-    if value == "var(--accent)":
-        return accent
-    return _six(value) if _HEX.fullmatch(value) else None
-
-
-def _value(d: _Declaration, names: frozenset[str], backs: set[str], accent: str) -> tuple | None:
-    """The code and the detail of what is wrong with one declaration, None when nothing."""
-    value = d.value
-    if d.page:
-        if d.prop == "size":
-            return (
-                None if value in ("a4", "a4 portrait") else ("page", "@page: a size other than A4")
-            )
-        return None if d.prop.startswith("margin") else ("page", "@page: only size and margin")
-    if d.prop in DENSITY or d.prop == "--accent":
-        return "density_pinned", f"{d.prop} is set by the density step, not by the sheet"
-    if d.prop.startswith("--"):
-        return None
-    if d.prop not in PROPERTIES:
-        return "property", "a property outside the allowed list"
-    if "url(" in value:
-        return "property", f"{d.prop}: url(), a template from an upload embeds nothing"
-    if d.prop != "font-family" and not all(set(text) <= CONTENT_CHARS for text in d.strings):
-        return "content", f"{d.prop}: a string other than punctuation"
-    relative = _within(value, ("em",), 0.5, 4) or _within(value, ("%",), 50, 400)
-    if d.prop == "font-size" and value not in ("var(--body-size)", "inherit") and not relative:
-        return "size", "font-size: em from 0.5 to 4, % or var(--body-size)"
-    plain = value in ("var(--line-height)", "normal", "inherit") or _within(
-        value, (None,), 0.9, 2.5
-    )
-    if d.prop == "line-height" and not plain:
-        return "size", "line-height: a number from 0.9 to 2.5 or var(--line-height)"
-    spacing = value in ("normal", "0") or _within(value, ("em",), -0.05, 0.5)
-    if d.prop == "letter-spacing" and not spacing:
-        return "size", "letter-spacing: em from -0.05 to 0.5"
-    if d.prop == "display" and value not in DISPLAY:
-        return "property", "display: a value that shows the box"
-    if d.prop == "position" and value not in POSITION:
-        return "property", "position: static, relative or absolute"
-    if d.prop in ("left", "top", "right", "bottom") and value.startswith("-"):
-        return "property", f"{d.prop}: a negative offset"
-    if d.prop == "content" and value not in ("none", "normal", _STRING):
-        return "content", "content: punctuation only"
-    if d.prop == "font-family":
-        items = iter(d.strings)
-        for item in value.split(","):
-            item = item.strip()
-            name = next(items, "") if item == _STRING else " ".join(item.split())
-            if name.casefold() not in names:
-                return "font", "font-family: a family the manifest does not name"
-    flat = all(t in ("none", "transparent", "inherit") or _colour(t, accent) for t in value.split())
-    if d.prop in ("background", "background-color") and not flat:
-        return "colour", f"{d.prop}: a flat colour written #rrggbb or var(--accent)"
-    if d.prop == "color" and value not in ("inherit", "currentcolor"):
-        colour = _colour(value, accent)
-        if colour is None:
-            return "colour", "color: #rrggbb or var(--accent)"
-        if max(contrast(colour, back) for back in backs) < AA:
-            return "contrast", "color: under 4.5 to 1 on every background of the sheet"
-    return None
+        page = printed[len(head) : len(printed) - len(tail)]
+        parser = _Rendered(file, kind, tokens)
+        parser.feed(page)
+        parser.close()
+        if parser.rawdata or parser.open is not parser.root.children[0]:
+            parser.refuse("structure", "markup not closed, once rendered")
+        if parser.count > ELEMENTS_MAX:
+            parser.refuse("too_large", f"a render of over {ELEMENTS_MAX} elements")
+        problems += [Problem(file, 0, code, detail) for code, detail in parser.problems]
+        if full:
+            pages.append(parser.root)
+            for field in REQUIRED[kind]:
+                key = field if FIELDS[kind][field] == "text" else f"{field}[]"
+                if key not in parser.found:
+                    detail = f"{field} is not printed, or only under another test"
+                    problems.append(Problem(file, 0, "unprinted", detail))
+    problems = list(dict.fromkeys(problems))
+    return problems, (pages[0] if pages and not problems else None)
 
 
 def check_css(
-    css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css"
+    css: str,
+    fonts: tuple[str, ...],
+    accent: str,
+    file: str = "style.css",
+    pages: tuple[Element, ...] = (),
 ) -> list[Problem]:
-    """The problems of a template's style sheet (see the module docstring)."""
-    declarations, problems = _sheet(css, file)
-    names = GENERIC | {
-        font_map.FAMILIES[f].name.casefold() for f in fonts if f in font_map.FAMILIES
-    }
-    backs = {WHITE}
-    for d in declarations:
-        if d.prop in ("background", "background-color"):
-            backs |= {c for t in d.value.split() if (c := _colour(t, accent))}
-    for d in declarations:
-        wrong = _value(d, frozenset(names), backs, accent)
-        if wrong:
-            problems.append(Problem(file, d.line, *wrong))
-    reads = {
-        "--body-size": ("font-size",),
-        "--line-height": ("line-height",),
-        "--section-gap": None,
-        "--item-gap": None,
-    }
-    if any(d.page and d.prop.startswith("margin") for d in declarations):
-        reads["--margin"] = None
-    for name, props in reads.items():
-        if not any(
-            f"var({name})" in d.value and (props is None or d.prop in props)
-            for d in declarations
-            if not d.page
-        ):
-            where = f" by {props[0]}" if props else ""
-            problems.append(Problem(file, 0, "density_unread", f"{name} is not read{where}"))
-    return problems
+    """The problems of a template's style sheet: `template_css.check`."""
+    return template_css.check(css, fonts, accent, file, pages)
 
 
 def check(
@@ -697,13 +704,20 @@ def check(
         found.append(Problem(file, 0, "authoring", detail))
     large = [name for name in templates.FILES if len(files.get(name, "")) > FILE_MAX]
     found += [Problem(name, 0, "too_large", f"over {FILE_MAX} characters") for name in large]
+    pages: list[Element] = []
     for kind in templates.KINDS:
         name = f"{kind}.html.j2"
-        if name not in large:
-            found += check_html(kind, name, files.get(name, ""))
-    accent = _six(accent.lower()) if _HEX.fullmatch(accent.lower()) else WHITE
+        if name in large:
+            continue
+        source = check_html(kind, name, files.get(name, ""))
+        found += source
+        if not source and not found:
+            rendered, page = render_check(kind, files, photo)
+            found += rendered
+            pages += [page] if page is not None else []
+    accent = accent.lower() if re.fullmatch(r"#[0-9a-f]{6}", accent.lower()) else WHITE
     if "style.css" not in large:
-        found += check_css(files.get("style.css", ""), fonts, accent)
+        found += check_css(files.get("style.css", ""), fonts, accent, pages=tuple(pages))
     return found
 
 
