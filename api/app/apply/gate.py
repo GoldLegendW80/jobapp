@@ -415,7 +415,11 @@ def decide(
             to = State.posting_closed if code == "posting_closed" else State.blocked
             states.move(application, to, now)
             application.error_code = code
-        elif application.mode is Mode.full_auto and application.state is State.ready:
+        elif (
+            authorisation.kind is AuthorisationKind.full_auto_like
+            and application.mode is Mode.full_auto
+            and application.state is State.ready
+        ):
             full_auto.to_review(db, application, code, now)
         _event(
             db,
