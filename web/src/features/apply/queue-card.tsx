@@ -379,7 +379,7 @@ export function QueueCard({
       ) : null}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start">
-        {item.state === "ready" ? (
+        {item.state === "ready" && reviewable ? (
           <div className="flex w-full flex-col gap-1 sm:w-fit">
             <Button
               disabled={
@@ -438,7 +438,7 @@ export function QueueCard({
         ) : null}
       </div>
 
-      {approval && item.state === "ready" ? (
+      {approval && item.state === "ready" && reviewable ? (
         <ApproveDialog
           open={confirming}
           onOpenChange={setConfirming}

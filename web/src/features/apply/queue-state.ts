@@ -22,7 +22,11 @@ const WAITING = new Set([
 
 /** The item waits for the person (a Full auto rehearsal waits for its answer); the api lists these first. */
 export const isWaiting = (item: QueueItem) =>
-  WAITING.has(item.state) || item.rehearsal === true;
+  (WAITING.has(item.state) && !isDeciding(item)) || item.rehearsal === true;
+
+/** A Full auto item filled and `ready` for the app's own decision: under way, not the person's. */
+export const isDeciding = (item: QueueItem) =>
+  item.state === "ready" && item.mode === "full_auto";
 
 /** A Full auto item in its hold: the countdown shows it, with its own Cancel. */
 export const isHeld = (item: QueueItem) =>
@@ -35,14 +39,16 @@ export function queuePoll(queue: Queue | undefined): number | false {
 
 /** The form is filled and its answers can be read and corrected. */
 export const isReviewable = (item: QueueItem) =>
-  item.state === "ready" || item.state === "needs_person";
+  (item.state === "ready" && !isDeciding(item)) ||
+  item.state === "needs_person";
 
 /** Reject is the api's for a filled form not yet approved. */
 export const canReject = isReviewable;
 
 /** Cancel stops an item under way before any click (a held one has the countdown's Cancel). */
 export const canCancel = (item: QueueItem) =>
-  ["queued", "filling", "approved", "held"].includes(item.state) &&
+  (["queued", "filling", "approved", "held"].includes(item.state) ||
+    isDeciding(item)) &&
   !isHeld(item);
 
 /** What only the posting's page can do: the live view, "It was submitted", "Try again". */

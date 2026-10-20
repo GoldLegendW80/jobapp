@@ -264,4 +264,23 @@ describe("Full auto in the review queue", () => {
     ).toBeNull();
     await screen.findByText(/Nothing is sent until you approve it/);
   });
+
+  it("follows a Full auto item ready for the app's decision as under way, with nothing to approve", async () => {
+    fakeQueue([queueItem(1, "ready", { mode: "full_auto" })]);
+    renderApp(PATH);
+    const underWay = await screen.findByRole("region", {
+      name: "Under way (1)",
+    });
+    const card = within(underWay).getByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    expect(card).toHaveTextContent(
+      "Full auto: filled. The app checks it now, then holds it so you can cancel.",
+    );
+    expect(
+      within(card).queryByRole("button", { name: "Approve and submit" }),
+    ).toBeNull();
+    expect(within(card).queryByRole("button", { name: "Reject" })).toBeNull();
+    within(card).getByRole("button", { name: "Cancel application" });
+  });
 });

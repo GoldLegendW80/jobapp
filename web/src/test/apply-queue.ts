@@ -71,7 +71,10 @@ export function fakeQueue(
     hash: (id: string) => `hash-${id}-${state.versions[id] ?? 1}`,
     waiting: () =>
       state.items.filter(
-        (item) => WAITING.includes(item.state) || item.rehearsal,
+        (item) =>
+          (WAITING.includes(item.state) &&
+            !(item.state === "ready" && item.mode === "full_auto")) ||
+          item.rehearsal,
       ).length,
     view: (id: string) => ({
       state: state.items.find((item) => item.id === id)?.state ?? "cancelled",

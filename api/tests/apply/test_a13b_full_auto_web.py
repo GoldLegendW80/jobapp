@@ -188,3 +188,17 @@ def test_the_settings_name_the_hold_floor_and_the_rehearsals(
     )
     db.commit()
     assert api.get("/api/apply/settings", token=token).json()["hold_s"] == 900
+
+
+def test_a_full_auto_item_ready_for_the_apps_decision_is_under_way(
+    api: Api, db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    turn_on(db, person_a)
+    app_id = filled(db, factory, person_a, stub)
+    body = queue(api, person_a)
+    shown = item(body, app_id)
+    assert shown is not None
+    assert (shown["state"], shown["mode"], shown["rehearsal"]) == ("ready", "full_auto", False)
+    assert body["waiting_on_you"] == 0
+    token = api.login_token(person_a.email)
+    assert api.get("/api/apply/queue/count", token=token).json()["waiting_on_you"] == 0

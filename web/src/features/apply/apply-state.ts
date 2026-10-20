@@ -47,6 +47,9 @@ const PHASES: Record<string, Phase> = {
 /** A state this page does not know is never treated as a state where something can be clicked. */
 export function phaseOf(application: Application | null | undefined): Phase {
   if (!application) return "idle";
+  // Full auto's decision is the app's: nothing to approve, the page follows it.
+  if (application.state === "ready" && application.mode === "full_auto")
+    return "submitting";
   return PHASES[application.state] ?? "other";
 }
 
@@ -117,7 +120,9 @@ export function statusLine(application: Application | null | undefined) {
     case "needs_person":
       return `${NEEDS[application.needs ?? ""] ?? "The form needs you before it can go on."} Nothing was sent.`;
     case "ready":
-      return "Filled and waiting for your approval. Nothing is sent until you approve.";
+      return application.mode === "full_auto"
+        ? "Full auto: filled. The app checks it now, then holds it so you can cancel."
+        : "Filled and waiting for your approval. Nothing is sent until you approve.";
     case "approved":
     case "submitting":
       return "Approved. The form is filled again with exactly the answers you approved, then submitted.";

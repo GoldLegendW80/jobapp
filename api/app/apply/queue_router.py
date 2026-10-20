@@ -11,7 +11,8 @@
   the count of fields left (and of those required), the documents filled with their check
   (`documents_review`: Full auto's rule, a page overflow or a correction), and the reason a
   `ready` item came back (`error_code`, else the code of its last refused decision), with its
-  sentence. Full auto (A13b): a rehearsal waiting for its answer to "Does this look right?"
+  sentence. Full auto (A13b): a Full auto item `ready` for the app's decision is under way; a
+  rehearsal waiting for its answer to "Does this look right?"
   (`rehearsed`, `mode` full_auto, no No recorded) waits for the person too (`rehearsal`
   true); a `held` item carries the end of its hold (`hold_until`); `now` is the server's
   time, so a countdown never reads the page's clock.
@@ -198,8 +199,15 @@ def _rehearsal_waiting() -> sa.ColumnElement[bool]:
     return sa.and_(Application.state == S.rehearsed, Application.mode == Mode.full_auto, ~answered)
 
 
+def _deciding() -> sa.ColumnElement[bool]:
+    """A Full auto item filled and `ready` for the app's decision: under way, not the person's."""
+    return sa.and_(Application.state == S.ready, Application.mode == Mode.full_auto)
+
+
 def _waiting() -> sa.ColumnElement[bool]:
-    return sa.or_(Application.state.in_(WAITING_ON_YOU), _rehearsal_waiting())
+    return sa.or_(
+        sa.and_(Application.state.in_(WAITING_ON_YOU), ~_deciding()), _rehearsal_waiting()
+    )
 
 
 def _queued(user_id: uuid.UUID) -> sa.Select[Any]:
@@ -209,7 +217,7 @@ def _queued(user_id: uuid.UUID) -> sa.Select[Any]:
         .where(
             Application.user_id == user_id,
             Application.mode != Mode.manual,
-            sa.or_(Application.state.in_(UNDER_WAY), _waiting()),
+            sa.or_(Application.state.in_(UNDER_WAY), _deciding(), _waiting()),
         )
     )
 
