@@ -4,7 +4,8 @@
  * the judge: after an import the page shows its numbers.
  *
  * Per section, the share of required fields filled (a whole number, Python's round half to even),
- * and the required fields still missing; overall, the rounded mean of the six. A section absent
+ * and the required fields still missing; overall, the rounded mean of the six sections with required fields (preferences has
+ * none: 100, left out of the mean). A section absent
  * from the input counts as empty.
  */
 import { SECTIONS, type SectionName } from "./api";

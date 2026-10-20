@@ -1177,7 +1177,7 @@ class RevisionOut(RevisionSummary):
 # The whole profile as one JSON file (GET /api/profile/export, POST /api/profile/import, the CLI
 # and the importer of Harald's engine files all speak it):
 #   {"format": "jobapp-profile", "version": 1, "exported_at": "<ISO 8601>",
-#    "sections": {<the six sections, each in its stored form>},
+#    "sections": {<the seven sections, each in its stored form; `preferences` optional on import>},
 #    "photo": {"mime": "image/png" | "image/jpeg", "base64": "<standard base64>"}  (optional)}
 # An import may add "base_revision": the revision the client loaded (409 when stale).
 

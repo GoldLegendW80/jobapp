@@ -1,7 +1,7 @@
 /**
  * The checks the Import dialog runs on a chosen file before anything is sent, in the order the api
  * runs them (schemas.py parse_document): size, JSON, format, version, then the shape of the
- * document (six sections, each an object; an optional photo). The api validates every field of
+ * document (six sections, each an object, and preferences when present; an optional photo). The api validates every field of
  * every section again on import and answers 422 with the first problem; this side only catches
  * the files that are plainly not a profile export, and describes the ones that are.
  */
