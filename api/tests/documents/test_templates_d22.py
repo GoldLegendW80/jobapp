@@ -697,3 +697,90 @@ def test_a_page_end_never_leaves_a_heading_or_a_role_title_alone(
             last = "".join(role.bullets[-1].split()).casefold()
             pages = {chunk.rstrip(","): page for chunk, page in reversed(placed)}
             assert pages[title] == pages[last], title
+
+
+HYPHENATED = [
+    "Marie-Christine Dupont-Aignan",
+    "Jean-Baptiste Exemplaire-Échantillon de la Fontaine-Rivière",
+]
+
+
+@docker
+@pytest.mark.parametrize("slug", D22)
+@pytest.mark.parametrize("kind", templates.KINDS)
+@pytest.mark.parametrize("language", templates.LANGUAGES)
+@pytest.mark.parametrize("name", HYPHENATED, ids=["short", "long"])
+@pytest.mark.parametrize("step", ["fitted", "loosest"])
+def test_a_double_barrelled_name_never_breaks_at_its_hyphen(
+    renderer: Any, slug: str, kind: str, language: str, name: str, step: str
+) -> None:
+    """The review of D21: "Dupont-Aignan" printed as "Dupont-" then "Aignan". Each word of the
+    name, in the heading and in a letter's signature, stands on one line, inside the margins."""
+    found = template(slug)
+    view = named(d1_view(), name)
+    content: Any = d1("cv-typical")[2] if kind == "cv" else d1("letter-en")[2]
+    if step == "fitted":
+        result = fitted(renderer, found, kind, content, view, language)
+        assert result.fit, result.pages
+        pdf, at = result.pdf, found.steps(kind)[result.step]
+    else:
+        at = found.steps(kind)[0]
+        pdf = renderer.render(
+            templates.build_html(found, kind, content, view, language, at, ON)
+        ).pdf
+    glyphs = Glyphs(pdf)
+    for occurrence in glyphs.find_all(name):
+        assert min(b[0] for b in occurrence) >= at.margin * MM - 0.5
+        assert max(b[2] for b in occurrence) <= A4[0] - at.margin * MM + 0.5
+    assert glyphs.find_all(name), name
+    for word in name.split():
+        if "-" in word:
+            ys = baselines(pdf, word)
+            assert max(ys) - min(ys) < 1.0, (word, sorted({round(y) for y in ys}))
+
+
+def two_page_letter() -> c.LetterContent:
+    letter = d1("letter-en")[2]
+    text = " ".join(["I ran the deployment platform and wrote its operating guides."] * 28)
+    return letter.model_copy(update={"paragraphs": [text[: c.PARAGRAPH_MAX]] * 3})
+
+
+def every_glyph(pdf: bytes) -> list[list[tuple[float, float, float, float]]]:
+    """Per page, the box of every character that is not white space."""
+    document = pdfium.PdfDocument(pdf)
+    try:
+        out = []
+        for page in document:
+            textpage = page.get_textpage()
+            text = textpage.get_text_range()
+            out.append([textpage.get_charbox(i) for i, ch in enumerate(text) if not ch.isspace()])
+        return out
+    finally:
+        document.close()
+
+
+@docker
+@pytest.mark.parametrize("slug", D22)
+@pytest.mark.parametrize("kind", templates.KINDS)
+def test_every_glyph_of_every_page_stands_inside_the_page_margins(
+    renderer: Any, slug: str, kind: str
+) -> None:
+    """The review of D21: with a page margin of 0 the body's padding applied once and page 2's
+    first line touched the top edge. Here a two page CV (D1's long one) and a two page letter at
+    the loosest step: every glyph of every page lies inside the step's margins."""
+    found = template(slug)
+    content: Any = d1("cv-long")[2] if kind == "cv" else two_page_letter()
+    step = found.steps(kind)[0]
+    rendered = renderer.render(templates.build_html(found, kind, content, d1_view(), "en", 0, ON))
+    assert rendered.pages == 2, rendered.pages
+    # 1 pt for the ink of a glyph that overhangs its advance (an italic, a justified line)
+    low, high = (
+        step.margin * MM - 1,
+        (A4[0] - step.margin * MM + 1, A4[1] - step.margin * MM + 1),
+    )
+    for number, boxes in enumerate(every_glyph(rendered.pdf)):
+        assert boxes, number
+        assert min(b[0] for b in boxes) >= low, (number, min(b[0] for b in boxes))
+        assert min(b[1] for b in boxes) >= low, (number, min(b[1] for b in boxes))
+        assert max(b[2] for b in boxes) <= high[0], (number, max(b[2] for b in boxes))
+        assert max(b[3] for b in boxes) <= high[1], (number, max(b[3] for b in boxes))

@@ -8,7 +8,7 @@
 {% set initials = ((parts[0][:1] ~ (parts[-1][:1] if parts | length > 1 else "")) | upper) if parts else "" %}
 <header class="head{% if not photo and not initials %} bare{% endif %}">
 <div class="headtext">
-<h1 class="name">{{ name }}</h1>
+<h1 class="name">{% for word in name.split() %}<span class="word">{{ word }}</span>{% if not loop.last %} {% endif %}{% endfor %}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
 {{ base.contact_lines() }}
 </div>
@@ -22,6 +22,6 @@
 {% if content.salutation %}<p class="salutation">{{ content.salutation }}</p>{% endif %}
 {{ base.paragraphs(content.paragraphs) }}
 {% if content.closing %}<p class="closing">{{ content.closing }}</p>{% endif %}
-<p class="signature">{{ name }}</p>
+<p class="signature">{% for word in name.split() %}<span class="word">{{ word }}</span>{% if not loop.last %} {% endif %}{% endfor %}</p>
 </div>
 {% endblock %}

@@ -6,7 +6,7 @@
 {% import "_base/macros.html.j2" as base with context %}
 {% block body %}
 <header class="head">
-<h1 class="name">{{ name }}</h1>
+<h1 class="name">{% for word in name.split() %}<span class="word">{{ word }}</span>{% if not loop.last %} {% endif %}{% endfor %}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
 {{ base.contact_lines() }}
 </header>

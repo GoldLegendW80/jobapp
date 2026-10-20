@@ -112,6 +112,9 @@ li, p { overflow-wrap: anywhere; }
 }
 .languages strong { font-weight: 600; }
 
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+
 /* a heading and a role's title stay with the text that follows them across a page end */
 .label, .entry-head, .entry-title { break-after: avoid; }
 
