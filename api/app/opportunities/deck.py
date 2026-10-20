@@ -186,8 +186,8 @@ def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters, mode: Mode) 
     if filters.remote is not None:
         # The stated work mode (O3) first; a posting that states none, by the sweep's own rule.
         names_remote = sa.func.strpos(sa.func.lower(Job.location), "remote") > 0
-        remote = sa.or_(
-            Job.work_mode == WorkMode.remote, sa.and_(Job.work_mode.is_(None), names_remote)
+        remote = sa.case(
+            (Job.work_mode.is_not(None), Job.work_mode == WorkMode.remote), else_=names_remote
         )
         query = query.where(remote if filters.remote == "remote" else ~remote)
     if filters.source is not None:

@@ -614,11 +614,12 @@ def _sweep(factory: sessionmaker[Session], owner: Person, fake: FakeAts, ats_nam
 
 
 @pytest.mark.parametrize(
-    ("ats_name", "stated"),
+    ("ats_name", "stated", "unstated_mode"),
     [
-        ("ashby", (60000, 70000, "EUR", "year", "hybrid")),
-        ("lever", (50000, 60000, "GBP", "year", "hybrid")),
-        ("greenhouse", (None, None, None, None, None)),
+        ("ashby", (60000, 70000, "EUR", "year", "hybrid"), None),
+        # The fake Lever states "onsite" for a posting that says nothing else.
+        ("lever", (50000, 60000, "GBP", "year", "hybrid"), "office"),
+        ("greenhouse", (None, None, None, None, None), None),
     ],
 )
 def test_the_sweep_stores_what_is_stated(
@@ -627,13 +628,14 @@ def test_the_sweep_stores_what_is_stated(
     fake_ats: FakeAts,
     ats_name: str,
     stated: tuple[Any, ...],
+    unstated_mode: str | None,
 ) -> None:
     _sweep(factory, person_a, fake_ats, ats_name)
     found = _postings(factory, person_a)
     assert _pay_columns(found["AI Engineer, Pay Stated"]) == stated
     # No pay from the ATS: the text's daily rate, the location's work mode.
     assert _pay_columns(found["GenAI Engineer, Freelance"]) == (600, 600, "EUR", "day", "remote")
-    assert _pay_columns(found["AI Engineer, Pay Not Stated"]) == (None,) * 5
+    assert _pay_columns(found["AI Engineer, Pay Not Stated"]) == (None,) * 4 + (unstated_mode,)
 
 
 def test_a_row_without_pay_and_the_check(
@@ -680,8 +682,8 @@ def test_a_manual_value_is_kept_through_a_rescore_and_a_new_sweep(
         "year",
     )
     assert body["work_mode"] == "remote"
-    assert body["events"][0]["kind"] == "edit"
-    assert body["events"][0]["data"]["changes"]["pay_min"] == {"from": 60000, "to": 65000}
+    edit = next(event for event in body["events"] if event["kind"] == "edit")
+    assert edit["data"]["changes"]["pay_min"] == {"from": 60000, "to": 65000}
 
     rescored = api.post("/api/jobs/rescore", token=person_a.token, json={}, headers=CSRF)
     assert rescored.status_code in (200, 202), rescored.text
