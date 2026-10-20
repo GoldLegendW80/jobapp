@@ -5,10 +5,13 @@ import { Link, useLocation, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { useMe } from "@/features/auth/auth-context";
+import { PageLoading } from "@/features/shell/page-status";
 
 import { getOnboarding, onboardingKey } from "./onboarding-api";
 
 export const WELCOME = "/welcome";
+/** The home page: no need to come back to it after the wizard, it is where the wizard ends. */
+const HOME = "/jobs";
 const checkedKey = (userId: string) => `welcome:checked:${userId}`;
 
 function wasChecked(userId: string): boolean {
@@ -38,8 +41,9 @@ function marker(decision: "welcome" | "stay"): void {
 /**
  * The first login redirect (opportunities O5): once per browser session, a person the api says
  * should see the wizard (`open_wizard`: a member with an empty profile who neither finished nor
- * put it off) is sent to /welcome, once. The page asked for renders meanwhile; an api that fails
- * sends nobody anywhere.
+ * put it off) is sent to /welcome, once. The page asked for waits for the answer (no flash of it,
+ * none of its requests), and a deep link is kept in `?next=` for the wizard to open at its end.
+ * An api that fails sends nobody anywhere.
  */
 export function OnboardingGate({ children }: { children: ReactNode }) {
   const me = useMe();
@@ -48,6 +52,8 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const [checked] = useState(() => (userId ? wasChecked(userId) : true));
   const handled = useRef(checked);
+  // True once the gate is done in this mount: before, the page asked for may not show yet.
+  const [released, setReleased] = useState(checked);
   const state = useQuery({
     queryKey: onboardingKey,
     queryFn: ({ signal }) => getOnboarding(signal),
@@ -68,8 +74,28 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
     markChecked(userId);
     const send = open && location.pathname !== WELCOME;
     marker(send ? "welcome" : "stay");
-    if (send) void navigate(WELCOME, { replace: true });
-  }, [decided, open, userId, location.pathname, navigate]);
+    const asked = `${location.pathname}${location.search}${location.hash}`;
+    const keep = location.pathname !== HOME && location.pathname !== "/";
+    const moving = send
+      ? navigate(
+          keep
+            ? `${WELCOME}?${new URLSearchParams({ next: asked }).toString()}`
+            : WELCOME,
+          { replace: true },
+        )
+      : undefined;
+    // Every page shows again once the decision is carried out (the wizard open, or staying).
+    void Promise.resolve(moving).then(() => {
+      setReleased(true);
+    });
+  }, [decided, open, userId, location, navigate]);
+  // Until the first answer of this session, and while the move to /welcome is on its way, the
+  // page asked for is not shown.
+  const waiting =
+    !released &&
+    userId !== undefined &&
+    (!decided || (open && location.pathname !== WELCOME));
+  if (waiting) return <PageLoading />;
   return children;
 }
 

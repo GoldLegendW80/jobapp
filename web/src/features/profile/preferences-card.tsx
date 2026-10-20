@@ -1,8 +1,8 @@
 /**
  * Preferences (opportunities O4): the language and the tone of the CV and letter the app writes,
  * saved as the profile's `preferences` section with its own Save, under the Search tab. The
- * onboarding dates of the section are the first login wizard's: the card sends them back as it
- * loaded them, never edits them (the api refuses a change).
+ * onboarding part of the section (its dates and steps passed) is the first login wizard's: the
+ * card sends it back as it loaded it, never edits it (the api refuses a change).
  */
 import { z } from "zod";
 
@@ -42,6 +42,7 @@ const preferencesSchema = z.object({
   onboarding: z.object({
     completed_at: z.string().nullable(),
     dismissed_at: z.string().nullable(),
+    steps_passed: z.array(z.string()),
   }),
   documents_language: z.enum(DOCUMENTS_LANGUAGES),
   documents_tone: z.enum(DOCUMENTS_TONES),
@@ -50,11 +51,11 @@ type PreferencesForm = z.infer<typeof preferencesSchema>;
 
 const toForm = (p: Preferences): PreferencesForm => ({
   ...p,
-  onboarding: { ...p.onboarding },
+  onboarding: { ...p.onboarding, steps_passed: [...p.onboarding.steps_passed] },
 });
 const fromForm = (v: PreferencesForm): Preferences => ({
   ...v,
-  onboarding: { ...v.onboarding },
+  onboarding: { ...v.onboarding, steps_passed: [...v.onboarding.steps_passed] },
 });
 
 export function PreferencesCard({

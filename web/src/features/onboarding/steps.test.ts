@@ -1,26 +1,23 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { EMPTY, type Search } from "@/features/profile/api";
 
 import {
   draftOf,
-  readPassed,
+  openStep,
+  passedOf,
   readPay,
   resumeStep,
+  savedDraft,
   searchWith,
   splitTerms,
   stepProblem,
-  writePassed,
   type Draft,
 } from "./steps";
 
 const draft = (patch: Partial<Draft> = {}): Draft => ({
   ...draftOf(EMPTY),
   ...patch,
-});
-
-afterEach(() => {
-  window.localStorage.clear();
 });
 
 describe("splitTerms", () => {
@@ -193,18 +190,55 @@ describe("progress", () => {
       resumeStep([], ["profile", "looking", "where", "work", "pay", "apply"]),
     ).toBe("summary");
   });
-  it("keeps each person's steps apart", () => {
-    writePassed("person-a", ["profile", "looking", "where"]);
-    expect(readPassed("person-a")).toEqual(["profile", "looking", "where"]);
-    expect(readPassed("person-b")).toEqual([]);
+  it("reads the steps passed from the profile, each once, in order", () => {
+    expect(passedOf(["where", "nope", "profile", "where"])).toEqual([
+      "profile",
+      "where",
+    ]);
   });
-  it("reads damaged storage as nothing passed", () => {
-    window.localStorage.setItem("welcome:v1:p", "{not json");
-    expect(readPassed("p")).toEqual([]);
-    window.localStorage.setItem(
-      "welcome:v1:p",
-      JSON.stringify(["where", "nope", 3]),
+  it("opens the step asked for, never one after the roles while none is saved", () => {
+    expect(openStep("pay", ["looking"], [])).toBe("pay");
+    expect(openStep(null, [], ["profile"])).toBe("looking");
+    // typed in the address, with no role saved: the first step left instead
+    expect(openStep("summary", [], ["profile"])).toBe("looking");
+    expect(openStep("apply", [], [])).toBe("profile");
+    // a role removed since: passing it once is not enough
+    expect(
+      openStep("summary", ["where"], ["profile", "looking", "where"]),
+    ).toBe("looking");
+    expect(openStep("profile", [], [])).toBe("profile");
+    expect(openStep("nowhere", ["looking"], ["profile"])).toBe("where");
+  });
+});
+
+describe("savedDraft", () => {
+  it("shows what was saved, not what was typed then skipped", () => {
+    const typed = draft({
+      roles: "Typed role",
+      locations: "Lyon",
+      salary: { min: "50000", max: "60000", currency: "EUR" },
+    });
+    const shown = savedDraft(EMPTY, typed);
+    expect(shown.roles).toBe("");
+    expect(shown.locations).toBe("");
+    expect(shown.salary.min).toBe("");
+  });
+  it("keeps Rather not say only while no figure is stored", () => {
+    expect(savedDraft(EMPTY, draft({ ratherNotSay: true })).ratherNotSay).toBe(
+      true,
     );
-    expect(readPassed("p")).toEqual(["where"]);
+    const paid = {
+      ...EMPTY,
+      search: {
+        ...EMPTY.search,
+        compensation: {
+          salary: { min: 1, max: 2, currency: "EUR" },
+          daily_rate: null,
+        },
+      },
+    };
+    expect(savedDraft(paid, draft({ ratherNotSay: true })).ratherNotSay).toBe(
+      false,
+    );
   });
 });

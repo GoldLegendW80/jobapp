@@ -82,6 +82,7 @@ def test_a_new_member_is_sent_to_the_wizard(api: Api, new_a: Who) -> None:
         "dismissed_at": None,
         "profile_empty": True,
         "done": [],
+        "passed": [],
         "steps_left": ["profile", "looking", "where", "work"],
         "open_wizard": True,
         "show_card": True,
@@ -200,6 +201,85 @@ def test_dismiss_is_one_revision_and_a_profile_save_keeps_it(
     assert stored_onboarding(factory, new_a)["dismissed_at"] == prefs["onboarding"]["dismissed_at"]
 
 
+# --- the steps passed, kept in the profile --------------------------------------------------
+
+
+def step(api: Api, who: Who, name: Any, *, csrf: bool = True) -> Any:
+    return api.post(f"{BASE}/steps", token=who.token, json={"step": name}, csrf=csrf)
+
+
+def test_a_step_passed_is_kept_once_in_order_on_every_device(
+    factory: sessionmaker[Session], api: Api, new_a: Who
+) -> None:
+    for name in ("where", "profile", "where"):
+        response = step(api, new_a, name)
+        assert response.status_code == 200, response.text
+    assert response.json()["passed"] == ["profile", "where"]
+    # another device: a new session reads the same steps from the profile
+    other = Who(api.login_token(NEW_A), new_a.user_id)
+    assert state(api, other)["passed"] == ["profile", "where"]
+    assert stored_onboarding(factory, new_a)["steps_passed"] == ["profile", "where"]
+    # two new steps, two revisions of preferences; the step passed again adds none
+    history = api.get("/api/profile/revisions?section=preferences", token=new_a.token).json()
+    assert [item["revision"] for item in history["items"]] == [2, 1]
+    # a step does not end the wizard nor stop it opening by itself
+    assert state(api, new_a)["open_wizard"] is True
+
+
+@pytest.mark.parametrize("name", ["nowhere", "", None, 3, "Where"])
+def test_an_unknown_step_is_422(api: Api, new_a: Who, name: Any) -> None:
+    assert step(api, new_a, name).status_code == 422
+    assert api.get("/api/profile", token=new_a.token).json()["revision"] == 0
+
+
+def test_the_steps_survive_a_save_and_an_import_and_a_save_cannot_write_them(
+    factory: sessionmaker[Session], api: Api, new_a: Who
+) -> None:
+    step(api, new_a, "looking")
+    loaded = api.get("/api/profile", token=new_a.token).json()
+    prefs = loaded["sections"]["preferences"]
+    assert prefs["onboarding"]["steps_passed"] == ["looking"]
+
+    def put(data: dict[str, Any], revision: int) -> Any:
+        return api.request(
+            "PUT",
+            "/api/profile/preferences",
+            token=new_a.token,
+            json={"base_revision": revision, "data": data},
+        )
+
+    # sent back as loaded: saved, the steps kept
+    assert put({**prefs, "documents_tone": "warm"}, loaded["revision"]).status_code == 200
+    # a save that adds or clears a step is refused
+    for steps in (["looking", "pay"], []):
+        changed = {**prefs, "onboarding": {**prefs["onboarding"], "steps_passed": steps}}
+        refused = put(changed, loaded["revision"] + 1)
+        assert refused.status_code == 422, refused.text
+    # an import of a file with other steps keeps the stored ones
+    exported = api.get("/api/profile/export", token=new_a.token).json()
+    exported["sections"]["preferences"]["onboarding"]["steps_passed"] = ["apply", "summary"]
+    imported = api.post("/api/profile/import", token=new_a.token, json=exported)
+    assert imported.status_code == 200, imported.text
+    assert stored_onboarding(factory, new_a)["steps_passed"] == ["looking"]
+
+
+def test_the_steps_are_never_shown_to_a_model(
+    factory: sessionmaker[Session], api: Api, new_a: Who
+) -> None:
+    from app.agents import tools
+
+    step(api, new_a, "pay")
+    scope = tools.Scope(user_id=new_a.user_id, sessions=factory)
+    shown = tools._section_payload(scope, "preferences")
+    assert "steps_passed" not in shown
+    assert "onboarding" not in shown
+
+
+def test_b_never_sees_a_s_steps(api: Api, new_a: Who, new_b: Who) -> None:
+    step(api, new_a, "where")
+    assert state(api, new_b)["passed"] == []
+
+
 # --- Start ----------------------------------------------------------------------------------
 
 
@@ -316,14 +396,16 @@ def test_b_never_sees_a_s_wizard(api: Api, queue: FakeQueue, new_a: Who, new_b: 
 
 
 @pytest.mark.parametrize(
-    ("method", "path"), [("GET", ""), ("POST", "/dismiss"), ("POST", "/complete")]
+    ("method", "path"),
+    [("GET", ""), ("POST", "/dismiss"), ("POST", "/complete"), ("POST", "/steps")],
 )
 def test_every_route_needs_a_session(api: Api, method: str, path: str) -> None:
     assert api.request(method, f"{BASE}{path}").status_code == 401
 
 
-@pytest.mark.parametrize("path", ["/dismiss", "/complete"])
+@pytest.mark.parametrize("path", ["/dismiss", "/complete", "/steps"])
 def test_the_writes_need_the_csrf_header(api: Api, new_a: Who, path: str) -> None:
-    response = api.post(f"{BASE}{path}", token=new_a.token, csrf=False)
+    response = api.post(f"{BASE}{path}", token=new_a.token, json={"step": "pay"}, csrf=False)
     assert response.status_code == 403
     assert state(api, new_a)["dismissed_at"] is None
+    assert state(api, new_a)["passed"] == []

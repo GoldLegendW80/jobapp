@@ -7,6 +7,8 @@ login wizard").
   (`show_card`).
 - `finish` and `dismiss`: the only callers of `profile.service.record_onboarding`. A date once
   recorded is kept: finishing twice, or putting off a finished wizard, changes nothing.
+- `pass_step`: the only caller of `profile.service.record_onboarding_step`: a step passed (Next
+  or "Skip this step") is kept in the profile, so another device resumes at the same step.
 - `start_first_sweep`: the sweep "Start" begins, through the jobs module's own `sweep.start`.
 
 The rules, each tested in tests/opportunities/test_o5_onboarding.py:
@@ -30,9 +32,10 @@ from app.jobs import sweep
 from app.jobs.models import SweepTrigger
 from app.profile import service as profile_service
 from app.profile.models import Profile
+from app.profile.schemas import WIZARD_STEPS
 
 # The step ids of the web wizard (web/src/features/onboarding/steps.ts), in order.
-STEPS = ("profile", "looking", "where", "work", "pay", "apply", "summary")
+STEPS = WIZARD_STEPS
 # The steps whose answer the card waits for: without them a sweep has nothing to look for.
 STEPS_LEFT = ("profile", "looking", "where", "work")
 
@@ -45,6 +48,7 @@ class State:
     dismissed_at: str | None
     profile_empty: bool
     done: list[str]
+    passed: list[str]
     steps_left: list[str]
     open_wizard: bool
     show_card: bool
@@ -78,6 +82,7 @@ def state(db: Session, user: User, now: datetime) -> State:
     onboarding = (sections.get("preferences") or {}).get("onboarding") or {}
     completed_at = onboarding.get("completed_at")
     dismissed_at = onboarding.get("dismissed_at")
+    passed = onboarding.get("steps_passed")
     empty = all(value is None for name, value in sections.items() if name != "preferences")
     done = done_steps(sections)
     left = [step for step in STEPS_LEFT if step not in done]
@@ -86,6 +91,7 @@ def state(db: Session, user: User, now: datetime) -> State:
         dismissed_at=dismissed_at,
         profile_empty=empty,
         done=done,
+        passed=[step for step in STEPS if isinstance(passed, list) and step in passed],
         steps_left=left,
         open_wizard=(
             user.role is Role.member and empty and completed_at is None and dismissed_at is None
@@ -121,6 +127,12 @@ def dismiss(db: Session, user: User, now: datetime) -> State:
     """Record `dismissed_at`, unless the wizard is finished or already put off; the caller
     commits."""
     _record_once(db, user, "dismissed_at", now)
+    return state(db, user, now)
+
+
+def pass_step(db: Session, user: User, step: str, now: datetime) -> State:
+    """Keep `step` among the steps passed (once); the caller commits."""
+    profile_service.record_onboarding_step(db, user.id, step, now)
     return state(db, user, now)
 
 

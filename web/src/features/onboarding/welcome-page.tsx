@@ -31,6 +31,7 @@ import {
   dismissOnboarding,
   getOnboarding,
   onboardingKey,
+  passStep,
   saveLikeMode,
   type OnboardingState,
 } from "./onboarding-api";
@@ -47,15 +48,15 @@ import {
 import {
   draftOf,
   ESSENTIAL,
-  isStepId,
+  nextPage,
+  openStep,
+  passedOf,
   preferencesWith,
-  readPassed,
-  resumeStep,
+  savedDraft,
   searchWith,
   STEP_IDS,
   STEP_NAMES,
   stepProblem,
-  writePassed,
   type Draft,
   type StepId,
 } from "./steps";
@@ -81,8 +82,9 @@ const SWEEP_SENTENCE = {
  * profile's own route with the revision this page read (a second tab's save shows the profile's
  * conflict dialog) and apply's settings route for the mode after a Like. What the person typed is
  * kept in one draft for the whole wizard, so Back shows it as left. The step open is in `?step=`
- * and the steps passed are kept per person in this browser, so a reload or a closed tab resumes
- * at the right step.
+ * and the steps passed are kept in the profile (POST /api/opportunities/onboarding/steps), so a
+ * reload, a closed tab or another device resumes at the right step. The summary shows what was
+ * saved, never what was typed and then skipped.
  */
 export function WelcomePage() {
   useTitle("Welcome");
@@ -99,7 +101,8 @@ export function WelcomePage() {
     queryKey: applySettingsKey,
     queryFn: ({ signal }) => getApplySettings(signal),
   });
-  if (profile.isError || state.isError)
+  // A failed refetch keeps the wizard and its draft: only a first load that fails stops here.
+  if ((profile.isError && !profile.data) || (state.isError && !state.data))
     return (
       <PageUnavailable
         error={profile.error ?? state.error}
@@ -113,7 +116,6 @@ export function WelcomePage() {
   if (!profile.data || !state.data || !me.data) return <PageLoading />;
   return (
     <Wizard
-      userId={me.data.id}
       profile={profile.data}
       state={state.data}
       settings={settings.data}
@@ -122,12 +124,10 @@ export function WelcomePage() {
 }
 
 function Wizard({
-  userId,
   profile,
   state,
   settings,
 }: {
-  userId: string;
   profile: Profile;
   state: OnboardingState;
   settings: ApplySettings | undefined;
@@ -135,14 +135,13 @@ function Wizard({
   const client = useQueryClient();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
-  const [passed, setPassed] = useState<StepId[]>(() => readPassed(userId));
   const [draft, setDraft] = useState<Draft>(() => draftOf(profile.sections));
   const [problem, setProblem] = useState<string | null>(null);
   const [conflict, setConflict] = useState<Conflict>();
-  const requested = params.get("step");
-  const step: StepId = isStepId(requested)
-    ? requested
-    : resumeStep(state.done, passed);
+  const passed = passedOf(state.passed);
+  const step: StepId = openStep(params.get("step"), state.done, passed);
+  const fromSummary = params.get("from") === "summary";
+  const after = nextPage(params.get("next"));
   const index = STEP_IDS.indexOf(step);
   const heading = useRef<HTMLHeadingElement>(null);
   const first = useRef(true);
@@ -153,14 +152,32 @@ function Wizard({
     else heading.current?.focus();
   }, [step]);
 
-  const goTo = (next: StepId) => {
+  /** Open a step; `back` says the summary sent the person there ("Change"). */
+  const goTo = (next: StepId, back = false) => {
     setProblem(null);
-    setParams({ step: next }, { replace: false });
+    setParams(
+      {
+        step: next,
+        ...(back ? { from: "summary" } : {}),
+        ...(after ? { next: after } : {}),
+      },
+      { replace: false },
+    );
   };
-  const pass = (current: StepId) => {
-    const updated = [...passed.filter((item) => item !== current), current];
-    setPassed(updated);
-    writePassed(userId, updated);
+  /** Where Next and "Skip this step" lead: the summary when it sent the person here. */
+  const following = (current: StepId): StepId =>
+    fromSummary
+      ? "summary"
+      : (STEP_IDS[STEP_IDS.indexOf(current) + 1] ?? "summary");
+  /**
+   * Keep the step passed in the profile. A new step is one revision of the profile's
+   * preferences, so the profile is read again before the next save starts from it.
+   */
+  const recordPass = async (current: StepId) => {
+    const known = passed.includes(current);
+    const found = await passStep(current);
+    client.setQueryData(onboardingKey, found);
+    if (!known) await client.invalidateQueries({ queryKey: profileKey });
   };
   const change = (patch: Partial<Draft>) => {
     setProblem(null);
@@ -194,11 +211,17 @@ function Wizard({
         );
       return null;
     },
-    onSuccess: (saved, current) => {
+    onSuccess: async (saved, current) => {
       if (saved) client.setQueryData(profileKey, saved);
-      pass(current);
-      void client.invalidateQueries({ queryKey: onboardingKey });
-      goTo(STEP_IDS[STEP_IDS.indexOf(current) + 1] ?? "summary");
+      try {
+        await recordPass(current);
+      } catch (error) {
+        setProblem(
+          `This step was saved, but not marked as done. ${describeError(error)}`,
+        );
+        return;
+      }
+      goTo(following(current));
     },
     onError: (error) => {
       const stale = conflictOf(error);
@@ -207,14 +230,25 @@ function Wizard({
     },
   });
 
+  const skip = useMutation({
+    mutationFn: recordPass,
+    onSuccess: (_, current) => {
+      goTo(following(current));
+    },
+    onError: (error) => {
+      setProblem(`That did not work. ${describeError(error)}`);
+    },
+  });
+
   const finish = useMutation({
     mutationFn: completeOnboarding,
     onSuccess: (answer) => {
-      writePassed(userId, []);
       if ("state" in answer) client.setQueryData(onboardingKey, answer.state);
       else void client.invalidateQueries({ queryKey: onboardingKey });
+      // Recording the end is one revision of the profile.
+      void client.invalidateQueries({ queryKey: profileKey });
       toast.success(SWEEP_SENTENCE[answer.sweep]);
-      void navigate(DISCOVER);
+      void navigate(after ?? DISCOVER);
     },
     onError: (error) => {
       setProblem(`The wizard could not finish. ${describeError(error)}`);
@@ -225,7 +259,9 @@ function Wizard({
     mutationFn: dismissOnboarding,
     onSuccess: (saved) => {
       client.setQueryData(onboardingKey, saved);
-      void navigate("/jobs");
+      // Putting it off is one revision of the profile: no later save starts from a stale one.
+      void client.invalidateQueries({ queryKey: profileKey });
+      void navigate(after ?? "/jobs");
     },
     onError: (error) => {
       setProblem(`That did not work. ${describeError(error)}`);
@@ -248,7 +284,9 @@ function Wizard({
         : old,
     );
   };
-  const busy = save.isPending || finish.isPending || later.isPending;
+  const busy =
+    save.isPending || skip.isPending || finish.isPending || later.isPending;
+  const stored = (client.getQueryData<Profile>(profileKey) ?? profile).sections;
   const panel: PanelProps = { draft, change };
 
   return (
@@ -272,7 +310,13 @@ function Wizard({
           A few short answers, and the app looks for postings that fit. You can
           change every answer later in your profile.
         </p>
-        <Progress current={index} onOpen={goTo} reachable={passed} />
+        <Progress
+          current={index}
+          onOpen={(open) => {
+            goTo(open);
+          }}
+          reachable={passed}
+        />
       </header>
 
       <section
@@ -305,13 +349,12 @@ function Wizard({
         {step === "apply" ? <StepApply {...panel} settings={settings} /> : null}
         {step === "summary" ? (
           <StepSummary
-            draft={draft}
+            draft={savedDraft(stored, draft)}
             settings={settings}
-            search={
-              (client.getQueryData<Profile>(profileKey) ?? profile).sections
-                .search
-            }
-            onChange={goTo}
+            search={stored.search}
+            onChange={(changed) => {
+              goTo(changed, true);
+            }}
           />
         ) : null}
       </section>
@@ -336,8 +379,7 @@ function Wizard({
               variant="ghost"
               disabled={busy}
               onClick={() => {
-                pass(step);
-                goTo(STEP_IDS[index + 1] ?? "summary");
+                skip.mutate(step);
               }}
             >
               Skip this step

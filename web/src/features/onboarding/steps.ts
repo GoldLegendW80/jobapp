@@ -215,35 +215,15 @@ export function preferencesWith(
 // --- progress -----------------------------------------------------------------------------------
 
 /**
- * The steps passed (Next or Skip) in this browser, per person: the profile cannot tell a skipped
- * step from one never seen, so this is what lets a closed tab resume at the right step.
+ * The steps passed (Next or Skip) come from the profile (`passed` of the onboarding state, kept
+ * by POST /api/opportunities/onboarding/steps): the profile cannot tell a skipped step from one
+ * never seen, so this is what lets a closed tab, or another device, resume at the right step.
  */
-const progressKey = (userId: string) => `welcome:v1:${userId}`;
-
-export function readPassed(userId: string): StepId[] {
-  try {
-    const raw = window.localStorage.getItem(progressKey(userId));
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is StepId => isStepId(String(item)))
-      : [];
-  } catch {
-    return [];
-  }
+export function passedOf(values: readonly string[]): StepId[] {
+  return STEP_IDS.filter((step) => values.includes(step));
 }
 
-export function writePassed(userId: string, passed: readonly StepId[]): void {
-  try {
-    window.localStorage.setItem(
-      progressKey(userId),
-      JSON.stringify([...new Set(passed)]),
-    );
-  } catch {
-    // Storage blocked: a reload then resumes from what the profile answers.
-  }
-}
-
-/** The first step neither answered by the profile (`done`) nor passed here; the summary last. */
+/** The first step neither answered by the profile (`done`) nor passed; the summary last. */
 export function resumeStep(
   done: readonly string[],
   passed: readonly StepId[],
@@ -252,4 +232,50 @@ export function resumeStep(
     STEP_IDS.find((step) => !done.includes(step) && !passed.includes(step)) ??
     "summary"
   );
+}
+
+/**
+ * The step to open for `?step=`: the one asked for, unless no role is saved yet and it lies
+ * after the roles (a step typed in the address never reaches Start without a role): then the
+ * first step not done, the roles at the latest.
+ */
+export function openStep(
+  requested: string | null,
+  done: readonly string[],
+  passed: readonly StepId[],
+): StepId {
+  // The roles count as passed only while saved: the first step left is the roles at the latest.
+  const first = resumeStep(
+    done,
+    passed.filter((step) => step !== "looking"),
+  );
+  if (!isStepId(requested)) return first;
+  if (
+    !done.includes("looking") &&
+    STEP_IDS.indexOf(requested) > STEP_IDS.indexOf("looking")
+  )
+    return first;
+  return requested;
+}
+
+/**
+ * What the summary shows: the answers as saved (the stored profile and apply's settings), never
+ * what was typed and then skipped. Only "Rather not say" comes from what was typed, since it
+ * saves as no figures at all.
+ */
+export function savedDraft(sections: SectionData, typed: Draft): Draft {
+  const stored = draftOf(sections);
+  const pay = sections.search.compensation;
+  const nothingStored = pay.salary === null && pay.daily_rate === null;
+  return { ...stored, ratherNotSay: typed.ratherNotSay && nothingStored };
+}
+
+/**
+ * The page asked for when the wizard opened by itself (`?next=`, set by the gate): restored when
+ * the wizard ends or is put off. Only a path of this app, never /welcome itself.
+ */
+export function nextPage(value: string | null): string | null {
+  if (!value?.startsWith("/") || value.startsWith("//")) return null;
+  if (value.startsWith("/welcome") || value.includes("\\")) return null;
+  return value;
 }

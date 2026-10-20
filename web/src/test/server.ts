@@ -44,6 +44,7 @@ export const onboardingDone = {
   dismissed_at: null,
   profile_empty: false,
   done: ["profile", "looking", "where", "work"],
+  passed: [],
   steps_left: [],
   open_wizard: false,
   show_card: false,

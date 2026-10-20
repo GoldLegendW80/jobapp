@@ -9,6 +9,10 @@
   finished all the same and that sweep is the first one.
 - POST /api/opportunities/onboarding/dismiss: "Skip for now", records `dismissed_at`. 200 with the
   state.
+- POST /api/opportunities/onboarding/steps `{step}`: a step passed (Next or "Skip this step"), kept
+  in the profile (`passed` in the state), so the wizard resumes at the same step on any device.
+  200 with the state; 422 for an unknown step. Each new step is one revision of the profile's
+  `preferences`: the web reads the profile again before its next save.
 
 Every route needs a session and acts on the caller's profile only; the step answers themselves are
 saved through the profile's and apply's own routes. Never cached.
@@ -20,7 +24,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
@@ -30,6 +34,7 @@ from app.identity.models import User
 from app.identity.schemas import ErrorOut
 from app.jobs import sweep
 from app.opportunities import onboarding
+from app.profile.schemas import WizardStep
 
 NO_STORE = {"Cache-Control": "no-store"}
 RUNNING = "A sweep is already running: it is your first one."
@@ -50,9 +55,16 @@ class StateOut(BaseModel):
     dismissed_at: str | None
     profile_empty: bool
     done: list[str]
+    passed: list[str]
     steps_left: list[str]
     open_wizard: bool
     show_card: bool
+
+
+class StepIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    step: WizardStep
 
 
 class CompleteOut(BaseModel):
@@ -84,6 +96,14 @@ def read_state(user: CurrentUser, request: Request, db: Db) -> StateOut:
 def dismiss(user: CurrentUser, request: Request, db: Db) -> StateOut:
     """Skip for now: the wizard no longer opens by itself; the home page shows its card."""
     found = onboarding.dismiss(db, user, deps.clock(request))
+    db.commit()
+    return _out(found)
+
+
+@router.post("/steps", response_model=StateOut, responses=_401, dependencies=[Depends(_no_store)])
+def pass_step(body: StepIn, user: CurrentUser, request: Request, db: Db) -> StateOut:
+    """A step passed: kept in the profile, so the wizard resumes there on any device."""
+    found = onboarding.pass_step(db, user, body.step, deps.clock(request))
     db.commit()
     return _out(found)
 

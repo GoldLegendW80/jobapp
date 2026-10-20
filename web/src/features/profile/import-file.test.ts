@@ -250,6 +250,7 @@ describe("checkImportFile accepts an export", () => {
         onboarding: {
           completed_at: "2026-10-20T08:00:00+00:00",
           dismissed_at: null,
+          steps_passed: ["looking"],
         },
       },
     });

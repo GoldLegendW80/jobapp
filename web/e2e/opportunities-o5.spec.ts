@@ -35,12 +35,17 @@ import {
  * Enter on the buttons) N uploads an invented CV (a PDF written by ./ingestion-pdf.ts from
  * api/tests/documents/fixtures/upload_morgan.txt) through the CV upload panel, agrees to what is
  * sent, sees it converted on the fake model backend, then fills the roles, the places and the
- * contracts; Back shows every value typed; a reload and a fresh visit of /welcome open the step
- * left; the pay is "Rather not say", Full auto shows as "Available soon" and cannot be chosen,
- * and "Start" on the summary ends on Discover. The profile holds the answers and apply's mode is
- * still Review first. Signing in again lands on the home page with no card. Person B, beside N,
- * still gets the wizard, puts it off with "Skip for now", and after signing in again is not
- * sent to it but sees the card. No screen shows a dash.
+ * contracts; Back shows every value typed. N's account is then given one enabled board on the
+ * fake ATS server (org fake-ok of api/tests/jobs/fake_ats.py, which the worker of this stack
+ * reads for every org) and skills its postings match. A reload, a fresh visit of /welcome and a
+ * second device (a new browser context signed in as N) open the step left, since the steps
+ * passed are kept in the profile. The pay is "Rather not say", Full auto shows as "Available
+ * soon" and cannot be chosen, and "Start" on the summary says the first search has started; the
+ * sweep runs in the worker to its end and Discover shows its card. The profile holds the answers
+ * and apply's mode is still Review first. Signing in again lands on the home page with no card.
+ * Person B, beside N, still gets the wizard, puts it off with "Skip for now", and after signing
+ * in again is not sent to it but sees the card; B has no board, so B's Start ends the wizard
+ * with the sentence that asks for boards and starts no sweep. No screen shows a dash.
  *
  * Locally, as opportunities-all.config.ts says (AGENTS_FAKE_BACKEND=1 on the worker), then:
  *   E2E_CADDY_URL=... E2E_ATS_FORMS_URL=... E2E_COMPOSE_PROJECT=... \
@@ -71,7 +76,33 @@ type State = {
   open_wizard: boolean;
   show_card: boolean;
   completed_at: string | null;
+  passed: string[];
 };
+
+/** Skills the fake board's matching posting names ("Python, agents, LLM evaluation"). */
+const SKILLS = {
+  years_experience: null,
+  have: [
+    { name: "python", terms: ["python"] },
+    { name: "agents", terms: ["agent", "agents"] },
+    { name: "llm", terms: ["llm", "evaluation"] },
+  ],
+  adjacent: [],
+  none: [],
+  gates: [],
+};
+/** One enabled board on the fake ATS server: two of its postings are AI engineer roles. */
+const BOARD = {
+  company: "Example Robotics",
+  ats: "ashby",
+  org: "fake-ok",
+  enabled: true,
+  extra_exclude: { terms: [], advanced_regex: false },
+};
+const STARTED =
+  "Your first search has started. New postings appear as it finds them.";
+const NO_BOARDS =
+  "Add the company boards to search in Search options, then find new postings.";
 
 let admin: Person;
 let adminContext: BrowserContext;
@@ -97,6 +128,27 @@ async function stateOf(page: Page): Promise<State> {
   const read = await page.request.get("/api/opportunities/onboarding");
   expect(read.status()).toBe(200);
   return (await read.json()) as State;
+}
+
+/** Replace one section of the signed in person's profile, from its current revision. */
+async function putSection(
+  page: Page,
+  section: string,
+  change: (stored: Record<string, unknown>) => Record<string, unknown>,
+) {
+  const read = await page.request.get("/api/profile");
+  const profile = (await read.json()) as {
+    revision: number;
+    sections: Record<string, Record<string, unknown> | null>;
+  };
+  const saved = await page.request.put(`/api/profile/${section}`, {
+    headers: CSRF,
+    data: {
+      base_revision: profile.revision,
+      data: change(profile.sections[section] ?? {}),
+    },
+  });
+  expect(saved.status(), await saved.text()).toBe(200);
 }
 
 async function invite(email: string): Promise<string> {
@@ -213,14 +265,14 @@ test("steps 2 to 4 by keyboard, and Back keeps every value", async () => {
     pageN.getByRole("button", { name: "Skip this step" }),
   ).toHaveCount(0);
   await pageN.getByLabel("Roles").focus();
-  await pageN.keyboard.type("Data engineer, Analytics engineer");
+  await pageN.keyboard.type("AI engineer, Applied AI engineer");
   await press(pageN.getByRole("checkbox", { name: "Senior" }), "Space");
   await noDash(pageN);
   await next(pageN);
 
   await step(pageN, 3);
   await pageN.getByLabel("Places").focus();
-  await pageN.keyboard.type("Lyon");
+  await pageN.keyboard.type("Paris");
   await press(pageN.getByRole("radio", { name: "Hybrid" }), "Space");
   await noDash(pageN);
   await next(pageN);
@@ -228,12 +280,12 @@ test("steps 2 to 4 by keyboard, and Back keeps every value", async () => {
   await step(pageN, 4);
   await back(pageN);
   await step(pageN, 3);
-  await expect(pageN.getByLabel("Places")).toHaveValue("Lyon");
+  await expect(pageN.getByLabel("Places")).toHaveValue("Paris");
   await expect(pageN.getByRole("radio", { name: "Hybrid" })).toBeChecked();
   await back(pageN);
   await step(pageN, 2);
   await expect(pageN.getByLabel("Roles")).toHaveValue(
-    "Data engineer, Analytics engineer",
+    "AI engineer, Applied AI engineer",
   );
   await expect(pageN.getByRole("checkbox", { name: "Senior" })).toBeChecked();
   await next(pageN);
@@ -252,11 +304,36 @@ test("steps 2 to 4 by keyboard, and Back keeps every value", async () => {
   await step(pageN, 5);
 });
 
-test("a reload, then a fresh visit of /welcome, open the step left", async () => {
+test("a reload, a fresh visit of /welcome and another device open the step left", async ({
+  browser,
+}) => {
+  // The account's first board, on the fake ATS server, and skills its postings match.
+  await putSection(pageN, "skills", () => SKILLS);
+  await putSection(pageN, "search", (stored) => ({
+    ...stored,
+    boards: [BOARD],
+  }));
   await pageN.reload();
   await step(pageN, 5);
   await pageN.goto("/welcome");
   await step(pageN, 5);
+  expect((await stateOf(pageN)).passed).toEqual([
+    "profile",
+    "looking",
+    "where",
+    "work",
+  ]);
+  // Another device: the steps passed are in the profile, not in a browser.
+  const other = await newContext(browser);
+  try {
+    const page = await other.newPage();
+    await signIn(page, N.email, PASSWORD);
+    await expect(page).toHaveURL(/\/jobs$/);
+    await page.goto("/welcome");
+    await step(page, 5);
+  } finally {
+    await other.close();
+  }
 });
 
 test("pay, how the app applies, the summary, and Start opens Discover", async () => {
@@ -279,17 +356,38 @@ test("pay, how the app applies, the summary, and Start opens Discover", async ()
 
   await step(pageN, 7);
   const summary = pageN.locator("dl");
-  await expect(summary).toContainText("Data engineer, Analytics engineer");
-  await expect(summary).toContainText("Lyon; Hybrid");
+  await expect(summary).toContainText("AI engineer, Applied AI engineer");
+  await expect(summary).toContainText("Paris; Hybrid");
   await expect(summary).toContainText("Freelance mission, Permanent");
   await expect(summary).toContainText("Rather not say");
+  await expect(pageN.getByText(/covers 1 board from/)).toBeVisible();
   await noDash(pageN);
   await shots(pageN, "summary");
   await press(pageN.getByRole("button", { name: "Start" }), "Enter");
+  await expect(pageN.getByText(STARTED)).toBeVisible();
   await expect(pageN).toHaveURL(/\/discover$/);
   await expect(
     pageN.getByRole("heading", { level: 1, name: "Discover" }),
   ).toBeVisible();
+
+  // The first sweep runs in the worker against the fake board, to its end.
+  await expect
+    .poll(
+      async () => {
+        const read = await pageN.request.get("/api/jobs/sweeps?limit=1");
+        const body = (await read.json()) as {
+          items: Array<{ status: string; new: number }>;
+        };
+        return body.items[0]?.status ?? "none";
+      },
+      { timeout: 90_000, intervals: [1_000] },
+    )
+    .toBe("done");
+  await pageN.reload();
+  await expect(pageN.getByTestId("deck-card").first()).toBeVisible();
+  await expect(
+    pageN.getByTestId("deck-card").getByRole("heading", { level: 2 }),
+  ).toHaveText("AI Engineer");
 
   const profile = (await (await pageN.request.get("/api/profile")).json()) as {
     sections: {
@@ -298,9 +396,9 @@ test("pay, how the app applies, the summary, and Start opens Discover", async ()
     };
   };
   expect(profile.sections.search).toMatchObject({
-    title_include: { terms: ["Data engineer", "Analytics engineer"] },
+    title_include: { terms: ["AI engineer", "Applied AI engineer"] },
     seniority: ["senior"],
-    location: { terms: ["Lyon"] },
+    location: { terms: ["Paris"] },
     remote_stance: "hybrid",
     contract_types: ["Freelance", "CDI"],
     compensation: { salary: null, daily_rate: null },
@@ -352,4 +450,24 @@ test("person B still gets the wizard, puts it off, and then sees only the card",
   await card.getByRole("link", { name: "Continue setup" }).click();
   await expect(pageB).toHaveURL(/\/welcome$/);
   await step(pageB, 1);
+  // The summary typed in the address opens the first step left while no role is saved.
+  await pageB.goto("/welcome?step=summary");
+  await step(pageB, 1);
+  await expect(pageB.getByRole("button", { name: "Start" })).toHaveCount(0);
+});
+
+test("B, with roles and no board, ends the wizard without a sweep", async () => {
+  await putSection(pageB, "search", (stored) => ({
+    ...stored,
+    title_include: { terms: ["Analytics engineer"], advanced_regex: false },
+  }));
+  await pageB.goto("/welcome?step=summary");
+  await step(pageB, 7);
+  await expect(pageB.getByText(/covers 0 boards from/)).toBeVisible();
+  await press(pageB.getByRole("button", { name: "Start" }), "Enter");
+  await expect(pageB.getByText(NO_BOARDS)).toBeVisible();
+  await expect(pageB).toHaveURL(/\/discover$/);
+  expect((await stateOf(pageB)).completed_at).not.toBeNull();
+  const sweeps = await pageB.request.get("/api/jobs/sweeps?limit=1");
+  expect(((await sweeps.json()) as { items: unknown[] }).items).toEqual([]);
 });

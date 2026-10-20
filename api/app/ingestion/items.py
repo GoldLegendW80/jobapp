@@ -336,6 +336,7 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         },
         "preferences.onboarding.completed_at": _T.SETTING,
         "preferences.onboarding.dismissed_at": _T.SETTING,
+        "preferences.onboarding.steps_passed[]": _T.SETTING,
         "preferences.documents_language": _T.SETTING,
         "preferences.documents_tone": _T.SETTING,
         "answers.work_authorization[].country": _T.TEXT,

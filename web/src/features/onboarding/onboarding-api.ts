@@ -8,6 +8,7 @@ const stateSchema = z.object({
   dismissed_at: z.string().nullable(),
   profile_empty: z.boolean(),
   done: z.array(z.string()),
+  passed: z.array(z.string()),
   steps_left: z.array(z.string()),
   open_wizard: z.boolean(),
   show_card: z.boolean(),
@@ -38,6 +39,14 @@ export const getOnboarding = (signal?: AbortSignal): Promise<OnboardingState> =>
 export const dismissOnboarding = (): Promise<OnboardingState> =>
   request("/opportunities/onboarding/dismiss", {
     method: "POST",
+    validate: (body) => stateSchema.parse(body),
+  });
+
+/** A step passed (Next or "Skip this step"), kept in the profile for any device. */
+export const passStep = (step: string): Promise<OnboardingState> =>
+  request("/opportunities/onboarding/steps", {
+    method: "POST",
+    body: { step },
     validate: (body) => stateSchema.parse(body),
   });
 
