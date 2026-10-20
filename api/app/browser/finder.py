@@ -15,15 +15,19 @@ lists. It asks of the runner (app/agents/runner.py):
   (`FinderSession.report`) before anything is kept.
 
 What code enforces, whatever the model asks (`FinderSession`):
-- the host allow list: a navigation goes to the careers page's own site only (same scheme, host
-  and port, no user part; the lease opens that one host too, so browserd refuses the rest). A
-  page that sends the agent elsewhere is refused and counted (`refused.other_host`);
+- the host allow list: a navigation goes to the careers page's own site only (same scheme and
+  port, the same host or its `www.` twin, no user part; the lease opens those two hosts only,
+  `host_pair`, so browserd refuses the rest). A page that sends the agent elsewhere is refused
+  and counted (`refused.other_host`);
 - PAGES_MAX pages per source per sweep, the careers page included, each paced and within the
   sweep's and the lease's time (`sources.Pages`); a lease that ends under the run stops it;
 - a posting is kept only when its address is on the site's host (lower cased, the fragment
   dropped), was seen in this run (a link of a page read, or a page opened), its title and text
   are present after trimming, and fewer than POSTINGS_MAX postings were kept before; a posting
-  whose page the agent opened keeps the text code read on that page, not the model's.
+  whose page the agent opened keeps the text code read on that page, not the model's, and is
+  kept only when its title is on that page (both folded: NFKC, case folded, whitespace
+  collapsed). Declared: this is a containment test, so a one word title passes on most pages;
+  the address rules above are what bind the posting to the site.
 
 Nothing of a page or a posting goes into a log or the run's events.
 """
@@ -34,6 +38,7 @@ import asyncio
 import contextlib
 import importlib.util
 import json
+import re
 import secrets
 import threading
 import unicodedata
@@ -42,7 +47,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -111,11 +116,41 @@ def _norm(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-def canonical(url: str) -> str:
-    """The address as code keeps it: scheme and host lower cased, the fragment dropped, the
-    default port left out. "" for anything that is not an http or https address with a host."""
+# browserd's own host rule (browser/browserd/tools/policy.py, `_LABEL` and the part of HOST_ENTRY
+# without a wildcard): a lease is refused for any other host, so code never asks for one.
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+HOST = re.compile(rf"{_LABEL}(?:\.{_LABEL})*")
+# What a path or query keeps as it is; every other character (a space, a letter outside ASCII,
+# a quote) is percent encoded as UTF-8, as browserd refuses a URL outside printable ASCII.
+_PATH_SAFE = "/%:@!$&'()*+,;=-._~"
+_QUERY_SAFE = _PATH_SAFE + "?"
+# Hosts a `site` source never reads: LinkedIn is read only by its own source, behind the
+# person's opt in and its guard (browser B10).
+NOT_SITES = ("linkedin.com",)
+
+
+def ascii_host(host: str) -> str:
+    """The host in the form browserd accepts: lower case, one final dot dropped, a name written
+    in another script in its `xn--` form (full width letters folded, IDNA 2003). "" when it is
+    none: an IP v6 literal, an underscore, an empty label, a label over 63 characters."""
+    name = host[:-1] if host.endswith(".") else host
     try:
-        parts = urlsplit(url.strip())
+        name = name.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return ""
+    return name if HOST.fullmatch(name) else ""
+
+
+def canonical(url: str) -> str:
+    """The address as code keeps it: scheme and host lower cased, the host in its ASCII form
+    (`ascii_host`), the fragment dropped, the default port left out, the path and query percent
+    encoded outside printable ASCII. "" for anything that is not an http or https address with
+    a host browserd accepts, or that holds a backslash (a browser reads it as a slash)."""
+    text = url.strip()
+    if "\\" in text:
+        return ""
+    try:
+        parts = urlsplit(text)
         port = parts.port
     except ValueError:
         return ""
@@ -124,18 +159,47 @@ def canonical(url: str) -> str:
         return ""
     if parts.username is not None or parts.password is not None:
         return ""
-    host = parts.hostname.lower()
-    if ":" in host:
-        host = f"[{host}]"
+    host = ascii_host(parts.hostname)
+    if not host:
+        return ""
     if port is not None and port != (443 if scheme == "https" else 80):
         host = f"{host}:{port}"
-    return urlunsplit((scheme, host, parts.path or "/", parts.query, ""))
+    path = quote(parts.path or "/", safe=_PATH_SAFE)
+    return urlunsplit((scheme, host, path, quote(parts.query, safe=_QUERY_SAFE), ""))
+
+
+def not_a_site(url: str) -> bool:
+    """Whether a canonical address is on a host a `site` source never reads (NOT_SITES, or any
+    name under one)."""
+    host = urlsplit(url).hostname or ""
+    return any(host == name or host.endswith("." + name) for name in NOT_SITES)
 
 
 def origin(url: str) -> tuple[str, str] | None:
     """(scheme, host with its port) of a canonical address."""
     parts = urlsplit(url)
     return (parts.scheme, parts.netloc) if parts.scheme and parts.netloc else None
+
+
+def host_pair(host: str) -> list[str]:
+    """The hosts a site's lease opens: its own and its `www.` twin (apex to www and back is the
+    one redirect of the same site that real sites make), nothing wider. A single label has no
+    twin, nor a `www.` host whose rest is one label."""
+    if host.startswith("www."):
+        rest = host[4:]
+        return [host, rest] if "." in rest else [host]
+    return [host, f"www.{host}"] if "." in host else [host]
+
+
+def site_of(url: str) -> tuple[str, str] | None:
+    """The site of a canonical address: its scheme and its host with its port, a leading `www.`
+    dropped (so apex and www are one site, `host_pair`)."""
+    found = origin(url)
+    if found is None:
+        return None
+    scheme, netloc = found
+    rest = netloc[4:] if netloc.startswith("www.") else netloc
+    return (scheme, rest if "." in rest.split(":")[0] else netloc)
 
 
 @dataclass
@@ -170,10 +234,11 @@ class FinderSession:
 
     @property
     def site(self) -> tuple[str, str] | None:
-        return origin(self.start)
+        return site_of(self.start)
 
     def on_site(self, url: str) -> bool:
-        return bool(url) and origin(url) == self.site
+        """Same scheme, same host or its `www.` twin, same port (`site_of`)."""
+        return bool(url) and site_of(url) == self.site
 
     def _read(self, url: str, text: str) -> None:
         """Note the links of a page read and its visible text."""
@@ -220,7 +285,9 @@ class FinderSession:
             if exc.code == "page_failed":
                 return "The page did not load.", True
             return self._stop(exc.code)
-        opened = canonical(self.pages.last_url) or url
+        opened = canonical(self.pages.last_url)
+        if not opened:
+            return "The page did not load.", True  # no address from browserd: fail closed
         if not self.on_site(opened):
             # Redirected off the site: nothing of that page is read.
             self.refused["other_host"] += 1
@@ -239,7 +306,9 @@ class FinderSession:
         text = shot.get("snapshot")
         if not shot.get("ok") or not isinstance(text, str):
             return "The page could not be read.", True
-        url = canonical(str(shot.get("url") or "")) or self.current
+        url = canonical(str(shot.get("url") or ""))
+        if not url:
+            return "The page could not be read.", True  # no address from browserd: fail closed
         if not self.on_site(url):
             self.refused["other_host"] += 1
             return "Refused: the page is on another site.", True

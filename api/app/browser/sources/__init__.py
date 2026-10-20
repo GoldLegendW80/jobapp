@@ -464,6 +464,8 @@ def host_of(url: str) -> str:
 
 
 StoreFound = Callable[[str, Sequence[tuple[str, ats.Posting]]], Awaitable[None]]
+# B9: (user id, the board, its company) to whether the board was added (site.add_board).
+AddBoard = Callable[[str, Any, str], Awaitable[bool]]
 ToolsFor = Callable[[str, str, str], Tools]
 
 
@@ -481,9 +483,11 @@ class Runner:
         monotonic: Callable[[], float] = time.monotonic,
         pacer: Pacer | None = None,
         finder: Any = None,
+        add_board: AddBoard | None = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
         self.finder = finder  # B9: the finder agent of `site` sources (finder.FinderAgent)
+        self.add_board = add_board  # B9: adds a board found to the person's (site.add_board)
         self.sleep, self.rng = sleep, rng or random.SystemRandom()
         self.monotonic = monotonic
         self.pacer = pacer or MemoryPacer()
@@ -535,13 +539,18 @@ class Runner:
             reader: Reader = site.Site(self.finder)
             host, skip = await reader.check(source, user, entry)  # type: ignore[attr-defined]
             if skip is not None:
+                await self._board_found(user, source, entry, skip)
                 return skip, None
+            from app.browser import finder
+
+            hosts = finder.host_pair(host)
         else:
             reader = readers()[source.kind]
             host = reader.host(self.base_url)
+            hosts = [host]
         asked = self.monotonic()  # the lease's active time counts from its start, after this
         try:
-            got = await self.leases.acquire(user, "sweep", automation=True, hosts=[host])
+            got = await self.leases.acquire(user, "sweep", automation=True, hosts=hosts)
         except BrowserError:
             return "browser_unavailable", "browser_unavailable"
         except StoreUnavailableError:
@@ -591,6 +600,7 @@ class Runner:
         if code == "layout_changed":
             logger.warning("browser source layout changed: kind=%s", source.kind)
             return code, code
+        await self._board_found(user, source, entry, code)
         if read.postings:
             new_before = stats.new
             try:
@@ -601,6 +611,26 @@ class Runner:
                 return "store_failed", code
             entry["postings"] = stats.new - new_before
         return code, code
+
+    async def _board_found(
+        self, user: str, source: BrowserSource, entry: dict[str, Any], code: str | None
+    ) -> None:
+        """B9: a site whose postings live on an API board adds that board to the person's swept
+        boards (`add_board`); the entry's board says whether it was added. A failure to add is
+        logged and the entry says not added: the source's own code stands."""
+        board = entry.get("board")
+        if code != "ats_board" or not isinstance(board, dict):
+            return
+        from app.browser.sources import site
+
+        found = site.Board(str(board["ats"]), str(board["org"]))
+        added = False
+        if self.add_board is not None:
+            try:
+                added = await self.add_board(user, found, site.company_for(source, found))
+            except Exception as exc:
+                logger.warning("a board was not added: error=%s", type(exc).__name__)
+        board["added"] = added
 
     async def _give_back(self, user: str, held: str | None) -> None:
         if held is None:
@@ -648,7 +678,31 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         base_url=settings.browser_sources_base_url,
         pacer=RedisPacer(pool),
         finder=None if agent_context is None else _finder(agent_context),
+        add_board=_add_board(sessions),
     )
+
+
+def _add_board(sessions: Any) -> AddBoard:
+    """site.add_board in its own transaction, off the event loop."""
+    import uuid
+    from datetime import UTC, datetime
+
+    from app.browser.sources import site
+
+    def add(user: str, board: Any, company: str) -> bool:
+        with sessions() as db:
+            try:
+                added = site.add_board(db, uuid.UUID(user), board, company, datetime.now(UTC))
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
+            return added
+
+    async def call(user: str, board: Any, company: str) -> bool:
+        return await asyncio.to_thread(add, user, board, company)
+
+    return call
 
 
 def _finder(agent_context: Any) -> Any:

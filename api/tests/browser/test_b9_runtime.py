@@ -25,6 +25,7 @@ from tests.browser.test_b9_site import Tools, run, s
 from tests.conftest import make_settings
 from tests.jobs.conftest import (  # noqa: F401  (fixtures)
     alice,
+    bob,
     clock,
     db,
     engine,
@@ -186,3 +187,107 @@ def test_the_session_of_a_run_is_gone_once_it_ended(
     [made] = runs_of(runtime.factory, alice)
     assert finder.session_of(made.id) is None
     assert asyncio.run(finder.RuntimeFinder(runtime.context).available(str(alice))) is True
+
+
+# --- a board found is added to the person's swept boards (owner, 2026-10-20) -------------------
+
+AT = datetime(2026, 10, 20, 9, 0, tzinfo=UTC)
+GREENHOUSE = {"company": "Example Labs", "ats": "greenhouse", "org": "examplelabs"}
+
+
+def save_search(factory_: sessionmaker[Session], user: uuid.UUID, boards: list[Any]) -> None:
+    from app.profile import service
+    from app.profile.schemas import validate_section
+
+    with factory_() as one:
+        profile = service.get_profile(one, user, AT)
+        data = validate_section("search", {"boards": boards, "min_fit": 70})
+        service.save_section(one, user, "search", data, profile.revision, AT)
+        one.commit()
+
+
+def search_of(factory_: sessionmaker[Session], user: uuid.UUID) -> tuple[list[Any], int]:
+    from app.profile import service
+
+    with factory_() as one:
+        profile = service.get_profile(one, user, AT)
+        raw = (profile.sections or {}).get("search") or {}
+        return list(raw.get("boards", [])), profile.revision
+
+
+def add(factory_: sessionmaker[Session], user: uuid.UUID, ats_: str, org: str) -> bool:
+    from app.browser import sources
+    from app.browser.sources import site
+
+    call = sources._add_board(factory_)
+    return asyncio.run(call(str(user), site.Board(ats_, org), "example-robotics.test"))
+
+
+def test_a_board_found_is_added_once_and_kept_as_the_person_saved_the_rest(
+    factory: sessionmaker[Session],  # noqa: F811
+    alice: uuid.UUID,  # noqa: F811
+) -> None:
+    save_search(factory, alice, [GREENHOUSE])
+    _, before = search_of(factory, alice)
+    assert add(factory, alice, "lever", "example-robotics") is True
+    boards, revision = search_of(factory, alice)
+    assert revision == before + 1
+    assert [(b["ats"], b["org"], b["enabled"]) for b in boards] == [
+        ("greenhouse", "examplelabs", True),
+        ("lever", "example-robotics", True),
+    ]
+    assert boards[1]["company"] == "example-robotics.test"
+    # Idempotent: the same board again, its org in another case, adds nothing.
+    assert add(factory, alice, "lever", "example-robotics") is False
+    assert add(factory, alice, "lever", "Example-Robotics") is False
+    assert add(factory, alice, "greenhouse", "ExampleLabs") is False
+    assert search_of(factory, alice) == (boards, revision)
+
+
+def test_a_board_is_added_for_its_person_only(
+    factory: sessionmaker[Session],  # noqa: F811
+    alice: uuid.UUID,  # noqa: F811
+    bob: uuid.UUID,  # noqa: F811
+) -> None:
+    save_search(factory, alice, [])
+    save_search(factory, bob, [GREENHOUSE])
+    assert add(factory, alice, "ashby", "example-robotics") is True
+    assert [(b["ats"], b["org"]) for b in search_of(factory, bob)[0]] == [
+        ("greenhouse", "examplelabs")
+    ]
+    assert add(factory, bob, "ashby", "example-robotics") is True  # bob's own copy
+    assert [b["org"] for b in search_of(factory, alice)[0]] == ["example-robotics"]
+
+
+def test_a_board_is_not_added_without_a_search_section_or_when_the_list_is_full(
+    factory: sessionmaker[Session],  # noqa: F811
+    alice: uuid.UUID,  # noqa: F811
+    bob: uuid.UUID,  # noqa: F811
+) -> None:
+    assert add(factory, alice, "lever", "example-robotics") is False
+    assert search_of(factory, alice)[0] == []
+    full = [{"company": f"C{n}", "ats": "lever", "org": f"org{n}"} for n in range(300)]
+    save_search(factory, bob, full)
+    _, revision = search_of(factory, bob)
+    assert add(factory, bob, "lever", "example-robotics") is False
+    assert search_of(factory, bob)[1] == revision
+
+
+def test_an_ats_source_in_the_sweep_adds_its_board(
+    factory: sessionmaker[Session],  # noqa: F811
+    alice: uuid.UUID,  # noqa: F811
+) -> None:
+    from app.browser import sources
+
+    save_search(factory, alice, [])
+    plan = Plan([s(query="https://jobs.ashbyhq.com/example-robotics")], user_id=alice)
+    stats, _, leases = run(
+        plan, Tools({}), finder.FinderAgent(), boards=sources._add_board(factory)
+    )
+    [entry] = stats.sources
+    assert entry["error"] == "ats_board"
+    assert entry["board"] == {"ats": "ashby", "org": "example-robotics", "added": True}
+    assert [(b["ats"], b["org"], b["company"]) for b in search_of(factory, alice)[0]] == [
+        ("ashby", "example-robotics", "example-robotics")
+    ]
+    assert leases.acquired == []

@@ -4,17 +4,24 @@ test_b9_runtime.py), snapshots written in the format browserd answers, invented 
 
 import asyncio
 import random
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
 from app.browser import finder
+from app.browser.client import BrowserError
 from app.browser.finder import FinderSession, Ran, canonical
 from app.browser.sources import ERRORS, MemoryPacer, Pages, Runner, site
 from app.profile.schemas import BrowserSource
 from tests.browser.test_b8_sources import FakeLeases, FakeTools, Plan, Stats
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "browser"))
+from browserd.tools.policy import HOST_ENTRY
 
 SITE = "https://careers.example-robotics.test/jobs"
 
@@ -88,8 +95,45 @@ class ScriptedFinder(finder.FinderAgent):
         return await self.script(session)
 
 
-async def _run(plan: Plan, tools: FakeTools, agent: finder.FinderAgent | None) -> Any:
-    leases, stored, now = FakeLeases(), [], [0.0]
+class Leases(FakeLeases):
+    """The B8 fake leases, refusing what browserd refuses: a host outside its pattern
+    (browser/browserd/tools/policy.py HOST_ENTRY), as the client's BrowserError("refused")."""
+
+    async def acquire(self, user: str, purpose: str, automation: bool, *, hosts: Any) -> Any:
+        if not hosts or any(not HOST_ENTRY.fullmatch(h) for h in hosts):
+            self.refused.append(list(hosts))
+            raise BrowserError("refused")
+        return await super().acquire(user, purpose, automation, hosts=hosts)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.refused: list[list[str]] = []
+
+
+class Boards:
+    """The person's swept boards as add_board sees them: (ats, org lower cased) per user."""
+
+    def __init__(self) -> None:
+        self.held: dict[str, list[tuple[str, str, str]]] = {}
+
+    async def __call__(self, user: str, board: site.Board, company: str) -> bool:
+        mine = self.held.setdefault(user, [])
+        if any((a, o.lower()) == (board.ats, board.org.lower()) for a, o, _ in mine):
+            return False
+        mine.append((board.ats, board.org, company))
+        return True
+
+
+async def _run(
+    plan: Plan,
+    tools: FakeTools,
+    agent: finder.FinderAgent | None,
+    *,
+    boards: Callable[[str, site.Board, str], Awaitable[bool]] | None = None,
+    deadline: float = 1e9,
+    clock: Callable[[list[float]], float] | None = None,
+) -> Any:
+    leases, stored, now = Leases(), [], [0.0]
 
     async def sleep(seconds: float) -> None:
         now[0] += seconds
@@ -107,16 +151,17 @@ async def _run(plan: Plan, tools: FakeTools, agent: finder.FinderAgent | None) -
         lambda user, lease, token: tools,
         sleep=sleep,
         rng=random.Random(9),  # noqa: S311  a seeded pacing, not a secret
-        monotonic=lambda: now[0],
+        monotonic=(lambda: clock(now)) if clock else (lambda: now[0]),
         pacer=MemoryPacer(lambda: now[0]),
         finder=agent,
+        add_board=boards,
     )
-    await runner(plan, stats, store, progress, 1e9)
+    await runner(plan, stats, store, progress, deadline)
     return stats, stored, leases
 
 
-def run(plan: Plan, tools: FakeTools, agent: finder.FinderAgent | None) -> Any:
-    return asyncio.run(_run(plan, tools, agent))
+def run(plan: Plan, tools: FakeTools, agent: finder.FinderAgent | None, **kw: Any) -> Any:
+    return asyncio.run(_run(plan, tools, agent, **kw))
 
 
 def session_on(pages_: dict[str, str], start: str = SITE) -> tuple[FinderSession, Tools]:
@@ -226,10 +271,99 @@ def test_a_page_whose_links_lead_to_one_board_is_that_board() -> None:
         ("https://careers.example.test:99999/", ""),
         ("/jobs/1", ""),
         ("", ""),
+        # Hosts as browserd accepts them (policy.py HOST_ENTRY), or not an address.
+        ("https://karriere.müller.de/jobs", "https://karriere.xn--mller-kva.de/jobs"),
+        ("https://karriere.xn--mller-kva.de/jobs", "https://karriere.xn--mller-kva.de/jobs"),
+        ("https://KARRIERE.MÜLLER.DE/", "https://karriere.xn--mller-kva.de/"),
+        ("https://careers.ｅxample.test/", "https://careers.example.test/"),  # full width
+        ("https://careers。example.test/", "https://careers.example.test/"),  # ideographic dot
+        ("https://careers.example.test./", "https://careers.example.test/"),  # one final dot
+        ("https://careers.example.test../", ""),
+        ("https://my_site.example/", ""),
+        ("https://[::1]/", ""),
+        ("https://[::1]:8443/jobs", ""),
+        ("https://a..b.test/", ""),
+        ("https://.example.test/", ""),
+        ("https://-bad.example.test/", ""),
+        ("https://bad-.example.test/", ""),
+        ("https://" + "a" * 64 + ".test/", ""),
+        ("https://" + "a" * 63 + ".test/", "https://" + "a" * 63 + ".test/"),
+        ("https://ex%41mple.test/", ""),
+        ("https://careers example.test/", ""),
+        ("https://evil.example\\@careers.example.test/", ""),
+        ("https://careers.example.test\\jobs", ""),
+        ("https://careers.example.test/jobs\\1", ""),
+        ("https://pages/b9/careers.html", "https://pages/b9/careers.html"),
+        ("http://127.0.0.1:8080/", "http://127.0.0.1:8080/"),
+        # Paths and queries percent encoded outside printable ASCII, never twice.
+        (
+            "https://careers.example.test/jobs/ingénieur",
+            "https://careers.example.test/jobs/ing%C3%A9nieur",
+        ),
+        (
+            "https://careers.example.test/jobs/ing%C3%A9nieur",
+            "https://careers.example.test/jobs/ing%C3%A9nieur",
+        ),
+        ("https://careers.example.test/a b", "https://careers.example.test/a%20b"),
+        (
+            "https://careers.example.test/jobs?q=ingé&p=2",
+            "https://careers.example.test/jobs?q=ing%C3%A9&p=2",
+        ),
+        ("https://careers.example.test/jobs?q=a/b?c", "https://careers.example.test/jobs?q=a/b?c"),
+        ('https://careers.example.test/"x"<y>', "https://careers.example.test/%22x%22%3Cy%3E"),
+        ("https://careers.example.test/日本", "https://careers.example.test/%E6%97%A5%E6%9C%AC"),
     ],
 )
 def test_canonical_addresses(raw: str, kept: str) -> None:
     assert canonical(raw) == kept
+    if kept:
+        host = urlsplit(kept).hostname or ""
+        assert HOST_ENTRY.fullmatch(host), host  # browserd leases it
+        assert all(0x21 <= ord(c) <= 0x7E for c in kept)  # browserd's bad_url rule
+        assert canonical(kept) == kept
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["pages", "a.b", "x" * 63, "a-b.c-d.e", "1.2.3.4", "*.example.test", "a_b", "-a", "a-",
+     "A.example", "a..b", "", ".a", "a.", "x" * 64, "xn--mller-kva.de", "a b"],
+)  # fmt: skip
+def test_the_host_rule_is_browserds(host: str) -> None:
+    wild = host.startswith("*.")
+    assert bool(finder.HOST.fullmatch(host)) == (bool(HOST_ENTRY.fullmatch(host)) and not wild)
+
+
+@pytest.mark.parametrize(
+    ("url", "refused"),
+    [
+        ("https://linkedin.com/jobs", True),
+        ("https://www.linkedin.com/jobs/view/1", True),
+        ("https://fr.LinkedIn.com/company/example-robotics/jobs", True),
+        ("https://linkedin.com./jobs", True),
+        ("https://LINKEDIN.COM/", True),
+        ("http://touch.www.linkedin.com/", True),
+        ("https://linkedin.com.example.test/jobs", False),
+        ("https://notlinkedin.com/jobs", False),
+        ("https://linkedin.co/jobs", False),
+        ("https://careers.example-robotics.test/linkedin.com", False),
+    ],
+)
+def test_linkedin_is_never_a_site(url: str, refused: bool) -> None:
+    assert finder.not_a_site(canonical(url)) is refused
+
+
+@pytest.mark.parametrize(
+    ("host", "pair"),
+    [
+        ("example.test", ["example.test", "www.example.test"]),
+        ("www.example.test", ["www.example.test", "example.test"]),
+        ("careers.example.test", ["careers.example.test", "www.careers.example.test"]),
+        ("pages", ["pages"]),
+        ("www.pages", ["www.pages"]),
+    ],
+)
+def test_a_lease_opens_the_host_and_its_www_twin_only(host: str, pair: list[str]) -> None:
+    assert finder.host_pair(host) == pair
 
 
 # --- the session's rules ----------------------------------------------------------------------
@@ -395,7 +529,11 @@ def test_a_careers_page_with_pagination_is_read_and_stored() -> None:
     assert name == f"site:{SITE}"
     assert [p.title for _, p in found] == ["AI Engineer", "ML Engineer"]
     assert {c for c, _ in found} == {"example-robotics.test"}
-    assert leases.acquired[0][2] == ["careers.example-robotics.test"]  # the lease opens one host
+    # The lease opens the site's host and its www twin, nothing wider.
+    assert leases.acquired[0][2] == [
+        "careers.example-robotics.test",
+        "www.careers.example-robotics.test",
+    ]
     assert leases.released == ["lease-1"]
 
 
@@ -495,7 +633,7 @@ def test_an_ats_address_is_proposed_as_an_api_board_without_a_lease() -> None:
     )
     [entry] = stats.sources
     assert entry["error"] == "ats_board"
-    assert entry["board"] == {"ats": "lever", "org": "example-robotics"}
+    assert entry["board"] == {"ats": "lever", "org": "example-robotics", "added": False}
     assert leases.acquired == []
     assert agent.ran == 0
 
@@ -548,3 +686,214 @@ def test_the_finder_is_internal_read_only_and_bounded() -> None:
         definitions.startable(finder.NAME, "development")
     with pytest.raises(LookupError):
         agent.prompt({"request": "0" * 32}, None)  # a run nobody waits for: no model call
+
+
+# --- round 2: addresses browserd refuses, LinkedIn, redirects, the sweep's time, the boards ---
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "https://my_site.example/",
+        "https://[::1]/",
+        "https://careers.example.test../",
+        "https://a..b.test/jobs",
+        "https://evil.example\\@careers.example.test/",
+        "https://linkedin.com/jobs",
+        "https://www.linkedin.com/company/example-robotics/jobs",
+    ],
+)
+def test_a_site_browserd_would_refuse_is_a_bad_address_and_the_sweep_goes_on(query: str) -> None:
+    from app.browser.sources import google_careers as gc
+
+    agent = ScriptedFinder(reports())
+    google = BrowserSource(kind="google_careers", query="ai", enabled=True)
+    stats, _, leases = run(Plan([s(query=query), google]), Tools({}), agent)
+    assert stats.sources[0]["error"] == "bad_address"
+    assert stats.sources[1]["error"] not in ("browser_unavailable", "bad_address")
+    assert leases.refused == []  # no lease was asked for the site
+    assert [hosts for _, _, hosts in leases.acquired] == [[gc.READER.host(None)]]
+    assert agent.ran == 0
+
+
+@pytest.mark.parametrize(
+    ("query", "hosts"),
+    [
+        (
+            "https://karriere.müller.de/jobs",
+            ["karriere.xn--mller-kva.de", "www.karriere.xn--mller-kva.de"],
+        ),
+        (
+            "https://careers.ｅxample.test./jobs",
+            ["careers.example.test", "www.careers.example.test"],
+        ),
+    ],
+)
+def test_a_site_is_leased_by_its_ascii_host(query: str, hosts: list[str]) -> None:
+    stats, _, leases = run(Plan([s(query=query)]), Tools({}), ScriptedFinder(reports()))
+    assert leases.refused == []
+    assert leases.acquired[0][2] == hosts
+    assert stats.sources[0]["error"] == "page_failed"  # the fake has no such page
+
+
+def redirected(start: str, end: str, titles: tuple[str, ...] = ("AI Engineer",)) -> Tools:
+    from tests.browser.test_b8_sources import RedirectTools as Base
+
+    base = end.rsplit("/", 1)[0]
+    found = {start: listing(list(titles))}
+    for title in titles:
+        found[f"{base}/jobs/{slug(title)}"] = posting_page(title)
+
+    class Redirect(Base, Tools):
+        pass
+
+    return Redirect(found, {start: end})
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        ("http://example-robotics.test/careers", "https://example-robotics.test/careers"),
+        ("https://example-robotics.test/careers", "https://www.example-robotics.test/careers"),
+        ("https://www.example-robotics.test/careers", "https://example-robotics.test/careers"),
+        ("http://example-robotics.test/careers", "https://www.example-robotics.test/careers"),
+        ("https://example-robotics.test/careers", "https://example-robotics.test/careers/"),
+    ],
+)
+def test_a_redirect_on_the_same_site_is_followed(start: str, end: str) -> None:
+    tools = redirected(start, end)
+    agent = ScriptedFinder(reports("AI Engineer"))
+    stats, stored, leases = run(Plan([s(query=start)]), tools, agent)
+    [entry] = stats.sources
+    assert entry["error"] is None
+    assert agent.ran == 1
+    assert entry["postings"] == 1
+    assert stored[0][1][0][1].url.startswith(end.split("/careers")[0] + "/")
+    host = urlsplit(start).hostname
+    assert set(leases.acquired[0][2]) == {host, *finder.host_pair(host or "")}
+
+
+@pytest.mark.parametrize(
+    "end",
+    [
+        "https://jobs.lever.co/example-robotics",
+        "https://evil.example/careers",
+        "https://jobs.example-robotics.test/careers",
+        "https://www.www.example-robotics.test/careers",
+        "https://example-robotics.test:8443/careers",
+    ],
+)
+def test_a_redirect_to_another_site_is_not_read(end: str) -> None:
+    start = "https://example-robotics.test/careers"
+    agent = ScriptedFinder(reports("AI Engineer"))
+    stats, stored, _ = run(Plan([s(query=start)]), redirected(start, end), agent)
+    assert stats.sources[0]["error"] == "page_failed"
+    assert "board" not in stats.sources[0]
+    assert agent.ran == 0
+    assert stored == []
+
+
+def test_the_agent_may_open_the_www_twin_of_the_site() -> None:
+    session, tools = session_on(site_pages("AI Engineer") | {
+        "https://www.careers.example-robotics.test/jobs/x": listing([]),
+    })  # fmt: skip
+    _text, error = asyncio.run(session.navigate("https://www.careers.example-robotics.test/jobs/x"))
+    assert not error
+    assert tools.calls[-1] == "https://www.careers.example-robotics.test/jobs/x"
+
+
+class NoUrlTools(Tools):
+    async def snapshot(self) -> dict[str, Any]:
+        done = await super().snapshot()
+        return {k: v for k, v in done.items() if k != "url"}
+
+
+def test_a_snapshot_without_an_address_fails_closed() -> None:
+    session, _tools = session_on(site_pages("AI Engineer"))
+    session.pages.tools = NoUrlTools(site_pages("AI Engineer"), current=SITE)
+    seen = set(session.seen)
+    text, error = asyncio.run(session.snapshot())
+    assert error
+    assert "untrusted_page_snapshot" not in text
+    assert session.seen == seen
+    text, error = asyncio.run(session.navigate("/jobs/ai-engineer"))  # nor a page opened
+    assert error
+    assert "untrusted_page_snapshot" not in text
+    assert "https://careers.example-robotics.test/jobs/ai-engineer" not in session.opened
+
+
+def test_a_careers_page_without_an_address_is_not_read() -> None:
+    agent = ScriptedFinder(reports("AI Engineer"))
+    stats, stored, _ = run(Plan([s()]), NoUrlTools(site_pages("AI Engineer")), agent)
+    assert stats.sources[0]["error"] == "page_failed"
+    assert agent.ran == 0
+    assert stored == []
+
+
+def test_the_run_ends_at_the_sweeps_deadline_and_keeps_what_was_validated() -> None:
+    async def endless(session: FinderSession) -> Ran:
+        session.report([posting_of("AI Engineer")])
+        await asyncio.Event().wait()  # a run that would outlast the sweep
+        return Ran()
+
+    tools = Tools(site_pages("AI Engineer"))
+    # The clock passes the deadline once the careers page is open: the run gets no time left.
+    stats, stored, leases = run(
+        Plan([s()]),
+        tools,
+        ScriptedFinder(endless),
+        deadline=100.0,
+        clock=lambda now: 1000.0 if tools.current else now[0],
+    )
+    [entry] = stats.sources
+    assert entry["error"] == "time_budget"
+    assert entry["postings"] == 1
+    assert [p.title for _, p in stored[0][1]] == ["AI Engineer"]
+    assert leases.released == ["lease-1"]
+
+
+def test_an_ats_address_adds_its_board_once() -> None:
+    boards = Boards()
+    lever = "https://jobs.lever.co/example-robotics"
+    plan = Plan([s(query=lever), s(query="https://jobs.lever.co/Example-Robotics/1")])
+    stats, _, leases = run(plan, Tools({}), ScriptedFinder(reports()), boards=boards)
+    first, second = stats.sources
+    assert first["board"] == {"ats": "lever", "org": "example-robotics", "added": True}
+    assert second["board"] == {"ats": "lever", "org": "Example-Robotics", "added": False}
+    assert [e["error"] for e in stats.sources] == ["ats_board", "ats_board"]
+    assert boards.held[str(plan.user_id)] == [("lever", "example-robotics", "example-robotics")]
+    assert leases.acquired == []
+
+
+def test_a_board_found_on_a_careers_page_is_added_under_the_sites_company() -> None:
+    frame = "  - iframe [ref=e50]:\n" + link(
+        "AI Engineer", "https://boards.greenhouse.io/examplerobotics/jobs/4001", 51
+    )
+    boards = Boards()
+    plan = Plan([s()])
+    tools = Tools({SITE: listing([], extra=frame)})
+    stats, _, _ = run(plan, tools, ScriptedFinder(reports()), boards=boards)
+    assert stats.sources[0]["board"]["added"] is True
+    assert boards.held[str(plan.user_id)] == [
+        ("greenhouse", "examplerobotics", "example-robotics.test")
+    ]
+
+
+def test_boards_are_added_per_person() -> None:
+    boards = Boards()
+    lever = "https://jobs.lever.co/example-robotics"
+    first, second = Plan([s(query=lever)]), Plan([s(query=lever)])
+    for plan in (first, second):
+        stats, _, _ = run(plan, Tools({}), ScriptedFinder(reports()), boards=boards)
+        assert stats.sources[0]["board"]["added"] is True
+    assert set(boards.held) == {str(first.user_id), str(second.user_id)}
+
+
+def test_a_board_that_cannot_be_added_leaves_the_code() -> None:
+    async def broken(user: str, board: site.Board, company: str) -> bool:
+        raise RuntimeError("the database went away")
+
+    lever = "https://jobs.lever.co/example-robotics"
+    stats, _, _ = run(Plan([s(query=lever)]), Tools({}), ScriptedFinder(reports()), boards=broken)
+    assert stats.sources[0]["error"] == "ats_board"
+    assert stats.sources[0]["board"]["added"] is False
