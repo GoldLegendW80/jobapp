@@ -58,6 +58,10 @@ def main() -> int:
         os.close(1)
         time.sleep(float(options["s"]))
         return 0
+    elif act == "hold":  # runs until the test creates this file, or for 30 s at most
+        deadline = time.monotonic() + 30
+        while not os.path.exists(options["path"]) and time.monotonic() < deadline:
+            time.sleep(0.01)
     elif act == "touch":  # leaves a trace: the test can tell that this child ran
         with open(options["path"], "w", encoding="ascii") as handle:
             handle.write("ran")

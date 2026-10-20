@@ -566,6 +566,70 @@ describe("the Edit view", () => {
     expect(api.saves).toHaveLength(0);
   });
 
+  it("lists what the import left out, and says which employer is not in the profile", async () => {
+    const legacy = (field: string, legacy_path: string, reason: string) => ({
+      field,
+      start: 0,
+      end: 0,
+      code: "legacy_invalid",
+      level: "invalid",
+      legacy_path,
+      reason,
+    });
+    fake(
+      doc({
+        draft_written_by: "import",
+        draft: {
+          ...CV,
+          experience: [
+            {
+              employer_key: "harbor-sample-works",
+              bullets: ["Kept as written"],
+            },
+          ],
+        },
+        notes: [
+          legacy("experience", "experience.1.bullets.0", "too_long"),
+          legacy("", "photo", "unknown_field"),
+          legacy("", "", "3 more"),
+          {
+            field: "experience.0.employer_key",
+            start: 0,
+            end: 19,
+            code: "unknown_employer",
+            level: "invalid",
+          },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    const panel = await openEdit(user);
+    expect(
+      within(panel).getByText(
+        "Left out of the imported file: employer 2, bullet 1, too long.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(panel).getByText(
+        "Left out of the imported file: photo, not a field of this form.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(panel).getByText(
+        "3 more parts of the imported file were left out.",
+      ),
+    ).toBeVisible();
+    const entry = await screen.findByRole("group", {
+      name: "harbor-sample-works",
+    });
+    expect(
+      await within(entry).findByText(
+        /This employer is no longer in your profile/,
+      ),
+    ).toBeVisible();
+    expect(panel.textContent).not.toMatch(SEPARATOR);
+  });
+
   it("reorders bullets with the keyboard, keeping the focus on what moved", async () => {
     const api = fake(doc());
     const user = userEvent.setup();

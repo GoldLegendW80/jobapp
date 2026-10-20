@@ -282,6 +282,39 @@ def test_page1_png_is_page_one_at_the_width_asked() -> None:
     assert image.height == round(480 * 842 / 595) or abs(image.height - 480 * 842 / 595) <= 1
 
 
+def _one_page(width: float, height: float) -> bytes:
+    document = pdfium.PdfDocument.new()
+    document.new_page(width, height).close()
+    out = io.BytesIO()
+    document.save(out)
+    document.close()
+    return out.getvalue()
+
+
+@pytest.mark.parametrize(
+    "pdf",
+    [
+        pytest.param(b"", id="nothing"),
+        pytest.param(b"<html>not a PDF</html>", id="non PDF bytes"),
+        pytest.param(b"%PDF-1.7\n%%EOF\n", id="a header and nothing"),
+        pytest.param(make_pdf(2)[:300], id="a truncated PDF"),
+        pytest.param(_one_page(20, 14_400), id="a page 720 times as long as wide"),
+        pytest.param(_one_page(595, 595 * render_client.PAGE_RATIO_MAX + 1), id="just too long"),
+    ],
+)
+def test_page1_png_refuses_what_it_cannot_draw_with_render_failed(pdf: bytes) -> None:
+    with pytest.raises(RenderError) as refused:
+        render_client.page1_png(pdf, 480)
+    assert refused.value.code == "render_failed"
+    assert not render_client.PDFIUM.locked()
+
+
+def test_page1_png_draws_the_longest_page_it_accepts_and_a_large_file() -> None:
+    longest = render_client.page1_png(_one_page(595, 595 * render_client.PAGE_RATIO_MAX), 120)
+    assert Image.open(io.BytesIO(longest)).size == (120, 120 * render_client.PAGE_RATIO_MAX)
+    assert render_client.page1_png(make_pdf(500), 480).startswith(b"\x89PNG")
+
+
 def test_the_log_line_holds_codes_and_sizes_never_the_page(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

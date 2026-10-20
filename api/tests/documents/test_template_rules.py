@@ -1,7 +1,8 @@
 """template_rules (task D25a): the checks of a template the design model writes.
 
 The true inputs are the bundled templates: each passes untouched, or is refused only for the
-overlay family (OVERLAY_FAMILY), which the static filter refuses whole since round 3. The
+overlay family (OVERLAY_FAMILY), which the static filter refuses whole since round 3; D21's and
+D22's repository templates are pinned to exactly what they use (REPOSITORY). The
 refusals are classic's files with one change each, from the spec's step 4 and its neighbours: a
 script, an outside address, `@import`, a literal sentence in every place a template can hold one
 (HTML, a Jinja constant, a CSS `content`, an escape), a missing field and a field printed only
@@ -45,8 +46,89 @@ def _bundled():
 OVERLAY_FAMILY = ("it can lay a box over another", "a ::before or ::after holds punctuation only")
 WHOLE = {"banner", "classic", "compact", "grid"}
 
+# D21's and D22's repository templates need not pass the filter of an upload (decision on #427):
+# each is pinned to exactly what it uses, its HTML set holding for cv.html.j2 and letter.html.j2.
+_LOOP = {
+    ("construct", "a for over a list field, into one name"),
+    ("construct", "the expression Call"),
+    ("unprinted", "name is not printed, or only under another test"),
+}
+_CUT = ("literal", "markup cut by a Jinja construct")
+_OUTSIDE = ("property", "a property outside the allowed list")
+_SELECTOR = ("selector", "a selector outside the allowed forms")
 
-@pytest.mark.parametrize("folder", list(_bundled()), ids=lambda f: f.name)
+
+def _box(*properties):
+    return {
+        ("property", f"{p}: a ::before or ::after holds punctuation only, no box")
+        for p in properties
+    }
+
+
+def _over(*properties):
+    return {("property", f"{p}: it can lay a box over another") for p in properties}
+
+
+REPOSITORY = {
+    "academic": (_LOOP, {_SELECTOR}),
+    "bold": (
+        _LOOP | {("construct", "the expression Compare"), _CUT},
+        {
+            _OUTSIDE,
+            ("property", "grid-template-columns: a function outside the allowed list"),
+            ("property", "margin: a value outside the allowed list"),
+        }
+        | _box("border"),
+    ),
+    "cards": (
+        _LOOP,
+        {_OUTSIDE, ("property", "margin: a value outside the allowed list")}
+        | _box("border", "border-radius"),
+    ),
+    "columns-header": (
+        _LOOP,
+        {("property", "grid-template-columns: a function outside the allowed list")},
+    ),
+    "elegant": (
+        _LOOP,
+        {_OUTSIDE, ("property", "position: static or relative")}
+        | _box("border-bottom", "flex")
+        | _over("bottom", "grid-row", "left", "right", "top"),
+    ),
+    "nordic": (_LOOP, _box("border-top", "width")),
+    "plain": (_LOOP, {_SELECTOR}),
+    "portrait": (
+        _LOOP
+        | {("construct", "the construct Assign"), _CUT, ("name", "a name that is not a field")},
+        {_OUTSIDE, _SELECTOR, ("property", "vertical-align: a value outside the allowed list")}
+        | _box("border", "border-top", "height", "width")
+        | _over("grid-row"),
+    ),
+}
+
+
+def _hand_written():
+    return [f for f in _bundled() if f.name not in REPOSITORY]
+
+
+@pytest.mark.parametrize("name", sorted(REPOSITORY))
+def test_each_repository_template_shows_exactly_what_it_uses(name):
+    folder = templates.ROOT / name
+    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+    files = {file: (folder / file).read_text(encoding="utf-8") for file in templates.FILES}
+    found = check(
+        files,
+        photo=manifest["photo"],
+        fonts=tuple(manifest["fonts"]),
+        accent=manifest["accent"],
+    )
+    html, css = REPOSITORY[name]
+    expected = {(file, *problem) for file in ("cv.html.j2", "letter.html.j2") for problem in html}
+    expected |= {("style.css", *problem) for problem in css}
+    assert {(p.file, p.code, p.detail) for p in found} == expected
+
+
+@pytest.mark.parametrize("folder", _hand_written(), ids=lambda f: f.name)
 def test_every_bundled_template_passes_untouched_but_for_the_overlay_family(folder):
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     files = {name: (folder / name).read_text(encoding="utf-8") for name in templates.FILES}
