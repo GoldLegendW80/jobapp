@@ -16,6 +16,8 @@ const leaseSchema = z.object({
   wait_reason: z.string().nullable(),
   wait_site: z.string().nullable(),
   wait_deadline: z.string().nullable(),
+  // The whole minutes a sign in hand off still waits for the person, rounded up (browser B12a).
+  wait_minutes_left: z.number().nullable().optional(),
   started_at: z.string(),
   active_s: z.number(),
   max_s: z.number(),
@@ -119,6 +121,19 @@ export function giveBack(viewer: string): Promise<InputHolder> {
     body: { viewer },
     validate: (data) => inputSchema.parse(data).input,
   });
+}
+
+/** "I'm signed in" of a sign in hand off: the assistant goes on at the same page. */
+export function handoffDone(): Promise<void> {
+  return request("/browser/handoff/done", {
+    method: "POST",
+    timeoutMs: START_TIMEOUT_MS,
+  });
+}
+
+/** "Cancel" of a sign in hand off: the assistant stops and the work waits for the person. */
+export function handoffCancel(): Promise<void> {
+  return request("/browser/handoff/cancel", { method: "POST" });
 }
 
 /** The websocket address of a ticket, on the page's own host (Caddy routes /vnc/websockify). */
