@@ -43,18 +43,36 @@ die() {
 [[ -n "$HARALD" ]] || die "OWNER is not set: run it again with OWNER=<the e-mail address of the owner's account on the Jetson>"
 [[ "$HARALD" =~ ^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$ ]] || die "OWNER is not an email address"
 
+# Replaces the owner's address in all that is printed through it, remote errors and bash -x traces included.
+masked() {
+  LC_ALL=C awk -v owner="$HARALD" -v shown="(the owner's address)" '
+    BEGIN { o = tolower(owner); n = length(o) }
+    {
+      line = $0
+      out = ""
+      while (n && (i = index(tolower(line), o))) {
+        out = out substr(line, 1, i - 1) shown
+        line = substr(line, i + n)
+      }
+      print out line
+      fflush()
+    }'
+}
+
 # sql: run the SQL on stdin in the Jetson's database, unaligned, fields separated by |.
 sql() {
+  # terse: no LINE context, which quotes the owner's address cut to 60 columns where masked cannot find it
   # shellcheck disable=SC2016 # $POSTGRES_* expand in the db container
   ssh -o BatchMode=yes "$HOST" "cd $(printf '%q' "$RDIR") && docker compose -f compose.yml exec -T db sh -c" \
-    "'psql -X -q -v ON_ERROR_STOP=1 -tA -F \"|\" -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'"
+    "'psql -X -q -v ON_ERROR_STOP=1 -v VERBOSITY=terse -tA -F \"|\" -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\"'"
 }
 
 snapshot() { # one line per field of Harald's account, nothing secret (the hash only as md5)
   sql <<SQL
-select 'email=' || u.email, 'name=' || u.name, 'role=' || u.role, 'is_active=' || u.is_active,
+select 'name=' || u.name, 'role=' || u.role, 'is_active=' || u.is_active,
        'created_at=' || u.created_at, 'updated_at=' || u.updated_at,
        'last_login_at=' || coalesce(u.last_login_at::text, 'null'),
+       'email_exact=' || (u.email::text = '$HARALD'),
        'password_hash_md5=' || md5(u.password_hash),
        'sessions=' || (select count(*) from sessions s where s.user_id = u.id),
        'sessions_md5=' || coalesce((select md5(string_agg(s.id::text || s.expires_at::text, ',' order by s.id))
@@ -109,7 +127,7 @@ stuck_containers() {
 }
 
 mkdir -p "$EVIDENCE"
-exec > >(tee "$LOG") 2>&1
+exec > >(masked | tee "$LOG") 2>&1
 printf 'tests/e2e_jetson.sh, %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 step "before"
@@ -123,7 +141,7 @@ if [[ "$left" != "users=0|sessions=0|profiles=0|invites=0|login_attempts=0" ]]; 
   info "removed e2e rows of an earlier run: $left"
 fi
 snapshot | tr '|' '\n' >"$WORK/before"
-[[ -s "$WORK/before" ]] || die "no account $HARALD on $HOST"
+[[ -s "$WORK/before" ]] || die "the owner's account is not on $HOST"
 sed 's/^/   /' "$WORK/before"
 rm -f "$EVIDENCE"/*.png
 
