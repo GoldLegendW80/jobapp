@@ -86,6 +86,11 @@ ATTEMPTS = 2  # a step cut by a restart or failed by the box runs once more, the
 TOKEN_CEILING = "token_ceiling"  # noqa: S105, a reason, not a secret
 WAITING_SLOTS = "slots"
 QUEUE_DOWN = "The agent queue is unavailable."
+CREDENTIAL_CHANGED = (
+    "Your Anthropic credential was replaced by one of another kind since this run started, so "
+    "the steps left would use another model than the estimate you agreed to. Put back a "
+    "credential of the earlier kind and resume, or cancel and start a new run."
+)
 TRANSCRIBE_NAME = "document_transcribe"  # registered by G14
 AGENT_OF = {plan.StepKind.extract: agents.EXTRACT_NAME, plan.StepKind.transcribe: TRANSCRIBE_NAME}
 REAPED = frozenset({agent_runs.INTERRUPTED, agent_runs.STOPPED, agent_runs.LOST, agent_runs.STALE})
@@ -104,6 +109,8 @@ CUT_GROWTH = 2
 # `advance` raising this many times in a row at the cron (about as many minutes) closes the run:
 # a run that cannot move must not stay the user's one active run for ever.
 ADVANCE_FAILURES = 5
+# The database itself failed (down, a lock or statement timeout, the pool empty): not counted.
+DATABASE_FAILURES = (sa.exc.OperationalError, sa.exc.TimeoutError)
 # Two failures closer than this count once: ticks that waited behind a long job run back to
 # back and must not close a run in one instant. The cron ticks every minute and a statement
 # times out after 15 seconds, so two real ticks are never this close; the five failures that
@@ -288,6 +295,18 @@ def _lock(db: Session, run_id: uuid.UUID, user_id: uuid.UUID | None = None) -> I
         query = query.where(IngestionRun.user_id == user_id)
     return db.execute(
         query.with_for_update().execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+
+
+def _first_model(db: Session, run: IngestionRun) -> str | None:
+    """The model the run's first agent run was called with (the runner records the one of the
+    credential it used): the model of the estimate the user agreed to, None before any call."""
+    return db.execute(
+        sa.select(AgentRun.model)
+        .join(IngestionRunStep, IngestionRunStep.agent_run_id == AgentRun.id)
+        .where(IngestionRunStep.ingestion_run_id == run.id, AgentRun.model.is_not(None))
+        .order_by(AgentRun.created_at, AgentRun.id)
+        .limit(1)
     ).scalar_one_or_none()
 
 
@@ -594,6 +613,10 @@ def _next(
     agent = definitions.AGENTS[AGENT_OF[step.kind]]
     credential = credentials.get(db, run.user_id)
     model = plan.model_for(credential.kind if credential is not None else None)
+    first = _first_model(db, run)
+    if credential is not None and first is not None and first != model:
+        _pause(run, CREDENTIAL_CHANGED, now)
+        return Moved(run.status)
     db.execute(
         sa.select(IngestionRunStep.id).where(IngestionRunStep.id == step.id).with_for_update()
     )
@@ -772,7 +795,9 @@ def _planned_again(
         return None
     digest = text_sha256(text)
     credential = credentials.get(db, run.user_id)
-    model = plan.model_for(credential.kind if credential is not None else None)
+    model = _first_model(db, run) or plan.model_for(
+        credential.kind if credential is not None else None
+    )
     described = plan.Document(
         document_id, bytes(document.sha256).hex(), len(text), (), plan.cut(text)
     )
@@ -1231,7 +1256,9 @@ async def tick(
 ) -> int:
     """The cron, every minute: every run that is not final is advanced, one after the other. A
     run that fails here does not stop the others; its failure is counted (`advance_failed`) and
-    logged by its type only, since the message of an error may quote what it was handling."""
+    logged by its type only, since the message of an error may quote what it was handling. A
+    failure of the database itself (DATABASE_FAILURES) is logged and not counted: it says
+    nothing about the run, and five of them would close runs that are well."""
     moved = 0
     for run_id in await asyncio.to_thread(_due, sessions):
         try:
@@ -1239,6 +1266,8 @@ async def tick(
             moved += 1
         except Exception as error:
             _log_failure("ingestion_advance_failed", run_id, error)
+            if isinstance(error, DATABASE_FAILURES):
+                continue
             try:
                 await asyncio.to_thread(_advance_failed, sessions, run_id, clock())
             except Exception as again:

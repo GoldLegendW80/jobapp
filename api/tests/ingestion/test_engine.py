@@ -26,12 +26,13 @@ from app import queue as queues
 from app.agents import failures
 from app.agents import runs as agent_runs
 from app.agents.crypto import Keyring
-from app.agents.models import AgentRun
+from app.agents.models import AgentRun, CredentialKind
 from app.agents.models import RunStatus as AgentStatus
 from app.config import Settings
 from app.ingestion import agents, deletion, engine, estimate, estimate_router, plan
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun, RunStatus, text_sha256
+from tests.agents.conftest import OAUTH, OTHER_KEY
 from tests.agents.g6_helpers import run_context
 from tests.agents.push_backend import COUNTED, INPUT_SIDE, OUTPUT, PushBackend, looping
 from tests.agents.run_helpers import add_user, execute, new_run, now, save_credential
@@ -299,6 +300,45 @@ def test_resume_with_the_credential_still_broken(
     assert (run.status, run.paused_reason) == (RunStatus.paused, failures.REFUSED)
     assert eh.statuses(factory, run_id) == ["planned"] * 3
     assert len(eh.agent_runs_of(factory, alice)) == 2
+
+
+def test_a_credential_replaced_by_another_kind_pauses_before_the_next_step(
+    factory: sessionmaker[Session], alice: uuid.UUID, keyring: Keyring, settings: Settings
+) -> None:
+    run_id = started(factory, alice, settings)
+    (first,) = eh.agent_runs_of(factory, alice)
+    assert first.model == plan.model_for(CredentialKind.anthropic_api_key)
+    save_credential(factory, keyring, alice, OAUTH, CredentialKind.claude_subscription)
+    moved = eh.finish_step(factory, run_id, settings)
+    assert moved.enqueue is None
+    run = eh.run_of(factory, run_id)
+    assert (run.status, run.paused_reason) == (RunStatus.paused, engine.CREDENTIAL_CHANGED)
+    assert " - " not in engine.CREDENTIAL_CHANGED
+    assert eh.statuses(factory, run_id) == ["done", "planned", "planned"]
+    assert len(eh.agent_runs_of(factory, alice)) == 1
+    # A Resume with the other kind still in place pauses again, with no agent run.
+    with factory() as db, db.begin():
+        engine.resume(db, alice, run_id, now())
+    assert eh.advance(factory, run_id, settings).enqueue is None
+    assert eh.run_of(factory, run_id).paused_reason == engine.CREDENTIAL_CHANGED
+    # The earlier kind back, and the chain goes on with the model of the estimate.
+    save_credential(factory, keyring, alice)
+    with factory() as db, db.begin():
+        engine.resume(db, alice, run_id, now())
+    assert eh.advance(factory, run_id, settings).enqueue is not None
+    second = eh.running(factory, run_id).agent_run_id
+    models = {one.id: one.model for one in eh.agent_runs_of(factory, alice)}
+    assert models[second] == first.model
+    assert eh.statuses(factory, run_id) == ["done", "running", "planned"]
+
+
+def test_a_credential_of_the_same_kind_saved_again_does_not_pause(
+    factory: sessionmaker[Session], alice: uuid.UUID, keyring: Keyring, settings: Settings
+) -> None:
+    run_id = started(factory, alice, settings)
+    save_credential(factory, keyring, alice, OTHER_KEY)
+    assert eh.finish_step(factory, run_id, settings).enqueue is not None
+    assert eh.run_of(factory, run_id).status is RunStatus.running
 
 
 @pytest.mark.parametrize("status", sorted(failures.CONTENT_STATUSES))
@@ -1368,6 +1408,47 @@ def test_an_advance_that_succeeds_forgets_the_failures_before_it(
     assert (run.status, run.advance_failures) == (RunStatus.running, 0)
     assert run.advance_failed_at is None
     assert eh.statuses(factory, run_id) == ["done", "running"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        sa.exc.OperationalError("SELECT 1", {}, Exception("canceling statement due to timeout")),
+        sa.exc.OperationalError("SELECT 1", {}, Exception("server closed the connection")),
+        sa.exc.TimeoutError("QueuePool limit of size 5 overflow 10 reached"),
+    ],
+)
+def test_a_failure_of_the_database_itself_is_not_counted_against_the_run(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    """N2 residual of the second review of PR #148."""
+    run_id = started(factory, alice, settings, count=2)
+    eh.end_agent(factory, eh.running(factory, run_id).agent_run_id, tokens=1_000)
+    record = engine._record
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(engine, "_record", broken)
+    with caplog.at_level("INFO", logger="app.ingestion.engine"):
+        for number in range(1, 2 * engine.ADVANCE_FAILURES):
+            assert asyncio.run(engine.tick(factory, None, minute(number), settings)) == 0
+    run = eh.run_of(factory, run_id)
+    assert (run.status, run.advance_failures, run.advance_failed_at) == (
+        RunStatus.running,
+        0,
+        None,
+    )
+    failed = [one for one in caplog.records if one.getMessage() == "ingestion_advance_failed"]
+    assert {one.__dict__["error_type"] for one in failed} == {type(error).__name__}
+    # The database back, the run moves on.
+    monkeypatch.setattr(engine, "_record", record)
+    assert asyncio.run(engine.tick(factory, None, now, settings)) == 1
 
 
 def test_ticks_that_pile_up_after_a_stall_count_as_one_failure(
