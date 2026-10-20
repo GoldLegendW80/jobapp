@@ -19,10 +19,11 @@ PAULO", while "us" never keeps "RUSSIA - MOSCOW" nor "UNITED STATES" (the site n
 full), and "nice" never keeps "VENICE". A location without a word keeps nothing.
 
 Fail closed as google_careers.py, and: the place heading must have the site's "COUNTRY - CITY"
-shape (` - ` between two parts with letters, no lower case letter) and the title heading must not
-(two headings swapped, or another heading taken for the place, is `layout_changed`); an offer page
-whose level 1 heading is not the card's title is skipped (not stored, the source goes on); an
-offer link must be on the results page's own site.
+shape (` - ` between two parts with letters, no lower case letter), else `layout_changed`; a title
+may have that shape too ("DATA - PARIS" is a title). An offer page whose level 1 heading is not
+the card's title, or whose address after redirects is not the card's, is skipped (not stored, the
+source goes on); an offer link must be on the results page's own site, kept with its host in lower
+case.
 """
 
 import re
@@ -39,6 +40,7 @@ from app.browser.sources import (
     Wanted,
     host_of,
     posting,
+    same_page,
     same_site,
     same_title,
     visible_lines,
@@ -66,7 +68,7 @@ def offer_url(href: str, page_url: str) -> str | None:
         return None
     if not same_site(parts, page_url):
         return None
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    return urlunsplit((parts.scheme, parts.netloc.lower(), parts.path, "", ""))
 
 
 def location_of(text: str) -> str:
@@ -131,7 +133,7 @@ def parse_results(root: Node, page_url: str) -> tuple[list[Card], str | None]:
         if not company or len(second) < 2 or not second[0].label().strip():
             raise SourceError("layout_changed")
         place = second[1].label() or " ".join(t.label() for t in second[1].children)
-        if not place_shaped(place) or place_shaped(second[0].label()):
+        if not place_shaped(place):
             raise SourceError("layout_changed")
         url = offer_url(link.url, page_url) or ""
         if url in seen:
@@ -201,7 +203,9 @@ class Vie:
         for card in todo:
             if not wanted(card):
                 continue
-            page, _ = await pages.open(card.url)
+            page, opened = await pages.open(card.url)
+            if not same_page(opened, card.url):
+                continue  # redirected to another page: not that offer
             offer = parse_offer(page, card.title)
             if offer is not None:
                 read.postings.append((card.company, posting(card, *offer)))

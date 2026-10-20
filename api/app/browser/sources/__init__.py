@@ -256,6 +256,20 @@ def same_site(parts: SplitResult, page_url: str) -> bool:
     )
 
 
+def same_page(opened: str, wanted: str) -> bool:
+    """Whether the page the browser ended on (after redirects) is the card's address: same scheme,
+    host (case ignored) and path, a trailing slash and the query ignored, as the parsers drop the
+    query. An empty address is never the page."""
+    a, b = urlsplit(opened), urlsplit(wanted)
+    if not a.scheme or not a.netloc:
+        return False
+
+    def key(parts: SplitResult) -> tuple[str, str, str]:
+        return parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/")
+
+    return key(a) == key(b)
+
+
 # --- what an extractor answers ----------------------------------------------------------------
 
 

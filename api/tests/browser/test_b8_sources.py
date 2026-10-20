@@ -262,6 +262,20 @@ def test_google_posting_page_of_another_posting_is_skipped() -> None:
     assert gc.parse_posting(parse_snapshot(results), one.title) is None
 
 
+def test_hosts_are_lower_cased_so_one_posting_is_one_row() -> None:
+    g_one = "https://WWW.Google.com/about/careers/applications/jobs/results/7-x?q=ai"
+    g_two = "https://www.google.com/about/careers/applications/jobs/results/7-x"
+    assert gc.posting_url(g_one, PAGE) == gc.posting_url(g_two, PAGE) == g_two
+    v_one, v_two = "https://MON-VIE-VIA.businessfrance.fr/en/offres/9", "/en/offres/9"
+    assert vie.offer_url(v_one, VIE_PAGE) == vie.offer_url(v_two, VIE_PAGE)
+    assert vie.offer_url(v_one, VIE_PAGE) == "https://mon-vie-via.businessfrance.fr/en/offres/9"
+    one = pages.offers(1)[0]
+    text = pages.google_results([one, one]).replace(
+        "/url: jobs/", "/url: https://WWW.GOOGLE.COM/about/careers/applications/jobs/", 1
+    )
+    assert len(gc.parse_results(parse_snapshot(text), PAGE)[0]) == 1
+
+
 def test_google_posting_text() -> None:
     offer = pages.offers(1)[0]
     text = gc.parse_posting(parse_snapshot(pages.google_posting(offer)), offer.title)
@@ -328,18 +342,29 @@ def swapped(o: pages.Offer) -> pages.Offer:
         pages.vie_results(pages.offers(2, location="FRANCE -")),
         pages.vie_results(pages.offers(2, location=" - PARIS")),
         pages.vie_results(pages.offers(2, location="12 - 34")),
-        pages.vie_results(pages.offers(2, title="DATA - PARIS", location="FRANCE - PARIS")),
         "",
     ],
     ids=[
         "french", "no_company", "no_title_level", "swapped", "comma_place", "mixed_case_place",
-        "no_separator", "no_city", "no_country", "digits_only", "title_shaped", "empty",
+        "no_separator", "no_city", "no_country", "digits_only", "empty",
     ],
 )  # fmt: skip
 def test_vie_layout_changed(text: str) -> None:
     with pytest.raises(SourceError) as caught:
         vie.parse_results(parse_snapshot(text), VIE_PAGE)
     assert caught.value.code == "layout_changed"
+
+
+@pytest.mark.parametrize(
+    "title", ["DATA - PARIS", "VIE - AI ENGINEER", "INGENIEUR PROJET - H/F", "AI Engineer"]
+)
+def test_vie_a_title_may_have_the_place_shape(title: str) -> None:
+    cards, _ = vie.parse_results(
+        parse_snapshot(pages.vie_results(pages.offers(2, title=title, location="FRANCE - PARIS"))),
+        VIE_PAGE,
+    )
+    assert [c.title for c in cards] == [title] * 2
+    assert {c.location for c in cards} == {"Paris, France"}
 
 
 @pytest.mark.parametrize(
@@ -557,6 +582,18 @@ class FakeTools:
         return {"ok": True, "url": self.current, "snapshot": self.pages[self.current]}
 
 
+class RedirectTools(FakeTools):
+    """FakeTools whose pages end on another address: `moved` maps a requested URL to it."""
+
+    def __init__(self, pages_: dict[str, str], moved: dict[str, str]) -> None:
+        super().__init__(pages_)
+        self.moved = moved
+
+    async def snapshot(self) -> dict[str, Any]:
+        done = await super().snapshot()
+        return done | {"url": self.moved.get(self.current, self.current)}
+
+
 class FakeLeases:
     def __init__(self, busy: bool = False, max_s: int = 900) -> None:
         self.busy, self.max_s = busy, max_s
@@ -766,6 +803,37 @@ def test_vie_grows_the_list_by_clicks_then_reads_offers_in_the_location() -> Non
     assert stats.sources[0]["result_pages"] == 2
     assert [p.location for _, p in stored[0][1]] == ["Paris, France", "Paris, France"]
     assert leases.acquired[0][2] == ["mon-vie-via.businessfrance.fr"]
+
+
+def test_a_page_that_ended_on_another_address_is_skipped() -> None:
+    # Google: the posting redirects to another posting with the same title.
+    site = google_site(2)
+    first, second = f"{gc.RESULTS}1001-ai-engineer-1", f"{gc.RESULTS}1002-ai-engineer-2"
+    other = f"{gc.RESULTS}1999-ai-engineer-1"
+    tools = RedirectTools(site, {first: other})
+    _, stored, _, _ = run_sources(Plan([g()]), tools)
+    assert [p.url for _, p in stored[0][1]] == [second]
+    # VIE: the same.
+    made = pages.offers(2, location="FRANCE - PARIS")
+    src = BrowserSource.model_validate({"kind": "vie", "query": "ai"})
+    base = "https://mon-vie-via.businessfrance.fr/en/offres/"
+    vsite = {vie.results_url(src): pages.vie_results(made)}
+    for o in made:
+        vsite[f"{base}{o.number}"] = pages.vie_offer(o)
+    tools = RedirectTools(vsite, {f"{base}{made[0].number}": f"{base}{made[1].number}"})
+    _, stored, _, _ = run_sources(Plan([src]), tools)
+    assert [p.url for _, p in stored[0][1]] == [f"{base}{made[1].number}"]
+
+
+def test_the_ended_address_is_compared_without_case_slash_or_query() -> None:
+    from app.browser.sources import same_page
+
+    want = "https://www.google.com/a/b/7-x"
+    assert same_page("https://WWW.google.com/a/b/7-x/?q=ai", want)
+    assert not same_page("https://www.google.com/a/b/8-x", want)
+    assert not same_page("http://www.google.com/a/b/7-x", want)
+    assert not same_page("https://evil.example/a/b/7-x", want)
+    assert not same_page("", want)
 
 
 def test_base_url_points_every_source_at_the_fixture_host() -> None:

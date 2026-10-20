@@ -15,7 +15,9 @@ company, a list of cards empty while the status counts some, or a posting page w
 heading is `layout_changed`. A posting page whose heading is not the card's title (an expired
 posting sent back to the results, or to another posting) is skipped: not stored, the source goes
 on. A posting address must be on the results page's own site (scheme, host and port) and is kept
-without its query (the search's), so the same posting found twice is one row.
+without its query (the search's) and with its host in lower case, so the same posting found
+twice is one row. A posting page is read only when the address the browser ended on (after
+redirects) is the card's: otherwise the posting is skipped.
 """
 
 import re
@@ -32,6 +34,7 @@ from app.browser.sources import (
     host_of,
     own_texts,
     posting,
+    same_page,
     same_site,
     same_title,
     visible_lines,
@@ -79,7 +82,7 @@ def posting_url(href: str, page_url: str) -> str | None:
         return None
     if not same_site(parts, page_url):
         return None
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    return urlunsplit((parts.scheme, parts.netloc.lower(), parts.path, "", ""))
 
 
 def _is_icon(node: Node, icon: str) -> bool:
@@ -182,7 +185,9 @@ class GoogleCareers:
             for card in fresh:
                 if not wanted(card):
                     continue
-                page, _ = await pages.open(card.url)
+                page, opened = await pages.open(card.url)
+                if not same_page(opened, card.url):
+                    continue  # redirected to another page: not that posting
                 text = parse_posting(page, card.title)
                 if text is not None:
                     read.postings.append((card.company, posting(card, text, "")))
