@@ -214,7 +214,13 @@ def test_an_update_sets_them_with_an_event(db: Session, alice: uuid.UUID) -> Non
     assert stored(db, alice) == (3000, 3500, "EUR", PayPeriod.month, WorkMode.office)
     query = sa.select(JobEvent).where(JobEvent.kind == JobEventKind.import_)
     (event,) = db.execute(query).scalars()
-    assert event.data["changed"] == ["pay_max", "pay_min", "pay_period", "work_mode"]
+    assert event.data["changed"] == [
+        "pay_currency",
+        "pay_max",
+        "pay_min",
+        "pay_period",
+        "work_mode",
+    ]
 
 
 def test_a_row_without_them_keeps_the_stored_values(db: Session, alice: uuid.UUID) -> None:
@@ -296,7 +302,8 @@ def test_the_route_refuses_what_patch_refuses(
         db.add(job)
         db.flush()
         job_id = job.id
-    pay = {k.removeprefix("pay_"): v for k, v in {**PAY, **fields}.items() if k.startswith("pay_")}
+    sent = fields if "pay_currency" not in fields and "pay_max" not in fields else {**PAY, **fields}
+    pay = {k.removeprefix("pay_"): v for k, v in sent.items() if k.startswith("pay_")}
     body = {"work_mode": fields["work_mode"]} if "work_mode" in fields else {"pay": pay}
     patched = api.request("PATCH", f"/api/jobs/{job_id}", token=person.token, json=body)
     assert patched.status_code == 422
