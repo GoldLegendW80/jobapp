@@ -23,10 +23,11 @@ Parsing (pure functions, `parse(ats, payload, tz)`), field for field the engine'
   `descriptionPlain`. remote = `workplaceType` is "remote" or the location names "remote".
   pay = `salaryRange` {min, max, currency, interval}, the interval naming a year, a month, a day
   or an hour ("per-year-salary", "per-hour-wage"); work_mode = `workplaceType` ("remote",
-  "hybrid", "onsite").
+  "hybrid", "onsite" or "on-site").
 Greenhouse states neither: the sweep reads them from the text and the location
 (app/opportunities/pay.py), as for any posting whose ATS states none. A value the ATS states in
-another shape is dropped (None), never guessed.
+another shape is dropped (None), never guessed, and never raises: NaN, an infinity or a figure too
+large for an int (json reads all three) is no pay, the posting is stored without it.
 
 Where the engine would stop the whole board on one odd posting (a KeyError), this module skips
 that posting and counts it (`BoardResult.invalid`): a posting without a title or a URL, or that
@@ -145,7 +146,16 @@ def _jobs(payload: Any) -> list[Any]:
 
 # The work mode an ATS's `workplaceType` names (Ashby: "OnSite", "Remote", "Hybrid"; Lever:
 # "onsite", "remote", "hybrid", "unspecified"), lowercased; anything else is none.
-WORKPLACE = {"remote": "remote", "hybrid": "hybrid", "onsite": "office"}
+WORKPLACE = {"remote": "remote", "hybrid": "hybrid", "onsite": "office", "on-site": "office"}
+
+
+def _stated(read: Callable[[Any], Any], value: Any) -> Any:
+    """What `read` makes of a value the ATS states, None when it cannot read it: a malformed pay
+    or work mode costs the posting that field, never the posting, the board or the sweep."""
+    try:
+        return read(value)
+    except Exception:  # any malformed value is no value
+        return None
 
 
 def _period(interval: Any) -> str | None:
@@ -218,7 +228,7 @@ def _ashby(payload: Any, _: tzinfo) -> BoardResult:
                 published=_text(job.get("publishedAt"))[:10],
                 text=storable(_text(job.get("descriptionPlain"))),
                 remote=remote,
-                pay=_ashby_pay(job.get("compensation")),
+                pay=_stated(_ashby_pay, job.get("compensation")),
                 work_mode=WORKPLACE.get(_text(job.get("workplaceType")).lower()),
             )
         )
@@ -280,7 +290,7 @@ def _lever(payload: Any, tz: tzinfo) -> BoardResult:
                 published=_lever_date(job.get("createdAt", 0), tz),
                 text=storable(_text(job.get("descriptionPlain"))),
                 remote=workplace == "remote" or "remote" in location.lower(),
-                pay=_lever_pay(job.get("salaryRange")),
+                pay=_stated(_lever_pay, job.get("salaryRange")),
                 work_mode=WORKPLACE.get(workplace),
             )
         )

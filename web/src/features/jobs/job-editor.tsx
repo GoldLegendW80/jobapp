@@ -374,8 +374,6 @@ const DETAIL_KEYS = [
   "url",
   "work_mode",
 ] as const;
-const PAY_INVALID =
-  "The pay needs whole numbers from 1 to 10,000,000, the lowest first, a currency and a period. Leave both figures empty for none.";
 
 function detailsOf(job: JobDetail): Details {
   return {
@@ -469,7 +467,7 @@ function EditDetailsDialog({
       values.pay_period,
     );
     if (pay === undefined) {
-      setError({ text: PAY_INVALID });
+      setError({ text: WORDING.payInvalid });
       return;
     }
     const payChanged = PAY_KEYS.some(
@@ -558,26 +556,32 @@ function EditDetailsDialog({
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Input
                 {...field("pay_min")}
-                aria-label="Lowest pay"
+                aria-label={WORDING.payLowest}
                 inputMode="numeric"
-                placeholder="From"
+                placeholder={WORDING.payFrom}
                 maxLength={8}
               />
               <Input
                 {...field("pay_max")}
-                aria-label="Highest pay"
+                aria-label={WORDING.payHighest}
                 inputMode="numeric"
-                placeholder="To"
+                placeholder={WORDING.payTo}
                 maxLength={8}
               />
-              <NativeSelect {...field("pay_currency")} aria-label="Currency">
+              <NativeSelect
+                {...field("pay_currency")}
+                aria-label={WORDING.payCurrency}
+              >
                 {CURRENCIES.map((code) => (
                   <option key={code} value={code}>
                     {code}
                   </option>
                 ))}
               </NativeSelect>
-              <NativeSelect {...field("pay_period")} aria-label="Per">
+              <NativeSelect
+                {...field("pay_period")}
+                aria-label={WORDING.payPer}
+              >
                 {Object.entries(PAY_PERIOD_WORDS).map(([period, words]) => (
                   <option key={period} value={period}>
                     {words}

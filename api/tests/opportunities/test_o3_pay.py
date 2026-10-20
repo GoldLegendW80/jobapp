@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.jobs import ats
-from app.jobs.models import Job
+from app.jobs.models import ContractType, Job, SweepStatus
 from app.opportunities.pay import Pay, pay_of, pay_text, pays, stated_pay, work_mode_of
 from tests.identity.api_helpers import Api
 from tests.jobs.fake_ats import FakeAts
@@ -111,7 +111,8 @@ RANGE_K = [
     ("60k-70k €€ per year", None),
     ("60k-70k € per year", y(60000, 70000)),
     ("-60k-70k € per year", y(60000, 70000)),
-    ("2025-2026 € per year", y(2025, 2026)),  # a statement in the shape, read as written
+    ("2025-2026 € per year", None),  # years next to a sign, not a pay
+    ("2 025-2 026 € per year", y(2025, 2026)),  # grouped: a figure, read as written
     ("2026-10 € per year", None),  # reversed
     ("60k-70k € et 0,1% equity per year", None),  # the period is not the figures
     ("60k-70k$ per year", y(60000, 70000, "USD")),
@@ -229,7 +230,7 @@ FRENCH_YEAR = [
     ("Salaire mensuel : 3 500 €", one(3500, period="month")),
     ("45 K€ brut", None),  # no period
     ("45 K brut annuel", None),  # no currency
-    ("45 K€ brut annuel variable", one(45000, period="year")),
+    ("45 K€ brut annuel variable", None),  # a bonus word right after
     ("variable 45 K€ brut annuel", None),  # a bonus word before
     ("45 K€ de prime annuelle", None),
     ("prime annuelle 5 K€ par an", None),
@@ -277,7 +278,8 @@ DOLLAR_YEAR = [
     ("Hourly rate: $60", one(60, "USD", "hour")),
     ("$120,000", None),  # no period
     ("120,000 a year", None),  # no currency
-    ("$120,000 a year in equity", one(120000, "USD", "year")),
+    ("$120,000 a year in equity", None),  # a bonus word right after
+    ("$120,000 a year plus equity", one(120000, "USD", "year")),
     ("Equity: $120,000 a year", None),
     ("$10,000 signing bonus a year", None),  # a bonus word between figure and period
     ("signing bonus of $10,000 a year", None),
@@ -290,6 +292,50 @@ DOLLAR_YEAR = [
     ("$12,000,000 a year", None),
     ("$120,000 a years", None),
     ("$1,20,000 a year", None),  # not groups of three
+]
+
+# A bonus or a perk is never a pay (review of PR #498): the words before the figure, right after
+# it, a comma or a parenthesis after the word, the floor of each period, a year next to a sign.
+PERKS = [
+    ("Tickets restaurant 9 € par jour", None),
+    ("Ticket restaurant de 9 € par jour", None),
+    ("Titres-restaurant : 10 € par jour", None),
+    ("Carte Swile 9 € par jour", None),
+    ("Meal vouchers worth €8 a day", None),
+    ("Lunch: €10 a day", None),
+    ("Mutuelle prise en charge 50 € par mois", None),
+    ("Gym membership $50 a month", None),
+    ("Learning budget of €1,000 a year", None),
+    ("Training budget: €2,000/year", None),
+    ("Remote budget €500 per year", None),
+    ("Home office stipend $1,000 per year", None),
+    ("€3,000 per year for conferences", None),
+    ("€10k per month in cloud credits", None),
+    ("Budget formation 2 000 € par an", None),
+    ("Pass Navigo remboursé 86 € par mois", None),
+    ("€1,500 a year for training", None),
+    ("Bonus, €5,000 per year", None),
+    ("Bonus , €5,000 per year", None),
+    ("Bonus (€5,000 per year)", None),
+    ("Prime, 3 000 € par an", None),
+    ("Signing bonus, paid once: $10,000 a year", None),
+    ("€9 a day", None),  # under the day floor: a perk, never a pay
+    ("€90 a month", None),  # under the month floor
+    ("€900 a year", None),  # under the year floor
+    ("2026 € a year", None),  # a year next to a sign
+    ("2026€ par mois", None),
+    ("€20 a day", one(20)),  # the floors themselves are kept
+    ("€100 a month", one(100, period="month")),
+    ("€1,000 a year", one(1000, period="year")),
+    ("€2026 a year", one(2026, period="year")),  # a sign before: a figure
+    ("2026 € brut par mois", one(2026, period="month")),  # "brut": a pay
+    ("TJM 2000 €", one(2000)),  # "TJM": a pay
+    ("2 026 € par mois", one(2026, period="month")),  # grouped: a figure
+    ("$120,000 a year plus bonus", one(120000, "USD", "year")),
+    ("45 K€ brut annuel, 5 K€ de prime", one(45000, period="year")),
+    ("Machine Learning Engineer, $150k-$200k a year", y(150000, 200000, "USD")),
+    ("Salary €60k-€70k a year and a learning budget", y(60000, 70000)),
+    ("Up to €60,000 to €70,000 per year", y(60000, 70000)),  # a range: no open bound
 ]
 
 # Texts with no figure the list accepts.
@@ -314,7 +360,7 @@ NOTHING = [
 
 @pytest.mark.parametrize(
     ("text", "expected"),
-    RANGE_WORDS + RANGE_K + DAILY + FRENCH_RANGE + FRENCH_YEAR + DOLLAR_YEAR,
+    RANGE_WORDS + RANGE_K + DAILY + FRENCH_RANGE + FRENCH_YEAR + DOLLAR_YEAR + PERKS,
 )
 def test_one_statement(text: str, expected: Pay | None) -> None:
     assert pays(text) == ([expected] if expected else [])
@@ -335,6 +381,21 @@ def test_pay_of_picks_by_contract_and_keeps_both_statements() -> None:
     assert pays("45 K€ for a permanent role, or TJM 600 € for a mission.") == [one(600)]
     assert pays("45 K€ for a permanent role, or 600 € for a mission.") == []
     assert pays("45 K€ brut annuel et 600 €/jour") == [one(45000, period="year"), one(600)]
+
+
+def test_pay_of_never_falls_back_to_a_refused_figure() -> None:
+    # A permanent role whose only figures are perks: no pay, whatever the contract.
+    text = (
+        "CDI. Tickets restaurant 9 € par jour, mutuelle 50 € par mois, "
+        "budget formation 2 000 € par an."
+    )
+    assert pays(text) == []
+    assert pay_of(text) is None
+    assert pay_of(text, freelance=True) is None
+    # The salary is kept, the perk beside it is not, in either order.
+    salary = "Salaire 45 K€ brut annuel. Tickets restaurant 9 € par jour."
+    assert pay_of(salary) == one(45000, period="year")
+    assert pay_of("Tickets restaurant 9 € par jour. TJM 600 €", freelance=False) == one(600)
 
 
 def test_two_currencies_in_one_text_are_both_read_the_first_kept() -> None:
@@ -431,6 +492,16 @@ def test_work_mode_of(location: str, mode: str | None) -> None:
         ("60000", 70000, "EUR", "year", None),
         (True, 70000, "EUR", "year", None),
         (None, 70000, "EUR", "year", None),
+        # json reads NaN, Infinity and 1e400: no pay, never an exception (review of PR #498).
+        (float("nan"), 70000, "EUR", "year", None),
+        (60000, float("nan"), "EUR", "year", None),
+        (float("inf"), 70000, "EUR", "year", None),
+        (60000, float("inf"), "EUR", "year", None),
+        (float("-inf"), 70000, "EUR", "year", None),
+        (60000, float("-inf"), "EUR", "year", None),
+        (1e400, 1e400, "EUR", "year", None),
+        (10**400, 10**400, "EUR", "year", None),
+        (1e300, 1e300, "EUR", "year", None),
     ],
 )
 def test_stated_pay(
@@ -522,6 +593,8 @@ def _salary(low: Any, high: Any, currency: str = "EUR", interval: str = "1 YEAR"
         ),
         ({"compensation": {"summaryComponents": [_salary(None, 70000)]}}, None, None),
         ({"compensation": "€60K"}, None, None),
+        ({"compensation": {"summaryComponents": [_salary(60000, 70000, 5)]}}, None, None),
+        ({"compensation": {"compensationTiers": [None, 7, {"components": "x"}]}}, None, None),
         ({"workplaceType": "Remote"}, None, "remote"),
         ({"workplaceType": "OnSite"}, None, "office"),
         ({"workplaceType": "Mars"}, None, None),
@@ -569,6 +642,9 @@ def test_ashby_board_is_asked_for_its_compensation() -> None:
         ({"salaryRange": {"min": 60000, "max": 70000, "currency": "ZZZ",
                           "interval": "per-year-salary"}}, None, None),
         ({"salaryRange": []}, None, None),
+        ({"workplaceType": "on-site"}, None, "office"),  # Lever's docs spell it so
+        ({"salaryRange": {"min": 50000, "max": 60000, "currency": 7,
+                          "interval": "per-year-salary"}}, None, None),
     ],
 )  # fmt: skip
 def test_lever_states_pay_and_work_mode(extra: dict, pay: Pay | None, mode: str | None) -> None:
@@ -582,6 +658,42 @@ def test_lever_states_pay_and_work_mode(extra: dict, pay: Pay | None, mode: str 
     }
     posting = ats.parse("lever", [job], TZ).postings[0]
     assert (posting.pay, posting.work_mode) == (pay, mode)
+
+
+BAD_FIGURES = ("NaN", "Infinity", "-Infinity", "1e400")
+
+
+@pytest.mark.parametrize("figure", BAD_FIGURES)
+@pytest.mark.parametrize("side", ["min", "max"])
+def test_ashby_bad_figures_are_no_pay(figure: str, side: str) -> None:
+    low, high = (figure, "70000") if side == "min" else ("60000", figure)
+    raw = (
+        '{"jobs":[{"title":"AI Engineer","jobUrl":"https://jobs.example.org/a/1",'
+        '"workplaceType":"Remote","compensation":{"summaryComponents":[{"compensationType":'
+        f'"Salary","interval":"1 YEAR","currencyCode":"EUR","minValue":{low},"maxValue":{high}}}'
+        ']}},{"title":"AI Engineer 2","jobUrl":"https://jobs.example.org/a/2"}]}'
+    ).encode()
+    result = ats.decode("ashby", raw, TZ)
+    assert [(p.title, p.pay, p.work_mode) for p in result.postings] == [
+        ("AI Engineer", None, "remote"),
+        ("AI Engineer 2", None, None),
+    ]
+    assert result.invalid == 0
+
+
+@pytest.mark.parametrize("figure", BAD_FIGURES)
+@pytest.mark.parametrize("side", ["min", "max"])
+def test_lever_bad_figures_are_no_pay(figure: str, side: str) -> None:
+    low, high = (figure, "60000") if side == "min" else ("50000", figure)
+    raw = (
+        '[{"text":"AI Engineer","hostedUrl":"https://jobs.example.org/l/1",'
+        '"workplaceType":"hybrid","salaryRange":{"min":' + low + ',"max":' + high + ","
+        '"currency":"EUR","interval":"per-year-salary"}}]'
+    ).encode()
+    result = ats.decode("lever", raw, TZ)
+    assert [(p.title, p.pay, p.work_mode) for p in result.postings] == [
+        ("AI Engineer", None, "hybrid")
+    ]
 
 
 def test_greenhouse_states_neither() -> None:
@@ -636,6 +748,33 @@ def test_the_sweep_stores_what_is_stated(
     # No pay from the ATS: the text's daily rate, the location's work mode.
     assert _pay_columns(found["GenAI Engineer, Freelance"]) == (600, 600, "EUR", "day", "remote")
     assert _pay_columns(found["AI Engineer, Pay Not Stated"]) == (None,) * 4 + (unstated_mode,)
+
+
+@pytest.mark.parametrize(("ats_name", "broken_mode"), [("ashby", "hybrid"), ("lever", "office")])
+def test_a_board_with_bad_pay_never_stalls_the_sweep(
+    factory: sessionmaker[Session],
+    person_a: Person,
+    fake_ats: FakeAts,
+    ats_name: str,
+    broken_mode: str,
+) -> None:
+    # NaN and Infinity in the ATS's pay (review of PR #498): that posting is stored without a
+    # pay, the board is done, the good board beside it too, and the sweep ends done, not
+    # timed out. The meal voucher is no pay.
+    boards = [board("fake-pay-bad", ats_name), board("fake-ok", ats_name)]
+    set_profile(factory, person_a.user_id, deck_search(boards=boards))
+    row = run(factory, new_sweep(factory, person_a.user_id), fake_ats, timeout_s=30)
+    assert row.status is SweepStatus.done, row.error
+    s = row.stats
+    assert (s["boards_total"], s["boards_done"], s["boards_ok"], s["boards_failed"]) == (
+        2, 2, 2, [],
+    )  # fmt: skip
+    found = _postings(factory, person_a)
+    assert {"AI Engineer", "Applied AI Engineer, Agents"} <= set(found)  # the good board
+    assert _pay_columns(found["AI Engineer, Pay Broken"]) == (None,) * 4 + (broken_mode,)
+    meal = found["AI Engineer, Meal Vouchers"]
+    assert meal.contract_type is ContractType.CDI
+    assert _pay_columns(meal)[:4] == (None,) * 4
 
 
 def test_a_row_without_pay_and_the_check(
@@ -757,12 +896,15 @@ def test_the_deck_filter_reads_the_stated_work_mode(
     named = add_posting(factory, person_a, location="Remote, Europe")
     office = add_posting(factory, person_a, location="Remote office, Paris", work_mode="office")
     plain = add_posting(factory, person_a, location="Paris")
+    hybrid = add_posting(factory, person_a, location="Remote, Paris", work_mode="hybrid")
 
     def ids(remote: str) -> set[str]:
         return {c["id"] for c in get_deck(api, person_a, remote=remote).json()["cards"]}
 
     assert ids("remote") == {str(stated), str(named)}
     assert ids("on_site") == {str(office), str(plain)}
+    # Hybrid is neither remote nor on site; with no filter it shows.
+    assert str(hybrid) in {c["id"] for c in get_deck(api, person_a).json()["cards"]}
 
 
 def test_a_cybersecurity_posting_with_a_pay_never_shows(
