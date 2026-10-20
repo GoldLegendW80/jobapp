@@ -44,6 +44,7 @@ from app.mail import accounts as mail_accounts
 from app.mail import oauth as mail_oauth
 from app.mail import registry as mail_registry
 from app.mail import routers as mail_routers
+from app.opportunities import registry as opportunities_registry
 from app.profile.router import router as profile_router
 from app.queue import Queue
 
@@ -263,6 +264,7 @@ def create_app(
         app.include_router(mail_router)
     browser_registry.include(app)
     apply_registry.include(app)
+    opportunities_registry.include(app)
     for documents_router in documents_routers.load():
         app.include_router(documents_router)
     identity_deps.assert_default_deny(app)
