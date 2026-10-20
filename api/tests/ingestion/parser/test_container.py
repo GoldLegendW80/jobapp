@@ -1095,9 +1095,9 @@ def test_the_wall_clock_ends_a_sleeping_child_at_60_s_and_reaps_it(
 def test_zz_the_log_of_the_service_holds_no_word_of_a_child_or_of_a_document(
     stack: Stack,
 ) -> None:
-    """Last in the file. Everything above went through this service: handlers that raised with
-    words, wrote to their standard error, answered sentences. Its log is one JSON object per
-    line with a kind, sizes, a code and durations."""
+    """Last in the file. Everything above that this process ran went through this service:
+    handlers that raised with words, wrote to their standard error, answered sentences. Its log
+    is one JSON object per line with a kind, sizes, a code and durations."""
     stack.raw({"act": "stderr", "text": "PRIVATE-stderr-canary "})
     stack.raw({"act": "raise", "text": "PRIVATE-exception-canary"})
     stack.raw({"act": "write_raw", "text": "PRIVATE-answer-canary"})
@@ -1105,8 +1105,12 @@ def test_zz_the_log_of_the_service_holds_no_word_of_a_child_or_of_a_document(
     assert "PRIVATE" not in log
     assert "Traceback" not in log
     lines = [json.loads(line) for line in log.splitlines() if line.strip()]
-    assert len(lines) > 30
+    # Under -n without --dist loadfile each process has a stack of its own and runs only part of
+    # this file (issue #104): the three jobs of this test are the ones every run holds.
+    jobs = [line for line in lines if line["event"] == "job"]
+    assert [line["kind"] for line in jobs[-3:]] == ["pdf_render"] * 3
     events = {line["event"] for line in lines}
+    assert "listening" in events
     assert events <= {"listening", "job", "refused", "ping", "stopped"}
     for line in lines:
         assert set(line) <= {

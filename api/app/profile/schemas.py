@@ -758,8 +758,9 @@ class Board(_Section):
 class BrowserSource(_Section):
     """A job source read through the person's browser (browser B8, app/browser/sources): the
     words typed in the site's search box, and its location box when the site has one. B8 runs
-    `google_careers` and `vie`; `site` (B9) and `linkedin` (B10) are accepted and wait for their
-    tasks. Off until the person turns it on."""
+    `google_careers` and `vie`, B9 `site` (the query is the careers page's address, read by the
+    finder agent); `linkedin` (B10) is accepted and waits for its task. Off until the person
+    turns it on."""
 
     kind: Literal["google_careers", "vie", "site", "linkedin"]
     query: Line
