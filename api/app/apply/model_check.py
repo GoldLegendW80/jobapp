@@ -451,6 +451,21 @@ def code(db: Session, application: Application, rows: list[Any]) -> str | None:
     return CODE_OF.get(verdict)
 
 
+def view(db: Session, application: Application) -> dict[str, Any] | None:
+    """The last check of this item as the approval view shows it: its verdict, whether it covers
+    the answers shown now, and the flagged claims (field, code, offsets). None when none ran."""
+    from app.apply import gate  # gate imports full_auto, which imports this module
+
+    stored = _stored(db, application)
+    if stored is None:
+        return None
+    return {
+        "verdict": str(stored.get("verdict")),
+        "current": stored.get("hash") == gate.current_hash(db, application).hex(),
+        "claims": list(stored.get("claims") or []),
+    }
+
+
 def request_for(db: Session, application_id: uuid.UUID, now: datetime) -> tuple[Request, str] | str:
     """What one run reads, with the answers hash it covers, or why no run is needed."""
     from app.apply import full_auto, gate  # both import this module

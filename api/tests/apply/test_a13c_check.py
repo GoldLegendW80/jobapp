@@ -15,6 +15,8 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import worker
@@ -28,13 +30,14 @@ from tests.apply.a6_support import submit_ashby
 from tests.apply.conftest import AT, Person
 from tests.apply.test_a5_answer_agent import Runtime, posting_text, runs_of
 from tests.apply.test_a5_run import WHY, application, events
-from tests.apply.test_a6_gate import run_submit, stub, submit_services
+from tests.apply.test_a6_gate import _password, api_app, run_submit, stub, submit_services
 from tests.apply.test_a6_recheck import at
 from tests.apply.test_a13_full_auto import HOLD, HOUR, filled, reviewed, turn_on
 from tests.conftest import make_settings
+from tests.identity.api_helpers import Api
 from tests.profile.conftest import full
 
-__all__ = ["stub"]
+__all__ = ["api_app", "stub"]
 
 TRUE_TEXT = "I want to build agents for warehouse operations, as I do in my current role."
 PHD_TEXT = "Thanks to my PhD in robotics, I would bring research depth to the team."
@@ -362,6 +365,34 @@ def test_a_degree_the_profile_lacks_is_flagged_and_the_item_goes_to_review(
     assert claim["field"] == key
     assert gate.SENTENCES["model_check_flagged"]
     assert "PhD" not in json.dumps(stored)
+
+
+def test_the_approval_view_shows_the_flagged_claims_to_their_person_only(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    person_b: Person,
+    stub: str,
+    runtime: CheckRuntime,
+    api_app: FastAPI,
+) -> None:
+    app_id = item(db, factory, person_a, stub, PHD_TEXT)
+    runtime.give_key(person_a)
+    decide(factory, stub, app_id, runtime.check("apply_check_flagged"))
+    _password(factory, person_a, person_b)
+    with TestClient(api_app, follow_redirects=False) as client:
+        api = Api(client)
+        token_a, token_b = api.login_token(person_a.email), api.login_token(person_b.email)
+        base = f"/api/applications/{app_id}/approval"
+        assert api.get(base, token=token_b).status_code == 404
+        body = api.get(base, token=token_a).json()
+        assert (body["check"]["verdict"], body["check"]["current"]) == ("flagged", True)
+        [claim] = body["check"]["claims"]
+        [answer] = [a for a in body["answers"] if a["field_key"] == claim["field"]]
+        assert answer["value"][claim["start"] : claim["end"]] == "my PhD in robotics"
+        assert claim["code"] == "not_in_profile"
+        agent_text(db, app_id, TRUE_TEXT)
+        assert api.get(base, token=token_a).json()["check"]["current"] is False
 
 
 def test_a_true_answer_in_french_for_a_profile_in_english_passes(
