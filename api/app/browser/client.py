@@ -12,6 +12,7 @@ network, behind BROWSER_CONTROL_SECRET. Nothing else of the application speaks t
     tool(...)   POST /leases/{id}/tools/{name}   a tool's result (browser B5)
     put_file()  PUT /leases/{id}/files/{name}    a PDF placed on the lease for browser_file_upload
     gate_click(...)  browser_click with the gate's capability: the apply gate's code only
+    handoff(id, action)  POST /leases/{id}/handoff/{done|cancel}   the sign in hand off (B12a)
 
 A tool's refusal (a submit element, a host outside the list) is a result with `ok` false, never
 an error. The gate's capability comes back from `start` for the gate's purposes (`apply_submit`,
@@ -26,6 +27,7 @@ Every failure is a BrowserError whose `code` is one of CODES, never browserd's t
     refused       browserd refused the request as malformed (400, 404 on a start, 413), or a
                   wrong token or capability (403)
     ended         a tool call on a lease that is no longer the current one (404, 410)
+    waiting_person  a tool call while the lease waits for the person to sign in (409, B12a)
 
 Timeouts are TIMEOUT_S (5 s) for every call but the start, which waits for Chromium to answer on
 CDP: browserd gives it START_S (30 s, browser/browserd/config.py) and the client a few seconds
@@ -51,7 +53,11 @@ TOOL_TIMEOUT_S = 120.0  # a paced browser_type of 200 characters, a 30 s navigat
 # browserd's QUIT_S of 10 s for Chromium, then the trim and the measure of the profile (B7); an
 # end or a removal that takes longer is told again later (browserd then answers it is done).
 END_TIMEOUT_S = 30.0
-CODES = ("unavailable", "busy", "refused", "ended")
+# A hand off's "done": the person's Chromium closed (QUIT_S, 10 s), one started with CDP (30 s)
+# and the noted address loaded (NAVIGATION_S, 30 s), plus a margin.
+HANDOFF_TIMEOUT_S = 80.0
+CODES = ("unavailable", "busy", "refused", "ended", "waiting_person")
+HANDOFF_ACTIONS = ("done", "cancel")
 FILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}\.pdf$")  # browserd/tools/policy.py
 
 
@@ -217,6 +223,22 @@ class BrowserdClient:
         args = {"ref": ref, "element": element}
         return await self._tool(lease_id, token, "browser_click", args, capability)
 
+    async def handoff(self, lease_id: str, action: str) -> dict[str, Any]:
+        """The person's answer to a sign in hand off (B12a): "done" restarts Chromium with CDP
+        (an answer of `restarted` false when it already did), "cancel" ends the lease. `ended`
+        when the lease is gone, `refused` when nothing waits on it."""
+        if action not in HANDOFF_ACTIONS:
+            raise ValueError(action)
+        path = f"/leases/{lease_id}/handoff/{action}"
+        status, payload = await self._call("POST", path, HANDOFF_TIMEOUT_S)
+        if status == 200 and isinstance(payload, dict):
+            return payload
+        if status in (404, 410):
+            raise BrowserError("ended")
+        if status == 409:
+            raise BrowserError("refused")
+        raise self._failure(status, payload)
+
     async def put_file(self, lease_id: str, token: str, name: str, data: bytes) -> dict[str, Any]:
         # The name goes into the path: one browserd accepts, checked here too, so a "../x.pdf"
         # never becomes another route once the path is normalised.
@@ -249,6 +271,8 @@ class BrowserdClient:
     def _tool_failure(self, status: int, payload: Any) -> BrowserError:
         if status in (404, 410):
             return BrowserError("ended")
+        if status == 409 and isinstance(payload, dict) and payload.get("error") == "waiting_person":
+            return BrowserError("waiting_person")
         if status == 403:
             return BrowserError("refused")
         return self._failure(status, payload)
