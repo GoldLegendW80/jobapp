@@ -1,0 +1,145 @@
+{
+  "slug": "portrait",
+  "version": 1,
+  "name": {
+    "en": "Portrait",
+    "fr": "Portrait"
+  },
+  "description": {
+    "en": "A large photo at the top left with the name set large beside it, its initials in the frame when there is no photo; serif headings over a sans text.",
+    "fr": "Une grande photo en haut à gauche et le nom en grand à côté, ses initiales dans le cadre en l'absence de photo ; des titres à empattements sur un texte sans empattement."
+  },
+  "tags": [
+    "one column",
+    "serif",
+    "sans",
+    "photo",
+    "colour"
+  ],
+  "photo": "optional",
+  "fonts": [
+    "carlito",
+    "caladea"
+  ],
+  "accent": "#7a4a22",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.2,
+        "line_height": 1.34,
+        "section_gap": 10.0,
+        "item_gap": 4.5,
+        "margin": 14.0
+      },
+      {
+        "body_size": 10.0,
+        "line_height": 1.31,
+        "section_gap": 9.0,
+        "item_gap": 4.0,
+        "margin": 13.0
+      },
+      {
+        "body_size": 9.7,
+        "line_height": 1.28,
+        "section_gap": 8.0,
+        "item_gap": 3.5,
+        "margin": 12.5
+      },
+      {
+        "body_size": 9.5,
+        "line_height": 1.25,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 11.5
+      },
+      {
+        "body_size": 9.3,
+        "line_height": 1.23,
+        "section_gap": 6.0,
+        "item_gap": 3.0,
+        "margin": 10.5
+      },
+      {
+        "body_size": 9.1,
+        "line_height": 1.2,
+        "section_gap": 5.0,
+        "item_gap": 2.5,
+        "margin": 9.5
+      },
+      {
+        "body_size": 8.8,
+        "line_height": 1.17,
+        "section_gap": 4.0,
+        "item_gap": 2.0,
+        "margin": 9.0
+      },
+      {
+        "body_size": 8.6,
+        "line_height": 1.14,
+        "section_gap": 3.0,
+        "item_gap": 1.5,
+        "margin": 8.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 11.4,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 8.0,
+        "margin": 20.0
+      },
+      {
+        "body_size": 11.0,
+        "line_height": 1.46,
+        "section_gap": 11.0,
+        "item_gap": 7.0,
+        "margin": 18.0
+      },
+      {
+        "body_size": 10.6,
+        "line_height": 1.41,
+        "section_gap": 10.0,
+        "item_gap": 6.0,
+        "margin": 16.0
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.37,
+        "section_gap": 9.0,
+        "item_gap": 5.0,
+        "margin": 14.0
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.32,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 12.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "1113d835353b94fd1d4f27f73eb05a898f788feb538d06a272fdebbfbd77bc04"
+}
