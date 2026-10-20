@@ -128,7 +128,7 @@ class FeedError(Exception):
 
 # --- text ---------------------------------------------------------------------------------------
 
-_BREAKS = re.compile(r"<\s*(?:br|/p|p|/li|li|/div|div|/h\d|h\d|/tr|hr)\b[^>]*>", re.IGNORECASE)
+_BREAKS = re.compile(r"<\s*(?:br|/p|p|li|/ul|/ol|/div|div|/h\d|h\d|/tr|hr)\b[^>]*>", re.IGNORECASE)
 _DROPPED = re.compile(r"<\s*(script|style)\b[^>]*>.*?<\s*/\s*\1\s*>", re.IGNORECASE | re.DOTALL)
 _TAG = re.compile(r"<[^>]*>")
 _SPACES = re.compile("[ \t\r\f\v\u00a0]+")

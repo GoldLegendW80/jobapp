@@ -644,7 +644,7 @@ def test_the_days_window_applies_to_a_feed(
     sweep_feeds(factory, person_a, fake_ats, hook)
     found = rows(factory, person_a)
     assert set(found) == {"AI Engineer Edge", "AI Engineer Undated"}
-    assert found["AI Engineer Undated"].published_on is None
+    assert found["AI Engineer Undated"].published_on == today
 
 
 def test_the_thread_reads_at_most_the_comments_allowed(
