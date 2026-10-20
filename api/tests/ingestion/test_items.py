@@ -180,7 +180,7 @@ BOARD = {"company": "Acme", "ats": "ashby", "org": "acme"}
         (
             "search",
             "browser_sources",
-            {"kind": "linkedin", "accepted_at": "2026-10-20T09:00:00+02:00", "text_version": "1"},
+            {"kind": "linkedin", "accepted_at": "2026-10-20T09:00:00+02:00", "text_version": 1},
         ),
         ("search", "browser_sources", {"kind": "linkedin", "accepted_at": None}),
         ("search", "min_fit", 80),
