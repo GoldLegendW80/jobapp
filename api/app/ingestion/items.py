@@ -81,12 +81,15 @@ start, and a school with no date at all last. Every other list appends.
 **Never proposable.** A setting is the user's choice about how the app behaves, not a claim a
 document supports: a gate's `penalty`, a board's `enabled` and `extra_exclude`, every
 `advanced_regex`, `search.min_fit`, `search.days`, `search.browser_sources`,
-`search.sweep_schedule`, `search.documents`, and the apply fields of `answers` (EEO, salary stance
+`search.sweep_schedule`, `search.documents`, `search.company_types` and `search.compensation`
+(wishes and pay a document does not state for the person), the whole `preferences` section (how
+the app behaves, and the wizard's dates), and the apply fields of `answers` (EEO, salary stance
 and ranges, consents, preferred name and the like). They are typed `setting` in `FIELD_TYPES`,
-and `build` refuses them for an agent whatever is cited. The photo is not a section and has no
-key. `skills.years_experience` is computed by the merge, never read by the agent: only
-`Origin.derived` may build it. A user's edit (`Origin.user`) is validated by the section model
-alone and may set a setting inside the entry it edits.
+and `build` refuses them for an agent whatever is cited. `search.seniority` (a CV shows the
+levels held) and `search.industries` (a CV names the sectors worked in) may be proposed. The
+photo is not a section and has no key. `skills.years_experience` is computed by the merge,
+never read by the agent: only `Origin.derived` may build it. A user's edit (`Origin.user`) is
+validated by the section model alone and may set a setting inside the entry it edits.
 
 **What is stored of a hostile value.** A value comes from a model that read a hostile document.
 Before the section model reads it: at most `VALUE_NODES_MAX` parts, `VALUE_CHARS_MAX` characters
@@ -321,6 +324,20 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "search.documents.auto": _T.SETTING,
         "search.documents.min_fit": _T.SETTING,
         "search.documents.daily_ceiling": _T.SETTING,
+        # Opportunities O4: the levels and sectors a CV shows may be proposed; the company
+        # types sought and the pay are the person's wishes, never read from a document.
+        "search.seniority[]": _T.ENUM,
+        **_terms("search.industries"),
+        "search.company_types[]": _T.SETTING,
+        **{
+            f"search.compensation.{pay}.{part}": _T.SETTING
+            for pay in ("salary", "daily_rate")
+            for part in ("min", "max", "currency")
+        },
+        "preferences.onboarding.completed_at": _T.SETTING,
+        "preferences.onboarding.dismissed_at": _T.SETTING,
+        "preferences.documents_language": _T.SETTING,
+        "preferences.documents_tone": _T.SETTING,
         "answers.work_authorization[].country": _T.TEXT,
         "answers.work_authorization[].answer": _T.TEXT,
         "answers.work_authorization[].needs_sponsorship": _T.ENUM,
@@ -463,6 +480,10 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             browser_sources=_K.setting,
             sweep_schedule=_K.setting,
             documents=_K.setting,
+            seniority=_K.words,
+            industries=_K.terms,
+            company_types=_K.setting,
+            compensation=_K.setting,
         ),
         "answers": _slots(
             "answers",
@@ -489,6 +510,12 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             eeo_answers=_K.setting,
             salary_stance=_K.setting,
             salary_ranges=_K.setting,
+        ),
+        "preferences": _slots(
+            "preferences",
+            onboarding=_K.setting,
+            documents_language=_K.setting,
+            documents_tone=_K.setting,
         ),
     }
 )

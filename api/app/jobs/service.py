@@ -42,7 +42,7 @@ from app.jobs.models import (
 from app.jobs.schemas import ImportFile, ImportJob
 from app.jobs.scoring import ScoreResult
 from app.profile.models import Profile
-from app.profile.schemas import SkillsSection
+from app.profile.schemas import SearchSection, SkillsSection
 
 
 class DuplicateJobError(Exception):
@@ -871,9 +871,28 @@ def scoring_text(job: Job) -> str | None:
     return scoring.engine_text(job.posting_text, (job.legacy or {}).get("posting_header"))
 
 
-def computed_score(job: Job, skills: SkillsSection) -> ScoreResult | None:
+def user_search(db: Session, user_id: uuid.UUID) -> SearchSection | None:
+    """The search section of the user's profile, for the bonus of its seniority, industries and
+    company types (scoring.bonus), or None when it was never saved or no longer validates: no
+    bonus then, the fit is the skills' alone."""
+    sections = db.execute(
+        sa.select(Profile.sections).where(Profile.user_id == user_id)
+    ).scalar_one_or_none()
+    raw = (sections or {}).get("search")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SearchSection.model_validate(raw)
+    except ValueError:
+        return None
+
+
+def computed_score(
+    job: Job, skills: SkillsSection, search: SearchSection | None = None
+) -> ScoreResult | None:
+    """The score of the job's text, with the bonus of `search` when it is given."""
     text = scoring_text(job)
-    return None if text is None else scoring.score(text, skills, title=job.title)
+    return None if text is None else scoring.score(text, skills, title=job.title, search=search)
 
 
 def imported_fit_is_manual(item: ImportJob, skills: SkillsSection | None) -> bool:
@@ -1120,7 +1139,7 @@ def clear_manual_fit(db: Session, job: Job, skills: SkillsSection | None, now: d
         return False
     if skills is None:
         raise NothingToComputeError("The fit cannot be computed: your profile has no skills yet.")
-    result = computed_score(job, skills)
+    result = computed_score(job, skills, user_search(db, job.user_id))
     if result is None:
         raise NothingToComputeError("The fit cannot be computed: this job has no posting text.")
     return apply_score(db, job, result, now, overwrite_manual=True)
@@ -1320,7 +1339,8 @@ def add_manual_job(db: Session, user_id: uuid.UUID, new: NewJob, now: datetime) 
     if new.posting_text and new.posting_text.strip():
         skills = user_skills(db, user_id)
         if skills is not None:
-            result = scoring.score(new.posting_text, skills, title=new.title)
+            search = user_search(db, user_id)
+            result = scoring.score(new.posting_text, skills, title=new.title, search=search)
             apply_score(db, job, result, now, via="add")
             return job, True
     return job, False
@@ -1376,8 +1396,9 @@ def rescore_batch(
     )
     outcome.skipped_busy += len(looked) - len(jobs)
     outcome.last_id = looked[-1]
+    search = user_search(db, user_id)  # the bonus (scoring.bonus); None gives none
     for job in jobs:
-        result = computed_score(job, skills)
+        result = computed_score(job, skills, search)
         if result is None:
             outcome.skipped_no_text += 1
             continue

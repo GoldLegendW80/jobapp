@@ -27,6 +27,9 @@ How the score is made, exactly as the engine does it:
 - Each gate that matches the lowercased text takes its penalty (25 for the converted engine
   gates) and is named in `gaps`.
 - The result is clamped to 0..100.
+- Bonus (opportunities O4, owner 2026-10-20), only when `search` is passed: see `bonus` below.
+  It is added before the clamp, so a posting a gate took below 0 stays at 0, and the fit is
+  never above 100. The engine had no bonus, so the golden test passes no `search`.
 
 Two deliberate differences, neither reachable from profile/skills.json: a gate's penalty is the
 gate's own (the engine fixed 25), so a user can weigh gates; and a category or gate with no terms
@@ -48,11 +51,12 @@ an error for every posting: the rest of the profile still scores.
 
 import logging
 import re
-from dataclasses import dataclass
+import unicodedata
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 from app.profile import matching
-from app.profile.schemas import Category, SkillsSection
+from app.profile.schemas import Category, SearchSection, SkillsSection
 
 OCCURRENCE_CAP = 3
 REQUIREMENTS_WEIGHT = 2
@@ -112,10 +116,28 @@ def engine_text(posting_text: str, header: object = None) -> str:
 
 
 @dataclass(frozen=True)
+class Bonus:
+    """The points `bonus` adds and what earned them, in plain words for the match reason."""
+
+    points: int = 0
+    seniority: tuple[str, ...] = ()
+    industries: tuple[str, ...] = ()
+    company_types: tuple[str, ...] = ()
+
+    @property
+    def matched(self) -> tuple[str, ...]:
+        return self.seniority + self.industries + self.company_types
+
+
+NO_BONUS = Bonus()
+
+
+@dataclass(frozen=True)
 class ScoreResult:
     fit: int
     competencies: list[str]
     gaps: list[str]
+    bonus: Bonus = field(default=NO_BONUS)
 
 
 def requirements_part(low: str) -> str:
@@ -151,8 +173,16 @@ def years_needed(low: str, title: str) -> int:
     return need
 
 
-def score(posting_text: str, skills: SkillsSection, *, title: str = "") -> ScoreResult:
-    """Fit 0..100, the categories the posting names and the gaps, for one posting."""
+def score(
+    posting_text: str,
+    skills: SkillsSection,
+    *,
+    title: str = "",
+    search: SearchSection | None = None,
+) -> ScoreResult:
+    """Fit 0..100, the categories the posting names and the gaps, for one posting; with the
+    person's `search` section, plus the bonus of its seniority, industries and company types
+    (the competencies and gaps never change with it)."""
     low = posting_text[:SCORED_CHARS_MAX].lower()
     req = requirements_part(low)
     credit = weight = 0.0
@@ -184,4 +214,188 @@ def score(posting_text: str, skills: SkillsSection, *, title: str = "") -> Score
         if pattern is not None and pattern.search(low) is not None:
             fit -= gate.penalty
             gaps.append(gate.name)
-    return ScoreResult(fit=max(0, min(100, fit)), competencies=named, gaps=gaps)
+    extra = bonus(posting_text, title, search) if search is not None else NO_BONUS
+    fit += extra.points
+    return ScoreResult(fit=max(0, min(100, fit)), competencies=named, gaps=gaps, bonus=extra)
+
+
+# --- the bonus of what the person aims for (opportunities O4) ---------------------------------
+#
+# Owner, 2026-10-20: seniority, industries and company types feed the score and never filter.
+# A posting earns a part for each of the three it matches, each part a third of BONUS_CAP, so
+# one part gives 3 points, two give 7 and all three give 10 (round(10 x parts / 3)). A field the
+# person left empty earns nothing; nothing here drops a posting, and the sweep's filters and the
+# deck's filter never read these fields.
+#
+# - Seniority is read in the title only: a body names the levels of colleagues and readers
+#   ("you will work with senior engineers"), the title names the role's own.
+# - Industries are the person's own terms (a TermList, matched as every term list is, through
+#   app.profile.matching), in the title and the text.
+# - Company types are read in the title and the text through the allow list below.
+#
+# The allow lists name what is accepted, in English and French, as whole words (no letter or
+# digit just before or after). Single words that mean something else in a posting are left
+# out on purpose (fail closed): "agency" ("high agency"), "conseil" ("conseil d'administration"),
+# "charity" ("charity days"), "mid" ("mid-market"), "large enterprise" (a customer). Text is NFKC
+# normalised, every dash and minus sign read as "-", and lowercased, so "Sénior", "SENIOR",
+# "start-up" written with a non breaking hyphen and full width letters read as their plain forms.
+
+BONUS_CAP = 10
+BONUS_PARTS = 3
+
+# Levels and types as the person reads them in the match reason.
+SENIORITY_LABELS = {
+    "intern": "intern",
+    "junior": "junior",
+    "mid": "mid-level",
+    "senior": "senior",
+    "lead": "lead",
+    "principal": "principal",
+}
+COMPANY_TYPE_LABELS = {
+    "startup": "startup",
+    "scaleup": "scale-up",
+    "large_company": "large company",
+    "public_sector": "public sector",
+    "nonprofit": "nonprofit",
+    "agency": "agency",
+    "consulting": "consulting",
+}
+
+# Each entry is literal words (spaces stand for any run of white space) unless it starts with
+# "re:", then it is a pattern of this file (bounded, no nested quantifier).
+_ROLE_NOUN = r"(?:engineer|scientist|developer|designer|architect|researcher|analyst)"
+SENIORITY_WORDS: dict[str, tuple[str, ...]] = {
+    "intern": (
+        "intern", "interns", "internship", "internships", "trainee", "trainees", "stage",
+        "stagiaire", "stagiaires", "alternance", "alternant", "alternante", "apprenti",
+        "apprentie", "apprentice", "apprenticeship", "work-study",
+    ),
+    "junior": (
+        "junior", "juniors", "jr", "entry level", "entry-level", "graduate", "new grad",
+        "débutant", "débutante", "jeune diplômé", "jeune diplômée",
+    ),
+    "mid": (
+        "mid-level", "mid level", "midlevel", "mid-senior", "intermediate", "confirmé",
+        "confirmée",
+    ),
+    "senior": ("senior", "sénior", "seniors", "séniors", "sr"),
+    "lead": ("re:lead(?!\\s+gen)", "leader", "team lead", "tech lead"),
+    "principal": (
+        "principal", "distinguished", "re:staff(?:\\s+[\\w-]+){0,2}?\\s+" + _ROLE_NOUN,
+    ),
+}  # fmt: skip
+COMPANY_TYPE_WORDS: dict[str, tuple[str, ...]] = {
+    "startup": (
+        "startup", "startups", "start-up", "start-ups", "early-stage", "early stage",
+        "seed-stage", "seed stage", "pre-seed", "series a", "série a", "jeune pousse",
+        "jeunes pousses",
+    ),
+    "scaleup": (
+        "scaleup", "scaleups", "scale-up", "scale-ups", "hypergrowth", "hyper-growth",
+        "hypercroissance", "forte croissance", "high-growth", "series b", "series c", "série b",
+        "série c",
+    ),
+    "large_company": (
+        "multinational", "multinationale", "fortune 500", "fortune 100", "global 500", "cac 40",
+        "sbf 120", "ftse 100", "grand groupe", "groupe international",
+    ),
+    "public_sector": (
+        "public sector", "secteur public", "fonction publique", "service public",
+        "civil service", "government", "gouvernement", "ministère", "ministry",
+        "administration publique", "public administration", "collectivité territoriale",
+        "collectivités territoriales", "établissement public",
+    ),
+    "nonprofit": (
+        "nonprofit", "non-profit", "not-for-profit", "not for profit", "ngo", "ngos", "ong",
+        "but non lucratif", "sans but lucratif", "registered charity", "charitable organization",
+        "charitable organisation", "association loi 1901",
+    ),
+    "agency": (
+        "digital agency", "creative agency", "marketing agency", "advertising agency",
+        "design agency", "web agency", "media agency", "agence digitale", "agence web",
+        "agence créative", "agence de communication", "agence de publicité", "agence marketing",
+        "agence de design",
+    ),
+    "consulting": (
+        "consulting firm", "consulting company", "consulting group", "consultancy",
+        "management consulting", "cabinet de conseil", "société de conseil",
+        "cabinet de consulting", "esn", "ssii",
+    ),
+}  # fmt: skip
+
+# Every dash and minus sign Unicode has, read as a hyphen.
+_DASHES = str.maketrans(
+    dict.fromkeys(
+        map(chr, (0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212, 0xFE63, 0xFF0D)), "-"
+    )
+)
+
+
+def _word_pattern(entries: tuple[str, ...]) -> re.Pattern[str]:
+    parts = []
+    for entry in entries:
+        if entry.startswith("re:"):
+            parts.append(entry[3:])
+        else:
+            parts.append(r"\s+".join(matching.escape(word) for word in entry.split()))
+    return re.compile(rf"(?<!\w)(?:{'|'.join(parts)})(?!\w)", re.IGNORECASE)
+
+
+_SENIORITY = {level: _word_pattern(words) for level, words in SENIORITY_WORDS.items()}
+_COMPANY_TYPES = {kind: _word_pattern(words) for kind, words in COMPANY_TYPE_WORDS.items()}
+SHOWN_MAX = 3  # industries named in the match reason
+
+
+def bonus_text(text: str) -> str:
+    """`text` as the bonus reads it: NFKC, dashes as "-", lowercase."""
+    return unicodedata.normalize("NFKC", text).translate(_DASHES).lower()
+
+
+def _industries(search: SearchSection, text: str) -> tuple[str, ...]:
+    """The person's industry terms the text names, at most SHOWN_MAX, in the person's words (a
+    plain term as written, an advanced one as the text has it)."""
+    terms = search.industries
+    pattern = _compiled(tuple(terms.terms), terms.advanced_regex, "industries")
+    if pattern is None:
+        return ()
+    by_fold = {term.casefold(): term for term in terms.terms}
+    found: dict[str, None] = {}
+    for match in pattern.finditer(text):
+        seen = match.group(0).casefold()
+        name = None
+        if not terms.advanced_regex:
+            for ending in ("", "s", "es"):
+                if ending and not seen.endswith(ending):
+                    continue
+                name = by_fold.get(seen[: len(seen) - len(ending)] if ending else seen)
+                if name is not None:
+                    break
+        found[name or match.group(0)[:LABEL_MAX]] = None
+        if len(found) == SHOWN_MAX:
+            break
+    return tuple(found)
+
+
+LABEL_MAX = 60
+
+
+def bonus(posting_text: str, title: str, search: SearchSection) -> Bonus:
+    """The points the person's seniority, industries and company types add to a posting, and
+    which of them it matched. Pure, linear in the text (one pass per level and type)."""
+    if not (search.seniority or search.industries.terms or search.company_types):
+        return NO_BONUS
+    head = bonus_text(title)
+    body = f"{head}\n{bonus_text(posting_text[:SCORED_CHARS_MAX])}"
+    levels = tuple(
+        SENIORITY_LABELS[level] for level in search.seniority if _SENIORITY[level].search(head)
+    )
+    industries = _industries(search, body) if search.industries.terms else ()
+    kinds = tuple(
+        COMPANY_TYPE_LABELS[kind]
+        for kind in search.company_types
+        if _COMPANY_TYPES[kind].search(body)
+    )
+    parts = sum(1 for matched in (levels, industries, kinds) if matched)
+    points = round(BONUS_CAP * parts / BONUS_PARTS)
+    return Bonus(points=points, seniority=levels, industries=industries, company_types=kinds)
