@@ -11,15 +11,20 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.jobs import scoring
+from app.jobs import scoring, service
 from app.jobs.models import Job
 from app.opportunities import deck as decks
 from app.profile.models import Profile
 from app.profile.schemas import COMPANY_TYPES, SENIORITIES, SearchSection
 from tests.identity.api_helpers import Api
 from tests.jobs.conftest import NOW
+from tests.jobs.fake_ats import FakeAts
+from tests.jobs.sweep_helpers import board, fake_ats, jobs_of, new_sweep, run, set_profile
+from tests.jobs.sweep_helpers import search as sweep_search
 from tests.jobs.test_api import Signed, seed, sign_in
 from tests.jobs.test_scoring import skills as make_skills
+
+__all__ = ["fake_ats"]
 
 SKILLS = make_skills()
 POSTING = "About the role\n\nBuild an agent with tool use in Python. Some RAG.\n"
@@ -75,6 +80,43 @@ SENIORITY_ACCEPT = [
     ("Staff Machine Learning Engineer", "principal"),
     ("Staff Engineer", "principal"),
     ("Distinguished Engineer", "principal"),
+    # Round 2: hyphen compounds and the words read by their place.
+    ("Stage Data Scientist H/F", "intern"),
+    ("Stage - Data Scientist", "intern"),
+    ("Stage – Data Scientist", "intern"),
+    ("Data Scientist (Stage)", "intern"),
+    ("Data Scientist - Stage - Paris", "intern"),
+    ("Data Scientist, Stage", "intern"),
+    ("Data Scientist | Stage", "intern"),
+    ("Data Scientist Stage", "intern"),
+    ("Data Scientist Stage 6 mois", "intern"),
+    ("Offre de stage Data Engineer", "intern"),
+    ("Stage de fin d'études IA", "intern"),
+    ("Stage de fin d’études IA", "intern"),
+    ("Ingénieur IA en stage", "intern"),
+    ("STAGE  DATA  SCIENTIST", "intern"),
+    ("Work study Data Analyst", "intern"),
+    ("Work-study Data Analyst", "intern"),
+    ("Junior-level Developer", "junior"),
+    ("Mid level Backend Engineer", "mid-level"),
+    ("Mid-Senior Engineer", "mid-level"),
+    ("Mid Senior Engineer", "mid-level"),
+    ("Mid-Senior Engineer", "senior"),
+    ("Mid Senior Engineer", "senior"),
+    ("Senior level Data Scientist", "senior"),
+    ("Senior/Staff Engineer", "senior"),
+    ("Senior Engineer – Paris", "senior"),
+    ("Tech-Lead, Platform", "lead"),
+    ("Team-Lead Data", "lead"),
+    ("Co-Lead AI", "lead"),
+    ("Lead - Data Engineer", "lead"),
+    ("Data Engineer, Lead", "lead"),
+    ("Engineering Lead", "lead"),
+    ("Lead Data Scientist", "lead"),
+    ("Lead-level Engineer", "lead"),
+    ("Lead, Management Tools", "lead"),
+    ("Stage-gate Process Lead", "lead"),
+    ("Senior/Staff Engineer", "principal"),
 ]
 
 
@@ -105,6 +147,55 @@ SENIORITY_REFUSE = [
     "",
     "Srinivasan Role",
     "SRE",
+    # Round 2: "lead" before a marketing noun, hyphen and spaced.
+    "Lead-Gen Specialist",
+    "Lead Gen Specialist",
+    "LeadGen Analyst",
+    "Lead-Generation Manager",
+    "Lead Nurturing Specialist",
+    "Lead-Nurturing Specialist",
+    "Lead Scoring Analyst",
+    "Lead-Scoring Analyst",
+    "Lead Qualification Representative",
+    "Lead Management Specialist",
+    "Lead Capture Developer",
+    "Lead Magnet Writer",
+    "Lead Routing Analyst",
+    "Lead List Builder",
+    "Leads Coordinator",
+    "Misleading Claims Reviewer",
+    "Leader-board Designer",  # "leader" glued to another word
+    "Plead Analyst",
+    "Mileage Lead-Gen",
+    "Non-Lead Role",
+    # Round 2: "stage" inside a hyphen compound, after an adjective, before a theatre noun.
+    "Multi-stage pipeline engineer",
+    "Multi stage pipeline engineer",
+    "Multi-Stage",
+    "Two-stage Rocket Engineer",
+    "Two stage Rocket Engineer",
+    "Early Stage Engineer",
+    "Early-Stage Engineer",
+    "Engineer, Early Stage",
+    "Engineer Early Stage",
+    "Late-stage Investor",
+    "Late stage Investor",
+    "Next Stage Engineer",
+    "Pre-stage Analyst",
+    "Backstage Engineer",
+    "Stagehand",
+    "Stage Manager",
+    "Stage-Manager",
+    "Stage Technician",
+    "Stage Crew",
+    "Center Stage Producer",
+    "Staging Engineer",
+    # Round 2: a level word glued to another word by a hyphen.
+    "Non-Senior Role",
+    "Senior–Engineer",  # an en dash with no spaces glues the words
+    "Staff-level Engineer",
+    "Pre-Junior Programme",
+    "Intern-Facing Recruiter",
 ]
 
 
@@ -160,6 +251,19 @@ COMPANY_ACCEPT = [
     ("Un cabinet de conseil en stratégie.", "consulting"),
     ("Une ESN de 500 personnes.", "consulting"),
     ("Une SSII historique.", "consulting"),
+    # Round 2: early and seed stage before a company noun, hyphen and spaced.
+    ("An early-stage startup.", "startup"),
+    ("An early stage startup.", "startup"),
+    ("An early stage company.", "startup"),
+    ("Early-stage companies only.", "startup"),
+    ("A seed-stage venture.", "startup"),
+    ("A seed stage business.", "startup"),
+    ("An early-stage start-up.", "startup"),
+    ("A Series A-funded team.", "startup"),
+    ("A Series-A team.", "startup"),
+    ("A late-stage startup.", "startup"),
+    ("Join the public-sector.", "public_sector"),
+    ("A Fortune-500 company.", "large_company"),
 ]
 
 
@@ -186,6 +290,36 @@ COMPANY_REFUSE = [
     "Esnault is our CTO.",
     "A series about AI.",
     "",
+    # Round 2: early and seed stage without a company noun, hyphen and spaced.
+    "You will be involved at an early stage.",
+    "You will be involved at an early-stage.",
+    "At the early stage of the project.",
+    "At the early-stage of the project.",
+    "Early stage of the project.",
+    "Early-stage of the project.",
+    "At a seed stage of the product.",
+    "At a seed-stage of the product.",
+    "Early-stage research in robotics.",
+    "Early stage research in robotics.",
+    "We are an early-stage fund.",
+    "An early stage investor.",
+    "Seed-stage funding rounds.",
+    "Seed stage funding rounds.",
+    "Early-stage detection of cancer.",
+    "Early stage design reviews.",
+    "Our early-stage team members.",
+    "A multi-stage pipeline.",
+    "A multi stage pipeline.",
+    "Late-stage product decisions.",
+    "Early-staged rollouts.",
+    # Round 2: a type word glued to another word by a hyphen.
+    "Non-government funding.",
+    "E-government services.",
+    "Government-wide rollout.",
+    "Start-up-like culture.",
+    "A non-startup feel.",
+    "We start up a project each month.",
+    "Pre-seeded data.",
 ]
 
 
@@ -211,6 +345,12 @@ def test_the_title_counts_for_a_company_type() -> None:
         ("For gaming and fintech alike.", ["fintech", "gaming"], ("gaming", "fintech")),
         ("Two banks, one platform.", ["bank"], ("bank",)),  # plural as every term list
         ("Santé numérique.", ["santé"], ("santé",)),
+        ("Santé numérique.", ["sante"], ("sante",)),  # accents folded both ways
+        ("Sante numerique.", ["santé"], ("santé",)),
+        ("SANTÉ.", ["sante"], ("sante",)),
+        ("Énergies renouvelables.", ["energie"], ("energie",)),
+        ("Energie verte.", ["énergie"], ("énergie",)),
+        ("Santéx.", ["sante"], ()),
         ("We serve hospitals.", ["health"], ()),
         ("Healthcare software.", ["health"], ()),  # inside a longer word
         ("Insurtech.", ["insurance"], ()),
@@ -353,3 +493,146 @@ def test_a_rescore_applies_the_bonus_keeps_manual_fits_and_isolates_people(
     assert response.status_code == 200, response.text
     # Bob has no search section: his twin posting gets no bonus from Alice's.
     assert fits(factory, bob.id) == {"Senior Engineer": base, "Engineer": plain}
+
+
+# --- every other scoring path applies the bonus too ---------------------------------------------
+#
+# Each test fails when the bonus line of its path is reverted (search not passed): the fit it
+# asserts differs from the plain score by the bonus.
+
+SENIOR = search(seniority=["senior"])
+
+
+def test_a_swept_new_posting_earns_the_bonus(
+    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+) -> None:
+    industries = {"terms": ["agents"], "advanced_regex": False}
+    # A gate keeps the fake postings below 100, so the bonus shows in the fit.
+    skills = make_skills(gates=[{"name": "python", "terms": ["python"], "penalty": 20}])
+    swept = sweep_search(board("fake-ok", "ashby"), industries=industries)
+    set_profile(factory, alice, swept, skills=skills.model_dump(mode="json"))
+    run(factory, new_sweep(factory, alice), fake_ats)
+    jobs = jobs_of(factory, alice)
+    assert len(jobs) == 2
+    wanted = search(industries=["agents"])
+    for job in jobs:
+        assert job.posting_text is not None
+        plain = scoring.score(job.posting_text, skills, title=job.title).fit
+        raised = scoring.score(job.posting_text, skills, title=job.title, search=wanted).fit
+        assert raised == plain + 3
+        assert job.fit == raised
+
+
+def test_a_job_added_by_hand_earns_the_bonus(factory: sessionmaker[Session], api: Api) -> None:
+    alice = sign_in(factory, api, "e2e-o4-add@example.org")
+    set_sections(
+        factory,
+        alice.id,
+        skills=SKILLS.model_dump(mode="json"),
+        search=SENIOR.model_dump(mode="json"),
+    )
+    text = POSTING.strip()
+    response = api.post(
+        "/api/jobs",
+        token=alice.token,
+        json={
+            "company": "Example Robotics",
+            "title": "Senior Engineer",
+            "location": "Paris",
+            "url": "https://jobs.example.org/o4/add",
+            "posting_text": text,
+        },
+    )
+    assert response.status_code == 201, response.text
+    plain = scoring.score(text, SKILLS, title="Senior Engineer").fit
+    assert response.json()["fit"] == plain + 3
+
+
+def test_clearing_a_manual_fit_restores_the_fit_with_the_bonus(
+    factory: sessionmaker[Session], api: Api
+) -> None:
+    alice = sign_in(factory, api, "e2e-o4-clear@example.org")
+    set_sections(
+        factory,
+        alice.id,
+        skills=SKILLS.model_dump(mode="json"),
+        search=SENIOR.model_dump(mode="json"),
+    )
+    (job,) = seed(
+        factory,
+        alice.id,
+        [{"title": "Senior Engineer", "posting_text": POSTING, "fit": 42, "fit_overridden": True}],
+    )
+    response = api.request("PATCH", f"/api/jobs/{job.id}", token=alice.token, json={"fit": None})
+    assert response.status_code == 200, response.text
+    plain = scoring.score(POSTING, SKILLS, title="Senior Engineer").fit
+    assert (response.json()["fit"], response.json()["fit_overridden"]) == (plain + 3, False)
+
+
+@pytest.mark.parametrize(
+    "broken",
+    [
+        {"seniority": ["chief"]},  # not a level
+        {"seniority": "senior"},  # not a list
+        {"company_types": ["startup"], "industries": {"terms": "fintech"}},
+        "senior",  # not even an object
+    ],
+)
+def test_a_search_section_that_does_not_validate_gives_no_bonus_and_no_error(
+    factory: sessionmaker[Session], api: Api, broken: Any
+) -> None:
+    alice = sign_in(factory, api, f"e2e-o4-broken-{uuid.uuid4().hex[:8]}@example.org")
+    set_sections(factory, alice.id, skills=SKILLS.model_dump(mode="json"), search=broken)
+    seed(factory, alice.id, [{"title": "Senior Engineer", "posting_text": POSTING}])
+    response = api.request("POST", "/api/jobs/rescore", token=alice.token, json={})
+    assert response.status_code == 200, response.text
+    plain = scoring.score(POSTING, SKILLS, title="Senior Engineer").fit
+    assert fits(factory, alice.id) == {"Senior Engineer": plain}
+
+
+# --- mark-overrides reads a fit with the bonus as the engine's ----------------------------------
+
+
+def test_mark_overrides_skips_a_fit_with_the_bonus_and_keeps_a_hand_fit(
+    factory: sessionmaker[Session], api: Api
+) -> None:
+    alice = sign_in(factory, api, "e2e-o4-marks@example.org")
+    set_sections(
+        factory,
+        alice.id,
+        skills=SKILLS.model_dump(mode="json"),
+        search=SENIOR.model_dump(mode="json"),
+    )
+    plain = scoring.score(POSTING, SKILLS, title="Senior Engineer").fit
+    seed(
+        factory,
+        alice.id,
+        [
+            {"title": "Senior Engineer", "posting_text": POSTING, "fit": plain + 3},  # a rescore
+            {"title": "Senior Engineer", "posting_text": POSTING, "fit": plain},  # the engine
+            {"title": "Senior Engineer", "posting_text": POSTING, "fit": 42},  # by hand
+        ],
+    )
+    with factory() as db:
+        found = service.override_candidates(db, alice.id, SKILLS)
+    assert [(c.job.slug, c.job.fit, c.computed) for c in found] == [("job-2", 42, plain + 3)]
+
+
+def test_mark_overrides_without_a_search_compares_with_the_plain_score(
+    factory: sessionmaker[Session], api: Api
+) -> None:
+    alice = sign_in(factory, api, "e2e-o4-marks-plain@example.org")
+    set_sections(factory, alice.id, skills=SKILLS.model_dump(mode="json"))
+    plain = scoring.score(POSTING, SKILLS, title="Senior Engineer").fit
+    seed(
+        factory,
+        alice.id,
+        [
+            {"title": "Senior Engineer", "posting_text": POSTING, "fit": plain + 3},
+            {"title": "Senior Engineer", "posting_text": POSTING, "fit": plain},
+        ],
+    )
+    with factory() as db:
+        found = service.override_candidates(db, alice.id, SKILLS)
+    # No search section: a fit 3 above the score is not the engine's, so it is a candidate.
+    assert [(c.job.slug, c.computed) for c in found] == [("job-0", plain)]

@@ -8,6 +8,7 @@ import {
   describeSection,
   exportFileName,
   formatBytes,
+  OLDER_FILE_PREFERENCES,
 } from "./import-file";
 
 function profileOf(sections: FakeProfile["sections"], photo = false) {
@@ -219,6 +220,24 @@ describe("checkImportFile accepts an export", () => {
     expect(result.summary.sections.at(-1)).toMatchObject({
       name: "preferences",
       changed: false,
+      detail: OLDER_FILE_PREFERENCES,
+    });
+  });
+
+  it("says an older file resets a tone the person had set", () => {
+    const current = haraldLike();
+    const profile = profileOf({
+      ...current,
+      preferences: { ...current.preferences, documents_tone: "warm" },
+    });
+    const sections: Record<string, unknown> = { ...current };
+    delete sections.preferences;
+    const result = check(exported({ sections }), profile);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.summary.sections.at(-1)).toMatchObject({
+      name: "preferences",
+      changed: true,
+      detail: OLDER_FILE_PREFERENCES,
     });
   });
 
@@ -282,7 +301,7 @@ describe("checkImportFile accepts an export", () => {
       "0 categories, 0 gates",
       "0 boards, 0 enabled",
       "0 countries",
-      "Documents: language auto, tone plain",
+      OLDER_FILE_PREFERENCES, // no preferences in this file
     ]);
   });
 

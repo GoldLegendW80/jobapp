@@ -70,6 +70,11 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** The preferences row of a file written before preferences existed: the file wins, so the
+ * import sets the language and tone of documents back to their defaults. */
+export const OLDER_FILE_PREFERENCES =
+  "Not in this older file: the import resets the documents' language and tone to the defaults (auto, plain)";
+
 /** A few words on what a section of the file holds. */
 export function describeSection(name: SectionName, data: unknown): string {
   const s = isObject(data) ? data : {};
@@ -211,7 +216,10 @@ export function checkImportFile(
   const changes = SECTIONS.map((name) => ({
     name,
     label: SECTION_LABELS[name],
-    detail: describeSection(name, sections[name]),
+    detail:
+      name === "preferences" && !("preferences" in sections)
+        ? OLDER_FILE_PREFERENCES
+        : describeSection(name, sections[name]),
     changed: !sameData(
       {
         ...EMPTY[name],

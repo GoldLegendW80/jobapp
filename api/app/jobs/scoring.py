@@ -233,12 +233,24 @@ def score(
 #   app.profile.matching), in the title and the text.
 # - Company types are read in the title and the text through the allow list below.
 #
-# The allow lists name what is accepted, in English and French, as whole words (no letter or
-# digit just before or after). Single words that mean something else in a posting are left
-# out on purpose (fail closed): "agency" ("high agency"), "conseil" ("conseil d'administration"),
-# "charity" ("charity days"), "mid" ("mid-market"), "large enterprise" (a customer). Text is NFKC
-# normalised, every dash and minus sign read as "-", and lowercased, so "Sénior", "SENIOR",
-# "start-up" written with a non breaking hyphen and full width letters read as their plain forms.
+# The allow lists name what is accepted, in English and French, as whole words. A word is a
+# hyphen compound: no letter, digit or hyphen just before or after, so "multi-stage", "lead-gen"
+# and "non-government" are other words, and a space inside an entry also reads a hyphen
+# ("team lead" reads "team-lead", "senior level" reads "senior-level"). Single words that mean
+# something else in a posting are left out on purpose (fail closed): "agency" ("high agency"),
+# "conseil" ("conseil d'administration"), "charity" ("charity days"), "mid" ("mid-market"),
+# "large enterprise" (a customer), "early stage" alone ("at an early stage of the project").
+# Three words are read by their place rather than alone:
+# - "lead" is a level unless a marketing noun follows it ("lead generation", "lead scoring");
+# - "stage" (French for internship) is a level only as a title segment of its own: first in the
+#   title or after a separator ("Stage: Data Engineer", "Data Engineer (Stage)", "offre de
+#   stage"), or last in it, never after an English adjective ("multi stage", "early stage")
+#   and never before a theatre noun ("stage manager");
+# - "early stage" and "seed stage" are a startup only before a company noun.
+# Text is NFKC normalised, every dash and minus sign read as "-", white space runs read as one
+# space, and lowercased, so "Sénior", "SENIOR", "start-up" written with a non breaking hyphen and
+# full width letters read as their plain forms. Industries are read with accents folded too, so
+# "sante" and "santé" name the same industry.
 
 BONUS_CAP = 10
 BONUS_PARTS = 3
@@ -262,34 +274,58 @@ COMPANY_TYPE_LABELS = {
     "consulting": "consulting",
 }
 
-# Each entry is literal words (spaces stand for any run of white space) unless it starts with
-# "re:", then it is a pattern of this file (bounded, no nested quantifier).
+# Each entry is literal words (a space stands for a space or a hyphen, as in "team lead" and
+# "team-lead") unless it starts with "re:", then it is a pattern of this file over the text as
+# bonus_text gives it (one space between words; bounded, no nested quantifier).
 _ROLE_NOUN = r"(?:engineer|scientist|developer|designer|architect|researcher|analyst)"
+# "lead" before one of these is marketing ("lead generation", "lead scoring"), not a level.
+_LEAD_NOT = r"(?:gen|nurtur|scor|qualif|magnet|routing|management|capture|list)"
+# "stage" right after one of these is a step of something ("multi stage", "early stage").
+_STAGE_AFTER_NOT = "".join(
+    f"(?<!{word} )"
+    for word in (
+        "early", "late", "later", "seed", "growth", "final", "next", "first", "second", "third",
+        "last", "single", "multi", "two", "three", "each", "every", "any", "this", "that", "back",
+        "main", "center", "centre", "big", "world", "global", "same", "one", "dev", "test",
+        "prod", "sound", "mid",
+    )
+)  # fmt: skip
+# The places where "stage" is a title segment of its own (see the comment above).
+_STAGE = (
+    _STAGE_AFTER_NOT
+    + r"(?:(?:(?<![^|(\[,:/;])|(?<=[|(\[,:/;] )|(?<= - )|(?<=\bde )|(?<=\bd')|(?<=\ben ))stage"
+    + r"|stage(?=$|[|)\],:;/]| [|(\[/]| - | \d| de | d'| en | h/f| f/h| \())"
+    + r"(?! (?:manager|management|managers|technician|technicians|hand|hands|crew|director"
+    + r"|door|lighting|sound|design|designer|left|right|combat|presence|fright))"
+)
+_COMPANY_NOUN = r"(?:start-?ups?|compan(?:y|ies)|ventures?|business(?:es)?|firms?)"
 SENIORITY_WORDS: dict[str, tuple[str, ...]] = {
     "intern": (
-        "intern", "interns", "internship", "internships", "trainee", "trainees", "stage",
+        "intern", "interns", "internship", "internships", "trainee", "trainees", "re:" + _STAGE,
         "stagiaire", "stagiaires", "alternance", "alternant", "alternante", "apprenti",
-        "apprentie", "apprentice", "apprenticeship", "work-study",
+        "apprentie", "apprentice", "apprenticeship", "work-study", "work study",
     ),
     "junior": (
-        "junior", "juniors", "jr", "entry level", "entry-level", "graduate", "new grad",
+        "junior", "juniors", "junior level", "jr", "entry level", "graduate", "new grad",
         "débutant", "débutante", "jeune diplômé", "jeune diplômée",
     ),
     "mid": (
-        "mid-level", "mid level", "midlevel", "mid-senior", "intermediate", "confirmé",
-        "confirmée",
+        "mid level", "midlevel", "mid senior", "intermediate", "confirmé", "confirmée",
     ),
-    "senior": ("senior", "sénior", "seniors", "séniors", "sr"),
-    "lead": ("re:lead(?!\\s+gen)", "leader", "team lead", "tech lead"),
+    "senior": ("senior", "sénior", "seniors", "séniors", "sr", "senior level", "mid senior"),
+    "lead": (
+        "re:lead(?! " + _LEAD_NOT + ")", "leader", "team lead", "tech lead", "co lead",
+        "lead level",
+    ),
     "principal": (
-        "principal", "distinguished", "re:staff(?:\\s+[\\w-]+){0,2}?\\s+" + _ROLE_NOUN,
+        "principal", "distinguished", "re:staff(?: [\\w-]+){0,2}? " + _ROLE_NOUN,
     ),
 }  # fmt: skip
 COMPANY_TYPE_WORDS: dict[str, tuple[str, ...]] = {
     "startup": (
-        "startup", "startups", "start-up", "start-ups", "early-stage", "early stage",
-        "seed-stage", "seed stage", "pre-seed", "series a", "série a", "jeune pousse",
-        "jeunes pousses",
+        "startup", "startups", "start-up", "start-ups", "pre-seed", "series a", "série a",
+        "series a funded", "series a backed", "jeune pousse", "jeunes pousses",
+        "re:(?:early|seed)[ -]stage " + _COMPANY_NOUN,
     ),
     "scaleup": (
         "scaleup", "scaleups", "scale-up", "scale-ups", "hypergrowth", "hyper-growth",
@@ -338,8 +374,8 @@ def _word_pattern(entries: tuple[str, ...]) -> re.Pattern[str]:
         if entry.startswith("re:"):
             parts.append(entry[3:])
         else:
-            parts.append(r"\s+".join(matching.escape(word) for word in entry.split()))
-    return re.compile(rf"(?<!\w)(?:{'|'.join(parts)})(?!\w)", re.IGNORECASE)
+            parts.append("[ -]".join(matching.escape(word) for word in entry.split()))
+    return re.compile(rf"(?<![\w-])(?:{'|'.join(parts)})(?![\w-])", re.IGNORECASE)
 
 
 _SENIORITY = {level: _word_pattern(words) for level, words in SENIORITY_WORDS.items()}
@@ -347,19 +383,37 @@ _COMPANY_TYPES = {kind: _word_pattern(words) for kind, words in COMPANY_TYPE_WOR
 SHOWN_MAX = 3  # industries named in the match reason
 
 
+_SPACES = re.compile(r"\s+")
+
+
 def bonus_text(text: str) -> str:
-    """`text` as the bonus reads it: NFKC, dashes as "-", lowercase."""
-    return unicodedata.normalize("NFKC", text).translate(_DASHES).lower()
+    """`text` as the bonus reads it: NFKC, dashes as "-", a curly apostrophe as "'", one space
+    for any white space run, lowercase."""
+    plain = unicodedata.normalize("NFKC", text).translate(_DASHES).replace("\u2019", "'")
+    return _SPACES.sub(" ", plain).strip().lower()
+
+
+def fold_accents(text: str) -> str:
+    """`text` without its accents ("santé" reads "sante"), for the industry terms."""
+    return "".join(
+        char for char in unicodedata.normalize("NFKD", text) if not unicodedata.combining(char)
+    )
 
 
 def _industries(search: SearchSection, text: str) -> tuple[str, ...]:
     """The person's industry terms the text names, at most SHOWN_MAX, in the person's words (a
-    plain term as written, an advanced one as the text has it)."""
+    plain term as written, an advanced one as the text has it). Plain terms and the text are
+    read with accents folded; an advanced term is the person's own pattern, read as written."""
     terms = search.industries
-    pattern = _compiled(tuple(terms.terms), terms.advanced_regex, "industries")
+    if terms.advanced_regex:
+        pattern = _compiled(tuple(terms.terms), True, "industries")
+    else:
+        text = fold_accents(text)
+        folded = tuple(fold_accents(term) for term in terms.terms)
+        pattern = _compiled(folded, False, "industries")
     if pattern is None:
         return ()
-    by_fold = {term.casefold(): term for term in terms.terms}
+    by_fold = {fold_accents(term).casefold(): term for term in terms.terms}
     found: dict[str, None] = {}
     for match in pattern.finditer(text):
         seen = match.group(0).casefold()
