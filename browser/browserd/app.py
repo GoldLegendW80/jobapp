@@ -11,6 +11,7 @@ control API of SPEC-browser:
   POST   /leases/{id}/tools/{name}, PUT /leases/{id}/files/{name}   the tool API (B5,
                           browserd/tools/routes.py); POST /leases also answers the gate's
                           capability (`gate_capability`) for an apply_submit or profile_edit lease
+  POST   /leases/{id}/handoff/done, /cancel   the sign in hand off (B12, browserd/handoff.py)
 
 Every request carries `Authorization: Bearer <BROWSER_CONTROL_SECRET>`, compared in constant
 time; without it (or with no secret configured) the answer is 401 and nothing starts. The lease
@@ -28,7 +29,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from browserd import live, signin
+from browserd import handoff, live, signin
 from browserd.leases import LeaseError, Manager, Request
 from browserd.tools import routes as tools
 
@@ -111,12 +112,13 @@ CONTROL = [
     Route("GET", re.compile(r"/healthz"), healthz),
 ]
 
-# The router list. B4, B5 and B7 each add one line here, nothing else of this file.
+# The router list. B4, B5, B7 and B12 each add one line here, nothing else of this file.
 ROUTES: list[Route] = [
     *CONTROL,
     *live.ROUTES,  # B4: browserd/live.py, who holds the live view's keyboard and mouse
     *(Route(*spec) for spec in tools.ROUTES),  # B5: browserd/tools/routes.py
     *(Route(*spec) for spec in signin.ROUTES),  # B7: DELETE /profiles/{id}, browserd/signin.py
+    *(Route(*spec) for spec in handoff.ROUTES),  # B12: the sign in hand off, browserd/handoff.py
 ]
 
 REASONS = {200: "OK", 201: "Created", 204: "No Content", 400: "Bad Request", 401: "Unauthorized",

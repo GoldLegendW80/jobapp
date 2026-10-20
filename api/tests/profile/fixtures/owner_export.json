@@ -1188,6 +1188,7 @@
       "never_apply": [
         "No cybersecurity roles: cyber, security, pentest, threat (Harald, 2026-10-06)"
       ],
+      "browser_sources": [],
       "sweep_schedule": {
         "enabled": false,
         "days": [

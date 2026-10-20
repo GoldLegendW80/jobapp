@@ -320,6 +320,7 @@ def create(
                 Proposal.kind == kind,
                 Proposal.status == ProposalStatus.pending,
             )
+            .order_by(Proposal.id)  # the lock order of jobs.service: proposals by id
             .with_for_update()
         ).all()
         for proposal in older:

@@ -11,6 +11,8 @@ import { defineConfig, devices } from "@playwright/test";
  *   browser-b4   the live view of an assistant's lease: Take over and Give back (task B4)
  *   browser-b7   Sign in to a site, the profile kept across leases and a restart, Forget all
  *                logins (task B7)
+ *   browser-b8   job sites read in the browser by the sweep: the Search tab's card, Find jobs
+ *                on the fixture pages of tests/browser_pages/b8/, another person sees none (B8)
  *
  * A task of the module adds its spec as browser-b<n>.spec.ts and it runs here: the local check
  * (ops/local-check.sh, group browser) names this config, not the specs, and

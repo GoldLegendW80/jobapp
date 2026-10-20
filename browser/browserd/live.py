@@ -390,9 +390,12 @@ class Live:
 
     def person(self, lease_id: str) -> bool:
         """That lease is the current one and a person's own session: the person holds the
-        input from its start to its end (B7)."""
+        input from its start to its end (B7); or an agent's lease during the sign in hand off,
+        while its Chromium has no debugging port (B12, browserd/handoff.py)."""
         lease = self.manager.current()
-        return lease is not None and lease.lease_id == lease_id and not lease.request.automation
+        if lease is None or lease.lease_id != lease_id:
+            return False
+        return not lease.request.automation or lease.person_input
 
     def take(self, lease_id: str, viewer: str) -> None:
         if lease_id != self._lease_id():
