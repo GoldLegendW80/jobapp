@@ -5,9 +5,10 @@ the person on the posting in any state but `cancelled` (a live one, a submitted 
 one all keep the posting out; a cancelled Like puts it back); a fit at or above "Show postings
 from" (`search.min_fit`, 70 by default), or no fit yet on a posting without text (nothing to
 score it from); and no never apply rule of the person matching its company or title through
-apply's folded matcher (`apply.guardrails.matching_rule`), so a title the sweep's whole word
-match missed ("Cyber­security" with a soft hyphen, full width letters) never shows. When the
-stored rules cannot be read, the deck is empty and says so (`rules_unreadable`): it fails closed.
+apply's folded matcher (`apply.guardrails.matching_rule`, its patterns built once per call),
+so a title the sweep's whole word match missed (a soft hyphen inside a word, full width letters)
+never shows. When the stored rules cannot be read, the deck is empty and says so
+(`rules_unreadable`): it fails closed.
 
 **Order.** Fit, highest first (no fit last), then the newest `found_on`, then the id: a total
 order, so a reload shows the same card and the cursor names a place in it.
@@ -33,6 +34,7 @@ page's rows are read in full.
 import base64
 import binascii
 import json
+import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -42,8 +44,7 @@ from typing import Literal
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.apply import caps
-from app.apply.guardrails import matching_rule
+from app.apply import caps, guardrails
 from app.apply.models import Application, State
 from app.jobs import sweep
 from app.jobs.models import ContractType, Job, JobStatus
@@ -169,6 +170,21 @@ def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters) -> sa.Select
     return query
 
 
+def _patterns(rules: Sequence[NeverApplyRule]) -> list[re.Pattern[str]]:
+    """Apply's pattern of each rule (`guardrails.matching_rule` builds the same ones per call),
+    built once per deck instead of once per posting."""
+    built = (guardrails._term_pattern(rule.terms) for rule in rules)
+    return [pattern for pattern in built if pattern is not None]
+
+
+def _excluded(patterns: Sequence[re.Pattern[str]], company: str, title: str) -> bool:
+    """`guardrails.matching_rule(rules, company, title) is not None`, on the built patterns."""
+    if not patterns:
+        return False
+    folded = " \n ".join(guardrails.fold(text) for text in (company, title) if text)
+    return any(pattern.search(folded) is not None for pattern in patterns)
+
+
 def _search(db: Session, user_id: uuid.UUID) -> tuple[int, list[NeverApplyRule] | None]:
     """The threshold and the never apply rules; rules None when the section cannot be read."""
     try:
@@ -196,11 +212,12 @@ def deck(
     if rules is None:
         return Deck([], None, 0, mode, min_fit, rules_unreadable=True)
 
+    patterns = _patterns(rules)
     rows = db.execute(_candidates(user_id, min_fit, filters)).all()
     keyed = sorted(
         (sort_key(row.fit, row.found_on, row.id), row)
         for row in rows
-        if not rules or matching_rule(rules, row.company, row.title) is None
+        if not _excluded(patterns, row.company, row.title)
     )
     if after is not None:
         keyed = [(key, row) for key, row in keyed if key > after]

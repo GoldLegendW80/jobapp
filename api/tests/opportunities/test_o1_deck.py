@@ -10,9 +10,11 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.apply import guardrails
 from app.apply.models import Application, State
 from app.jobs import service as jobs_service
 from app.jobs.models import ContractType, Job, JobStatus
+from app.jobs.sweep import NeverApplyRule
 from app.opportunities import deck as decks
 from app.opportunities import passes
 from app.profile.models import Profile
@@ -24,6 +26,7 @@ from tests.jobs.test_status_lock import join_all, run_in_thread, wait_until_bloc
 from tests.opportunities.conftest import (
     AT,
     FOUND_ON,
+    OWNER_RULE,
     Person,
     add_application,
     add_posting,
@@ -626,3 +629,12 @@ def add_application_in(session: Session, owner: Person, posting_id: uuid.UUID) -
     session.add(application)
     session.flush()
     return application.id
+
+
+@pytest.mark.parametrize("company", ["Example Robotics", "Example CyberDefense", ""])
+def test_the_deck_s_built_patterns_match_as_apply_s_matcher(company: str) -> None:
+    rules = [NeverApplyRule.parse(OWNER_RULE), NeverApplyRule.parse("Nothing here")]
+    patterns = decks._patterns(rules)
+    for title in [*REFUSED_BY_OWNER, *KEPT_BY_OWNER, "", "Secu­rity Engineer"]:
+        expected = guardrails.matching_rule(rules, company, title) is not None
+        assert decks._excluded(patterns, company, title) is expected, (company, title)
