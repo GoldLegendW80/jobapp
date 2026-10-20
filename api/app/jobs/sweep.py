@@ -453,7 +453,9 @@ def store_postings(
         db.execute(
             sa.update(Job)
             .where(Job.id == job_id, Job.user_id == plan.user_id)
-            .values(source=joined, updated_at=now)
+            # Noting a source is not an edit: `updated_at` (PATCH's version) stays, so an edit the
+            # person has in flight is not refused as stale.
+            .values(source=joined, updated_at=Job.updated_at)
         )
     for first in range(0, len(pending), INSERT_CHUNK):
         chunk = pending[first : first + INSERT_CHUNK]

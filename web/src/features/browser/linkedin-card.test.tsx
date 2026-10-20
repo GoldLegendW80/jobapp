@@ -92,6 +92,35 @@ describe("LinkedInCard", () => {
     });
   });
 
+  it("saves edited search words while LinkedIn is on", async () => {
+    const calls = mount(
+      state({ enabled: true, accepted: true, allowed: true, query: "AI" }),
+      state({
+        enabled: true,
+        accepted: true,
+        allowed: true,
+        query: "ML Engineer",
+        location: "Lyon",
+      }),
+    );
+    const words = await screen.findByLabelText("Search words");
+    expect(screen.queryByRole("button", { name: "Save search" })).toBeNull();
+    await userEvent.clear(words);
+    await userEvent.type(words, "ML Engineer");
+    await userEvent.type(screen.getByLabelText("Location"), "Lyon");
+    await userEvent.click(screen.getByRole("button", { name: "Save search" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Save search" })).toBeNull();
+    });
+    const put = calls.find((c) => c.method === "PUT");
+    expect(put?.body).toEqual({
+      enabled: true,
+      query: "ML Engineer",
+      location: "Lyon",
+    });
+    expect(screen.getByLabelText("Search words")).toHaveValue("ML Engineer");
+  });
+
   it("asks again when the sentence changed", async () => {
     mount(
       state({

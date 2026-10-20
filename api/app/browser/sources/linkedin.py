@@ -103,6 +103,21 @@ def norm(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
+WORK_MODE = re.compile(
+    r"\s*\((?:hybrid|on-site|onsite|remote|hybride|sur site|t[ée]l[ée]travail)\)\s*$", re.I
+)
+
+
+def fold_location(text: str) -> str:
+    """LinkedIn's card location in the form an ATS writes it, so the same posting found on a
+    board dedupes by identity: the work mode in brackets dropped, and "City, Region, Country"
+    (three parts or more) kept as "City, Country". "Paris, Île-de-France, France (Hybrid)" is
+    "Paris, France"; "Paris, France", "France" and "Greater Paris Metropolitan Region" are kept."""
+    text = WORK_MODE.sub("", " ".join(text.split()))
+    parts = [p.strip() for p in text.split(",") if p.strip()]
+    return f"{parts[0]}, {parts[-1]}" if len(parts) >= 3 else ", ".join(parts)
+
+
 def search_base(base_url: str | None) -> str:
     return f"{base_url.rstrip('/')}/linkedin/jobs/search/" if base_url else SEARCH
 
@@ -322,7 +337,7 @@ def parse_results(root: Node, page_url: str) -> list[Card]:
         if url in seen:
             continue
         seen.add(url)
-        location = next((t for t in _texts(item) if t not in (title, company)), "")
+        location = fold_location(next((t for t in _texts(item) if t not in (title, company)), ""))
         cards.append(Card(title=title, company=company, location=location, url=url))
     return cards
 

@@ -3,7 +3,8 @@
  * browser": off by default. Turning it on shows the api's one sentence on LinkedIn's terms and
  * the button "I accept, turn LinkedIn on", which records the acceptance of that version. A new
  * version of the sentence shows it again. The card also tells the person when LinkedIn is paused
- * after a security check, and when the last sweep met LinkedIn's sign in page.
+ * after a security check, and when the last sweep met LinkedIn's sign in page. Edited search
+ * words or location are saved with "Save search", while LinkedIn is on or off.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -72,12 +73,20 @@ export function LinkedInCard() {
     onSuccess: (data) => {
       client.setQueryData(linkedinKey, data);
       setAsking(false);
+      setWords(null);
+      setPlace(null);
     },
   });
   const data = query.data;
   if (!data) return null;
   const keywords = words ?? data.query ?? "";
   const where = place ?? data.location ?? "";
+  const edited =
+    keywords.trim() !== (data.query ?? "") ||
+    where.trim() !== (data.location ?? "");
+  // A stale sentence (on, not accepted) is answered by the accept button, which sends the words.
+  const canSave =
+    edited && keywords.trim() !== "" && !(data.enabled && !data.accepted);
   const turnOn = () => {
     if (!data.accepted) {
       setAsking(true);
@@ -133,6 +142,24 @@ export function LinkedInCard() {
           />
         </div>
       </div>
+      {canSave ? (
+        <div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={save.isPending}
+            onClick={() => {
+              save.mutate({
+                enabled: data.enabled,
+                query: keywords,
+                location: where,
+              });
+            }}
+          >
+            Save search
+          </Button>
+        </div>
+      ) : null}
       {data.enabled && !data.accepted ? (
         <p className="text-sm">
           The sentence below changed. LinkedIn stays stopped until you accept

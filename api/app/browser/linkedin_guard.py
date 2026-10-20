@@ -18,7 +18,7 @@ lift it. The sweep records it through `sweep_wall` as soon as its reader meets t
 the read returns its postings, so a kill after the checkpoint keeps the pause); apply's Easy
 Apply (A16) and apply's profile work (A18a) call `record_checkpoint` the same way, with their
 `origin`, in a transaction they commit before anything else. Nothing lifts it early: the owner
-may delete the person's rows of `linkedin_checkpoints` in SQL (README, runbook).
+may delete the person's rows of `linkedin_checkpoints` in SQL (README, "Sweeps and the worker").
 One sweep a day at most: a sweep of the same day (SWEEP_TZ) that opened a LinkedIn page
 (`result_pages` at least 1, a sign in wall or a checkpoint included, saved with the sweep's
 progress as soon as the page is met) refuses the next one with `linkedin_daily`.

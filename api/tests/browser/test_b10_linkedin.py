@@ -102,7 +102,7 @@ def test_results_of_0_1_and_25(count: int) -> None:
     assert [c.title for c in cards] == [o.title for o in made]
     if made:
         assert cards[0].company == "Example Robotics"
-        assert cards[0].location == "Paris, Île-de-France, France"
+        assert cards[0].location == "Paris, France"  # folded (fold_location)
         assert cards[0].url == f"https://www.linkedin.com/jobs/view/{made[0].number}/"
 
 
@@ -236,6 +236,27 @@ COMPANY_TARGETS = [
     "https://bücher-beispiel.de/jobs/ki-ingenieur",
     "https://8.8.8.8/jobs/1",  # a global address in its plain form
 ]
+
+
+@pytest.mark.parametrize(
+    ("text", "folded"),
+    [
+        ("Paris, Île-de-France, France", "Paris, France"),
+        ("Paris, Île-de-France, France (Hybrid)", "Paris, France"),
+        ("Lyon, Auvergne-Rhône-Alpes, France (On-site)", "Lyon, France"),
+        ("Berlin, Berlin, Germany (Remote)", "Berlin, Germany"),
+        ("Paris, Île-de-France, France (Hybride)", "Paris, France"),
+        ("Paris, France", "Paris, France"),
+        ("  Paris ,  France  ", "Paris, France"),
+        ("France", "France"),
+        ("European Union (Remote)", "European Union"),
+        ("Greater Paris Metropolitan Region", "Greater Paris Metropolitan Region"),
+        ("Paris (La Défense), Île-de-France, France", "Paris (La Défense), France"),
+        ("", ""),
+    ],
+)
+def test_fold_location(text: str, folded: str) -> None:
+    assert li.fold_location(text) == folded
 
 
 @pytest.mark.parametrize("target", REFUSED_TARGETS)

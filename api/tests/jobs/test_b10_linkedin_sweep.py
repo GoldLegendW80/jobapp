@@ -230,6 +230,30 @@ def test_the_same_posting_on_linkedin_and_greenhouse_is_one_row_naming_both(
     assert sweep.noted_sources(again[0].source) == names
 
 
+def test_linkedins_longer_location_dedupes_and_noting_keeps_updated_at(
+    factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
+) -> None:
+    # The board first: its row says "Paris, France".
+    gh = board("fake-ok", "greenhouse", "Acme AI")
+    set_profile(factory, alice, search(gh))
+    run(factory, new_sweep(factory, alice), fake_ats)
+    [before] = [j for j in jobs_of(factory, alice) if j.title == "AI Engineer"]
+    # Then LinkedIn's Easy Apply card of the same posting, with its longer location.
+    same = pages.Offer(
+        "AI Engineer", company="Acme AI", location="Paris, Île-de-France, France (Hybrid)"
+    )
+    tools = FakeTools(
+        {pages.search_url(): pages.results([same]), pages.view(same): pages.posting(same)}
+    )
+    set_profile(factory, alice, search(browser_sources=[linkedin()]))
+    row = run(factory, new_sweep(factory, alice), fake_ats, browser=checked(factory, tools))
+    assert row.stats["sources"][0]["error"] is None
+    [after] = [j for j in jobs_of(factory, alice) if j.title == "AI Engineer"]
+    assert after.id == before.id
+    assert sweep.noted_sources(after.source)[-1] == "linkedin:AI Engineer"
+    assert after.updated_at == before.updated_at  # noting a source is not an edit
+
+
 def test_a_second_sweep_the_same_day_is_refused(
     factory: sessionmaker[Session], alice: uuid.UUID, fake_ats: FakeAts
 ) -> None:
