@@ -7,7 +7,10 @@ by a sweep and by hand both picked up; the threshold at, under, without a fit, l
 rule; `auto` off; the consent and the credential (waiting, nothing counted, then started); the
 safety ceiling in America/New_York while the server is in UTC; one automatic run at a time; a
 posting skipped or fallen under the threshold while waiting (cancelled); the retry once; the
-default base CV changed; legacy files; the tick lock held by another pass; and the canary.
+default base CV changed; legacy files; the tick lock held by another pass; and the canary. The
+base CV the tick names for a CV that waited without one (its own deleted, or none yet) gives its
+template as the write's own, so a write from another base CV later takes that one's; a switch by
+hand made while it waited is kept and still read as one.
 
 Never two starts: a click that read the open generation before the tick started it, and a click
 committed between the tick's read and its start (one run either way, no exception, the next
@@ -45,10 +48,12 @@ from app.documents import (  # noqa: F401 (writers registers the writers)
     consent,
     estimate,
     generate,
+    render_job,
     store,
     tick,
     writers,
 )
+from app.documents import content as c
 from app.documents.models import (
     BaseSource,
     Document,
@@ -67,7 +72,7 @@ from tests.agents.conftest import API_KEY, new_key
 from tests.conftest import make_settings
 from tests.documents.canary import find, marker
 from tests.documents.conftest import load
-from tests.documents.render_support import give_profile
+from tests.documents.render_support import CV, give_profile
 from tests.documents.store_support import (
     AT,
     USER_A,
@@ -530,6 +535,99 @@ def test_a_changed_default_base_cv_is_used_by_later_postings_only(world: World) 
     world.tick()
     assert [g["base_document_id"] for g in posting_cv(world.generations(earlier))] == [world.base]
     assert [g["base_document_id"] for g in posting_cv(world.generations(later))] == [other_id]
+
+
+def _bases(world: World, *slugs: str) -> list[uuid.UUID]:
+    """Base CVs of these templates, each a second newer than the last, so the oldest other one is
+    known when the default is deleted."""
+    made = []
+    with world.factory() as db:
+        for n, slug in enumerate(slugs, start=1):
+            at = AT + timedelta(seconds=n)
+            base = store.create_base(
+                db, world.user, f"CV {slug}", BaseSource.built, at=at, template_slug=slug
+            )
+            made.append(base.id)
+        db.commit()
+    return made
+
+
+@pytest.mark.parametrize(
+    ("before", "named", "recorded", "again"),
+    [
+        # The default deleted while the CV waits: the tick names the oldest other one.
+        ("delete", "sidebar", "sidebar", "banner"),
+        # No base CV when the CV's generation was created: the tick names the first one made.
+        ("none", "sidebar", "sidebar", "banner"),
+        # A switch by hand while it waits is kept, and still is one for the next write.
+        ("switch", "compact", "classic", "compact"),
+    ],
+)
+def test_the_template_a_named_base_cv_gives_is_the_writes_never_a_switch_by_hand(
+    factory: sessionmaker[Session],
+    migrated_url: str,
+    before: str,
+    named: str,
+    recorded: str,
+    again: str,
+) -> None:
+    who = World(factory, migrated_url, USER_A, consent=False, base=before != "none")
+    posting = who.posting(90)
+    if before == "none":
+        with factory() as db:
+            document = store.get_or_create(db, who.user, posting, Kind.cv, at=AT)
+            generate.create(
+                db,
+                document,
+                GenerationMode.posting,
+                GenerationTrigger.auto,
+                None,
+                {},
+                1000,
+                at=AT,
+                status=GenerationStatus.waiting,
+                wait_reason=GenerationWait.consent,
+            )
+            db.commit()
+    else:
+        who.tick()  # waits for the consent, from the first base CV, `classic`
+    with factory() as db:
+        cv = db.scalar(
+            sa.select(Document.id).where(Document.posting_id == posting, Document.kind == Kind.cv)
+        )
+        if before == "switch":
+            assert render_job.switch(db, who.user, cv, at=AT, template_slug="compact")
+        db.commit()
+    sidebar, banner = _bases(who, "sidebar", "banner")
+    if before != "none":
+        with factory() as db:
+            default = store.delete_base(db, who.user, who.base, AT)
+            assert default is not None
+            assert default.id == sidebar
+            db.commit()
+    [waiting] = posting_cv(who.generations(posting))
+    assert waiting["base_document_id"] is None
+    who.consent()
+    who.tick()
+    with factory() as db:
+        generation = db.get(DocumentGeneration, waiting["id"])
+        document = store.get(db, who.user, cv)
+        assert generation is not None
+        assert document is not None
+        assert (generation.base_document_id, document.base_document_id) == (sidebar, sidebar)
+        assert (document.template_slug, generation.estimate[generate.WRITE_TEMPLATE]) == (
+            named,
+            recorded,
+        )
+        generate.finish(db, generation, c.parse("cv", CV), [], at=AT)
+        db.commit()
+    with factory() as db:  # "Write it again from this CV" with the third base CV
+        document = store.get(db, who.user, cv)
+        assert document is not None
+        mode, trigger = GenerationMode.posting, GenerationTrigger.click
+        generate.create(db, document, mode, trigger, banner, {}, 1000, at=AT)
+        db.commit()
+        assert (document.template_slug, document.base_document_id) == (again, banner)
 
 
 def test_a_pass_that_finds_the_person_held_does_nothing(world: World) -> None:

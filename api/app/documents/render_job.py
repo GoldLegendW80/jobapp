@@ -175,8 +175,10 @@ def content_kind(document: Document) -> c.Kind:
 
 
 def template_of(db: Session, user_id: uuid.UUID, slug: str) -> templates.Template:
-    """The document's template; one that disappeared (a person's own, deleted) renders with
-    the default rather than not at all."""
+    """The document's template; one that disappeared (a person's own, deleted, or a folder
+    removed from the repository) renders with the default rather than not at all. The version
+    records the default it was printed with; the document keeps its slug, which the picker's
+    note reads."""
     found = templates.resolve(db, user_id, slug)
     return found if found is not None else templates.registry()[templates.DEFAULT]
 
@@ -354,7 +356,8 @@ def switch(
 ) -> DocumentVersion | None:
     """Change the language or the template: a new version of the draft (origin `template` for
     a template switch, `edited` for a language), with what the new template cannot print
-    recorded on it; a frozen version is never touched (the snapshot makes a new one after it).
+    recorded on it, and the template it is printed with (`template_of`); a frozen version is
+    never touched (the snapshot makes a new one after it).
     An unknown template, or another person's own, is `store.TemplateUnknownError`. None when
     nothing changed. The caller then asks for its render."""
     if template_slug is not None and templates.resolve(db, user_id, template_slug) is None:
@@ -386,6 +389,7 @@ def switch(
         at=at,
         corrections=context.corrections,
         template_version=context.template.version,
+        template_slug=context.template.slug,
     )
     return version
 
@@ -451,7 +455,7 @@ def _claim(
             and latest.pdf_sha256 is not None
             and latest.content_hash == c.content_hash(kind, context.content)
             and latest.language == document.language
-            and latest.template_slug == document.template_slug
+            and latest.template_slug == context.template.slug
             and latest.template_version == context.template.version
         ):
             _idle(document)
@@ -465,6 +469,7 @@ def _claim(
             at=at,
             corrections=context.corrections,
             template_version=context.template.version,
+            template_slug=context.template.slug,
         )
         if version.pdf_sha256 is not None:
             _idle(document)
