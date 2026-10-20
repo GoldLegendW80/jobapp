@@ -1,0 +1,193 @@
+{
+ "description": "The finder's default stream (browser B9), the journey's: reads the careers page of tests/browser_pages/b9/careers.html, follows its next page and reports the two postings, with addresses relative to the page.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__browser_navigate",
+     "mcp__app__browser_snapshot",
+     "mcp__app__browser_wait_for",
+     "mcp__app__report_postings"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000101",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_finder_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_finder_01",
+       "name": "mcp__app__browser_snapshot",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000102",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_finder_2",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_finder_02",
+       "name": "mcp__app__browser_navigate",
+       "input": {
+        "url": "careers-2.html"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000103",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_finder_3",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_finder_03",
+       "name": "mcp__app__report_postings",
+       "input": {
+        "postings": [
+         {
+          "title": "AI Engineer",
+          "location": "Paris, France",
+          "url": "jobs/ai-engineer.html",
+          "text": "AI Engineer at Example Robotics: build agents that run robot fleets."
+         },
+         {
+          "title": "ML Engineer",
+          "location": "Lyon, France",
+          "url": "jobs/ml-engineer.html",
+          "text": "ML Engineer at Example Robotics: train perception models."
+         }
+        ]
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000104",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_finder_4",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "Postings reported."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 20,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 9000,
+    "duration_api_ms": 8000,
+    "num_turns": 4,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0,
+    "usage": {
+     "input_tokens": 12000,
+     "output_tokens": 140,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "result": "Postings reported."
+   }
+  }
+ ]
+}

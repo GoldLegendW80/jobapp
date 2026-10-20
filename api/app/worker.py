@@ -62,7 +62,8 @@ Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
 - apply_tick: cron every 30 seconds: asks a fill for the next `queued` application of every
   person whose fill is not running (a new one, one waiting for its documents or behind another
   person's lease, whose ticket lives 60 s), one per person so people take turns; and the submit
-  of every `approved` application (A6).
+  job of every `approved` application (A6), every `held` one whose hold ended and every `ready`
+  Full auto one, whose job runs Full auto's decision (A13a, `submit.due`).
   The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus the wait of a
   sign in hand off (BROWSER_SESSION_MAX_S, browser B12a) plus a margin, the submit's the
   `apply_submit` lease's ceiling plus a margin. At start, every application left `filling` by a dead
@@ -270,7 +271,9 @@ def browser_sources(ctx: dict[str, Any]) -> sweep.BrowserHook | None:
         return None
     from app.browser import sources
 
-    return sources.runner_for(ctx["settings"], ctx["redis"], sessions_of(ctx))
+    return sources.runner_for(
+        ctx["settings"], ctx["redis"], sessions_of(ctx), lambda: agent_context(ctx)
+    )
 
 
 def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
@@ -1046,6 +1049,13 @@ async def serve(
             run.done() for run in runs
         ):
             await asyncio.sleep(0.05)
+        # arq records a queue's health on its first poll, which comes after its own start up; the
+        # start hooks above can be slow on a loaded machine. Record every ready queue now, in
+        # arq's own key and format, so that `--check` passes as soon as the workers run. The
+        # periodic record is arq's and unchanged: it skips until the interval has elapsed.
+        for w in workers:
+            if getattr(w, "_pool", None) is not None:
+                await w.record_health()
         logger.info("worker started", extra={"queues": [w.queue_name for w in workers]})
         if on_ready is not None:
             await on_ready(workers)

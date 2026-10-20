@@ -57,6 +57,16 @@ choice made by the build that stands until the owner says otherwise.
 - Freelance platforms are configurable sources, like job boards.
 - Job is renamed Opportunity everywhere (table, API, code, specs). Decided, not built yet: it
   comes after ingestion and mail.
+- 2026-10-20: the full rename runs LAST, in a freeze window, once find, apply and swipe are
+  merged (option 1 of #353). Spec and plan: [SPEC-opportunities.md](../SPEC-opportunities.md),
+  [tasks/opportunities/todo.md](../tasks/opportunities/todo.md).
+- 2026-10-20, owner answers on opportunities: a Pass is stored only for now (learning from Passes is
+  a separate later task); seniority, industries and company types feed the score as a bonus, never a
+  filter; freelance platforms whose terms forbid automated reading (Malt, Free-Work, Codeur, Upwork,
+  Freelancer.com, Comet, Crème de la Crème) are read with Playwright in the app's browser only for a
+  person who opted in per platform, with the risk sentence, a recorded acceptance and a 7 day pause on
+  a checkpoint (task O7b); Full auto for missions follows the rule of jobs (Ashby, Greenhouse and
+  Lever forms only).
 
 ## Mail (2026-10-13; paused 2026-10-14 after M4)
 
@@ -110,6 +120,11 @@ choice made by the build that stands until the owner says otherwise.
 - 2026-10-15: the filter of form questions the answer agent may answer is a positive topic
   anchor (the job, the company, the team, motivation, experience); the person answers everything
   else in the approval screen.
+- 2026-10-20 (on #429): "block chrome://flags, and every chrome:// settings page, in ALL sessions
+  of the app's browser, the person's own sign-in sessions included, not only agent sessions."
+  Built as the image's managed policy: every chrome:// page blocked but chrome://policy,
+  chrome://sandbox, the new tab page and the browser's own UI; chrome://policy's test page off; no extension installed; saved flags and saved test policies
+  dropped before every start.
 
 ## The short path to Full auto (2026-10-19)
 

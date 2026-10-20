@@ -62,7 +62,7 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.apply import agent, caps, guardrails, shots, states
+from app.apply import agent, caps, full_auto, guardrails, shots, states
 from app.apply import form_agent as forms
 from app.apply.answers import Answer, Context, Documents, Left, Posting
 from app.apply.ats import adapter_for, generic
@@ -297,7 +297,7 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Plan | str
         posting,
         _rules(db, user_id),
         swept=guardrails.swept_never_apply(db, user_id, posting.id),
-        mode=application.mode,
+        mode=full_auto.blocking_mode(application.mode),
     )
     if code is None:
         code = caps.linkedin_refusal(db, application, now)
@@ -536,6 +536,9 @@ def finish(
         code=result.error,
         dry_run=application.dry_run,
     )
+    if result.state is State.needs_person:
+        # Full auto (A13a): what needs the person, a sign in wall included, is a review item.
+        full_auto.hand_over(db, application, result.needs, now)
     filled_any = counts["filled"] + counts["unverified"] > 0
     if result.state in (State.ready, State.needs_person) and filled_any:
         if posting.status in STAGE_FROM:

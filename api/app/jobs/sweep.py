@@ -262,12 +262,16 @@ def enabled_boards(search: SearchSection | None) -> list[Board]:
 
 
 def enabled_sources(search: SearchSection | None) -> list[BrowserSource]:
-    """The browser sources a sweep runs (browser B8): enabled, of a kind B8 reads, each once."""
+    """The browser sources a sweep runs (browser B8, B9, B10): enabled, of a kind read, once."""
     found: dict[tuple[str, str, str], BrowserSource] = {}
     for source in search.browser_sources if search else []:
         # LinkedIn (browser B10) only once its sentence was accepted; its guard decides the rest.
         accepted = source.kind != "linkedin" or source.accepted_at is not None
-        if source.enabled and accepted and source.kind in ("google_careers", "vie", "linkedin"):
+        if (
+            source.enabled
+            and accepted
+            and source.kind in ("google_careers", "vie", "site", "linkedin")
+        ):
             found.setdefault((source.kind, source.query, source.location or ""), source)
     return list(found.values())
 

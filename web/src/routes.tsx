@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { AccountPage } from "@/features/account/account-page";
 import { AdminUsersPage } from "@/features/admin/users-page";
 import { RunPage, RunsPage } from "@/features/agents/runs-page";
+import { QueuePage } from "@/features/apply/queue-page";
 import { ApplicationsSettingsPage } from "@/features/apply/settings-page";
 import { AuthProvider } from "@/features/auth/auth-provider";
 import { PublicOnly, RequireAdmin, RequireAuth } from "@/features/auth/guards";
@@ -18,6 +19,7 @@ import { FillPage } from "@/features/ingestion/fill-page";
 import { JobDetailPage } from "@/features/jobs/job-detail-page";
 import { JobsPage } from "@/features/jobs/jobs-page";
 import { JobsMapPage } from "@/features/jobs/map/jobs-map-page";
+import { DeckPage } from "@/features/opportunities/deck/deck-page";
 import { ProfilePage } from "@/features/profile/profile-page";
 import { AppShell } from "@/features/shell/app-shell";
 import { NotFoundPage } from "@/features/shell/not-found-page";
@@ -64,6 +66,7 @@ export const routes: RouteObject[] = [
             path: "jobs/:id/documents/:kind",
             element: <PostingDocumentPage />,
           },
+          { path: "discover", element: <DeckPage /> },
           { path: "documents/templates", element: <TemplatesPage /> },
           { path: "account", element: <AccountPage /> },
           { path: "profile", element: <ProfilePage /> },
@@ -71,6 +74,7 @@ export const routes: RouteObject[] = [
           { path: "profile/fill", element: <FillPage /> },
           { path: "runs", element: <RunsPage /> },
           { path: "runs/:id", element: <RunPage /> },
+          { path: "applications", element: <QueuePage /> },
           {
             path: "settings/applications",
             element: <ApplicationsSettingsPage />,

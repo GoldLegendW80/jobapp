@@ -455,7 +455,7 @@ def test_the_settings_routes(api: Api, db: Session, person_a: Person, person_b: 
     assert shown.headers["cache-control"] == "no-store"
     assert shown.json() == {
         "mode_after_like": "review",
-        "full_auto_available": False,
+        "full_auto_available": True,
         "paused": False,
         "min_fit": 80,
         "min_fit_chosen": False,
@@ -484,7 +484,7 @@ def test_the_settings_routes(api: Api, db: Session, person_a: Person, person_b: 
         changed.json()["paused"],
     ) == (85, True, True)
     for refused in (
-        {"mode_after_like": "full_auto"},
+        {"mode_after_like": "manual"},
         {"safety_ceiling": 100},
         {"min_fit": 101},
         {"min_fit": "85"},

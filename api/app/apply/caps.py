@@ -47,6 +47,7 @@ Declared open points (`company_key`, each toward refusing more, except the last 
 
 import hashlib
 import json
+import unicodedata
 import uuid
 import zoneinfo
 from dataclasses import dataclass
@@ -156,9 +157,17 @@ def _org(ats: str, url: str) -> str | None:
     return dict(parse_qsl(parts.query)).get("for")
 
 
+def _spaced(text: str) -> str:
+    """`text` with the format and control characters a reader does not see (a zero width space,
+    a soft hyphen, a word joiner) read as spaces, where `fold` drops them."""
+    return "".join(" " if unicodedata.category(c) in ("Cf", "Cc") else c for c in text)
+
+
 def company_keys(company: str, ats: str, form_url: str) -> frozenset[str]:
-    """The keys an application answers to: its posting's company and its form's ATS org."""
-    keys = {company_key(company)}
+    """The keys an application answers to: its posting's company, read both with the unseen
+    characters dropped and read as spaces (so "Example Robotics<ZWSP>Inc" answers to a cap on
+    "Example Robotics"), and its form's ATS org."""
+    keys = {company_key(company), company_key(_spaced(company or ""))}
     if (org := _org(ats, form_url)) is not None:
         keys.add(company_key(org))
     return frozenset(k for k in keys if k)
@@ -216,7 +225,13 @@ def settings_of(db: Session, user_id: uuid.UUID) -> Values:
 
 
 def save_settings(
-    db: Session, user_id: uuid.UUID, now: datetime, *, paused: bool | None, min_fit: int | None
+    db: Session,
+    user_id: uuid.UUID,
+    now: datetime,
+    *,
+    paused: bool | None,
+    min_fit: int | None,
+    hold_s: int | None = None,
 ) -> None:
     """The person's changes (None leaves a value as it is), in the caller's transaction."""
     values: dict[str, Any] = {"updated_at": now}
@@ -224,6 +239,8 @@ def save_settings(
         values["paused"] = paused
     if min_fit is not None:
         values["min_fit"] = min_fit
+    if hold_s is not None:
+        values["hold_s"] = hold_s
     row = insert(ApplySettings).values(user_id=user_id, **values)
     db.execute(row.on_conflict_do_update(index_elements=["user_id"], set_=values))
 

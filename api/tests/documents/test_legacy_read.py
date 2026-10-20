@@ -175,9 +175,91 @@ def test_a_role_is_never_content(
 def test_roles_too_long_for_the_notes_are_noted_not_cut() -> None:
     data = {"experience": [entry(role="r" * c.NOTES_MAX)]}
     reading = legacy.read(Kind.cv, raw(data), KEYS)
-    assert reading.left_out == (("notes", "too_long"),)
+    assert reading.left_out == (("experience.0.role", "too_long"),)
     assert isinstance(reading.content, c.CvContent)
     assert reading.content.notes == ""
+    assert reading.roles == 0
+
+
+def _role_line(key: str, role: str) -> str:
+    return legacy.ROLE_LINE.format(key=key, role=role)
+
+
+def _fill(total: int, after: str) -> str:
+    """Own notes that make `own + blank line + after` exactly `total` characters."""
+    return "n" * (total - len(after) - 2)
+
+
+SHORT = _role_line("example-corp", "Lead")
+# (own notes, the entries' roles, the notes kept, left out)
+ROLES_AND_NOTES = [
+    pytest.param(
+        _fill(c.NOTES_MAX, SHORT),
+        ["Lead"],
+        _fill(c.NOTES_MAX, SHORT) + "\n\n" + SHORT,
+        (),
+        id="own notes and a role at the limit exactly",
+    ),
+    pytest.param(
+        _fill(c.NOTES_MAX + 1, SHORT),
+        ["Lead"],
+        _fill(c.NOTES_MAX + 1, SHORT),
+        (("experience.0.role", "too_long"),),
+        id="one character over: the role is noted, the own notes kept",
+    ),
+    pytest.param(
+        "Kept from the command line.",
+        ["r" * c.NOTES_MAX],
+        "Kept from the command line.",
+        (("experience.0.role", "too_long"),),
+        id="a role longer than the notes alone",
+    ),
+    pytest.param(
+        "o" * (c.NOTES_MAX + 1),
+        ["Lead"],
+        SHORT,
+        (("notes", "too_long"),),
+        id="own notes over the limit: noted, the role kept",
+    ),
+    pytest.param(
+        "bad\x00notes",
+        ["Lead"],
+        SHORT,
+        (("notes", "control_character"),),
+        id="own notes that do not validate: noted, the role kept",
+    ),
+    pytest.param(
+        "",
+        ["Lead", "r" * c.NOTES_MAX, "Staff"],
+        SHORT + "\n" + _role_line("example-corp-2", "Staff"),
+        (("experience.1.role", "too_long"),),
+        id="the role that does not fit is noted, those after it still come",
+    ),
+    pytest.param(
+        "o" * 1_990,
+        ["Lead", "Staff"],
+        "o" * 1_990,
+        (("experience.0.role", "too_long"), ("experience.1.role", "too_long")),
+        id="no room left for any role",
+    ),
+]
+
+
+@pytest.mark.parametrize(("own", "roles", "notes", "left"), ROLES_AND_NOTES)
+def test_the_own_notes_come_first_and_each_role_fits_or_is_noted(
+    own: str, roles: list[str], notes: str, left: tuple[tuple[str, str], ...]
+) -> None:
+    keys = ["example-corp", "sample-labs", "example-corp-2"][: len(roles)]
+    data = {
+        "experience": [entry(key, role=role) for key, role in zip(keys, roles, strict=True)],
+        "notes": own,
+    }
+    reading = legacy.read(Kind.cv, raw(data), [*KEYS, "example-corp-2"])
+    assert reading.left_out == left
+    assert isinstance(reading.content, c.CvContent)
+    assert reading.content.notes == notes
+    assert len(reading.content.notes) <= c.NOTES_MAX
+    assert reading.roles == len(roles) - sum(1 for path, _ in left if path.endswith(".role"))
 
 
 def test_a_letter_has_no_role_rule() -> None:
@@ -305,15 +387,87 @@ INVALID_CVS = [
     ),
     pytest.param(
         {"experience": [entry(bullets=["b" * (c.BULLET_MAX + 1)]), entry("sample-labs")]},
-        {"experience": [entry("sample-labs")]},
+        {"experience": [entry(bullets=[]), entry("sample-labs")]},
         (("experience.0.bullets.0", "too_long"),),
-        id="a bullet over its limit",
+        id="a bullet over its limit: the entry is kept without it",
+    ),
+    pytest.param(
+        {"experience": [entry(bullets=["One.", "b" * (c.BULLET_MAX + 1), "Two."])]},
+        {"experience": [entry(bullets=["One.", "Two."])]},
+        (("experience.0.bullets.1", "too_long"),),
+        id="one long bullet among valid ones: they are kept",
+    ),
+    pytest.param(
+        {"experience": [entry(bullets=["One.", 3, "", "a\x00b", None, ["x"], "Two."])]},
+        {"experience": [entry(bullets=["One.", "Two."])]},
+        (
+            ("experience.0.bullets.1", "wrong_type"),
+            ("experience.0.bullets.2", "empty"),
+            ("experience.0.bullets.3", "control_character"),
+            ("experience.0.bullets.4", "wrong_type"),
+            ("experience.0.bullets.5", "wrong_type"),
+        ),
+        id="every kind of bad bullet, the good ones kept in order",
     ),
     pytest.param(
         {"experience": [entry(bullets=["b"] * 9)]},
+        {"experience": [entry(bullets=["b"] * 8)]},
+        (("experience.0.bullets.8", "too_many"),),
+        id="nine bullets: the first eight kept",
+    ),
+    pytest.param(
+        {"experience": [entry(bullets=["b" * (c.BULLET_MAX + 1)] + ["b"] * 9)]},
+        {"experience": [entry(bullets=["b"] * 8)]},
+        (("experience.0.bullets.0", "too_long"), ("experience.0.bullets.9", "too_many")),
+        id="a long bullet does not count towards the eight",
+    ),
+    pytest.param(
+        {"experience": [entry(bullets="One. Two.")]},
         {},
-        (("experience.0.bullets", "too_many"),),
-        id="nine bullets",
+        (("experience.0.bullets", "wrong_type"),),
+        id="bullets as one text: the entry is left out",
+    ),
+    pytest.param(
+        {"experience": [entry("Example Corp", bullets=["b" * (c.BULLET_MAX + 1), "Ok."])]},
+        {},
+        (("experience.0.employer_key", "bad_format"),),
+        id="a bad key and a long bullet: the entry is left out whole",
+    ),
+    pytest.param(
+        {"experience": [entry(bullets=["b" * (c.BULLET_MAX + 1)], title="Lead")]},
+        {},
+        (("experience.0.title", "unknown_field"),),
+        id="a long bullet and an unknown field: noted by the unknown field",
+    ),
+    pytest.param(
+        {"experience": [entry(), entry(bullets=["b" * (c.BULLET_MAX + 1), "Ok."])]},
+        {"experience": [entry()]},
+        (("experience.1", "duplicate_employer"),),
+        id="a salvaged entry that repeats an employer: only the repeat is noted",
+    ),
+    pytest.param(
+        {"skills": [{"label": "Data", "items": ["SQL", "s" * (c.TERM_MAX + 1), "dbt"]}]},
+        {"skills": [{"label": "Data", "items": ["SQL", "dbt"]}]},
+        (("skills.0.items.1", "too_long"),),
+        id="a skill over its limit: the group is kept without it",
+    ),
+    pytest.param(
+        {"skills": [{"label": "Data", "items": [f"s{n}" for n in range(c.SKILL_ITEMS_MAX + 1)]}]},
+        {"skills": [{"label": "Data", "items": [f"s{n}" for n in range(c.SKILL_ITEMS_MAX)]}]},
+        ((f"skills.0.items.{c.SKILL_ITEMS_MAX}", "too_many"),),
+        id="one skill too many in a group",
+    ),
+    pytest.param(
+        {"skills": [{"label": "", "items": ["s" * (c.TERM_MAX + 1)]}]},
+        {},
+        (("skills.0.label", "empty"),),
+        id="a group without label and a long skill: left out whole",
+    ),
+    pytest.param(
+        {"skills": [{"label": "Data", "items": ["SQL"], "level": "high"}]},
+        {},
+        (("skills.0.level", "unknown_field"),),
+        id="a group with an unknown field: left out whole",
     ),
     pytest.param(
         {"experience": [{"key": "example-corp", "bullets": ["b"]}]},
@@ -365,7 +519,8 @@ def test_the_invalid_fixture_keeps_every_valid_part() -> None:
     assert isinstance(reading.content, c.CvContent)
     assert reading.content.headline == "Platform engineer"
     assert reading.content.highlights == ["First highlight", "Second highlight", "Third highlight"]
-    assert [r.employer_key for r in reading.content.experience] == ["example-corp"]
+    assert [r.employer_key for r in reading.content.experience] == ["example-corp", "sample-labs"]
+    assert reading.content.experience[1].bullets == []
     assert reading.content.notes == "Kept from the command line."
 
 
@@ -470,6 +625,46 @@ def test_the_worst_shape_at_the_cap_is_read_whole() -> None:
     reading = legacy.read(Kind.cv, body, KEYS)
     assert len(reading.left_out) == 2 * (items // 2)
     assert reading.content == c.parse("cv", {})
+
+
+def _counted(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    calls = [0]
+    check = legacy._first_error
+
+    def counting(kind: c.Kind, data: dict[str, Any]) -> c.FieldError | None:
+        calls[0] += 1
+        return check(kind, data)
+
+    monkeypatch.setattr(legacy, "_first_error", counting)
+    return calls
+
+
+def test_the_worst_shape_inside_entries_costs_a_few_checks_per_element(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # One entry and one skill group holding every bad element the raw cap allows, then as many
+    # entries of one long bullet as fit, all for the same employer.
+    bullets = (c.RAW_MAX_BYTES - 400) // 4
+    data = {
+        "experience": [entry(bullets=[0] * (bullets // 2))],
+        "skills": [{"label": "Data", "items": [0] * (bullets // 2)}],
+    }
+    body = raw(data)
+    assert len(body) <= c.RAW_MAX_BYTES
+    calls = _counted(monkeypatch)
+    reading = legacy.read(Kind.cv, body, KEYS)
+    assert len(reading.left_out) == 2 * (bullets // 2)
+    assert [r.bullets for r in reading.content.experience] == [[]]
+    assert calls[0] <= 2 * (bullets // 2) + 20
+
+    one = entry(bullets=["b" * (c.BULLET_MAX + 1), "Ok."])
+    entries = (c.RAW_MAX_BYTES - 200) // len(raw(one))
+    calls[0] = 0
+    reading = legacy.read(Kind.cv, raw({"experience": [one] * entries}), KEYS)
+    assert reading.left_out[1:] == tuple(
+        (f"experience.{i}", "duplicate_employer") for i in range(1, entries)
+    )
+    assert calls[0] <= 6 * entries + 10
 
 
 def test_reading_is_pure() -> None:

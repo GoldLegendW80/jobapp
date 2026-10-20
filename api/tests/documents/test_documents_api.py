@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import io
 import json
 import uuid
 from typing import Any
 
+import pypdfium2 as pdfium
 import pytest
 import sqlalchemy as sa
 from fastapi import FastAPI
+from PIL import Image
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.body_limit import DEFAULT_MAX_BYTES, TOO_LARGE, limit_for
@@ -28,8 +31,14 @@ from app.documents.models import (
     GenerationStatus,
     GenerationTrigger,
 )
-from app.documents.router import NAME_MAX, ascii_name
-from tests.documents.render_support import CV, FakeRenderer, RecordingQueue, give_profile
+from app.documents.router import NAME_MAX, UNDRAWABLE, ascii_name
+from tests.documents.render_support import (
+    CV,
+    FakeRenderer,
+    RecordingQueue,
+    give_profile,
+    pdf_of,
+)
 from tests.identity.api_helpers import Api, make_user
 from tests.identity.conftest import api, app, clock, engine, factory, migrated_url
 
@@ -156,6 +165,66 @@ def test_save_render_read_the_pdf_and_the_page_image(
             sa.text("SELECT status FROM jobs WHERE id = :j"), {"j": two["posting"]}
         ).scalar_one()
     assert status == "cv_ready"
+
+
+def _tall_page() -> bytes:
+    document = pdfium.PdfDocument.new()
+    document.new_page(20, 14_400).close()
+    out = io.BytesIO()
+    document.save(out)
+    document.close()
+    return out.getvalue()
+
+
+UNDRAWABLE_PDFS = [
+    pytest.param(lambda pdf: b"<html>not a PDF</html>", id="non PDF bytes"),
+    pytest.param(lambda pdf: pdf[: len(pdf) // 3], id="a truncated PDF"),
+    pytest.param(lambda pdf: b"%PDF-1.7\n%%EOF\n", id="a header and nothing"),
+    pytest.param(lambda pdf: _tall_page(), id="a page 720 times as long as wide"),
+]
+
+
+@pytest.mark.parametrize("spoil", UNDRAWABLE_PDFS)
+def test_a_pdf_that_cannot_be_drawn_answers_422_with_a_sentence(
+    two: dict[str, Any],
+    api: Api,
+    factory: sessionmaker[Session],
+    queue: RecordingQueue,
+    clock: Any,
+    spoil: Any,
+) -> None:
+    alex, document = two["alex"], two["document"]
+    assert _save(api, alex, document, CV, 1).status_code == 200
+    _render(factory, queue, clock)
+    with factory.begin() as db:
+        pdf = db.execute(
+            sa.text("SELECT pdf FROM document_versions WHERE document_id = :d"), {"d": document}
+        ).scalar_one()
+        db.execute(
+            sa.text("UPDATE document_versions SET pdf = :p WHERE document_id = :d"),
+            {"p": spoil(bytes(pdf)), "d": document},
+        )
+    png = api.get(f"/api/documents/{document}/versions/1/page1.png", token=alex)
+    assert png.status_code == 422
+    assert png.json() == {"detail": UNDRAWABLE}
+
+
+def test_a_large_rendered_pdf_draws_its_first_page(
+    two: dict[str, Any], api: Api, factory: sessionmaker[Session], queue: RecordingQueue, clock: Any
+) -> None:
+    alex, document = two["alex"], two["document"]
+    assert _save(api, alex, document, CV, 1).status_code == 200
+    _render(factory, queue, clock)
+    large = pdf_of(3_000)
+    assert len(large) > 300_000  # 3,000 pages
+    with factory.begin() as db:
+        db.execute(
+            sa.text("UPDATE document_versions SET pdf = :p WHERE document_id = :d"),
+            {"p": large, "d": document},
+        )
+    png = api.get(f"/api/documents/{document}/versions/1/page1.png?width=1200", token=alex)
+    assert png.status_code == 200
+    assert Image.open(io.BytesIO(png.content)).width == 1200
 
 
 def test_posting_documents_name_a_failed_generation_until_a_later_one_replaces_it(

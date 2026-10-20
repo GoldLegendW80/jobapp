@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.browser.sources import MemoryPacer, Runner
 from app.browser.sources import google_careers as gc
-from app.jobs import sweep
+from app.jobs import sweep, sweep_router
 from app.jobs.models import JobStatus, SweepStatus
 from tests.browser import b8_pages as pages
 from tests.browser.test_b8_sources import FakeLeases, FakeTools
@@ -99,6 +99,11 @@ def test_browser_postings_are_stored_scored_and_ruled(
     assert jobs["GenAI Security Engineer"].status is JobStatus.skipped
     assert row.stats["sources"][0]["error"] is None
     assert row.stats["sources"][0]["postings"] == 2
+    assert row.stats["sources"][0]["found"] == 3  # read completely; the excluded title is not new
+    out = sweep_router.sweep_out(row).sources
+    assert [(s.kind, s.query, s.found, s.new, s.error) for s in out] == [
+        ("google_careers", "ai", 3, 2, None)
+    ]
     assert leases.acquired[0][0] == str(alice)
 
 
@@ -133,6 +138,8 @@ def test_a_changed_layout_stores_nothing_and_the_sweep_is_done(
     row = run(factory, new_sweep(factory, alice), fake_ats, browser=runner(FakeTools(broken)))
     assert row.status is SweepStatus.done
     assert row.stats["sources"][0]["error"] == "layout_changed"
+    assert row.stats["sources"][0]["found"] == 0  # nothing of a changed page is kept
+    assert sweep_router.sweep_out(row).sources[0].error == "layout_changed"
     assert all(job.source != "google_careers:ai" for job in jobs_of(factory, alice))
     assert row.stats["boards_ok"] == 1  # the boards' postings are kept
 

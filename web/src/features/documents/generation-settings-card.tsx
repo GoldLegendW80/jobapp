@@ -133,6 +133,7 @@ export function GenerationSettingsCard({ form }: { form: Form }) {
       <Today query={current} ceiling={ceiling} />
       <SpendFigures query={current} />
       <AdvancedSection
+        keepMounted
         open={advanced || ceilingError !== undefined}
         onOpenChange={setAdvanced}
       >
