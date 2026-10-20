@@ -14,8 +14,19 @@ export const SECTIONS = [
   "skills",
   "search",
   "answers",
+  "preferences",
 ] as const;
 export type SectionName = (typeof SECTIONS)[number];
+/** The sections with a tab of their own; preferences is a card of the Search tab (O4). */
+export const TAB_SECTIONS = [
+  "identity",
+  "experience",
+  "facts",
+  "skills",
+  "search",
+  "answers",
+] as const satisfies readonly SectionName[];
+export type TabSection = (typeof TAB_SECTIONS)[number];
 
 // --- section shapes, as the api stores them ---------------------------------------------------
 
@@ -109,6 +120,33 @@ export const CONTRACT_TYPES = [
   "Freelance",
 ] as const;
 export const REMOTE_STANCES = ["remote", "hybrid", "office", "any"] as const;
+// Opportunities O4, as api/app/profile/schemas.py names them.
+export const SENIORITIES = [
+  "intern",
+  "junior",
+  "mid",
+  "senior",
+  "lead",
+  "principal",
+] as const;
+export const COMPANY_TYPES = [
+  "startup",
+  "scaleup",
+  "large_company",
+  "public_sector",
+  "nonprofit",
+  "agency",
+  "consulting",
+] as const;
+export const INDUSTRIES_MAX = 30;
+export const PAY_MAX = 10_000_000;
+export const CURRENCIES = [
+  "AED", "AUD", "BGN", "BRL", "CAD", "CHF", "CNY", "CZK", "DKK", "EUR", "GBP",
+  "HKD", "HUF", "ILS", "INR", "JPY", "KRW", "MAD", "MXN", "NOK", "NZD", "PLN",
+  "RON", "SAR", "SEK", "SGD", "THB", "TND", "TRY", "TWD", "USD", "ZAR",
+] as const; // prettier-ignore
+export const DOCUMENTS_LANGUAGES = ["auto", "en", "fr"] as const;
+export const DOCUMENTS_TONES = ["plain", "formal", "warm"] as const;
 export const EEO_TOPICS = [
   "gender",
   "ethnicity",
@@ -178,6 +216,25 @@ export interface Search {
   sweep_schedule: SweepSchedule;
   /** the automatic generation of documents (D10), edited by the Search tab's documents card */
   documents: DocumentsGeneration;
+  /** O4: a bonus to the fit when a posting matches, never a filter */
+  seniority: (typeof SENIORITIES)[number][];
+  industries: TermList;
+  company_types: (typeof COMPANY_TYPES)[number][];
+  /** O4: the pay sought; changes no score */
+  compensation: { salary: PayRange | null; daily_rate: PayRange | null };
+}
+
+export interface PayRange {
+  min: number;
+  max: number;
+  currency: string;
+}
+
+export interface Preferences {
+  /** written by the first login wizard only (O5); a save sends it back unchanged */
+  onboarding: { completed_at: string | null; dismissed_at: string | null };
+  documents_language: (typeof DOCUMENTS_LANGUAGES)[number];
+  documents_tone: (typeof DOCUMENTS_TONES)[number];
 }
 
 export interface WorkAuthorization {
@@ -227,6 +284,7 @@ export interface SectionData {
   skills: Skills;
   search: Search;
   answers: Answers;
+  preferences: Preferences;
 }
 
 /** The empty form of each section: what the api's models default to, for a section never saved. */
@@ -269,6 +327,10 @@ export const EMPTY: SectionData = {
       timezone: "Europe/Paris",
     },
     documents: { auto: true, min_fit: 70, daily_ceiling: 100 },
+    seniority: [],
+    industries: { advanced_regex: false, terms: [] },
+    company_types: [],
+    compensation: { salary: null, daily_rate: null },
   },
   answers: {
     work_authorization: [],
@@ -294,6 +356,11 @@ export const EMPTY: SectionData = {
     eeo_answers: [],
     salary_stance: null,
     salary_ranges: [],
+  },
+  preferences: {
+    onboarding: { completed_at: null, dismissed_at: null },
+    documents_language: "auto",
+    documents_tone: "plain",
   },
 };
 

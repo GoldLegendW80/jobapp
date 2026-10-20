@@ -98,6 +98,15 @@ export function describeSection(name: SectionName, data: unknown): string {
     }
     case "answers":
       return plural(count(s.work_authorization), "country", "countries");
+    case "preferences": {
+      const language =
+        typeof s.documents_language === "string"
+          ? s.documents_language
+          : "auto";
+      const tone =
+        typeof s.documents_tone === "string" ? s.documents_tone : "plain";
+      return `Documents: language ${language}, tone ${tone}`;
+    }
   }
 }
 
@@ -162,7 +171,11 @@ export function checkImportFile(
   if (!isObject(sections)) {
     return { ok: false, error: "The file has no sections." };
   }
-  const missing = SECTIONS.filter((name) => !(name in sections));
+  // Preferences came after version 1 files were first written: an older file has none (the api
+  // reads its defaults then).
+  const missing = SECTIONS.filter(
+    (name) => !(name in sections) && name !== "preferences",
+  );
   if (missing.length > 0) {
     return {
       ok: false,
@@ -178,7 +191,9 @@ export function checkImportFile(
       error: `Unknown section in the file: ${extra.join(", ")}.`,
     };
   }
-  const notObject = SECTIONS.filter((name) => !isObject(sections[name]));
+  const notObject = SECTIONS.filter(
+    (name) => name in sections && !isObject(sections[name]),
+  );
   if (notObject.length > 0) {
     return {
       ok: false,
@@ -198,7 +213,14 @@ export function checkImportFile(
     label: SECTION_LABELS[name],
     detail: describeSection(name, sections[name]),
     changed: !sameData(
-      { ...EMPTY[name], ...(sections[name] as object) },
+      {
+        ...EMPTY[name],
+        ...(sections[name] as object | undefined),
+        // An import keeps the stored onboarding dates (O4): they never count as a change.
+        ...(name === "preferences"
+          ? { onboarding: profile.sections.preferences.onboarding }
+          : {}),
+      },
       profile.sections[name],
     ),
   }));

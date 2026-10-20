@@ -73,6 +73,8 @@ export const REQUIRED: Record<SectionName, Record<string, Rule>> = {
       "motivation",
     ].map((name) => [name, field(name)]),
   ),
+  // Every field has a default: always filled, and left out of the overall mean (O4).
+  preferences: {},
 };
 
 /** Python's round(): halves go to the even neighbour (round(0.5) is 0, round(2.5) is 2). */
@@ -106,15 +108,21 @@ export function completenessOf(
     const rules = Object.entries(REQUIRED[name]);
     const missing = rules.filter(([, ok]) => !ok(data)).map(([key]) => key);
     result[name] = {
-      percent: roundHalfEven(
-        (100 * (rules.length - missing.length)) / rules.length,
-      ),
+      percent:
+        rules.length === 0
+          ? 100
+          : roundHalfEven(
+              (100 * (rules.length - missing.length)) / rules.length,
+            ),
       missing,
     };
   }
-  const total = SECTIONS.reduce((sum, name) => sum + result[name].percent, 0);
+  const counted = SECTIONS.filter(
+    (name) => Object.keys(REQUIRED[name]).length > 0,
+  );
+  const total = counted.reduce((sum, name) => sum + result[name].percent, 0);
   return {
-    overall: roundHalfEven(total / SECTIONS.length),
+    overall: roundHalfEven(total / counted.length),
     sections: result,
   };
 }

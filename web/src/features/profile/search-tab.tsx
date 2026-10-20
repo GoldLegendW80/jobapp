@@ -2,9 +2,11 @@
  * Search: what the sweep looks for. Title include and exclude terms and location terms as chips
  * (each list with its advanced switch), contract types as toggles, the remote stance, the minimum
  * fit to shortlist, the posting age window, the company boards (boards-table.tsx) and the
- * never-apply rules.
+ * never-apply rules. Then what the person aims for (target-fields.tsx, O4) and, as a card with
+ * its own Save, the preferences section (preferences-card.tsx).
  */
 import { Plus } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
 import { Link } from "react-router";
 
@@ -29,6 +31,8 @@ import {
   type SweepSchedule,
 } from "./api";
 import { BoardsTable } from "./boards-table";
+import { PreferencesCard } from "./preferences-card";
+import { TargetFields } from "./target-fields";
 import { describeSchedule } from "./schedule";
 import {
   fromSearchForm,
@@ -71,6 +75,18 @@ export function SearchTab({
   profile: Profile;
   onDirtyChange: (dirty: boolean) => void;
 }) {
+  // Two forms on one tab (search and preferences): the page is dirty while either is.
+  const [searchDirty, setSearchDirty] = useState(false);
+  const [preferencesDirty, setPreferencesDirty] = useState(false);
+  useEffect(() => {
+    onDirtyChange(searchDirty || preferencesDirty);
+  }, [onDirtyChange, searchDirty, preferencesDirty]);
+  const onSearchDirty = useCallback((dirty: boolean) => {
+    setSearchDirty(dirty);
+  }, []);
+  const onPreferencesDirty = useCallback((dirty: boolean) => {
+    setPreferencesDirty(dirty);
+  }, []);
   const { form, onSubmit, saving, formError, conflict, keepEditing, reload } =
     useSectionForm({
       section: "search",
@@ -79,7 +95,7 @@ export function SearchTab({
       toForm: toSearchForm,
       fromForm: fromSearchForm,
       rules: { unique: { boards: "org" }, wrapped: ["never_apply"] },
-      onDirtyChange,
+      onDirtyChange: onSearchDirty,
     });
   const { control } = form;
 
@@ -139,6 +155,7 @@ export function SearchTab({
             />
             <ContractTypes form={form} />
           </Group>
+          <TargetFields form={form} />
           <Group title="Shortlist">
             <FormField
               control={control}
@@ -202,6 +219,7 @@ export function SearchTab({
         onKeepEditing={keepEditing}
         onReload={reload}
       />
+      <PreferencesCard profile={profile} onDirtyChange={onPreferencesDirty} />
     </div>
   );
 }
