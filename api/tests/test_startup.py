@@ -7,6 +7,10 @@ import time
 from pathlib import Path
 from urllib.request import urlopen
 
+import pytest
+
+from app import main
+from app.config import ConfigError
 from tests.conftest import free_port
 
 API_DIR = Path(__file__).resolve().parents[1]
@@ -22,20 +26,31 @@ def uvicorn(env: dict[str, str], port: int) -> subprocess.Popen[str]:
     )  # fmt: skip
 
 
-def test_missing_database_url_exits_fast_with_clear_error() -> None:
-    start = time.monotonic()
+# A bound that only turns a process that hangs into a failure: a gate on a loaded machine took
+# more than 15 s to import the app (issue #104).
+HANG_S = 180
+
+
+def test_missing_database_url_exits_fast_with_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Fast: the settings are refused before anything that could wait (the engine) is built.
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    built: list[object] = []
+    monkeypatch.setattr(main, "build_engine", built.append)
+    with pytest.raises(ConfigError, match="DATABASE_URL is not set"):
+        main.create_app()
+    assert built == []
+    # And the real process, started as the Dockerfile starts it, ends by itself with that error.
     proc = uvicorn({}, free_port())
-    out, _ = proc.communicate(timeout=15)
+    out, _ = proc.communicate(timeout=HANG_S)
     assert proc.returncode != 0
     assert "Invalid configuration: DATABASE_URL is not set" in out
-    assert time.monotonic() - start < 10
 
 
 def test_server_serves_health(database_url: str) -> None:
     port = free_port()
     proc = uvicorn({"DATABASE_URL": database_url}, port)
     try:
-        deadline = time.monotonic() + 15
+        deadline = time.monotonic() + HANG_S
         while True:
             try:
                 with urlopen(f"http://127.0.0.1:{port}/api/health", timeout=3) as response:
@@ -48,6 +63,6 @@ def test_server_serves_health(database_url: str) -> None:
                 time.sleep(0.2)
     finally:
         proc.terminate()
-        out, _ = proc.communicate(timeout=10)
+        out, _ = proc.communicate(timeout=HANG_S)
     assert '"msg": "api starting"' in out
     assert '"msg": "api stopped"' in out
