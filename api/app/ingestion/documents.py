@@ -159,7 +159,7 @@ def export_refused(names: Sequence[str]) -> str:
     run has read were not stored, the others were."""
     one = len(names) == 1
     return (
-        f"The other files of this export were added. A run has read {', '.join(names)}, "
+        f"The other files of this export are in your documents. A run has read {', '.join(names)}, "
         f"already among your documents, so the export did not replace {'it' if one else 'them'}. "
         f"Delete {'it' if one else 'them'} first, then add the export again."
     )

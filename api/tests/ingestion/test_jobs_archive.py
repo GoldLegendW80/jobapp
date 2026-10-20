@@ -242,15 +242,15 @@ def test_an_export_that_would_replace_a_file_a_run_has_read_says_so_and_keeps_th
     [
         (
             ["a.zip: Positions.csv"],
-            "The other files of this export were added. A run has read a.zip: Positions.csv, "
-            "already among your documents, so the export did not replace it. Delete it first, "
-            "then add the export again.",
+            "The other files of this export are in your documents. A run has read "
+            "a.zip: Positions.csv, already among your documents, so the export did not replace "
+            "it. Delete it first, then add the export again.",
         ),
         (
             ["a.zip: Positions.csv", "a.zip: Skills.csv"],
-            "The other files of this export were added. A run has read a.zip: Positions.csv, "
-            "a.zip: Skills.csv, already among your documents, so the export did not replace "
-            "them. Delete them first, then add the export again.",
+            "The other files of this export are in your documents. A run has read "
+            "a.zip: Positions.csv, a.zip: Skills.csv, already among your documents, so the "
+            "export did not replace them. Delete them first, then add the export again.",
         ),
     ],
 )
