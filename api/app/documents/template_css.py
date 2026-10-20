@@ -9,7 +9,7 @@ would read another way is ever judged. Then everything is held to allow lists:
 - the structure: rules and an exact `@page`, no other at-rule, no block inside a block;
 - the selectors (SELECTORS): type selectors of ELEMENTS, classes, `*`, `:root`, `:first-child`,
   `:last-child`, the combinators space, `>`, `+`, `~`, a final `::before`, `::after` or
-  `::marker`; at most MAX_COMPOUNDS parts;
+  `::marker`; at most MAX_COMPOUNDS parts of MAX_CLASSES classes;
 - the properties of VALUES, each with its own allow list of values; sizes of text in `em` or
   `%` or the density property, every other length from 0 up to CAPS; colours `#rrggbb` or the
   accent; strings only punctuation; functions only `var()` and, in a grid template, `minmax()`;
@@ -70,6 +70,7 @@ AA = 4.5  # WCAG 2, contrast of body text
 WHITE = "#ffffff"
 BLACK = "#000000"
 MAX_COMPOUNDS = 4
+MAX_CLASSES = 4
 CAPS = {"pt": 850.0, "px": 1134.0, "mm": 300.0, "em": 40.0, "%": 100.0}  # about one A4 height
 PSEUDO_CLASSES = frozenset(("root", "first-child", "last-child"))
 PSEUDO_ELEMENTS = frozenset(("before", "after", "marker"))
@@ -309,6 +310,8 @@ def _selector(parts: Sequence[Token]) -> Selector | str:
         if i == start:
             return "a selector outside the allowed forms"
         compounds.append(Compound(tag, frozenset(classes), frozenset(pseudo)))
+        if len(classes) > MAX_CLASSES:
+            return f"a part of more than {MAX_CLASSES} classes"
         if len(compounds) > MAX_COMPOUNDS:
             return f"a selector of more than {MAX_COMPOUNDS} parts"
     if not compounds:
@@ -353,6 +356,7 @@ def parse(css: str, file: str) -> tuple[list[Rule], list[Problem]]:
         return [], [Problem(file, stop.line, stop.code, stop.detail)]
     rules: list[Rule] = []
     problems: list[Problem] = []
+    interned: dict[Selector, Selector] = {}  # one object per selector: the cascade keys by id
     i, n = 0, len(found)
     while i < n:
         if found[i].kind == "space":
@@ -380,7 +384,7 @@ def parse(css: str, file: str) -> tuple[list[Rule], list[Problem]]:
             wrong = [r for r in read if isinstance(r, str)]
             if wrong:
                 problems.append(Problem(file, line, "selector", wrong[0]))
-            selectors = tuple(r for r in read if isinstance(r, Selector))
+            selectors = tuple(interned.setdefault(r, r) for r in read if isinstance(r, Selector))
         i += 1
         declarations: list[Declaration] = []
         part: list[Token] = []
@@ -838,9 +842,29 @@ class _Paint:
 
 
 class _Matcher:
-    def __init__(self, relaxed: bool) -> None:
+    def __init__(self, relaxed: bool, above: dict[int, frozenset[str]] | None = None) -> None:
         self.relaxed = relaxed
         self.memo: dict[tuple[int, int, int], bool] = {}
+        self.above = {} if above is None else above  # per element, the keys of its ancestors
+        self.needs: dict[int, frozenset[str]] = {}
+
+    def ancestors(self, e: Element) -> frozenset[str]:
+        """The keys of the ancestors of `e`."""
+        chain, node = [], e
+        while node is not None and id(node) not in self.above:
+            chain.append(node)
+            node = node.parent
+        for node in reversed(chain):
+            parent = node.parent
+            keys = () if parent is None else (*self.above[id(parent)], *_element_keys(parent))
+            self.above[id(node)] = frozenset(keys)
+        return self.above[id(e)]
+
+    def candidate(self, s: Selector, e: Element) -> bool:
+        """Whether the ancestors of `e` have every key the selector asks of them."""
+        if id(s) not in self.needs:
+            self.needs[id(s)] = _ancestry(s)
+        return self.needs[id(s)] <= self.ancestors(e)
 
     def compound(self, c: Compound, e: Element) -> bool:
         if (c.tag and c.tag != e.tag) or not c.classes <= e.classes:
@@ -855,7 +879,10 @@ class _Matcher:
         )
 
     def matches(self, s: Selector, e: Element, k: int | None = None) -> bool:
-        k = len(s.compounds) - 1 if k is None else k
+        if k is None:
+            if not self.candidate(s, e):
+                return False
+            k = len(s.compounds) - 1
         key = (id(s), k, id(e))
         if key in self.memo:
             return self.memo[key]
@@ -911,31 +938,57 @@ def _paints(rules: Sequence[Rule], customs, accent) -> tuple[list[_Paint], list[
     return colours, backs
 
 
+class _Index:
+    """Selectors by two keys an element they match must have: one of its subject's, and another
+    of its subject's or of an ancestor's (None when there is none), so an element meets only
+    the selectors whose two keys it and its ancestors have."""
+
+    def __init__(self, selectors: Iterable[Selector]) -> None:
+        self.buckets: dict[str, dict[str | None, list[Selector]]] = {}
+        for selector in selectors:
+            subject = selector.compounds[-1]
+            first = _key(subject)
+            rest = ({*_needs(subject)} | _ancestry(selector)) - {first}
+            bucket = self.buckets.setdefault(first, {})
+            bucket.setdefault(min(rest, default=None), []).append(selector)
+
+    def candidates(self, e: Element, above: frozenset[str]) -> Iterable[Selector]:
+        keys = _element_keys(e)
+        seconds = {None, *keys, *above}
+        for key in dict.fromkeys(keys):
+            bucket = self.buckets.get(key)
+            if bucket:
+                for second in seconds if len(seconds) < len(bucket) else list(bucket):
+                    if second in seconds:
+                        yield from bucket.get(second, ())
+
+
 class _Cascade:
     def __init__(self, colours: list[_Paint], backs: list[_Paint]) -> None:
         self.strict = _Matcher(relaxed=False)
-        self.colours, self.backs = colours, backs
-        self.index: dict[str, list[_Paint]] = {}
-        for paint in (*colours, *backs):
-            subject = paint.selector.compounds[-1]
-            key = next(iter(sorted(subject.classes)), None)
-            key = f".{key}" if key else (subject.tag or "*")
-            self.index.setdefault(key, []).append(paint)
-        self.matched: set[int] = set()
         self.colour_ids = {id(p) for p in colours}
+        # per distinct selector, the strongest colour and background it sets
+        self.selectors: dict[int, Selector] = {}
+        self.best: dict[int, list[_Paint | None]] = {}
+        for paint in (*colours, *backs):
+            slot = 0 if id(paint) in self.colour_ids else 1
+            self.selectors[id(paint.selector)] = paint.selector
+            pair = self.best.setdefault(id(paint.selector), [None, None])
+            if pair[slot] is None or paint.weight > pair[slot].weight:
+                pair[slot] = paint
+        self.index = _Index(self.selectors.values())
+        self.matched: set[int] = set()
         self.colour_of: dict[int, tuple[str, int]] = {}
         self.back_of: dict[int, tuple[str | None, int]] = {}
 
     def winners(self, e: Element) -> tuple[_Paint | None, _Paint | None]:
-        keys = [f".{c}" for c in e.classes] + [e.tag, "*"]
         best: list[_Paint | None] = [None, None]
-        for key in keys:
-            for paint in self.index.get(key, ()):
-                if not self.strict.matches(paint.selector, e):
-                    continue
-                self.matched.add(id(paint))
-                slot = 0 if id(paint) in self.colour_ids else 1
-                if best[slot] is None or paint.weight > best[slot].weight:
+        for selector in self.index.candidates(e, self.strict.ancestors(e)):
+            if not self.strict.matches(selector, e):
+                continue
+            self.matched.add(id(selector))
+            for slot, paint in enumerate(self.best[id(selector)]):
+                if paint is not None and (best[slot] is None or paint.weight > best[slot].weight):
                     best[slot] = paint
         return best[0], best[1]
 
@@ -961,13 +1014,93 @@ class _Cascade:
         return WHITE, 0
 
 
-def _fallback_back(selector: Selector, backs: list[_Paint], roots: list[_Paint]) -> list[str]:
-    """The backgrounds a selector's own parts name, nearest first, else those of the root."""
-    for compound in reversed(selector.compounds):
-        found = [b.colour for b in backs if b.colour and b.selector.compounds[-1].covers(compound)]
-        if found:
-            return found
-    return [b.colour for b in roots if b.colour] or [WHITE]
+def _element_keys(e: Element) -> list[str]:
+    return [f".{c}" for c in e.classes] + [e.tag, "*"]
+
+
+def _key(compound: Compound) -> str:
+    """The one key a part is indexed by: a class of it, else its tag, else `*`."""
+    first = min(compound.classes, default=None)
+    return f".{first}" if first else (compound.tag or "*")
+
+
+def _keys(compound: Compound) -> list[str]:
+    """Every key a part a rule covers can be indexed by."""
+    found = [f".{c}" for c in compound.classes] + [compound.tag or "*", "*"]
+    return [*found, "html"] if "root" in compound.pseudo else found
+
+
+def _subsets(classes: frozenset[str]) -> Iterable[frozenset[str]]:
+    items = sorted(classes)
+    for mask in range(1 << len(items)):
+        yield frozenset(c for i, c in enumerate(items) if mask >> i & 1)
+
+
+class _Fallback:
+    """What a selector's own parts say when no rendered element tells: the backgrounds of the
+    parts it names (a background rule whose part covers one of them), and the colours of the
+    rules a background's part holds."""
+
+    def __init__(self, colours: list[_Paint], backs: list[_Paint]) -> None:
+        self.backs: dict[tuple, set[str]] = {}
+        for paint in backs:
+            if paint.colour:
+                subject = paint.selector.compounds[-1]
+                shape = (subject.tag, subject.classes, "root" in subject.pseudo)
+                self.backs.setdefault(shape, set()).add(paint.colour)
+        self.parts: dict[str, dict[Compound, set[str]]] = {}
+        for paint in colours:
+            for part in paint.selector.compounds if paint.colour else ():
+                for key in {*_needs(part), "*"}:
+                    self.parts.setdefault(key, {}).setdefault(part, set()).add(paint.colour)
+        root = Compound("html", frozenset(), frozenset(("root",)))
+        self.root_backs = self.covering(root)
+        self.root_colours = {
+            p.colour
+            for p in colours
+            if p.colour and len(p.selector.compounds) == 1 and p.selector.compounds[0].covers(root)
+        } or {BLACK}
+        self.memo: dict[Compound, set[str]] = {}
+
+    def covering(self, part: Compound) -> set[str]:
+        """The background colours of the rules whose part covers `part`."""
+        found: set[str] = set()
+        roots = (False, True) if "root" in part.pseudo or part.tag == "html" else (False,)
+        for tag in {None, part.tag}:
+            for classes in _subsets(part.classes):
+                for root in roots:
+                    found |= self.backs.get((tag, classes, root), set())
+        return found
+
+    def behind(self, selector: Selector) -> set[str]:
+        """The backgrounds behind a colour: of its nearest part that has one, else the root's."""
+        for part in reversed(selector.compounds):
+            if part not in self.memo:
+                self.memo[part] = self.covering(part)
+            if self.memo[part]:
+                return self.memo[part]
+        return self.root_backs or {WHITE}
+
+    def held(self, subject: Compound) -> set[str]:
+        """The colours a background holds: of the rules with a part it covers, else the root's."""
+        needs = _needs(subject) or ["*"]
+        bucket = min((self.parts.get(key, {}) for key in needs), key=len)
+        found = {c for part, cs in bucket.items() if subject.covers(part) for c in cs}
+        return found or self.root_colours
+
+
+def _needs(part: Compound) -> list[str]:
+    """The keys every element a part matches has: its classes and its tag."""
+    return [f".{c}" for c in part.classes] + ([part.tag] if part.tag else [])
+
+
+def _ancestry(selector: Selector) -> frozenset[str]:
+    """The keys that some ancestor of any element the selector matches must have."""
+    found: set[str] = set()
+    for k in range(len(selector.compounds) - 1, 0, -1):
+        if selector.combinators[k - 1] in (" ", ">"):
+            found |= set(_needs(selector.compounds[k - 1]))
+    return frozenset(found)
 
 
 def _contrast(
@@ -1005,14 +1138,9 @@ def _contrast(
         if e.text:
             colour, line = cascade.colour_of[id(e)]
             back, back_line = cascade.backdrop(e)
-            low(
-                colour,
-                back,
-                line or back_line,
-                "color: under 4.5 to 1 on the background it lands on",
-            )
+            detail = "color: under 4.5 to 1 on the background it lands on"
+            low(colour, back, line or back_line, detail)
 
-    relaxed = _Matcher(relaxed=True)
     under: dict[int, set[str]] = {}
     for e in reversed(elements):
         found = {cascade.colour_of[id(e)][0]} if e.text else set()
@@ -1020,56 +1148,35 @@ def _contrast(
             if not cascade.back_of[id(child)][0]:
                 found |= under[id(child)]
         under[id(e)] = found
-    is_root = Compound("html", frozenset(), frozenset())
-    roots = [
-        b
-        for b in backs
-        if b.selector.compounds[-1].covers(is_root) and len(b.selector.compounds) == 1
-    ]
-    root_colours = [
-        c.colour for c in colours
-        if c.colour and len(c.selector.compounds) == 1 and c.selector.compounds[-1].covers(is_root)
-    ] or [BLACK]  # fmt: skip
+    relaxed = _Matcher(relaxed=True, above=cascade.strict.above)
+    shaped = _Index(s for s in cascade.selectors.values() if s.shaped)
+    reach: dict[int, list[Element]] = {}
+    for e in elements:
+        for selector in shaped.candidates(e, relaxed.ancestors(e)):
+            if relaxed.matches(selector, e):
+                reach.setdefault(id(selector), []).append(e)
+
+    fallback = _Fallback(colours, backs)
+    against: dict[tuple[int, bool], set[str]] = {}
     for paint in (*colours, *backs):
         if paint.colour is None:
             continue
-        shaped = paint.selector.shaped
-        if id(paint) in cascade.matched and not shaped:
+        selector, is_colour = paint.selector, id(paint) in cascade.colour_ids
+        if id(selector) in cascade.matched and not selector.shaped:
             continue
-        reach = [e for e in elements if relaxed.matches(paint.selector, e)] if shaped else []
-        is_colour = id(paint) in cascade.colour_ids
-        if reach:
-            for e in reach:
-                against = [cascade.backdrop(e)[0]] if is_colour else under[id(e)]
-                for other in against:
-                    low(
-                        paint.colour,
-                        other,
-                        paint.line,
-                        "a colour under 4.5 to 1 where the content's shape puts it",
-                    )
-            continue
-        if is_colour:
-            for back in _fallback_back(paint.selector, backs, roots):
-                low(
-                    paint.colour,
-                    back,
-                    paint.line,
-                    "color: under 4.5 to 1 on the background its selector names",
-                )
-        else:
-            subject = paint.selector.compounds[-1]
-            inside = [
-                c.colour for c in colours
-                if c.colour and any(subject.covers(part) for part in c.selector.compounds)
-            ]  # fmt: skip
-            for colour in inside or root_colours:
-                low(
-                    colour,
-                    paint.colour,
-                    paint.line,
-                    "a background under 4.5 to 1 with the text its selector holds",
-                )
+        key = (id(selector), is_colour)
+        if key not in against:
+            if id(selector) in reach:
+                against[key] = set()
+                for e in reach[id(selector)]:
+                    against[key] |= {cascade.backdrop(e)[0]} if is_colour else under[id(e)]
+            elif is_colour:
+                against[key] = fallback.behind(selector)
+            else:
+                against[key] = fallback.held(selector.compounds[-1])
+        for other in against[key]:
+            detail = "color: under 4.5 to 1 on a background its rules can put it on"
+            low(paint.colour, other, paint.line, detail)
     return list(dict.fromkeys(problems))
 
 

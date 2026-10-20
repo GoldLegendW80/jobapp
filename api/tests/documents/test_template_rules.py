@@ -200,7 +200,7 @@ HTML_ACCEPTED = [
     _cv("{{ base.skill_group(group) }}", '{{ group.label }}: {{ group["items"] | join(", ") }}'),
     _cv(
         "{{ base.skill_group(group) }}",
-        "{{ group.label }}{% for i in group.items %}{{ i }}"
+        '{{ group.label }}{% for i in group["items"] %}{{ i }}'
         "{% if not loop.last %} · {% endif %}{% endfor %}",
     ),
     _cv(SUMMARY, '<p class="summary">&nbsp;{{ content.summary }} (&amp;) | /</p>'),
@@ -322,6 +322,8 @@ def test_a_problem_never_carries_text_of_the_template():
         f"\n@{marker} {{ }}"
     )
     found = _check(files)
+    no_at_rule = {**files, "style.css": files["style.css"].replace(f"@{marker} {{ }}", "")}
+    found += _check(no_at_rule)
     assert len(found) >= 8
     assert not [p for p in found if marker in str(p) or marker in p.code]
     assert {p.code for p in found} <= set(template_rules.CODES)
@@ -347,3 +349,219 @@ def test_a_file_at_the_cap_of_the_shapes_the_rules_read_is_checked_whole():
     files["style.css"] += sheet * 1000
     assert all(len(text) <= template_rules.FILE_MAX for text in files.values())
     assert _check(files) == []
+
+
+# --- round 2 of the review: the reviewer's probes and their neighbours, never deleted ----------
+
+
+def _body_outside_the_block() -> dict[str, str]:
+    source = FILES["cv.html.j2"].replace("{% block body %}", "{% block body %}{% endblock %}", 1)
+    head, _, _ = source.rpartition("{% endblock %}")
+    return {**FILES, "cv.html.j2": head}
+
+
+def _top(addition: str, before: bool = False) -> dict[str, str]:
+    source = FILES["cv.html.j2"]
+    return {**FILES, "cv.html.j2": addition + source if before else source + addition}
+
+
+CUT = [
+    # a tag, an attribute, a comment or a reference cut by a construct: the check would read a
+    # class value where the render prints text
+    '{% if name %}{% else %}<i class="{% endif %}senior staff engineer'
+    '{% if name %}{% else %}">{% endif %}',
+    '{% for h in content.highlights %}<b class="{% endfor %}led a team'
+    '{% for h in content.highlights %}">{% endfor %}',
+    '{% if name %}<i class="{% elif photo %}<b class="{% endif %}lead{% if name %}">{% endif %}',
+    '{% for h in content.highlights %}{% else %}<i class="{% endfor %}x">',
+    "{% if name %}<i class='{% endif %}Led a team{% if name %}'>{% endif %}",
+    '<span class="a" {{ name }}></span>',
+    '<span {% if name %}class="a"{% endif %}></span>',
+    "{% if name %}<!--{% endif %}Led a team{% if name %}-->{% endif %}",
+    '<p class="x">&am{% if name %}{% endif %}p;</p>',
+    '<I CLASS="{% if name %}{% endif %}Lead">',
+    '{% if name %}<p class="x{% endif %} y">',
+]
+JINJA_REFUSED = [
+    *((_cv(SUMMARY, SUMMARY + probe), "literal") for probe in CUT),
+    (_letter("{{ base.letter_date() }}", "{{ base.letter_date() }}" + CUT[0]), "literal"),
+    (_body_outside_the_block(), "construct"),
+    (_top("<p>Led a team</p>"), "construct"),
+    (_top("{% if name %}{{ name }}{% endif %}"), "construct"),
+    (_top("{% block head %}{% endblock %}"), "construct"),
+    (_top("Led a team", before=True), "construct"),
+    (_top('{% set x = "a" %}', before=True), "construct"),
+    (_cv('{% extends "_base/page.html.j2" %}', ""), "construct"),
+    (_cv("{% block body %}", "{% block body scoped %}"), "construct"),
+    (_cv(SUMMARY, SUMMARY + '{{ content | join(", ") }}'), "construct"),
+    (_cv(SUMMARY, SUMMARY + '{{ roles | join(", ") }}'), "construct"),
+    (_cv(SUMMARY, SUMMARY + '{{ name | join(" ") }}'), "construct"),
+    (_cv(SUMMARY, SUMMARY + '{{ photo | join("") }}'), "construct"),
+    (_cv(SUMMARY, SUMMARY + '{{ content.skills | join(", ") }}'), "construct"),
+    (_cv(SUMMARY, SUMMARY + '{{ languages | join(", ") }}'), "construct"),
+    (_cv(ROLE, '{{ role | join(", ") }}' + ROLE), "construct"),
+    (_cv(ROLE, '{{ role.title | join(", ") }}' + ROLE), "construct"),
+    (_cv("{{ base.skill_group(group) }}", '{{ group.items | join(", ") }}'), "name"),
+    (_cv("{{ base.skill_group(group) }}", "{% for i in group.items %}{{ i }}{% endfor %}"), "name"),
+    (_cv(SUMMARY, SUMMARY + "{% for k in content.keys %}{% endfor %}"), "name"),
+    (_cv(ROLE, "{{ role.get }}" + ROLE), "name"),
+    (_cv(ROLE, "{{ role.values }}" + ROLE), "name"),
+    (_cv(ROLE, "{% for h in content.highlights %}{{ h }}{% endfor %}" + ROLE), "construct"),
+    (_cv(ROLE, "{% for r in roles %}{{ r.title }}{% endfor %}" + ROLE), "construct"),
+    (_cv(ROLE, "{% for s in schools %}{{ s.school }}{% endfor %}" + ROLE), "construct"),
+    (_cv(SUMMARY, SUMMARY + "<p>\ue000</p>"), "literal"),
+]
+
+
+@pytest.mark.parametrize(("files", "code"), JINJA_REFUSED)
+def test_round_two_jinja_and_markup_probes_are_refused(files, code):
+    assert code in {problem.code for problem in _check(files)}
+
+
+def test_a_body_outside_the_block_is_not_counted_as_printed():
+    expected = "content.summary is not printed, or only under another test"
+    assert Problem("cv.html.j2", 0, "unprinted", expected) in _check(_body_outside_the_block())
+
+
+RENDER_REFUSED = [
+    # well formed for the source check, but the browser's tree differs from the one checked
+    _cv(SUMMARY, '<p class="summary"><div class="x">{{ content.summary }}</div></p>'),
+    _cv(SUMMARY, '<div class="x">' + SUMMARY),
+    _cv(SUMMARY, SUMMARY + "</div>"),
+    _cv(SUMMARY, '<div class="x"><span class="y">' + SUMMARY + "</div></span>"),
+    _cv(SUMMARY, '<table class="t"><div class="x">' + SUMMARY + "</div></table>"),
+    _cv(SUMMARY, '<table class="t"><tr><td>{{ content.summary }}</td></tr>, </table>'),
+    _cv(SUMMARY, '<h2 class="a"><h3 class="b">{{ content.summary }}</h3></h2>'),
+    _cv(SUMMARY, '<ul class="a"><li><li>{{ content.summary }}</li></li></ul>'),
+    _cv(SUMMARY, "<br></br>" + SUMMARY),
+    _cv(SUMMARY, '<td class="a">{{ content.summary }}</td>'),
+]
+
+
+@pytest.mark.parametrize("files", RENDER_REFUSED)
+def test_a_template_the_browser_would_build_another_tree_from_is_refused(files):
+    assert template_rules.check_html("cv", "cv.html.j2", files["cv.html.j2"]) == []
+    assert "structure" in {problem.code for problem in _check(files)}
+
+
+ROUND_TWO_ACCEPTED = [
+    _cv(
+        ROLE,
+        '<div class="entry">{{ role.title }}, {{ role.organisation }}, {{ role.period }}, '
+        "{{ role.location }}"
+        '{% for b in role.bullets %}<p class="b">{{ b }}</p>{% endfor %}</div>',
+    ),
+    _cv(
+        "{{ base.skill_group(group) }}",
+        '<p class="g">{{ group.label }}: {% for i in group["items"] %}{{ i }}'
+        "{% if not loop.last %}, {% endif %}{% endfor %}</p>",
+    ),
+    _cv(SUMMARY, '<table class="t"><tr><td>{{ content.summary }}</td></tr></table>'),
+    _top("\n\n{# a comment #}\n"),
+]
+
+
+@pytest.mark.parametrize("files", ROUND_TWO_ACCEPTED)
+def test_round_two_true_inputs_pass(files):
+    assert _check(files) == []
+
+
+SHEET_REFUSED = [
+    # the reviewer's probes: a url( and a comment the browser reads otherwise
+    ".a{--z:url(data:\")}.summary::before{content:'Led a team of forty'}.c{--y:\"}",
+    '.a url(data:"){}.summary{display:none}.c{--y:"}',
+    ".a{--z:url(data:/*)}.summary::before{content:'Led a team'}.c{--y:*/}",
+    '.a{--z:URL(data:")}.summary::before{content:"Lead"}.c{--y:"}',
+    ".a{--z:Url(data:x)}",
+    ".a{--z:url( data:x )}",
+    '.summary{background:url("data:image/png;base64,AAAA")}',
+    # the reviewer's probes through var()
+    ':root{--x:"Led a team of forty "}.summary{display:list-item;list-style-type:var(--x)}',
+    ":root{--n:-9999px}.summary{position:absolute;left:var(--n)}",
+    ':root{--x:image-set("\\68ttps\\3a\\2f\\2f example.org\\2f a.png" 1x)}'
+    ".summary{display:list-item;list-style:var(--x)}",
+    ":root{--x:none}.summary{display:var(--x)}",
+    ":root{--x:#1d232b}:root{--x:#ffffff}.summary{color:var(--x)}",
+    ".summary{font-size:var(--Body-Size)}",
+    ".summary{font-size:var(--body-size, 9pt)}",
+    ".summary{color:var(--undefined)}",
+    ":root{--rail:9999mm}",
+    # the reviewer's contrast probes and the cascade
+    ".summary { color: #1d232b; background: #1d232b; }",
+    ".summary{color:var(--accent);background:var(--accent)}",
+    ".summary { background: #1d232b; }",
+    ".row { background: #222222; }",
+    "html { background: #1d232b; }",
+    ".body .summary { color: #f0f0f0; }",
+    ".summary:last-child { color: #ffffff; }",
+    ".summary:first-child { background: #1d232b; }",
+    ".sub + ul { background: #1d232b; }",
+    ".nothing-here p { color: #ffffff; }",
+    # the follow ups: hidden by offsets, a generic family first, an at-rule that looks like @page
+    ".summary { margin-left: -1000em; }",
+    ".summary { position: relative; left: 9999em; }",
+    ".summary { width: 5000mm; }",
+    ".summary { font-family: serif; }",
+    '.summary { font-family: sans-serif, "Nunito Sans"; }',
+    "@pagex { size: A4; }",
+    # selectors outside the allow list
+    "[title] { color: #000000; }",
+    ".x:not(.y) { color: #000000; }",
+    ".x:hover { color: #000000; }",
+    "#id { color: #000000; }",
+    "svg { color: #000000; }",
+    ".x::first-line { color: #000000; }",
+    ".a .b .c .d .e { color: #000000; }",
+    ".x, { color: #000000; }",
+    # input the tokenizer stops on
+    ".x { color: #１２３４５６; }",
+    ".é { color: #000000; }",
+    ".x { col\\or: #000000; }",
+    ".x { color: #000000; } /* not closed",
+    '.x::before { content: "•; }',
+    '.x::before { content: "a\\\nb"; }',
+    # values outside the allow lists
+    ".x { display: contents; }",
+    ".x::before { content: counter(x); }",
+    ".x { list-style-type: disclosure-open; }",
+    ".x { grid-template-columns: repeat(2, 1fr); }",
+    ".x { columns: 2 200mm; }",
+    ".x { margin: 1fr; }",
+    ".x { color: #000000 !ie; }",
+    ".x { width: minmax(0, 1fr); }",
+    ".x { border: 1px solid red; }",
+]
+
+
+@pytest.mark.parametrize("addition", SHEET_REFUSED)
+def test_round_two_sheet_probes_are_refused(addition):
+    assert _check(_css(addition))
+
+
+SHEET_ACCEPTED = [
+    '.x::before { content: "\\00B7"; }',
+    ".a > .b + .c ~ .d { color: #1d232b; }",
+    ".x { border: 1px solid #1d232b; } .y { border-bottom: 0; }",
+    "@PAGE { size: A4; }",
+    ".x { grid-template-columns: minmax(0, 1fr) 58mm; grid-column: 1 / -1; }",
+    ".x:last-child { color: #1d232b; }",
+    ".summary { background: #1f4e79; color: #ffffff; }",
+]
+
+
+@pytest.mark.parametrize("addition", SHEET_ACCEPTED)
+def test_round_two_sheets_written_another_way_pass(addition):
+    assert _check(_css(addition)) == []
+
+
+def test_a_sheet_the_tokenizer_stops_on_is_refused_whole_with_one_problem():
+    found = _check(_css(".a{--z:url(data:\")}.summary::before{content:'Led a team'}.c{--y:\"}"))
+    assert [p.code for p in found] == ["property"]
+
+
+def test_the_contrast_of_many_rules_is_linear_in_their_number():
+    backs = "".join(f".b{i}{{background:#f{i % 10}f{i % 10}f{i % 10}}}" for i in range(1300))
+    colours = "".join(f".c{i}{{color:#1{i % 10}1{i % 10}1{i % 10}}}" for i in range(1300))
+    sheet = FILES["style.css"] + backs + colours
+    assert len(sheet) <= template_rules.FILE_MAX
+    assert not {p.code for p in _check({**FILES, "style.css": sheet})} - {"contrast"}
