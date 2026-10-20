@@ -237,6 +237,40 @@ def test_an_export_that_would_replace_a_file_a_run_has_read_says_so_and_keeps_th
     assert len(of_user(factory, ALICE)) == 3
 
 
+def test_a_run_that_starts_reading_a_file_while_the_export_is_stored_keeps_the_names(
+    api: Api,
+    alice: str,
+    factory: sessionmaker[Session],
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Follow up of the second review of PR #467: the archive's row was deleted on the first
+    look of the checks, and a file refused by the second look lost its name."""
+    first = uploaded(api, alice, fx.export(), "export.zip")
+    assert run(factory, clock, RealParser(), first["id"]) == jobs.DONE
+    by_name = {document.name: document for document in of_user(factory, ALICE)}
+    read = by_name["export.zip: Positions.csv"]
+    set_columns(factory, str(read.id), text_status=TextStatus.failed, failed_reason="why")
+    looks: list[uuid.UUID] = []
+
+    def check(db: Session, document: IngestionDocument) -> str | None:
+        looks.append(document.id)
+        # A run starts reading it after the first look.
+        return deletion.REPLACEMENT_REFUSED if looks.count(read.id) > 1 else None
+
+    monkeypatch.setattr(documents, "_checks", [check])
+    clock.advance(minutes=5)
+    second = uploaded(api, alice, fx.export(), "again.zip")
+    assert run(factory, clock, RealParser(), second["id"]) == jobs.FAILED
+    assert looks.count(read.id) == 2
+    archive = row(factory, second["id"])
+    assert (archive.text_status, archive.failed_kind) == (TextStatus.failed, FailedKind.file)
+    assert archive.failed_reason == documents.export_refused(["export.zip: Positions.csv"])
+    assert archive.raw is None
+    kept = row(factory, str(read.id))
+    assert (kept.text_status, kept.failed_reason) == (TextStatus.failed, "why")
+
+
 @pytest.mark.parametrize(
     ("names", "sentence"),
     [

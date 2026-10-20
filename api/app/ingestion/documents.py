@@ -466,10 +466,12 @@ def replaceable(document: IngestionDocument) -> bool:
     )
 
 
-def usage(db: Session, user_id: uuid.UUID) -> Usage:
-    """What the user's documents take: the bytes, the text and the page images stored now.
-    Neither sum reads a content: octet_length takes the size from the stored value's header."""
+def usage(db: Session, user_id: uuid.UUID, spare: uuid.UUID | None = None) -> Usage:
+    """What the user's documents take: the bytes, the text and the page images stored now,
+    without the document `spare` (an export's archive while its files are stored). Neither sum
+    reads a content: octet_length takes the size from the stored value's header."""
     doc = IngestionDocument
+    others = sa.true() if spare is None else doc.id != spare
     count, stored = db.execute(
         sa.select(
             sa.func.count(),
@@ -480,7 +482,7 @@ def usage(db: Session, user_id: uuid.UUID) -> Usage:
                 ),
                 0,
             ),
-        ).where(doc.user_id == user_id)
+        ).where(doc.user_id == user_id, others)
     ).one()
     images = db.execute(
         sa.select(
@@ -515,9 +517,11 @@ def _store(
     digest: bytes,
     payload: _Content | bytes | bytearray,
     now: datetime,
+    spare: uuid.UUID | None = None,
 ) -> Stored:
     """Steps 1 to 3 of the module docstring. `payload` is the file of a binary kind, kept as
-    it is, or the text of a document that is complete at once."""
+    it is, or the text of a document that is complete at once. The room is counted without the
+    document `spare`."""
     content = payload if isinstance(payload, _Content) else None
     body = None if isinstance(payload, _Content) else payload
     cost = payload.stored_bytes if isinstance(payload, _Content) else len(payload)
@@ -526,7 +530,7 @@ def _store(
         _log("document duplicate", existing)
         return Stored(existing, created=False)
     if existing is None:
-        _check_room(usage(db, user_id), cost, new=True)
+        _check_room(usage(db, user_id, spare), cost, new=True)
     if body is not None:
         _stage(db, body)
     lock_user(db, user_id)
@@ -548,7 +552,7 @@ def _store(
             .where(IngestionDocument.id == document.id)
             .values(raw=None, text=None)
         )
-    _check_room(usage(db, user_id), cost, new=not replaced)
+    _check_room(usage(db, user_id, spare), cost, new=not replaced)
     if document is None:
         document = IngestionDocument(user_id=user_id, sha256=digest, created_at=now)
         db.add(document)
@@ -678,7 +682,9 @@ def store_export(
 
     A replaceable row that a replacement check refuses (a run has read it) is left as it is and
     its Stored carries `refused`; then the archive's row stays too, its bytes gone, for the
-    caller to fail with export_refused, so the page says which files were not replaced."""
+    caller to fail with export_refused, so the page says which files were not replaced. Whether
+    the archive's row stays is decided from what `_store` answered, not from the first look: a
+    run may start reading a file between the two."""
     fresh = cost = 0
     kept = False
     for entry in entries:
@@ -695,14 +701,10 @@ def store_export(
         raise DocumentError(413, QUOTA, "quota")
     name = archive.name
     _log("document unpacked", archive, files=len(entries), new=fresh)
-    if kept:
-        db.execute(
-            sa.update(IngestionDocument).where(IngestionDocument.id == archive.id).values(raw=None)
-        )
-    else:
-        db.delete(archive)
-    db.flush()
-    return [
+    db.execute(
+        sa.update(IngestionDocument).where(IngestionDocument.id == archive.id).values(raw=None)
+    )
+    stored = [
         _store(
             db,
             user_id,
@@ -713,9 +715,16 @@ def store_export(
             digest=entry.digest,
             payload=entry.content,
             now=now,
+            spare=archive.id,
         )
         for entry in entries
     ]
+    if not any(one.refused for one in stored):
+        db.delete(archive)
+        db.flush()
+    elif usage(db, user_id).documents > USER_MAX_DOCUMENTS:
+        raise DocumentError(422, EXPORT_TOO_MANY, "too-many-documents")
+    return stored
 
 
 def store_paste(

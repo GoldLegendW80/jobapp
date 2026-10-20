@@ -308,6 +308,7 @@ def test_a_credential_replaced_by_another_kind_pauses_before_the_next_step(
     run_id = started(factory, alice, settings)
     (first,) = eh.agent_runs_of(factory, alice)
     assert first.model == plan.model_for(CredentialKind.anthropic_api_key)
+    eh.set_agent(factory, first.id, credential_kind=CredentialKind.anthropic_api_key)
     save_credential(factory, keyring, alice, OAUTH, CredentialKind.claude_subscription)
     moved = eh.finish_step(factory, run_id, settings)
     assert moved.enqueue is None
@@ -339,6 +340,37 @@ def test_a_credential_of_the_same_kind_saved_again_does_not_pause(
     save_credential(factory, keyring, alice, OTHER_KEY)
     assert eh.finish_step(factory, run_id, settings).enqueue is not None
     assert eh.run_of(factory, run_id).status is RunStatus.running
+
+
+def test_a_model_id_reported_otherwise_by_the_sdk_does_not_pause(
+    factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
+) -> None:
+    run_id = started(factory, alice, settings)
+    (first,) = eh.agent_runs_of(factory, alice)
+    reported = f"{first.model}-20261001"
+    eh.set_agent(
+        factory, first.id, model=reported, credential_kind=CredentialKind.anthropic_api_key
+    )
+    assert eh.finish_step(factory, run_id, settings).enqueue is not None
+    assert eh.run_of(factory, run_id).status is RunStatus.running
+    assert eh.statuses(factory, run_id) == ["done", "running", "planned"]
+    second = eh.running(factory, run_id).agent_run_id
+    models = {one.id: one.model for one in eh.agent_runs_of(factory, alice)}
+    assert models[second] == plan.model_for(CredentialKind.anthropic_api_key)
+
+
+def test_a_first_agent_run_that_revealed_no_credential_does_not_pause(
+    factory: sessionmaker[Session], alice: uuid.UUID, keyring: Keyring, settings: Settings
+) -> None:
+    run_id = started(factory, alice, settings)
+    (first,) = eh.agent_runs_of(factory, alice)
+    eh.set_agent(factory, first.id, model=plan.model_for(None), credential_kind=None)
+    save_credential(factory, keyring, alice, OAUTH, CredentialKind.claude_subscription)
+    assert eh.finish_step(factory, run_id, settings).enqueue is not None
+    assert eh.run_of(factory, run_id).status is RunStatus.running
+    second = eh.running(factory, run_id).agent_run_id
+    models = {one.id: one.model for one in eh.agent_runs_of(factory, alice)}
+    assert models[second] == plan.model_for(CredentialKind.claude_subscription)
 
 
 @pytest.mark.parametrize("status", sorted(failures.CONTENT_STATUSES))
@@ -1453,7 +1485,7 @@ def test_an_advance_that_succeeds_forgets_the_failures_before_it(
         sa.exc.TimeoutError("QueuePool limit of size 5 overflow 10 reached"),
     ],
 )
-def test_a_failure_of_the_database_itself_is_not_counted_against_the_run(
+def test_a_failure_of_the_database_itself_does_not_close_the_run_at_the_normal_bound(
     factory: sessionmaker[Session],
     alice: uuid.UUID,
     settings: Settings,
@@ -1461,7 +1493,7 @@ def test_a_failure_of_the_database_itself_is_not_counted_against_the_run(
     caplog: pytest.LogCaptureFixture,
     error: Exception,
 ) -> None:
-    """N2 residual of the second review of PR #148."""
+    """N2 residual of the second review of PR #148: counted, but against the larger bound."""
     run_id = started(factory, alice, settings, count=2)
     eh.end_agent(factory, eh.running(factory, run_id).agent_run_id, tokens=1_000)
     record = engine._record
@@ -1474,16 +1506,92 @@ def test_a_failure_of_the_database_itself_is_not_counted_against_the_run(
         for number in range(1, 2 * engine.ADVANCE_FAILURES):
             assert asyncio.run(engine.tick(factory, None, minute(number), settings)) == 0
     run = eh.run_of(factory, run_id)
-    assert (run.status, run.advance_failures, run.advance_failed_at) == (
+    assert (run.status, run.advance_failures) == (
         RunStatus.running,
-        0,
-        None,
+        2 * engine.ADVANCE_FAILURES - 1,
     )
     failed = [one for one in caplog.records if one.getMessage() == "ingestion_advance_failed"]
     assert {one.__dict__["error_type"] for one in failed} == {type(error).__name__}
-    # The database back, the run moves on.
+    # The database back, the run moves on and forgets the count.
     monkeypatch.setattr(engine, "_record", record)
     assert asyncio.run(engine.tick(factory, None, now, settings)) == 1
+    assert eh.run_of(factory, run_id).advance_failures == 0
+
+
+def test_a_run_whose_advance_times_out_at_every_tick_is_closed_at_the_database_bound(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second review of PR #467, B2: a statement timeout at every tick kept the run the user's
+    one active run for ever."""
+    run_id = started(factory, alice, settings, count=2)
+    eh.end_agent(factory, eh.running(factory, run_id).agent_run_id, tokens=1_000)
+    timeout = sa.exc.OperationalError("SELECT 1", {}, Exception("canceling statement"))
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise timeout
+
+    monkeypatch.setattr(engine, "_record", broken)
+    assert engine.ADVANCE_FAILURES < engine.DATABASE_ADVANCE_FAILURES
+    for number in range(1, engine.DATABASE_ADVANCE_FAILURES):
+        asyncio.run(engine.tick(factory, None, minute(number), settings))
+    run = eh.run_of(factory, run_id)
+    assert (run.status, run.advance_failures) == (
+        RunStatus.running,
+        engine.DATABASE_ADVANCE_FAILURES - 1,
+    )
+    last = minute(engine.DATABASE_ADVANCE_FAILURES)()
+    asyncio.run(engine.tick(factory, None, lambda: last, settings))
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.closed_reason) == (RunStatus.failed, engine.STUCK)
+    assert closed.finished_at == last
+    with factory() as db:
+        assert engine.active_run_id(db, alice) is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("an error of the run"),
+        sa.exc.OperationalError("SELECT 1", {}, Exception("canceling statement")),
+    ],
+    ids=["run", "database"],
+)
+def test_a_cancel_closes_a_run_whose_advance_keeps_failing(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    """Second review of PR #467, B2: a Cancel closes through `advance`, so a run whose advance
+    kept failing could not be cancelled."""
+    run_id = started(factory, alice, settings, count=2)
+    eh.end_agent(factory, eh.running(factory, run_id).agent_run_id, tokens=1_000)
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(engine, "_record", broken)
+    asyncio.run(engine.tick(factory, None, minute(1), settings))
+    assert eh.run_of(factory, run_id).status is RunStatus.running
+    with factory() as db, db.begin():
+        engine.request_cancel(db, alice, run_id, minute(1)())
+    # The tick right after, closer than the gap to the failure before, closes it.
+    within = minute(1)() + engine.ADVANCE_FAILURE_GAP / 2
+    asyncio.run(engine.tick(factory, None, lambda: within, settings))
+    closed = eh.run_of(factory, run_id)
+    assert (closed.status, closed.closed_reason, closed.partial) == (
+        RunStatus.cancelled,
+        None,
+        False,
+    )
+    assert closed.tokens_spent == 1_000
+    assert eh.statuses(factory, run_id) == ["cancelled", "cancelled"]
+    with factory() as db:
+        assert engine.active_run_id(db, alice) is None
 
 
 def test_ticks_that_pile_up_after_a_stall_count_as_one_failure(
