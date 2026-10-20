@@ -18,6 +18,7 @@ overflow is stored. What can be refused is capacity (429, renders waiting) and a
 
 from __future__ import annotations
 
+import itertools
 import logging
 import re
 import threading
@@ -327,37 +328,63 @@ def _checked(db: Session, document: Document, at: datetime) -> Any:
     return render_job.sources_of(render_job.read_context(db, document, at), document)
 
 
-# Letters NFKD leaves whole, by their ASCII spelling; every other letter is folded by NFKD.
-SPELLED = str.maketrans(
-    {
-        "ø": "o", "Ø": "O", "æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ß": "ss", "ẞ": "SS",
-        "ł": "l", "Ł": "L", "đ": "d", "Đ": "D", "ð": "d", "Ð": "D", "þ": "th", "Þ": "Th",
-        "\u0131": "i", "ħ": "h", "Ħ": "H", "ŧ": "t", "Ŧ": "T", "ŋ": "ng", "Ŋ": "Ng",
-        "ə": "e", "Ə": "E", "ǝ": "e", "Ǝ": "E", "ɛ": "e", "Ɛ": "E", "ɔ": "o", "Ɔ": "O",
-        "\u0263": "g", "Ɣ": "G", "Ɖ": "D",
-    }
-)  # fmt: skip
+# Letters NFKD leaves whole, by their ASCII spelling in small letters (`_cased` writes their
+# case); every other letter is folded by NFKD.
+SPELLED = {
+    "ø": "o", "æ": "ae", "œ": "oe", "ß": "ss", "ł": "l", "đ": "d", "ð": "d", "þ": "th",
+    "\u0131": "i", "ħ": "h", "ŧ": "t", "ŋ": "ng", "ĸ": "q", "ə": "e", "ǝ": "e", "ɛ": "e",
+    "ɔ": "o", "\u0263": "g", "ɖ": "d",
+}  # fmt: skip
 # The other letters NFKD leaves whole carry their base letter in their name ("LATIN SMALL
-# LETTER D WITH HOOK"); what is left (IPA letters) is dropped.
-_BASE_LETTER = re.compile(r"LATIN (SMALL|CAPITAL) LETTER ([A-Z]) WITH ")
+# LETTER D WITH HOOK", "LATIN CAPITAL LETTER U BAR", "LATIN SMALL LETTER DOTLESS J"); what is
+# left (IPA letters, letters no language writes today) is dropped.
+_BASE_LETTER = re.compile(r"LATIN (SMALL|CAPITAL) LETTER (?:DOTLESS )?([A-Z])(?: BAR| WITH .+)?")
 
 
-def _spell(char: str) -> str:
+def _ascii_of(char: str) -> str | None:
+    """The spelling of a letter NFKD leaves whole, in small letters; None for the others."""
     if char.isascii() or unicodedata.normalize("NFKD", char).encode("ascii", "ignore"):
-        return char
-    found = _BASE_LETTER.match(unicodedata.name(char, ""))
-    if found is None:
-        return char
-    return found[2] if found[1] == "CAPITAL" else found[2].lower()
+        return None
+    if spelled := SPELLED.get(char.lower()):
+        return spelled
+    found = _BASE_LETTER.fullmatch(unicodedata.name(char, ""))
+    return found[2].lower() if found else None
+
+
+def _cased(word: str) -> str:
+    """`word` with its letters spelled. A spelling of two letters is written all in capitals
+    in a word whose other letters are all capitals, two at least for a small letter
+    ("ŊGUYEN", "ÞO", "STRAßE"), else in the letter's own case ("Ŋuolja", "Æsa", "Aß")."""
+    letters = sum(char.isupper() or char.islower() for char in word)
+    capitals = sum(char.isupper() for char in word)
+    out = []
+    for char in word:
+        spelled = _ascii_of(char)
+        if spelled is None:
+            out.append(char)
+            continue
+        others = letters - 1
+        shouting = others >= 2 - char.isupper() and capitals - char.isupper() == others
+        if len(spelled) > 1 and shouting:
+            out.append(spelled.upper())
+        else:
+            out.append(spelled.capitalize() if char.isupper() else spelled)
+    return "".join(out)
+
+
+def _in_word(char: str) -> bool:
+    return char.isalpha() or unicodedata.category(char).startswith("M")
 
 
 def ascii_name(*parts: str, suffix: str = "") -> str:
-    """Words of ASCII letters and digits joined by `_`: accents folded, letters with no
-    decomposition spelled (ø as o, æ as ae, ß as ss, ŋ as ng, ɗ as d), the rest dropped. The
-    parts are cut to NAME_MAX with room for `suffix`, which is never cut."""
+    """Words of ASCII letters and digits joined by `_`: accents folded (after NFD, so a letter
+    with an accent is spelled as its base: ǽ as ae), letters with no decomposition spelled (ø
+    as o, æ as ae, ß as ss, ŋ as ng, ɗ as d, ʉ as u), the rest dropped. The parts are cut to
+    NAME_MAX with room for `suffix`, which is never cut."""
     words: list[str] = []
     for part in parts:
-        spelled = "".join(map(_spell, part.translate(SPELLED)))
+        runs = itertools.groupby(unicodedata.normalize("NFD", part), _in_word)
+        spelled = "".join(_cased("".join(run)) if inside else "".join(run) for inside, run in runs)
         folded = unicodedata.normalize("NFKD", spelled).encode("ascii", "ignore").decode()
         words += re.findall(r"[A-Za-z0-9]+", folded)
     room = NAME_MAX - (len(suffix) + 1 if suffix else 0)
