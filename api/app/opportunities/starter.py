@@ -1,8 +1,9 @@
 """The starter list of boards and sources (opportunities O5b, issue #482): a brand new account
 has no boards, so its first sweep would find nothing. From what the person gave in the wizard
-(roles, industries, places, company types, contract types), this module proposes public company
+(roles, industries, places, company types), this module proposes public company
 boards (Ashby, Greenhouse, Lever) and browser sources (browser B8: Google Careers and Business
-France VIE, searched for the person's own role words). Nothing is added until the person chooses.
+France VIE, always proposed, searched for the person's first role and place). Nothing is added
+until the person chooses.
 
 The catalog is `starter_catalog.json` next to this module: versioned with the code, public
 company ATS identifiers only, each board asked once through the profile's board check before it
@@ -52,6 +53,7 @@ CATALOG_PATH = Path(__file__).with_name("starter_catalog.json")
 STUB_CATALOG_PATH = Path(__file__).with_name("starter_stub.json")
 ENTRIES_MAX = 15  # proposed at once, the added ones included
 GENERAL_MAX = 8  # the list for a person who gave no target
+DEFAULT_QUERY = "jobs"  # what a browser source searches when the person gave no plain role words
 
 # The app's own rule, whatever the person's list says (CLAUDE.md rule 2).
 CYBER_RULE = NeverApplyRule.parse(
@@ -289,11 +291,10 @@ class Board(_Entry):
 
 
 class Source(_Entry):
-    """A browser source of B8; `contract` limits it to a person who chose that contract type
-    (VIE offers are VIE contracts only)."""
+    """A browser source of B8: proposed to everyone, whatever the person saved (owner 2026-10-20,
+    PR #496); the person unticks what they do not want."""
 
     kind: Literal["google_careers", "vie"]
-    contract: Literal["VIE"] | None = None
 
     @property
     def key(self) -> str:
@@ -402,6 +403,13 @@ def _why(item: _Entry, industries: set[str], countries: set[str] | None) -> str:
     return ", ".join(parts)
 
 
+def _source_why(query: str, default: bool, place: str | None) -> str:
+    """What a browser source searches, said plainly (the person's first role and first place, or
+    every job when no role words were given)."""
+    what = "every job (no role given)" if default else f'"{query}"'
+    return f"Searches {what} in {place}" if place else f"Searches {what}"
+
+
 def propose(catalog: Catalog, search: SearchSection, handled: Iterable[str]) -> Proposal:
     """The person's starter list (pure: the catalog, the search section, the keys handled)."""
     done = set(handled)
@@ -419,6 +427,7 @@ def propose(catalog: Catalog, search: SearchSection, handled: Iterable[str]) -> 
     types = set(search.company_types)
 
     ranked: list[tuple[tuple[int, ...], Entry]] = []
+    sources: list[Entry] = []
     blocked = 0
     for item in (*catalog.boards, *catalog.sources):
         if matching_rule(rules, item.company, *item.industries) is not None:
@@ -427,10 +436,23 @@ def propose(catalog: Catalog, search: SearchSection, handled: Iterable[str]) -> 
         if item.key in done and item.key not in present:
             continue  # removed from the list, or added and later deleted: never again
         if isinstance(item, Source):
-            if query is None:
-                continue  # a browser source searches the person's own role words
-            if item.contract and item.contract not in search.contract_types:
-                continue
+            asked = query or DEFAULT_QUERY
+            where = place if item.kind == "google_careers" else None
+            sources.append(
+                Entry(
+                    key=item.key,
+                    kind="source",
+                    company=item.company,
+                    ats=None,
+                    org=None,
+                    source=item.kind,
+                    query=asked,
+                    location=where,
+                    why=_source_why(asked, query is None, where),
+                    added=item.key in present,
+                )
+            )
+            continue  # a browser source is always proposed, whatever the person saved
         if not given:
             if not item.general:
                 continue
@@ -451,26 +473,25 @@ def propose(catalog: Catalog, search: SearchSection, handled: Iterable[str]) -> 
                 int(bool(countries and countries & set(item.countries))),
                 int(item.company_type in types),
             )
-        board = item if isinstance(item, Board) else None
-        source = item if isinstance(item, Source) else None
         entry = Entry(
             key=item.key,
-            kind="board" if board else "source",
+            kind="board",
             company=item.company,
-            ats=board.ats if board else None,
-            org=board.org if board else None,
-            source=source.kind if source else None,
-            query=query if source else None,
-            location=(place if source and source.kind == "google_careers" else None),
+            ats=item.ats,
+            org=item.org,
+            source=None,
+            query=None,
+            location=None,
             why=_why(item, industries, countries),
             added=item.key in present,
         )
         ranked.append((score, entry))
     ranked.sort(key=lambda pair: (tuple(-n for n in pair[0]), pair[1].company.casefold()))
-    limit = ENTRIES_MAX if given else GENERAL_MAX
+    sources.sort(key=lambda e: e.company.casefold())
+    limit = (ENTRIES_MAX if given else GENERAL_MAX) - len(sources)
     return Proposal(
         targets=given,
-        entries=[entry for _, entry in ranked[:limit]],
+        entries=[*sources, *(entry for _, entry in ranked[:limit])],
         unmatched=(unknown_roles if roles and not families else [])
         + (unknown_industries if kinds.terms and not industries else []),
         version=catalog.version,

@@ -35,6 +35,7 @@ import {
   saveLikeMode,
   type OnboardingState,
 } from "./onboarding-api";
+import { starterKey } from "./starter-api";
 import { StarterBoards } from "./starter-boards";
 import {
   StepApply,
@@ -214,6 +215,8 @@ function Wizard({
     },
     onSuccess: async (saved, current) => {
       if (saved) client.setQueryData(profileKey, saved);
+      // The starter list is built from the saved answers: never show a stale one on step 7.
+      void client.invalidateQueries({ queryKey: starterKey });
       try {
         await recordPass(current);
       } catch (error) {

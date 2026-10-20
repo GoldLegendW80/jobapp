@@ -47,6 +47,6 @@
   ],
   "sources": [
     {"company": "Google", "kind": "google_careers", "industries": ["ai", "software", "developer_tools", "data", "consumer"], "countries": ["US", "GB", "IE", "FR", "DE", "CH", "NL", "PL", "IN", "JP", "SG", "AU", "CA"], "company_type": "large_company"},
-    {"company": "Business France VIE", "kind": "vie", "contract": "VIE", "industries": ["ai", "software", "developer_tools", "data", "fintech", "health", "legal", "consumer", "marketplace", "media", "mobility", "education"], "remote": true, "countries": []}
+    {"company": "Business France VIE", "kind": "vie", "industries": ["ai", "software", "developer_tools", "data", "fintech", "health", "legal", "consumer", "marketplace", "media", "mobility", "education"], "remote": true, "countries": []}
   ]
 }

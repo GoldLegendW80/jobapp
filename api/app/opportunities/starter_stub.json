@@ -10,6 +10,6 @@
   ],
   "sources": [
     {"company": "Google", "kind": "google_careers", "industries": ["ai", "software", "data"], "countries": ["FR", "GB", "US"], "company_type": "large_company"},
-    {"company": "Business France VIE", "kind": "vie", "contract": "VIE", "industries": ["ai", "software", "data", "health"], "remote": true}
+    {"company": "Business France VIE", "kind": "vie", "industries": ["ai", "software", "data", "health"], "remote": true}
   ]
 }

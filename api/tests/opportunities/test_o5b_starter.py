@@ -32,11 +32,13 @@ BASE = "/api/opportunities/starter"
 STUB = starter.load(starter.STUB_CATALOG_PATH)
 REAL = starter.load(starter.CATALOG_PATH)
 CYBER_WORDS = ("cyber", "security", "pentest", "threat", "secure")
-# The stub list of a person looking for AI engineer roles in Paris, in its order.
+# The stub list of a person looking for AI engineer roles in Paris, in its order: the browser
+# sources first (always proposed), then the boards.
 A_LIST = [
+    "source:vie",
+    "source:google_careers",
     "lever:fake-404",
     "ashby:fake-ok",
-    "source:google_careers",
     "lever:fake-unicode",
     "greenhouse:fake-ok2",
 ]
@@ -56,6 +58,10 @@ def section(**values: Any) -> SearchSection:
 
 def keys(found: starter.Proposal) -> list[str]:
     return [entry.key for entry in found.entries]
+
+
+def boards(found: starter.Proposal) -> list[str]:
+    return [entry.key for entry in found.entries if entry.kind == "board"]
 
 
 # --- the catalog --------------------------------------------------------------------------------
@@ -260,8 +266,12 @@ def test_no_target_gives_the_small_general_list() -> None:
     assert found.targets is False
     assert 1 <= len(found.entries) <= starter.GENERAL_MAX
     general = {item.key for item in REAL.boards if item.general}
-    assert set(keys(found)) <= general
-    assert all(entry.kind == "board" for entry in found.entries)  # a source needs role words
+    assert {e.key for e in found.entries if e.kind == "board"} <= general
+    sources = {e.key: e for e in found.entries if e.kind == "source"}
+    assert set(sources) == {"source:google_careers", "source:vie"}  # always proposed
+    google = sources["source:google_careers"]
+    assert (google.query, google.location) == (starter.DEFAULT_QUERY, None)
+    assert google.why == "Searches every job (no role given)"
     assert found.unmatched == []
 
 
@@ -270,14 +280,15 @@ def test_targets_rank_industries_then_roles_then_places() -> None:
         STUB, section(title_include=["AI engineer"], location=["Paris"], industries=["Data"]), []
     )
     # a tie on every count is broken by the name
-    assert keys(found) == ["source:google_careers", "greenhouse:fake-ok2"]
-    assert found.entries[1].why == "Data, France"
-    google = found.entries[0]
+    assert keys(found) == ["source:vie", "source:google_careers", "greenhouse:fake-ok2"]
+    assert found.entries[2].why == "Data, France"
+    google = found.entries[1]
     assert (google.source, google.query, google.location) == (
         "google_careers",
         "AI engineer",
         "Paris",
     )
+    assert google.why == 'Searches "AI engineer" in Paris'
     assert google.ats is None
     assert google.org is None
 
@@ -292,13 +303,13 @@ def test_roles_and_places_without_industries() -> None:
 
 def test_a_place_filters_and_anywhere_does_not() -> None:
     spain = starter.propose(STUB, section(industries=["Travel"], location=["Madrid"]), [])
-    assert keys(spain) == ["greenhouse:fake-dup"]
+    assert boards(spain) == ["greenhouse:fake-dup"]
     london = starter.propose(STUB, section(industries=["Travel"], location=["London"]), [])
-    assert keys(london) == []
+    assert boards(london) == []
     anywhere = starter.propose(STUB, section(industries=["Travel"], location=["Anywhere"]), [])
-    assert keys(anywhere) == ["greenhouse:fake-dup"]
+    assert boards(anywhere) == ["greenhouse:fake-dup"]
     unknown = starter.propose(STUB, section(industries=["Travel"], location=["Atlantis"]), [])
-    assert keys(unknown) == ["greenhouse:fake-dup"]
+    assert boards(unknown) == ["greenhouse:fake-dup"]
 
 
 @pytest.mark.parametrize(
@@ -310,10 +321,11 @@ def test_a_place_filters_and_anywhere_does_not() -> None:
         {"title_include": ["AI engineer"], "industries": ["Agriculture"]},
     ],
 )
-def test_targets_matching_nothing_propose_nothing_and_say_which(values: dict[str, Any]) -> None:
+def test_targets_matching_nothing_propose_no_board_and_say_which(values: dict[str, Any]) -> None:
     found = starter.propose(REAL, section(**values), [])
     assert found.targets is True
-    assert found.entries == []
+    assert boards(found) == []
+    assert keys(found) == ["source:vie", "source:google_careers"]  # still proposed to everyone
     expected = [t for t in values.get("title_include", []) if t != "AI engineer"]
     expected += values.get("industries", [])
     assert found.unmatched == expected
@@ -358,20 +370,39 @@ def test_never_apply_rules_and_the_app_s_own_rule_leave_entries_out() -> None:
     assert starter.propose(leaky, section(), []).blocked == 1
 
 
-def test_sources_need_role_words_and_vie_needs_the_vie_contract() -> None:
-    no_vie = starter.propose(STUB, section(title_include=["AI engineer"]), [])
-    assert "source:vie" not in keys(no_vie)
-    vie = starter.propose(STUB, section(title_include=["AI engineer"], contract_types=["VIE"]), [])
-    entry = {e.key: e for e in vie.entries}["source:vie"]
+def test_sources_are_always_proposed_whatever_the_person_saved() -> None:
+    both = ["source:vie", "source:google_careers"]
+    for values in (
+        {},
+        {"title_include": ["AI engineer"]},
+        {"title_include": ["AI engineer"], "contract_types": ["CDI"]},
+        {"industries": ["Agriculture"]},
+        {"location": ["Atlantis"], "contract_types": ["VIE"]},
+    ):
+        assert keys(starter.propose(STUB, section(**values), []))[:2] == both, values
+    entry = {
+        e.key: e for e in starter.propose(STUB, section(title_include=["AI engineer"]), []).entries
+    }["source:vie"]
     assert (entry.query, entry.location, entry.why) == (
         "AI engineer",
         None,
-        "Artificial intelligence, Remote",
+        'Searches "AI engineer"',
     )
-    patterns = section(
-        title_include=[r"ai\s+engineer"], title_include_re=True, contract_types=["VIE"]
-    )
-    assert not any(e.kind == "source" for e in starter.propose(STUB, patterns, []).entries)
+    # role words kept as patterns are no search words: the default query, said so
+    patterns = section(title_include=[r"ai\s+engineer"], title_include_re=True)
+    entry = {e.key: e for e in starter.propose(STUB, patterns, []).entries}["source:vie"]
+    assert (entry.query, entry.why) == (starter.DEFAULT_QUERY, "Searches every job (no role given)")
+    # a place goes to Google Careers only, and the first place when several
+    google = {
+        e.key: e for e in starter.propose(STUB, section(location=["Paris", "Lyon"]), []).entries
+    }["source:google_careers"]
+    assert (google.location, google.why) == ("Paris", "Searches every job (no role given) in Paris")
+
+
+def test_a_source_the_person_removed_is_not_proposed_again() -> None:
+    found = starter.propose(STUB, section(), ["source:vie"])
+    assert "source:vie" not in keys(found)
+    assert "source:google_careers" in keys(found)
 
 
 def test_the_list_is_capped() -> None:
@@ -382,8 +413,8 @@ def test_the_list_is_capped() -> None:
 def test_two_people_get_lists_from_their_own_targets() -> None:
     a = starter.propose(STUB, section(industries=["Health"]), [])
     b = starter.propose(STUB, section(industries=["Travel"]), ["greenhouse:fake-dup"])
-    assert keys(a) == ["lever:fake-unicode"]
-    assert keys(b) == []
+    assert boards(a) == ["lever:fake-unicode"]
+    assert boards(b) == []
 
 
 # --- the live check, on a fake transport --------------------------------------------------------
@@ -481,7 +512,7 @@ def test_the_list_of_the_caller(api: Api, a: Who) -> None:
     found = read(api, a)
     assert found["targets"] is True
     assert [e["key"] for e in found["entries"]] == A_LIST
-    assert found["entries"][1] == {
+    assert found["entries"][3] == {
         "key": "ashby:fake-ok",
         "kind": "board",
         "company": "Example Robotics",
@@ -500,7 +531,12 @@ def test_an_empty_profile_gets_the_general_list(factory: sessionmaker[Session], 
     who = _signed(factory, api, "e2e-starter-new@example.org")
     found = read(api, who)
     assert found["targets"] is False
-    assert [e["key"] for e in found["entries"]] == ["ashby:fake-ok", "greenhouse:fake-ok2"]
+    assert [e["key"] for e in found["entries"]] == [
+        "source:vie",
+        "source:google_careers",
+        "ashby:fake-ok",
+        "greenhouse:fake-ok2",
+    ]
 
 
 def test_adding_puts_enabled_boards_and_sources_in_the_search(
@@ -555,6 +591,7 @@ def test_removing_and_deleting_are_never_proposed_again(
     )
     assert put.status_code == 200, put.text
     assert [e["key"] for e in read(api, a)["entries"]] == [
+        "source:vie",
         "source:google_careers",
         "lever:fake-unicode",
         "greenhouse:fake-ok2",

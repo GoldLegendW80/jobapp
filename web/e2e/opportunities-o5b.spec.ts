@@ -24,7 +24,7 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
  *
  * An invented admin invites two invented members, N and B. N's roles (AI engineer, in Paris) are
  * saved, then N opens the summary at phone width: the list proposes the fake boards and Google
- * Careers with nothing ticked. N removes Google Careers and two boards, ticks one board and adds
+ * Careers and Business France VIE (always proposed) with nothing ticked. N removes both sources and two boards, ticks one board and adds
  * it, then adds the rest with "Add all"; the summary's count follows. After a reload the boards
  * show as added and the removed entries are never proposed again. Start runs the first sweep on
  * the two fake boards and Discover shows a card. B looks for a role the catalog knows nothing of:
@@ -184,6 +184,7 @@ test("N's summary proposes the fake boards and Google Careers, nothing ticked", 
     "Example Defence Systems",
     "Placeholder Health",
     "Google",
+    "Business France VIE",
   ])
     await expect(list.getByText(company, { exact: true })).toBeVisible();
   await expect(list.getByText("Invented Travel")).toHaveCount(0); // hires in Spain only
@@ -201,10 +202,11 @@ test("N's summary proposes the fake boards and Google Careers, nothing ticked", 
   await shots(pageN, "starter-list");
 });
 
-test("N removes three entries, adds one ticked board, then adds the rest", async () => {
+test("N removes four entries, adds one ticked board, then adds the rest", async () => {
   const list = starterList(pageN);
   for (const company of [
     "Google",
+    "Business France VIE",
     "Example Defence Systems",
     "Placeholder Health",
   ]) {
@@ -239,6 +241,7 @@ test("after a reload the boards show as added and the removed ones never come ba
   await expect(list.getByText("Added", { exact: true })).toHaveCount(2);
   for (const company of [
     "Google",
+    "Business France VIE",
     "Example Defence Systems",
     "Placeholder Health",
   ])
@@ -300,6 +303,9 @@ test("B's own list: what N removed is proposed, never the board of B's rule", as
   }));
   const list = await summary(pageB);
   await expect(list.getByText("Google", { exact: true })).toBeVisible();
+  await expect(
+    list.getByText("Business France VIE", { exact: true }),
+  ).toBeVisible();
   await expect(
     list.getByText("Placeholder Health", { exact: true }),
   ).toBeVisible();

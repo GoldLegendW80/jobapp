@@ -233,6 +233,26 @@ describe("the starter list", () => {
     expect(router.state.location.search).toBe("?tab=search");
   });
 
+  it("keeps the sources and still says when no board matches the answers", async () => {
+    fakeStarter({
+      ...emptyStarter,
+      targets: true,
+      unmatched: ["Nurse"],
+      entries: [{ ...GOOGLE, query: "jobs", location: null }],
+    });
+    renderPanel();
+    const region = await panel();
+    expect(await within(region).findByText("Google")).toBeVisible();
+    expect(
+      within(region).getByText(
+        "No starter board matches your answers. None is listed for Nurse.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(region).getByRole("link", { name: "Search options" }),
+    ).toBeVisible();
+  });
+
   it("says so when there is nothing to propose without targets", async () => {
     fakeStarter(emptyStarter);
     renderPanel();

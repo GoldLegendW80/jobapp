@@ -148,6 +148,16 @@ export function StarterBoards() {
             From your answers, these public company boards and sites may list
             postings for you. Nothing is added until you choose.
           </p>
+          {entries.some((entry) => entry.kind === "board") ? null : (
+            <p className="text-sm">
+              {list.data.targets
+                ? "No starter board matches your answers."
+                : "No starter board to propose yet."}
+              {list.data.unmatched.length
+                ? ` None is listed for ${list.data.unmatched.join(", ")}.`
+                : ""}
+            </p>
+          )}
           <ul className="flex flex-col divide-y">
             {entries.map((entry) => (
               <li
