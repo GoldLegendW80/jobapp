@@ -99,6 +99,12 @@ ERRORS = (
     "ats_board",
     "token_budget",
     "agent_failed",
+    # LinkedIn (browser B10, linkedin.py and app/browser/linkedin_guard.py)
+    "linkedin_off",
+    "linkedin_paused",
+    "linkedin_daily",
+    "linkedin_signin",
+    "linkedin_checkpoint",
 )
 # The codes after which no other source of this sweep starts: the browser is wanted elsewhere.
 STOPS_SWEEP = ("lease_ended", "browser_busy", "browser_unavailable")
@@ -392,8 +398,10 @@ class Pages:
         host: str = "",
         pacer: Pacer | None = None,
         lease_until: float = math.inf,
+        pause: tuple[float, float] = PAGE_PAUSE_S,
     ) -> None:
         self.tools, self.deadline = tools, deadline
+        self.pause = pause
         self.sleep, self.rng, self.monotonic = sleep, rng, monotonic
         self.host, self.pacer = host, pacer or MemoryPacer(monotonic)
         self.lease_until = lease_until  # monotonic time at which the lease's active time ends
@@ -405,7 +413,7 @@ class Pages:
     async def _act(self, action: Callable[[], Awaitable[dict[str, Any]]]) -> tuple[Node, str]:
         if self.monotonic() + PAGE_BUDGET_S >= self.deadline:
             raise SourceError("time_budget")
-        wait = await self.pacer.reserve(self.host, self.rng.uniform(*PAGE_PAUSE_S))
+        wait = await self.pacer.reserve(self.host, self.rng.uniform(*self.pause))
         if self.monotonic() + wait + PAGE_LOAD_S > self.lease_until:
             raise SourceError("lease_budget")
         self.pauses.append(wait)
@@ -443,6 +451,18 @@ class Read:
     user_id: str = ""
     # What the source adds to its entry in the sweep's stats (B9: the board, the refusals).
     extra: dict[str, Any] = field(default_factory=dict)
+    # Cards the person has already (browser B10): stored without a page so the row names this
+    # source too (sweep.store_postings notes it on the duplicate); `known` tells them.
+    noted: list[tuple[str, ats.Posting]] = field(default_factory=list)
+    known: Callable[[Card], bool] = lambda card: False
+    # Called by a reader the moment it counts a result page (None) or meets a wall (its code),
+    # before it goes on or raises: the Runner saves `result_pages` and the code with the sweep's
+    # progress and runs the kind's wall hook, so a kill after that page keeps both (browser B10).
+    met: Callable[[str | None], Awaitable[None]] = field(default=lambda code: _nothing())
+
+
+async def _nothing() -> None:
+    return None
 
 
 class Reader(Protocol):
@@ -454,9 +474,13 @@ class Reader(Protocol):
 
 
 def readers() -> dict[str, Reader]:
-    from app.browser.sources import google_careers, vie
+    from app.browser.sources import google_careers, linkedin, vie
 
-    return {"google_careers": google_careers.READER, "vie": vie.READER}
+    return {
+        "google_careers": google_careers.READER,
+        "vie": vie.READER,
+        "linkedin": linkedin.READER,
+    }
 
 
 def source_name(source: BrowserSource) -> str:
@@ -473,6 +497,12 @@ StoreFound = Callable[[str, Sequence[tuple[str, ats.Posting]]], Awaitable[None]]
 # B9: (user id, the board, its company) to whether the board was added (site.add_board).
 AddBoard = Callable[[str, Any, str], Awaitable[str]]
 ToolsFor = Callable[[str, str, str], Tools]
+# A check before a source of a kind takes the browser (browser B10: LinkedIn's guard): given the
+# plan, the code the source reports when it must not run, None when it may.
+Check = Callable[[Any], Awaitable[str | None]]
+# What runs when a reader of a kind meets a wall (browser B10: LinkedIn's checkpoint starts the
+# pause), given the plan and the wall's code.
+Wall = Callable[[Any, str], Awaitable[None]]
 
 
 class Runner:
@@ -488,10 +518,14 @@ class Runner:
         rng: random.Random | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         pacer: Pacer | None = None,
+        checks: dict[str, Check] | None = None,
+        walls: dict[str, Wall] | None = None,
         finder: Any = None,
         add_board: AddBoard | None = None,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
+        self.checks = checks or {}
+        self.walls = walls or {}
         self.finder = finder  # B9: the finder agent of `site` sources (finder.FinderAgent)
         self.add_board = add_board  # B9: adds a board found to the person's (site.add_board)
         self.sleep, self.rng = sleep, rng or random.SystemRandom()
@@ -522,7 +556,9 @@ class Runner:
                 continue
             stats.current_board = source_name(source)
             await progress()
-            entry["error"], ended = await self._one(plan, stats, source, entry, store, deadline)
+            entry["error"], ended = await self._one(
+                plan, stats, source, entry, store, deadline, progress
+            )
             if ended in STOPS_SWEEP:
                 stop = ended
             await progress()
@@ -535,10 +571,22 @@ class Runner:
         entry: dict[str, Any],
         store: StoreFound,
         deadline: float,
+        progress: Callable[[], Awaitable[None]],
     ) -> tuple[str | None, str | None]:
         """The code the source reports, and the code of how its read ended (they differ only when
         the store failed after a read that ended the lease: the sweep's other sources then still
         do not start)."""
+        check = self.checks.get(source.kind)
+        if source.kind == "linkedin" and check is None:
+            return "linkedin_off", None  # fail closed: LinkedIn never runs without its guard
+        if check is not None:
+            try:
+                refused = await check(plan)
+            except Exception as exc:
+                logger.warning("browser source check failed: error=%s", type(exc).__name__)
+                refused = "browser_unavailable"
+            if refused is not None:
+                return refused, None
         user = str(plan.user_id)
         if source.kind == "site":
             from app.browser.sources import site
@@ -576,8 +624,22 @@ class Runner:
             host=host,
             pacer=self.pacer,
             lease_until=asked + got.lease.max_s,
+            pause=getattr(reader, "pause", PAGE_PAUSE_S),
         )
-        read = Read(user_id=user)
+        wall = self.walls.get(source.kind)
+
+        async def met(code: str | None) -> None:
+            entry["result_pages"] = read.result_pages
+            if code is not None:
+                entry["error"] = code
+                if wall is not None:
+                    try:
+                        await wall(plan, code)
+                    except Exception as exc:
+                        logger.warning("browser source wall failed: error=%s", type(exc).__name__)
+            await progress()
+
+        read = Read(user_id=user, known=lambda card: self._known(plan, card), met=met)
         code: str | None = None
 
         def wanted(card: Card) -> bool:
@@ -608,10 +670,10 @@ class Runner:
             logger.warning("browser source layout changed: kind=%s", source.kind)
             return code, code
         await self._board_found(user, source, entry, code)
-        if read.postings:
+        if read.postings or read.noted:
             new_before = stats.new
             try:
-                await store(source_name(source), read.postings)
+                await store(source_name(source), [*read.postings, *read.noted])
             except Exception as exc:
                 # sweep._store_found puts the stats and the known postings back: nothing stored.
                 logger.warning("browser source not stored: error=%s", type(exc).__name__)
@@ -649,6 +711,14 @@ class Runner:
                 await self.leases.cancel(user, ["sweep"])
 
     @staticmethod
+    def _known(plan: Any, card: Card) -> bool:
+        from app.jobs import slug as slugs
+
+        return bool(
+            plan.known.has(slugs.PostingKey.of(card.company, card.title, card.location, card.url))
+        )
+
+    @staticmethod
     def _wanted(plan: Any, card: Card, opened: int) -> bool:
         """Whether the posting page is worth a visit: the person does not have it yet, and the
         page budget is not spent. The search's filters decide again at the store."""
@@ -683,11 +753,15 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         session_max_s=settings.browser_session_max_s,
         max_table=lease_max_table(settings.browser_lease_max_s),
     )
+    from app.browser import linkedin_guard
+
     return Runner(
         leases,
         lambda user, lease, token: LeaseTools(leases, client, user, lease, token),
         base_url=settings.browser_sources_base_url,
         pacer=RedisPacer(pool),
+        checks={"linkedin": linkedin_guard.sweep_check(sessions)},
+        walls={"linkedin": linkedin_guard.sweep_wall(sessions)},
         finder=None if agent_context is None else _finder(agent_context),
         add_board=_add_board(sessions),
     )
