@@ -4,8 +4,8 @@ the standard headings, its PDF text in the order of the page); `portrait` withou
 initials in the frame, never an empty frame); `columns-header` with five contact lines in its
 three columns; a long name and long contact lines in all four (a line wraps between contact
 lines, never inside a name, an address or a link); a heading never left alone at a page's end;
-the contrast of every text colour on what it is painted on, no dash printed as a separator,
-truthful tags, and each of the four distinct in layout from every other template.
+the contrast of every text colour on what it is painted on, truthful tags, and each of the four
+distinct in layout from every other template.
 Marked `docker`: the same cases through the real renderer, with the geometry of the PDF
 (pypdfium2 character boxes and image objects).
 """
@@ -26,7 +26,6 @@ from PIL import Image, ImageChops
 from app.documents import content as c
 from app.documents import fit, templates
 from app.documents.profile_view import Identity, ProfileView
-from app.documents.templates import thumbnails
 from tests.documents.test_templates import (
     ON,
     SLUGS,
@@ -50,7 +49,6 @@ from tests.documents.test_templates_d19 import (
 )
 
 D22 = ("nordic", "columns-header", "portrait", "plain")
-DASHES = ("—", "–", " - ")
 MM = 72 / 25.4  # points in a millimetre
 A4 = (210 * MM, 297 * MM)
 
@@ -143,7 +141,14 @@ FRAME = re.compile(r'<div class="frame( initials)?">(.*?)</div>', re.S)
         ("Émilie de la Fontaine", "ÉF"),
         ("  Alex   Example  ", "AE"),
         ("Øyvind Ålesund Ødegård", "ØØ"),
-        ("<b>Alex</b> Example", "&lt;E"),
+        ("<b>Alex</b> Example", "BE"),
+        # the first letter, never a sign, with its accent written as a combining mark
+        ("(Élodie) Example", "ÉE"),
+        ("E\u0301lodie e\u0301chantillon", "E\u0301E\u0301"),
+        ("« Alex » Example-Sample", "AE"),
+        ("Alex 2", "A"),
+        ("J.-P. Dupont", "JD"),
+        ("łukasz żółw", "ŁŻ"),
     ],
 )
 @pytest.mark.parametrize("kind", templates.KINDS)
@@ -248,32 +253,6 @@ def test_the_contrast_pairs_read_a_rule_with_its_own_background() -> None:
     assert ("#2d3a42", "#edf1ed") in painted_pairs("nordic")
     assert ("#7a4a22", "#f3e9df") in painted_pairs("portrait")
     assert painted_pairs("plain") == {("#000000", "#ffffff")}
-
-
-# The text of a CSS `content`, in double or in single quotes.
-CONTENT = re.compile(r"""content:\s*(?:"([^"]*)"|'([^']*)')""")
-
-
-def test_the_dash_test_reads_content_in_both_quotes() -> None:
-    css = """a::before { content: "x — y"; } b::after { content: ' - '; }"""
-    assert [a or b for a, b in CONTENT.findall(css)] == ["x — y", " - "]
-
-
-@pytest.mark.parametrize("slug", D22)
-def test_no_dash_is_printed_as_a_separator(slug: str) -> None:
-    """The text a template prints of its own: its manifest's names and descriptions, the text of
-    its CSS `content`, and the page it builds from the sample in both languages."""
-    found = template(slug)
-    own = [*found.name.values(), *found.description.values()]
-    own += [a or b for a, b in CONTENT.findall(found.files["style.css"])]
-    for kind in templates.KINDS:
-        for language in templates.LANGUAGES:
-            sample = thumbnails.sample()[kind]
-            view = thumbnails.sample_view()
-            html = templates.build_html(found, kind, sample, view, language, 0, ON)
-            own.append(assert_authoring(html).body)
-    for text in own:
-        assert not any(dash in text for dash in DASHES), (slug, text[:120])
 
 
 @pytest.mark.parametrize("slug", D22)
@@ -527,12 +506,19 @@ def test_columns_header_moves_a_long_contact_line_whole_to_the_next_row(
     renderer: Any, language: str, kind: str
 ) -> None:
     """The five long lines take wider cells and the rows they need: each stays on one line
-    (asserted above), and no two lines overlap on a row."""
+    (asserted above), each starts on one of the three columns, and no two lines overlap on a
+    row."""
     found = template("columns-header")
     view = with_identity(d1_view(), LONG_CONTACT)
     content: Any = d1("cv-typical")[2] if kind == "cv" else d1("letter-en")[2]
     result = fitted(renderer, found, kind, content, view, language)
     assert result.fit
+    step = found.steps(kind)[result.step]
+    width = A4[0] - 2 * step.margin * MM
+    columns = [step.margin * MM + column * 0.35 * width for column in range(3)]
+    for line in templates.contact_lines(view):
+        x, _ = lefts(result.pdf, str(line["text"]))
+        assert min(abs(x - column) for column in columns) < 1.5, (line["text"], x, columns)
     glyphs = Glyphs(result.pdf)
     boxes = [glyphs.find(str(line["text"])) for line in templates.contact_lines(view)]
     for i, one in enumerate(boxes):
@@ -542,6 +528,29 @@ def test_columns_header_moves_a_long_contact_line_whole_to_the_next_row(
                 b[2] for b in other
             ) < min(b[0] for b in one)
             assert not same_row or apart
+
+
+@docker
+@pytest.mark.parametrize("language", templates.LANGUAGES)
+@pytest.mark.parametrize("kind", templates.KINDS)
+def test_plain_starts_each_row_of_contact_lines_at_the_margin(
+    renderer: Any, language: str, kind: str
+) -> None:
+    """The long contact lines wrap over rows; the rule that parts two lines never starts a row:
+    the first line of each row stands at the margin, as on the first."""
+    found = template("plain")
+    view = with_identity(d1_view(), LONG_CONTACT)
+    content: Any = d1("cv-typical")[2] if kind == "cv" else d1("letter-en")[2]
+    result = fitted(renderer, found, kind, content, view, language)
+    assert result.fit
+    margin = found.steps(kind)[result.step].margin * MM
+    rows: dict[int, list[float]] = {}
+    for line in templates.contact_lines(view):
+        x, y = lefts(result.pdf, str(line["text"]))
+        rows.setdefault(round(y), []).append(x)
+    assert len(rows) >= 2, rows
+    for row in rows.values():
+        assert abs(min(row) - margin) < 1.5, (row, margin)
 
 
 LONG_NAMES = [

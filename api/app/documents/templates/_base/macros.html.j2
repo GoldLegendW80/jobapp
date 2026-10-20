@@ -10,15 +10,24 @@
     breaks between two words, never at a hyphen; a no break space stays inside its word. -#}
 {% macro words(text, class="word") %}{% for word in text.split(" ") if word %}{% if not loop.first %} {% endif %}<span class="{{ class }}">{{ word }}</span>{% endfor %}{% endmacro %}
 
-{% macro contact_lines(class="contact") %}
+{#- `spans`: (one cell, two cells), the most characters a line holds in one and in two cells of
+    a grid of three; a longer line gets the class `span2` or `span3`. -#}
+{% macro contact_lines(class="contact", spans=none) %}
 {% if contact %}
 <ul class="{{ class }}">
 {% for line in contact %}
-<li>{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
+{% set size = line.text | length %}
+<li{% if spans and size > spans[1] %} class="span3"{% elif spans and size > spans[0] %} class="span2"{% endif %}>{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
 {% endfor %}
 </ul>
 {% endif %}
 {% endmacro %}
+
+{#- The first letter of a word with its accents (combining marks after it), past any sign. -#}
+{% macro first_letter(word) %}{% set ns = namespace(out="", done=false) %}{% for ch in word if not ns.done %}{% if ns.out and "\u0300" <= ch <= "\u036f" %}{% set ns.out = ns.out ~ ch %}{% elif ns.out %}{% set ns.done = true %}{% elif ch.isalpha() %}{% set ns.out = ch %}{% endif %}{% endfor %}{{ ns.out | upper }}{% endmacro %}
+
+{#- The initials of a name: the first letters of its first and last words that hold a letter. -#}
+{% macro initials(text) %}{% set ns = namespace(first="", last="") %}{% for part in text.split() %}{% set letter = first_letter(part) %}{% if letter and not ns.first %}{% set ns.first = letter %}{% elif letter %}{% set ns.last = letter %}{% endif %}{% endfor %}{{ ns.first }}{{ ns.last }}{% endmacro %}
 
 {% macro portrait(class="photo") %}
 {% if photo %}<img class="{{ class }}" src="{{ photo }}" alt="{{ name }}">{% endif %}

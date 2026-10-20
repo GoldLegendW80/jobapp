@@ -11,7 +11,8 @@
 </div>
 {{ base.portrait() }}
 </header>
-{{ base.contact_lines() }}
+{#- the characters a line holds in one cell and in two, at the loosest step of the kind -#}
+{{ base.contact_lines(spans=(28, 62) if kind == "cv" else (23, 51)) }}
 
 <div class="letter-body">
 {{ base.letter_date() }}
