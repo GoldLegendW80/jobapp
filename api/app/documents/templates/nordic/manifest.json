@@ -1,0 +1,143 @@
+{
+  "slug": "nordic",
+  "version": 1,
+  "name": {
+    "en": "Nordic",
+    "fr": "Nordique"
+  },
+  "description": {
+    "en": "A muted palette of slate and sage on wide margins: a light name, spaced capitals for the headings, the competencies as quiet tags.",
+    "fr": "Une palette sourde d'ardoise et de sauge sur de larges marges : un nom en caractères fins, des intitulés en capitales espacées, les compétences en étiquettes discrètes."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "no photo",
+    "colour"
+  ],
+  "photo": "none",
+  "fonts": [
+    "dm-sans"
+  ],
+  "accent": "#4a6273",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 9.6,
+        "line_height": 1.42,
+        "section_gap": 12.0,
+        "item_gap": 5.5,
+        "margin": 22.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.38,
+        "section_gap": 11.0,
+        "item_gap": 5.0,
+        "margin": 20.5
+      },
+      {
+        "body_size": 9.1,
+        "line_height": 1.35,
+        "section_gap": 9.5,
+        "item_gap": 4.5,
+        "margin": 19.0
+      },
+      {
+        "body_size": 8.9,
+        "line_height": 1.31,
+        "section_gap": 8.5,
+        "item_gap": 4.0,
+        "margin": 17.5
+      },
+      {
+        "body_size": 8.7,
+        "line_height": 1.27,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 15.5
+      },
+      {
+        "body_size": 8.5,
+        "line_height": 1.23,
+        "section_gap": 6.0,
+        "item_gap": 2.5,
+        "margin": 14.0
+      },
+      {
+        "body_size": 8.2,
+        "line_height": 1.2,
+        "section_gap": 4.5,
+        "item_gap": 2.0,
+        "margin": 12.5
+      },
+      {
+        "body_size": 8.0,
+        "line_height": 1.16,
+        "section_gap": 3.5,
+        "item_gap": 1.5,
+        "margin": 11.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "summary": 330,
+      "highlight": 60,
+      "competency": 40,
+      "main_bullet": 190,
+      "bullet": 100,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 10.8,
+        "line_height": 1.55,
+        "section_gap": 13.0,
+        "item_gap": 8.0,
+        "margin": 26.0
+      },
+      {
+        "body_size": 10.4,
+        "line_height": 1.5,
+        "section_gap": 12.0,
+        "item_gap": 7.0,
+        "margin": 23.5
+      },
+      {
+        "body_size": 10.1,
+        "line_height": 1.45,
+        "section_gap": 10.5,
+        "item_gap": 6.0,
+        "margin": 21.0
+      },
+      {
+        "body_size": 9.7,
+        "line_height": 1.4,
+        "section_gap": 9.5,
+        "item_gap": 5.0,
+        "margin": 19.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.35,
+        "section_gap": 8.0,
+        "item_gap": 4.0,
+        "margin": 16.5
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.3,
+        "section_gap": 7.0,
+        "item_gap": 3.0,
+        "margin": 14.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 90,
+      "paragraph": 900
+    }
+  },
+  "thumbnail_of": "a24e8f820c46ff1e4cc03d99dc250a390d088ba584741da7af10a15009d4e198"
+}
