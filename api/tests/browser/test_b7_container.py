@@ -14,9 +14,11 @@ container is recreated; SIGTERM to browserd during a session without CDP closes 
 new size.
 
 Hardening (issue #424): an end whose helper raises leaves no browser on the display for the next
-lease (the end reaps, and every start reaps what an end could not); chrome://inspect is blocked by
-the managed policy, a remote debugging switch kept on in the profile's Local State opens no port
-in a person's session, and a port opened in one ends it `debugging_port`.
+lease (the end reaps, and every start reaps what an end could not); every chrome:// page but
+chrome://policy, chrome://sandbox and the new tab page is blocked by the managed policy, in an
+agent's lease and in a person's session (owner, 2026-10-20); a remote debugging switch kept on in
+the profile's Local State opens no port in a person's session, a flag saved there does not
+survive a restart, and a port opened in a person's session ends it `debugging_port`.
 
 The fixture site is tests/browser_pages/b7/site.html: its title says who is signed in, which the
 test reads from the display's window list (xwininfo), since nothing may attach to a session
@@ -69,6 +71,16 @@ for pid in sys.argv[2:]:
 """
 
 
+ARGV_ALL = """
+import sys
+for pid in sys.argv[1:]:
+    try:
+        print(open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\\0", b" ").decode())
+    except OSError:
+        pass
+"""
+
+
 def session(stack: Stack, purpose: str, profile: str, uid: int, address: str | None = None) -> dict:
     body = {"user_id": f"u{uid}", "profile_id": profile, "uid": uid, "purpose": purpose,
             "automation": False}  # fmt: skip
@@ -100,7 +112,7 @@ def wait_title(stack: Stack, text: str, attempts: int = 300) -> None:
     for _ in range(attempts):
         if text in window_titles(stack):
             return
-    raise AssertionError(f"no window titled {text!r}")
+    raise AssertionError(f"no window titled {text!r}: {window_titles(stack)[-1500:]}")
 
 
 def end(stack: Stack) -> dict:
@@ -355,18 +367,166 @@ for name in ("/proc/net/tcp", "/proc/net/tcp6"):
 """
 
 
-@pytest.mark.parametrize(
-    "page", ["chrome://inspect/#remote-debugging", "chrome://inspect", "CHROME://INSPECT/#devices",
-             "chrome://%69nspect/", "chrome:inspect", "view-source:chrome://inspect"],
-)  # fmt: skip
-def test_chrome_inspect_is_blocked_by_the_managed_policy(stack: Stack, page: str) -> None:
-    """Its "Allow remote debugging" switch opens a DevTools port at the next start (measured
-    for B7); an agent's lease still has CDP (this navigation goes through it)."""
+BLOCKED = ["chrome://flags", "chrome://flags/#enable-experimental-web-platform-features",
+           "chrome://settings", "chrome://settings/content", "chrome://extensions",
+           "chrome://net-internals", "chrome://inspect/#remote-debugging", "chrome://inspect",
+           "CHROME://INSPECT/#devices", "chrome://%69nspect/", "chrome:inspect",
+           "view-source:chrome://inspect", "chrome://%66lags", "view-source:chrome://flags",
+           "chrome://chrome-urls", "chrome://version"]  # fmt: skip
+
+
+@pytest.mark.parametrize("page", BLOCKED)
+def test_chrome_pages_are_blocked_by_the_managed_policy_in_an_agents_lease(
+    stack: Stack, page: str
+) -> None:
+    """Every chrome:// page is blocked (owner, 2026-10-20); an agent's lease still has CDP (this
+    navigation goes through it)."""
     stack.lease(F, UID_F)
     seen = stack.probe("navigate", page, "20")
     end(stack)
     assert seen["ok"] is False
     assert "ERR_BLOCKED_BY_ADMINISTRATOR" in seen["detail"]
+
+
+def test_the_chrome_pages_the_image_needs_stay_open(stack: Stack) -> None:
+    """browserd.probe reads chrome://sandbox and chrome://policy; Ctrl+T opens the new tab
+    page."""
+    stack.lease(F, UID_F)
+    sandbox = stack.probe("sandbox")["text"]
+    policy = stack.probe("policy")
+    seen = stack.probe("navigate", "chrome://new-tab-page", "20")
+    end(stack)
+    assert "You are adequately sandboxed." in sandbox, sandbox[:800]
+    assert all(policy.values()), policy
+    assert seen["ok"] is True, seen
+
+
+TYPE = """
+import ctypes, sys
+x, t = ctypes.CDLL("libX11.so.6"), ctypes.CDLL("libXtst.so.6")
+x.XOpenDisplay.restype, x.XOpenDisplay.argtypes = ctypes.c_void_p, [ctypes.c_char_p]
+x.XStringToKeysym.restype, x.XStringToKeysym.argtypes = ctypes.c_ulong, [ctypes.c_char_p]
+x.XKeysymToKeycode.restype = ctypes.c_ubyte
+x.XKeysymToKeycode.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+x.XKeycodeToKeysym.restype = ctypes.c_ulong
+x.XKeycodeToKeysym.argtypes = [ctypes.c_void_p, ctypes.c_ubyte, ctypes.c_int]
+x.XSync.argtypes = [ctypes.c_void_p, ctypes.c_int]
+t.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int, ctypes.c_ulong]
+t.XTestFakeMotionEvent.argtypes = [ctypes.c_void_p] + [ctypes.c_int] * 3 + [ctypes.c_ulong]
+d = x.XOpenDisplay(b":1")
+NAMES = {":": "colon", "/": "slash", "-": "minus", "#": "numbersign"}
+
+def code(name):
+    sym = x.XStringToKeysym(name.encode())
+    c = x.XKeysymToKeycode(d, sym)
+    return c, x.XKeycodeToKeysym(d, c, 0) != sym
+
+def press(c, *mods):
+    for m in (*mods, c):
+        t.XTestFakeKeyEvent(d, m, 1, 0)
+    for m in (c, *reversed(mods)):
+        t.XTestFakeKeyEvent(d, m, 0, 0)
+    x.XSync(d, 0)
+
+if sys.argv[1] == "focus":
+    t.XTestFakeMotionEvent(d, 0, 720, 500, 0)
+    press(code("l")[0], code("Control_L")[0])
+    sys.exit()
+def write(text):
+    for ch in text:
+        c, shifted = code(NAMES.get(ch, ch))
+        press(c, *([code("Shift_L")[0]] if shifted else []))
+
+scheme, rest = sys.argv[1].split(":", 1)
+write(":" + rest)
+press(code("Home")[0])
+write(scheme)
+press(code("Return")[0])
+"""
+
+
+def type_address(stack: Stack, address: str) -> None:
+    """Types the address in the window's address bar, with the X test extension (no xdotool in
+    the image): the pointer over the window (no click: the new tab page's tiles are links),
+    Ctrl+L, the keys, Return. The scheme is typed last, at the start: typed at the
+    end, "chrome" races the address bar's inline completion (chrome.google.com). The focus is
+    given a few docker exec round trips to land (no sleep)."""
+    stack.execute("browser", "python", "-c", TYPE, "focus", user="1000")
+    for _ in range(10):
+        window_titles(stack)
+    stack.execute("browser", "python", "-c", TYPE, address, user="1000")
+
+
+# What the person types, the title of the page when it opens, and when it is blocked (its
+# address). chrome://policy and the new tab page open: the controls.
+TYPED = [
+    ("chrome://policy", "Policies", None),
+    ("chrome://flags", "Experiments", "chrome://flags/"),
+    ("chrome://newtab", "New Tab", None),
+    ("chrome://settings", "Settings", "chrome://settings/"),
+    ("chrome://extensions", "Extensions", "chrome://extensions/"),
+    ("chrome://net-internals", "net-internals", "chrome://net-internals/"),
+    (
+        "chrome://inspect/#devices",
+        "Inspect with Chrome Developer Tools",
+        "chrome://inspect/#devices",
+    ),
+    ("about:flags", "Experiments", "chrome://flags/"),
+    ("chrome://settings/content", "Settings", "chrome://settings/content"),
+]
+
+
+@pytest.mark.parametrize("purpose", ["signin", "takeover"])
+def test_chrome_pages_are_blocked_in_a_persons_session(stack: Stack, purpose: str) -> None:
+    """The owner's decision holds for the person's own sessions, which nothing may attach to:
+    the address is typed in the window as he would, and the window's title tells what shows."""
+    session(stack, purpose, F, UID_F, SITE)
+    wait_title(stack, "Example Portal")
+    for address, opened, blocked in TYPED:
+        type_address(stack, address)
+        wait_title(stack, f'"{blocked or opened} - Chromium"')
+        if blocked:
+            assert f'"{opened} - Chromium"' not in window_titles(stack)
+    assert stack.current()["lease"]["purpose"] == purpose
+    end(stack)
+
+
+FLAG_ON = """
+import json, sys
+path = f"/profiles/{sys.argv[1]}/data/Local State"
+state = json.load(open(path))
+state.setdefault("browser", {})["enabled_labs_experiments"] = [
+    "enable-experimental-web-platform-features"]
+json.dump(state, open(path, "w"))
+"""
+
+FLAGS_SAVED = """
+import json, sys
+state = json.load(open(f"/profiles/{sys.argv[1]}/data/Local State"))
+print(json.dumps(state.get("browser", {}).get("enabled_labs_experiments", [])))
+"""
+
+
+@pytest.mark.parametrize("purpose", ["signin", "apply_fill"])
+def test_a_saved_chrome_flag_does_not_survive_a_restart(stack: Stack, purpose: str) -> None:
+    """A flag saved in Local State (chrome://flags before the block, or written by hand) applies
+    at every start; Chromium passes this one to its renderers as a switch. prep drops it."""
+    sign_in(stack, F, UID_F, "e2e-browser-f")
+    end(stack)
+    stack.python(FLAG_ON, F, user=str(UID_F))
+    assert json.loads(stack.python(FLAGS_SAVED, F, user=str(UID_F))) != []
+    if purpose == "signin":
+        session(stack, purpose, F, UID_F, SITE)
+        wait_title(stack, "signed in as e2e-browser-f")
+    else:
+        stack.lease(F, UID_F, purpose)
+        assert stack.probe("navigate", SITE, "20")["ok"] is True
+    pids = [str(pid) for owner, pid, _ in processes(stack) if owner == UID_F]
+    argv = stack.python(ARGV_ALL, *pids)
+    assert "--type=renderer" in argv
+    assert "experimental-web-platform-features" not in argv
+    end(stack)
+    assert json.loads(stack.python(FLAGS_SAVED, F, user=str(UID_F))) == []
 
 
 def test_a_switch_kept_on_in_the_profile_opens_no_port_in_a_persons_session(

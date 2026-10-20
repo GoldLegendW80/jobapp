@@ -788,13 +788,57 @@ def test_prepare_turns_off_the_remote_debugging_switch_kept_in_local_state(
     local = profile / "data" / "Local State"
     local.write_text(json.dumps({
         "devtools": {"remote_debugging": {"user-enabled": True}, "other": 1},
-        "browser": {"enabled_labs_experiments": []},
+        "browser": {"last_redirect_origin": "", "window_placement": {"top": 0}},
     }))  # fmt: skip
     prep.prepare(str(profile), str(lease), "fr-FR,fr")
     assert json.loads(local.read_text()) == {
         "devtools": {"remote_debugging": {"user-enabled": False}, "other": 1},
-        "browser": {"enabled_labs_experiments": []},
+        "browser": {"last_redirect_origin": "", "window_placement": {"top": 0}},
     }
+
+
+@pytest.mark.parametrize(
+    "browser",
+    [
+        {"enabled_labs_experiments": ["enable-experimental-web-platform-features"]},
+        {"enabled_labs_experiments": ["ozone-platform-hint@2", "smooth-scrolling@2"]},
+        {"enabled_labs_experiments": []},
+        {"enabled_labs_experiments_origin_lists": {
+            "unsafely-treat-insecure-origin-as-secure": "http://site.example"}},
+        {"enabled_labs_experiments": ["unsafely-treat-insecure-origin-as-secure"],
+         "enabled_labs_experiments_origin_lists": {
+             "unsafely-treat-insecure-origin-as-secure": "http://site.example"}},
+        {"enabled_labs_experiments": "not a list"},
+    ],
+)  # fmt: skip
+def test_prepare_drops_the_saved_chrome_flags(tmp_path: Path, umask: None, browser: dict) -> None:
+    """chrome://flags is blocked (owner, 2026-10-20), but entries saved before keep applying at
+    every start: prep drops them and keeps the rest of Local State."""
+    profile, lease = tmp_path / "profile", tmp_path / "lease"
+    (profile / "data").mkdir(parents=True)
+    local = profile / "data" / "Local State"
+    local.write_text(json.dumps({
+        "browser": {**browser, "window_placement": {"top": 0}},
+        "enabled_labs_experiments": ["kept, not where Chromium reads it"],
+    }))  # fmt: skip
+    prep.prepare(str(profile), str(lease), "fr-FR,fr")
+    assert json.loads(local.read_text()) == {
+        "browser": {"window_placement": {"top": 0}},
+        "enabled_labs_experiments": ["kept, not where Chromium reads it"],
+        "devtools": {"remote_debugging": {"user-enabled": False}},
+    }
+
+
+@pytest.mark.parametrize("browser", [None, "a string", ["enabled_labs_experiments"]])
+def test_a_browser_entry_that_is_not_an_object_is_left_as_it_is(
+    tmp_path: Path, umask: None, browser: object
+) -> None:
+    profile, lease = tmp_path / "profile", tmp_path / "lease"
+    (profile / "data").mkdir(parents=True)
+    local = profile / "data" / "Local State"
+    local.write_text(json.dumps({"browser": browser}))
+    prep.prepare(str(profile), str(lease), "fr-FR,fr")
+    assert json.loads(local.read_text())["browser"] == browser
 
 
 @pytest.mark.parametrize("content", [None, "not json", "[1, 2]"])
@@ -810,11 +854,18 @@ def test_a_local_state_without_the_switch_is_left_as_it_is(
     assert (local.read_text() if local.exists() else None) == content
 
 
-def test_the_managed_policy_blocks_chrome_inspect_and_keeps_cdp() -> None:
-    """The policies that would also block CDP (measured for B7: RemoteDebuggingAllowed false
-    ignores --remote-debugging-port, DeveloperToolsAvailability 2 breaks Playwright's pages) are
-    never set: the agents' leases need CDP."""
+def test_the_managed_policy_blocks_every_chrome_page_and_keeps_cdp() -> None:
+    """Every chrome:// page is blocked (owner, 2026-10-20) but the two browserd.probe reads and
+    the new tab page; no extension may be installed. The policies that would also block CDP
+    (measured for B7: RemoteDebuggingAllowed false ignores --remote-debugging-port,
+    DeveloperToolsAvailability 2 breaks Playwright's pages) are never set: the agents' leases
+    need CDP."""
     policy = json.loads((ROOT / "browser/policies/browserd.json").read_text())
-    assert policy["URLBlocklist"] == ["chrome://inspect"]
+    assert policy["URLBlocklist"] == ["chrome://*"]
+    assert sorted(policy["URLAllowlist"]) == [
+        "chrome://new-tab-page", "chrome://new-tab-page-third-party", "chrome://newtab",
+        "chrome://policy", "chrome://sandbox",
+    ]  # fmt: skip
+    assert policy["ExtensionInstallBlocklist"] == ["*"]
     assert "RemoteDebuggingAllowed" not in policy
     assert "DeveloperToolsAvailability" not in policy

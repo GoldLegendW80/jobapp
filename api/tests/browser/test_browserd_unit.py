@@ -591,7 +591,15 @@ def test_the_image_installs_the_managed_webrtc_policy() -> None:
     assert policy == {
         "WebRtcIPHandling": "disable_non_proxied_udp",
         "QuicAllowed": False,
-        "URLBlocklist": ["chrome://inspect"],
+        "URLBlocklist": ["chrome://*"],
+        "URLAllowlist": [
+            "chrome://policy",
+            "chrome://sandbox",
+            "chrome://newtab",
+            "chrome://new-tab-page",
+            "chrome://new-tab-page-third-party",
+        ],
+        "ExtensionInstallBlocklist": ["*"],
         "PasswordManagerEnabled": False,
     }
     dockerfile = (ROOT / "browser/Dockerfile").read_text()

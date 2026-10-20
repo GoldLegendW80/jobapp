@@ -19,7 +19,7 @@ signal its Chromium itself; this child does it under the profile's uid, then exi
 - the preferences Chromium reads at start: the languages (`--lang` is ignored on Linux, B1),
   continue where you left off (session cookies survive a restart), no password saving, no card
   autofill, downloads into the lease's directory without a prompt; in Local State, the remote
-  debugging switch of chrome://inspect off;
+  debugging switch of chrome://inspect off and no saved chrome://flags entry;
 - the lease's directory, mode 0700, for downloads.
 """
 
@@ -34,6 +34,8 @@ import sys
 
 LOCKS = ("SingletonLock", "SingletonSocket", "SingletonCookie")
 PROFILE = re.compile(r"/profiles/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+# Where chrome://flags keeps its entries in Local State (the names in Chromium 155's binary).
+FLAGS = ("enabled_labs_experiments", "enabled_labs_experiments_origin_lists")
 # What Chromium rebuilds by itself: its disk caches (the cache lives in the profile, which is
 # not under XDG_CONFIG_HOME), shader caches, crash reports. Cookies, Local Storage, IndexedDB,
 # Session Storage, Sessions and Preferences are never in this list.
@@ -105,13 +107,14 @@ def prepare(profile: str, lease: str, languages: str) -> None:
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(prefs, handle)
     os.replace(tmp, path)
-    remote_debugging_off(f"{profile}/data/Local State")
+    local_state_reset(f"{profile}/data/Local State")
 
 
-def remote_debugging_off(path: str) -> None:
+def local_state_reset(path: str) -> None:
     """chrome://inspect's "Allow remote debugging" is kept in Local State and opens a DevTools
     port at every later start, with no --remote-debugging-port (measured for B7): it is turned
-    off. A Local State that is missing or not JSON holds no such setting."""
+    off. The chrome://flags entries saved there keep applying once the page is blocked: they are
+    dropped. A Local State that is missing or not JSON holds no such setting."""
     try:
         with open(path, encoding="utf-8") as handle:
             state = json.load(handle)
@@ -120,6 +123,9 @@ def remote_debugging_off(path: str) -> None:
     if not isinstance(state, dict):
         return
     merge(state, {"devtools": {"remote_debugging": {"user-enabled": False}}})
+    if isinstance(state.get("browser"), dict):
+        for name in FLAGS:
+            state["browser"].pop(name, None)
     tmp = f"{path}.browserd"
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(state, handle)
