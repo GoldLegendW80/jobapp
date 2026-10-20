@@ -117,7 +117,7 @@ INDUSTRY_WORDS: dict[str, tuple[str, ...]] = {
         "llm", "deep learning", "intelligence artificielle", "ia", "nlp", "computer vision",
     ),
     "software": (
-        "software", "saas", "tech", "technology", "logiciel", "internet", "b2b",
+        "software", "saas", "technology", "logiciel", "internet", "b2b",
         "enterprise software", "informatique", "numerique", "digital",
     ),
     "developer_tools": (
@@ -242,8 +242,9 @@ def industries_of(terms: Sequence[str]) -> tuple[set[str], list[str]]:
 
 
 def countries_of(terms: Sequence[str]) -> tuple[set[str] | None, list[str]]:
-    """The countries the places name; None when one of them is "Anywhere" or "Remote" (no
-    filter). A place the table does not know is returned as unmatched and filters nothing."""
+    """The countries the places name; None when one of them is "Anywhere" or "Remote" with no
+    country (no filter). A place the table does not know is returned as unmatched and filters
+    nothing."""
     found: set[str] = set()
     unmatched: list[str] = []
     anywhere = False
@@ -252,8 +253,8 @@ def countries_of(terms: Sequence[str]) -> tuple[set[str] | None, list[str]]:
         hits = {name for name, pattern in _COUNTRY_PATTERNS.items() if pattern.search(text)}
         if _EUROPE.search(text):
             hits |= set(EUROPE)
-        if _ANYWHERE.search(text):
-            anywhere = True
+        if not hits and _ANYWHERE.search(text):
+            anywhere = True  # "Remote, UK" is the United Kingdom; "Remote" alone is anywhere
         elif not hits:
             unmatched.append(term)
         found |= hits
@@ -546,7 +547,8 @@ def choose(
     """Add the chosen entries to the search section (enabled: the person chose them) and keep
     every key added or removed among the ones handled, under the profile row lock; the caller
     commits. Only entries proposed right now are taken: one already added, handled or left out
-    by a never apply rule is passed over. Returns the new proposal and the keys added."""
+    by a never apply rule is passed over. Returns the new proposal and the keys added, in the
+    order asked."""
     for key in (*add, *remove):
         if catalog.entry(key) is None:
             raise UnknownKeyError(key)
@@ -555,7 +557,7 @@ def choose(
     offered = {e.key: e for e in propose(catalog, search, handled_of(profile)).entries}
     offered = {key: entry for key, entry in offered.items() if not entry.added}
     adding = [offered[key] for key in dict.fromkeys(add) if key in offered]
-    taken = {entry.key for entry in adding}
+    taken = [entry.key for entry in adding]
     removing = [key for key in dict.fromkeys(remove) if key in offered and key not in taken]
     if adding:
         stored = search.model_dump(mode="json")
@@ -571,4 +573,4 @@ def choose(
         profile = profile_service.save_section(db, user.id, "search", data, profile.revision, now)
     if adding or removing:
         profile = profile_service.record_starter(db, user.id, [*taken, *removing], now)
-    return propose(catalog, _search(profile), handled_of(profile)), sorted(taken)
+    return propose(catalog, _search(profile), handled_of(profile)), taken
